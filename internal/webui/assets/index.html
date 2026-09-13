@@ -3832,23 +3832,13 @@ SHELL_WINDOW_PANELS_HTML +
   function hideModal(id) { document.getElementById(id).classList.add('hidden'); }
 
   /**
-   * Leaving the page detaches this tab from live state (open terminal windows,
-   * running sessions, active forwards, unsaved connection edits). Sessions keep
-   * running server-side — the guard only makes the leave deliberate instead of
-   * accidental. Returns a comma-joined summary of what is live, or '' when safe.
+   * Only guard page leave when terminal windows are actually open.
+   * Sessions keep running on the server even when windows are closed.
    */
   function pageHasLiveState() {
-    var reasons = [];
-    var c = shellWindowsEl();
-    var openWins = c ? c.querySelectorAll('.shell-window').length : 0;
-    if (openWins > 0) reasons.push(openWins + ' open terminal window' + (openWins > 1 ? 's' : ''));
-    var running = 0;
-    (window._lastSessionsSnapshot || []).forEach(function (s) { if (s && s.status === 'running') running++; });
-    if (running > 0) reasons.push(running + ' running session' + (running > 1 ? 's' : ''));
-    var fwdCount = (window._lastForwards || []).length;
-    if (fwdCount > 0) reasons.push(fwdCount + ' active forwarding' + (fwdCount > 1 ? 's' : ''));
-    if (_connDirty) reasons.push('unsaved connection changes');
-    return reasons.join(', ');
+    var openWins = (typeof allShellWins === 'function' ? allShellWins() : []).length;
+    if (openWins > 0) return openWins + ' open terminal window' + (openWins > 1 ? 's' : '');
+    return '';
   }
 
   window.addEventListener('beforeunload', function (e) {
