@@ -17,6 +17,7 @@
 
 ### 改进
 
+- **Web UI 仅在窗体打开时拦截离开页面**：离开页面保护（`beforeunload`）此前因统计了服务端后台运行的会话和端口转发，导致即使用户关掉了所有 session 终端窗体，关闭/刷新网页时仍会弹出“系统可能不会保存您所做的更改”。现在调整为仅在页面上实际存在打开的终端窗体（含浮动与平铺网格窗体）时才弹窗拦截；窗体全部关闭后直接离开，不打扰用户。
 - **修复快速命令输出被截断**：SSH 会话在进程退出时立即上报 exit-status，此时末尾 stdout 可能仍在通道缓冲中未读，而旧的读取循环一看到进程退出就停止、随后立刻封存缓冲，导致 `echo`/`ls` 之类快速命令丢失最后几行。现在读取循环以通道 EOF 为准持续读取，封存缓冲前先等待该 shell 的输出管道排空（带超时兜底）。
 - **修复 PTY 窗口改动被丢弃**：内部 SSH 会话（`pty` 模式）此前在服务端又开了一个 window-change 消费者，与库自身的 resize 处理竞争同一个通道，约一半的 resize 事件被丢弃——WebUI/MCP 调整窗口后子进程终端尺寸时大时小。现在统一交给库处理，客户端 resize 可靠地传到子进程（新增 `stty size` 回归测试）。
 - **清理并发读写隐患**：内部 SSH 服务端不再跨 goroutine 直接读会话的 PTY 结构（改为在 session 请求 goroutine 上取一次再交接），PTY 的 fork/exec 与库的 PTY 关闭用同一把锁串行；`ExecSession` 的 stdin 写入与关闭也串行（x/crypto 的 `Write` 与 `CloseWrite` 并发会竞争通道 EOF 标志）。内存 SSH 传输 `duplexConn` 的 `Close`/`Write` 不再可能 `send on closed channel`。`go test -race ./...` 现全绿。
