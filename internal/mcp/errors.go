@@ -12,8 +12,16 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
+// errMissingSSHConfig is returned when the caller omits ssh_config.
+// session_start deliberately refuses to fall back to a default profile so a
+// forgotten ssh_config cannot silently open a shell on the wrong host.
+var errMissingSSHConfig = errors.New("ssh_config is required")
+
 // sshConfigErrCode maps an ssh_config store failure onto its tool error code.
 func sshConfigErrCode(err error) string {
+	if errors.Is(err, errMissingSSHConfig) {
+		return CodeInvalidArgument
+	}
 	if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return CodeSSHConfigNotFound
 	}

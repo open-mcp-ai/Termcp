@@ -163,10 +163,7 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 	}
 	name := strings.TrimSpace(getString(args, "ssh_config", ""))
 	if name == "" {
-		if s.NoInternal {
-			return "", nil, nil, fmt.Errorf("ssh_config is required when internal profile is disabled")
-		}
-		name = "internal"
+		return "", nil, nil, errMissingSSHConfig
 	}
 	ent, err := s.sshConfigs.Load(name)
 	if err != nil {

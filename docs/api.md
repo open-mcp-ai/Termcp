@@ -91,7 +91,7 @@ Response 200:
 ```
 Request:
 {
-  "ssh_config": "pi",    // 连接配置名，默认 "internal"
+  "ssh_config": "pi",    // 连接配置名，默认 "internal"（本机 loopback）；MCP 的 session_start 则必填
   "command": "",         // 命令，空 = 登录 shell
   "args": [],
   "mode": "pty",         // "pty" | "pipe"

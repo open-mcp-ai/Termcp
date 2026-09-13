@@ -15,9 +15,10 @@ import (
 func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {
 	t.Helper()
 	res, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testShellEchoArgs("notify_ok"),
-		"mode":    "pipe",
+		"command":    testShell(),
+		"args":       testShellEchoArgs("notify_ok"),
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("start session failed: %v %+v", err, res)
@@ -221,9 +222,10 @@ func TestShellNotify_SamplingDispatchToRegisteringClient(t *testing.T) {
 	}
 
 	startRes, err := cli.CallTool(ctx, callReq("session_start", map[string]any{
-		"command": testShell(),
-		"args":    testShellEchoArgs("notify_ok"),
-		"mode":    "pipe",
+		"command":    testShell(),
+		"args":       testShellEchoArgs("notify_ok"),
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	}))
 	if err != nil || startRes.IsError {
 		t.Fatalf("session_start failed: %v %+v", err, startRes)
@@ -296,9 +298,10 @@ func TestShellNotify_ResourceDispatchEndToEnd(t *testing.T) {
 	})
 
 	startRes, err := cli.CallTool(ctx, callReq("session_start", map[string]any{
-		"command": testShell(),
-		"args":    testShellEchoArgs("notify_ok"),
-		"mode":    "pipe",
+		"command":    testShell(),
+		"args":       testShellEchoArgs("notify_ok"),
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	}))
 	if err != nil || startRes.IsError {
 		t.Fatalf("session_start failed: %v %+v", err, startRes)

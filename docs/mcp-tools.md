@@ -93,7 +93,7 @@ ssh_config(action=list)
 | `name` | string | 否 | ssh_config | 会话显示名称 |
 | `rows` | number | 否 | `24` | 初始 PTY 行数（1–1000） |
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |
-| `ssh_config` | string | 否 | `"internal"` | profile 名称：`"internal"` = 本机 loopback，其他 = `ssh_configs/<name>/` 下的远端连接 |
+| `ssh_config` | string | **是** | — | profile 名称：`"internal"` = 本机 loopback，其他 = `ssh_configs/<name>/` 下的远端连接（可用 `ssh_config(action=list)` 查询） |
 
 **返回**：`{ session_id, shell_id, pid, ssh_config }`
 

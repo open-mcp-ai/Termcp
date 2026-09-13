@@ -168,9 +168,37 @@ func TestHandleDetectShell_Auto(t *testing.T) {
 	}
 }
 
+func TestHandleStartSession_MissingSSHConfig(t *testing.T) {
+	s := newTestServer(t)
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"omitted", map[string]any{}},
+		{"blank", map[string]any{"ssh_config": "   "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := s.handleStartSession(context.Background(), makeRequest(tc.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError {
+				t.Fatal("expected error when ssh_config is missing or blank")
+			}
+			code, msg := decodeToolError(t, result)
+			if code != CodeInvalidArgument {
+				t.Fatalf("expected error_code %q, got %q", CodeInvalidArgument, code)
+			}
+			if msg != "ssh_config is required" {
+				t.Fatalf("expected message %q, got %q", "ssh_config is required", msg)
+			}
+		})
+	}
+}
+
 func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
 	s := newTestServer(t)
-	req := makeRequest(map[string]any{})
+	req := makeRequest(map[string]any{"ssh_config": "internal"})
 	result, err := s.handleStartSession(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +215,8 @@ func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
 func TestHandleStartSession_CommandRequiredWhenArgs(t *testing.T) {
 	s := newTestServer(t)
 	req := makeRequest(map[string]any{
-		"args": []any{"-c", "echo hi"},
+		"ssh_config": "internal",
+		"args":       []any{"-c", "echo hi"},
 	})
 	result, err := s.handleStartSession(context.Background(), req)
 	if err != nil {
@@ -201,9 +230,10 @@ func TestHandleStartSession_CommandRequiredWhenArgs(t *testing.T) {
 func TestHandleStartSession_Success(t *testing.T) {
 	s := newTestServer(t)
 	req := makeRequest(map[string]any{
-		"command": "echo",
-		"args":    []any{"hello"},
-		"mode":    "pipe",
+		"command":    "echo",
+		"args":       []any{"hello"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	})
 
 	result, err := s.handleStartSession(context.Background(), req)
@@ -312,9 +342,10 @@ func TestHandleStartSendPressKeyRead(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -343,9 +374,10 @@ func TestHandleListMessages(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": "echo",
-		"args":    []any{"test"},
-		"mode":    "pipe",
+		"command":    "echo",
+		"args":       []any{"test"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
@@ -373,9 +405,10 @@ func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -422,9 +455,10 @@ func TestHandleReadOutput_ContextCancelled(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -469,9 +503,10 @@ func TestHandleSendInput_ExitedShell(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testShellEchoArgs("done"),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testShellEchoArgs("done"),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
@@ -495,9 +530,10 @@ func TestHandleSendInput_ExitedShell(t *testing.T) {
 func TestHandlePressKey_UnknownKey(t *testing.T) {
 	s := newTestServer(t)
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -524,8 +560,9 @@ func TestHandleStartSession_InvalidMode(t *testing.T) {
 	s := newTestServer(t)
 	for _, mode := range []string{"websocket", "x"} {
 		req := makeRequest(map[string]any{
-			"command": "echo",
-			"mode":    mode,
+			"command":    "echo",
+			"mode":       mode,
+			"ssh_config": "internal",
 		})
 		result, _ := s.handleStartSession(context.Background(), req)
 		if !result.IsError {
@@ -543,10 +580,11 @@ func TestHandleStartSession_InvalidRowsCols(t *testing.T) {
 		{0, 80}, {-1, 80}, {24, 0}, {24, -5}, {1001, 80},
 	} {
 		req := makeRequest(map[string]any{
-			"command": "echo",
-			"mode":    "pty",
-			"rows":    tc.rows,
-			"cols":    tc.cols,
+			"command":    "echo",
+			"mode":       "pty",
+			"rows":       tc.rows,
+			"cols":       tc.cols,
+			"ssh_config": "internal",
 		})
 		result, _ := s.handleStartSession(context.Background(), req)
 		if !result.IsError {
@@ -557,7 +595,7 @@ func TestHandleStartSession_InvalidRowsCols(t *testing.T) {
 
 func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
 	s := newTestServer(t)
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
 	shellID := m["shell_id"].(string)
@@ -587,7 +625,7 @@ func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
 func TestHandleTerminateSession_InvalidGracePeriod(t *testing.T) {
 	s := newTestServer(t)
 
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
 	sessionID := m["session_id"].(string)
@@ -608,9 +646,10 @@ func TestHandleReadOutput_ReturnsSessionStatus(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -661,7 +700,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 		t.Skip("SFTP mode semantics differ on Windows")
 	}
 	s := newTestServer(t)
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
 		t.Fatal(err)
@@ -838,7 +877,7 @@ func TestGroupDispatch(t *testing.T) {
 	}
 
 	// message(action=list) needs a session (per-session index)
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startRes, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
 		t.Fatal(err)

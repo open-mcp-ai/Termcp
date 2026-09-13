@@ -56,9 +56,10 @@ func TestUnifiedOutput_TailLinesLive(t *testing.T) {
 		args = testShellArgs("-c", "i=1; while [ $i -le 20 ]; do echo LINE_$(printf '%02d' $i); i=$((i+1)); done")
 	}
 	startReq := makeRequest(map[string]any{
-		"command": command,
-		"args":    args,
-		"mode":    "pipe",
+		"command":    command,
+		"args":       args,
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	})
 	startRes, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil || startRes.IsError {
@@ -129,9 +130,10 @@ func TestUnifiedOutput_OffsetStatelessLive(t *testing.T) {
 	s, _, _, _ := newTestServerWithHistory(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startRes, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil || startRes.IsError {
