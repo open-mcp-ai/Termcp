@@ -4,6 +4,7 @@
 
 ### Breaking
 
+- **`session_start` 必填 `ssh_config`**：此前未传 `ssh_config` 时会隐式回退到 `"internal"`（本机 loopback），导致当调用方意在连远端主机但漏传配置（如只传了 `name`）时会误打开宿主机终端。现在必须显式指定 `ssh_config`（连宿主请显式传 `"internal"`，连远端传 profile 名称）；未传或为空时直接返回 `invalid_argument`（`ssh_config is required`）。
 - **`shell_output` 统一游标读取**：唯一输出读取入口，活会话（内存缓冲）、已退出会话（保留缓冲）、归档/重启恢复会话（磁盘消息流）全部同一套字节流游标语义。新增 `offset`（无状态字节定位，配合 `start_offset`/`end_offset`/`total_bytes`/`has_more` 翻页）与 `tail_lines`（只取末尾 N 行，token 友好）；返回体新增 `source`/`session_id`/`shell_id` 等游标元数据。
 - **删除 `history(action=get_transcript)`**：归档输出读取并入 `shell_output`（`shell_id=归档session_id或shell_id`），不再提供全量转录导出，避免一次性把整个会话拖入 LLM 上下文。WebUI 的 `GET /api/history/{id}/transcript` 导出保留。
 - **低频工具合并为 action 枚举**：`local_forward` / `remote_forward` / `dynamic_forward` / `list_forwards` / `close_forward` → `forward(action=...)`；`message_list` / `message_get` → `message(action=...)`；7 个 `history_*` 工具 → `history(action=...)`；5 个 `ssh_config_*` 工具 → `ssh_config(action=...)`（写操作通过 `--mcp-manage-ssh-configs` 开关）。

@@ -123,14 +123,14 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		})
 	}
 	mcpServer.AddTool(newTool("session_start",
-		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config \"internal\" (default) = termcp host loopback; otherwise a remote profile name. Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
+		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED; \"internal\" = termcp host loopback, otherwise a remote profile name from ssh_config(action=list). Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
 		mcpgo.WithString("command", mcpgo.Description("Executable line; empty with no args = login shell / profile default_shell")),
 		mcpgo.WithArray("args", mcpgo.Description("Argv after command"), mcpgo.WithStringItems()),
 		mcpgo.WithString("mode", mcpgo.Description("\"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented)"), mcpgo.DefaultString("pty")),
 		mcpgo.WithString("name"),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),
-		mcpgo.WithString("ssh_config"),
+		mcpgo.WithString("ssh_config", mcpgo.Required(), mcpgo.Description("REQUIRED: \"internal\" for the termcp host loopback, or a profile name from ssh_config(action=list)")),
 	), withLogging("session_start", s.handleStartSession))
 
 	mcpServer.AddTool(newTool("shell_open",
