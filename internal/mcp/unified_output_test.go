@@ -12,18 +12,13 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
-	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *history.Manager, *session.Manager) {
 	t.Helper()
-	srv := sshserver.New()
-	if err := srv.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { srv.Stop() })
+	srv := startTestSSH(t)
 
 	dir := t.TempDir()
 	store := storage.New(dir)
@@ -32,6 +27,7 @@ func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *history.M
 	histMgr := history.New(store)
 	_ = histMgr.Load()
 	sessMgr.SetHistory(histMgr)
+	cleanupTestRuntime(t, sessMgr, srv)
 
 	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
 	s.SetHistory(histMgr)

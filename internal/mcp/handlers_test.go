@@ -19,18 +19,40 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func newTestServer(t *testing.T) *Server {
+// startTestSSH starts an in-process SSH server for a test.
+func startTestSSH(t *testing.T) *sshserver.Server {
 	t.Helper()
 	srv := sshserver.New()
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { srv.Stop() })
+	return srv
+}
+
+// cleanupTestRuntime finalizes every session — draining exit watchers and any
+// in-flight message writes — then stops the SSH server. It must be registered
+// AFTER t.TempDir so LIFO runs it before the temp dir is removed: otherwise a
+// session watcher could still be writing messages/<id>/* during RemoveAll,
+// which on Windows fails with "The directory is not empty".
+func cleanupTestRuntime(t *testing.T, sessMgr *session.Manager, srv *sshserver.Server) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, s := range sessMgr.ListAll() {
+			_ = sessMgr.Delete(s.ID)
+		}
+		srv.Stop()
+	})
+}
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	srv := startTestSSH(t)
 
 	dir := t.TempDir()
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
+	cleanupTestRuntime(t, sessMgr, srv)
 	return New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
 }
 

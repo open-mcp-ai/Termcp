@@ -92,6 +92,14 @@ type Session struct {
 	// doneWG tracks live output pipe goroutines so markDead can flush their final
 	// message Appends before the session is observed as exited.
 	doneWG sync.WaitGroup
+	// watchWG tracks per-shell exit-watcher goroutines. The watcher performs the
+	// final message Appends (markDead system note) and persist() after the
+	// transport closes, so finalize must wait for them: otherwise Delete could
+	// return (and a caller could purge/remove the data dir) while a watcher is
+	// still writing files under messages/<id>/. The watcher is deliberately not
+	// in doneWG: markDead (called *by* the watcher on a pipe exit) waits on
+	// doneWG, so adding the watcher there would self-deadlock.
+	watchWG sync.WaitGroup
 }
 
 // New creates and starts a new Session.
@@ -554,6 +562,10 @@ func (s *Session) finalize() {
 		if s.execSession != nil {
 			_ = s.execSession.Close()
 		}
+		// Wait for exit watchers to finish their post-transport writes (final
+		// system message + persist) before releasing the session, so a caller
+		// that purges the data directory afterwards cannot race a writer.
+		s.watchWG.Wait()
 	})
 }
 
@@ -1083,7 +1095,13 @@ func (cs *ChildShell) startReaders() {
 	cs.pipeToBuffer(cs.execSession.Stdout)
 	cs.pipeToBuffer(cs.execSession.Stderr)
 
+	if p := cs.parent; p != nil {
+		p.watchWG.Add(1)
+	}
 	go func() {
+		if p := cs.parent; p != nil {
+			defer p.watchWG.Done()
+		}
 		<-cs.execSession.Done()
 		cs.closeOnce.Do(func() { close(cs.done) })
 		cs.mu.Lock()
