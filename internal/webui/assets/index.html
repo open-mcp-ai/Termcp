@@ -70,9 +70,9 @@
       background: rgba(9,105,218,.06);
     }
     /* × and the selection checkbox are 20×20 and mirror each other about the icon's horizontal center line:
-       × at the icon's top-right, checkbox at the icon's bottom-right, both just clearing the 40px icon. */
+       × at the icon's top-right, checkbox at the icon's top-left, both clearing the 40px icon flush at the stack edge. */
     .conn-tile.sess-tile .conn-tile-stack .sess-checkbox {
-      position: absolute; right: -4px; bottom: -4px; z-index: 4;
+      position: absolute; left: 0; top: 0; z-index: 4;
       width: 20px; height: 20px; margin: 0; padding: 0;
       cursor: pointer; accent-color: #0969da;
     }
@@ -260,7 +260,7 @@
     }
     #ui-copy-toast.ui-copy-toast-visible { opacity: 1; }
     .conn-tile .conn-tile-stack .sess-x {
-      position: absolute; right: -4px; top: -4px; z-index: 3; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
+      position: absolute; right: 0; top: 0; z-index: 3; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
       background: #fff; color: #cf222e; cursor: pointer; display: flex; align-items: center; justify-content: center;
       box-shadow: 0 1px 3px rgba(0,0,0,.12); opacity: 1; transition: background .12s, color .12s, border-color .12s;
     }
