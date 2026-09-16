@@ -345,13 +345,13 @@ The Web UI's **API / MCP** page (`/api.html`) offers copy-ready config for both 
 
 ## Tool Reference
 
-termcp exposes 30 MCP tools. Full parameters, return shapes, and error codes live in [`docs/mcp-tools.md`](./docs/mcp-tools.md).
+termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes live in [`docs/mcp-tools.md`](./docs/mcp-tools.md).
 
 | Area | Tools |
 |------|-------|
 | Sessions (connection containers) | `session_start`, `session_list`, `session_info`, `session_terminate` |
 | Shells (terminal channels) | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
-| Event notifications | `shell_notify` |
+| Notifications | `shell_notify` (wakes the AI Agent), `notify_user` (toasts the human at the Web UI) |
 | SSH profiles | `ssh_config` (`list`; `create`/`edit`/`copy`/`delete` with `--mcp-manage-ssh-configs`) |
 | Port forwarding | `forward` (`-L` / `-R` / `-D` / list / close) |
 | Files (SFTP) | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |

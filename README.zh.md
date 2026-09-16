@@ -345,13 +345,13 @@ Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制�
 
 ## 工具参考
 
-termcp 共提供 30 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
+termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
 
 | 分类 | 工具列表 |
 |------|---------|
 | 会话容器 | `session_start`, `session_list`, `session_info`, `session_terminate` |
 | 终端通道 | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
-| 反向通知 | `shell_notify` |
+| 通知 | `shell_notify`（唤醒 AI Agent）、`notify_user`（弹窗提醒 Web UI 用户） |
 | 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
 | 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
 | 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |

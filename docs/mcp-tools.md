@@ -292,6 +292,28 @@ ssh_config(action=list)
 
 > 进程还活但只是“输出停了”，用 `event="silence", silence_seconds=10`；需要持续跟踪输出变化用 `event="output"`。
 
+### notify_user
+
+向**人类用户**（而非 AI Agent）推送浏览器通知：在 termcp Web UI 的**每个已打开页面**弹出彩色 toast，并尝试触发**浏览器系统通知**（需浏览器授权，页面在后台也能收到）；指定 `session_id` 时，该 session 的卡片会**高亮**（脉冲描边，滚到可视区；若其终端窗口已打开，窗口头部也会闪烁）。与 `shell_notify` 正相反 —— 后者是通知 AI Agent，本工具是 Agent 通知人。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `message` | string | **是** | 通知正文（最多 2000 字符） |
+| `title` | string | 否 | 标题，默认 `termcp` |
+| `level` | string | 否 | `info`（默认）/ `success` / `warn` / `error`，决定 toast 配色与左侧色条 |
+| `duration_seconds` | number | 否 | toast 停留秒数（0–600）；`0` = 一直停留直到手动关闭，默认 `10` |
+| `session_id` | string | 否 | 高亮该 session 的卡片；session 不存在时 `error_code=session_not_found` |
+
+**返回**：`{ ok, delivered, title, level, session_id? }` —— `delivered` 是实际收到通知的已打开页面数（WebSocket 标签页）；为 `0` 表示当前没有页面打开，通知未展示（附 `hint` 说明）。
+
+**典型用法**（长任务完成提醒）：
+
+```jsonc
+{ "message": "构建已完成，耗时 2m31s", "level": "success", "session_id": "<session_id>" }
+```
+
+> 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。
+
 ### message（会话消息历史）
 
 查看与获取持久化存储的原始会话消息。消息包含系统事件、输入命令和输出内容。

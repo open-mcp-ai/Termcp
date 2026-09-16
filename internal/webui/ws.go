@@ -87,6 +87,10 @@ func (h *Handler) handleWebUIWS(w http.ResponseWriter, r *http.Request) {
 	}
 	go c.writePump()
 	go c.sessionLoop()
+	// Subscribe to UI notification broadcasts (notify_user tool); deliveries land
+	// on the same send channel writePump drains.
+	unregNotify := c.h.uiNotifyHub().register(c.send)
+	defer unregNotify()
 	c.readPump()
 }
 
