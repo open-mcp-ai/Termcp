@@ -36,7 +36,9 @@
 
 ## 简介
 
-`termcp `是一个go语言编写的包含MCP服务器，以**SSH**会话的形式，让AI Agent能够持续地管理、调度交互式程序。此外，termcp还有专门用于管理这些会话的界面，使得用户能够完整地观测AI Agent的行为。同时用户能够像使用SSH一样，直接与受控机器进行交互或调整AI Agent行为。
+`termcp `是一个go语言编写的包含MCP服务器，以**SSH**会话的形式，让AI Agent能够持续地管理、调度交互式程序。此外，termcp还有专门用于管理这些会话的界面，使得用户能够完整地观测AI Agent的行为。同时用户能够像使用SSH一样，直接与受控机器进行交互或调整AI Agent行为。Go 编写、单二进制、低开销、可长期驻留；编译型 + goroutine 并发，高吞吐、低延迟。
+
+### 演示视频
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
@@ -77,31 +79,49 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 
 ## 功能特性
 
+- **⚡ 一行安装** —— `go install github.com/open-mcp-ai/termcp@latest`，无需克隆、无需编译，只需 Go 环境即可。
+- **🔌 一行接入 MCP** —— 任何 MCP 客户端一行接入（`claude mcp add --transport http termcp http://localhost:18765/stream` 只是示例，Open WebUI 等其它客户端同样适用）；termcp 在同一端口同时提供 Streamable HTTP 与 SSE 两种传输，无需为每个工具单独集成。
+- **🔗 资源 URL 寻址** —— 为配置、会话、频道定义了统一的 `termcp://` 寻址，Web UI 各处一键复制；把 URL 粘进与 AI 的对话，AI 即可准确定位并操作对应的连接、会话或频道。
+- **🤝 人机接力，无缝切换** —— 人类与 Agent 共享同一个实时会话，可随时切换：你手动开好 root 权限的 shell，再交给 Agent 驱动；或 Agent 遇到 `sudo` / 密码 / MFA 提示时暂停，由你在 Web UI 里输入，Agent 继续执行。同一 shell 的输入串行写入，人机互不打断对方按键；凭据全程不由 Agent 猜测或回显；且你始终掌握控制权——Agent 出现不当操作时，可随时中断其操作。
 - **🟦 支持多轮交互** —— 进程持续运行，Agent 可跨多个对话轮次驱动，而非一次性调用即返回。
-- **🟪 真实终端环境** —— 完整模拟真实终端，`vim`、`top`、`gdb` 等依赖终端特性的程序均可正常运行，跨平台兼容。
-- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、历史输出回放，单端口提供服务，无需额外部署。
-- **🟨 多 Agent 并行不冲突** —— 多个 Agent 可同时读取同一会话，各自维护独立游标，输出互不抢占。
-- **🟩 远程操作一体集成** —— 单条 SSH 连接内完成命令执行、文件传输与端口转发，无需重复建立连接。
-- **🟥 事件通知（反向唤醒）** —— `shell_notify` 注册后，进程退出 / 输出停顿 / 有新输出时由 termcp 主动唤醒 Agent（仅信令、不带内容），无需持续轮询；Web UI 可查看与拆下已注册规则。
+- **🟪 真实终端环境** —— 完整模拟真实终端（PTY；Windows 下走 ConPTY），`vim`、`top`、`gdb` 等依赖终端特性的程序均可正常运行，跨平台兼容。
+- **🟫 本机 / 远程任选入口** —— 既能零配置直接操作 termcp 所在本机（`ssh_config="internal"`），也能通过 SSH 接入任意远程主机，同一套工具流程通用。
+- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署。
+- **🟨 多 Agent 并行不冲突** —— 多个 Agent 可同时读取同一会话，各自维护独立游标，输出互不抢占；统一的 `shell_output` 游标在活会话、死亡会话与归档会话上语义完全一致（字节 offset、`tail_lines`、翻页）。
+- **🟩 远程操作一体集成** —— 单条 SSH 连接内完成命令执行、文件传输（完整 SFTP 套件 + 带 Range 断点续传的 HTTP 直链）、端口转发（`-L` / `-R` / `-D`），无需重复建立连接。
+- **🟥 主动通知 AI Agent（推送，免轮询）** —— `shell_notify` 注册后由 termcp **主动通知 AI Agent**：进程退出 / 输出停顿 / 有新输出时即刻推送唤醒信令（仅信令、不带内容，避免污染上下文），无需 Agent 持续轮询；`channel="sampling"` 时还会主动发送 MCP `sampling/createMessage` 直接唤起模型。命令完成判定基于进程退出事件，而非固定超时。Web UI 可查看与拆下已注册规则。
+- **🟨 断开 ≠ 删除，历史全保留** —— 正常退出或异常断线的会话自动归档，完整终端输出落盘保留，跨 termcp 重启仍可检索、重命名、打标签、渲染为 PNG 终端截图，仅显式删除才真正清理。
+- **🔒 凭据安全设计** —— 通过 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据永不出现在 Agent 上下文中；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
+- **🪶 上下文友好，省 Token** —— `shell_notify` 只推送唤醒信令（不带内容），终端正文通过 `shell_output` 按需拉取，避免原始输出灌满模型上下文。
 
 ## 快速开始
 
+### 快速安装（需要 Go 环境）
+
+最省事的方式 —— 一条命令搞定，无需克隆、无需编译：
+
+```bash
+go install github.com/open-mcp-ai/termcp@latest
+```
+
+`go install` 会通过 Go 模块代理拉取（中国大陆可用 `GOPROXY=https://goproxy.cn,direct`），把 `termcp` 二进制放到 `$(go env GOPATH)/bin`，请确保该目录在 `PATH` 中。termcp 用 Go 编写，安装方式就是 `go install` 或 Releases 预编译二进制，没有 npx/uvx 版本，也不需要 Node/Python 运行时。作为 Go module，它还支持**源码级集成**：可 `go get github.com/open-mcp-ai/termcp` 作为依赖引入，或 fork 源码构建定制版本。随后直接运行：
+
+```bash
+termcp
+```
+
 ### 下载
 
-前往 Releases 页面,下载对应平台的预编译二进制:
+前往 [Releases 页面](https://github.com/open-mcp-ai/termcp/releases)，下载对应平台的预编译二进制:
 
 | 平台                  | 文件                       |
 | :-------------------- | :------------------------- |
-| Linux (x86_64)        | `termcp-linux-amd64`       |
-| Linux (ARM64)         | `termcp-linux-arm64`       |
-| macOS (Intel)         | `termcp-darwin-amd64`      |
-| macOS (Apple Silicon) | `termcp-darwin-arm64`      |
-| Windows (x86_64)      | `termcp-windows-amd64.exe` |
-| Windows (ARM64)       | `termcp-windows-arm64.exe` |
-### 快速安装 (需要Golang环境)
-```shell
-go install github.com/open-mcp-ai/termcp@latest
-```
+| Linux (x86_64)        | [termcp-linux-amd64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-linux-amd64) |
+| Linux (ARM64)         | [termcp-linux-arm64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-linux-arm64) |
+| macOS (Intel)         | [termcp-darwin-amd64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-darwin-amd64) |
+| macOS (Apple Silicon) | [termcp-darwin-arm64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-darwin-arm64) |
+| Windows (x86_64)      | [termcp-windows-amd64.exe](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-windows-amd64.exe) |
+| Windows (ARM64)       | [termcp-windows-arm64.exe](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-windows-arm64.exe) |
 
 ### 编译
 
@@ -129,12 +149,14 @@ termcp [flags]
 
 | Flag            | 默认值      | 说明                                                         |
 | --------------- | ----------- | ------------------------------------------------------------ |
-| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。                      |
+| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。**认证功能未实现**，除非有防火墙/反向代理保护端口，否则请保持 loopback 默认值。 |
 | `--port`        | `18765`     | HTTP 端口。Web UI、MCP SSE、MCP streamable HTTP 共用。       |
 | `--data-dir`    | `~/.termcp` | 持久化目录（会话、消息、SSH 配置）。不存在则自动创建。默认值可用环境变量 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level`   | `info`      | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 显示全部 MCP 工具调用；失败的工具调用与会话创建错误始终以 `warn`/`error` 打印。 |
 | `--no-internal` | `false`     | 禁用内建 loopback SSH profile。                                |
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
+
+这两个 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。
 
 ### 示例
 
@@ -144,7 +166,38 @@ termcp [flags]
 
 # 允许 AI Agent 管理 SSH 配置
 ./termcp --mcp-manage-ssh-configs
+
+# 禁用内建 loopback profile（Agent 只能连远程主机）
+./termcp --no-internal
 ```
+
+### 连接远程主机
+
+零配置：`ssh_config="internal"` 直接操作 termcp 本机。要连远程机器，在 Web UI 新建连接对话框创建 SSH profile（内置 TOML 模板与「测试连接」按钮），或通过 REST `PUT /api/connections/<name>` 提交 TOML：
+
+```toml
+kind = "remote"
+host = "192.168.1.100"
+user = "pi"
+trust_unknown_host = true  # 首次连接未知主机
+
+# 密码方式二选一：
+password = "..."
+
+# 或直接粘贴私钥 PEM 内容——写路径（如 "~/.ssh/id_ed25519"）是无效的：
+private_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+<粘贴 ~/.ssh/id_ed25519 的完整内容>
+-----END OPENSSH PRIVATE KEY-----"""
+key_passphrase = "..."     # 仅当私钥带口令时填写
+
+# 可选：跳板机（ProxyJump）
+[jump]
+host = "bastion.example.com"
+user = "ops"
+password = "..."
+```
+
+profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config(action=list)` 查询；按此方式写入的凭据一律不可读回。Agent 也能创建 profile，但仅在 termcp 以 `--mcp-manage-ssh-configs` 启动时可用。
 
 ## Docker 部署
 
@@ -237,38 +290,83 @@ docker compose up -d --build
 
 ## 接入 MCP 客户端
 
-### Claude Code（SSE）
+termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
+
+termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。作为 MCP 服务器，它本身就是可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）的插件。
+
+### 方式 A —— Streamable HTTP (`/stream`)
+
+新一代 MCP 传输，单端点、无需单独的 message 路径。Claude Code、Open WebUI 及多数新客户端推荐使用。
 
 ```json
 {
   "mcpServers": {
     "termcp": {
-      "type": "sse"，
+      "type": "http",
+      "url": "http://your-server:18765/stream"
+    }
+  }
+}
+```
+
+```bash
+claude mcp add --transport http termcp http://localhost:18765/stream
+```
+
+- 同机：`http://127.0.0.1:18765/stream`。
+- Open WebUI 在 Docker 内、termcp 在宿主机：`http://host.docker.internal:18765/stream`（macOS/Windows），或宿主机局域网 IP。
+- 两者都在 Docker 内（同一网络，见 [Docker 部署](#docker-部署)）：`http://termcp:18765/stream`。
+
+### 方式 B —— SSE (`/sse`)
+
+传统传输方式。客户端**只配置 `/sse`**，SDK 会自动向 `/message` 发 JSON-RPC。
+
+```json
+{
+  "mcpServers": {
+    "termcp": {
+      "type": "sse",
       "url": "http://your-server:18765/sse"
     }
   }
 }
 ```
 
-或用 CLI：
-
 ```bash
 claude mcp add --transport sse termcp http://localhost:18765/sse
 ```
 
-### Open WebUI（Streamable HTTP）
+### 速查
 
-将 Open WebUI 指向 `http://<host>:18765/stream`。
+- Streamable HTTP → `http://<host>:18765/stream`
+- SSE → `http://<host>:18765/sse`（JSON-RPC 走 `POST /message`）
 
-- 同机：`http://127.0.0.1:18765/stream`。
-- Open WebUI 在 Docker 内、termcp 在宿主机：`http://host.docker.internal:18765/stream`（macOS/Windows），或宿主机局域网 IP。
-- 两者都在 Docker 内（同一网络，见 [Docker 部署](#docker-部署)）：`http://termcp:18765/stream`。
+Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制配置。
 
-### 其他 MCP 客户端
+## 工具参考
 
-- SSE 传输 → `http://<host>:<port>/sse`
-- Streamable HTTP → `http://<host>:<port>/stream`
+termcp 共提供 30 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
 
+| 分类 | 工具列表 |
+|------|---------|
+| 会话容器 | `session_start`, `session_list`, `session_info`, `session_terminate` |
+| 终端通道 | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
+| 反向通知 | `shell_notify` |
+| 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
+| 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
+| 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
+| 历史与审计 | `history`（列表 / 消息搜索 / 重命名 / 备注标签 / 彻底清理 / 渲染截图）, `message`（列表 / 获取） |
+| 宿主探测 | `shell_detect` |
+
+执行一行命令的标准做法为：`shell_input` 输入文本 + `shell_key(key="enter")` 按回车 + `shell_output` 读取输出。调用失败时返回带有 `error_code` 稳定错误码的结构化 JSON。
+
+## 已知限制
+
+- **`history` 截图仅支持 ASCII 终端字符**：`history(action=screenshot)` 将持久化文本渲染为固定点阵终端图像，非 ASCII 字符可能无法高精度呈现。
+- **文件与转发操作需活跃连接**：在已退出（DEAD）或归档的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
+- **断线不自动重连**：SSH 意外断线会被检测，会话置为 DEAD（`exited`）只读保留、输出不丢，但不会自动重连。需要时重新 `session_start`，或从历史中查看旧会话。
+- **无命令白名单 / 目录限制**：termcp 不设命令白名单、路径限制或策略式风险分级。风险控制走**人工在环**：可在 Web UI 随时中断 AI 的操作；`sudo` / 密码 / MFA 提示默认交给你输入（Agent 遵循不猜测、不回显的约定，暂停等你输入），若你允许 Agent 代输也完全可以——termcp 不做禁止。
+- **认证功能未实现**：HTTP 面（Web UI、MCP、REST、WebSocket）当前没有任何认证，谁能触达端口谁就能进入。默认绑定 `127.0.0.1` 就是安全边界——一旦 `--host 0.0.0.0` 暴露到网络，请自行用认证、反向代理或防火墙兜底。
 
 ---
 

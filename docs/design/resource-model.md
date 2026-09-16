@@ -64,26 +64,18 @@ SSH 连接
 
 **场景**：SSH 连接因网络故障、服务端超时等原因意外断开。
 
-**当前状态**：无检测机制。SSH 断开后 Session 残留为僵尸，Shell 和 Forward 不释放。
+**当前状态**：**已实现**。检测挂在每个 Shell 的退出 watcher 上（`startReaders` 中等待 `<-execSession.Done()`）：
 
-**检测策略**：
+- Shell 的 SSH channel 结束时先落定退出码。若本次结束**既非主动关闭**（`deliberateClose`，来自 `TerminateShell`/`CloseChildShell`）**又非正常进程退出**（`ExecSession.Aborted()` == `err != nil && !isExitError(err)`，即 transport/连接错误而非 `*ssh.ExitError`），判定为 **SSH 断线**。
+- 此时由该 Shell 把**父 Session 标记为 DEAD**，并写入系统消息 `❌ SSH connection lost — network disconnected`。
+- 一条 SSH 传输断开时其上所有 channel 会一并结束，因此最先观察到 abort 的 watcher 即完成整个 Session 的收敛（`exitOnce` 保证只跑一次）。
 
-Session 持有多种 SSH channel 类型：
-- Shell channel（每个 Shell 一个）
-- Forward tunnel（每个转发一个）
-- SFTP channel（Session 级别，按需开启）
+**自然退出与容器状态**：
 
-任意 channel 的 `Done()` 事件都能感知到其自身关闭。但单个 Shell 退出不能判定整个 SSH 断开。
+- PTY 会话的 Shell 正常退出后，容器保持 `running`（可继续新建 Shell），退出的 Shell 以 `exited` 元数据保留，供只读读取末尾输出。
+- Pipe 会话的**最后一个** Shell 正常退出时，`markDeadIfNoShells` 将容器翻为 DEAD，避免留下零 Shell 的僵尸 `running` 容器；PTY 容器保持可复用。
 
-**方案**：Session 创建时注册对 SSH Client 底层连接的监控。具体实现：
-- Go 的 `ssh.Client` 未导出 `Wait()` 方法，需通过以下方式之一感知：
-  1. 开一个专用的 watchdog SSH session，监控其 `Done()` 事件
-  2. 用 `ssh.Client.Wait()`（如果 crypto/ssh 版本支持）
-  3. 当所有 Shell channel 全部退出 + Forward 全部关闭时，用 `NewSession()` 试探 SSH 是否存活
-
-具体实现方案待确定后写入实现文档。
-
-断开后的清理流程等同于 Session 显式终止：关闭所有 Shell → 关闭所有 Forward → 关闭 SSH Client → 标记 Exited → 从 registry 移除 → 推送 UI 更新。
+**DEAD 的边界**：断线收敛只把 Session **就地置为 DEAD（`exited`），保留在 registry 中只读**（"断开 ≠ 删除"）。释放资源需显式 `Delete`，移入历史库需 `ArchiveAndForget`（见 `docs/api.md`）。
 
 ## 推送机制
 
@@ -107,8 +99,9 @@ WebSocket `{type: "sessions"}` 消息到达时：
 |------|---------|---------|
 | Session 持有 execSession | 是，`sendInput` 直接写 `s.execSession.Stdin` | 剥离，I/O 全部走 Shell |
 | Session 持有 buf | 是，`ReadTerminalStream` 读 `s.buf` | 剥离 |
-| primaryShell 字段 | 存在，多处引用 | 删除，所有 Shell 平等存储在 `childShells` map |
-| rootShell / 根 shell 概念 | 多处特殊处理 | 删除，无此概念 |
-| SSH 断线检测 | 无 | 待实现 |
-| Shell 自然退出清理 | 不完善 | Shell 退出→从 map 移除→推送 |
+| primaryShell 字段 | 存在（`primaryShellID`），供 legacy Session 级 helper 使用 | 删除，所有 Shell 平等存储在 `childShells` map |
+| rootShell / 根 shell 概念 | 首个 Shell 在代码中仍以局部变量 `root` 命名并特殊处理 | 删除，无此概念 |
+| SSH 断线检测 | **已实现**：Shell channel `Done()` 时用 `Aborted()` 判定 → 父 Session 置 DEAD（见上节） | 保持 |
+| Shell 自然退出清理 | **已实现**：保留 `exited` 元数据于 map、drain 管道、关缓冲、推送 UI；仅手动关闭才从 map 移除 | 保持 |
 | Forward 级联清理 | 有（`CloseBySession`） | 保持 |
+| File（SFTP）复用 | 无，每次操作临时 `NewClient`（见上） | Session 级复用 |

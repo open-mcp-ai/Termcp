@@ -36,11 +36,11 @@
 
 ## Introduction
 
-`termcp` is an MCP server written in Go that exposes interactive programs to AI Agents as persistent **SSH** sessions, letting Agents continuously manage and drive them. On top of that, termcp ships a dedicated session management UI that gives you full visibility into the Agent's behavior. You can also interact directly with the controlled machine — or adjust the Agent's behavior — just as you would over a normal SSH connection.
+`termcp` is an MCP server written in Go that exposes interactive programs to AI Agents as persistent **SSH** sessions, letting Agents continuously manage and drive them. On top of that, termcp ships a dedicated session management UI that gives you full visibility into the Agent's behavior. You can also interact directly with the controlled machine — or adjust the Agent's behavior — just as you would over a normal SSH connection. Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
 
+### Demo Video
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
-
 
 ## Why termcp
 
@@ -79,27 +79,49 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 
 ## Features
 
+- **⚡ One-command install** — `go install github.com/open-mcp-ai/termcp@latest`. No clone and no build; a single Go toolchain is all you need.
+- **🔌 One-line MCP onboarding** — Point any MCP client at termcp in a single line — e.g. `claude mcp add --transport http termcp http://localhost:18765/stream` (just one example; Open WebUI and other clients work the same way). Both Streamable HTTP and SSE are served on the same port, so there is no per-tool integration work.
+- **🔗 Resource URLs** — Every entry, session, and shell has a stable `termcp://` address with one-click copy buttons throughout the Web UI. Paste the URL into your chat with the Agent and it can precisely locate and operate that connection, session, or shell.
+- **🤝 Human–AI relay, seamless handoff** — You and the Agent share the same live session and can switch at any moment: open a root-privileged shell yourself, then hand it to the Agent to drive; or let the Agent hit a `sudo` / password / MFA prompt and pause for you to type it into the Web UI, after which the Agent carries on. Input to each shell is serialized, so you and the Agent never garble each other's keystrokes, and credentials are never guessed or echoed by the Agent — and you stay in control: interrupt a misbehaving Agent at any time.
 - **🟦 Multi-turn interaction** — The process keeps running; the Agent can drive it across multiple conversation turns instead of a one-shot call-and-return.
-- **🟪 Real terminal environment** — A fully emulated real terminal, so programs that depend on terminal features like `vim`, `top`, `gdb` all run correctly, with cross-platform compatibility.
-- **🟧 Built-in visual UI** — Access live terminals, session lists, and output-history replay straight from a browser. Served from a single port, no extra deployment needed.
-- **🟨 Multiple Agents, no conflicts** — Multiple Agents can read the same session simultaneously, each maintaining its own independent cursor, with no output stealing.
-- **🟩 Remote operations, all integrated** — Command execution, file transfer, and port forwarding all over a single SSH connection, with no need to re-establish connections.
-- **🟥 Event notifications (reverse wake-up)** — With `shell_notify`, termcp proactively wakes the Agent on process exit / output going quiet / new output (signal only, no payload), so polling is unnecessary; the Web UI lists and can remove active rules.
+- **🟪 Real terminal environment** — A fully emulated real terminal (PTY; ConPTY on Windows), so programs that depend on terminal features like `vim`, `top`, `gdb` all run correctly, with cross-platform compatibility.
+- **🟫 Local or remote, your choice** — Point an Agent at the termcp host itself with zero setup (`ssh_config="internal"`), or at any remote machine over SSH. The same tool workflow drives both.
+- **🟧 Built-in visual UI** — Access live terminals, session lists, tabbed multi-shell windows, a tiling workspace, and output-history replay straight from a browser. Served from a single port, no extra deployment needed.
+- **🟨 Multiple Agents, no conflicts** — Multiple Agents can read the same session simultaneously, each maintaining its own independent cursor, with no output stealing. The unified `shell_output` reader works identically on live, dead, and archived sessions (byte offsets, `tail_lines`, paging).
+- **🟩 Remote operations, all integrated** — Command execution, file transfer (full SFTP suite plus direct HTTP download/upload URLs with resume), and port forwarding (`-L` / `-R` / `-D`) all over a single SSH connection, with no need to re-establish connections.
+- **🟥 Proactive AI notifications (push, no polling)** — `shell_notify` actively notifies the AI Agent — no polling required. termcp pushes a wake-up signal the moment a process exits, output goes quiet, or new output arrives (signal only, no payload); with `channel="sampling"` it actively sends an MCP `sampling/createMessage` to wake the model. Completion is decided by the process-exit event, never a fixed timeout. The Web UI lists and can remove active rules.
+- **🟨 Session history survives everything** — "Disconnect ≠ delete": sessions that exit or crash are archived with their full output, survive termcp restarts, and can be searched, annotated, renamed, rendered as screenshots, or permanently purged.
+- **🔒 Credential-safe by design** — SSH passwords, private keys, and passphrases written through `ssh_config` are never readable back, so plaintext secrets never enter the Agent's context. Config-writing tools stay off unless you explicitly enable `--mcp-manage-ssh-configs`.
+- **🪶 Context-friendly output** — `shell_notify` pushes only a wake-up signal (no payload), and terminal content is pulled on demand via `shell_output`; raw terminal output never floods the model context.
 
 ## Quick Start
 
+### Quick Install (Go toolchain required)
+
+The fastest way to install — one command, no clone, no build:
+
+```bash
+go install github.com/open-mcp-ai/termcp@latest
+```
+
+`go install` resolves the module through the Go proxy (use `GOPROXY=https://goproxy.cn,direct` in mainland China) and drops the `termcp` binary into `$(go env GOPATH)/bin` — make sure that directory is on your `PATH`. termcp is written in Go, so install is `go install` or a prebuilt Release binary: there is no `npx`/`uvx` variant, and it needs no Node or Python runtime. Being a Go module, it also supports source-level integration: `go get github.com/open-mcp-ai/termcp` to bring it in as a dependency, or fork and build a customized binary from source. Then run:
+
+```bash
+termcp
+```
+
 ### Download
 
-Head to the Releases page and download the pre-built binary for your platform:
+Head to the [Releases page](https://github.com/open-mcp-ai/termcp/releases) and download the pre-built binary for your platform:
 
 | Platform            | File                       |
 | :------------------ | :------------------------- |
-| Linux (x86_64)      | `termcp-linux-amd64`       |
-| Linux (ARM64)       | `termcp-linux-arm64`       |
-| macOS (Intel)       | `termcp-darwin-amd64`      |
-| macOS (Apple Silicon) | `termcp-darwin-arm64`    |
-| Windows (x86_64)    | `termcp-windows-amd64.exe` |
-| Windows (ARM64)     | `termcp-windows-arm64.exe` |
+| Linux (x86_64)      | [termcp-linux-amd64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-linux-amd64) |
+| Linux (ARM64)       | [termcp-linux-arm64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-linux-arm64) |
+| macOS (Intel)       | [termcp-darwin-amd64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-darwin-amd64) |
+| macOS (Apple Silicon) | [termcp-darwin-arm64](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-darwin-arm64) |
+| Windows (x86_64)    | [termcp-windows-amd64.exe](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-windows-amd64.exe) |
+| Windows (ARM64)     | [termcp-windows-arm64.exe](https://github.com/open-mcp-ai/termcp/releases/latest/download/termcp-windows-arm64.exe) |
 
 ### Build
 
@@ -127,12 +149,14 @@ termcp [flags]
 
 | Flag            | Default       | Description                                                              |
 | --------------- | ------------- | ------------------------------------------------------------------------ |
-| `--host`        | `127.0.0.1`   | HTTP bind address. `0.0.0.0` listens on all interfaces.                  |
+| `--host`        | `127.0.0.1`   | HTTP bind address. `0.0.0.0` listens on all interfaces. Keep the loopback default unless a firewall or reverse proxy protects the port — **authentication is not implemented yet**. |
 | `--port`        | `18765`       | HTTP port. Shared by the Web UI, MCP SSE, and MCP streamable HTTP.       |
 | `--data-dir`    | `~/.termcp`   | Persistence directory (sessions, messages, SSH configs). Auto-created. Default overridable via `$TERMCP_DATA_DIR`. |
 | `--log-level`   | `info`        | Log level: `debug` / `info` / `warn` / `error`. `debug` shows all MCP tool calls; failed tool calls and session-create errors log at `warn`/`error` regardless. |
 | `--no-internal` | `false`       | Disable the built-in loopback SSH profile.                                   |
 | `--mcp-manage-ssh-configs` | `false` | Enable MCP tools to create/edit/delete SSH configs (secrets are never exposed). |
+
+These flags are your **capability gates**: `--no-internal` narrows Agents to remote hosts only, and `--mcp-manage-ssh-configs` is what opens SSH-config write access. Tighten or loosen what Agents can touch per scenario.
 
 ### Examples
 
@@ -142,7 +166,38 @@ termcp [flags]
 
 # Allow AI agents to manage SSH configs
 ./termcp --mcp-manage-ssh-configs
+
+# Disable the built-in loopback profile (agents may only reach remote hosts)
+./termcp --no-internal
 ```
+
+### Connecting to Remote Hosts
+
+Zero setup: `ssh_config="internal"` drives the termcp host itself. To reach a remote machine, create an SSH profile — in the Web UI's new-connection dialog (it ships a TOML template and a **Test connection** button), or via the REST API `PUT /api/connections/<name>` with a TOML body:
+
+```toml
+kind = "remote"
+host = "192.168.1.100"
+user = "pi"
+trust_unknown_host = true  # first connect to an unknown host
+
+# EITHER a password:
+password = "..."
+
+# OR the private key's PEM content itself — a path like "~/.ssh/id_ed25519" will NOT work:
+private_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+<paste the full content of ~/.ssh/id_ed25519>
+-----END OPENSSH PRIVATE KEY-----"""
+key_passphrase = "..."     # only if the key is passphrase-protected
+
+# Optional bastion (ProxyJump) hop:
+[jump]
+host = "bastion.example.com"
+user = "ops"
+password = "..."
+```
+
+Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_config(action=list)`. Credentials written this way are never readable back. Agents can create profiles too, but only when termcp was started with `--mcp-manage-ssh-configs`.
 
 ## Docker Deployment
 
@@ -235,7 +290,36 @@ docker compose up -d --build
 
 ## Connecting MCP Clients
 
-### Claude Code (SSE)
+termcp speaks **both MCP transports** on the same port (18765). Choose whichever your client supports — the tool surface is identical.
+
+termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode). As an MCP server it is itself a plugin: embed it into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
+
+### Option A — Streamable HTTP (`/stream`)
+
+The modern MCP transport; a single endpoint, no separate message path. Use this for Claude Code, Open WebUI, and most current clients.
+
+```json
+{
+  "mcpServers": {
+    "termcp": {
+      "type": "http",
+      "url": "http://your-server:18765/stream"
+    }
+  }
+}
+```
+
+```bash
+claude mcp add --transport http termcp http://localhost:18765/stream
+```
+
+- Same machine: `http://127.0.0.1:18765/stream`.
+- Open WebUI in Docker, termcp on the host: `http://host.docker.internal:18765/stream` (macOS/Windows), or the host's LAN IP.
+- Both in Docker on the same network (see [Docker Deployment](#docker-deployment)): `http://termcp:18765/stream`.
+
+### Option B — SSE (`/sse`)
+
+The legacy transport. Configure **only** `/sse`; the SDK posts JSON-RPC to `/message` automatically.
 
 ```json
 {
@@ -248,25 +332,41 @@ docker compose up -d --build
 }
 ```
 
-Or via CLI:
-
 ```bash
 claude mcp add --transport sse termcp http://localhost:18765/sse
 ```
 
-### Open WebUI (Streamable HTTP)
+### Cheat sheet
 
-Point Open WebUI at `http://<host>:18765/stream`.
+- Streamable HTTP → `http://<host>:18765/stream`
+- SSE → `http://<host>:18765/sse` (JSON-RPC goes to `POST /message`)
 
-- Same machine: `http://127.0.0.1:18765/stream`.
-- Open WebUI inside Docker, termcp on the host: `http://host.docker.internal:18765/stream` (macOS/Windows), or the host's LAN IP.
-- Both in Docker on the same network (see [Docker Deployment](#docker-deployment)): `http://termcp:18765/stream`.
+The Web UI's **API / MCP** page (`/api.html`) offers copy-ready config for both transports.
 
-### Other MCP Clients
+## Tool Reference
 
-- SSE transport → `http://<host>:<port>/sse`
-- Streamable HTTP → `http://<host>:<port>/stream`
+termcp exposes 30 MCP tools. Full parameters, return shapes, and error codes live in [`docs/mcp-tools.md`](./docs/mcp-tools.md).
 
+| Area | Tools |
+|------|-------|
+| Sessions (connection containers) | `session_start`, `session_list`, `session_info`, `session_terminate` |
+| Shells (terminal channels) | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
+| Event notifications | `shell_notify` |
+| SSH profiles | `ssh_config` (`list`; `create`/`edit`/`copy`/`delete` with `--mcp-manage-ssh-configs`) |
+| Port forwarding | `forward` (`-L` / `-R` / `-D` / list / close) |
+| Files (SFTP) | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
+| History & messages | `history` (list / search / rename / meta / purge / screenshot), `message` (list / get) |
+| Host discovery | `shell_detect` |
+
+Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Failed tools return `isError=true` with a JSON body carrying a stable `error_code`.
+
+## Known Limitations
+
+- **`history` screenshots are ASCII-only.** `history(action=screenshot)` renders the persisted text as a fixed-bitmap terminal image; it is not a pixel-accurate rendering of non-ASCII glyphs.
+- **File and forward tools need a live connection.** On `exited`/archived sessions those tools return `session_not_running`; output reading still works via `shell_output`.
+- **No auto-reconnect.** An unexpected SSH drop is detected and the session is marked DEAD (`exited`), kept read-only with its output retained — it is not reconnected automatically. Start a new session (`session_start`) or review the old one from history.
+- **No command allowlisting or directory jail.** termcp does not enforce command whitelists, path restrictions, or policy-based risk tiers. Risk control is human-in-the-loop instead: interrupt the Agent from the Web UI at any time, and privileged prompts (`sudo` / password / MFA) are by default handed to you — Agents follow a no-guessing, no-echoing convention and pause for you to type. Whether the Agent may type them anyway is your call; termcp does not forbid it.
+- **Authentication is not implemented yet.** The HTTP surface — Web UI, MCP, REST, WebSocket — has no authentication; anyone who can reach the port gets in. The default `127.0.0.1` bind is the security boundary: if you expose `--host 0.0.0.0`, put your own authentication, reverse proxy, or firewall in front.
 
 ---
 

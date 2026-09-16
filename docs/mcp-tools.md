@@ -24,6 +24,22 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 
 ---
 
+## 资源 URL 寻址（termcp://）
+
+这些 URL 是**复制给 AI 用的定位符**：Web UI 各处的复制按钮（entry 卡片、session 卡片、终端标题、每个 shell 频道标签）一键复制后，直接粘进与 AI 的对话或任务描述中，AI 就能精确定位你说的是**哪个连接 / 哪个会话 / 会话里的第几个频道**，不用再费口舌描述。点击复制按钮不会触发连接、切换频道或关闭窗口。
+
+| 层级 | URL 形式 | 例子 |
+|------|----------|------|
+| entry（连接配置） | `termcp://[entry名]` | `termcp://internal` |
+| session（会话） | `termcp://[entry名]#[会话id]`，也可用短形式 `termcp://#[会话id]` | `termcp://pi#ctf-1` / `termcp://#ctf-1` |
+| shell（频道） | `termcp://[entry名]#[会话id]:[序号]` 或 `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
+
+- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致。
+- 知道所属 entry 就带上前缀，不确定时直接用短形式。
+- 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`。
+
+---
+
 ## 错误返回（错误码）
 
 工具失败时返回 `isError=true`，其文本内容是一个带**专用错误码字段**的 JSON 对象，调用方据此分支处理，无需解析自然语言：
@@ -238,7 +254,7 @@ ssh_config(action=list)
 
 ### shell_notify
 
-为某个 shell 注册**反向唤醒通知**：termcp 在事件发生时主动发一个“醒来”信号，Agent 收到后再用 `shell_output` 拉取输出（通知**只带信令、不带终端内容**，避免污染上下文）。
+为某个 shell 注册**主动通知（push）**：termcp 在事件发生时**主动通知 AI Agent** —— 进程退出 / 输出停顿 / 有新输出时即刻推送“醒来”信令，Agent 收到后再用 `shell_output` 拉取输出（通知**只带信令、不带终端内容**，避免污染上下文）。Agent 无需持续轮询，非常适合长任务挂起等待。
 
 `action` 三选一：
 
@@ -275,6 +291,46 @@ ssh_config(action=list)
 ```
 
 > 进程还活但只是“输出停了”，用 `event="silence", silence_seconds=10`；需要持续跟踪输出变化用 `event="output"`。
+
+### message（会话消息历史）
+
+查看与获取持久化存储的原始会话消息。消息包含系统事件、输入命令和输出内容。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | string | **是** | `"list"` 或 `"get"` |
+| `session_id` | string | **是** | 会话 ID |
+| `message_ids` | string[] | 条件 | `action="get"` 时传入要读取的消息 ID 列表 |
+
+- `action="list"`：返回该会话的消息索引 `{ "messages": [{ id, shell_id, type, created_at, byte_size }] }`
+- `action="get"`：返回指定消息的详细内容 `{ "messages": [{ id, session_id, shell_id, type, content, created_at, byte_size }] }`
+
+### history（归档会话管理与回放）
+
+会话正常退出、意外断线或 `session_terminate` 后进入归档历史（“断开 ≠ 删除”），元数据保存在 `history.json`，消息保留在磁盘。跨 termcp 重启仍可检索、查看与导出。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `action` | string | **是** | — | `list` / `search_messages` / `rename_session` / `update_session_meta` / `purge` / `screenshot` |
+| `session_id` | string | 条件 | — | 会话 ID（除 list/search_messages 外必填） |
+| `query` | string | 条件 | — | `search_messages`：不区分大小写的全文搜索子串 |
+| `limit` | number | 否 | `50` | `search_messages`：最多返回的匹配条数 |
+| `name` | string | 条件 | — | `rename_session`：新的会话显示名称 |
+| `notes` | string | 否 | — | `update_session_meta`：更新的解法笔记/说明 |
+| `tags` | string[] | 否 | — | `update_session_meta`：更新的标签列表（如 `["web", "flag"]`） |
+| `start` | number | 否 | `0` | `screenshot`：起始渲染行（0 索引） |
+| `lines` | number | 否 | `0` | `screenshot`：渲染行数（0 = 全部） |
+| `cols` | number | 否 | `80` | `screenshot`：终端列宽 |
+| `theme` | string | 否 | `"dark"` | `screenshot`：主题（`"dark"` 或 `"light"`） |
+
+**各 action 行为**：
+- `action="list"`：列出所有归档会话 `{ "sessions": [...] }`。
+- `action="search_messages"`：跨所有会话全文搜索终端输出与输入 `{ "query": "...", "hits": [{ session_id, name, type, snippet }] }`。
+- `action="rename_session"`：重命名活跃或归档会话。
+- `action="update_session_meta"`：为归档会话添加备注与标签，方便事后检索审计。
+- `action="purge"`：**永久删除**会话，并物理清理磁盘上的所有消息记录（不可逆）。
+- `action="screenshot"`：将终端指定行数渲染为 PNG 截图并返回下载 URL，适合快速视觉审计。
+- **输出读取**：归档会话的终端输出由 `shell_output(shell_id=归档session_id, tail_lines=N / offset=...)` 读取，无需调用独立工具。
 
 ---
 

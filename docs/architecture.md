@@ -12,13 +12,14 @@
     ┌──────────────────────────┼──────────────────────────┐
     │               internal/mcp/ (server.go)               │
     │                                                       │
-    │  工具: session_start / shell_open / shell_close, │
-    │  shell_input / shell_key / shell_output, │
+    │  工具: session_start / shell_open / shell_list / shell_close, │
+    │  shell_input / shell_key / shell_output / shell_resize, │
+    │  shell_reader_register / shell_reader_unregister / shell_notify, │
     │  session_list / session_info / session_terminate, │
-    │  shell_resize / shell_reader_register / shell_reader_unregister, │
     │  forward(action=local/remote/dynamic/list/close), │
-    │  file_read / file_write / file_stat / file_delete / file_rename / file_mkdir / file_urls, │
-    │  shell_detect / ssh_config(action=list) / message(action=list/get) / history(action=...) │
+    │  ssh_config(action=list|create|edit|copy|delete) / shell_detect, │
+    │  file_read/write/stat/delete/rename/mkdir/urls/perm/link/fs/getwd, │
+    │  message(action=list|get) / history(action=list|search_messages|...) │
     │                                                       │
     │  logging.go: 每个 handler 包装结构化日志 (耗时/错误)    │
     └──────┬───────────────────────────────┬────────────────┘
@@ -253,7 +254,7 @@ AI Agent                Session                    sshclient              sshser
 AI Agent                Session                    sshclient              sshserver              OS
   │                        │                          │                      │                     │
   │  shell_resize(           │                          │                      │                     │
-  │    session_id,         │                          │                      │                     │
+  │    shell_id,           │                          │                      │                     │
   │    rows=40, cols=120)  │                          │                      │                     │
   │ ──────────────────────>│                          │                      │                     │
   │                        │  ResizePty(40,120)        │                      │                     │
@@ -287,7 +288,7 @@ Agent A (reader 0)           Session              Agent B (新加入)
   │                            │  shell_output(       │
   │                            │    reader_id=3) ───>│
   │                            │ buf.Read(ctx,3,...) │
-  │                            │ ← output (从头开始)  │
+  │                            │ ← output (从注册点起)  │
   │                            │                     │
   │  shell_output(reader_id=0)──┤                     │
   │  ← 新输出                  │                     │

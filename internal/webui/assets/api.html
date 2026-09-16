@@ -211,6 +211,7 @@
           <tr><td>Connection templates</td><td>GET</td><td><code class="inline">/api/connection-templates</code></td></tr>
           <tr><td>Connections</td><td>GET</td><td><code class="inline">/api/connections</code></td></tr>
           <tr><td>Connection</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/connections/{name}</code></td></tr>
+          <tr><td>Test connection</td><td>POST</td><td><code class="inline">/api/connections/test</code> <span class="muted">(validates connectivity, does not save)</span></td></tr>
           <tr><td>Sessions</td><td>GET / POST</td><td><code class="inline">/api/sessions</code></td></tr>
           <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE permanently erases history)</span></td></tr>
           <tr><td>Dead sessions</td><td>GET</td><td><code class="inline">/api/history</code></td></tr>
@@ -225,6 +226,8 @@
           <tr><td>Forwards</td><td>GET</td><td><code class="inline">/api/forwards</code></td></tr>
           <tr><td>Forward</td><td>DELETE</td><td><code class="inline">/api/forwards/{id}</code></td></tr>
           <tr><td>Session forwards</td><td>GET / POST</td><td><code class="inline">/api/sessions/{id}/forwards</code></td></tr>
+          <tr><td>Notification rules</td><td>GET</td><td><code class="inline">/api/notifications</code> <span class="muted">(filter by session_id / shell_id)</span></td></tr>
+          <tr><td>Notification rule</td><td>DELETE</td><td><code class="inline">/api/notifications/{id}</code></td></tr>
           <tr><td>Files</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/sessions/{id}/files</code></td></tr>
           <tr><td>Download file</td><td>GET</td><td><code class="inline">/api/sessions/{id}/files/download?path=...</code></td></tr>
           <tr><td>Upload file</td><td>POST</td><td><code class="inline">/api/sessions/{id}/files/upload</code></td></tr>
