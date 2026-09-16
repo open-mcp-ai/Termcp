@@ -216,6 +216,27 @@ func takePTY(sess ssh.Session) (*sessionPTY, bool) {
 	return ps, true
 }
 
+// drainWindowChanges applies every window the library delivers on winch to the
+// session's PTY.
+//
+// charmbracelet/ssh runs its own goroutine that consumes winch and applies
+// resizes, but it is fire-and-forget: errors are swallowed and nothing revives
+// it. If its application of a window silently stops (observed on macOS, where
+// resizes stopped reaching the child tty mid-session while every other byte of
+// traffic kept flowing), buffered window-changes sit unapplied forever and the
+// request loop eventually blocks on the full channel — every later resize of
+// the session dies with no error anywhere. This consumer makes resize
+// application independent of that goroutine: each window it dequeues is applied
+// to the same PTY. It must never discard windows: an earlier discard-only
+// consumer (removed in a664a5d) dropped roughly half of all resizes. When both
+// consumers are alive they race for each window, but both apply what they get,
+// so no window can be lost.
+func drainWindowChanges(pty ssh.Pty, winch <-chan ssh.Window) {
+	for win := range winch {
+		_ = pty.Resize(win.Width, win.Height)
+	}
+}
+
 // New creates an internal SSH server that communicates in-process via net.Pipe (no TCP port).
 func New() *Server {
 	s := &Server{
@@ -268,6 +289,9 @@ func New() *Server {
 		if err != nil {
 			sess.Context().SetValue(key, nil)
 			return nil, err
+		}
+		if p, winch, ok := sess.Pty(); ok && !p.IsZero() {
+			go drainWindowChanges(p, winch)
 		}
 		return func() error {
 			ps.mu.Lock()
@@ -424,7 +448,7 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// The PTY info comes from stashPTY rather than sess.Pty(): the request loop
 	// writes sess.pty.Window for every window-change without holding the session
 	// lock, so reading that struct here would race it. Window changes are applied
-	// by the library's own drain goroutine (installed by AllocatePty).
+	// by drainWindowChanges plus the library's own drain goroutine.
 	ps, hasPty := takePTY(sess)
 	var started bool
 	if hasPty {
