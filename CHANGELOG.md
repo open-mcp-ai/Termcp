@@ -4,6 +4,7 @@
 
 ### Breaking
 
+- **非 loopback 绑定必须配置认证**：监听 `0.0.0.0`、局域网 IP 或非 `localhost` 主机名时，若未提供 `--auth-token` / `--auth-hash` / `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH`，启动直接失败（此前允许无认证运行）。loopback 绑定保持无认证默认行为不变。
 - **`session_start` 必填 `ssh_config`**：此前未传 `ssh_config` 时会隐式回退到 `"internal"`（本机 loopback），导致当调用方意在连远端主机但漏传配置（如只传了 `name`）时会误打开宿主机终端。现在必须显式指定 `ssh_config`（连宿主请显式传 `"internal"`，连远端传 profile 名称）；未传或为空时直接返回 `invalid_argument`（`ssh_config is required`）。
 - **`shell_output` 统一游标读取**：唯一输出读取入口，活会话（内存缓冲）、已退出会话（保留缓冲）、归档/重启恢复会话（磁盘消息流）全部同一套字节流游标语义。新增 `offset`（无状态字节定位，配合 `start_offset`/`end_offset`/`total_bytes`/`has_more` 翻页）与 `tail_lines`（只取末尾 N 行，token 友好）；返回体新增 `source`/`session_id`/`shell_id` 等游标元数据。
 - **删除 `history(action=get_transcript)`**：归档输出读取并入 `shell_output`（`shell_id=归档session_id或shell_id`），不再提供全量转录导出，避免一次性把整个会话拖入 LLM 上下文。WebUI 的 `GET /api/history/{id}/transcript` 导出保留。
@@ -13,6 +14,7 @@
 
 ### 新功能
 
+- **单一静态 Token 的 HTTP 认证**：新增 `internal/auth` 包 + 共享 mux 外层中间件，一次覆盖 Web UI、REST、MCP SSE、`/stream`、WebSocket。配置 `--auth-token` / `TERMCP_AUTH_TOKEN`（明文）或 `--auth-hash` / `TERMCP_AUTH_HASH`（`sha256-<salt_hex>-<digest_hex>`，`digest = SHA256(salt || token)`，服务端不落明文），二者互斥、flag 优先于环境变量。凭据按序尝试 `Authorization: Bearer` → `Authorization: Basic`（密码字段即 token，用户名忽略）→ `termcp_token` cookie（Basic 成功后自动下发：HttpOnly、SameSite=Strict，TLS 下带 Secure；解决浏览器 WebSocket 握手无法自定义请求头的问题）；全部失败返回 `401` + `WWW-Authenticate: Basic`（浏览器原生登录框，无自定义登录页、无 `/auth/login`）。校验用 `crypto/subtle` 常数时间比对，token 不进日志、不进 URL。新增 `--gen-auth-hash` flag：生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或在不带参数时从 stdin 无回显读取（不进 shell 历史）。文档同步更新 README（中英）、`docs/api.md`、`docs/architecture.md`、Web UI `api.html` 与 Docker 示例。
 - **反向唤醒通知 `shell_notify`**（信令与数据分离）：新增 `internal/notify` 统一通知内核，支持 `event=output`（双沿触发：立即 + 2s 尾沿兜底）/`exit`（一次性，进程退出/SSH 中断）/`silence`（N 秒无输出，一次性）；双通道 `resource`（广播 `notifications/resources/updated`，uri `termcp://shells/<id>`）与 `sampling`（向**注册规则的客户端 session** 发送 `sampling/createMessage`，systemPrompt `termcp notification daemon`）；全局 1s 冷却阀防刷屏；`register`/`unregister`/`list` 三个 action，shell 退出/关闭/会话删除自动级联反注册（零协程/定时器泄漏）。MCP 层用 `AddTerminateListener` 与 forward 清理共存（不再互相覆盖）；sampling 在注册时捕获 `ClientSession`，解决定时器 goroutine 中无 session 导致发送失败的问题。Web UI 终端窗口新增 **Notifications 标签页**：实时列出该会话已注册的通知规则（event/channel/silence 秒数），可一键拆除；新增 `GET /api/notifications`（支持 `shell_id`/`session_id` 过滤）与 `DELETE /api/notifications/{id}`，规则变更经 `notify.Manager` 回调广播实时刷新。文档：`docs/mcp-tools.md` 新增 `shell_notify` 章节，README 特性表补充。
 - **资源 URL 规矩与复制按钮**：为 termcp 资源定义统一的 URL 寻址——entry `termcp://[entry_name]`；session `termcp://#[session_name]` 或带 entry 前缀的 `termcp://[entry_name]#[session_name]`；shell `termcp://#[session_name]:[shell_index]` 或 `termcp://[entry_name]#[session_name]:[shell_index]`。`[session_name]` 取**会话 id**（卡片上等宽小字，无 `session-` 前缀），`[shell_index]` 取会话内**频道顺序（1 起）**，与频道标签 `shell-1`/`shell-2` 一致；知道 entry 时带上 entry 前缀，否则用短形式。Web UI 新增/改造小复制按钮，一律复制对应层级的 URL：entry 卡片名字旁（新增，紧贴名字）、session 卡片（原复制 session id 改为 URL）、终端窗口标题栏与 Tools 面板、以及**每个底部 shell 频道标签**（新增，复制该频道的 `:index` URL）。点击复制按钮不触发连接/切换频道/关闭窗口。
 

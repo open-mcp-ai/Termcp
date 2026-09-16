@@ -92,6 +92,7 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - **🟥 主动通知 AI Agent（推送，免轮询）** —— `shell_notify` 注册后由 termcp **主动通知 AI Agent**：进程退出 / 输出停顿 / 有新输出时即刻推送唤醒信令（仅信令、不带内容，避免污染上下文），无需 Agent 持续轮询；`channel="sampling"` 时还会主动发送 MCP `sampling/createMessage` 直接唤起模型。命令完成判定基于进程退出事件，而非固定超时。Web UI 可查看与拆下已注册规则。
 - **🟨 断开 ≠ 删除，历史全保留** —— 正常退出或异常断线的会话自动归档，完整终端输出落盘保留，跨 termcp 重启仍可检索、重命名、打标签、渲染为 PNG 终端截图，仅显式删除才真正清理。
 - **🔒 凭据安全设计** —— 通过 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据永不出现在 Agent 上下文中；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
+- **🛡️ 单一静态 Token 鉴权** —— 一个静态 Token 保护整个 HTTP 面：Web UI、REST API、MCP SSE、MCP Streamable HTTP 和 WebSocket。可配置 Token 本身（`--auth-token` / `TERMCP_AUTH_TOKEN`），也可只配置 salted SHA-256 哈希（`--auth-hash` / `TERMCP_AUTH_HASH`，用 `termcp --gen-auth-hash` 生成），服务端不保存明文配置。监听非 loopback 地址时未配置认证会拒绝启动。
 - **🪶 上下文友好，省 Token** —— `shell_notify` 只推送唤醒信令（不带内容），终端正文通过 `shell_output` 按需拉取，避免原始输出灌满模型上下文。
 
 ## 快速开始
@@ -149,20 +150,26 @@ termcp [flags]
 
 | Flag            | 默认值      | 说明                                                         |
 | --------------- | ----------- | ------------------------------------------------------------ |
-| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。**认证功能未实现**，除非有防火墙/反向代理保护端口，否则请保持 loopback 默认值。 |
+| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。绑定非 loopback 地址时**必须**配置认证 Token/哈希，否则拒绝启动。 |
 | `--port`        | `18765`     | HTTP 端口。Web UI、MCP SSE、MCP streamable HTTP 共用。       |
 | `--data-dir`    | `~/.termcp` | 持久化目录（会话、消息、SSH 配置）。不存在则自动创建。默认值可用环境变量 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level`   | `info`      | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 显示全部 MCP 工具调用；失败的工具调用与会话创建错误始终以 `warn`/`error` 打印。 |
 | `--no-internal` | `false`     | 禁用内建 loopback SSH profile。                                |
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
+| `--auth-token`  | *(未设置)*  | HTTP 认证静态 Token（或 `$TERMCP_AUTH_TOKEN`）。API、MCP、浏览器全部客户端都须携带。与 `--auth-hash` 互斥。 |
+| `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。与 `--auth-token` 互斥。 |
+| `--gen-auth-hash` | *(action)* | 生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或不带参数时从终端 stdin 无回显读取。 |
 
-这两个 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。
+这些 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。认证详见下节[认证](#认证)。
 
 ### 示例
 
 ```bash
 # 监听所有网卡
-./termcp --host 0.0.0.0
+./termcp --host 0.0.0.0 --auth-token "your-long-random-token"
+
+# 监听所有网卡，服务端只保存 salted 哈希
+./termcp --host 0.0.0.0 --auth-hash "$(./termcp --gen-auth-hash)"
 
 # 允许 AI Agent 管理 SSH 配置
 ./termcp --mcp-manage-ssh-configs
@@ -170,6 +177,36 @@ termcp [flags]
 # 禁用内建 loopback profile（Agent 只能连远程主机）
 ./termcp --no-internal
 ```
+
+### 认证
+
+单一静态 Token 保护整个 HTTP 面——Web UI、REST API、MCP SSE、MCP Streamable HTTP 与浏览器 WebSocket。仅监听 loopback（`127.0.0.1`）时可保持零配置默认；绑定非 loopback 而未配置 Token 会直接启动失败。
+
+```bash
+# 明文方式：flag 或环境变量
+./termcp --auth-token "your-long-random-token"
+TERMCP_AUTH_TOKEN="your-long-random-token" ./termcp
+
+# 哈希方式（推荐）：服务端只保存 sha256-<salt>-<digest>。
+# `termcp --gen-auth-hash` 在终端下无回显地从 stdin 读取 Token，
+# 不会进入 shell 历史：
+./termcp --gen-auth-hash
+TERMCP_AUTH_HASH='sha256-...' ./termcp
+```
+
+各客户端如何携带 Token：
+
+| 客户端 | 凭据方式 |
+|--------|---------|
+| API / MCP / curl | `Authorization: Bearer <token>` 请求头 |
+| 浏览器（Web UI） | 收到 `401` 时弹出原生登录框——用户名被忽略（留空即可），**密码填 Token**。认证成功后自动下发 `termcp_token` cookie，同源 WebSocket 握手随之通过。 |
+
+行为说明：
+
+- `--auth-token` 与 `--auth-hash` 互斥；同一配置项 flag 优先于环境变量。
+- Token 含冒号也兼容：解码后的整个 `user:pass` 串与原 token 完全一致时同样放行，因此按首个冒号拆分的客户端（如 `curl -u user:pass`）也能通过；规范写法仍是 `curl -u :<token>`。
+- 未配置 Token/哈希时，绑定任何非 loopback 地址（`0.0.0.0`、局域网 IP、非 `localhost` 的主机名）都会启动失败——被误暴露的实例不可能无认证运行。
+- 浏览器走的是 HTTP Basic，只是 Base64 编码而非加密。对外提供服务时请在 termcp 前面用反向代理终止 TLS；此时仅当请求本身来自 TLS 时 `termcp_token` cookie 才会自动带上 `Secure` 标志。
 
 ### 连接远程主机
 
@@ -229,6 +266,8 @@ COPY --from=termcp-build /out/termcp /usr/local/bin/termcp
 
 ### 启动命令示例
 
+容器内必须监听 `0.0.0.0`，而非 loopback 监听**必须配置认证**；通过 `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH` 或对应 flag 传入，否则启动失败。
+
 ```bash
 # 构建包含 termcp 的应用镜像
 # 也可以同时指定企业内网或其他可用的 GOPROXY / Go 基础镜像
@@ -237,10 +276,11 @@ docker build \
   -t my-app-with-termcp .
 
 # 以 termcp 作为容器主进程
-# 容器内必须监听 0.0.0.0，数据目录应挂载为持久化卷
+# 数据目录挂载为持久化卷；通过环境变量配置认证 Token
 docker run -d --name my-app-termcp \
   -p 18765:18765 \
   -v termcp-data:/data \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
   --entrypoint /usr/local/bin/termcp \
   my-app-with-termcp \
   --host 0.0.0.0 --port 18765 --data-dir /data
@@ -248,6 +288,7 @@ docker run -d --name my-app-termcp \
 # 开启 MCP SSH 配置写入工具（按需使用）
 docker run -d --name my-app-termcp \
   -p 18765:18765 -v termcp-data:/data \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
   --entrypoint /usr/local/bin/termcp \
   my-app-with-termcp \
   --host 0.0.0.0 --data-dir /data --mcp-manage-ssh-configs
@@ -259,6 +300,7 @@ docker logs -f my-app-termcp
 如果需要与原应用进程在同一个容器中同时运行，应在原有 entrypoint 或进程管理器中启动：
 
 ```bash
+export TERMCP_AUTH_TOKEN="change-me-to-a-long-random-secret"
 /usr/local/bin/termcp --host 0.0.0.0 --port 18765 --data-dir /data
 ```
 
@@ -275,6 +317,8 @@ services:
         GOPROXY: https://goproxy.cn,direct
     entrypoint: ["/usr/local/bin/termcp"]
     command: ["--host", "0.0.0.0", "--port", "18765", "--data-dir", "/data"]
+    environment:
+      - TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret
     ports:
       - "18765:18765"
     volumes:
@@ -343,6 +387,33 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 
 Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制配置。
 
+### 开启认证时的接入
+
+服务端以 `--auth-token` / `--auth-hash` 启动后，所有 MCP 请求都要带 `Authorization: Bearer` 请求头：
+
+```bash
+claude mcp add --transport http termcp http://your-server:18765/stream \
+  --header "Authorization: Bearer $TERMCP_AUTH_TOKEN"
+```
+
+```json
+{
+  "mcpServers": {
+    "termcp": {
+      "type": "http",
+      "url": "http://your-server:18765/stream",
+      "headers": { "Authorization": "Bearer <your-token>" }
+    }
+  }
+}
+```
+
+不要把 Token 放进 URL，也不要贴进共享配置或截图。`curl` 与脚本使用相同请求头：
+
+```bash
+curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://your-server:18765/api/sessions
+```
+
 ## 工具参考
 
 termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
@@ -366,7 +437,7 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 - **文件与转发操作需活跃连接**：在已退出（DEAD）或归档的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
 - **断线不自动重连**：SSH 意外断线会被检测，会话置为 DEAD（`exited`）只读保留、输出不丢，但不会自动重连。需要时重新 `session_start`，或从历史中查看旧会话。
 - **无命令白名单 / 目录限制**：termcp 不设命令白名单、路径限制或策略式风险分级。风险控制走**人工在环**：可在 Web UI 随时中断 AI 的操作；`sudo` / 密码 / MFA 提示默认交给你输入（Agent 遵循不猜测、不回显的约定，暂停等你输入），若你允许 Agent 代输也完全可以——termcp 不做禁止。
-- **认证功能未实现**：HTTP 面（Web UI、MCP、REST、WebSocket）当前没有任何认证，谁能触达端口谁就能进入。默认绑定 `127.0.0.1` 就是安全边界——一旦 `--host 0.0.0.0` 暴露到网络，请自行用认证、反向代理或防火墙兜底。
+- **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
 
 ---
 
