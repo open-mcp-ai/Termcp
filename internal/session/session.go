@@ -1127,18 +1127,25 @@ func (cs *ChildShell) startReaders() {
 		// Keep the exited ChildShell in the parent map until explicit close/Delete.
 		// This preserves its closed buffer so shell_output and WebUI can drain
 		// final output after a fast pipe command has already exited.
-		if p := cs.parent; p != nil {
-			if fn := p.onShellExit.Load(); fn != nil {
-				(*fn)(cs.ID, cs.ExitCode)
-			}
-			p.notifyChildChange()
-		}
-		// If the shell ended due to SSH disconnect (not deliberate close and not
-		// clean process exit), tear down the session. exitOnce ensures once.
 		cs.mu.RLock()
 		deliberate := cs.deliberateClose
 		reparent := cs.parent
+		// Snapshot the exit code under the lock: a concurrent
+		// CloseChildShell/TerminateShell writes cs.ExitCode while the watcher runs.
+		var exitCode *int
+		if cs.ExitCode != nil {
+			v := *cs.ExitCode
+			exitCode = &v
+		}
 		cs.mu.RUnlock()
+		if reparent != nil {
+			if fn := reparent.onShellExit.Load(); fn != nil {
+				(*fn)(cs.ID, exitCode)
+			}
+			reparent.notifyChildChange()
+		}
+		// If the shell ended due to SSH disconnect (not deliberate close and not
+		// clean process exit), tear down the session. exitOnce ensures once.
 		if reparent != nil && !deliberate && cs.execSession.Aborted() {
 			slog.Debug("session DEAD via transport abort", "session_id", reparent.ID, "child_shell_id", cs.ID)
 			reparent.markDeadWithMessage("❌ SSH connection lost — network disconnected")

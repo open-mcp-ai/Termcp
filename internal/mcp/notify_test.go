@@ -134,7 +134,32 @@ func TestShellNotify_InvalidChannelAndEvent(t *testing.T) {
 // Closing a shell must cascade-clear its notification rules (session hook).
 func TestShellNotify_RulesClearedWhenShellClosed(t *testing.T) {
 	s, _, _, _ := newTestServerWithHistory(t)
-	_, shellID := startTestSession(t, s)
+
+	// Parent must be a live PTY session: pipe containers flip DEAD once their
+	// only shell exits (startTestSession's echo command does exactly that), and
+	// a DEAD session refuses to spawn child shells.
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("start session failed: %v %+v", err, startRes)
+	}
+	sessionID := parseResult(t, startRes)["session_id"].(string)
+
+	// Closing the internal primary shell is a documented no-op (the process
+	// outlives the tab), so it never fires the close hook. Exercise the
+	// cascade on a child shell instead: handleCloseShell -> CloseChildShell ->
+	// removeChildShell, which invokes the onShellClose hook synchronously.
+	openRes, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
+		"session_id": sessionID,
+		"command":    testShell(),
+	}))
+	if err != nil || openRes.IsError {
+		t.Fatalf("shell_open failed: %v %+v", err, openRes)
+	}
+	shellID := parseResult(t, openRes)["shell_id"].(string)
 
 	if _, err := s.handleShellNotifyOps(context.Background(), makeRequest(map[string]any{
 		"action":   "register",
