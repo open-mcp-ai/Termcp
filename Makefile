@@ -1,4 +1,4 @@
-.PHONY: build build-debug clean dist
+.PHONY: build build-debug test clean dist
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
@@ -21,6 +21,10 @@ build:
 build-debug:
 	mkdir -p dist
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -gcflags "all=-N -l" -o dist/$(BIN) .
+
+# 运行全部单元测试（-count=1 跳过测试结果缓存，保证每次都真实执行）
+test:
+	go test -count=1 ./...
 
 # 清理构建文件
 clean:
