@@ -154,6 +154,12 @@
     }
     .conn-tile .nm { font-size: 0.85rem; font-weight: 600; word-break: break-all; line-height: 1.2; color: #1f2328; cursor: default; }
     .conn-tile.entry-card .conn-nm-row { margin-top: 0; justify-content: flex-start; }
+    /* Name + copy button hug each other; the edit button stays at the row's far right. */
+    .conn-tile.entry-card .conn-nm-cluster { display: flex; align-items: flex-start; gap: 4px; min-width: 0; flex: 1 1 auto; }
+    .conn-tile.entry-card .conn-nm { flex: 0 1 auto; }
+    /* Borderless copy button, mirroring the edit button's quiet look. */
+    .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
+    .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: #0969da; background: rgba(9,105,218,.08); }
     .conn-nm-row { display: flex; align-items: flex-start; justify-content: center; gap: 4px; margin-top: 4px; max-width: 100%; }
     .conn-nm { font-size: 0.9rem; font-weight: 600; word-break: break-all; line-height: 1.25; color: #1f2328; cursor: inherit; text-align: left; flex: 1; min-width: 0; }
     .conn-nm:hover { color: inherit; }
@@ -597,6 +603,27 @@
     .shell-channel-tab:hover .shell-channel-tab-close,
     .shell-channel-tab.active .shell-channel-tab-close { opacity: 1; }
     .shell-channel-tab-close:hover { color: #fff; background: rgba(207,34,46,.6); }
+    .shell-channel-tab-copy {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: #8b949e;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      opacity: 0;
+      transition: opacity .1s, color .1s, background .1s;
+    }
+    .shell-channel-tab:hover .shell-channel-tab-copy,
+    .shell-channel-tab.active .shell-channel-tab-copy { opacity: 1; }
+    .shell-channel-tab-copy:hover { color: #e6edf3; background: rgba(255,255,255,.1); }
+    .shell-channel-tab-copy svg { display: block; }
     .shell-channel-tab-add {
       flex-shrink: 0;
       width: 26px;
@@ -767,7 +794,7 @@
           <span class="shell-title-id-group">
             <span class="shell-sid-copy">
               <span class="sid" id="panel-tools-sid">…</span>
-              <button type="button" class="title-copy-btn" id="panel-tools-copy-sid" title="Copy session id" aria-label="Copy session id"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg></button>
+              <button type="button" class="title-copy-btn" id="panel-tools-copy-sid" title="Copy URL" aria-label="Copy URL"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg></button>
             </span>
           </span>
         </h3>
@@ -1024,6 +1051,15 @@
     str = String(str || '').trim();
     if (str.indexOf('session-') === 0) return str.slice(8) || str;
     return str;
+  }
+
+  // Resource URLs: termcp://[entry] | termcp://[entry#][session]:[shell-index]
+  function resourceUrlEntry(name) { return 'termcp://' + name; }
+  function resourceUrlSession(entry, sid) {
+    return (entry ? 'termcp://' + entry + '#' : 'termcp://#') + stripSessionPrefix(sid);
+  }
+  function resourceUrlShell(entry, sid, index) {
+    return resourceUrlSession(entry, sid) + ':' + index;
   }
 
   function shellWindowsEl() {
@@ -1640,7 +1676,7 @@
       copyBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
       copyBtn.addEventListener('click', function(e) {
         e.preventDefault(); e.stopPropagation();
-        copyTextToClipboard(_toolPanelSessionId || '').then(function() { showCopyToast(); }).catch(function() { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(_toolPanelSshCfg || '', _toolPanelSessionId || '')).then(function() { showCopyToast(); }).catch(function() { showCopyToast('Copy failed'); });
       });
     }
     // z-order on mousedown
@@ -1940,6 +1976,7 @@
       tile.className = tileClass;
       var nm = String((s.name || '').trim());
       var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
+      var urlEntry = nm && nm.indexOf('session-') !== 0 ? nm : '';
       var badge = dead ? '<span class="sess-dead" title="' + escapeHtml(reasonLabel(s.reason)) + '">dead</span>' : '';
 
       var actionCornerHtml =
@@ -1957,7 +1994,7 @@
         '<div class="sess-entry-line" title="' + escapeHtml(entryLine) + '">' + escapeHtml(entryLine) + badge + '</div>' +
         '<div class="sess-meta-row">' +
         '<span class="sess-sid-line" title="' + escapeHtml(sid) + '">' + escapeHtml(sid) + '</span>' +
-        '<button type="button" class="sess-copy-btn" title="Copy session id" aria-label="Copy session id">' + SVG_COPY_12 + '</button>' +
+        '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</div>' +
         '</div>' +
         '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
@@ -2001,7 +2038,7 @@
       copyBtn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        copyTextToClipboard(sid).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(urlEntry, sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
       });
 
       tile.onclick = function (e) {
@@ -2863,6 +2900,7 @@
     if (!win._channels) { win._channels = {}; win._channelCount = 0; win._channelSeq = 0; }
     if (win._channels[sessionId]) { switchChannelTab(win, sessionId); return; }
     var label = optLabel || ('shell-' + (win._channelSeq + 1));
+    var urlIndex = win._channelSeq + 1;
     var readOnlyHistory = !!optReadOnlyHistory;
 
     var tabsBar = win.querySelector('.shell-channel-tabs');
@@ -2879,6 +2917,7 @@
     tab.className = 'shell-channel-tab active';
     tab.setAttribute('data-chsid', sessionId);
     tab.innerHTML = '<span class="shell-channel-tab-label">' + escapeHtml(label || 'shell') + '</span>' +
+      '<button type="button" class="shell-channel-tab-copy" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
       '<span class="shell-channel-tab-ended" style="display:none" title="Session ended">end</span>' +
       '<button type="button" class="shell-channel-tab-close" title="Close shell">&times;</button>';
     if (addBtn) tabsBar.insertBefore(tab, addBtn);
@@ -2936,7 +2975,8 @@
       streamDone: readOnlyHistory,
       endedMarkPrinted: false,
       historyLoaded: false,
-      fitRo: null
+      fitRo: null,
+      urlIndex: urlIndex
     };
     win._activeChannelSid = sessionId;
     win._channelCount += 1;
@@ -2992,8 +3032,18 @@
 
     // Tab click → switch
     tab.addEventListener('click', function(e) {
-      if (e.target.closest('.shell-channel-tab-close')) return;
+      if (e.target.closest('.shell-channel-tab-close') || e.target.closest('.shell-channel-tab-copy')) return;
       switchChannelTab(win, sessionId);
+    });
+
+    // Copy this shell's resource URL
+    var tabCopyBtn = tab.querySelector('.shell-channel-tab-copy');
+    tabCopyBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    tabCopyBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var url = resourceUrlShell(win._connName || '', win._parentSid || win._sid || '', urlIndex);
+      copyTextToClipboard(url).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
     });
 
     // Close button
@@ -3180,7 +3230,7 @@
       titleCopyBtn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        copyTextToClipboard(sessionId).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(win._connName || '', sessionId)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
       });
     }
 
@@ -3596,7 +3646,7 @@
         '<span class="shell-title-id-group">' +
         '<span class="shell-sid-copy">' +
         '<span class="sid">…</span>' +
-        '<button type="button" class="title-copy-btn" style="display:none" title="Copy session id" aria-label="Copy session id">' + SVG_COPY_12 + '</button>' +
+        '<button type="button" class="title-copy-btn" style="display:none" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</span>' +
         '</span>' +
         '</h3>' +
@@ -3696,7 +3746,7 @@ SHELL_WINDOW_PANELS_HTML +
         '<span class="shell-title-id-group">' +
         '<span class="shell-sid-copy">' +
         '<span class="sid">' + escapeHtml(stripSessionPrefix(sessionId)) + '</span>' +
-        '<button type="button" class="title-copy-btn" title="Copy session id" aria-label="Copy session id">' + SVG_COPY_12 + '</button>' +
+        '<button type="button" class="title-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</span>' +
         '</span>' +
         '</h3>' +
@@ -3911,7 +3961,10 @@ SHELL_WINDOW_PANELS_HTML +
         '</div>' +
         '<div class="entry-card-main">' +
         '<div class="conn-nm-row">' +
+        '<span class="conn-nm-cluster">' +
         '<span class="conn-nm" title="Click to connect">' + escapeHtml(c.name) + '</span>' +
+        '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
+        '</span>' +
         editBtn +
         '</div>' +
         '</div>' +
@@ -3925,7 +3978,7 @@ SHELL_WINDOW_PANELS_HTML +
         inner.title = hostLine ? (tipConnect + ' — ' + hostLine) : tipConnect;
       }
       inner.addEventListener('click', function (e) {
-        if (e.target.closest('.conn-edit-btn')) return;
+        if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn')) return;
         if (e.altKey) {
           openStartModal(c.name, e);
           return;
@@ -3946,6 +3999,15 @@ SHELL_WINDOW_PANELS_HTML +
             inner.classList.remove('entry-connecting');
           });
       });
+      var entryCopyBtn = tile.querySelector('.sess-copy-btn');
+      if (entryCopyBtn) {
+        entryCopyBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        entryCopyBtn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          copyTextToClipboard(resourceUrlEntry(c.name)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        });
+      }
       var editEl = tile.querySelector('.conn-edit-btn');
       if (editEl) {
         editEl.addEventListener('click', function (ev) {

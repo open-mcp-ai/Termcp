@@ -14,6 +14,7 @@
 ### 新功能
 
 - **反向唤醒通知 `shell_notify`**（信令与数据分离）：新增 `internal/notify` 统一通知内核，支持 `event=output`（双沿触发：立即 + 2s 尾沿兜底）/`exit`（一次性，进程退出/SSH 中断）/`silence`（N 秒无输出，一次性）；双通道 `resource`（广播 `notifications/resources/updated`，uri `termcp://shells/<id>`）与 `sampling`（向**注册规则的客户端 session** 发送 `sampling/createMessage`，systemPrompt `termcp notification daemon`）；全局 1s 冷却阀防刷屏；`register`/`unregister`/`list` 三个 action，shell 退出/关闭/会话删除自动级联反注册（零协程/定时器泄漏）。MCP 层用 `AddTerminateListener` 与 forward 清理共存（不再互相覆盖）；sampling 在注册时捕获 `ClientSession`，解决定时器 goroutine 中无 session 导致发送失败的问题。Web UI 终端窗口新增 **Notifications 标签页**：实时列出该会话已注册的通知规则（event/channel/silence 秒数），可一键拆除；新增 `GET /api/notifications`（支持 `shell_id`/`session_id` 过滤）与 `DELETE /api/notifications/{id}`，规则变更经 `notify.Manager` 回调广播实时刷新。文档：`docs/mcp-tools.md` 新增 `shell_notify` 章节，README 特性表补充。
+- **资源 URL 规矩与复制按钮**：为 termcp 资源定义统一的 URL 寻址——entry `termcp://[entry_name]`；session `termcp://#[session_name]` 或带 entry 前缀的 `termcp://[entry_name]#[session_name]`；shell `termcp://#[session_name]:[shell_index]` 或 `termcp://[entry_name]#[session_name]:[shell_index]`。`[session_name]` 取**会话 id**（卡片上等宽小字，无 `session-` 前缀），`[shell_index]` 取会话内**频道顺序（1 起）**，与频道标签 `shell-1`/`shell-2` 一致；知道 entry 时带上 entry 前缀，否则用短形式。Web UI 新增/改造小复制按钮，一律复制对应层级的 URL：entry 卡片名字旁（新增，紧贴名字）、session 卡片（原复制 session id 改为 URL）、终端窗口标题栏与 Tools 面板、以及**每个底部 shell 频道标签**（新增，复制该频道的 `:index` URL）。点击复制按钮不触发连接/切换频道/关闭窗口。
 
 ### 改进
 

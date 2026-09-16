@@ -98,6 +98,10 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 | macOS (Apple Silicon) | `termcp-darwin-arm64`      |
 | Windows (x86_64)      | `termcp-windows-amd64.exe` |
 | Windows (ARM64)       | `termcp-windows-arm64.exe` |
+### 快速安装 (需要Golang环境)
+```shell
+go install github.com/open-mcp-ai/termcp@latest
+```
 
 ### 编译
 
