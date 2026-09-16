@@ -24,7 +24,46 @@ type Manager struct {
 	historyMu    sync.Mutex
 	listChangeMu sync.RWMutex
 	onListChange func()
-	onTerminate  func(sessionID string)
+	onTerminate  []func(sessionID string)
+	onOutputHook func(shellID string)
+	onExitHook   func(shellID string, exitCode *int)
+	onCloseHook  func(shellID string)
+}
+
+// SetNotifyHooks registers hooks for terminal I/O and lifecycle events.
+func (m *Manager) SetNotifyHooks(onOutput func(shellID string), onExit func(shellID string, exitCode *int), onClose func(shellID string)) {
+	m.listChangeMu.Lock()
+	m.onOutputHook = onOutput
+	m.onExitHook = onExit
+	m.onCloseHook = onClose
+	m.listChangeMu.Unlock()
+}
+
+func (m *Manager) notifyOutput(shellID string) {
+	m.listChangeMu.RLock()
+	fn := m.onOutputHook
+	m.listChangeMu.RUnlock()
+	if fn != nil {
+		fn(shellID)
+	}
+}
+
+func (m *Manager) notifyExit(shellID string, exitCode *int) {
+	m.listChangeMu.RLock()
+	fn := m.onExitHook
+	m.listChangeMu.RUnlock()
+	if fn != nil {
+		fn(shellID, exitCode)
+	}
+}
+
+func (m *Manager) notifyClose(shellID string) {
+	m.listChangeMu.RLock()
+	fn := m.onCloseHook
+	m.listChangeMu.RUnlock()
+	if fn != nil {
+		fn(shellID)
+	}
 }
 
 // NewManager creates a Manager. internalSSH must be the built-in sshserver.Server (after Start) when using internal profiles; may be nil if only remote sessions are used in tests.
@@ -59,21 +98,38 @@ func (m *Manager) notifyListChange() {
 	}
 }
 
-// SetTerminateListener registers a callback for session resource-tree teardown.
-// It is invoked exactly once per session ID when the session is finally deleted
-// (Manager.Delete). Use this for child resources that cannot outlive a session
+// SetTerminateListener registers a callback for session resource-tree teardown,
+// replacing any previously registered listeners. It is invoked exactly once per
+// session ID when the session is finally deleted (Manager.Delete or
+// ArchiveAndForget). Use this for child resources that cannot outlive a session
 // (forwards, etc.). A mere disconnect/DEAD transition does NOT fire it.
 func (m *Manager) SetTerminateListener(fn func(sessionID string)) {
 	m.listChangeMu.Lock()
-	m.onTerminate = fn
+	if fn == nil {
+		m.onTerminate = nil
+	} else {
+		m.onTerminate = []func(sessionID string){fn}
+	}
+	m.listChangeMu.Unlock()
+}
+
+// AddTerminateListener appends a teardown callback without replacing existing
+// ones, so independent subsystems (forwards, notifications) can each clean up
+// when a session is deleted. Passing nil is a no-op.
+func (m *Manager) AddTerminateListener(fn func(sessionID string)) {
+	if fn == nil {
+		return
+	}
+	m.listChangeMu.Lock()
+	m.onTerminate = append(m.onTerminate, fn)
 	m.listChangeMu.Unlock()
 }
 
 func (m *Manager) notifySessionClosed(sessionID string) {
 	m.listChangeMu.RLock()
-	fn := m.onTerminate
+	listeners := append([]func(string){}, m.onTerminate...)
 	m.listChangeMu.RUnlock()
-	if fn != nil {
+	for _, fn := range listeners {
 		fn(sessionID)
 	}
 }
@@ -88,19 +144,48 @@ func (m *Manager) NotifyChange() {
 func (m *Manager) Create(cfg Config) (*Session, error) {
 	s, err := New(m.internalSSH, cfg, m.msgMgr)
 	if err != nil {
+		// Failure is invisible downstream (MCP tool error results are debug-levelled;
+		// the web UI handler only replies over HTTP), so log it for the terminal.
+		// Never log credentials or command text; the error itself already carries
+		// the failing host:port for remote dials.
+		attrs := []any{"err", err}
+		if cfg.Mode != "" {
+			attrs = append(attrs, "mode", cfg.Mode)
+		}
+		if cfg.Name != "" {
+			attrs = append(attrs, "name", cfg.Name)
+		}
+		if isRemote(cfg) {
+			attrs = append(attrs, "remote_addr", remoteDialAddr(cfg.Remote), "dial_timeout_s", cfg.Remote.DialTimeoutSeconds)
+		} else {
+			attrs = append(attrs, "endpoint", "internal")
+		}
+		slog.Error("session create failed", attrs...)
 		return nil, err
 	}
 	m.sessions.Store(s.ID, s)
 
 	sid := s.ID
-	s.onDead = func() {
+	// Exit watchers started by New() may already be reading these callbacks;
+	// atomic stores make the assignment race-free (a watcher firing in the
+	// assignment window sees nil, same observable behavior as before).
+	onDead := func() {
 		// DEAD keeps the object in the registry. Nothing is removed, forgotten,
 		// or purged here — only the new state is persisted and the UI notified.
 		slog.Debug("session marked DEAD", "session_id", sid)
 		m.persist()
 		m.notifyListChange()
 	}
-	s.onChildChange = m.notifyListChange
+	s.onDead.Store(&onDead)
+	onChildChange := m.notifyListChange
+	s.onChildChange.Store(&onChildChange)
+
+	onOutput := m.notifyOutput
+	s.onOutput.Store(&onOutput)
+	onShellExit := m.notifyExit
+	s.onShellExit.Store(&onShellExit)
+	onShellClose := m.notifyClose
+	s.onShellClose.Store(&onShellClose)
 
 	m.persist()
 	m.notifyListChange()
@@ -181,7 +266,13 @@ func (m *Manager) CloseChildShell(id string) (bool, error) {
 	if parent == nil {
 		return false, nil
 	}
-	return true, parent.CloseChildShell(id)
+	err := parent.CloseChildShell(id)
+	// Persist the updated per-shell snapshot right away so a restart cannot
+	// resurrect the closed shell from sessions.json; notify the UI so closed
+	// shells disappear from tabs immediately.
+	m.persist()
+	m.notifyListChange()
+	return true, err
 }
 
 // ListAll returns metadata for all sessions (running and DEAD).
@@ -374,8 +465,10 @@ func (m *Manager) RestoreDead() error {
 			meta.Status = api.SessionExited
 		}
 		s := &Session{Session: meta}
-		s.onDead = m.notifyListChange
-		s.onChildChange = m.notifyListChange
+		onDead := m.notifyListChange
+		onChildChange := m.notifyListChange
+		s.onDead.Store(&onDead)
+		s.onChildChange.Store(&onChildChange)
 		for _, sh := range meta.Shells {
 			s.shellHistory.Store(sh.ID, sh)
 		}

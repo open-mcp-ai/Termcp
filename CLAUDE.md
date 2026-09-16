@@ -21,7 +21,7 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context layout: `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
+Project docs live under `docs/` (`docs/mcp-tools.md`, `docs/api.md`, `docs/architecture.md`, `docs/design/`).
 
 ## Multi-session parallel work
 
@@ -29,25 +29,25 @@ Agents using interactive-process MCP tools must follow these rules for non-block
 
 ### Rules
 
-1. **One task = one session.** Start a new session per independent task via `start_session`. Keep both `session_id` (connection) and `shell_id` (terminal I/O). Use the `name` param for tracking.
-2. **Never block on reads.** Always use `read_output` with `timeout` ≤ 3. A long timeout blocks the entire agent — other shells go unserviced.
-3. **Run a command as three calls.** `send_input(shell_id, text)` types only; `press_key(shell_id, key="enter")` executes; then `read_output(shell_id, timeout≤3)`. Do not put newlines in text.
-4. **Poll in rotation.** When managing N shells, loop through all of them: `read_output(timeout=1)` each, act on whichever has output, repeat.
-5. **Clean up.** `terminate_session(session_id)` closes the connection (cascades shells + forwards) and removes the session. Use `force=true` for immediate kill. `close_shell` only closes one channel.
+1. **One task = one session.** Start a new session per independent task via `session_start(ssh_config=...)`. Keep both `session_id` (connection) and `shell_id` (terminal I/O). Use the `name` param for tracking.
+2. **Never block on reads.** Always use `shell_output` with `timeout` ≤ 3. A long timeout blocks the entire agent — other shells go unserviced.
+3. **Run a command as three calls.** `shell_input(shell_id, text)` types only; `shell_key(shell_id, key="enter")` executes; then `shell_output(shell_id, timeout≤3)`. Do not put newlines in text.
+4. **Poll in rotation or use event notifications.** When managing N shells, poll `shell_output(timeout=1)` each, or register event-driven wake-ups via `shell_notify(shell_id=..., channel="resource"|"sampling", event="output"|"exit"|"silence")`.
+5. **Clean up.** `session_terminate(session_id)` closes the connection (cascades shells + forwards) and removes the session. Use `force=true` for immediate kill. `shell_close(shell_id)` only closes one channel.
 
 ### Multi-agent shared shell
 
 When multiple agents need to observe the same process:
 
-1. Agent A: `start_session(...)` → session_id + shell_id, default reader_id=0
-2. Agent B: `register_reader(shell_id=...)` → gets its own reader_id
-3. Each agent calls `read_output(shell_id=..., reader_id=<theirs>)` — independent cursors, no output stealing
-4. Agent B leaves: `unregister_reader(shell_id=..., reader_id=...)`
+1. Agent A: `session_start(...)` → session_id + shell_id, default reader_id=0
+2. Agent B: `shell_reader_register(shell_id=...)` → gets its own reader_id
+3. Each agent calls `shell_output(shell_id=..., reader_id=<theirs>)` — independent cursors, no output stealing
+4. Agent B leaves: `shell_reader_unregister(shell_id=..., reader_id=...)`
 
 ### Anti-patterns
 
-- ❌ `read_output(timeout=30)` — blocks 30s, other shells starve
+- ❌ `shell_output(timeout=30)` — blocks 30s, other shells starve
 - ❌ Waiting for session A to finish before starting session B — start both, poll both
 - ❌ Multiple agents using the same reader_id — output gets consumed, others miss it
 - ❌ Using `session_id` for I/O tools — I/O is always `shell_id`
-- ❌ Relying on removed tools: `send_and_read`, `background_send`, `press_enter`, `forward_port`
+- ❌ Relying on removed tools: `start_session`, `read_output`, `send_input`, `press_key`, `terminate_session`, `send_and_read`, `background_send`, `press_enter`, `forward_port`

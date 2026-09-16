@@ -64,6 +64,18 @@ Response: 204 No Content
 Response: 204 No Content
 ```
 
+### `POST /api/connections/test`
+
+Web UI 新建连接对话框的「测试连接」按钮后端：验证连接配置的连通性（完整拨号链路：SOCKS5 代理 → bastion 跳板 → 目标主机，并验证可开 exec 通道），**测试成功后不保留连接**。Body 为 TOML（与 `PUT` 相同）。`internal` 类 profile 不做拨号，直接返回 `{ "ok": true }`。
+
+```
+Request: TOML body
+
+Response 200:
+{ "ok": true, "duration_ms": 123 }
+{ "ok": false, "duration_ms": 123, "error": "<失败原因 + 诊断提示>" }
+```
+
 ---
 
 ## 2. Session
@@ -91,7 +103,7 @@ Response 200:
 ```
 Request:
 {
-  "ssh_config": "pi",    // 连接配置名，默认 "internal"
+  "ssh_config": "pi",    // 连接配置名，默认 "internal"（本机 loopback）；MCP 的 session_start 则必填
   "command": "",         // 命令，空 = 登录 shell
   "args": [],
   "mode": "pty",         // "pty" | "pipe"
@@ -222,6 +234,9 @@ Shell 是 Session 下的子资源，ID 全局唯一。
 
 列出 Session 的所有 Shell。
 
+- `running` Session 只列出**现存**的 channel：活跃 shell + 自然退出但保留的 shell（status `exited`，供读取末尾输出）。**手动关闭的 shell 已删除，不会出现在列表中**，也不会以死态 tab 形式复活。
+- `exited`（DEAD）Session 返回保留的 shell 快照（仅自然退出/异常断线的 shell）。
+
 ```
 Response 200:
 {
@@ -246,7 +261,9 @@ Response 200:
 
 ### `DELETE /api/shells/{id}`
 
-关闭指定 Shell channel（参数为 **shell_id**）。不中断 SSH 连接，不影响同 Session 的其他 Shell。internal 主 shell 关闭为 no-op。
+**删除**指定 Shell channel（参数为 **shell_id**）。手动关闭是删除而非 DEAD：shell 从活跃列表、保留快照和 sessions.json 中一并移除，不会留下 `end`/死态 tab。不中断 SSH 连接，不影响同 Session 的其他 Shell。internal 主 shell 关闭为 no-op（进程可存活于 tab 之外）。
+
+Pipe 会话的最后一个 shell 被关闭时，容器转为 `exited`（DEAD，保留只读）；PTY 容器保持 `running`，可再新建 shell。
 
 已不存在的 shell 也返回 204（幂等）。
 
@@ -434,6 +451,37 @@ Response 200: { "ok": true }
 
 ```
 Response 200: { "ok": true }
+```
+
+---
+
+## 6.5 通知规则（shell_notify）
+
+MCP `shell_notify` 注册的反向唤醒规则在这里查询与删除。Web UI 的 Notifications 标签页同源。
+
+### `GET /api/notifications`
+
+列出所有活跃通知规则。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `shell_id` | query | 可选，按 shell 过滤 |
+| `session_id` | query | 可选，按会话过滤 |
+
+```
+Response 200:
+{ "notifications": [{ "rule_id": "notif_...", "session_id": "...", "shell_id": "...",
+                     "channel": "resource"|"sampling", "event": "output"|"exit"|"silence",
+                     "created_at": "..." }] }
+```
+
+### `DELETE /api/notifications/{id}`
+
+注销一条通知规则（`id` = `rule_id`）。
+
+```
+Response 200: { "ok": true, "rule_id": "notif_..." }
+Response 404: { "error": "notification rule not found" }
 ```
 
 ---
