@@ -180,7 +180,10 @@ func main() {
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	(&webui.Handler{Sessions: sessMgr, History: historyMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}).Register(mux)
+	webuiH := &webui.Handler{Sessions: sessMgr, History: historyMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}
+	webuiH.Register(mux)
+	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
+	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
 
 	host := strings.TrimSpace(cfg.Host)
 	base := fmt.Sprintf("http://%s:%d", host, cfg.Port)

@@ -1471,6 +1471,67 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 	}
 }
 
+// maxNotifyMessageLen caps the message shown in the Web UI toast.
+const maxNotifyMessageLen = 2000
+
+// handleNotifyUser posts a user-facing notification to every open termcp Web UI
+// tab (toast + browser system notification) and optionally highlights the card
+// of the given session. Unlike shell_notify, which wakes the AI Agent, this
+// reaches the human at the browser.
+func (s *Server) handleNotifyUser(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := request.GetArguments()
+	message := strings.TrimSpace(getString(args, "message", ""))
+	if message == "" {
+		return toolError(CodeInvalidArgument, "%s", "message is required"), nil
+	}
+	if r := []rune(message); len(r) > maxNotifyMessageLen {
+		message = string(r[:maxNotifyMessageLen])
+	}
+
+	level := strings.TrimSpace(getString(args, "level", "info"))
+	if level == "" {
+		level = "info"
+	}
+	switch level {
+	case "info", "success", "warn", "error":
+	default:
+		return toolError(CodeInvalidArgument, "%s", "level must be info, success, warn, or error"), nil
+	}
+
+	title := strings.TrimSpace(getString(args, "title", ""))
+	if title == "" {
+		title = "termcp"
+	}
+
+	durationSec := int(getFloat64(args, "duration_seconds", 10))
+	if durationSec < 0 {
+		durationSec = 0
+	}
+	if durationSec > 600 {
+		durationSec = 600
+	}
+
+	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	if sessionID != "" {
+		if _, bad := s.requireSession(sessionID); bad != nil {
+			return bad, nil
+		}
+	}
+
+	delivered := 0
+	if s.uiNotify != nil {
+		delivered = s.uiNotify(level, title, message, sessionID, durationSec)
+	}
+	out := map[string]any{"ok": true, "delivered": delivered, "title": title, "level": level}
+	if sessionID != "" {
+		out["session_id"] = sessionID
+	}
+	if delivered == 0 {
+		out["hint"] = "no Web UI tab is open; the notification was not displayed"
+	}
+	return jsonResult(out), nil
+}
+
 // toMap converts a struct to map[string]any via JSON round-trip.
 func toMap(v any) map[string]any {
 	b, _ := json.Marshal(v)

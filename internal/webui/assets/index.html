@@ -265,6 +265,60 @@
       transition: opacity 0.2s ease;
     }
     #ui-copy-toast.ui-copy-toast-visible { opacity: 1; }
+    /* Server-pushed user notifications (MCP notify_user): toast stack, top-right. */
+    #ui-notify-stack {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(340px, calc(100vw - 28px));
+      max-height: calc(100dvh - 28px);
+      z-index: 26000;
+      pointer-events: none;
+    }
+    .ui-notify-card {
+      position: relative;
+      pointer-events: auto;
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-left: 4px solid #0969da;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(27, 31, 36, .16);
+      padding: 10px 30px 12px 12px;
+      overflow: hidden;
+      animation: uiNotifyIn .2s ease;
+    }
+    @keyframes uiNotifyIn {
+      from { opacity: 0; transform: translateX(24px); }
+      to { opacity: 1; transform: none; }
+    }
+    .ui-notify-card.ui-notify-out { opacity: 0; transform: translateX(24px); transition: opacity .18s ease, transform .18s ease; }
+    .ui-notify-card.ntf-success { border-left-color: #1a7f37; }
+    .ui-notify-card.ntf-warn { border-left-color: #bf8700; }
+    .ui-notify-card.ntf-error { border-left-color: #cf222e; }
+    .ui-notify-title { font-size: 0.82rem; font-weight: 600; color: #1f2328; margin-bottom: 3px; word-break: break-word; }
+    .ui-notify-msg { font-size: 0.8rem; color: #424a53; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+    .ui-notify-sess { font-size: 0.68rem; color: #656d76; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    .ui-notify-close {
+      position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
+      border: none; background: transparent; color: #656d76; cursor: pointer; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+    }
+    .ui-notify-close:hover { background: #f0f3f6; color: #1f2328; }
+    .ui-notify-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: rgba(31, 35, 38, .35); transform-origin: left center; }
+    /* Highlight the card of a session referenced by a notification; cleared on click. */
+    .conn-tile.sess-tile.sess-notified { outline: 2px solid #0969da; outline-offset: 2px; border-radius: 8px; animation: sessNotifiedPulse 1.4s ease-in-out infinite; }
+    @keyframes sessNotifiedPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(9, 105, 218, .0); }
+      50% { box-shadow: 0 0 0 5px rgba(9, 105, 218, .28); }
+    }
+    .shell-window.shell-window-notified .shell-window-header { animation: shellHeaderFlash 1.2s ease-in-out 3; }
+    @keyframes shellHeaderFlash {
+      0%, 100% { box-shadow: inset 0 0 0 0 rgba(88, 166, 255, 0); }
+      50% { box-shadow: inset 0 0 0 2px #58a6ff; }
+    }
     .conn-tile .conn-tile-stack .sess-x {
       position: absolute; right: 0; top: 0; z-index: 3; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
       background: #fff; color: #cf222e; cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -1035,6 +1089,129 @@
     _copyToastTimer = setTimeout(function () {
       el.classList.remove('ui-copy-toast-visible');
     }, 1600);
+  }
+
+  /* --- Server-pushed user notifications (MCP notify_user) --- */
+  var _uiNotifHighlights = {}; // session_id -> true; re-applied when tiles re-render
+
+  function uiNotifyStackEl() {
+    var el = document.getElementById('ui-notify-stack');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ui-notify-stack';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function findSessTile(sid) {
+    var tiles = document.querySelectorAll('.conn-tile.sess-tile');
+    for (var i = 0; i < tiles.length; i++) {
+      if (tiles[i].getAttribute('data-sid') === sid) return tiles[i];
+    }
+    return null;
+  }
+
+  function clearSessNotified(sid) {
+    if (!sid) return;
+    delete _uiNotifHighlights[sid];
+    var tile = findSessTile(sid);
+    if (tile) tile.classList.remove('sess-notified');
+    var w = getShellWindowBySid(sid);
+    if (w) w.classList.remove('shell-window-notified');
+  }
+
+  function markSessNotified(sid) {
+    if (!sid) return;
+    _uiNotifHighlights[sid] = true;
+    var tile = findSessTile(sid);
+    if (tile) {
+      tile.classList.add('sess-notified');
+      try { tile.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+    }
+    var w = getShellWindowBySid(sid);
+    if (w) w.classList.add('shell-window-notified');
+  }
+
+  /** Browser system-level notification (visible with the tab in the background).
+   *  Best-effort: requested once, silently skipped when not granted. */
+  function browserSystemNotify(n) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      fireBrowserNotify(n);
+    } else if (Notification.permission === 'default' && typeof Notification.requestPermission === 'function') {
+      // A WS-pushed notification is not a user gesture, so Chrome may keep
+      // permission at 'default' instead of prompting; best-effort only.
+      Notification.requestPermission().then(function (perm) {
+        if (perm === 'granted') fireBrowserNotify(n);
+      }).catch(function () {});
+    }
+  }
+
+  function fireBrowserNotify(n) {
+    try { new Notification(n.title || 'termcp', { body: n.message }); } catch (e) {}
+  }
+
+  function dismissUiNotify(card) {
+    if (!card || card._dismissed) return;
+    card._dismissed = true;
+    if (card._timer) clearTimeout(card._timer);
+    card.classList.add('ui-notify-out');
+    setTimeout(function () {
+      if (card.parentNode) card.parentNode.removeChild(card);
+    }, 200);
+    if (card._sessionId) clearSessNotified(card._sessionId);
+  }
+
+  function showUiNotify(n) {
+    if (!n) return;
+    var level = String(n.level || 'info');
+    if (level !== 'info' && level !== 'success' && level !== 'warn' && level !== 'error') level = 'info';
+    var title = String(n.title || 'termcp');
+    var message = String(n.message || '');
+    var dur = parseInt(n.duration_seconds, 10);
+    if (isNaN(dur) || dur < 0) dur = 10;
+    if (dur > 600) dur = 600;
+    var sid = String(n.session_id || '');
+
+    var card = document.createElement('div');
+    card.className = 'ui-notify-card ntf-' + level;
+    card._sessionId = sid;
+    var titleEl = document.createElement('div');
+    titleEl.className = 'ui-notify-title';
+    titleEl.textContent = title;
+    var msgEl = document.createElement('div');
+    msgEl.className = 'ui-notify-msg';
+    msgEl.textContent = message;
+    card.appendChild(titleEl);
+    card.appendChild(msgEl);
+    if (sid) {
+      var sessEl = document.createElement('div');
+      sessEl.className = 'ui-notify-sess';
+      sessEl.textContent = 'session ' + sid;
+      card.appendChild(sessEl);
+    }
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'ui-notify-close';
+    closeBtn.setAttribute('aria-label', 'Dismiss notification');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function () { dismissUiNotify(card); });
+    card.appendChild(closeBtn);
+    if (dur > 0) {
+      var bar = document.createElement('div');
+      bar.className = 'ui-notify-bar';
+      bar.style.transition = 'transform ' + dur + 's linear';
+      card.appendChild(bar);
+      // Force a layout read so the transition has a painted start state, then animate.
+      void bar.offsetWidth;
+      bar.style.transform = 'scaleX(0)';
+      card._timer = setTimeout(function () { dismissUiNotify(card); }, (dur + 1) * 1000);
+    }
+    uiNotifyStackEl().appendChild(card);
+
+    markSessNotified(sid);
+    browserSystemNotify(n);
   }
 
   /** Display: strip leading session- from name, else use id */
@@ -1974,6 +2151,11 @@
       var tile = document.createElement('div');
       var tileClass = 'conn-tile sess-tile' + (dead ? ' archived' : '') + (isSelected ? ' batch-selected' : '');
       tile.className = tileClass;
+      tile.setAttribute('data-sid', sid);
+      // Re-apply a pending notify_user highlight across re-renders.
+      if (sid && _uiNotifHighlights && _uiNotifHighlights[sid]) {
+        tile.classList.add('sess-notified');
+      }
       var nm = String((s.name || '').trim());
       var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
       var urlEntry = nm && nm.indexOf('session-') !== 0 ? nm : '';
@@ -2043,6 +2225,7 @@
 
       tile.onclick = function (e) {
         if (e.target.closest('.sess-x') || e.target.closest('.sess-copy-btn') || e.target.closest('.sess-checkbox')) return;
+        clearSessNotified(sid); // opening the session acknowledges its notification highlight
         openOrFocusShellWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
       };
       if (!dead) {
@@ -2417,6 +2600,10 @@
               }
             }
           }
+        } else if (j.type === 'ui_notify') {
+          // Pushed by the MCP notify_user tool: toast + system notification +
+          // optional session-card highlight.
+          showUiNotify(j);
         }
       } catch (e) { console.error(e); }
     };

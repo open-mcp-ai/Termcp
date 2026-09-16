@@ -33,7 +33,8 @@ const mcpServerInstructions = `termcp agent rules:
 5) Password/sudo/passphrase/MFA prompt: stop and ask user to type it in termcp Web UI. Never guess, paste, or echo secrets.
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
-8) Non-blocking notifications: shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") receives asynchronous wake-ups (signaling only, no payload); poll output via shell_output when awakened.`
+8) Non-blocking notifications: shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") receives asynchronous wake-ups (signaling only, no payload); poll output via shell_output when awakened.
+9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.`
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
@@ -49,6 +50,11 @@ type Server struct {
 	baseURL         string // http://host:port, set from Start()
 	NoInternal      bool   // when true, hide and refuse the built-in loopback profile
 	sshConfigWrites bool   // expose write actions on the unified ssh_config tool
+
+	// uiNotify delivers a user-facing notification to the Web UI (the notify_user
+	// tool). Set by main to webui.Handler.BroadcastUINotify so this package stays
+	// decoupled from webui. Returns the number of open tabs that received it.
+	uiNotify func(level, title, message, sessionID string, durationSec int) int
 }
 
 // SendResourceNotification broadcasts an MCP resource update event.
@@ -90,6 +96,11 @@ func (s *Server) SendSamplingNotification(ctx context.Context, shellID string, t
 // SetHistory attaches the archived-session history manager (list/transcript/search/purge tools).
 func (s *Server) SetHistory(h *history.Manager) {
 	s.historyMgr = h
+}
+
+// SetUINotifier wires the Web UI notification delivery end (notify_user tool).
+func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, durationSec int) int) {
+	s.uiNotify = fn
 }
 
 // NotifyManager exposes the shell notification rule manager so other subsystems
@@ -251,6 +262,15 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		mcpgo.WithNumber("silence_seconds", mcpgo.Description("Silence window in seconds for event=silence (default 3)"), mcpgo.DefaultNumber(3)),
 		mcpgo.WithString("rule_id", mcpgo.Description("Rule identifier (required for unregister)")),
 	), withLogging("shell_notify", s.handleShellNotifyOps))
+
+	mcpServer.AddTool(newTool("notify_user",
+		mcpgo.WithDescription("Post a visible notification to the human at the termcp Web UI (not the AI Agent): a colored toast on every open page plus a browser system notification; when session_id is set, that session's card is also highlighted."),
+		mcpgo.WithString("message", mcpgo.Required(), mcpgo.Description("Notification text shown to the user")),
+		mcpgo.WithString("title"),
+		mcpgo.WithString("level", mcpgo.Description("info (default), success, warn, or error"), mcpgo.DefaultString("info"), mcpgo.Enum("info", "success", "warn", "error")),
+		mcpgo.WithNumber("duration_seconds", mcpgo.Description("Seconds the toast stays before auto-dismissing (0–600); 0 = sticky until dismissed"), mcpgo.DefaultNumber(10)),
+		mcpgo.WithString("session_id", mcpgo.Description("Optional: highlight this session's card (and its terminal window, if open)")),
+	), withLogging("notify_user", s.handleNotifyUser))
 
 	// --- Port forwarding: one entry, action selects mode (OpenSSH names) ---
 	mcpServer.AddTool(newTool("forward",
