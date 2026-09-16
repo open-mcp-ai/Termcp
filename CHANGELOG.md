@@ -9,7 +9,7 @@
 - **删除 `history(action=get_transcript)`**：归档输出读取并入 `shell_output`（`shell_id=归档session_id或shell_id`），不再提供全量转录导出，避免一次性把整个会话拖入 LLM 上下文。WebUI 的 `GET /api/history/{id}/transcript` 导出保留。
 - **低频工具合并为 action 枚举**：`local_forward` / `remote_forward` / `dynamic_forward` / `list_forwards` / `close_forward` → `forward(action=...)`；`message_list` / `message_get` → `message(action=...)`；7 个 `history_*` 工具 → `history(action=...)`；5 个 `ssh_config_*` 工具 → `ssh_config(action=...)`（写操作通过 `--mcp-manage-ssh-configs` 开关）。
 - **删除 9 个低频文件工具**：`file_chmod` / `file_chown` / `file_chtimes` / `file_readlink` / `file_symlink` / `file_link` / `file_truncate` / `file_realpath` / `file_statvfs` → `file_perm` / `file_link` / `file_fs`（各带 `action` 枚举）。
-- **工具总数 保持 29**：`history(action=get_transcript)` 移除，`shell_output` 新增 `offset`/`tail_lines` 两参数，`tools/list` 13,585 B → 13,803 B（+1.6%）。
+- **工具总数 保持 30**：`history(action=get_transcript)` 移除，`shell_output` 新增 `offset`/`tail_lines` 两参数，`tools/list` 13,585 B → 13,803 B（+1.6%）。
 
 ### 新功能
 

@@ -64,6 +64,18 @@ Response: 204 No Content
 Response: 204 No Content
 ```
 
+### `POST /api/connections/test`
+
+Web UI 新建连接对话框的「测试连接」按钮后端：验证连接配置的连通性（完整拨号链路：SOCKS5 代理 → bastion 跳板 → 目标主机，并验证可开 exec 通道），**测试成功后不保留连接**。Body 为 TOML（与 `PUT` 相同）。`internal` 类 profile 不做拨号，直接返回 `{ "ok": true }`。
+
+```
+Request: TOML body
+
+Response 200:
+{ "ok": true, "duration_ms": 123 }
+{ "ok": false, "duration_ms": 123, "error": "<失败原因 + 诊断提示>" }
+```
+
 ---
 
 ## 2. Session
@@ -439,6 +451,37 @@ Response 200: { "ok": true }
 
 ```
 Response 200: { "ok": true }
+```
+
+---
+
+## 6.5 通知规则（shell_notify）
+
+MCP `shell_notify` 注册的反向唤醒规则在这里查询与删除。Web UI 的 Notifications 标签页同源。
+
+### `GET /api/notifications`
+
+列出所有活跃通知规则。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `shell_id` | query | 可选，按 shell 过滤 |
+| `session_id` | query | 可选，按会话过滤 |
+
+```
+Response 200:
+{ "notifications": [{ "rule_id": "notif_...", "session_id": "...", "shell_id": "...",
+                     "channel": "resource"|"sampling", "event": "output"|"exit"|"silence",
+                     "created_at": "..." }] }
+```
+
+### `DELETE /api/notifications/{id}`
+
+注销一条通知规则（`id` = `rule_id`）。
+
+```
+Response 200: { "ok": true, "rule_id": "notif_..." }
+Response 404: { "error": "notification rule not found" }
 ```
 
 ---
