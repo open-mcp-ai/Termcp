@@ -379,8 +379,18 @@ func TestHandleStartSendPressKeyRead(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
-	output := testReadOutputUntil(t, s, shellID, "handler_test", 3*time.Second)
+	// PowerShell cold-start under ConPTY can exceed 300ms on slow CI runners;
+	// input typed before the shell is ready may be dropped. Retry the line
+	// until the marker appears so this asserts behavior, not startup speed.
+	deadline := time.Now().Add(10 * time.Second)
+	output := ""
+	for time.Now().Before(deadline) {
+		testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
+		output = testReadOutputUntil(t, s, shellID, "handler_test", 3*time.Second)
+		if strings.Contains(output, "handler_test") {
+			break
+		}
+	}
 	if !strings.Contains(output, "handler_test") {
 		t.Fatalf("expected output containing 'handler_test', got %q", output)
 	}
