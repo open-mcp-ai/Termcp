@@ -17,49 +17,103 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 
 | 资源 | 参数名 | 谁用 |
 |------|--------|------|
-| Session（SSH 连接容器） | `session_id` | start_subshell、forwards、files、terminate、list_sessions、get_session_info |
-| Shell（终端 channel） | `shell_id` | send_input、press_key、read_output、resize_pty、register/unregister_reader、close_shell |
+| Session（SSH 连接容器） | `session_id` | shell_open、forward、file_*、session_terminate、session_list、session_info |
+| Shell（终端 channel） | `shell_id` | shell_input、shell_key、shell_output、shell_resize、shell_reader_register/unregister、shell_close |
 
-`start_session` 返回 **两个不同** 的 id：`session_id` 与 `shell_id`（首个 shell 不再与 session 共用 id）。
+`session_start` 返回 **两个不同** 的 id：`session_id` 与 `shell_id`（首个 shell 不与 session 共用 id）。
+
+---
+
+## 资源 URL 寻址（termcp://）
+
+这些 URL 是**复制给 AI 用的定位符**：Web UI 各处的复制按钮（entry 卡片、session 卡片、终端标题、每个 shell 频道标签）一键复制后，直接粘进与 AI 的对话或任务描述中，AI 就能精确定位你说的是**哪个连接 / 哪个会话 / 会话里的第几个频道**，不用再费口舌描述。点击复制按钮不会触发连接、切换频道或关闭窗口。
+
+| 层级 | URL 形式 | 例子 |
+|------|----------|------|
+| entry（连接配置） | `termcp://[entry名]` | `termcp://internal` |
+| session（会话） | `termcp://[entry名]#[会话id]`，也可用短形式 `termcp://#[会话id]` | `termcp://pi#ctf-1` / `termcp://#ctf-1` |
+| shell（频道） | `termcp://[entry名]#[会话id]:[序号]` 或 `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
+
+- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致。
+- 知道所属 entry 就带上前缀，不确定时直接用短形式。
+- 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`。
+
+---
+
+## 错误返回（错误码）
+
+工具失败时返回 `isError=true`，其文本内容是一个带**专用错误码字段**的 JSON 对象，调用方据此分支处理，无需解析自然语言：
+
+```json
+{"error_code":"shell_not_found","error":"Shell '12d3e2f8-a15' not found"}
+```
+
+- `error_code`：稳定的 snake_case 错误码（仅失败结果携带；成功结果没有该字段）。
+- `error`：人类可读的说明，仅用于展示/日志。
+
+| 错误码 | 含义 | 典型处理 |
+|--------|------|----------|
+| `invalid_argument` | 参数缺失或非法 | 按提示修正参数后重试 |
+| `session_not_found` | 无此 session_id | 用 `session_list` 复核 id |
+| `shell_not_found` | 无此 shell_id（可能已 `shell_close` 删除） | 用 `shell_list` 复核 id |
+| `session_not_running` | 会话已 DEAD/恢复但无活跃 SSH 连接 | 重新 `session_start` |
+| `reader_not_registered` | `reader_id` 未在该 shell 注册 | 先 `shell_reader_register` |
+| `history_not_found` | 归档中无此会话 | 用 `history(action=list)` 复核 |
+| `forward_not_found` | 无此 forward_id | 用 `forward(action=list)` 复核 |
+| `ssh_config_not_found` | 无此 ssh_config | 用 `ssh_config(action=list)` 复核 |
+| `rule_not_found` | 无此通知规则 rule_id | 用 `shell_notify(action=list)` 复核 |
+| `conflict` | 资源已存在 | 改用 edit/其它名称 |
+| `not_configured` | 功能未启用/未初始化 | 检查服务启动参数 |
+| `connection_failed` | SSH 拨号/连接失败 | 检查网络与目标地址 |
+| `operation_failed` | 其它操作失败 | 查看 `error` 详情 |
+| `internal_error` | 服务端内部错误 | 查看服务端日志 |
 
 ---
 
 ## 会话生命周期
 
 ```
-list_ssh_configs
-  → start_session → { session_id, shell_id, ... }
-      → send_input(shell_id, text)          # 只打字，不回车
-      → press_key(shell_id, key="enter")    # 只按键
-      → read_output(shell_id, timeout≤3)
-      → start_subshell(session_id) → { shell_id, session_id }
-      → close_shell(shell_id)
-      → local_forward / remote_forward / dynamic_forward(session_id, ...)
+ssh_config(action=list)
+  → session_start → { session_id, shell_id, ... }
+      → shell_input(shell_id, text)         # 只打字，不回车
+      → shell_key(shell_id, key="enter")    # 只按键
+      → shell_output(shell_id, timeout≤3)
+      → shell_open(session_id) → { shell_id, session_id }
+      → shell_close(shell_id)
+      → forward(session_id, action=local|remote|dynamic, ...)
       → file_*(session_id, ...)
-  → terminate_session(session_id)           # 关连接并移除（级联 shell+forward；force=true 强杀）
+  → session_terminate(session_id)           # 关连接并归档（级联 shell+forward；force=true 强杀）
 ```
 
 ---
 
 ## 工具清单
 
-### start_session
+### session_start
 
 启动会话（连接容器）并创建一个主 shell 通道。
 
+> **会话模式选择**：
+> - **交互 shell（默认，省略 `command`/`args`）**：用于多步骤任务、带状态的操作（`cd`/环境变量/依赖后续步骤）以及通用 CLI 会话。在同一个会话中持续输入执行，保持工作目录与环境一致，形成连续的审计历史。
+> - **专用单次程序（显式传入 `command`/`args`）**：**仅限**以下三种情况使用：
+>   1. 交互式专用 REPL 或 TUI 工具（如 `python -i`、`mysql`、`htop`）；
+>   2. 长期后台服务或守护进程（如 `npm run dev`、后端服务二进制）；
+>   3. 需要进程原生退出码（ExitCode）的独立原子脚本。
+> - **反模式**：切勿将多步骤任务拆解为多次 `session_start(command="bash", args=["-c", ...])` 执行。每一步都会丢失环境状态、产生多余 SSH 握手开销并割裂审计历史。
+
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `command` | string | 否 | — | 要执行的命令；空 = 登录 shell 或 profile `default_shell` |
+| `command` | string | 否 | — | 可执行文件；省略 = 登录 shell（默认）。仅 REPL/服务/独立原子任务需要填写 |
 | `args` | string[] | 否 | `[]` | 命令行参数，仅 `command` 非空时有效 |
 | `mode` | string | 否 | `"pty"` | `"pty"` 或 `"pipe"` |
 | `name` | string | 否 | ssh_config | 会话显示名称 |
 | `rows` | number | 否 | `24` | 初始 PTY 行数（1–1000） |
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |
-| `ssh_config` | string | 否 | `"internal"` | profile 名称：`"internal"` = 本机 loopback，其他 = `ssh_configs/<name>/` 下的远端连接 |
+| `ssh_config` | string | **是** | — | profile 名称：`"internal"` = 本机 loopback，其他 = `ssh_configs/<name>/` 下的远端连接（可用 `ssh_config(action=list)` 查询） |
 
 **返回**：`{ session_id, shell_id, pid, ssh_config }`
 
-### start_subshell
+### shell_open
 
 在已有会话连接上打开另一个 shell 通道（复用 SSH 传输）。
 
@@ -74,34 +128,34 @@ list_ssh_configs
 
 **返回**：`{ shell_id, session_id, name }`
 
-### list_subshells
+### shell_list
 
 列出某会话上的 shell 通道。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `session_id` | string | **是** | 来自 `start_session` / `list_sessions` |
+| `session_id` | string | **是** | 来自 `session_start` / `session_list` |
 
 **返回**：`{ session_id, shells: [{id, name, status, ...}] }`
 
-### close_shell
+### shell_close
 
-按 `shell_id` 关闭一个 shell 通道，不拆会话连接。internal 主 shell 关闭为 no-op（进程可存活于 tab 之外）。彻底停止会话用 `terminate_session`。
+按 `shell_id` **删除**一个 shell 通道（手动关闭 = 删除，不是 DEAD；不会留下死态 tab）。不拆会话连接，不影响同会话其它 shell。internal 主 shell 关闭为 no-op（进程可存活于 tab 之外）。pipe 会话的最后一个 shell 被关闭时，容器转为 `exited`（DEAD）；PTY 容器保持 `running` 可再新建 shell。彻底停止会话用 `session_terminate`。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `shell_id` | string | **是** | 来自 `start_session` / `start_subshell` / `list_subshells` |
+| `shell_id` | string | **是** | 来自 `session_start` / `shell_open` / `shell_list` |
 
-### send_input
+### shell_input
 
-向 shell stdin **只写文本**，不按回车、不执行命令。执行一行请再调 `press_key(key="enter")`。
+向 shell stdin **只写文本**，不按回车、不执行命令。执行一行请再调 `shell_key(key="enter")`。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
 | `shell_id` | string | **是** | — | |
 | `text` | string | **是** | — | UTF-8 文本（不自动追加换行） |
 
-### press_key
+### shell_key
 
 向 shell 发送命名按键。
 
@@ -115,30 +169,42 @@ list_ssh_configs
 
 `enter`：PTY 下为 `\r`；pipe 下按 shell family 为 `\n` 或 `\r\n`。
 
-### read_output
+### shell_output
 
-读取指定 reader 上次读取后的新输出。每个 reader 持有独立游标。
+**统一输出读取工具**：活会话（内存缓冲）、已退出会话（保留缓冲）、归档会话（磁盘消息流）全部用同一套字节流游标语义读取。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `shell_id` | string | **是** | — | |
-| `strip_ansi` | boolean | 否 | `true` | 是否剥离 ANSI 转义码 |
-| `timeout` | number | 否 | `3` | 阻塞等待秒数（0.1–60）；多 shell 轮询建议 ≤3 |
-| `max_lines` | number | 否 | `0` | 按换行分页：最多返回 N 行；未返回字节保留在 reader 游标，`has_more` 为 true；0 = 无限制 |
-| `max_bytes` | number | 否 | `8192` | 单次返回最大字节数；0 = 无限制。配合 `has_more` 分页 |
-| `reader_id` | number | 否 | `0` | reader id（0 = 默认） |
+| `shell_id` | string | **是** | — | shell_id 或 session_id 均可；归档会话也可用 shell_id 定位单个 shell 的输出流 |
+| `strip_ansi` | boolean | 否 | `true` | 是否剥离 ANSI 转义码并压缩终端噪音 |
+| `timeout` | number | 否 | `3` | 仅活会话：阻塞等待秒数（0–60）；0 = 非阻塞；多 shell 轮询建议 ≤3 |
+| `offset` | number | 否 | `-1` | 无状态字节游标：从该原始字节位置向后读；-1 = 默认模式（见下） |
+| `tail_lines` | number | 否 | `0` | 只返回流末尾最后 N 行（优先于 offset）；0 = 关闭 |
+| `max_lines` | number | 否 | `0` | 最多返回 N 个完整行（窗口内裁切）；0 = 无限制 |
+| `max_bytes` | number | 否 | `8192` | 单次返回最大原始字节数；0 = 无限制 |
+| `reader_id` | number | 否 | `0` | 仅活会话流式游标；归档会话不支持 |
 
-**返回**：`{ output, has_more, lines_returned, bytes_returned, session_status, session_uptime_seconds }`
+**读取模式（三选一）**：
 
-`max_lines` / `max_bytes` 都在 buffer 层限制游标推进：未返回的数据可继续读，不会被静默丢弃。
+1. **流式游标（默认，活会话）**：返回 reader 上次读取后的新输出，游标前移、不重复。`shell_input → shell_key(enter) → shell_output` 轮询循环的原有语义，完全兼容。
+2. **`offset >= 0`（无状态绝对定位）**：读字节区间 `[offset, offset+max_bytes)`。任意时刻从头/任意位置翻页；每次调用显式传 `offset`（用返回的 `end_offset` 续读），服务器不保存状态，活会话与归档会话一视同仁。
+3. **`tail_lines > 0`（末尾截取）**：反向取流末尾最后 N 行——只读最近输出，绝不拖入整段历史（token 友好）。无 `offset`/`tail_lines` 且目标是归档/死亡会话时，默认也取末尾最近一块（≤8 KiB），不会全量导出。
 
-### list_sessions
+**返回**：`{ output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds? }`
 
-列出注册表中所有父会话。子 shell 不包含——用 `list_subshells`。无参数。
+- `start_offset` / `end_offset`：本次返回的原始字节区间；`total_bytes`：流总长；`has_more = end_offset < total_bytes`。
+- `source`：`"live"`（内存缓冲）或 `"persisted"`（磁盘消息流）。
+- 活会话流式读（模式 1）时 `start_offset`/`end_offset` 反映 reader 游标位置。
+
+> 例：只读归档会话最后 10 行 → `shell_output(shell_id=归档session_id, tail_lines=10)`；从头翻页 → `shell_output(shell_id, offset=0, max_bytes=8000)` 后用 `end_offset` 续读。
+
+### session_list
+
+列出注册表中所有父会话。子 shell 不包含——用 `shell_list`。无参数。
 
 **返回**：`{ sessions: [{id, name, status, ssh_endpoint, ...}] }`
 
-### get_session_info
+### session_info
 
 获取单个会话详细信息。
 
@@ -146,9 +212,9 @@ list_ssh_configs
 |------|------|------|------|
 | `session_id` | string | **是** | |
 
-### terminate_session
+### session_terminate
 
-终止并移除会话：关闭全部 shell，并关闭 SSH 连接（级联 forwards）。`force=true` 立即强杀；只关一个通道用 `close_shell`。
+终止并移除会话：关闭全部 shell，并关闭 SSH 连接（级联 forwards）。`force=true` 立即强杀；只关一个通道用 `shell_close`。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -157,7 +223,7 @@ list_ssh_configs
 | `grace_period` | number | 否 | `5` | SIGTERM 后等待秒数（0–60） |
 
 
-### resize_pty
+### shell_resize
 
 调整 shell 的 PTY 行列数（会传播到远端 SSH）。
 
@@ -167,7 +233,7 @@ list_ssh_configs
 | `rows` | number | 否 | `24` | 新行数 |
 | `cols` | number | 否 | `80` | 新列数 |
 
-### register_reader
+### shell_reader_register
 
 为 shell 注册独立 reader，返回新的 `reader_id`。新 reader 游标起点 = 当前缓冲末尾（**无历史 backlog**）。
 
@@ -177,128 +243,204 @@ list_ssh_configs
 
 **返回**：`{ reader_id }`
 
-### unregister_reader
+### shell_reader_unregister
 
 释放 reader。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `shell_id` | string | **是** | |
-| `reader_id` | number | **是** | 非零 reader id（来自 `register_reader`） |
+| `reader_id` | number | **是** | 非零 reader id（来自 `shell_reader_register`） |
+
+### shell_notify
+
+为某个 shell 注册**主动通知（push）**：termcp 在事件发生时**主动通知 AI Agent** —— 进程退出 / 输出停顿 / 有新输出时即刻推送“醒来”信令，Agent 收到后再用 `shell_output` 拉取输出（通知**只带信令、不带终端内容**，避免污染上下文）。Agent 无需持续轮询，非常适合长任务挂起等待。
+
+`action` 三选一：
+
+| action | 参数 | 说明 |
+|--------|------|------|
+| `register` | `shell_id`（必填）、`channel`（必填）、`event`（可选，默认 `output`）、`silence_seconds`（可选，默认 3，仅 `silence` 生效，范围 1–300） | 新增规则，返回 `{ ok, rule_id, shell_id, channel, event }` |
+| `unregister` | `rule_id`（必填） | 删除规则，返回 `{ ok, rule_id }`；规则不存在时 `error_code=rule_not_found` |
+| `list` | `shell_id`（可选，过滤） | 返回 `{ rules: [...] }`，每条含 `rule_id`/`session_id`/`shell_id`/`channel`/`event`/`created_at` |
+
+`channel`（下发通道）：
+
+- `resource`：广播 MCP `notifications/resources/updated`，资源 uri = `termcp://shells/<shell_id>`。
+- `sampling`：向注册该规则的 MCP 客户端发 `sampling/createMessage`（systemPrompt `termcp notification daemon`），直接唤起模型。
+
+`event`（触发时机）：
+
+| event | 触发 | 行为 |
+|-------|------|------|
+| `output`（默认） | 终端产生新输出 | **双沿**：立即发一次；输出停止 2s 后再兼底一次 |
+| `exit` | 进程退出 / SSH 断开 | **一次性**：发一次后自动注销 |
+| `silence` | 输出停止 N 秒（`silence_seconds`） | **一次性**：发一次后自动注销 |
+
+**流控与生命周期**：所有下发共享一个全局 **1s 冷却阀**（防止风暴/刷屏）；shell 退出/`shell_close`/会话 `session_terminate` 或 `Delete` 时，该 shell/session 的规则**自动级联清理**，无定时器/协程泄漏。
+
+**典型用法**（长任务编译）：
+
+```jsonc
+// 1) 编译命令跑起来后，注册退出通知
+{ "action": "register", "shell_id": "<shell_id>", "channel": "sampling", "event": "exit" }
+// → { "ok": true, "rule_id": "notif_...", "...": "..." }
+
+// 2) 等 termcp 主动唤醒（通知不带内容），再用 shell_output 拉取结果
+{ "shell_id": "<shell_id>", "timeout": 0 }
+```
+
+> 进程还活但只是“输出停了”，用 `event="silence", silence_seconds=10`；需要持续跟踪输出变化用 `event="output"`。
+
+### message（会话消息历史）
+
+查看与获取持久化存储的原始会话消息。消息包含系统事件、输入命令和输出内容。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | string | **是** | `"list"` 或 `"get"` |
+| `session_id` | string | **是** | 会话 ID |
+| `message_ids` | string[] | 条件 | `action="get"` 时传入要读取的消息 ID 列表 |
+
+- `action="list"`：返回该会话的消息索引 `{ "messages": [{ id, shell_id, type, created_at, byte_size }] }`
+- `action="get"`：返回指定消息的详细内容 `{ "messages": [{ id, session_id, shell_id, type, content, created_at, byte_size }] }`
+
+### history（归档会话管理与回放）
+
+会话正常退出、意外断线或 `session_terminate` 后进入归档历史（“断开 ≠ 删除”），元数据保存在 `history.json`，消息保留在磁盘。跨 termcp 重启仍可检索、查看与导出。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `action` | string | **是** | — | `list` / `search_messages` / `rename_session` / `update_session_meta` / `purge` / `screenshot` |
+| `session_id` | string | 条件 | — | 会话 ID（除 list/search_messages 外必填） |
+| `query` | string | 条件 | — | `search_messages`：不区分大小写的全文搜索子串 |
+| `limit` | number | 否 | `50` | `search_messages`：最多返回的匹配条数 |
+| `name` | string | 条件 | — | `rename_session`：新的会话显示名称 |
+| `notes` | string | 否 | — | `update_session_meta`：更新的解法笔记/说明 |
+| `tags` | string[] | 否 | — | `update_session_meta`：更新的标签列表（如 `["web", "flag"]`） |
+| `start` | number | 否 | `0` | `screenshot`：起始渲染行（0 索引） |
+| `lines` | number | 否 | `0` | `screenshot`：渲染行数（0 = 全部） |
+| `cols` | number | 否 | `80` | `screenshot`：终端列宽 |
+| `theme` | string | 否 | `"dark"` | `screenshot`：主题（`"dark"` 或 `"light"`） |
+
+**各 action 行为**：
+- `action="list"`：列出所有归档会话 `{ "sessions": [...] }`。
+- `action="search_messages"`：跨所有会话全文搜索终端输出与输入 `{ "query": "...", "hits": [{ session_id, name, type, snippet }] }`。
+- `action="rename_session"`：重命名活跃或归档会话。
+- `action="update_session_meta"`：为归档会话添加备注与标签，方便事后检索审计。
+- `action="purge"`：**永久删除**会话，并物理清理磁盘上的所有消息记录（不可逆）。
+- `action="screenshot"`：将终端指定行数渲染为 PNG 截图并返回下载 URL，适合快速视觉审计。
+- **输出读取**：归档会话的终端输出由 `shell_output(shell_id=归档session_id, tail_lines=N / offset=...)` 读取，无需调用独立工具。
 
 ---
 
-## 服务端发现
+## 服务端发现与配置
 
-### detect_shell
+### shell_detect
 
 探测 termcp **宿主机**（不是 ssh_config 目标）的可用交互 shell。无参数。
 
 **返回**：`{ path, family, hint }`
 
-### list_ssh_configs
+### ssh_config（统一入口）
 
-返回可用的 profile 名称列表（不含密码/host/完整 JSON）。始终可用，无参数。
+SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启动 termcp 时加 `--mcp-manage-ssh-configs`。
 
-**返回**：`{ ssh_configs: ["internal", "my-server", ...] }`
-
-### create_ssh_config
-
-创建新的 remote SSH profile。需启用 `--mcp-manage-ssh-configs`。Fails if name already exists。
-
-| 参数 | 类型 | 必须 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `name` | string | 是 | — | Profile 名称（字母/数字/`_`/`-`，最长 64） |
-| `host` | string | 是 | — | SSH 主机名或 IP |
-| `user` | string | 是 | — | SSH 用户名 |
-| `port` | number | 否 | `22` | SSH 端口 |
-| `password` | string | 否 | — | 密码认证（与 private_key 二选一） |
-| `private_key` | string | 否 | — | PEM 私钥内容 |
-| `key_passphrase` | string | 否 | — | 加密私钥的 passphrase |
-| `trust_unknown_host` | bool | 否 | `false` | 接受未知 host key |
-| `known_hosts` | string | 否 | — | known_hosts 内容或路径 |
-| `dial_timeout_seconds` | number | 否 | `30` | Dial 超时 |
-| `proxy` | string | 否 | — | SOCKS5 代理 URL |
-| `description` | string | 否 | — | 人类可读的描述 |
-| `default_shell` | string | 否 | — | 默认 shell 命令 |
-| `default_mode` | string | 否 | — | 默认模式：`pty` 或 `pipe` |
-| `jump_host` 等 | — | 否 | — | 可选的单层 bastion（ProxyJump）参数，前缀 `jump_` |
-
-**注意**：password/private_key/key_passphrase/proxy 凭据**写入后不可读取**；不要在聊天中回显。
-
-### edit_ssh_config
-
-增量修补已有 profile。仅将提供的非空字段写入；省略的字段（含密码/密钥）保持原值。需启用 `--mcp-manage-ssh-configs`。
-
-参数同 `create_ssh_config`，但 `host`/`user` 非必填（仅更新传入的字段）。
-
-### copy_ssh_config
-
-服务端整体复制已有 profile（含凭据），凭据不经过 AI。需启用 `--mcp-manage-ssh-configs`。
-
-| 参数 | 类型 | 必须 | 说明 |
+| 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `source_name` | string | 是 | 要复制的现有 profile |
-| `target_name` | string | 是 | 新 profile 名称（必须不存在） |
+| `action` | string | **是** | `list` / `create` / `edit` / `copy` / `delete`（后四者需 flag） |
+| `name` | string | 条件 | create/edit/delete：profile 名（`[A-Za-z0-9_-]`，最长 64） |
+| `host` / `user` | string | 条件 | create 必填；edit 可选（仅更新传入字段） |
+| `port` | number | 否 | 默认 22 |
+| `password` / `private_key` / `key_passphrase` | string | 条件 | create 二选一；edit 省略保持原值 |
+| `trust_unknown_host` | bool | 否 | 默认 false |
+| `known_hosts` | string | 否 | 内容或路径 |
+| `dial_timeout_seconds` | number | 否 | 默认 30 |
+| `proxy` | string | 否 | SOCKS5 代理 URL |
+| `description` / `default_shell` / `default_mode` | string | 否 | 会话默认值 |
+| `jump_*` | — | 否 | 单层 bastion（ProxyJump）：`jump_host` / `jump_user` / `jump_port` / `jump_password` / `jump_private_key` / `jump_key_passphrase` / `jump_trust_unknown_host` / `jump_known_hosts` / `jump_dial_timeout_seconds` / `jump_proxy` |
+| `source_name` / `target_name` | string | 条件 | copy：源与目标（目标须不存在） |
 
-### delete_ssh_config
-
-按名称删除 remote profile。`internal` 不可删除。需启用 `--mcp-manage-ssh-configs`。
-
-| 参数 | 类型 | 必须 | 说明 |
-|------|------|------|------|
-| `name` | string | 是 | 要删除的 profile 名称 |
+**注意**：password/private_key/key_passphrase/proxy 凭据**写入后不可读取**；不要在聊天中回显。write actions 未启用时调用返回错误提示启动 flag。
 
 ---
 
-## 端口转发（OpenSSH 命名）
+## 端口转发：forward（统一入口）
 
-所有转发基于 SSH 通道，复用 `start_session` 建立的连接。参数均为 `session_id`。
+所有转发基于 SSH 通道，复用 `session_start` 建立的连接，参数均为 `session_id`。`action` 对应 OpenSSH 语义：
 
-| 工具 | OpenSSH | 语义 |
-|------|---------|------|
-| `local_forward` | `-L` | termcp 侧监听本地端口，隧道到远端目标 |
-| `remote_forward` | `-R` | 远端监听端口，隧道回 termcp 侧目标 |
-| `dynamic_forward` | `-D` | 本机 SOCKS5 代理 |
-
-### local_forward（ssh -L）
-
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-|------|------|------|------|------|
-| `session_id` | string | **是** | — | |
-| `remote_host` | string | 否 | `"localhost"` | 目标主机（相对远端） |
-| `remote_port` | number | **是** | — | 远端目标端口 |
-| `local_port` | number | 否 | `0` | 本地监听端口（0=随机） |
-
-### remote_forward（ssh -R）
+| action | OpenSSH | 语义 |
+|--------|---------|------|
+| `local` | `-L` | termcp 侧监听本地端口，隧道到远端目标 |
+| `remote` | `-R` | 远端监听端口，隧道回 termcp 侧目标 |
+| `dynamic` | `-D` | 本机 SOCKS5 代理 |
+| `list` | — | 列出全部转发 |
+| `close` | — | 按 `forward_id` 关闭 |
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `session_id` | string | **是** | — | |
-| `local_host` | string | 否 | `"0.0.0.0"` | 远端监听绑定地址 |
-| `local_port` | number | **是** | — | 远端监听端口 |
-| `remote_host` | string | **是** | — | 目标主机（相对 termcp） |
-| `remote_port` | number | **是** | — | 目标端口（相对 termcp） |
+| `action` | string | **是** | — | `local` / `remote` / `dynamic` / `list` / `close` |
+| `session_id` | string | 条件 | — | local/remote/dynamic 必填 |
+| `remote_host` | string | 否 | `"localhost"` | local：目标主机（相对远端） |
+| `remote_port` | number | 条件 | — | local：远端目标端口；remote：termcp 侧目标端口 |
+| `local_port` | number | 条件 | `0` | local/dynamic：本地监听端口（0=随机）；remote：远端监听端口（必填） |
+| `local_host` | string | 否 | `"0.0.0.0"` | remote：远端监听绑定地址 |
+| `forward_id` | string | 条件 | — | close：来自 `action=list` |
 
-### dynamic_forward（ssh -D）
-
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-|------|------|------|------|------|
-| `session_id` | string | **是** | — | |
-| `local_port` | number | 否 | `0` | 本地 SOCKS5 监听端口（0=随机） |
-
-### list_forwards / close_forward
-
-- `list_forwards`：无参数，返回 `{ forwards: [{forward_id, direction, listen_addr, target_addr, status}, ...] }`
-- `close_forward`：`forward_id` 必填
+**返回**：local/dynamic → `{ local_port, forward_id }`；remote → `{ remote_port, forward_id }`；list → `{ forwards: [...] }`；close → `{ "success": true }`
 
 ---
 
 ## 文件（SFTP，session 级）
 
-`file_*` / `get_file_urls` 一律用 **`session_id`**（连接级，不绑 shell）。
+`file_*` 一律用 **`session_id`**（连接级，不绑 shell）。
 
-`file_getwd` 返回 **SFTP cwd**，不是交互 shell 的 `pwd`；要 shell 工作目录请在对应 shell 里执行命令。
+### 高频独立入口
+
+| 工具 | 说明 |
+|------|------|
+| `file_read` | 读文件（text/hex 或下载到 termcp 主机） |
+| `file_write` | 写文件（内联数据或从 host 文件流式写入） |
+| `file_stat` | 文件/目录元信息（size、is_dir、children） |
+| `file_delete` | 删除文件或空目录 |
+| `file_rename` | 移动/重命名 |
+| `file_mkdir` | 创建目录（含父目录） |
+| `file_urls` | 获取 HTTP 下载/上传 URL |
+| `file_getwd` | SFTP 工作目录（不是 shell 的 `pwd`） |
+
+### 低频操作：分组入口（action 枚举）
+
+低频文件操作合并为 3 个入口，用 `action` 参数区分具体操作，避免每个操作一个工具占用模型上下文。
+
+**file_perm** — 权限/属主/时间戳
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | string | **是** | |
+| `action` | string | **是** | `chmod` / `chown` / `chtimes` |
+| `remote_path` | string | **是** | |
+| `mode` | number | 条件 | chmod：十进制 Unix 权限（493 = 0755） |
+| `uid` / `gid` | number | 条件 | chown：数字 uid/gid |
+| `atime` / `mtime` | number | 条件 | chtimes：Unix 秒 |
+
+**file_link** — 符号链接/硬链接
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | string | **是** | |
+| `action` | string | **是** | `readlink` / `symlink` / `link` |
+| `remote_path` | string | 条件 | readlink：要读取的链接路径 |
+| `target` / `link_path` | string | 条件 | symlink：目标 + 新链接路径（`ln -s target link_path`） |
+| `existing_path` / `new_path` | string | 条件 | link：已有文件 + 新硬链接路径 |
+
+**file_fs** — 路径/文件系统
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | string | **是** | |
+| `action` | string | **是** | `truncate` / `realpath` / `statvfs` |
+| `remote_path` | string | **是** | |
+| `size` | number | 条件 | truncate：新字节数 |
 
 ---
 
@@ -306,11 +448,19 @@ list_ssh_configs
 
 | 旧工具/参数 | 替代 |
 |-------------|------|
-| `send_and_read` | `send_input` + `press_key(enter)` + `read_output` |
-| `background_send` | `send_input`（本身即立即返回） |
-| `press_enter` 参数 | `press_key(key="enter")` |
-| `forward_port` | `local_forward`（ssh -L） |
-| 旧 `local_forward`（曾错误实现为 -R） | 现为 -L；原 -R 能力见 `remote_forward` |
-| I/O 参数名 `session_id` | `shell_id` |
-| `start_subshell` 的 `parent_session_id` | `session_id` |
-| `initial_output` 返回字段 | 删除；用 `read_output` |
+| `send_and_read` | `shell_input` + `shell_key(enter)` + `shell_output` |
+| `background_send` | `shell_input`（本身即立即返回） |
+| `press_enter` 参数 | `shell_key(key="enter")` |
+| `forward_port` | `forward(action=local)`（ssh -L） |
+| 旧 `local_forward`（曾错误实现为 -R） | 现为 `forward(action=local)`；原 -R 能力见 `forward(action=remote)` |
+| I/O 参数名 `session_id` | `shell_id`（shell_* 工具） |
+| `shell_open` 的 `parent_session_id` | `session_id` |
+| `initial_output` 返回字段 | 删除；用 `shell_output` |
+| `file_chmod` / `file_chown` / `file_chtimes` | `file_perm(action=chmod\|chown\|chtimes)` |
+| `file_readlink` / `file_symlink` / `file_link` | `file_link(action=readlink\|symlink\|link)` |
+| `file_truncate` / `file_realpath` / `file_statvfs` | `file_fs(action=truncate\|realpath\|statvfs)` |
+| `local_forward` / `remote_forward` / `dynamic_forward` / `list_forwards` / `close_forward` | `forward(action=local\|remote\|dynamic\|list\|close)` |
+| `message_list` / `message_get` | `message(action=list\|get)` |
+| `history_list` / `history_search_messages` / `history_rename_session` / `history_update_session_meta` / `history_purge` / `history_screenshot` | `history(action=list\|search_messages\|rename_session\|update_session_meta\|purge\|screenshot)`；归档输出读取改由 `shell_output` 承担（`tail_lines`/`offset`） |
+| `history(action=get_transcript)` | 删除；归档/死亡会话输出改用 `shell_output(shell_id=归档session_id或shell_id, tail_lines=N / offset)`，与活会话同一套游标语义 |
+| `ssh_config_list` / `ssh_config_create` / `ssh_config_edit` / `ssh_config_copy` / `ssh_config_delete` | `ssh_config(action=list\|create\|edit\|copy\|delete)` |

@@ -12,10 +12,15 @@ import (
 
 	"github.com/BurntSushi/toml"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
+	"golang.org/x/crypto/ssh"
 
+	"github.com/open-mcp-ai/termcp/internal/ansi"
+	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sftp"
 	"github.com/open-mcp-ai/termcp/internal/shell"
+	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -58,15 +63,15 @@ func validateStartParams(args map[string]any) (*mcpgo.CallToolResult, error) {
 		mode = "pty"
 	}
 	if mode != "pty" && mode != "pipe" {
-		return mcpgo.NewToolResultError(fmt.Sprintf("mode must be 'pty' or 'pipe', got %q", mode)), nil
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("mode must be 'pty' or 'pipe', got %q", mode)), nil
 	}
 	rows := int(getFloat64(args, "rows", 24))
 	if rows < 1 || rows > 1000 {
-		return mcpgo.NewToolResultError(fmt.Sprintf("rows must be between 1 and 1000, got %d", rows)), nil
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("rows must be between 1 and 1000, got %d", rows)), nil
 	}
 	cols := int(getFloat64(args, "cols", 80))
 	if cols < 1 || cols > 1000 {
-		return mcpgo.NewToolResultError(fmt.Sprintf("cols must be between 1 and 1000, got %d", cols)), nil
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("cols must be between 1 and 1000, got %d", cols)), nil
 	}
 	return nil, nil
 }
@@ -94,21 +99,36 @@ func filterRunning(in []api.Session) []api.Session {
 func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
 	sess := s.sessMgr.Get(sessionID)
 	if sess == nil {
-		return nil, mcpgo.NewToolResultError(fmt.Sprintf("Session '%s' not found", sessionID))
+		return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID))
 	}
 	return sess, nil
+}
+
+// sshClientForSession resolves a session and returns it together with its live SSH
+// client. Restored/DEAD sessions keep metadata but no transport; callers receive a
+// standard tool error instead of a nil client that would crash SFTP/forward internals.
+func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.Client, *mcpgo.CallToolResult) {
+	sess, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return nil, nil, bad
+	}
+	cli := sess.SSHClient()
+	if cli == nil {
+		return nil, nil, toolError(CodeSessionNotRunning, "%s", fmt.Sprintf("Session '%s' is not running or has no active SSH connection", sessionID))
+	}
+	return sess, cli, nil
 }
 
 // sftpClient resolves a session and creates an SFTP client over it.
 // Caller must defer Close() on the returned client.
 func (s *Server) sftpClient(sessionID string) (*sftp.Client, *mcpgo.CallToolResult) {
-	sess, bad := s.requireSession(sessionID)
+	_, sshCli, bad := s.sshClientForSession(sessionID)
 	if bad != nil {
 		return nil, bad
 	}
-	cli, err := sftp.NewClient(sess.SSHClient())
+	cli, err := sftp.NewClient(sshCli)
 	if err != nil {
-		return nil, mcpgo.NewToolResultError(fmt.Sprintf("SFTP: %v", err))
+		return nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
 	}
 	return cli, nil
 }
@@ -118,7 +138,7 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 	if cs := s.sessMgr.GetChildShell(shellID); cs != nil {
 		return cs, nil
 	}
-	return nil, mcpgo.NewToolResultError(fmt.Sprintf("Shell '%s' not found", shellID))
+	return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID))
 }
 
 func getStringSlice(args map[string]any, key string) []string {
@@ -143,10 +163,7 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 	}
 	name := strings.TrimSpace(getString(args, "ssh_config", ""))
 	if name == "" {
-		if s.NoInternal {
-			return "", nil, nil, fmt.Errorf("ssh_config is required when internal profile is disabled")
-		}
-		name = "internal"
+		return "", nil, nil, errMissingSSHConfig
 	}
 	ent, err := s.sshConfigs.Load(name)
 	if err != nil {
@@ -170,7 +187,7 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 	command := getString(args, "command", "")
 	toolArgs := getStringSlice(args, "args")
 	if strings.TrimSpace(command) == "" && len(toolArgs) > 0 {
-		return mcpgo.NewToolResultError("command is required when args are provided"), nil
+		return toolError(CodeInvalidArgument, "%s", "command is required when args are provided"), nil
 	}
 	if bad, _ := validateStartParams(args); bad != nil {
 		return bad, nil
@@ -178,12 +195,12 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 
 	cfgName, ent, remote, err := s.resolveSSHFromArgs(args)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 
 	cmd, execArgs := sshconfig.EffectiveCommand(ent, command, toolArgs)
 	if strings.TrimSpace(cmd) == "" && len(execArgs) > 0 {
-		return mcpgo.NewToolResultError("command is required when args are provided"), nil
+		return toolError(CodeInvalidArgument, "%s", "command is required when args are provided"), nil
 	}
 
 	mode := sshconfig.EffectiveMode(ent, getString(args, "mode", ""))
@@ -203,7 +220,7 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 		Remote:  remote,
 	})
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -227,7 +244,7 @@ func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequ
 		return bad, nil
 	}
 	if err := shell.SendTerminalBytes([]byte(text), false); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -238,14 +255,14 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 	key := getString(args, "key", "")
 	repeat := int(getFloat64(args, "repeat", 1))
 	if key == "" {
-		return mcpgo.NewToolResultError("key is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "key is required"), nil
 	}
 	shell, bad := s.requireShell(shellID)
 	if bad != nil {
 		return bad, nil
 	}
 	if err := shell.PressKey(key, repeat); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -265,7 +282,7 @@ func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRe
 	}
 	cs, err := sess.CreateChildShell(command, nil, mode == "pty", rows, cols, name)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{"shell_id": cs.ID, "session_id": parentID, "name": cs.Name}), nil
 }
@@ -285,12 +302,12 @@ func (s *Server) handleListSubshells(_ context.Context, request mcpgo.CallToolRe
 // handleCloseShell closes a single shell channel without tearing down the parent session.
 // For a parent session id: closes the root shell channel only (remote) / no-op (internal);
 // the SSH connection and other child shells keep running. For a child shell id: closes
-// just that channel. Use terminate_session to fully stop a session.
+// just that channel. Use session_terminate to fully stop a session.
 func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	if shellID == "" {
-		return mcpgo.NewToolResultError("shell_id is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "shell_id is required"), nil
 	}
 	// Internal primary shell: tab close is a no-op (process outlives the tab).
 	if sess := s.sessMgr.GetByShellID(shellID); sess != nil && sess.PrimaryShellID() == shellID && sess.SSHEndpoint == "internal" {
@@ -298,42 +315,126 @@ func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolReque
 	}
 	found, err := s.sessMgr.CloseChildShell(shellID)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if !found {
-		return mcpgo.NewToolResultError(fmt.Sprintf("Shell '%s' not found", shellID)), nil
+		return toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID)), nil
 	}
 	return successResult(), nil
 }
 
+// handleReadOutput is the ONE unified output reader. It serves live shells
+// (in-memory buffer), exited-but-retained shells, and archived/restored-DEAD
+// sessions (persisted message log) with identical byte-stream cursor semantics.
+// Three read modes:
+//   - tail_lines > 0, or an archived id with no offset: read the tail of the
+//     stream (token-safe default; never a full dump);
+//   - offset >= 0: stateless positional read of [offset, offset+max_bytes);
+//   - otherwise: live streaming cursor on reader_id (new bytes since last read).
+//
+// Every response carries start_offset/end_offset/total_bytes/has_more so the
+// caller can page the stream without server-side state.
 func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
-	sessionID := getString(args, "shell_id", "")
+	id := getString(args, "shell_id", "")
+	if id == "" {
+		return toolError(CodeInvalidArgument, "%s", "shell_id is required"), nil
+	}
 	stripAnsi := getBool(args, "strip_ansi", true)
 	timeout := getFloat64(args, "timeout", 3.0)
-	if timeout < 0.1 || timeout > 60 {
-		return mcpgo.NewToolResultError(fmt.Sprintf("timeout must be between 0.1 and 60, got %v", timeout)), nil
+	if timeout < 0 || timeout > 60 {
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("timeout must be between 0 and 60, got %v", timeout)), nil
 	}
 	maxLines := int(getFloat64(args, "max_lines", 0))
-	maxBytes := int(getFloat64(args, "max_bytes", 0))
+	maxBytes := int(getFloat64(args, "max_bytes", 8192))
 	readerID := int(getFloat64(args, "reader_id", 0))
+	offset := int64(getFloat64(args, "offset", -1))
+	tailLines := int(getFloat64(args, "tail_lines", 0))
+	if tailLines < 0 {
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("tail_lines must be >= 0, got %d", tailLines)), nil
+	}
+	if offset < -1 {
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("offset must be >= -1, got %d", offset)), nil
+	}
 
-	shell, bad := s.requireShell(sessionID)
+	src, bad := s.resolveOutputSource(id)
 	if bad != nil {
 		return bad, nil
 	}
-	output, err := shell.ReadTerminalStream(ctx, readerID, time.Duration(timeout*float64(time.Second)), stripAnsi, maxLines, maxBytes)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+	if readerID > 0 && src.live == nil {
+		return toolError(CodeInvalidArgument, "%s", "reader_id requires a live shell; archived sessions are read with offset/tail_lines"), nil
 	}
-	info := shell.Info()
+	clean := func(raw []byte) string {
+		if !stripAnsi {
+			return string(raw)
+		}
+		return ansi.Compact(ansi.Strip(string(raw)))
+	}
+
+	var output string
+	var start, end, total int64
+	var hasMore bool
+
+	switch {
+	case tailLines > 0 || (src.live == nil && offset < 0):
+		raw, st, tot, err := src.scanTailWindow(tailLines, maxBytes)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		output, start, end, total, hasMore = clean(raw), st, tot, tot, false
+	case offset >= 0:
+		tot, err := src.Len()
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		total = tot
+		max := maxBytes
+		if max <= 0 {
+			max = int(total - offset)
+			if max < 0 {
+				max = 0
+			}
+		}
+		raw, _, err := src.ByteRange(offset, max)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		raw = truncateAtLines(raw, maxLines, offset+int64(len(raw)) >= total)
+		start, end = offset, offset+int64(len(raw))
+		hasMore = end < total
+		output = clean(raw)
+	default:
+		// Live streaming cursor path (unchanged semantics).
+		pre := src.live.ReaderCursor(readerID)
+		if pre < 0 {
+			return toolError(CodeReaderNotRegistered, "%s", fmt.Sprintf("reader_id %d is not registered on this shell", readerID)), nil
+		}
+		out, err := src.live.ReadTerminalStream(ctx, readerID, time.Duration(timeout*float64(time.Second)), stripAnsi, maxLines, maxBytes)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		output = out
+		end = src.live.ReaderCursor(readerID)
+		total = src.live.BufferLen()
+		start = pre
+		hasMore = end < total
+	}
+
 	result := map[string]any{
-		"output":                 output,
-		"has_more":               shell.HasMoreOutput(readerID),
-		"lines_returned":         strings.Count(output, "\n"),
-		"bytes_returned":         len(output),
-		"session_status":         string(info.Status),
-		"session_uptime_seconds": int(time.Since(info.CreatedAt).Seconds()),
+		"output":         output,
+		"has_more":       hasMore,
+		"lines_returned": strings.Count(output, "\n"),
+		"bytes_returned": len(output),
+		"start_offset":   start,
+		"end_offset":     end,
+		"total_bytes":    total,
+		"source":         src.source(),
+		"session_id":     src.sessID,
+		"shell_id":       src.shellID,
+		"session_status": string(src.status),
+	}
+	if src.live != nil {
+		result["session_uptime_seconds"] = int(time.Since(src.created).Seconds())
 	}
 	return jsonResult(result), nil
 }
@@ -362,7 +463,7 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 	force := getBool(args, "force", false)
 	gracePeriod := getFloat64(args, "grace_period", 5.0)
 	if gracePeriod < 0 || gracePeriod > 60 {
-		return mcpgo.NewToolResultError(fmt.Sprintf("grace_period must be between 0 and 60, got %v", gracePeriod)), nil
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("grace_period must be between 0 and 60, got %v", gracePeriod)), nil
 	}
 
 	_, bad := s.requireSession(sessionID)
@@ -387,7 +488,7 @@ func (s *Server) handleResizePty(ctx context.Context, request mcpgo.CallToolRequ
 		return bad, nil
 	}
 	if err := shell.ResizePty(rows, cols); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -398,7 +499,7 @@ func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolR
 
 	entries, err := s.msgMgr.List(sessionID)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	result := map[string]any{"messages": entries}
 	return jsonResult(result), nil
@@ -417,7 +518,7 @@ func (s *Server) handleGetMessage(ctx context.Context, request mcpgo.CallToolReq
 
 	messages, err := s.msgMgr.GetMany(sessionID, msgIDs)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	result := map[string]any{"messages": messages}
 	return jsonResult(result), nil
@@ -428,28 +529,6 @@ func (s *Server) handleListHistory(ctx context.Context, request mcpgo.CallToolRe
 		return jsonResult(map[string]any{"sessions": []any{}}), nil
 	}
 	return jsonResult(map[string]any{"sessions": s.historyMgr.List()}), nil
-}
-
-func (s *Server) handleGetTranscript(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	format := strings.TrimSpace(getString(args, "format", "markdown"))
-	switch format {
-	case "text", "markdown", "html":
-	default:
-		return mcpgo.NewToolResultError("format must be text, markdown, or html"), nil
-	}
-	if s.historyMgr == nil {
-		return mcpgo.NewToolResultError("history not configured"), nil
-	}
-	if _, ok := s.historyMgr.Get(sessionID); !ok {
-		return mcpgo.NewToolResultError(fmt.Sprintf("Session '%s' not found in history", sessionID)), nil
-	}
-	text, err := s.historyMgr.Transcript(sessionID, format)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return jsonResult(map[string]any{"session_id": sessionID, "format": format, "transcript": text}), nil
 }
 
 func (s *Server) handleSearchMessages(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -467,19 +546,19 @@ func (s *Server) handleRenameSession(ctx context.Context, request mcpgo.CallTool
 	sessionID := getString(args, "session_id", "")
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
-		return mcpgo.NewToolResultError("name is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 	if sess := s.sessMgr.Get(sessionID); sess != nil {
 		if err := s.sessMgr.Rename(sessionID, name); err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
 		}
 		return successResult(), nil
 	}
 	if s.historyMgr == nil {
-		return mcpgo.NewToolResultError("history not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
 	}
 	if err := s.historyMgr.Update(sessionID, &name, nil, nil); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -488,7 +567,7 @@ func (s *Server) handleUpdateSessionMeta(ctx context.Context, request mcpgo.Call
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 	if s.historyMgr == nil {
-		return mcpgo.NewToolResultError("history not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
 	}
 	var notes *string
 	if v, ok := args["notes"]; ok {
@@ -501,7 +580,7 @@ func (s *Server) handleUpdateSessionMeta(ctx context.Context, request mcpgo.Call
 		tags = &t
 	}
 	if err := s.historyMgr.Update(sessionID, nil, notes, tags); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -511,18 +590,18 @@ func (s *Server) handlePurgeSession(ctx context.Context, request mcpgo.CallToolR
 	sessionID := getString(args, "session_id", "")
 	if s.sessMgr.Get(sessionID) != nil {
 		if err := s.sessMgr.Delete(sessionID); err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
 		}
 		return successResult(), nil
 	}
 	if s.historyMgr == nil {
-		return mcpgo.NewToolResultError("history not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
 	}
 	if _, ok := s.historyMgr.Get(sessionID); !ok {
-		return mcpgo.NewToolResultError(fmt.Sprintf("Session '%s' not found", sessionID)), nil
+		return toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID)), nil
 	}
 	if err := s.historyMgr.Delete(sessionID); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -531,10 +610,10 @@ func (s *Server) handleScreenshot(ctx context.Context, request mcpgo.CallToolReq
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 	if s.historyMgr == nil {
-		return mcpgo.NewToolResultError("history not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
 	}
 	if _, ok := s.historyMgr.Get(sessionID); !ok {
-		return mcpgo.NewToolResultError(fmt.Sprintf("Session '%s' not found in history", sessionID)), nil
+		return toolError(CodeHistoryNotFound, "%s", fmt.Sprintf("Session '%s' not found in history", sessionID)), nil
 	}
 	start := int(getFloat64(args, "start", 0))
 	lines := int(getFloat64(args, "lines", 0))
@@ -563,7 +642,7 @@ func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToo
 	}
 	readerID, err := shell.RegisterReader()
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	result := map[string]any{"reader_id": readerID}
 	return jsonResult(result), nil
@@ -584,12 +663,12 @@ func (s *Server) handleUnregisterReader(ctx context.Context, request mcpgo.CallT
 
 func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if s.sshConfigs == nil {
-		return mcpgo.NewToolResultError("ssh config store not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
-		return mcpgo.NewToolResultError("name is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 	host := strings.TrimSpace(getString(args, "host", ""))
 	user := strings.TrimSpace(getString(args, "user", ""))
@@ -655,71 +734,71 @@ func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallTo
 	if names, err := s.sshConfigs.List(); err == nil {
 		for _, n := range names {
 			if strings.EqualFold(n, name) {
-				return mcpgo.NewToolResultError(fmt.Sprintf("ssh config %q already exists (use edit_ssh_config or copy_ssh_config)", name)), nil
+				return toolError(CodeConflict, "%s", fmt.Sprintf("ssh config %q already exists (use edit_ssh_config or copy_ssh_config)", name)), nil
 			}
 		}
 	}
 
 	body, err := toml.Marshal(entry)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if _, err := sshconfig.ParseAndValidate(body); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(name, body); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
 
 func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if s.sshConfigs == nil {
-		return mcpgo.NewToolResultError("ssh config store not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
 	name := strings.TrimSpace(getString(request.GetArguments(), "name", ""))
 	if name == "" {
-		return mcpgo.NewToolResultError("name is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 	if err := s.sshConfigs.Delete(name); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
 
 func (s *Server) handleCopySSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if s.sshConfigs == nil {
-		return mcpgo.NewToolResultError("ssh config store not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
 	args := request.GetArguments()
 	src := strings.TrimSpace(getString(args, "source_name", ""))
 	dst := strings.TrimSpace(getString(args, "target_name", ""))
 	if src == "" || dst == "" {
-		return mcpgo.NewToolResultError("source_name and target_name are required"), nil
+		return toolError(CodeInvalidArgument, "%s", "source_name and target_name are required"), nil
 	}
 	data, err := s.sshConfigs.ReadRaw(src)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(dst, data); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
 
 func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if s.sshConfigs == nil {
-		return mcpgo.NewToolResultError("ssh config store not configured"), nil
+		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
-		return mcpgo.NewToolResultError("name is required"), nil
+		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 
 	existing, err := s.sshConfigs.Load(name)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 
 	// Merge: apply non-empty values from args over existing entry.
@@ -802,13 +881,13 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 
 	body, err := toml.Marshal(existing)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if _, err := sshconfig.ParseAndValidate(body); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(name, body); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -819,7 +898,7 @@ func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToo
 	}
 	names, err := s.sshConfigs.List()
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	arr := make([]any, 0, len(names))
 	for _, n := range names {
@@ -834,7 +913,7 @@ func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToo
 func (s *Server) handleDetectShell(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	path, family, hint := shell.NewDetector().Detect()
 	if path == "" {
-		return mcpgo.NewToolResultError(hint), nil
+		return toolError(CodeOperationFailed, "%s", hint), nil
 	}
 	result := map[string]any{
 		"path":   path,
@@ -854,19 +933,19 @@ func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolR
 	localPort := int(getFloat64(args, "local_port", 0))
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePort <= 0 || remotePort > 65535 {
-		return mcpgo.NewToolResultError("remote_port required (1-65535)"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_port required (1-65535)"), nil
 	}
 
-	sess, bad := s.requireSession(sessionID)
+	sess, sshCli, bad := s.sshClientForSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
-	fw, err := s.forwardMgr.CreateLocal(sessionID, sess.Info().Name, remoteHost, remotePort, localPort, sess.SSHClient())
+	fw, err := s.forwardMgr.CreateLocal(sessionID, sess.Info().Name, remoteHost, remotePort, localPort, sshCli)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{
 		"local_port": fw.ListenAddr,
@@ -883,22 +962,22 @@ func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallTool
 	remotePort := int(getFloat64(args, "remote_port", 0))
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if localPort <= 0 || localPort > 65535 {
-		return mcpgo.NewToolResultError("local_port required (1-65535)"), nil
+		return toolError(CodeInvalidArgument, "%s", "local_port required (1-65535)"), nil
 	}
 	if remoteHost == "" || remotePort <= 0 {
-		return mcpgo.NewToolResultError("remote_host and remote_port required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_host and remote_port required"), nil
 	}
 
-	sess, bad := s.requireSession(sessionID)
+	sess, sshCli, bad := s.sshClientForSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
-	fw, err := s.forwardMgr.CreateRemote(sessionID, sess.Info().Name, localHost, localPort, remoteHost, remotePort, sess.SSHClient())
+	fw, err := s.forwardMgr.CreateRemote(sessionID, sess.Info().Name, localHost, localPort, remoteHost, remotePort, sshCli)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{
 		"remote_port": localPort,
@@ -912,17 +991,17 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToo
 	localPort := int(getFloat64(args, "local_port", 0))
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 
-	sess, bad := s.requireSession(sessionID)
+	sess, sshCli, bad := s.sshClientForSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	info := sess.Info()
-	fw, err := s.forwardMgr.CreateDynamic(sessionID, info.Name, localPort, sess.SSHClient(), info.SSHEndpoint == "internal")
+	fw, err := s.forwardMgr.CreateDynamic(sessionID, info.Name, localPort, sshCli, info.SSHEndpoint == "internal")
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{"local_port": fw.ListenAddr, "forward_id": fw.ForwardID}), nil
 }
@@ -943,13 +1022,13 @@ func (s *Server) handleCloseForward(ctx context.Context, request mcpgo.CallToolR
 	args := request.GetArguments()
 	forwardID := getString(args, "forward_id", "")
 	if forwardID == "" {
-		return mcpgo.NewToolResultError("forward_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "forward_id required"), nil
 	}
 	if s.forwardMgr == nil {
-		return mcpgo.NewToolResultError("forward manager not available"), nil
+		return toolError(CodeNotConfigured, "%s", "forward manager not available"), nil
 	}
 	if err := s.forwardMgr.Close(forwardID); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(forwardErrCode(err), "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -966,13 +1045,13 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	localPath := getString(args, "local_path", "")
 
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 	if mode != "text" && mode != "hex" && mode != "file" {
-		return mcpgo.NewToolResultError(`mode must be "text", "hex", or "file"`), nil
+		return toolError(CodeInvalidArgument, "%s", `mode must be "text", "hex", or "file"`), nil
 	}
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 
 	sftpCli, bad := s.sftpClient(sessionID)
@@ -982,7 +1061,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	defer sftpCli.Close()
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(toMap(result)), nil
 }
@@ -999,10 +1078,10 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequ
 	length := int64(getFloat64(args, "length", 0))
 
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 	if localPath == "" && data == "" {
-		return mcpgo.NewToolResultError("data or local_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "data or local_path required"), nil
 	}
 
 	sftpCli, bad := s.sftpClient(sessionID)
@@ -1012,7 +1091,7 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequ
 	defer sftpCli.Close()
 	n, err := sftpCli.WriteFile(remotePath, offset, data, mode, localPath, localOffset, length)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{"ok": true, "bytes_written": n}), nil
 }
@@ -1023,7 +1102,7 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 	remotePath := getString(args, "remote_path", "")
 
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 
 	sftpCli, bad := s.sftpClient(sessionID)
@@ -1033,7 +1112,7 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 	defer sftpCli.Close()
 	result, err := sftpCli.StatFile(remotePath)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	m := toMap(result)
 	m["download_url"] = s.baseURL + "/api/sessions/" + sessionID + "/files/download?path=" + url.QueryEscape(remotePath)
@@ -1047,10 +1126,10 @@ func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolReq
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
@@ -1058,7 +1137,7 @@ func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolReq
 	}
 	defer sftpCli.Close()
 	if err := sftpCli.RemoveFile(remotePath); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -1069,10 +1148,10 @@ func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolReq
 	fromPath := getString(args, "from_path", "")
 	toPath := getString(args, "to_path", "")
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if fromPath == "" || toPath == "" {
-		return mcpgo.NewToolResultError("from_path and to_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
 	}
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
@@ -1080,7 +1159,7 @@ func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolReq
 	}
 	defer sftpCli.Close()
 	if err := sftpCli.RenameFile(fromPath, toPath); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -1090,10 +1169,10 @@ func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRe
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
@@ -1101,7 +1180,7 @@ func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRe
 	}
 	defer sftpCli.Close()
 	if err := sftpCli.MakeDir(remotePath); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -1111,10 +1190,10 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
 	}
 	return jsonResult(map[string]any{
 		"download_url": s.baseURL + "/api/sessions/" + sessionID + "/files/download?path=" + url.QueryEscape(remotePath),
@@ -1124,240 +1203,165 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 	}), nil
 }
 
-// handleFileChmod changes file permissions via SSH/SFTP.
-func (s *Server) handleFileChmod(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// handleFilePerm dispatches chmod, chown, chtimes.
+func (s *Server) handleFilePerm(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	mode := os.FileMode(getFloat64(args, "mode", 0))
+	action := getString(args, "action", "")
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
-	if err := sftpCli.ChmodFile(remotePath, mode); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+
+	switch action {
+	case "chmod":
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "chmod requires remote_path and mode (decimal, e.g. 493 = 0755)"), nil
+		}
+		if _, ok := args["mode"]; !ok {
+			return toolError(CodeInvalidArgument, "%s", "chmod requires remote_path and mode (decimal, e.g. 493 = 0755)"), nil
+		}
+		mode := os.FileMode(getFloat64(args, "mode", 0))
+		if err := sftpCli.ChmodFile(remotePath, mode); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	case "chown":
+		remotePath := getString(args, "remote_path", "")
+		uid := int(getFloat64(args, "uid", -1))
+		gid := int(getFloat64(args, "gid", -1))
+		if remotePath == "" || uid < 0 || gid < 0 {
+			return toolError(CodeInvalidArgument, "%s", "chown requires remote_path, uid, and gid"), nil
+		}
+		if err := sftpCli.ChownFile(remotePath, uid, gid); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	case "chtimes":
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "chtimes requires remote_path, atime, and mtime"), nil
+		}
+		if _, ok := args["atime"]; !ok {
+			return toolError(CodeInvalidArgument, "%s", "chtimes requires remote_path, atime, and mtime"), nil
+		}
+		if _, ok := args["mtime"]; !ok {
+			return toolError(CodeInvalidArgument, "%s", "chtimes requires remote_path, atime, and mtime"), nil
+		}
+		atime := time.Unix(int64(getFloat64(args, "atime", 0)), 0)
+		mtime := time.Unix(int64(getFloat64(args, "mtime", 0)), 0)
+		if err := sftpCli.ChtimesFile(remotePath, atime, mtime); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	default:
+		return toolError(CodeInvalidArgument, "%s", "action must be chmod, chown, or chtimes"), nil
 	}
 	return successResult(), nil
 }
 
-// handleFileChown changes file owner and group via SSH/SFTP.
-func (s *Server) handleFileChown(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// handleFileLinkOp dispatches readlink, symlink, link.
+func (s *Server) handleFileLinkOp(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	uid := int(getFloat64(args, "uid", -1))
-	gid := int(getFloat64(args, "gid", -1))
+	action := getString(args, "action", "")
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
-	if err := sftpCli.ChownFile(remotePath, uid, gid); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+
+	switch action {
+	case "readlink":
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "readlink requires remote_path"), nil
+		}
+		target, err := sftpCli.ReadLink(remotePath)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return jsonResult(map[string]any{"target": target}), nil
+	case "symlink":
+		target := getString(args, "target", "")
+		linkPath := getString(args, "link_path", "")
+		if target == "" || linkPath == "" {
+			return toolError(CodeInvalidArgument, "%s", "symlink requires target and link_path"), nil
+		}
+		if err := sftpCli.SymlinkFile(target, linkPath); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	case "link":
+		existingPath := getString(args, "existing_path", "")
+		newPath := getString(args, "new_path", "")
+		if existingPath == "" || newPath == "" {
+			return toolError(CodeInvalidArgument, "%s", "link requires existing_path and new_path"), nil
+		}
+		if err := sftpCli.LinkFile(existingPath, newPath); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	default:
+		return toolError(CodeInvalidArgument, "%s", "action must be readlink, symlink, or link"), nil
 	}
 	return successResult(), nil
 }
 
-// handleFileChtimes changes file access and modification times via SSH/SFTP.
-func (s *Server) handleFileChtimes(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// handleFileFsOp dispatches truncate, realpath, statvfs.
+func (s *Server) handleFileFsOp(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	atimeSec := getFloat64(args, "atime", 0)
-	mtimeSec := getFloat64(args, "mtime", 0)
+	action := getString(args, "action", "")
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
-	atime := time.Unix(int64(atimeSec), 0)
-	mtime := time.Unix(int64(mtimeSec), 0)
-
 	sftpCli, bad := s.sftpClient(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
-	if err := sftpCli.ChtimesFile(remotePath, atime, mtime); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+
+	switch action {
+	case "truncate":
+		remotePath := getString(args, "remote_path", "")
+		size := int64(getFloat64(args, "size", 0))
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "truncate requires remote_path and size"), nil
+		}
+		if err := sftpCli.TruncateFile(remotePath, size); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+	case "realpath":
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "realpath requires remote_path"), nil
+		}
+		canonical, err := sftpCli.RealPath(remotePath)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return jsonResult(map[string]any{"canonical_path": canonical}), nil
+	case "statvfs":
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "statvfs requires remote_path"), nil
+		}
+		result, err := sftpCli.StatVFS(remotePath)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return jsonResult(toMap(result)), nil
+	default:
+		return toolError(CodeInvalidArgument, "%s", "action must be truncate, realpath, or statvfs"), nil
 	}
 	return successResult(), nil
-}
-
-// handleFileReadlink reads the target of a symbolic link via SSH/SFTP.
-func (s *Server) handleFileReadlink(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	target, err := sftpCli.ReadLink(remotePath)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return jsonResult(map[string]any{"target": target}), nil
-}
-
-// handleFileSymlink creates a symbolic link via SSH/SFTP.
-func (s *Server) handleFileSymlink(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	target := getString(args, "target", "")
-	linkPath := getString(args, "link_path", "")
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if target == "" {
-		return mcpgo.NewToolResultError("target required"), nil
-	}
-	if linkPath == "" {
-		return mcpgo.NewToolResultError("link_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	if err := sftpCli.SymlinkFile(target, linkPath); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-// handleFileLink creates a hard link via SSH/SFTP.
-func (s *Server) handleFileLink(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	existingPath := getString(args, "existing_path", "")
-	newPath := getString(args, "new_path", "")
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if existingPath == "" {
-		return mcpgo.NewToolResultError("existing_path required"), nil
-	}
-	if newPath == "" {
-		return mcpgo.NewToolResultError("new_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	if err := sftpCli.LinkFile(existingPath, newPath); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-// handleFileTruncate truncates a file to a specified size via SSH/SFTP.
-func (s *Server) handleFileTruncate(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	size := int64(getFloat64(args, "size", 0))
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	if err := sftpCli.TruncateFile(remotePath, size); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-// handleFileRealpath resolves the canonical absolute path via SSH/SFTP.
-func (s *Server) handleFileRealpath(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	canonical, err := sftpCli.RealPath(remotePath)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return jsonResult(map[string]any{"canonical_path": canonical}), nil
-}
-
-// handleFileStatVFS returns filesystem statistics via SSH/SFTP.
-func (s *Server) handleFileStatVFS(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-
-	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
-	}
-	if remotePath == "" {
-		return mcpgo.NewToolResultError("remote_path required"), nil
-	}
-
-	sftpCli, bad := s.sftpClient(sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	result, err := sftpCli.StatVFS(remotePath)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	return jsonResult(toMap(result)), nil
 }
 
 // handleFileGetwd returns the remote working directory via SSH/SFTP.
@@ -1366,7 +1370,7 @@ func (s *Server) handleFileGetwd(_ context.Context, request mcpgo.CallToolReques
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 
 	if sessionID == "" {
-		return mcpgo.NewToolResultError("session_id required"), nil
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 
 	sftpCli, bad := s.sftpClient(sessionID)
@@ -1376,9 +1380,95 @@ func (s *Server) handleFileGetwd(_ context.Context, request mcpgo.CallToolReques
 	defer sftpCli.Close()
 	dir, err := sftpCli.Getwd()
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return jsonResult(map[string]any{"directory": dir}), nil
+}
+
+// handleShellNotifyOps dispatches register, unregister, and list actions on shell_notify.
+func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if s.notifyMgr == nil {
+		return toolError(CodeNotConfigured, "%s", "notification manager not initialized"), nil
+	}
+	args := request.GetArguments()
+	action := strings.TrimSpace(getString(args, "action", ""))
+
+	switch action {
+	case "register":
+		shellID := strings.TrimSpace(getString(args, "shell_id", ""))
+		if shellID == "" {
+			return toolError(CodeInvalidArgument, "%s", "shell_id is required for register"), nil
+		}
+		// Validate that the shell exists in running sessions
+		shell, bad := s.requireShell(shellID)
+		if bad != nil {
+			return bad, nil
+		}
+
+		channelStr := strings.TrimSpace(getString(args, "channel", ""))
+		var channel notify.Channel
+		switch channelStr {
+		case "resource":
+			channel = notify.ChannelResource
+		case "sampling":
+			channel = notify.ChannelSampling
+		default:
+			return toolError(CodeInvalidArgument, "%s", "channel must be resource or sampling"), nil
+		}
+
+		eventStr := strings.TrimSpace(getString(args, "event", "output"))
+		var event notify.Event
+		switch eventStr {
+		case "exit":
+			event = notify.EventExit
+		case "silence":
+			event = notify.EventSilence
+		case "output":
+			event = notify.EventOutput
+		default:
+			return toolError(CodeInvalidArgument, "%s", "event must be exit, silence, or output"), nil
+		}
+
+		silenceSec := int(getFloat64(args, "silence_seconds", 3))
+		if silenceSec <= 0 {
+			silenceSec = 3
+		}
+
+		sessionID := shell.ParentSessionID()
+		// Capture the MCP client session that registered this rule so sampling
+		// notifications can be delivered later from timer/exit goroutines, where
+		// the dispatch context no longer carries the client session.
+		target := mcpserver.ClientSessionFromContext(ctx)
+		rule, err := s.notifyMgr.Register(sessionID, shellID, channel, event, silenceSec, target)
+		if err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return jsonResult(map[string]any{
+			"ok":       true,
+			"rule_id":  rule.ID,
+			"shell_id": rule.ShellID,
+			"channel":  string(rule.Channel),
+			"event":    string(rule.Event),
+		}), nil
+
+	case "unregister":
+		ruleID := strings.TrimSpace(getString(args, "rule_id", ""))
+		if ruleID == "" {
+			return toolError(CodeInvalidArgument, "%s", "rule_id is required for unregister"), nil
+		}
+		if !s.notifyMgr.Unregister(ruleID) {
+			return toolError(CodeRuleNotFound, "%s", fmt.Sprintf("rule %q not found", ruleID)), nil
+		}
+		return jsonResult(map[string]any{"ok": true, "rule_id": ruleID}), nil
+
+	case "list":
+		shellID := strings.TrimSpace(getString(args, "shell_id", ""))
+		rules := s.notifyMgr.List(shellID)
+		return jsonResult(map[string]any{"rules": rules}), nil
+
+	default:
+		return toolError(CodeInvalidArgument, "%s", "action must be register, unregister, or list"), nil
+	}
 }
 
 // toMap converts a struct to map[string]any via JSON round-trip.

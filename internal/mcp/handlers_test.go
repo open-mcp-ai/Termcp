@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,20 +16,43 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func newTestServer(t *testing.T) *Server {
+// startTestSSH starts an in-process SSH server for a test.
+func startTestSSH(t *testing.T) *sshserver.Server {
 	t.Helper()
 	srv := sshserver.New()
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { srv.Stop() })
+	return srv
+}
+
+// cleanupTestRuntime finalizes every session — draining exit watchers and any
+// in-flight message writes — then stops the SSH server. It must be registered
+// AFTER t.TempDir so LIFO runs it before the temp dir is removed: otherwise a
+// session watcher could still be writing messages/<id>/* during RemoveAll,
+// which on Windows fails with "The directory is not empty".
+func cleanupTestRuntime(t *testing.T, sessMgr *session.Manager, srv *sshserver.Server) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, s := range sessMgr.ListAll() {
+			_ = sessMgr.Delete(s.ID)
+		}
+		srv.Stop()
+	})
+}
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	srv := startTestSSH(t)
 
 	dir := t.TempDir()
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
+	cleanupTestRuntime(t, sessMgr, srv)
 	return New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
 }
 
@@ -165,9 +190,37 @@ func TestHandleDetectShell_Auto(t *testing.T) {
 	}
 }
 
+func TestHandleStartSession_MissingSSHConfig(t *testing.T) {
+	s := newTestServer(t)
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"omitted", map[string]any{}},
+		{"blank", map[string]any{"ssh_config": "   "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := s.handleStartSession(context.Background(), makeRequest(tc.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError {
+				t.Fatal("expected error when ssh_config is missing or blank")
+			}
+			code, msg := decodeToolError(t, result)
+			if code != CodeInvalidArgument {
+				t.Fatalf("expected error_code %q, got %q", CodeInvalidArgument, code)
+			}
+			if msg != "ssh_config is required" {
+				t.Fatalf("expected message %q, got %q", "ssh_config is required", msg)
+			}
+		})
+	}
+}
+
 func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
 	s := newTestServer(t)
-	req := makeRequest(map[string]any{})
+	req := makeRequest(map[string]any{"ssh_config": "internal"})
 	result, err := s.handleStartSession(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +237,8 @@ func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
 func TestHandleStartSession_CommandRequiredWhenArgs(t *testing.T) {
 	s := newTestServer(t)
 	req := makeRequest(map[string]any{
-		"args": []any{"-c", "echo hi"},
+		"ssh_config": "internal",
+		"args":       []any{"-c", "echo hi"},
 	})
 	result, err := s.handleStartSession(context.Background(), req)
 	if err != nil {
@@ -198,9 +252,10 @@ func TestHandleStartSession_CommandRequiredWhenArgs(t *testing.T) {
 func TestHandleStartSession_Success(t *testing.T) {
 	s := newTestServer(t)
 	req := makeRequest(map[string]any{
-		"command": "echo",
-		"args":    []any{"hello"},
-		"mode":    "pipe",
+		"command":    "echo",
+		"args":       []any{"hello"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	})
 
 	result, err := s.handleStartSession(context.Background(), req)
@@ -309,9 +364,10 @@ func TestHandleStartSendPressKeyRead(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -323,8 +379,18 @@ func TestHandleStartSendPressKeyRead(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
-	output := testReadOutputUntil(t, s, shellID, "handler_test", 3*time.Second)
+	// PowerShell cold-start under ConPTY can exceed 300ms on slow CI runners;
+	// input typed before the shell is ready may be dropped. Retry the line
+	// until the marker appears so this asserts behavior, not startup speed.
+	deadline := time.Now().Add(10 * time.Second)
+	output := ""
+	for time.Now().Before(deadline) {
+		testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
+		output = testReadOutputUntil(t, s, shellID, "handler_test", 3*time.Second)
+		if strings.Contains(output, "handler_test") {
+			break
+		}
+	}
 	if !strings.Contains(output, "handler_test") {
 		t.Fatalf("expected output containing 'handler_test', got %q", output)
 	}
@@ -340,9 +406,10 @@ func TestHandleListMessages(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": "echo",
-		"args":    []any{"test"},
-		"mode":    "pipe",
+		"command":    "echo",
+		"args":       []any{"test"},
+		"mode":       "pipe",
+		"ssh_config": "internal",
 	})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
@@ -370,9 +437,10 @@ func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -419,9 +487,10 @@ func TestHandleReadOutput_ContextCancelled(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -466,9 +535,10 @@ func TestHandleSendInput_ExitedShell(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testShellEchoArgs("done"),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testShellEchoArgs("done"),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
@@ -492,9 +562,10 @@ func TestHandleSendInput_ExitedShell(t *testing.T) {
 func TestHandlePressKey_UnknownKey(t *testing.T) {
 	s := newTestServer(t)
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -521,8 +592,9 @@ func TestHandleStartSession_InvalidMode(t *testing.T) {
 	s := newTestServer(t)
 	for _, mode := range []string{"websocket", "x"} {
 		req := makeRequest(map[string]any{
-			"command": "echo",
-			"mode":    mode,
+			"command":    "echo",
+			"mode":       mode,
+			"ssh_config": "internal",
 		})
 		result, _ := s.handleStartSession(context.Background(), req)
 		if !result.IsError {
@@ -540,10 +612,11 @@ func TestHandleStartSession_InvalidRowsCols(t *testing.T) {
 		{0, 80}, {-1, 80}, {24, 0}, {24, -5}, {1001, 80},
 	} {
 		req := makeRequest(map[string]any{
-			"command": "echo",
-			"mode":    "pty",
-			"rows":    tc.rows,
-			"cols":    tc.cols,
+			"command":    "echo",
+			"mode":       "pty",
+			"rows":       tc.rows,
+			"cols":       tc.cols,
+			"ssh_config": "internal",
 		})
 		result, _ := s.handleStartSession(context.Background(), req)
 		if !result.IsError {
@@ -554,12 +627,12 @@ func TestHandleStartSession_InvalidRowsCols(t *testing.T) {
 
 func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
 	s := newTestServer(t)
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
 	shellID := m["shell_id"].(string)
 
-	for _, timeout := range []float64{-1, 0.001, 61, 999} {
+	for _, timeout := range []float64{-1, 61, 999} {
 		req := makeRequest(map[string]any{
 			"shell_id": shellID,
 			"timeout":  timeout,
@@ -569,12 +642,22 @@ func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
 			t.Fatalf("expected error for timeout %v", timeout)
 		}
 	}
+
+	// Zero is an explicit non-blocking read and must not require a retry.
+	zeroReq := makeRequest(map[string]any{
+		"shell_id": shellID,
+		"timeout":  0.0,
+	})
+	zeroResult, _ := s.handleReadOutput(context.Background(), zeroReq)
+	if zeroResult.IsError {
+		t.Fatalf("timeout=0 should be accepted: %s", zeroResult.Content[0].(mcpgo.TextContent).Text)
+	}
 }
 
 func TestHandleTerminateSession_InvalidGracePeriod(t *testing.T) {
 	s := newTestServer(t)
 
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe"})
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
 	startResult, _ := s.handleStartSession(context.Background(), startReq)
 	m := parseResult(t, startResult)
 	sessionID := m["session_id"].(string)
@@ -595,9 +678,10 @@ func TestHandleReadOutput_ReturnsSessionStatus(t *testing.T) {
 	s := newTestServer(t)
 
 	startReq := makeRequest(map[string]any{
-		"command": testShell(),
-		"args":    testInteractiveShellArgs(),
-		"mode":    "pty",
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
 	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
@@ -611,7 +695,7 @@ func TestHandleReadOutput_ReturnsSessionStatus(t *testing.T) {
 
 	readReq := makeRequest(map[string]any{
 		"shell_id": shellID,
-		"timeout":    1.0,
+		"timeout":  1.0,
 	})
 	result, err := s.handleReadOutput(context.Background(), readReq)
 	if err != nil {
@@ -643,3 +727,271 @@ func TestHandleReadOutput_ReturnsSessionStatus(t *testing.T) {
 	})
 	s.handleTerminateSession(context.Background(), termReq)
 }
+func TestHandleFileOpsDispatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SFTP mode semantics differ on Windows")
+	}
+	s := newTestServer(t)
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	startResult, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, startResult)
+	sessionID := m["session_id"].(string)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("chmod", func(t *testing.T) {
+		req := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0600),
+		})
+		res, err := s.handleFilePerm(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("chmod error: %s", res.Content[0].(mcpgo.TextContent).Text)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0600 {
+			t.Fatalf("expected 0600, got %o", fi.Mode().Perm())
+		}
+
+		noMode := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+		})
+		noModeRes, _ := s.handleFilePerm(context.Background(), noMode)
+		if !noModeRes.IsError {
+			t.Fatal("expected error when mode missing")
+		}
+
+		// chmod 000 is a valid operation (strip all permissions) and must be accepted.
+		zero := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0),
+		})
+		zeroRes, _ := s.handleFilePerm(context.Background(), zero)
+		if zeroRes.IsError {
+			t.Fatalf("chmod 000 should be accepted: %s", zeroRes.Content[0].(mcpgo.TextContent).Text)
+		}
+		fi, err = os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0 {
+			t.Fatalf("expected perm 0000, got %o", fi.Mode().Perm())
+		}
+		// restore perms for later subtests
+		rm := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "chmod",
+			"remote_path": path,
+			"mode":        float64(0644),
+		})
+		rmRes, _ := s.handleFilePerm(context.Background(), rm)
+		if rmRes.IsError {
+			t.Fatalf("restore chmod failed: %s", rmRes.Content[0].(mcpgo.TextContent).Text)
+		}
+	})
+
+	t.Run("realpath", func(t *testing.T) {
+		req := makeRequest(map[string]any{
+			"session_id":  sessionID,
+			"action":      "realpath",
+			"remote_path": dir,
+		})
+		res, err := s.handleFileFsOp(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("realpath error: %s", res.Content[0].(mcpgo.TextContent).Text)
+		}
+		m := parseResult(t, res)
+		gotPath, ok := m["canonical_path"].(string)
+		if !ok || gotPath == "" {
+			t.Fatalf("expected non-empty canonical_path, got %v", m["canonical_path"])
+		}
+		if !strings.HasSuffix(gotPath, filepath.Base(dir)) {
+			t.Fatalf("canonical_path %q should end with %q", gotPath, filepath.Base(dir))
+		}
+	})
+
+	t.Run("unknown action rejected", func(t *testing.T) {
+		calls := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+			"file_perm": s.handleFilePerm,
+			"file_link": s.handleFileLinkOp,
+			"file_fs":   s.handleFileFsOp,
+		}
+		for name, h := range calls {
+			req := makeRequest(map[string]any{
+				"session_id":  sessionID,
+				"action":      "nope",
+				"remote_path": path,
+			})
+			res, _ := h(context.Background(), req)
+			if !res.IsError {
+				t.Fatalf("%s: expected error", name)
+			}
+		}
+	})
+
+	termReq := makeRequest(map[string]any{"session_id": sessionID, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+func TestGroupDispatch(t *testing.T) {
+	s := newTestServer(t)
+
+	// unknown actions rejected on every unified tool
+	dispatchers := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+		"message":    s.handleMessageOps,
+		"history":    s.handleHistoryOps,
+		"forward":    s.handleForwardOps,
+		"ssh_config": s.handleSSHConfigOps,
+	}
+	for name, h := range dispatchers {
+		req := makeRequest(map[string]any{"action": "bogus"})
+		res, _ := h(context.Background(), req)
+		if !res.IsError {
+			t.Fatalf("%s: expected error for unknown action", name)
+		}
+	}
+
+	// ssh_config write actions gated behind RegisterSSHConfigWriteTools
+	req := makeRequest(map[string]any{"action": "create"})
+	res, _ := s.handleSSHConfigOps(context.Background(), req)
+	if !res.IsError {
+		t.Fatal("expected create to be rejected before RegisterSSHConfigWriteTools")
+	}
+	s.RegisterSSHConfigWriteTools()
+	req = makeRequest(map[string]any{"action": "list"})
+	res, err := s.handleSSHConfigOps(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("list should work after upgrade: %s", res.Content[0].(mcpgo.TextContent).Text)
+	}
+
+	// forward(action=list) on empty registry
+	fwdReq := makeRequest(map[string]any{"action": "list"})
+	fwdRes, err := s.handleForwardOps(context.Background(), fwdReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := parseResult(t, fwdRes)
+	if _, ok := fm["forwards"].([]any); !ok {
+		t.Fatalf("expected forwards array, got %v", fm["forwards"])
+	}
+
+	// history(action=list) works without args
+	hisReq := makeRequest(map[string]any{"action": "list"})
+	hisRes, err := s.handleHistoryOps(context.Background(), hisReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hisRes.IsError {
+		t.Fatalf("history list error: %s", hisRes.Content[0].(mcpgo.TextContent).Text)
+	}
+
+	// message(action=list) needs a session (per-session index)
+	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	startRes, err := s.handleStartSession(context.Background(), startReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := parseResult(t, startRes)
+	sid := sm["session_id"].(string)
+	msgReq := makeRequest(map[string]any{"action": "list", "session_id": sid})
+	msgRes, err := s.handleMessageOps(context.Background(), msgReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgRes.IsError {
+		t.Fatalf("message list error: %s", msgRes.Content[0].(mcpgo.TextContent).Text)
+	}
+	mm := parseResult(t, msgRes)
+	if _, ok := mm["messages"].([]any); !ok {
+		t.Fatalf("expected messages array, got %v", mm["messages"])
+	}
+	termReq := makeRequest(map[string]any{"session_id": sid, "force": true})
+	s.handleTerminateSession(context.Background(), termReq)
+}
+
+func TestDeadSessionOperationsNoPanic(t *testing.T) {
+	dir := t.TempDir()
+	store := storage.New(dir)
+	msgMgr := message.NewManager(store)
+	sessMgr := session.NewManager(msgMgr, store, nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+
+	// Persist a session to disk and restore it so it is in the registry without an SSH connection.
+	deadSession := api.Session{
+		ID:          "dead-sess-1",
+		Name:        "dead-session",
+		Status:      api.SessionExited,
+		SSHEndpoint: "remote",
+	}
+	if err := store.SaveSessions([]api.Session{deadSession}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessMgr.RestoreDead(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. File write on dead session must return tool error without panic.
+	writeReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_path": "/tmp/test.txt",
+		"data":        "hello",
+	})
+	writeRes, err := s.handleFileWrite(context.Background(), writeReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !writeRes.IsError {
+		t.Fatal("expected error result on dead session file write")
+	}
+
+	// 2. File read on dead session must return tool error without panic.
+	readReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_path": "/tmp/test.txt",
+	})
+	readRes, err := s.handleFileRead(context.Background(), readReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !readRes.IsError {
+		t.Fatal("expected error result on dead session file read")
+	}
+
+	// 3. Local forward on dead session must return tool error without panic.
+	fwdReq := makeRequest(map[string]any{
+		"session_id":  "dead-sess-1",
+		"remote_port": float64(8080),
+		"local_port":  float64(8080),
+	})
+	fwdRes, err := s.handleLocalForward(context.Background(), fwdReq)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if !fwdRes.IsError {
+		t.Fatal("expected error result on dead session forward")
+	}
+}
+

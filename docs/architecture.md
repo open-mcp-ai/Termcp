@@ -12,13 +12,14 @@
     ┌──────────────────────────┼──────────────────────────┐
     │               internal/mcp/ (server.go)               │
     │                                                       │
-    │  工具: start_session / start_subshell / close_shell, │
-    │  send_input / press_key / read_output, │
-    │  list_sessions / get_session_info / terminate_session, │
-    │  resize_pty / register_reader / unregister_reader,    │
-    │  local_forward / remote_forward / dynamic_forward / list_forwards / close_forward, │
-    │  file_read / file_write / file_stat / file_delete / file_rename / file_mkdir / get_file_urls, │
-    │  detect_shell / list_ssh_configs / list_messages / get_message │
+    │  工具: session_start / shell_open / shell_list / shell_close, │
+    │  shell_input / shell_key / shell_output / shell_resize, │
+    │  shell_reader_register / shell_reader_unregister / shell_notify, │
+    │  session_list / session_info / session_terminate, │
+    │  forward(action=local/remote/dynamic/list/close), │
+    │  ssh_config(action=list|create|edit|copy|delete) / shell_detect, │
+    │  file_read/write/stat/delete/rename/mkdir/urls/perm/link/fs/getwd, │
+    │  message(action=list|get) / history(action=list|search_messages|...) │
     │                                                       │
     │  logging.go: 每个 handler 包装结构化日志 (耗时/错误)    │
     └──────┬───────────────────────────────┬────────────────┘
@@ -73,12 +74,12 @@
              └─────────────────┘
 ```
 
-## 二、进程启动流程（start_session）
+## 二、进程启动流程（session_start）
 
 ```
 AI Agent                    MCP Server              Session.Manager        sshclient              sshserver              OS
   │                            │                         │                     │                      │                     │
-  │  start_session(            │                         │                     │                      │                     │
+  │  session_start(            │                         │                     │                      │                     │
   │    command="bash",         │                         │                     │                      │                     │
   │    mode="pty",             │                         │                     │                      │                     │
   │    rows=24, cols=80)       │                         │                     │                      │                     │
@@ -136,21 +137,21 @@ AI Agent                    MCP Server              Session.Manager        sshcl
   │     (双 ID：连接 vs 终端)   │                         │                     │                      │                     │
 ```
 
-## 三、输入流向（send_input + press_key）
+## 三、输入流向（shell_input + shell_key）
 
 ```
 AI Agent                    ChildShell                 sshclient              sshserver              OS/进程
   │                            │                          │                      │                     │
-  │  send_input(shell_id,text) │                          │                      │                     │
+  │  shell_input(shell_id,text) │                          │                      │                     │
   │ ─────────────────────────> │  SendTerminalBytes       │                      │                     │
-  │  press_key(shell_id,enter) │  PressKey → \r / \n      │                      │                     │
+  │  shell_key(shell_id,enter) │  PressKey → \r / \n      │                      │                     │
   │ ─────────────────────────> │ ── Stdin.Write ─────────>│ ───── SSH data ────>│ ───── stdin ───────>│
   │  ← {"success":true}        │                          │                      │                     │
 ```
 
 **关键设计**：shell 级 stdin 串行写入，防止并发 Agent 交替写入导致输入错乱。I/O 一律按 `shell_id`，不再用 session id 当默认 shell。
 
-## 四、输出流向（read_output）
+## 四、输出流向（shell_output）
 
 ```
 进程 stdout/stderr                                                               AI Agent
@@ -165,7 +166,7 @@ AI Agent                    ChildShell                 sshclient              ss
                                      │  └────┬────┘────┬────┘─────────┘              │
                                      │       │         │                              │
                                      ▼       ▼         ▼                              │
-                                    read_output 被调用时:                              │
+                                    shell_output 被调用时:                              │
                                      │                                                 │
                                      │  buf.Read(ctx, readerID, timeout)               │
                                      │  ┌─ drain: 拷贝 master[readPos:] 并推进 readPos   │
@@ -195,17 +196,18 @@ AI Agent                    ChildShell                 sshclient              ss
 
 | 特性 | 实现 |
 |------|------|
-| 多读者 | 每个 `register_reader` 独立 readPos；共享一条 append-only master |
+| 多读者 | 每个 `shell_reader_register` 独立 readPos；共享一条 append-only master |
 | 内存 | 全员已读过的前缀可整体丢弃；无固定容量环、不按读者覆盖旧数据 |
 | 阻塞等待 | `sync.Cond.Wait()` + 超时 goroutine，支持 context 取消 |
 | 输出清洗 | 两次处理：Strip(去ANSI) → Compact(压缩噪音) |
+| 统一游标 | `shell_output` 是唯一输出读取入口：活/死/归档会话一律按字节流读取。活会话走 reader 增量游标；`offset` 无状态定位 & `tail_lines` 末尾截取对两种流同样生效；归档流由磁盘 MsgOutput 按序重建，与内存字节流同构（同 start_offset/end_offset/total_bytes/has_more 协议） |
 
-## 五、信号/终止流向（terminate_session）
+## 五、信号/终止流向（session_terminate）
 
 ```
 AI Agent                Session                    sshclient              sshserver              OS
   │                        │                          │                      │                     │
-  │  terminate_session(   │                          │                      │                     │
+  │  session_terminate(   │                          │                      │                     │
   │    session_id,        │                          │                      │                     │
   │    force=false,       │                          │                      │                     │
   │    grace_period=5)    │                          │                      │                     │
@@ -246,13 +248,13 @@ AI Agent                Session                    sshclient              sshser
 | `exitOnce` | 保证 Status/ExitCode 只写一次，退出 goroutine 是单一权威 |
 | 两阶段终止 | SIGTERM（优雅）→ Close（强制）→ 2s hard timeout |
 
-## 六、PTY 调整大小流向（resize_pty）
+## 六、PTY 调整大小流向（shell_resize）
 
 ```
 AI Agent                Session                    sshclient              sshserver              OS
   │                        │                          │                      │                     │
-  │  resize_pty(           │                          │                      │                     │
-  │    session_id,         │                          │                      │                     │
+  │  shell_resize(           │                          │                      │                     │
+  │    shell_id,           │                          │                      │                     │
   │    rows=40, cols=120)  │                          │                      │                     │
   │ ──────────────────────>│                          │                      │                     │
   │                        │  ResizePty(40,120)        │                      │                     │
@@ -271,28 +273,28 @@ AI Agent                Session                    sshclient              sshser
 ```
 Agent A (reader 0)           Session              Agent B (新加入)
   │                            │                     │
-  │  start_session() ────────>│                     │
+  │  session_start() ────────>│                     │
   │  ← reader_id:0 (默认)     │                     │
   │                            │                     │
-  │  read_output(             │                     │
+  │  shell_output(             │                     │
   │    reader_id=0) ─────────>│                     │
   │                            │ buf.Read(ctx,0,...) │
   │  ← output                  │                     │
   │                            │                     │
-  │                            │  register_reader() ─┤
+  │                            │  shell_reader_register() ─┤
   │                            │ ─────────────────>  │
   │                            │  ← reader_id:3      │
   │                            │                     │
-  │                            │  read_output(       │
+  │                            │  shell_output(       │
   │                            │    reader_id=3) ───>│
   │                            │ buf.Read(ctx,3,...) │
-  │                            │ ← output (从头开始)  │
+  │                            │ ← output (从注册点起)  │
   │                            │                     │
-  │  read_output(reader_id=0)──┤                     │
+  │  shell_output(reader_id=0)──┤                     │
   │  ← 新输出                  │                     │
 ```
 
-**关键**：两个 Agent 各自有独立 readPos，互不干扰。Agent B 注册时游标起点 = 当时的 master 末尾（**无历史 backlog**），只能看到此后产生的新输出；历史不再因单读者环形容量被截断。`start_subshell` 可在同一 SSH 连接上为 Agent B 开独立 shell 通道，彻底避免共用 reader 的游标协调问题。
+**关键**：两个 Agent 各自有独立 readPos，互不干扰。Agent B 注册时游标起点 = 当时的 master 末尾（**无历史 backlog**），只能看到此后产生的新输出；历史不再因单读者环形容量被截断。`shell_open` 可在同一 SSH 连接上为 Agent B 开独立 shell 通道，彻底避免共用 reader 的游标协调问题。
 
 
 ```
@@ -315,30 +317,45 @@ message.Manager.Append(sessionID, type, content)
 
 ## 十、会话生命周期状态机
 
+Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `status`。当前状态的含义如下：
+
+- `running`：Session 未关闭，SSH transport 可用；这是 Session 的正常在线状态。Shell 可以是 `running`，也可以是自然退出后仍保留在 channel 列表中的 `exited`。
+- `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown，或 pipe 模式最后一个 shell 自然退出/被关闭）。Session 仍保留在 registry，缓冲区、消息和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
+- `error`：保留给启动失败等错误；当前启动失败直接返回错误，不会创建 Session。
+- `archived`：只用于 `history.json` 中的历史记录，不是当前 registry 中 Session 的在线状态。
+
 ```
-                  start_session()
-                       │
-                       ▼
-               ┌──────────────┐
-               │   running    │
-               └──┬───────┬───┘
-                  │       │
-    进程自行退出  │       │  terminate_session()
-    (startReaders │       │
-     goroutine    │       │
-     检测退出)    │       │
-                  │       │
-                  ▼       ▼
-              ┌──────────────┐
-              │   exited     │──── 自动从注册表移除 ────> [gone]
-              └──────────────┘
-                  │
-         启动失败时
-                  │
-                  ▼
-              ┌──────────────┐
-              │    error     │
-              └──────────────┘
+                              session_start()
+                                   │
+                                   ▼
+                           ┌──────────────┐
+                           │   running    │
+                           │  (在线容器)  │
+                           └──┬─────┬─────┘
+                              │     │
+           Session terminate/ │     │  传输异常断线
+           disconnect/shutdown│     │  或 pipe 最后 shell 结束
+                              │     │
+                              └──┬──┘
+                                 ▼
+                           ┌──────────────┐
+                           │   exited     │
+                           │ DEAD / 只读  │
+                           └──────┬───────┘
+                                  │ DELETE
+                                  ▼
+                               [gone]
+
+      running ── shell 自然退出 ──> running（PTY；shell 留在列表供 drain）
+      running ── shell 手动关闭 ──> running（PTY；shell 直接删除）
+      running ── 最后 pipe shell 手动关闭 ──> exited（shell 直接删除）
 ```
 
-**exitOnce 保证**：无论是进程自然退出还是 terminate 触发，Status/ExitCode 只设置一次，不会竞态覆盖。
+**关键不变量：**
+
+1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭就把仍可用的 PTY Session 标成 DEAD。
+2. 手动关闭 Shell 是删除操作：从 live map、shell history snapshot 和持久化 `sessions.json` 中移除；它不会产生 `exited` shell，也不会被 UI 渲染成 `end` tab。
+3. 只有自然退出或 transport 异常断线的 shell，才会保留 `exited` 元数据供 DEAD/只读视图使用。
+4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。
+
+**exitOnce / closeOnce 保证**：无论是进程自然退出还是 terminate/手动关闭触发，状态转换和 Done channel 都只执行一次；手动关闭与自然退出并发时，关闭标记优先，避免 shell 被重新写回历史快照。

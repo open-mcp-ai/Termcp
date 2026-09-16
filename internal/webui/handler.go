@@ -19,9 +19,11 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/history"
+	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/screenshot"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sftp"
+	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -44,7 +46,8 @@ type Handler struct {
 	History    *history.Manager
 	SSH        *sshconfig.Store
 	ForwardMgr *forward.ForwardManager
-	NoInternal bool // when true, hide and refuse the built-in loopback profile
+	NotifyMgr  *notify.Manager // active shell notification rules (read-only listing + delete)
+	NoInternal bool            // when true, hide and refuse the built-in loopback profile
 
 	sessHub *sessionListHub
 }
@@ -58,6 +61,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	if h.ForwardMgr != nil {
 		h.ForwardMgr.SetOnChange(h.sessionHub().broadcast)
 	}
+	if h.NotifyMgr != nil {
+		h.NotifyMgr.SetOnChange(h.sessionHub().broadcast)
+	}
 	if h.SSH != nil {
 		h.SSH.SetOnChange(h.sessionHub().broadcast)
 	}
@@ -65,9 +71,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/connection-templates", h.handleConnectionTemplates)
 	mux.HandleFunc("GET /api/connections", h.handleListConnections)
 	mux.HandleFunc("GET /api/connections/{name}", h.handleGetConnection)
-		mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
-		mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
-		mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
+	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
+	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
+	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
 
 	// Sessions
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
@@ -101,6 +107,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Session-scoped forwards
 	mux.HandleFunc("GET /api/sessions/{id}/forwards", h.handleListSessionForwards)
 	mux.HandleFunc("POST /api/sessions/{id}/forwards", h.handleCreateForward)
+
+	// Shell notification rules (registered by the MCP shell_notify tool; the UI
+	// lists them and can unregister).
+	mux.HandleFunc("GET /api/notifications", h.handleListNotifications)
+	mux.HandleFunc("DELETE /api/notifications/{id}", h.handleDeleteNotification)
 
 	// File operations
 	mux.HandleFunc("GET /api/sessions/{id}/files", h.handleListFiles)
@@ -351,7 +362,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Remote:  remote,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
 		return
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -944,6 +955,48 @@ func (h *Handler) handleListForwards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"forwards": h.ForwardMgr.List()})
 }
 
+// handleListNotifications returns active shell notification rules, optionally
+// filtered by shell_id and/or session_id query parameters.
+func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request) {
+	if h.NotifyMgr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"notifications": []any{}})
+		return
+	}
+	q := r.URL.Query()
+	rules := h.NotifyMgr.List(q.Get("shell_id"))
+	if sessionID := q.Get("session_id"); sessionID != "" {
+		filtered := make([]notify.RuleView, 0, len(rules))
+		for _, rule := range rules {
+			if rule.SessionID == sessionID {
+				filtered = append(filtered, rule)
+			}
+		}
+		rules = filtered
+	}
+	if rules == nil {
+		rules = []notify.RuleView{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notifications": rules})
+}
+
+// handleDeleteNotification unregisters one notification rule by id.
+func (h *Handler) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "notification rule id required"})
+		return
+	}
+	if h.NotifyMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "notification manager not available"})
+		return
+	}
+	if !h.NotifyMgr.Unregister(id) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "notification rule not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rule_id": id})
+}
+
 func (h *Handler) handleDeleteForward(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	slog.Info("handleDeleteForward called", "forward_id", id)
@@ -1062,13 +1115,18 @@ func (h *Handler) handleListSessionForwards(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"forwards": h.ForwardMgr.ListBySession(sessionID)})
 }
 
-func (h *Handler) getFileSession(sessionID string, w http.ResponseWriter) (*session.Session, *ssh.Client) {
+func (h *Handler) resolveFileSession(sessionID string, w http.ResponseWriter) (*session.Session, *ssh.Client, bool) {
 	sess := h.Sessions.Get(sessionID)
 	if sess == nil {
-		return nil, nil
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+		return nil, nil, false
 	}
 	sshClient := sess.SSHClient()
-	return sess, sshClient
+	if sess.SSHEndpoint != "internal" && sshClient == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session has no active SSH connection"})
+		return nil, nil, false
+	}
+	return sess, sshClient, true
 }
 
 func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -1079,9 +1137,8 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Debug("handleListFiles", "session", sid, "path", path)
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
@@ -1150,9 +1207,8 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		length, _ = strconv.ParseInt(r.URL.Query().Get("length"), 10, 64)
 	}
 
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
@@ -1272,9 +1328,8 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
@@ -1324,9 +1379,8 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path required"})
 		return
 	}
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
@@ -1365,9 +1419,8 @@ func (h *Handler) handleRenameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
@@ -1400,9 +1453,8 @@ func (h *Handler) handleMakeDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, sshClient := h.getFileSession(sid, w)
-	if sess == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+	_, sshClient, ok := h.resolveFileSession(sid, w)
+	if !ok {
 		return
 	}
 	if sshClient == nil {
