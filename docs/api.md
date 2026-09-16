@@ -15,6 +15,31 @@ Base URL: `http://localhost:18765`
 
 浏览器：`/api.html`（Web UI **API / MCP**）提供按 origin 复制的 MCP 配置和 HTTP API 速查表。工具参数见 [`mcp-tools.md`](./mcp-tools.md)。
 
+## Authentication（可选，默认关闭）
+
+启用 `--auth-token` / `--auth-hash`（或 `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH`）后，**全部** HTTP 面都要求凭据：Web UI、REST、MCP SSE、`/stream`、WebSocket，由共享 mux 外层的 `internal/auth` 中间件统一校验。缺少或错误的凭据返回 `401 Unauthorized`，并携带 `WWW-Authenticate: Basic`（浏览器据此弹出原生登录框）。
+
+| 客户端类型 | 凭据方式 |
+|-----------|---------|
+| REST / MCP / curl | `Authorization: Bearer <token>` |
+| 浏览器（Web UI） | 原生 Basic 弹框——用户名被忽略、**密码填 token** |
+| 浏览器 WebSocket (`/api/ui/ws`) | 同源自动携带认证成功后下发的 `termcp_token` cookie |
+
+```bash
+# 生成 salted SHA-256 哈希（终端下无回显，不进 shell 历史）
+termcp --gen-auth-hash
+
+# REST 请求两种等价写法
+curl -u :<token> http://127.0.0.1:18765/api/sessions
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:18765/api/sessions
+```
+
+约束：
+
+- `--auth-token` 与 `--auth-hash` 互斥；同一配置项 flag 优先于环境变量。
+- 绑定非 loopback 地址（`0.0.0.0`、局域网 IP 等）时未配置认证会**拒绝启动**。
+- Token 不会写入日志，也不应放入 URL（query string）——请放在请求头。
+
 ---
 
 ## 1. 连接配置 (Connection Profiles)

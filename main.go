@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/history"
@@ -100,7 +102,20 @@ func main() {
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log verbosity: debug|info|warn|error")
 	flag.BoolVar(&cfg.NoInternal, "no-internal", cfg.NoInternal, "Disable the built-in loopback SSH profile (no internal connection)")
 	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable MCP tools to create/edit/delete SSH configs (off by default; passwords/keys are never exposed)")
+	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
+	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
+	var genAuthHash bool
+	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
 	flag.Parse()
+
+	if genAuthHash {
+		if err := runGenAuthHash(flag.Args()); err != nil {
+			fmt.Fprintf(os.Stderr, "gen-auth-hash: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
+	cfg.ApplyEnv()
 
 	if args := flag.Args(); len(args) > 0 {
 		fmt.Fprintf(os.Stderr, "unknown arguments: %s\n", strings.Join(args, " "))
@@ -129,6 +144,16 @@ func main() {
 		os.Exit(2)
 	}
 
+	var verifier *auth.Verifier
+	if cfg.AuthToken != "" || cfg.AuthHash != "" {
+		v, err := auth.NewVerifier(cfg.AuthToken, cfg.AuthHash)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid auth config: %v\n", err)
+			os.Exit(2)
+		}
+		verifier = v
+	}
+
 	slog.SetDefault(slog.New(buildLogHandler(cfg)))
 	slog.Info("termcp server started")
 
@@ -142,6 +167,12 @@ func main() {
 		}
 	}
 	slog.Info("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
+
+	if verifier != nil {
+		slog.Info("HTTP authentication: enabled (API/MCP: Authorization: Bearer <token>; browsers: native login prompt, token as password)")
+	} else {
+		slog.Info("HTTP authentication: disabled (loopback-only bind)")
+	}
 
 	slog.Info("MCP HTTP:")
 	slog.Info("    /sse SSE transport")
@@ -184,6 +215,9 @@ func main() {
 	webuiH.Register(mux)
 	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
 	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
+	if verifier != nil {
+		mainSrv.Handler = auth.Middleware(verifier, mux)
+	}
 
 	host := strings.TrimSpace(cfg.Host)
 	base := fmt.Sprintf("http://%s:%d", host, cfg.Port)
@@ -232,6 +266,48 @@ func ensureWritableDir(dir string) error {
 	}
 	f.Close()
 	return os.Remove(probe)
+}
+
+func runGenAuthHash(args []string) error {
+	var token string
+	switch len(args) {
+	case 0:
+		t, err := readTokenFromStdin()
+		if err != nil {
+			return err
+		}
+		token = t
+	case 1:
+		token = args[0]
+	default:
+		return errors.New("too many arguments: expected at most one token")
+	}
+	if token == "" {
+		return errors.New("token must not be empty")
+	}
+	hash, err := auth.Hash(token)
+	if err != nil {
+		return err
+	}
+	fmt.Println(hash)
+	return nil
+}
+
+func readTokenFromStdin() (string, error) {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprint(os.Stderr, "Token: ")
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", fmt.Errorf("read token: %w", err)
+		}
+		return string(b), nil
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("read token from stdin: %w", err)
+	}
+	return strings.TrimRight(string(b), "\r\n"), nil
 }
 
 func buildLogHandler(cfg *config.Config) slog.Handler {

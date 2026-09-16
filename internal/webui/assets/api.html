@@ -141,6 +141,20 @@
     </div>
     <div class="note">Both transports expose the same tools. The most common connection bug is using <code class="inline">/sse</code> where the client expects <code class="inline">/stream</code>, or the reverse.</div>
 
+    <div class="card">
+      <h3>Authentication</h3>
+      <p class="muted" style="margin-top:0">When termcp starts with <code class="inline">--auth-token</code> / <code class="inline">--auth-hash</code> (or the matching environment variable), the same token protects Web UI, REST, MCP, and WebSocket.</p>
+      <table>
+        <thead><tr><th>Client</th><th>How to authenticate</th></tr></thead>
+        <tbody>
+          <tr><td>API / MCP / scripts</td><td><code class="inline">Authorization: Bearer &lt;token&gt;</code></td></tr>
+          <tr><td>Browser</td><td>A native <code class="inline">401</code> login prompt appears; username is ignored and the password is the token.</td></tr>
+          <tr><td>Browser WebSocket</td><td>A successful Basic prompt sets an HttpOnly <code class="inline">termcp_token</code> cookie, which same-origin WebSocket handshakes send automatically.</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">Generate a salted hash with <code class="inline">termcp --gen-auth-hash</code>. Do not put tokens in URLs or copied client configuration. Use TLS through a reverse proxy when exposing Basic authentication beyond a trusted local network.</p>
+    </div>
+
     <h2 id="clients">2. Client config</h2>
     <div class="card">
       <h3>Claude Code CLI</h3>
