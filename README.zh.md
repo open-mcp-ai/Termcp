@@ -5,7 +5,7 @@
 <p align="center">
     <img src="./docs/assets/logo.png"></img>
   <h1 align="center">termcp</h1>
-  <p align="center"><em>让 AI Agent 拥有交互式终端能力。</em></p>
+  <p align="center"><em>跨平台终端会话平台 —— 本机 / 远程统一接入，人、Agent 与脚本共用一套真实终端。</em></p>
 </p>
 
 
@@ -36,13 +36,29 @@
 
 ## 简介
 
-`termcp `是一个go语言编写的包含MCP服务器，以**SSH**会话的形式，让AI Agent能够持续地管理、调度交互式程序。此外，termcp还有专门用于管理这些会话的界面，使得用户能够完整地观测AI Agent的行为。同时用户能够像使用SSH一样，直接与受控机器进行交互或调整AI Agent行为。Go 编写、单二进制、低开销、可长期驻留；编译型 + goroutine 并发，高吞吐、低延迟。
+`termcp` 是一个 **Go 编写的跨平台终端操作平台**。它可以连接**本机**或任意**远程主机**，把每个连接变为一个可持久管理的终端会话，并且人、AI 与脚本可以共用同一批会话：
+
+- **人** —— 浏览器实时查看、操作、接管任何会话；
+- **AI Agent** —— 通过内置的 MCP 接口驱动同一批终端；
+- **脚本 / 程序** —— 通过 REST API 编程化接入。
+
+每个会话都支持多标签终端、端口转发与文件传输，可挂起、归档、回放，还可以在人与 AI 之间随时交接——你开着 root 权限的 shell 交给 Agent 驱动，或 Agent 碰到密码提示时暂停交给你输入。
+
+MCP 只是它能力的一层接口，平台本身是完整的终端服务，不依赖任何 MCP 客户端也能独立使用。Go 编写、单二进制、低开销、可长期驻留。
 
 ### 演示视频
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 ## 为什么选 termcp
+
+### 平台：三种入口，一套会话
+
+| 入口 | 面向 | 形态 |
+|------|------|------|
+| **Web 管理界面**（内置） | 人 | 浏览器实时终端、会话仪表盘、多标签、历史回放、文件/转发面板 |
+| **MCP 接口**（内置） | AI Agent | 会话作为持久连接，Agent 可跨多轮对话管理/调度交互式程序 |
+| **REST API**（内置） | 脚本/程序 | 编程化创建会话、读写终端、端口转发、文件操作 |
 
 ### 打破边界
 
@@ -72,7 +88,8 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - [快速开始](#快速开始)
 - [使用](#使用)
 - [Docker 部署](#docker-部署)
-- [接入 MCP 客户端](#接入-mcp-客户端)
+- [接入 AI 客户端（MCP）](#接入-ai-客户端mcp)
+- [接入脚本 / 程序（REST API）](#接入脚本--程序rest-api)
 - [示例](#示例)
 - [工具参考](#工具参考)
 - [已知限制](#已知限制)
@@ -80,18 +97,20 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 ## 功能特性
 
 - **⚡ 一行安装** —— `go install github.com/open-mcp-ai/termcp@latest`，无需克隆、无需编译，只需 Go 环境即可。
-- **🔌 一行接入 MCP** —— 任何 MCP 客户端一行接入（`claude mcp add --transport http termcp http://localhost:18765/stream` 只是示例，Open WebUI 等其它客户端同样适用）；termcp 在同一端口同时提供 Streamable HTTP 与 SSE 两种传输，无需为每个工具单独集成。
-- **🔗 资源 URL 寻址** —— 为配置、会话、频道定义了统一的 `termcp://` 寻址，Web UI 各处一键复制；把 URL 粘进与 AI 的对话，AI 即可准确定位并操作对应的连接、会话或频道。
+- **🔌 一个端口，多入口服务** —— 同一端口同时提供：浏览器 Web UI、REST API、WebSocket、MCP Streamable HTTP 与 SSE。想连哪个就连哪个：人是浏览器，Agent/客户端是 MCP，脚本是 REST。
+- **🔗 资源 URL 寻址** —— 为配置、会话、频道定义了统一的 `termcp://` 寻址，Web UI 各处一键复制；把 URL 粘进与 AI 的对话，AI 即可准确定位并操作对应的连接、会话或频道（`session_start` / `session_terminate` / `shell_input` 等直接接受定位符，一次调用直达）。
 - **🤝 人机接力，无缝切换** —— 人类与 Agent 共享同一个实时会话，可随时切换：你手动开好 root 权限的 shell，再交给 Agent 驱动；或 Agent 遇到 `sudo` / 密码 / MFA 提示时暂停，由你在 Web UI 里输入，Agent 继续执行。同一 shell 的输入串行写入，人机互不打断对方按键；凭据全程不由 Agent 猜测或回显；且你始终掌握控制权——Agent 出现不当操作时，可随时中断其操作。
 - **🟦 支持多轮交互** —— 进程持续运行，Agent 可跨多个对话轮次驱动，而非一次性调用即返回。
 - **🟪 真实终端环境** —— 完整模拟真实终端（PTY；Windows 下走 ConPTY），`vim`、`top`、`gdb` 等依赖终端特性的程序均可正常运行，跨平台兼容。
 - **🟫 本机 / 远程任选入口** —— 既能零配置直接操作 termcp 所在本机（`ssh_config="internal"`），也能通过 SSH 接入任意远程主机，同一套工具流程通用。
-- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署。
+- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署；另有 `/api.html` 提供 API 与 MCP 配置速查。
+- **🟦 REST API + WebSocket** —— 完整 HTTP 面：会话 CRUD、终端 I/O 流、端口转发、SFTP 文件、历史检索，供脚本与自研程序编程化调用。
 - **🟨 多 Agent 并行不冲突** —— 多个 Agent 可同时读取同一会话，各自维护独立游标，输出互不抢占；统一的 `shell_output` 游标在活会话、死亡会话与归档会话上语义完全一致（字节 offset、`tail_lines`、翻页）。
 - **🟩 远程操作一体集成** —— 单条 SSH 连接内完成命令执行、文件传输（完整 SFTP 套件 + 带 Range 断点续传的 HTTP 直链）、端口转发（`-L` / `-R` / `-D`），无需重复建立连接。
 - **🟥 主动通知 AI Agent（推送，免轮询）** —— `shell_notify` 注册后由 termcp **主动通知 AI Agent**：进程退出 / 输出停顿 / 有新输出时即刻推送唤醒信令（仅信令、不带内容，避免污染上下文），无需 Agent 持续轮询；`channel="sampling"` 时还会主动发送 MCP `sampling/createMessage` 直接唤起模型。命令完成判定基于进程退出事件，而非固定超时。Web UI 可查看与拆下已注册规则。
 - **🟨 断开 ≠ 删除，历史全保留** —— 正常退出或异常断线的会话自动归档，完整终端输出落盘保留，跨 termcp 重启仍可检索、重命名、打标签、渲染为 PNG 终端截图，仅显式删除才真正清理。
 - **🔒 凭据安全设计** —— 通过 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据永不出现在 Agent 上下文中；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
+- **🛡️ 单一静态 Token 鉴权** —— 一个静态 Token 保护整个 HTTP 面：Web UI、REST API、MCP SSE、MCP Streamable HTTP 和 WebSocket。可配置 Token 本身（`--auth-token` / `TERMCP_AUTH_TOKEN`），也可只配置 salted SHA-256 哈希（`--auth-hash` / `TERMCP_AUTH_HASH`，用 `termcp --gen-auth-hash` 生成），服务端不保存明文配置。监听非 loopback 地址时未配置认证会拒绝启动。
 - **🪶 上下文友好，省 Token** —— `shell_notify` 只推送唤醒信令（不带内容），终端正文通过 `shell_output` 按需拉取，避免原始输出灌满模型上下文。
 
 ## 快速开始
@@ -149,20 +168,26 @@ termcp [flags]
 
 | Flag            | 默认值      | 说明                                                         |
 | --------------- | ----------- | ------------------------------------------------------------ |
-| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。**认证功能未实现**，除非有防火墙/反向代理保护端口，否则请保持 loopback 默认值。 |
+| `--host`        | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。绑定非 loopback 地址时**必须**配置认证 Token/哈希，否则拒绝启动。 |
 | `--port`        | `18765`     | HTTP 端口。Web UI、MCP SSE、MCP streamable HTTP 共用。       |
 | `--data-dir`    | `~/.termcp` | 持久化目录（会话、消息、SSH 配置）。不存在则自动创建。默认值可用环境变量 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level`   | `info`      | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 显示全部 MCP 工具调用；失败的工具调用与会话创建错误始终以 `warn`/`error` 打印。 |
 | `--no-internal` | `false`     | 禁用内建 loopback SSH profile。                                |
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
+| `--auth-token`  | *(未设置)*  | HTTP 认证静态 Token（或 `$TERMCP_AUTH_TOKEN`）。API、MCP、浏览器全部客户端都须携带。与 `--auth-hash` 互斥。 |
+| `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。与 `--auth-token` 互斥。 |
+| `--gen-auth-hash` | *(action)* | 生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或不带参数时从终端 stdin 无回显读取。 |
 
-这两个 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。
+这些 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。认证详见下节[认证](#认证)。
 
 ### 示例
 
 ```bash
 # 监听所有网卡
-./termcp --host 0.0.0.0
+./termcp --host 0.0.0.0 --auth-token "your-long-random-token"
+
+# 监听所有网卡，服务端只保存 salted 哈希
+./termcp --host 0.0.0.0 --auth-hash "$(./termcp --gen-auth-hash)"
 
 # 允许 AI Agent 管理 SSH 配置
 ./termcp --mcp-manage-ssh-configs
@@ -170,6 +195,36 @@ termcp [flags]
 # 禁用内建 loopback profile（Agent 只能连远程主机）
 ./termcp --no-internal
 ```
+
+### 认证
+
+单一静态 Token 保护整个 HTTP 面——Web UI、REST API、MCP SSE、MCP Streamable HTTP 与浏览器 WebSocket。仅监听 loopback（`127.0.0.1`）时可保持零配置默认；绑定非 loopback 而未配置 Token 会直接启动失败。
+
+```bash
+# 明文方式：flag 或环境变量
+./termcp --auth-token "your-long-random-token"
+TERMCP_AUTH_TOKEN="your-long-random-token" ./termcp
+
+# 哈希方式（推荐）：服务端只保存 sha256-<salt>-<digest>。
+# `termcp --gen-auth-hash` 在终端下无回显地从 stdin 读取 Token，
+# 不会进入 shell 历史：
+./termcp --gen-auth-hash
+TERMCP_AUTH_HASH='sha256-...' ./termcp
+```
+
+各客户端如何携带 Token：
+
+| 客户端 | 凭据方式 |
+|--------|---------|
+| API / MCP / curl | `Authorization: Bearer <token>` 请求头 |
+| 浏览器（Web UI） | 收到 `401` 时弹出原生登录框——用户名被忽略（留空即可），**密码填 Token**。认证成功后自动下发 `termcp_token` cookie，同源 WebSocket 握手随之通过。 |
+
+行为说明：
+
+- `--auth-token` 与 `--auth-hash` 互斥；同一配置项 flag 优先于环境变量。
+- Token 含冒号也兼容：解码后的整个 `user:pass` 串与原 token 完全一致时同样放行，因此按首个冒号拆分的客户端（如 `curl -u user:pass`）也能通过；规范写法仍是 `curl -u :<token>`。
+- 未配置 Token/哈希时，绑定任何非 loopback 地址（`0.0.0.0`、局域网 IP、非 `localhost` 的主机名）都会启动失败——被误暴露的实例不可能无认证运行。
+- 浏览器走的是 HTTP Basic，只是 Base64 编码而非加密。对外提供服务时请在 termcp 前面用反向代理终止 TLS；此时仅当请求本身来自 TLS 时 `termcp_token` cookie 才会自动带上 `Secure` 标志。
 
 ### 连接远程主机
 
@@ -229,6 +284,8 @@ COPY --from=termcp-build /out/termcp /usr/local/bin/termcp
 
 ### 启动命令示例
 
+容器内必须监听 `0.0.0.0`，而非 loopback 监听**必须配置认证**；通过 `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH` 或对应 flag 传入，否则启动失败。
+
 ```bash
 # 构建包含 termcp 的应用镜像
 # 也可以同时指定企业内网或其他可用的 GOPROXY / Go 基础镜像
@@ -237,10 +294,11 @@ docker build \
   -t my-app-with-termcp .
 
 # 以 termcp 作为容器主进程
-# 容器内必须监听 0.0.0.0，数据目录应挂载为持久化卷
+# 数据目录挂载为持久化卷；通过环境变量配置认证 Token
 docker run -d --name my-app-termcp \
   -p 18765:18765 \
   -v termcp-data:/data \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
   --entrypoint /usr/local/bin/termcp \
   my-app-with-termcp \
   --host 0.0.0.0 --port 18765 --data-dir /data
@@ -248,6 +306,7 @@ docker run -d --name my-app-termcp \
 # 开启 MCP SSH 配置写入工具（按需使用）
 docker run -d --name my-app-termcp \
   -p 18765:18765 -v termcp-data:/data \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
   --entrypoint /usr/local/bin/termcp \
   my-app-with-termcp \
   --host 0.0.0.0 --data-dir /data --mcp-manage-ssh-configs
@@ -259,6 +318,7 @@ docker logs -f my-app-termcp
 如果需要与原应用进程在同一个容器中同时运行，应在原有 entrypoint 或进程管理器中启动：
 
 ```bash
+export TERMCP_AUTH_TOKEN="change-me-to-a-long-random-secret"
 /usr/local/bin/termcp --host 0.0.0.0 --port 18765 --data-dir /data
 ```
 
@@ -275,6 +335,8 @@ services:
         GOPROXY: https://goproxy.cn,direct
     entrypoint: ["/usr/local/bin/termcp"]
     command: ["--host", "0.0.0.0", "--port", "18765", "--data-dir", "/data"]
+    environment:
+      - TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret
     ports:
       - "18765:18765"
     volumes:
@@ -288,11 +350,11 @@ volumes:
 docker compose up -d --build
 ```
 
-## 接入 MCP 客户端
+## 接入 AI 客户端（MCP）
 
 termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
 
-termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。作为 MCP 服务器，它本身就是可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）的插件。
+termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。作为 AI 控制层，MCP 服务器只是它诸多能力面之一，可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）。
 
 ### 方式 A —— Streamable HTTP (`/stream`)
 
@@ -343,15 +405,61 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 
 Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制配置。
 
+## 接入脚本 / 程序（REST API）
+
+不通过 MCP 也能编程化使用同一套会话能力：完整的 REST API 与实时 WebSocket 通道。
+
+```bash
+# 列出会话（同样受 --auth-token 保护）
+curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://127.0.0.1:18765/api/sessions
+
+# 创建一个会话
+curl -X POST http://127.0.0.1:18765/api/sessions \
+  -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"ssh_config":"internal","command":"bash","mode":"pty"}'
+
+# 读取会话输出 / 上传下载文件 / 端口转发，见 docs/api.md
+```
+
+终端实时 I/O 走 `WebSocket /api/ui/ws`；文件支持 HTTP 直链（Range 断点续传）。完整端点见 [`docs/api.md`](./docs/api.md)。
+
+### 开启认证时的接入
+
+服务端以 `--auth-token` / `--auth-hash` 启动后，所有 MCP 请求都要带 `Authorization: Bearer` 请求头：
+
+```bash
+claude mcp add --transport http termcp http://your-server:18765/stream \
+  --header "Authorization: Bearer $TERMCP_AUTH_TOKEN"
+```
+
+```json
+{
+  "mcpServers": {
+    "termcp": {
+      "type": "http",
+      "url": "http://your-server:18765/stream",
+      "headers": { "Authorization": "Bearer <your-token>" }
+    }
+  }
+}
+```
+
+不要把 Token 放进 URL，也不要贴进共享配置或截图。`curl` 与脚本使用相同请求头：
+
+```bash
+curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://your-server:18765/api/sessions
+```
+
 ## 工具参考
 
-termcp 共提供 30 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
+termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
 
 | 分类 | 工具列表 |
 |------|---------|
 | 会话容器 | `session_start`, `session_list`, `session_info`, `session_terminate` |
 | 终端通道 | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
-| 反向通知 | `shell_notify` |
+| 通知 | `shell_notify`（唤醒 AI Agent）、`notify_user`（弹窗提醒 Web UI 用户） |
 | 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
 | 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
 | 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
@@ -366,7 +474,7 @@ termcp 共提供 30 个 MCP 工具。完整参数、返回结构与错误码请�
 - **文件与转发操作需活跃连接**：在已退出（DEAD）或归档的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
 - **断线不自动重连**：SSH 意外断线会被检测，会话置为 DEAD（`exited`）只读保留、输出不丢，但不会自动重连。需要时重新 `session_start`，或从历史中查看旧会话。
 - **无命令白名单 / 目录限制**：termcp 不设命令白名单、路径限制或策略式风险分级。风险控制走**人工在环**：可在 Web UI 随时中断 AI 的操作；`sudo` / 密码 / MFA 提示默认交给你输入（Agent 遵循不猜测、不回显的约定，暂停等你输入），若你允许 Agent 代输也完全可以——termcp 不做禁止。
-- **认证功能未实现**：HTTP 面（Web UI、MCP、REST、WebSocket）当前没有任何认证，谁能触达端口谁就能进入。默认绑定 `127.0.0.1` 就是安全边界——一旦 `--host 0.0.0.0` 暴露到网络，请自行用认证、反向代理或防火墙兜底。
+- **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
 
 ---
 

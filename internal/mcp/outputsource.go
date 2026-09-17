@@ -71,6 +71,50 @@ func (o *outputSource) ByteRange(start int64, max int) ([]byte, int64, error) {
 // Resolution order: live shells → live registry sessions (incl. restored DEAD)
 // → archived history (merged, then per-shell).
 func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolResult) {
+	// A termcp:// locator names a session (optionally one of its shell
+	// channels by 1-based creation index); it never names a raw shell id, so
+	// a locator always lands in a session-scoped branch below.
+	shellIdx := 0
+	if looksLikeResourceLocator(id) {
+		p, perr := parseResourceURL(id)
+		if perr != nil {
+			return nil, toolError(CodeInvalidArgument, "%s", perr.Error())
+		}
+		if p.kind == resourceURLEntry {
+			return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session or shell", id))
+		}
+		id, shellIdx = p.sid, p.index
+	}
+
+	// Locator channel form (:N): the target is that specific shell — a live
+	// ChildShell by index, or the N-th channel of an archived session.
+	if shellIdx > 0 {
+		if sess := s.sessMgr.Get(id); sess != nil && sess.PrimaryShell() != nil {
+			cs, err := s.shellFromIndex(sess, shellIdx)
+			if err != nil {
+				return nil, toolError(CodeShellNotFound, "%s", err.Error())
+			}
+			if cs == nil {
+				return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", sess.ID))
+			}
+			info := cs.Info()
+			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
+		}
+		if s.historyMgr != nil {
+			if a, ok := s.historyMgr.Get(id); ok {
+				if idx := shellIdx - 1; idx < len(a.Shells) {
+					status := a.Status
+					if status == "" {
+						status = api.SessionArchived
+					}
+					return &outputSource{sessID: a.ID, shellID: a.Shells[idx].ID, hist: s.historyMgr, status: status}, nil
+				}
+				return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("shell index %d out of range (session %q has %d shell(s))", shellIdx, a.ID, len(a.Shells)))
+			}
+		}
+		return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("session %q not found", id))
+	}
+
 	if cs := s.sessMgr.GetChildShell(id); cs != nil {
 		info := cs.Info()
 		sessID := id

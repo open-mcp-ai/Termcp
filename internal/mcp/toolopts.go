@@ -41,6 +41,7 @@ var compactToolDescriptions = map[string]string{
 	"message":                 "Stored session messages: list the index or fetch payloads.",
 	"history":                 "Archived sessions: list, search, rename, meta, purge, screenshot. Read output via shell_output.",
 	"ssh_config":              "SSH profiles: action=list names, or (if enabled) create/edit/copy/delete.",
+	"notify_user":             "Notify the human user via the termcp Web UI: toast on every open page + browser system notification; session_id highlights that session's card.",
 }
 
 // newTool applies termcp's compact wire representation to a tool definition.
@@ -68,7 +69,7 @@ var omitPropertyDescriptions = map[string]struct{}{
 	"forward_id": {}, "source_name": {}, "target_name": {},
 	"host": {}, "user": {}, "port": {}, "local_host": {}, "local_port": {},
 	"remote_host": {}, "remote_port": {}, "uid": {}, "gid": {},
-	"atime": {}, "mtime": {}, "size": {},
+	"atime": {}, "mtime": {}, "size": {}, "title": {},
 	"description": {}, "default_shell": {},
 	"trust_unknown_host": {}, "known_hosts": {}, "dial_timeout_seconds": {},
 	"jump_host": {}, "jump_user": {}, "jump_port": {}, "jump_password": {},

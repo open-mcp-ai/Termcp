@@ -28,14 +28,14 @@ type Options struct {
 type Handler struct {
 	opts   Options
 	w      io.Writer
-	mu     sync.Mutex
+	mu     *sync.Mutex // shared across WithAttrs/WithGroup copies (same writer)
 	groups []string
 	attrs  []slog.Attr
 }
 
 // NewTextHandler returns a handler writing to w.
 func NewTextHandler(w io.Writer, opts Options) slog.Handler {
-	return &Handler{opts: opts, w: w}
+	return &Handler{opts: opts, w: w, mu: new(sync.Mutex)}
 }
 
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {

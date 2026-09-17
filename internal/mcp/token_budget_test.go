@@ -13,8 +13,8 @@ func TestTokenBudgetGuard(t *testing.T) {
 	s.RegisterSSHConfigWriteTools()
 
 	tools := s.mcpServer.ListTools()
-	if len(tools) != 30 {
-		t.Fatalf("expected 30 tools, got %d", len(tools))
+	if len(tools) != 31 {
+		t.Fatalf("expected 31 tools, got %d", len(tools))
 	}
 
 	total := 0
