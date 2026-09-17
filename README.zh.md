@@ -5,7 +5,7 @@
 <p align="center">
     <img src="./docs/assets/logo.png"></img>
   <h1 align="center">termcp</h1>
-  <p align="center"><em>让 AI Agent 拥有交互式终端能力。</em></p>
+  <p align="center"><em>跨平台终端会话平台 —— 本机 / 远程统一接入，人、Agent 与脚本共用一套真实终端。</em></p>
 </p>
 
 
@@ -36,13 +36,29 @@
 
 ## 简介
 
-`termcp `是一个go语言编写的包含MCP服务器，以**SSH**会话的形式，让AI Agent能够持续地管理、调度交互式程序。此外，termcp还有专门用于管理这些会话的界面，使得用户能够完整地观测AI Agent的行为。同时用户能够像使用SSH一样，直接与受控机器进行交互或调整AI Agent行为。Go 编写、单二进制、低开销、可长期驻留；编译型 + goroutine 并发，高吞吐、低延迟。
+`termcp` 是一个 **Go 编写的跨平台终端操作平台**。它可以连接**本机**或任意**远程主机**，把每个连接变为一个可持久管理的终端会话，并且人、AI 与脚本可以共用同一批会话：
+
+- **人** —— 浏览器实时查看、操作、接管任何会话；
+- **AI Agent** —— 通过内置的 MCP 接口驱动同一批终端；
+- **脚本 / 程序** —— 通过 REST API 编程化接入。
+
+每个会话都支持多标签终端、端口转发与文件传输，可挂起、归档、回放，还可以在人与 AI 之间随时交接——你开着 root 权限的 shell 交给 Agent 驱动，或 Agent 碰到密码提示时暂停交给你输入。
+
+MCP 只是它能力的一层接口，平台本身是完整的终端服务，不依赖任何 MCP 客户端也能独立使用。Go 编写、单二进制、低开销、可长期驻留。
 
 ### 演示视频
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 ## 为什么选 termcp
+
+### 平台：三种入口，一套会话
+
+| 入口 | 面向 | 形态 |
+|------|------|------|
+| **Web 管理界面**（内置） | 人 | 浏览器实时终端、会话仪表盘、多标签、历史回放、文件/转发面板 |
+| **MCP 接口**（内置） | AI Agent | 会话作为持久连接，Agent 可跨多轮对话管理/调度交互式程序 |
+| **REST API**（内置） | 脚本/程序 | 编程化创建会话、读写终端、端口转发、文件操作 |
 
 ### 打破边界
 
@@ -72,7 +88,8 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - [快速开始](#快速开始)
 - [使用](#使用)
 - [Docker 部署](#docker-部署)
-- [接入 MCP 客户端](#接入-mcp-客户端)
+- [接入 AI 客户端（MCP）](#接入-ai-客户端mcp)
+- [接入脚本 / 程序（REST API）](#接入脚本--程序rest-api)
 - [示例](#示例)
 - [工具参考](#工具参考)
 - [已知限制](#已知限制)
@@ -80,13 +97,14 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 ## 功能特性
 
 - **⚡ 一行安装** —— `go install github.com/open-mcp-ai/termcp@latest`，无需克隆、无需编译，只需 Go 环境即可。
-- **🔌 一行接入 MCP** —— 任何 MCP 客户端一行接入（`claude mcp add --transport http termcp http://localhost:18765/stream` 只是示例，Open WebUI 等其它客户端同样适用）；termcp 在同一端口同时提供 Streamable HTTP 与 SSE 两种传输，无需为每个工具单独集成。
-- **🔗 资源 URL 寻址** —— 为配置、会话、频道定义了统一的 `termcp://` 寻址，Web UI 各处一键复制；把 URL 粘进与 AI 的对话，AI 即可准确定位并操作对应的连接、会话或频道。
+- **🔌 一个端口，多入口服务** —— 同一端口同时提供：浏览器 Web UI、REST API、WebSocket、MCP Streamable HTTP 与 SSE。想连哪个就连哪个：人是浏览器，Agent/客户端是 MCP，脚本是 REST。
+- **🔗 资源 URL 寻址** —— 为配置、会话、频道定义了统一的 `termcp://` 寻址，Web UI 各处一键复制；把 URL 粘进与 AI 的对话，AI 即可准确定位并操作对应的连接、会话或频道（`session_start` / `session_terminate` / `shell_input` 等直接接受定位符，一次调用直达）。
 - **🤝 人机接力，无缝切换** —— 人类与 Agent 共享同一个实时会话，可随时切换：你手动开好 root 权限的 shell，再交给 Agent 驱动；或 Agent 遇到 `sudo` / 密码 / MFA 提示时暂停，由你在 Web UI 里输入，Agent 继续执行。同一 shell 的输入串行写入，人机互不打断对方按键；凭据全程不由 Agent 猜测或回显；且你始终掌握控制权——Agent 出现不当操作时，可随时中断其操作。
 - **🟦 支持多轮交互** —— 进程持续运行，Agent 可跨多个对话轮次驱动，而非一次性调用即返回。
 - **🟪 真实终端环境** —— 完整模拟真实终端（PTY；Windows 下走 ConPTY），`vim`、`top`、`gdb` 等依赖终端特性的程序均可正常运行，跨平台兼容。
 - **🟫 本机 / 远程任选入口** —— 既能零配置直接操作 termcp 所在本机（`ssh_config="internal"`），也能通过 SSH 接入任意远程主机，同一套工具流程通用。
-- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署。
+- **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署；另有 `/api.html` 提供 API 与 MCP 配置速查。
+- **🟦 REST API + WebSocket** —— 完整 HTTP 面：会话 CRUD、终端 I/O 流、端口转发、SFTP 文件、历史检索，供脚本与自研程序编程化调用。
 - **🟨 多 Agent 并行不冲突** —— 多个 Agent 可同时读取同一会话，各自维护独立游标，输出互不抢占；统一的 `shell_output` 游标在活会话、死亡会话与归档会话上语义完全一致（字节 offset、`tail_lines`、翻页）。
 - **🟩 远程操作一体集成** —— 单条 SSH 连接内完成命令执行、文件传输（完整 SFTP 套件 + 带 Range 断点续传的 HTTP 直链）、端口转发（`-L` / `-R` / `-D`），无需重复建立连接。
 - **🟥 主动通知 AI Agent（推送，免轮询）** —— `shell_notify` 注册后由 termcp **主动通知 AI Agent**：进程退出 / 输出停顿 / 有新输出时即刻推送唤醒信令（仅信令、不带内容，避免污染上下文），无需 Agent 持续轮询；`channel="sampling"` 时还会主动发送 MCP `sampling/createMessage` 直接唤起模型。命令完成判定基于进程退出事件，而非固定超时。Web UI 可查看与拆下已注册规则。
@@ -332,11 +350,11 @@ volumes:
 docker compose up -d --build
 ```
 
-## 接入 MCP 客户端
+## 接入 AI 客户端（MCP）
 
 termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
 
-termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。作为 MCP 服务器，它本身就是可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）的插件。
+termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。作为 AI 控制层，MCP 服务器只是它诸多能力面之一，可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）。
 
 ### 方式 A —— Streamable HTTP (`/stream`)
 
@@ -386,6 +404,25 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 - SSE → `http://<host>:18765/sse`（JSON-RPC 走 `POST /message`）
 
 Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制配置。
+
+## 接入脚本 / 程序（REST API）
+
+不通过 MCP 也能编程化使用同一套会话能力：完整的 REST API 与实时 WebSocket 通道。
+
+```bash
+# 列出会话（同样受 --auth-token 保护）
+curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://127.0.0.1:18765/api/sessions
+
+# 创建一个会话
+curl -X POST http://127.0.0.1:18765/api/sessions \
+  -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"ssh_config":"internal","command":"bash","mode":"pty"}'
+
+# 读取会话输出 / 上传下载文件 / 端口转发，见 docs/api.md
+```
+
+终端实时 I/O 走 `WebSocket /api/ui/ws`；文件支持 HTTP 直链（Range 断点续传）。完整端点见 [`docs/api.md`](./docs/api.md)。
 
 ### 开启认证时的接入
 

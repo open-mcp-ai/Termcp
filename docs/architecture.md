@@ -30,29 +30,36 @@
 
 ## 一、整体分层
 
+termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑三个平行入口**——Web UI（人）、MCP（AI Agent）、REST/WebSocket（脚本程序）。三者操作同一批会话，互不冲突。
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      AI Agent (MCP Client)                    │
-│     SSE (/sse + /message)  或  Streamable HTTP (/stream)      │
-│                     同一工具面 / JSON-RPC                      │
-└──────────────────────────────────────────────────────────────┘
-                               │
-    ┌──────────────────────────┼──────────────────────────┐
-    │               internal/mcp/ (server.go)               │
-    │                                                       │
-    │  工具: session_start / shell_open / shell_list / shell_close, │
-    │  shell_input / shell_key / shell_output / shell_resize, │
-    │  shell_reader_register / shell_reader_unregister / shell_notify, │
-    │  session_list / session_info / session_terminate, │
-    │  forward(action=local/remote/dynamic/list/close), │
-    │  ssh_config(action=list|create|edit|copy|delete) / shell_detect, │
-    │  file_read/write/stat/delete/rename/mkdir/urls/perm/link/fs/getwd, │
-    │  message(action=list|get) / history(action=list|search_messages|...) │
-    │                                                       │
-    │  logging.go: 每个 handler 包装结构化日志 (耗时/错误)    │
-    └──────┬───────────────────────────────┬────────────────┘
-           │ session.Manager (注册表)       │ message.Manager (持久化)
-           ▼                               ▼
+│  ┌────────────────┐   ┌──────────────────────┐   ┌─────────┐  │
+│  │   人 (浏览器)    │   │   AI Agent (MCP)     │   │ 脚本/程序 │  │
+│  │  Web UI /api   │   │ SSE | /stream        │   │ REST API │  │
+│  │  WebSocket     │   │ 同一工具面 / JSON-RPC │   │ WebSocket│  │
+│  └───────┬────────┘   └───────────┬──────────┘   └────┬────┘  │
+└──────────┼────────────────────────┼─────────────────────┼─────┘
+           ▼                        ▼                     ▼
+┌────────────────────────────────────────────────────────────────┐
+│                   共享 http.ServeMux（单端口 18765）            │
+│  /                → Web UI（internal/webui）                    │
+│  /api/*           → REST（internal/webui/handler.go）            │
+│  /api/ui/ws       → WebSocket 终端 I/O                          │
+│  /sse /message/stream → internal/mcp（工具面不变）               │
+└──────┬──────────────────────────────────┬──────────────────────┘
+       │                                  │
+       ▼                                  ▼
+┌──────────────────────┐      ┌──────────────────────────┐
+│ internal/mcp/        │      │ internal/webui/          │
+│ server.go 工具注册    │      │ 会话卡片/终端窗口/历史     │
+│ handlers.go 31 工具   │      │ handler.go REST+WS        │
+│ logging.go 结构化日志  │      └───────────┬──────────────┘
+└──────┬───────────────┘                  │
+       │                                  │
+       └──────────┬───────────────────────┘
+                  │ session.Manager (注册表) │ message.Manager (持久化)
+                  ▼                          ▼
     ┌──────────────────────┐    ┌──────────────────────────┐
     │  internal/session/    │    │  internal/message/        │
     │  manager.go          │    │  message.go              │

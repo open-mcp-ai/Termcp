@@ -2,11 +2,19 @@
 
 Base URL: `http://localhost:18765`
 
-实时终端 I/O 走 WebSocket (`/api/ui/ws`)，其余操作走 REST。
+termcp 是一个终端会话平台，同一端口向**三种使用者**开放同一批会话：
+
+| 入口 | 路径 | 使用者 |
+|------|------|--------|
+| Web UI | `/` + `/api.html` | 人（浏览器） |
+| MCP | `/sse` + `/message` 或 `/stream` | AI Agent |
+| REST + WebSocket | `/api/*` + `/api/ui/ws` | 脚本 / 程序 |
+
+本文档描述 REST 面（脚本编程）。实时终端 I/O 走 WebSocket (`/api/ui/ws`)，其余操作走 REST。
 
 ## 0. MCP 传输（AI 对接）
 
-与 REST 共用同一 HTTP 端口；工具面一致，按客户端能力二选一：
+与 REST 共用同一 HTTP 端口、同一会话内核；MCP 是平台面向 AI Agent 的接入面。按客户端能力二选一：
 
 | 传输 | 路径 | 说明 |
 |------|------|------|

@@ -5,7 +5,7 @@
 <p align="center">
     <img src="./docs/assets/logo.png"></img>
   <h1 align="center">termcp</h1>
-  <p align="center"><em>Give AI Agents interactive terminal capabilities.</em></p>
+  <p align="center"><em>A cross-platform terminal session platform — local & remote hosts, one session layer for humans, Agents, and scripts.</em></p>
 </p>
 
 
@@ -36,13 +36,29 @@
 
 ## Introduction
 
-`termcp` is an MCP server written in Go that exposes interactive programs to AI Agents as persistent **SSH** sessions, letting Agents continuously manage and drive them. On top of that, termcp ships a dedicated session management UI that gives you full visibility into the Agent's behavior. You can also interact directly with the controlled machine — or adjust the Agent's behavior — just as you would over a normal SSH connection. Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
+`termcp` is a **cross-platform terminal session platform** written in Go. It treats the **terminal session** as its unifying primitive and connects two classes of machines: **the termcp host itself** (built-in loopback profile, zero config) and **any remote host** (SSH profiles with password / key / jump-host support). Every session is a real PTY channel — hosting multiple shell tabs, port forwards, and SFTP file transfer — opened simultaneously to three kinds of users:
+
+- **You (human)** — a browser-based Web UI for live observation and instant takeover of any session;
+- **AI Agents** — a built-in MCP server (Streamable HTTP and SSE on the same port) driving the same real terminals;
+- **Scripts / programs** — a full REST API plus WebSocket channel for programmatic session, forward, and file operations.
+
+termcp is not "an MCP tool": MCP is just one **interface layer** exposing its AI-control capabilities. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
+
+Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
 
 ### Demo Video
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 ## Why termcp
+
+### One platform, three entrances, one session layer
+
+| Entrance | For | Form |
+|----------|-----|------|
+| **Web UI** (built-in) | Humans | Browser live terminals, session dashboard, tabs, history replay, file/forward panels |
+| **MCP server** (built-in) | AI Agents | Sessions as persistent connections; Agents manage/drive interactive programs across turns |
+| **REST API + WebSocket** (built-in) | Scripts | Programmatic session creation, terminal I/O, port forwarding, SFTP file operations |
 
 ### Breaking the Boundary
 
@@ -72,7 +88,8 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 - [Quick Start](#quick-start)
 - [Usage](#usage)
 - [Docker Deployment](#docker-deployment)
-- [Connecting MCP Clients](#connecting-mcp-clients)
+- [Connecting AI Clients (MCP)](#connecting-ai-clients-mcp)
+- [Connecting Scripts / Programs (REST API)](#connecting-scripts--programs-rest-api)
 - [Examples](#examples)
 - [Tool Reference](#tool-reference)
 - [Known Limitations](#known-limitations)
@@ -80,13 +97,14 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 ## Features
 
 - **⚡ One-command install** — `go install github.com/open-mcp-ai/termcp@latest`. No clone and no build; a single Go toolchain is all you need.
-- **🔌 One-line MCP onboarding** — Point any MCP client at termcp in a single line — e.g. `claude mcp add --transport http termcp http://localhost:18765/stream` (just one example; Open WebUI and other clients work the same way). Both Streamable HTTP and SSE are served on the same port, so there is no per-tool integration work.
-- **🔗 Resource URLs** — Every entry, session, and shell has a stable `termcp://` address with one-click copy buttons throughout the Web UI. Paste the URL into your chat with the Agent and it can precisely locate and operate that connection, session, or shell.
+- **🔌 One port, many entrances** — The same port serves the browser Web UI, REST API, WebSocket, and MCP Streamable HTTP + SSE in parallel. Pick whichever fits: browsers for humans, MCP for Agents/clients, REST for scripts.
+- **🔗 Resource URLs** — Every entry, session, and shell has a stable `termcp://` address with one-click copy buttons throughout the Web UI. Paste the URL into your chat with the Agent and it can precisely locate and operate that connection, session, or shell — `session_start` / `session_terminate` / `shell_input` accept locators directly, no lookups needed.
 - **🤝 Human–AI relay, seamless handoff** — You and the Agent share the same live session and can switch at any moment: open a root-privileged shell yourself, then hand it to the Agent to drive; or let the Agent hit a `sudo` / password / MFA prompt and pause for you to type it into the Web UI, after which the Agent carries on. Input to each shell is serialized, so you and the Agent never garble each other's keystrokes, and credentials are never guessed or echoed by the Agent — and you stay in control: interrupt a misbehaving Agent at any time.
 - **🟦 Multi-turn interaction** — The process keeps running; the Agent can drive it across multiple conversation turns instead of a one-shot call-and-return.
 - **🟪 Real terminal environment** — A fully emulated real terminal (PTY; ConPTY on Windows), so programs that depend on terminal features like `vim`, `top`, `gdb` all run correctly, with cross-platform compatibility.
 - **🟫 Local or remote, your choice** — Point an Agent at the termcp host itself with zero setup (`ssh_config="internal"`), or at any remote machine over SSH. The same tool workflow drives both.
-- **🟧 Built-in visual UI** — Access live terminals, session lists, tabbed multi-shell windows, a tiling workspace, and output-history replay straight from a browser. Served from a single port, no extra deployment needed.
+- **🟧 Built-in visual UI** — Access live terminals, session lists, tabbed multi-shell windows, a tiling workspace, and output-history replay straight from a browser. Served from a single port, no extra deployment needed; `/api.html` provides API + MCP quick-reference configs.
+- **🟦 REST API + WebSocket** — A complete HTTP surface: session CRUD, terminal I/O streaming, port forwarding, SFTP files, history search — for scripts and custom programs.
 - **🟨 Multiple Agents, no conflicts** — Multiple Agents can read the same session simultaneously, each maintaining its own independent cursor, with no output stealing. The unified `shell_output` reader works identically on live, dead, and archived sessions (byte offsets, `tail_lines`, paging).
 - **🟩 Remote operations, all integrated** — Command execution, file transfer (full SFTP suite plus direct HTTP download/upload URLs with resume), and port forwarding (`-L` / `-R` / `-D`) all over a single SSH connection, with no need to re-establish connections.
 - **🟥 Proactive AI notifications (push, no polling)** — `shell_notify` actively notifies the AI Agent — no polling required. termcp pushes a wake-up signal the moment a process exits, output goes quiet, or new output arrives (signal only, no payload); with `channel="sampling"` it actively sends an MCP `sampling/createMessage` to wake the model. Completion is decided by the process-exit event, never a fixed timeout. The Web UI lists and can remove active rules.
@@ -332,11 +350,11 @@ volumes:
 docker compose up -d --build
 ```
 
-## Connecting MCP Clients
+## Connecting AI Clients (MCP)
 
 termcp speaks **both MCP transports** on the same port (18765). Choose whichever your client supports — the tool surface is identical.
 
-termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode). As an MCP server it is itself a plugin: embed it into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
+termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode). The MCP server is one interface layer of the platform, embeddable into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
 
 ### Option A — Streamable HTTP (`/stream`)
 
@@ -386,6 +404,25 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 - SSE → `http://<host>:18765/sse` (JSON-RPC goes to `POST /message`)
 
 The Web UI's **API / MCP** page (`/api.html`) offers copy-ready config for both transports.
+
+## Connecting Scripts / Programs (REST API)
+
+Skip MCP and use the same session layer programmatically: the full REST API and live WebSocket channel.
+
+```bash
+# List sessions (same --auth-token protection)
+curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://127.0.0.1:18765/api/sessions
+
+# Create a session
+curl -X POST http://127.0.0.1:18765/api/sessions \
+  -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"ssh_config":"internal","command":"bash","mode":"pty"}'
+
+# Read output / upload files / port forwards — see docs/api.md
+```
+
+Live terminal I/O runs over `WebSocket /api/ui/ws`; files support direct HTTP URLs with Range resume. Full endpoint list in [`docs/api.md`](./docs/api.md).
 
 ### With authentication enabled
 

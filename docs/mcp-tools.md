@@ -31,12 +31,14 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 | 层级 | URL 形式 | 例子 |
 |------|----------|------|
 | entry（连接配置） | `termcp://[entry名]` | `termcp://internal` |
-| session（会话） | `termcp://[entry名]#[会话id]`，也可用短形式 `termcp://#[会话id]` | `termcp://pi#ctf-1` / `termcp://#ctf-1` |
-| shell（频道） | `termcp://[entry名]#[会话id]:[序号]` 或 `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
+| session（会话） | `termcp://#[会话id]`（**短形式，复制按钮统一输出此形式**） | `termcp://#ctf-1` |
+| shell（频道） | `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
 
-- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致。
-- 知道所属 entry 就带上前缀，不确定时直接用短形式。
-- 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`。
+- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致；无序号 = 首个 shell。
+- **MCP 工具直接接受定位符**：`session_start(ssh_config="termcp://mac")`、`session_terminate(session_id="termcp://#ctf-1")`、`shell_input(shell_id="termcp://#ctf-1:2", ...)` 等都无需先解析成裸 id，一次调用直达。
+- 兼容旧形式 `termcp://[entry名]#[会话id]`：entry 前缀被忽略（会话名与 entry 名无关），以会话 id 为准。
+- **归档会话**：写操作工具（`shell_input` / `shell_key` / `shell_resize` 等）不接受归档定位符，会返回带提示的错误——归档输出是只读的，用 `shell_output`（`tail_lines` / `offset` 翻页）读取。定位符解析失败（如 `termcp://#sid:0`）返回 `invalid_argument` 并附具体原因。
+- 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`（仅作事件载体，不是可用定位符）。
 
 ---
 
@@ -54,7 +56,7 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 | 错误码 | 含义 | 典型处理 |
 |--------|------|----------|
 | `invalid_argument` | 参数缺失或非法 | 按提示修正参数后重试 |
-| `session_not_found` | 无此 session_id | 用 `session_list` 复核 id |
+| `session_not_found` | 无此 session_id，或会话已归档（错误文本会提示用 `shell_output` 读取） | 用 `session_list` 复核 id |
 | `shell_not_found` | 无此 shell_id（可能已 `shell_close` 删除） | 用 `shell_list` 复核 id |
 | `session_not_running` | 会话已 DEAD/恢复但无活跃 SSH 连接 | 重新 `session_start` |
 | `reader_not_registered` | `reader_id` 未在该 shell 注册 | 先 `shell_reader_register` |
