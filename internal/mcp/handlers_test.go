@@ -11,6 +11,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -52,8 +53,12 @@ func newTestServer(t *testing.T) *Server {
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
+	hist := history.New(store)
+	sessMgr.SetHistory(hist)
 	cleanupTestRuntime(t, sessMgr, srv)
-	return New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+	s.SetHistory(hist)
+	return s
 }
 
 func makeRequest(args map[string]any) mcpgo.CallToolRequest {

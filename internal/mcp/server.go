@@ -17,23 +17,24 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
+// ResourceURLScheme is the URI scheme used for termcp resource locators
+// (termcp://...). Singular definition so all subsystems reference one constant.
+const ResourceURLScheme = "termcp://"
+
 // mcpServerInstructions is returned in initialize (MCP "instructions") so clients may
 // inject it into the model context. Keep it terse because clients may include it
 // in every model turn.
 const mcpServerInstructions = `termcp agent rules:
 
 0) Tools: session_*/shell_* are standalone; forward/message/history/ssh_config and file_perm/file_link/file_fs take an "action" parameter (enum in each schema).
-1) IDs: session_id = connection container (forwards, files, terminate, shell_open); shell_id = terminal channel (input/key/output/resize/close, readers). Never invent them; take from session_start / shell_open / list tools.
-2) Mode selection:
-   - Interactive shell (omit command/args, DEFAULT): For multi-step tasks, stateful work (cd/env), and CLI sessions. Drive: loop shell_input(shell_id,text) + shell_key(shell_id,key="enter") + shell_output(shell_id,timeout≤3) until prompt. shell_output returns ONLY new bytes: empty read ≠ done, keep polling (echo precedes output).
-   - Dedicated command (set command/args): ONLY for: (a) interactive REPL/TUI (python, psql, htop); (b) long-running daemon/server (npm start, server binary); (c) isolated atomic script needing process exit code.
-   - Anti-pattern: Never split sequential steps into multiple session_start(bash -c) calls (loses cwd/env, wastes SSH handshakes, fragments history).
+1) IDs: session_id = connection container (forwards, files, terminate, shell_open); shell_id = terminal channel (input/key/output/resize/close, readers). Never invent them; take from session_start / shell_open / list tools. termcp:// locators from the user ("termcp://mac" entry, "termcp://#<sid>" session, "termcp://#<sid>:N" shell) are accepted in place of ssh_config names, session_id, shell_id — use verbatim, no lookups.
+2) Mode: interactive shell (omit command/args, DEFAULT) for multi-step/stateful work; drive via shell_input + shell_key(enter) + shell_output(timeout≤3) loops. shell_output returns ONLY new bytes: empty ≠ done, keep polling. Dedicated command (command/args set) ONLY for REPL/TUI, daemons, or one atomic script. Never split sequential steps into session_start(bash -c) calls (loses cwd/env, wastes handshakes).
 3) After discovery, act with concrete calls, not prose. Verify success via output or an explicit success field.
-4) Lifecycle: session_terminate closes shells+forwards and archives; archived output is read with shell_output (same cursor semantics as live, use tail_lines/offset); history(action=screenshot) renders archived output as PNG; history(action=purge) deletes it. force=true = immediate kill. shell_close closes one channel.
+4) Lifecycle: session_terminate closes shells+forwards and archives; archived output is read via shell_output (tail_lines/offset); history(purge) deletes it; history(screenshot) renders PNG. force=true = immediate kill. shell_close closes one channel.
 5) Password/sudo/passphrase/MFA prompt: stop and ask user to type it in termcp Web UI. Never guess, paste, or echo secrets.
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
-8) Non-blocking notifications: shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") receives asynchronous wake-ups (signaling only, no payload); poll output via shell_output when awakened.
+8) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken.
 9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.`
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
@@ -59,7 +60,7 @@ type Server struct {
 
 // SendResourceNotification broadcasts an MCP resource update event.
 func (s *Server) SendResourceNotification(ctx context.Context, shellID string) error {
-	uri := fmt.Sprintf("termcp://shells/%s", shellID)
+	uri := ResourceURLScheme + "shells/" + shellID
 	s.mcpServer.SendNotificationToAllClients("notifications/resources/updated", map[string]any{
 		"uri": uri,
 	})
@@ -134,14 +135,14 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		})
 	}
 	mcpServer.AddTool(newTool("session_start",
-		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED; \"internal\" = termcp host loopback, otherwise a remote profile name from ssh_config(action=list). Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
+		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED: a profile name from ssh_config(action=list), \"internal\" for the termcp host loopback, or a termcp:// entry locator pasted by the user (e.g. \"termcp://mac\" — parsed directly, no lookup needed). Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
 		mcpgo.WithString("command", mcpgo.Description("Executable line; empty with no args = login shell / profile default_shell")),
 		mcpgo.WithArray("args", mcpgo.Description("Argv after command"), mcpgo.WithStringItems()),
 		mcpgo.WithString("mode", mcpgo.Description("\"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented)"), mcpgo.DefaultString("pty")),
 		mcpgo.WithString("name"),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),
-		mcpgo.WithString("ssh_config", mcpgo.Required(), mcpgo.Description("REQUIRED: \"internal\" for the termcp host loopback, or a profile name from ssh_config(action=list)")),
+		mcpgo.WithString("ssh_config", mcpgo.Required(), mcpgo.Description("REQUIRED: \"internal\" for the termcp host loopback, a profile name from ssh_config(action=list), or a termcp:// entry locator (e.g. \"termcp://mac\")")),
 	), withLogging("session_start", s.handleStartSession))
 
 	mcpServer.AddTool(newTool("shell_open",
@@ -165,21 +166,21 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("shell_close", s.handleCloseShell))
 
 	mcpServer.AddTool(newTool("shell_input",
-		mcpgo.WithDescription("Write text bytes to a shell's stdin. Follow with shell_key(key=\"enter\") to execute the typed line, then shell_output for the result."),
+		mcpgo.WithDescription("Write text bytes to a shell's stdin. Follow with shell_key(key=\"enter\") to execute the typed line, then shell_output for the result. shell_id accepts a raw id, a session id, or a termcp:// locator (\"termcp://#<sid>\" = primary shell, \"termcp://#<sid>:2\" = 2nd shell channel)."),
 		mcpgo.WithString("shell_id", mcpgo.Required()),
 		mcpgo.WithString("text", mcpgo.Required(), mcpgo.Description("UTF-8 text to write (no automatic newline)")),
 	), withLogging("shell_input", s.handleSendInput))
 
 	mcpServer.AddTool(newTool("shell_key",
-		mcpgo.WithDescription("Send a named key to a shell. Supported: enter, tab, esc, up/down/left/right, backspace, delete, home, end, ctrl+c/d/z/l/u/w. Use enter after shell_input to run a command."),
+		mcpgo.WithDescription("Send a named key to a shell. Supported: enter, tab, esc, up/down/left/right, backspace, delete, home, end, ctrl+c/d/z/l/u/w. Use enter after shell_input to run a command. shell_id accepts a raw id, a session id, or a termcp:// locator (\"termcp://#<sid>\" or \"termcp://#<sid>:N\")."),
 		mcpgo.WithString("shell_id", mcpgo.Required()),
 		mcpgo.WithString("key", mcpgo.Required(), mcpgo.Description("Named key (e.g. enter, ctrl+c, up)")),
 		mcpgo.WithNumber("repeat", mcpgo.Description("Times to send the key (1–20)"), mcpgo.DefaultNumber(1)),
 	), withLogging("shell_key", s.handlePressKey))
 
 	mcpServer.AddTool(newTool("shell_output",
-		mcpgo.WithDescription("Unified output reader for live AND archived/dead shells with one byte-stream cursor model. shell_id may be a shell_id or session_id. Default: live = new output since the last read on reader_id (blocking up to timeout); archived = recent tail. tail_lines=N returns the last N lines; offset>=0 reads raw bytes from that position (stateless paging with has_more). Returns {output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds?}."),
-		mcpgo.WithString("shell_id", mcpgo.Required()),
+		mcpgo.WithDescription("Unified output reader for live AND archived/dead shells with one byte-stream cursor model. shell_id may be a shell_id, a session_id, or a termcp:// locator (\"termcp://#<sid>\" = primary shell, \"termcp://#<sid>:N\" = Nth shell channel). Default: live = new output since the last read on reader_id (blocking up to timeout); archived = recent tail. tail_lines=N returns the last N lines; offset>=0 reads raw bytes from that position (stateless paging with has_more). Returns {output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds?}."),
+		mcpgo.WithString("shell_id", mcpgo.Required(), mcpgo.Description("shell_id, session_id, or termcp:// locator (termcp://#<sid> / termcp://#<sid>:N)")),
 		mcpgo.WithBoolean("strip_ansi", mcpgo.Description("If true, strip ANSI SGR/cursor escapes and compress terminal noise"), mcpgo.DefaultBool(true)),
 		mcpgo.WithNumber("timeout", mcpgo.Description("Blocking wait for new output on LIVE shells, in seconds (0–60); 0 = non-blocking; ignored for archived reads"), mcpgo.DefaultNumber(3)),
 		mcpgo.WithNumber("max_lines", mcpgo.Description("Return at most N newline-terminated lines (from the read window); 0 = no line limit"), mcpgo.DefaultNumber(0)),
@@ -193,13 +194,13 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		mcpgo.WithDescription("Return metadata for every running parent session (exited ones are auto-removed). Child shells excluded — use shell_list."),
 	), withLogging("session_list", s.handleListSessions))
 	mcpServer.AddTool(newTool("session_info",
-		mcpgo.WithDescription("Return a JSON document with detailed fields for one session: identifiers, command line, mode, PTY size, remote connection metadata, exit state, etc."),
-		mcpgo.WithString("session_id", mcpgo.Required()),
+		mcpgo.WithDescription("Return a JSON document with detailed fields for one session: identifiers, command line, mode, PTY size, remote connection metadata, exit state, etc. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\")."),
+		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 	), withLogging("session_info", s.handleGetSessionInfo))
 
 	mcpServer.AddTool(newTool("session_terminate",
-		mcpgo.WithDescription("Stop and archive a session: terminate all shells, close SSH, cascade forwards, drop registry entry. Output stays readable via shell_output (same cursor semantics as live; tail_lines/offset); history(action=purge) deletes it permanently. force=true = immediate kill; force=false waits grace_period after SIGTERM. To close one shell only, use shell_close."),
-		mcpgo.WithString("session_id", mcpgo.Required()),
+		mcpgo.WithDescription("Stop and archive a session: terminate all shells, close SSH, cascade forwards, drop registry entry. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). Output stays readable via shell_output (same cursor semantics as live; tail_lines/offset); history(action=purge) deletes it permanently. force=true = immediate kill; force=false waits grace_period after SIGTERM. To close one shell only, use shell_close."),
+		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 		mcpgo.WithBoolean("force", mcpgo.Description("If true, end immediately without honoring grace_period"), mcpgo.DefaultBool(false)),
 		mcpgo.WithNumber("grace_period", mcpgo.Description("Seconds to allow after SIGTERM before hard close when force is false (0–60)"), mcpgo.DefaultNumber(5)),
 	), withLogging("session_terminate", s.handleTerminateSession))

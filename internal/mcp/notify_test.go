@@ -347,7 +347,7 @@ func TestShellNotify_ResourceDispatchEndToEnd(t *testing.T) {
 
 	select {
 	case uri := <-uriCh:
-		if want := "termcp://shells/" + shellID; uri != want {
+		if want := ResourceURLScheme + "shells/" + shellID; uri != want {
 			t.Fatalf("resource uri = %q, want %q", uri, want)
 		}
 	case <-time.After(5 * time.Second):
