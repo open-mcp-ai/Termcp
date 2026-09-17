@@ -58,3 +58,68 @@ func TestValidate_AcceptsAllValidLevels(t *testing.T) {
 	}
 }
 
+func TestValidate_AuthTokenAndHashAreMutuallyExclusive(t *testing.T) {
+	cfg := &Config{Host: "127.0.0.1", Port: 8080, DataDir: "/tmp/data", AuthToken: "plain", AuthHash: "sha256-aa-bb"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when both AuthToken and AuthHash are set")
+	}
+}
+
+func TestValidate_NonLoopbackRequiresAuth(t *testing.T) {
+	for _, host := range []string{"0.0.0.0", "::", "[::]", "", "192.168.1.25", "myserver.local"} {
+		cfg := &Config{Host: host, Port: 8080, DataDir: "/tmp/data"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected auth-required error for host %q", host)
+		}
+	}
+}
+
+func TestValidate_NonLoopbackWithAuthOK(t *testing.T) {
+	for _, host := range []string{"0.0.0.0", "::", "192.168.1.25"} {
+		for _, auth := range []*Config{{AuthToken: "tok"}, {AuthHash: "sha256-aa-68f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"}} {
+			cfg := &Config{Host: host, Port: 8080, DataDir: "/tmp/data", AuthToken: auth.AuthToken, AuthHash: auth.AuthHash}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("host %q with auth %+v: unexpected error: %v", host, auth, err)
+			}
+		}
+	}
+}
+
+func TestValidate_LoopbackAllowsNoAuth(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost", "LOCALHOST"} {
+		cfg := &Config{Host: host, Port: 8080, DataDir: "/tmp/data"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("host %q should validate without auth, got error: %v", host, err)
+		}
+	}
+}
+
+func TestApplyEnv_PopulatesAuthFromEnv(t *testing.T) {
+	t.Setenv(EnvAuthToken, "env-token")
+	t.Setenv(EnvAuthHash, "env-hash")
+	cfg := Default()
+	cfg.ApplyEnv()
+	if cfg.AuthToken != "env-token" || cfg.AuthHash != "env-hash" {
+		t.Fatalf("ApplyEnv did not read env: token=%q hash=%q", cfg.AuthToken, cfg.AuthHash)
+	}
+}
+
+func TestApplyEnv_FlagValueWins(t *testing.T) {
+	t.Setenv(EnvAuthToken, "env-token")
+	cfg := Default()
+	cfg.AuthToken = "flag-token" // set by flag.Parse before ApplyEnv's callers run
+	cfg.ApplyEnv()
+	if cfg.AuthToken != "flag-token" {
+		t.Fatalf("ApplyEnv overwrote flag value: got %q", cfg.AuthToken)
+	}
+}
+
+func TestApplyEnv_BlankEnvCleared(t *testing.T) {
+	t.Setenv(EnvAuthToken, "   ")
+	t.Setenv(EnvAuthHash, "")
+	cfg := Default()
+	cfg.ApplyEnv()
+	if cfg.AuthToken != "" || cfg.AuthHash != "" {
+		t.Fatalf("blank env should be ignored, got token=%q hash=%q", cfg.AuthToken, cfg.AuthHash)
+	}
+}

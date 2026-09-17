@@ -17,9 +17,13 @@ import (
 // forgotten ssh_config cannot silently open a shell on the wrong host.
 var errMissingSSHConfig = errors.New("ssh_config is required")
 
+// errInvalidResourceLocator is returned when ssh_config is written in termcp://
+// syntax but is malformed, or names a session/shell instead of an entry.
+var errInvalidResourceLocator = errors.New("invalid resource locator")
+
 // sshConfigErrCode maps an ssh_config store failure onto its tool error code.
 func sshConfigErrCode(err error) string {
-	if errors.Is(err, errMissingSSHConfig) {
+	if errors.Is(err, errMissingSSHConfig) || errors.Is(err, errInvalidResourceLocator) {
 		return CodeInvalidArgument
 	}
 	if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {

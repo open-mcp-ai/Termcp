@@ -1,30 +1,65 @@
 # termcp 终端进程通信流程架构
 
+## 零、HTTP 入口与认证中间件（可选）
+
+启用 `--auth-token` / `--auth-hash` 后，共享 `http.ServeMux` 外层包一层 `internal/auth` 中间件，一次覆盖所有入口（Web UI、REST、MCP SSE、`/stream`、WebSocket）：
+
+```
+浏览器 / AI Agent / curl / 脚本
+        │
+        ▼
+┌──────────────────────────────┐
+│  internal/auth（中间件）        │  credentials: Bearer → Basic → cookie
+│  常数时间比对（crypto/subtle）  │  失败: 401 + WWW-Authenticate: Basic
+│  Basic 成功: 下发 termcp_token │  成功: 放行 next
+└──────────────┬───────────────┘
+               ▼
+     ┌─────────────────────┐
+     │  共享 http.ServeMux   │
+     └───┬─────┬─────┬─────┘
+         │     │     │
+ /sse /message /stream ────> internal/mcp（工具面不变）
+ /api/*（REST） ───────────> internal/webui
+ /api/ui/ws（WebSocket） ──> internal/webui
+```
+
+- 凭据按序尝试：`Authorization: Bearer` → `Authorization: Basic`（密码字段即 token，用户名忽略）→ `termcp_token` cookie；任一通过即放行，全部失败返回 401。Basic 若带冒号 token，解码后的整个 `user:pass` 串与原 token 完全一致时也放行（兼容 `curl -u user:pass` 这类在客户端自行拆分密码的用法）。
+- Basic 认证成功时中间件设置 `termcp_token` cookie（HttpOnly、SameSite=Strict、Path=/），使无法携带自定义请求头的浏览器 WebSocket 握手也能完成认证；无服务端 session 存储，cookie 值即 token 本身（TLS 下自动附 `Secure`）。
+- 哈希格式 `sha256-<salt_hex>-<digest_hex>`，其中 `digest = SHA256(salt || token)`，由 `termcp --gen-auth-hash` 生成；服务端可只保存哈希、不落明文。
+- 启动期校验：`--auth-token` 与 `--auth-hash` 互斥；绑定非 loopback 且未配置认证直接拒绝启动；loopback 绑定保持无认证默认行为。
+
 ## 一、整体分层
+
+termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑三个平行入口**——Web UI（人）、MCP（AI Agent）、REST/WebSocket（脚本程序）。三者操作同一批会话，互不冲突。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      AI Agent (MCP Client)                    │
-│     SSE (/sse + /message)  或  Streamable HTTP (/stream)      │
-│                     同一工具面 / JSON-RPC                      │
-└──────────────────────────────────────────────────────────────┘
-                               │
-    ┌──────────────────────────┼──────────────────────────┐
-    │               internal/mcp/ (server.go)               │
-    │                                                       │
-    │  工具: session_start / shell_open / shell_list / shell_close, │
-    │  shell_input / shell_key / shell_output / shell_resize, │
-    │  shell_reader_register / shell_reader_unregister / shell_notify, │
-    │  session_list / session_info / session_terminate, │
-    │  forward(action=local/remote/dynamic/list/close), │
-    │  ssh_config(action=list|create|edit|copy|delete) / shell_detect, │
-    │  file_read/write/stat/delete/rename/mkdir/urls/perm/link/fs/getwd, │
-    │  message(action=list|get) / history(action=list|search_messages|...) │
-    │                                                       │
-    │  logging.go: 每个 handler 包装结构化日志 (耗时/错误)    │
-    └──────┬───────────────────────────────┬────────────────┘
-           │ session.Manager (注册表)       │ message.Manager (持久化)
-           ▼                               ▼
+│  ┌────────────────┐   ┌──────────────────────┐   ┌─────────┐  │
+│  │   人 (浏览器)    │   │   AI Agent (MCP)     │   │ 脚本/程序 │  │
+│  │  Web UI /api   │   │ SSE | /stream        │   │ REST API │  │
+│  │  WebSocket     │   │ 同一工具面 / JSON-RPC │   │ WebSocket│  │
+│  └───────┬────────┘   └───────────┬──────────┘   └────┬────┘  │
+└──────────┼────────────────────────┼─────────────────────┼─────┘
+           ▼                        ▼                     ▼
+┌────────────────────────────────────────────────────────────────┐
+│                   共享 http.ServeMux（单端口 18765）            │
+│  /                → Web UI（internal/webui）                    │
+│  /api/*           → REST（internal/webui/handler.go）            │
+│  /api/ui/ws       → WebSocket 终端 I/O                          │
+│  /sse /message/stream → internal/mcp（工具面不变）               │
+└──────┬──────────────────────────────────┬──────────────────────┘
+       │                                  │
+       ▼                                  ▼
+┌──────────────────────┐      ┌──────────────────────────┐
+│ internal/mcp/        │      │ internal/webui/          │
+│ server.go 工具注册    │      │ 会话卡片/终端窗口/历史     │
+│ handlers.go 31 工具   │      │ handler.go REST+WS        │
+│ logging.go 结构化日志  │      └───────────┬──────────────┘
+└──────┬───────────────┘                  │
+       │                                  │
+       └──────────┬───────────────────────┘
+                  │ session.Manager (注册表) │ message.Manager (持久化)
+                  ▼                          ▼
     ┌──────────────────────┐    ┌──────────────────────────┐
     │  internal/session/    │    │  internal/message/        │
     │  manager.go          │    │  message.go              │

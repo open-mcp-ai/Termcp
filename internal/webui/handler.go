@@ -49,7 +49,8 @@ type Handler struct {
 	NotifyMgr  *notify.Manager // active shell notification rules (read-only listing + delete)
 	NoInternal bool            // when true, hide and refuse the built-in loopback profile
 
-	sessHub *sessionListHub
+	sessHub   *sessionListHub
+	notifyHub *uiNotifyHub
 }
 
 // Register mounts /api/... and / (HTML/CSS/JS via embed.FS + http.FileServer).

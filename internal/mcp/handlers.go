@@ -99,6 +99,13 @@ func filterRunning(in []api.Session) []api.Session {
 func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
 	sess := s.sessMgr.Get(sessionID)
 	if sess == nil {
+		if p, err := parseResourceURL(sessionID); err == nil {
+			if p.kind == resourceURLSession || p.kind == resourceURLShell {
+				sess = s.sessMgr.Get(p.sid)
+			}
+		}
+	}
+	if sess == nil {
 		return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID))
 	}
 	return sess, nil
@@ -134,9 +141,47 @@ func (s *Server) sftpClient(sessionID string) (*sftp.Client, *mcpgo.CallToolResu
 }
 
 // requireShell looks up a shell by shell_id for terminal I/O (never session_id).
+// The id may also be a termcp:// resource URL (session or shell form), a raw
+// session id (→ primary shell), or a raw shell id. Archived sessions are
+// reported with a hint: their output is read-only via shell_output.
 func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallToolResult) {
 	if cs := s.sessMgr.GetChildShell(shellID); cs != nil {
 		return cs, nil
+	}
+	if sess := s.sessMgr.Get(shellID); sess != nil {
+		if cs := sess.PrimaryShell(); cs != nil {
+			return cs, nil
+		}
+		return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", shellID))
+	}
+	if looksLikeResourceLocator(shellID) {
+		p, err := parseResourceURL(shellID)
+		if err != nil {
+			return nil, toolError(CodeInvalidArgument, "%s", err.Error())
+		}
+		if p.kind == resourceURLEntry {
+			return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session or shell", shellID))
+		}
+		sess, err := s.sessionFromParsed(p)
+		if err != nil {
+			// Includes the archived hint from sessionFromParsed; surface it
+			// instead of a generic "shell not found".
+			return nil, toolError(CodeSessionNotFound, "%s", err.Error())
+		}
+		cs, err := s.shellFromIndex(sess, p.index)
+		if err != nil {
+			return nil, toolError(CodeShellNotFound, "%s", err.Error())
+		}
+		if cs == nil {
+			return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", sess.ID))
+		}
+		return cs, nil
+	}
+	// Raw archived session id: same hint as the URL form.
+	if s.historyMgr != nil {
+		if _, ok := s.historyMgr.Get(shellID); ok {
+			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is archived; read it via shell_output(offset/tail)", shellID))
+		}
 	}
 	return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID))
 }
@@ -157,6 +202,8 @@ func getStringSlice(args map[string]any, key string) []string {
 }
 
 // resolveSSHFromArgs returns the ssh_config name, loaded entry, and remote dial settings (nil Remote = built-in loopback).
+// The ssh_config value may be a profile name or a termcp:// entry resource URL
+// (e.g. "termcp://mac"); both resolve to the same profile.
 func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Entry, *session.RemoteSSH, error) {
 	if s.sshConfigs == nil {
 		return "", nil, nil, fmt.Errorf("ssh config store not configured")
@@ -164,6 +211,16 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 	name := strings.TrimSpace(getString(args, "ssh_config", ""))
 	if name == "" {
 		return "", nil, nil, errMissingSSHConfig
+	}
+	if looksLikeResourceLocator(name) {
+		p, perr := parseResourceURL(name)
+		if perr != nil {
+			return "", nil, nil, fmt.Errorf("%w: %v", errInvalidResourceLocator, perr)
+		}
+		if p.kind != resourceURLEntry {
+			return "", nil, nil, fmt.Errorf("%w: ssh_config %q is a session/shell locator; pass an entry name or termcp://<entry>", errInvalidResourceLocator, name)
+		}
+		name = p.entry
 	}
 	ent, err := s.sshConfigs.Load(name)
 	if err != nil {
@@ -1469,6 +1526,67 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 	default:
 		return toolError(CodeInvalidArgument, "%s", "action must be register, unregister, or list"), nil
 	}
+}
+
+// maxNotifyMessageLen caps the message shown in the Web UI toast.
+const maxNotifyMessageLen = 2000
+
+// handleNotifyUser posts a user-facing notification to every open termcp Web UI
+// tab (toast + browser system notification) and optionally highlights the card
+// of the given session. Unlike shell_notify, which wakes the AI Agent, this
+// reaches the human at the browser.
+func (s *Server) handleNotifyUser(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := request.GetArguments()
+	message := strings.TrimSpace(getString(args, "message", ""))
+	if message == "" {
+		return toolError(CodeInvalidArgument, "%s", "message is required"), nil
+	}
+	if r := []rune(message); len(r) > maxNotifyMessageLen {
+		message = string(r[:maxNotifyMessageLen])
+	}
+
+	level := strings.TrimSpace(getString(args, "level", "info"))
+	if level == "" {
+		level = "info"
+	}
+	switch level {
+	case "info", "success", "warn", "error":
+	default:
+		return toolError(CodeInvalidArgument, "%s", "level must be info, success, warn, or error"), nil
+	}
+
+	title := strings.TrimSpace(getString(args, "title", ""))
+	if title == "" {
+		title = "termcp"
+	}
+
+	durationSec := int(getFloat64(args, "duration_seconds", 10))
+	if durationSec < 0 {
+		durationSec = 0
+	}
+	if durationSec > 600 {
+		durationSec = 600
+	}
+
+	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	if sessionID != "" {
+		if _, bad := s.requireSession(sessionID); bad != nil {
+			return bad, nil
+		}
+	}
+
+	delivered := 0
+	if s.uiNotify != nil {
+		delivered = s.uiNotify(level, title, message, sessionID, durationSec)
+	}
+	out := map[string]any{"ok": true, "delivered": delivered, "title": title, "level": level}
+	if sessionID != "" {
+		out["session_id"] = sessionID
+	}
+	if delivered == 0 {
+		out["hint"] = "no Web UI tab is open; the notification was not displayed"
+	}
+	return jsonResult(out), nil
 }
 
 // toMap converts a struct to map[string]any via JSON round-trip.

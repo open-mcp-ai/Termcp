@@ -174,6 +174,13 @@
     }
     .conn-edit-btn svg { width: 14px; height: 14px; display: block; }
     .conn-edit-btn:hover { color: #0969da; background: rgba(9,105,218,.08); }
+    .conn-quick-btn {
+      flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
+      background: transparent; cursor: pointer; color: #1a7f37;
+      position: relative; z-index: 1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .conn-quick-btn:hover { color: #116329; background: rgba(26,127,55,.12); }
     .conn-tile .sub { font-size: 0.68rem; color: #656d76; margin-top: 2px; line-height: 1.2; max-height: 2.4em; overflow: hidden; }
     .conn-tile.sess-tile { cursor: pointer; width: 128px; }
     .sess-tile-body {
@@ -211,7 +218,7 @@
       white-space: nowrap;
       text-align: center;
     }
-    .sess-copy-btn {
+    .sess-copy-btn, .sess-rename-btn {
       flex-shrink: 0;
       width: 22px;
       height: 22px;
@@ -227,7 +234,7 @@
       position: relative;
       z-index: 1;
     }
-    .sess-copy-btn:hover { border-color: #0969da; color: #0969da; background: #f6f8fa; }
+    .sess-copy-btn:hover, .sess-rename-btn:hover { border-color: #0969da; color: #0969da; background: #f6f8fa; }
     .sess-terminal-ic {
       display: flex;
       align-items: center;
@@ -265,6 +272,60 @@
       transition: opacity 0.2s ease;
     }
     #ui-copy-toast.ui-copy-toast-visible { opacity: 1; }
+    /* Server-pushed user notifications (MCP notify_user): toast stack, top-right. */
+    #ui-notify-stack {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(340px, calc(100vw - 28px));
+      max-height: calc(100dvh - 28px);
+      z-index: 26000;
+      pointer-events: none;
+    }
+    .ui-notify-card {
+      position: relative;
+      pointer-events: auto;
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-left: 4px solid #0969da;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(27, 31, 36, .16);
+      padding: 10px 30px 12px 12px;
+      overflow: hidden;
+      animation: uiNotifyIn .2s ease;
+    }
+    @keyframes uiNotifyIn {
+      from { opacity: 0; transform: translateX(24px); }
+      to { opacity: 1; transform: none; }
+    }
+    .ui-notify-card.ui-notify-out { opacity: 0; transform: translateX(24px); transition: opacity .18s ease, transform .18s ease; }
+    .ui-notify-card.ntf-success { border-left-color: #1a7f37; }
+    .ui-notify-card.ntf-warn { border-left-color: #bf8700; }
+    .ui-notify-card.ntf-error { border-left-color: #cf222e; }
+    .ui-notify-title { font-size: 0.82rem; font-weight: 600; color: #1f2328; margin-bottom: 3px; word-break: break-word; }
+    .ui-notify-msg { font-size: 0.8rem; color: #424a53; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+    .ui-notify-sess { font-size: 0.68rem; color: #656d76; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    .ui-notify-close {
+      position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
+      border: none; background: transparent; color: #656d76; cursor: pointer; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+    }
+    .ui-notify-close:hover { background: #f0f3f6; color: #1f2328; }
+    .ui-notify-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: rgba(31, 35, 38, .35); transform-origin: left center; }
+    /* Highlight the card of a session referenced by a notification; cleared on click. */
+    .conn-tile.sess-tile.sess-notified { outline: 2px solid #0969da; outline-offset: 2px; border-radius: 8px; animation: sessNotifiedPulse 1.4s ease-in-out infinite; }
+    @keyframes sessNotifiedPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(9, 105, 218, .0); }
+      50% { box-shadow: 0 0 0 5px rgba(9, 105, 218, .28); }
+    }
+    .shell-window.shell-window-notified .shell-window-header { animation: shellHeaderFlash 1.2s ease-in-out 3; }
+    @keyframes shellHeaderFlash {
+      0%, 100% { box-shadow: inset 0 0 0 0 rgba(88, 166, 255, 0); }
+      50% { box-shadow: inset 0 0 0 2px #58a6ff; }
+    }
     .conn-tile .conn-tile-stack .sess-x {
       position: absolute; right: 0; top: 0; z-index: 3; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
       background: #fff; color: #cf222e; cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -941,6 +1002,8 @@
       <div class="modal-body">
         <p id="modal-start-err" class="err" style="display:none"></p>
         <input type="hidden" id="start-ssh-config">
+        <label for="start-name">Session name (optional)</label>
+        <input type="text" id="start-name" placeholder="Default: connection name" autocomplete="off">
         <label for="start-cmd">Command (optional)</label>
         <input type="text" id="start-cmd" placeholder="Empty = SSH login shell; or bash, powershell, …" autocomplete="off">
         <label for="start-mode">Mode</label>
@@ -982,6 +1045,8 @@
   }
 
   var SVG_COPY_12 = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg>';
+  var SVG_PENCIL_12 = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 000-.354l-1.086-1.086zM11.189 5.25 9.75 3.81l-6.286 6.287a.25.25 0 00-.064.108l-.558 1.953 1.953-.558a.25.25 0 00.108-.064l6.286-6.286z"/></svg>';
+  var SVG_CONN_QUICK = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor"><path d="M5 3.5a.75.75 0 011.12-.65l7.5 4.5a.75.75 0 010 1.3l-7.5 4.5a.75.75 0 01-1.12-.65v-9z"/></svg>';
 
   var SVG_CONN_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
@@ -1037,6 +1102,129 @@
     }, 1600);
   }
 
+  /* --- Server-pushed user notifications (MCP notify_user) --- */
+  var _uiNotifHighlights = {}; // session_id -> true; re-applied when tiles re-render
+
+  function uiNotifyStackEl() {
+    var el = document.getElementById('ui-notify-stack');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ui-notify-stack';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function findSessTile(sid) {
+    var tiles = document.querySelectorAll('.conn-tile.sess-tile');
+    for (var i = 0; i < tiles.length; i++) {
+      if (tiles[i].getAttribute('data-sid') === sid) return tiles[i];
+    }
+    return null;
+  }
+
+  function clearSessNotified(sid) {
+    if (!sid) return;
+    delete _uiNotifHighlights[sid];
+    var tile = findSessTile(sid);
+    if (tile) tile.classList.remove('sess-notified');
+    var w = getShellWindowBySid(sid);
+    if (w) w.classList.remove('shell-window-notified');
+  }
+
+  function markSessNotified(sid) {
+    if (!sid) return;
+    _uiNotifHighlights[sid] = true;
+    var tile = findSessTile(sid);
+    if (tile) {
+      tile.classList.add('sess-notified');
+      try { tile.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+    }
+    var w = getShellWindowBySid(sid);
+    if (w) w.classList.add('shell-window-notified');
+  }
+
+  /** Browser system-level notification (visible with the tab in the background).
+   *  Best-effort: requested once, silently skipped when not granted. */
+  function browserSystemNotify(n) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      fireBrowserNotify(n);
+    } else if (Notification.permission === 'default' && typeof Notification.requestPermission === 'function') {
+      // A WS-pushed notification is not a user gesture, so Chrome may keep
+      // permission at 'default' instead of prompting; best-effort only.
+      Notification.requestPermission().then(function (perm) {
+        if (perm === 'granted') fireBrowserNotify(n);
+      }).catch(function () {});
+    }
+  }
+
+  function fireBrowserNotify(n) {
+    try { new Notification(n.title || 'termcp', { body: n.message }); } catch (e) {}
+  }
+
+  function dismissUiNotify(card) {
+    if (!card || card._dismissed) return;
+    card._dismissed = true;
+    if (card._timer) clearTimeout(card._timer);
+    card.classList.add('ui-notify-out');
+    setTimeout(function () {
+      if (card.parentNode) card.parentNode.removeChild(card);
+    }, 200);
+    if (card._sessionId) clearSessNotified(card._sessionId);
+  }
+
+  function showUiNotify(n) {
+    if (!n) return;
+    var level = String(n.level || 'info');
+    if (level !== 'info' && level !== 'success' && level !== 'warn' && level !== 'error') level = 'info';
+    var title = String(n.title || 'termcp');
+    var message = String(n.message || '');
+    var dur = parseInt(n.duration_seconds, 10);
+    if (isNaN(dur) || dur < 0) dur = 10;
+    if (dur > 600) dur = 600;
+    var sid = String(n.session_id || '');
+
+    var card = document.createElement('div');
+    card.className = 'ui-notify-card ntf-' + level;
+    card._sessionId = sid;
+    var titleEl = document.createElement('div');
+    titleEl.className = 'ui-notify-title';
+    titleEl.textContent = title;
+    var msgEl = document.createElement('div');
+    msgEl.className = 'ui-notify-msg';
+    msgEl.textContent = message;
+    card.appendChild(titleEl);
+    card.appendChild(msgEl);
+    if (sid) {
+      var sessEl = document.createElement('div');
+      sessEl.className = 'ui-notify-sess';
+      sessEl.textContent = 'session ' + sid;
+      card.appendChild(sessEl);
+    }
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'ui-notify-close';
+    closeBtn.setAttribute('aria-label', 'Dismiss notification');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function () { dismissUiNotify(card); });
+    card.appendChild(closeBtn);
+    if (dur > 0) {
+      var bar = document.createElement('div');
+      bar.className = 'ui-notify-bar';
+      bar.style.transition = 'transform ' + dur + 's linear';
+      card.appendChild(bar);
+      // Force a layout read so the transition has a painted start state, then animate.
+      void bar.offsetWidth;
+      bar.style.transform = 'scaleX(0)';
+      card._timer = setTimeout(function () { dismissUiNotify(card); }, (dur + 1) * 1000);
+    }
+    uiNotifyStackEl().appendChild(card);
+
+    markSessNotified(sid);
+    browserSystemNotify(n);
+  }
+
   /** Display: strip leading session- from name, else use id */
   function displaySessionShort(s) {
     var id = String((s && s.id) || '').trim();
@@ -1053,13 +1241,16 @@
     return str;
   }
 
-  // Resource URLs: termcp://[entry] | termcp://[entry#][session]:[shell-index]
-  function resourceUrlEntry(name) { return 'termcp://' + name; }
-  function resourceUrlSession(entry, sid) {
-    return (entry ? 'termcp://' + entry + '#' : 'termcp://#') + stripSessionPrefix(sid);
+  // Resource URLs: termcp://[entry] | termcp://#[session][:shell-index]
+  // Session/shell URLs ALWAYS use the short form (no entry prefix):
+  // session names are user-assigned and may not match any entry.
+  var TERMCP_SCHEME = 'termcp://';
+  function resourceUrlEntry(name) { return TERMCP_SCHEME + name; }
+  function resourceUrlSession(sid) {
+    return TERMCP_SCHEME + '#' + stripSessionPrefix(sid);
   }
-  function resourceUrlShell(entry, sid, index) {
-    return resourceUrlSession(entry, sid) + ':' + index;
+  function resourceUrlShell(sid, index) {
+    return resourceUrlSession(sid) + ':' + index;
   }
 
   function shellWindowsEl() {
@@ -1536,13 +1727,42 @@
     });
   }
 
+  /** "-" button: close the window only — the session keeps running (the old x behavior). */
+  function bindShellWindowMinButton(win, minBtn) {
+    if (!minBtn || minBtn._termcpMinBound) return;
+    minBtn._termcpMinBound = true;
+    minBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    minBtn.addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      closeShellWindow(win);
+    });
+  }
+
+  /** "x" button: delete the session — same as the session tile's x. A pending
+   *  window has no session yet, so it just cancels the connect. */
   function bindShellWindowCloseButton(win, closeBtn) {
     if (!closeBtn || closeBtn._termcpCloseBound) return;
     closeBtn._termcpCloseBound = true;
     closeBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
     closeBtn.addEventListener('click', function (e) {
       e.preventDefault(); e.stopPropagation();
-      closeShellWindow(win);
+      var sid = win && win._sid;
+      if (!sid || win._placeholder) { closeShellWindow(win); return; }
+      confirmDialog({
+        title: 'Delete session',
+        message: 'Delete "' + stripSessionPrefix(sid) + '"?',
+        okText: 'Delete',
+        danger: true
+      }).then(function (ok) {
+        if (!ok) return;
+        fetch('/api/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })
+          .then(function (r) {
+            if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
+            var w = getShellWindowBySid(sid) || win;
+            if (w) closeShellWindow(w);
+          })
+          .catch(function (err) { showCopyToast('Delete failed: ' + (err.message || err)); });
+      });
     });
   }
 
@@ -1676,7 +1896,7 @@
       copyBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
       copyBtn.addEventListener('click', function(e) {
         e.preventDefault(); e.stopPropagation();
-        copyTextToClipboard(resourceUrlSession(_toolPanelSshCfg || '', _toolPanelSessionId || '')).then(function() { showCopyToast(); }).catch(function() { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(_toolPanelSessionId || '')).then(function() { showCopyToast(); }).catch(function() { showCopyToast('Copy failed'); });
       });
     }
     // z-order on mousedown
@@ -1974,9 +2194,13 @@
       var tile = document.createElement('div');
       var tileClass = 'conn-tile sess-tile' + (dead ? ' archived' : '') + (isSelected ? ' batch-selected' : '');
       tile.className = tileClass;
+      tile.setAttribute('data-sid', sid);
+      // Re-apply a pending notify_user highlight across re-renders.
+      if (sid && _uiNotifHighlights && _uiNotifHighlights[sid]) {
+        tile.classList.add('sess-notified');
+      }
       var nm = String((s.name || '').trim());
       var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
-      var urlEntry = nm && nm.indexOf('session-') !== 0 ? nm : '';
       var badge = dead ? '<span class="sess-dead" title="' + escapeHtml(reasonLabel(s.reason)) + '">dead</span>' : '';
 
       var actionCornerHtml =
@@ -1994,6 +2218,7 @@
         '<div class="sess-entry-line" title="' + escapeHtml(entryLine) + '">' + escapeHtml(entryLine) + badge + '</div>' +
         '<div class="sess-meta-row">' +
         '<span class="sess-sid-line" title="' + escapeHtml(sid) + '">' + escapeHtml(sid) + '</span>' +
+        '<button type="button" class="sess-rename-btn" title="Rename session" aria-label="Rename session">' + SVG_PENCIL_12 + '</button>' +
         '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</div>' +
         '</div>' +
@@ -2038,11 +2263,40 @@
       copyBtn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        copyTextToClipboard(resourceUrlSession(urlEntry, sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+      });
+      var renBtn = tile.querySelector('.sess-rename-btn');
+      renBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      renBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var cur = String((s.name || '').trim());
+        if (cur.indexOf('session-') === 0) cur = '';
+        var input = prompt('Rename session', cur);
+        if (input === null) return;
+        var newName = input.trim();
+        if (!newName || (cur && newName === cur)) { showCopyToast('Name unchanged'); return; }
+        fetch('/api/sessions/' + encodeURIComponent(sid), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
+            showCopyToast('Renamed');
+            // Local optimistic refresh; the server broadcast reconciles shortly.
+            var snap = (window._lastSessionsSnapshot || []).slice();
+            for (var i = 0; i < snap.length; i++) {
+              if (snap[i] && snap[i].id === sid) { snap[i].name = newName; }
+            }
+            applySessionsSnapshot(snap);
+          })
+          .catch(function (err) { showCopyToast('Rename failed: ' + (err.message || err)); });
       });
 
       tile.onclick = function (e) {
-        if (e.target.closest('.sess-x') || e.target.closest('.sess-copy-btn') || e.target.closest('.sess-checkbox')) return;
+        if (e.target.closest('.sess-x') || e.target.closest('.sess-rename-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.sess-checkbox')) return;
+        clearSessNotified(sid); // opening the session acknowledges its notification highlight
         openOrFocusShellWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
       };
       if (!dead) {
@@ -2417,6 +2671,10 @@
               }
             }
           }
+        } else if (j.type === 'ui_notify') {
+          // Pushed by the MCP notify_user tool: toast + system notification +
+          // optional session-card highlight.
+          showUiNotify(j);
         }
       } catch (e) { console.error(e); }
     };
@@ -3042,7 +3300,7 @@
     tabCopyBtn.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
-      var url = resourceUrlShell(win._connName || '', win._parentSid || win._sid || '', urlIndex);
+      var url = resourceUrlShell(win._parentSid || win._sid || '', urlIndex);
       copyTextToClipboard(url).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
     });
 
@@ -3221,8 +3479,11 @@
     var header = win.querySelector('.shell-window-header');
     var collapseBtn = win.querySelector('.shell-window-collapse-btn');
     var closeBtn = win.querySelector('.close-btn');
+    var minBtn = win.querySelector('.shell-window-min-btn');
     bindShellWindowMouseToFront(win);
     if (collapseBtn) collapseBtn.style.display = '';
+    if (closeBtn) closeBtn.title = 'Delete session';
+    bindShellWindowMinButton(win, minBtn);
     var titleCopyBtn = win.querySelector('.title-copy-btn');
     if (titleCopyBtn) {
       titleCopyBtn.style.display = '';
@@ -3230,7 +3491,7 @@
       titleCopyBtn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        copyTextToClipboard(resourceUrlSession(win._connName || '', sessionId)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(sessionId)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
       });
     }
 
@@ -3661,6 +3922,9 @@
             '<svg class="ic-d" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>' +
             '<svg class="ic-u" viewBox="0 0 12 8" width="12" height="8" style="display:none"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 6l5-4 5 4"/></svg>' +
           '</button>' +
+          '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)">' +
+            '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 6h8"/></svg>' +
+          '</button>' +
           '<button type="button" class="close-btn" title="Close (cancel connect)">' +
             '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
           '</button>' +
@@ -3684,11 +3948,13 @@ SHELL_WINDOW_PANELS_HTML +
     var termEl = win.querySelector('.shell-channel-body');
     var header = win.querySelector('.shell-window-header');
     var closeBtn = win.querySelector('.close-btn');
+    var minBtn = win.querySelector('.shell-window-min-btn');
     positionShellWindowFromClick(win, clickEvent);
     /* First mount only — never re-append this node to reorder; use bringShellWindowToFront (z-index). */
     container.appendChild(win);
 
     bindShellWindowMouseToFront(win);
+    bindShellWindowMinButton(win, minBtn);
     bindShellWindowCloseButton(win, closeBtn);
     bindShellWindowMaxButton(win);
     setupShellWindowDrag(win, header);
@@ -3761,7 +4027,10 @@ SHELL_WINDOW_PANELS_HTML +
             '<svg class="ic-d" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>' +
             '<svg class="ic-u" viewBox="0 0 12 8" width="12" height="8" style="display:none"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 6l5-4 5 4"/></svg>' +
           '</button>' +
-          '<button type="button" class="close-btn" title="Close window (session keeps running)">' +
+          '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)">' +
+            '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 6h8"/></svg>' +
+          '</button>' +
+          '<button type="button" class="close-btn" title="Delete session">' +
             '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
           '</button>' +
         '</div>' +
@@ -3954,6 +4223,7 @@ SHELL_WINDOW_PANELS_HTML +
       var icon = c.kind === 'internal' ? '🔁' : '🌐';
       var editBtn = c.kind === 'internal' ? '' :
         '<button type="button" class="conn-edit-btn" title="Edit profile" aria-label="Edit profile">' + SVG_CONN_EDIT + '</button>';
+      var quickBtn = '<button type="button" class="conn-quick-btn" title="Quick connect (profile default)" aria-label="Quick connect">' + SVG_CONN_QUICK + '</button>';
       tile.innerHTML =
         '<div class="entry-card-inner">' +
         '<div class="conn-tile-stack">' +
@@ -3962,15 +4232,16 @@ SHELL_WINDOW_PANELS_HTML +
         '<div class="entry-card-main">' +
         '<div class="conn-nm-row">' +
         '<span class="conn-nm-cluster">' +
-        '<span class="conn-nm" title="Click to connect">' + escapeHtml(c.name) + '</span>' +
+        '<span class="conn-nm" title="Click for options">' + escapeHtml(c.name) + '</span>' +
         '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</span>' +
+        quickBtn +
         editBtn +
         '</div>' +
         '</div>' +
         '</div>';
       var inner = tile.querySelector('.entry-card-inner');
-      var tipConnect = 'Click to connect; Alt+click for custom command';
+      var tipConnect = 'Click for options (session name, command); ▶ quick connect';
       if (c.kind === 'internal') {
         inner.title = tipConnect + ' (built-in loopback; not editable)';
       } else {
@@ -3978,27 +4249,34 @@ SHELL_WINDOW_PANELS_HTML +
         inner.title = hostLine ? (tipConnect + ' — ' + hostLine) : tipConnect;
       }
       inner.addEventListener('click', function (e) {
-        if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn')) return;
-        if (e.altKey) {
-          openStartModal(c.name, e);
-          return;
-        }
-        var b = document.getElementById('conn-load-banner');
-        if (b) setLoadBanner(b, '');
-        tile.classList.add('entry-connecting');
-        inner.classList.add('entry-connecting');
-        startSessionAndOpenShell(c.name, e)
-          .catch(function (err) {
-            if (err && err.name === 'AbortError') return;
-            console.error(err);
-            var msg = (err && err.message) ? err.message : String(err);
-            if (b) setLoadBanner(b, 'Connection failed: ' + msg);
-          })
-          .finally(function () {
-            tile.classList.remove('entry-connecting');
-            inner.classList.remove('entry-connecting');
-          });
+        if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn')) return;
+        // Plain click opens the start dialog (session name defaults to the
+        // profile and stays editable); the green ▶ button is the
+        // quick-connect shortcut that keeps the old one-click behavior.
+        openStartModal(c.name, e);
       });
+      var quickBtnEl = tile.querySelector('.conn-quick-btn');
+      if (quickBtnEl) {
+        quickBtnEl.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var b = document.getElementById('conn-load-banner');
+          if (b) setLoadBanner(b, '');
+          tile.classList.add('entry-connecting');
+          inner.classList.add('entry-connecting');
+          startSessionAndOpenShell(c.name, e)
+            .catch(function (err) {
+              if (err && err.name === 'AbortError') return;
+              console.error(err);
+              var msg = (err && err.message) ? err.message : String(err);
+              if (b) setLoadBanner(b, 'Connection failed: ' + msg);
+            })
+            .finally(function () {
+              tile.classList.remove('entry-connecting');
+              inner.classList.remove('entry-connecting');
+            });
+        });
+      }
       var entryCopyBtn = tile.querySelector('.sess-copy-btn');
       if (entryCopyBtn) {
         entryCopyBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
@@ -4554,6 +4832,8 @@ SHELL_WINDOW_PANELS_HTML +
     startConnName = connName;
     document.getElementById('modal-start-err').style.display = 'none';
     document.getElementById('start-ssh-config').value = connName;
+    var startNameEl = document.getElementById('start-name');
+    if (startNameEl) startNameEl.value = connName;
     document.getElementById('start-title').textContent = 'Connect · ' + connName;
     document.getElementById('start-cmd').value = '';
     document.getElementById('start-mode').value = 'pty';
@@ -4565,12 +4845,21 @@ SHELL_WINDOW_PANELS_HTML +
     var err = document.getElementById('modal-start-err');
     err.style.display = 'none';
     var cmd = document.getElementById('start-cmd').value.trim();
+    var sname = document.getElementById('start-name').value.trim();
+    // Close immediately on submit: the pending terminal window already shows
+    // connection progress (spinner). On failure the dialog reopens with the
+    // error so inputs stay editable for a retry.
+    hideModal('modal-start');
     startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, window._startClickEvt, {
       command: cmd,
-      mode: document.getElementById('start-mode').value
+      mode: document.getElementById('start-mode').value,
+      name: sname || undefined
     })
-      .then(function () { hideModal('modal-start'); })
-      .catch(function (e) { err.textContent = String(e.message || e); err.style.display = 'block'; });
+      .catch(function (e) {
+        err.textContent = String(e.message || e);
+        err.style.display = 'block';
+        showModal('modal-start');
+      });
   };
 
   document.getElementById('btn-add-conn').onclick = function () { openConnModal(false, ''); };
