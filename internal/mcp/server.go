@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"time"
@@ -16,10 +17,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
-
-// ResourceURLScheme is the URI scheme used for termcp resource locators
-// (termcp://...). Singular definition so all subsystems reference one constant.
-const ResourceURLScheme = "termcp://"
 
 // mcpServerInstructions is returned in initialize (MCP "instructions") so clients may
 // inject it into the model context. Keep it terse because clients may include it
@@ -35,7 +32,8 @@ const mcpServerInstructions = `termcp agent rules:
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
 8) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken.
-9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.`
+9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.
+10) Docs: before REST/CLI work read this instance's own reference via resources/list (URIs are real http://.../api.md and http://.../skills.md URLs; same paths over plain HTTP). MCP tool args/results come from tools/list, not from docs.`
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
@@ -49,6 +47,7 @@ type Server struct {
 	forwardMgr      *forward.ForwardManager
 	notifyMgr       *notify.Manager
 	baseURL         string // http://host:port, set from Start()
+	docsFS          fs.FS  // embedded agent docs, set via SetDocsFS
 	NoInternal      bool   // when true, hide and refuse the built-in loopback profile
 	sshConfigWrites bool   // expose write actions on the unified ssh_config tool
 
@@ -124,7 +123,11 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 
 	mcpServer := mcpserver.NewMCPServer("termcp", "0.0.4",
 		mcpserver.WithInstructions(mcpServerInstructions),
-		mcpserver.WithResourceCapabilities(true, true),
+		// Resources are read-only docs (resources/list + resources/read) and the
+		// list is fixed at startup, so no subscribe/listChanged: mcp-go v0.50 has
+		// no subscribe handler, and claiming it would break clients that try.
+		mcpserver.WithResourceCapabilities(false, false),
+		mcpserver.WithPromptCapabilities(false),
 	)
 
 	s.notifyMgr = notify.NewManager(s)
@@ -475,6 +478,9 @@ func (s *Server) Start(addr string) error {
 		port = "8080"
 	}
 	s.baseURL = "http://" + net.JoinHostPort(host, port)
+	// Docs resources/prompts need baseURL, so they are registered here (once)
+	// rather than in New(). registerDocs is idempotent for a single Start.
+	s.registerDocs()
 	return s.sseServer.Start(addr)
 }
 

@@ -1,4 +1,8 @@
-.PHONY: build build-debug test clean dist
+.PHONY: build build-debug test clean dist sync-assets
+
+# Plain `make` must keep meaning "build the release binary" (GNU make otherwise
+# picks the first target in the file as the default goal).
+.DEFAULT_GOAL := build
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
@@ -32,3 +36,9 @@ clean:
 
 # 构建并清理旧文件
 dist: clean build
+
+# 同步对外服务的文档副本：assets/api.md 通过 HTTP（/api.md）与 MCP resource 对外
+# 发布，TestSyncedDocsMatchSource 会拦住漂移；MCP 工具参数由 tools/list schema
+# 自描述，因此不再同步 docs/mcp-tools.md。
+sync-assets:
+	cp docs/api.md internal/webui/assets/api.md

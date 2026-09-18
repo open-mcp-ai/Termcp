@@ -126,16 +126,17 @@ func TestSession_SendInputReadOutput(t *testing.T) {
 	}
 	defer s.Terminate(true, 0)
 
-	time.Sleep(200 * time.Millisecond)
-
-	if err := s.SendInput(testShellInput(testInteractiveOutputCommand("session_test")), false); err != nil {
-		t.Fatal(err)
-	}
-
+	// The shell may still be cold-starting on a slow CI runner (PowerShell under
+	// ConPTY can take seconds), so input typed too early is dropped by the TTY.
+	// Retry the line until the marker shows up rather than asserting startup
+	// speed — the same approach as the MCP press-key test.
 	var output string
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		chunk, _ := s.ReadOutput(context.Background(), 500*time.Millisecond, true, 0, 0)
+		if err := s.SendInput(testShellInput(testInteractiveOutputCommand("session_test")), false); err != nil {
+			t.Fatal(err)
+		}
+		chunk, _ := s.ReadOutput(context.Background(), 1*time.Second, true, 0, 0)
 		output += chunk
 		if strings.Contains(output, "session_test") {
 			break

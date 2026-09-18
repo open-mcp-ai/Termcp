@@ -204,6 +204,8 @@ func main() {
 
 	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, mcpserver.WithHTTPServer(mainSrv))
 	mcpSrv.SetHistory(historyMgr)
+	// Same embedded docs the Web UI serves over HTTP become MCP resources/prompts.
+	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal
 	if cfg.MCPManageSSHConfigs {
 		mcpSrv.RegisterSSHConfigWriteTools()

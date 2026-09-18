@@ -387,7 +387,7 @@ func TestHandleStartSendPressKeyRead(t *testing.T) {
 	// PowerShell cold-start under ConPTY can exceed 300ms on slow CI runners;
 	// input typed before the shell is ready may be dropped. Retry the line
 	// until the marker appears so this asserts behavior, not startup speed.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	output := ""
 	for time.Now().Before(deadline) {
 		testRunLine(t, s, shellID, testInteractiveOutputCommand("handler_test"))
