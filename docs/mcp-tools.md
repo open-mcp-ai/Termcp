@@ -12,7 +12,7 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 - SSE：`http://<host>:18765/sse`（Claude：`--transport sse` / `type: "sse"`）
 - Streamable HTTP：`http://<host>:18765/stream`（Claude：`--transport http` / `type: "http"`）
 
-可复制配置与 HTTP API 速查：Web UI **`/api.html`**。完整客户端样例见 `README.md` / `README.zh.md`。
+可复制配置与 HTTP API 速查：Web UI **`/api.html`**。完整客户端样例见 `README.md` / `README.zh.md`。同一批会话也可用实例自带的 Agent Skill 驱动（`/skills.md` 安装一次，配 `GET /api/resolve` 解析 `termcp://` 定位符，纯 curl）。
 
 ## Resources & Prompts
 
@@ -50,6 +50,7 @@ MCP resources, and a `learn-api` prompt:
 | shell（频道） | `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
 
 - `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致；无序号 = 首个 shell。
+- **REST 侧也能解析**：`GET /api/resolve?url=termcp://...` 返回 `kind=entry|session|shell` 与对应 `ssh_config` / `session_id` / `shell_id`（纯 curl 的 agent 用；语法解析器与 MCP 共用 `internal/locator`）。
 - **MCP 工具直接接受定位符**：`session_start(ssh_config="termcp://mac")`、`session_terminate(session_id="termcp://#ctf-1")`、`shell_input(shell_id="termcp://#ctf-1:2", ...)` 等都无需先解析成裸 id，一次调用直达。
 - 兼容旧形式 `termcp://[entry名]#[会话id]`：entry 前缀被忽略（会话名与 entry 名无关），以会话 id 为准。
 - **归档会话**：写操作工具（`shell_input` / `shell_key` / `shell_resize` 等）不接受归档定位符，会返回带提示的错误——归档输出是只读的，用 `shell_output`（`tail_lines` / `offset` 翻页）读取。定位符解析失败（如 `termcp://#sid:0`）返回 `invalid_argument` 并附具体原因。

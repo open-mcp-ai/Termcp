@@ -80,10 +80,10 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 		if perr != nil {
 			return nil, toolError(CodeInvalidArgument, "%s", perr.Error())
 		}
-		if p.kind == resourceURLEntry {
+		if p.Kind == resourceURLEntry {
 			return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session or shell", id))
 		}
-		id, shellIdx = p.sid, p.index
+		id, shellIdx = p.SessionID, p.Index
 	}
 
 	// Locator channel form (:N): the target is that specific shell — a live

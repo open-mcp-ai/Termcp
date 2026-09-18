@@ -91,6 +91,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Sessions
 	mux.HandleFunc("GET /api/sessions", h.handleListSessions)
+	// Locator resolution: termcp://<entry> | termcp://#<session>[:index] → ids.
+	mux.HandleFunc("GET /api/resolve", h.handleResolve)
 	mux.HandleFunc("POST /api/sessions", h.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	mux.HandleFunc("PATCH /api/sessions/{id}", h.handleRenameSession)

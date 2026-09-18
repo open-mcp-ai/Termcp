@@ -1,19 +1,26 @@
 ---
-name: termcp-http
-description: Drive the termcp terminal-platform over its HTTP REST API with curl + jq (no MCP client needed). Always fetch the instance's own <origin>/api.md first for version-exact endpoints, then use the recipes for creating sessions, polling output in chunks, sending input/keys, resizing PTYs, terminating or purging sessions, exporting transcripts/screenshots, transferring files, and managing port forwards. For server sweeps, batch commands, CI, and agents that only have HTTP access.
+name: termcp
+description: Drive the termcp terminal-platform over its HTTP REST API with curl + jq (curl only). Use whenever a request mentions termcp, a termcp URL/locator (termcp://rock64, termcp://#<session>, termcp://#<session>:2), "open/connect to <host> through termcp", or termcp sessions/shells. Always fetch the instance's own <origin>/api.md first for version-exact endpoints, then use the recipes for resolving locators, creating sessions, polling output in chunks, sending input/keys, resizing PTYs, terminating or purging sessions, exporting transcripts/screenshots, transferring files, and managing port forwards. For server sweeps, batch commands, CI, and agents that only have HTTP access.
 ---
 
 # termcp over HTTP
 
 termcp is a terminal-session platform: one HTTP port serves REST, WebSocket and
-MCP. This skill uses curl only — no MCP client required.
+MCP. This skill uses curl only.
 
 The documentation endpoints (`/api.md`, `/skills.md`) are public: they work with
 no token. **API calls themselves need the token** whenever the instance runs with
 authentication enabled (see section 2).
 
-> Served at `<origin>/skills.md`. To install it as a loadable skill, save it to
-> `~/.agents/skills/termcp-http/SKILL.md` (the folder name is what gets discovered).
+> Served at `<origin>/skills.md`. Install it by saving it into your agent's
+> skills directory as `termcp/SKILL.md` (the folder name is what gets discovered):
+>
+> - **Claude Code**: `~/.claude/skills/termcp/SKILL.md`
+> - **Other agents** (shared Agent Skills convention): `~/.agents/skills/termcp/SKILL.md`
+> - **Project-scoped**: `<project>/.claude/skills/termcp/SKILL.md`
+>
+> Restart the agent session afterwards — skills load at session start. Claude Code
+> has no per-skill CLI command: install = write the file, remove = delete the folder.
 
 ## 1. Rules
 
@@ -23,6 +30,9 @@ authentication enabled (see section 2).
 2. **Origin** = the address you got from the user (default `http://localhost:18765`).
 3. **Never put credentials in URLs or logs**: use
    `Authorization: Bearer <token>` when auth is enabled.
+4. **A `termcp://...` string is a locator, not a command and not a web page.**
+   Never try to "open" it in a browser or as a shell argument; resolve it with
+   `GET /api/resolve` (section 2) and act on the ids it returns.
 
 ## 2. Connect & authenticate
 
@@ -34,7 +44,52 @@ AUTH=()                                           # no auth configured
 curl -fsS "${AUTH[@]}" "$BASE/api.md"             # authoritative reference — read before acting
 ```
 
-## 3. Session lifecycle
+## 3. Resource locators (termcp://)
+
+Users copy locators from the termcp Web UI and paste them into chat. A locator is
+an **address for a termcp object**, not a URL to open in a browser and not a
+shell argument:
+
+| Locator | Names | Resolves to |
+|---------|-------|-------------|
+| `termcp://<entry>` | a connection profile (ssh_config), e.g. `termcp://rock64` | `ssh_config` name |
+| `termcp://#<session>` | a session | `session_id` |
+| `termcp://#<session>:<N>` | shell channel N of that session (1 = first tab) | `session_id` + `shell_id` |
+
+Resolve any of them in one call — never parse or guess by hand:
+
+```bash
+curl -fsS "${AUTH[@]}" -G --data-urlencode 'url=termcp://rock64' "$BASE/api/resolve"
+# {"kind":"entry",  "entry":"rock64", "ssh_config":"rock64"}
+# {"kind":"session","session_id":"...","name":"...","status":"running"}
+# {"kind":"shell",  "session_id":"...","shell_id":"...","index":2,"name":"shell-2","status":"running"}
+```
+
+Then act on the ids (see sections 4–6 for the full recipes):
+
+- `"kind":"entry"` — "open termcp://rock64" means **connect to that profile**:
+  `POST /api/sessions -d '{"ssh_config":"rock64"}'` → returns `session_id` +
+  `shell_id`. Then drive them like any other session. 404 = no such profile
+  (`GET /api/connections` lists them; one must be created first in the Web UI).
+- `"kind":"session"` — an existing session: use `session_id` for output/files/
+  forwards. `"status":"archived"` (or `"archived":true`) means read-only: use
+  `output-range` / `transcript`, not input.
+- `"kind":"shell"` — use `shell_id` for input/key/output-range/resize; the
+  `index` matches the `shell-1`/`shell-2` tabs.
+
+Errors: `400` malformed locator, `404` unknown profile/session/out-of-range shell
+index, `409` shell locator on an archived (read-only) session.
+
+Example — "open termcp://rock64 and run uname -a":
+
+```bash
+OUT=$(curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d '{"ssh_config":"rock64","name":"rock64"}' "$BASE/api/sessions")
+SID=$(jq -r .session_id <<<"$OUT"); SHELL_ID=$(jq -r .shell_id <<<"$OUT")
+# then: input section 6, wait, poll output section 5
+```
+
+## 4. Session lifecycle
 
 ```bash
 # List (read-only)
@@ -64,7 +119,7 @@ curl -fsS -X DELETE "${AUTH[@]}" "$BASE/api/sessions/$SID"
 `ssh_config`: `"internal"` (the termcp host) or a configured profile name;
 `GET /api/connections` lists names only (never credentials).
 
-## 4. Read output (cursor semantics)
+## 5. Read output (cursor semantics)
 
 Output is a byte stream: `GET /api/shells/{shell_id}/output-range` returns
 `{"start","end","total","d":<base64>}`. Poll with `end` as your cursor until
@@ -84,7 +139,7 @@ After issuing a command, sleep ~0.3s and re-poll until output stops growing.
 Empty reads do NOT mean done — check session/shell status. For REPL/TUI
 programs, use `tail=1` to watch the latest screen.
 
-## 5. Write input
+## 6. Write input
 
 ```bash
 # Text, optionally followed by enter (typing into a shell/REPL)
@@ -104,7 +159,7 @@ For real-time bidirectional streams (full-screen TUI) use the WebSocket
 `GET /api/ui/ws` (`watch_add` to subscribe, `input` to write); curl cannot
 speak WebSocket — without `websocat`, prefer REST + `output-range` polling.
 
-## 6. Archived sessions, transcript, screenshot
+## 7. Archived sessions, transcript, screenshot
 
 ```bash
 curl -fsS "${AUTH[@]}" "$BASE/api/history" | jq -r '.sessions[]?.id'    # archived sessions
@@ -114,7 +169,7 @@ curl -fsS "${AUTH[@]}" "$BASE/api/history/$OLD/screenshot?lines=60&cols=160" -o 
 
 Archived sessions are read-only: write endpoints reject them; use `output-range`.
 
-## 7. Files & port forwards
+## 8. Files & port forwards
 
 Bodies are in `/api.md`. Essentials:
 
@@ -124,7 +179,7 @@ Bodies are in `/api.md`. Essentials:
 - Forwards: `POST /api/sessions/{sid}/forwards` (local/remote/dynamic),
   `GET /api/forwards` to list, `DELETE /api/forwards/{id}` to close.
 
-## 8. Pitfalls
+## 9. Pitfalls
 
 - `DELETE /api/sessions/{id}` and `DELETE /api/history/{id}` are **permanent**;
   use `terminate` to keep history.

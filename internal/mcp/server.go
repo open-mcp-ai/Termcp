@@ -18,10 +18,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-// ResourceURLScheme is the URI scheme used for termcp resource locators
-// (termcp://...). Singular definition so all subsystems reference one constant.
-const ResourceURLScheme = "termcp://"
-
 // mcpServerInstructions is returned in initialize (MCP "instructions") so clients may
 // inject it into the model context. Keep it terse because clients may include it
 // in every model turn.

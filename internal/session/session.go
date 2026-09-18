@@ -1279,6 +1279,24 @@ func (s *Session) ListChildShells() []api.Session {
 	return out
 }
 
+// ShellByIndex resolves a shell channel by its 1-based creation order — the
+// numbering the Web UI shows as shell-1/shell-2 tabs and that termcp://
+// locators use (see internal/locator). index <= 0 means the primary (first)
+// shell. ok is false when the session has no such shell (including a session
+// whose primary shell has already exited).
+func (s *Session) ShellByIndex(index int) (*ChildShell, bool) {
+	if index <= 0 {
+		cs := s.PrimaryShell()
+		return cs, cs != nil
+	}
+	all := s.ListChildShells()
+	if idx := index - 1; idx >= 0 && idx < len(all) {
+		cs := s.GetChildShell(all[idx].ID)
+		return cs, cs != nil
+	}
+	return nil, false
+}
+
 // SnapshotShells returns the last-known per-shell metadata (still populated for
 // shells dropped from the live map on exit), sorted by creation time. This is
 // what gets persisted and what a DEAD session renders into its tabs.

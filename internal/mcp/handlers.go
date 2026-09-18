@@ -100,8 +100,8 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.Call
 	sess := s.sessMgr.Get(sessionID)
 	if sess == nil {
 		if p, err := parseResourceURL(sessionID); err == nil {
-			if p.kind == resourceURLSession || p.kind == resourceURLShell {
-				sess = s.sessMgr.Get(p.sid)
+			if p.Kind == resourceURLSession || p.Kind == resourceURLShell {
+				sess = s.sessMgr.Get(p.SessionID)
 			}
 		}
 	}
@@ -159,7 +159,7 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 		if err != nil {
 			return nil, toolError(CodeInvalidArgument, "%s", err.Error())
 		}
-		if p.kind == resourceURLEntry {
+		if p.Kind == resourceURLEntry {
 			return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session or shell", shellID))
 		}
 		sess, err := s.sessionFromParsed(p)
@@ -168,7 +168,7 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 			// instead of a generic "shell not found".
 			return nil, toolError(CodeSessionNotFound, "%s", err.Error())
 		}
-		cs, err := s.shellFromIndex(sess, p.index)
+		cs, err := s.shellFromIndex(sess, p.Index)
 		if err != nil {
 			return nil, toolError(CodeShellNotFound, "%s", err.Error())
 		}
@@ -217,10 +217,10 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 		if perr != nil {
 			return "", nil, nil, fmt.Errorf("%w: %v", errInvalidResourceLocator, perr)
 		}
-		if p.kind != resourceURLEntry {
+		if p.Kind != resourceURLEntry {
 			return "", nil, nil, fmt.Errorf("%w: ssh_config %q is a session/shell locator; pass an entry name or termcp://<entry>", errInvalidResourceLocator, name)
 		}
-		name = p.entry
+		name = p.Entry
 	}
 	ent, err := s.sshConfigs.Load(name)
 	if err != nil {
