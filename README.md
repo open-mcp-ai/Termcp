@@ -36,13 +36,13 @@
 
 ## Introduction
 
-`termcp` is a **cross-platform terminal session platform** written in Go. It treats the **terminal session** as its unifying primitive and connects two classes of machines: **the termcp host itself** (built-in loopback profile, zero config) and **any remote host** (SSH profiles with password / key / jump-host support). Every session is a real PTY channel — hosting multiple shell tabs, port forwards, and SFTP file transfer — opened simultaneously to three kinds of users:
+`termcp` is a **cross-platform terminal session platform** written in Go. It treats the **terminal session** as its unifying primitive and connects two classes of machines: **the termcp host itself** (built-in loopback profile, zero config) and **any remote host** (SSH profiles with password / key / jump-host support). Every session is a real PTY channel — hosting multiple shell tabs, port forwards, and SFTP file transfer — opened simultaneously to every kind of user:
 
 - **You (human)** — a browser-based Web UI for live observation and instant takeover of any session;
-- **AI Agents** — a built-in MCP server (Streamable HTTP and SSE on the same port) driving the same real terminals;
+- **AI Agents** — drive the same real terminals through **MCP** or through **SKILLS**: the instance ships an installable skill (`/skills.md`) that drives it with plain `curl`, `termcp://` locators included;
 - **Scripts / programs** — a full REST API plus WebSocket channel for programmatic session, forward, and file operations.
 
-termcp is not "an MCP tool": MCP is just one **interface layer** exposing its AI-control capabilities. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
+termcp is not "an MCP tool": MCP is just one **interface layer** exposing its AI-control capabilities — and the instance also ships an installable **Agent Skill** (`/skills.md`) that drives the identical session layer over plain `curl`. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
 
 Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
 
@@ -52,13 +52,14 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 ## Why termcp
 
-### One platform, three entrances, one session layer
+### One platform, four entrances, one session layer
 
 | Entrance | For | Form |
 |----------|-----|------|
-| **Web UI** (built-in) | Humans | Browser live terminals, session dashboard, tabs, history replay, file/forward panels |
-| **MCP server** (built-in) | AI Agents | Sessions as persistent connections; Agents manage/drive interactive programs across turns |
-| **REST API + WebSocket** (built-in) | Scripts | Programmatic session creation, terminal I/O, port forwarding, SFTP file operations |
+| **Web UI** | Humans | Browser live terminals, session dashboard, tabs, history replay, file/forward panels |
+| **MCP server** | AI Agents | Sessions as persistent connections; Agents manage/drive interactive programs across turns |
+| **SKILLS** (`/skills.md`) | AI Agents | One-file install; drives termcp with `curl` alone, `termcp://` locators included |
+| **REST API + WebSocket** | Scripts | Programmatic session creation, terminal I/O, port forwarding, SFTP file operations |
 
 ### Breaking the Boundary
 
@@ -69,7 +70,7 @@ Agents can natively only execute one-shot commands — they run and return. But 
 - Answer a `[Y/n]` prompt buried deep inside an installer.
 - Drive terminal-dependent tools like `top`, `htop`, or impacket.
 
-In these scenarios the process keeps running, and the Agent must **read and write the process's I/O across multiple conversation turns**. Plenty of specialized MCPs have sprung up to handle these — but why not just give the Agent hands so it can interact directly? `termcp` breaks that boundary for AI Agents: no more writing or installing a separate MCP for every interactive tool. The Agent can directly and continuously manage and drive interactive programs like **TUIs**, **REPLs**, **GDB**, **msfconsole**, **vim**, and more.
+In these scenarios the process keeps running, and the Agent must **read and write the process's I/O across multiple conversation turns**. Plenty of specialized MCPs have sprung up to handle these — but why not just give the Agent hands so it can interact directly? `termcp` breaks that boundary for AI Agents: no more writing or installing a separate MCP for every interactive tool. The Agent can directly and continuously manage and drive interactive programs like **TUIs**, **REPLs**, **GDB**, **msfconsole**, **vim**, and more — through MCP or through the instance's own [Agent Skill](#agent-skill-curl-only-no-mcp) over plain `curl`.
 
 ### Visual Management
 
@@ -89,6 +90,7 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 - [Usage](#usage)
 - [Docker Deployment](#docker-deployment)
 - [Connecting AI Clients (MCP)](#connecting-ai-clients-mcp)
+- [Agent Skill (curl-only, no MCP)](#agent-skill-curl-only-no-mcp)
 - [Connecting Scripts / Programs (REST API)](#connecting-scripts--programs-rest-api)
 - [Examples](#examples)
 - [Tool Reference](#tool-reference)
@@ -96,22 +98,15 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 
 ## Features
 
-- **⚡ One-command install** — `go install github.com/open-mcp-ai/termcp@latest`. No clone and no build; a single Go toolchain is all you need.
-- **🔌 One port, many entrances** — The same port serves the browser Web UI, REST API, WebSocket, and MCP Streamable HTTP + SSE in parallel. Pick whichever fits: browsers for humans, MCP for Agents/clients, REST for scripts.
-- **🔗 Resource URLs** — Every entry, session, and shell has a stable `termcp://` address with one-click copy buttons throughout the Web UI. Paste the URL into your chat with the Agent and it can precisely locate and operate that connection, session, or shell — `session_start` / `session_terminate` / `shell_input` accept locators directly, no lookups needed.
-- **🤝 Human–AI relay, seamless handoff** — You and the Agent share the same live session and can switch at any moment: open a root-privileged shell yourself, then hand it to the Agent to drive; or let the Agent hit a `sudo` / password / MFA prompt and pause for you to type it into the Web UI, after which the Agent carries on. Input to each shell is serialized, so you and the Agent never garble each other's keystrokes, and credentials are never guessed or echoed by the Agent — and you stay in control: interrupt a misbehaving Agent at any time.
-- **🟦 Multi-turn interaction** — The process keeps running; the Agent can drive it across multiple conversation turns instead of a one-shot call-and-return.
-- **🟪 Real terminal environment** — A fully emulated real terminal (PTY; ConPTY on Windows), so programs that depend on terminal features like `vim`, `top`, `gdb` all run correctly, with cross-platform compatibility.
-- **🟫 Local or remote, your choice** — Point an Agent at the termcp host itself with zero setup (`ssh_config="internal"`), or at any remote machine over SSH. The same tool workflow drives both.
-- **🟧 Built-in visual UI** — Access live terminals, session lists, tabbed multi-shell windows, a tiling workspace, and output-history replay straight from a browser. Served from a single port, no extra deployment needed; `/api.html` provides API + MCP quick-reference configs.
-- **🟦 REST API + WebSocket** — A complete HTTP surface: session CRUD, terminal I/O streaming, port forwarding, SFTP files, history search — for scripts and custom programs.
-- **🟨 Multiple Agents, no conflicts** — Multiple Agents can read the same session simultaneously, each maintaining its own independent cursor, with no output stealing. The unified `shell_output` reader works identically on live, dead, and archived sessions (byte offsets, `tail_lines`, paging).
-- **🟩 Remote operations, all integrated** — Command execution, file transfer (full SFTP suite plus direct HTTP download/upload URLs with resume), and port forwarding (`-L` / `-R` / `-D`) all over a single SSH connection, with no need to re-establish connections.
-- **🟥 Proactive AI notifications (push, no polling)** — `shell_notify` actively notifies the AI Agent — no polling required. termcp pushes a wake-up signal the moment a process exits, output goes quiet, or new output arrives (signal only, no payload); with `channel="sampling"` it actively sends an MCP `sampling/createMessage` to wake the model. Completion is decided by the process-exit event, never a fixed timeout. The Web UI lists and can remove active rules.
-- **🟨 Session history survives everything** — "Disconnect ≠ delete": sessions that exit or crash are archived with their full output, survive termcp restarts, and can be searched, annotated, renamed, rendered as screenshots, or permanently purged.
-- **🔒 Credential-safe by design** — SSH passwords, private keys, and passphrases written through `ssh_config` are never readable back, so plaintext secrets never enter the Agent's context. Config-writing tools stay off unless you explicitly enable `--mcp-manage-ssh-configs`.
-- **🛡️ Single-token HTTP authentication** — One static token guards the entire HTTP surface: Web UI, REST API, MCP SSE, MCP streamable HTTP, and the WebSocket. Configure the token itself (`--auth-token` / `TERMCP_AUTH_TOKEN`) or only its salted SHA-256 hash (`--auth-hash` / `TERMCP_AUTH_HASH`, generated by `termcp --gen-auth-hash`) so the server never stores the plaintext. Non-loopback binds refuse to start without one.
-- **🪶 Context-friendly output** — `shell_notify` pushes only a wake-up signal (no payload), and terminal content is pulled on demand via `shell_output`; raw terminal output never floods the model context.
+- **⚡ One-command install** — `go install github.com/open-mcp-ai/termcp@latest`; just a Go toolchain.
+- **🔌 One port, four entrances** — Web UI (humans), MCP / SKILLS (Agents), and REST + WebSocket (scripts) share one port.
+- **🤝 Human–AI relay** — You and the Agent share one live session and you can take over or interrupt at any time; the Agent pauses at `sudo` / password / MFA prompts for you to type in the Web UI; input is serialized so keystrokes never collide.
+- **🟦 Multi-turn interaction on a real terminal** — The process keeps running, so an Agent drives TUIs, REPLs, GDB, msfconsole, or vim across conversation turns; a full PTY (ConPTY on Windows) behaves the same on every platform.
+- **🟫 Local or remote, one workflow** — Zero-config access to the termcp host (`ssh_config="internal"`) or any remote machine over SSH profiles; commands, file transfer (SFTP plus resumable HTTP URLs), and port forwarding (`-L` / `-R` / `-D`) all run over that single connection.
+- **🟧 Built-in visual management** — Browser live terminals, session dashboard, tabbed shells, tiling workspace, history replay, file and forward panels; `/api.html` holds the API / MCP / SKILLS cheat sheet.
+- **🟨 Multiple Agents, no lost history** — Parallel readers of one session keep independent cursors; exited or crashed sessions are archived with their full output, survive restarts, and stay searchable, renamable, taggable, and screenshot-able until explicitly deleted. After a drop, open a fresh session from the same entry (`termcp://<entry>`) and carry on.
+- **🟥 Proactive notifications, no polling** — `shell_notify` wakes the Agent on process exit, silence, or new output — signal only, no payload (pull the text when needed); `channel="sampling"` sends `sampling/createMessage` directly.
+- **🔒 Credential-safe by design** — Passwords, private keys, and passphrases written through `ssh_config` are never readable back, so plaintext never enters the Agent's context; config-writing tools stay off unless `--mcp-manage-ssh-configs` is set.
 
 ## Quick Start
 
@@ -169,7 +164,7 @@ termcp [flags]
 | Flag            | Default       | Description                                                              |
 | --------------- | ------------- | ------------------------------------------------------------------------ |
 | `--host`        | `127.0.0.1`   | HTTP bind address. `0.0.0.0` listens on all interfaces. A non-loopback bind **requires** an auth token/hash (startup fails otherwise). |
-| `--port`        | `18765`       | HTTP port. Shared by the Web UI, MCP SSE, and MCP streamable HTTP.       |
+| `--port`        | `18765`       | HTTP port. Shared by the Web UI, MCP SSE, MCP streamable HTTP, and the docs/skill endpoints (`/api.md`, `/skills.md`). |
 | `--data-dir`    | `~/.termcp`   | Persistence directory (sessions, messages, SSH configs). Auto-created. Default overridable via `$TERMCP_DATA_DIR`. |
 | `--log-level`   | `info`        | Log level: `debug` / `info` / `warn` / `error`. `debug` shows all MCP tool calls; failed tool calls and session-create errors log at `warn`/`error` regardless. |
 | `--no-internal` | `false`       | Disable the built-in loopback SSH profile.                                   |
@@ -198,7 +193,7 @@ These flags are your **capability gates**: `--no-internal` narrows Agents to rem
 
 ### Authentication
 
-A single static token protects the whole HTTP surface — the Web UI, REST API, MCP SSE, MCP streamable HTTP, and the browser WebSocket. Configuring it is optional for loopback-only binds (`127.0.0.1` keeps its no-setup default); exposing a non-loopback bind without a token is a startup error.
+A single static token protects the whole HTTP surface — the Web UI, REST API, MCP SSE, MCP streamable HTTP, and the browser WebSocket. (The read-only docs `/api.md` and `/skills.md` stay public, so an agent can fetch them before it has a token.) Configuring it is optional for loopback-only binds (`127.0.0.1` keeps its no-setup default); exposing a non-loopback bind without a token is a startup error.
 
 ```bash
 # Plaintext: flag or env var
@@ -354,7 +349,9 @@ docker compose up -d --build
 
 termcp speaks **both MCP transports** on the same port (18765). Choose whichever your client supports — the tool surface is identical.
 
-termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode). The MCP server is one interface layer of the platform, embeddable into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
+termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode).
+
+Alternative: the [Agent Skill](#agent-skill-curl-only-no-mcp) drives the same sessions over plain `curl` — the instance serves it at `/skills.md`. The MCP server is one interface layer of the platform, embeddable into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
 
 ### Option A — Streamable HTTP (`/stream`)
 
@@ -403,7 +400,36 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 - Streamable HTTP → `http://<host>:18765/stream`
 - SSE → `http://<host>:18765/sse` (JSON-RPC goes to `POST /message`)
 
-The Web UI's **API / MCP** page (`/api.html`) offers copy-ready config for both transports.
+The Web UI's **API / MCP / SKILLS** page (`/api.html`) offers copy-ready config for both transports, plus the Agent-docs and skill-download addresses for this instance.
+
+## Agent Skill (curl-only, no MCP)
+
+Don't want to configure an MCP client? The instance ships an installable
+**Agent Skill** that teaches any agent to drive termcp with `curl` alone —
+including the `termcp://` locators users paste from the Web UI.
+
+```bash
+# Public endpoint: no token needed for the download itself
+curl -fsS http://<host>:18765/skills.md -o /tmp/termcp-SKILL.md
+
+# Claude Code reads ~/.claude/skills/<name>/SKILL.md
+mkdir -p ~/.claude/skills/termcp && cp /tmp/termcp-SKILL.md ~/.claude/skills/termcp/SKILL.md
+
+# Other agents that follow the shared convention read ~/.agents/skills/<name>/SKILL.md
+mkdir -p ~/.agents/skills/termcp && cp /tmp/termcp-SKILL.md ~/.agents/skills/termcp/SKILL.md
+```
+
+Restart the agent session after installing (skills are loaded at session start).
+Claude Code has no per-skill CLI command — adding is "drop the file in", removing
+is `rm -rf ~/.claude/skills/termcp` (or `claude plugin install/uninstall` when the
+skill ships as a plugin).
+
+Once installed, a request as simple as *"open termcp://rock64 and run `uname -a`"*
+works end to end: the skill resolves the locator via
+`GET /api/resolve?url=...`, creates the session with that `ssh_config`, sends the
+command, and polls the output. The same skill is registered as the MCP resource
+`<origin>/skills.md`, and `/api.html` shows the exact install command for the
+instance you are looking at.
 
 ## Connecting Scripts / Programs (REST API)
 
@@ -472,7 +498,6 @@ Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Fail
 
 - **`history` screenshots are ASCII-only.** `history(action=screenshot)` renders the persisted text as a fixed-bitmap terminal image; it is not a pixel-accurate rendering of non-ASCII glyphs.
 - **File and forward tools need a live connection.** On `exited`/archived sessions those tools return `session_not_running`; output reading still works via `shell_output`.
-- **No auto-reconnect.** An unexpected SSH drop is detected and the session is marked DEAD (`exited`), kept read-only with its output retained — it is not reconnected automatically. Start a new session (`session_start`) or review the old one from history.
 - **No command allowlisting or directory jail.** termcp does not enforce command whitelists, path restrictions, or policy-based risk tiers. Risk control is human-in-the-loop instead: interrupt the Agent from the Web UI at any time, and privileged prompts (`sudo` / password / MFA) are by default handed to you — Agents follow a no-guessing, no-echoing convention and pause for you to type. Whether the Agent may type them anyway is your call; termcp does not forbid it.
 - **Basic authentication needs TLS outside localhost.** The browser login challenge uses HTTP Basic, whose credentials are only Base64-encoded. Put a TLS-terminating reverse proxy in front of termcp when exposing it beyond a trusted local network; the static token is still never logged or placed in a URL.
 
