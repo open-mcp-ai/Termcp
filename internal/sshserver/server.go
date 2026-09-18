@@ -14,7 +14,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -411,30 +410,15 @@ func sshSignalToOSSig(sig ssh.Signal) os.Signal {
 	}
 }
 
-// disableHistoryExpansion prepends shell-specific flags to suppress ! history expansion.
-func disableHistoryExpansion(args []string) []string {
-	if len(args) == 0 {
-		return args
-	}
-	switch filepath.Base(args[0]) {
-	case "zsh":
-		return append([]string{args[0], "-o", "NO_BANG_HIST"}, args[1:]...)
-	case "bash", "sh":
-		return append([]string{args[0], "+o", "histexpand"}, args[1:]...)
-	default:
-		return args
-	}
-}
-
 func (s *Server) handleSession(sess ssh.Session) {
+	// Interactive sessions get the detected default shell, spawned bare with
+	// no injected flags: shell-specific options (e.g. bash's +o histexpand)
+	// abort shells that do not implement them, e.g. dash/busybox /bin/sh
+	// fails with "illegal option +o histexpand".
 	cmdArgs := sess.Command()
 	if len(cmdArgs) == 0 {
 		sh, shArgs := shell.NewDetector().Argv()
 		cmdArgs = append([]string{sh}, shArgs...)
-	}
-
-	if len(sess.Command()) == 0 {
-		cmdArgs = disableHistoryExpansion(cmdArgs)
 	}
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)

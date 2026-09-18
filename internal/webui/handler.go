@@ -37,7 +37,20 @@ func embeddedStaticServer() http.Handler {
 	if err != nil {
 		panic("webui: embed assets: " + err.Error())
 	}
-	return http.FileServer(http.FS(root))
+	return markdownContentType(http.FileServer(http.FS(root)))
+}
+
+// markdownContentType pins text/markdown on .md responses. Go's built-in mime
+// table is platform-dependent (Windows knows .md, a bare Linux container often
+// does not, where http.ServeContent then sniffs "text/plain"), and agents fetch
+// these documents to read them, so the type must not vary by host.
+func markdownContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".md") {
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handler serves the browser UI and JSON/SSE APIs at / and /api/... .
@@ -101,6 +114,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Shells (globally unique IDs — virtual top-level resource)
 	mux.HandleFunc("GET /api/shells/{id}/output-range", h.handleShellOutputRange)
 	mux.HandleFunc("DELETE /api/shells/{id}", h.handleCloseShell)
+	// Terminal I/O over REST for scripts/CLI (the WebSocket stays the real-time path).
+	mux.HandleFunc("POST /api/shells/{id}/input", h.handleShellInput)
+	mux.HandleFunc("POST /api/shells/{id}/key", h.handleShellKey)
+	mux.HandleFunc("POST /api/shells/{id}/resize", h.handleShellResize)
 
 	// Port forwards (list all, delete by ID)
 	mux.HandleFunc("GET /api/forwards", h.handleListForwards)

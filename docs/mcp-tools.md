@@ -13,6 +13,21 @@ termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 - Streamable HTTP：`http://<host>:18765/stream`（Claude：`--transport http` / `type: "http"`）
 
 可复制配置与 HTTP API 速查：Web UI **`/api.html`**。完整客户端样例见 `README.md` / `README.zh.md`。
+
+## Resources & Prompts
+
+Besides tools, the server publishes its own HTTP API reference and curl skill as
+MCP resources, and a `learn-api` prompt:
+
+- Resources: `<origin>/api.md` (REST reference) and `<origin>/skills.md` (curl skill).
+  URIs are the instance's real HTTP addresses, so the same string works for `curl`.
+  (Tool arguments/results are described by the `tools/list` schemas themselves, so no
+  separate tool reference document is served.)
+- Prompt: `learn-api` (optional argument `task`) — primes an agent with `/api.md`
+  and `/skills.md` before it scripts against termcp over REST.
+
+两个文档端点在开启鉴权后仍可**无凭据**获取（仅 GET/HEAD，纯静态、无数据）；其余所有面（REST/MCP/WS/Web UI）依旧要求 token。
+
 **ID 规则（硬）：**
 
 | 资源 | 参数名 | 谁用 |

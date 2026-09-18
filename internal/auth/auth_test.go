@@ -313,3 +313,60 @@ func TestMiddleware_BasicPasswordMayContainColon(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 }
+
+// TestMiddleware_PublicDocsNeedNoCredentials pins the docs exception: the two
+// read-only documents are fetchable without a token (that is how an agent
+// without MCP, or a script, learns the API), while every other surface keeps
+// requiring credentials — including non-GET methods on those same paths.
+func TestMiddleware_PublicDocsNeedNoCredentials(t *testing.T) {
+	v, err := NewVerifier("secret", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Middleware(v, okHandler())
+
+	for _, p := range []string{"/api.md", "/skills.md"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, httptest.NewRequest(method, p, nil))
+			if rr.Code != http.StatusOK {
+				t.Errorf("%s %s = %d, want 200 without credentials", method, p, rr.Code)
+			}
+		}
+		// Write methods on the same paths are not part of the exception.
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, p, nil))
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("POST %s = %d, want 401", p, rr.Code)
+		}
+	}
+
+	// Everything else still needs the token.
+	for _, p := range []string{"/", "/api.html", "/api/sessions", "/sse", "/stream", "/api.md/../api/sessions"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, p, nil))
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s = %d, want 401", p, rr.Code)
+		}
+	}
+
+	// With the token the docs (and everything else) still work.
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api.md", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api.md with token = %d, want 200", rr.Code)
+	}
+}
+
+// TestMiddleware_PublicDocsFailClosedWithoutVerifier: even with no verifier
+// configured, only the docs bypass (nil verifier still denies data paths).
+func TestMiddleware_PublicDocsFailClosedWithoutVerifier(t *testing.T) {
+	h := Middleware(nil, okHandler())
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("nil verifier: GET /api/sessions = %d, want 401", rr.Code)
+	}
+}
