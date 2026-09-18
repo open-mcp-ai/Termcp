@@ -2,13 +2,14 @@
 
 Base URL: `http://localhost:18765`
 
-termcp is a terminal-session platform. One port serves the same sessions to three
+termcp is a terminal-session platform. One port serves the same sessions to four
 kinds of callers:
 
 | Entrance | Path | Caller |
 |----------|------|--------|
 | Web UI | `/` + `/api.html` | Humans (browser) |
-| MCP | `/sse` + `/message` or `/stream` | AI agents |
+| MCP | `/sse` + `/message` or `/stream` | AI agents with an MCP client |
+| Agent Skill + REST | `/skills.md` (install once) + `/api/*` | AI agents driving termcp with `curl` |
 | REST + WebSocket | `/api/*` + `/api/ui/ws` | Scripts / programs |
 
 This document covers the REST surface (scripting). Real-time terminal I/O goes over
@@ -36,12 +37,15 @@ can learn the API without MCP and without version drift:
 
 | Document | Path | When to use it |
 |----------|------|----------------|
-| HTTP API reference (this file) | `/api.md` | You drive termcp over HTTP yourself (REST/WebSocket, no MCP client): endpoints, bodies, output-cursor semantics |
+| HTTP API reference (this file) | `/api.md` | You drive termcp over HTTP yourself (REST/WebSocket): endpoints, bodies, output-cursor semantics |
 | HTTP skill (curl recipes) | `/skills.md` | Install once into a skills directory so the curl workflow is available on demand later |
 
 `/skills.md` is served flat (as guessable as `/api.md`) but is a real Agent Skill:
-save it to `~/.agents/skills/termcp-http/SKILL.md` — the directory name is what a
-skill loader discovers.
+save it as `termcp/SKILL.md` in your agent's skills directory — the directory name
+is what a skill loader discovers. Claude Code reads `~/.claude/skills/termcp/SKILL.md`;
+agents following the shared convention read `~/.agents/skills/termcp/SKILL.md`
+(project-scoped: `<project>/.claude/skills/termcp/SKILL.md`). Restart the agent
+session afterwards; adding/removing a skill is just writing/deleting that folder.
 
 MCP clients get the same bytes as resources: `resources/list` exposes these two files
 and the `resources/read` URIs are exactly the `<origin>/…` HTTP addresses above (one
@@ -56,8 +60,9 @@ public even when a token is configured. Everything else — Web UI, REST, MCP, W
 
 ```bash
 curl -fsS "$BASE/api.md"                       # authoritative reference
-mkdir -p ~/.agents/skills/termcp-http && \
-  curl -fsS "$BASE/skills.md" -o ~/.agents/skills/termcp-http/SKILL.md
+DIR=~/.claude/skills                           # Claude Code
+# DIR=~/.agents/skills                         # other agents
+mkdir -p "$DIR/termcp" && curl -fsS "$BASE/skills.md" -o "$DIR/termcp/SKILL.md"
 ```
 
 ## 3. Authentication (optional, off by default)
@@ -161,7 +166,59 @@ Response 200:
 
 ---
 
-## 5. Session
+## 5. Resource locators (termcp://)
+
+A locator names a termcp object in one string. The Web UI's copy buttons emit
+them (entry cards, session cards, shell tabs) so a user can paste "open this"
+into a chat, an issue, or a script. MCP tools accept locators anywhere an id or
+profile name is expected; over plain HTTP, resolve them first with
+`GET /api/resolve`.
+
+| Locator | Names | Resolves to |
+|---------|-------|-------------|
+| `termcp://<entry>` | a connection profile (ssh_config), e.g. `termcp://rock64` | `ssh_config` name |
+| `termcp://#<session>` | a session | `session_id` |
+| `termcp://#<session>:<N>` | shell channel N of that session | `session_id` + `shell_id` |
+
+The shell index is 1-based creation order, matching the `shell-1`/`shell-2` tabs;
+without `:N` the primary (first) shell is meant. The long form
+`termcp://<entry>#<session>` is accepted for back-compat, but the entry prefix is
+ignored — session ids are unique, profile names are not. `termcp://shells/<id>`
+is a notification broadcast URI, not a locator.
+
+### `GET /api/resolve?url=<locator>`
+
+Turns a locator into concrete ids. The response is one object whose `kind` tells
+you what you got; only the relevant fields are set.
+
+```
+Request:
+  GET /api/resolve?url=termcp://rock64
+  GET /api/resolve?url=termcp://%23abc123
+  GET /api/resolve?url=termcp://%23abc123:2
+
+Response 200 (entry — "open termcp://rock64" means connect to that profile):
+{ "kind": "entry", "entry": "rock64", "ssh_config": "rock64" }
+
+Response 200 (session):
+{ "kind": "session", "session_id": "abc123", "name": "rock64", "status": "running" }
+
+Response 200 (archived session — read-only):
+{ "kind": "session", "session_id": "abc123", "name": "old-box", "status": "archived", "archived": true }
+
+Response 200 (shell channel):
+{ "kind": "shell", "session_id": "abc123", "shell_id": "def456", "index": 2, "name": "shell-2", "status": "running" }
+```
+
+Then use the ids with the ordinary endpoints: an `entry` becomes
+`POST /api/sessions` with that `ssh_config`; a `session_id` drives output,
+files, forwards and history; a `shell_id` drives input/key/resize/output-range.
+
+Errors: `400` malformed locator, `404` unknown profile / session / shell index
+out of range, `409` shell locator on an archived session (read it with the
+session-level `output-range` instead).
+
+## 6. Session
 
 **Concept:** a Session is an SSH connection container holding 0..N shells and 0..N
 forwards. Shell IDs are separate from the session ID; the first shell has its own ID.
@@ -234,7 +291,7 @@ Response 200: Session object
 
 ---
 
-## 6. Archived session history (dead sessions)
+## 7. Archived session history (dead sessions)
 
 Sessions that exit normally, lose their connection, or are stopped by server shutdown
 are kept as **archived sessions**: metadata in `history.json`, messages in
@@ -320,7 +377,7 @@ Response 200: image/png (Content-Disposition adds a download filename)
 
 ---
 
-## 7. Shell
+## 8. Shell
 
 A shell is a sub-resource of a session; shell IDs are globally unique.
 
@@ -376,7 +433,7 @@ Response: 204 No Content
 
 ---
 
-## 8. Terminal I/O
+## 9. Terminal I/O
 
 ### WebSocket `GET /api/ui/ws`
 
@@ -468,7 +525,7 @@ Response 200: { "rows": 40, "cols": 120 }
 
 ---
 
-## 9. Port forwarding
+## 10. Port forwarding
 
 ### `GET /api/forwards`
 
@@ -519,7 +576,7 @@ Response 200: { "ok": true }
 
 ---
 
-## 10. Files
+## 11. Files
 
 All file operations go over the session's SFTP channel (remote) or the local file
 system (internal).
@@ -603,7 +660,7 @@ Response 200: { "ok": true }
 
 ---
 
-## 11. Notification rules (shell_notify)
+## 12. Notification rules (shell_notify)
 
 Reverse-wake-up rules registered by the MCP `shell_notify` tool are listed and
 deleted here. The Web UI's Notifications tab reads the same source.
@@ -635,7 +692,7 @@ Response 404: { "error": "notification rule not found" }
 
 ---
 
-## 12. Backward-compatible routes
+## 13. Backward-compatible routes
 
 Old routes still work and delegate to the new ones. New code should use the canonical
 paths above.

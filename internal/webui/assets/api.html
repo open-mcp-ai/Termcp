@@ -160,7 +160,7 @@
     <h2 id="agentdocs">2. Agent docs &amp; skill (no MCP)</h2>
     <div class="card">
       <h3>Install the HTTP skill</h3>
-      <p class="muted" style="margin-top:0">termcp serves its own curl skill from this instance. Download it into an agent skills directory and an Agent can drive termcp over REST with no MCP client installed. The download needs no token; API calls do when authentication is enabled.</p>
+      <p class="muted" style="margin-top:0">termcp serves its own curl skill from this instance. Download it into an agent skills directory and an Agent drives termcp over REST with curl alone. The download needs no token; API calls do when authentication is enabled.</p>
       <div class="ep">
         <code id="url-skill"></code>
         <button type="button" class="copy-btn" data-copy="url-skill">Copy</button>
@@ -178,11 +178,11 @@
       <table>
         <thead><tr><th>Document</th><th>URL</th><th>When to use it</th></tr></thead>
         <tbody>
-          <tr><td><a href="/api.md">api.md</a></td><td><code class="inline" id="url-api-md"></code></td><td>You will drive termcp over HTTP yourself (REST/WebSocket, no MCP client): endpoints, bodies, output-cursor semantics.</td></tr>
+          <tr><td><a href="/api.md">api.md</a></td><td><code class="inline" id="url-api-md"></code></td><td>You will drive termcp over HTTP yourself (REST/WebSocket): endpoints, bodies, output-cursor semantics.</td></tr>
           <tr><td><a href="/skills.md">skills.md</a></td><td><code class="inline" id="url-skill-md"></code></td><td>Install once into a skills directory when the curl workflow should be available on demand in later tasks.</td></tr>
         </tbody>
       </table>
-      <p class="muted">The skill is served flat at <code class="inline">/skills.md</code> (as guessable as <code class="inline">/api.md</code>), but it is a real Agent Skill: save it to <code class="inline">~/.agents/skills/termcp-http/SKILL.md</code> — the folder name is what a skill loader discovers.</p>
+      <p class="muted">The skill is served flat at <code class="inline">/skills.md</code> (as guessable as <code class="inline">/api.md</code>), but it is a real Agent Skill: save it as <code class="inline">termcp/SKILL.md</code> — Claude Code reads <code class="inline">~/.claude/skills/</code>, other agents <code class="inline">~/.agents/skills/</code>. The folder name is what a skill loader discovers; restart the agent session afterwards.</p>
     </div>
 
     <h2 id="clients">3. Client config</h2>
@@ -254,6 +254,7 @@
           <tr><th>Resource</th><th>Method</th><th>Path</th></tr>
         </thead>
         <tbody>
+          <tr><td>Resolve termcp:// locator</td><td>GET</td><td><code class="inline">/api/resolve?url=termcp://...</code> <span class="muted">(&rarr; session_id / shell_id / ssh_config)</span></td></tr>
           <tr><td>Connection templates</td><td>GET</td><td><code class="inline">/api/connection-templates</code></td></tr>
           <tr><td>Connections</td><td>GET</td><td><code class="inline">/api/connections</code></td></tr>
           <tr><td>Connection</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/connections/{name}</code></td></tr>
@@ -316,8 +317,8 @@
     setText('url-skill-md', skill);
     setText('url-api-md', origin + '/api.md');
     setText('cfg-skill-install',
-      'mkdir -p ~/.agents/skills/termcp-http && curl -fsS ' + skill +
-      ' -o ~/.agents/skills/termcp-http/SKILL.md');
+      'DIR=~/.claude/skills && mkdir -p "$DIR/termcp" && curl -fsS ' + skill +
+      ' -o "$DIR/termcp/SKILL.md"   # other agents: DIR=~/.agents/skills');
 
     setText('cfg-sse-cli', 'claude mcp add --transport sse termcp ' + sse);
     setText('cfg-stream-cli', 'claude mcp add --transport http termcp ' + stream);

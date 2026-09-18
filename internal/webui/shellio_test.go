@@ -94,9 +94,27 @@ func TestSkillFrontmatter(t *testing.T) {
 		t.Fatal("SKILL.md frontmatter is not terminated")
 	}
 	front := b[4 : 4+end]
-	for _, field := range []string{"name: termcp-http", "description:"} {
+	for _, field := range []string{"name: termcp", "description:"} {
 		if !strings.Contains(front, field) {
 			t.Errorf("SKILL.md frontmatter misses %q", field)
+		}
+	}
+	// The description decides whether an agent loads the skill, so it must name
+	// the locator syntax users paste ("open termcp://rock64").
+	if !strings.Contains(front, "termcp://") {
+		t.Error("SKILL.md description must mention termcp:// locators")
+	}
+	// The body must teach how to act on a locator over plain HTTP.
+	for _, want := range []string{"termcp://", "/api/resolve"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("SKILL.md body misses %q", want)
+		}
+	}
+	// Install instructions must name the directory Claude Code actually reads
+	// (it does not read ~/.agents/skills) plus the shared convention.
+	for _, want := range []string{"~/.claude/skills/termcp/SKILL.md", "~/.agents/skills/termcp/SKILL.md"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("SKILL.md install note misses %q", want)
 		}
 	}
 }
@@ -197,6 +215,9 @@ func TestApiPageShowsSkillDownload(t *testing.T) {
 		`href="/skills.md"`,      // direct download link
 		`href="/api.md"`,         // document link
 		`var skill = origin + '/skills.md'`,
+		`~/.claude/skills/`,      // Claude Code's skills dir (the only one CC actually reads)
+		`~/.agents/skills/`,      // shared convention for other agents
+		`"$DIR/termcp/SKILL.md"`, // install target: folder name = skill name
 	} {
 		if !strings.Contains(b, want) {
 			t.Errorf("api.html misses %s", want)
