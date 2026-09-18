@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>termcp · API &amp; MCP</title>
+  <title>termcp · API / MCP / SKILLS</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; font-family: ui-sans-serif, system-ui, sans-serif; background: #f6f8fa; color: #24292f; }
@@ -52,6 +52,7 @@
     }
     .copy-btn:hover { background: #eaeef2; }
     .copy-btn.ok { background: #dafbe1; border-color: #aceebb; color: #1a7f37; }
+    a.copy-btn { text-decoration: none; display: inline-flex; align-items: center; }
     .block { position: relative; margin: 8px 0 0; }
     .block pre {
       margin: 0; padding: 12px 14px; padding-right: 72px; border-radius: 8px; overflow: auto;
@@ -93,7 +94,7 @@
 </head>
 <body>
   <header class="app-header">
-    <h1>termcp · API &amp; MCP</h1>
+    <h1>termcp · API / MCP / SKILLS</h1>
     <nav class="nav">
       <a href="/">← Web UI</a>
     </nav>
@@ -101,12 +102,13 @@
 
   <main class="wrap">
     <p class="lead">
-      Copy MCP client settings for this termcp instance, or look up the HTTP/WebSocket API paths.
-      URLs below use the current browser origin.
+      Copy MCP client settings, the HTTP/WebSocket API paths, or the Agent skill
+      download for this termcp instance. URLs below use the current browser origin.
     </p>
 
     <div class="toc">
       <a href="#mcp">MCP endpoints</a>
+      <a href="#agentdocs">Agent docs &amp; skill</a>
       <a href="#clients">Client config</a>
       <a href="#api">HTTP API list</a>
     </div>
@@ -143,7 +145,7 @@
 
     <div class="card">
       <h3>Authentication</h3>
-      <p class="muted" style="margin-top:0">When termcp starts with <code class="inline">--auth-token</code> / <code class="inline">--auth-hash</code> (or the matching environment variable), the same token protects Web UI, REST, MCP, and WebSocket.</p>
+      <p class="muted" style="margin-top:0">When termcp starts with <code class="inline">--auth-token</code> / <code class="inline">--auth-hash</code> (or the matching environment variable), the same token protects Web UI, REST, MCP, and WebSocket. (Only the read-only documentation endpoints <code class="inline">/api.md</code> and <code class="inline">/skills.md</code> stay open without credentials so agents and scripts can fetch them before configuring a token.)</p>
       <table>
         <thead><tr><th>Client</th><th>How to authenticate</th></tr></thead>
         <tbody>
@@ -155,7 +157,35 @@
       <p class="muted">Generate a salted hash with <code class="inline">termcp --gen-auth-hash</code>. Do not put tokens in URLs or copied client configuration. Use TLS through a reverse proxy when exposing Basic authentication beyond a trusted local network.</p>
     </div>
 
-    <h2 id="clients">2. Client config</h2>
+    <h2 id="agentdocs">2. Agent docs &amp; skill (no MCP)</h2>
+    <div class="card">
+      <h3>Install the HTTP skill</h3>
+      <p class="muted" style="margin-top:0">termcp serves its own curl skill from this instance. Download it into an agent skills directory and an Agent can drive termcp over REST with no MCP client installed. The download needs no token; API calls do when authentication is enabled.</p>
+      <div class="ep">
+        <code id="url-skill"></code>
+        <button type="button" class="copy-btn" data-copy="url-skill">Copy</button>
+        <a class="copy-btn" href="/skills.md" download>Download</a>
+      </div>
+      <div class="block">
+        <button type="button" class="copy-btn" data-copy="cfg-skill-install">Copy</button>
+        <pre id="cfg-skill-install"></pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Documents (markdown)</h3>
+      <p class="muted" style="margin-top:0">One URI, two access paths: the same files are served over HTTP and published as MCP resources (<code class="inline">resources/list</code>). MCP tool arguments/results come from the <code class="inline">tools/list</code> schemas, so no separate tool reference is served.</p>
+      <table>
+        <thead><tr><th>Document</th><th>URL</th><th>When to use it</th></tr></thead>
+        <tbody>
+          <tr><td><a href="/api.md">api.md</a></td><td><code class="inline" id="url-api-md"></code></td><td>You will drive termcp over HTTP yourself (REST/WebSocket, no MCP client): endpoints, bodies, output-cursor semantics.</td></tr>
+          <tr><td><a href="/skills.md">skills.md</a></td><td><code class="inline" id="url-skill-md"></code></td><td>Install once into a skills directory when the curl workflow should be available on demand in later tasks.</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">The skill is served flat at <code class="inline">/skills.md</code> (as guessable as <code class="inline">/api.md</code>), but it is a real Agent Skill: save it to <code class="inline">~/.agents/skills/termcp-http/SKILL.md</code> — the folder name is what a skill loader discovers.</p>
+    </div>
+
+    <h2 id="clients">3. Client config</h2>
     <div class="card">
       <h3>Claude Code CLI</h3>
       <h4>SSE</h4>
@@ -199,7 +229,7 @@
       <p class="muted">Open WebUI usually uses Streamable HTTP: <code class="inline">/stream</code>.</p>
     </div>
 
-    <h2 id="api">3. HTTP API list</h2>
+    <h2 id="api">4. HTTP API list</h2>
     <div class="card">
       <h3>Public surfaces</h3>
       <table>
@@ -211,8 +241,10 @@
           <tr><td>GET / POST</td><td><code class="inline">/sse</code> + <code class="inline">/message</code></td><td>MCP SSE</td></tr>
           <tr><td>—</td><td><code class="inline">/stream</code></td><td>MCP Streamable HTTP</td></tr>
           <tr><td>GET</td><td><code class="inline">/api/ui/ws</code></td><td>Browser terminal WebSocket</td></tr>
+          <tr><td>GET</td><td><code class="inline">/api.md</code> · <code class="inline">/skills.md</code></td><td>Agent docs (markdown, no MCP needed; same docs as MCP resources)</td></tr>
         </tbody>
       </table>
+      <p class="muted">The API reference is <a href="/api.md">/api.md</a>; the curl skill is installable from <a href="/skills.md">/skills.md</a>.</p>
     </div>
 
     <div class="card">
@@ -235,6 +267,9 @@
           <tr><td>Screenshot</td><td>GET</td><td><code class="inline">/api/history/{id}/screenshot?start=0&amp;lines=40&amp;cols=80&amp;theme=dark</code></td></tr>
           <tr><td>Shells</td><td>GET / POST</td><td><code class="inline">/api/sessions/{id}/shells</code></td></tr>
           <tr><td>Shell</td><td>DELETE</td><td><code class="inline">/api/shells/{id}</code> <span class="muted">(shell_id)</span></td></tr>
+          <tr><td>Shell input</td><td>POST</td><td><code class="inline">/api/shells/{id}/input</code> <span class="muted">({"text", "press_enter"})</span></td></tr>
+          <tr><td>Shell key</td><td>POST</td><td><code class="inline">/api/shells/{id}/key</code> <span class="muted">({"key", "repeat"})</span></td></tr>
+          <tr><td>Shell resize</td><td>POST</td><td><code class="inline">/api/shells/{id}/resize</code> <span class="muted">({"rows", "cols"})</span></td></tr>
           <tr><td>Output history</td><td>GET</td><td><code class="inline">/api/shells/{id}/output-range</code> <span class="muted">(shell_id)</span></td></tr>
           <tr><td>Output history (compat)</td><td>GET</td><td><code class="inline">/api/sessions/{id}/output-range</code> <span class="muted">(shell_id or session primary)</span></td></tr>
           <tr><td>Forwards</td><td>GET</td><td><code class="inline">/api/forwards</code></td></tr>
@@ -273,6 +308,16 @@
     setText('url-message', message);
     setText('url-stream', stream);
     setText('url-stream-2', stream);
+
+    // Agent-facing docs: same bytes over HTTP and as MCP resources. The skill
+    // URL is the download address shown in the "Agent docs & skill" card.
+    var skill = origin + '/skills.md';
+    setText('url-skill', skill);
+    setText('url-skill-md', skill);
+    setText('url-api-md', origin + '/api.md');
+    setText('cfg-skill-install',
+      'mkdir -p ~/.agents/skills/termcp-http && curl -fsS ' + skill +
+      ' -o ~/.agents/skills/termcp-http/SKILL.md');
 
     setText('cfg-sse-cli', 'claude mcp add --transport sse termcp ' + sse);
     setText('cfg-stream-cli', 'claude mcp add --transport http termcp ' + stream);

@@ -1,4 +1,11 @@
-.PHONY: build build-debug test clean dist
+.PHONY: build build-debug test clean dist sync-assets
+
+# Keep the served copy of the API reference in step with docs/. assets/api.md is
+# published over HTTP (/api.md) and as an MCP resource; TestSyncedDocsMatchSource
+# fails when it drifts. (MCP tool arguments live in the tools/list schemas, so there
+# is no served copy of docs/mcp-tools.md.)
+sync-assets:
+	cp docs/api.md internal/webui/assets/api.md
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)

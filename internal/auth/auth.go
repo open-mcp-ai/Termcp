@@ -4,7 +4,10 @@
 // TERMCP_AUTH_TOKEN) or a salted SHA-256 hash of one (--auth-hash /
 // TERMCP_AUTH_HASH), so deployments that prefer not to store the cleartext
 // can keep only the hash. One token guards the whole HTTP surface: Web UI,
-// REST API, MCP SSE, MCP streamable HTTP, and the WebSocket.
+// REST API, MCP SSE, MCP streamable HTTP, and the WebSocket — except for the
+// read-only documentation endpoints in publicPaths, which carry no data and no
+// credentials, and must be fetchable before a client has a token configured
+// (that is the whole point of serving the API reference and the curl skill).
 //
 // Credentials are accepted in three shapes:
 //
@@ -160,13 +163,38 @@ func credentials(r *http.Request) []candidate {
 	return out
 }
 
-// Middleware wraps next so every request must carry a valid token. A missing
-// or invalid credential is answered with 401 plus a Basic challenge, which
-// makes browsers show their native username/password dialog (username is
+// publicPaths are static, secret-free documentation documents served from the
+// embedded assets. They are readable without credentials so a fresh client (an
+// agent before MCP setup, a script, a human with a browser) can read the API
+// reference and download the skill; every data/action surface still requires
+// the token.
+var publicPaths = map[string]struct{}{
+	"/api.md":    {},
+	"/skills.md": {},
+}
+
+// isPublicDoc reports whether the request targets one of the credential-free
+// documentation endpoints. Only safe read methods are allowed through.
+func isPublicDoc(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	_, ok := publicPaths[r.URL.Path]
+	return ok
+}
+
+// Middleware wraps next so every request must carry a valid token. The static
+// documentation endpoints (publicPaths) bypass the check. For any other path,
+// a missing or invalid credential is answered with 401 plus a Basic challenge,
+// which makes browsers show their native username/password dialog (username is
 // ignored, password is the token). A nil or unconfigured verifier denies
-// everything (fail closed).
+// everything except the public documentation (fail closed).
 func Middleware(v *Verifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPublicDoc(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		for _, c := range credentials(r) {
 			if v.Verify(c.token) {
 				if c.viaBasic {

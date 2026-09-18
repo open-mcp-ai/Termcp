@@ -105,12 +105,13 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - **🟫 本机 / 远程任选入口** —— 既能零配置直接操作 termcp 所在本机（`ssh_config="internal"`），也能通过 SSH 接入任意远程主机，同一套工具流程通用。
 - **🟧 内建可视化界面** —— 浏览器即可访问实时终端、会话列表、多 Shell 频道标签、平铺工作区、历史输出回放，单端口提供服务，无需额外部署；另有 `/api.html` 提供 API 与 MCP 配置速查。
 - **🟦 REST API + WebSocket** —— 完整 HTTP 面：会话 CRUD、终端 I/O 流、端口转发、SFTP 文件、历史检索，供脚本与自研程序编程化调用。
+- **📄 文档可被 Agent 自取** —— 实例直接对外提供自身文档（`/api.md`），同一内容注册为 MCP resource（一个 URI，两条获取路径），另附可下载的 curl 技能包（`/skills.md`）与 `learn-api` prompt —— 完全不装 MCP 客户端，只用 REST 也能让 AI 接管 termcp。
 - **🟨 多 Agent 并行不冲突** —— 多个 Agent 可同时读取同一会话，各自维护独立游标，输出互不抢占；统一的 `shell_output` 游标在活会话、死亡会话与归档会话上语义完全一致（字节 offset、`tail_lines`、翻页）。
 - **🟩 远程操作一体集成** —— 单条 SSH 连接内完成命令执行、文件传输（完整 SFTP 套件 + 带 Range 断点续传的 HTTP 直链）、端口转发（`-L` / `-R` / `-D`），无需重复建立连接。
 - **🟥 主动通知 AI Agent（推送，免轮询）** —— `shell_notify` 注册后由 termcp **主动通知 AI Agent**：进程退出 / 输出停顿 / 有新输出时即刻推送唤醒信令（仅信令、不带内容，避免污染上下文），无需 Agent 持续轮询；`channel="sampling"` 时还会主动发送 MCP `sampling/createMessage` 直接唤起模型。命令完成判定基于进程退出事件，而非固定超时。Web UI 可查看与拆下已注册规则。
 - **🟨 断开 ≠ 删除，历史全保留** —— 正常退出或异常断线的会话自动归档，完整终端输出落盘保留，跨 termcp 重启仍可检索、重命名、打标签、渲染为 PNG 终端截图，仅显式删除才真正清理。
 - **🔒 凭据安全设计** —— 通过 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据永不出现在 Agent 上下文中；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
-- **🛡️ 单一静态 Token 鉴权** —— 一个静态 Token 保护整个 HTTP 面：Web UI、REST API、MCP SSE、MCP Streamable HTTP 和 WebSocket。可配置 Token 本身（`--auth-token` / `TERMCP_AUTH_TOKEN`），也可只配置 salted SHA-256 哈希（`--auth-hash` / `TERMCP_AUTH_HASH`，用 `termcp --gen-auth-hash` 生成），服务端不保存明文配置。监听非 loopback 地址时未配置认证会拒绝启动。
+- **🛡️ 单一静态 Token 鉴权** —— 一个静态 Token 保护整个 HTTP 面：Web UI、REST API、MCP SSE、MCP Streamable HTTP 和 WebSocket（唯一例外：只读文档 `/api.md`、`/skills.md` 不含任何数据，允许无凭据获取，供尚未配置 token 的 agent/脚本学习 API）。可配置 Token 本身（`--auth-token` / `TERMCP_AUTH_TOKEN`），也可只配置 salted SHA-256 哈希（`--auth-hash` / `TERMCP_AUTH_HASH`，用 `termcp --gen-auth-hash` 生成），服务端不保存明文配置。监听非 loopback 地址时未配置认证会拒绝启动。
 - **🪶 上下文友好，省 Token** —— `shell_notify` 只推送唤醒信令（不带内容），终端正文通过 `shell_output` 按需拉取，避免原始输出灌满模型上下文。
 
 ## 快速开始
@@ -403,7 +404,7 @@ claude mcp add --transport sse termcp http://localhost:18765/sse
 - Streamable HTTP → `http://<host>:18765/stream`
 - SSE → `http://<host>:18765/sse`（JSON-RPC 走 `POST /message`）
 
-Web UI 的 **API / MCP** 页面（`/api.html`）提供两种传输的可复制配置。
+Web UI 的 **API / MCP / SKILLS** 页面（`/api.html`）提供两种传输的可复制配置，以及本实例的 Agent 文档与 skill 下载地址。
 
 ## 接入脚本 / 程序（REST API）
 
