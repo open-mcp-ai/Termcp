@@ -28,6 +28,26 @@ MCP resources, and a `learn-api` prompt:
 
 两个文档端点在开启鉴权后仍可**无凭据**获取（仅 GET/HEAD，纯静态、无数据）；其余所有面（REST/MCP/WS/Web UI）依旧要求 token。
 
+## 工具懒加载（deferred tool loading）
+
+termcp 的 31 个工具按"热路径 / 低频面"分成两类，通过 MCP 标准的 `defer_loading` 标记告诉客户端哪些工具可以**按需加载**：
+
+- **核心常驻**（不标记，初次 `tools/list` 即返回完整 Schema）：`session_start` / `session_list` / `session_info` / `session_terminate` / `session_delete` / `shell_open` / `shell_list` / `shell_close` / `shell_input` / `shell_key` / `shell_output` / `notify_user`。这些构成"开会话 → 打字 → 读输出"的主循环，若需先搜索才能用，每次交互都要多一个来回。
+- **延迟加载**（标记 `defer_loading: true`）：11 个 SFTP 文件工具、`forward`、`shell_resize` / `shell_detect` / `shell_notify` / `shell_reader_register` / `shell_reader_unregister`、`message`、`ssh_config`。这些工具参数面宽、调用频率低，客户端可按需检索后再拉取 Schema，节省每轮注入的上下文预算。
+
+分类由 `internal/mcp/toolopts.go` 的 `deferredTools` 表定义，`TestDeferLoadingPolicy` 会拦住"新工具未分类"与"僵尸条目"；若要调整分类，改表即可，无需改各处注册代码。
+
+**ID 规则（硬）：**
+
+| 资源 | 参数名 | 谁用 |
+|------|--------|------|
+| Session（SSH 连接容器） | `session_id` | shell_open、forward、file_*、session_terminate、session_list、session_info |
+| Shell（终端 channel） | `shell_id` | shell_input、shell_key、shell_output、shell_resize、shell_reader_register/unregister、shell_close |
+
+`session_start` 返回 **两个不同** 的 id：`session_id` 与 `shell_id`（首个 shell 不与 session 共用 id）。
+
+---
+
 ## 资源 URL 寻址（termcp://）
 
 这些 URL 是**复制给 AI 用的定位符**：Web UI 各处的复制按钮（entry 卡片、session 卡片、终端标题、每个 shell 频道标签）一键复制后，直接粘进与 AI 的对话或任务描述中，AI 就能精确定位你说的是**哪个连接 / 哪个会话 / 会话里的第几个频道**，不用再费口舌描述。点击复制按钮不会触发连接、切换频道或关闭窗口。
