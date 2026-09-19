@@ -251,6 +251,20 @@ Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_
 
 ## Docker Deployment
 
+### Run the official image
+
+The registry image runs as a dedicated non-root user (`termcp`, uid/gid 1000) whose `$HOME` is declared a `VOLUME` — termcp keeps all of its state (sessions, SSH configs, history) in the default `~/.termcp`, so persisting is just a volume mount:
+
+```bash
+docker run -d --name termcp \
+  -p 18765:18765 \
+  -v termcp-data:/home/termcp \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
+  ghcr.io/open-mcp-ai/termcp:latest
+```
+
+The container listens on `0.0.0.0:18765`, so an auth token is required (see the note below). MCP endpoint: `http://localhost:18765/stream`. With a bind mount instead of a named volume, chown the host directory first: `chown -R 1000:1000 /path/on/host`.
+
 ### Multi-stage build: add termcp to any container
 
 Place the following `Dockerfile` in your application project. The build stage installs termcp with `go install`, then `COPY --from` copies the binary into the target image. The target container does not need the Go runtime:
