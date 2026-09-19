@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.schema.json",
+  "name": "io.github.open-mcp-ai/termcp",
+  "description": "An MCP server and cross-platform terminal platform that lets AI agents act like a human at a real terminal: typing into running processes, answering prompts, and driving TUIs/REPLs across conversation turns over real PTY sessions (local or SSH), with a browser Web UI for live observation and human takeover, plus REST/WebSocket and a curl-only Agent Skill.",
+  "repository": {
+    "url": "https://github.com/open-mcp-ai/termcp",
+    "source": "github"
+  },
+  "version": "0.1.16",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/open-mcp-ai/termcp",
+      "version": "0.1.16",
+      "transport": {
+        "type": "http",
+        "url": "http://localhost:18765/stream"
+      }
+    }
+  ]
+}
