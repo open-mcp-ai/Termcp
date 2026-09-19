@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.schema.json",
   "name": "io.github.open-mcp-ai/termcp",
-  "description": "An MCP server and cross-platform terminal platform that lets AI agents act like a human at a real terminal: typing into running processes, answering prompts, and driving TUIs/REPLs across conversation turns over real PTY sessions (local or SSH), with a browser Web UI for live observation and human takeover, plus REST/WebSocket and a curl-only Agent Skill.",
+  "description": "An MCP server that lets AI agents act like a human at a real terminal, local or over SSH.",
   "repository": {
     "url": "https://github.com/open-mcp-ai/termcp",
     "source": "github"
