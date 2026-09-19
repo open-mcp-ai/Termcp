@@ -236,7 +236,7 @@ AI Agent                    ChildShell                 sshclient              ss
 | 内存 | 全员已读过的前缀可整体丢弃；无固定容量环、不按读者覆盖旧数据 |
 | 阻塞等待 | `sync.Cond.Wait()` + 超时 goroutine，支持 context 取消 |
 | 输出清洗 | 两次处理：Strip(去ANSI) → Compact(压缩噪音) |
-| 统一游标 | `shell_output` 是唯一输出读取入口：活/死/归档会话一律按字节流读取。活会话走 reader 增量游标；`offset` 无状态定位 & `tail_lines` 末尾截取对两种流同样生效；归档流由磁盘 MsgOutput 按序重建，与内存字节流同构（同 start_offset/end_offset/total_bytes/has_more 协议） |
+| 统一游标 | `shell_output` 是唯一输出读取入口：活/死会话一律按字节流读取。活会话走 reader 增量游标；`offset` 无状态定位 & `tail_lines` 末尾截取对两种流同样生效；重启恢复的 DEAD 会话其流由磁盘 MsgOutput 按序重建，与内存字节流同构（同 start_offset/end_offset/total_bytes/has_more 协议） |
 
 ## 五、信号/终止流向（session_terminate）
 
@@ -358,7 +358,6 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 - `running`：Session 未关闭，SSH transport 可用；这是 Session 的正常在线状态。Shell 可以是 `running`，也可以是自然退出后仍保留在 channel 列表中的 `exited`。
 - `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown，或 pipe 模式最后一个 shell 自然退出/被关闭）。Session 仍保留在 registry，缓冲区、消息和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
 - `error`：保留给启动失败等错误；当前启动失败直接返回错误，不会创建 Session。
-- `archived`：只用于 `history.json` 中的历史记录，不是当前 registry 中 Session 的在线状态。
 
 ```
                               session_start()
@@ -395,3 +394,49 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。
 
 **exitOnce / closeOnce 保证**：无论是进程自然退出还是 terminate/手动关闭触发，状态转换和 Done channel 都只执行一次；手动关闭与自然退出并发时，关闭标记优先，避免 shell 被重新写回历史快照。
+
+### 资源作用域：创建点挂载，级联释放
+
+Session 持有一个 `ResourceScope`（`internal/session/scope.go`），等价于一次性的 `context.Context` 加 LIFO 清理栈：
+
+```
+finalize()  ──►  scope.Release()  ──►  逆序执行所有已挂载的清理函数
+                    ▲
+      ┌─────────────┼───────────────────────────┐
+      │             │                           │
+  端口转发      通知规则                消息管理器会话状态
+  (创建时挂载)  (注册时挂载)             (会话创建时挂载)
+```
+
+- **创建点负责挂载**：任何绑定到某个 Session 的子资源（端口转发、通知规则、订阅句柄、临时凭据等），在它被创建的那一刻调用 `sess.AttachCleanup(fn)` / `sess.AttachCloser(c)` 挂到该 Session 上。
+- **唯一级联点**：`finalize()` → `scope.Release()` 是唯一的释放入口；子系统之间互不感知，也不需要任何全局注册表或"记得在 main 里注册 listener"的隐式约定。
+- **幂等与并发安全**：`Release()` 可重复调用（`sync.Once` 语义），清理函数 panic 不会阻断其余释放；若挂载发生在 scope 已释放之后（会话已删除与资源创建并发），清理函数立即同步执行，因此不存在"挂到一个死会话上"的泄漏窗口。
+- **LIFO 顺序**：后创建的资源先释放，符合依赖方向（例如先关转发，再关底层连接）。
+- **DEAD 不释放**：`terminate` / 断线只把 Session 标记为 `exited`，不触发 `Release()`；只有 `DELETE`（`Manager.Delete` / `ArchiveAndForget`）才释放。
+
+---
+
+## 十一、跨平台设计与安全边界模型
+
+### 1. 跨平台与纯 Go 无 CGO 设计
+
+termcp 采用 **100% 纯 Go 实现（`CGO_ENABLED=0`）**：
+
+- **零系统 C 库绑定**：不引入 libc / glibc / musl 动态链接约束，单个二进制文件静态自包含，可在 Alpine、CentOS、Debian、Ubuntu、macOS、Windows 等任意环境下即拷即用，无环境依赖地支持交叉编译。
+- **全平台一致的真实 PTY**：
+  - **Windows**：直接对接操作系统原生 **ConPTY**（Pseudo Console API），规避传统 winpty 依赖 C++ runtime 与不稳定注入的问题，与 PowerShell / CMD 具有完全一致的 ANSI 转义序列与 VT 仿真体验。
+  - **Linux / macOS**：采用 POSIX PTY，结合标准 termios 控制字符与行规程（line discipline）。
+- **进程生命周期统一抽象**：无论是本机回环还是远程 SSH，会话容器层以统一的 PTY 游标与字节流呈现，跨平台差异在内部各探测器和适配层彻底抹平。
+
+### 2. 安全边界：责任自负与 AI 输出端前置过滤
+
+> **核心原则：安全防线必须建立在 AI 模型的输出端（Output Guardrails / Tool Call Validator）与应用网关，而非底层终端管道。**
+
+termcp 本质上是**透明的真实终端与多路交互管道**（PTY Transport），不包含任何业务意图审计；期望底层终端识别或拦截恶意意图是不切实际且不可行的：
+
+1. **为什么终端管道无法防范恶意行为？**
+   - **语义混淆在底层不可判定**：AI 可以将破坏性指令切片拼接（如 `a="rm -"; b="rf /"; $a$b`）、通过变量重组、`eval` 注入、`printf` 格式化拼接、环境变量构造执行、或拆解为多步分片写入后执行。在 PTY 看来，这些输入完全是合法的键盘按键与字符流，底层通道绝无可能在不破坏正常开发操作的前提下区分“混淆攻击”与“正常开发脚本”。
+   - **Payload 交付方式千变万化**：攻击性行为可通过 Base64 管道还原、分段追加写入、乃至使用合法的 `curl`/`wget`/`ssh` 远程拉取多阶段执行体。终端与 SFTP 只是原始字节输送管，无法也不应该扮演杀毒引擎或 EDR 的角色。
+2. **责任共担模型（Shared Responsibility）**：
+   - **调用方自负防线**：宿主程序、Agent Harness 或集成框架必须在模型发起 `shell_input` 或 `file_write` 调用**之前**完成安全过滤——包括模型输出敏感指令检测、正则阻断、参数合规审计与指令沙箱隔离。
+   - **人机接力作为最后屏障**：termcp 原生提供 Web UI 实时同屏监视与强制接管能力。对高风险命令、权限跃迁（`sudo`、MFA 等）默认暂停等待人工确认，切忌在缺乏隔离的真实生产机器上完全放任 AI 无人值守执行。

@@ -156,43 +156,6 @@ func TestStore_PathTraversalLoadMessage(t *testing.T) {
 	}
 }
 
-func TestStore_SaveLoadHistory(t *testing.T) {
-	dir := t.TempDir()
-	s := New(dir)
-
-	archived := []api.ArchivedSession{
-		{Session: api.Session{ID: "aaa", Name: "CTF-1", Status: api.SessionArchived}, Notes: "note", Tags: []string{"web"}},
-		{Session: api.Session{ID: "bbb", Name: "CTF-2", Status: api.SessionArchived}},
-	}
-	if err := s.SaveHistory(archived); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := s.LoadHistory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded) != 2 {
-		t.Fatalf("expected 2 archived sessions, got %d", len(loaded))
-	}
-	if loaded[0].ID != "aaa" || loaded[0].Notes != "note" || len(loaded[0].Tags) != 1 {
-		t.Fatalf("unexpected first record: %+v", loaded[0])
-	}
-	if loaded[0].Status != api.SessionArchived {
-		t.Fatalf("expected status archived, got %q", loaded[0].Status)
-	}
-}
-
-func TestStore_LoadHistoryEmpty(t *testing.T) {
-	s := New(t.TempDir())
-	loaded, err := s.LoadHistory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded) != 0 {
-		t.Fatalf("expected empty history, got %d", len(loaded))
-	}
-}
 
 func TestStore_DeleteSessionMessagesRemovesDir(t *testing.T) {
 	dir := t.TempDir()

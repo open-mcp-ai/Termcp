@@ -11,7 +11,6 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -53,11 +52,8 @@ func newTestServer(t *testing.T) *Server {
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
-	hist := history.New(store)
-	sessMgr.SetHistory(hist)
 	cleanupTestRuntime(t, sessMgr, srv)
 	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
-	s.SetHistory(hist)
 	return s
 }
 
@@ -864,7 +860,6 @@ func TestGroupDispatch(t *testing.T) {
 	// unknown actions rejected on every unified tool
 	dispatchers := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
 		"message":    s.handleMessageOps,
-		"history":    s.handleHistoryOps,
 		"forward":    s.handleForwardOps,
 		"ssh_config": s.handleSSHConfigOps,
 	}
@@ -901,16 +896,6 @@ func TestGroupDispatch(t *testing.T) {
 	fm := parseResult(t, fwdRes)
 	if _, ok := fm["forwards"].([]any); !ok {
 		t.Fatalf("expected forwards array, got %v", fm["forwards"])
-	}
-
-	// history(action=list) works without args
-	hisReq := makeRequest(map[string]any{"action": "list"})
-	hisRes, err := s.handleHistoryOps(context.Background(), hisReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hisRes.IsError {
-		t.Fatalf("history list error: %s", hisRes.Content[0].(mcpgo.TextContent).Text)
 	}
 
 	// message(action=list) needs a session (per-session index)

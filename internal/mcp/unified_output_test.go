@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -16,7 +15,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *history.Manager, *session.Manager) {
+func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *session.Manager) {
 	t.Helper()
 	srv := startTestSSH(t)
 
@@ -24,21 +23,17 @@ func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *history.M
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
-	histMgr := history.New(store)
-	_ = histMgr.Load()
-	sessMgr.SetHistory(histMgr)
 	cleanupTestRuntime(t, sessMgr, srv)
 
 	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
-	s.SetHistory(histMgr)
-	return s, store, histMgr, sessMgr
+	return s, store, sessMgr
 }
 
 // TestUnifiedOutput_TailLinesLive verifies tail_lines on a running pipe shell.
 // Pipe mode is deterministic: no prompt echo, no PSReadLine redraw artifacts —
 // the buffer contains exactly the command's stdout lines.
 func TestUnifiedOutput_TailLinesLive(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	// One command that prints 20 numbered lines then exits (pipe mode).
 	var command string
@@ -123,7 +118,7 @@ func TestUnifiedOutput_TailLinesLive(t *testing.T) {
 
 // TestUnifiedOutput_OffsetStatelessLive verifies offset-based stateless pagination on live shells.
 func TestUnifiedOutput_OffsetStatelessLive(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	startReq := makeRequest(map[string]any{
 		"command":    testShell(),
@@ -183,30 +178,30 @@ func TestUnifiedOutput_OffsetStatelessLive(t *testing.T) {
 	}
 }
 
-// TestUnifiedOutput_ArchivedSessionReadsViaShellOutput verifies that an archived session
-// is transparently readable through shell_output using session_id or shell_id,
-// and honors tail_lines to protect against token blowups.
+// TestUnifiedOutput_DeadSessionReadsViaShellOutput verifies that a DEAD (or restart-
+// restored) session is transparently readable through shell_output using
+// session_id or shell_id, and honors tail_lines to protect against token blowups.
 func TestUnifiedOutput_ArchivedSessionReadsViaShellOutput(t *testing.T) {
-	s, store, histMgr, _ := newTestServerWithHistory(t)
+	s, store, sessMgr := newTestServerWithHistory(t)
 
 	archID := "archived-100"
 	shellID := "shell-xyz"
 
-	// Create an archived session record
-	arch := api.ArchivedSession{
-		Session: api.Session{
-			ID:        archID,
-			Name:      "Build Task",
-			Status:    api.SessionArchived,
-			CreatedAt: time.Now().Add(-10 * time.Minute).UTC(),
-		},
+	// Persist the session to sessions.json as DEAD so RestoreDead reloads it.
+	meta := api.Session{
+		ID:        archID,
+		Name:      "Build Task",
+		Status:    api.SessionExited,
+		CreatedAt: time.Now().Add(-10 * time.Minute).UTC(),
 		Shells: []api.Session{
-			{ID: shellID, Name: "main", Status: api.SessionArchived},
+			{ID: shellID, Name: "main", Status: api.SessionExited},
 		},
-		Reason: api.ArchiveExplicit,
 	}
-	if err := histMgr.Add(arch); err != nil {
-		t.Fatalf("Add archived session failed: %v", err)
+	if err := store.SaveSessions([]api.Session{meta}); err != nil {
+		t.Fatalf("SaveSessions failed: %v", err)
+	}
+	if err := sessMgr.RestoreDead(); err != nil {
+		t.Fatalf("RestoreDead failed: %v", err)
 	}
 
 	// Persist 50 output messages representing shell output
@@ -259,8 +254,8 @@ func TestUnifiedOutput_ArchivedSessionReadsViaShellOutput(t *testing.T) {
 		if m["source"].(string) != "persisted" {
 			t.Fatalf("expected source=persisted, got %v", m["source"])
 		}
-		if m["session_status"].(string) != "archived" {
-			t.Fatalf("expected session_status=archived, got %v", m["session_status"])
+		if m["session_status"].(string) != "exited" {
+			t.Fatalf("expected session_status=exited, got %v", m["session_status"])
 		}
 	})
 

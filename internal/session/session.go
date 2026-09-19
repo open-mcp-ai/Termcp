@@ -65,17 +65,21 @@ type Config struct {
 // Session is a connection container; terminal I/O is addressed by shell_id via ChildShell.
 type Session struct {
 	api.Session
-	mu             sync.RWMutex
-	shellStateMu   sync.Mutex // serializes child registration with close/DEAD transition
-	closing        bool       // guarded by shellStateMu; blocks new child channels
-	stdinMu        sync.Mutex
-	terminateOnce  sync.Once
-	deadOnce       sync.Once
-	exitOnce       sync.Once
-	execSession    *sshclient.ExecSession
-	buf            *buffer.Buffer
-	readerID       int
-	msgMgr         *message.Manager
+	mu            sync.RWMutex
+	shellStateMu  sync.Mutex // serializes child registration with close/DEAD transition
+	closing       bool       // guarded by shellStateMu; blocks new child channels
+	stdinMu       sync.Mutex
+	terminateOnce sync.Once
+	deadOnce      sync.Once
+	exitOnce      sync.Once
+	execSession   *sshclient.ExecSession
+	buf           *buffer.Buffer
+	readerID      int
+	msgMgr        *message.Manager
+	// scope owns the session's lifecycle resources (forwards, notification rules,
+	// minted credentials, readers). Subsystems attach themselves at creation;
+	// Release() in finalize cascades the teardown in LIFO order.
+	scope          *ResourceScope
 	onDead         atomic.Pointer[func()] // invoked once when the session turns DEAD; assigned by the manager right after New(), while exit watchers may already be reading
 	onChildChange  atomic.Pointer[func()] // invoked when child shells are added/removed; assigned under the same constraint
 	onOutput       atomic.Pointer[func(shellID string)]
@@ -156,11 +160,17 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		}
 		conn, err := internal.Dial()
 		if err != nil {
+			// The credential was never used: drop it instead of leaving a dead
+			// entry in the server's pending map for the process lifetime.
+			internal.RevokeClientConfig(minted.User)
 			return nil, err
 		}
 		sshEndpointPublic = "internal"
 		execSession, err = sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
+			// A failed handshake consumes nothing, so the one-time credential is
+			// still pending; revoke it to keep the map bounded by live sessions.
+			internal.RevokeClientConfig(minted.User)
 			return nil, err
 		}
 	}
@@ -214,10 +224,16 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		readerID:       rid,
 		msgMgr:         msgMgr,
 		primaryShellID: shellID,
+		scope:          newResourceScope(),
 	}
 
 	if msgMgr != nil {
 		msgMgr.Append(s.ID, api.MsgSystem, "Process started")
+	}
+	// Message-manager session state is a session-scoped resource: release it
+	// through the same cascade that closes forwards and notification rules.
+	if msgMgr != nil {
+		s.AttachCleanup(func() { msgMgr.ForgetSession(sessionID) })
 	}
 	// Attach the root to the session BEFORE starting its readers so the output
 	// pipe and exit watcher see a live parent + message manager from the first
@@ -566,7 +582,48 @@ func (s *Session) finalize() {
 		// system message + persist) before releasing the session, so a caller
 		// that purges the data directory afterwards cannot race a writer.
 		s.watchWG.Wait()
+		// Cascade: cancel every goroutine bound to the session scope and run the
+		// registered cleanups (forwards, notification rules, minted credentials,
+		// readers) in LIFO order. Nothing else needs to know what is attached.
+		if s.scope != nil {
+			s.scope.Release()
+		}
 	})
+}
+
+// Context returns the session's lifecycle context. It is canceled when the
+// session is finalized (deleted/purged), so long-lived loops or network dialers
+// bound to this session exit automatically without a coordinator polling them.
+func (s *Session) Context() context.Context {
+	if s.scope == nil {
+		return context.Background()
+	}
+	return s.scope.Context()
+}
+
+// AttachCleanup binds an arbitrary teardown function to the session's
+// ResourceScope. When the session is finalized (deleted), fn is invoked in
+// LIFO order alongside other attached resources. If the session has already
+// finalized, fn runs immediately.
+func (s *Session) AttachCleanup(fn func()) {
+	if s.scope == nil {
+		if fn != nil {
+			fn()
+		}
+		return
+	}
+	s.scope.Add(fn)
+}
+
+// AttachCloser registers an io.Closer to be closed when the session is finalized.
+func (s *Session) AttachCloser(c io.Closer) {
+	if s.scope == nil {
+		if c != nil {
+			_ = c.Close()
+		}
+		return
+	}
+	s.scope.AddCloser(c)
 }
 
 // TerminateShellOnly closes the primary shell channel by shell id. For internal sessions this is a

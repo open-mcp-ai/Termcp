@@ -11,7 +11,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/open-mcp-ai/termcp/internal/forward"
-	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -27,7 +26,7 @@ const mcpServerInstructions = `termcp agent rules:
 1) IDs: session_id = connection container (forwards, files, terminate, shell_open); shell_id = terminal channel (input/key/output/resize/close, readers). Never invent them; take from session_start / shell_open / list tools. termcp:// locators from the user ("termcp://mac" entry, "termcp://#<sid>" session, "termcp://#<sid>:N" shell) are accepted in place of ssh_config names, session_id, shell_id — use verbatim, no lookups.
 2) Mode: interactive shell (omit command/args, DEFAULT) for multi-step/stateful work; drive via shell_input + shell_key(enter) + shell_output(timeout≤3) loops. shell_output returns ONLY new bytes: empty ≠ done, keep polling. Dedicated command (command/args set) ONLY for REPL/TUI, daemons, or one atomic script. Never split sequential steps into session_start(bash -c) calls (loses cwd/env, wastes handshakes).
 3) After discovery, act with concrete calls, not prose. Verify success via output or an explicit success field.
-4) Lifecycle: session_terminate closes shells+forwards and archives; archived output is read via shell_output (tail_lines/offset); history(purge) deletes it; history(screenshot) renders PNG. force=true = immediate kill. shell_close closes one channel.
+4) Lifecycle: session_terminate closes a session (shells + SSH + forwards) but keeps it in the registry as exited/DEAD, output still readable via shell_output; session_delete erases it for good. force=true = immediate kill. shell_close closes one channel only.
 5) Password/sudo/passphrase/MFA prompt: stop and ask user to type it in termcp Web UI. Never guess, paste, or echo secrets.
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
@@ -42,7 +41,6 @@ type Server struct {
 	streamServer    *mcpserver.StreamableHTTPServer
 	sessMgr         *session.Manager
 	msgMgr          *message.Manager
-	historyMgr      *history.Manager
 	sshConfigs      *sshconfig.Store
 	forwardMgr      *forward.ForwardManager
 	notifyMgr       *notify.Manager
@@ -93,11 +91,6 @@ func (s *Server) SendSamplingNotification(ctx context.Context, shellID string, t
 	return err
 }
 
-// SetHistory attaches the archived-session history manager (list/transcript/search/purge tools).
-func (s *Server) SetHistory(h *history.Manager) {
-	s.historyMgr = h
-}
-
 // SetUINotifier wires the Web UI notification delivery end (notify_user tool).
 func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, durationSec int) int) {
 	s.uiNotify = fn
@@ -133,9 +126,6 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	s.notifyMgr = notify.NewManager(s)
 	if sessMgr != nil {
 		sessMgr.SetNotifyHooks(s.notifyMgr.OnOutput, s.notifyMgr.OnExit, s.notifyMgr.ClearShell)
-		sessMgr.AddTerminateListener(func(sessionID string) {
-			s.notifyMgr.ClearSession(sessionID)
-		})
 	}
 	mcpServer.AddTool(newTool("session_start",
 		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED: a profile name from ssh_config(action=list), \"internal\" for the termcp host loopback, or a termcp:// entry locator pasted by the user (e.g. \"termcp://mac\" — parsed directly, no lookup needed). Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
@@ -202,11 +192,16 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("session_info", s.handleGetSessionInfo))
 
 	mcpServer.AddTool(newTool("session_terminate",
-		mcpgo.WithDescription("Stop and archive a session: terminate all shells, close SSH, cascade forwards, drop registry entry. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). Output stays readable via shell_output (same cursor semantics as live; tail_lines/offset); history(action=purge) deletes it permanently. force=true = immediate kill; force=false waits grace_period after SIGTERM. To close one shell only, use shell_close."),
+		mcpgo.WithDescription("Close a session: terminates all shells, closes the SSH transport, cascades forwards, but keeps the entry in the registry (status: exited / DEAD) and in the Web UI as a read-only tile, so output remains readable via shell_output. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). force=true = immediate kill; force=false waits grace_period after SIGTERM. To permanently erase the session and its on-disk messages, use session_delete. To close one shell only, use shell_close."),
 		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 		mcpgo.WithBoolean("force", mcpgo.Description("If true, end immediately without honoring grace_period"), mcpgo.DefaultBool(false)),
 		mcpgo.WithNumber("grace_period", mcpgo.Description("Seconds to allow after SIGTERM before hard close when force is false (0–60)"), mcpgo.DefaultNumber(5)),
 	), withLogging("session_terminate", s.handleTerminateSession))
+
+	mcpServer.AddTool(newTool("session_delete",
+		mcpgo.WithDescription("Permanently delete a session: finalizes its process (running or DEAD), releases every child resource (shells, forwards, notification rules, buffers), drops the registry entry (its tile disappears from the Web UI) and erases on-disk message history. Irreversible. To merely stop a session and keep reading its output, use session_terminate."),
+		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
+	), withLogging("session_delete", s.handleDeleteSession))
 
 	mcpServer.AddTool(newTool("shell_resize",
 		mcpgo.WithDescription("Update PTY rows/cols for a shell channel (propagates to SSH remote PTY when applicable)."),
@@ -236,21 +231,6 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		mcpgo.WithString("shell_id", mcpgo.Required()),
 	), withLogging("shell_reader_register", s.handleRegisterReader))
 
-	mcpServer.AddTool(newTool("history",
-		mcpgo.WithDescription("Archived sessions: action(list) all; search_messages (query); rename_session; update_session_meta (notes/tags); purge (delete permanently); screenshot (PNG URL, start/lines/cols/theme). Output reading is shell_output's job (it works on archived shells)."),
-		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list", "search_messages", "rename_session", "update_session_meta", "purge", "screenshot")),
-		mcpgo.WithString("session_id", mcpgo.Description("Archived session id; required except list/search_messages")),
-		mcpgo.WithString("query", mcpgo.Description("search_messages: case-insensitive substring")),
-		mcpgo.WithNumber("limit", mcpgo.Description("search_messages: max snippets"), mcpgo.DefaultNumber(50)),
-		mcpgo.WithString("name", mcpgo.Description("rename_session: new display name")),
-		mcpgo.WithString("notes", mcpgo.Description("update_session_meta: notes to set")),
-		mcpgo.WithArray("tags", mcpgo.Description("update_session_meta: tags to set"), mcpgo.WithStringItems()),
-		mcpgo.WithNumber("start", mcpgo.Description("screenshot: first display line"), mcpgo.DefaultNumber(0)),
-		mcpgo.WithNumber("lines", mcpgo.Description("screenshot: lines to render; 0 = all"), mcpgo.DefaultNumber(0)),
-		mcpgo.WithNumber("cols", mcpgo.Description("screenshot: terminal width"), mcpgo.DefaultNumber(80)),
-		mcpgo.WithString("theme", mcpgo.Description("screenshot: dark|light"), mcpgo.DefaultString("dark")),
-	), withLogging("history", s.handleHistoryOps))
-
 	mcpServer.AddTool(newTool("shell_reader_unregister",
 		mcpgo.WithDescription("Release a reader_id previously returned by shell_reader_register."),
 		mcpgo.WithString("shell_id", mcpgo.Required()),
@@ -268,11 +248,11 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("shell_notify", s.handleShellNotifyOps))
 
 	mcpServer.AddTool(newTool("notify_user",
-		mcpgo.WithDescription("Post a visible notification to the human at the termcp Web UI (not the AI Agent): a colored toast on every open page plus a browser system notification; when session_id is set, that session's card is also highlighted."),
+		mcpgo.WithDescription("Post a visible notification to the human at the termcp Web UI (not the AI Agent): a colored toast on every open page plus a browser system notification; when session_id is set, that session's card is also highlighted.\n\nUse your own judgment: notify whenever the human would want to be interrupted or may not be watching this conversation — anything that needs their eyes, decision or action counts, not a fixed list of cases. Blockers read best as level=warn/error with duration_seconds=0 and the affected session_id, so the toast stands out and the right card highlights. Also say the same thing in your reply: delivered=0 means no Web UI tab was open and the toast was never shown."),
 		mcpgo.WithString("message", mcpgo.Required(), mcpgo.Description("Notification text shown to the user")),
 		mcpgo.WithString("title"),
 		mcpgo.WithString("level", mcpgo.Description("info (default), success, warn, or error"), mcpgo.DefaultString("info"), mcpgo.Enum("info", "success", "warn", "error")),
-		mcpgo.WithNumber("duration_seconds", mcpgo.Description("Seconds the toast stays before auto-dismissing (0–600); 0 = sticky until dismissed"), mcpgo.DefaultNumber(10)),
+		mcpgo.WithNumber("duration_seconds", mcpgo.Description("Seconds the toast stays before auto-dismissing (0–600); 0 = sticky until dismissed. Prefer 0 when the human must act before it can be ignored"), mcpgo.DefaultNumber(10)),
 		mcpgo.WithString("session_id", mcpgo.Description("Optional: highlight this session's card (and its terminal window, if open)")),
 	), withLogging("notify_user", s.handleNotifyUser))
 

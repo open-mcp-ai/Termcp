@@ -28,17 +28,6 @@ MCP resources, and a `learn-api` prompt:
 
 两个文档端点在开启鉴权后仍可**无凭据**获取（仅 GET/HEAD，纯静态、无数据）；其余所有面（REST/MCP/WS/Web UI）依旧要求 token。
 
-**ID 规则（硬）：**
-
-| 资源 | 参数名 | 谁用 |
-|------|--------|------|
-| Session（SSH 连接容器） | `session_id` | shell_open、forward、file_*、session_terminate、session_list、session_info |
-| Shell（终端 channel） | `shell_id` | shell_input、shell_key、shell_output、shell_resize、shell_reader_register/unregister、shell_close |
-
-`session_start` 返回 **两个不同** 的 id：`session_id` 与 `shell_id`（首个 shell 不与 session 共用 id）。
-
----
-
 ## 资源 URL 寻址（termcp://）
 
 这些 URL 是**复制给 AI 用的定位符**：Web UI 各处的复制按钮（entry 卡片、session 卡片、终端标题、每个 shell 频道标签）一键复制后，直接粘进与 AI 的对话或任务描述中，AI 就能精确定位你说的是**哪个连接 / 哪个会话 / 会话里的第几个频道**，不用再费口舌描述。点击复制按钮不会触发连接、切换频道或关闭窗口。
@@ -53,7 +42,7 @@ MCP resources, and a `learn-api` prompt:
 - **REST 侧也能解析**：`GET /api/resolve?url=termcp://...` 返回 `kind=entry|session|shell` 与对应 `ssh_config` / `session_id` / `shell_id`（纯 curl 的 agent 用；语法解析器与 MCP 共用 `internal/locator`）。
 - **MCP 工具直接接受定位符**：`session_start(ssh_config="termcp://mac")`、`session_terminate(session_id="termcp://#ctf-1")`、`shell_input(shell_id="termcp://#ctf-1:2", ...)` 等都无需先解析成裸 id，一次调用直达。
 - 兼容旧形式 `termcp://[entry名]#[会话id]`：entry 前缀被忽略（会话名与 entry 名无关），以会话 id 为准。
-- **归档会话**：写操作工具（`shell_input` / `shell_key` / `shell_resize` 等）不接受归档定位符，会返回带提示的错误——归档输出是只读的，用 `shell_output`（`tail_lines` / `offset` 翻页）读取。定位符解析失败（如 `termcp://#sid:0`）返回 `invalid_argument` 并附具体原因。
+- **已关闭（DEAD）会话**：写操作工具（`shell_input` / `shell_key` / `shell_resize` 等）不接受定位到已关闭会话，会返回带提示的错误——已关闭会话是只读的，用 `shell_output`（`tail_lines` / `offset` 翻页）读取。定位符解析失败（如 `termcp://#sid:0`）返回 `invalid_argument` 并附具体原因。
 - 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`（仅作事件载体，不是可用定位符）。
 
 ---
@@ -72,11 +61,10 @@ MCP resources, and a `learn-api` prompt:
 | 错误码 | 含义 | 典型处理 |
 |--------|------|----------|
 | `invalid_argument` | 参数缺失或非法 | 按提示修正参数后重试 |
-| `session_not_found` | 无此 session_id，或会话已归档（错误文本会提示用 `shell_output` 读取） | 用 `session_list` 复核 id |
+| `session_not_found` | 无此 session_id，或会话已关闭（错误文本会提示用 `shell_output` 读取） | 用 `session_list` 复核 id |
 | `shell_not_found` | 无此 shell_id（可能已 `shell_close` 删除） | 用 `shell_list` 复核 id |
 | `session_not_running` | 会话已 DEAD/恢复但无活跃 SSH 连接 | 重新 `session_start` |
 | `reader_not_registered` | `reader_id` 未在该 shell 注册 | 先 `shell_reader_register` |
-| `history_not_found` | 归档中无此会话 | 用 `history(action=list)` 复核 |
 | `forward_not_found` | 无此 forward_id | 用 `forward(action=list)` 复核 |
 | `ssh_config_not_found` | 无此 ssh_config | 用 `ssh_config(action=list)` 复核 |
 | `rule_not_found` | 无此通知规则 rule_id | 用 `shell_notify(action=list)` 复核 |
@@ -100,7 +88,7 @@ ssh_config(action=list)
       → shell_close(shell_id)
       → forward(session_id, action=local|remote|dynamic, ...)
       → file_*(session_id, ...)
-  → session_terminate(session_id)           # 关连接并归档（级联 shell+forward；force=true 强杀）
+  → session_terminate(session_id)           # 关闭会话（离 DEAD：断连接+杀进程；force=true 强杀）
 ```
 
 ---
@@ -189,24 +177,24 @@ ssh_config(action=list)
 
 ### shell_output
 
-**统一输出读取工具**：活会话（内存缓冲）、已退出会话（保留缓冲）、归档会话（磁盘消息流）全部用同一套字节流游标语义读取。
+**统一输出读取工具**：活会话（内存缓冲）、已退出会话（保留缓冲）、已关闭/重启恢复的会话（磁盘消息流）全部用同一套字节流游标语义读取。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `shell_id` | string | **是** | — | shell_id 或 session_id 均可；归档会话也可用 shell_id 定位单个 shell 的输出流 |
+| `shell_id` | string | **是** | — | shell_id 或 session_id 均可；已关闭会话也可用 shell_id 定位单个 shell 的输出流 |
 | `strip_ansi` | boolean | 否 | `true` | 是否剥离 ANSI 转义码并压缩终端噪音 |
 | `timeout` | number | 否 | `3` | 仅活会话：阻塞等待秒数（0–60）；0 = 非阻塞；多 shell 轮询建议 ≤3 |
 | `offset` | number | 否 | `-1` | 无状态字节游标：从该原始字节位置向后读；-1 = 默认模式（见下） |
 | `tail_lines` | number | 否 | `0` | 只返回流末尾最后 N 行（优先于 offset）；0 = 关闭 |
 | `max_lines` | number | 否 | `0` | 最多返回 N 个完整行（窗口内裁切）；0 = 无限制 |
 | `max_bytes` | number | 否 | `8192` | 单次返回最大原始字节数；0 = 无限制 |
-| `reader_id` | number | 否 | `0` | 仅活会话流式游标；归档会话不支持 |
+| `reader_id` | number | 否 | `0` | 仅活会话流式游标；已关闭会话不支持 |
 
 **读取模式（三选一）**：
 
 1. **流式游标（默认，活会话）**：返回 reader 上次读取后的新输出，游标前移、不重复。`shell_input → shell_key(enter) → shell_output` 轮询循环的原有语义，完全兼容。
-2. **`offset >= 0`（无状态绝对定位）**：读字节区间 `[offset, offset+max_bytes)`。任意时刻从头/任意位置翻页；每次调用显式传 `offset`（用返回的 `end_offset` 续读），服务器不保存状态，活会话与归档会话一视同仁。
-3. **`tail_lines > 0`（末尾截取）**：反向取流末尾最后 N 行——只读最近输出，绝不拖入整段历史（token 友好）。无 `offset`/`tail_lines` 且目标是归档/死亡会话时，默认也取末尾最近一块（≤8 KiB），不会全量导出。
+2. **`offset >= 0`（无状态绝对定位）**：读字节区间 `[offset, offset+max_bytes)`。任意时刻从头/任意位置翻页；每次调用显式传 `offset`（用返回的 `end_offset` 续读），服务器不保存状态，活会话与已关闭会话一视同仁。
+3. **`tail_lines > 0`（末尾截取）**：反向取流末尾最后 N 行——只读最近输出，绝不拖入整段历史（token 友好）。无 `offset`/`tail_lines` 且目标是已关闭/死亡会话时，默认也取末尾最近一块（≤8 KiB），不会全量导出。
 
 **返回**：`{ output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds? }`
 
@@ -214,7 +202,7 @@ ssh_config(action=list)
 - `source`：`"live"`（内存缓冲）或 `"persisted"`（磁盘消息流）。
 - 活会话流式读（模式 1）时 `start_offset`/`end_offset` 反映 reader 游标位置。
 
-> 例：只读归档会话最后 10 行 → `shell_output(shell_id=归档session_id, tail_lines=10)`；从头翻页 → `shell_output(shell_id, offset=0, max_bytes=8000)` 后用 `end_offset` 续读。
+> 例：只读已关闭会话最后 10 行 → `shell_output(shell_id=已关闭session_id, tail_lines=10)`；从头翻页 → `shell_output(shell_id, offset=0, max_bytes=8000)` 后用 `end_offset` 续读。
 
 ### session_list
 
@@ -232,7 +220,7 @@ ssh_config(action=list)
 
 ### session_terminate
 
-终止并移除会话：关闭全部 shell，并关闭 SSH 连接（级联 forwards）。`force=true` 立即强杀；只关一个通道用 `shell_close`。
+终止并**关闭**会话：关闭全部 shell，并关闭 SSH 连接（级联清理 forwards / 通知规则）。会话**保留在注册表**中（状态 `exited` / DEAD），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。彻底删除用 `session_delete`。`force=true` 立即强杀；只关一个通道用 `shell_close`。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -324,7 +312,9 @@ ssh_config(action=list)
 
 **返回**：`{ ok, delivered, title, level, session_id? }` —— `delivered` 是实际收到通知的已打开页面数（WebSocket 标签页）；为 `0` 表示当前没有页面打开，通知未展示（附 `hint` 说明）。
 
-**典型用法**（长任务完成提醒）：
+**什么时候用**：由 Agent 自行判断 —— 只要“人应该被提醒”就用，例如会话在等人（凭据、确认、MFA、交互式提问）、长任务结束、任务失败、需要人做决定。不限于固定场景清单。阻塞类提醒建议 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片）；同时要在回复里说同一件事，因为 `delivered=0` 说明没有页面打开、通知未展示。
+
+**典型用法**：
 
 ```jsonc
 { "message": "构建已完成，耗时 2m31s", "level": "success", "session_id": "<session_id>" }
@@ -345,32 +335,15 @@ ssh_config(action=list)
 - `action="list"`：返回该会话的消息索引 `{ "messages": [{ id, shell_id, type, created_at, byte_size }] }`
 - `action="get"`：返回指定消息的详细内容 `{ "messages": [{ id, session_id, shell_id, type, content, created_at, byte_size }] }`
 
-### history（归档会话管理与回放）
+### session_delete（彻底删除会话）
 
-会话正常退出、意外断线或 `session_terminate` 后进入归档历史（“断开 ≠ 删除”），元数据保存在 `history.json`，消息保留在磁盘。跨 termcp 重启仍可检索、查看与导出。
+**永久删除**一个会话：关闭仍存活的进程/传输，释放全部子资源（shell 通道、端口转发、通知规则、内存缓冲），从注册表移除（Web UI 上的 tile 随之消失），并擦除磁盘上的消息记录。**不可逆**。
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-|------|------|------|------|------|
-| `action` | string | **是** | — | `list` / `search_messages` / `rename_session` / `update_session_meta` / `purge` / `screenshot` |
-| `session_id` | string | 条件 | — | 会话 ID（除 list/search_messages 外必填） |
-| `query` | string | 条件 | — | `search_messages`：不区分大小写的全文搜索子串 |
-| `limit` | number | 否 | `50` | `search_messages`：最多返回的匹配条数 |
-| `name` | string | 条件 | — | `rename_session`：新的会话显示名称 |
-| `notes` | string | 否 | — | `update_session_meta`：更新的解法笔记/说明 |
-| `tags` | string[] | 否 | — | `update_session_meta`：更新的标签列表（如 `["web", "flag"]`） |
-| `start` | number | 否 | `0` | `screenshot`：起始渲染行（0 索引） |
-| `lines` | number | 否 | `0` | `screenshot`：渲染行数（0 = 全部） |
-| `cols` | number | 否 | `80` | `screenshot`：终端列宽 |
-| `theme` | string | 否 | `"dark"` | `screenshot`：主题（`"dark"` 或 `"light"`） |
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | string | **是** | session_id 或 `termcp://` 定位符 |
 
-**各 action 行为**：
-- `action="list"`：列出所有归档会话 `{ "sessions": [...] }`。
-- `action="search_messages"`：跨所有会话全文搜索终端输出与输入 `{ "query": "...", "hits": [{ session_id, name, type, snippet }] }`。
-- `action="rename_session"`：重命名活跃或归档会话。
-- `action="update_session_meta"`：为归档会话添加备注与标签，方便事后检索审计。
-- `action="purge"`：**永久删除**会话，并物理清理磁盘上的所有消息记录（不可逆）。
-- `action="screenshot"`：将终端指定行数渲染为 PNG 截图并返回下载 URL，适合快速视觉审计。
-- **输出读取**：归档会话的终端输出由 `shell_output(shell_id=归档session_id, tail_lines=N / offset=...)` 读取，无需调用独立工具。
+> **close ≠ delete**：`session_terminate` 只**关闭**会话——断开连接、结束进程，但会话仍留在注册表中（状态 `exited`），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。只有 `session_delete` 才真正抹除。
 
 ---
 
@@ -501,6 +474,6 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `file_truncate` / `file_realpath` / `file_statvfs` | `file_fs(action=truncate\|realpath\|statvfs)` |
 | `local_forward` / `remote_forward` / `dynamic_forward` / `list_forwards` / `close_forward` | `forward(action=local\|remote\|dynamic\|list\|close)` |
 | `message_list` / `message_get` | `message(action=list\|get)` |
-| `history_list` / `history_search_messages` / `history_rename_session` / `history_update_session_meta` / `history_purge` / `history_screenshot` | `history(action=list\|search_messages\|rename_session\|update_session_meta\|purge\|screenshot)`；归档输出读取改由 `shell_output` 承担（`tail_lines`/`offset`） |
-| `history(action=get_transcript)` | 删除；归档/死亡会话输出改用 `shell_output(shell_id=归档session_id或shell_id, tail_lines=N / offset)`，与活会话同一套游标语义 |
+| ~~`history_*`~~ | **已移除**：`session_terminate` 不再归档，关闭后会话保留在注册表，`shell_output` 统一读输出；彻底删除用 `session_delete` |
+| `history(action=get_transcript)` | **已移除**；归档/死亡会话输出改用 `shell_output(shell_id=归档session_id或shell_id, tail_lines=N / offset)`，与活会话同一套游标语义 |
 | `ssh_config_list` / `ssh_config_create` / `ssh_config_edit` / `ssh_config_copy` / `ssh_config_delete` | `ssh_config(action=list\|create\|edit\|copy\|delete)` |
