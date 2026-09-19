@@ -171,16 +171,20 @@ func (b *Buffer) ReadLimited(ctx context.Context, readerID int, timeout time.Dur
 	deadline := time.Now().Add(timeout)
 	stop := make(chan struct{})
 	ctxDone := ctx.Done()
+	timer := time.NewTimer(time.Until(deadline))
 	go func() {
 		select {
-		case <-time.After(time.Until(deadline)):
+		case <-timer.C:
 			b.cond.Broadcast()
 		case <-ctxDone:
 			b.cond.Broadcast()
 		case <-stop:
 		}
 	}()
-	defer close(stop)
+	defer func() {
+		close(stop)
+		timer.Stop()
+	}()
 
 	for rs.readPos >= int64(len(b.master)) && !b.closed {
 		if time.Until(deadline) <= 0 {

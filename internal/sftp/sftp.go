@@ -190,8 +190,8 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 		if err != nil {
 			return nil, fmt.Errorf("create local file: %w", err)
 		}
+		defer localFile.Close()
 		n, err := io.CopyN(localFile, f, length)
-		localFile.Close()
 		if err != nil {
 			return nil, fmt.Errorf("copy to local: %w", err)
 		}
