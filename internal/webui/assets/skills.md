@@ -72,13 +72,13 @@ Then act on the ids (see sections 4–6 for the full recipes):
   `shell_id`. Then drive them like any other session. 404 = no such profile
   (`GET /api/connections` lists them; one must be created first in the Web UI).
 - `"kind":"session"` — an existing session: use `session_id` for output/files/
-  forwards. `"status":"archived"` (or `"archived":true`) means read-only: use
-  `output-range` / `transcript`, not input.
+  forwards. `"status":"exited"` means read-only (closed): use
+  `output-range`, not input.
 - `"kind":"shell"` — use `shell_id` for input/key/output-range/resize; the
   `index` matches the `shell-1`/`shell-2` tabs.
 
 Errors: `400` malformed locator, `404` unknown profile/session/out-of-range shell
-index, `409` shell locator on an archived (read-only) session.
+index, `409` shell locator on a closed (read-only) session.
 
 Example — "open termcp://rock64 and run uname -a":
 
@@ -110,9 +110,9 @@ SID=$(jq -r .session_id <<<"$OUT"); SHELL_ID=$(jq -r .shell_id <<<"$OUT")
 curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
   -d '{"name":"shell-2"}' "$BASE/api/sessions/$SID/shells" | jq .
 
-# Stop but keep history (archive, still readable)
+# Close but keep in registry (DEAD, still readable via output-range)
 curl -fsS -X POST "${AUTH[@]}" "$BASE/api/sessions/$SID/terminate"
-# Permanently delete (archive + on-disk messages, irreversible)
+# Permanently delete (drops from registry, clears on-disk messages, irreversible)
 curl -fsS -X DELETE "${AUTH[@]}" "$BASE/api/sessions/$SID"
 ```
 
@@ -159,17 +159,7 @@ For real-time bidirectional streams (full-screen TUI) use the WebSocket
 `GET /api/ui/ws` (`watch_add` to subscribe, `input` to write); curl cannot
 speak WebSocket — without `websocat`, prefer REST + `output-range` polling.
 
-## 7. Archived sessions, transcript, screenshot
-
-```bash
-curl -fsS "${AUTH[@]}" "$BASE/api/history" | jq -r '.sessions[]?.id'    # archived sessions
-curl -fsS "${AUTH[@]}" "$BASE/api/history/$OLD/transcript?format=markdown"   # full transcript
-curl -fsS "${AUTH[@]}" "$BASE/api/history/$OLD/screenshot?lines=60&cols=160" -o s.png
-```
-
-Archived sessions are read-only: write endpoints reject them; use `output-range`.
-
-## 8. Files & port forwards
+## 7. Files & port forwards
 
 Bodies are in `/api.md`. Essentials:
 
@@ -179,10 +169,10 @@ Bodies are in `/api.md`. Essentials:
 - Forwards: `POST /api/sessions/{sid}/forwards` (local/remote/dynamic),
   `GET /api/forwards` to list, `DELETE /api/forwards/{id}` to close.
 
-## 9. Pitfalls
+## 8. Pitfalls
 
-- `DELETE /api/sessions/{id}` and `DELETE /api/history/{id}` are **permanent**;
-  use `terminate` to keep history.
+- `DELETE /api/sessions/{id}` is **permanent**;
+  use `terminate` to keep the session visible and readable.
 - `shell_id` ≠ `session_id`: terminal I/O (output-range / input / key / resize)
   takes `shell_id`.
 - With auth enabled, every API endpoint needs credentials (`/api.md` and

@@ -2395,18 +2395,54 @@
     //  - deleted parent → close the window
     var sessionById = {};
     (sessions || []).forEach(function (s) { if (s.id) sessionById[s.id] = s; });
-    var c = shellWindowsEl();
-    if (c) {
-      var wins = c.querySelectorAll('.shell-window');
-      for (var i = 0; i < wins.length; i++) {
-        var w = wins[i];
-        if (!w._parentSid || w._placeholder) continue;
-        var s = sessionById[w._parentSid];
-        if (!s) { closeShellWindow(w); continue; }
-        if (s.status !== 'running') lockWindowReadonly(w);
+    // Reconcile EVERY open window — floating (shellWindowsEl) AND tiled
+    // (pane-grid). Iterating only the floating container left windows for
+    // deleted sessions open forever in the tiled workspace; allShellWins()
+    // is the single source of truth for "all open shell windows".
+    var wins = allShellWins();
+    for (var i = 0; i < wins.length; i++) {
+      var w = wins[i];
+      if (!w._parentSid || w._placeholder) continue;
+      var s = sessionById[w._parentSid];
+      if (!s) {
+        releaseSessionUIState(w._parentSid);
+        closeShellWindow(w);
+        continue;
       }
+      if (s.status !== 'running') lockWindowReadonly(w);
     }
+    // Prune invisible client-side state for sessions that have left the
+    // server registry entirely, even if no window was open when they died.
+    pruneDeadSessionUIState(sessionById);
     refreshAllWindowTabs();
+  }
+
+  /** Drop client-side maps for sessions no longer present in sessionById. */
+  function pruneDeadSessionUIState(liveMap) {
+    if (!liveMap) return;
+    if (_uiNotifHighlights) {
+      Object.keys(_uiNotifHighlights).forEach(function(id) { if (!liveMap[id]) delete _uiNotifHighlights[id]; });
+    }
+    if (_selectedSessionIds && _selectedSessionIds.size) {
+      _selectedSessionIds.forEach(function(id) { if (!liveMap[id]) _selectedSessionIds.delete(id); });
+    }
+    if (window._shellLastActive) {
+      Object.keys(window._shellLastActive).forEach(function(id) { if (!liveMap[id]) delete window._shellLastActive[id]; });
+    }
+    if (window._pendingTerminalWatch) {
+      Object.keys(window._pendingTerminalWatch).forEach(function(id) { if (!liveMap[id]) delete window._pendingTerminalWatch[id]; });
+    }
+  }
+
+  /** Drop every client-side map keyed by a session id that no longer exists.
+   *  Windows are the visible half of the leak; these maps are the invisible
+   *  half (stale highlights, remembered tabs, queued watches). */
+  function releaseSessionUIState(sid) {
+    if (!sid) return;
+    if (_uiNotifHighlights) delete _uiNotifHighlights[sid];
+    if (_selectedSessionIds) _selectedSessionIds.delete(sid);
+    if (window._shellLastActive) delete window._shellLastActive[sid];
+    if (window._pendingTerminalWatch) delete window._pendingTerminalWatch[sid];
   }
 
   /** Per-window tab refresh: fetch child shells for win's parent session and sync tabs.
@@ -2422,11 +2458,9 @@
   }
 
   /** Notify all open windows that the global session list changed; each window independently
-   *  decides whether to refresh its own channel tabs. */
+   *  decides whether to refresh its own channel tabs. Covers tiled panes too. */
   function refreshAllWindowTabs() {
-    var c = shellWindowsEl();
-    if (!c) return;
-    var wins = c.querySelectorAll('.shell-window');
+    var wins = allShellWins();
     for (var i = 0; i < wins.length; i++) {
       refreshWindowTabs(wins[i]);
     }
@@ -2575,9 +2609,7 @@
   }
 
   function resubscribeAllTerminalWatches() {
-    var c = shellWindowsEl();
-    if (!c) return;
-    var wins = c.querySelectorAll('.shell-window');
+    var wins = allShellWins();
     for (var i = 0; i < wins.length; i++) {
       var w = wins[i];
       if (w._channels) {
@@ -2709,6 +2741,26 @@
     connectUIWebSocket();
   }
 
+  /** Register a window-scoped teardown. Every global listener, timer or
+   *  abortable request owned by a shell window goes through here so that
+   *  closing the window can never leave one behind (the old code cleaned
+   *  channel tabs by hand and silently leaked per-window document listeners). */
+  function addWinDisposable(win, disposeFn) {
+    if (!win || typeof disposeFn !== 'function') return;
+    if (!win._disposables) win._disposables = [];
+    win._disposables.push(disposeFn);
+  }
+
+  /** Run every window-scoped teardown exactly once, LIFO. */
+  function disposeWinResources(win) {
+    if (!win || !win._disposables || !win._disposables.length) return;
+    var list = win._disposables;
+    win._disposables = [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      try { list[i](); } catch (e) {}
+    }
+  }
+
   function closeShellWindow(win) {
     // Remember active tab for reconnect.
     if (win._parentSid && win._activeChannelSid) {
@@ -2746,6 +2798,9 @@
       try { win._shellInputUnlockAC.abort(); } catch (e) {}
       win._shellInputUnlockAC = null;
     }
+    // Release everything registered through addWinDisposable (document-level
+    // listeners, drag/resize finish hooks, pending requests).
+    disposeWinResources(win);
     win.remove();
   }
 
@@ -3662,10 +3717,16 @@
     var fileUploadInput = win.querySelector('.shell-file-upload-input');
     var fileCtxMenu = win.querySelector('.shell-file-ctx-menu');
 
-    // Dismiss context menu on outside click
-    document.addEventListener('click', function(e) {
+    // Dismiss context menu on outside click. Scoped to the window: without
+    // removeEventListener every opened window left a click handler (and its
+    // closed-over DOM) attached to document forever.
+    var onFileCtxOutsideClick = function(e) {
       if (!fileCtxMenu || fileCtxMenu.style.display === 'none') return;
       if (!fileCtxMenu.contains(e.target)) fileCtxMenu.style.display = 'none';
+    };
+    document.addEventListener('click', onFileCtxOutsideClick);
+    addWinDisposable(win, function() {
+      document.removeEventListener('click', onFileCtxOutsideClick);
     });
 
     function shellFileBrowse() {
@@ -4223,7 +4284,7 @@ SHELL_WINDOW_PANELS_HTML +
       var icon = c.kind === 'internal' ? '🔁' : '🌐';
       var editBtn = c.kind === 'internal' ? '' :
         '<button type="button" class="conn-edit-btn" title="Edit profile" aria-label="Edit profile">' + SVG_CONN_EDIT + '</button>';
-      var quickBtn = '<button type="button" class="conn-quick-btn" title="Quick connect (profile default)" aria-label="Quick connect">' + SVG_CONN_QUICK + '</button>';
+      var quickBtn = '<button type="button" class="conn-quick-btn" title="Launch options (session name, command)" aria-label="Launch options">' + SVG_CONN_QUICK + '</button>';
       tile.innerHTML =
         '<div class="entry-card-inner">' +
         '<div class="conn-tile-stack">' +
@@ -4232,7 +4293,7 @@ SHELL_WINDOW_PANELS_HTML +
         '<div class="entry-card-main">' +
         '<div class="conn-nm-row">' +
         '<span class="conn-nm-cluster">' +
-        '<span class="conn-nm" title="Click for options">' + escapeHtml(c.name) + '</span>' +
+        '<span class="conn-nm" title="Connect">' + escapeHtml(c.name) + '</span>' +
         '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
         '</span>' +
         quickBtn +
@@ -4241,40 +4302,39 @@ SHELL_WINDOW_PANELS_HTML +
         '</div>' +
         '</div>';
       var inner = tile.querySelector('.entry-card-inner');
-      var tipConnect = 'Click for options (session name, command); ▶ quick connect';
+      var tipConnect = 'Click to connect directly; ▶ for options (session name, command)';
       if (c.kind === 'internal') {
         inner.title = tipConnect + ' (built-in loopback; not editable)';
       } else {
         var hostLine = ((c.user || '') + '@' + (c.host || '') + (c.port && c.port !== 22 ? ':' + c.port : '')).trim();
         inner.title = hostLine ? (tipConnect + ' — ' + hostLine) : tipConnect;
       }
+      // Clicking the card body connects directly (most frequent action).
       inner.addEventListener('click', function (e) {
         if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn')) return;
-        // Plain click opens the start dialog (session name defaults to the
-        // profile and stays editable); the green ▶ button is the
-        // quick-connect shortcut that keeps the old one-click behavior.
-        openStartModal(c.name, e);
+        var b = document.getElementById('conn-load-banner');
+        if (b) setLoadBanner(b, '');
+        tile.classList.add('entry-connecting');
+        inner.classList.add('entry-connecting');
+        startSessionAndOpenShell(c.name, e)
+          .catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            console.error(err);
+            var msg = (err && err.message) ? err.message : String(err);
+            if (b) setLoadBanner(b, 'Connection failed: ' + msg);
+          })
+          .finally(function () {
+            tile.classList.remove('entry-connecting');
+            inner.classList.remove('entry-connecting');
+          });
       });
+      // The triangle button opens the launch options modal (rename session, custom command).
       var quickBtnEl = tile.querySelector('.conn-quick-btn');
       if (quickBtnEl) {
         quickBtnEl.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
-          var b = document.getElementById('conn-load-banner');
-          if (b) setLoadBanner(b, '');
-          tile.classList.add('entry-connecting');
-          inner.classList.add('entry-connecting');
-          startSessionAndOpenShell(c.name, e)
-            .catch(function (err) {
-              if (err && err.name === 'AbortError') return;
-              console.error(err);
-              var msg = (err && err.message) ? err.message : String(err);
-              if (b) setLoadBanner(b, 'Connection failed: ' + msg);
-            })
-            .finally(function () {
-              tile.classList.remove('entry-connecting');
-              inner.classList.remove('entry-connecting');
-            });
+          openStartModal(c.name, e);
         });
       }
       var entryCopyBtn = tile.querySelector('.sess-copy-btn');

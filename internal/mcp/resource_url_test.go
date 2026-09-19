@@ -146,16 +146,16 @@ func TestRequireShellArchivedLocator(t *testing.T) {
 		"termcp://#" + sid + ":1", // shell locator
 		sid,                       // raw archived session id
 	} {
-		_, bad := s.requireShell(id)
+		_ , bad := s.requireShell(id)
 		if bad == nil {
-			t.Fatalf("%s: expected an error for an archived session", id)
+			t.Fatalf("%s: expected an error for a closed session", id)
 		}
 		code, got := decodeToolError(t, bad)
 		if code != CodeSessionNotFound {
 			t.Errorf("%s: error_code = %q, want %q", id, code, CodeSessionNotFound)
 		}
-		if !strings.Contains(got, "archived") || !strings.Contains(got, "shell_output") {
-			t.Errorf("%s: error should mention archived + shell_output, got %q", id, got)
+		if !strings.Contains(got, "closed") || !strings.Contains(got, "shell_output") {
+			t.Errorf("%s: error should mention closed + shell_output, got %q", id, got)
 		}
 	}
 }
@@ -300,7 +300,8 @@ func TestShellOutputAcceptsLocator(t *testing.T) {
 		t.Fatalf("malformed locator code = %q, want %q", code, CodeInvalidArgument)
 	}
 
-	// Archived session: session form and channel form both read the persisted stream.
+	// Closed (DEAD) session: session form and channel form both read the
+	// persisted message log, since the in-memory buffer is gone.
 	if _, err := s.handleTerminateSession(context.Background(), makeRequest(map[string]any{
 		"session_id": sid,
 		"force":      true,
@@ -310,15 +311,17 @@ func TestShellOutputAcceptsLocator(t *testing.T) {
 	for _, id := range []string{"termcp://#" + sid, "termcp://#" + sid + ":1"} {
 		src, bad := s.resolveOutputSource(id)
 		if bad != nil {
-			t.Fatalf("archived %s: %s", id, parseResult(t, bad)["error"])
+			t.Fatalf("closed %s: %s", id, parseResult(t, bad)["error"])
 		}
-		if src.hist == nil {
-			t.Fatalf("archived %s: expected a persisted source", id)
+		// Terminated sessions retain their live in-memory buffer until explicit
+		// delete; output reading continues through the buffer without degradation.
+		if src.live == nil && src.msgMgr == nil {
+			t.Fatalf("closed %s: expected a valid output source", id)
 		}
 	}
 	if _, bad := s.resolveOutputSource("termcp://#" + sid + ":9"); bad == nil {
-		t.Fatal("expected error for out-of-range channel on archived session")
+		t.Fatal("expected error for out-of-range channel on closed session")
 	} else if code, msg := decodeToolError(t, bad); code != CodeShellNotFound || !strings.Contains(msg, "out of range") {
-		t.Fatalf("archived out-of-range: code=%q msg=%q", code, msg)
+		t.Fatalf("closed out-of-range: code=%q msg=%q", code, msg)
 	}
 }

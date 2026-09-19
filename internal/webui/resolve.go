@@ -6,7 +6,6 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
-	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // resolveResponse is the body of GET /api/resolve. Only the fields meaningful
@@ -111,21 +110,5 @@ func (h *Handler) resolveSessionOrShell(w http.ResponseWriter, p *locator.Parsed
 		return
 	}
 
-	if h.History != nil {
-		if arch, ok := h.History.Get(p.SessionID); ok {
-			if p.Kind == locator.KindShell {
-				http.Error(w, fmt.Sprintf("session %q is archived: its shells are read-only, read them with GET /api/sessions/%s/output-range", p.SessionID, p.SessionID), http.StatusConflict)
-				return
-			}
-			writeJSON(w, http.StatusOK, resolveResponse{
-				Kind:      "session",
-				SessionID: arch.ID,
-				Name:      arch.Name,
-				Status:    string(api.SessionArchived),
-				Archived:  true,
-			})
-			return
-		}
-	}
 	http.Error(w, fmt.Sprintf("session %q not found (list live sessions with GET /api/sessions)", p.SessionID), http.StatusNotFound)
 }
