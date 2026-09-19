@@ -89,6 +89,40 @@ func TestMint_OneTimePassword(t *testing.T) {
 	// ssh.NewClientConn closes conn2 on handshake failure, so no explicit Close needed.
 }
 
+// A minted credential that never authenticates (dial refused, handshake error)
+// must not stay in the pending map: failed session starts would otherwise leak
+// one entry per attempt for the lifetime of the process.
+func TestRevokeClientConfig(t *testing.T) {
+	srv := New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	cfg, err := srv.MintClientConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	_, pendingBefore := srv.pending[cfg.User]
+	srv.mu.Unlock()
+	if !pendingBefore {
+		t.Fatal("minted credential should be pending before revoke")
+	}
+
+	srv.RevokeClientConfig(cfg.User)
+	srv.mu.Lock()
+	_, pendingAfter := srv.pending[cfg.User]
+	srv.mu.Unlock()
+	if pendingAfter {
+		t.Fatal("RevokeClientConfig left the credential in the pending map")
+	}
+
+	// Revoking an unknown/already-consumed credential must be a no-op.
+	srv.RevokeClientConfig(cfg.User)
+	srv.RevokeClientConfig("")
+}
+
 func TestServer_StartAndStop(t *testing.T) {
 	srv := New()
 	if err := srv.Start(); err != nil {
@@ -412,4 +446,72 @@ func TestServer_PtyEnviron(t *testing.T) {
 
 	stdin.Write([]byte(testShellInput("exit")))
 	session.Wait()
+}
+
+// countGoroutines returns the current goroutine count after a settle period.
+func countGoroutines() int {
+	for i := 0; i < 20; i++ {
+		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
+	}
+	return runtime.NumGoroutine()
+}
+
+// Every handled session used to leak one signal-forwarding goroutine: it ranged
+// over a channel the library never closes, so it blocked forever after the shell
+// exited. Delete a handful of sessions and the count must come back down.
+func TestServer_SessionGoroutinesReleased(t *testing.T) {
+	if testing.Short() {
+		t.Skip("goroutine accounting is timing sensitive")
+	}
+	srv := New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// Warm up: the first session spins up library-internal goroutines that are
+	// intentionally long-lived, so measure the baseline only after one round.
+	runOneSession := func() {
+		cfg := mintCfg(t, srv)
+		c := dialServer(t, srv, cfg)
+		session, err := c.NewSession()
+		if err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		stdin, err := session.StdinPipe()
+		if err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		if err := session.Start(testShellEchoCommand("leak-check")); err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(stdout)
+		_, _ = stdin.Write([]byte("\n"))
+		_ = session.Wait()
+		_ = session.Close()
+		_ = c.Close()
+	}
+
+	runOneSession()
+	baseline := countGoroutines()
+
+	const rounds = 6
+	for i := 0; i < rounds; i++ {
+		runOneSession()
+	}
+
+	after := countGoroutines()
+	// Allow a little slack for runtime-internal goroutines that linger briefly.
+	if after > baseline+3 {
+		t.Fatalf("goroutine leak: baseline=%d after %d sessions=%d (leaked ~%d)", baseline, rounds, after, after-baseline)
+	}
 }

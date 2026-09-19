@@ -490,3 +490,56 @@ func TestBuffer_ByteRange(t *testing.T) {
 		t.Fatalf("expected nil past end")
 	}
 }
+
+// A reader that is registered but never drained pins the compaction watermark at
+// its cursor (maybeCompactLocked uses min(readPos)), so the master buffer grows
+// without bound. Unregister must release that pin — this is what session-scope
+// cleanup relies on for readers an agent forgot to release.
+func TestBuffer_UndrainedReaderPinsCompactionUntilUnregistered(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	churn := make([]byte, 32)
+	for i := range churn {
+		churn[i] = 'x'
+	}
+
+	// Active reader that keeps draining, so only the idle reader can pin growth.
+	drainer, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const rounds = 200
+	for i := 0; i < rounds; i++ {
+		if err := b.Write(churn); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.Read(context.Background(), drainer, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pinned := b.Len()
+	if pinned < int64(rounds*len(churn)/2) {
+		t.Fatalf("expected idle reader to pin growth, master len = %d", pinned)
+	}
+
+	b.Unregister(idle)
+
+	// One more write lets the next compaction reclaim the consumed prefix.
+	if err := b.Write(churn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), drainer, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if after := b.Len(); after >= pinned {
+		t.Fatalf("expected compaction after Unregister to shrink master: before=%d after=%d", pinned, after)
+	}
+}
