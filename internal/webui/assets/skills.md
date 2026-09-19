@@ -135,7 +135,8 @@ END=$(jq -r .end <<<"$R"); TOTAL=$(jq -r .total <<<"$R")
 # Tail only: ?tail=1&max=8192
 ```
 
-After issuing a command, sleep ~0.3s and re-poll until output stops growing.
+After issuing a command, re-poll until output stops growing — the read blocks
+until bytes arrive, so no delay is needed between polls.
 Empty reads do NOT mean done — check session/shell status. For REPL/TUI
 programs, use `tail=1` to watch the latest screen.
 
