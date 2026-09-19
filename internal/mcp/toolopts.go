@@ -51,6 +51,9 @@ var compactToolDescriptions = map[string]string{
 // parameter name, type, and compact tool description.
 func newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
 	opts = append([]mcpgo.ToolOption{annotationNone}, opts...)
+	if deferredTools[name] {
+		opts = append(opts, mcpgo.WithDeferLoading(true))
+	}
 	t := mcpgo.NewTool(name, opts...)
 	if desc, ok := compactToolDescriptions[name]; ok {
 		t.Description = desc
@@ -59,6 +62,31 @@ func newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
 	return t
 }
 
+// deferredTools lists tools whose full JSON Schema is withheld from the initial
+// tools/list so a client can load them on demand (MCP deferred tool loading).
+//
+// Keep the CORE loop out of this set — session_start/list/info/terminate/delete,
+// shell_open/close/input/key/output, notify_user — because a model that has to
+// search before it can type a command wastes a round trip on every interaction.
+// Deferred are the wide, low-frequency surfaces: SFTP (11 tools, parameter-heavy),
+// port forwarding, PTY/reader plumbing, message inspection and SSH profile admin.
+var deferredTools = map[string]bool{
+	// Files (SFTP): only needed once a session is already being driven.
+	"file_read": true, "file_write": true, "file_stat": true,
+	"file_delete": true, "file_rename": true, "file_mkdir": true,
+	"file_urls": true, "file_perm": true, "file_link": true,
+	"file_fs": true, "file_getwd": true,
+	// Networking and channel plumbing.
+	"forward":                 true,
+	"shell_resize":            true,
+	"shell_detect":            true,
+	"shell_notify":            true,
+	"shell_reader_register":   true,
+	"shell_reader_unregister": true,
+	// Introspection and configuration.
+	"message":    true,
+	"ssh_config": true,
+}
 
 // These fields are either identifiers, paths, coordinates, or self-evident
 // SSH profile fields. Their descriptions repeat information already present in

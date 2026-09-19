@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -32,6 +33,47 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/internal/webui"
 )
+
+// Build metadata. Release builds override these with -ldflags, e.g.
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always) \
+//	  -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%FT%TZ)"
+//
+// When they are not injected (plain `go build`, `go install pkg@v0.1.16`),
+// versionString falls back to the module version embedded by the Go toolchain,
+// so `termcp -version` always reports something truthful.
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
+// versionString returns the build version, preferring the ldflags-injected tag
+// and falling back to the Go toolchain's embedded module version (which carries
+// the git tag for `go install module@version` builds).
+func versionString() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return version
+}
+
+// printVersion writes the version line to w.
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "termcp %s", versionString())
+	if commit != "" {
+		fmt.Fprintf(w, " (commit %s)", commit)
+	}
+	if date != "" {
+		fmt.Fprintf(w, " built %s", date)
+	}
+	fmt.Fprintln(w)
+}
 
 func bindHostIsAll(bind string) bool {
 	switch strings.TrimSpace(bind) {
@@ -105,8 +147,14 @@ func main() {
 	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Print version, commit, and build date, then exit")
 	flag.Parse()
 
+	if showVersion {
+		printVersion(os.Stdout)
+		return
+	}
 
 	if genAuthHash {
 		if err := runGenAuthHash(flag.Args()); err != nil {
@@ -155,7 +203,7 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(buildLogHandler(cfg)))
-	slog.Info("termcp server started")
+	slog.Info("termcp server started", "version", versionString())
 
 	// Start internal SSH server (in-process, no TCP port) unless disabled.
 	var sshSrv *sshserver.Server

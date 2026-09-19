@@ -11,15 +11,24 @@ ifeq ($(GOOS),windows)
 BIN := $(BIN).exe
 endif
 
-LDFLAGS_RELEASE := -s -w
-
 # release 模式：-s 去掉符号表，-w 去掉 DWARF 调试信息，-trimpath 去掉本机路径等个人信息
 LDFLAGS_RELEASE := -s -w
+
+# 版本元数据：优先取 git tag（describe --tags --always 回退到短哈希），
+# 编译时注入 main.version / main.commit / main.date，使 `termcp -version`
+# 自动跟随 tag，无需手工改代码。无 .git 时（源码打包分发）自动降级为空。
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+
+LDFLAGS_VERSION := $(if $(VERSION),-X main.version=$(VERSION)) \
+                   $(if $(COMMIT),-X main.commit=$(COMMIT)) \
+                   $(if $(DATE),-X main.date=$(DATE))
 
 # 构建目标（默认 release）
 build:
 	mkdir -p dist
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS_RELEASE)" -o dist/$(BIN) .
+	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS_RELEASE) $(LDFLAGS_VERSION)" -o dist/$(BIN) .
 
 # 调试模式构建（保留符号信息，便于 delve 调试）
 build-debug:
