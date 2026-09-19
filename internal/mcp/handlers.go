@@ -94,12 +94,22 @@ func listableSessions(in []api.Session, callerNS string) []api.Session {
 // several matches is a refusal listing the candidates, because every candidate is
 // reachable by id and choosing for the caller is how a `close` lands on the wrong one.
 func (s *Server) sessionByName(name string) (*session.Session, *mcp.CallToolResult) {
+	sess, why := s.sessionNamedOne(name)
+	if why != "" {
+		return nil, toolError(CodeInvalidArgument, "%s", why)
+	}
+	return sess, nil
+}
+
+// sessionNamedOne is sessionByName with the refusal as a sentence rather than a tool
+// result, for the callers that are building their own error (issue #320).
+func (s *Server) sessionNamedOne(name string) (*session.Session, string) {
 	matches := s.sessMgr.SessionsNamed(name)
 	switch len(matches) {
 	case 0:
-		return nil, nil
+		return nil, ""
 	case 1:
-		return matches[0], nil
+		return matches[0], ""
 	}
 	ids := make([]string, 0, len(matches))
 	running := 0
@@ -111,10 +121,10 @@ func (s *Server) sessionByName(name string) (*session.Session, *mcp.CallToolResu
 		}
 	}
 	sort.Strings(ids)
-	return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf(
+	return nil, fmt.Sprintf(
 		"%d sessions are named %q, so the name does not say which one: %s. "+
 			"Address one by id, or give the next one a distinct --name (`connect <host> --name web`).",
-		len(matches), name, strings.Join(ids, ", ")))
+		len(matches), name, strings.Join(ids, ", "))
 }
 
 // are stored with their parent, so a shell id names its container).
@@ -136,6 +146,12 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcp.CallTo
 		if sess := s.sessMgr.Get(h.SessionID); sess != nil {
 			return sess, nil
 		}
+		// ... AND ITS SESSION PART IS A REF, not only an id (issue #320).
+		if sess, why := s.resolveSessionRef(h.SessionID); why != nil {
+			return nil, toolError(CodeInvalidArgument, "%s", why.Error())
+		} else if sess != nil {
+			return sess, nil
+		}
 	}
 	// A NAME ADDRESSES A SESSION (issue #247), and an ambiguous name is refused
 	// rather than guessed: Name defaults to the profile name, so "internal" names
@@ -143,6 +159,13 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcp.CallTo
 	// kill a session the caller was not looking at, and the reply would say success.
 	if sess, bad := s.sessionByName(sessionID); bad != nil || sess != nil {
 		return sess, bad
+	}
+	// A UNIQUE ID PREFIX NAMES A SESSION TOO (issue #320): it is the spelling `ps` prints
+	// in a narrow column and the one a reader copies out of a log line.
+	if sess, why := s.resolveSessionRef(sessionID); why != nil {
+		return nil, toolError(CodeInvalidArgument, "%s", why.Error())
+	} else if sess != nil {
+		return sess, nil
 	}
 	if looksLikeResourceLocator(sessionID) {
 		p, err := parseResourceURL(sessionID)
@@ -512,9 +535,21 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcp.CallToo
 		// name resolves before the id does — the id branch below is unchanged, and a
 		// name that matches several sessions is refused by sessionByName rather than
 		// guessed.
-		if byName, bad := s.sessionByName(h.SessionID); bad != nil {
-			return nil, bad
-		} else if byName != nil {
+		// EVERY SPELLING OF THE SESSION PART RESOLVES HERE (issue #320): full id, --name, or
+		// a unique id prefix. This branch knew the first two, so `run 0fd6:1` answered
+		// "Shell '0fd6:1' not found" while `run <full id>:1` worked.
+		byName, why := s.sessionNamedOne(h.SessionID)
+		if why != "" {
+			return nil, toolError(CodeInvalidArgument, "%s", why)
+		}
+		if byName == nil {
+			resolved, rerr := s.resolveSessionRef(h.SessionID)
+			if rerr != nil {
+				return nil, toolError(CodeInvalidArgument, "%s", rerr.Error())
+			}
+			byName = resolved
+		}
+		if byName != nil {
 			if byName.Info().Status != api.SessionRunning {
 				return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is still readable with `read`", byName.ID, byName.Info().Status))
 			}

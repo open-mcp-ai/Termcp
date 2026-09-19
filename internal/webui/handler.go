@@ -91,6 +91,11 @@ type Handler struct {
 	DaemonLog   string
 	IdleTimeout time.Duration // effective idle countdown; 0 = never auto-exits
 
+	// Restoring reports that the instance is up and serving while it is still
+	// reading yesterday's sessions (issue #353). It is a status, not a gate: every
+	// route answers either way, and the session list is simply not complete yet.
+	Restoring func() bool
+
 	// StopDaemon asks the process to shut down gracefully; main wires it to the
 	// same path a SIGTERM takes. Called from POST /api/daemon/stop once the
 	// response is on the wire.
@@ -180,6 +185,34 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
 	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
+	mux.HandleFunc("GET /api/share/identity", h.handleShareIdentity)
+	mux.HandleFunc("POST /api/share/export", h.handleShareExport)
+	mux.HandleFunc("POST /api/share/import", h.handleShareImport)
+
+	// Configuration-at-rest management: the keychain, the per-host storage mode,
+	// and converting selected hosts between plaintext and ciphertext. Each key is
+	// independent, so every key action is one route and one request; a host is
+	// sealed with whichever key the caller names.
+	mux.HandleFunc("GET /api/config-storage", h.handleConfigStorageStatus)
+	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
+	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
+	mux.HandleFunc("POST /api/config-storage/activate", h.handleActivateConfigs)
+	mux.HandleFunc("POST /api/config-storage/deactivate", h.handleDeactivateConfigs)
+	mux.HandleFunc("PUT /api/config-storage/mask", h.handleMaskConfigs)
+	mux.HandleFunc("GET /api/keychain", h.handleKeychainList)
+	mux.HandleFunc("POST /api/keychain", h.handleKeychainAdd)
+	mux.HandleFunc("DELETE /api/keychain/{id}", h.handleKeychainRemove)
+	mux.HandleFunc("POST /api/keychain/{id}/plug", h.handleKeychainPlug)
+	mux.HandleFunc("POST /api/keychain/{id}/unplug", h.handleKeychainUnplug)
+	mux.HandleFunc("POST /api/keychain/new-mnemonic", h.handleKeychainNewMnemonic)
+	mux.HandleFunc("POST /api/keychain/{id}/rename", h.handleKeychainRename)
+	mux.HandleFunc("POST /api/keychain/{id}/rotate", h.handleKeychainRotate)
+	mux.HandleFunc("POST /api/keychain/{id}/passphrase", h.handleKeychainPassphrase)
+	mux.HandleFunc("GET /api/keychain/{id}/mnemonic", h.handleKeychainMnemonic)
+	/* The explicit exit for a keychain file this build cannot read. Without a route
+	   the panel could only report "broken" and leave the human to guess that adding
+	   a key would replace the file. It refuses while hosts are still sealed by it. */
+	mux.HandleFunc("POST /api/config-storage/discard-keychain", h.handleDiscardKeychain)
 
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes

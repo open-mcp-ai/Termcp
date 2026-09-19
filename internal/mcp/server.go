@@ -23,14 +23,27 @@ type Server struct {
 	mcpServer    *mcp.Server
 	sseServer    *mcp.SSEServer
 	streamServer *mcp.StreamableHTTPServer
-	sessMgr      *session.Manager
-	msgMgr       *message.Manager
-	sshConfigs   *sshconfig.Store
-	forwardMgr   *forward.ForwardManager
-	extensions   *extensions.Reconciler
-	baseURL      string // http://host:port, set from Start()
-	docsFS       fs.FS  // embedded agent docs, set via SetDocsFS
-	NoInternal   bool   // when true, hide and refuse the built-in loopback profile
+	// extTransports holds one streamable transport per extension name (issue #328): the
+	// transport owns sessions and GET streams, so it cannot be created per request.
+	extTransports sync.Map
+	// extPumps holds one reader per extension channel, keyed by shell id: it is what makes
+	// a frame the extension sends on its own reach an attached client.
+	extPumps sync.Map
+	// extVersions is the protocol version each extension's peer negotiated (#328): the
+	// transport answers with it instead of this library's own.
+	extVersions sync.Map
+	// extShells remembers the channel each extension's endpoint is talking to. An on-demand
+	// extension hands out a fresh instance per Acquire — right for a caller, wrong for an
+	// endpoint that has clients attached (see extChannel).
+	extShells  sync.Map
+	sessMgr    *session.Manager
+	msgMgr     *message.Manager
+	sshConfigs *sshconfig.Store
+	forwardMgr *forward.ForwardManager
+	extensions *extensions.Reconciler
+	baseURL    string // http://host:port, set from Start()
+	docsFS     fs.FS  // embedded agent docs, set via SetDocsFS
+	NoInternal bool   // when true, hide and refuse the built-in loopback profile
 	// ManageSSHConfigs enables the profile write actions (create/edit/copy/delete)
 	// of the `profile` directive; main sets it from --mcp-manage-ssh-configs.
 	ManageSSHConfigs bool
@@ -117,7 +130,7 @@ type Server struct {
 	// the cursor are two halves of one position.
 	recvPending sync.Map // handle string -> *frameQueue
 
-	// lineLocks serialises the two writes that make ONE line on a channel (#212).
+	// lineTokens serialises the two writes that make ONE line on a channel (#212).
 	//
 	// `run` is two calls into the shell layer — the text, then the enter that ends it
 	// — and nothing used to keep another `run` from landing between them. Two
@@ -126,7 +139,17 @@ type Server struct {
 	//
 	// PER HANDLE and held ONLY around the writes: the wait for output that follows
 	// must not hold it, or a run would park every later command on the channel.
-	lineLocks sync.Map // handle string -> *sync.Mutex
+	lineTokens sync.Map // handle string -> chan struct{}
+
+	// stdioPeers is the MCP client state of each extension channel that runs a stdio
+	// MCP server (issue #316): the one-shot handshake and the id counter.
+	//
+	// KEYED BY THE CHILD SHELL ID, never by the spelling a caller typed: `sid:1`, the
+	// session's `--name:1` and the shell's own id name one channel, and a second state
+	// for it would be a second handshake against a server that has one session. The id
+	// is never reused (a new channel gets a new id), so an entry cannot survive its
+	// channel by accident; `close` drops it anyway.
+	stdioPeers sync.Map // child shell id -> *stdioPeer
 
 	// closedReads is where each CLOSED channel's plain `read` has read up to (#188).
 	//
@@ -174,7 +197,7 @@ func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, 
 
 // SetDataDir tells the server where this installation keeps its state, which is
 // what makes `create alias` (and `edit alias`) persist: the saved table lives in
-// `<dir>/aliases.json`.
+// `<dir>/aliases/<name>.toml`.
 //
 // A SERVER GIVEN NO DIRECTORY KEEPS ALIASES IN MEMORY, which is exactly what the
 // plain `alias` verb promises and what an embedder without a data directory wants.
@@ -261,6 +284,16 @@ func (s *Server) Stop() error {
 	defer cancel()
 	if s.streamServer != nil {
 		_ = s.streamServer.Shutdown(ctx)
+	}
+	// The per-extension transports own sessions and janitors too (#328): a Stop that left
+	// them running would keep one goroutine per extension alive after shutdown.
+	s.extTransports.Range(func(k, v any) bool {
+		_ = v.(*mcp.StreamableHTTPServer).Shutdown(ctx)
+		s.extTransports.Delete(k)
+		return true
+	})
+	if s.sseServer == nil {
+		return nil
 	}
 	return s.sseServer.Shutdown(ctx)
 }

@@ -24,11 +24,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
-// Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
-// only taken by session-level transitions (close/DEAD/terminate, new shells).
-// The manager-assigned callbacks and the per-shell closed flag are atomics and
-// need no lock (see field docs below).
+// NO LOCK HIERARCHY. Session metadata is an immutable snapshot (live); shell
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 // OnExitPolicy decides what a session does when its last shell channel ends by
 // itself (the user typing `exit`, or a run-to-exit pipe command finishing).
@@ -106,18 +104,90 @@ type Config struct {
 	UseHost bool
 }
 
+// liveMeta is the mutable half of a session record: the facts that change while the
+// session lives. It is replaced as a whole through an atomic pointer, so a reader
+// always sees one consistent version — a name that belongs with the status next to it,
+// never half of a rename.
+//
+// WHY A SNAPSHOT AND NOT A LOCK. Every write here is a small, whole-value transition
+// (rename, status change, exit code), and there is no invariant that spans two of them.
+// The read side is the WebUI list, the agent's `ls session` and the manifest writer:
+// they want one coherent record and never want to block a terminal.
+type liveMeta struct {
+	name       string
+	sshConfig  string
+	status     api.SessionStatus
+	updatedAt  int64
+	exitReason string
+	// os/osSource are the measured target OS and how it was decided (#318). They
+	// belong to the mutable half because a reconnect probes again: the fact expires
+	// with the connection it was measured on.
+	os       string
+	osSource string
+}
+
+// loadLive returns the current mutable half, initializing it on first use so a
+// zero-value Session cannot return nil.
+func (s *Session) loadLive() *liveMeta {
+	if st := s.live.Load(); st != nil {
+		return st
+	}
+	st := &liveMeta{
+		name:       s.Session.Name,
+		sshConfig:  s.Session.SSHConfig,
+		status:     s.Session.Status,
+		updatedAt:  s.Session.UpdatedAt,
+		exitReason: s.Session.ExitReason,
+		os:         s.Session.OS,
+		osSource:   s.Session.OSSource,
+	}
+	if s.live.CompareAndSwap(nil, st) {
+		return st
+	}
+	return s.live.Load()
+}
+
+// updateLive applies one transition. fn gets a private copy and must not keep it; a
+// failed CAS retries with a fresher copy, so a check inside fn is check-and-set.
+func (s *Session) updateLive(fn func(*liveMeta)) {
+	for {
+		cur := s.loadLive()
+		next := *cur
+		fn(&next)
+		if s.live.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
+
+// touch records that the session's metadata changed now.
+func (s *Session) touch() {
+	s.updateLive(func(st *liveMeta) { st.updatedAt = clock.Now() })
+}
+
+// liveStatus is the session's status. Every internal read goes through here; the
+// embedded copy is deliberately blank (see the struct comment).
+func (s *Session) liveStatus() api.SessionStatus { return s.loadLive().status }
+
 // Session wraps an interactive process session managed over SSH.
 // Session is a connection container; terminal I/O is addressed by shell_id via ChildShell.
 type Session struct {
+	// api.Session holds the IMMUTABLE half of the record: id, command, mode, sizes,
+	// namespace, endpoint. It is written once at construction and never again.
+	//
+	// The mutable half lives in live, below, and the same fields here are
+	// DELIBERATELY LEFT EMPTY — name, ssh config, status, timestamps, exit code and
+	// reason. A field read that bypasses live therefore yields "" or 0 rather than a
+	// plausible stale value, so the mistake shows up in the first test instead of at
+	// 3am. Info() is what rebuilds one complete record for readers.
 	api.Session
-	mu            sync.RWMutex
-	shellStateMu  sync.Mutex  // serializes child registration with close/DEAD transition
+	live          atomic.Pointer[liveMeta]
 	closing       atomic.Bool // blocks new child channels and approval reconfiguration
 	closeLater    atomic.Bool // a deferred close was requested (#255); fulfilled by closeIfLastShellEnded
 	terminateOnce sync.Once
 	deadOnce      sync.Once
 	exitOnce      sync.Once
-	execSession   *sshclient.ExecSession
+	execSession   *sshclient.ExecSession // written once at construction
 	buf           *buffer.Buffer
 	readerID      int
 	msgMgr        *message.Manager
@@ -136,21 +206,21 @@ type Session struct {
 	onExit         OnExitPolicy // what to do when the last shell ends by itself
 	primaryShellID string       // first shell id (≠ session id); addressed by session-level helpers; empty when NoShell
 	primaryMode    api.SessionMode
-	nextShellIndex int         // guarded by shellStateMu; monotonically assigns channel indexes
-	restriction    Restriction // the zero value is unrestricted; see Config.Restriction
+	nextShellIndex atomic.Int64 // monotonically assigns channel indexes; no lock, no field beside it
+	restriction    Restriction  // the zero value is unrestricted; see Config.Restriction
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
 	// It is session-scoped because production access is per-target: one
 	// deployment can hold a scratch host and a prod host at the same time.
-	approval *approvalState
+	approval atomic.Pointer[approvalState]
 	// retainedQueue holds the closed queue after approval mode is disabled or the
 	// session closes, so /api/approvals can still report the terminal cancelled
 	// state to a harness or an auditor (issue #217). It gates nothing.
-	retainedQueue *approval.Queue
+	retainedQueue atomic.Pointer[approval.Queue]
 	// approvalSink is the change handler installed before approval mode is
 	// enabled, so a handler set at startup is not lost.
-	approvalSink func(sessionID string, req approval.Request)
+	approvalSink atomic.Pointer[func(sessionID string, req approval.Request)]
 
 	// shellHistory retains the last-known per-shell metadata (id, name, status)
 	// so a DEAD session can still render per-shell tabs after shells leave the
@@ -248,6 +318,19 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		msgMgr:       msgMgr,
 		scope:        newResourceScope(),
 	}
+	s.live.Store(&liveMeta{
+		name:       name,
+		sshConfig:  cfg.SSHConfig,
+		status:     api.SessionRunning,
+		updatedAt:  s.Session.UpdatedAt,
+		exitReason: "",
+	})
+	// Blank what live owns, so the embedded copy can never be mistaken for the
+	// authoritative one (see the struct comment).
+	s.Session.Name = ""
+	s.Session.SSHConfig = ""
+	s.Session.Status = ""
+	s.Session.UpdatedAt = 0
 
 	// Message-manager session state is a session-scoped resource: release it
 	// through the same cascade that closes forwards and notification rules.
@@ -276,7 +359,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	s.readerID = rid
 	s.primaryShellID = shellID
 	s.primaryMode = cfg.Mode
-	s.nextShellIndex = 1
+	s.nextShellIndex.Store(1)
 
 	root := &ChildShell{
 		ID:          shellID,
@@ -625,11 +708,9 @@ func normalizeOnExit(p OnExitPolicy) OnExitPolicy {
 // readable.
 //
 // It is called by the exit watcher, after the shell has left Running. "Last" is
-// decided by the live map, and the transition is guarded by the same
-// shellStateMu that registration uses, so a shell being opened concurrently
-// either lands before the check (and the session stays) or finds the session
-// already closing (and is refused) -- a new channel can never be added to a
-// session that this call is about to close.
+// decided by the live map: a shell being opened concurrently either lands before
+// the check (and the session stays) or finds closing set afterwards and is torn
+// down by createChildShell's re-check.
 func (s *Session) closeIfLastShellEnded() {
 	// A DEFERRED CLOSE IS FULFILLED HERE (issue #255). `close <session> --later`
 	// promised "this ends without me touching it again", and the last work item
@@ -640,7 +721,6 @@ func (s *Session) closeIfLastShellEnded() {
 	if s.onExit != OnExitClose && !deferred {
 		return
 	}
-	s.shellStateMu.Lock()
 	live := false
 	s.shells.Range(func(_, v any) bool {
 		cs := v.(*ChildShell)
@@ -650,7 +730,6 @@ func (s *Session) closeIfLastShellEnded() {
 		}
 		return true
 	})
-	s.shellStateMu.Unlock()
 	// A live channel (or a session already going down via Terminate/finalize)
 	// means this was not the end of the session's work.
 	//
@@ -684,8 +763,11 @@ func (s *Session) markDead() {
 }
 
 func (s *Session) markDeadWithMessage(systemMessage string) {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
+	// NO LOCK. Run-once is deadOnce's job, and the two things the old lock serialised
+	// here were both worse for it: the flush wait below is up to 500 ms,
+	// and the onDead callback is other people's code — a session that held a lock
+	// across either would park every channel open behind a dying session.
+	//
 	// A deliberate close may race with an exit watcher that already observed
 	// the transport error. Do not turn that intentional close into a network-loss
 	// notification.
@@ -702,7 +784,7 @@ func (s *Session) markDeadWithMessage(systemMessage string) {
 	s.markDeadLocked(systemMessage)
 }
 
-// markDeadLocked requires shellStateMu.
+// markDeadLocked is the once-only DEAD transition; deadOnce is what makes it once.
 func (s *Session) markDeadLocked(systemMessage string) {
 	s.closing.Store(true)
 	s.deadOnce.Do(func() {
@@ -721,20 +803,20 @@ func (s *Session) markDeadLocked(systemMessage string) {
 			slog.Debug("session exit", "session_id", s.ID, "message", systemMessage)
 		}
 
-		s.mu.Lock()
-		if s.Status == api.SessionRunning {
-			s.Status = api.SessionExited
-			s.UpdatedAt = clock.Now()
-		}
-		// WHY, not just THAT. This is the only record of the reason that outlives the
-		// process: the caller asks precisely when the session is no longer live, and by
-		// then the transcript (which carries the same sentence) may be gone with the
-		// directory (issue #176). A deliberate close passes "" and keeps the field empty
-		// rather than claiming a cause.
-		if systemMessage != "" && s.ExitReason == "" {
-			s.ExitReason = systemMessage
-		}
-		s.mu.Unlock()
+		s.updateLive(func(st *liveMeta) {
+			if st.status == api.SessionRunning {
+				st.status = api.SessionExited
+				st.updatedAt = clock.Now()
+			}
+			// WHY, not just THAT. This is the only record of the reason that outlives the
+			// process: the caller asks precisely when the session is no longer live, and by
+			// then the transcript (which carries the same sentence) may be gone with the
+			// directory (issue #176). A deliberate close passes "" and keeps the field empty
+			// rather than claiming a cause.
+			if systemMessage != "" && st.exitReason == "" {
+				st.exitReason = systemMessage
+			}
+		})
 
 		slog.Debug("session DEAD", "session_id", s.ID)
 		if fn := s.onDead.Load(); fn != nil {
@@ -842,18 +924,17 @@ func (s *Session) beginClosing() {
 	// grant, while the bytes were refused because the process was already gone.
 	// The decision then read as effective in the audit trail when nothing ran.
 	//
-	// Called after releasing shellStateMu: the lock order in this file is
-	// shellStateMu then s.mu (see CreateChildShell), and DisableApproval takes
-	// s.mu.
+	// Called outside any lock: DisableApproval takes s.mu, and a session transitioning
+	// to DEAD must not hold anything a channel open would wait on.
 	s.DisableApproval()
 }
 
 // terminateChildren closes all child shells. Called during parent session termination.
-// Holds write lock long enough to snapshot+clear the map, preventing races with Create/Close.
+//
+// The sweep needs no lock: a sync.Map Range plus Delete is safe, a create that lands
+// afterwards is refused (the session is closing by this point) and tears itself down,
+// and a shell deleted here cannot be resurrected by CloseChildShell's purge.
 func (s *Session) terminateChildren() {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
-
 	var children []*ChildShell
 	s.shells.Range(func(k, v any) bool {
 		s.shells.Delete(k)
@@ -867,14 +948,16 @@ func (s *Session) terminateChildren() {
 
 // Info returns a deep copy of the session metadata.
 func (s *Session) Info() api.Session {
-	s.mu.RLock()
-	approvalState := s.approval
+	live := s.loadLive()
+	approvalState := s.approval.Load()
 	cp := s.Session
-	if cp.ExitCode != nil {
-		v := *cp.ExitCode
-		cp.ExitCode = &v
-	}
-	s.mu.RUnlock()
+	cp.Name = live.name
+	cp.SSHConfig = live.sshConfig
+	cp.Status = live.status
+	cp.UpdatedAt = live.updatedAt
+	cp.ExitReason = live.exitReason
+	cp.OS = live.os
+	cp.OSSource = live.osSource
 
 	// Approval fields are derived from live state rather than stored on the
 	// embedded api.Session, so a manifest written before approval mode existed
@@ -899,8 +982,8 @@ func (s *Session) Info() api.Session {
 // SSHClient returns the underlying SSH client. All sessions (including internal/loopback)
 // use SSH transport, so this never returns nil for a running session.
 func (s *Session) SSHClient() *ssh.Client {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// execSession is written once at construction, before the session is published,
+	// so reading it needs no lock; the call into the client happens outside any.
 	if s.execSession == nil {
 		return nil
 	}

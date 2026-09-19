@@ -294,6 +294,424 @@ Response 200:
 
 ---
 
+### Configuration at rest
+
+`GET /api/config-storage` reports whether a keychain exists, whether new profiles
+will be encrypted, whether addresses are masked, how much of the keychain is
+loaded, and each listed host's `mode`, key, and two-layer state. There is no
+index: the hosts are the directories under `ssh_configs/`, and a host's key is the
+`keyID` in its own envelope header:
+
+```json
+{
+  "initialized": true,
+  "encrypt_new": true,
+  "masked": false,
+  "keys": 2,
+  "keys_plugged": 1,
+  "system_available": true,
+  "error_code": "",
+  "legacy_encryption_artifacts": false,
+  "hosts": [
+    {"name": "internal", "mode": "builtin", "activated": false, "passphrase": false, "orphaned": false},
+    {"name": "prod", "mode": "plaintext", "activated": false, "passphrase": false, "orphaned": false},
+    {"name": "staging", "mode": "encrypted", "key_id": "89abcdef…", "activated": true, "passphrase": true, "orphaned": false}
+  ]
+}
+```
+
+No field names a "default" key, because none exists: nothing in the keychain
+decides which key a new host gets, and a request that omits the key id is refused
+(`400 key_required`) unless exactly one key is loaded.
+
+Two independent switches decide whether a host can be read:
+
+| switch | states | survives a restart |
+| --- | --- | --- |
+| the key | loaded / released | yes — the `plugged` bit in `config.keys` |
+| the host | activated / inactive | only for a key without a passphrase (catalog boolean) |
+
+The switches are an AND. A loaded key unwraps the host's DEK; the host's
+activation key is the other half of the body key. Neither half alone opens
+anything: with only the key you cannot derive the body key, and with only the
+passphrase you cannot unwrap the DEK.
+
+Opening the Web UI or reading status never creates a keychain. Whether a profile
+is encrypted is a property of that profile, not a global setting:
+`PUT /api/connections/<name>` takes `?encrypt=true|false` alongside `?temporary=`,
+and `?key=<id>` to name the key that seals it. There is no implicit choice: with
+more than one key in the keychain an encrypted save that names none is refused with
+`404 key_unknown`. `true` writes the profile into the encrypted catalog and `false`
+restores it to plaintext, so the connection form's own checkbox decides the mode.
+Ciphertext generations live at `ssh_configs/<profile>/<generation>.enc`, and a host
+whose key carries a passphrase has a `<generation>.adk` beside it.
+
+`PUT /api/config-storage/mask` with `{"masked":true|false}` flips the global mask.
+Masking changes serialization only, and the same answer reaches every surface that
+prints an address: `GET /api/connections` and the MCP `ls host` / `get host`
+results print a fixed-width dots string instead of the address, the user name and
+the port, and `GET /api/connections?reveal=true` prints the real ones.
+
+All three parts go, the port included. Leaving `:2222` in place would narrow down
+which machine this is through the one field the mask did not cover, so a masked row
+is `{"host":"••••••","user":"••••••","port":0,"masked":true}`. The `masked` flag is
+what distinguishes "hidden" from "no port written down" — both legitimately report
+zero. Storage, dialing and validation are untouched, and the mask works with no
+keychain at all: it hides what the page prints, which is not a property of
+encryption.
+
+### The keychain
+
+`keys/config.keys` is a keychain: an array of keys, and each key has exactly **one
+root** — the 24 words a person wrote down.
+
+```text
+{"version":2,"store_id":…,"masked":false,
+ "keys":[{"id":…,"plugged":true,"passphrase":true,
+          "slots":[{"provider":"dpapi",…},{"provider":"env",…}]}]}
+```
+
+A slot seals **those words** under one provider's key-encryption key. The slots are
+several ways to open the same secret, not several secrets: this machine's credential
+store, a mounted KEK file, an environment variable. The Main Key is derived from the
+words, so exporting the phrase and using this machine are strictly the same ability
+— which is what makes exporting mean something.
+
+There is no `mnemonic` slot and no `password` slot any more. A phrase used as a
+wrapper would seal the Main Key under a key derived from the very words that
+determine it; a password-derived Main Key was a different model, and a keychain file
+that still names `password` is refused as an unsupported format.
+
+Inserting a key is silent: the words are already in the slots, so nothing is typed.
+A key none of this machine's providers can open is **FAILED** — the file is intact
+and re-importing the words is the way back.
+
+```text
+GET    /api/keychain                        → {"keys":[…]}
+POST   /api/keychain                        {"label":"…"}                     add a key, phrase generated
+                                            {"secret":"word word …"}          adopt written-down words
+                                            {"passphrase":"…"}                mark the key as one whose hosts need it
+                                            `label` is REQUIRED; without one the
+                                            request is 400 key_label_invalid
+DELETE /api/keychain/{id}                   {"backup_confirmed":true}         delete a key
+POST   /api/keychain/{id}/plug              {"passphrase":"…"}                load it (unseal the
+                                            words into memory) and activate every
+                                            host it seals — one step, one answer.
+                                            The passphrase is required when the key
+                                            has one; an empty body loads only.
+POST   /api/keychain/{id}/unplug            remove it
+POST   /api/keychain/{id}/rename            {"label":"…"}                     rename it
+POST   /api/keychain/{id}/rotate            {"passphrase":"…"} → {"keys":[…],"mnemonic":"…"}
+POST   /api/keychain/{id}/passphrase        {"old":"…","new":"…"} → {"keys":[…]}
+                                            (same words, same id, same address; every
+                                             host it seals is re-sealed under `new`)
+                                            new words; hosts handed over
+POST   /api/keychain/new-mnemonic         → {"mnemonic":"word word …"}
+                                            fresh words only; creates nothing
+GET    /api/keychain/{id}/mnemonic          → {"mnemonic":"word word …"}
+POST   /api/config-storage/discard-keychain discard an unreadable key file
+```
+
+Each key is reported as:
+
+```json
+{"id":"0123456789abcdef0123456789abcdef","catalog":true,"plugged":true,
+ "auto":true,"passphrase":true,"hosts":3}
+```
+
+- `plugged` — its Main Key is in memory right now.
+- `auto` — the words are sealed into a wrapper this machine can open by itself
+  (its credential store, a mounted KEK file, an environment variable), so a
+  `plugged` key comes back on the next start with nothing typed. Each key carries
+  its **own** wrappers: no key wraps another, and there is no master key.
+- `passphrase` — this key's hosts need a passphrase to activate. The passphrase
+  itself is never stored.
+- `hosts` — how many profiles it seals, so deleting it can say what it would strand.
+
+The list is readable with nothing loaded: the panel has to render the rows before
+anyone can load one. `POST /api/keychain` is also how encryption is switched on
+from scratch — the first key and the first keychain are the same object — and it
+sets `encrypt_new=true`.
+
+Guards the endpoints enforce:
+
+- Deleting without `"backup_confirmed":true` → `409 key_backup_required`. Deleting a
+  key destroys its slots, so the words on paper become the only copy.
+- Deleting a key that still seals hosts → `409 key_in_use`.
+- Removing a key's last wrapper → `409 key_last_wrapper`.
+- A secret that is not valid BIP39 → `400 key_mnemonic_invalid`, before any KDF runs.
+- An id that is not in this keychain → `404 key_unknown`.
+
+Deleting the last key **turns encryption off** when nothing is sealed by it: the
+keychain file is removed, the store keeps its plaintext profiles, and later saves
+are plaintext. A key still sealing hosts is refused (`409 key_in_use`), because
+deleting it would make those profiles unreadable forever.
+
+A generated phrase is returned **once**, in the response body as `"mnemonic"`.
+A key has a **name**, and a name is **required**. It is stored in clear beside the
+plugged bit — the keychain file has to be readable while nothing is loaded, so you
+can tell the keys apart before any of them is in memory — which also means a name is
+not a secret. Create and rename both take one, and an empty or whitespace-only one
+is `400 key_label_invalid`: a nameless row is one you cannot tell from the next one,
+in a list whose whole job is telling keys apart. The only key that gets a name
+without being asked is the one a store is born with, which is called `default` and
+can be renamed like any other.
+
+`POST /api/keychain/{id}/passphrase` changes a key's second layer and nothing else:
+same 24 words, same id, same sharing address. It is not a field edit — a host's body
+key is HKDF(DEK ‖ activation key), and the activation key comes from the passphrase and
+that host's own salt — so every host sealed by the key is re-sealed with a new salt
+and a new `.adk`. Both passphrases are supplied in one request: the old one proves the
+caller can open the hosts, the new one is what they will be sealed with. A wrong old
+passphrase is refused before anything is written, and an empty `new` removes the
+second layer (the hosts fall back to the keychain boolean, i.e. an `active` marker).
+`/rotate` is the other way to change a passphrase: it changes the words too and hands
+the hosts over to the new key.
+
+`POST /api/keychain/{id}/rotate` gives a key new words. The optional `passphrase`
+is the second layer the NEW key carries; leaving it out produces a key with none,
+which is a decision the caller states rather than one that happens to them — the
+first version of this endpoint dropped the passphrase silently, and a security
+property changed as a side effect of an unrelated action.
+
+Rotation is three operations, not a re-encryption: a second key is created with the new phrase and the same name,
+every object is handed over one at a time (only the wrapper holding the DEK moves —
+the body ciphertext is untouched, so nothing is decrypted), and the old key is
+deleted, which the store refuses until it seals nothing. A crash at any point leaves
+both keys present with every object readable by exactly one of them, which is a
+state the panel shows rather than a state that needs repairing.
+
+`GET /api/keychain/{id}/mnemonic` returns it again on request: this machine already
+holds the slot, so it asks for no passphrase.
+
+Inserting a key, activating a host and exporting the words are **human actions**. A
+request that identifies itself as an agent (`X-Termcp-Role: agent`) is refused with
+`403 forbidden` on those routes. Every key operation answers `Cache-Control: no-store`.
+
+### A host that cannot be read
+
+Nothing fails closed at startup. A store whose keys need a passphrase, or whose keys
+were never loaded, opens with nothing readable, lists every host, and answers the
+profile reads it cannot serve with a code — not prose, so each surface can say it in
+its own language:
+
+| state | answer |
+| --- | --- |
+| the key that seals it is not loaded | `409 key_locked` |
+| the key is loaded, the host is not activated | `409 host_not_activated` |
+| its key was deleted | `409 config_encryption_orphaned` |
+
+The first two are recoverable and are different actions: load the key, or activate
+the host. The third is permanent — no key will ever open it, and the panel's advice
+is to delete and recreate the profile.
+
+Writing while a host is inactive is refused rather than falling back to plaintext,
+and a save that would silently drop a host's second layer (re-saving a
+passphrase-bearing host without its activation key in memory) fails with
+`409 passphrase_required` instead of writing a body nobody could open.
+
+### Activating and deactivating hosts
+
+```text
+POST /api/config-storage/activate    {"names":["a","b","c"],
+                                      "passphrases":{"<key id>":"…","<key id>":"…"}}
+POST /api/config-storage/deactivate  {"names":["a","b"]}
+```
+
+**A passphrase is given per key, not per host.** A selection of 5 hosts under 2
+passphrase-bearing keys needs 2 passphrases and one request: the panel groups the
+selection by `key_id` and renders one box per key, labelled with that key's short id
+and its host count. Each host under one key has its own 16-byte Argon2id salt, so one
+passphrase derives N different activation keys for N hosts.
+
+The batch is all-or-nothing:
+
+1. Every host is decided first. A host whose key is not loaded refuses the whole
+   batch, and nothing changes.
+2. Every passphrase-bearing key in the selection must be supplied. A missing one
+   refuses the batch with `409 passphrase_required`, listing the keys by short id.
+   Extra entries for keys that are not in the selection are ignored.
+3. Each host's activation key is derived from its own salt.
+4. A wrong passphrase refuses the batch with `400 passphrase_incorrect`, naming the
+   **key** — never a host, because one passphrase belongs to a whole key.
+
+A key without a passphrase needs nothing for its hosts: activation for those is the
+authenticated catalog boolean, and a mixed selection is allowed.
+
+Deactivating drops the in-memory activation key (or clears the boolean) and touches
+no ciphertext: the body key is computed per read, so there is nothing to rewrite.
+Deactivating does not change whether the key is loaded, and loading a key does
+not activate its hosts.
+
+Restart behaviour follows from the two switches being independent: a key whose
+`plugged` bit is set comes back loaded, hosts whose key has no passphrase come back
+activated from the catalog boolean, and hosts whose key has a passphrase come back
+**inactive** — the activation key was never on disk, so the passphrase has to be
+typed again.
+
+Releasing a key never asks for anything: the words leave memory and the passphrase
+plays no part in that direction. Loading one asks for its passphrase exactly when the
+key carries one, and that single answer does both layers — the words go into memory
+and every host the key seals is activated. A wrong passphrase rolls the load back, so
+the panel never shows a key that is "loaded" while nothing it seals can be read.
+
+### The two switches on a host card
+
+A host card carries two controls, and they answer different questions:
+
+| control | question | passphrase |
+| --- | --- | --- |
+| the padlock in the title row | is this host stored as ciphertext or as plaintext TOML? | never |
+| the caption on the protocol row | can this host be read right now? | only when its key has one |
+
+The padlock is storage mode, and it is a toggle: 已加锁 (ciphertext) ↔ 未加锁
+(plaintext), each direction confirmed, neither direction asking for a passphrase —
+it only changes the form the bytes are kept in.
+
+The caption has three states in one slot, and its press moves the host to the other
+side of the one it is in:
+
+| caption | press |
+| --- | --- |
+| 钥匙未载入 | load that key (and activate this host) |
+| 未激活 | activate this host |
+| 已激活 | deactivate this host |
+
+Only the first two replace the address line: a host that cannot be read has no address
+to show, while an activated host keeps its address and wears the state beside it.
+Deactivating drops the in-memory activation key and touches no ciphertext, so the
+press is reversible and needs nothing from the person.
+
+### Sharing one host with another person
+
+A profile can be handed to somebody else as a single block of text, so it travels
+through whatever chat the two people already use. The address a host is sent to
+belongs to a **key**, not to the store: each key derives its own stable X25519
+identity from its own Main Key, so a keychain with ten keys has ten addresses.
+Nothing new is stored — an address is a function of a key that already exists — and
+a key has to be loaded to answer at its address, which is the same rule the rest
+of the panel follows.
+
+That granularity is the point. The sender picks the address, and the address picks
+the key: a host sealed to key A's address is saved under key A, and one sealed to
+key B's is saved under key B. The receiving side is never asked which key to use,
+because asking would be a second decision about something the sender already
+decided.
+
+- `GET /api/share/identity?key=<key id>` returns `{"public_key": "..."}` — that
+  key's public half. `key` is required: there is no such thing as "the" address of
+  a keychain, and defaulting to one would silently pick where a stranger's host
+  lands. The keychain list carries the same value as `public_key` on each key, so
+  the panel does not make a request per row; it is absent while the key is not
+  loaded, because an address is derived from a Main Key and a key that is not in
+  memory cannot answer at one.
+- `POST /api/share/export` takes `{"name": "...", "recipient": "<their public key>"}`
+  and answers `{"blob": "termcp-host-v1:..."}`. The profile is sealed to the
+  recipient with an ephemeral X25519 exchange; the sender cannot open the result.
+- `POST /api/share/import` takes `{"blob": "..."}` and answers `{"name": "..."}`
+  with the name it was saved under, suffixed when the sender's name is taken. The
+  profile is validated like any other paste before it lands.
+
+The blob authenticates its contents, not its author: anyone holding the public key
+can seal a profile to it, so an imported host is untrusted input until its recipient
+decides otherwise. The name travels inside the authenticated envelope, so a blob
+cannot be relabelled to overwrite a different profile on the way in.
+
+Import tries the keys this store is currently holding and saves under whichever one
+opens the blob; a blob addressed to a key that is not loaded answers
+`share_wrong_key`, because an address nobody is holding cannot be answered.
+Rotating a key's words gives it a new address, so shares made to the old one stop
+opening — that is what rotation means.
+
+There is no index file. Each profile is its own directory under `ssh_configs/`,
+the directory name is the profile name, and a directory holding exactly one `.enc`
+is one committed generation. Two `.enc` files in one directory is damage (a save
+that died between the write and the cleanup), reported as an ambiguity rather than
+resolved by picking the newest. A profile is one independent envelope:
+
+```text
+random DEK encrypts the TOML
+Main Key encrypts the DEK into an EDK
+the current Main Key ID, wrap nonce, and EDK are stored with the body ciphertext
+```
+
+`POST /api/keychain/new-mnemonic` hands out a phrase **without creating anything**.
+The panel's create form asks for one when the person presses Generate: the words are
+a field they can read, keep, or replace with ones they already wrote down, and Save is
+what makes a key. Before this the only way to get words was to create a key, which is
+how a key could be born with no name.
+
+`POST /api/config-storage/encrypt` takes
+`{"names":["prod","staging"],"key":"<id>","passphrase":"…"}` and
+`POST /api/config-storage/restore` takes `{"names":["prod","staging"]}`; both report
+one result per requested host. `key` may also be given as `?key=<id>`. Encryption
+commits all selected ciphertext objects and the catalog before removing their
+plaintext `config.toml` files — and, for a key that carries a passphrase, writes each
+host's `.adk` and leaves the hosts active, because the person creating them is
+present (that passphrase is the "type it once while setting up" moment). A missing
+passphrase for such a key answers `409 passphrase_required`, and one that does not
+open a host the key already seals answers `400 passphrase_incorrect` — the seal
+proves the passphrase first. A key keeps no verifier of its own, because a stored one
+would be an offline oracle for guessing; the hosts it seals are the verifier, each
+with its own salt. A key that seals nothing yet has nothing to compare against, and
+that first sealing defines the passphrase. Without this check a typo was not a
+refusal but a silent redefinition: the new host answered to the typo while its
+siblings stayed sealed to the real passphrase. Restore writes an atomic
+plaintext file first, then removes the encrypted catalog entry, and needs an active
+host: an inactive or orphaned one cannot be read, so it cannot be restored. Temporary
+profiles cannot be converted. These routes use the instance's existing HTTP
+authentication.
+
+Encrypting a host that is **already** sealed means "move it to this key": the
+plaintext is read into memory (which needs the old key loaded and the host
+activated), validated, and written again under the named key. Reading first is the
+point — it proves the existing ciphertext still opens before the only surviving copy
+is replaced, and a host that cannot be read answers `not_activated` or
+`key_not_loaded` per host rather than failing the batch. Asking for the key a host is
+already under is a no-op that reports `already_encrypted`.
+
+### When no key can be loaded
+
+If the keychain parses but none of this machine's providers can open it, the server
+keeps running: status reports `initialized:true`, `keys_plugged:0`, and an
+`error_code`:
+
+- `key_provider_unavailable`: no system or ENV provider secret exists at all.
+- `keyring_authentication_failed`: the credential this machine presents cannot
+  authenticate the keychain (a wrong KEK, for instance).
+- `keyring_missing`: the keychain file is gone or does not parse while the catalog
+  it sealed is still there — damaged state, and the encrypted profiles are
+  permanently unreadable.
+
+Reads and writes of encrypted profiles fail with `409 key_locked` until the key is
+loaded; plaintext profiles keep working, and the host list still succeeds.
+A keychain that does not parse is a different fault from one this machine cannot
+open, and only the first may be replaced. `POST /api/keychain` over an unparseable
+file discards it and starts a new keychain — unless profiles are still sealed, in
+which case it answers `409` and nothing is written.
+
+That implicit replacement has an explicit form: `POST /api/config-storage/discard-keychain`
+throws the unreadable file away and leaves an uninitialized store, which is what a
+panel needs when the human wants to start over without also creating a key in the
+same breath. It answers `409 keychain_readable` for a file that reads fine (deleting
+keys you can still read is `DELETE /api/keychain/{id}`, with its own guards) and
+`409 keychain_seals_hosts` while any ciphertext depends on it. A keychain that parses but whose
+keys none of this machine's providers can open is not damaged at all: it is waiting
+for the words, and adding a key would leave the file's own keys unreachable while
+their hosts stayed sealed. So that case refuses, and the words are the way back.
+
+Inserting needs nothing typed: a key whose words are held by this machine's
+credential store comes back on every start, because `plugged` is a persisted bit, not
+a memory state that a human re-creates.
+
+Set `TERMCP_CONFIG_KEK` to the canonical Base64 encoding of 32 random bytes to mount
+a KEK from the environment instead. It is a key-encryption key that seals the words
+for startup, not the words themselves. Without a working provider the service starts
+with nothing loaded, and a host's passphrase is what a person has to type — the
+words live on paper, not in the workflow.
+
+---
+
 ## 5. Resource locators (termcp://)
 
 A locator names a Termcp object in one string. The Web UI's copy buttons emit
@@ -1000,34 +1418,39 @@ Creates a forward on a session. The session_id comes from the URL; no `ssh_confi
 needed.
 
 ```
-Request:
-{
-  "direction": "local",      // "local" | "remote" | "dynamic"
-  "remote_host": "localhost",
-  "remote_port": 80,
-  "bind_host":  "",          // local: what THIS host listens on (default 127.0.0.1)
-  "local_host": "127.0.0.1", // remote: what the TARGET listens on (default 127.0.0.1)
-  "local_port": 8080          // 0 = auto-assign (local/dynamic only)
-}
+Request (one per direction — a body carries the fields of the direction it names):
+{ "direction": "local",   "remote_host": "localhost", "remote_port": 80,
+  "bind_host": "127.0.0.1",   // what THIS host listens on (default 127.0.0.1)
+  "local_port": 8080 }        // 0 = auto-assign (local/dynamic only)
+
+{ "direction": "remote",  "local_host": "127.0.0.1",  // what the TARGET listens on
+  "local_port": 9090, "remote_host": "localhost", "remote_port": 80 }
+
+{ "direction": "dynamic", "local_port": 1080 }        // loopback only; no target
 ```
 
 | direction | Required fields |
 |-----------|-----------------|
 | `local` | `remote_host`, `remote_port` (1-65535); `bind_host` optional |
 | `remote` | `local_host`, `local_port`, `remote_host`, `remote_port` (1-65535) |
-| `dynamic` | `local_port` optional; `bind_host` is refused unless loopback |
+| `dynamic` | `local_port` optional; `bind_host` is refused unless loopback; `remote_host`/`remote_port` are refused |
 
 `bind_host` and `local_host` name two different machines, which is why they are two
 fields: `local` and `dynamic` listen here, `remote` listens on the target. **Both
 default to `127.0.0.1`**: a forward carries an already-authenticated tunnel, so
-publishing it is an explicit act. Setting either to `0.0.0.0` (or `*`) publishes the
-tunnel to every interface, and the review prompt says so before the forward is
-created. A `dynamic` forward refuses any
+publishing it is an explicit act. Setting either to `0.0.0.0` (or `*`, OpenSSH's own
+spelling of "every interface") publishes the tunnel to every interface, and the
+review prompt says so before the forward is created. The two are not
+interchangeable: the field of the side that does not listen is a `400` naming the
+one that does, never a silently dropped value. A `dynamic` forward refuses any
 non-loopback `bind_host`: its SOCKS5 handshake performs no authentication, so it
-would be an open proxy for anything that can reach the port.
+would be an open proxy for anything that can reach the port. It also refuses
+`remote_host`/`remote_port`, because the SOCKS5 client names the destination per
+connection — the forward carries no fixed target for them to describe.
 
-Errors: `404` unknown session, `409` the session is closed (DEAD — a closed
-session is read-only and accepts no new forwards).
+Errors: `400` a field the direction cannot use, `404` unknown session, `409` the
+session is closed (DEAD — a closed session is read-only and accepts no new
+forwards).
 
 ```
 Response 201: ForwardInfo
@@ -2065,11 +2488,15 @@ Response 200:
 ```
 
 <!-- BEGIN termdoc: args -->
+| `run` | Execute one shell line verbatim without DSL parsing, placeholders, or flags. Pair with `session` (one-shot pipe returning exit_code) or `shell` (existing interactive shell). Mutually exclusive with `cmd` |
+| `session` | Target session id, channel (uses its session), or `use:<host>` for `run`: runs the line in a fresh pipe and returns `exit_code` + stdout. Mutually exclusive with `shell` |
+| `shell` | Existing channel for `run` (e.g. `6a29:1`): types the line into that interactive shell so `cd`/env state persists (no `exit_code`). Mutually exclusive with `session` |
 | `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
+| `encoding` | The default charset for reads in this call, as `read --encoding` sets per statement. A byte that is not UTF-8 refuses the whole reply otherwise, which is the one thing a caller cannot work around from outside |
 | `timeout` | Seconds to look (default 2; a pipe returns as soon as its process exits). 60 is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait |
 | `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.
 Two paths read `0` as "name the object, consume nothing" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).
-A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default 8192 rather than none; a `mcp recv` never reads with a window under 1048576, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`). |
+A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default 8192 rather than none; a `mcp recv` never reads with a window under 8388608, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`). |
 | `lines_limit` | Lines per slot (default 200; `0` = no line limit). 2000 is the size to stay under, not a wall: a longer tail is allowed, and said so in the reply |
 | `total_bytes_limit` | Cap for the whole reply (default 32768). 32768 is the size to stay under, not a wall — this is YOUR budget for one reply, so set it as high as you are willing to read |
 | `on_bytes_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
@@ -2080,7 +2507,7 @@ A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer:
 | `content` | Send the rendered text projection. **On by default**. `content:false` with `structured_content:true` answers with `structuredContent` only; `content:false` alone is refused, because a reply with neither projection carries nothing |
 | `args` | Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets` |
 | `vars` | Named values for `$NAME` in `cmd`. The same mechanism as `args` under another spelling — the position decides the insertion, never which table named the value — so a `$NAME` that is the whole payload and a `$1` that is the whole payload behave identically. Every name must be referenced by cmd: an unused entry is refused before anything runs, and so is a `$NAME` this table does not define. **These values ARE recorded in the server log**, which is what makes the log a faithful record of the call: a value that must not be written down belongs in `secrets` instead |
-| `secrets` | Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, while `vars` is logged verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed |
+| `secrets` | Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, and a reply echoes the reference `$NAME` rather than the value — while `vars` is logged and echoed verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed |
 <!-- END termdoc: args -->
 
 The window parameters are identical to the tool's, with the same names and the

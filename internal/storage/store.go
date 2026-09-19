@@ -44,7 +44,6 @@ func validateID(id string) error {
 // log.jsonl holds one mark per status transition and carries no payload.
 type Store struct {
 	dataDir string
-	mu      sync.RWMutex
 
 	// logSink owns every open append handle and performs every append; see
 	// logsink.go. It replaces a mutex plus a handle map: a lock guarding handles
@@ -59,37 +58,20 @@ type Store struct {
 	markIdx sync.Map // "<session>:<shell>" -> *markIndex (sync.Map, no mutex)
 
 	// deleted remembers sessions whose directory was removed, so a late append is
-	// refused instead of recreating it. Guarded by mu, and cleared by SaveSession:
-	// a session id can legitimately be reused after a delete, and the new session's
-	// appends must be accepted.
-	deleted map[string]bool
+	// refused instead of recreating it. Cleared by SaveSession: a session id can
+	// legitimately be reused after a delete. A sync.Map so the check needs no lock.
+	deleted sync.Map // sessionID string -> bool
 
-	// manifestHash remembers the bytes last written to each manifest, keyed by the
-	// manifest's path, so a write whose content is unchanged can be skipped. See
-	// writeManifest for why skipping is safe and what must invalidate it. Guarded by
-	// mu, like the other maps on this struct.
-	//
-	// Both maps above are caches of what is on disk, and each carries an obligation
-	// that is not visible from the map itself, so it is stated once here:
-	//
-	//	deleted       Every removal path must add to it (DeleteSession), and every
-	//	              creation path must clear it (SaveSession).
-	//	manifestHash  Every path that removes a manifest file must delete its entry
-	//	              (DeleteShell, DeleteSession).
-	//
-	// Missing either obligation does not produce a wrong value - it produces a
-	// directory with no manifest, which LoadSessions skips forever. That is the one
-	// failure this store cannot recover from on its own, so the invariants are worth
-	// keeping in one place rather than spread across the call sites that uphold them.
-	manifestHash map[string][32]byte
+	// manifestHash remembers the SHA-256 last written to each manifest, so a write
+	// whose content is unchanged can skip atomicWriteFile. A sync.Map, so distinct
+	// manifests are written in parallel and no mutex guards a disk write.
+	manifestHash sync.Map // path string -> [32]byte
 }
 
 // New creates a Store rooted at dataDir.
 func New(dataDir string) *Store {
 	s := &Store{
 		dataDir:      dataDir,
-		deleted:      make(map[string]bool),
-		manifestHash: make(map[string][32]byte),
 	}
 	// One owner goroutine per Store, started here rather than on first append so
 	// that "who may write a log" has one answer from construction onward.
@@ -120,10 +102,7 @@ func (s *Store) initDir(path string) error {
 // of a directory. Deleting also drops the cached handle, so this state is consulted
 // on the append after a delete, not on every append.
 func (s *Store) initLogDir(sessionID, shellID string) error {
-	s.mu.RLock()
-	deleted := s.deleted[sessionID]
-	s.mu.RUnlock()
-	if deleted {
+	if _, deleted := s.deleted.Load(sessionID); deleted {
 		return fmt.Errorf("%w: session %q was deleted", ErrSessionGone, sessionID)
 	}
 	return os.MkdirAll(s.shellDir(sessionID, shellID), 0700)
@@ -277,11 +256,8 @@ func (s *Store) SaveSession(sess api.Session) error {
 	if err := validateID(sess.ID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// A session that exists on disk is not deleted, whatever happened before this.
-	delete(s.deleted, sess.ID)
+	s.deleted.Delete(sess.ID)
 
 	dir := s.sessionDir(sess.ID)
 	if err := s.initDir(dir); err != nil {
@@ -300,9 +276,6 @@ func (s *Store) SaveShell(sessionID string, sh api.Session) error {
 	if err := validateID(sh.ID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	dir := s.shellDir(sessionID, sh.ID)
 	if err := s.initDir(dir); err != nil {
 		return err
@@ -353,10 +326,8 @@ func (s *Store) DeleteShell(sessionID, shellID string) error {
 	s.logSink.closeShell(sessionID, shellID)
 	s.dropMarkIndex(sessionID, shellID)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Drop the manifest's cached hash with the file it describes; see writeManifest.
-	delete(s.manifestHash, filepath.Join(s.shellDir(sessionID, shellID), "manifest.json"))
+	s.manifestHash.Delete(filepath.Join(s.shellDir(sessionID, shellID), "manifest.json"))
 	return removeAllRetrying(s.shellDir(sessionID, shellID))
 }
 
@@ -369,22 +340,18 @@ func (s *Store) DeleteSession(sessionID string) error {
 	s.logSink.closeSession(sessionID)
 	s.dropSessionMarkIndex(sessionID)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Record the deletion before removing the directory, so an append that arrives
 	// during the removal is refused rather than racing to recreate it.
-	if s.deleted == nil {
-		s.deleted = make(map[string]bool)
-	}
-	s.deleted[sessionID] = true
+	s.deleted.Store(sessionID, true)
 	// Drop every cached hash under this session, so a session id that is reused
 	// after the delete is written rather than skipped; see writeManifest.
 	prefix := s.sessionDir(sessionID) + string(filepath.Separator)
-	for path := range s.manifestHash {
-		if strings.HasPrefix(path, prefix) {
-			delete(s.manifestHash, path)
+	s.manifestHash.Range(func(k, _ any) bool {
+		if path, ok := k.(string); ok && strings.HasPrefix(path, prefix) {
+			s.manifestHash.Delete(k)
 		}
-	}
+		return true
+	})
 	return removeAllRetrying(s.sessionDir(sessionID))
 }
 
@@ -394,8 +361,6 @@ func (s *Store) DeleteSession(sessionID string) error {
 // list file: one session is one directory, so there is no second copy of the
 // list to fall out of sync with the data.
 func (s *Store) LoadSessions() ([]api.Session, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	root := s.sessionsDir()
 	dirs, err := os.ReadDir(root)
@@ -417,7 +382,7 @@ func (s *Store) LoadSessions() ([]api.Session, error) {
 			// describe; skip it rather than failing the whole load.
 			continue
 		}
-		sess.Shells = s.loadShellsLocked(sess.ID)
+		sess.Shells = s.loadShells(sess.ID)
 		out = append(out, *sess)
 	}
 	return out, nil
@@ -434,14 +399,12 @@ func (s *Store) ReadSession(sessionID string) (*api.Session, error) {
 	if err := validateID(sessionID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.readManifest(s.sessionDir(sessionID))
 }
 
-// loadShellsLocked reads the shell manifests under a session directory, ordered
-// by creation time. Caller holds s.mu.
-func (s *Store) loadShellsLocked(sessionID string) []api.Session {
+// loadShells reads the shell manifests under a session directory, ordered by
+// creation time.
+func (s *Store) loadShells(sessionID string) []api.Session {
 	dir := s.sessionDir(sessionID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -491,7 +454,7 @@ func (s *Store) writeManifest(dir string, v any) error {
 	}
 	path := filepath.Join(dir, "manifest.json")
 	sum := sha256.Sum256(data)
-	if prev, ok := s.manifestHash[path]; ok && prev == sum {
+	if prev, ok := s.manifestHash.Load(path); ok && prev.([32]byte) == sum {
 		return nil
 	}
 	if err := atomicWriteFile(path, data, 0644); err != nil {
@@ -499,7 +462,7 @@ func (s *Store) writeManifest(dir string, v any) error {
 	}
 	// Recorded only after a successful write, so a failed write is retried rather
 	// than remembered as done.
-	s.manifestHash[path] = sum
+	s.manifestHash.Store(path, sum)
 	return nil
 }
 
@@ -539,9 +502,6 @@ func (s *Store) HasPersistedHistory(sessionID string) bool {
 	if err := validateID(sessionID); err != nil {
 		return false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	_, err := os.Stat(filepath.Join(s.sessionDir(sessionID), "manifest.json"))
 	return err == nil
 }
