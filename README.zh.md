@@ -251,6 +251,20 @@ profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config
 
 ## Docker 部署
 
+### 运行官方镜像
+
+官方镜像以专用非 root 用户（`termcp`，uid/gid 1000）运行，其 `$HOME` 被声明为 `VOLUME`——termcp 的全部状态（会话、SSH 配置、历史）默认存在 `~/.termcp`，因此持久化只需挂载一个卷：
+
+```bash
+docker run -d --name termcp \
+  -p 18765:18765 \
+  -v termcp-data:/home/termcp \
+  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
+  ghcr.io/open-mcp-ai/termcp:latest
+```
+
+容器监听 `0.0.0.0:18765`，因此必须提供认证 token（见下方说明）。MCP 端点：`http://localhost:18765/stream`。若用 bind mount 代替命名卷，需先对宿主目录执行 `chown -R 1000:1000 /path/on/host`。
+
 ### 多阶段构建：添加到任意容器
 
 将下面的 `Dockerfile` 放到应用项目中。构建阶段通过 `go install` 安装 termcp，再用 `COPY --from` 把二进制文件复制到目标镜像；目标容器不需要安装 Go 运行时：
