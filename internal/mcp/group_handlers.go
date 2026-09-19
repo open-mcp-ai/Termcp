@@ -19,26 +19,6 @@ func (s *Server) handleMessageOps(ctx context.Context, request mcpgo.CallToolReq
 	}
 }
 
-// handleHistoryOps is the low-frequency archived-session entry point.
-func (s *Server) handleHistoryOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	switch getString(request.GetArguments(), "action", "") {
-	case "list":
-		return s.handleListHistory(ctx, request)
-	case "search_messages":
-		return s.handleSearchMessages(ctx, request)
-	case "rename_session":
-		return s.handleRenameSession(ctx, request)
-	case "update_session_meta":
-		return s.handleUpdateSessionMeta(ctx, request)
-	case "purge":
-		return s.handlePurgeSession(ctx, request)
-	case "screenshot":
-		return s.handleScreenshot(ctx, request)
-	default:
-		return toolError(CodeInvalidArgument, "%s", "action must be list, search_messages, rename_session, update_session_meta, purge, or screenshot"), nil
-	}
-}
-
 // handleForwardOps is the low-frequency port-forward entry point.
 func (s *Server) handleForwardOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	switch getString(request.GetArguments(), "action", "") {

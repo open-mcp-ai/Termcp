@@ -18,10 +18,11 @@ var compactToolDescriptions = map[string]string{
 	"shell_close":             "Close one shell channel; use session_terminate for the whole session.",
 	"shell_input":             "Write text to shell stdin without executing; use shell_key(enter) to run it.",
 	"shell_key":               "Send a named key to a shell.",
-	"shell_output":            "Read output of a live or archived shell; empty read != no output (poll with timeout<=3). Unified cursor (offset/tail_lines/reader_id).",
+	"shell_output":            "Read output of a live or closed shell; empty read != no output (poll with timeout<=3). Unified cursor (offset/tail_lines/reader_id).",
 	"session_list":            "List live sessions.",
 	"session_info":            "Get detailed information for a session.",
-	"session_terminate":       "Terminate and archive a session; closes its shells and forwards.",
+	"session_terminate":       "Close a session (DEAD): stops shells and forwards; entry stays in the registry and readable.",
+	"session_delete":          "Permanently delete a session and its on-disk messages.",
 	"shell_resize":            "Resize a shell PTY.",
 	"shell_detect":            "Detect an interactive shell on the termcp host.",
 	"shell_reader_register":   "Register an output reader starting at the current buffer end.",
@@ -39,8 +40,8 @@ var compactToolDescriptions = map[string]string{
 	"file_fs":                 "Path/filesystem ops: truncate, realpath, or statvfs.",
 	"file_getwd":              "Get the SFTP working directory for a session.",
 	"message":                 "Stored session messages: list the index or fetch payloads.",
-	"history":                 "Archived sessions: list, search, rename, meta, purge, screenshot. Read output via shell_output.",
 	"ssh_config":              "SSH profiles: action=list names, or (if enabled) create/edit/copy/delete.",
+	"shell_notify":            "Manage event notifications (wake-up) for a shell: register/unregister/list rules.",
 	"notify_user":             "Notify the human user via the termcp Web UI: toast on every open page + browser system notification; session_id highlights that session's card.",
 }
 
@@ -57,6 +58,7 @@ func newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
 	compactToolSchema(&t)
 	return t
 }
+
 
 // These fields are either identifiers, paths, coordinates, or self-evident
 // SSH profile fields. Their descriptions repeat information already present in

@@ -18,7 +18,7 @@
     <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge" alt="Forks">
   </a>
   <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="平台">
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go 1.25+">
+  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go No CGO">
   <a href="./LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">
   </a>
@@ -42,7 +42,7 @@
 - **AI Agent** —— 通过 MCP 或 SKILLS（实例自带的 `/skills.md`，用 `curl` 即可驱动，含 `termcp://` 定位符解析）驱动同一批终端；
 - **脚本 / 程序** —— 通过 REST API 编程化接入。
 
-每个会话都支持多标签终端、端口转发与文件传输，可挂起、归档、回放，还可以在人与 AI 之间随时交接——你开着 root 权限的 shell 交给 Agent 驱动，或 Agent 碰到密码提示时暂停交给你输入。
+每个会话都支持多标签终端、端口转发与文件传输，会话可关闭后只读回放，还可以在人与 AI 之间随时交接——你开着 root 权限的 shell 交给 Agent 驱动，或 Agent 碰到密码提示时暂停交给你输入。
 
 作为 MCP，它给了 AI 一双真实终端上的手，让 AI 像人类一样持续操作交互式程序；作为平台，它又是完整的终端服务 —— 会话挂起与归档、多会话并行编排、SSH 连接全生命周期管理，MCP 只是其中一层接口，实例还自带 Agent Skill（`/skills.md`），纯 `curl` 即可驱动同一批会话。Go 编写、单二进制、低开销、可长期驻留。
 
@@ -94,17 +94,17 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - [接入脚本 / 程序（REST API）](#接入脚本--程序rest-api)
 - [示例](#示例)
 - [工具参考](#工具参考)
-- [已知限制](#已知限制)
+- [已知限制与安全模型](#已知限制与安全模型)
 
 ## 功能特性
 
-- **⚡ 一行安装** —— `go install github.com/open-mcp-ai/termcp@latest`，只需 Go 环境。
+- **⚡ 一行安装，纯 Go 无 CGO** —— `go install github.com/open-mcp-ai/termcp@latest`；无 CGO 依赖（`CGO_ENABLED=0`），零系统动态库绑定，单静态二进制随处分发，原生完美跨平台（Windows ConPTY、macOS / Linux POSIX PTY 行为高度一致）。
 - **🔌 一个端口，四个入口** —— Web UI（人）、MCP / SKILLS（Agent）、REST + WebSocket（脚本）共用同一端口。
 - **🤝 人机接力** —— 人与 Agent 共用同一实时会话，你可随时接管或中断 Agent；遇到 `sudo` / 密码 / MFA 提示时 Agent 暂停，由你在 Web UI 输入；同一 shell 输入串行，互不打断。
 - **🟦 多轮交互的真实终端** —— 进程持续运行，Agent 可跨对话轮次驱动 TUI、REPL、GDB、msfconsole、vim 等程序；完整 PTY（Windows 走 ConPTY），各平台行为一致。
 - **🟫 本机 / 远程同一套流程** —— 零配置操作本机（`ssh_config="internal"`）或经 SSH profile 接入远程主机；命令、文件传输（SFTP + 可断点续传的 HTTP 直链）与端口转发（`-L` / `-R` / `-D`）都在同一条连接内完成。
 - **🟧 内置可视化管理** —— 浏览器实时终端、多会话仪表盘、多标签频道、平铺工作区、历史回放、文件与转发面板；`/api.html` 提供 API / MCP / SKILLS 速查。
-- **🟨 多 Agent 并行，断开不丢历史** —— 多个 Agent 同时读同一会话、各自游标互不抢占；退出或断线的会话自动归档、输出完整落盘，跨重启可检索、重命名、打标签、渲染截图，仅显式删除才清理；断线后用同一个 entry（`termcp://<entry>`）新起一个会话即可接着干。
+- **🟨 多 Agent 并行，断开不丢输出** —— 多个 Agent 同时读同一会话、各自游标互不抢占；会话关闭后（显式关闭、自然退出、断线或重启）仍以只读 DEAD tile 留在列表中，输出完整可回放、翻页或删除；断线后用同一个 entry（`termcp://<entry>`）新起一个会话即可接着干。
 - **🟥 主动通知，免轮询** —— `shell_notify` 在进程退出 / 输出停顿 / 有新输出时主动唤醒 Agent，只发信令、不带内容（正文另行拉取）；`channel="sampling"` 时直接发送 `sampling/createMessage`。
 - **🔒 凭据安全** —— 经 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据不进入 Agent 上下文；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
 
@@ -144,8 +144,8 @@ termcp
 git clone https://github.com/open-mcp-ai/termcp.git
 cd termcp
 
-# 编译
-go build -o termcp .
+# 编译（纯 Go，无需 CGO，支持任意平台交叉编译）
+CGO_ENABLED=0 go build -o termcp .
 
 # 运行（默认：loopback，端口 18765；数据存于 ~/.termcp）
 ./termcp
@@ -280,6 +280,8 @@ FROM ${GO_IMAGE} AS termcp-build
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
 ENV GOBIN=/out
+# 纯 Go 静态二进制：无需 CGO、无系统动态库依赖
+ENV CGO_ENABLED=0
 
 # 生产环境建议将 latest 固定为具体版本，例如 @vX.Y.Z
 RUN go install github.com/open-mcp-ai/termcp@latest
@@ -499,17 +501,28 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 | 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
 | 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
 | 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
-| 历史与审计 | `history`（列表 / 消息搜索 / 重命名 / 备注标签 / 彻底清理 / 渲染截图）, `message`（列表 / 获取） |
+| 会话生命周期 | `session_start`, `session_list`, `session_info`, `session_terminate`（关闭，保留可读）, `session_delete`（彻底删除）, `shell_open`, `shell_close` |
+| 消息记录 | `message`（列表 / 获取） |
 | 宿主探测 | `shell_detect` |
 
 执行一行命令的标准做法为：`shell_input` 输入文本 + `shell_key(key="enter")` 按回车 + `shell_output` 读取输出。调用失败时返回带有 `error_code` 稳定错误码的结构化 JSON。
 
-## 已知限制
+## 已知限制与安全模型
 
-- **`history` 截图仅支持 ASCII 终端字符**：`history(action=screenshot)` 将持久化文本渲染为固定点阵终端图像，非 ASCII 字符可能无法高精度呈现。
-- **文件与转发操作需活跃连接**：在已退出（DEAD）或归档的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
-- **无命令白名单 / 目录限制**：termcp 不设命令白名单、路径限制或策略式风险分级。风险控制走**人工在环**：可在 Web UI 随时中断 AI 的操作；`sudo` / 密码 / MFA 提示默认交给你输入（Agent 遵循不猜测、不回显的约定，暂停等你输入），若你允许 Agent 代输也完全可以——termcp 不做禁止。
+- **文件与转发操作需活跃连接**：在已退出（DEAD）的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
 - **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
+
+### 🚨 安全边界：termcp 不负责安全防范（它只是管道，不是杀软）
+
+> **核心原则：termcp 是纯透明的终端字节管道（Byte Pipe），绝不是杀毒软件（Antivirus）、EDR 或应用防火墙；安全防线必须由调用方建立在 AI 输出端与业务网关。**
+
+termcp 具备与系统真实终端完全一致的自由度与控制力。**作为底层管道，termcp 既无能力、也不可能替你判定执行内容的安全性**：
+
+- **无法防范“上传并执行”恶意行为**：AI 可以通过 Base64 解码、分段追加写入文件、或调用系统现成的 `curl`/`wget` 从外部拉取脚本或二进制 Payload 并赋予执行权限。**termcp 是数据流通道，不是病毒查杀引擎**，它不可能去扫描流经管道的每个字节是不是木马。
+- **无法通过简单正则断定命令意图**：危险指令可以通过各种方式混淆（变量切片拼接 `a="rm -"; b="rf /"; $a$b`、动态 `eval`、`printf` 展开、环境变量替换、甚至写入临时文件后执行）。在 PTY 视界中，一切输入都只是合法的键盘敲击序列，底层管道无法区分这是“混淆攻击”还是“正常的前端/运维脚本”。
+- **安全防线必须前置在 AI 输出端**：
+  - 调用方（宿主、Agent 框架）必须在 AI 触发 `shell_input`、`file_write` 等操作**之前**，于外部部署 Guardrails、敏感词审查、高危命令合规拦截或安全大模型。
+  - **关键操作坚持人工在环（Human-in-the-loop）**：termcp 提供了 Web UI 实时同屏与一键接管机制。遇到 `sudo`、破坏性指令、格式化、不可逆数据修改等操作时，切勿在无人值守的生产环境完全信任 AI，请务必人工介入确认。
 
 ---
 

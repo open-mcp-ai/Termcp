@@ -5,6 +5,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // Resource URL (termcp://...) support. Parsing lives in internal/locator, which
@@ -51,12 +52,10 @@ func (s *Server) sessionFromParsed(p *parsedResourceURL) (*session.Session, erro
 		return nil, fmt.Errorf("resource URL does not name a session")
 	}
 	if sess := s.sessMgr.Get(p.SessionID); sess != nil {
-		return sess, nil
-	}
-	if s.historyMgr != nil {
-		if _, ok := s.historyMgr.Get(p.SessionID); ok {
-			return nil, fmt.Errorf("session %q is archived; read it via shell_output(offset/tail)", p.SessionID)
+		if sess.Info().Status != api.SessionRunning {
+			return nil, fmt.Errorf("session %q is closed (status %s); its output is read-only via shell_output", p.SessionID, sess.Info().Status)
 		}
+		return sess, nil
 	}
 	return nil, fmt.Errorf("session %q not found", p.SessionID)
 }

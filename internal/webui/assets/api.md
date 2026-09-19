@@ -203,8 +203,8 @@ Response 200 (entry — "open termcp://rock64" means connect to that profile):
 Response 200 (session):
 { "kind": "session", "session_id": "abc123", "name": "rock64", "status": "running" }
 
-Response 200 (archived session — read-only):
-{ "kind": "session", "session_id": "abc123", "name": "old-box", "status": "archived", "archived": true }
+Response 200 (closed / DEAD session — read-only):
+{ "kind": "session", "session_id": "abc123", "name": "old-box", "status": "exited" }
 
 Response 200 (shell channel):
 { "kind": "shell", "session_id": "abc123", "shell_id": "def456", "index": 2, "name": "shell-2", "status": "running" }
@@ -212,10 +212,10 @@ Response 200 (shell channel):
 
 Then use the ids with the ordinary endpoints: an `entry` becomes
 `POST /api/sessions` with that `ssh_config`; a `session_id` drives output,
-files, forwards and history; a `shell_id` drives input/key/resize/output-range.
+files and forwards; a `shell_id` drives input/key/resize/output-range.
 
 Errors: `400` malformed locator, `404` unknown profile / session / shell index
-out of range, `409` shell locator on an archived session (read it with the
+out of range, `409` shell locator on a closed session (read it with the
 session-level `output-range` instead).
 
 ## 6. Session
@@ -269,18 +269,19 @@ Response 200: Session object (same shape as a list element)
 ### `DELETE /api/sessions/{id}`
 
 **Permanent deletion**: disconnects the session (shells → forwards → SSH connection)
-and removes its archive record plus on-disk message history. Irreversible.
+and erases its on-disk message history. Irreversible.
 
 ```
 Response: 204 No Content
 ```
 
-> Note: this differs from `POST /api/sessions/{id}/terminate` (stop and archive, keep
-> history).
+> Note: this differs from `POST /api/sessions/{id}/terminate` (close only — the
+> session stays in the registry as a read-only DEAD tile and its output remains
+> readable).
 
 ### `PATCH /api/sessions/{id}`
 
-Renames a session (live or archived).
+Renames a session.
 
 ```
 Request:
@@ -291,93 +292,7 @@ Response 200: Session object
 
 ---
 
-## 7. Archived session history (dead sessions)
-
-Sessions that exit normally, lose their connection, or are stopped by server shutdown
-are kept as **archived sessions**: metadata in `history.json`, messages in
-`data/messages/{id}/`, visible across termcp restarts. Only `DELETE` truly clears
-history.
-
-### `GET /api/history`
-
-Lists all archived (dead) sessions.
-
-```
-Response 200:
-{
-  "sessions": [
-    { "id": "abc123", "name": "CTF-1", "status": "archived", "reason": "crash",
-      "notes": "…", "tags": ["web"], "created_at": "..." }
-  ]
-}
-```
-
-### `GET /api/history/{id}`
-
-Returns one archived session.
-
-```
-Response 200: ArchivedSession object
-```
-
-### `PATCH /api/history/{id}`
-
-Updates an archived session's name/notes/tags. Omitted fields keep their value; an
-empty string / empty array clears them.
-
-```
-Request:
-{ "name": "new-name", "notes": "how it was solved", "tags": ["web","flag"] }
-
-Response 200: ArchivedSession object
-```
-
-### `DELETE /api/history/{id}`
-
-**Permanently deletes** an archived session and clears its `data/messages/{id}/`
-directory. Irreversible.
-
-```
-Response: 204 No Content
-```
-
-### `GET /api/history/search?q=...&limit=...`
-
-Full-text search across all archived messages (substring, case-insensitive).
-
-```
-Response 200:
-{
-  "hits": [
-    { "session_id": "abc123", "name": "CTF-1", "type": "output", "snippet": "…keyword…" }
-  ]
-}
-```
-
-### `GET /api/history/{id}/transcript?format=text|markdown|html`
-
-Exports the interleaved input/output timeline (ANSI stripped). Defaults to `text`.
-
-```
-Response 200:
-$ ls -la
-file.txt
-...
-```
-
-### `GET /api/history/{id}/screenshot?start=0&lines=40&cols=80&theme=dark`
-
-Renders a line range of the session as a PNG. `start` = first display line (0-based),
-`lines` = number of lines (0 = all), `cols` = terminal width (default 80), `theme` =
-`dark` (default) / `light`.
-
-```
-Response 200: image/png (Content-Disposition adds a download filename)
-```
-
----
-
-## 8. Shell
+## 7. Shell
 
 A shell is a sub-resource of a session; shell IDs are globally unique.
 
@@ -433,7 +348,7 @@ Response: 204 No Content
 
 ---
 
-## 9. Terminal I/O
+## 8. Terminal I/O
 
 ### WebSocket `GET /api/ui/ws`
 
@@ -525,7 +440,7 @@ Response 200: { "rows": 40, "cols": 120 }
 
 ---
 
-## 10. Port forwarding
+## 9. Port forwarding
 
 ### `GET /api/forwards`
 
@@ -576,7 +491,7 @@ Response 200: { "ok": true }
 
 ---
 
-## 11. Files
+## 10. Files
 
 All file operations go over the session's SFTP channel (remote) or the local file
 system (internal).
@@ -660,7 +575,7 @@ Response 200: { "ok": true }
 
 ---
 
-## 12. Notification rules (shell_notify)
+## 11. Notification rules (shell_notify)
 
 Reverse-wake-up rules registered by the MCP `shell_notify` tool are listed and
 deleted here. The Web UI's Notifications tab reads the same source.
@@ -692,7 +607,7 @@ Response 404: { "error": "notification rule not found" }
 
 ---
 
-## 13. Backward-compatible routes
+## 12. Backward-compatible routes
 
 Old routes still work and delegate to the new ones. New code should use the canonical
 paths above.
@@ -709,6 +624,6 @@ paths above.
 | `POST /api/sessions/{id}/files/rename` | `PUT /api/sessions/{id}/files` |
 | `POST /api/sessions/{id}/files/mkdir` | `POST /api/sessions/{id}/files/dir` |
 
-> Note: the legacy `terminate` / `disconnect` only **stop and archive** (history is
-> kept) — they are not the permanent deletion of the canonical `DELETE`. To erase
-> history use `DELETE /api/sessions/{id}` or `DELETE /api/history/{id}`.
+> Note: the legacy `terminate` / `disconnect` only **close** a session (it stays in
+> the registry as a DEAD, read-only entry). To erase it for good use
+> `DELETE /api/sessions/{id}`.

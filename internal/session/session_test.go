@@ -200,32 +200,32 @@ func TestManager_TerminateKeepsDeadThenDeleteReleases(t *testing.T) {
 	command, args := testSleepCommand("60")
 	m := NewManager(nil, nil, srv)
 
-	var (
-		mu    sync.Mutex
-		ids   []string
-		count int
-	)
-	m.SetTerminateListener(func(sessionID string) {
-		mu.Lock()
-		defer mu.Unlock()
-		count++
-		ids = append(ids, sessionID)
-	})
-
 	s, err := m.Create(testConfig(command, args, api.ModePipe, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := s.ID
 
+	var (
+		mu    sync.Mutex
+		count int
+	)
+	// Attached at creation time (as forwards and notification rules are): the
+	// cleanup belongs to the session, not to a manager-wide listener list.
+	s.AttachCleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		count++
+	})
+
 	m.Terminate(id, true, 0)
-	// Repeating the DEAD path (e.g. Disconnect after Terminate) must not fire
-	// resource cleanup or remove the registry entry.
+	// Repeating the DEAD path (e.g. Disconnect after Terminate) must not release
+	// attached resources or remove the registry entry.
 	s.Disconnect()
 
 	mu.Lock()
 	if count != 0 {
-		t.Fatalf("terminate/disconnect must not fire terminate listener, got %d", count)
+		t.Fatalf("terminate/disconnect must not release attached resources, got %d", count)
 	}
 	mu.Unlock()
 
@@ -236,13 +236,13 @@ func TestManager_TerminateKeepsDeadThenDeleteReleases(t *testing.T) {
 		t.Fatalf("expected 'exited', got %q", got)
 	}
 
-	// Delete is the only release: fires cleanup once and removes the registry entry.
+	// Delete is the only release: runs cleanup once and removes the registry entry.
 	if err := m.Delete(id); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
 	if count != 1 {
-		t.Fatalf("expected resource cleanup once on delete, got %d (ids=%v)", count, ids)
+		t.Fatalf("expected resource cleanup once on delete, got %d", count)
 	}
 	mu.Unlock()
 	if m.Get(id) != nil {
@@ -256,21 +256,21 @@ func TestManager_DisconnectKeepsDead(t *testing.T) {
 	command, args := testSleepCommand("60")
 	m := NewManager(nil, nil, srv)
 
-	var (
-		mu    sync.Mutex
-		count int
-	)
-	m.SetTerminateListener(func(sessionID string) {
-		mu.Lock()
-		defer mu.Unlock()
-		count++
-	})
-
 	s, err := m.Create(testConfig(command, args, api.ModePipe, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := s.ID
+
+	var (
+		mu    sync.Mutex
+		count int
+	)
+	s.AttachCleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		count++
+	})
 
 	// SSH abort/Disconnect only DEADs the session; it never releases resources.
 	s.Disconnect()
@@ -283,7 +283,7 @@ func TestManager_DisconnectKeepsDead(t *testing.T) {
 	}
 	mu.Lock()
 	if count != 0 {
-		t.Fatalf("disconnect must not fire terminate listener, got %d", count)
+		t.Fatalf("disconnect must not release attached resources, got %d", count)
 	}
 	mu.Unlock()
 
@@ -860,31 +860,35 @@ func TestAppendEnter(t *testing.T) {
 	}
 }
 
-func TestManager_TerminateListenersCompose(t *testing.T) {
+func TestSessionScopeReleasesIndependentSubsystems(t *testing.T) {
 	srv := startTestServer(t)
 	command, args := testSleepCommand("60")
 	m := NewManager(nil, nil, srv)
 
 	var mu sync.Mutex
 	fired := map[string]int{}
-
-	// Set replaces; Add appends. Both must fire exactly once on Delete, so
-	// independent subsystems (forwards and notifications) can coexist.
-	m.SetTerminateListener(func(string) {
-		mu.Lock()
-		fired["forward"]++
-		mu.Unlock()
-	})
-	m.AddTerminateListener(func(string) {
-		mu.Lock()
-		fired["notify"]++
-		mu.Unlock()
-	})
+	order := []string{}
 
 	s, err := m.Create(testConfig(command, args, api.ModePipe, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Independent subsystems attach at their own creation points; Delete must
+	// run every one of them exactly once, in LIFO order, with no central list.
+	s.AttachCleanup(func() {
+		mu.Lock()
+		fired["forward"]++
+		order = append(order, "forward")
+		mu.Unlock()
+	})
+	s.AttachCleanup(func() {
+		mu.Lock()
+		fired["notify"]++
+		order = append(order, "notify")
+		mu.Unlock()
+	})
+
 	if err := m.Delete(s.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -892,6 +896,9 @@ func TestManager_TerminateListenersCompose(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if fired["forward"] != 1 || fired["notify"] != 1 {
-		t.Fatalf("expected both listeners once, got %v", fired)
+		t.Fatalf("expected both attached resources once, got %v", fired)
+	}
+	if len(order) != 2 || order[0] != "notify" || order[1] != "forward" {
+		t.Fatalf("expected LIFO release order [notify forward], got %v", order)
 	}
 }
