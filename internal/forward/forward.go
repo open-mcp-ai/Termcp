@@ -136,17 +136,19 @@ func LocalForwardSSH(ctx context.Context, client *ssh.Client, remoteHost string,
 					return
 				}
 				defer remoteConn.Close()
-				// Close both sides when context is cancelled (forward deleted).
-				go func() {
-					<-ctx.Done()
+				// Close both sides when the forward is deleted. context.AfterFunc
+				// (unlike a `go func(){ <-ctx.Done() }`) leaves no goroutine behind
+				// when the connection finishes first — stop() unregisters it.
+				stopOnCancel := context.AfterFunc(ctx, func() {
 					localConn.Close()
 					remoteConn.Close()
-				}()
+				})
 				var wg sync.WaitGroup
 				wg.Add(2)
 				go func() { io.Copy(remoteConn, localConn); wg.Done() }()
 				go func() { io.Copy(localConn, remoteConn); wg.Done() }()
 				wg.Wait()
+				stopOnCancel()
 			}()
 		}
 	}()
@@ -189,16 +191,17 @@ func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string,
 			go func() {
 				defer agentConn.Close()
 				defer remoteConn.Close()
-				go func() {
-					<-ctx.Done()
+				// context.AfterFunc leaves nothing behind on normal connection end.
+				stopOnCancel := context.AfterFunc(ctx, func() {
 					agentConn.Close()
 					remoteConn.Close()
-				}()
+				})
 				var wg sync.WaitGroup
 				wg.Add(2)
 				go func() { io.Copy(remoteConn, agentConn); wg.Done() }()
 				go func() { io.Copy(agentConn, remoteConn); wg.Done() }()
 				wg.Wait()
+				stopOnCancel()
 			}()
 		}
 	}()
@@ -350,6 +353,11 @@ func serveSOCKS5(ctx context.Context, ln net.Listener, dialer func(target string
 		}
 		go func() {
 			defer conn.Close()
+			// Register BEFORE the handshake read: a peer that connects and never
+			// sends the SOCKS5 greeting would otherwise pin this goroutine and its
+			// connection forever once the forward is deleted (ctx cancelled).
+			stopGreeting := context.AfterFunc(ctx, func() { conn.Close() })
+			defer stopGreeting()
 			// Read SOCKS5 request without sending response yet
 			target, err := socks5ReadRequest(conn)
 			if err != nil {
@@ -369,17 +377,17 @@ func serveSOCKS5(ctx context.Context, ln net.Listener, dialer func(target string
 				slog.Error("SOCKS5 reply write failed", "err", err)
 				return
 			}
-			// Close both sides when context is cancelled.
-			go func() {
-				<-ctx.Done()
+			// Close both sides when the forward is deleted (no lingering goroutine).
+			stopOnCancel := context.AfterFunc(ctx, func() {
 				conn.Close()
 				remote.Close()
-			}()
+			})
 			var wg sync.WaitGroup
 			wg.Add(2)
 			go func() { io.Copy(remote, conn); wg.Done() }()
 			go func() { io.Copy(conn, remote); wg.Done() }()
 			wg.Wait()
+			stopOnCancel()
 		}()
 	}
 }

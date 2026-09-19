@@ -352,6 +352,21 @@ func (s *Server) MintClientConfig() (*sshstd.ClientConfig, error) {
 	}, nil
 }
 
+// RevokeClientConfig drops a pending one-time credential minted by
+// MintClientConfig. Call it when the returned config will never complete a
+// successful authentication (dial refused, handshake error), otherwise the
+// entry would stay in the pending map for the lifetime of the process — a
+// memory leak on every failed session start. Revoking a credential that was
+// already consumed is a no-op.
+func (s *Server) RevokeClientConfig(user string) {
+	if user == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.pending, user)
+	s.mu.Unlock()
+}
+
 // Dial creates a new in-memory connection to this server. The returned net.Conn
 // is the client side of a net.Pipe(); the server side is handed to the SSH server
 // goroutine for handshake and session handling.
@@ -480,19 +495,33 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// Forward signals from client to local process. Now that cmd.Start() has
 	// populated cmd.Process (and pty.Start calls it too), reading it here cannot
 	// race with the Start() write.
+	sigDone := make(chan struct{})
 	if started {
 		go func() {
-			for sig := range sigCh {
-				if cmd.Process != nil {
-					if osSig := sshSignalToOSSig(sig); osSig != nil {
-						cmd.Process.Signal(osSig)
+			for {
+				select {
+				case sig := <-sigCh:
+					if cmd.Process != nil {
+						if osSig := sshSignalToOSSig(sig); osSig != nil {
+							cmd.Process.Signal(osSig)
+						}
 					}
+				case <-sigDone:
+					return
 				}
 			}
 		}()
 	}
 
 	cmd.Wait()
+	// Detach and stop the forwarder. sess.Signals(nil) makes the library buffer
+	// (bounded) any late signal instead of sending into a channel nobody reads,
+	// which would block its request loop while holding the session lock. It takes
+	// the same lock the sender uses, so no send can be in flight when we return.
+	// Closing sigCh instead would panic: the library sends on it without knowing
+	// the handler is gone.
+	sess.Signals(nil)
+	close(sigDone)
 
 	exitCode := 127
 	if cmd.ProcessState != nil {
