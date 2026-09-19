@@ -10,8 +10,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/open-mcp-ai/termcp",
-      "version": "0.1.16",
+      "identifier": "ghcr.io/open-mcp-ai/termcp:0.1.16",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:18765/stream"
