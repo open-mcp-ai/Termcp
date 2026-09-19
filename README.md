@@ -5,7 +5,7 @@
 <p align="center">
     <img src="./docs/assets/logo.png"></img>
   <h1 align="center">termcp</h1>
-  <p align="center"><em>A cross-platform terminal session platform — local & remote hosts, one session layer for humans, Agents, and scripts.</em></p>
+  <p align="center"><em>Not only an MCP that lets AI act like a human at the terminal — also a cross-platform terminal management platform: local & remote hosts, one session layer for humans, Agents, and scripts.</em></p>
 </p>
 
 
@@ -36,13 +36,13 @@
 
 ## Introduction
 
-`termcp` is a **cross-platform terminal session platform** written in Go. It treats the **terminal session** as its unifying primitive and connects two classes of machines: **the termcp host itself** (built-in loopback profile, zero config) and **any remote host** (SSH profiles with password / key / jump-host support). Every session is a real PTY channel — hosting multiple shell tabs, port forwards, and SFTP file transfer — opened simultaneously to every kind of user:
+`termcp` is not only an MCP that lets AI act like a human at the terminal — typing into running processes, answering prompts, driving TUIs and REPLs across conversation turns. More than that, it is a **cross-platform terminal management platform** written in Go. It treats the **terminal session** as its unifying primitive and connects two classes of machines: **the termcp host itself** (built-in loopback profile, zero config) and **any remote host** (SSH profiles with password / key / jump-host support). Every session is a real PTY channel — hosting multiple shell tabs, port forwards, and SFTP file transfer — opened simultaneously to every kind of user:
 
 - **You (human)** — a browser-based Web UI for live observation and instant takeover of any session;
 - **AI Agents** — drive the same real terminals through **MCP** or through **SKILLS**: the instance ships an installable skill (`/skills.md`) that drives it with plain `curl`, `termcp://` locators included;
 - **Scripts / programs** — a full REST API plus WebSocket channel for programmatic session, forward, and file operations.
 
-termcp is not "an MCP tool": MCP is just one **interface layer** exposing its AI-control capabilities — and the instance also ships an installable **Agent Skill** (`/skills.md`) that drives the identical session layer over plain `curl`. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
+As an MCP, termcp gives AI a human's hands on a real terminal; as a platform, MCP is just one of its **interface layers** — the instance also ships an installable **Agent Skill** (`/skills.md`) that drives the identical session layer over plain `curl`. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
 
 Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
 
