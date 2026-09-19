@@ -94,7 +94,7 @@ func TestWithLogging_LogsErrorCodeOnCodedFailure(t *testing.T) {
 // End-to-end: shell_output on an unknown shell id returns the dedicated
 // shell_not_found code instead of only prose (the reported WARN log).
 func TestHandleReadOutput_UnknownShellReturnsCode(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 	res, err := s.handleReadOutput(context.Background(), makeRequest(map[string]any{
 		"shell_id": "12d3e2f8-a15",
 	}))

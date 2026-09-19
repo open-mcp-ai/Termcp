@@ -18,7 +18,7 @@
     <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge" alt="Forks">
   </a>
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go 1.25+">
+  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go, No CGO">
   <a href="./LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">
   </a>
@@ -42,7 +42,7 @@
 - **AI Agents** — drive the same real terminals through **MCP** or through **SKILLS**: the instance ships an installable skill (`/skills.md`) that drives it with plain `curl`, `termcp://` locators included;
 - **Scripts / programs** — a full REST API plus WebSocket channel for programmatic session, forward, and file operations.
 
-As an MCP, termcp gives AI a human's hands on a real terminal; as a platform, MCP is just one of its **interface layers** — the instance also ships an installable **Agent Skill** (`/skills.md`) that drives the identical session layer over plain `curl`. The platform itself is a complete terminal service — suspendable/archivable sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, history replay, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
+termcp is not "an MCP tool": MCP is just one **interface layer** exposing its AI-control capabilities — and the instance also ships an installable **Agent Skill** (`/skills.md`) that drives the identical session layer over plain `curl`. The platform itself is a complete terminal service — long-lived sessions, parallel multi-session orchestration, a closed-loop SSH connection lifecycle — with a browser terminal, read-only replay of closed sessions, and a human-in-the-loop control model, forming an **observable, programmable, human-and-AI handoff** terminal platform.
 
 Written in Go, it ships as a single lightweight binary that runs persistently with low overhead; compiled Go and goroutine concurrency keep it high-throughput and low-latency.
 
@@ -56,7 +56,7 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 | Entrance | For | Form |
 |----------|-----|------|
-| **Web UI** | Humans | Browser live terminals, session dashboard, tabs, history replay, file/forward panels |
+| **Web UI** | Humans | Browser live terminals, session dashboard, tabs, replay of closed sessions, file/forward panels |
 | **MCP server** | AI Agents | Sessions as persistent connections; Agents manage/drive interactive programs across turns |
 | **SKILLS** (`/skills.md`) | AI Agents | One-file install; drives termcp with `curl` alone, `termcp://` locators included |
 | **REST API + WebSocket** | Scripts | Programmatic session creation, terminal I/O, port forwarding, SFTP file operations |
@@ -94,17 +94,17 @@ In these scenarios the process keeps running, and the Agent must **read and writ
 - [Connecting Scripts / Programs (REST API)](#connecting-scripts--programs-rest-api)
 - [Examples](#examples)
 - [Tool Reference](#tool-reference)
-- [Known Limitations](#known-limitations)
+- [Known Limitations & Security Model](#known-limitations--security-model)
 
 ## Features
 
-- **⚡ One-command install** — `go install github.com/open-mcp-ai/termcp@latest`; just a Go toolchain.
+- **⚡ One-command install, pure Go, no CGO** — `go install github.com/open-mcp-ai/termcp@latest`; builds with `CGO_ENABLED=0` and binds no system shared libraries, so one static binary runs anywhere and cross-compiles natively (ConPTY on Windows, POSIX PTY on macOS / Linux — same behaviour everywhere).
 - **🔌 One port, four entrances** — Web UI (humans), MCP / SKILLS (Agents), and REST + WebSocket (scripts) share one port.
 - **🤝 Human–AI relay** — You and the Agent share one live session and you can take over or interrupt at any time; the Agent pauses at `sudo` / password / MFA prompts for you to type in the Web UI; input is serialized so keystrokes never collide.
 - **🟦 Multi-turn interaction on a real terminal** — The process keeps running, so an Agent drives TUIs, REPLs, GDB, msfconsole, or vim across conversation turns; a full PTY (ConPTY on Windows) behaves the same on every platform.
 - **🟫 Local or remote, one workflow** — Zero-config access to the termcp host (`ssh_config="internal"`) or any remote machine over SSH profiles; commands, file transfer (SFTP plus resumable HTTP URLs), and port forwarding (`-L` / `-R` / `-D`) all run over that single connection.
-- **🟧 Built-in visual management** — Browser live terminals, session dashboard, tabbed shells, tiling workspace, history replay, file and forward panels; `/api.html` holds the API / MCP / SKILLS cheat sheet.
-- **🟨 Multiple Agents, no lost history** — Parallel readers of one session keep independent cursors; exited or crashed sessions are archived with their full output, survive restarts, and stay searchable, renamable, taggable, and screenshot-able until explicitly deleted. After a drop, open a fresh session from the same entry (`termcp://<entry>`) and carry on.
+- **🟧 Built-in visual management** — Browser live terminals, session dashboard, tabbed shells, tiling workspace, read-only replay of closed sessions, file and forward panels; `/api.html` holds the API / MCP / SKILLS cheat sheet.
+- **🟨 Multiple Agents, no lost output** — Parallel readers of one session keep independent cursors; a closed session (explicit close, exit, crash, or restart) stays in the registry as a read-only DEAD tile with its full output intact, so you can still replay, page through, or delete it whenever you like. After a drop, open a fresh session from the same entry (`termcp://<entry>`) and carry on.
 - **🟥 Proactive notifications, no polling** — `shell_notify` wakes the Agent on process exit, silence, or new output — signal only, no payload (pull the text when needed); `channel="sampling"` sends `sampling/createMessage` directly.
 - **🔒 Credential-safe by design** — Passwords, private keys, and passphrases written through `ssh_config` are never readable back, so plaintext never enters the Agent's context; config-writing tools stay off unless `--mcp-manage-ssh-configs` is set.
 
@@ -144,8 +144,8 @@ Head to the [Releases page](https://github.com/open-mcp-ai/termcp/releases) and 
 git clone https://github.com/open-mcp-ai/termcp.git
 cd termcp
 
-# Build
-go build -o termcp .
+# Build (pure Go — no CGO needed, cross-compiles to any platform)
+CGO_ENABLED=0 go build -o termcp .
 
 # Run (defaults: loopback, port 18765; data goes to ~/.termcp)
 ./termcp
@@ -280,6 +280,8 @@ FROM ${GO_IMAGE} AS termcp-build
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
 ENV GOBIN=/out
+# Pure Go static binary: no CGO, no dynamic C runtime
+ENV CGO_ENABLED=0
 
 # Pin latest to a concrete version in production, for example @vX.Y.Z
 RUN go install github.com/open-mcp-ai/termcp@latest
@@ -503,17 +505,29 @@ termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes liv
 | SSH profiles | `ssh_config` (`list`; `create`/`edit`/`copy`/`delete` with `--mcp-manage-ssh-configs`) |
 | Port forwarding | `forward` (`-L` / `-R` / `-D` / list / close) |
 | Files (SFTP) | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
-| History & messages | `history` (list / search / rename / meta / purge / screenshot), `message` (list / get) |
+| Session lifecycle | `session_start`, `session_list`, `session_info`, `session_terminate` (close, keeps it readable), `session_delete` (permanent), `shell_open`, `shell_close` |
+| History & messages | `message` (list / get) |
 | Host discovery | `shell_detect` |
 
 Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Failed tools return `isError=true` with a JSON body carrying a stable `error_code`.
 
-## Known Limitations
+## Known Limitations & Security Model
 
-- **`history` screenshots are ASCII-only.** `history(action=screenshot)` renders the persisted text as a fixed-bitmap terminal image; it is not a pixel-accurate rendering of non-ASCII glyphs.
-- **File and forward tools need a live connection.** On `exited`/archived sessions those tools return `session_not_running`; output reading still works via `shell_output`.
-- **No command allowlisting or directory jail.** termcp does not enforce command whitelists, path restrictions, or policy-based risk tiers. Risk control is human-in-the-loop instead: interrupt the Agent from the Web UI at any time, and privileged prompts (`sudo` / password / MFA) are by default handed to you — Agents follow a no-guessing, no-echoing convention and pause for you to type. Whether the Agent may type them anyway is your call; termcp does not forbid it.
+- **File and forward tools need a live connection.** On `exited` sessions those tools return `session_not_running`; output reading still works via `shell_output`.
 - **Basic authentication needs TLS outside localhost.** The browser login challenge uses HTTP Basic, whose credentials are only Base64-encoded. Put a TLS-terminating reverse proxy in front of termcp when exposing it beyond a trusted local network; the static token is still never logged or placed in a URL.
+
+### 🚨 Security boundary: termcp does not enforce security (it is a pipe, not an antivirus)
+
+> **The defence line belongs at the AI's output side and your gateway — not in the terminal pipe. termcp is NOT an antivirus, EDR, or WAF.**
+
+termcp is a **transparent real-terminal and multiplexed-session pipe** (PTY transport) with the same freedom and power as the machine's own terminal. It therefore **cannot and should not judge the intent of what it carries**:
+
+1. **Why a terminal pipe cannot detect malicious intent.**
+   - **Upload-and-execute cannot be stopped here.** Malicious content arrives Base64-decoded through a pipe, written in fragments, or fetched by legitimate tools (`curl` / `wget`) in multiple stages and then chmod'ed and run. termcp is a **data pipe, not a malware scanner**: inspecting every streaming byte for a trojan is simply not something a byte transport can do.
+   - **Obfuscation and concatenation are undecidable at the byte layer.** An AI can split a dangerous command into string fragments (`a="rm -"; b="rf /"; $a$b`), rebuild it through variable renaming, dynamic `eval`, `printf` injection, environment-variable stitching, or by writing several partial files and executing them. To the PTY every character is a legal keystroke; the transport cannot tell "obfuscated payload" from "ordinary development script".
+2. **Security must be enforced upstream.**
+   - **The caller (host application / Agent harness) must guard the AI's output before the tool call.** Wrap `shell_input` / `file_write` with output guardrails, an instruction-compliance policy layer, sensitive-content filters, or a safety model that inspects the generated command **before** it reaches termcp. termcp does not enforce command allowlists, path jails, or policy-based risk tiers.
+   - **Keep humans in the loop for privileged or destructive steps.** The Web UI shows every session live and lets you take over or interrupt at any time. Treat `sudo`, destructive, or irreversible commands as human-approval events — and never hand unattended high-privilege terminal access to a production host that is not sandboxed.
 
 ---
 

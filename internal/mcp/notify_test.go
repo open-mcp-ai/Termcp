@@ -28,7 +28,7 @@ func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {
 }
 
 func TestShellNotify_RegisterListUnregister(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 	_, shellID := startTestSession(t, s)
 
 	reg, err := s.handleShellNotifyOps(context.Background(), makeRequest(map[string]any{
@@ -80,7 +80,7 @@ func TestShellNotify_RegisterListUnregister(t *testing.T) {
 }
 
 func TestShellNotify_DefaultEventIsOutput(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 	_, shellID := startTestSession(t, s)
 
 	res, err := s.handleShellNotifyOps(context.Background(), makeRequest(map[string]any{
@@ -97,7 +97,7 @@ func TestShellNotify_DefaultEventIsOutput(t *testing.T) {
 }
 
 func TestShellNotify_UnknownShellReturnsCode(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	res, err := s.handleShellNotifyOps(context.Background(), makeRequest(map[string]any{
 		"action":   "register",
@@ -113,7 +113,7 @@ func TestShellNotify_UnknownShellReturnsCode(t *testing.T) {
 }
 
 func TestShellNotify_InvalidChannelAndEvent(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 	_, shellID := startTestSession(t, s)
 
 	for _, args := range []map[string]any{
@@ -133,7 +133,7 @@ func TestShellNotify_InvalidChannelAndEvent(t *testing.T) {
 
 // Closing a shell must cascade-clear its notification rules (session hook).
 func TestShellNotify_RulesClearedWhenShellClosed(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	// Parent must be a live PTY session: pipe containers flip DEAD once their
 	// only shell exits (startTestSession's echo command does exactly that), and
@@ -226,7 +226,7 @@ func callReq(name string, args map[string]any) mcpgo.CallToolRequest {
 // sampling/createMessage request to the client that registered it, even though
 // dispatch happens from a timer/goroutine with no client session in its context.
 func TestShellNotify_SamplingDispatchToRegisteringClient(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	handler := &mockSamplingHandler{}
 	cli, err := client.NewInProcessClientWithSamplingHandler(s.mcpServer, handler)
@@ -288,7 +288,7 @@ func TestShellNotify_SamplingDispatchToRegisteringClient(t *testing.T) {
 // Channel A end-to-end over the Streamable HTTP transport: a resource rule must
 // broadcast notifications/resources/updated with uri termcp://shells/<id>.
 func TestShellNotify_ResourceDispatchEndToEnd(t *testing.T) {
-	s, _, _, _ := newTestServerWithHistory(t)
+	s, _, _ := newTestServerWithHistory(t)
 
 	ts := httptest.NewServer(s.StreamableHTTPHandler())
 	defer ts.Close()

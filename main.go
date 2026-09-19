@@ -23,7 +23,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
-	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/logansi"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -108,6 +107,7 @@ func main() {
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
 	flag.Parse()
 
+
 	if genAuthHash {
 		if err := runGenAuthHash(flag.Args()); err != nil {
 			fmt.Fprintf(os.Stderr, "gen-auth-hash: %v\n", err)
@@ -182,13 +182,7 @@ func main() {
 	// Initialize storage and managers
 	store := storage.New(cfg.DataDir)
 	msgMgr := message.NewManager(store)
-	historyMgr := history.New(store)
-	if err := historyMgr.Load(); err != nil {
-		slog.Error("failed to load session history", "err", err)
-		os.Exit(1)
-	}
 	sessMgr := session.NewManager(msgMgr, store, sshSrv)
-	sessMgr.SetHistory(historyMgr)
 	if err := sessMgr.RestoreDead(); err != nil {
 		slog.Warn("failed to restore previous DEAD sessions", "err", err)
 	}
@@ -200,10 +194,8 @@ func main() {
 	mainSrv := &http.Server{Addr: addr, Handler: mux}
 
 	forwardMgr := forward.NewForwardManager()
-	sessMgr.AddTerminateListener(func(sessionID string) { forwardMgr.CloseBySession(sessionID) })
 
 	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, mcpserver.WithHTTPServer(mainSrv))
-	mcpSrv.SetHistory(historyMgr)
 	// Same embedded docs the Web UI serves over HTTP become MCP resources/prompts.
 	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal
@@ -213,7 +205,7 @@ func main() {
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	webuiH := &webui.Handler{Sessions: sessMgr, History: historyMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}
+	webuiH := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}
 	webuiH.Register(mux)
 	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
 	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)

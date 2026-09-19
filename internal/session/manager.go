@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/history"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
@@ -19,12 +18,9 @@ type Manager struct {
 	internalSSH *sshserver.Server
 	msgMgr      *message.Manager
 	store       *storage.Store
-	hist        *history.Manager
 
-	historyMu    sync.Mutex
 	listChangeMu sync.RWMutex
 	onListChange func()
-	onTerminate  []func(sessionID string)
 	onOutputHook func(shellID string)
 	onExitHook   func(shellID string, exitCode *int)
 	onCloseHook  func(shellID string)
@@ -75,12 +71,6 @@ func NewManager(msgMgr *message.Manager, store *storage.Store, internalSSH *sshs
 	}
 }
 
-// SetHistory attaches a backward-compat history manager used for download/transcript
-// tooling and legacy purge. It takes no part in the running→DEAD transition.
-func (m *Manager) SetHistory(h *history.Manager) {
-	m.hist = h
-}
-
 // SetSessionListListener registers a callback invoked without holding Manager locks whenever
 // the session set or a session's lifecycle state may have changed (create, delete, exit, terminate).
 func (m *Manager) SetSessionListListener(fn func()) {
@@ -95,42 +85,6 @@ func (m *Manager) notifyListChange() {
 	m.listChangeMu.RUnlock()
 	if fn != nil {
 		fn()
-	}
-}
-
-// SetTerminateListener registers a callback for session resource-tree teardown,
-// replacing any previously registered listeners. It is invoked exactly once per
-// session ID when the session is finally deleted (Manager.Delete or
-// ArchiveAndForget). Use this for child resources that cannot outlive a session
-// (forwards, etc.). A mere disconnect/DEAD transition does NOT fire it.
-func (m *Manager) SetTerminateListener(fn func(sessionID string)) {
-	m.listChangeMu.Lock()
-	if fn == nil {
-		m.onTerminate = nil
-	} else {
-		m.onTerminate = []func(sessionID string){fn}
-	}
-	m.listChangeMu.Unlock()
-}
-
-// AddTerminateListener appends a teardown callback without replacing existing
-// ones, so independent subsystems (forwards, notifications) can each clean up
-// when a session is deleted. Passing nil is a no-op.
-func (m *Manager) AddTerminateListener(fn func(sessionID string)) {
-	if fn == nil {
-		return
-	}
-	m.listChangeMu.Lock()
-	m.onTerminate = append(m.onTerminate, fn)
-	m.listChangeMu.Unlock()
-}
-
-func (m *Manager) notifySessionClosed(sessionID string) {
-	m.listChangeMu.RLock()
-	listeners := append([]func(string){}, m.onTerminate...)
-	m.listChangeMu.RUnlock()
-	for _, fn := range listeners {
-		fn(sessionID)
 	}
 }
 
@@ -275,6 +229,24 @@ func (m *Manager) CloseChildShell(id string) (bool, error) {
 	return true, err
 }
 
+// Messages returns the persisted message log for a session (system/input/output
+// records in append order). DEAD and restart-restored sessions have no in-memory
+// buffer, so their terminal content is reconstructed from this log.
+func (m *Manager) Messages(sessionID string) ([]api.Message, error) {
+	if m.msgMgr == nil {
+		return nil, nil
+	}
+	entries, err := m.msgMgr.List(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.ID)
+	}
+	return m.msgMgr.GetMany(sessionID, ids)
+}
+
 // ListAll returns metadata for all sessions (running and DEAD).
 func (m *Manager) ListAll() []api.Session {
 	var result []api.Session
@@ -285,54 +257,14 @@ func (m *Manager) ListAll() []api.Session {
 	return result
 }
 
-// Terminate ends a session's process/transport and turns it DEAD in place. The
-// session stays in the registry with its buffers/history retained. Use Delete to
-// release resources.
+// Terminate closes a session's process/transport and turns it DEAD in place:
+// the entry stays in the registry (and in the UI as a read-only tile) with its
+// buffers and message log retained, so shell_output/session_info keep working and
+// a restart restores it as a DEAD tile. Use Delete to release resources for good.
 func (m *Manager) Terminate(id string, force bool, gracePeriod time.Duration) {
 	if s := m.Get(id); s != nil {
 		s.Terminate(force, gracePeriod)
 	}
-}
-
-func (m *Manager) ArchiveAndForget(id string, reason api.ArchiveReason) error {
-	s := m.Get(id)
-	if s == nil {
-		return fmt.Errorf("session %q not found", id)
-	}
-	// Terminate the process and mark DEAD (flushes final output onto the message
-	// log). Idempotent even if the session already exited via transport abort.
-	s.Terminate(true, 0)
-
-	// Move it into the history archive so transcript/screenshot/search keep
-	// working, then drop it from the live registry so a restart does not reload
-	// it as a DEAD tile. On-disk message files stay (ForgetSession only
-	// frees in-memory state; only a later purge erases them).
-	rec := api.ArchivedSession{
-		Session: s.Info(),
-		Shells:  s.SnapshotShells(),
-		Reason:  reason,
-	}
-	if m.hist != nil {
-		m.historyMu.Lock()
-		err := m.hist.Add(rec)
-		m.historyMu.Unlock()
-		if err != nil {
-			slog.Warn("archive: failed to record history", "session_id", id, "err", err)
-		}
-	}
-
-	// Release the transport, remaining shells, and in-memory buffer now that the
-	// output has been flushed and persisted; only the on-disk message files stay.
-	s.finalize()
-
-	m.sessions.Delete(id)
-	if m.msgMgr != nil {
-		m.msgMgr.ForgetSession(id)
-	}
-	m.persist()
-	m.notifyListChange()
-	m.notifySessionClosed(id)
-	return nil
 }
 
 // Shutdown delegates to Terminate during server shutdown; it still only DEADs
@@ -341,30 +273,20 @@ func (m *Manager) Shutdown(id string, force bool) {
 	m.Terminate(id, force, 0)
 }
 
-// Delete is the only operation that releases a session's resources. It finalizes
-// a running/DEAD session (stops remaining shells, closes buffers/transport),
-// removes it from the registry, forgets its messages, and clears on-disk message
-// history and any backward-compat record.
+// Delete permanently removes a session: it finalizes a running/DEAD session
+// (stops remaining shells, closes buffers/transport, releases the session's
+// ResourceScope), drops it from the registry, and erases its on-disk message
+// history. Irreversible — use Terminate to merely close a session and keep it
+// readable as a DEAD entry.
 func (m *Manager) Delete(id string) error {
 	if v, ok := m.sessions.Load(id); ok {
 		s := v.(*Session)
 		s.finalize()
 		m.sessions.Delete(id)
-		if m.msgMgr != nil {
-			m.msgMgr.ForgetSession(id)
-		}
 		m.persist()
 		m.notifyListChange()
-		m.notifySessionClosed(id)
 	}
-	if m.hist != nil {
-		m.historyMu.Lock()
-		err := m.hist.Delete(id)
-		m.historyMu.Unlock()
-		if err != nil {
-			return err
-		}
-	} else if m.store != nil {
+	if m.store != nil {
 		if err := m.store.DeleteSessionMessages(id); err != nil {
 			return err
 		}
@@ -464,7 +386,13 @@ func (m *Manager) RestoreDead() error {
 		if meta.Status == api.SessionRunning {
 			meta.Status = api.SessionExited
 		}
-		s := &Session{Session: meta}
+		s := &Session{Session: meta, scope: newResourceScope()}
+		// Restored sessions never start a process, but they can still be deleted;
+		// keep the message-manager cleanup on the same cascade as live sessions.
+		if m.msgMgr != nil {
+			sessionID := meta.ID
+			s.AttachCleanup(func() { m.msgMgr.ForgetSession(sessionID) })
+		}
 		onDead := m.notifyListChange
 		onChildChange := m.notifyListChange
 		s.onDead.Store(&onDead)

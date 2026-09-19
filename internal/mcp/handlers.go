@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -142,13 +141,17 @@ func (s *Server) sftpClient(sessionID string) (*sftp.Client, *mcpgo.CallToolResu
 
 // requireShell looks up a shell by shell_id for terminal I/O (never session_id).
 // The id may also be a termcp:// resource URL (session or shell form), a raw
-// session id (→ primary shell), or a raw shell id. Archived sessions are
-// reported with a hint: their output is read-only via shell_output.
+// session id (→ primary shell), or a raw shell id. Closed (DEAD) sessions are
+// rejected: their process is gone, so the only remaining operation is reading
+// output via shell_output.
 func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallToolResult) {
 	if cs := s.sessMgr.GetChildShell(shellID); cs != nil {
 		return cs, nil
 	}
 	if sess := s.sessMgr.Get(shellID); sess != nil {
+		if sess.Info().Status != api.SessionRunning {
+			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is read-only via shell_output", shellID, sess.Info().Status))
+		}
 		if cs := sess.PrimaryShell(); cs != nil {
 			return cs, nil
 		}
@@ -176,12 +179,6 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 			return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", sess.ID))
 		}
 		return cs, nil
-	}
-	// Raw archived session id: same hint as the URL form.
-	if s.historyMgr != nil {
-		if _, ok := s.historyMgr.Get(shellID); ok {
-			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is archived; read it via shell_output(offset/tail)", shellID))
-		}
 	}
 	return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID))
 }
@@ -527,10 +524,27 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 	if bad != nil {
 		return bad, nil
 	}
+	// Close only: the process/transport stops and the entry becomes DEAD, but it
+	// stays in the registry (and in the Web UI as a read-only tile) so its output
+	// remains readable via shell_output. session_delete removes it for good.
 	s.sessMgr.Terminate(sessionID, force, time.Duration(gracePeriod*float64(time.Second)))
-	// Deliberate close: move the session into the history archive and drop it
-	// from the live registry (so it is not reloaded as a DEAD tile after restart).
-	_ = s.sessMgr.ArchiveAndForget(sessionID, api.ArchiveExplicit)
+	return successResult(), nil
+}
+
+func (s *Server) handleDeleteSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := request.GetArguments()
+	sessionID := getString(args, "session_id", "")
+
+	_, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return bad, nil
+	}
+	// Permanent: closes any live transport, releases the session's resources
+	// (shells, forwards, notification rules, buffers) and erases its on-disk
+	// message history. Irreversible.
+	if err := s.sessMgr.Delete(sessionID); err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
 	return successResult(), nil
 }
 
@@ -580,115 +594,6 @@ func (s *Server) handleGetMessage(ctx context.Context, request mcpgo.CallToolReq
 	result := map[string]any{"messages": messages}
 	return jsonResult(result), nil
 }
-
-func (s *Server) handleListHistory(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	if s.historyMgr == nil {
-		return jsonResult(map[string]any{"sessions": []any{}}), nil
-	}
-	return jsonResult(map[string]any{"sessions": s.historyMgr.List()}), nil
-}
-
-func (s *Server) handleSearchMessages(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	query := getString(args, "query", "")
-	limit := int(getFloat64(args, "limit", 50))
-	if s.historyMgr == nil {
-		return jsonResult(map[string]any{"hits": []any{}}), nil
-	}
-	return jsonResult(map[string]any{"query": query, "hits": s.historyMgr.Search(query, limit)}), nil
-}
-
-func (s *Server) handleRenameSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	name := strings.TrimSpace(getString(args, "name", ""))
-	if name == "" {
-		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
-	}
-	if sess := s.sessMgr.Get(sessionID); sess != nil {
-		if err := s.sessMgr.Rename(sessionID, name); err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		return successResult(), nil
-	}
-	if s.historyMgr == nil {
-		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
-	}
-	if err := s.historyMgr.Update(sessionID, &name, nil, nil); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handleUpdateSessionMeta(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	if s.historyMgr == nil {
-		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
-	}
-	var notes *string
-	if v, ok := args["notes"]; ok {
-		vs := fmt.Sprintf("%v", v)
-		notes = &vs
-	}
-	var tags *[]string
-	if _, ok := args["tags"]; ok {
-		t := getStringSlice(args, "tags")
-		tags = &t
-	}
-	if err := s.historyMgr.Update(sessionID, nil, notes, tags); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handlePurgeSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	if s.sessMgr.Get(sessionID) != nil {
-		if err := s.sessMgr.Delete(sessionID); err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		return successResult(), nil
-	}
-	if s.historyMgr == nil {
-		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
-	}
-	if _, ok := s.historyMgr.Get(sessionID); !ok {
-		return toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID)), nil
-	}
-	if err := s.historyMgr.Delete(sessionID); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handleScreenshot(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	if s.historyMgr == nil {
-		return toolError(CodeNotConfigured, "%s", "history not configured"), nil
-	}
-	if _, ok := s.historyMgr.Get(sessionID); !ok {
-		return toolError(CodeHistoryNotFound, "%s", fmt.Sprintf("Session '%s' not found in history", sessionID)), nil
-	}
-	start := int(getFloat64(args, "start", 0))
-	lines := int(getFloat64(args, "lines", 0))
-	cols := int(getFloat64(args, "cols", 80))
-	theme := getString(args, "theme", "dark")
-	q := url.Values{}
-	q.Set("start", strconv.Itoa(start))
-	q.Set("lines", strconv.Itoa(lines))
-	q.Set("cols", strconv.Itoa(cols))
-	q.Set("theme", theme)
-	u := s.baseURL + "/api/history/" + url.PathEscape(sessionID) + "/screenshot?" + q.Encode()
-	return jsonResult(map[string]any{
-		"session_id": sessionID,
-		"url":        u,
-		"note":       "Fetch this URL to download the PNG. Rendered from persisted messages as a fixed-bitmap terminal image (ASCII only).",
-	}), nil
-}
-
 func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "shell_id", "")
@@ -700,6 +605,16 @@ func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToo
 	readerID, err := shell.RegisterReader()
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	// A registered reader pins the buffer's compaction watermark at its cursor
+	// until it is unregistered (maybeCompactLocked takes the minimum readPos), so
+	// an agent that forgets shell_reader_unregister would grow the transcript
+	// without bound. Attach it to the parent session scope so deletion still
+	// releases it; an explicit unregister simply makes this cleanup a no-op.
+	if pid := shell.ParentSessionID(); pid != "" {
+		if sess := s.sessMgr.Get(pid); sess != nil {
+			sess.AttachCleanup(func() { shell.UnregisterReader(readerID) })
+		}
 	}
 	result := map[string]any{"reader_id": readerID}
 	return jsonResult(result), nil
@@ -1004,6 +919,9 @@ func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolR
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
+	// Attach at creation: the session's ResourceScope closes this forward when
+	// the session is deleted, so no subsystem has to be remembered elsewhere.
+	sess.AttachCleanup(func() { _ = s.forwardMgr.Close(fw.ForwardID) })
 	return jsonResult(map[string]any{
 		"local_port": fw.ListenAddr,
 		"forward_id": fw.ForwardID,
@@ -1036,6 +954,7 @@ func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallTool
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
+	sess.AttachCleanup(func() { _ = s.forwardMgr.Close(fw.ForwardID) })
 	return jsonResult(map[string]any{
 		"remote_port": localPort,
 		"forward_id":  fw.ForwardID,
@@ -1060,6 +979,7 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToo
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
+	sess.AttachCleanup(func() { _ = s.forwardMgr.Close(fw.ForwardID) })
 	return jsonResult(map[string]any{"local_port": fw.ListenAddr, "forward_id": fw.ForwardID}), nil
 }
 
@@ -1499,6 +1419,11 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 		rule, err := s.notifyMgr.Register(sessionID, shellID, channel, event, silenceSec, target)
 		if err != nil {
 			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		// Attach at creation: session deletion releases the rule (and stops its
+		// timers) through the session's ResourceScope.
+		if sess := s.sessMgr.Get(sessionID); sess != nil {
+			sess.AttachCleanup(func() { s.notifyMgr.Unregister(rule.ID) })
 		}
 		return jsonResult(map[string]any{
 			"ok":       true,

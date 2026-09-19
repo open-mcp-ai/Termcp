@@ -6,7 +6,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/open-mcp-ai/termcp/internal/history"
+	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -15,9 +15,9 @@ import (
 // shell's lifecycle state:
 //   - live shells (incl. exited-but-retained ones): stream from the in-memory
 //     buffer;
-//   - archived / restored-DEAD sessions: stream is the persisted MsgOutput log
-//     of the shell (or the merged session stream), reconstructed in append
-//     order — the same byte sequence the in-memory buffer once held.
+//   - DEAD / restart-restored sessions: stream is the persisted MsgOutput log of
+//     the shell (or the merged session stream), reconstructed in append order —
+//     the same byte sequence the in-memory buffer once held.
 //
 // Both expose the same cursor semantics (Len + ByteRange), which is what makes
 // shell_output a single unified read tool for every state.
@@ -25,7 +25,7 @@ type outputSource struct {
 	live    *session.ChildShell // non-nil ⇒ live source
 	sessID  string
 	shellID string           // resolved shell id; "" = merged persisted stream
-	hist    *history.Manager // non-nil ⇒ persisted source
+	msgMgr  *message.Manager // non-nil ⇒ persisted source (DEAD / restored)
 	status  api.SessionStatus
 	created time.Time // live sources only
 }
@@ -34,7 +34,7 @@ const (
 	SourceLive      = "live"
 	SourcePersisted = "persisted"
 	tailScanCeiling = 8 << 20 // cap backward tail scan at 8 MiB of raw bytes
-	defaultTailCap  = 8192    // archived default read = last 8 KiB
+	defaultTailCap  = 8192    // DEAD default read = last 8 KiB
 )
 
 func (o *outputSource) source() string {
@@ -49,27 +49,33 @@ func (o *outputSource) Len() (int64, error) {
 	if o.live != nil {
 		return o.live.BufferLen(), nil
 	}
-	_, total, err := o.hist.OutputByteRange(o.sessID, o.shellID, 0, 0)
+	if o.msgMgr == nil {
+		return 0, nil
+	}
+	_, total, err := o.msgMgr.OutputByteRange(o.sessID, o.shellID, 0, 0)
 	return total, err
 }
 
 // ByteRange copies raw bytes [start, start+max) of the stream. No cursors or
-// reader state are touched, so positional reads are safe for concurrent
-// readers and for archived sessions alike.
+// reader state is touched, so positional reads are safe for concurrent
+// readers and for DEAD sessions alike.
 func (o *outputSource) ByteRange(start int64, max int) ([]byte, int64, error) {
 	if o.live != nil {
 		return o.live.OutputByteRange(start, max)
 	}
-	return o.hist.OutputByteRange(o.sessID, o.shellID, start, max)
+	if o.msgMgr == nil {
+		return nil, 0, nil
+	}
+	return o.msgMgr.OutputByteRange(o.sessID, o.shellID, start, max)
 }
 
 // resolveOutputSource maps an id onto the unified output stream. The id may be:
-//   - a shell_id: that shell (live, or archived/restored per-shell stream);
+//   - a shell_id: that shell (live, or persisted per-shell stream);
 //   - a session_id: the primary shell (live), or the merged output stream
-//     (archived / restored DEAD session).
+//     (DEAD / restart-restored session).
 //
-// Resolution order: live shells → live registry sessions (incl. restored DEAD)
-// → archived history (merged, then per-shell).
+// Resolution order: live shells → live registry sessions (incl. restored DEAD).
+// Every valid session lives in the registry; there is no hidden archive.
 func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolResult) {
 	// A termcp:// locator names a session (optionally one of its shell
 	// channels by 1-based creation index); it never names a raw shell id, so
@@ -86,10 +92,13 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 		id, shellIdx = p.SessionID, p.Index
 	}
 
-	// Locator channel form (:N): the target is that specific shell — a live
-	// ChildShell by index, or the N-th channel of an archived session.
+	// Locator channel form (:N): the target is that specific shell.
 	if shellIdx > 0 {
-		if sess := s.sessMgr.Get(id); sess != nil && sess.PrimaryShell() != nil {
+		sess := s.sessMgr.Get(id)
+		if sess == nil {
+			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("session %q not found", id))
+		}
+		if sess.PrimaryShell() != nil {
 			cs, err := s.shellFromIndex(sess, shellIdx)
 			if err != nil {
 				return nil, toolError(CodeShellNotFound, "%s", err.Error())
@@ -100,19 +109,12 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 			info := cs.Info()
 			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 		}
-		if s.historyMgr != nil {
-			if a, ok := s.historyMgr.Get(id); ok {
-				if idx := shellIdx - 1; idx < len(a.Shells) {
-					status := a.Status
-					if status == "" {
-						status = api.SessionArchived
-					}
-					return &outputSource{sessID: a.ID, shellID: a.Shells[idx].ID, hist: s.historyMgr, status: status}, nil
-				}
-				return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("shell index %d out of range (session %q has %d shell(s))", shellIdx, a.ID, len(a.Shells)))
-			}
+		// DEAD / restored session without live shells: resolve by snapshot order.
+		shells := sess.SnapshotShells()
+		if idx := shellIdx - 1; idx >= 0 && idx < len(shells) {
+			return &outputSource{sessID: sess.ID, shellID: shells[idx].ID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
 		}
-		return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("session %q not found", id))
+		return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("shell index %d out of range (session %q has %d shell(s))", shellIdx, sess.ID, len(shells)))
 	}
 
 	if cs := s.sessMgr.GetChildShell(id); cs != nil {
@@ -129,37 +131,11 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 		}
 		// Restored DEAD session: no live shell objects, but its on-disk message
-		// log can still serve a merged persisted stream.
-		if s.historyMgr == nil {
-			return nil, toolError(CodeNotConfigured, "%s", "history not configured")
-		}
-		return &outputSource{sessID: sess.ID, hist: s.historyMgr, status: sess.Info().Status}, nil
+		// log serves as the merged output stream.
+		return &outputSource{sessID: sess.ID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
 	}
 	if sess := s.sessMgr.GetSessionByShellID(id); sess != nil {
-		if s.historyMgr == nil {
-			return nil, toolError(CodeNotConfigured, "%s", "history not configured")
-		}
-		return &outputSource{sessID: sess.ID, shellID: id, hist: s.historyMgr, status: sess.Info().Status}, nil
-	}
-	if s.historyMgr != nil {
-		if a, ok := s.historyMgr.Get(id); ok {
-			status := a.Status
-			if status == "" {
-				status = api.SessionArchived
-			}
-			return &outputSource{sessID: a.ID, hist: s.historyMgr, status: status}, nil
-		}
-		for _, a := range s.historyMgr.List() {
-			for _, sh := range a.Shells {
-				if sh.ID == id {
-					status := a.Status
-					if status == "" {
-						status = api.SessionArchived
-					}
-					return &outputSource{sessID: a.ID, shellID: id, hist: s.historyMgr, status: status}, nil
-				}
-			}
-		}
+		return &outputSource{sessID: sess.ID, shellID: id, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
 	}
 	return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", id))
 }
@@ -194,9 +170,6 @@ func truncateAtLines(raw []byte, maxLines int, _ bool) []byte {
 			return raw[:i+1]
 		}
 	}
-	// Match buffer.ReadLimited: if the window contains fewer than maxLines
-	// newline boundaries, return the whole window (including a final partial
-	// line) so a long line cannot produce a zero-progress page.
 	return raw
 }
 
@@ -214,8 +187,6 @@ func (o *outputSource) scanTailWindow(tailLines, maxBytes int) (raw []byte, star
 		cap := int64(maxBytes)
 		if cap <= 0 {
 			if o.live != nil {
-				// Explicit max_bytes=0 on a live tail: still bounded — dump the
-				// whole stream is never a safe default.
 				cap = defaultTailCap
 			} else {
 				cap = total
@@ -229,14 +200,11 @@ func (o *outputSource) scanTailWindow(tailLines, maxBytes int) (raw []byte, star
 		if err != nil {
 			return nil, 0, total, err
 		}
-		// Align to a line start so the tail does not begin mid-line.
 		if start > 0 {
 			if idx := bytes.IndexByte(raw0, '\n'); idx >= 0 {
 				raw0 = raw0[idx+1:]
 				start += int64(idx + 1)
 			}
-			// If the bounded window contains no newline, return the partial
-			// final line rather than an empty, non-progressing result.
 		}
 		return raw0, start, total, nil
 	}
@@ -263,15 +231,11 @@ func (o *outputSource) scanTailWindow(tailLines, maxBytes int) (raw []byte, star
 	if n := countLines(raw0); n > int64(tailLines) {
 		raw0 = takeLastLines(raw0, int64(tailLines))
 	}
-	// maxBytes caps the returned tail (align to a line start).
 	if maxBytes > 0 && int64(len(raw0)) > int64(maxBytes) {
 		cut := int64(len(raw0)) - int64(maxBytes)
 		if idx := bytes.IndexByte(raw0[cut:], '\n'); idx >= 0 {
-			// Prefer a complete line when one starts within the byte budget.
 			raw0 = raw0[cut+int64(idx)+1:]
 		} else {
-			// A single line may exceed max_bytes; return its final bytes rather
-			// than an empty, non-progressing page.
 			raw0 = raw0[cut:]
 		}
 	}
