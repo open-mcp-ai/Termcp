@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### 新功能
+
+- **`--disable-auth` / `TERMCP_DISABLE_AUTH_TOKEN`**：显式关闭 HTTP 认证，非 loopback 绑定也放行（此前无认证绑定非 loopback 直接启动失败）。用于录屏、演示、单用户工作站等 loopback-only 场景；启动日志降为 warn。与 `--auth-token`/`--auth-hash` 同时配置视为矛盾并直接报错，不做静默取舍。环境变量只接受 `1`/`true`/`yes`/`on`，`=0`/`=false` 等按未设置处理，避免误开。
+- **`--mcp-defer-tools`（默认关闭）**：开启后才给 19 个低频工具（11 个 SFTP `file_*`、`forward`、`shell_resize`/`shell_detect`/`shell_notify`/`shell_reader_register`/`shell_reader_unregister`、`message`、`ssh_config`）打 `defer_loading` 标记，12 个核心工具永远立即可见。默认全 31 个工具带完整 Schema 一次列出——不支持懒加载的客户端、或经网关丢弃标记的链路（实测 Codex 0.155.1 + AxonHub 会吞掉带标记的工具，模型侧看到“零工具”）会因标记丢失而完全看不到这些工具。`Server.shouldDeferTool` 为唯一判定点，`TestDeferLoadingPolicy` 覆盖两种模式。
+
 ## v0.2.0 — 2026-09-20
 
 ### Breaking

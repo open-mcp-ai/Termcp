@@ -191,6 +191,8 @@ termcp [flags]
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
 | `--auth-token`  | *(未设置)*  | HTTP 认证静态 Token（或 `$TERMCP_AUTH_TOKEN`）。API、MCP、浏览器全部客户端都须携带。与 `--auth-hash` 互斥。 |
 | `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。与 `--auth-token` 互斥。 |
+| `--disable-auth` | `false` | **主动**关闭 HTTP 认证，非 loopback 绑定也放行（或 `$TERMCP_DISABLE_AUTH_TOKEN=1`）。建议同时把端口限定在 loopback，只让本机访问。与 `--auth-token`/`--auth-hash` 同时出现会直接报错，不会静默取其一。 |
+| `--mcp-defer-tools` | `false` | 给低频工具（`file_*`、`forward`、`shell_resize` 等）打上 `defer_loading` 标记，让客户端按需拉取 schema，缩小首次 `tools/list`。默认关闭：不认识该标记的客户端、或被网关丢弃标记的链路（如 Codex 经 AxonHub），会干脆看不到这些工具。详见[工具懒加载](#工具懒加载)。 |
 | `--gen-auth-hash` | *(action)* | 生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或不带参数时从终端 stdin 无回显读取。 |
 | `--version`     | *(action)*  | 打印版本、commit 与构建时间后退出。版本自动跟随 git tag：release 构建通过 `-ldflags` 注入；直接 `go build` 或 `go install module@vX.Y.Z` 时回退到 Go 工具链嵌入的模块版本。 |
 
@@ -215,6 +217,8 @@ termcp [flags]
 ### 认证
 
 单一静态 Token 保护整个 HTTP 面——Web UI、REST API、MCP SSE、MCP Streamable HTTP 与浏览器 WebSocket（只读文档 `/api.md`、`/skills.md` 保持公开，供 agent 在拿到 token 前先读文档）。仅监听 loopback（`127.0.0.1`）时可保持零配置默认；绑定非 loopback 而未配置 Token 会直接启动失败。
+
+需要明确无认证运行（录屏、演示、单用户工作站）时用 `--disable-auth` 或 `TERMCP_DISABLE_AUTH_TOKEN=1`，它会放行非 loopback 绑定并把启动日志改为警告；但同时提供 Token/哈希会被视为矛盾配置直接报错。
 
 ```bash
 # 明文方式：flag 或环境变量
@@ -283,6 +287,16 @@ docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP
 > shell 示例均为单行：`\` 续行在 bash 里有效，但在 PowerShell 里是语法错误；单行命令可原样粘贴到 bash、zsh 与 PowerShell。
 
 `--host 0.0.0.0` 使容器可被外部访问，因此必须提供认证 token。MCP 端点：`http://localhost:18765/stream`。改用 bind mount 时，先对宿主目录执行 `chown -R 1000:1000 /path/on/host`。
+
+#### 不启用 Token 的 Docker 运行方式（仅限本机）
+
+如果是临时演示、录屏、或单机自用，token 只是妨碍而没有任何保护价值。把端口只发布到**宿主 loopback**，并明确告知 termcp 缺凭据是有意为之：
+
+```bash
+docker run -d --name termcp -p 127.0.0.1:18765:18765 -v termcp-data:/home/termcp ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765 --disable-auth
+```
+
+这里两个细节让它安全而不只是方便：`-p 127.0.0.1:18765:18765` 把发布端口绑在宿主 loopback 上，容器对本机可达、对局域网不可见（容器内仍必须监听 `0.0.0.0`，因为那是它网络命名空间之外唯一可路由的地址）；而 `--disable-auth` 之所以必需，正是因为 termcp 拒绕在非 loopback 绑定上无认证启动——该 flag 就是运维主动承担责任，因此启动日志也从信息级降为警告级。等价的环变量写法是把 flag 换成 `-e TERMCP_DISABLE_AUTH_TOKEN=1`。
 
 ### 多阶段构建：添加到任意容器
 
@@ -485,6 +499,17 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 | 宿主探测 | `shell_detect` |
 
 执行一行命令的标准做法为：`shell_input` 输入文本 + `shell_key(key="enter")` 按回车 + `shell_output` 读取输出。调用失败时返回带有 `error_code` 稳定错误码的结构化 JSON。
+
+## 工具懒加载
+
+MCP 客户端在 `tools/list` 时会拉取每个工具的 JSON Schema，工具多的服务就要为此付出上下文预算。MCP 规范留了一个口子：把低频工具标记为 `defer_loading`，客户端按需再拉 schema。termcp 的 31 个工具分为热路径 **12 个**（会话生命周期 + 终端输入输出，永远立即可见）与低频宽面 **19 个**（11 个 SFTP `file_*`、`forward`、`shell_resize`/`shell_detect`/`shell_notify`、`shell_reader_register`/`shell_reader_unregister`、`message`、`ssh_config`）。
+
+`--mcp-defer-tools` 才开启该标记，**默认关闭**：
+
+- **默认**——全 31 个工具连同完整 schema 一次列出。这是所有不支持懒加载的客户端所需要的，包括经 AxonHub 这类网关访问 termcp 的 Codex（网关可能丢掉 `defer_loading` 标记）。标记一旦丢失，这些工具无法再按需拉取，只会从模型视野里直接消失。
+- **`--mcp-defer-tools`**——19 个低频工具带上 `defer_loading`；12 个核心工具保持立即可见，使 `session_start → shell_input → shell_output` 主循环永远不需要先搜工具。支持按需加载的客户端（mcp-go 系、Claude Code）只为自己真正用到的 schema 付费。
+
+两种模式都是同样 31 个工具：开启开关从不删除工具，只影响首次列表是否附带 schema。
 
 ## 已知限制与安全模型
 
