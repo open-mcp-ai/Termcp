@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.0 — 2026-09-20
+
 ### Breaking
 
 - **非 loopback 绑定必须配置认证**：监听 `0.0.0.0`、局域网 IP 或非 `localhost` 主机名时，若未提供 `--auth-token` / `--auth-hash` / `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH`，启动直接失败（此前允许无认证运行）。loopback 绑定保持无认证默认行为不变。
