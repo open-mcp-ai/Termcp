@@ -30,12 +30,23 @@ MCP resources, and a `learn-api` prompt:
 
 ## 工具懒加载（deferred tool loading）
 
-termcp 的 31 个工具按"热路径 / 低频面"分成两类，通过 MCP 标准的 `defer_loading` 标记告诉客户端哪些工具可以**按需加载**：
+termcp 的 31 个工具按"热路径 / 低频面"分成两类。MCP 标准的 `defer_loading` 标记可以让客户端**按需加载**低频工具的 Schema，但这套机制**默认关闭**：
 
-- **核心常驻**（不标记，初次 `tools/list` 即返回完整 Schema）：`session_start` / `session_list` / `session_info` / `session_terminate` / `session_delete` / `shell_open` / `shell_list` / `shell_close` / `shell_input` / `shell_key` / `shell_output` / `notify_user`。这些构成"开会话 → 打字 → 读输出"的主循环，若需先搜索才能用，每次交互都要多一个来回。
-- **延迟加载**（标记 `defer_loading: true`）：11 个 SFTP 文件工具、`forward`、`shell_resize` / `shell_detect` / `shell_notify` / `shell_reader_register` / `shell_reader_unregister`、`message`、`ssh_config`。这些工具参数面宽、调用频率低，客户端可按需检索后再拉取 Schema，节省每轮注入的上下文预算。
+- **核心常驻**（永远不标记）：`session_start` / `session_list` / `session_info` / `session_terminate` / `session_delete` / `shell_open` / `shell_list` / `shell_close` / `shell_input` / `shell_key` / `shell_output` / `notify_user`。这些构成"开会话 → 打字 → 读输出"的主循环，若需先搜索才能用，每次交互都要多一个来回——**开启懒加载时它们依然立即可见**。
+- **低频宽面**（19 个，`--mcp-defer-tools` 下才标记）：11 个 SFTP 文件工具、`forward`、`shell_resize` / `shell_detect` / `shell_notify` / `shell_reader_register` / `shell_reader_unregister`、`message`、`ssh_config`。这些工具参数面宽、调用频率低，客户端可按需检索后再拉取 Schema，节省每轮注入的上下文预算。
 
-分类由 `internal/mcp/toolopts.go` 的 `deferredTools` 表定义，`TestDeferLoadingPolicy` 会拦住"新工具未分类"与"僵尸条目"；若要调整分类，改表即可，无需改各处注册代码。
+### 两种模式
+
+| 模式 | `tools/list` 行为 |
+|------|------------------|
+| **默认** | 31 个工具全部返回完整 Schema，不打 `defer_loading` |
+| **`--mcp-defer-tools`** | 12 个核心工具完整返回；19 个低频工具带 `defer_loading: true` |
+
+两种模式都是**同样 31 个工具**，开关从不删除工具，只影响首次列表是否附带 Schema。
+
+默认关闭的原因很实际：不认识 `defer_loading` 的客户端、或经网关转发而被丢弃标记的链路（实测 **Codex 0.155.1 经 AxonHub** 会把带标记的工具整个吞掉，模型侧看到"零工具"），会让这些工具**从模型视野里直接消失**，而不是"稍后能搜到"。只有确认客户端支持按需拉取（mcp-go 系、Claude Code）时才建议开启。
+
+分类由 `internal/mcp/toolopts.go` 的 `deferredTools` 表定义，开关由 `Server.shouldDeferTool` 决定（`mcp.DeferTools()` option）；`TestDeferLoadingPolicy` 会分别校验两种模式，并拦住"新工具未分类"与"僵尸条目"。若要调整分类，改表即可，无需改各处注册代码。
 
 **ID 规则（硬）：**
 

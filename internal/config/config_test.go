@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefault_HostBindsAllInterfaces(t *testing.T) {
 	cfg := Default()
@@ -121,5 +124,61 @@ func TestApplyEnv_BlankEnvCleared(t *testing.T) {
 	cfg.ApplyEnv()
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
 		t.Fatalf("blank env should be ignored, got token=%q hash=%q", cfg.AuthToken, cfg.AuthHash)
+	}
+}
+
+func TestApplyEnv_DisableAuthFromEnv(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " on "} {
+		t.Setenv(EnvDisableAuth, v)
+		cfg := Default()
+		cfg.ApplyEnv()
+		if !cfg.DisableAuth {
+			t.Errorf("%s=%q should enable DisableAuth", EnvDisableAuth, v)
+		}
+	}
+}
+
+// A falsy-looking value must not read as "disable auth": an operator who writes
+// =0 to turn the switch back off should not accidentally open the server.
+func TestApplyEnv_DisableAuthFalsyValuesIgnored(t *testing.T) {
+	for _, v := range []string{"", "0", "false", "no", "off", "   "} {
+		t.Setenv(EnvDisableAuth, v)
+		cfg := Default()
+		cfg.ApplyEnv()
+		if cfg.DisableAuth {
+			t.Errorf("%s=%q must not enable DisableAuth", EnvDisableAuth, v)
+		}
+	}
+}
+
+func TestValidate_DisableAuthAllowsNonLoopback(t *testing.T) {
+	cfg := &Config{Host: "0.0.0.0", Port: 8080, DataDir: "/tmp/data", DisableAuth: true}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("DisableAuth should permit a non-loopback bind, got: %v", err)
+	}
+}
+
+// Supplying credentials *and* disabling auth is contradictory, and guessing
+// which one the operator meant is exactly the kind of ambiguity that leaves an
+// exposed server open by accident. Report it instead.
+func TestValidate_DisableAuthConflictsWithToken(t *testing.T) {
+	cfg := &Config{Host: "127.0.0.1", Port: 8080, DataDir: "/tmp/data", DisableAuth: true, AuthToken: "tok"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected an error when DisableAuth and AuthToken are both set")
+	}
+	if !strings.Contains(err.Error(), "auth-token") {
+		t.Fatalf("error should name the conflicting setting, got: %v", err)
+	}
+}
+
+func TestValidate_DisableAuthConflictsWithHash(t *testing.T) {
+	cfg := &Config{Host: "127.0.0.1", Port: 8080, DataDir: "/tmp/data", DisableAuth: true, AuthHash: "sha256-aa-bb"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected an error when DisableAuth and AuthHash are both set")
+	}
+	if !strings.Contains(err.Error(), "auth-hash") {
+		t.Fatalf("error should name the conflicting setting, got: %v", err)
 	}
 }

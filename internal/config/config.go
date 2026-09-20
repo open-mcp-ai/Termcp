@@ -18,6 +18,11 @@ const (
 	EnvAuthHash  = "TERMCP_AUTH_HASH"
 )
 
+// EnvDisableAuth turns HTTP authentication off from the environment. It is the
+// explicit escape hatch for hosts where network reachability is already the
+// access control (loopback, container-internal only, trusted lab LAN).
+const EnvDisableAuth = "TERMCP_DISABLE_AUTH_TOKEN"
+
 // Config holds all runtime configuration for the server.
 type Config struct {
 	Host                string // HTTP server bind address (default: "127.0.0.1" = loopback; use 0.0.0.0 for all interfaces)
@@ -28,6 +33,8 @@ type Config struct {
 	MCPManageSSHConfigs bool   // enable MCP tools for creating/editing/deleting SSH configs (default: false)
 	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
 	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
+	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)
+	MCPDeferTools       bool   // opt-in: mark low-frequency MCP tools defer_loading; off lists every tool eagerly
 }
 
 // Default returns a Config with sensible defaults.
@@ -64,6 +71,21 @@ func (c *Config) ApplyEnv() {
 	if c.AuthHash == "" {
 		c.AuthHash = strings.TrimSpace(os.Getenv(EnvAuthHash))
 	}
+	if !c.DisableAuth && envTruthy(os.Getenv(EnvDisableAuth)) {
+		c.DisableAuth = true
+	}
+}
+
+// envTruthy reports whether an environment variable was set to an affirmative
+// value. "0", "false", "no" and "off" (any case) mean "not set" so that
+// `TERMCP_DISABLE_AUTH_TOKEN=0` cannot surprise an operator into an open server.
+func envTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Validate checks that all fields are within valid ranges. A non-loopback
@@ -84,8 +106,20 @@ func (c *Config) Validate() error {
 	if c.AuthToken != "" && c.AuthHash != "" {
 		return fmt.Errorf("auth-token and auth-hash are mutually exclusive")
 	}
+	// Disabling auth is a deliberate operator decision, so it never silently
+	// wins: supplying credentials *and* asking for no auth is a configuration
+	// mistake and reported instead of guessed at.
+	if c.DisableAuth {
+		switch {
+		case c.AuthToken != "":
+			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --auth-token / $%s is also set; remove one of them", EnvDisableAuth, EnvAuthToken)
+		case c.AuthHash != "":
+			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --auth-hash / $%s is also set; remove one of them", EnvDisableAuth, EnvAuthHash)
+		}
+		return nil
+	}
 	if isNonLoopbackBind(c.Host) && c.AuthToken == "" && c.AuthHash == "" {
-		return fmt.Errorf("non-loopback host %q requires --auth-token, --auth-hash, TERMCP_AUTH_TOKEN, or TERMCP_AUTH_HASH", c.Host)
+		return fmt.Errorf("non-loopback host %q requires --auth-token, --auth-hash, TERMCP_AUTH_TOKEN, or TERMCP_AUTH_HASH (or pass --disable-auth / %s=1 to run open on purpose)", c.Host, EnvDisableAuth)
 	}
 	return nil
 }

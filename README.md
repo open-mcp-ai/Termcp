@@ -191,6 +191,8 @@ termcp [flags]
 | `--mcp-manage-ssh-configs` | `false` | Enable MCP tools to create/edit/delete SSH configs (secrets are never exposed). |
 | `--auth-token`   | *(unset)*    | Static token for HTTP authentication (or `$TERMCP_AUTH_TOKEN`). Every client — API, MCP, browser — must present it. Mutually exclusive with `--auth-hash`. |
 | `--auth-hash`    | *(unset)*    | Salted SHA-256 hash of the token (`sha256-<salt_hex>-<digest_hex>`) so the server never holds the plaintext (or `$TERMCP_AUTH_HASH`). Generate with `termcp --gen-auth-hash`. Mutually exclusive with `--auth-token`. |
+| `--disable-auth` | `false`      | Turn HTTP authentication off **on purpose**, including on a non-loopback bind (or `$TERMCP_DISABLE_AUTH_TOKEN=1`). Pair it with a loopback port so only local callers can reach the port. Combining it with `--auth-token`/`--auth-hash` is an error rather than a silently-won argument. |
+| `--mcp-defer-tools` | `false`   | Tag low-frequency MCP tools (`file_*`, `forward`, `shell_resize`, …) with `defer_loading` so clients fetch their schemas on demand, shrinking the initial `tools/list`. Off by default: clients that ignore the marker — or talk to termcp through a gateway that drops it — would otherwise never see those tools. See [Deferred tool loading](#deferred-tool-loading). |
 | `--gen-auth-hash` | *(action)* | Generate the salted SHA-256 hash of a token for `--auth-hash`, then exit (token from an argument, or from stdin without echo on a terminal). |
 | `--version`      | *(action)*   | Print version, commit, and build date, then exit. The version follows the git tag automatically (release builds inject it via `-ldflags`; plain `go build` / `go install module@vX.Y.Z` falls back to the module version embedded by the Go toolchain). |
 
@@ -240,6 +242,7 @@ Behavior notes:
 - `--auth-token` and `--auth-hash` are mutually exclusive; a flag value overrides the environment variable of the same setting.
 - A colon inside the token is fine: the server also accepts the whole decoded `user:pass` string when it equals the token, so clients that split at the first colon (e.g. `curl -u user:pass`) still authenticate. `curl -u :<token>` remains the canonical form.
 - Without a token or hash, startup fails on any non-loopback host (`0.0.0.0`, a LAN IP, or a hostname other than `localhost`), so an accidentally exposed instance can never run unauthenticated.
+- `--disable-auth` (or `TERMCP_DISABLE_AUTH_TOKEN=1`) explicitly lifts that requirement. It is the escape hatch for loopback-only setups — demo videos, screen recordings, single-user workstations — where the token protects nothing. Because it is a deliberate override, combining it with `--auth-token`/`--auth-hash` is a startup error rather than a silently-won argument, and the startup log switches from the informational auth line to a warning.
 - Browsers use HTTP Basic, which is Base64, not encryption. When serving termcp beyond your own machine, terminate TLS in a reverse proxy in front of it — the `termcp_token` cookie then gets the `Secure` flag automatically only when the request arrived over TLS.
 
 ### Connecting to Remote Hosts
@@ -283,6 +286,16 @@ docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP
 > Shell examples are single-line on purpose: a `\` continuation is valid bash but a syntax error in PowerShell, so every command pastes as-is into bash, zsh, and PowerShell.
 
 `--host 0.0.0.0` is reachable from outside the container, so an auth token is required. MCP endpoint: `http://localhost:18765/stream`. With a bind mount instead of a named volume, chown the host directory first: `chown -R 1000:1000 /path/on/host`.
+
+#### Docker without a token (loopback only)
+
+For a throwaway demo, a screen recording, or a single-user workstation, the token is friction with no benefit. Publish the port on the **host loopback only** and tell termcp explicitly that the missing credentials are intentional:
+
+```bash
+docker run -d --name termcp -p 127.0.0.1:18765:18765 -v termcp-data:/home/termcp ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765 --disable-auth
+```
+
+Two details make this safe rather than merely convenient. `-p 127.0.0.1:18765:18765` binds the published port to the host's loopback, so the container stays reachable to this machine and invisible to the LAN — the container itself still listens on `0.0.0.0` because that is the only address routable from outside its network namespace. And `--disable-auth` is required precisely because termcp refuses to start unauthenticated on a non-loopback bind: the flag is the operator taking responsibility, which is why it also downgrades the startup log to a warning. The equivalent environment form is `-e TERMCP_DISABLE_AUTH_TOKEN=1` instead of the flag.
 
 ### Multi-stage build: add termcp to any container
 
@@ -489,6 +502,17 @@ termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes liv
 | Host discovery | `shell_detect` |
 
 Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Failed tools return `isError=true` with a JSON body carrying a stable `error_code`.
+
+## Deferred tool loading
+
+An MCP client fetches every tool's JSON schema in `tools/list`, so tool-heavy servers pay for that in context budget. The MCP spec offers an escape hatch: mark low-frequency tools with `defer_loading`, and a client loads their schema on demand. termcp's 31 tools split into a hot path of **12** (session lifecycle + shell input/output — always listed) and **19** wide, low-frequency surfaces (the 11 SFTP `file_*` tools, `forward`, `shell_resize`/`shell_detect`/`shell_notify`, `shell_reader_register`/`shell_reader_unregister`, `message`, `ssh_config`).
+
+`--mcp-defer-tools` turns the marker on and is **off by default**, so:
+
+- **Default** — all 31 tools are listed eagerly with full schema. This is what every client that does not implement deferred loading needs — including any Codex that talks to termcp through a gateway such as AxonHub, which can drop the `defer_loading` marker. With the marker lost, those tools are not reloadable on demand and would simply vanish from the model's view.
+- **`--mcp-defer-tools`** — the 19 low-frequency tools carry `defer_loading`; the 12 core tools stay eager so the `session_start → shell_input → shell_output` loop never requires a search round trip. Clients that support on-demand loading (mcp-go based clients, Claude Code) pay only for the schemas they actually use.
+
+Same 31 tools either way: enabling the flag never removes tools, it only withholds schemas from the initial listing.
 
 ## Known Limitations & Security Model
 
