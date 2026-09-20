@@ -733,7 +733,18 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 		t.Skip("SFTP mode semantics differ on Windows")
 	}
 	s := newTestServer(t)
-	startReq := makeRequest(map[string]any{"command": "echo", "mode": "pipe", "ssh_config": "internal"})
+	// Dispatch needs a RUNNING session: file tools short-circuit with
+	// session_not_running before the action switch when the session is DEAD (an
+	// `echo` pipe session exits within ms, and the unknown-action subtest would
+	// even pass vacuously on the guard's error — see
+	// TestCleanExitPipeSessionIsReadOnly). A long-lived pipe command keeps the
+	// fixture in pipe mode while reaching the real dispatch switch.
+	startReq := makeRequest(map[string]any{
+		"command":    "sleep",
+		"args":       testShellArgs("30"),
+		"mode":       "pipe",
+		"ssh_config": "internal",
+	})
 	startResult, err := s.handleStartSession(context.Background(), startReq)
 	if err != nil {
 		t.Fatal(err)
