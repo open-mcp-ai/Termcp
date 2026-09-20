@@ -6,6 +6,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // resolveResponse is the body of GET /api/resolve. Only the fields meaningful
@@ -19,7 +20,6 @@ type resolveResponse struct {
 	Index     int    `json:"index,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Status    string `json:"status,omitempty"`
-	Archived  bool   `json:"archived,omitempty"`
 }
 
 // handleResolve turns a termcp:// locator into concrete ids so scripts and
@@ -75,7 +75,9 @@ func (h *Handler) resolveEntry(w http.ResponseWriter, p *locator.Parsed) {
 }
 
 // resolveSessionOrShell resolves the session part first (live sessions, then
-// the archive), then the optional shell channel index.
+// closed/restored DEAD ones kept in the registry), then the optional shell
+// channel index. A shell locator on a closed session is rejected (409): its
+// process is gone, so the channel is read-only via output-range.
 func (h *Handler) resolveSessionOrShell(w http.ResponseWriter, p *locator.Parsed) {
 	if sess := h.Sessions.Get(p.SessionID); sess != nil {
 		info := sess.Info()
@@ -87,6 +89,11 @@ func (h *Handler) resolveSessionOrShell(w http.ResponseWriter, p *locator.Parsed
 		}
 		if p.Kind == locator.KindSession {
 			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		// Shell channel: only live sessions expose an operable channel.
+		if info.Status != api.SessionRunning {
+			http.Error(w, fmt.Sprintf("session %q is closed (status %s); shell channels are read-only — use GET /api/shells/{id}/output-range or shell_output", p.SessionID, info.Status), http.StatusConflict)
 			return
 		}
 		// Shell channel: 1-based creation order, matching the Web UI tabs

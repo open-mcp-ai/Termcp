@@ -22,7 +22,7 @@ import (
 // in every model turn.
 const mcpServerInstructions = `termcp agent rules:
 
-0) Tools: session_*/shell_* are standalone; forward/message/history/ssh_config and file_perm/file_link/file_fs take an "action" parameter (enum in each schema).
+0) Tools: session_*/shell_* are standalone; forward/message/ssh_config and file_perm/file_link/file_fs take an "action" parameter (enum in each schema).
 1) IDs: session_id = connection container (forwards, files, terminate, shell_open); shell_id = terminal channel (input/key/output/resize/close, readers). Never invent them; take from session_start / shell_open / list tools. termcp:// locators from the user ("termcp://mac" entry, "termcp://#<sid>" session, "termcp://#<sid>:N" shell) are accepted in place of ssh_config names, session_id, shell_id — use verbatim, no lookups.
 2) Mode: interactive shell (omit command/args, DEFAULT) for multi-step/stateful work; drive via shell_input + shell_key(enter) + shell_output(timeout≤3) loops. shell_output returns ONLY new bytes: empty ≠ done, keep polling. Dedicated command (command/args set) ONLY for REPL/TUI, daemons, or one atomic script. Never split sequential steps into session_start(bash -c) calls (loses cwd/env, wastes handshakes).
 3) After discovery, act with concrete calls, not prose. Verify success via output or an explicit success field.
@@ -105,8 +105,21 @@ func (s *Server) NotifyManager() *notify.Manager {
 
 // New creates and configures the MCP server with all tools registered.
 // sshConfigs may be nil (session_start / ssh_config(action=list) will error or return empty).
+// version is the build version reported in initialize's serverInfo (main passes the
+// same value `termcp --version` prints); an empty string falls back to "dev".
 // sseOpts are passed to the underlying mcp-go SSE server (e.g. mcpserver.WithHTTPServer).
-func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfig.Store, forwardMgr *forward.ForwardManager, sseOpts ...mcpserver.SSEOption) *Server {
+func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfig.Store, forwardMgr *forward.ForwardManager, version string, sseOpts ...mcpserver.SSEOption) *Server {
+	if version == "" {
+		version = "dev"
+	}
+	// Port forwards are bound to a session's SSH transport: when a session goes
+	// DEAD (terminate/exit/lost connection) every forward of that session must be
+	// released, or its local listener lingers as a dead endpoint. The session
+	// manager does not know the forward manager, so wire the cascade here at the
+	// composition point shared by the MCP and Web UI surfaces.
+	if sessMgr != nil && forwardMgr != nil {
+		sessMgr.SetOnDeadHook(forwardMgr.CloseBySession)
+	}
 	s := &Server{
 		sessMgr:    sessMgr,
 		msgMgr:     msgMgr,
@@ -114,7 +127,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		forwardMgr: forwardMgr,
 	}
 
-	mcpServer := mcpserver.NewMCPServer("termcp", "0.0.4",
+	mcpServer := mcpserver.NewMCPServer("termcp", version,
 		mcpserver.WithInstructions(mcpServerInstructions),
 		// Resources are read-only docs (resources/list + resources/read) and the
 		// list is fixed at startup, so no subscribe/listChanged: mcp-go v0.50 has
@@ -172,13 +185,13 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("shell_key", s.handlePressKey))
 
 	mcpServer.AddTool(newTool("shell_output",
-		mcpgo.WithDescription("Unified output reader for live AND archived/dead shells with one byte-stream cursor model. shell_id may be a shell_id, a session_id, or a termcp:// locator (\"termcp://#<sid>\" = primary shell, \"termcp://#<sid>:N\" = Nth shell channel). Default: live = new output since the last read on reader_id (blocking up to timeout); archived = recent tail. tail_lines=N returns the last N lines; offset>=0 reads raw bytes from that position (stateless paging with has_more). Returns {output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds?}."),
+		mcpgo.WithDescription("Unified output reader for live AND closed (DEAD) shells with one byte-stream cursor model. shell_id may be a shell_id, a session_id, or a termcp:// locator (\"termcp://#<sid>\" = primary shell, \"termcp://#<sid>:N\" = Nth shell channel). Default: live = new output since the last read on reader_id (blocking up to timeout); closed = recent tail. tail_lines=N returns the last N lines; offset>=0 reads raw bytes from that position (stateless paging with has_more). Returns {output, has_more, lines_returned, bytes_returned, start_offset, end_offset, total_bytes, source, session_id, shell_id, session_status, session_uptime_seconds?}."),
 		mcpgo.WithString("shell_id", mcpgo.Required(), mcpgo.Description("shell_id, session_id, or termcp:// locator (termcp://#<sid> / termcp://#<sid>:N)")),
 		mcpgo.WithBoolean("strip_ansi", mcpgo.Description("If true, strip ANSI SGR/cursor escapes and compress terminal noise"), mcpgo.DefaultBool(true)),
-		mcpgo.WithNumber("timeout", mcpgo.Description("Blocking wait for new output on LIVE shells, in seconds (0–60); 0 = non-blocking; ignored for archived reads"), mcpgo.DefaultNumber(3)),
+		mcpgo.WithNumber("timeout", mcpgo.Description("Blocking wait for new output on LIVE shells, in seconds (0–60); 0 = non-blocking; ignored for closed-session reads"), mcpgo.DefaultNumber(3)),
 		mcpgo.WithNumber("max_lines", mcpgo.Description("Return at most N newline-terminated lines (from the read window); 0 = no line limit"), mcpgo.DefaultNumber(0)),
 		mcpgo.WithNumber("max_bytes", mcpgo.Description("Max raw bytes per call (from offset or tail); 0 = no limit. Use with start_offset/end_offset/has_more to paginate"), mcpgo.DefaultNumber(8192)),
-		mcpgo.WithNumber("offset", mcpgo.Description("Raw byte position to start reading; -1 = reader cursor (live, default) / tail (archived)"), mcpgo.DefaultNumber(-1)),
+		mcpgo.WithNumber("offset", mcpgo.Description("Raw byte position to start reading; -1 = reader cursor (live, default) / tail (closed)"), mcpgo.DefaultNumber(-1)),
 		mcpgo.WithNumber("tail_lines", mcpgo.Description("Return only the last N lines of the stream (overrides offset); 0 = off"), mcpgo.DefaultNumber(0)),
 		mcpgo.WithNumber("reader_id", mcpgo.DefaultNumber(0)),
 	), withLogging("shell_output", s.handleReadOutput))

@@ -429,7 +429,7 @@ type sessionRenameBody struct {
 	Name *string `json:"name"`
 }
 
-// handleRenameSession renames a live or archived session (PATCH /api/sessions/{id}).
+// handleRenameSession renames a live or closed (DEAD) session (PATCH /api/sessions/{id}).
 func (h *Handler) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body sessionRenameBody
@@ -865,6 +865,12 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
 		return
 	}
+	// A forward needs a live transport; a closed (DEAD) session must not mint a
+	// listener that can never carry traffic.
+	if sess.Info().Status != api.SessionRunning {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "session is closed; forwards need a live connection"})
+		return
+	}
 	sshClient := sess.SSHClient()
 	if sshClient == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session has no SSH client — may not be ready"})
@@ -938,6 +944,12 @@ func (h *Handler) resolveFileSession(sessionID string, w http.ResponseWriter) (*
 	sess := h.Sessions.Get(sessionID)
 	if sess == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+		return nil, nil, false
+	}
+	// File operations need a live connection; a closed (DEAD) session keeps its
+	// output readable via output-range but has no transport left to SFTP over.
+	if sess.Info().Status != api.SessionRunning {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "session is closed; file operations need a live connection (read output via /output-range)"})
 		return nil, nil, false
 	}
 	sshClient := sess.SSHClient()

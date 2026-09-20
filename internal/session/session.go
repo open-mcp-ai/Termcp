@@ -420,7 +420,7 @@ func (s *Session) readOutput(ctx context.Context, readerID int, timeout time.Dur
 		output = ansi.Strip(output)
 		output = ansi.Compact(output)
 	}
-	// Output is archived at the write source (pipeToBuffer), not here, so it is
+	// Output is recorded at the write source (pipeToBuffer), not here, so it is
 	// recorded exactly once regardless of which reader consumes it.
 	return output, nil
 }
@@ -1052,10 +1052,10 @@ func (cs *ChildShell) pipeToBuffer(r io.Reader) {
 				if werr := cs.buf.Write(buf[:n]); werr != nil {
 					return
 				}
-				// Archive output once at the source so every session (WebUI stream and
+				// Record output once at the source so every session (WebUI stream and
 				// MCP read alike) leaves a transcript — regardless of which reader
 				// consumes it. Never double-recorded because each write fires once.
-				// Tagged with the originating shell so archived history can split tabs.
+				// Tagged with the originating shell so retained history can split tabs.
 				if p := cs.parent; p != nil {
 					if fn := p.onOutput.Load(); fn != nil {
 						(*fn)(cs.ID)
@@ -1101,7 +1101,7 @@ func (cs *ChildShell) drainPipes() {
 	}
 }
 
-// retainHistory keeps the shell's final metadata for the archived per-shell
+// retainHistory keeps the shell's final metadata for the retained per-shell
 // tabs, unless the shell was explicitly closed — closed shells are deleted,
 // never retained.
 func (cs *ChildShell) retainHistory(p *Session) {
@@ -1166,7 +1166,7 @@ func (cs *ChildShell) startReaders() {
 		code := cs.execSession.ExitCode()
 		cs.ExitCode = &code
 		cs.mu.Unlock()
-		// Retain this shell's final metadata for the archived per-shell tabs —
+		// Retain this shell's final metadata for the retained per-shell tabs —
 		// unless the user explicitly closed it. Store-then-recheck: a manual close
 		// racing this store re-deletes the entry below, so a closed shell can
 		// never survive in the retained snapshot (no lock needed: CloseChildShell

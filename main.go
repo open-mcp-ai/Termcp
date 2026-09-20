@@ -243,7 +243,7 @@ func main() {
 
 	forwardMgr := forward.NewForwardManager()
 
-	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, mcpserver.WithHTTPServer(mainSrv))
+	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, versionString(), mcpserver.WithHTTPServer(mainSrv))
 	// Same embedded docs the Web UI serves over HTTP become MCP resources/prompts.
 	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal
