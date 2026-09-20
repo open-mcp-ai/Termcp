@@ -108,7 +108,7 @@ ssh_config(action=list)
       → shell_close(shell_id)
       → forward(session_id, action=local|remote|dynamic, ...)
       → file_*(session_id, ...)
-  → session_terminate(session_id)           # 关闭会话（离 DEAD：断连接+杀进程；force=true 强杀）
+  → session_terminate(session_id)           # 关闭会话（转入 DEAD：断连接+杀进程；force=true 强杀）
 ```
 
 ---
@@ -494,6 +494,6 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `file_truncate` / `file_realpath` / `file_statvfs` | `file_fs(action=truncate\|realpath\|statvfs)` |
 | `local_forward` / `remote_forward` / `dynamic_forward` / `list_forwards` / `close_forward` | `forward(action=local\|remote\|dynamic\|list\|close)` |
 | `message_list` / `message_get` | `message(action=list\|get)` |
-| ~~`history_*`~~ | **已移除**：`session_terminate` 不再归档，关闭后会话保留在注册表，`shell_output` 统一读输出；彻底删除用 `session_delete` |
-| `history(action=get_transcript)` | **已移除**；归档/死亡会话输出改用 `shell_output(shell_id=归档session_id或shell_id, tail_lines=N / offset)`，与活会话同一套游标语义 |
+| ~~`history_*`~~ | **已移除**：`session_terminate` 只关闭会话（保留 DEAD 条目可读），不再归档；`shell_output` 统一读输出；彻底删除用 `session_delete` |
+| `history(action=get_transcript)` | **已移除**；已关闭（DEAD）会话输出改用 `shell_output(shell_id=会话id或shell_id, tail_lines=N / offset)`，与活会话同一套游标语义 |
 | `ssh_config_list` / `ssh_config_create` / `ssh_config_edit` / `ssh_config_copy` / `ssh_config_delete` | `ssh_config(action=list\|create\|edit\|copy\|delete)` |

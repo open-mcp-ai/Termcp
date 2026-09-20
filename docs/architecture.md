@@ -412,7 +412,7 @@ finalize()  ──►  scope.Release()  ──►  逆序执行所有已挂载�
 - **唯一级联点**：`finalize()` → `scope.Release()` 是唯一的释放入口；子系统之间互不感知，也不需要任何全局注册表或"记得在 main 里注册 listener"的隐式约定。
 - **幂等与并发安全**：`Release()` 可重复调用（`sync.Once` 语义），清理函数 panic 不会阻断其余释放；若挂载发生在 scope 已释放之后（会话已删除与资源创建并发），清理函数立即同步执行，因此不存在"挂到一个死会话上"的泄漏窗口。
 - **LIFO 顺序**：后创建的资源先释放，符合依赖方向（例如先关转发，再关底层连接）。
-- **DEAD 不释放**：`terminate` / 断线只把 Session 标记为 `exited`，不触发 `Release()`；只有 `DELETE`（`Manager.Delete` / `ArchiveAndForget`）才释放。
+- **DEAD 不释放 scope，但释放传输资源**：`terminate` / 断线只把 Session 标记为 `exited`，不触发 `Release()`（保留缓冲与消息供只读回放）；但绑定在已死传输上的资源——端口转发——会经 `Manager.SetOnDeadHook` → `ForwardManager.CloseBySession` 立即关闭，否则本地监听会残留成 active 的死端点。只有 `DELETE`（`Manager.Delete`）才跑 `finalize()` → `scope.Release()`。
 
 ---
 
