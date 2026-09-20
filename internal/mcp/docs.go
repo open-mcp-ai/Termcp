@@ -36,7 +36,7 @@ var docResources = []docResource{
 	{
 		path:        "skills.md",
 		name:        "termcp HTTP skill (curl recipes)",
-		description: "Agent skill for driving termcp over HTTP with curl + jq only: session lifecycle, output polling, input/keys/resize, archive/transcript/screenshot, files, forwards, pitfalls. Installable into a skills directory.",
+		description: "Agent skill for driving termcp over HTTP with curl + jq only: session lifecycle, output polling (live and closed sessions), input/keys/resize, files, forwards, pitfalls. Installable into a skills directory.",
 	},
 }
 
