@@ -1,38 +1,62 @@
 <div id="top">
 
-
-
 <p align="center">
-    <img src="./docs/assets/logo.png"></img>
-  <h1 align="center">termcp</h1>
-  <p align="center"><em>一个 AI Native 的终端平台：跨平台、可视化、人机协作。</em></p>
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:2786FF,50:6E4AFF,100:FF69B4&height=150&section=header" width="100%" alt="header banner">
 </p>
 
+<p align="center">
+  <a href="https://github.com/open-mcp-ai/termcp">
+    <img src="./docs/assets/logo.png" width="150" alt="termcp logo">
+  </a>
+</p>
 
+<h1 align="center">⚡ termcp</h1>
+
+<p align="center">
+  <a href="https://github.com/open-mcp-ai/termcp">
+    <img src="https://readme-typing-svg.demolab.com?font=Noto+Sans+SC&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=%E4%B8%80%E4%B8%AA+AI+Native+%E7%9A%84%E7%BB%88%E7%AB%AF%E5%B9%B3%E5%8F%B0;%E8%B7%A8%E5%B9%B3%E5%8F%B0+%C2%B7+%E5%8F%AF%E8%A7%86%E5%8C%96+%C2%B7+%E4%BA%BA%E6%9C%BA%E5%8D%8F%E4%BD%9C;%E4%B8%80%E4%B8%AA%E7%AB%AF%E5%8F%A3%EF%BC%8C%E5%9B%9B%E4%B8%AA%E5%85%A5%E5%8F%A3;%E7%94%A8+MCP+%E4%B8%8E+SKILLS+%E9%A9%B1%E5%8A%A8%E7%9C%9F%E5%AE%9E%E7%BB%88%E7%AB%AF" alt="termcp 标语">
+  </a>
+</p>
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp/stargazers">
-    <img src="https://img.shields.io/github/stars/open-mcp-ai/termcp?label=Stars&logo=github&style=for-the-badge" alt="Stars">
+    <img src="https://img.shields.io/github/stars/open-mcp-ai/termcp?label=Stars&logo=github&style=for-the-badge&color=2786ff" alt="Stars">
   </a>
   <a href="https://github.com/open-mcp-ai/termcp/forks">
-    <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge" alt="Forks">
+    <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge&color=2786ff" alt="Forks">
   </a>
-  <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="平台">
-  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go No CGO">
-  <a href="./LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">
+  <a href="https://github.com/open-mcp-ai/termcp/releases">
+    <img src="https://img.shields.io/github/v/release/open-mcp-ai/termcp?label=Release&logo=github&style=for-the-badge&color=2786ff" alt="Release">
   </a>
 </p>
 
-
+<p align="center">
+  <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="平台">
+  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go No CGO">
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="MIT License">
+  </a>
+</p>
 
 <p align="center">
   <strong>中文</strong> | <a href="./README.md">English</a>
 </p>
 
+<p align="center">
+  <a href="#功能特性"><img src="https://img.shields.io/badge/%E5%8A%9F%E8%83%BD%E7%89%B9%E6%80%A7-2786ff?style=flat-square" alt="功能特性"></a>
+  <a href="#快速开始"><img src="https://img.shields.io/badge/%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B-2786ff?style=flat-square" alt="快速开始"></a>
+  <a href="#使用"><img src="https://img.shields.io/badge/%E4%BD%BF%E7%94%A8-2786ff?style=flat-square" alt="使用"></a>
+  <a href="#docker-部署"><img src="https://img.shields.io/badge/Docker%20%E9%83%A8%E7%BD%B2-2786ff?style=flat-square" alt="Docker 部署"></a>
+  <a href="#接入-ai-客户端mcp"><img src="https://img.shields.io/badge/MCP-6E4AFF?style=flat-square" alt="MCP"></a>
+  <a href="#agent-skill纯-curl无需-mcp"><img src="https://img.shields.io/badge/Skill-6E4AFF?style=flat-square" alt="Skill"></a>
+  <a href="#接入脚本--程序rest-api"><img src="https://img.shields.io/badge/REST%20API-6E4AFF?style=flat-square" alt="REST API"></a>
+  <a href="#工具参考"><img src="https://img.shields.io/badge/%E5%B7%A5%E5%85%B7%E5%8F%82%E8%80%83-00ADD8?style=flat-square" alt="工具参考"></a>
+  <a href="#已知限制与安全模型"><img src="https://img.shields.io/badge/%E5%AE%89%E5%85%A8%E6%A8%A1%E5%9E%8B-FF69B4?style=flat-square" alt="安全模型"></a>
+</p>
 
-
----
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=0:2786FF,100:FF69B4&height=3&section=header" width="100%" alt="divider">
+</p>
 
 ## 简介
 
@@ -54,6 +78,8 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 功能强大的 Web UI 把多主机、多会话集中到一个界面里管理：本地一条命令启动，或容器化部署到云端，浏览器访问的都是同一套操作界面。
 
+![pic2_zh](docs/assets/pic2_zh.png)
+
 - **多会话仪表盘**：所有运行中的会话按名称列出，随时切换、随时接管。
 - **实时行为观测**：像操作本地终端一样，在浏览器里看 `htop` 的动态界面、`vim` 的编辑过程、安装程序的彩色提示。
 - **标签化与平铺工作区**：一个 SSH 会话下可开多个 shell，各占一个标签；多个会话也可平铺展示，同时跟踪。
@@ -67,6 +93,8 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 无缝人机交互、结对操作：Agent 是终端的常驻用户，与你和脚本并列。
 
 Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互**（SSH 登录先输密码、Python REPL 逐行调试、回答安装程序的 `[Y/n]` 提示、驱动 `top`/`htop`/impacket）。`termcp` 把真实终端直接交给 Agent：会话持续复用，**TUI**、**REPL**、**GDB**、**msfconsole**、**vim** 都能像人一样被持续管理——走 MCP，或用实例自带的 [Agent Skill](#agent-skill纯-curl无需-mcp) 走纯 `curl`。
+
+![pic1_zh](docs/assets/pic1_zh.png)
 
 - **同一套会话层，平级入口。** MCP、SKILLS、REST/WebSocket 与 Web UI 同处一层，共用同一批真实会话。Agent 的每一步操作，你在浏览器里都看得见、随时能接管；反过来，Agent 需要时也可以停下来，把密码/MFA 提示交给你输入。
 - **为 token 与轮次预算设计。** 工具 schema 紧凑、支持按需延迟加载（见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)）；`shell_output` 用 tail/offset 游标分页，模型上下文只载入你真正需要的输出；`shell_notify` 只发唤醒信号；`message` 按需取回完整输出。
@@ -476,4 +504,26 @@ termcp 具备与系统真实终端完全一致的自由度与控制力。**作�
   - **关键操作坚持人工在环（Human-in-the-loop）**：termcp 提供了 Web UI 实时同屏与一键接管机制。遇到 `sudo`、破坏性指令、格式化、不可逆数据修改等操作时，切勿在无人值守的生产环境完全信任 AI，请务必人工介入确认。
 
 ---
+
+## Star 趋势
+
+<p align="center">
+  <a href="https://star-history.com/#open-mcp-ai/termcp&Date">
+    <img src="https://api.star-history.com/svg?repos=open-mcp-ai/termcp&type=Date" alt="Star 趋势图" width="760">
+  </a>
+</p>
+
+## 许可证
+
+本项目基于 [MIT License](./LICENSE) 开源，可自由使用、修改与分发，只需保留版权与许可声明。感谢 [linux.do](https://linux.do/) 社区的支持与讨论。
+
+---
+
+<p align="right">
+  <a href="#top">⬆️ 回到顶部</a>
+</p>
+
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:2786FF,100:6E4AFF&height=110&section=footer" width="100%" alt="footer">
+</p>
 

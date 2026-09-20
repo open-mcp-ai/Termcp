@@ -1,38 +1,62 @@
 <div id="top">
 
-
-
 <p align="center">
-    <img src="./docs/assets/logo.png"></img>
-  <h1 align="center">termcp</h1>
-  <p align="center"><em>An AI-native terminal platform: cross-platform, visual, built for human–agent collaboration.</em></p>
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:2786FF,50:6E4AFF,100:FF69B4&height=150&section=header" width="100%" alt="header banner">
 </p>
 
+<p align="center">
+  <a href="https://github.com/open-mcp-ai/termcp">
+    <img src="./docs/assets/logo.png" width="150" alt="termcp logo">
+  </a>
+</p>
 
+<h1 align="center">⚡ termcp</h1>
+
+<p align="center">
+  <a href="https://github.com/open-mcp-ai/termcp">
+    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=An+AI-native+terminal+platform;Cross-platform+%C2%B7+Visual+%C2%B7+Built+for+Human%E2%80%93Agent+Collaboration;One+port%2C+four+entrances;Drive+real+terminals+over+MCP+and+SKILLS" alt="termcp tagline">
+  </a>
+</p>
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp/stargazers">
-    <img src="https://img.shields.io/github/stars/open-mcp-ai/termcp?label=Stars&logo=github&style=for-the-badge" alt="Stars">
+    <img src="https://img.shields.io/github/stars/open-mcp-ai/termcp?label=Stars&logo=github&style=for-the-badge&color=2786ff" alt="Stars">
   </a>
   <a href="https://github.com/open-mcp-ai/termcp/forks">
-    <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge" alt="Forks">
+    <img src="https://img.shields.io/github/forks/open-mcp-ai/termcp?label=Forks&logo=github&style=for-the-badge&color=2786ff" alt="Forks">
   </a>
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go, No CGO">
-  <a href="./LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">
+  <a href="https://github.com/open-mcp-ai/termcp/releases">
+    <img src="https://img.shields.io/github/v/release/open-mcp-ai/termcp?label=Release&logo=github&style=for-the-badge&color=2786ff" alt="Release">
   </a>
 </p>
 
-
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-2786ff?style=for-the-badge" alt="Platform">
+  <img src="https://img.shields.io/badge/Go-Pure%20Go%20%7C%20No%20CGO-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Pure Go, No CGO">
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="MIT License">
+  </a>
+</p>
 
 <p align="center">
   <strong>English</strong> | <a href="./README.zh.md">中文</a>
 </p>
 
+<p align="center">
+  <a href="#features"><img src="https://img.shields.io/badge/Features-2786ff?style=flat-square" alt="Features"></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/Quick%20Start-2786ff?style=flat-square" alt="Quick Start"></a>
+  <a href="#usage"><img src="https://img.shields.io/badge/Usage-2786ff?style=flat-square" alt="Usage"></a>
+  <a href="#docker-deployment"><img src="https://img.shields.io/badge/Docker-2786ff?style=flat-square" alt="Docker"></a>
+  <a href="#connecting-ai-clients-mcp"><img src="https://img.shields.io/badge/MCP-6E4AFF?style=flat-square" alt="MCP"></a>
+  <a href="#agent-skill-curl-only-no-mcp"><img src="https://img.shields.io/badge/Skill-6E4AFF?style=flat-square" alt="Skill"></a>
+  <a href="#connecting-scripts--programs-rest-api"><img src="https://img.shields.io/badge/REST%20API-6E4AFF?style=flat-square" alt="REST API"></a>
+  <a href="#tool-reference"><img src="https://img.shields.io/badge/Tools-00ADD8?style=flat-square" alt="Tools"></a>
+  <a href="#known-limitations--security-model"><img src="https://img.shields.io/badge/Security-FF69B4?style=flat-square" alt="Security"></a>
+</p>
 
-
----
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=0:2786FF,100:FF69B4&height=3&section=header" width="100%" alt="divider">
+</p>
 
 ## Introduction
 
@@ -54,6 +78,8 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 A powerful Web UI manages many hosts and many sessions in one place: start it locally with a single command or deploy the container to the cloud — the browser gets the same interface either way.
 
+![pic2](docs/assets/pic2.png)
+
 - **Multi-session dashboard**: every running session listed by name, switch or take over at any time.
 - **Real-time observation**: watch `htop`'s live display, `vim`'s editing process, or an installer's prompts in the browser, just like a local terminal.
 - **Tabs and tiling workspace**: one SSH session can open several shells, each its own tab; sessions can also be tiled side by side and tracked together.
@@ -67,6 +93,8 @@ A powerful Web UI manages many hosts and many sessions in one place: start it lo
 Seamless human–agent interaction and pair operation: the Agent is a standing user of the terminal, alongside you and your scripts.
 
 An Agent natively runs only one-shot commands, while real work is largely **multi-turn interaction** — SSH login needs a password first, a Python REPL is debugged line by line, an installer asks `[Y/n]`, tools like `top`/`htop`/impacket need a terminal. `termcp` hands the Agent a real terminal: one session stays alive and gets reused, so **TUIs**, **REPLs**, **GDB**, **msfconsole** and **vim** can be driven continuously the way a human would — through MCP or through the instance's own [Agent Skill](#agent-skill-curl-only-no-mcp) over plain `curl`.
+
+![pic1](docs/assets/pic1.png)
 
 - **One session layer, peer entrances.** MCP, SKILLS and REST/WebSocket sit at the same level as the Web UI, sharing the same real sessions. You can watch every Agent step in the browser and take over at any time; the Agent in turn can pause and hand a password/MFA prompt to you.
 - **Built for token and turn budgets.** Tool schemas are compact and can be deferred-loaded (see [`docs/mcp-tools.md`](./docs/mcp-tools.md)); `shell_output` pages by tail/offset cursors so only the slices you ask for ever enter the context window; `shell_notify` sends a bare wake-up signal; `message` fetches full output only when asked.
@@ -482,3 +510,23 @@ termcp is a **transparent real-terminal and multiplexed-session pipe** (PTY tran
 
 ---
 
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#open-mcp-ai/termcp&Date">
+    <img src="https://api.star-history.com/svg?repos=open-mcp-ai/termcp&type=Date" alt="Star History Chart" width="760">
+  </a>
+</p>
+
+## License
+
+Released under the [MIT License](./LICENSE). You are free to use, modify, and distribute it, provided the copyright notice and permission notice are retained. Thanks to the [linux.do](https://linux.do/) community for the discussions and support.
+
+---
+
+
+
+
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:2786FF,100:6E4AFF&height=110&section=footer" width="100%" alt="footer">
+</p>
