@@ -83,7 +83,7 @@ termcp 的 31 个工具按"热路径 / 低频面"分成两类，通过 MCP 标�
 | `invalid_argument` | 参数缺失或非法 | 按提示修正参数后重试 |
 | `session_not_found` | 无此 session_id，或会话已关闭（错误文本会提示用 `shell_output` 读取） | 用 `session_list` 复核 id |
 | `shell_not_found` | 无此 shell_id（可能已 `shell_close` 删除） | 用 `shell_list` 复核 id |
-| `session_not_running` | 会话已 DEAD/恢复但无活跃 SSH 连接 | 重新 `session_start` |
+| `session_not_running` | 会话已 DEAD（进程退出/显式关闭/断线/恢复），只读，不接受新操作 | 重新 `session_start` |
 | `reader_not_registered` | `reader_id` 未在该 shell 注册 | 先 `shell_reader_register` |
 | `forward_not_found` | 无此 forward_id | 用 `forward(action=list)` 复核 |
 | `ssh_config_not_found` | 无此 ssh_config | 用 `ssh_config(action=list)` 复核 |
