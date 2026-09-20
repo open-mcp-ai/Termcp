@@ -24,6 +24,7 @@ type Manager struct {
 	onOutputHook func(shellID string)
 	onExitHook   func(shellID string, exitCode *int)
 	onCloseHook  func(shellID string)
+	onDeadHook   func(sessionID string)
 }
 
 // SetNotifyHooks registers hooks for terminal I/O and lifecycle events.
@@ -59,6 +60,25 @@ func (m *Manager) notifyClose(shellID string) {
 	m.listChangeMu.RUnlock()
 	if fn != nil {
 		fn(shellID)
+	}
+}
+
+// SetOnDeadHook registers a callback invoked once per session, right after it
+// transitions to DEAD (explicit terminate, process exit, or transport loss).
+// Resources bound to a live transport — port forwards — are torn down there;
+// deleting the session later only finalizes what remains.
+func (m *Manager) SetOnDeadHook(fn func(sessionID string)) {
+	m.listChangeMu.Lock()
+	m.onDeadHook = fn
+	m.listChangeMu.Unlock()
+}
+
+func (m *Manager) notifyDead(sessionID string) {
+	m.listChangeMu.RLock()
+	fn := m.onDeadHook
+	m.listChangeMu.RUnlock()
+	if fn != nil {
+		fn(sessionID)
 	}
 }
 
@@ -126,9 +146,11 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 	onDead := func() {
 		// DEAD keeps the object in the registry. Nothing is removed, forgotten,
 		// or purged here — only the new state is persisted and the UI notified.
+		// Transport-bound resources (forwards) are released through the dead hook.
 		slog.Debug("session marked DEAD", "session_id", sid)
 		m.persist()
 		m.notifyListChange()
+		m.notifyDead(sid)
 	}
 	s.onDead.Store(&onDead)
 	onChildChange := m.notifyListChange

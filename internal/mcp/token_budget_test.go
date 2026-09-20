@@ -9,7 +9,7 @@ import (
 // must stay within defined limits. These values are injected into the model
 // context every turn, so every byte matters.
 func TestTokenBudgetGuard(t *testing.T) {
-	s := New(nil, nil, nil, nil)
+	s := New(nil, nil, nil, nil, "test")
 	s.RegisterSSHConfigWriteTools()
 
 	tools := s.mcpServer.ListTools()
@@ -65,7 +65,7 @@ func TestTokenBudgetGuard(t *testing.T) {
 // command pays a round trip on every interaction, so the core driving loop must
 // never be deferred; the wide, low-frequency surfaces should be.
 func TestDeferLoadingPolicy(t *testing.T) {
-	s := New(nil, nil, nil, nil)
+	s := New(nil, nil, nil, nil, "test")
 	s.RegisterSSHConfigWriteTools()
 
 	tools := s.mcpServer.ListTools()
