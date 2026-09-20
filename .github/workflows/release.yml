@@ -21,6 +21,12 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X main.version=$VERSION"
+          if [ -n "$COMMIT" ]; then LDFLAGS="$LDFLAGS -X main.commit=$COMMIT"; fi
+          if [ -n "$DATE" ]; then LDFLAGS="$LDFLAGS -X main.date=$DATE"; fi
           PLATFORMS=(
             "linux/amd64"
             "linux/arm64"
@@ -36,9 +42,9 @@ jobs:
             if [ "$GOOS" = "windows" ]; then
               BINARY="${BINARY}.exe"
             fi
-            echo "Building ${BINARY}..."
+            echo "Building ${BINARY} (${VERSION})..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
-              -ldflags="-s -w" \
+              -ldflags="$LDFLAGS" \
               -o "dist/${BINARY}" \
               .
           done
