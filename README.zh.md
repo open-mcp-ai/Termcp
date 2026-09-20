@@ -277,7 +277,7 @@ profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config
 官方镜像以非 root 用户 `termcp`（uid/gid 1000）运行，`/home/termcp` 声明为 `VOLUME`——全部状态（会话、SSH 配置、消息记录）默认存于 `~/.termcp`。镜像只携带二进制：不内置 entrypoint、不预声明端口，监听地址由运行命令决定。
 
 ```bash
-docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest --no-internal --host 0.0.0.0 --port 18765
+docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765
 ```
 
 > shell 示例均为单行：`\` 续行在 bash 里有效，但在 PowerShell 里是语法错误；单行命令可原样粘贴到 bash、zsh 与 PowerShell。

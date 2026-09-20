@@ -277,7 +277,7 @@ Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_
 The registry image runs as non-root `termcp` (uid/gid 1000) with `/home/termcp` declared a `VOLUME` — all state (sessions, SSH configs, message history) defaults to `~/.termcp`. It carries only the binary: no baked-in entrypoint or exposed port, so the run command decides the bind address.
 
 ```bash
-docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest --no-internal --host 0.0.0.0 --port 18765
+docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765
 ```
 
 > Shell examples are single-line on purpose: a `\` continuation is valid bash but a syntax error in PowerShell, so every command pastes as-is into bash, zsh, and PowerShell.
