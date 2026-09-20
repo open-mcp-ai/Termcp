@@ -1,6 +1,6 @@
 ---
 name: termcp
-description: Drive the termcp terminal-platform over its HTTP REST API with curl + jq (curl only). Use whenever a request mentions termcp, a termcp URL/locator (termcp://rock64, termcp://#<session>, termcp://#<session>:2), "open/connect to <host> through termcp", or termcp sessions/shells. Always fetch the instance's own <origin>/api.md first for version-exact endpoints, then use the recipes for resolving locators, creating sessions, polling output in chunks, sending input/keys, resizing PTYs, terminating or purging sessions, exporting transcripts/screenshots, transferring files, and managing port forwards. For server sweeps, batch commands, CI, and agents that only have HTTP access.
+description: Drive the termcp terminal-platform over its HTTP REST API with curl + jq (curl only). Use whenever a request mentions termcp, a termcp URL/locator (termcp://rock64, termcp://#<session>, termcp://#<session>:2), "open/connect to <host> through termcp", or termcp sessions/shells. Always fetch the instance's own <origin>/api.md first for version-exact endpoints, then use the recipes for resolving locators, creating sessions, polling output in chunks (live and closed sessions), sending input/keys, resizing PTYs, terminating or purging sessions, transferring files, and managing port forwards. For server sweeps, batch commands, CI, and agents that only have HTTP access.
 ---
 
 # termcp over HTTP
