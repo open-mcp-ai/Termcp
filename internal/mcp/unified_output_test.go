@@ -25,7 +25,7 @@ func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *session.M
 	sessMgr := session.NewManager(msgMgr, store, srv)
 	cleanupTestRuntime(t, sessMgr, srv)
 
-	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
 	return s, store, sessMgr
 }
 
