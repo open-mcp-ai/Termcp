@@ -61,27 +61,50 @@ func TestTokenBudgetGuard(t *testing.T) {
 }
 
 // TestDeferLoadingPolicy locks the split between always-loaded core tools and
-// deferred (on-demand) tools. A model that must search before it can type a
-// command pays a round trip on every interaction, so the core driving loop must
-// never be deferred; the wide, low-frequency surfaces should be.
+// deferred (on-demand) tools, and the default that governs whether the marker
+// is emitted at all.
+//
+// The classification is a property of termcp; whether it reaches the wire is a
+// deployment choice. Both halves matter: a model that must search before it can
+// type a command pays a round trip on every interaction, so the core driving
+// loop must never be deferred, and clients that drop defer_loading must still
+// see the whole surface unless the operator opted in.
 func TestDeferLoadingPolicy(t *testing.T) {
-	s := New(nil, nil, nil, nil, "test")
-	s.RegisterSSHConfigWriteTools()
-
-	tools := s.mcpServer.ListTools()
-	byName := make(map[string]bool, len(tools))
-	for _, st := range tools {
-		byName[st.Tool.Name] = st.Tool.DeferLoading
-	}
-
 	core := []string{
 		"session_start", "session_list", "session_info",
 		"session_terminate", "session_delete",
 		"shell_open", "shell_list", "shell_close", "shell_input", "shell_key", "shell_output",
 		"notify_user",
 	}
+	isCore := make(map[string]bool, len(core))
 	for _, name := range core {
-		deferred, ok := byName[name]
+		isCore[name] = true
+	}
+
+	collect := func(t *testing.T, opts ...Option) map[string]bool {
+		t.Helper()
+		s := New(nil, nil, nil, nil, "test", opts...)
+		s.RegisterSSHConfigWriteTools()
+		byName := make(map[string]bool)
+		for _, st := range s.mcpServer.ListTools() {
+			byName[st.Tool.Name] = st.Tool.DeferLoading
+		}
+		return byName
+	}
+
+	// Default: nothing is deferred, so a client that does not understand the
+	// marker still receives every tool.
+	def := collect(t)
+	for name, deferred := range def {
+		if deferred {
+			t.Errorf("default config marked %q defer_loading; the marker must be opt-in", name)
+		}
+	}
+
+	// Opt-in: the hot path stays eager, the wide/low-frequency surfaces defer.
+	on := collect(t, DeferTools())
+	for _, name := range core {
+		deferred, ok := on[name]
 		if !ok {
 			t.Errorf("core tool %q is not registered", name)
 			continue
@@ -90,9 +113,8 @@ func TestDeferLoadingPolicy(t *testing.T) {
 			t.Errorf("core tool %q must not be deferred (it is on the hot path)", name)
 		}
 	}
-
 	for name := range deferredTools {
-		got, ok := byName[name]
+		got, ok := on[name]
 		if !ok {
 			t.Errorf("deferredTools lists %q, which is not a registered tool (stale entry)", name)
 			continue
@@ -104,19 +126,10 @@ func TestDeferLoadingPolicy(t *testing.T) {
 
 	// Every registered tool must be classified, so a new tool cannot silently
 	// default into the always-loaded set and inflate every client's context.
-	for name := range byName {
-		if deferredTools[name] {
+	for name := range on {
+		if deferredTools[name] || isCore[name] {
 			continue
 		}
-		found := false
-		for _, c := range core {
-			if c == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("tool %q is neither in the core list nor deferredTools; classify it", name)
-		}
+		t.Errorf("tool %q is neither in the core list nor deferredTools; classify it", name)
 	}
 }
