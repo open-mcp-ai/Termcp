@@ -19,8 +19,6 @@ import (
 
 	"golang.org/x/term"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
-
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -145,6 +143,8 @@ func main() {
 	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable MCP tools to create/edit/delete SSH configs (off by default; passwords/keys are never exposed)")
 	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
 	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
+	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
+	flag.BoolVar(&cfg.MCPDeferTools, "mcp-defer-tools", cfg.MCPDeferTools, "Mark low-frequency MCP tools with defer_loading so clients fetch them on demand. Off by default: every tool is listed eagerly, which is what clients without deferred-tool support (e.g. Codex behind a gateway) need.")
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
 	var showVersion bool
@@ -218,6 +218,8 @@ func main() {
 
 	if verifier != nil {
 		slog.Info("HTTP authentication: enabled (API/MCP: Authorization: Bearer <token>; browsers: native login prompt, token as password)")
+	} else if cfg.DisableAuth {
+		slog.Warn("HTTP authentication: DISABLED on purpose (--disable-auth / $" + config.EnvDisableAuth + "); anyone who can reach this port can drive every session")
 	} else {
 		slog.Info("HTTP authentication: disabled (loopback-only bind)")
 	}
@@ -243,7 +245,15 @@ func main() {
 
 	forwardMgr := forward.NewForwardManager()
 
-	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, versionString(), mcpserver.WithHTTPServer(mainSrv))
+	mcpOpts := []mcpmod.Option{mcpmod.WithHTTPServer(mainSrv)}
+	if cfg.MCPDeferTools {
+		// Opt-in: tag low-frequency tools defer_loading so clients fetch their
+		// schemas on demand. Off by default because clients that drop the marker
+		// (any Codex talking through a gateway, for instance) would lose those
+		// tools entirely rather than merely load them later.
+		mcpOpts = append(mcpOpts, mcpmod.DeferTools())
+	}
+	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, versionString(), mcpOpts...)
 	// Same embedded docs the Web UI serves over HTTP become MCP resources/prompts.
 	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal

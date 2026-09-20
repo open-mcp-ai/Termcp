@@ -94,6 +94,11 @@ Constraints:
   environment variable for the same setting.
 - Binding a non-loopback address (`0.0.0.0`, a LAN IP, …) without auth **refuses to
   start**.
+- `--disable-auth` (or `TERMCP_DISABLE_AUTH_TOKEN=1`) lifts that requirement on
+  purpose, for loopback-only setups where the token protects nothing (demo
+  recordings, single-user workstations). Combining it with a token or hash is a
+  startup error, and the env var only accepts `1`/`true`/`yes`/`on` — `=0` means
+  "not set" rather than "open the server".
 - Tokens are never logged and must not go into URLs (query strings) — use headers.
 - Public exception: the two documentation endpoints `/api.md` and `/skills.md`
   (GET/HEAD only, no data inside) are served **without** credentials, so agents

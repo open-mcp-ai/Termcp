@@ -49,9 +49,14 @@ var compactToolDescriptions = map[string]string{
 // Tool metadata is sent to the model with every tool listing, so repeated
 // parameter explanations are kept only where they add semantics beyond the
 // parameter name, type, and compact tool description.
-func newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
+//
+// Low-frequency tools get defer_loading only when the server was constructed
+// with DeferTools() (the --mcp-defer-tools switch): the classification lives
+// in deferredTools, and whether the marker reaches the wire is a deployment
+// choice decided here, at the single registration point.
+func (s *Server) newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
 	opts = append([]mcpgo.ToolOption{annotationNone}, opts...)
-	if deferredTools[name] {
+	if s.shouldDeferTool(name) {
 		opts = append(opts, mcpgo.WithDeferLoading(true))
 	}
 	t := mcpgo.NewTool(name, opts...)
@@ -62,8 +67,13 @@ func newTool(name string, opts ...mcpgo.ToolOption) mcpgo.Tool {
 	return t
 }
 
-// deferredTools lists tools whose full JSON Schema is withheld from the initial
-// tools/list so a client can load them on demand (MCP deferred tool loading).
+// deferredTools lists tools whose full JSON Schema may be withheld from the
+// initial tools/list so a client can load them on demand (MCP deferred tool
+// loading, sent as `defer_loading: true`).
+//
+// This is the *classification*; whether the marker is actually emitted depends
+// on the --mcp-defer-tools switch (see Server.shouldDeferTool), which is off by
+// default because several widely used clients ignore or mishandle the marker.
 //
 // Keep the CORE loop out of this set — session_start/list/info/terminate/delete,
 // shell_open/close/input/key/output, notify_user — because a model that has to
