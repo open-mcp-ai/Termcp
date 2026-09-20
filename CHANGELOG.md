@@ -897,9 +897,6 @@
 
 ## v0.2.8-rc.2 — 2026-10-19
 
-
-## v0.2.8-rc.2 — 2026-10-19
-
 ### 变更
 
 - **MCP 工具面收成一个入口 `term`（#117）**。`tools/list` 从 32 个工具、约 22–25 KB 变成**一个**工具、约 2.0 KB，且此后不再随能力增长：新增一种操作是在命令空间里加一条指令，不是在工具清单里加一行。`cmd` 非必填，空调用返回引导——用法摘要、开工必需的 10 条指令、以及「`help` 列出全部 23 条」的指路（实测 2187 → 953 字节：读它的调用方还没决定要做什么，18 条用不上的能力不该每轮付费，但完全不说就等于让文件、转发、扩展不可见）。`cmd` 之外是十个具名参数（`timeout` / `bytes_limit` / `lines_limit` / `total_bytes_limit` / 三个 `on_*_overflow` / `pipe_to` / `learn_mode` / `structured_only`），语义全部由同一张表生成。32 个特化工具与 `--mcp-defer-tools` 一类的开关一并删除，白名单、命名空间、审阅门控、路径范围现在问同一张能力表，「同一操作经 `term`、经 REST、经 WebSocket 产生相同状态」因此不是靠自律而是判定只有一处。同一批新增的指令还有 `alias`（运行时别名，重启即失）与 `mcp`（把任意第三方 MCP server 当成一条通道驱动）。
@@ -944,9 +941,6 @@
 - **一批表示与交互修复**。多 slot 的 `structuredContent` 改为 `{"slots":[…]}`（客户端要求顶层是对象，裸数组会让整条回复被丢弃）；生成式回复也遵守 `bytes_limit=0` 与 `lines_limit`；`Content-Range` 在被总量上限截断后不再声称已不携带的字节；子通道先排空缓冲再发布 `exited`（否则「看到 exited 立刻读」会读到 `*/0`）；`pipe --argv` 消费整行剩余并按 shell 引用规则分词（此前 `--argv echo hello` 只跑了 `echo`）；`watch` 省掉 `--channel` 按客户端能力选而不是报错；`info 'a1f3:1'` 这类带引号的目标不再静默变成空串；窗口参数的默认值、范围与说明收成 `internal/mcp/term_args.go` 一张表，`tools/list` 的 schema 与 `docs/api.md` 的表格都从它生成（`structured_only` 曾上了 schema 却漏进文档）。连接者面板此前打开是空的、计数把自己算进去、同秒接入时排序随机，窄屏下按钮并成图标，赛博朋克主题还有一份陈旧的分叉 `base.css` 盖住了新样式。
 
 - **面向调用方的说明只剩一份**。`docs/mcp-tools.md`、`internal/webui/assets/SKILL.md`、`internal/webui/assets/extensions.md` 三份文档删除，因为它们教的是一个**能自己回答自己**的接口：`term()` 空调用给指令表、`help <directive>` 给形状与陷阱、`ext list` 给现有扩展。真正不可推导的事实搬进了代码而不是留在文件里——扩展的握手与终态语义进 `help ext`，`docs/api.md` 保留为**传输层**参考并在开头写明「只在基于它构建时才需要读」。
-
-## v0.2.8-rc.1 — 2026-10-15
-
 
 ## v0.2.8-rc.1 — 2026-10-15
 
@@ -1385,8 +1379,6 @@
 
 - **`--disable-auth` / `TERMCP_DISABLE_AUTH_TOKEN`**：显式关闭 HTTP 认证，非 loopback 绑定也放行（此前无认证绑定非 loopback 直接启动失败）。用于录屏、演示、单用户工作站等 loopback-only 场景；启动日志降为 warn。与 `--auth-token`/`--auth-hash` 同时配置视为矛盾并直接报错，不做静默取舍。环境变量只接受 `1`/`true`/`yes`/`on`，`=0`/`=false` 等按未设置处理，避免误开。
 - **`--mcp-defer-tools`（默认关闭）**：开启后才给 19 个低频工具（11 个 SFTP `file_*`、`forward`、`shell_resize`/`shell_detect`/`shell_notify`/`shell_reader_register`/`shell_reader_unregister`、`message`、`ssh_config`）打 `defer_loading` 标记，12 个核心工具永远立即可见。默认全 31 个工具带完整 Schema 一次列出——不支持懒加载的客户端、或经网关丢弃标记的链路（实测 Codex 0.155.1 + AxonHub 会吞掉带标记的工具，模型侧看到“零工具”）会因标记丢失而完全看不到这些工具。`Server.shouldDeferTool` 为唯一判定点，`TestDeferLoadingPolicy` 覆盖两种模式。
-
-## v0.2.0 — 2026-09-20
 
 ## v0.2.0 — 2026-09-20
 
