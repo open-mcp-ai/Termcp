@@ -225,7 +225,8 @@ forwards. Shell IDs are separate from the session ID; the first shell has its ow
 
 ### `GET /api/sessions`
 
-Lists all active sessions.
+Lists every session in the registry: running ones plus closed (DEAD) read-only tiles
+(the tile keeps its retained output readable).
 
 ```
 Response 200:
@@ -477,6 +478,9 @@ Request:
 | `remote` | `local_host`, `local_port`, `remote_host`, `remote_port` (1-65535) |
 | `dynamic` | none |
 
+Errors: `404` unknown session, `409` the session is closed (DEAD — forwards need a
+live connection; the transport is gone).
+
 ```
 Response 201: ForwardInfo
 ```
@@ -494,7 +498,9 @@ Response 200: { "ok": true }
 ## 10. Files
 
 All file operations go over the session's SFTP channel (remote) or the local file
-system (internal).
+system (internal). A closed (DEAD) session returns `409` for every file endpoint —
+its transport is gone, so output is readable via `GET /api/shells/{id}/output-range`
+instead.
 
 ### `GET /api/sessions/{id}/files`
 

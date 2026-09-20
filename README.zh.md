@@ -5,7 +5,7 @@
 <p align="center">
     <img src="./docs/assets/logo.png"></img>
   <h1 align="center">termcp</h1>
-  <p align="center"><em>不仅是一个让 AI 像人类一样操作的 MCP，更是一个跨平台的终端管理平台 —— 本机 / 远程统一接入，人、Agent 与脚本共用一套真实终端。</em></p>
+  <p align="center"><em>一个 AI Native 的终端平台：跨平台、可视化、人机协作。</em></p>
 </p>
 
 
@@ -36,15 +36,13 @@
 
 ## 简介
 
-`termcp` 不仅是一个让 AI 像人类一样操作的 MCP —— 在真实终端里敲命令、应答提示、跨轮次驱动 TUI 与 REPL；更是一个 **Go 编写的跨平台终端管理平台**。它可以连接**本机**或任意**远程主机**，把每个连接变为一个可持久管理的终端会话，人、AI 与脚本共用同一批会话：
+`termcp` 是一款 AI Native 的终端平台：多主机、多会话同时管理，全程可视化。这些会话由人和 AI 共同管理、共同维护，随时可以互相接管与交接；连接配置由平台独立维护，Agent 无需读取凭据即可使用。
 
 - **人** —— 浏览器实时查看、操作、接管任何会话；
-- **AI Agent** —— 通过 MCP 或 SKILLS（实例自带的 `/skills.md`，用 `curl` 即可驱动，含 `termcp://` 定位符解析）驱动同一批终端；
+- **AI Agent** —— 通过 MCP 或 SKILLS 驱动同一批终端；
 - **脚本 / 程序** —— 通过 REST API 编程化接入。
 
-每个会话都支持多标签终端、端口转发与文件传输，会话可关闭后只读回放，还可以在人与 AI 之间随时交接——你开着 root 权限的 shell 交给 Agent 驱动，或 Agent 碰到密码提示时暂停交给你输入。
-
-作为 MCP，它给了 AI 一双真实终端上的手，让 AI 像人类一样持续操作交互式程序；作为平台，它又是完整的终端服务 —— 会话挂起与归档、多会话并行编排、SSH 连接全生命周期管理，MCP 只是其中一层接口，实例还自带 Agent Skill（`/skills.md`），纯 `curl` 即可驱动同一批会话。Go 编写、单二进制、低开销、可长期驻留。
+平台层提供长驻会话与只读回放、多主机多会话并行编排、SSH 连接全生命周期管理，让整个过程**可观测、可编程、人机接力**。跨平台、云原生、纯 Go 无 CGO；单二进制、低开销、可长期驻留。
 
 ### 演示视频
 
@@ -52,36 +50,30 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 ## 为什么选 termcp
 
-### 平台：四种入口，一套会话
+### 多会话可视化管理
 
-| 入口 | 面向 | 形态 |
-|------|------|------|
-| **Web 管理界面** | 人 | 浏览器实时终端、会话仪表盘、多标签、历史回放、文件/转发面板 |
-| **MCP 接口** | AI Agent | 会话作为持久连接，Agent 可跨多轮对话管理/调度交互式程序 |
-| **SKILLS 方式**（`/skills.md`） | AI Agent | 单文件安装，仅凭 `curl` 驱动，含 `termcp://` 定位符解析 |
-| **REST API + WebSocket** | 脚本/程序 | 编程化创建会话、读写终端、端口转发、文件操作 |
+功能强大的 Web UI 把多主机、多会话集中到一个界面里管理：本地一条命令启动，或容器化部署到云端，浏览器访问的都是同一套操作界面。
 
-### 打破边界
+- **多会话仪表盘**：所有运行中的会话按名称列出，随时切换、随时接管。
+- **实时行为观测**：像操作本地终端一样，在浏览器里看 `htop` 的动态界面、`vim` 的编辑过程、安装程序的彩色提示。
+- **标签化与平铺工作区**：一个 SSH 会话下可开多个 shell，各占一个标签；多个会话也可平铺展示，同时跟踪。
+- **端口转发可视化**：会话相关的本地/远程端口与协议一目了然。
+- **文件管理**：浏览目录、上传下载、重命名、建目录，都在管理界面里完成。
+- **连接模板集中托管**：统一 SSH 配置管理；AI 开启会话时只指定配置名，读不到具体配置。
+- **已关闭会话只读回放**：会话关闭、崩溃或重启后，完整输出仍可翻阅。
 
-Agent 原生只能执行一次性命令，运行完就返回。但现实中有大量工作是**多轮交互**的，例如：
+### AI Native 设计
 
-- SSH 登录一台主机，先输密码，_再_执行命令。
-- 在 Python REPL 里逐行调试代码。
-- 回答安装程序里深埋的 `[Y/n]` 提示。
-- 驱动 `top`、`htop`、或 impacket 这类终端依赖型工具。
+无缝人机交互、结对操作：Agent 是终端的常驻用户，与你和脚本并列。
 
-这些场景里进程持续运行，Agent 必须在**多个对话轮次间读写进程的 I/O**。由此诞生了许多专门的MCP，但是为什么不直接赋予Agent双手，让他能够直接交互呢？`termcp`让 AI Agent打破了进程交互的边界，不再需要为每个交互工具安装编写单独的mcp，使其能够直接地持续管理、调度交互式程序，如**TUI**、**REPL**、**GDB**、**msfconsole**、**vim**等——走 MCP，或用实例自带的 [Agent Skill](#agent-skill纯-curl无需-mcp) 走纯 `curl`，两种方式皆可。
+Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互**（SSH 登录先输密码、Python REPL 逐行调试、回答安装程序的 `[Y/n]` 提示、驱动 `top`/`htop`/impacket）。`termcp` 把真实终端直接交给 Agent：会话持续复用，**TUI**、**REPL**、**GDB**、**msfconsole**、**vim** 都能像人一样被持续管理——走 MCP，或用实例自带的 [Agent Skill](#agent-skill纯-curl无需-mcp) 走纯 `curl`。
 
-### 可视化管理
-
-`termcp` 提供了一个会话管理界面，让你和 Agent 对进程里正在发生的一切一目了然:
-
-- **多会话仪表盘**:所有正在运行的会话都在这里，以名称区分，随时切换，随时接管。
-- **实时 AI Agent 行为观测**:像操作本地终端一样，直接在浏览器里看到 `htop` 的动态界面、`vim` 的编辑过程，或者安装程序弹出的彩色提示，不再对着"黑盒"猜测。
-- **标签化管理**:一个 SSH 会话下可开多个操作shell，每个 shell 在 UI 里是独立标签页，Agent 在 A 标签调试、在 B 标签查日志，互不干扰。
-- **端口转发可视化**：会话相关的所有端口转发等功能参数都列在面板里，本地/远程端口、协议一目了然。
-- **文件管理**：在管理界面里直接浏览目录、上传下载、重命名、建目录。
-- **连接模板集中托管**：提供统一的SSH配置管理，如果不想让Agent知道ssh具体配置，只需要告知Agent需要使用的ssh配置文件。
+- **同一套会话层，平级入口。** MCP、SKILLS、REST/WebSocket 与 Web UI 同处一层，共用同一批真实会话。Agent 的每一步操作，你在浏览器里都看得见、随时能接管；反过来，Agent 需要时也可以停下来，把密码/MFA 提示交给你输入。
+- **为 token 与轮次预算设计。** 工具 schema 紧凑、支持按需延迟加载（见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)）；`shell_output` 用 tail/offset 游标分页，模型上下文只载入你真正需要的输出；`shell_notify` 只发唤醒信号；`message` 按需取回完整输出。
+- **实例自描述。** 每个运行中的 termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
+- **密钥留在平台侧。** 经 `ssh_config` 写入的密码、私钥、口令仅保存在平台侧，MCP 的读取接口只返回配置名；SSH 配置写入工具默认关闭，需运维显式开启 `--mcp-manage-ssh-configs`。
+- **失败可恢复。** 关闭、崩溃或重启过的会话仍以只读 DEAD 条目留在会话列表里，输出依旧可读，Agent（或你）可以接着中断前的状态继续；重连同一个 `termcp://<entry>` 即可开启下一段会话。
+- **人始终保留中断权。** `notify_user` 可直接通知到你；需要提权的提示由你在 Web UI 里输入；同一 shell 的写入串行化，人与 Agent 的输入按序生效。
 
 ## 快速导航
 
@@ -103,7 +95,7 @@ Agent 原生只能执行一次性命令，运行完就返回。但现实中有�
 - **🤝 人机接力** —— 人与 Agent 共用同一实时会话，你可随时接管或中断 Agent；遇到 `sudo` / 密码 / MFA 提示时 Agent 暂停，由你在 Web UI 输入；同一 shell 输入串行，互不打断。
 - **🟦 多轮交互的真实终端** —— 进程持续运行，Agent 可跨对话轮次驱动 TUI、REPL、GDB、msfconsole、vim 等程序；完整 PTY（Windows 走 ConPTY），各平台行为一致。
 - **🟫 本机 / 远程同一套流程** —— 零配置操作本机（`ssh_config="internal"`）或经 SSH profile 接入远程主机；命令、文件传输（SFTP + 可断点续传的 HTTP 直链）与端口转发（`-L` / `-R` / `-D`）都在同一条连接内完成。
-- **🟧 内置可视化管理** —— 浏览器实时终端、多会话仪表盘、多标签频道、平铺工作区、历史回放、文件与转发面板；`/api.html` 提供 API / MCP / SKILLS 速查。
+- **🟧 内置可视化管理** —— 浏览器实时终端、多会话仪表盘、多标签频道、平铺工作区、已关闭会话只读回放、文件与转发面板；`/api.html` 提供 API / MCP / SKILLS 速查。
 - **🟨 多 Agent 并行，断开不丢输出** —— 多个 Agent 同时读同一会话、各自游标互不抢占；会话关闭后（显式关闭、自然退出、断线或重启）仍以只读 DEAD tile 留在列表中，输出完整可回放、翻页或删除；断线后用同一个 entry（`termcp://<entry>`）新起一个会话即可接着干。
 - **🟥 主动通知，免轮询** —— `shell_notify` 在进程退出 / 输出停顿 / 有新输出时主动唤醒 Agent，只发信令、不带内容（正文另行拉取）；`channel="sampling"` 时直接发送 `sampling/createMessage`。
 - **🔒 凭据安全** —— 经 `ssh_config` 写入的密码、私钥、口令一律不可读回，明文凭据不进入 Agent 上下文；配置写入类工具默认关闭，需显式开启 `--mcp-manage-ssh-configs`。
@@ -254,97 +246,60 @@ profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config
 
 ### 运行官方镜像
 
-官方镜像以专用非 root 用户（`termcp`，uid/gid 1000）运行，其 `$HOME` 被声明为 `VOLUME`——termcp 的全部状态（会话、SSH 配置、历史）默认存在 `~/.termcp`，因此持久化只需挂载一个卷：
+官方镜像以非 root 用户 `termcp`（uid/gid 1000）运行，`/home/termcp` 声明为 `VOLUME`——全部状态（会话、SSH 配置、消息记录）默认存于 `~/.termcp`。镜像只携带二进制：不内置 entrypoint、不预声明端口，监听地址由运行命令决定。
 
 ```bash
-docker run -d --name termcp \
-  -p 18765:18765 \
-  -v termcp-data:/home/termcp \
-  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
-  ghcr.io/open-mcp-ai/termcp:latest
+docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest --no-internal --host 0.0.0.0 --port 18765
 ```
 
-容器监听 `0.0.0.0:18765`，因此必须提供认证 token（见下方说明）。MCP 端点：`http://localhost:18765/stream`。若用 bind mount 代替命名卷，需先对宿主目录执行 `chown -R 1000:1000 /path/on/host`。
+> shell 示例均为单行：`\` 续行在 bash 里有效，但在 PowerShell 里是语法错误；单行命令可原样粘贴到 bash、zsh 与 PowerShell。
+
+`--host 0.0.0.0` 使容器可被外部访问，因此必须提供认证 token。MCP 端点：`http://localhost:18765/stream`。改用 bind mount 时，先对宿主目录执行 `chown -R 1000:1000 /path/on/host`。
 
 ### 多阶段构建：添加到任意容器
 
-将下面的 `Dockerfile` 放到应用项目中。构建阶段通过 `go install` 安装 termcp，再用 `COPY --from` 把二进制文件复制到目标镜像；目标容器不需要安装 Go 运行时：
+把下面的 `Dockerfile` 放进应用项目：构建阶段用 `go install` 安装 termcp，再用 `COPY --from` 把二进制复制进目标镜像——目标容器不需要 Go 运行时。
 
 ```dockerfile
 # syntax=docker/dockerfile:1
 
-# 可在构建时替换为可访问的 Go 基础镜像
 ARG GO_IMAGE=golang:1.25-alpine
 FROM ${GO_IMAGE} AS termcp-build
 
-# Go 模块加速；海外环境可改为 https://proxy.golang.org,direct
+# 模块代理；海外环境可换 https://proxy.golang.org,direct
 ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=${GOPROXY}
-ENV GOBIN=/out
-# 纯 Go 静态二进制：无需 CGO、无系统动态库依赖
-ENV CGO_ENABLED=0
+ENV GOPROXY=${GOPROXY} GOBIN=/out CGO_ENABLED=0
 
-# 生产环境建议将 latest 固定为具体版本，例如 @vX.Y.Z
+# 生产环境建议固定版本，如 @vX.Y.Z
 RUN go install github.com/open-mcp-ai/termcp@latest
 
-# 替换为任意目标基础镜像
+# 任意目标基础镜像
 FROM alpine
 COPY --from=termcp-build /out/termcp /usr/local/bin/termcp
 ```
 
-> `go install` 会从 Go 模块代理下载 termcp 及其依赖。`GOPROXY` 默认使用 `goproxy.cn`；也可以通过 `--build-arg GOPROXY=...` 替换。若 Docker Hub 访问较慢，可通过 `--build-arg GO_IMAGE=...` 指定可用的 Go 基础镜像镜像源。
+需要换模块代理或基础镜像源时，用 `--build-arg GOPROXY=...` / `--build-arg GO_IMAGE=...` 覆盖。
 
 ### 启动命令示例
 
-容器内必须监听 `0.0.0.0`，而非 loopback 监听**必须配置认证**；通过 `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH` 或对应 flag 传入，否则启动失败。
+容器内必须监听 `0.0.0.0`，非 loopback 监听**必须配置认证**（`TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH`），否则启动失败。
 
 ```bash
-# 构建包含 termcp 的应用镜像
-# 也可以同时指定企业内网或其他可用的 GOPROXY / Go 基础镜像
-docker build \
-  --build-arg GOPROXY=https://goproxy.cn,direct \
-  -t my-app-with-termcp .
-
-# 以 termcp 作为容器主进程
-# 数据目录挂载为持久化卷；通过环境变量配置认证 Token
-docker run -d --name my-app-termcp \
-  -p 18765:18765 \
-  -v termcp-data:/data \
-  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
-  --entrypoint /usr/local/bin/termcp \
-  my-app-with-termcp \
-  --host 0.0.0.0 --port 18765 --data-dir /data
-
-# 开启 MCP SSH 配置写入工具（按需使用）
-docker run -d --name my-app-termcp \
-  -p 18765:18765 -v termcp-data:/data \
-  -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret \
-  --entrypoint /usr/local/bin/termcp \
-  my-app-with-termcp \
-  --host 0.0.0.0 --data-dir /data --mcp-manage-ssh-configs
-
-# 查看日志
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t my-app-with-termcp .
+docker run -d --name my-app-termcp -p 18765:18765 -v termcp-data:/data -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret --entrypoint /usr/local/bin/termcp my-app-with-termcp --host 0.0.0.0 --port 18765 --data-dir /data
 docker logs -f my-app-termcp
 ```
 
-如果需要与原应用进程在同一个容器中同时运行，应在原有 entrypoint 或进程管理器中启动：
+在启动参数后追加 `--mcp-manage-ssh-configs` 即可放开 SSH 配置写入工具。
 
-```bash
-export TERMCP_AUTH_TOKEN="change-me-to-a-long-random-secret"
-/usr/local/bin/termcp --host 0.0.0.0 --port 18765 --data-dir /data
-```
-
-Docker 容器通常只运行一个前台进程；若应用仍需作为主进程运行，建议将 termcp 放在同一 Docker 网络的独立服务中，并通过 `http://termcp:18765/stream` 访问。
+必须与原应用共用同一容器时，从原有 entrypoint 或进程管理器启动 termcp；否则建议作为独立服务运行，通过 `http://termcp:18765/stream` 访问。
 
 ### Docker Compose 启动
 
 ```yaml
 services:
   termcp:
-    build:
-      context: .
-      args:
-        GOPROXY: https://goproxy.cn,direct
+    build: .
     entrypoint: ["/usr/local/bin/termcp"]
     command: ["--host", "0.0.0.0", "--port", "18765", "--data-dir", "/data"]
     environment:
@@ -453,10 +408,7 @@ skill 会先用 `GET /api/resolve?url=...` 解析定位符，用解析出的 `ss
 curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://127.0.0.1:18765/api/sessions
 
 # 创建一个会话
-curl -X POST http://127.0.0.1:18765/api/sessions \
-  -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"ssh_config":"internal","command":"bash","mode":"pty"}'
+curl -X POST http://127.0.0.1:18765/api/sessions -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" -H 'Content-Type: application/json' -d '{"ssh_config":"internal","command":"bash","mode":"pty"}'
 
 # 读取会话输出 / 上传下载文件 / 端口转发，见 docs/api.md
 ```
@@ -468,8 +420,7 @@ curl -X POST http://127.0.0.1:18765/api/sessions \
 服务端以 `--auth-token` / `--auth-hash` 启动后，所有 MCP 请求都要带 `Authorization: Bearer` 请求头：
 
 ```bash
-claude mcp add --transport http termcp http://your-server:18765/stream \
-  --header "Authorization: Bearer $TERMCP_AUTH_TOKEN"
+claude mcp add --transport http termcp http://your-server:18765/stream --header "Authorization: Bearer $TERMCP_AUTH_TOKEN"
 ```
 
 ```json
@@ -496,13 +447,12 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 
 | 分类 | 工具列表 |
 |------|---------|
-| 会话容器 | `session_start`, `session_list`, `session_info`, `session_terminate` |
+| 会话容器 | `session_start`, `session_list`, `session_info`, `session_terminate`（关闭，保留 DEAD 条目可读）、`session_delete`（彻底删除） |
 | 终端通道 | `shell_open`, `shell_list`, `shell_close`, `shell_input`, `shell_key`, `shell_output`, `shell_resize`, `shell_reader_register`, `shell_reader_unregister` |
 | 通知 | `shell_notify`（唤醒 AI Agent）、`notify_user`（弹窗提醒 Web UI 用户） |
 | 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
 | 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
 | 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
-| 会话生命周期 | `session_start`, `session_list`, `session_info`, `session_terminate`（关闭，保留可读）, `session_delete`（彻底删除）, `shell_open`, `shell_close` |
 | 消息记录 | `message`（列表 / 获取） |
 | 宿主探测 | `shell_detect` |
 
@@ -510,7 +460,7 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 
 ## 已知限制与安全模型
 
-- **文件与转发操作需活跃连接**：在已退出（DEAD）的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出读取仍可通过 `shell_output` 进行。
+- **文件与转发操作需活跃连接**：在已关闭（DEAD）的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出仍可通过 `shell_output` 读取，且会话转入 DEAD 时其端口转发会自动级联关闭。
 - **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
 
 ### 🚨 安全边界：termcp 不负责安全防范（它只是管道，不是杀软）
