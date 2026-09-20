@@ -111,15 +111,18 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.Call
 }
 
 // requireRunningSession resolves a session and rejects closed (DEAD) sessions:
-// their transport is gone, so the only remaining operation is reading output via
-// shell_output. Restored sessions (no live SSH connection) are rejected here too.
+// a DEAD session is a read-only record — its output stays readable via
+// shell_output, and nothing new is created on it. The check is the session
+// status, not transport liveness: a pipe session whose command exited cleanly is
+// DEAD while its SSH client is still open until Delete, and it must be refused
+// exactly like a terminated, disconnected, or restored one.
 func (s *Server) requireRunningSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
 	sess, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return nil, bad
 	}
 	if info := sess.Info(); info.Status != api.SessionRunning {
-		return nil, toolError(CodeSessionNotRunning, "%s", fmt.Sprintf("Session '%s' is closed (status %s); this operation needs a live connection — read its output via shell_output", sessionID, info.Status))
+		return nil, toolError(CodeSessionNotRunning, "%s", fmt.Sprintf("Session '%s' is closed (status %s); this operation needs a running session — read its output via shell_output", sessionID, info.Status))
 	}
 	return sess, nil
 }

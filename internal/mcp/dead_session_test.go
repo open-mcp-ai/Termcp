@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,39 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 )
+
+// waitForExited polls the session registry until the session reports status
+// exited (DEAD), or the timeout elapses.
+func waitForExited(t *testing.T, s *Server, sid string, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		infoRes, _ := s.handleGetSessionInfo(context.Background(), makeRequest(map[string]any{"session_id": sid}))
+		if !infoRes.IsError && strings.Contains(infoRes.Content[0].(mcpgo.TextContent).Text, `"status":"exited"`) {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return false
+}
+
+// assertErrorCode fails unless res is an error result whose error_code is want.
+func assertErrorCode(t *testing.T, res *mcpgo.CallToolResult, want, what string) {
+	t.Helper()
+	if !res.IsError {
+		t.Fatalf("%s: expected an error result, got %s", what, res.Content[0].(mcpgo.TextContent).Text)
+	}
+	var body struct {
+		ErrorCode string `json:"error_code"`
+		Error     string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	if body.ErrorCode != want {
+		t.Fatalf("%s: error_code = %q, want %q (%s)", what, body.ErrorCode, want, body.Error)
+	}
+}
 
 // startTerminatedSession starts an internal session, prints a marker line into
 // it (so the retained output is non-empty), terminates it with force, and waits
@@ -39,17 +74,10 @@ func startTerminatedSession(t *testing.T, s *Server) string {
 	if _, err := s.handleTerminateSession(context.Background(), termReq); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		infoReq := makeRequest(map[string]any{"session_id": sid})
-		infoRes, _ := s.handleGetSessionInfo(context.Background(), infoReq)
-		if !infoRes.IsError && strings.Contains(infoRes.Content[0].(mcpgo.TextContent).Text, `"status":"exited"`) {
-			return sid
-		}
-		time.Sleep(25 * time.Millisecond)
+	if !waitForExited(t, s, sid, 5*time.Second) {
+		t.Fatal("session did not turn DEAD in time")
 	}
-	t.Fatal("session did not turn DEAD in time")
-	return ""
+	return sid
 }
 
 // TestDeadSessionFileAndForwardRejected pins the documented contract: on an
@@ -65,19 +93,7 @@ func TestDeadSessionFileAndForwardRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var errBody struct {
-		ErrorCode string `json:"error_code"`
-		Error     string `json:"error"`
-	}
-	if !readRes.IsError {
-		t.Fatal("file_read on DEAD session must error")
-	}
-	if err := json.Unmarshal([]byte(readRes.Content[0].(mcpgo.TextContent).Text), &errBody); err != nil {
-		t.Fatal(err)
-	}
-	if errBody.ErrorCode != "session_not_running" {
-		t.Fatalf("file_read on DEAD session: error_code = %q, want session_not_running (%s)", errBody.ErrorCode, errBody.Error)
-	}
+	assertErrorCode(t, readRes, "session_not_running", "file_read on DEAD session")
 
 	// file_urls is a file tool too: same guard, same code.
 	urlsReq := makeRequest(map[string]any{"session_id": sid, "remote_path": "/etc/hostname"})
@@ -85,15 +101,7 @@ func TestDeadSessionFileAndForwardRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !urlsRes.IsError {
-		t.Fatal("file_urls on DEAD session must error")
-	}
-	if err := json.Unmarshal([]byte(urlsRes.Content[0].(mcpgo.TextContent).Text), &errBody); err != nil {
-		t.Fatal(err)
-	}
-	if errBody.ErrorCode != "session_not_running" {
-		t.Fatalf("file_urls on DEAD session: error_code = %q, want session_not_running", errBody.ErrorCode)
-	}
+	assertErrorCode(t, urlsRes, "session_not_running", "file_urls on DEAD session")
 
 	// forward(action=local) → session_not_running, no listener created.
 	fwdReq := makeRequest(map[string]any{
@@ -107,15 +115,7 @@ func TestDeadSessionFileAndForwardRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fwdRes.IsError {
-		t.Fatalf("forward on DEAD session must error, got %s", fwdRes.Content[0].(mcpgo.TextContent).Text)
-	}
-	if err := json.Unmarshal([]byte(fwdRes.Content[0].(mcpgo.TextContent).Text), &errBody); err != nil {
-		t.Fatal(err)
-	}
-	if errBody.ErrorCode != "session_not_running" {
-		t.Fatalf("forward on DEAD session: error_code = %q, want session_not_running", errBody.ErrorCode)
-	}
+	assertErrorCode(t, fwdRes, "session_not_running", "forward on DEAD session")
 	if s.forwardMgr != nil && len(s.forwardMgr.List()) != 0 {
 		t.Fatalf("forward on DEAD session must not leave a listener, got %v", s.forwardMgr.List())
 	}
@@ -126,15 +126,7 @@ func TestDeadSessionFileAndForwardRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !openRes.IsError {
-		t.Fatal("shell_open on DEAD session must error")
-	}
-	if err := json.Unmarshal([]byte(openRes.Content[0].(mcpgo.TextContent).Text), &errBody); err != nil {
-		t.Fatal(err)
-	}
-	if errBody.ErrorCode != "session_not_running" {
-		t.Fatalf("shell_open on DEAD session: error_code = %q, want session_not_running", errBody.ErrorCode)
-	}
+	assertErrorCode(t, openRes, "session_not_running", "shell_open on DEAD session")
 
 	// shell_output still reads the retained output of the closed session.
 	outReq := makeRequest(map[string]any{"shell_id": sid, "tail_lines": float64(5)})
@@ -203,4 +195,50 @@ func TestForwardsCascadeOnSessionDead(t *testing.T) {
 	if got := len(fm.List()); got != 0 {
 		t.Fatalf("forwards must be closed when the session goes DEAD, still %d forward(s)", got)
 	}
+}
+
+// TestCleanExitPipeSessionIsReadOnly pins the DEAD contract for the case that
+// used to slip through: a pipe session whose command exits on its own. The
+// container flips to exited without closing its SSH client (only terminate,
+// disconnect, and Delete do), so the refusal below can only come from the
+// session-status guard — never from a dead transport. That live-transport
+// precondition is asserted, so a transport-liveness guard cannot pass this test
+// by closing the connection earlier. The forward path shares the same guard
+// (sshClientForSession → requireRunningSession) and stays covered by
+// TestDeadSessionFileAndForwardRejected.
+func TestCleanExitPipeSessionIsReadOnly(t *testing.T) {
+	s := newTestServer(t)
+
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    "echo",
+		"mode":       "pipe",
+		"ssh_config": "internal",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := parseResult(t, startRes)["session_id"].(string)
+
+	if !waitForExited(t, s, sid, 5*time.Second) {
+		t.Fatal("cleanly-exited pipe session did not turn DEAD in time")
+	}
+	if sess := s.sessMgr.Get(sid); sess == nil || sess.SSHClient() == nil {
+		t.Fatal("precondition failed: a cleanly-exited session keeps its SSH transport until Delete")
+	}
+
+	// A file that exists on every platform: if the guard ever regresses, this
+	// read succeeds instead of failing for an unrelated reason.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	readRes, err := s.handleFileRead(context.Background(), makeRequest(map[string]any{
+		"session_id":  sid,
+		"remote_path": path,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertErrorCode(t, readRes, "session_not_running", "file_read on a cleanly-exited session")
 }
