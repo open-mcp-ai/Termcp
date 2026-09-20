@@ -45,8 +45,9 @@ func (s *Server) shellFromIndex(sess *session.Session, index int) (*session.Chil
 }
 
 // sessionFromParsed resolves the session named by a parsed resource URL.
-// Live sessions take precedence; restored DEAD / archived sessions fall back
-// to the history manager so read-only locators keep working.
+// Only live sessions resolve: closed (DEAD) sessions have no transport, so
+// they are not addressable by locator — callers get a hint to read output
+// via shell_output instead.
 func (s *Server) sessionFromParsed(p *parsedResourceURL) (*session.Session, error) {
 	if p.Kind != resourceURLSession && p.Kind != resourceURLShell {
 		return nil, fmt.Errorf("resource URL does not name a session")

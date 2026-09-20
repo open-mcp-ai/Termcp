@@ -17,6 +17,10 @@
 // Shell channel index is 1-based creation order (matches the Web UI's
 // shell-1/shell-2 tab labels), NOT the raw id. Only the short form (no entry)
 // is emitted by the UI copy buttons.
+//
+// Locators name live sessions. A closed (DEAD) session is deliberately NOT
+// resolvable: it has no transport left, so its channels are read-only and are
+// addressed by the session-level output-range endpoint instead.
 package locator
 
 import (

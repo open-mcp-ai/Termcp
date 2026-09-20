@@ -110,11 +110,25 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.Call
 	return sess, nil
 }
 
-// sshClientForSession resolves a session and returns it together with its live SSH
-// client. Restored/DEAD sessions keep metadata but no transport; callers receive a
-// standard tool error instead of a nil client that would crash SFTP/forward internals.
-func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.Client, *mcpgo.CallToolResult) {
+// requireRunningSession resolves a session and rejects closed (DEAD) sessions:
+// their transport is gone, so the only remaining operation is reading output via
+// shell_output. Restored sessions (no live SSH connection) are rejected here too.
+func (s *Server) requireRunningSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
 	sess, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return nil, bad
+	}
+	if info := sess.Info(); info.Status != api.SessionRunning {
+		return nil, toolError(CodeSessionNotRunning, "%s", fmt.Sprintf("Session '%s' is closed (status %s); this operation needs a live connection — read its output via shell_output", sessionID, info.Status))
+	}
+	return sess, nil
+}
+
+// sshClientForSession resolves a running session and returns its live SSH client.
+// Closed (DEAD) sessions — whether just terminated or restored after a restart —
+// return session_not_running so SFTP/forward internals never see a dead transport.
+func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.Client, *mcpgo.CallToolResult) {
+	sess, bad := s.requireRunningSession(sessionID)
 	if bad != nil {
 		return nil, nil, bad
 	}
@@ -167,8 +181,8 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 		}
 		sess, err := s.sessionFromParsed(p)
 		if err != nil {
-			// Includes the archived hint from sessionFromParsed; surface it
-			// instead of a generic "shell not found".
+			// Surface the closed-session hint from sessionFromParsed instead of a
+			// generic "shell not found".
 			return nil, toolError(CodeSessionNotFound, "%s", err.Error())
 		}
 		cs, err := s.shellFromIndex(sess, p.Index)
@@ -330,7 +344,7 @@ func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRe
 	rows := int(getFloat64(args, "rows", 24))
 	cols := int(getFloat64(args, "cols", 80))
 
-	sess, bad := s.requireSession(parentID)
+	sess, bad := s.requireRunningSession(parentID)
 	if bad != nil {
 		return bad, nil
 	}
@@ -378,10 +392,10 @@ func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolReque
 }
 
 // handleReadOutput is the ONE unified output reader. It serves live shells
-// (in-memory buffer), exited-but-retained shells, and archived/restored-DEAD
+// (in-memory buffer), exited-but-retained shells, and closed/restored-DEAD
 // sessions (persisted message log) with identical byte-stream cursor semantics.
 // Three read modes:
-//   - tail_lines > 0, or an archived id with no offset: read the tail of the
+//   - tail_lines > 0, or a closed id with no offset: read the tail of the
 //     stream (token-safe default; never a full dump);
 //   - offset >= 0: stateless positional read of [offset, offset+max_bytes);
 //   - otherwise: live streaming cursor on reader_id (new bytes since last read).
@@ -416,7 +430,7 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 		return bad, nil
 	}
 	if readerID > 0 && src.live == nil {
-		return toolError(CodeInvalidArgument, "%s", "reader_id requires a live shell; archived sessions are read with offset/tail_lines"), nil
+		return toolError(CodeInvalidArgument, "%s", "reader_id requires a live shell; closed sessions are read with offset/tail_lines"), nil
 	}
 	clean := func(raw []byte) string {
 		if !stripAnsi {
@@ -1171,6 +1185,9 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 	}
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+	}
+	if _, bad := s.requireRunningSession(sessionID); bad != nil {
+		return bad, nil
 	}
 	return jsonResult(map[string]any{
 		"download_url": s.baseURL + "/api/sessions/" + sessionID + "/files/download?path=" + url.QueryEscape(remotePath),

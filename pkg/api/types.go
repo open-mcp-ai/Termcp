@@ -28,7 +28,7 @@ type Session struct {
 	Command   string        `json:"command"`
 	Args      []string      `json:"args"`
 	Mode      SessionMode   `json:"mode"`   // "pty" | "pipe"
-	Status    SessionStatus `json:"status"` // running | exited | error | archived
+	Status    SessionStatus `json:"status"` // running | exited | error
 	ExitCode  *int          `json:"exit_code"`
 	PID       int           `json:"pid"`
 	CreatedAt time.Time     `json:"created_at"`

@@ -53,7 +53,7 @@ func newTestServer(t *testing.T) *Server {
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
 	cleanupTestRuntime(t, sessMgr, srv)
-	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
 	return s
 }
 
@@ -927,7 +927,7 @@ func TestDeadSessionOperationsNoPanic(t *testing.T) {
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, nil)
-	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
 
 	// Persist a session to disk and restore it so it is in the registry without an SSH connection.
 	deadSession := api.Session{
