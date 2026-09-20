@@ -6,11 +6,11 @@
     "url": "https://github.com/open-mcp-ai/termcp",
     "source": "github"
   },
-  "version": "0.1.16",
+  "version": "0.1.17",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/open-mcp-ai/termcp:0.1.16",
+      "identifier": "ghcr.io/open-mcp-ai/termcp:0.1.17",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:18765/stream"
