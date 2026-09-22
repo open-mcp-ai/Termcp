@@ -156,7 +156,7 @@ function renderSessionGrid(sessions, bannerMsg) {
     tile.onclick = function (e) {
       if (e.target.closest('.sess-x') || e.target.closest('.sess-rename-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.sess-checkbox')) return;
       clearSessNotified(sid); // opening the session acknowledges its notification highlight
-      openOrFocusShellWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
+      focusSessionWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
     };
     if (!dead) {
       var fwdInfo = tile.querySelector('.sess-fwd-info');

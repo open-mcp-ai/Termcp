@@ -30,10 +30,16 @@ function refreshSessionTabbar() {
     var topZ = -1;
     wins.forEach(function (w) {
       if (isTiledWin(w)) return;
-      /* A full-screen window has no inline z-index (the stylesheet owns it), so
-         treat it as topmost rather than reading 0 and picking a wrong active tab. */
-      var z = w.classList.contains('win-fullscreen') ? Infinity : (parseInt(w.style.zIndex, 10) || 0);
-      if (z > topZ) { topZ = z; topWin = w; }
+      /* A minimized window keeps its inline z-index but is not on screen, so it
+         must not win the "which tab is active" test. */
+      if (w.classList.contains('win-minimized')) return;
+      /* A full-screen window's z-index usually comes from bringShellWindowToFront;
+         when it does not (e.g. a resize cleared it), fall back to the stylesheet's
+         value. Ties are real at that point — same computed z-index — and the one
+         later in the DOM paints on top, so >= picks the visible one. */
+      var z = parseInt(w.style.zIndex, 10);
+      if (isNaN(z)) z = FULLSCREEN_Z;
+      if (z >= topZ) { topZ = z; topWin = w; }
     });
   }
   // Reuse existing tab nodes keyed by window id to keep hover state and avoid flicker.
@@ -59,15 +65,10 @@ function refreshSessionTabbar() {
         '<svg viewBox="0 0 12 12" width="10" height="10"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></span>';
       tab.addEventListener('click', function (e) {
         if (e.target.closest('.session-tab-close')) return;
-        if (_winsHidden) showAllWindows();
-        if (isTiledWin(w)) {
-          if (_paneMaxedWin && _paneMaxedWin !== w) { _paneMaxedWin = null; applyPaneGrid(); }
-          try { w.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e2) {}
-        }
-        bringShellWindowToFront(w);
-        var ch = w._activeChannelSid && w._channels && w._channels[w._activeChannelSid];
-        var t = ch ? ch.term : w._term;
-        if (t) { try { t.focus(); } catch (e2) {} }
+        /* Same entry point as the session tiles and the mobile switcher: it
+           restores a minimized window and expands a collapsed one before
+           raising it. */
+        focusSessionWindow(w._connName || '', w._sid, null, null);
       });
       tab.addEventListener('mousedown', function (e) {
         if (e.button === 1) { // middle-click closes the window
@@ -226,7 +227,12 @@ function paneGridShape(n) {
 function applyPaneGrid() {
   var g = paneGridEl();
   if (!g) return;
-  var wins = Array.prototype.filter.call(g.children, function (w) { return w.classList.contains('shell-window'); });
+  /* A minimized pane is display:none, so it is not a grid item at all and must
+     not be counted when sizing the grid — otherwise the layout reserves an
+     empty cell for a window nobody can see. */
+  var wins = Array.prototype.filter.call(g.children, function (w) {
+    return w.classList.contains('shell-window') && !w.classList.contains('win-minimized');
+  });
   var n = wins.length;
   var shape = paneGridShape(Math.max(1, n));
   var cols = Math.max(1, shape.cols);
@@ -235,7 +241,9 @@ function applyPaneGrid() {
   g.style.gridTemplateRows = 'repeat(' + Math.max(1, shape.rows) + ', 1fr)';
   var maxed = _paneMaxedWin && _paneMaxedWin.parentNode === g ? _paneMaxedWin : null;
   wins.forEach(function (w) { w.classList.toggle('pane-maxed', w === maxed); });
-  if (!_paneActiveWin || _paneActiveWin.parentNode !== g) setActivePane(wins[0] || null, false);
+  if (!_paneActiveWin || _paneActiveWin.parentNode !== g || _paneActiveWin.classList.contains('win-minimized')) {
+    setActivePane(wins[0] || null, false);
+  }
   wins.forEach(_fitWinSoon);
 }
 
@@ -286,7 +294,8 @@ function _fitWinSoon(win) {
       /* Refit after the layout settles; a window measured while hidden or
          mid-resize reports 0 and fitShellTerminal silently declines. */
       allShellWins().forEach(function (w) {
-        if (w.classList.contains('win-hidden')) return;
+        if (typeof w._syncSwitcherAffordance === 'function') w._syncSwitcherAffordance();
+        if (w.classList.contains('win-hidden') || w.classList.contains('win-minimized')) return;
         _fitWinSoon(w);
       });
       refreshSessionTabbar();
@@ -635,15 +644,79 @@ function bindShellWindowMouseToFront(win) {
   });
 }
 
-/** "-" button: close the window only — the session keeps running (the old x behavior). */
+/** "-" button: minimize — hide the window, keep the session running and the
+ *  window restorable (see minimizeShellWindow). Destroying the window outright
+ *  was the old behavior and made the session unreachable from the UI. */
 function bindShellWindowMinButton(win, minBtn) {
   if (!minBtn || minBtn._termcpMinBound) return;
   minBtn._termcpMinBound = true;
   minBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   minBtn.addEventListener('click', function (e) {
     e.preventDefault(); e.stopPropagation();
-    closeShellWindow(win);
+    minimizeShellWindow(win);
   });
+}
+
+/** Minimize: hide the window but keep it alive — DOM, xterm, and the terminal
+ *  watch all survive, so the session stays reachable from the switcher and the
+ *  session tiles. This is deliberately NOT closeShellWindow, which destroys the
+ *  window: a minimized window that has been removed from the DOM cannot be
+ *  listed or restored by anything.
+ *
+ *  Uses .win-minimized rather than the tab bar's .win-hidden, because that one
+ *  is a single global flag (_winsHidden): restoring one window would restore
+ *  every hidden window, and minimizing one would hide them all. */
+function minimizeShellWindow(win) {
+  if (!win || win.classList.contains('win-minimized')) return;
+  win.classList.add('win-minimized');
+  win._minimized = true;
+  /* In tile mode the grid has to drop this pane's cell, or the layout keeps
+     reserving space for a window that is no longer drawn. */
+  if (isTiledWin(win)) applyPaneGrid();
+  refreshSessionTabbar();
+}
+
+/** Undo minimizeShellWindow. Idempotent. */
+function restoreShellWindow(win) {
+  if (!win || !win._minimized) return;
+  win.classList.remove('win-minimized');
+  win._minimized = false;
+  if (isTiledWin(win)) applyPaneGrid();
+  _fitWinSoon(win);
+}
+
+/** Expand a collapsed window (the header's chevron). Idempotent, so the
+ *  switcher and the session tiles can call it before focusing. */
+function expandShellWindow(win) {
+  if (!win || !win.classList.contains('shell-window-collapsed')) return;
+  win.style.height = win._savedH || '';
+  win.style.minHeight = '';
+  win.classList.remove('shell-window-collapsed');
+  var btn = win.querySelector('.shell-window-collapse-btn');
+  if (btn) {
+    var icD = btn.querySelector('.ic-d');
+    var icU = btn.querySelector('.ic-u');
+    if (icD && icU) { icD.style.display = ''; icU.style.display = 'none'; }
+    btn.title = 'Collapse';
+  }
+  var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
+  if (ch && ch.term && ch.instEl) fitShellTerminal(ch.term, ch.instEl, win, true);
+}
+
+/** Collapse a window to its header. Idempotent. */
+function collapseShellWindow(win) {
+  if (!win || win.classList.contains('shell-window-collapsed')) return;
+  win._savedH = win.style.height || (win.getBoundingClientRect().height + 'px');
+  win.style.height = 'auto';
+  win.style.minHeight = '0';
+  win.classList.add('shell-window-collapsed');
+  var btn = win.querySelector('.shell-window-collapse-btn');
+  if (btn) {
+    var icD = btn.querySelector('.ic-d');
+    var icU = btn.querySelector('.ic-u');
+    if (icD && icU) { icD.style.display = 'none'; icU.style.display = ''; }
+    btn.title = 'Expand';
+  }
 }
 
 /** "x" button: delete the session — same as the session tile's x. A pending
@@ -690,22 +763,34 @@ function findShellWindowByChannelSid(sessionId) {
   return null;
 }
 
-function openOrFocusShellWindow(connLabel, sessionId, clickEvent, opts) {
+/** The one entry point for "the user picked this session". Every trigger routes
+ *  here: the session tiles, the mobile switcher, and the session tab bar. It
+ *  normalises the three states a window can be in (minimized, collapsed, tiled)
+ *  before raising it, so callers never have to know about any of them. */
+function focusSessionWindow(connLabel, sessionId, clickEvent, opts) {
   opts = opts || {};
   var ex = getShellWindowBySid(sessionId);
-  if (ex) {
-    if (isTiledWin(ex)) {
-      if (_paneMaxedWin && _paneMaxedWin !== ex) { _paneMaxedWin = null; applyPaneGrid(); }
-      try { ex.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
-    }
-    bringShellWindowToFront(ex);
-    if (opts.readOnly) lockWindowReadonly(ex);
-    var ch = ex._activeChannelSid && ex._channels && ex._channels[ex._activeChannelSid];
-    var t = ch ? ch.term : ex._term;
-    if (t) { try { t.focus(); } catch (e) {} }
+  if (!ex) {
+    openShellWindow(connLabel, sessionId, clickEvent, opts);
     return;
   }
-  openShellWindow(connLabel, sessionId, clickEvent, opts);
+  /* Minimized: bring it back before anything else looks at its geometry. */
+  restoreShellWindow(ex);
+  /* Collapsed to its header: a collapsed window cannot show the terminal the
+     user just asked for, so expand it. */
+  expandShellWindow(ex);
+  if (isTiledWin(ex)) {
+    if (_paneMaxedWin && _paneMaxedWin !== ex) { _paneMaxedWin = null; applyPaneGrid(); }
+    try { ex.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+  }
+  bringShellWindowToFront(ex);
+  if (opts.readOnly) lockWindowReadonly(ex);
+  /* The tab bar's own "hide all" is a global state; showing one window has to
+     clear it or the window we just raised stays invisible. */
+  if (_winsHidden) showAllWindows();
+  var ch = ex._activeChannelSid && ex._channels && ex._channels[ex._activeChannelSid];
+  var t = ch ? ch.term : ex._term;
+  if (t) { try { t.focus(); } catch (e) {} }
 }
 
 

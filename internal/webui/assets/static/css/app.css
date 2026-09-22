@@ -421,6 +421,9 @@
   .pane-grid > .shell-window.pane-active { outline: 2px solid #58a6ff; outline-offset: -2px; }
   .pane-grid > .shell-window.pane-maxed { grid-column: 1 / -1; grid-row: 1 / -1; }
   .shell-window.win-hidden { display: none !important; }
+  /* Minimized: hidden but alive. Separate from .win-hidden, which is the tab
+     bar's global show/hide-all flag. */
+  .shell-window.win-minimized { display: none !important; }
   .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid #3a3a3a; border-radius: 6px; background: #2d2d2d; color: #8b949e; cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tabbar-toggle:hover { color: #fff; border-color: #555; }
   .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid #3a3a3a; border-radius: 6px; background: #2d2d2d; color: #8b949e; cursor: pointer; font-size: 11px; white-space: nowrap; }
@@ -818,18 +821,32 @@
     .shell-window-header-btns button.shell-window-max-btn { display: none; }
   }
 
-  /* Mobile session switcher: replaces the hidden session tab bar on touch
-     devices. Hidden on desktop, where the tab bar already does this job. */
-  .shell-window-switch-btn {
+  /* The monitor glyph doubles as the session switcher on touch devices. On
+     desktop it stays a plain icon (the tab bar owns switching), so the
+     affordance is added only where the interaction exists. */
+  .shell-header-icon-btn.active { color: #fff; }
+  @media (pointer: coarse) and (hover: none) {
+    /* A tap target, not just an 18px glyph. */
+    .shell-header-icon-btn {
+      cursor: pointer;
+      width: 32px; height: 32px; margin-left: 2px; margin-right: 0;
+      border-radius: 6px;
+    }
+    .shell-header-icon-btn.active { color: #fff; background: #3a3a3a; }
+  }
+
+  /* Drawer button in the terminal header: opens the entries drawer. Same touch
+     rationale as above — desktop expands entries in place. */
+  .shell-window-drawer-btn {
     display: none;
     flex-shrink: 0; align-items: center; justify-content: center;
     width: 30px; height: 30px; margin-right: 2px; padding: 0;
     border: 1px solid #3a3a3a; border-radius: 6px;
     background: #2d2d2d; color: #8b949e; cursor: pointer;
   }
-  .shell-window-switch-btn:hover, .shell-window-switch-btn.active { color: #fff; border-color: #555; }
+  .shell-window-drawer-btn:hover { color: #fff; border-color: #555; }
   @media (pointer: coarse) and (hover: none) {
-    .shell-window-switch-btn { display: inline-flex; }
+    .shell-window-drawer-btn { display: inline-flex; }
   }
   .shell-window-switch-menu {
     position: fixed; z-index: 30001;
@@ -847,14 +864,9 @@
   }
   .shell-switch-item:hover, .shell-switch-item:active { background: #30363d; color: #fff; }
   .shell-switch-item.current { background: #094771; color: #fff; }
-  .shell-switch-item.ended { opacity: .7; }
+  .shell-switch-empty { padding: 10px 12px; color: #8b949e; font-size: 0.78rem; }
   .shell-switch-num { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; min-width: 12px; }
   .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .shell-switch-dead {
-    flex-shrink: 0; padding: 1px 6px; border-radius: 10px;
-    background: #484f58; color: #c9d1d9;
-    font-size: 0.62rem; text-transform: uppercase; letter-spacing: .03em;
-  }
 
   .tools-tab {
     font: inherit; padding: 8px 14px; border: none; border-bottom: 2px solid transparent;
