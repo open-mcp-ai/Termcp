@@ -17,22 +17,10 @@ import (
 // removes the window from the DOM, so a minimized session could not be listed or
 // restored by anything.
 func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
-	shellWins, err := readAsset("static/js/shell-windows.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	termView, err := readAsset("static/js/terminal-view.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessions, err := readAsset("static/js/sessions.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css, err := readAsset("static/css/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
+	shellWins := readAssetLF(t, "static/js/shell-windows.js")
+	termView := readAssetLF(t, "static/js/terminal-view.js")
+	sessions := readAssetLF(t, "static/js/sessions.js")
+	css := readAssetLF(t, "static/css/app.css")
 
 	// One menu singleton, rebuilt per open, rather than a node per window.
 	if !strings.Contains(termView, "var _sessionSwitchMenu = null;") {
@@ -74,10 +62,7 @@ func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
 // on touch devices: on desktop the session tab bar already switches sessions, so
 // clicking the glyph must do nothing there.
 func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
-	termView, err := readAsset("static/js/terminal-view.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	termView := readAssetLF(t, "static/js/terminal-view.js")
 	setup := between(t, termView, "function setupMobileSessionSwitcher", "\n}\n")
 
 	if !strings.Contains(setup, ".shell-header-icon") {
@@ -90,10 +75,7 @@ func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
 	}
 
 	// The old standalone hamburger must be gone.
-	css, err := readAsset("static/css/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
+	css := readAssetLF(t, "static/css/app.css")
 	if strings.Contains(css, ".shell-window-switch-btn") || strings.Contains(termView, "shell-window-switch-btn") {
 		t.Error("the standalone switch button should be replaced by the header glyph")
 	}
@@ -102,20 +84,14 @@ func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
 	if !strings.Contains(setup, "termcpToggleEntriesDrawer") {
 		t.Error("a header button should open the entries drawer")
 	}
-	connForm, err := readAsset("static/js/conn-form.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	connForm := readAssetLF(t, "static/js/conn-form.js")
 	if !strings.Contains(connForm, "window.termcpToggleEntriesDrawer") {
 		t.Error("conn-form.js should expose the drawer toggle for the terminal header")
 	}
 }
 
 func TestMinimizeKeepsTheWindowAlive(t *testing.T) {
-	shellWins, err := readAsset("static/js/shell-windows.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	shellWins := readAssetLF(t, "static/js/shell-windows.js")
 
 	// The "-" button must minimize, not destroy.
 	bind := between(t, shellWins, "function bindShellWindowMinButton", "\n}\n")
@@ -152,10 +128,7 @@ func TestMinimizeKeepsTheWindowAlive(t *testing.T) {
 }
 
 func TestFocusSessionWindowNormalisesState(t *testing.T) {
-	shellWins, err := readAsset("static/js/shell-windows.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	shellWins := readAssetLF(t, "static/js/shell-windows.js")
 	body := between(t, shellWins, "function focusSessionWindow", "\n}\n")
 
 	// Picking a session has to undo whatever state the window was left in.
@@ -171,10 +144,7 @@ func TestFocusSessionWindowNormalisesState(t *testing.T) {
 }
 
 func TestMinimizedCSSCannotBeConfusedWithHidden(t *testing.T) {
-	css, err := readAsset("static/css/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
+	css := readAssetLF(t, "static/css/app.css")
 	if !strings.Contains(css, ".shell-window.win-minimized") {
 		t.Error("css should define .shell-window.win-minimized")
 	}
@@ -189,10 +159,7 @@ func TestMinimizedCSSCannotBeConfusedWithHidden(t *testing.T) {
 // inline value. It must be handed over rather than incremented: a counter
 // climbing past the drawer's 24000 would put terminals over the entries drawer.
 func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
-	util, err := readAsset("static/js/util.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	util := readAssetLF(t, "static/js/util.js")
 	body := between(t, util, "function bringShellWindowToFront", "\n}\n")
 
 	for _, want := range []string{"FULLSCREEN_Z", "win-fullscreen"} {
@@ -210,10 +177,7 @@ func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
 
 	// The constant has to sit between the tab bar and the drawer, or the
 	// terminal hides the drawer (or sinks behind the tab bar).
-	css, err := readAsset("static/css/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
+	css := readAssetLF(t, "static/css/app.css")
 	full := between(t, css, ".shell-window.win-fullscreen {", "}")
 	if !strings.Contains(full, "z-index: 21000") {
 		t.Errorf("the stylesheet full-screen z-index should be 21000; got %q", strings.TrimSpace(full))
@@ -229,10 +193,7 @@ func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
 // another session or reach another profile, so the pending window needs the same
 // wiring as a connected one.
 func TestPendingWindowHasWorkingHeaderControls(t *testing.T) {
-	termView, err := readAsset("static/js/terminal-view.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	termView := readAssetLF(t, "static/js/terminal-view.js")
 	pending := between(t, termView, "function openPendingShellWindow", "\n}\n")
 
 	for _, want := range []string{
@@ -259,7 +220,26 @@ func TestPendingWindowHasWorkingHeaderControls(t *testing.T) {
 	}
 }
 
+// readAssetLF reads one embedded asset with line endings normalised to LF.
+//
+// The asset files are LF in git, but a checkout on Windows (CI runs there with
+// core.autocrlf=true) hands them back as CRLF. Any test that slices a function
+// body by a "\n}\n" terminator would then never find it and silently get the
+// rest of the file instead — a false pass, or a confusing failure. Normalising
+// once here keeps the tests reading the same text on every platform.
+func readAssetLF(t *testing.T, p string) string {
+	t.Helper()
+	s, err := readAsset(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return normalizeNL(s)
+}
+
 // between returns the slice of src from the marker up to (but not including) end.
+// It fails the test when either is absent: a missing terminator used to return
+// the whole remainder, which quietly widened the slice and made assertions test
+// code outside the function they named.
 func between(t *testing.T, src, marker, end string) string {
 	t.Helper()
 	i := strings.Index(src, marker)
@@ -267,8 +247,18 @@ func between(t *testing.T, src, marker, end string) string {
 		t.Fatalf("marker %q not found", marker)
 	}
 	rest := src[i:]
-	if j := strings.Index(rest, end); j >= 0 {
-		return rest[:j]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		t.Fatalf("terminator %q not found after marker %q", end, marker)
 	}
-	return rest
+	return rest[:j]
 }
+
+// The load banner shows a dismiss button, so it has to be a flex row; and the
+// inline display value has to agree with the stylesheet, or the button lands
+// under the message instead of beside it.
+//
+
+// The z-index ladder: a surface that can open a dialog must sit below it.
+//
+
