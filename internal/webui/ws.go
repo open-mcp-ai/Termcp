@@ -2,7 +2,6 @@ package webui
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"errors"
@@ -207,11 +206,10 @@ func (c *uiWS) handleWSInput(msg *wsClientMsg) {
 	if shell.Info().Status != api.SessionRunning {
 		return
 	}
-	raw, err := base64.StdEncoding.DecodeString(msg.D)
-	if err != nil {
-		return
-	}
-	if err := shell.SendTerminalBytes(raw, msg.NL); err != nil {
+	// msg.D is the JSON string xterm produced, not base64: the frame is standard
+	// JSON, so encoding/json already recovered the text and no decode step is
+	// needed. See the "传输编码" section of docs/design/session-storage.md.
+	if err := shell.SendTerminalBytes([]byte(msg.D), msg.NL); err != nil {
 		slog.Debug("ws input", "err", err)
 	}
 }
@@ -278,8 +276,9 @@ func (c *uiWS) runWatch(ctx context.Context, shell session.TerminalShell, sid st
 			continue
 		}
 		if out != "" {
-			line := base64.StdEncoding.EncodeToString([]byte(out))
-			payload, err := json.Marshal(map[string]string{"type": "terminal", "id": sid, "d": line})
+			// Terminal bytes travel as a plain JSON string; encoding/json escapes
+			// whatever it must. base64 would only add a layer the client undoes.
+			payload, err := json.Marshal(map[string]string{"type": "terminal", "id": sid, "d": out})
 			if err != nil {
 				continue
 			}

@@ -2,7 +2,6 @@ package webui
 
 import (
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/crypto/ssh"
@@ -624,7 +623,7 @@ func (h *Handler) writeOutputRange(w http.ResponseWriter, r *http.Request, id st
 		"start": start,
 		"end":   start + int64(len(data)),
 		"total": total,
-		"d":     base64.StdEncoding.EncodeToString(data),
+		"d":     string(data),
 	})
 }
 
