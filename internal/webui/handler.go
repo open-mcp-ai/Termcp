@@ -569,26 +569,17 @@ func (h *Handler) writeOutputRange(w http.ResponseWriter, r *http.Request, id st
 	// One read path for every session state. A live shell reads its buffer; a DEAD
 	// or restart-restored session reads the persisted byte log. Both answer in the
 	// same offset space, so a client can hold an offset across a restart.
-	shell := h.resolveOutputShell(id)
-	if shell != nil {
-		if tail {
-			total = shell.BufferLen()
-			if t := total - int64(max); t > 0 {
-				start = t
-			} else {
-				start = 0
-			}
-		}
-		data, total, err = shell.OutputByteRange(start, max)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// An absolute start below the earliest retained byte (dropped by buffer
-		// compaction) clamps forward; report the start actually served.
-		if base := shell.OutputBaseOffset(); start < base {
-			start = base
-		}
+	//
+	// The two differ only in where the bytes come from, so they are resolved into
+	// one (len, read) pair instead of duplicating the tail/read/error handling.
+	var sizeFn func() (int64, error)
+	var readFn func(start int64, max int) ([]byte, int64, error)
+	var baseOffset int64
+
+	if shell := h.resolveOutputShell(id); shell != nil {
+		sizeFn = func() (int64, error) { return shell.BufferLen(), nil }
+		readFn = shell.OutputByteRange
+		baseOffset = shell.OutputBaseOffset()
 	} else {
 		// DEAD/restored sessions have no live buffer; serve the read-only view from
 		// the persisted log so tabs still work after a teardown or a restart.
@@ -597,23 +588,34 @@ func (h *Handler) writeOutputRange(w http.ResponseWriter, r *http.Request, id st
 			http.NotFound(w, r)
 			return
 		}
-		if tail {
-			total, err = h.Sessions.OutputSize(sid, shid)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if t := total - int64(max); t > 0 {
-				start = t
-			} else {
-				start = 0
-			}
+		sizeFn = func() (int64, error) { return h.Sessions.OutputSize(sid, shid) }
+		readFn = func(s int64, m int) ([]byte, int64, error) {
+			return h.Sessions.OutputByteRange(sid, shid, s, m)
 		}
-		data, total, err = h.Sessions.OutputByteRange(sid, shid, start, max)
+	}
+
+	if tail {
+		total, err = sizeFn()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if t := total - int64(max); t > 0 {
+			start = t
+		} else {
+			start = 0
+		}
+	}
+
+	data, total, err = readFn(start, max)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// An absolute start below the earliest retained byte (dropped by buffer
+	// compaction) clamps forward; report the start actually served.
+	if start < baseOffset {
+		start = baseOffset
 	}
 	if start > total {
 		start = total

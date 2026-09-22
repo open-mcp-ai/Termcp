@@ -2602,17 +2602,6 @@
     });
   }
 
-  /**
-   * Keystrokes go on the wire as the string xterm produced.
-   *
-   * JSON encodes the text (and the server takes its UTF-8 bytes), so no extra
-   * base64 layer is needed. The previous version ran TextEncoder -> base64 only
-   * for the server to base64-decode it back into the same bytes.
-   */
-  function terminalInputPayload(str) {
-    return str;
-  }
-
   function sendTerminalWatch(sid, add) {
     if (!sid) return;
     wsUiSend({ type: add ? 'watch_add' : 'watch_remove', id: sid });
@@ -3333,7 +3322,9 @@
       if (!win._shellUserInputReady) return;
       if (!window._uiWS || window._uiWS.readyState !== 1) return;
       try {
-        window._uiWS.send(JSON.stringify({ type: 'input', id: sessionId, d: terminalInputPayload(data), nl: false }));
+        // The keystrokes go out as the string xterm produced: JSON encodes the
+        // text and the server takes its UTF-8 bytes, so no base64 layer is needed.
+        window._uiWS.send(JSON.stringify({ type: 'input', id: sessionId, d: data, nl: false }));
       } catch (e) {}
     });
 
