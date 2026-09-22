@@ -1,0 +1,208 @@
+package webui
+
+import (
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// The Web UI is served as a thin index.html plus independently cacheable
+// modules under static/js and static/css. These tests guard the split: a
+// dropped <script>, a module that 404s, or a declaration that moved out of
+// the shared global scope all break the page in the browser while leaving the
+// Go build green, so they are asserted here instead.
+
+// assetRefRe matches src=/href= targets in index.html.
+var assetRefRe = regexp.MustCompile(`(?:src|href)="([^"]+)"`)
+
+// moduleScriptRe matches the module <script src> tags, in document order.
+var moduleScriptRe = regexp.MustCompile(`<script src="(static/js/[^"]+)"></script>`)
+
+// TestIndexHTMLReferencesOnlyExistingAssets catches a renamed or missing
+// module: a 404 on any referenced asset yields a blank page with no Go error.
+func TestIndexHTMLReferencesOnlyExistingAssets(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assetRefRe.FindAllStringSubmatch(index, -1)) == 0 {
+		t.Fatal("index.html references no assets at all; the split was reverted?")
+	}
+	for _, m := range assetRefRe.FindAllStringSubmatch(index, -1) {
+		ref := m[1]
+		if strings.HasPrefix(ref, "/") || strings.Contains(ref, "://") {
+			continue // absolute or external
+		}
+		// Serve it through the same handler the browser hits, so a path that
+		// exists on disk but is unreachable over HTTP still fails.
+		rr := httptest.NewRecorder()
+		embeddedStaticServer().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/"+ref, nil))
+		if rr.Code != http.StatusOK {
+			t.Errorf("index.html references %s but GET /%s = %d", ref, ref, rr.Code)
+		}
+	}
+}
+
+// TestModulesLoadedInSourceOrder pins the load order. The modules rely on
+// script-execution order for `var` state that is initialised and read at load
+// time (e.g. tools-panel's cached DOM refs before its wiring statements run),
+// so a shuffled order can break the page even though every name exists.
+func TestModulesLoadedInSourceOrder(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := moduleScriptRe.FindAllStringSubmatch(index, -1)
+	if len(got) < 2 {
+		t.Fatalf("expected several module scripts in index.html, found %d", len(got))
+	}
+	// Every module file under static/js must be referenced by index.html: an
+	// unreferenced module is dead code, and a referenced-but-missing one 404s.
+	onDisk, err := fs.Glob(Assets(), "static/js/*.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	referenced := map[string]bool{}
+	for _, m := range got {
+		referenced[m[1]] = true
+	}
+	for _, f := range onDisk {
+		if !referenced[f] {
+			t.Errorf("%s exists but no <script src=%q> in index.html loads it", f, f)
+		}
+	}
+	if len(onDisk) != len(got) {
+		t.Errorf("index.html loads %d modules but %d exist under static/js", len(got), len(onDisk))
+	}
+	// Every module except the last must appear before the following one, and
+	// the whole block must sit after the xterm vendor script so `Terminal`
+	// exists when the modules are evaluated.
+	xtermAt := strings.Index(index, "static/xterm/xterm.js")
+	firstModuleAt := strings.Index(index, got[0][1])
+	if xtermAt == -1 || firstModuleAt == -1 || xtermAt > firstModuleAt {
+		t.Error("xterm.js must be loaded before the UI modules")
+	}
+	last := -1
+	for _, m := range got {
+		at := strings.Index(index, m[1])
+		if at < last {
+			t.Errorf("module %s appears out of order in index.html", m[1])
+		}
+		last = at
+	}
+}
+
+// TestModuleDeclarationsReachSharedScope verifies the split's core invariant:
+// the modules are plain scripts (no per-file IIFE and no `let`/`const` at top
+// level), so their top-level `var`/`function` declarations land in the shared
+// global scope and stay visible to every other module. Wrapping one module in
+// its own IIFE, or switching a declaration to `let`, silently hides it from
+// the others at runtime.
+func TestModuleDeclarationsReachSharedScope(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mods := moduleScriptRe.FindAllStringSubmatch(index, -1)
+	if len(mods) == 0 {
+		t.Fatal("no module scripts found")
+	}
+
+	declRe := regexp.MustCompile(`(?m)^(?:var|let|const|function)\s+([A-Za-z_$][\w$]*)`)
+	seen := map[string]string{} // name -> module that declares it
+	total := 0
+
+	for _, m := range mods {
+		path := m[1] // e.g. static/js/util.js, relative to the assets root
+		body, err := readAsset(path)
+		if err != nil {
+			t.Errorf("module %s not embedded: %v", m[1], err)
+			continue
+		}
+
+		// No module may wrap itself in an IIFE: that would re-privatise scope.
+		// The original single-file UI did exactly this, which is why the split
+		// drops the wrapper.
+		head := strings.TrimSpace(firstNonEmptyLine(body))
+		if head == "(function () {" || strings.HasPrefix(head, "(() =>") {
+			t.Errorf("%s starts with an IIFE wrapper (%q); modules must share the global scope", m[1], head)
+		}
+
+		for _, d := range declRe.FindAllStringSubmatch(body, -1) {
+			name := d[1]
+			full := strings.TrimSpace(strings.SplitN(body[strings.Index(body, d[0]):], "\n", 2)[0])
+			if strings.HasPrefix(full, "let ") || strings.HasPrefix(full, "const ") {
+				t.Errorf("%s declares %q with let/const; script-scoped bindings are invisible to the other modules — use var", m[1], name)
+			}
+			if prev, dup := seen[name]; dup {
+				t.Errorf("top-level %q declared in both %s and %s; one module silently shadows the other", name, prev, m[1])
+			}
+			seen[name] = m[1]
+			total++
+		}
+	}
+	if total < 50 {
+		t.Errorf("only %d top-level declarations found across modules; the split looks truncated", total)
+	}
+	t.Logf("%d top-level declarations across %d modules share the global scope", total, len(mods))
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// TestCSSIsExtractedAndServable checks the stylesheet left index.html for its
+// own file, so it caches independently of the page markup.
+func TestCSSIsExtractedAndServable(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(index, "<style>") {
+		t.Error("index.html still inlines a <style> block; it should live in static/css/app.css")
+	}
+	rr := httptest.NewRecorder()
+	embeddedStaticServer().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/static/css/app.css", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /static/css/app.css = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), ".app-header") {
+		t.Error("app.css does not contain the app's own rules; the extraction looks wrong")
+	}
+}
+
+// TestIndexHTMLIsThin documents the point of the split: the page itself must
+// stay small enough to re-fetch on every load while the modules cache.
+func TestIndexHTMLIsThin(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const maxBytes = 64 * 1024
+	if len(index) > maxBytes {
+		t.Errorf("index.html is %d bytes, over the %d-byte budget; markup or logic crept back in", len(index), maxBytes)
+	}
+	mods := moduleScriptRe.FindAllStringSubmatch(index, -1)
+	biggest, bigName := 0, ""
+	for _, m := range mods {
+		fi, err := fs.Stat(Assets(), m[1])
+		if err != nil {
+			continue
+		}
+		if int(fi.Size()) > biggest {
+			biggest, bigName = int(fi.Size()), m[1]
+		}
+	}
+	if biggest == 0 {
+		t.Fatal("could not stat any module")
+	}
+	t.Logf("index.html=%d B, largest module %s=%d B, %d modules", len(index), bigName, biggest, len(mods))
+}
