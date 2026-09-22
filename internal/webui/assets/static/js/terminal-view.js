@@ -362,27 +362,8 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
   collapseBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   collapseBtn.addEventListener('click', function (e) {
     e.preventDefault(); e.stopPropagation();
-    var collapsing = !win.classList.contains('shell-window-collapsed');
-    if (collapsing) {
-      win._savedH = win.style.height || (win.getBoundingClientRect().height + 'px');
-      win.style.height = 'auto';
-      win.style.minHeight = '0';
-    } else {
-      win.style.height = win._savedH || '';
-      win.style.minHeight = '';
-    }
-    win.classList.toggle('shell-window-collapsed');
-    var icD = collapseBtn.querySelector('.ic-d');
-    var icU = collapseBtn.querySelector('.ic-u');
-    if (icD && icU) {
-      icD.style.display = win.classList.contains('shell-window-collapsed') ? 'none' : '';
-      icU.style.display = win.classList.contains('shell-window-collapsed') ? '' : 'none';
-    }
-    collapseBtn.title = win.classList.contains('shell-window-collapsed') ? 'Expand' : 'Collapse';
-    if (!win.classList.contains('shell-window-collapsed')) {
-      var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
-      if (ch && ch.term && ch.instEl) fitShellTerminal(ch.term, ch.instEl, win, true);
-    }
+    if (win.classList.contains('shell-window-collapsed')) expandShellWindow(win);
+    else collapseShellWindow(win);
   });
 
   setupShellWindowDrag(win, header);
@@ -825,6 +806,12 @@ SHELL_WINDOW_PANELS_HTML +
   bindShellWindowMaxButton(win);
   setupShellWindowDrag(win, header);
   setupShellWindowResize(win);
+  /* The header's switcher and drawer buttons must work while the connection is
+     still being established: waiting for a slow or failing dial to be able to
+     switch sessions (or reach another profile) is exactly when they matter. The
+     session menu only lists established windows, so a pending one contributes
+     nothing to it — but it can still open it. */
+  setupMobileSessionSwitcher(win);
   bringShellWindowToFront(win);
   if (_layoutMode === 'tile') { tileWindow(win); openPaneWorkspace(); }
   else { _layoutMaybeAutoTile(); }
@@ -857,7 +844,7 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
   var readOnly = !!opts.readOnly;
   if (typeof Terminal === 'undefined') { alert('xterm failed to load'); return; }
   if (getShellWindowBySid(sessionId)) {
-    openOrFocusShellWindow(connLabel, sessionId, clickEvent, opts);
+    focusSessionWindow(connLabel, sessionId, clickEvent, opts);
     return;
   }
   var container = shellWindowsEl();
@@ -1017,88 +1004,186 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
 /** Mobile session switcher.
  *
  *  The floating session tab bar is hidden on touch devices, which leaves the
- *  full-screen terminal with no way to reach another open session — closing the
- *  window is the only exit. This injects a compact switcher into the window
- *  header instead, listing every window that exists (including ended/read-only
- *  history views) and reusing openOrFocusShellWindow, the same entry point the
- *  session tiles use, so z-order and read-only handling stay in one place. */
+ *  full-screen terminal with no way to reach another open session. Two controls
+ *  are wired into the window header:
+ *
+ *    - the monitor glyph at the far left opens the session menu. Touch only:
+ *      on desktop the tab bar already switches sessions, so the glyph stays a
+ *      plain icon and clicking it does nothing.
+ *    - the button next to it opens the connection drawer, so a full-screen
+ *      terminal can switch connection without going home first.
+ *
+ *  The menu itself is a module-level singleton rather than a per-window node,
+ *  because a per-window menu is built from whatever the DOM held when that
+ *  window was created, so two windows would disagree about which sessions exist.
+ *  One menu, rebuilt on every open, cannot go stale.
+ *
+ *  It is appended to <body>, not into the window: #pane-workspace carries a
+ *  backdrop-filter, which makes it the containing block for position:fixed
+ *  descendants, so a menu parented inside a window would be positioned against
+ *  the pane grid (and clipped by its overflow) instead of the viewport. */
+var _sessionSwitchMenu = null;
+
+function closeSessionSwitchMenu() {
+  if (_sessionSwitchMenu) {
+    _sessionSwitchMenu.remove();
+    _sessionSwitchMenu = null;
+  }
+  document.removeEventListener('click', _onSessionSwitchMenuDocClick, true);
+  document.removeEventListener('keydown', _onSessionSwitchMenuKey);
+  window.removeEventListener('resize', closeSessionSwitchMenu);
+  Array.prototype.forEach.call(document.querySelectorAll('.shell-header-icon-btn.active'), function (b) {
+    b.classList.remove('active');
+  });
+}
+
+function _onSessionSwitchMenuDocClick(e) {
+  if (!_sessionSwitchMenu) return;
+  if (_sessionSwitchMenu.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('.shell-header-icon-btn')) return;
+  closeSessionSwitchMenu();
+}
+
+function _onSessionSwitchMenuKey(e) {
+  if (e.key === 'Escape') closeSessionSwitchMenu();
+}
+
+/** Live sessions with an open terminal window. Minimized windows still count:
+ *  they are alive, just hidden. Ended (read-only) views are left out. */
+function liveSessionWindows() {
+  return allShellWins().filter(function (w) {
+    return w && !w._placeholder && !w._readOnly && !w._streamDone;
+  });
+}
+
+function openSessionSwitchMenu(anchorBtn) {
+  var alreadyOpen = !!_sessionSwitchMenu;
+  closeSessionSwitchMenu();
+  if (alreadyOpen) return;   // second press toggles it shut
+
+  var wins = liveSessionWindows();
+  var el = document.createElement('div');
+  el.className = 'shell-window-switch-menu';
+  el.setAttribute('role', 'menu');
+  wins.forEach(function (w) {
+    var item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'shell-switch-item';
+    item.setAttribute('role', 'menuitem');
+    if (w === anchorBtn._switchWin) item.classList.add('current');
+    item.innerHTML =
+      '<span class="shell-switch-num"></span>' +
+      '<span class="shell-switch-label"></span>';
+    item.querySelector('.shell-switch-num').textContent = String(sessionTabNum(w) || '');
+    item.querySelector('.shell-switch-label').textContent = sessionTabLabel(w);
+    item.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSessionSwitchMenu();
+      if (!w._sid) return;
+      focusSessionWindow(w._connName || '', w._sid, null, null);
+    });
+    el.appendChild(item);
+  });
+  if (wins.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'shell-switch-empty';
+    empty.textContent = 'No open sessions';
+    el.appendChild(empty);
+  }
+
+  document.body.appendChild(el);
+  _sessionSwitchMenu = el;
+
+  /* Viewport coordinates: the menu's parent is <body>, so position:fixed means
+     the viewport and these numbers are the button's real position. */
+  var r = anchorBtn.getBoundingClientRect();
+  var maxLeft = Math.max(8, window.innerWidth - el.offsetWidth - 8);
+  el.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
+  var maxTop = Math.max(8, window.innerHeight - el.offsetHeight - 8);
+  el.style.top = Math.max(8, Math.min(r.bottom + 4, maxTop)) + 'px';
+  anchorBtn.classList.add('active');
+
+  /* Deferred: the click that opened the menu must not reach this listener, or
+     it closes on the same tick. */
+  setTimeout(function () {
+    document.addEventListener('click', _onSessionSwitchMenuDocClick, true);
+    document.addEventListener('keydown', _onSessionSwitchMenuKey);
+    window.addEventListener('resize', closeSessionSwitchMenu);
+  }, 0);
+}
+
 function setupMobileSessionSwitcher(win) {
   if (!win || win._termcpSwitcherBound) return;
   win._termcpSwitcherBound = true;
   var titleCluster = win.querySelector('.shell-window-title-cluster');
   if (!titleCluster) return;
 
-  var btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'shell-window-switch-btn';
-  btn.title = 'Switch session';
-  btn.setAttribute('aria-label', 'Switch session');
-  btn.setAttribute('aria-haspopup', 'true');
-  btn.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>';
-  titleCluster.insertBefore(btn, titleCluster.firstChild);
-
-  var menu = null;
-  function closeMenu() {
-    if (!menu) return;
-    menu.remove();
-    menu = null;
-    btn.classList.remove('active');
-    document.removeEventListener('click', onDocClick, true);
-    document.removeEventListener('keydown', onKey);
-    window.removeEventListener('resize', closeMenu);
-  }
-  function onDocClick(e) { if (menu && !menu.contains(e.target) && !btn.contains(e.target)) closeMenu(); }
-  function onKey(e) { if (e.key === 'Escape') closeMenu(); }
-
-  function buildMenu() {
-    var el = document.createElement('div');
-    el.className = 'shell-window-switch-menu';
-    el.setAttribute('role', 'menu');
-    allShellWins().forEach(function (w) {
-      var item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'shell-switch-item';
-      item.setAttribute('role', 'menuitem');
-      if (w === win) item.classList.add('current');
-      var dead = !!(w._readOnly || w._streamDone);
-      if (dead) item.classList.add('ended');
-      item.innerHTML =
-        '<span class="shell-switch-num"></span>' +
-        '<span class="shell-switch-label"></span>' +
-        (dead ? '<span class="shell-switch-dead">ended</span>' : '');
-      item.querySelector('.shell-switch-num').textContent = String(sessionTabNum(w) || '');
-      item.querySelector('.shell-switch-label').textContent = sessionTabLabel(w);
-      item.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        closeMenu();
-        if (!w._sid) return;
-        openOrFocusShellWindow(w._connName || '', w._sid, null, { readOnly: !!w._readOnly });
-      });
-      el.appendChild(item);
+  /* Session menu hangs off the monitor glyph that already sits at the far left
+     of the header. Touch only: on desktop the tab bar does this job, so the
+     glyph must stay inert rather than open a menu the user does not expect —
+     including the button semantics, which would advertise an action that is not
+     there. */
+  var icon = win.querySelector('.shell-header-icon');
+  if (icon) {
+    if (isMobileViewport()) {
+      icon.classList.add('shell-header-icon-btn');
+      icon.setAttribute('role', 'button');
+      icon.setAttribute('tabindex', '0');
+      icon.setAttribute('aria-haspopup', 'true');
+      icon.title = 'Switch session';
+    }
+    icon._switchWin = win;
+    var activate = function (e) {
+      if (!isMobileViewport()) return;      // desktop: plain icon, no action
+      e.preventDefault();
+      e.stopPropagation();
+      openSessionSwitchMenu(icon);
+    };
+    icon.addEventListener('click', activate);
+    icon.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      activate(e);
     });
-    return el;
+    /* Don't let the header's drag handler treat this as a window drag. */
+    icon.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    /* A window can be created on desktop and then meet the touch breakpoint on a
+       rotate or a devtools resize. The listeners above are already attached (they
+       self-check at click time), so only the affordance and semantics need
+       adding here. */
+    win._syncSwitcherAffordance = function () {
+      if (isMobileViewport()) {
+        icon.classList.add('shell-header-icon-btn');
+        icon.setAttribute('role', 'button');
+        icon.setAttribute('tabindex', '0');
+        icon.setAttribute('aria-haspopup', 'true');
+        icon.title = 'Switch session';
+      } else {
+        closeSessionSwitchMenu();
+        icon.classList.remove('shell-header-icon-btn');
+        icon.removeAttribute('role');
+        icon.removeAttribute('tabindex');
+        icon.removeAttribute('aria-haspopup');
+        icon.removeAttribute('title');
+      }
+    };
   }
 
-  btn.addEventListener('click', function (e) {
+  /* Connection drawer, so a full-screen terminal can switch profile without
+     going home first. Touch only: desktop has no drawer. */
+  var drawerBtn = document.createElement('button');
+  drawerBtn.type = 'button';
+  drawerBtn.className = 'shell-window-drawer-btn';
+  drawerBtn.title = 'Connections';
+  drawerBtn.setAttribute('aria-label', 'Connections');
+  drawerBtn.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>';
+  titleCluster.insertBefore(drawerBtn, titleCluster.firstChild);
+
+  drawerBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+  drawerBtn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (menu) { closeMenu(); return; }
-    menu = buildMenu();
-    /* Anchored inside the window so it works in both full-screen and floating
-       mode; clamped so it cannot overflow a narrow viewport. */
-    win.appendChild(menu);
-    var r = btn.getBoundingClientRect();
-    var maxLeft = Math.max(8, window.innerWidth - menu.offsetWidth - 8);
-    menu.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
-    menu.style.top = (r.bottom + 4) + 'px';
-    btn.classList.add('active');
-    /* Deferred: the header's own click handlers must not close the menu on the
-       same click that opened it. */
-    setTimeout(function () {
-      document.addEventListener('click', onDocClick, true);
-      document.addEventListener('keydown', onKey);
-      window.addEventListener('resize', closeMenu);
-    }, 0);
+    closeSessionSwitchMenu();
+    if (typeof window.termcpToggleEntriesDrawer === 'function') window.termcpToggleEntriesDrawer(true);
   });
 }

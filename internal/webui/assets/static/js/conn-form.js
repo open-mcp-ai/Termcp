@@ -771,4 +771,13 @@ startUIWebSocket();
      localStorage (default "true"), which would otherwise leave the icon saying
      "expanded" next to a closed drawer. */
   if (isMobileViewport()) header.setAttribute('aria-expanded', 'false');
+
+  /* The terminal header's switcher button opens this drawer too, so a full-screen
+     terminal can switch connection without going home first. Desktop has no
+     drawer (entries expand in place), so the call is a no-op there. */
+  window.termcpToggleEntriesDrawer = function (forceOpen) {
+    if (!isMobileViewport()) return false;
+    setOpen(forceOpen === undefined ? !isOpen() : !!forceOpen);
+    return true;
+  };
 })();
