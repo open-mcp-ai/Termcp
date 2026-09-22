@@ -15,6 +15,43 @@
   .btn-danger { background: #cf222e; border-color: #cf222e; color: #fff; }
   .btn-danger:hover { background: #a40e26; border-color: #a40e26; }
   .dock { padding: 16px; min-height: calc(100% - 52px); }
+
+  /* Entries (connection profiles) as a left slide-in drawer on touch devices.
+     Expanded in place they are 22 cards ~2000px tall, which pushes the user's
+     own sessions two screens down — on a phone that is the wrong thing to lead
+     with. The drawer keeps the list intact but out of the way, and the scrim
+     plus the peeking panel are the "layered" look from the design. */
+  .drawer-scrim { display: none; }
+  @media (pointer: coarse) and (hover: none) {
+    .dock { padding: 12px; }
+    /* The drawer's trigger is the section header itself — no extra button. */
+    .entries-section-header { cursor: pointer; }
+
+    #sec-entries-body {
+      position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
+      width: min(86vw, 360px);
+      padding: 12px; overflow-y: auto; overscroll-behavior: contain;
+      background: #f6f8fa; border-right: 1px solid #d0d7de;
+      box-shadow: 8px 0 28px rgba(0,0,0,.22);
+      /* Left edge inset so the drawer clears the status bar / home indicator. */
+      padding-left: calc(12px + env(safe-area-inset-left, 0px));
+      padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+      transform: translateX(-100%);
+      transition: transform .22s ease;
+      will-change: transform;
+    }
+    #sec-entries-body.drawer-open { transform: translateX(0); }
+    /* The scrim dims the page behind and makes the panel read as a layer. */
+    .drawer-scrim {
+      display: block; position: fixed; inset: 0; z-index: 23900;
+      background: rgba(31,35,38,.35);
+      opacity: 0; pointer-events: none; transition: opacity .22s ease;
+    }
+    .drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
+    /* Collapsed state is meaningless once the drawer owns visibility. */
+    #sec-entries-body.collapsed { display: block; }
+
+  }
   .icon-btn {
     width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid #d0d7de;
     background: #fff; color: #24292f; cursor: pointer;
@@ -795,6 +832,11 @@
   @media (pointer: coarse) and (hover: none) {
     .session-tabbar { display: none; }
     body.tile-mode .session-tabbar { display: flex; }
+    /* Maximize is meaningless on a phone: the window already fills the screen,
+       and the toggle is a no-op there (see toggleShellWindowMax). Matched to the
+       specificity of the base rule (.shell-window-header-btns button, 0,1,1) —
+       a bare class loses to it despite coming later in the file. */
+    .shell-window-header-btns button.shell-window-max-btn { display: none; }
   }
 
   /* Mobile session switcher: replaces the hidden session tab bar on touch
@@ -891,3 +933,44 @@
   .shell-file-detail-actions .sf-del { border-color:#f85149; color:#f85149; }
   .shell-file-detail-actions .sf-del:hover { background:#3d1a1a; }
 
+/* ---- Touch / single-column layout ----------------------------------------
+   Kept at the end of the file on purpose: these override the card widths
+   declared above (.entry-card min/max-width, .sess-tile width:128px), and a
+   media query earlier in the file loses to them at equal specificity.
+
+   With one card per row the card fills the row. Letting them size themselves
+   gives 188-300px (entry) and 128px (session), which reads as ragged when
+   only one fits anyway. */
+/* "Add connection" is an affordance, not a destination: a dashed border reads
+   as "empty slot you can fill" and keeps it distinct from real entries without
+   a different shape or colour. */
+.conn-tile.entry-card.entry-card-add {
+  border-style: dashed;
+  border-color: #afb8c1;
+  background: transparent;
+  box-shadow: none;
+}
+.conn-tile.entry-card.entry-card-add:hover {
+  border-color: #0969da;
+  background: rgba(9,105,218,.04);
+  box-shadow: none;
+  transform: none;
+}
+.conn-tile.entry-card.entry-card-add .icon-wrap { color: #57606a; }
+.conn-tile.entry-card.entry-card-add:hover .icon-wrap { color: #0969da; }
+
+@media (pointer: coarse) and (hover: none) {
+  /* Chevron pinned to the collapsed glyph: on touch the drawer is a layer over
+     the page, so an expanded/collapsed reading of it means nothing. */
+  .section-header#sec-entries .sec-chevron,
+  .section-header#sec-entries[aria-expanded="false"] .sec-chevron,
+  .section-header#sec-entries[aria-expanded="true"] .sec-chevron {
+    transform: rotate(-90deg);
+    opacity: .5;
+  }
+  .conn-grid { gap: 10px; }
+  /* Only entries are list rows that fill the row. Session tiles stay the
+     compact cards they are on desktop and wrap several per row — stretching
+     them to full width turns each one into a mostly-empty band. */
+  .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+}
