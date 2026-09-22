@@ -251,6 +251,10 @@ function clearRetryTimer(id) {
 function bringShellWindowToFront(win) {
   if (!win || !win.classList.contains('shell-window')) return;
   if (isTiledWin(win)) { setActivePane(win, false); return; }
+  /* A full-screen window is already above everything (see .win-fullscreen); an
+     inline z-index here would override that rule and sink it under the session
+     tab bar and modals. */
+  if (win.classList.contains('win-fullscreen')) { refreshSessionTabbar(); return; }
   if (!window._shellZSeq) window._shellZSeq = 10050;
   window._shellZSeq += 1;
   win.style.zIndex = String(window._shellZSeq);
