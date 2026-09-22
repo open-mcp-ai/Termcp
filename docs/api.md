@@ -109,18 +109,6 @@ Constraints:
 
 ## 4. Connection profiles
 
-### `GET /api/connection-templates`
-
-Returns the TOML templates used when creating a connection.
-
-```
-Response 200:
-{
-  "remote":   "# Remote SSH connection\n...",
-  "internal": "# Internal loopback\n..."
-}
-```
-
 ### `GET /api/connections`
 
 Lists summaries of all connection profiles.

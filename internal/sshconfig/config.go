@@ -181,37 +181,6 @@ func EffectiveMode(ent *Entry, mode string) string {
 	return "pty"
 }
 
-// RemoteTemplate returns default TOML for a new remote config directory.
-func RemoteTemplate() []byte {
-	return []byte("# termcp SSH config (TOML)\n" +
-		"kind = \"remote\"\n" +
-		"description = \"Edit this file with real credentials (never commit).\"\n" +
-		"host = \"ssh.example.com\"\n" +
-		"port = 22\n" +
-		"user = \"\"\n" +
-		"# auth: password or private_key\n" +
-		"password = \"\"\n" +
-		"private_key = \"\"\"\n\"\"\"\n" +
-		"key_passphrase = \"\"\n" +
-		"trust_unknown_host = false\n" +
-		"known_hosts = \"\"\n" +
-		"dial_timeout_seconds = 30\n" +
-		"\n# Optional: tunnel SSH through a SOCKS5 proxy.\n" +
-		"# proxy = \"socks5://user:pass@127.0.0.1:1080\"\n" +
-		"proxy = \"\"\n" +
-		"\n# Optional: bastion / ProxyJump chain (self-contained, inline).\n" +
-		"# [jump]\n" +
-		"# host = \"bastion.example\"\n" +
-		"# port = 22\n" +
-		"# user = \"\"\n" +
-		"# password = \"\"\n" +
-		"# proxy = \"\"\n" +
-		"# trust_unknown_host = true\n" +
-		"# [jump.jump]   # deeper hop\n" +
-		"# host = \"...\"\n")
-}
-
-
 // InternalTemplate is the built-in loopback SSH entry.
 func InternalTemplate() []byte {
 	return []byte("# termcp loopback SSH config (TOML)\nkind = \"internal\"\ndescription = \"Built-in termcp loopback SSH (no host credentials).\"\n")

@@ -1,3 +1,51 @@
+// TOML shown when creating a new remote profile. Lives here because the web UI
+// is its only consumer: the server never writes this to disk (saving a profile
+// always goes through PUT /api/connections/{name} with user-supplied TOML).
+// Every field is commented out: it is a set of hints, not values. A real value
+// here gets saved verbatim by anyone who forgets to edit it, producing a profile
+// that dials a host that does not exist. The server rejects an empty host, so
+// the user has to fill these in, which is the point.
+var _connTemplateRemote = [
+  '# termcp SSH config (TOML)',
+  'kind = "remote"',
+  'description = ""',
+  '',
+  '# Required: host and user of the machine to connect to.',
+  '# host = "example.com"',
+  '# user = "root"',
+  '# port = 22',
+  '',
+  '# Authentication: set exactly one of password / private_key.',
+  '# password = ""',
+  '# private_key = """',
+  '# -----BEGIN OPENSSH PRIVATE KEY-----',
+  '# ...',
+  '# -----END OPENSSH PRIVATE KEY-----',
+  '# """',
+  '# key_passphrase = ""',
+  '',
+  '# Host key checking. trust_unknown_host accepts any key on first contact;',
+  '# pin known_hosts to verify against a specific key instead.',
+  '# trust_unknown_host = false',
+  '# known_hosts = ""',
+  '# dial_timeout_seconds = 30',
+  '',
+  '# Optional: tunnel SSH through a SOCKS5 proxy.',
+  '# proxy = "socks5://user:pass@127.0.0.1:1080"',
+  '',
+  '# Optional: bastion / ProxyJump chain (self-contained, inline).',
+  '# [jump]',
+  '# host = "bastion.example"',
+  '# port = 22',
+  '# user = ""',
+  '# password = ""',
+  '# proxy = ""',
+  '# trust_unknown_host = true',
+  '# [jump.jump]   # deeper hop',
+  '# host = "..."',
+  ''
+].join('\n');
+
 function _tomlEscape(v) { return v.replace(/\\/g,'\\\\').replace(/"/g,'\\"'); }
 function _tomlVal(s) { return s ? ('"'+_tomlEscape(s)+'"') : '""'; }
 function _hesc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -230,11 +278,8 @@ function openConnModal(edit, name, kind) {
       document.getElementById('modal-conn-err').style.display = 'block';
     });
   } else {
-    fetch('/api/connection-templates').then(function (r) { return r.json(); }).then(function (t) {
-      var tmpl = t.remote || '{}';
-      document.getElementById('conn-config').value = tmpl;
-      _connTOMLToForm(tmpl);
-    }).catch(function () {});
+    document.getElementById('conn-config').value = _connTemplateRemote;
+    _connTOMLToForm(_connTemplateRemote);
   }
   resetConnPasswordVisibility();
   showModal('modal-conn');
