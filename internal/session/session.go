@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/internal/buffer"
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
@@ -86,23 +87,22 @@ type Session struct {
 	onShellExit    atomic.Pointer[func(shellID string, exitCode *int)]
 	onShellClose   atomic.Pointer[func(shellID string)]
 	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
-	primaryShellID string // first shell id (≠ session id); used for legacy Session-level helpers
+	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
 
 	shells sync.Map // *ChildShell by ID
 	// shellHistory retains the last-known per-shell metadata (id, name, status)
 	// so a DEAD session can still render per-shell tabs after shells leave the
-	// live map on exit. Also persisted to sessions.json for restart restore.
+	// live map on exit. Also persisted to the shell manifests for restart restore.
 	shellHistory sync.Map // string → api.Session
 	// doneWG tracks live output pipe goroutines so markDead can flush their final
-	// message Appends before the session is observed as exited.
+	// log writes before the session is observed as exited.
 	doneWG sync.WaitGroup
 	// watchWG tracks per-shell exit-watcher goroutines. The watcher performs the
-	// final message Appends (markDead system note) and persist() after the
-	// transport closes, so finalize must wait for them: otherwise Delete could
-	// return (and a caller could purge/remove the data dir) while a watcher is
-	// still writing files under messages/<id>/. The watcher is deliberately not
-	// in doneWG: markDead (called *by* the watcher on a pipe exit) waits on
-	// doneWG, so adding the watcher there would self-deadlock.
+	// final log writes and persist() after the transport closes, so finalize must
+	// wait for them: otherwise Delete could return (and a caller could purge/remove
+	// the data dir) while a watcher is still appending log.bin. The watcher is
+	// deliberately not in doneWG: markDead (called *by* the watcher on a pipe exit)
+	// waits on doneWG, so adding the watcher there would self-deadlock.
 	watchWG sync.WaitGroup
 }
 
@@ -199,7 +199,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		Status:      api.SessionRunning,
 		Rows:        cfg.Rows,
 		Cols:        cfg.Cols,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   clock.Now(),
 		enterCRLF:   enterCRLF,
 		mode:        cfg.Mode,
 	}
@@ -212,8 +212,8 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 			Args:        cfg.Args,
 			Mode:        cfg.Mode,
 			Status:      api.SessionRunning,
-			CreatedAt:   time.Now().UTC(),
-			UpdatedAt:   time.Now().UTC(),
+			CreatedAt:   clock.Now(),
+			UpdatedAt:   clock.Now(),
 			Rows:        cfg.Rows,
 			Cols:        cfg.Cols,
 			SSHEndpoint: sshEndpointPublic,
@@ -227,9 +227,11 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		scope:          newResourceScope(),
 	}
 
-	if msgMgr != nil {
-		msgMgr.Append(s.ID, api.MsgSystem, "Process started")
-	}
+	// "Process started" is a session lifecycle event, not shell output. It used to
+	// be stored as a system message; the new layout has no message records, so it
+	// is logged rather than persisted as a transcript entry. Session lifecycle is
+	// still visible in the session manifest's status and timestamps.
+	slog.Debug("session ready", "session_id", sessionID, "shell_id", shellID)
 	// Message-manager session state is a session-scoped resource: release it
 	// through the same cascade that closes forwards and notification rules.
 	if msgMgr != nil {
@@ -342,7 +344,30 @@ func buildChainClient(r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
 	return ssh.NewClient(c, chans, reqs), closers, nil
 }
 
-// SendInput writes text to the process stdin and records it in the message log.
+// InputSource identifies who produced a keystroke sequence, which decides the
+// status recorded for those bytes in the shell's log.
+//
+// The distinction is the reason the log carries a status at all: a transcript
+// that cannot say "the agent typed this" versus "the human typed this" cannot be
+// replayed or audited meaningfully.
+type InputSource int
+
+const (
+	// InputFromAPI is a human typing through the HTTP/WebSocket API.
+	InputFromAPI InputSource = iota
+	// InputFromAI is an AI agent driving the shell through MCP.
+	InputFromAI
+)
+
+// logStatus maps an input source onto the status stored in log.jsonl.
+func (s InputSource) logStatus() api.LogStatus {
+	if s == InputFromAI {
+		return api.LogAIInput
+	}
+	return api.LogAPIInput
+}
+
+// SendInput writes text to the process stdin and records it in the byte log.
 func (s *Session) SendInput(text string, pressEnter bool) error {
 	return s.sendInput([]byte(text), pressEnter, true)
 }
@@ -357,13 +382,19 @@ func (s *Session) PrimaryShell() *ChildShell {
 	return s.GetChildShell(s.primaryShellID)
 }
 
-// SendTerminalBytes writes raw keystrokes to the primary shell stdin (web UI / legacy).
+// SendTerminalBytes writes raw keystrokes to the primary shell stdin (web UI / REST).
 func (s *Session) SendTerminalBytes(data []byte, pressEnter bool) error {
+	return s.SendTerminalBytesFrom(data, pressEnter, InputFromAPI)
+}
+
+// SendTerminalBytesFrom writes raw keystrokes and records them with the status of
+// the given source, so the log distinguishes human input from agent input.
+func (s *Session) SendTerminalBytesFrom(data []byte, pressEnter bool, src InputSource) error {
 	cs := s.PrimaryShell()
 	if cs == nil {
 		return fmt.Errorf("session shell has exited")
 	}
-	return cs.SendTerminalBytes(data, pressEnter)
+	return cs.SendTerminalBytesFrom(data, pressEnter, src)
 }
 
 // appendEnter returns data with the line ending appropriate for the shell family.
@@ -395,17 +426,7 @@ func (s *Session) sendInput(data []byte, pressEnter bool, persist bool) error {
 		return err
 	}
 	if persist && s.msgMgr != nil {
-		var logged string
-		if pressEnter {
-			if crlf {
-				logged = string(data) + "\r\n"
-			} else {
-				logged = string(data) + "\n"
-			}
-		} else {
-			logged = string(data)
-		}
-		s.msgMgr.AppendShell(s.ID, s.primaryShellID, api.MsgInput, logged)
+		_ = s.msgMgr.AppendMarkOnly(s.ID, s.primaryShellID, InputFromAPI.logStatus())
 	}
 	return nil
 }
@@ -437,7 +458,7 @@ func (s *Session) ReadOutputForReader(ctx context.Context, readerID int, timeout
 	return s.readOutput(ctx, readerID, timeout, stripAnsi, maxLines, true, maxBytes)
 }
 
-// ReadTerminalStream reads PTY output for a reader without appending to the message log (high-frequency UI streaming).
+// ReadTerminalStream reads PTY output for a reader without appending to the byte log (high-frequency UI streaming).
 // If maxBytes > 0, each call returns at most that many raw bytes (for WebSocket/SSE chunking); 0 means one full drain to end of buffer.
 func (s *Session) ReadTerminalStream(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
 	cs := s.PrimaryShell()
@@ -458,6 +479,16 @@ func (s *Session) OutputByteRange(start int64, max int) ([]byte, int64, error) {
 	return data, total, nil
 }
 
+// OutputBaseOffset is the absolute offset of the earliest retained byte.
+func (s *Session) OutputBaseOffset() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.buf == nil {
+		return 0
+	}
+	return s.buf.BaseOffset()
+}
+
 // BufferLen returns retained raw output length in bytes (for tail slicing).
 func (s *Session) BufferLen() int64 {
 	s.mu.RLock()
@@ -470,7 +501,7 @@ func (s *Session) BufferLen() int64 {
 
 // Terminate ends the remote process/transport and marks the session DEAD
 // (exited) in place. The session object, its shells' metadata and retained
-// buffers, and its message history are all kept for read-only viewing; nothing
+// buffers, and its byte log are all kept for read-only viewing; nothing
 // is removed from the registry or purged. Only Manager.Delete/finalize release
 // resources.
 func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
@@ -505,9 +536,9 @@ func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 }
 
 // markDead transitions a Running session to exited (DEAD) in place, retaining
-// the object in the registry, its retained buffers, and its message history.
-// Idempotent (runs once). It never removes the registry entry, forgets
-// messages, or closes retained buffers; only Manager.Delete → finalize do that.
+// the object in the registry, its retained buffers, and its byte log.
+// Idempotent (runs once). It never removes the registry entry, forgets logs,
+// or closes retained buffers; only Manager.Delete → finalize do that.
 func (s *Session) markDead() {
 	s.markDeadWithMessage("")
 }
@@ -540,7 +571,7 @@ func (s *Session) markDeadLocked(systemMessage string) {
 	s.closing = true
 	s.deadOnce.Do(func() {
 		// Flush output pipe goroutines so the last bytes are appended to the
-		// message log before DEAD becomes observable.
+		// byte log before DEAD becomes observable.
 		flushDone := make(chan struct{})
 		go func() { s.doneWG.Wait(); close(flushDone) }()
 		select {
@@ -548,14 +579,16 @@ func (s *Session) markDeadLocked(systemMessage string) {
 		case <-time.After(500 * time.Millisecond):
 		}
 
-		if systemMessage != "" && s.msgMgr != nil {
-			_, _ = s.msgMgr.Append(s.ID, api.MsgSystem, systemMessage)
+		if systemMessage != "" {
+			// Session lifecycle, not shell output: it has no bytes and therefore no
+			// place in the byte log. Recorded in the log stream instead.
+			slog.Debug("session exit", "session_id", s.ID, "message", systemMessage)
 		}
 
 		s.mu.Lock()
 		if s.Status == api.SessionRunning {
 			s.Status = api.SessionExited
-			s.UpdatedAt = time.Now().UTC()
+			s.UpdatedAt = clock.Now()
 		}
 		s.mu.Unlock()
 
@@ -780,6 +813,9 @@ type TerminalShell interface {
 	ReaderCursor(readerID int) int64
 	IsBufferClosed() bool
 	OutputByteRange(start int64, max int) ([]byte, int64, error)
+	// OutputBaseOffset is the absolute offset of the earliest retained byte, which
+	// moves forward only when the buffer drops a prefix to reclaim memory.
+	OutputBaseOffset() int64
 	BufferLen() int64
 }
 
@@ -797,7 +833,7 @@ type ChildShell struct {
 	mu          sync.RWMutex
 	stdinMu     sync.Mutex
 	Status      api.SessionStatus
-	CreatedAt   time.Time
+	CreatedAt   int64 // Unix ms
 	ExitCode    *int
 	Rows        int
 	Cols        int
@@ -842,7 +878,7 @@ func (cs *ChildShell) Info() api.Session {
 		Rows:      cs.Rows,
 		Cols:      cs.Cols,
 		CreatedAt: cs.CreatedAt,
-		UpdatedAt: time.Now().UTC(),
+		UpdatedAt: clock.Now(),
 	}
 	if cs.ExitCode != nil {
 		v := *cs.ExitCode
@@ -859,6 +895,16 @@ func (cs *ChildShell) Done() <-chan struct{} {
 // SendTerminalBytes writes raw keystrokes to the child shell's stdin.
 // pressEnter is kept for WebUI NL flag; MCP should use PressKey instead.
 func (cs *ChildShell) SendTerminalBytes(data []byte, pressEnter bool) error {
+	return cs.SendTerminalBytesFrom(data, pressEnter, InputFromAPI)
+}
+
+// SendTerminalBytesFrom writes raw keystrokes and records the bytes in the
+// shell's log with the status of the given source.
+//
+// The bytes are logged whether or not the remote terminal echoes them: the log
+// records what was sent, which is the only way to explain a transcript where the
+// screen does not show the input (password prompts, full-screen programs).
+func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src InputSource) error {
 	cs.mu.RLock()
 	running := cs.Status == api.SessionRunning
 	cs.mu.RUnlock()
@@ -874,11 +920,42 @@ func (cs *ChildShell) SendTerminalBytes(data []byte, pressEnter bool) error {
 	cs.stdinMu.Lock()
 	_, err := cs.execSession.WriteStdin(toWrite)
 	cs.stdinMu.Unlock()
-	return err
+	if err != nil {
+		return err
+	}
+	// Input is recorded as a zero-length status mark, not as bytes: the terminal
+	// already writes the keystrokes back into the output stream as echo, so storing
+	// them here too would put every keystroke in the log twice. A zero-length mark
+	// says who typed when, without duplicating what the screen already shows.
+	//
+	// Input the terminal never echoes (a password prompt) therefore leaves no bytes
+	// anywhere — that is intended, not a gap to fill in.
+	cs.logInput(src)
+	return nil
+}
+
+// logInput records that input happened, as a zero-length status mark at the
+// current end of the shell's log.
+//
+// It writes no bytes: keystrokes reach log.bin through the terminal's echo, which
+// keeps log.bin byte-for-byte equal to what the screen showed. Adding the bytes
+// here as well would duplicate them on every replay.
+func (cs *ChildShell) logInput(src InputSource) {
+	p := cs.parent
+	if p == nil || p.msgMgr == nil {
+		return
+	}
+	_ = p.msgMgr.AppendMarkOnly(p.ID, cs.ID, src.logStatus())
 }
 
 // PressKey writes a named key sequence (enter, ctrl+c, arrows, …) repeat times.
 func (cs *ChildShell) PressKey(key string, repeat int) error {
+	return cs.PressKeyFrom(key, repeat, InputFromAPI)
+}
+
+// PressKeyFrom writes a named key sequence and records it with the status of the
+// given source.
+func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) error {
 	if repeat < 1 {
 		repeat = 1
 	}
@@ -899,7 +976,11 @@ func (cs *ChildShell) PressKey(key string, repeat int) error {
 	cs.stdinMu.Lock()
 	_, err = cs.execSession.WriteStdin(payload)
 	cs.stdinMu.Unlock()
-	return err
+	if err != nil {
+		return err
+	}
+	cs.logInput(src)
+	return nil
 }
 
 // ResizePty adjusts the child shell's terminal dimensions.
@@ -932,7 +1013,7 @@ func (cs *ChildShell) UnregisterReader(id int) {
 	cs.buf.Unregister(id)
 }
 
-// ReadTerminalStream reads PTY output for a reader without appending to the message log.
+// ReadTerminalStream reads PTY output for a reader without appending to the byte log.
 func (cs *ChildShell) ReadTerminalStream(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
 	data, err := cs.buf.ReadLimited(ctx, readerID, timeout, maxBytes, maxLines)
 	if err != nil && err != io.EOF {
@@ -972,6 +1053,16 @@ func (cs *ChildShell) OutputByteRange(start int64, max int) ([]byte, int64, erro
 	}
 	data, total := cs.buf.ByteRange(start, max)
 	return data, total, nil
+}
+
+// OutputBaseOffset is the absolute offset of the earliest retained byte.
+func (cs *ChildShell) OutputBaseOffset() int64 {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.buf == nil {
+		return 0
+	}
+	return cs.buf.BaseOffset()
 }
 
 // BufferLen returns retained raw output length in bytes.
@@ -1047,21 +1138,45 @@ func (cs *ChildShell) pipeToBuffer(r io.Reader) {
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
-				// A closed buffer means the shell was already sealed; nothing more
-				// can be recorded, so stop rather than spin on a dead transcript.
-				if werr := cs.buf.Write(buf[:n]); werr != nil {
+				chunk := buf[:n]
+				// With a log attached, the log is written FIRST and the offset it
+				// returns is the one the memory buffer is told to expect: a byte's
+				// position is established by the durable log and the buffer only caches
+				// it. If the two ever disagree, WriteAt reports it here instead of
+				// letting every later read silently address the wrong byte.
+				//
+				// Order also matters for crash safety: a crash between the two writes
+				// leaves a byte in the log that no reader saw, which is harmless. The
+				// reverse would leave a reader positioned past the end of the durable
+				// data.
+				var werr error
+				if p != nil && p.msgMgr != nil {
+					off, lerr := p.msgMgr.AppendOutput(p.ID, cs.ID, chunk)
+					if lerr != nil {
+						// A failed append means the durable log did not take these bytes.
+						// Keeping them only in memory would create exactly the drift this
+						// design removes, so stop the transcript rather than serve a stream
+						// that cannot be replayed.
+						slog.Error("failed to append output to log; stopping transcript",
+							"session_id", p.ID, "shell_id", cs.ID, "err", lerr)
+						return
+					}
+					werr = cs.buf.WriteAt(chunk, off)
+				} else {
+					// No persistence configured: the buffer is the only record, so it
+					// numbers its own bytes.
+					werr = cs.buf.Write(chunk)
+				}
+				// A closed buffer means the shell was already sealed; nothing more can be
+				// recorded, so stop rather than spin on a dead transcript.
+				if werr != nil {
+					slog.Error("output buffer rejected write; stopping transcript",
+						"session_id", cs.ID, "err", werr)
 					return
 				}
-				// Record output once at the source so every session (WebUI stream and
-				// MCP read alike) leaves a transcript — regardless of which reader
-				// consumes it. Never double-recorded because each write fires once.
-				// Tagged with the originating shell so retained history can split tabs.
-				if p := cs.parent; p != nil {
+				if p != nil {
 					if fn := p.onOutput.Load(); fn != nil {
 						(*fn)(cs.ID)
-					}
-					if p.msgMgr != nil {
-						p.msgMgr.AppendShell(p.ID, cs.ID, api.MsgOutput, string(buf[:n]))
 					}
 				}
 			}
@@ -1260,7 +1375,7 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 		buf:         buf,
 		done:        make(chan struct{}),
 		Status:      api.SessionRunning,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   clock.Now(),
 		Rows:        rows,
 		Cols:        cols,
 		enterCRLF:   s.enterCRLF,
@@ -1320,7 +1435,7 @@ func (s *Session) GetChildShell(id string) *ChildShell {
 func (s *Session) ListChildShells() []api.Session {
 	type entry struct {
 		info      api.Session
-		createdAt time.Time
+		createdAt int64
 	}
 	var entries []entry
 	s.shells.Range(func(_, v any) bool {
@@ -1328,7 +1443,7 @@ func (s *Session) ListChildShells() []api.Session {
 		entries = append(entries, entry{info: cs.Info(), createdAt: cs.CreatedAt})
 		return true
 	})
-	sort.Slice(entries, func(i, j int) bool { return entries[i].createdAt.Before(entries[j].createdAt) })
+	sort.Slice(entries, func(i, j int) bool { return entries[i].createdAt < entries[j].createdAt })
 	out := make([]api.Session, len(entries))
 	for i, e := range entries {
 		out[i] = e.info
@@ -1363,7 +1478,7 @@ func (s *Session) SnapshotShells() []api.Session {
 		out = append(out, v.(api.Session))
 		return true
 	})
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
 	return out
 }
 

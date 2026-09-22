@@ -97,7 +97,7 @@ An Agent natively runs only one-shot commands, while real work is largely **mult
 ![pic1](docs/assets/pic1.png)
 
 - **One session layer, peer entrances.** MCP, SKILLS and REST/WebSocket sit at the same level as the Web UI, sharing the same real sessions. You can watch every Agent step in the browser and take over at any time; the Agent in turn can pause and hand a password/MFA prompt to you.
-- **Built for token and turn budgets.** Tool schemas are compact and can be deferred-loaded (see [`docs/mcp-tools.md`](./docs/mcp-tools.md)); `shell_output` pages by tail/offset cursors so only the slices you ask for ever enter the context window; `shell_notify` sends a bare wake-up signal; `message` fetches full output only when asked.
+- **Built for token and turn budgets.** Tool schemas are compact and can be deferred-loaded (see [`docs/mcp-tools.md`](./docs/mcp-tools.md)); `shell_output` pages by tail/offset cursors so only the slices you ask for ever enter the context window; `shell_notify` sends a bare wake-up signal.
 - **Self-describing instances.** Every running termcp serves its own `/api.md` and `/skills.md` (no token needed) and registers them as MCP resources plus a `learn-api` prompt, so a fresh Agent can drive this exact instance straight away, using only these two files.
 - **Secrets stay server-side.** Passwords, private keys and passphrases written through `ssh_config` are stored only on the host, and the MCP read interface returns profile names only; the SSH-config write tools stay off unless the operator opts in with `--mcp-manage-ssh-configs`.
 - **Failure-tolerant, resumable work.** A closed, crashed or restarted session stays in the session list as a read-only DEAD tile with its output readable, so an Agent (or you) can pick up from the interrupted state; reconnecting the same `termcp://<entry>` starts a fresh session.
@@ -185,7 +185,7 @@ termcp [flags]
 | --------------- | ------------- | ------------------------------------------------------------------------ |
 | `--host`        | `127.0.0.1`   | HTTP bind address. `0.0.0.0` listens on all interfaces. A non-loopback bind **requires** an auth token/hash (startup fails otherwise). |
 | `--port`        | `18765`       | HTTP port. Shared by the Web UI, MCP SSE, MCP streamable HTTP, and the docs/skill endpoints (`/api.md`, `/skills.md`). |
-| `--data-dir`    | `~/.termcp`   | Persistence directory (sessions, messages, SSH configs). Auto-created. Default overridable via `$TERMCP_DATA_DIR`. |
+| `--data-dir`    | `~/.termcp`   | Persistence directory (sessions, SSH configs). Auto-created. Default overridable via `$TERMCP_DATA_DIR`. |
 | `--log-level`   | `info`        | Log level: `debug` / `info` / `warn` / `error`. `debug` shows all MCP tool calls; failed tool calls and session-create errors log at `warn`/`error` regardless. |
 | `--no-internal` | `false`       | Disable the built-in loopback SSH profile.                                   |
 | `--mcp-manage-ssh-configs` | `false` | Enable MCP tools to create/edit/delete SSH configs (secrets are never exposed). |
@@ -277,7 +277,7 @@ Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_
 
 ### Run the official image
 
-The registry image runs as non-root `termcp` (uid/gid 1000) with `/home/termcp` declared a `VOLUME` — all state (sessions, SSH configs, message history) defaults to `~/.termcp`. It carries only the binary: no baked-in entrypoint or exposed port, so the run command decides the bind address.
+The registry image runs as non-root `termcp` (uid/gid 1000) with `/home/termcp` declared a `VOLUME` — all state (sessions, SSH configs, transcripts) defaults to `~/.termcp`. It carries only the binary: no baked-in entrypoint or exposed port, so the run command decides the bind address.
 
 ```bash
 docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765
@@ -391,7 +391,7 @@ claude mcp add --transport http termcp http://localhost:18765/stream
 
 ### Option B — SSE (`/sse`)
 
-The legacy transport. Configure **only** `/sse`; the SDK posts JSON-RPC to `/message` automatically.
+The legacy SSE transport. Configure **only** `/sse`; the SDK posts JSON-RPC to `/message` automatically.
 
 ```json
 {
@@ -498,7 +498,7 @@ termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes liv
 | SSH profiles | `ssh_config` (`list`; `create`/`edit`/`copy`/`delete` with `--mcp-manage-ssh-configs`) |
 | Port forwarding | `forward` (`-L` / `-R` / `-D` / list / close) |
 | Files (SFTP) | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
-| History & messages | `message` (list / get) |
+| Transcript index | `message` (span list; bytes via `shell_output`) |
 | Host discovery | `shell_detect` |
 
 Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Failed tools return `isError=true` with a JSON body carrying a stable `error_code`.

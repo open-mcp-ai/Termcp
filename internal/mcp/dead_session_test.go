@@ -67,8 +67,22 @@ func startTerminatedSession(t *testing.T, s *Server) string {
 	sid := sm["session_id"].(string)
 	shellID := sm["shell_id"].(string)
 
-	testRunLine(t, s, shellID, "echo DEAD-READ-MARKER")
-	testReadOutputUntil(t, s, shellID, "DEAD-READ-MARKER", 3*time.Second)
+	// The internal profile starts a login shell, whose startup (prompt themes,
+	// rc files) can still be in flight when the first line is typed; input sent
+	// before the shell is ready is dropped. Retry until the marker appears so this
+	// asserts the DEAD-read contract, not shell startup speed.
+	deadline := time.Now().Add(30 * time.Second)
+	var output string
+	for time.Now().Before(deadline) {
+		testRunLine(t, s, shellID, "echo DEAD-READ-MARKER")
+		output = testReadOutputUntil(t, s, shellID, "DEAD-READ-MARKER", 3*time.Second)
+		if strings.Contains(output, "DEAD-READ-MARKER") {
+			break
+		}
+	}
+	if !strings.Contains(output, "DEAD-READ-MARKER") {
+		t.Fatalf("session never echoed the marker line, got %q", output)
+	}
 
 	termReq := makeRequest(map[string]any{"session_id": sid, "force": true})
 	if _, err := s.handleTerminateSession(context.Background(), termReq); err != nil {

@@ -64,7 +64,7 @@ termcp 是平台型架构：**一个会话内核（session/message/sshclient/ssh
     ┌──────────────────────┐    ┌──────────────────────────┐
     │  internal/session/    │    │  internal/message/        │
     │  manager.go          │    │  message.go              │
-    │  Create/Get/Delete/  │    │  Append/List/Get          │
+    │  Create/Get/Delete/  │    │  AppendOutput/Marks       │
     │  Terminate/ListAll   │    │  每 session 独立 mutex     │
     └──────────┬───────────┘    └──────────┬───────────────┘
                │ session.go                │
@@ -334,21 +334,20 @@ Agent A (reader 0)           Session              Agent B (新加入)
 
 
 ```
-每次 SendInput / readOutput / 系统事件
+输出循环（每读到一个 chunk）
   │
   ▼
-message.Manager.Append(sessionID, type, content)
+message.Manager.AppendOutput(sessionID, shellID, chunk)
   │
-  ├─ 生成 UUID 前 12 位作为 message ID
-  ├─ per-session mutex（防止索引并发损坏）
+  ├─ per-session mutex（防止字节写与标记写交错）
   │
-  ├─ storage.SaveMessage(sessionID, msgID, Message{...})
-  │   └─ atomicWriteFile: temp → fsync → rename
-  │       data/messages/{session_id}/messages/{msg_id}.json
+  ├─ storage.AppendLog → 返回 offset（= log.bin 的文件位置，偏移的唯一定义）
+  │   data/sessions/{session_id}/{shell_id}/log.bin
   │
-  └─ storage.SaveMessageIndex(sessionID, entries)
-      └─ atomicWriteFile: temp → fsync → rename
-          data/messages/{session_id}/index.json
+  ├─ buffer.WriteAt(chunk, offset)   只断言：自身末尾 == offset，不符则停止记录
+  │
+  └─ 仅状态变化时：storage.AppendMark
+      data/sessions/{session_id}/{shell_id}/log.jsonl
 ```
 
 ## 十、会话生命周期状态机
@@ -356,7 +355,7 @@ message.Manager.Append(sessionID, type, content)
 Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `status`。当前状态的含义如下：
 
 - `running`：Session 未关闭，SSH transport 可用；这是 Session 的正常在线状态。Shell 可以是 `running`，也可以是自然退出后仍保留在 channel 列表中的 `exited`。
-- `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown，或 pipe 模式最后一个 shell 自然退出/被关闭）。Session 仍保留在 registry，缓冲区、消息和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
+- `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown，或 pipe 模式最后一个 shell 自然退出/被关闭）。Session 仍保留在 registry，缓冲区、字节流日志和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
 - `error`：保留给启动失败等错误；当前启动失败直接返回错误，不会创建 Session。
 
 ```
@@ -389,7 +388,7 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 **关键不变量：**
 
 1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭就把仍可用的 PTY Session 标成 DEAD。
-2. 手动关闭 Shell 是删除操作：从 live map、shell history snapshot 和持久化 `sessions.json` 中移除；它不会产生 `exited` shell，也不会被 UI 渲染成 `end` tab。
+2. 手动关闭 Shell 是删除操作：从 live map、shell history snapshot 和持久化的 shell manifest 中移除；它不会产生 `exited` shell，也不会被 UI 渲染成 `end` tab。
 3. 只有自然退出或 transport 异常断线的 shell，才会保留 `exited` 元数据供 DEAD/只读视图使用。
 4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。
 

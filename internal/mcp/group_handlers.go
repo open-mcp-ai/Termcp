@@ -6,16 +6,15 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
-// handleMessageOps is the low-frequency message entry point. The action keeps
-// list/get in one tool while the existing handlers retain their behavior.
+// handleMessageOps is the low-frequency transcript entry point: it lists the
+// spans of a shell's byte log. The bytes are read through shell_output, so
+// there is no payload-fetching action.
 func (s *Server) handleMessageOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	switch getString(request.GetArguments(), "action", "") {
 	case "list":
 		return s.handleListMessages(ctx, request)
-	case "get":
-		return s.handleGetMessage(ctx, request)
 	default:
-		return toolError(CodeInvalidArgument, "%s", "action must be list or get"), nil
+		return toolError(CodeInvalidArgument, "%s", "action must be list"), nil
 	}
 }
 

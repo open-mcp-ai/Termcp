@@ -242,14 +242,14 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("session_info", s.handleGetSessionInfo))
 
 	mcpServer.AddTool(s.newTool("session_terminate",
-		mcpgo.WithDescription("Close a session: terminates all shells, closes the SSH transport, cascades forwards, but keeps the entry in the registry (status: exited / DEAD) and in the Web UI as a read-only tile, so output remains readable via shell_output. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). force=true = immediate kill; force=false waits grace_period after SIGTERM. To permanently erase the session and its on-disk messages, use session_delete. To close one shell only, use shell_close."),
+		mcpgo.WithDescription("Close a session: terminates all shells, closes the SSH transport, cascades forwards, but keeps the entry in the registry (status: exited / DEAD) and in the Web UI as a read-only tile, so output remains readable via shell_output. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). force=true = immediate kill; force=false waits grace_period after SIGTERM. To permanently erase the session and its on-disk byte logs, use session_delete. To close one shell only, use shell_close."),
 		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 		mcpgo.WithBoolean("force", mcpgo.Description("If true, end immediately without honoring grace_period"), mcpgo.DefaultBool(false)),
 		mcpgo.WithNumber("grace_period", mcpgo.Description("Seconds to allow after SIGTERM before hard close when force is false (0–60)"), mcpgo.DefaultNumber(5)),
 	), withLogging("session_terminate", s.handleTerminateSession))
 
 	mcpServer.AddTool(s.newTool("session_delete",
-		mcpgo.WithDescription("Permanently delete a session: finalizes its process (running or DEAD), releases every child resource (shells, forwards, notification rules, buffers), drops the registry entry (its tile disappears from the Web UI) and erases on-disk message history. Irreversible. To merely stop a session and keep reading its output, use session_terminate."),
+		mcpgo.WithDescription("Permanently delete a session: finalizes its process (running or DEAD), releases every child resource (shells, forwards, notification rules, buffers), drops the registry entry (its tile disappears from the Web UI) and removes its on-disk directory (manifests + log.bin + log.jsonl). Irreversible. To merely stop a session and keep reading its output, use session_terminate."),
 		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 	), withLogging("session_delete", s.handleDeleteSession))
 
@@ -270,10 +270,9 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("ssh_config", s.handleSSHConfigOps))
 
 	mcpServer.AddTool(s.newTool("message",
-		mcpgo.WithDescription("Stored session messages: action=list returns the message index; action=get returns full payloads for message_ids."),
-		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list", "get")),
+		mcpgo.WithDescription("A session's transcript index: action=list returns the spans of the shell's byte log (status, time, start, end) in order. The bytes themselves are read with shell_output(offset=start, max_bytes=end-start)."),
+		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list")),
 		mcpgo.WithString("session_id", mcpgo.Required()),
-		mcpgo.WithArray("message_ids", mcpgo.Description("get: ids from message(action=list)"), mcpgo.WithStringItems()),
 	), withLogging("message", s.handleMessageOps))
 
 	mcpServer.AddTool(s.newTool("shell_reader_register",
@@ -375,15 +374,15 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	// dispatched by the `action` enum. This keeps rare operations available
 	// (SFTP works uniformly on Windows/Unix) without bloating tools/list.
 	mcpServer.AddTool(s.newTool("file_perm",
-		mcpgo.WithDescription("Ownership/metadata ops on a remote path: chmod (mode, decimal perms), chown (uid+gid), chtimes (atime+mtime Unix seconds)."),
+		mcpgo.WithDescription("Ownership/metadata ops on a remote path: chmod (mode, decimal perms), chown (uid+gid), chtimes (atime+mtime Unix milliseconds)."),
 		mcpgo.WithString("session_id", mcpgo.Required()),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("chmod", "chown", "chtimes")),
 		mcpgo.WithString("remote_path", mcpgo.Required()),
 		mcpgo.WithNumber("mode", mcpgo.Description("chmod: decimal Unix perms, e.g. 493 = 0755")),
 		mcpgo.WithNumber("uid", mcpgo.Description("chown: numeric user ID")),
 		mcpgo.WithNumber("gid", mcpgo.Description("chown: numeric group ID")),
-		mcpgo.WithNumber("atime", mcpgo.Description("chtimes: access time, Unix seconds")),
-		mcpgo.WithNumber("mtime", mcpgo.Description("chtimes: modification time, Unix seconds")),
+		mcpgo.WithNumber("atime", mcpgo.Description("chtimes: access time, Unix milliseconds")),
+		mcpgo.WithNumber("mtime", mcpgo.Description("chtimes: modification time, Unix milliseconds")),
 	), withLogging("file_perm", s.handleFilePerm))
 
 	mcpServer.AddTool(s.newTool("file_link",

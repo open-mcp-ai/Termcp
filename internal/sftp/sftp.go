@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/encoding"
 )
 
@@ -31,7 +32,7 @@ type FileStatResult struct {
 	Name     string           `json:"name"`
 	Size     int64            `json:"size"`
 	IsDir    bool             `json:"is_dir"`
-	ModTime  string           `json:"mod_time,omitempty"`
+	ModTime  int64            `json:"mod_time,omitempty"` // Unix ms; 0 = unknown
 	Children []FileStatResult `json:"children,omitempty"`
 }
 
@@ -323,7 +324,7 @@ func (s *Client) StatFile(remotePath string) (*FileStatResult, error) {
 		Name:    filepath.Base(remotePath),
 		Size:    fi.Size(),
 		IsDir:   fi.IsDir(),
-		ModTime: fi.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+		ModTime: clock.Millis(fi.ModTime()),
 	}
 
 	if fi.IsDir() {
@@ -336,7 +337,7 @@ func (s *Client) StatFile(remotePath string) (*FileStatResult, error) {
 				Name:    e.Name(),
 				Size:    e.Size(),
 				IsDir:   e.IsDir(),
-				ModTime: e.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+				ModTime: clock.Millis(e.ModTime()),
 			})
 		}
 	}

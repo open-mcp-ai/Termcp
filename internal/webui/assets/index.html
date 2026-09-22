@@ -1969,7 +1969,7 @@
       var html = '<div style="padding:12px">';
       html += '<div style="font-weight:600;margin-bottom:8px">' + escapeHtml(data.name || currentPath) + '</div>';
       html += '<div>Size: ' + formatSize(data.size || 0) + '</div>';
-      if (data.mod_time) html += '<div>Modified: ' + escapeHtml(data.mod_time) + '</div>';
+      if (data.mod_time) html += '<div>Modified: ' + escapeHtml(fmtTime(data.mod_time)) + '</div>';
       html += '</div>';
       document.getElementById('file-listing').innerHTML = html;
       return;
@@ -2043,6 +2043,21 @@
     var size = bytes;
     while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
     return (i === 0 ? size : size.toFixed(1)) + ' ' + units[i];
+  }
+
+  /**
+   * Render a Unix-millisecond timestamp as local time.
+   *
+   * Every timestamp on the wire is Unix ms: manifests,
+   * log.jsonl marks, session and forward metadata, file mod_time. Formatting is
+   * deliberately the client's job so the server never has to serialize a time
+   * as a locale string, and every field shares one unit.
+   */
+  function fmtTime(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString();
   }
   function switchToolsTab(name) {
     document.querySelectorAll('.tools-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.tab === name); });
@@ -3836,7 +3851,7 @@
         var detailHtml = '<div class="shell-file-detail" data-file-path="' + escapeHtml(currentPath) + '">';
         detailHtml += '<div style="font-size:0.85rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px"><span>📄</span><span style="word-break:break-all">' + escapeHtml(nm) + '</span></div>';
         detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">Size: ' + formatSize(data.size||0) + '</div>';
-        if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">Modified: ' + escapeHtml(data.mod_time) + '</div>';
+        if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">Modified: ' + escapeHtml(fmtTime(data.mod_time)) + '</div>';
         detailHtml += '<div class="shell-file-detail-actions">';
         detailHtml += '<button class="sf-dl" data-file-action="download" data-file-path="' + escapeHtml(currentPath) + '">Download</button>';
         detailHtml += '<button data-file-action="rename" data-file-path="' + escapeHtml(currentPath) + '" data-file-name="' + escapeHtml(nm) + '">Rename</button>';

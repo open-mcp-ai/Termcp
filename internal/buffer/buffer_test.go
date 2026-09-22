@@ -539,7 +539,16 @@ func TestBuffer_UndrainedReaderPinsCompactionUntilUnregistered(t *testing.T) {
 	if _, err := b.Read(context.Background(), drainer, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if after := b.Len(); after >= pinned {
-		t.Fatalf("expected compaction after Unregister to shrink master: before=%d after=%d", pinned, after)
+
+	// Compaction reclaims memory, and the reported stream length keeps growing:
+	// dropping a prefix is an internal optimisation, so it must not change what an
+	// offset means or make the stream look shorter than the bytes written. The
+	// retained window shrinks while the stream length does not.
+	retained := b.Len() - b.BaseOffset()
+	if retained >= pinned {
+		t.Fatalf("expected compaction after Unregister to reclaim memory: retained=%d before=%d", retained, pinned)
+	}
+	if after := b.Len(); after <= pinned {
+		t.Fatalf("stream length must keep growing across compaction: before=%d after=%d", pinned, after)
 	}
 }
