@@ -506,11 +506,6 @@ document.getElementById('start-run').onclick = function () {
     });
 };
 
-document.getElementById('btn-add-conn').onclick = function () { openConnModal(false, ''); };
-document.getElementById('btn-refresh-conn').onclick = function () {
-  loadConnections();
-  startUIWebSocket();
-};
 // Session selection toolbar actions
 document.getElementById('btn-clear-dead').onclick = function (e) {
   e.stopPropagation();
@@ -668,3 +663,67 @@ startUIWebSocket();
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
   });
 });
+
+// ---- Entries drawer (touch devices) ----
+// On touch devices the connection list becomes a left slide-in drawer instead of
+// an expanded section: 22 entries expanded are ~2000px tall, which pushes the
+// user's own sessions off-screen. The section header itself is the trigger (there
+// is no separate hamburger), so the same row that expands in place on desktop
+// opens the drawer on touch. Picking a connection closes it again.
+(function () {
+  var header = document.getElementById('sec-entries');
+  var body = document.getElementById('sec-entries-body');
+  if (!header || !body) return;
+
+  var scrim = document.createElement('div');
+  scrim.className = 'drawer-scrim';
+  scrim.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(scrim);
+
+  function isOpen() { return body.classList.contains('drawer-open'); }
+
+  function setOpen(open) {
+    body.classList.toggle('drawer-open', open);
+    scrim.classList.toggle('drawer-open', open);
+    header.setAttribute('aria-expanded', String(open));
+    /* Prevent the page behind from scrolling under the drawer. */
+    document.body.style.overflow = open ? 'hidden' : '';
+  }
+
+  /* In drawer mode the section header toggles the drawer instead of the inline
+     collapse, so swallow the click before the shared collapse handler sees it.
+     Capture phase: the collapse listener is on the same element. */
+  header.addEventListener('click', function (e) {
+    if (!isMobileViewport()) return;        // desktop keeps the inline collapse
+    if (e.target.closest('button')) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    setOpen(!isOpen());
+  }, true);
+  header.addEventListener('keydown', function (e) {
+    if (!isMobileViewport()) return;
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    setOpen(!isOpen());
+  }, true);
+
+  scrim.addEventListener('click', function () { setOpen(false); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && isOpen()) setOpen(false);
+  });
+  /* Picking a connection from the drawer should reveal what it opened rather
+     than leave the drawer covering the page. */
+  body.addEventListener('click', function (e) {
+    if (e.target.closest('.conn-tile')) setOpen(false);
+  });
+  window.addEventListener('resize', function () {
+    if (isOpen() && !isMobileViewport()) setOpen(false);
+  });
+
+  /* On touch the drawer starts closed, so the chevron must show the collapsed
+     state — the shared collapse logic above seeds aria-expanded from
+     localStorage (default "true"), which would otherwise leave the icon saying
+     "expanded" next to a closed drawer. */
+  if (isMobileViewport()) header.setAttribute('aria-expanded', 'false');
+})();
