@@ -197,28 +197,6 @@ func (s *Store) Save(name string, data []byte) error {
 	return nil
 }
 
-// InitRemoteSkeleton creates ssh_configs/<name>/config.toml from template.
-func InitRemoteSkeleton(dataDir, name string) error {
-	if isInternalName(name) {
-		return fmt.Errorf("name %q is reserved for the built-in virtual profile", name)
-	}
-	if err := ValidateName(name); err != nil {
-		return err
-	}
-	s := NewStore(dataDir)
-	p, err := s.configPath(name)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(p); err == nil {
-		return fmt.Errorf("config already exists: %s", p)
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(p, RemoteTemplate(), 0600)
-}
-
 // Rename moves a remote config directory to a new validated name.
 func (s *Store) Rename(oldName, newName string) error {
 	oldName = strings.TrimSpace(oldName)

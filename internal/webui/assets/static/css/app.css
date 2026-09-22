@@ -59,8 +59,6 @@
     transition: background .12s, border-color .12s, color .12s;
   }
   .icon-btn:hover { background: #eaeef2; border-color: #afb8c1; }
-  .icon-btn-primary { background: #2da44e; border-color: #2da44e; color: #fff; }
-  .icon-btn-primary:hover { background: #2c974b; border-color: #2c974b; color: #fff; }
   .icon-btn svg { width: 18px; height: 18px; display: block; }
   .section-header {
     display: flex; align-items: center; gap: 6px;
@@ -416,7 +414,6 @@
   /* ---- pane workspace (tiled mode) ---- */
   .pane-workspace { position: fixed; inset: 0; z-index: 10000; background: rgba(13,17,23,.72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
-  .pane-grid > .shell-window.pane-maxed { grid-column: 1 / -1; grid-row: 1 / -1; }
   .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
   .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
   .pane-grid > .shell-window .shell-window-resize-handle { display: none; }
@@ -488,24 +485,6 @@
     margin-left: 6px;
     margin-right: 2px;
     line-height: 0;
-  }
-  .shell-terminal-ic {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    overflow: hidden;
-    line-height: 0;
-    box-sizing: border-box;
-  }
-  .shell-terminal-ic img.terminal-shell-icon {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: fill;
   }
   .shell-sid-copy .sid {
     font-size: 12px;
@@ -877,17 +856,6 @@
     font-size: 0.62rem; text-transform: uppercase; letter-spacing: .03em;
   }
 
-  .conn-tile .conn-tile-stack .sess-fwd-overlay {
-    position: absolute; left: 2px; top: 2px; z-index: 3;
-    width: 22px; height: 22px; padding: 0; border: none;
-    border-radius: 4px;
-    background: rgba(9,105,218,.12); color: #0969da; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 1px 2px rgba(0,0,0,.08);
-    transition: background .12s, color .12s;
-  }
-  .conn-tile .conn-tile-stack .sess-fwd-overlay:hover { background: #0969da; color: #fff; }
-  .sess-fwd-overlay svg { width: 11px; height: 11px; display: block; }
   .tools-tab {
     font: inherit; padding: 8px 14px; border: none; border-bottom: 2px solid transparent;
     background: transparent; color: #656d76; cursor: pointer; transition: color .12s, border-color .12s;
@@ -934,13 +902,14 @@
   .shell-file-detail-actions .sf-del:hover { background:#3d1a1a; }
 
 /* ---- Touch / single-column layout ----------------------------------------
-   Kept at the end of the file on purpose: these override the card widths
-   declared above (.entry-card min/max-width, .sess-tile width:128px), and a
-   media query earlier in the file loses to them at equal specificity.
+   Kept at the end of the file on purpose: this overrides the entry card's
+   min/max-width declared above, and a media query earlier in the file loses to
+   it at equal specificity.
 
-   With one card per row the card fills the row. Letting them size themselves
-   gives 188-300px (entry) and 128px (session), which reads as ragged when
-   only one fits anyway. */
+   Only entry cards fill the row on a phone: with one entry per row, letting it
+   size itself to 188-300px reads as ragged. Session tiles stay the compact
+   128px cards they are on desktop and wrap several per row — stretching those
+   to full width turns each into a mostly-empty band. */
 /* "Add connection" is an affordance, not a destination: a dashed border reads
    as "empty slot you can fill" and keeps it distinct from real entries without
    a different shape or colour. */
@@ -961,10 +930,10 @@
 
 @media (pointer: coarse) and (hover: none) {
   /* Chevron pinned to the collapsed glyph: on touch the drawer is a layer over
-     the page, so an expanded/collapsed reading of it means nothing. */
-  .section-header#sec-entries .sec-chevron,
-  .section-header#sec-entries[aria-expanded="false"] .sec-chevron,
-  .section-header#sec-entries[aria-expanded="true"] .sec-chevron {
+     the page, so an expanded/collapsed reading of it means nothing. The ID in
+     the selector outranks the base .section-header[aria-expanded] rule, so one
+     selector covers both states. */
+  .section-header#sec-entries .sec-chevron {
     transform: rotate(-90deg);
     opacity: .5;
   }
