@@ -349,3 +349,115 @@ func TestAddCardCentresItsGlyph(t *testing.T) {
 		t.Error("the centring rule must come after the base rule it overrides")
 	}
 }
+
+// A session tile's name is its rename control, and the selection checkbox sits
+// on that same row.
+//
+// Both were somewhere else: the pencil button sat next to the sid, so it read as
+// "edit the id" rather than "rename the session", and the checkbox was pinned to
+// the icon's top-left corner, where it looked like it belonged to the icon. The
+// name has to stay the click target for opening nothing — it renames — so the
+// tile's open handler must ignore clicks that land on it.
+func TestSessionTileNameRenamesAndCheckboxSitsOnItsRow(t *testing.T) {
+	sessions := readAssetLF(t, "static/js/sessions.js")
+	css := readAssetLF(t, "static/css/app.css")
+
+	// The checkbox is inside the name row, not the icon stack.
+	if !strings.Contains(sessions, `'<div class="sess-name-row">' +`) {
+		t.Fatal("the session tile should have a sess-name-row holding the checkbox and the name")
+	}
+	row := between(t, sessions, `class="sess-name-row">`, `</div>`)
+	if !strings.Contains(row, `class="sess-checkbox"`) {
+		t.Error("the checkbox belongs on the name row, on the same line as the name it selects")
+	}
+	if !strings.Contains(row, "sess-entry-line") {
+		t.Error("the name row should also hold the name")
+	}
+	// And out of the icon stack, where it used to sit.
+	stack := between(t, sessions, `'<div class="conn-tile-stack">'`, `'</div>' +`)
+	if strings.Contains(stack, "sess-checkbox") {
+		t.Error("the checkbox should have left the icon stack")
+	}
+
+	// The two elements must stay adjacent for the gap to mean anything: a name
+	// that grows to fill the row strands the checkbox at the card's edge, and the
+	// CSS gap then has nothing to do with the visual spacing.
+	if !strings.Contains(css, ".sess-entry-line ") && !strings.Contains(css, ".sess-entry-line {") {
+		t.Fatal("the name rule should exist in the stylesheet")
+	}
+	nameRule := between(t, css, ".sess-entry-line {", "}")
+	if !strings.Contains(nameRule, "flex: 0 1 auto") {
+		t.Errorf("the name must size to its text (flex: 0 1 auto), or the checkbox is pushed away from it; got %q", nameRule)
+	}
+	rowRule := between(t, css, ".conn-tile.sess-tile .sess-name-row {", "}")
+	for _, want := range []string{"justify-content: center", "padding: 0 4px"} {
+		if !strings.Contains(rowRule, want) {
+			t.Errorf("the name row should have %s so the pair is centred with breathing room", want)
+		}
+	}
+
+	// The pencil is gone from both the markup and the stylesheet.
+	if strings.Contains(sessions, "sess-rename-btn") || strings.Contains(css, "sess-rename-btn") {
+		t.Error("the rename button next to the sid should be gone: the name is the control now")
+	}
+	if strings.Contains(readAssetLF(t, "static/js/util.js"), "SVG_PENCIL_12") {
+		t.Error("SVG_PENCIL_12 is dead once the rename button is gone")
+	}
+
+	// Renaming hangs off the name element, and the name is keyboard reachable.
+	name := between(t, sessions, "var nameEl = tile.querySelector('.sess-entry-line');", "\n\n")
+	for _, want := range []string{"nameEl.addEventListener('click', doRename)", "nameEl.addEventListener('keydown'"} {
+		if !strings.Contains(name, want) {
+			t.Errorf("the name element should carry %s", want)
+		}
+	}
+	if !strings.Contains(sessions, `class="sess-entry-line" role="button" tabindex="0"`) {
+		t.Error("the name is now an actionable control and needs button semantics and a tab stop")
+	}
+
+	// A click on the name must not also open the session: the tile's own handler
+	// has to skip it, or a rename would open a terminal behind the prompt.
+	open := between(t, sessions, "tile.onclick = function (e) {", "\n    };")
+	for _, want := range []string{".sess-entry-line", ".sess-sid-line", ".sess-status-ic"} {
+		if !strings.Contains(open, want) {
+			t.Errorf("the tile's open handler must ignore clicks on %s: each is its own control", want)
+		}
+	}
+
+	// The sid copies, and it is keyboard reachable for the same reason the name is.
+	sid := between(t, sessions, "var sidEl = tile.querySelector('.sess-sid-line');", "\n\n")
+	for _, want := range []string{"sidEl.addEventListener('click', doCopy)", "sidEl.addEventListener('keydown'"} {
+		if !strings.Contains(sid, want) {
+			t.Errorf("the sid is the copy control and should carry %s", want)
+		}
+	}
+	if !strings.Contains(sessions, `class="sess-sid-line" role="button" tabindex="0"`) {
+		t.Error("the sid is now actionable and needs button semantics and a tab stop")
+	}
+	// The separate copy button is gone from the session tile. The entry card keeps
+	// its own (dialogs.js), so this checks the tile's markup, not the class.
+	tileHtml := between(t, sessions, "tile.innerHTML =", "tile.title =")
+	if strings.Contains(tileHtml, "sess-copy-btn") {
+		t.Error("the session tile should not carry a separate copy button: the sid copies")
+	}
+
+	// Status is a lamp at the left of the id, not a word on the name.
+	if !strings.Contains(sessions, `class="sess-status-ic `) {
+		t.Error("the tile should carry a status lamp")
+	}
+	if strings.Contains(css, ".sess-dead {") {
+		t.Error("the DEAD word badge should be gone: the lamp says it now")
+	}
+	meta := between(t, sessions, `'<div class="sess-meta-row">'`, `'</div>' +`)
+	if !strings.Contains(meta, "statusIc") || !strings.Contains(meta, "sess-sid-line") {
+		t.Error("the lamp belongs immediately before the sid")
+	}
+	if i, j := strings.Index(meta, "statusIc"), strings.Index(meta, "sess-sid-line"); i > j {
+		t.Error("the lamp must precede the sid, not follow it")
+	}
+	for _, want := range []string{".sess-status-ic.is-live { background: #1a7f37; }", ".sess-status-ic.is-dead { background: #cf222e; }"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("the status lamp should style %s", want)
+		}
+	}
+}

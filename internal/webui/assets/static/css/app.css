@@ -74,9 +74,20 @@
     transition: transform 0.2s ease, opacity .12s;
   }
   .section-body.collapsed { display: none; }
-  .conn-tile.sess-tile .sess-dead { display: inline-block; margin-left: 5px; padding: 1px 5px; border-radius: 10px; background: #eaeef2; color: #57606a; font-size: 0.62rem; text-transform: uppercase; letter-spacing: .03em; vertical-align: middle; }
   .conn-tile.sess-tile.archived { opacity: .68; }
   .conn-tile.sess-tile.archived:hover { opacity: .9; }
+  /* Status lamp at the left of the id: green while the session is up, red once it
+     is over. A dot rather than a badge, so the row keeps its height and the id
+     stays the thing you read. */
+  .conn-tile.sess-tile .sess-status-ic {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    cursor: help;
+  }
+  .conn-tile.sess-tile .sess-status-ic.is-live { background: #1a7f37; }
+  .conn-tile.sess-tile .sess-status-ic.is-dead { background: #cf222e; }
   /* Sessions toolbar: always-visible select-all / delete-selected / clear-dead */
   .icon-btn-sm { width: 28px; height: 28px; border-radius: 6px; }
   .icon-btn-sm svg { width: 16px; height: 16px; }
@@ -96,11 +107,24 @@
     box-shadow: 0 0 0 2px #0969da;
     background: rgba(9,105,218,.06);
   }
-  /* × and the selection checkbox are 20×20 and mirror each other about the icon's horizontal center line:
-     × at the icon's top-right, checkbox at the icon's top-left, both clearing the 40px icon flush at the stack edge. */
-  .conn-tile.sess-tile .conn-tile-stack .sess-checkbox {
-    position: absolute; left: 0; top: 0; z-index: 4;
-    width: 20px; height: 20px; margin: 0; padding: 0;
+  /* The checkbox sits at the left of the name row, on the same line as the name
+     it selects. It used to be pinned to the icon's top-left corner, where it
+     read as belonging to the icon rather than to the session. */
+  .conn-tile.sess-tile .sess-name-row {
+    display: flex;
+    align-items: center;
+    /* Centred as a pair. The name sizes to its text (see .sess-entry-line), so
+       the two sit together and the group is what gets centred — centring the
+       text inside a full-width box instead strands the checkbox at the card's
+       left edge and reads as unrelated to the name. */
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 4px;
+  }
+  .conn-tile.sess-tile .sess-checkbox {
+    flex-shrink: 0;
+    width: 16px; height: 16px; margin: 0; padding: 0;
     cursor: pointer; accent-color: #0969da;
   }
   .conn-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
@@ -227,7 +251,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Sizes to its text rather than to the leftover width, so the checkbox stays
+       next to the name. Still shrinks (0 1 auto + min-width:0) when the name is
+       too long, which is what lets the ellipsis above take effect. */
+    flex: 0 1 auto;
+    min-width: 0;
+    /* It is the rename control, so it gets the affordance of one: no text
+       selection, a pointer, and a focus ring for keyboard users. */
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
   }
+  .sess-entry-line:hover { color: #0969da; text-decoration: underline dotted; }
+  .sess-entry-line:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
   .sess-meta-row {
     display: flex;
     align-items: center;
@@ -244,8 +280,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     text-align: center;
+    /* The id copies the session URL — it inherited that from the button that used
+       to sit next to it, since the id is already the thing you aim at. */
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
   }
-  .sess-copy-btn, .sess-rename-btn {
+  .sess-sid-line:hover { color: #0969da; text-decoration: underline dotted; }
+  .sess-sid-line:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
+  .sess-copy-btn {
     flex-shrink: 0;
     width: 22px;
     height: 22px;
@@ -261,14 +304,14 @@
     position: relative;
     z-index: 1;
   }
-  .sess-copy-btn:hover, .sess-rename-btn:hover { border-color: #0969da; color: #0969da; background: #f6f8fa; }
+  .sess-copy-btn:hover { border-color: #0969da; color: #0969da; background: #f6f8fa; }
   .sess-terminal-ic {
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 40px;
-    height: 40px;
+    width: 55px;
+    height: 55px;
     background: #fff;
     border-radius: 3px;
     overflow: hidden;
@@ -365,7 +408,7 @@
     50% { box-shadow: inset 0 0 0 2px #58a6ff; }
   }
   .conn-tile .conn-tile-stack .sess-x {
-    position: absolute; right: 0; top: 0; z-index: 3; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
+    position: absolute; right: -3px; top: 2px; z-index: 3; width: 25px; height: 25px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
     background: #fff; color: #cf222e; cursor: pointer; display: flex; align-items: center; justify-content: center;
     box-shadow: 0 1px 3px rgba(0,0,0,.12); opacity: 1; transition: background .12s, color .12s, border-color .12s;
   }
