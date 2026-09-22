@@ -1005,18 +1005,22 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
  *
  *  The floating session tab bar is hidden on touch devices, which leaves the
  *  full-screen terminal with no way to reach another open session. Two controls
- *  are wired into the window header:
+ *  go into the window header, in this order:
  *
- *    - the monitor glyph at the far left opens the session menu. Touch only:
- *      on desktop the tab bar already switches sessions, so the glyph stays a
- *      plain icon and clicking it does nothing.
- *    - the button next to it opens the connection drawer, so a full-screen
- *      terminal can switch connection without going home first.
+ *    - the hamburger opens the connections drawer. It sits leftmost because
+ *      switching connection is the outer scope of switching session — the same
+ *      reason desktop apps put the sidebar toggle first.
+ *    - the monitor glyph opens the session menu, for the current connection.
  *
- *  The menu itself is a module-level singleton rather than a per-window node,
- *  because a per-window menu is built from whatever the DOM held when that
- *  window was created, so two windows would disagree about which sessions exist.
- *  One menu, rebuilt on every open, cannot go stale.
+ *  Both are touch-only: desktop has the tab bar for sessions and expands entries
+ *  in place, so there the glyph stays an inert icon (it does not even take button
+ *  semantics, which would advertise an action that is not there) and the
+ *  hamburger is hidden.
+ *
+ *  The menu is a module-level singleton rather than a per-window node, because a
+ *  per-window menu is built from whatever the DOM held when that window was
+ *  created, so two windows would disagree about which sessions exist. One menu,
+ *  rebuilt on every open, cannot go stale.
  *
  *  It is appended to <body>, not into the window: #pane-workspace carries a
  *  backdrop-filter, which makes it the containing block for position:fixed
@@ -1116,22 +1120,25 @@ function openSessionSwitchMenu(anchorBtn) {
 function setupMobileSessionSwitcher(win) {
   if (!win || win._termcpSwitcherBound) return;
   win._termcpSwitcherBound = true;
+  var header = win.querySelector('.shell-window-header');
   var titleCluster = win.querySelector('.shell-window-title-cluster');
-  if (!titleCluster) return;
+  if (!header || !titleCluster) return;
 
-  /* Session menu hangs off the monitor glyph that already sits at the far left
-     of the header. Touch only: on desktop the tab bar does this job, so the
-     glyph must stay inert rather than open a menu the user does not expect —
-     including the button semantics, which would advertise an action that is not
-     there. */
-  var icon = win.querySelector('.shell-header-icon');
+  /* One control group holding both header controls, so their spacing comes from
+     a single gap instead of two elements' margins fighting. */
+  var group = document.createElement('div');
+  group.className = 'shell-header-controls';
+
+  /* The monitor glyph moves into the group from its original spot in the
+     header: it is the control group's second item, after the hamburger. */
+  var icon = header.querySelector('.shell-header-icon');
   if (icon) {
     if (isMobileViewport()) {
       icon.classList.add('shell-header-icon-btn');
       icon.setAttribute('role', 'button');
       icon.setAttribute('tabindex', '0');
       icon.setAttribute('aria-haspopup', 'true');
-      icon.title = 'Switch session';
+      icon.title = 'Active sessions';
     }
     icon._switchWin = win;
     var activate = function (e) {
@@ -1157,7 +1164,7 @@ function setupMobileSessionSwitcher(win) {
         icon.setAttribute('role', 'button');
         icon.setAttribute('tabindex', '0');
         icon.setAttribute('aria-haspopup', 'true');
-        icon.title = 'Switch session';
+        icon.title = 'Active sessions';
       } else {
         closeSessionSwitchMenu();
         icon.classList.remove('shell-header-icon-btn');
@@ -1167,17 +1174,19 @@ function setupMobileSessionSwitcher(win) {
         icon.removeAttribute('title');
       }
     };
+    group.appendChild(icon);
   }
 
-  /* Connection drawer, so a full-screen terminal can switch profile without
-     going home first. Touch only: desktop has no drawer. */
+  /* Connections drawer. Leftmost of the two: switching connection is the outer
+     scope of switching session, and touch-only because desktop expands entries
+     in place. */
   var drawerBtn = document.createElement('button');
   drawerBtn.type = 'button';
   drawerBtn.className = 'shell-window-drawer-btn';
   drawerBtn.title = 'Connections';
   drawerBtn.setAttribute('aria-label', 'Connections');
   drawerBtn.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>';
-  titleCluster.insertBefore(drawerBtn, titleCluster.firstChild);
+  group.insertBefore(drawerBtn, group.firstChild);
 
   drawerBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   drawerBtn.addEventListener('click', function (e) {
@@ -1186,4 +1195,8 @@ function setupMobileSessionSwitcher(win) {
     closeSessionSwitchMenu();
     if (typeof window.termcpToggleEntriesDrawer === 'function') window.termcpToggleEntriesDrawer(true);
   });
+
+  /* DOM order is the visual order here on purpose: a CSS reorder would leave the
+     tab order disagreeing with what the user sees. */
+  header.insertBefore(group, header.firstChild);
 }

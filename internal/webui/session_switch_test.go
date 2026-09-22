@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -214,7 +216,7 @@ func TestPendingWindowHasWorkingHeaderControls(t *testing.T) {
 		t.Error("setupMobileSessionSwitcher must stay idempotent: finalize calls it again")
 	}
 	if i := strings.Index(setup, guard); i >= 0 {
-		if j := strings.Index(setup, "titleCluster.insertBefore"); j >= 0 && j < i {
+		if j := strings.Index(setup, "insertBefore"); j >= 0 && j < i {
 			t.Error("the idempotence guard must come before any DOM insertion")
 		}
 	}
@@ -258,7 +260,92 @@ func between(t *testing.T, src, marker, end string) string {
 // inline display value has to agree with the stylesheet, or the button lands
 // under the message instead of beside it.
 //
+// setLoadBanner is the only writer of that inline value, so the visible state
+// belongs there. A stylesheet-only `display:flex` loses to the inline
+// declaration, and a rule that keys off the inline string breaks the moment the
+// string changes — assert the two agree instead of pinning either spelling.
+func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
+	util := readAssetLF(t, "static/js/util.js")
+	css := readAssetLF(t, "static/css/app.css")
+
+	banner := between(t, util, "function setLoadBanner", "\n}\n")
+	if !strings.Contains(banner, "conn-load-banner-close") {
+		t.Error("setLoadBanner should add the dismiss button: it is the only path every caller shares")
+	}
+
+	// The display value setLoadBanner writes must be the flex one the stylesheet
+	// expects, otherwise the row collapses and the button wraps to its own line.
+	if !strings.Contains(banner, "style.display = msg ? 'flex' : 'none';") {
+		t.Error("the visible banner must be laid out with display:flex, not block")
+	}
+	base := between(t, css, ".conn-load-banner {", "}")
+	if !strings.Contains(base, "display: none") || !strings.Contains(base, "align-items: flex-start") {
+		t.Errorf("the banner should default to hidden and be a flex row when shown; got %q", base)
+	}
+}
 
 // The z-index ladder: a surface that can open a dialog must sit below it.
 //
+// The edit-connection dialog is reachable from the entries drawer and from the
+// full-screen terminal's hamburger, so a modal below either one opens *behind*
+// it. Nothing errors when that happens — the class is removed and the dialog is
+// briefly in the DOM and invisible — so it is pinned here instead.
+func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
+	css := readAssetLF(t, "static/css/app.css")
+	z := func(sel string) int {
+		t.Helper()
+		// A selector can appear in several rules (e.g. .drawer-scrim is first
+		// declared as display:none), so take the declaration that sets z-index.
+		re := regexp.MustCompile(regexp.QuoteMeta(sel) + `\s*\{[^}]*z-index:\s*(\d+)`)
+		m := re.FindStringSubmatch(css)
+		if m == nil {
+			t.Fatalf("%s declares no z-index", sel)
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("%s has an unparsable z-index: %v", sel, err)
+		}
+		return n
+	}
 
+	modal := z(".modal-backdrop")
+	for _, below := range []string{
+		"#sec-entries-body",            // the drawer
+		".drawer-scrim",                // its scrim
+		".shell-window.win-fullscreen", // the terminal that hosts the hamburger
+		".session-tabbar",              // the tab bar
+	} {
+		if got := z(below); got >= modal {
+			t.Errorf("%s is z-index %d, at or above the modal's %d: a dialog opened from it renders behind it", below, got, modal)
+		}
+	}
+	// Toasts stay on top, and so does the notify stack: a server-pushed
+	// notify_user message must not be swallowed by a dialog. The modal was
+	// already below both at 20000, so this pins the existing precedence.
+	for _, above := range []string{"#ui-copy-toast", "#ui-notify-stack"} {
+		if got := z(above); got <= modal {
+			t.Errorf("%s is z-index %d, below the modal's %d", above, got, modal)
+		}
+	}
+}
+
+// The add card is a single glyph with no label, so it centres in whatever width
+// the card has — which differs by breakpoint (glyph-sized on desktop, full row
+// on a phone). Without this the glyph sits left, where a real entry's label
+// would start, and on a phone that reads as a stray glyph in an empty row.
+func TestAddCardCentresItsGlyph(t *testing.T) {
+	css := readAssetLF(t, "static/css/app.css")
+	rule := between(t, css, ".conn-tile.entry-card.entry-card-add .entry-card-inner {", "}")
+	if !strings.Contains(rule, "justify-content: center") {
+		t.Error("the add card's inner row should centre its glyph")
+	}
+	// The shared base rule is left-aligned because real entries have a label
+	// beside the icon; the add card has to override it, not inherit it.
+	base := between(t, css, ".entry-card-inner {", "}")
+	if !strings.Contains(base, "flex-direction: row") {
+		t.Errorf("the base entry-card row changed shape; re-check the add card override: %q", base)
+	}
+	if seen := strings.Index(css, ".conn-tile.entry-card.entry-card-add .entry-card-inner"); seen < strings.Index(css, ".entry-card-inner {") {
+		t.Error("the centring rule must come after the base rule it overrides")
+	}
+}
