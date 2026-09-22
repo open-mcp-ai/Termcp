@@ -281,7 +281,18 @@
     height: 100%;
     object-fit: fill;
   }
-  .conn-load-banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: #fff8c5; border: 1px solid #d4a72c; color: #24292f; font-size: 0.85rem; }
+  /* Flex row so the message wraps and the dismiss button keeps its own column at
+     the end. Visible state is applied inline (display:flex) because an inline
+     declaration outranks any class rule here, so the hide/show has to live in
+     the same place setLoadBanner writes it. */
+  .conn-load-banner { display: none; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: #fff8c5; border: 1px solid #d4a72c; color: #24292f; font-size: 0.85rem; }
+  .conn-load-banner-close {
+    flex-shrink: 0; width: 22px; height: 22px; padding: 0; margin-left: auto;
+    border: none; border-radius: 4px; background: transparent;
+    color: #57606a; cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+  }
+  .conn-load-banner-close:hover { background: rgba(31,35,38,.1); color: #1f2328; }
   #ui-copy-toast {
     position: fixed;
     left: 50%;
@@ -360,7 +371,17 @@
   }
   .conn-tile .conn-tile-stack .sess-x:hover { background: #cf222e; border-color: #cf222e; color: #fff; }
 
-  .modal-backdrop { position: fixed; inset: 0; background: rgba(31,35,38,.45); z-index: 20000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  /* Modals are a layer above page content, so they outrank every surface that
+     can open one: the entries drawer and its scrim (24000/23900), the
+     full-screen terminal (21000) and the session tab bar (20000). The
+     edit-connection dialog is reachable from all of them, so anything lower
+     would open a dialog underneath the surface that opened it.
+
+     Still below the toasts (25000) and the notify stack (26000), which was
+     already the case when this sat at 20000: a server-pushed notify_user
+     message hidden behind a dialog is exactly the message the user was meant to
+     see, so a dialog must not be able to swallow it. */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(31,35,38,.45); z-index: 24500; display: flex; align-items: center; justify-content: center; padding: 16px; }
   .modal-backdrop.hidden { display: none; }
   .modal { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; max-width: 720px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 16px 48px rgba(27,31,36,.18); }
   .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #d0d7de; background: #f6f8fa; }
@@ -782,8 +803,9 @@
     max-width: none; max-height: none;
     border: none; border-radius: 0;
     box-shadow: none;
-    /* Above the session tab bar (20000) and the modals: when the terminal is the
-       screen, nothing may float over it. */
+    /* Above the session tab bar (20000): when the terminal is the screen,
+       nothing in the page layer may float over it. Modals (24500), toasts and
+       notifications are not page content and may still do so. */
     z-index: 21000;
   }
   /* The resize grip and drag cursor are meaningless when the window is the
@@ -821,9 +843,25 @@
     .shell-window-header-btns button.shell-window-max-btn { display: none; }
   }
 
-  /* The monitor glyph doubles as the session switcher on touch devices. On
-     desktop it stays a plain icon (the tab bar owns switching), so the
-     affordance is added only where the interaction exists. */
+  /* Control group at the left of the terminal header. Order matches the DOM:
+     hamburger (connections drawer) then monitor (session menu) — outer scope
+     first, the same way desktop apps order a sidebar toggle ahead of the thing
+     it scopes. gap owns the spacing so each control keeps its own margins out
+     of it. */
+  .shell-header-controls {
+    display: flex; align-items: center; gap: 2px;
+    flex-shrink: 0;
+    /* The group replaced the icon's own 6px margin, which is zeroed below;
+       without this the controls sit flush against the window edge. */
+    margin-left: 6px;
+  }
+  /* Inside the control group the gap owns the spacing, so the glyph's own
+     margins would double it up. Outside the group (no group yet) they still
+     position it against the header edge. */
+  .shell-header-controls .shell-header-icon { margin-left: 0; margin-right: 0; }
+  /* The monitor glyph doubles as the session menu on touch devices. On desktop
+     it stays a plain icon (the tab bar owns switching), so the affordance is
+     added only where the interaction exists. */
   .shell-header-icon-btn.active { color: #fff; }
   @media (pointer: coarse) and (hover: none) {
     /* A tap target, not just an 18px glyph. */
@@ -840,7 +878,7 @@
   .shell-window-drawer-btn {
     display: none;
     flex-shrink: 0; align-items: center; justify-content: center;
-    width: 30px; height: 30px; margin-right: 2px; padding: 0;
+    width: 30px; height: 30px; padding: 0;
     border: 1px solid #3a3a3a; border-radius: 6px;
     background: #2d2d2d; color: #8b949e; cursor: pointer;
   }
@@ -930,7 +968,17 @@
   border-color: #afb8c1;
   background: transparent;
   box-shadow: none;
+  /* The card holds one glyph, so on desktop it sizes to that glyph rather than
+     stretching into a mostly-empty row. On a phone it is the last of the list
+     rows, so it fills the row like every other entry there — see the touch rule
+     at the end of the file. */
+  width: auto; min-width: 0; max-width: none;
 }
+/* The glyph is the whole card, so it centres in whatever width the card ends up
+   with. Needed because the row layout is shared with real entries, which are
+   left-aligned next to their label — this card has no label to sit beside, so
+   left alignment reads as a stray glyph. */
+.conn-tile.entry-card.entry-card-add .entry-card-inner { justify-content: center; }
 .conn-tile.entry-card.entry-card-add:hover {
   border-color: #0969da;
   background: rgba(9,105,218,.04);
@@ -954,4 +1002,9 @@
      compact cards they are on desktop and wrap several per row — stretching
      them to full width turns each one into a mostly-empty band. */
   .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+  /* The "add" card is a list row too while the drawer is open — it closes the
+     list, so a glyph-sized card among full-width rows reads as a stray. Needs
+     the extra class to outrank the desktop rule above (three classes beat two),
+     which is why it is repeated here instead of relying on the rule just above. */
+  .conn-tile.entry-card.entry-card-add { width: 100%; max-width: none; }
 }
