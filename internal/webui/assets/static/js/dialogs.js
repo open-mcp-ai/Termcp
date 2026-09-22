@@ -148,7 +148,10 @@ function renderConnGrid(connections, bannerMsg) {
   });
 
   /* "Add connection" as a trailing card rather than a header button: it belongs
-     with the list it extends, and the header keeps only the section toggle. */
+     with the list it extends, and the header keeps only the section toggle. The
+     card is the plus alone — the label said nothing the glyph does not, and on a
+     phone it turned the row into a wide band with one word in it. The accessible
+     name still carries the meaning. */
   var addCard = document.createElement('div');
   addCard.className = 'conn-tile entry-card entry-card-add';
   addCard.setAttribute('role', 'button');
@@ -158,11 +161,6 @@ function renderConnGrid(connections, bannerMsg) {
     '<div class="entry-card-inner">' +
     '<div class="conn-tile-stack">' +
     '<div class="icon-wrap"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div>' +
-    '</div>' +
-    '<div class="entry-card-main">' +
-    '<div class="conn-nm-row">' +
-    '<span class="conn-nm-cluster"><span class="conn-nm">Add connection</span></span>' +
-    '</div>' +
     '</div>' +
     '</div>';
   function openAdd() { openConnModal(false, ''); }
