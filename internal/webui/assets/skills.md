@@ -122,7 +122,7 @@ curl -fsS -X DELETE "${AUTH[@]}" "$BASE/api/sessions/$SID"
 ## 5. Read output (cursor semantics)
 
 Output is a byte stream: `GET /api/shells/{shell_id}/output-range` returns
-`{"start","end","total","d":<base64>}`. Poll with `end` as your cursor until
+`{"start","end","total","d":<string>}`. Poll with `end` as your cursor until
 `end == total` and it stops growing.
 
 ```bash
@@ -130,10 +130,15 @@ read_range() { # $1=shell_id $2=start
   curl -fsS "${AUTH[@]}" "$BASE/api/shells/$1/output-range?start=$2&max=262144"
 }
 R=$(read_range "$SHELL_ID" 0)
-echo "$R" | jq -r .d | base64 -d            # decoded text
+echo "$R" | jq -r .d                     # already text; no base64 step
 END=$(jq -r .end <<<"$R"); TOTAL=$(jq -r .total <<<"$R")
 # Tail only: ?tail=1&max=8192
 ```
+
+`d` is the raw byte window in a standard JSON string, not base64. Byte sequences
+that are not valid UTF-8 cannot survive a JSON string (Windows ConPTY already
+replaces them before termcp sees them; a Linux `cat` of binary data may show
+U+FFFD) — `log.bin` itself is byte-exact.
 
 After issuing a command, re-poll until output stops growing — the read blocks
 until bytes arrive, so no delay is needed between polls.

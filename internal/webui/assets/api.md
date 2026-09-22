@@ -372,7 +372,7 @@ Bidirectional real-time channel.
 |------|--------|---------|
 | `watch_add` | `id` | Subscribe to terminal output |
 | `watch_remove` | `id` | Unsubscribe |
-| `input` | `id`, `d`(base64), `nl` | Send keystrokes |
+| `input` | `id`, `d`(string), `nl` | Send keystrokes |
 | `resize` | `id`, `rows`, `cols` | Change PTY size |
 
 **Server → Client:**
@@ -380,7 +380,7 @@ Bidirectional real-time channel.
 | type | Fields | Meaning |
 |------|--------|---------|
 | `sessions` | `sessions` | Session list (on connect and on change) |
-| `terminal` | `id`, `d`(base64) | Terminal output chunk |
+| `terminal` | `id`, `d`(string) | Terminal output chunk |
 | `terminal_done` | `id` | Shell exited |
 
 > Terminal I/O `id` values are shell IDs; session IDs are only for connection-level
@@ -404,9 +404,15 @@ Response 200:
   "start": 0,
   "end": 1024,
   "total": 4096,
-  "d": "<base64>"
+  "d": "<bytes as a JSON string>"
 }
 ```
+
+> `d` is the raw byte window placed in a standard JSON string (not base64). A
+> byte sequence that is not valid UTF-8 cannot survive a JSON string; on Windows
+> ConPTY already replaces such sequences before termcp sees them, and on Linux
+> `cat` of binary data may appear as U+FFFD. The bytes in `log.bin` are never
+> altered — only this transport representation is lossy.
 
 ### `POST /api/shells/{id}/input`
 
