@@ -1,24 +1,37 @@
 package message
 
 import (
+	"strings"
 	"sync"
-	"time"
 
-	"github.com/google/uuid"
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// Manager handles persistence of session messages.
+// Manager persists a session's transcript as a byte log per shell plus an index
+// of status marks (see docs/design/session-storage.md).
+//
+// The byte log is the single source of truth: a byte's offset is its position in
+// log.bin and is never recomputed from record lengths. The mark index only says
+// which status produced which span, so it can be missing, stale, or incomplete
+// without affecting where a byte lives.
 type Manager struct {
 	store *storage.Store
-	// session holds per-session index locks (string → *sync.Mutex).
-	session sync.Map
+	// session holds per-session locks so concurrent appends to one log cannot
+	// interleave a byte write with a mark write.
+	session sync.Map // string → *sync.Mutex
+
+	// lastStatus remembers the status of each shell's most recent mark, so a mark
+	// is only appended when the status actually changes. Without this the index
+	// would grow one line per read chunk.
+	lastMu     sync.Mutex
+	lastStatus map[string]api.LogStatus
 }
 
 // NewManager creates a Manager backed by the given Store.
 func NewManager(store *storage.Store) *Manager {
-	return &Manager{store: store}
+	return &Manager{store: store, lastStatus: make(map[string]api.LogStatus)}
 }
 
 func (m *Manager) sessionLock(sessionID string) *sync.Mutex {
@@ -30,93 +43,112 @@ func (m *Manager) sessionLock(sessionID string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// ForgetSession releases in-memory state associated with a closed session.
-// Disk-backed messages are intentionally kept.
+// ForgetSession releases in-memory state for a session. On-disk data is kept and
+// is removed only by DeleteSession.
 func (m *Manager) ForgetSession(sessionID string) {
 	m.session.Delete(sessionID)
+
+	m.lastMu.Lock()
+	prefix := sessionID + "\x00"
+	for k := range m.lastStatus {
+		if strings.HasPrefix(k, prefix) {
+			delete(m.lastStatus, k)
+		}
+	}
+	m.lastMu.Unlock()
 }
 
-// Append records a new message and persists it. The shell id is empty, meaning
-// the primary/legacy shell of the session.
-func (m *Manager) Append(sessionID string, typ api.MsgType, content string) (*api.Message, error) {
-	return m.AppendShell(sessionID, "", typ, content)
-}
-
-// AppendShell records a new message tagged with the originating shell id.
-// An empty shellID identifies the primary/legacy shell.
-func (m *Manager) AppendShell(sessionID string, shellID string, typ api.MsgType, content string) (*api.Message, error) {
-	msg := api.Message{
-		ID:        uuid.New().String()[:12],
-		SessionID: sessionID,
-		ShellID:   shellID,
-		Type:      typ,
-		Content:   content,
-		CreatedAt: time.Now().UTC(),
-		ByteSize:  len(content),
+// AppendOutput appends shell output to its byte log and returns the absolute
+// offset the bytes were written at.
+//
+// This is the one place a byte's position is established. Callers use the
+// returned offset to verify their own view of the stream, so a byte cannot be
+// counted by one component and missed by another without being detected.
+func (m *Manager) AppendOutput(sessionID, shellID string, data []byte) (int64, error) {
+	if m.store == nil || len(data) == 0 {
+		return 0, nil
 	}
-	if err := m.store.SaveMessage(sessionID, msg); err != nil {
-		return nil, err
-	}
-
 	mu := m.sessionLock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	entries, err := m.store.LoadMessageIndex(sessionID)
+	offset, err := m.store.AppendLog(sessionID, shellID, data)
 	if err != nil {
-		entries = []api.MessageIndexEntry{}
+		return 0, err
 	}
-	entries = append(entries, api.MessageIndexEntry{
-		ID:        msg.ID,
-		ShellID:   msg.ShellID,
-		Type:      msg.Type,
-		CreatedAt: msg.CreatedAt,
-		ByteSize:  msg.ByteSize,
+	if err := m.markIfChanged(sessionID, shellID, api.LogOutput, offset); err != nil {
+		// The bytes are durable; only the status mark failed. Report it, but the
+		// caller can keep going: a missing mark makes the span read as a
+		// continuation of the previous status, which is a labelling inaccuracy, not
+		// a lost byte or a moved offset.
+		return offset, err
+	}
+	return offset, nil
+}
+
+// AppendMarkOnly records a status change that produced no bytes (for example an
+// input the remote terminal never echoes). The mark points at the current end of
+// the log so the span is empty.
+func (m *Manager) AppendMarkOnly(sessionID, shellID string, status api.LogStatus) error {
+	if m.store == nil {
+		return nil
+	}
+	size, err := m.store.LogSize(sessionID, shellID)
+	if err != nil {
+		return err
+	}
+	mu := m.sessionLock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	return m.markIfChanged(sessionID, shellID, status, size)
+}
+
+// markIfChanged appends a mark when the shell's status differs from the last one
+// recorded, so log.jsonl holds one line per transition rather than one per write.
+func (m *Manager) markIfChanged(sessionID, shellID string, status api.LogStatus, offset int64) error {
+	key := sessionID + "\x00" + shellID
+
+	m.lastMu.Lock()
+	prev, seen := m.lastStatus[key]
+	if seen && prev == status {
+		m.lastMu.Unlock()
+		return nil
+	}
+	m.lastStatus[key] = status
+	m.lastMu.Unlock()
+
+	return m.store.AppendMark(sessionID, shellID, api.LogMark{
+		Status: status,
+		Time:   clock.Now(),
+		Offset: offset,
 	})
-	if err := m.store.SaveMessageIndex(sessionID, entries); err != nil {
-		return nil, err
+}
+
+// OutputSize returns the length of a shell's byte log, i.e. the offset just past
+// its last byte. It reads the file size directly: asking a byte-range reader for
+// a zero-length window to learn the size would work, but it makes the size
+// depend on the reader's clamping rules rather than on the file.
+func (m *Manager) OutputSize(sessionID, shellID string) (int64, error) {
+	if m.store == nil {
+		return 0, nil
 	}
-	return &msg, nil
+	return m.store.LogSize(sessionID, shellID)
 }
 
-// List returns the message index for a session.
-func (m *Manager) List(sessionID string) ([]api.MessageIndexEntry, error) {
-	return m.store.LoadMessageIndex(sessionID)
-}
-
-// Get returns a single message by ID.
-func (m *Manager) Get(sessionID, msgID string) (*api.Message, error) {
-	return m.store.LoadMessage(sessionID, msgID)
-}
-
-// GetMany returns multiple messages by ID.
-func (m *Manager) GetMany(sessionID string, msgIDs []string) ([]api.Message, error) {
-	return m.store.LoadMessages(sessionID, msgIDs)
-}
-
-// OutputByteRange returns raw output bytes [start, start+max) of the persisted
-// output stream for one shell (shellID != "") or the whole merged session
-// stream (shellID == ""), plus the total persisted length. It reads the index
-// only to compute offsets, then loads just the message files that overlap the
-// requested window, so a large transcript is never fully materialised.
+// OutputByteRange returns raw bytes [start, start+max) of a shell's byte stream
+// plus the stream's total size. A `start` at or past the end, or max <= 0,
+// returns no bytes but still reports the true total, so a caller can tell
+// "empty" from "past the end" without a second call.
 //
-// This is the read path for DEAD and restart-restored sessions, which have no
-// live in-memory buffer.
+// Both come straight from log.bin: `total` is the file size and the window is a
+// positional read, so the two can never disagree.
 func (m *Manager) OutputByteRange(sessionID, shellID string, start int64, max int) ([]byte, int64, error) {
 	if m.store == nil {
 		return nil, 0, nil
 	}
-	entries, err := m.store.LoadMessageIndex(sessionID)
+	total, err := m.store.LogSize(sessionID, shellID)
 	if err != nil {
 		return nil, 0, err
-	}
-	var total int64
-	for i := range entries {
-		e := &entries[i]
-		if e.Type != api.MsgOutput || (shellID != "" && e.ShellID != shellID) {
-			continue
-		}
-		total += int64(e.ByteSize)
 	}
 	if start < 0 {
 		start = 0
@@ -124,44 +156,18 @@ func (m *Manager) OutputByteRange(sessionID, shellID string, start int64, max in
 	if start >= total || max <= 0 {
 		return nil, total, nil
 	}
-	end := start + int64(max)
-	if end > total {
-		end = total
+	data, err := m.store.ReadLog(sessionID, shellID, start, max)
+	if err != nil {
+		return nil, total, err
 	}
-	out := make([]byte, 0, end-start)
-	var pos int64
-	for i := range entries {
-		e := &entries[i]
-		if e.Type != api.MsgOutput || (shellID != "" && e.ShellID != shellID) {
-			continue
-		}
-		n := int64(e.ByteSize)
-		lo, hi := pos, pos+n
-		pos = hi
-		if hi <= start || lo >= end {
-			continue
-		}
-		msg, err := m.store.LoadMessage(sessionID, e.ID)
-		if err != nil || msg == nil {
-			continue
-		}
-		content := msg.Content
-		s := lo
-		if s < start {
-			s = start
-		}
-		ePos := hi
-		if ePos > end {
-			ePos = end
-		}
-		relStart := s - lo
-		relEnd := ePos - lo
-		if relStart < int64(len(content)) {
-			if relEnd > int64(len(content)) {
-				relEnd = int64(len(content))
-			}
-			out = append(out, content[relStart:relEnd]...)
-		}
+	return data, total, nil
+}
+
+// Marks returns a shell's status marks (the log.jsonl index). The index is
+// advisory: an empty or damaged index does not affect what bytes exist.
+func (m *Manager) Marks(sessionID, shellID string) ([]api.LogMark, error) {
+	if m.store == nil {
+		return nil, nil
 	}
-	return out, total, nil
+	return m.store.ReadMarks(sessionID, shellID)
 }

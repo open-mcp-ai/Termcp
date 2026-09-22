@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
 // Channel defines the notification delivery channel.
@@ -30,13 +32,13 @@ const (
 // Rule represents a registered notification rule (internal state; never copied
 // by value — it carries the per-rule timer mutex).
 type Rule struct {
-	ID         string    `json:"rule_id"`
-	SessionID  string    `json:"session_id"`
-	ShellID    string    `json:"shell_id"`
-	Channel    Channel   `json:"channel"`
-	Event      Event     `json:"event"`
-	SilenceSec int       `json:"silence_seconds,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string  `json:"rule_id"`
+	SessionID  string  `json:"session_id"`
+	ShellID    string  `json:"shell_id"`
+	Channel    Channel `json:"channel"`
+	Event      Event   `json:"event"`
+	SilenceSec int     `json:"silence_seconds,omitempty"`
+	CreatedAt  int64   `json:"created_at"` // Unix ms
 
 	// Target is an opaque, per-registration delivery handle captured from the
 	// registering caller (for sampling: the MCP client session). The Sender
@@ -52,13 +54,13 @@ type Rule struct {
 // RuleView is the lock-free JSON/API projection of a Rule. List returns these
 // so callers never copy a Rule's mutex or observe its timer state.
 type RuleView struct {
-	ID         string    `json:"rule_id"`
-	SessionID  string    `json:"session_id"`
-	ShellID    string    `json:"shell_id"`
-	Channel    Channel   `json:"channel"`
-	Event      Event     `json:"event"`
-	SilenceSec int       `json:"silence_seconds,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string  `json:"rule_id"`
+	SessionID  string  `json:"session_id"`
+	ShellID    string  `json:"shell_id"`
+	Channel    Channel `json:"channel"`
+	Event      Event   `json:"event"`
+	SilenceSec int     `json:"silence_seconds,omitempty"`
+	CreatedAt  int64   `json:"created_at"` // Unix ms
 }
 
 func (r *Rule) view() RuleView {
@@ -182,7 +184,7 @@ func (m *Manager) Register(sessionID, shellID string, channel Channel, event Eve
 		Channel:    channel,
 		Event:      event,
 		SilenceSec: silenceSec,
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  clock.Now(),
 		Target:     target,
 	}
 

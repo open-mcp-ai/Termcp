@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
@@ -244,29 +245,64 @@ func (m *Manager) CloseChildShell(id string) (bool, error) {
 	}
 	err := parent.CloseChildShell(id)
 	// Persist the updated per-shell snapshot right away so a restart cannot
-	// resurrect the closed shell from sessions.json; notify the UI so closed
+	// resurrect the closed shell from the shell manifest; notify the UI so closed
 	// shells disappear from tabs immediately.
 	m.persist()
 	m.notifyListChange()
 	return true, err
 }
 
-// Messages returns the persisted message log for a session (system/input/output
-// records in append order). DEAD and restart-restored sessions have no in-memory
-// buffer, so their terminal content is reconstructed from this log.
-func (m *Manager) Messages(sessionID string) ([]api.Message, error) {
+// resolveShellID fills in the session's primary shell when a caller passes an
+// empty shellID. Log files are addressed per shell, so an empty id would name a
+// path that does not exist and read back nothing; callers that only hold a
+// session id (DEAD/restored sessions) depend on this translation.
+func (m *Manager) resolveShellID(sessionID, shellID string) string {
+	if shellID != "" {
+		return shellID
+	}
+	s := m.Get(sessionID)
+	if s == nil {
+		return ""
+	}
+	if cs := s.PrimaryShell(); cs != nil {
+		return cs.ID
+	}
+	// DEAD/restored sessions have no live shell objects; the snapshot holds the
+	// shells as they were when the session went down.
+	if sh := s.SnapshotShells(); len(sh) > 0 {
+		return sh[0].ID
+	}
+	return ""
+}
+
+// Marks returns the status index for one shell (or, with an empty shellID, the
+// session's primary shell). DEAD and restart-restored sessions have no in-memory
+// buffer, so this index is what says which span of the byte log holds output
+// versus input.
+func (m *Manager) Marks(sessionID, shellID string) ([]api.LogMark, error) {
 	if m.msgMgr == nil {
 		return nil, nil
 	}
-	entries, err := m.msgMgr.List(sessionID)
-	if err != nil {
-		return nil, err
+	return m.msgMgr.Marks(sessionID, m.resolveShellID(sessionID, shellID))
+}
+
+// OutputByteRange reads a window of a shell's persisted byte log. It exists so
+// callers that only have a session id (DEAD/restored sessions) still address the
+// same offset space as the live path.
+func (m *Manager) OutputByteRange(sessionID, shellID string, start int64, max int) ([]byte, int64, error) {
+	if m.msgMgr == nil {
+		return nil, 0, nil
 	}
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.ID)
+	return m.msgMgr.OutputByteRange(sessionID, m.resolveShellID(sessionID, shellID), start, max)
+}
+
+// OutputSize returns the current length of a shell's byte log, i.e. the offset
+// just past the last byte.
+func (m *Manager) OutputSize(sessionID, shellID string) (int64, error) {
+	if m.msgMgr == nil {
+		return 0, nil
 	}
-	return m.msgMgr.GetMany(sessionID, ids)
+	return m.msgMgr.OutputSize(sessionID, m.resolveShellID(sessionID, shellID))
 }
 
 // ListAll returns metadata for all sessions (running and DEAD).
@@ -281,7 +317,7 @@ func (m *Manager) ListAll() []api.Session {
 
 // Terminate closes a session's process/transport and turns it DEAD in place:
 // the entry stays in the registry (and in the UI as a read-only tile) with its
-// buffers and message log retained, so shell_output/session_info keep working and
+// buffers and byte log retained, so shell_output/session_info keep working and
 // a restart restores it as a DEAD tile. Use Delete to release resources for good.
 func (m *Manager) Terminate(id string, force bool, gracePeriod time.Duration) {
 	if s := m.Get(id); s != nil {
@@ -297,9 +333,9 @@ func (m *Manager) Shutdown(id string, force bool) {
 
 // Delete permanently removes a session: it finalizes a running/DEAD session
 // (stops remaining shells, closes buffers/transport, releases the session's
-// ResourceScope), drops it from the registry, and erases its on-disk message
-// history. Irreversible — use Terminate to merely close a session and keep it
-// readable as a DEAD entry.
+// ResourceScope), drops it from the registry, and removes its on-disk directory
+// (manifests + log.bin + log.jsonl). Irreversible — use Terminate to merely close
+// a session and keep it readable as a DEAD entry.
 func (m *Manager) Delete(id string) error {
 	if v, ok := m.sessions.Load(id); ok {
 		s := v.(*Session)
@@ -309,7 +345,9 @@ func (m *Manager) Delete(id string) error {
 		m.notifyListChange()
 	}
 	if m.store != nil {
-		if err := m.store.DeleteSessionMessages(id); err != nil {
+		// Closing a session is a delete, not an archive: remove the session
+		// directory so nothing is left behind.
+		if err := m.store.DeleteSession(id); err != nil {
 			return err
 		}
 	}
@@ -324,7 +362,7 @@ func (m *Manager) Rename(id, name string) error {
 	}
 	s.mu.Lock()
 	s.Name = name
-	s.UpdatedAt = time.Now().UTC()
+	s.UpdatedAt = clock.Now()
 	s.mu.Unlock()
 	m.persist()
 	m.notifyListChange()
@@ -380,12 +418,19 @@ func (m *Manager) persist(sessions ...[]api.Session) {
 	} else {
 		list = m.ListAll()
 	}
+	// One manifest per session, and one per shell beneath it. There is no list
+	// file: the session list is the directory tree, so it cannot disagree with
+	// the data it describes.
 	for i := range list {
-		if s := m.Get(list[i].ID); s != nil {
-			list[i].Shells = s.SnapshotShells()
+		sess := list[i]
+		if s := m.Get(sess.ID); s != nil {
+			for _, sh := range s.SnapshotShells() {
+				_ = m.store.SaveShell(sess.ID, sh)
+			}
 		}
+		sess.Shells = nil
+		_ = m.store.SaveSession(sess)
 	}
-	_ = m.store.SaveSessions(list)
 }
 
 // RestoreDead loads persisted sessions into the registry as read-only DEAD

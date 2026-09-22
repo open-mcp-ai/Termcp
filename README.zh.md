@@ -97,7 +97,7 @@ Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互
 ![pic1_zh](docs/assets/pic1_zh.png)
 
 - **同一套会话层，平级入口。** MCP、SKILLS、REST/WebSocket 与 Web UI 同处一层，共用同一批真实会话。Agent 的每一步操作，你在浏览器里都看得见、随时能接管；反过来，Agent 需要时也可以停下来，把密码/MFA 提示交给你输入。
-- **为 token 与轮次预算设计。** 工具 schema 紧凑、支持按需延迟加载（见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)）；`shell_output` 用 tail/offset 游标分页，模型上下文只载入你真正需要的输出；`shell_notify` 只发唤醒信号；`message` 按需取回完整输出。
+- **为 token 与轮次预算设计。** 工具 schema 紧凑、支持按需延迟加载（见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)）；`shell_output` 用 tail/offset 游标分页，模型上下文只载入你真正需要的输出；`shell_notify` 只发唤醒信号。
 - **实例自描述。** 每个运行中的 termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
 - **密钥留在平台侧。** 经 `ssh_config` 写入的密码、私钥、口令仅保存在平台侧，MCP 的读取接口只返回配置名；SSH 配置写入工具默认关闭，需运维显式开启 `--mcp-manage-ssh-configs`。
 - **失败可恢复。** 关闭、崩溃或重启过的会话仍以只读 DEAD 条目留在会话列表里，输出依旧可读，Agent（或你）可以接着中断前的状态继续；重连同一个 `termcp://<entry>` 即可开启下一段会话。
@@ -278,7 +278,7 @@ profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config
 
 ### 运行官方镜像
 
-官方镜像以非 root 用户 `termcp`（uid/gid 1000）运行，`/home/termcp` 声明为 `VOLUME`——全部状态（会话、SSH 配置、消息记录）默认存于 `~/.termcp`。镜像只携带二进制：不内置 entrypoint、不预声明端口，监听地址由运行命令决定。
+官方镜像以非 root 用户 `termcp`（uid/gid 1000）运行，`/home/termcp` 声明为 `VOLUME`——全部状态（会话、SSH 配置、终端记录）默认存于 `~/.termcp`。镜像只携带二进制：不内置 entrypoint、不预声明端口，监听地址由运行命令决定。
 
 ```bash
 docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765
@@ -495,7 +495,7 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 | 连接配置 | `ssh_config`（`list`；启动带 `--mcp-manage-ssh-configs` 时支持 `create`/`edit`/`copy`/`delete`） |
 | 端口转发 | `forward`（`-L` / `-R` / `-D` / 列表 / 关闭） |
 | 文件操作（SFTP） | `file_read`, `file_write`, `file_stat`, `file_delete`, `file_rename`, `file_mkdir`, `file_urls`, `file_perm`, `file_link`, `file_fs`, `file_getwd` |
-| 消息记录 | `message`（列表 / 获取） |
+| 输出区段索引 | `message`（列区段；字节用 `shell_output` 读） |
 | 宿主探测 | `shell_detect` |
 
 执行一行命令的标准做法为：`shell_input` 输入文本 + `shell_key(key="enter")` 按回车 + `shell_output` 读取输出。调用失败时返回带有 `error_code` 稳定错误码的结构化 JSON。

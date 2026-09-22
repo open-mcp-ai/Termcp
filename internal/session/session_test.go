@@ -721,7 +721,7 @@ func TestManager_CloseInternalChildShellKeepsParentSession(t *testing.T) {
 }
 
 // Manual shell close must survive nothing: not the live map, not the retained
-// snapshot, and not the persisted sessions.json. After a restart the closed
+// snapshot, and not the persisted shell manifest. After a restart the closed
 // shell must not reappear as a DEAD/"end" tab (the reported bug).
 func TestManager_CloseChildShellNotResurrectedAfterRestart(t *testing.T) {
 	srv := startTestServer(t)
@@ -766,7 +766,7 @@ func TestManager_CloseChildShellNotResurrectedAfterRestart(t *testing.T) {
 	for _, meta := range loaded {
 		for _, sh := range meta.Shells {
 			if sh.ID == child.ID {
-				t.Fatal("closed child shell persisted in sessions.json — would resurrect on restart")
+				t.Fatal("closed child shell persisted in the shell manifest — would resurrect on restart")
 			}
 		}
 	}

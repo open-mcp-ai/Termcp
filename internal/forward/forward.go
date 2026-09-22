@@ -8,9 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
 // ErrNotFound reports that no forward with the given id exists. Callers can
@@ -65,7 +66,7 @@ type ForwardInfo struct {
 	ListenAddr string           `json:"listen_addr"`
 	TargetAddr string           `json:"target_addr"`
 	Status     string           `json:"status"`
-	CreatedAt  time.Time        `json:"created_at"`
+	CreatedAt  int64            `json:"created_at"` // Unix ms
 }
 
 // forwardState holds the runtime state of a port forward.
@@ -85,7 +86,7 @@ func ForwardID(direction ForwardDirection) string {
 	forwardCounter.mu.Lock()
 	defer forwardCounter.mu.Unlock()
 	forwardCounter.count++
-	return fmt.Sprintf("fw-%s-%d-%d", direction, time.Now().UnixMilli(), forwardCounter.count)
+	return fmt.Sprintf("fw-%s-%d-%d", direction, clock.Now(), forwardCounter.count)
 }
 
 // tunnel connections back via smux to termcp's remoteHost:remotePort.
@@ -118,7 +119,7 @@ func LocalForwardSSH(ctx context.Context, client *ssh.Client, remoteHost string,
 		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
 		TargetAddr: target,
 		Status:     "active",
-		CreatedAt:  time.Now(),
+		CreatedAt:  clock.Now(),
 	}
 
 	go func() {
@@ -173,7 +174,7 @@ func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string,
 		ListenAddr: fmt.Sprintf("%s:%d", agentHost, agentPort),
 		TargetAddr: fmt.Sprintf("%s:%d", remoteHost, remotePort),
 		Status:     "active",
-		CreatedAt:  time.Now(),
+		CreatedAt:  clock.Now(),
 	}
 
 	go func() {
@@ -327,7 +328,7 @@ func DynamicForwardSSH(ctx context.Context, client *ssh.Client, localPort int) (
 		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
 		TargetAddr: "SOCKS5",
 		Status:     "active",
-		CreatedAt:  time.Now(),
+		CreatedAt:  clock.Now(),
 	}
 	go serveSOCKS5(ctx, ln, func(target string) (net.Conn, error) {
 		conn, err := client.Dial("tcp", target)
@@ -482,7 +483,7 @@ func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig string, localPort in
 		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
 		TargetAddr: "SOCKS5",
 		Status:     "active",
-		CreatedAt:  time.Now(),
+		CreatedAt:  clock.Now(),
 	}
 	go serveSOCKS5(ctx, ln, func(target string) (net.Conn, error) {
 		conn, err := net.Dial("tcp", target)

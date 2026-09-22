@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/open-mcp-ai/termcp/internal/ansi"
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sftp"
@@ -314,7 +315,9 @@ func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequ
 	if bad != nil {
 		return bad, nil
 	}
-	if err := shell.SendTerminalBytes([]byte(text), false); err != nil {
+	// An agent's keystrokes are tagged as AI input, so a transcript can say who
+	// typed what. The bytes themselves reach the log through the terminal's echo.
+	if err := shell.SendTerminalBytesFrom([]byte(text), false, session.InputFromAI); err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
@@ -332,7 +335,7 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 	if bad != nil {
 		return bad, nil
 	}
-	if err := shell.PressKey(key, repeat); err != nil {
+	if err := shell.PressKeyFrom(key, repeat, session.InputFromAI); err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
@@ -396,7 +399,7 @@ func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolReque
 
 // handleReadOutput is the ONE unified output reader. It serves live shells
 // (in-memory buffer), exited-but-retained shells, and closed/restored-DEAD
-// sessions (persisted message log) with identical byte-stream cursor semantics.
+// sessions (persisted log.bin) with identical byte-stream cursor semantics.
 // Three read modes:
 //   - tail_lines > 0, or a closed id with no offset: read the tail of the
 //     stream (token-safe default; never a full dump);
@@ -505,7 +508,7 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 		"session_status": string(src.status),
 	}
 	if src.live != nil {
-		result["session_uptime_seconds"] = int(time.Since(src.created).Seconds())
+		result["session_uptime_seconds"] = int(clock.Since(src.created).Seconds())
 	}
 	return jsonResult(result), nil
 }
@@ -557,8 +560,8 @@ func (s *Server) handleDeleteSession(ctx context.Context, request mcpgo.CallTool
 		return bad, nil
 	}
 	// Permanent: closes any live transport, releases the session's resources
-	// (shells, forwards, notification rules, buffers) and erases its on-disk
-	// message history. Irreversible.
+	// (shells, forwards, notification rules, buffers) and removes its on-disk
+	// directory (manifests + log.bin + log.jsonl). Irreversible.
 	if err := s.sessMgr.Delete(sessionID); err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
@@ -581,36 +584,44 @@ func (s *Server) handleResizePty(ctx context.Context, request mcpgo.CallToolRequ
 	return successResult(), nil
 }
 
+// handleListMessages returns a shell's status marks: the spans of its byte log,
+// in order, with what produced each one.
+//
+// This replaced a per-message index. The transcript is one byte stream per shell,
+// so "what happened" is a list of spans rather than a list of payloads — the
+// payloads all live in log.bin and are read through shell_output.
 func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
+	shellID := getString(args, "shell_id", "")
 
-	entries, err := s.msgMgr.List(sessionID)
+	marks, err := s.sessMgr.Marks(sessionID, shellID)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
-	result := map[string]any{"messages": entries}
-	return jsonResult(result), nil
-}
-
-func (s *Server) handleGetMessage(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := getString(args, "session_id", "")
-	msgIDs := getStringSlice(args, "message_ids")
-
-	if len(msgIDs) == 0 {
-		if id := getString(args, "message_id", ""); id != "" {
-			msgIDs = append(msgIDs, id)
+	// Each span's end is the next mark's start; the last span runs to the current
+	// end of the log, so it is derived rather than stored.
+	size, _ := s.sessMgr.OutputSize(sessionID, shellID)
+	spans := make([]map[string]any, 0, len(marks))
+	for i, m := range marks {
+		end := size
+		if i+1 < len(marks) {
+			end = marks[i+1].Offset
 		}
+		spans = append(spans, map[string]any{
+			"status": string(m.Status),
+			"time":   m.Time,
+			"start":  m.Offset,
+			"end":    end,
+		})
 	}
-
-	messages, err := s.msgMgr.GetMany(sessionID, msgIDs)
-	if err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	result := map[string]any{"messages": messages}
-	return jsonResult(result), nil
+	return jsonResult(map[string]any{
+		"spans":       spans,
+		"total_bytes": size,
+		"session_id":  sessionID,
+	}), nil
 }
+
 func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "shell_id", "")
@@ -1249,8 +1260,9 @@ func (s *Server) handleFilePerm(_ context.Context, request mcpgo.CallToolRequest
 		if _, ok := args["mtime"]; !ok {
 			return toolError(CodeInvalidArgument, "%s", "chtimes requires remote_path, atime, and mtime"), nil
 		}
-		atime := time.Unix(int64(getFloat64(args, "atime", 0)), 0)
-		mtime := time.Unix(int64(getFloat64(args, "mtime", 0)), 0)
+		// Unix milliseconds, like every other timestamp the API accepts or returns.
+		atime := clock.Time(int64(getFloat64(args, "atime", 0)))
+		mtime := clock.Time(int64(getFloat64(args, "mtime", 0)))
 		if err := sftpCli.ChtimesFile(remotePath, atime, mtime); err != nil {
 			return toolError(CodeOperationFailed, "%s", err.Error()), nil
 		}
