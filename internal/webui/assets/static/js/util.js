@@ -248,13 +248,31 @@ function clearRetryTimer(id) {
   try { clearTimeout(id); } catch (e) {}
 }
 
+/* The stylesheet's z-index for .win-fullscreen. Full-screen windows all share
+   it, so ordering them against each other needs an inline value; this is the
+   value the frontmost one takes. */
+var FULLSCREEN_Z = 21000;
+
 function bringShellWindowToFront(win) {
   if (!win || !win.classList.contains('shell-window')) return;
   if (isTiledWin(win)) { setActivePane(win, false); return; }
-  /* A full-screen window is already above everything (see .win-fullscreen); an
-     inline z-index here would override that rule and sink it under the session
-     tab bar and modals. */
-  if (win.classList.contains('win-fullscreen')) { refreshSessionTabbar(); return; }
+  if (win.classList.contains('win-fullscreen')) {
+    /* Full-screen windows share the stylesheet's z-index, so ordering them needs
+       an inline value. The top slot is handed over, never pushed higher: the
+       raised window takes FULLSCREEN_Z and every other one drops to
+       FULLSCREEN_Z - 1. So the ceiling never moves and cannot overrun the
+       drawer's 24000, whatever the window count or switching order. (A value
+       below the tab bar's 20000 would sink the terminal behind it, which is why
+       the shared floating sequence is not used here.) */
+    allShellWins().forEach(function (w) {
+      if (w !== win && w.classList.contains('win-fullscreen')) {
+        w.style.zIndex = String(FULLSCREEN_Z - 1);
+      }
+    });
+    win.style.zIndex = String(FULLSCREEN_Z);
+    refreshSessionTabbar();
+    return;
+  }
   if (!window._shellZSeq) window._shellZSeq = 10050;
   window._shellZSeq += 1;
   win.style.zIndex = String(window._shellZSeq);
