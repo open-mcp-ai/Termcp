@@ -78,7 +78,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		h.SSH.SetOnChange(h.sessionHub().broadcast)
 	}
 	// Connection profiles
-	mux.HandleFunc("GET /api/connection-templates", h.handleConnectionTemplates)
 	mux.HandleFunc("GET /api/connections", h.handleListConnections)
 	mux.HandleFunc("GET /api/connections/{name}", h.handleGetConnection)
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
@@ -147,13 +146,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	list := h.Sessions.ListAll()
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": list})
-}
-
-func (h *Handler) handleConnectionTemplates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"remote":   strings.TrimSpace(string(sshconfig.RemoteTemplate())),
-		"internal": strings.TrimSpace(string(sshconfig.InternalTemplate())),
-	})
 }
 
 type connectionSummary struct {
