@@ -361,6 +361,10 @@
   .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
   .shell-windows-container > * { pointer-events: auto; }
   .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: rgba(29,29,31,.94); border: 1px solid #333; border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); max-width: 92vw; pointer-events: auto; }
+  /* Left grip: the bar is draggable, but only from here so clicks on tabs and
+     the action cluster keep working. Kept wide enough to grab comfortably. */
+  .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 8px 0 0 8px; cursor: move; touch-action: none; }
+  .session-tabbar.dragging { cursor: move; user-select: none; }
   .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; max-width: calc(92vw - 170px); }
   .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid #3a3a3a; flex-shrink: 0; }
   .session-tabbar.hidden { display: none; }
@@ -735,8 +739,24 @@
   }
   .shell-channel-empty button:hover { background: #3d3d3d; border-color: #666; }
 
+  /* Narrow screens rail the window to the viewport width; short screens rail the
+     height. Both are checked separately: a phone in landscape is ~844px wide
+     (over the 768px breakpoint) but only ~390px tall, so a width-only query
+     would leave it with a full-height window hanging off the bottom. */
   @media (max-width: 768px) {
     .shell-window { width: calc(100vw - 16px); max-width: calc(100vw - 16px); min-width: 0; max-height: calc(100dvh - 16px); }
+  }
+  @media (max-height: 520px) {
+    .shell-window { max-height: calc(100dvh - 16px); }
+  }
+
+  /* Mobile: the shell-window title bar already carries per-window controls, and
+     the floating tab bar competes with the terminal for the top of a phone
+     screen. Hide it outright — but only outside tile mode, which has no other
+     way back to float (see sessionTabbarEl users). */
+  @media (max-width: 768px) {
+    .session-tabbar { display: none; }
+    body.tile-mode .session-tabbar { display: flex; }
   }
 
   .conn-tile .conn-tile-stack .sess-fwd-overlay {
