@@ -301,7 +301,7 @@ func TestShellOutputAcceptsLocator(t *testing.T) {
 	}
 
 	// Closed (DEAD) session: session form and channel form both read the
-	// persisted message log, since the in-memory buffer is gone.
+	// persisted byte log, since the in-memory buffer is gone.
 	if _, err := s.handleTerminateSession(context.Background(), makeRequest(map[string]any{
 		"session_id": sid,
 		"force":      true,

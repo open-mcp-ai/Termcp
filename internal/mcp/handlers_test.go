@@ -30,9 +30,9 @@ func startTestSSH(t *testing.T) *sshserver.Server {
 }
 
 // cleanupTestRuntime finalizes every session — draining exit watchers and any
-// in-flight message writes — then stops the SSH server. It must be registered
+// in-flight log writes — then stops the SSH server. It must be registered
 // AFTER t.TempDir so LIFO runs it before the temp dir is removed: otherwise a
-// session watcher could still be writing messages/<id>/* during RemoveAll,
+// session watcher could still be appending log.bin during RemoveAll,
 // which on Windows fails with "The directory is not empty".
 func cleanupTestRuntime(t *testing.T, sessMgr *session.Manager, srv *sshserver.Server) {
 	t.Helper()
@@ -418,7 +418,8 @@ func TestHandleListMessages(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// List messages for this session
+	// The transcript is a byte log with a status index, so listing returns spans
+	// (status + offsets), not message payloads.
 	listReq := makeRequest(map[string]any{
 		"session_id": sessionID,
 	})
@@ -428,9 +429,25 @@ func TestHandleListMessages(t *testing.T) {
 	}
 
 	listM := parseResult(t, listResult)
-	msgs := listM["messages"].([]any)
-	if len(msgs) == 0 {
-		t.Fatal("expected at least one message")
+	spans, ok := listM["spans"].([]any)
+	if !ok {
+		t.Fatalf("expected spans in the result, got %v", listM)
+	}
+	if len(spans) == 0 {
+		t.Fatal("expected at least one span for a session that produced output")
+	}
+	first := spans[0].(map[string]any)
+	if first["status"] != string(api.LogOutput) {
+		t.Errorf("first span status = %v, want %q", first["status"], api.LogOutput)
+	}
+	if _, ok := first["start"]; !ok {
+		t.Error("span carries no start offset")
+	}
+	if _, ok := first["end"]; !ok {
+		t.Error("span carries no end offset")
+	}
+	if _, ok := listM["total_bytes"]; !ok {
+		t.Error("result carries no total_bytes")
 	}
 }
 
@@ -926,8 +943,8 @@ func TestGroupDispatch(t *testing.T) {
 		t.Fatalf("message list error: %s", msgRes.Content[0].(mcpgo.TextContent).Text)
 	}
 	mm := parseResult(t, msgRes)
-	if _, ok := mm["messages"].([]any); !ok {
-		t.Fatalf("expected messages array, got %v", mm["messages"])
+	if _, ok := mm["spans"].([]any); !ok {
+		t.Fatalf("expected spans array, got %v", mm["spans"])
 	}
 	termReq := makeRequest(map[string]any{"session_id": sid, "force": true})
 	s.handleTerminateSession(context.Background(), termReq)
@@ -947,7 +964,7 @@ func TestDeadSessionOperationsNoPanic(t *testing.T) {
 		Status:      api.SessionExited,
 		SSHEndpoint: "remote",
 	}
-	if err := store.SaveSessions([]api.Session{deadSession}); err != nil {
+	if err := store.SaveSession(deadSession); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessMgr.RestoreDead(); err != nil {
@@ -995,4 +1012,3 @@ func TestDeadSessionOperationsNoPanic(t *testing.T) {
 		t.Fatal("expected error result on dead session forward")
 	}
 }
-

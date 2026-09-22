@@ -3,6 +3,7 @@ package buffer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -24,12 +25,20 @@ type readerState struct {
 // All readers share one master byte slice; each reader has an independent read cursor.
 // Fully consumed prefixes are dropped when compactThreshold is exceeded to bound memory.
 type Buffer struct {
-	mu                sync.Mutex
-	master            []byte
-	readers           map[int]*readerState
-	nextID            int
-	closed            bool
-	cond              *sync.Cond
+	mu      sync.Mutex
+	master  []byte
+	readers map[int]*readerState
+	nextID  int
+	closed  bool
+	cond    *sync.Cond
+	// baseOffset is the absolute stream offset of master[0]: the number of bytes
+	// this buffer has dropped from the front through compaction. Every offset this
+	// type reports is absolute (baseOffset + a position in master), so dropping a
+	// prefix to reclaim memory never moves a byte.
+	//
+	// The same numbering is used by the on-disk log (a byte's offset is its file
+	// position), so a live read and a persisted read of the same byte agree.
+	baseOffset        int64
 	compactThreshold  int // compact when len(master) > this
 	compactMinAdvance int // and min(readPos) >= this
 }
@@ -130,6 +139,9 @@ func (b *Buffer) maybeCompactLocked() {
 		return
 	}
 	b.master = b.master[minPos:]
+	// Absorb the drop into baseOffset so the absolute numbering is unchanged;
+	// reader positions are relative to master and so must move too.
+	b.baseOffset += minPos
 	for _, rs := range b.readers {
 		rs.readPos -= minPos
 	}
@@ -266,24 +278,57 @@ func (b *Buffer) Cursor(readerID int) int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if rs, ok := b.readers[readerID]; ok {
-		return rs.readPos
+		return b.baseOffset + rs.readPos
 	}
 	return -1
+}
+
+// BaseOffset returns the absolute offset of the earliest retained byte. Bytes
+// before it were dropped by compaction and can no longer be read.
+func (b *Buffer) BaseOffset() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.baseOffset
+}
+
+// WriteAt records that the bytes being written start at absolute offset offset.
+//
+// The buffer does not use this value to place the data (it appends); it only
+// checks that its own numbering agrees with the caller's. That check is the point:
+// the buffer and the log must count the same bytes from the same origin, and a
+// mismatch means a byte was recorded on one side and not the other. Reporting it
+// here turns a silent offset drift into an immediate, located error.
+func (b *Buffer) WriteAt(data []byte, offset int64) error {
+	b.mu.Lock()
+	want := b.baseOffset + int64(len(b.master))
+	b.mu.Unlock()
+	if want != offset {
+		return fmt.Errorf("buffer offset mismatch: have %d, caller says %d (%d bytes off)",
+			want, offset, offset-want)
+	}
+	return b.Write(data)
 }
 
 // Len returns the current retained master size in bytes.
 func (b *Buffer) Len() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return int64(len(b.master))
+	return b.baseOffset + int64(len(b.master))
 }
 
-// ByteRange returns a copy of master[start:start+n] with n = min(max, len-start), and total = len(master).
+// ByteRange returns the retained bytes at absolute offset start and the absolute
+// stream length. A start below the earliest retained byte clamps forward, so the
+// caller can compare its request against BaseOffset to detect a shortened read.
 // No reader cursors are advanced.
 func (b *Buffer) ByteRange(start int64, max int) (out []byte, total int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	total = int64(len(b.master))
+	total = b.baseOffset + int64(len(b.master))
+	if start < 0 {
+		start = 0
+	}
+	// Translate the caller's absolute offset into a position in master.
+	start -= b.baseOffset
 	if start < 0 {
 		start = 0
 	}

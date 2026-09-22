@@ -260,7 +260,7 @@
           <tr><td>Connection</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/connections/{name}</code></td></tr>
           <tr><td>Test connection</td><td>POST</td><td><code class="inline">/api/connections/test</code> <span class="muted">(validates connectivity, does not save)</span></td></tr>
           <tr><td>Sessions</td><td>GET / POST</td><td><code class="inline">/api/sessions</code></td></tr>
-          <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE erases on-disk messages permanently)</span></td></tr>
+          <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE removes the session directory permanently)</span></td></tr>
           <tr><td>Shells</td><td>GET / POST</td><td><code class="inline">/api/sessions/{id}/shells</code></td></tr>
           <tr><td>Shell</td><td>DELETE</td><td><code class="inline">/api/shells/{id}</code> <span class="muted">(shell_id)</span></td></tr>
           <tr><td>Shell input</td><td>POST</td><td><code class="inline">/api/shells/{id}/input</code> <span class="muted">({"text", "press_enter"})</span></td></tr>

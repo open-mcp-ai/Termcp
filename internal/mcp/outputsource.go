@@ -3,7 +3,6 @@ package mcp
 import (
 	"bytes"
 	"fmt"
-	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -15,9 +14,8 @@ import (
 // shell's lifecycle state:
 //   - live shells (incl. exited-but-retained ones): stream from the in-memory
 //     buffer;
-//   - DEAD / restart-restored sessions: stream is the persisted MsgOutput log of
-//     the shell (or the merged session stream), reconstructed in append order —
-//     the same byte sequence the in-memory buffer once held.
+//   - DEAD / restart-restored sessions: stream is the shell's persisted log.bin,
+//     read positionally — the same byte sequence the in-memory buffer once held.
 //
 // Both expose the same cursor semantics (Len + ByteRange), which is what makes
 // shell_output a single unified read tool for every state.
@@ -27,7 +25,7 @@ type outputSource struct {
 	shellID string           // resolved shell id; "" = merged persisted stream
 	msgMgr  *message.Manager // non-nil ⇒ persisted source (DEAD / restored)
 	status  api.SessionStatus
-	created time.Time // live sources only
+	created int64 // Unix ms; live sources only (for session_uptime_seconds)
 }
 
 const (
@@ -52,8 +50,7 @@ func (o *outputSource) Len() (int64, error) {
 	if o.msgMgr == nil {
 		return 0, nil
 	}
-	_, total, err := o.msgMgr.OutputByteRange(o.sessID, o.shellID, 0, 0)
-	return total, err
+	return o.msgMgr.OutputSize(o.sessID, o.shellID)
 }
 
 // ByteRange copies raw bytes [start, start+max) of the stream. No cursors or
@@ -130,9 +127,15 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 			info := cs.Info()
 			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 		}
-		// Restored DEAD session: no live shell objects, but its on-disk message
-		// log serves as the merged output stream.
-		return &outputSource{sessID: sess.ID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
+		// Restored DEAD session: no live shell objects, so the persisted log of
+		// this session's first shell serves as the stream. The shell id must be
+		// resolved here — a log belongs to a shell, so an empty id would address a
+		// shell that does not exist and read back nothing.
+		shellID := ""
+		if shells := sess.SnapshotShells(); len(shells) > 0 {
+			shellID = shells[0].ID
+		}
+		return &outputSource{sessID: sess.ID, shellID: shellID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
 	}
 	if sess := s.sessMgr.GetSessionByShellID(id); sess != nil {
 		return &outputSource{sessID: sess.ID, shellID: id, msgMgr: s.msgMgr, status: sess.Info().Status}, nil

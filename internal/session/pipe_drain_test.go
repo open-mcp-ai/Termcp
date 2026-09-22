@@ -76,20 +76,19 @@ func TestPipeShellDrainsOutputBeforeSealingBuffer(t *testing.T) {
 		}
 	}
 
-	// Archive parity: the persisted transcript must hold the same stream, since
-	// every buffered write is archived at the source.
-	entries, err := mm.List(s.ID)
+	// The persisted log must hold the same stream as the in-memory buffer: every
+	// buffered write is appended to log.bin at the source, and an offset means the
+	// same byte in both.
+	persisted, persistedTotal, err := mm.OutputByteRange(s.ID, cs.ID, 0, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var archived int64
-	for _, e := range entries {
-		if e.Type == api.MsgOutput {
-			archived += int64(e.ByteSize)
-		}
+	if persistedTotal != total {
+		t.Fatalf("persisted log is %d bytes, buffer retained %d — transcript is truncated", persistedTotal, total)
 	}
-	if archived != total {
-		t.Fatalf("archived %d bytes, retained %d — transcript is truncated", archived, total)
+	if string(persisted) != got {
+		t.Fatalf("persisted bytes differ from the buffer\nlog  tail = %q\nbuf  tail = %q",
+			tailOf(string(persisted), 120), tailOf(got, 120))
 	}
 }
 

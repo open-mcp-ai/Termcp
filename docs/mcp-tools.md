@@ -353,22 +353,25 @@ ssh_config(action=list)
 
 > 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。
 
-### message（会话消息历史）
+### message（会话输出区段索引）
 
-查看与获取持久化存储的原始会话消息。消息包含系统事件、输入命令和输出内容。
+查看一个 shell 字节日志（`log.bin`）的区段索引：每段从哪里开始、什么时候开始、由什么产生。
+**区段只描述位置，不携带内容** —— 字节全部在 `log.bin` 里，用 `shell_output` 按 offset 读取。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `action` | string | **是** | `"list"` 或 `"get"` |
-| `session_id` | string | **是** | 会话 ID |
-| `message_ids` | string[] | 条件 | `action="get"` 时传入要读取的消息 ID 列表 |
+| `action` | string | **是** | `"list"` |
+| `session_id` | string | **是** | 会话 ID（省略 `shell_id` 时解析到该会话的 primary shell） |
+| `shell_id` | string | 否 | 指定 shell 通道；省略则用会话的 primary shell |
 
-- `action="list"`：返回该会话的消息索引 `{ "messages": [{ id, shell_id, type, created_at, byte_size }] }`
-- `action="get"`：返回指定消息的详细内容 `{ "messages": [{ id, session_id, shell_id, type, content, created_at, byte_size }] }`
+- `action="list"`：返回 `{ "spans": [{ status, time, start, end }], "total_bytes": N, "session_id": "..." }`
+- `status`：`"o"` = 输出，`"a"` = AI 输入（MCP），`"i"` = 接口输入（浏览器）
+- `start`/`end`：该区段在 `log.bin` 中的字节区间；取内容用 `shell_output(shell_id, offset=start, max_bytes=end-start)`
+- 输入是**零长度标记**（`start == end`）：按键已由终端回显进输出流，不重复写入
 
 ### session_delete（彻底删除会话）
 
-**永久删除**一个会话：关闭仍存活的进程/传输，释放全部子资源（shell 通道、端口转发、通知规则、内存缓冲），从注册表移除（Web UI 上的 tile 随之消失），并擦除磁盘上的消息记录。**不可逆**。
+**永久删除**一个会话：关闭仍存活的进程/传输，释放全部子资源（shell 通道、端口转发、通知规则、内存缓冲），从注册表移除（Web UI 上的 tile 随之消失），并删除磁盘上的会话目录（manifest + `log.bin` + `log.jsonl`）。**不可逆**。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -465,7 +468,7 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `remote_path` | string | **是** | |
 | `mode` | number | 条件 | chmod：十进制 Unix 权限（493 = 0755） |
 | `uid` / `gid` | number | 条件 | chown：数字 uid/gid |
-| `atime` / `mtime` | number | 条件 | chtimes：Unix 秒 |
+| `atime` / `mtime` | number | 条件 | chtimes：Unix 毫秒 |
 
 **file_link** — 符号链接/硬链接
 
