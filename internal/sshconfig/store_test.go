@@ -9,6 +9,28 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// remoteFixture is the TOML a new remote profile starts from. The server no
+// longer owns this: the web UI supplies the template (see conn-form.js), so the
+// fixture lives here, next to the only code that still needs one.
+const remoteFixture = "kind = \"remote\"\n" +
+	"# host = \"example.com\"\n" +
+	"# user = \"root\"\n" +
+	"# port = 22\n"
+
+// writeRemoteSkeleton creates ssh_configs/<name>/config.toml the way a user's
+// first save would, standing in for the removed InitRemoteSkeleton helper.
+func writeRemoteSkeleton(t *testing.T, dataDir, name string) string {
+	t.Helper()
+	p := filepath.Join(dataDir, "ssh_configs", name, "config.toml")
+	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(remoteFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestStoreRemoteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
@@ -27,10 +49,7 @@ func TestStoreRemoteRoundTrip(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ssh_configs", "internal")); !os.IsNotExist(err) {
 		t.Fatalf("expected no on-disk internal dir, stat err=%v", err)
 	}
-	if err := InitRemoteSkeleton(dir, "prod"); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "ssh_configs", "prod", "config.toml"))
+	raw, err := os.ReadFile(writeRemoteSkeleton(t, dir, "prod"))
 	if err != nil {
 		t.Fatal(err)
 	}
