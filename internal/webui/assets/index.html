@@ -2602,12 +2602,15 @@
     });
   }
 
-  /** xterm onData string → UTF-8 bytes → base64 (matches WS decode) */
-  function strToUtf8B64(str) {
-    var u8 = new TextEncoder().encode(str);
-    var bin = '';
-    for (var i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-    return btoa(bin);
+  /**
+   * Keystrokes go on the wire as the string xterm produced.
+   *
+   * JSON encodes the text (and the server takes its UTF-8 bytes), so no extra
+   * base64 layer is needed. The previous version ran TextEncoder -> base64 only
+   * for the server to base64-decode it back into the same bytes.
+   */
+  function terminalInputPayload(str) {
+    return str;
   }
 
   function sendTerminalWatch(sid, add) {
@@ -2680,7 +2683,7 @@
             var tm = ch ? ch.term : win._term;
             var done = ch ? ch.streamDone : win._streamDone;
             if (tm && !done) {
-              var bytes = b64ToBytes(j.d);
+              var bytes = textToBytes(j.d);
               tm.write(bytes, function () {
                 requestAnimationFrame(function () {
                   shellTermScrollToBottomIfStuck(tm, true);
@@ -3033,20 +3036,18 @@
     } catch (e0) {}
   }
 
-  function b64ToBytes(b64) {
-    var bin = atob(b64);
-    var u = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-    return u;
-  }
-
-  function bytesToUtf8Lossy(bytes) {
-    if (!bytes || !bytes.length) return '';
-    try {
-      return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(bytes);
-    } catch (e) {
-      return '';
-    }
+  /**
+   * Terminal bytes arrive as a JSON string; xterm wants a Uint8Array.
+   *
+   * TextEncoder produces the UTF-8 bytes of that string, which is exactly what
+   * the server wrote. A byte sequence that is not valid UTF-8 cannot survive a
+   * JSON string, so the server guarantees whole characters (it stores bytes in
+   * log.bin and only converts on the way out). xterm's own decoder then stitches
+   * a multi-byte character split across two frames, because it keeps a partial
+   * sequence between writes.
+   */
+  function textToBytes(text) {
+    return new TextEncoder().encode(text || '');
   }
 
   var SHELL_HISTORY_CHUNK = 512 * 1024;
@@ -3088,8 +3089,8 @@
         if (isFinite(T) && T >= 0) total = T;
         var d = j.d || '';
         if (d) {
-          var u = b64ToBytes(d);
-          try { term.write(bytesToUtf8Lossy(u)); } catch (e1) {}
+          var u = textToBytes(d);
+          try { term.write(u); } catch (e1) {}
           shown += u.length;
         }
         var end = Number(j.end);
@@ -3332,7 +3333,7 @@
       if (!win._shellUserInputReady) return;
       if (!window._uiWS || window._uiWS.readyState !== 1) return;
       try {
-        window._uiWS.send(JSON.stringify({ type: 'input', id: sessionId, d: strToUtf8B64(data), nl: false }));
+        window._uiWS.send(JSON.stringify({ type: 'input', id: sessionId, d: terminalInputPayload(data), nl: false }));
       } catch (e) {}
     });
 
