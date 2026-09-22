@@ -282,6 +282,36 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 	if !strings.Contains(base, "display: none") || !strings.Contains(base, "align-items: flex-start") {
 		t.Errorf("the banner should default to hidden and be a flex row when shown; got %q", base)
 	}
+
+	// Neither banner may live inside a section body. Both sections can be collapsed
+	// (a state persisted in localStorage, so it can stay collapsed forever), which
+	// is display:none — and on touch the entries body is additionally a fixed
+	// drawer that slides off-screen. A "Connection failed" or a dropped-WebSocket
+	// notice written into either one would be hidden exactly when it matters.
+	//
+	// Bounds are the next element, not "</div>": each section body's own closing
+	// tag comes after nested divs, so a "</div>" bound stops inside #conn-grid and
+	// the assertion would only ever see empty markup.
+	index := readAssetLF(t, "index.html")
+	for _, tc := range []struct{ name, banner, from, to string }{
+		{"connections", "conn-load-banner", `id="sec-entries-body"`, `id="sec-sessions"`},
+		{"sessions", "session-load-banner", `id="sec-sessions-body"`, `id="panel-tools"`},
+	} {
+		if !strings.Contains(index, `id="`+tc.banner+`"`) {
+			t.Fatalf("index.html should still contain the %s banner", tc.name)
+		}
+		section := between(t, index, tc.from, tc.to)
+		if strings.Contains(section, tc.banner) {
+			t.Errorf("the %s banner must not sit inside its section body: a collapsed section hides it", tc.name)
+		}
+	}
+	// And both must be in the page column, ahead of the sections they report on.
+	dock := between(t, index, `class="dock"`, `id="panel-tools"`)
+	for _, banner := range []string{`id="conn-load-banner"`, `id="session-load-banner"`} {
+		if !strings.Contains(dock, banner) {
+			t.Errorf("%s belongs to the page column, not a section body", banner)
+		}
+	}
 }
 
 // The z-index ladder: a surface that can open a dialog must sit below it.
