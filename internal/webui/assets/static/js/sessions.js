@@ -60,7 +60,12 @@ function renderSessionGrid(sessions, bannerMsg) {
     }
     var nm = String((s.name || '').trim());
     var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
-    var badge = dead ? '<span class="sess-dead" title="' + escapeHtml(reasonLabel(s.reason)) + '">dead</span>' : '';
+    /* Status lamp at the left of the id: green while the session is up, red once
+       it is over. The reason still travels in the tooltip. */
+    var statusIc =
+      '<span class="sess-status-ic ' + (dead ? 'is-dead' : 'is-live') + '" title="' +
+      escapeHtml(dead ? ('Dead: ' + reasonLabel(s.reason)) : 'Running') + '" role="img" aria-label="' +
+      escapeHtml(dead ? ('Dead: ' + reasonLabel(s.reason)) : 'Running') + '"></span>';
 
     var actionCornerHtml =
       '<button type="button" class="sess-x" title="Delete session" aria-label="Delete session">' +
@@ -71,14 +76,15 @@ function renderSessionGrid(sessions, bannerMsg) {
       '<div class="conn-tile-stack">' +
       actionCornerHtml +
       '<div class="icon-wrap" title="' + (dead ? 'Open history' : 'Open terminal') + '"><span class="sess-terminal-ic">' + terminalIconImgHtml() + '</span></div>' +
-      '<input type="checkbox" class="sess-checkbox" title="Select session" aria-label="Select session"' + (isSelected ? ' checked' : '') + '>' +
       '</div>' +
       '<div class="sess-tile-body">' +
-      '<div class="sess-entry-line" title="' + escapeHtml(entryLine) + '">' + escapeHtml(entryLine) + badge + '</div>' +
+      '<div class="sess-name-row">' +
+      '<input type="checkbox" class="sess-checkbox" title="Select session" aria-label="Select session"' + (isSelected ? ' checked' : '') + '>' +
+      '<div class="sess-entry-line" role="button" tabindex="0" title="Rename session" aria-label="Rename session">' + escapeHtml(entryLine) + '</div>' +
+      '</div>' +
       '<div class="sess-meta-row">' +
-      '<span class="sess-sid-line" title="' + escapeHtml(sid) + '">' + escapeHtml(sid) + '</span>' +
-      '<button type="button" class="sess-rename-btn" title="Rename session" aria-label="Rename session">' + SVG_PENCIL_12 + '</button>' +
-      '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
+      statusIc +
+      '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" aria-label="Copy session URL">' + escapeHtml(sid) + '</span>' +
       '</div>' +
       '</div>' +
       '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
@@ -117,16 +123,25 @@ function renderSessionGrid(sessions, bannerMsg) {
       });
     }
 
-    var copyBtn = tile.querySelector('.sess-copy-btn');
-    copyBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-    copyBtn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      copyTextToClipboard(resourceUrlSession(sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
-    });
-    var renBtn = tile.querySelector('.sess-rename-btn');
-    renBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-    renBtn.addEventListener('click', function (e) {
+    /* The sid copies what the button next to it used to: the session URL. The
+       button went because the id is already the thing you aim at. */
+    var sidEl = tile.querySelector('.sess-sid-line');
+    if (sidEl) {
+      var doCopy = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        copyTextToClipboard(resourceUrlSession(sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+      };
+      sidEl.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      sidEl.addEventListener('click', doCopy);
+      sidEl.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        doCopy(e);
+      });
+    }
+
+    var nameEl = tile.querySelector('.sess-entry-line');
+    var doRename = function (e) {
       e.preventDefault();
       e.stopPropagation();
       var cur = String((s.name || '').trim());
@@ -151,10 +166,18 @@ function renderSessionGrid(sessions, bannerMsg) {
           applySessionsSnapshot(snap);
         })
         .catch(function (err) { showCopyToast('Rename failed: ' + (err.message || err)); });
+    };
+    /* The name is the rename control: the pencil it replaced sat next to the sid
+       and read as "edit the id", which is not what it did. */
+    nameEl.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    nameEl.addEventListener('click', doRename);
+    nameEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      doRename(e);
     });
 
     tile.onclick = function (e) {
-      if (e.target.closest('.sess-x') || e.target.closest('.sess-rename-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.sess-checkbox')) return;
+      if (e.target.closest('.sess-x') || e.target.closest('.sess-checkbox') || e.target.closest('.sess-entry-line') || e.target.closest('.sess-sid-line') || e.target.closest('.sess-status-ic')) return;
       clearSessNotified(sid); // opening the session acknowledges its notification highlight
       focusSessionWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
     };
