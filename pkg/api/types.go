@@ -1,9 +1,5 @@
 package api
 
-import (
-	"time"
-)
-
 // SessionStatus represents the current state of a session.
 type SessionStatus string
 
@@ -22,6 +18,11 @@ const (
 )
 
 // Session holds metadata for an interactive process session.
+//
+// Timestamps are Unix milliseconds, the one time representation this project
+// stores and serves: log.jsonl marks, manifests, and every JSON API response
+// use it. Formatting for display is the client's job (see the Web UI's
+// fmtTime), so a value never has to be parsed back out of a string.
 type Session struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
@@ -31,8 +32,8 @@ type Session struct {
 	Status    SessionStatus `json:"status"` // running | exited | error
 	ExitCode  *int          `json:"exit_code"`
 	PID       int           `json:"pid"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	CreatedAt int64         `json:"created_at"` // Unix ms
+	UpdatedAt int64         `json:"updated_at"` // Unix ms
 	Rows      int           `json:"rows"`
 	Cols      int           `json:"cols"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).
@@ -43,31 +44,34 @@ type Session struct {
 	Shells []Session `json:"shells,omitempty"`
 }
 
-// MsgType classifies a message in a session.
-type MsgType string
+// LogStatus classifies a span of a shell's log.bin.
+//
+// The set is open: adding a status only means introducing a new value, the
+// on-disk schema does not change.
+type LogStatus string
 
 const (
-	MsgInput  MsgType = "input"
-	MsgOutput MsgType = "output"
-	MsgSystem MsgType = "system"
+	// LogOutput is bytes produced by the shell.
+	LogOutput LogStatus = "o"
+	// LogAIInput is bytes entered by an AI agent through MCP.
+	LogAIInput LogStatus = "a"
+	// LogAPIInput is bytes entered through the HTTP/WebSocket API (the human at
+	// the browser).
+	LogAPIInput LogStatus = "i"
 )
 
-// Message represents a single input/output record within a session.
-type Message struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	ShellID   string    `json:"shell_id,omitempty"`
-	Type      MsgType   `json:"type"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
-	ByteSize  int       `json:"byte_size"`
-}
-
-// MessageIndexEntry is a lightweight reference stored in the index file.
-type MessageIndexEntry struct {
-	ID        string    `json:"id"`
-	ShellID   string    `json:"shell_id,omitempty"`
-	Type      MsgType   `json:"type"`
-	CreatedAt time.Time `json:"created_at"`
-	ByteSize  int       `json:"byte_size"`
+// LogMark is one line of log.jsonl: a transition to `Status` at byte `Offset`
+// in the shell's log.bin.
+//
+// Marks carry no payload — log.bin is the only copy of the bytes. A mark only
+// records where a span starts and what produced it. The span runs from its own
+// Offset to the next mark's Offset (the last one runs to the end of the file),
+// so there is no end field to keep in sync.
+//
+// Keys are single characters because every session appends these lines for its
+// whole life; the file is an index, not a document.
+type LogMark struct {
+	Status LogStatus `json:"s"`
+	Time   int64     `json:"t"` // Unix milliseconds; the moment the span started
+	Offset int64     `json:"i"` // byte offset in log.bin where the span starts
 }

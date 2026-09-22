@@ -225,6 +225,11 @@ session-level `output-range` instead).
 
 ## 6. Session
 
+**Timestamps.** Every timestamp in every response (and on disk) is **Unix
+milliseconds as a number** — `created_at`, `updated_at`, `mod_time`, and the
+`time` field of a transcript span. There are no locale or RFC3339 strings on the
+wire: the unit is always ms, and formatting for display is the client's job.
+
 **Concept:** a Session is an SSH connection container holding 0..N shells and 0..N
 forwards. Shell IDs are separate from the session ID; the first shell has its own ID.
 
@@ -238,7 +243,7 @@ Response 200:
 {
   "sessions": [
     { "id": "abc123", "name": "pi", "mode": "pty", "status": "running",
-      "pid": 12345, "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": "..." }
+      "pid": 12345, "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
   ]
 }
 ```
@@ -275,7 +280,8 @@ Response 200: Session object (same shape as a list element)
 ### `DELETE /api/sessions/{id}`
 
 **Permanent deletion**: disconnects the session (shells → forwards → SSH connection)
-and erases its on-disk message history. Irreversible.
+and removes its on-disk session directory (`manifest.json` + `log.bin` + `log.jsonl`).
+Irreversible.
 
 ```
 Response: 204 No Content
@@ -339,7 +345,7 @@ Response 200:
 
 **Deletes** one shell channel (path id is a **shell_id**). Manual close is a delete,
 not DEAD: the shell disappears from the live list, the retained snapshot, and
-`sessions.json`, leaving no `end`/dead tab. The SSH connection and the session's other
+`sessions/<session_id>/`, leaving no `end`/dead tab. The SSH connection and the session's other
 shells are untouched. Closing the internal primary shell is a no-op (the process can
 outlive the tab).
 
@@ -518,7 +524,7 @@ Lists a directory or stats a file.
 ```
 Response 200:
 { "name": "home", "size": 4096, "is_dir": true,
-  "children": [{ "name": "file.txt", "size": 1024, "is_dir": false, "mod_time": "..." }] }
+  "children": [{ "name": "file.txt", "size": 1024, "is_dir": false, "mod_time": 1758499200123 }] }
 ```
 
 ### `GET /api/sessions/{id}/files/download`
@@ -604,7 +610,7 @@ Lists all active notification rules.
 Response 200:
 { "notifications": [{ "rule_id": "notif_...", "session_id": "...", "shell_id": "...",
                      "channel": "resource"|"sampling", "event": "output"|"exit"|"silence",
-                     "created_at": "..." }] }
+                     "created_at": 1758499200123 }] }
 ```
 
 ### `DELETE /api/notifications/{id}`

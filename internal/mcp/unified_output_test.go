@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -15,7 +16,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *session.Manager) {
+func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *session.Manager, *message.Manager) {
 	t.Helper()
 	srv := startTestSSH(t)
 
@@ -26,14 +27,14 @@ func newTestServerWithHistory(t *testing.T) (*Server, *storage.Store, *session.M
 	cleanupTestRuntime(t, sessMgr, srv)
 
 	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
-	return s, store, sessMgr
+	return s, store, sessMgr, msgMgr
 }
 
 // TestUnifiedOutput_TailLinesLive verifies tail_lines on a running pipe shell.
 // Pipe mode is deterministic: no prompt echo, no PSReadLine redraw artifacts —
 // the buffer contains exactly the command's stdout lines.
 func TestUnifiedOutput_TailLinesLive(t *testing.T) {
-	s, _, _ := newTestServerWithHistory(t)
+	s, _, _, _ := newTestServerWithHistory(t)
 
 	// One command that prints 20 numbered lines then exits (pipe mode).
 	var command string
@@ -118,7 +119,7 @@ func TestUnifiedOutput_TailLinesLive(t *testing.T) {
 
 // TestUnifiedOutput_OffsetStatelessLive verifies offset-based stateless pagination on live shells.
 func TestUnifiedOutput_OffsetStatelessLive(t *testing.T) {
-	s, _, _ := newTestServerWithHistory(t)
+	s, _, _, _ := newTestServerWithHistory(t)
 
 	startReq := makeRequest(map[string]any{
 		"command":    testShell(),
@@ -182,56 +183,45 @@ func TestUnifiedOutput_OffsetStatelessLive(t *testing.T) {
 // restored) session is transparently readable through shell_output using
 // session_id or shell_id, and honors tail_lines to protect against token blowups.
 func TestUnifiedOutput_ArchivedSessionReadsViaShellOutput(t *testing.T) {
-	s, store, sessMgr := newTestServerWithHistory(t)
+	s, store, sessMgr, msgMgr := newTestServerWithHistory(t)
 
 	archID := "archived-100"
 	shellID := "shell-xyz"
 
-	// Persist the session to sessions.json as DEAD so RestoreDead reloads it.
+	// Persist the session manifest as DEAD so RestoreDead reloads it.
 	meta := api.Session{
 		ID:        archID,
 		Name:      "Build Task",
 		Status:    api.SessionExited,
-		CreatedAt: time.Now().Add(-10 * time.Minute).UTC(),
+		CreatedAt: clock.Now() - (10 * 60 * 1000), // 10 minutes ago
 		Shells: []api.Session{
 			{ID: shellID, Name: "main", Status: api.SessionExited},
 		},
 	}
-	if err := store.SaveSessions([]api.Session{meta}); err != nil {
-		t.Fatalf("SaveSessions failed: %v", err)
+	if err := store.SaveSession(meta); err != nil {
+		t.Fatalf("SaveSession failed: %v", err)
+	}
+	for _, sh := range meta.Shells {
+		if err := store.SaveShell(meta.ID, sh); err != nil {
+			t.Fatalf("SaveShell failed: %v", err)
+		}
 	}
 	if err := sessMgr.RestoreDead(); err != nil {
 		t.Fatalf("RestoreDead failed: %v", err)
 	}
 
-	// Persist 50 output messages representing shell output
-	var idxEntries []api.MessageIndexEntry
-	baseTime := time.Now().Add(-10 * time.Minute).UTC()
+	// Append 50 lines to the shell's byte log. Each append returns the offset it
+	// landed at, so a later read can be checked against the same numbering.
+	var lineOffsets []int64
 	for i := 1; i <= 50; i++ {
 		text := fmt.Sprintf("Build step [%02d]: finished successfully\n", i)
-		m := api.Message{
-			ID:        fmt.Sprintf("msg-%03d", i),
-			SessionID: archID,
-			ShellID:   shellID,
-			Type:      api.MsgOutput,
-			Content:   text,
-			CreatedAt: baseTime.Add(time.Duration(i) * time.Second),
-			ByteSize:  len(text),
+		off, err := msgMgr.AppendOutput(archID, shellID, []byte(text))
+		if err != nil {
+			t.Fatalf("AppendOutput failed: %v", err)
 		}
-		idxEntries = append(idxEntries, api.MessageIndexEntry{
-			ID:        m.ID,
-			ShellID:   m.ShellID,
-			Type:      m.Type,
-			CreatedAt: m.CreatedAt,
-			ByteSize:  m.ByteSize,
-		})
-		if err := store.SaveMessage(archID, m); err != nil {
-			t.Fatalf("SaveMessage failed: %v", err)
-		}
+		lineOffsets = append(lineOffsets, off)
 	}
-	if err := store.SaveMessageIndex(archID, idxEntries); err != nil {
-		t.Fatalf("SaveMessageIndex failed: %v", err)
-	}
+	_ = lineOffsets
 
 	// 1. Reading by session_id with tail_lines=3
 	t.Run("by_session_id_tail_3", func(t *testing.T) {

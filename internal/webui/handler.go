@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"bytes"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -93,7 +93,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions", h.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	mux.HandleFunc("PATCH /api/sessions/{id}", h.handleRenameSession)
-	// DELETE purges the session (terminate + clear history/messages).
+	// DELETE purges the session (terminate + remove its on-disk directory).
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handlePurgeSession)
 	mux.HandleFunc("GET /api/ui/ws", h.handleWebUIWS)
 	// output-range path id is shell_id (or session_id for primary-shell fallback).
@@ -405,13 +405,13 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Close only: disconnect ≠ delete. The DEAD entry keeps its buffers and
-	// message log, so the tile stays visible and clickable for replay.
+	// byte log, so the tile stays visible and clickable for replay.
 	h.Sessions.Terminate(id, true, 0)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePurgeSession terminates a live session and permanently clears its
-// message files (DELETE /api/sessions/{id}).
+// handlePurgeSession terminates a live session and permanently removes its
+// on-disk directory (DELETE /api/sessions/{id}).
 func (h *Handler) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if h.Sessions.Get(id) != nil {
@@ -453,7 +453,6 @@ func (h *Handler) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	}
 	http.NotFound(w, r)
 }
-
 
 func atoiDefault(s string, def int) int {
 	if s == "" {
@@ -567,53 +566,63 @@ func (h *Handler) writeOutputRange(w http.ResponseWriter, r *http.Request, id st
 
 	var data []byte
 	var total int64
+
+	// One read path for every session state. A live shell reads its buffer; a DEAD
+	// or restart-restored session reads the persisted byte log. Both answer in the
+	// same offset space, so a client can hold an offset across a restart.
 	shell := h.resolveOutputShell(id)
-	if shell == nil {
-		// DEAD/restored sessions have no live shell or buffer; serve the read-only
-		// view from the persisted message log so tabs still work after a transport
-		// teardown or a termcp restart.
-		sid, shid, ok := h.persistedOutputFor(id)
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		blob := h.persistedOutputBlob(sid, shid)
-		total = int64(len(blob))
+	if shell != nil {
 		if tail {
-			t := total - int64(max)
-			if t < 0 {
-				t = 0
+			total = shell.BufferLen()
+			if t := total - int64(max); t > 0 {
+				start = t
+			} else {
+				start = 0
 			}
-			start = t
-		}
-		if start > total {
-			start = total
-		}
-		end := start + int64(max)
-		if end > total {
-			end = total
-		}
-		data = blob[start:end]
-	} else {
-		if tail {
-			total := shell.BufferLen()
-			t := total - int64(max)
-			if t < 0 {
-				t = 0
-			}
-			start = t
 		}
 		data, total, err = shell.OutputByteRange(start, max)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// An absolute start below the earliest retained byte (dropped by buffer
+		// compaction) clamps forward; report the start actually served.
+		if base := shell.OutputBaseOffset(); start < base {
+			start = base
+		}
+	} else {
+		// DEAD/restored sessions have no live buffer; serve the read-only view from
+		// the persisted log so tabs still work after a teardown or a restart.
+		sid, shid, ok := h.persistedOutputFor(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if tail {
+			total, err = h.Sessions.OutputSize(sid, shid)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if t := total - int64(max); t > 0 {
+				start = t
+			} else {
+				start = 0
+			}
+		}
+		data, total, err = h.Sessions.OutputByteRange(sid, shid, start, max)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if start > total {
+		start = total
 	}
 
-	end := start + int64(len(data))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"start": start,
-		"end":   end,
+		"end":   start + int64(len(data)),
 		"total": total,
 		"d":     base64.StdEncoding.EncodeToString(data),
 	})
@@ -636,28 +645,6 @@ func (h *Handler) persistedOutputFor(id string) (sessionID, shellID string, ok b
 		}
 	}
 	return "", "", false
-}
-
-// persistedOutputBlob concatenates the raw output bytes for a shell (or the whole
-// session when shellID is empty), in message order, from the on-disk log. This
-// reconstructs the terminal content that a DEAD/restored session no longer keeps
-// in a live ring buffer.
-func (h *Handler) persistedOutputBlob(sessionID, shellID string) []byte {
-	msgs, err := h.Sessions.Messages(sessionID)
-	if err != nil {
-		return nil
-	}
-	var buf bytes.Buffer
-	for _, m := range msgs {
-		if m.Type != api.MsgOutput {
-			continue
-		}
-		if shellID != "" && m.ShellID != shellID {
-			continue
-		}
-		buf.WriteString(m.Content)
-	}
-	return buf.Bytes()
 }
 
 func (h *Handler) handleListShells(w http.ResponseWriter, r *http.Request) {
@@ -698,7 +685,7 @@ func (h *Handler) handleCloseShell(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleClosePrimaryShell is the legacy POST /api/sessions/{id}/close-shell path.
+// handleClosePrimaryShell is the compatibility POST /api/sessions/{id}/close-shell path.
 // Path id is a session_id: close that session's primary shell only.
 func (h *Handler) handleClosePrimaryShell(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
@@ -980,7 +967,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 			return
 		}
-		result := map[string]any{"name": filepath.Base(path), "size": fi.Size(), "is_dir": fi.IsDir()}
+		result := map[string]any{"name": filepath.Base(path), "size": fi.Size(), "is_dir": fi.IsDir(), "mod_time": clock.Millis(fi.ModTime())}
 		if fi.IsDir() {
 			entries, err := os.ReadDir(path)
 			if err != nil {
@@ -994,7 +981,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 				ch := map[string]any{"name": e.Name(), "is_dir": e.IsDir()}
 				if info != nil {
 					ch["size"] = info.Size()
-					ch["mod_time"] = info.ModTime().UTC().Format(time.RFC3339)
+					ch["mod_time"] = clock.Millis(info.ModTime())
 				}
 				children = append(children, ch)
 			}

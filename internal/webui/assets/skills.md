@@ -112,7 +112,7 @@ curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
 
 # Close but keep in registry (DEAD, still readable via output-range)
 curl -fsS -X POST "${AUTH[@]}" "$BASE/api/sessions/$SID/terminate"
-# Permanently delete (drops from registry, clears on-disk messages, irreversible)
+# Permanently delete (drops from registry, removes its session directory)
 curl -fsS -X DELETE "${AUTH[@]}" "$BASE/api/sessions/$SID"
 ```
 

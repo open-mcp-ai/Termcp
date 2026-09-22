@@ -295,6 +295,11 @@ func main() {
 			sshSrv.Stop()
 		}
 		mcpSrv.Stop()
+		// The store keeps a shell's log open for appending; close it so the last
+		// bytes are durable and no handle outlives the process.
+		if err := store.Close(); err != nil {
+			slog.Warn("closing output logs", "err", err)
+		}
 	}()
 
 	if err := mcpSrv.Start(addr); err != nil {
