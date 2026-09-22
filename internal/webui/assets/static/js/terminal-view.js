@@ -387,6 +387,7 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
 
   setupShellWindowDrag(win, header);
   setupShellWindowResize(win);
+  setupMobileSessionSwitcher(win);
 
   // --- Header tab switching (term / fw / file / notify panels) ---
   // Inject the Notifications tab here so both the pending and connected
@@ -1012,3 +1013,92 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
     });
 }
 
+
+/** Mobile session switcher.
+ *
+ *  The floating session tab bar is hidden on touch devices, which leaves the
+ *  full-screen terminal with no way to reach another open session — closing the
+ *  window is the only exit. This injects a compact switcher into the window
+ *  header instead, listing every window that exists (including ended/read-only
+ *  history views) and reusing openOrFocusShellWindow, the same entry point the
+ *  session tiles use, so z-order and read-only handling stay in one place. */
+function setupMobileSessionSwitcher(win) {
+  if (!win || win._termcpSwitcherBound) return;
+  win._termcpSwitcherBound = true;
+  var titleCluster = win.querySelector('.shell-window-title-cluster');
+  if (!titleCluster) return;
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'shell-window-switch-btn';
+  btn.title = 'Switch session';
+  btn.setAttribute('aria-label', 'Switch session');
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>';
+  titleCluster.insertBefore(btn, titleCluster.firstChild);
+
+  var menu = null;
+  function closeMenu() {
+    if (!menu) return;
+    menu.remove();
+    menu = null;
+    btn.classList.remove('active');
+    document.removeEventListener('click', onDocClick, true);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', closeMenu);
+  }
+  function onDocClick(e) { if (menu && !menu.contains(e.target) && !btn.contains(e.target)) closeMenu(); }
+  function onKey(e) { if (e.key === 'Escape') closeMenu(); }
+
+  function buildMenu() {
+    var el = document.createElement('div');
+    el.className = 'shell-window-switch-menu';
+    el.setAttribute('role', 'menu');
+    allShellWins().forEach(function (w) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'shell-switch-item';
+      item.setAttribute('role', 'menuitem');
+      if (w === win) item.classList.add('current');
+      var dead = !!(w._readOnly || w._streamDone);
+      if (dead) item.classList.add('ended');
+      item.innerHTML =
+        '<span class="shell-switch-num"></span>' +
+        '<span class="shell-switch-label"></span>' +
+        (dead ? '<span class="shell-switch-dead">ended</span>' : '');
+      item.querySelector('.shell-switch-num').textContent = String(sessionTabNum(w) || '');
+      item.querySelector('.shell-switch-label').textContent = sessionTabLabel(w);
+      item.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu();
+        if (!w._sid) return;
+        openOrFocusShellWindow(w._connName || '', w._sid, null, { readOnly: !!w._readOnly });
+      });
+      el.appendChild(item);
+    });
+    return el;
+  }
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (menu) { closeMenu(); return; }
+    menu = buildMenu();
+    /* Anchored inside the window so it works in both full-screen and floating
+       mode; clamped so it cannot overflow a narrow viewport. */
+    win.appendChild(menu);
+    var r = btn.getBoundingClientRect();
+    var maxLeft = Math.max(8, window.innerWidth - menu.offsetWidth - 8);
+    menu.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
+    menu.style.top = (r.bottom + 4) + 'px';
+    btn.classList.add('active');
+    /* Deferred: the header's own click handlers must not close the menu on the
+       same click that opened it. */
+    setTimeout(function () {
+      document.addEventListener('click', onDocClick, true);
+      document.addEventListener('keydown', onKey);
+      window.addEventListener('resize', closeMenu);
+    }, 0);
+  });
+}

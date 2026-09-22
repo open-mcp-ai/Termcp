@@ -30,7 +30,9 @@ function refreshSessionTabbar() {
     var topZ = -1;
     wins.forEach(function (w) {
       if (isTiledWin(w)) return;
-      var z = parseInt(w.style.zIndex, 10) || 0;
+      /* A full-screen window has no inline z-index (the stylesheet owns it), so
+         treat it as topmost rather than reading 0 and picking a wrong active tab. */
+      var z = w.classList.contains('win-fullscreen') ? Infinity : (parseInt(w.style.zIndex, 10) || 0);
       if (z > topZ) { topZ = z; topWin = w; }
     });
   }
@@ -249,6 +251,51 @@ function _fitWinSoon(win) {
   });
 }
 
+/* Viewport changes: rotate the phone, resize the browser, or cross the mobile
+   breakpoint. Two things must happen, and only one of them is a plain fit:
+     1. every floating window re-evaluates full-screen mode, since a window that
+        carries desktop inline geometry (640x480) otherwise keeps it after a
+        rotate to the mobile breakpoint, because inline styles beat media queries;
+     2. the terminal refits, or xterm keeps the row/column count from the old size.
+   Coalesced through rAF: mobile browsers fire resize continuously while the
+   address bar collapses. */
+(function () {
+  var pending = 0;
+  function onViewportChange() {
+    if (pending) return;
+    pending = window.requestAnimationFrame(function () {
+      pending = 0;
+      var mobile = isMobileViewport();
+      if (mobile !== _wasMobileViewport) {
+        _wasMobileViewport = mobile;
+        allShellWins().forEach(function (w) {
+          if (isTiledWin(w)) return;
+          if (mobile) {
+            applyWindowViewportMode(w);
+          } else {
+            /* Leaving mobile: drop full-screen and re-seat the window as a
+               floating one, since it has no inline geometry to fall back on. */
+            w.classList.remove('win-fullscreen');
+            if (!w._maxed) positionShellWindowFromClick(w, null);
+          }
+        });
+      } else if (mobile) {
+        /* Same mode, new dimensions: nothing to re-seat, but keep the class. */
+        allShellWins().forEach(function (w) { if (!isTiledWin(w)) applyWindowViewportMode(w); });
+      }
+      /* Refit after the layout settles; a window measured while hidden or
+         mid-resize reports 0 and fitShellTerminal silently declines. */
+      allShellWins().forEach(function (w) {
+        if (w.classList.contains('win-hidden')) return;
+        _fitWinSoon(w);
+      });
+      refreshSessionTabbar();
+    });
+  }
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('orientationchange', onViewportChange);
+})();
+
 /** Ensure the tiled overlay is visible (e.g. first window after restoring a saved tile preference). */
 function openPaneWorkspace() {
   var ws = paneWorkspaceEl();
@@ -295,6 +342,18 @@ function _layoutMaybeAutoTile() {
 
 // ---- hide/show all terminal windows (main-page focus mode) ----
 var _winsHidden = false;
+
+/** Last viewport mode seen, so the resize handler can tell a rotate (same mode,
+ *  new size) from a breakpoint crossing (mode flip). Seeded on first load. */
+var _wasMobileViewport = (function () {
+  if (!window.matchMedia) return false;
+  try {
+    return window.matchMedia('(pointer: coarse)').matches &&
+           window.matchMedia('(hover: none)').matches;
+  } catch (e) {
+    return false;
+  }
+})();
 
 function hideAllWindows() {
   _winsHidden = true;
@@ -437,6 +496,10 @@ function toggleShellWindowMax(win) {
     setActivePane(win, true);
     return;
   }
+  /* Full-screen mode owns its geometry through CSS; letting a maximize toggle
+     write inline width/left here would override the stylesheet and un-fullscreen
+     the window. On mobile the window is already screen-sized, so it is a no-op. */
+  if (win.classList.contains('win-fullscreen') || isMobileViewport()) return;
   if (win._maxed) {
     win._maxed = false;
     var r = win._maxSavedRect || {};
@@ -447,7 +510,9 @@ function toggleShellWindowMax(win) {
     win._maxed = true;
     win._maxSavedRect = { left: win.style.left, top: win.style.top, width: win.style.width, height: win.style.height };
     win.style.left = '8px'; win.style.top = '8px';
-    win.style.width = 'calc(100vw - 16px)'; win.style.height = 'calc(100vh - 16px)';
+    /* dvh, not vh: iOS Safari's 100vh includes the collapsing address bar, so a
+       vh-based maximize leaves the bottom of the terminal cut off. */
+    win.style.width = 'calc(100vw - 16px)'; win.style.height = 'calc(100dvh - 16px)';
     win.querySelector('.shell-window-max-btn').title = 'Restore (dblclick header / Esc)';
   }
   bringShellWindowToFront(win);
@@ -466,6 +531,9 @@ function bindShellWindowMaxButton(win) {
     header._termcpDblMaxBound = true;
     header.addEventListener('dblclick', function (e) {
       if (e.target.closest('button')) return;
+      /* No maximize toggle on mobile: the window already fills the screen, and a
+         double tap there is a browser zoom gesture. */
+      if (win.classList.contains('win-fullscreen') || isMobileViewport()) return;
       toggleShellWindowMax(win);
     });
   }
@@ -481,11 +549,57 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
+/** True on touch-first devices (phones, tablets) in any orientation.
+ *
+ *  Deliberately NOT a width query: a phone in landscape is ~844px wide, which
+ *  fails `max-width: 768px` and would leave it with a desktop floating window.
+ *  Touch capability is the real signal, and it is orientation-independent.
+ *  The `no-touch` escape hatch lets a narrow desktop window stay in floating
+ *  mode, where a mouse-driven UI is still the right model. */
+function isMobileViewport() {
+  if (!window.matchMedia) return false;
+  try {
+    return window.matchMedia('(pointer: coarse)').matches &&
+           window.matchMedia('(hover: none)').matches;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Mobile shows one terminal filling the viewport (RFC: full-screen layer).
+ *
+ *  Geometry comes from the stylesheet here, never from inline styles: an inline
+ *  width/height wins over a media query, so writing the desktop 640x480 box would
+ *  silently defeat the full-screen rule. Any inline geometry left over from a
+ *  desktop-sized window (or an earlier viewport) is cleared, and tiled panes are
+ *  left alone — they are laid out by the pane grid, not by this. */
+function applyWindowViewportMode(win) {
+  if (!win || isTiledWin(win)) return;
+  if (!isMobileViewport()) {
+    win.classList.remove('win-fullscreen');
+    return;
+  }
+  win.classList.add('win-fullscreen');
+  win.style.width = '';
+  win.style.height = '';
+  win.style.left = '';
+  win.style.top = '';
+  /* Clear the inline z-index too: the full-screen rule in the stylesheet owns it,
+     and a stale one from floating mode would defeat that rule. */
+  win.style.zIndex = '';
+  /* A desktop maximize rect cannot be restored meaningfully at this size, and a
+     stale "maximized" flag would make the first restore jump back to 640x480. */
+  win._maxSavedRect = null;
+  win._maxed = false;
+}
+
 /** Initial placement for a new .shell-window (caller must have incremented shellWindowCount).
- *  The window is 640x480 by default, but never larger than the viewport: a phone
- *  in landscape is only ~390px tall, so a fixed 480px window would hang off the
- *  bottom with its toolbar unreachable. */
+ *  On mobile the window fills the viewport and CSS owns its geometry (see
+ *  applyWindowViewportMode). Otherwise it starts at 640x480, clamped to the
+ *  viewport: a phone in landscape is only ~390px tall, so a fixed 480px window
+ *  would hang off the bottom with its toolbar unreachable. */
 function positionShellWindowFromClick(win, clickEvent) {
+  if (isMobileViewport()) { applyWindowViewportMode(win); return; }
   var MARGIN = 8;
   var winW = Math.min(640, window.innerWidth - MARGIN * 2);
   var winH = Math.min(480, window.innerHeight - MARGIN * 2);
