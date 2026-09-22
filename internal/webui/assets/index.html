@@ -15,12 +15,20 @@
     </nav>
   </header>
   <div class="dock">
+    <!-- Both banners live in the page column rather than inside a section body.
+         Their sections can be collapsed (a state persisted in localStorage, so it
+         can stay collapsed forever) and the entries section is additionally a
+         fixed drawer on touch that slides off-screen. A message written into
+         either container after a failure would be hidden exactly when it matters:
+         a dropped WebSocket or a failed connect is the one thing the user needs
+         to read. -->
+    <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
+    <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
     <div class="section-header entries-section-header" id="sec-entries" aria-expanded="true" role="button" tabindex="0">
       <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
       <span>Entries</span>
     </div>
     <div class="section-body" id="sec-entries-body">
-      <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
       <div id="conn-grid" class="conn-grid"></div>
     </div>
     <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
@@ -40,7 +48,6 @@
       </button>
     </div>
     <div class="section-body" id="sec-sessions-body">
-      <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
       <div id="session-grid" class="conn-grid"></div>
     </div>
     <div id="panel-tools" class="shell-window tools-panel" style="display:none;width:520px;height:70vh;min-width:340px;min-height:280px">
