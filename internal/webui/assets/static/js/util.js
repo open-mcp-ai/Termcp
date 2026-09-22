@@ -223,13 +223,21 @@ function shellWindowsEl() {
 
 function setLoadBanner(bannerEl, msg) {
   if (!bannerEl) return;
-  if (msg) {
-    bannerEl.textContent = msg;
-    bannerEl.style.display = 'block';
-  } else {
-    bannerEl.textContent = '';
-    bannerEl.style.display = 'none';
-  }
+  /* textContent also clears any previous close button. */
+  bannerEl.textContent = msg || '';
+  bannerEl.style.display = msg ? 'flex' : 'none';
+  if (!msg) return;
+  /* Dismissable: otherwise the banner stays until the next successful action,
+     which can be a long time on a page the user has moved on from. Built here
+     so every caller gets it. */
+  var x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'conn-load-banner-close';
+  x.title = 'Dismiss';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.textContent = '\u00d7';
+  x.addEventListener('click', function () { setLoadBanner(bannerEl, ''); });
+  bannerEl.appendChild(x);
 }
 
 /** /api/sessions/{id}{suffix} — session-scoped REST (shells/forwards/files). Terminal I/O uses WebSocket. */
