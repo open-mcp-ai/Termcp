@@ -22,6 +22,7 @@ function refreshSessionTabbar() {
   // Keep the bar (and its layout controls) visible in tile mode even with no windows,
   // so the tiled overlay always offers an exit; float mode hides it when empty.
   bar.classList.toggle('hidden', wins.length === 0 && _layoutMode !== 'tile');
+  if (!bar.classList.contains('hidden')) restoreSessionTabbarPos(bar);
   var topWin = null;
   if (_layoutMode === 'tile') {
     topWin = (_paneActiveWin && isTiledWin(_paneActiveWin)) ? _paneActiveWin : null;
@@ -325,6 +326,85 @@ function updateSessionTabbarToggle() {
     : '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><path d="M3.5 11.5l9-7"/></svg>';
 }
 
+/** Drag the floating session tab bar by its left grip.
+ *  The bar is centred with left:50% + translateX(-50%), so a drag switches it to
+ *  an explicit left/top and drops the centring transform. The position is kept in
+ *  localStorage and re-applied after re-renders, which only touch the inner tab list. */
+function setupSessionTabbarDrag(bar) {
+  if (!bar || bar._termcpDragBound) return;
+  var grip = document.getElementById('session-tabbar-grip');
+  if (!grip) return;
+  bar._termcpDragBound = true;
+
+  function clamp(left, top) {
+    var r = bar.getBoundingClientRect();
+    var maxLeft = Math.max(0, window.innerWidth - r.width);
+    var maxTop = Math.max(0, window.innerHeight - r.height);
+    return { left: Math.max(0, Math.min(left, maxLeft)), top: Math.max(0, Math.min(top, maxTop)) };
+  }
+  function place(left, top) {
+    bar.style.transform = 'none';
+    bar.style.left = left + 'px';
+    bar.style.top = top + 'px';
+  }
+
+  var drag = { active: false, id: null, dx: 0, dy: 0 };
+  function onMove(e) {
+    if (!drag.active || e.pointerId !== drag.id) return;
+    e.preventDefault();
+    var p = clamp(e.clientX - drag.dx, e.clientY - drag.dy);
+    place(p.left, p.top);
+  }
+  function finish(e) {
+    if (!drag.active || (e && e.pointerId !== drag.id)) return;
+    drag.active = false;
+    bar.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    if (grip.hasPointerCapture && grip.hasPointerCapture(drag.id)) {
+      try { grip.releasePointerCapture(drag.id); } catch (e2) {}
+    }
+    var r = bar.getBoundingClientRect();
+    try { localStorage.setItem('termcp_tabbar_pos', JSON.stringify({ left: r.left, top: r.top })); } catch (e3) {}
+    drag.id = null;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', finish);
+    window.removeEventListener('pointercancel', finish);
+    window.removeEventListener('blur', finish);
+  }
+  grip.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var r = bar.getBoundingClientRect();
+    drag.active = true;
+    drag.id = e.pointerId;
+    drag.dx = e.clientX - r.left;
+    drag.dy = e.clientY - r.top;
+    bar.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    if (grip.setPointerCapture) {
+      try { grip.setPointerCapture(drag.id); } catch (e2) {}
+    }
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', finish);
+  });
+}
+
+/** Re-apply a saved tab bar position (called after the bar is shown or re-rendered). */
+function restoreSessionTabbarPos(bar) {
+  var saved;
+  try { saved = JSON.parse(localStorage.getItem('termcp_tabbar_pos') || 'null'); } catch (e) { return; }
+  if (!saved || typeof saved.left !== 'number' || typeof saved.top !== 'number') return;
+  var r = bar.getBoundingClientRect();
+  var maxLeft = Math.max(0, window.innerWidth - r.width);
+  var maxTop = Math.max(0, window.innerHeight - r.height);
+  bar.style.transform = 'none';
+  bar.style.left = Math.max(0, Math.min(saved.left, maxLeft)) + 'px';
+  bar.style.top = Math.max(0, Math.min(saved.top, maxTop)) + 'px';
+}
+
 // Keep the grid recomputed as panes are added/removed.
 (function () {
   var g = paneGridEl();
@@ -346,6 +426,7 @@ function updateSessionTabbarToggle() {
 try { if (localStorage.getItem('termcp_layout_mode') === 'tile') _layoutMode = 'tile'; } catch (e) {}
 updateTileToggleButton();
 refreshSessionTabbar();
+if (sessionTabbarEl()) setupSessionTabbarDrag(sessionTabbarEl());
 
 /** Toggle maximize: floating window fills the viewport; a pane fills the grid. */
 function toggleShellWindowMax(win) {
@@ -400,16 +481,25 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
-/** Initial placement for a new .shell-window (caller must have incremented shellWindowCount). */
+/** Initial placement for a new .shell-window (caller must have incremented shellWindowCount).
+ *  The window is 640x480 by default, but never larger than the viewport: a phone
+ *  in landscape is only ~390px tall, so a fixed 480px window would hang off the
+ *  bottom with its toolbar unreachable. */
 function positionShellWindowFromClick(win, clickEvent) {
-  var winW = 640, winH = 480, th = 21;
+  var MARGIN = 8;
+  var winW = Math.min(640, window.innerWidth - MARGIN * 2);
+  var winH = Math.min(480, window.innerHeight - MARGIN * 2);
+  win.style.width = winW + 'px';
+  win.style.height = winH + 'px';
+  var th = 21;
   var left, top;
   if (clickEvent && typeof clickEvent.clientX === 'number') {
-    left = Math.max(8, Math.min(clickEvent.clientX - winW / 2, window.innerWidth - winW - 8));
-    top = Math.max(8, Math.min(clickEvent.clientY - th, window.innerHeight - winH - 8));
+    left = Math.max(MARGIN, Math.min(clickEvent.clientX - winW / 2, window.innerWidth - winW - MARGIN));
+    top = Math.max(MARGIN, Math.min(clickEvent.clientY - th, window.innerHeight - winH - MARGIN));
   } else {
     var off = (shellWindowCount - 1) % 5;
-    left = 80 + off * 24; top = 60 + off * 24;
+    left = Math.max(MARGIN, 80 + off * 24);
+    top = Math.max(MARGIN, 60 + off * 24);
   }
   win.style.left = left + 'px';
   win.style.top = top + 'px';
