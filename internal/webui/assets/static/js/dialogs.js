@@ -178,7 +178,6 @@ function loadForwards() {
     .then(function (j) {
       window._lastForwards = j.forwards || [];
       renderSessionGrid(window._lastSessionsSnapshot || [], '');
-      refreshFwList();
       document.querySelectorAll('.shell-window').forEach(function(w) { if (w._refreshFwList) w._refreshFwList(); });
     })
     .catch(function (e) { window._lastForwards = []; });
