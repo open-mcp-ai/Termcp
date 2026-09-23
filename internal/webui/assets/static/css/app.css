@@ -949,30 +949,6 @@
   .shell-switch-num { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; min-width: 12px; }
   .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-  .tools-tab {
-    font: inherit; padding: 8px 14px; border: none; border-bottom: 2px solid transparent;
-    background: transparent; color: #656d76; cursor: pointer; transition: color .12s, border-color .12s;
-  }
-  .tools-tab:hover { color: #24292f; }
-  .tools-tab.active { color: #0969da; border-bottom-color: #0969da; font-weight: 600; }
-  /* Light-themed tools panel (overrides dark shell-window) */
-  .shell-window.tools-panel { background: #fff; color: #24292f; }
-  .shell-window.tools-panel .shell-window-header { background: #f6f8fa; border-bottom-color: #d0d7de; }
-  .shell-window.tools-panel .shell-window-title { color: #1f2328; }
-  .shell-window.tools-panel .shell-window-content { background: #fff; }
-  .shell-window.tools-panel .shell-window-header-btns button { color: #57606a; }
-  .shell-window.tools-panel .shell-window-header-btns button:hover { color: #24292f; background: rgba(0,0,0,.06); }
-  .shell-window.tools-panel .sid { color: #1f2328; }
-  .shell-window.tools-panel .tools-tab { padding: 6px 10px; font-size: 0.78rem; border-bottom: 2px solid transparent; background: transparent; color: #656d76; cursor: pointer; }
-  .shell-window.tools-panel .tools-tab:hover { color: #24292f; }
-  .shell-window.tools-panel .tools-tab.active { color: #0969da; border-bottom-color: #0969da; font-weight: 600; }
-  .file-row:hover { background: #f0f6fc; }
-  #file-listing { padding: 0; }
-  #file-listing:empty::after { content: 'Enter a path and click Load'; display: block; padding: 12px; color: #656d76; font-size: 0.82rem; }
-  #file-up:hover, #file-upload-btn:hover, #file-ls:hover { background: #eaeef2; color: #24292f; }
-  #file-path:focus { background: #fff; }
-
-
   /* File context menu (dark, matches shell-window) */
   .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:#252526; border:1px solid #484f58; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:150px; padding:4px 0; }
   .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:#ccc; white-space:nowrap; }

@@ -48,7 +48,7 @@ func TestIndexHTMLReferencesOnlyExistingAssets(t *testing.T) {
 
 // TestModulesLoadedInSourceOrder pins the load order. The modules rely on
 // script-execution order for `var` state that is initialised and read at load
-// time (e.g. tools-panel's cached DOM refs before its wiring statements run),
+// time (e.g. forward-modal's cached DOM refs before its wiring statements run),
 // so a shuffled order can break the page even though every name exists.
 func TestModulesLoadedInSourceOrder(t *testing.T) {
 	index, err := readAsset("index.html")
@@ -205,4 +205,72 @@ func TestIndexHTMLIsThin(t *testing.T) {
 		t.Fatal("could not stat any module")
 	}
 	t.Logf("index.html=%d B, largest module %s=%d B, %d modules", len(index), bigName, biggest, len(mods))
+}
+
+// TestNoUnreachableUI pins the removal of the floating tools window
+// (#panel-tools) and its module. That window shipped with no way to open it:
+// openToolPanel had no caller in any commit, so the whole surface was markup,
+// CSS and a 350-line module that no user could ever reach. The panel's two
+// tabs duplicated what every terminal window already offers (the term/fw/file
+// tabs in .shell-tab-bar), so the fix was deletion, not wiring up a trigger.
+//
+// This guards against the panel creeping back: a re-added #panel-tools with no
+// caller would be invisible in the Go build and in every unit test, which is
+// exactly how it survived this long.
+func TestNoUnreachableUI(t *testing.T) {
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(index, "panel-tools") {
+		t.Error("index.html declares #panel-tools again; it had no trigger and was removed")
+	}
+	if _, err := fs.Stat(Assets(), "static/js/tools-panel.js"); err == nil {
+		t.Error("tools-panel.js is back; the reachable part of it lives in forward-modal.js")
+	}
+	// The forward modal is the part that was reachable, so it must still be wired.
+	fm, err := readAsset("static/js/forward-modal.js")
+	if err != nil {
+		t.Fatalf("forward-modal.js must exist: %v", err)
+	}
+	for _, want := range []string{
+		"function openForwardModal(",
+		"function createForward(",
+		"function deleteForward(",
+		"function forwardMatchesConfig(",
+	} {
+		if !strings.Contains(fm, want) {
+			t.Errorf("forward-modal.js lost %q; the forward modal needs it", want)
+		}
+	}
+	// The two formatters moved to util.js because the per-window file tab uses
+	// them and forward-modal no longer has a file panel. Losing them breaks the
+	// file tab at runtime only, so pin the new home.
+	util, err := readAsset("static/js/util.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"function formatSize(", "function fmtTime("} {
+		if !strings.Contains(util, want) {
+			t.Errorf("util.js should declare %q for the per-window file tab", want)
+		}
+	}
+	// And no module may re-declare them: two top-level definitions silently
+	// shadow each other (TestModuleDeclarationsReachSharedScope also covers this,
+	// but a targeted check says why).
+	mods, _ := fs.Glob(Assets(), "static/js/*.js")
+	for _, f := range mods {
+		if f == "static/js/util.js" {
+			continue
+		}
+		body, err := readAsset(f)
+		if err != nil {
+			continue
+		}
+		for _, fn := range []string{"function formatSize(", "function fmtTime("} {
+			if strings.Contains(body, fn) {
+				t.Errorf("%s re-declares %q; it belongs to util.js only", f, fn)
+			}
+		}
+	}
 }

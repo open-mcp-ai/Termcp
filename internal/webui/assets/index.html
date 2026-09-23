@@ -50,60 +50,6 @@
     <div class="section-body" id="sec-sessions-body">
       <div id="session-grid" class="conn-grid"></div>
     </div>
-    <div id="panel-tools" class="shell-window tools-panel" style="display:none;width:520px;height:70vh;min-width:340px;min-height:280px">
-    <div class="shell-window-header">
-      <div class="shell-window-title-cluster">
-        <h3 class="shell-window-title">
-          <span class="shell-title-id-group">
-            <span class="shell-sid-copy">
-              <span class="sid" id="panel-tools-sid">…</span>
-              <button type="button" class="title-copy-btn" id="panel-tools-copy-sid" title="Copy URL" aria-label="Copy URL"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg></button>
-            </span>
-          </span>
-        </h3>
-      </div>
-      <div class="shell-window-header-btns">
-        <button type="button" class="tools-tab active" data-tab="fw">Fwd</button>
-        <button type="button" class="tools-tab" data-tab="file">Files</button>
-        <span style="flex:1;min-width:4px"></span>
-        <button type="button" class="shell-window-collapse-btn" id="panel-tools-collapse" title="Collapse">
-          <svg class="ic-d" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-          <svg class="ic-u" viewBox="0 0 12 8" width="12" height="8" style="display:none"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 6l5-4 5 4"/></svg>
-        </button>
-        <button type="button" class="close-btn" id="panel-tools-close" title="Close">
-          <svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="shell-window-content" style="display:flex;flex-direction:column">
-      <p id="panel-tools-err" class="err" style="display:none"></p>
-      <div id="tools-tab-fw" style="flex:1;min-height:0;overflow:auto;padding:8px 16px 16px">
-        <input type="hidden" id="fw-ssh-config" value="">
-        <div id="tools-fw-list-view">
-          <div style="display:flex;align-items:center;margin-bottom:8px">
-            <span style="font-size:0.75rem;text-transform:uppercase;color:#656d76">Active</span>
-            <button type="button" class="icon-btn" id="fw-show-add" title="Add forwarding" style="width:26px;height:26px;margin-left:auto"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
-          </div>
-          <div id="tools-fw-list-items" style="font-size:0.8rem;color:#656d76">Loading...</div>
-        </div>
-      </div>
-      <div id="tools-tab-file" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:8px 16px 12px">
-        <div style="display:flex;gap:0;margin-bottom:6px;align-items:stretch;flex-shrink:0;border:1px solid #d0d7de;overflow:hidden">
-          <button type="button" id="file-up" title="Parent directory" style="width:34px;height:34px;padding:0;border:none;border-right:1px solid #e0e0e0;background:#f6f8fa;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 11l6-6 6 6"/></svg></button>
-          <input type="text" id="file-path" placeholder="/" style="flex:1;min-width:0;border:none;outline:none;font-family:ui-monospace,monospace;font-size:0.82rem;padding:0 10px;background:#fff;color:#24292f" autocomplete="off">
-          <input type="file" id="file-upload-input" style="display:none">
-          <button type="button" id="file-upload-btn" title="Upload file" style="width:34px;height:34px;padding:0;border:none;border-left:1px solid #e0e0e0;background:#f6f8fa;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M8 2v9M4 6l4-4 4 4M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg></button>
-          <button type="button" id="file-ls" title="Load" style="width:34px;height:34px;padding:0;border:none;border-left:1px solid #e0e0e0;background:#f6f8fa;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M1 8a7 7 0 0113-4.5M15 8a7 7 0 01-13 4.5"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M15 2v3h-3M1 14v-3h3"/></svg></button>
-        </div>
-        <div id="file-listing" style="flex:1;min-height:0;overflow:auto;font-size:0.82rem;font-family:ui-monospace,monospace;border:1px solid #d0d7de;background:#fff"></div>
-      </div>
-      <div id="file-ctx-menu" style="display:none;position:fixed;z-index:30000;background:#fff;border:1px solid #d0d7de;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);min-width:140px;padding:4px 0">
-        <div class="file-ctx-item" data-action="download" style="padding:6px 12px;cursor:pointer;font-size:0.82rem" onmouseover="this.style.background='#f0f6fc'" onmouseout="this.style.background=''">Download</div>
-        <div class="file-ctx-item" data-action="delete" style="padding:6px 12px;cursor:pointer;font-size:0.82rem;color:#cf222e" onmouseover="this.style.background='#fff0f0'" onmouseout="this.style.background=''">Delete</div>
-      </div>
-    </div>
-    <div class="shell-window-resize-handle" title="Drag to resize"></div>
-  </div>
 
 
   <div id="modal-forward" class="modal-backdrop hidden" role="dialog" aria-modal="true">
@@ -237,7 +183,7 @@
   <script src="static/xterm/xterm.js"></script>
   <script src="static/js/util.js"></script>
   <script src="static/js/shell-windows.js"></script>
-  <script src="static/js/tools-panel.js"></script>
+  <script src="static/js/forward-modal.js"></script>
   <script src="static/js/sessions.js"></script>
   <script src="static/js/ui-socket.js"></script>
   <script src="static/js/terminal-view.js"></script>

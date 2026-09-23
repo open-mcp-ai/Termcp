@@ -794,6 +794,7 @@ function focusSessionWindow(connLabel, sessionId, clickEvent, opts) {
 }
 
 
-var _toolPanelSshCfg = '';
-var _toolPanelSessionId = '';
-// Bind the shared forward modal to a session + ssh profile (also used by the files panel).
+// Session + ssh profile the shared forward modal is currently bound to, set by
+// openForwardModal and read by createForward.
+var _fwdSshCfg = '';
+var _fwdSessionId = '';
