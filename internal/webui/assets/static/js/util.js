@@ -65,6 +65,31 @@ function showCopyToast(msg) {
   }, 1600);
 }
 
+/** Human-readable byte size (B/KB/MB/GB), one decimal above the first unit. */
+function formatSize(bytes) {
+  if (!bytes || bytes < 0) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB'];
+  var i = 0;
+  var size = bytes;
+  while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+  return (i === 0 ? size : size.toFixed(1)) + ' ' + units[i];
+}
+
+/**
+ * Render a Unix-millisecond timestamp as local time.
+ *
+ * Every timestamp on the wire is Unix ms: manifests, log.jsonl marks, session
+ * and forward metadata, file mod_time. Formatting is deliberately the client's
+ * job so the server never has to serialize a time as a locale string, and
+ * every field shares one unit.
+ */
+function fmtTime(ms) {
+  if (!ms) return '';
+  var d = new Date(ms);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString();
+}
+
 /* --- Server-pushed user notifications (MCP notify_user) --- */
 var _uiNotifHighlights = {}; // session_id -> true; re-applied when tiles re-render
 

@@ -295,7 +295,7 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 	index := readAssetLF(t, "index.html")
 	for _, tc := range []struct{ name, banner, from, to string }{
 		{"connections", "conn-load-banner", `id="sec-entries-body"`, `id="sec-sessions"`},
-		{"sessions", "session-load-banner", `id="sec-sessions-body"`, `id="panel-tools"`},
+		{"sessions", "session-load-banner", `id="sec-sessions-body"`, `id="modal-forward"`},
 	} {
 		if !strings.Contains(index, `id="`+tc.banner+`"`) {
 			t.Fatalf("index.html should still contain the %s banner", tc.name)
@@ -306,7 +306,7 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 		}
 	}
 	// And both must be in the page column, ahead of the sections they report on.
-	dock := between(t, index, `class="dock"`, `id="panel-tools"`)
+	dock := between(t, index, `class="dock"`, `id="modal-forward"`)
 	for _, banner := range []string{`id="conn-load-banner"`, `id="session-load-banner"`} {
 		if !strings.Contains(dock, banner) {
 			t.Errorf("%s belongs to the page column, not a section body", banner)

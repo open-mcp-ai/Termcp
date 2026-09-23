@@ -648,23 +648,6 @@ if (btnBatchDel) {
     });
   };
 }
-// Delegated click handler for forward delete buttons (bound once, survives innerHTML refresh).
-(function() {
-  var fwList = document.getElementById('tools-fw-list-items');
-  if (fwList) {
-    fwList.addEventListener('click', function(e) {
-      var target = e.target;
-      // Guard against text-node targets (which lack .closest).
-      var btn = (target && target.closest) ? target.closest('.fw-del-btn') : null;
-      if (!btn) return;
-      e.preventDefault();
-      var fwid = btn.getAttribute('data-fwid');
-      if (!fwid) return;
-      deleteForward(fwid).catch(function(err) { console.error('Delete forward failed:', err); });
-    });
-  }
-})();
-
 function reasonLabel(r) {
   if (!r) return '';
   switch (String(r)) {

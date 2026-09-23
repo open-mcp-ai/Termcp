@@ -78,9 +78,13 @@ core/            纯逻辑，零 DOM：transport（REST/WS）、会话状态管�
 
 ### 2.6 待继续确认的开放项
 
-- [ ] 移动端工具面板（Forwardings/Files）的具体形态（`[工具▾]` 弹出后如何呈现）
+- [x] 移动端工具面板（Forwardings/Files）的具体形态（`[工具▾]` 弹出后如何呈现）——**结论：不再需要独立面板**。
+      Forwardings/Files 已随终端窗口本身提供（窗口内 `.shell-tab-bar` 的 term/fw/file/notify 四个页签，触屏与桌面一致），
+      原先为此预留的 `#panel-tools` 悬浮窗口从未有触发入口（`openToolPanel` 无调用点），已删除；
+      `tools-panel.js` 只剩共享的转发弹窗逻辑，更名为 `forward-modal.js`。
 - [ ] 平板（横屏 768–1024）的布局断点与浮动窗口策略
-- [ ] 卡片 hover-only 按钮的移动端替代（长按菜单）
+- [x] 卡片 hover-only 按钮的移动端替代（长按菜单）——**结论：不再需要**。卡片动作已改为直接作用在对象上
+      （名字=重命名、sid=复制，各自 `role=button` + Enter/Space），不依赖 hover，触屏可直接点。
 - [ ] 已关闭会话回放视图在移动端的呈现
 - [ ] SDK 提取的具体 API 形态（最后阶段）
 - [ ] `notify_user` 在移动端的呈现（浏览器级通知，不做会话定位）
@@ -90,14 +94,14 @@ core/            纯逻辑，零 DOM：transport（REST/WS）、会话状态管�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **0** | 输出字节偏移坐标系 + 字节安全存储（见 `docs/design/session-storage.md`） | ✅ 已完成 |
-| 1 | 模块拆分 + Go 侧哈希缓存（`window.Termcp` 命名空间、多 js/css、immutable） | 待定 |
-| 2 | 数据层/core 抽取（transport、会话状态） | 待定 |
-| 3 | PC 外壳迁入 layout-pc.js（保真，行为不变） | 待定 |
-| 4 | 手机外壳 layout-mobile.js（全屏层、左侧抽屉、底部 shell tab、会话切换器） | 待定 |
-| 5 | 历史按需加载 + 3-xterm 轮换（PC/手机统一） | 待定 |
-| 6 | 测试与回归（见 §五） | 待定 |
+| 1 | 模块拆分 + Go 侧哈希缓存（`window.Termcp` 命名空间、多 js/css、immutable） | ✅ 拆分已完成（`c87c157`，index.html 252 KB → 21 KB，8 个模块 + `app.css`）；**Go 侧哈希缓存/immutable 未做** |
+| 2 | 数据层/core 抽取（transport、会话状态） | 部分完成：transport 在 `ui-socket.js`、会话状态在 `sessions.js`；未抽成独立 core 层 |
+| 3 | PC 外壳迁入 layout-pc.js（保真，行为不变） | 未做（按功能域拆分，未按 PC/手机外壳分文件） |
+| 4 | 手机外壳 layout-mobile.js（全屏层、左侧抽屉、底部 shell tab、会话切换器） | ✅ 已完成（行为层面；代码未单独成 layout-mobile.js） |
+| 5 | 历史按需加载 + 3-xterm 轮换（PC/手机统一） | 待定（用户明确后置） |
+| 6 | 测试与回归（见 §五） | 部分完成：`assetsplit_test.go`、`session_switch_test.go` 覆盖拆分不变量与触屏交互；6 视口实测通过 |
 | 7 | SDK 提取（宿主注入 xterm） | 最后 |
-| 8 | 文档（README 兼容矩阵、移动端截图） | 最后 |
+| 8 | 文档（README 兼容矩阵、移动端截图） | 部分完成：新增 `docs/design/mobile-terminal.md`；**README 兼容矩阵与移动端截图未做** |
 
 ## 四、验收标准（草案）
 
