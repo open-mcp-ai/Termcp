@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Breaking
+
+- **输出改为按字节偏移追加的 `log.bin`，旧布局不再读取**：不再按条（message record）存储输出，每个 shell 的输出落成一个追加文件，字节的偏移量就是它的文件位置，不需要再从记录长度反推。布局改为 `sessions/<session_id>/{manifest.json,<shell_id>/{manifest.json,log.bin,log.jsonl}}`——`log.bin` 是唯一真源，`log.jsonl` 只记「谁、何时、从哪个偏移开始」的状态标记（`o` 输出 / `a` Agent 输入 / `i` 人工输入）。会话列表由目录树导出，不再有第二份可漂移的副本（`sessions.json` 与 `messages/` 移除）。`docs/design/session-storage.md` 记录了取舍：旧的磁盘布局**不读、不迁移、不清理**——旧目录原地不动，其中的会话不会出现在 `session_list` 里。设计说明见 `docs/design/session-storage.md`。
+- **终端字节以普通 JSON 字符串传输，不再是 base64**：WS/REST 帧本来就是标准 JSON，`encoding/json` 两侧都已还原文本，base64 只是把刚解码的内容再编码一次（一次按键要经过 xterm → TextEncoder → base64 → JSON → base64 解码）。**客户端必须停止对 `d` 做 base64 解码**。代价：JSON 字符串无法表示非法 UTF-8 字节序列，这类输出可能显示为 U+FFFD（Windows ConPTY 在 termcp 见到之前就已替换；Linux 下 `cat` 二进制数据会出现）。`log.bin` 本身不受影响，只有传输表示是有损的。
+- **删除 `GET /api/connection-templates`**：它只服务于 Web UI 新建连接表单的预填，现在模板由前端自己持有；服务端不再携带一份它从不写入磁盘的文本。
+
+### 新功能
+
+- **手机端全屏终端（触屏设备）**：手机上的终端此前是 640×480 浮窗，只占 57% 屏幕，横屏时整个挂到屏幕外。触屏设备现在使用全屏终端（RFC 的 full-screen layer），桌面端浮窗/平铺/拖拽行为完全不变。
+  - **手机判据是触控能力，不是宽度**：`pointer:coarse` + `hover:none`。横屏手机宽约 844px，`max-width:768px` 判不中，于是既不进全屏也不隐藏 tab 栏，留下一个浮窗压在浮动栏下面。
+  - **几何来自样式表，不来自 inline**：JS 会清掉它自己写过的 inline `width`/`height`/`z-index`——inline 值压得过媒体查询，这条是实测（给元素写 inline 640px 后，媒体查询命中仍保持 640px 宽）。
+  - 新增 `resize`/`orientationchange` 重算（旋转会跨过手机判据边界，inline 几何否则会存活下来）；`maximize` 改用 `100dvh`（iOS Safari 的 `100vh` 含收起的地址栏，会切掉终端底部）；触屏上不显示最大化开关（双击是缩放手势）。
+  - 随之修掉的一批触屏缺陷：`[−]` 之前调用 `closeShellWindow`，把窗口销毁（xterm 释放、监听摘掉、节点移除），此后点会话卡片再无反应——现在只加 `.win-minimized`，`restoreShellWindow` 还原；全屏窗口之间无法互相抬升（样式表给每个全屏窗口同一个 `z-index: 21000`），顶位改为「移交」而非「递增」，上限固定，不会爬过抽屉的 24000。
+- **手机端首页：entries 变左侧抽屉，会话先到首屏**：22 个连接排成网格约 1960px 高，用户自己的会话要滚过 **2081px** 才出现——两屏才能到目的地。触屏上 entries 改为左侧滑入抽屉，由区段标题自身开启（不额外加汉堡键），带 scrim、safe-area 内边距，点卡片/scrim/Escape/回到桌面宽度都会关闭；会话区段标题 **2081px → 117px**。entry 卡片在手机上撑满整行；「新建连接」从标题栏按钮改为末尾的虚线卡片（原来的绑定写在顶层，元素缺失会在那里抛错，导致其后所有初始化都不执行——症状是零 entry 卡片，而不是少一个按钮）。
+- **区段加载横幅移出可折叠区段**：两个横幅此前挂在区段 body 内，而两个容器都会隐藏内容——`#sec-entries-body` 在触屏上是滑出屏幕的固定抽屉（点卡片就关），`#sec-sessions-body` 折叠时是 `display:none` 且折叠状态持久化在 localStorage（可以永久折叠）。于是「连接失败」与「已断开，正在重连」恰好写在用户最需要读的时刻被藏起来。现在两者都放在页面列顶部，位于它们所报告的区段之前，并带关闭按钮。
+- **会话卡片：把操作放到它作用的对象上**：卡片上 id 旁的铅笔读起来是「编辑 id」，实际是重命名会话；复制按钮是紧挨着 id 的第二个目标，而 id 本身就是你要瞄准的东西。现在**名字**是重命名控件，**sid** 是复制控件（各自带 `role=button`/`tabindex`/Enter/Space），铅笔与独立复制按钮随之移除；状态从名字旁的 `dead` 文字徽标改为 id 左侧的指示灯（绿=运行、红=已退出，原因仍在 tooltip），用 7px 的 CSS 圆点而非图标，以保持行高不变、让 id 始终是那一行的阅读重点；选择复选框从图标左上角（读起来像属于图标）移到名字所在行。名字行把复选框与名字**作为一组**居中：名字盒若为 `flex: 1 1 auto` 会撑满剩余宽度，`gap` 就不起作用（实测视觉间隙 42px，而 CSS 里写的是 4px），改为 `flex: 0 1 auto`（保留 `min-width: 0` 以便长名字省略号生效）后两个元素才真正相邻。
+
+### 改进
+
+- **Web UI 拆成可独立缓存的模块**：`index.html` 原本是一个 **252 KB** 的单文件，标记、CSS、脚本全部内联，每次浏览器加载都要重取全部内容。现在拆成薄页面 + 独立资源：`index.html` **252625 → 21578 B**，原内联 `<style>` 落为 `static/css/app.css`，逻辑按功能域分成 **8 个** `static/js/*.js` 模块。原代码是单个 IIFE，而按文件拆分的 IIFE 无法共享作用域，因此去掉包装，顶层 `var`/`function` 声明成为所有模块可见的全局量（拆分前已核对：全部 201 个顶层声明都是 `var`/`function`，无 `let`/`const`、无重名、不与 window 内建或 xterm 导出冲突、无跨文件加载期前向引用）。无 Go 改动，行为不变（HTML body、JS body、CSS 各自与拆分前逐字节比对，并与拆分前的构建在 4 个视口做 A/B：DOM、计算样式、交互、布局一致）。
+- **文档补全**：`docs/api.md` 记录新的传输编码及其唯一取舍；`docs/design/session-storage.md` 记录字节日志模型与旧布局策略；新增 `docs/design/mobile-terminal.md`（移动端目标、21 条实测陷阱、执行计划与残余风险——含「真实 iOS Safari 与微信/XWebView 未在真机验证」）。
+
+### 修复
+
+- **`between()` 不再静默降级（测试工具）**：CI 在 Windows 上 checkout 后资源文件是 CRLF，测试用 `"\n}\n"` 切片取函数体，终止符永不匹配，而 `between()` 不是失败而是返回**文件剩余全部内容**——于是该切片越过自己的收尾括号、吞掉下一个函数，断言在最小化绑定里看到了销毁路径，报出一个并不存在的 bug。现在各资源统一以 LF 读取（复用 `normalizeNL`），且 `between()` 在终止符缺失时直接判失败：无法定界的切片是断言写坏了，不是「范围更宽」。
+
+## v0.2.1 — 2026-09-20
+
 ### 新功能
 
 - **`--disable-auth` / `TERMCP_DISABLE_AUTH_TOKEN`**：显式关闭 HTTP 认证，非 loopback 绑定也放行（此前无认证绑定非 loopback 直接启动失败）。用于录屏、演示、单用户工作站等 loopback-only 场景；启动日志降为 warn。与 `--auth-token`/`--auth-hash` 同时配置视为矛盾并直接报错，不做静默取舍。环境变量只接受 `1`/`true`/`yes`/`on`，`=0`/`=false` 等按未设置处理，避免误开。
