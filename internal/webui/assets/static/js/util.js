@@ -48,7 +48,7 @@ function copyTextFallback(text) {
 
 var _copyToastTimer;
 function showCopyToast(msg) {
-  msg = msg || 'Copied';
+  msg = msg || t('toast.copied');
   var el = document.getElementById('ui-copy-toast');
   if (!el) {
     el = document.createElement('div');
@@ -187,13 +187,13 @@ function showUiNotify(n) {
   if (sid) {
     var sessEl = document.createElement('div');
     sessEl.className = 'ui-notify-sess';
-    sessEl.textContent = 'session ' + sid;
+    sessEl.textContent = t('notify.sessionPrefix', { id: sid });
     card.appendChild(sessEl);
   }
   var closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'ui-notify-close';
-  closeBtn.setAttribute('aria-label', 'Dismiss notification');
+  closeBtn.setAttribute('aria-label', t('notify.dismiss'));
   closeBtn.textContent = '×';
   closeBtn.addEventListener('click', function () { dismissUiNotify(card); });
   card.appendChild(closeBtn);
@@ -257,8 +257,8 @@ function setLoadBanner(bannerEl, msg) {
   var x = document.createElement('button');
   x.type = 'button';
   x.className = 'conn-load-banner-close';
-  x.title = 'Dismiss';
-  x.setAttribute('aria-label', 'Dismiss');
+  x.title = t('banner.dismiss');
+  x.setAttribute('aria-label', t('banner.dismiss'));
   x.textContent = '\u00d7';
   x.addEventListener('click', function () { setLoadBanner(bannerEl, ''); });
   bannerEl.appendChild(x);

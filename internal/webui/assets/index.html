@@ -10,8 +10,25 @@
 <body>
   <header class="app-header">
     <h1>termcp</h1>
-    <nav class="app-header-nav" aria-label="Docs">
-      <a href="/api.html" title="MCP, HTTP API and Agent skill integration docs">API / MCP / SKILLS</a>
+    <nav class="app-header-nav" aria-label="Docs" data-i18n-aria="nav.docs">
+      <!-- Trigger + menu. The trigger is shaped like the API link beside it
+           (same border, radius and blue label) and shows the language in use;
+           the menu below it marks that same choice. -->
+      <span class="lang-switch">
+        <button type="button" id="lang-btn" class="lang-btn" aria-haspopup="true" aria-expanded="false"
+                aria-label="Language" data-i18n-aria="lang.label" onclick="toggleLangMenu()">
+          <span class="lang-icon" aria-hidden="true"></span>
+          <span class="lang-current" id="lang-current">Auto</span>
+          <svg class="lang-caret" viewBox="0 0 12 8" width="9" height="9" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
+        </button>
+        <span class="lang-menu hidden" id="lang-menu" aria-label="Language" data-i18n-aria="lang.label">
+          <button type="button" class="lang-opt" data-lang="auto" onclick="chooseLang('auto')" data-i18n="lang.auto">Auto</button>
+          <button type="button" class="lang-opt" data-lang="en" onclick="chooseLang('en')">ENG</button>
+          <button type="button" class="lang-opt" data-lang="zh-Hans" onclick="chooseLang('zh-Hans')">简中</button>
+          <button type="button" class="lang-opt" data-lang="zh-Hant" onclick="chooseLang('zh-Hant')">繁中</button>
+        </span>
+      </span>
+      <a href="/api.html" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title">API / MCP / SKILLS</a>
     </nav>
   </header>
   <div class="dock">
@@ -26,24 +43,24 @@
     <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
     <div class="section-header entries-section-header" id="sec-entries" aria-expanded="true" role="button" tabindex="0">
       <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span>Entries</span>
+      <span data-i18n="sec.entries">Host</span>
     </div>
     <div class="section-body" id="sec-entries-body">
       <div id="conn-grid" class="conn-grid"></div>
     </div>
     <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
       <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span>Sessions</span>
+      <span data-i18n="sec.sessions">Sessions</span>
       <span id="session-batch-count" class="batch-count" style="display:none"></span>
       <span style="flex:1"></span>
-      <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" aria-label="Select all or clear selection" onclick="event.stopPropagation()">
+      <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
         <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
         <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
       </button>
-      <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" aria-label="Delete selected sessions" disabled onclick="event.stopPropagation()">
+      <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" disabled onclick="event.stopPropagation()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
       </button>
-      <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" aria-label="Clear all dead sessions" onclick="event.stopPropagation()">
+      <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" data-i18n-title="section.batch.clearDead" aria-label="Clear all dead sessions" data-i18n-aria="section.batch.clearDeadAria" onclick="event.stopPropagation()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4 12 12"/><path d="M12 12l-6 6 4 1 1 4 6-6z"/><path d="M14 10l-2-2"/></svg>
       </button>
     </div>
@@ -55,42 +72,42 @@
   <div id="modal-forward" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
-        <h2 id="modal-forward-title">New Forwarding</h2>
-        <button type="button" id="modal-forward-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <h2 id="modal-forward-title" data-i18n="modal.forward.title">New Forwarding</h2>
+        <button type="button" id="modal-forward-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-forward-err" class="err" style="display:none"></p>
         <input type="hidden" id="fw-ssh-config-modal" value="">
-        <label for="fw-direction">Direction</label>
+        <label for="fw-direction" data-i18n="modal.forward.direction">Direction</label>
         <select id="fw-direction">
-          <option value="local">Local (ssh -L)</option>
-          <option value="remote">Remote (ssh -R)</option>
-          <option value="dynamic">SOCKS5 (ssh -D)</option>
+          <option value="local" data-i18n="modal.forward.dir.local">Local (ssh -L)</option>
+          <option value="remote" data-i18n="modal.forward.dir.remote">Remote (ssh -R)</option>
+          <option value="dynamic" data-i18n="modal.forward.dir.dynamic">SOCKS5 (ssh -D)</option>
         </select>
         <p style="font-size:0.7rem;color:#656d76;margin:-8px 0 8px 0">
-          <span id="fw-dir-hint-local">local listen → remote target</span>
-          <span id="fw-dir-hint-remote" style="display:none">remote listen → local target</span>
-          <span id="fw-dir-hint-dynamic" style="display:none">SOCKS5 → any target</span>
+          <span id="fw-dir-hint-local" data-i18n="modal.forward.dirHint.local">local listen → remote target</span>
+          <span id="fw-dir-hint-remote" style="display:none" data-i18n="modal.forward.dirHint.remote">remote listen → local target</span>
+          <span id="fw-dir-hint-dynamic" style="display:none" data-i18n="modal.forward.dirHint.dynamic">SOCKS5 → any target</span>
         </p>
         <div id="fw-target-fields-modal">
-          <label for="fw-remote-host">Target host</label>
-          <input type="text" id="fw-remote-host" placeholder="e.g. localhost" autocomplete="off">
-          <label for="fw-remote-port">Target port</label>
-          <input type="number" id="fw-remote-port" placeholder="port" min="1" max="65535">
+          <label for="fw-remote-host" data-i18n="modal.forward.targetHost">Target host</label>
+          <input type="text" id="fw-remote-host" placeholder="e.g. localhost" data-i18n-placeholder="modal.forward.targetHostPlaceholder" autocomplete="off">
+          <label for="fw-remote-port" data-i18n="modal.forward.targetPort">Target port</label>
+          <input type="number" id="fw-remote-port" placeholder="port" data-i18n-placeholder="modal.forward.targetPortPlaceholder" min="1" max="65535">
         </div>
-        <label for="fw-local-host">Listen host</label>
-        <input type="text" id="fw-local-host" placeholder="e.g. 127.0.0.1" autocomplete="off">
-        <label for="fw-local-port" id="fw-local-port-label">Listen port (0 = random)</label>
+        <label for="fw-local-host" data-i18n="modal.forward.listenHost">Listen host</label>
+        <input type="text" id="fw-local-host" placeholder="e.g. 127.0.0.1" data-i18n-placeholder="modal.forward.listenHostPlaceholder" autocomplete="off">
+        <label for="fw-local-port" id="fw-local-port-label" data-i18n="modal.forward.listenPort">Listen port (0 = random)</label>
         <input type="number" id="fw-local-port" placeholder="0" value="0" min="0" max="65535">
-        <button type="button" class="btn btn-primary" id="fw-create" style="margin-top:8px">Create</button>
+        <button type="button" class="btn btn-primary" id="fw-create" style="margin-top:8px" data-i18n="common.create">Create</button>
       </div>
     </div>
   </div>
   <div id="pane-workspace" class="pane-workspace" aria-hidden="true">
     <div class="pane-grid" id="pane-grid"></div>
   </div>
-  <div id="session-tabbar" class="session-tabbar hidden" role="tablist" aria-label="Open sessions">
-    <div class="session-tabbar-grip" id="session-tabbar-grip" title="Drag to move" aria-hidden="true"></div>
+  <div id="session-tabbar" class="session-tabbar hidden" role="tablist" aria-label="Open sessions" data-i18n-aria="tabbar.openSessions">
+    <div class="session-tabbar-grip" id="session-tabbar-grip" title="Drag to move" data-i18n-title="tabbar.dragToMove" aria-hidden="true"></div>
     <div class="session-tabs-scroll" id="session-tabs-scroll"></div>
     <div class="session-tabbar-actions" id="session-tabbar-actions"></div>
   </div>
@@ -99,14 +116,14 @@
   <div id="modal-conn" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal">
       <div class="modal-h">
-        <h2 id="modal-conn-title">Add connection</h2>
-        <button type="button" id="modal-conn-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <h2 id="modal-conn-title" data-i18n="modal.conn.titleAdd">Add Host</h2>
+        <button type="button" id="modal-conn-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-conn-err" class="err" style="display:none"></p>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <label for="conn-name" style="margin:0;flex:1;font-size:0.85rem;font-weight:600">name</label>
-          <button type="button" class="btn" id="conn-toggle-view" style="font-size:0.78rem;padding:2px 6px" title="Toggle between form and TOML">
+          <label for="conn-name" style="margin:0;flex:1;font-size:0.85rem;font-weight:600" data-i18n="modal.conn.name">name</label>
+          <button type="button" class="btn" id="conn-toggle-view" style="font-size:0.78rem;padding:2px 6px" title="Toggle between form and TOML" data-i18n-title="modal.conn.toggleView">
             <svg class="toggle-icon-form" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5"/><path d="M4.5 5h5M4.5 7.5h3M4.5 10h2"/></svg>
             <svg class="toggle-icon-toml" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="display:none"><path d="M5 3.5L2 7l3 3.5M9 10.5l3-3.5-3-3.5"/></svg>
           </button>
@@ -114,28 +131,28 @@
         <input type="text" id="conn-name" placeholder="my-server" autocomplete="off" style="margin-bottom:8px;width:100%">
         <!-- Form view -->
         <form id="conn-form-view" autocomplete="off" onsubmit="return false">
-          <div class="conn-field"><label for="conn-f-host">Host</label><input type="text" id="conn-f-host" placeholder="192.168.1.1" autocomplete="off"></div>
-          <div class="conn-row"><div class="conn-field"><label for="conn-f-port">Port</label><input type="number" id="conn-f-port" value="22" autocomplete="off"></div><div class="conn-field"><label for="conn-f-user">User</label><input type="text" id="conn-f-user" placeholder="root" autocomplete="username"></div></div>
-          <div class="conn-field"><label for="conn-f-auth">Auth</label><select id="conn-f-auth"><option value="password">Password</option><option value="key">Private Key</option></select></div>
-          <div class="conn-field" id="conn-f-password-wrap"><label for="conn-f-password">Password</label><div class="psw-wrap"><input type="password" id="conn-f-password" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show password"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-          <div class="conn-field" id="conn-f-pem-wrap" style="display:none"><label for="conn-f-pem">Private Key</label><textarea id="conn-f-pem" spellcheck="false" rows="4"></textarea></div>
-          <div class="conn-field" id="conn-f-passphrase-wrap" style="display:none"><label for="conn-f-passphrase">Key Passphrase (optional)</label><div class="psw-wrap"><input type="password" id="conn-f-passphrase" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-          <div class="conn-field"><label for="conn-f-shell">Default Shell (optional)</label><input type="text" id="conn-f-shell" placeholder="auto-detect" autocomplete="off"></div>
-          <div class="conn-field"><label for="conn-f-proxy">Proxy (optional, SOCKS5 URL)</label><input type="text" id="conn-f-proxy" placeholder="socks5://user:pass@127.0.0.1:1080" autocomplete="off"></div>
-          <div class="jump-arrow" title="SSH traffic to this host is tunneled through the bastions below, in order">SSH Jumps Chain</div>
+          <div class="conn-field"><label for="conn-f-host" data-i18n="modal.conn.field.host">Host</label><input type="text" id="conn-f-host" placeholder="192.168.1.1" autocomplete="off"></div>
+          <div class="conn-row"><div class="conn-field"><label for="conn-f-port" data-i18n="modal.conn.field.port">Port</label><input type="number" id="conn-f-port" value="22" autocomplete="off"></div><div class="conn-field"><label for="conn-f-user" data-i18n="modal.conn.field.user">User</label><input type="text" id="conn-f-user" placeholder="root" autocomplete="username"></div></div>
+          <div class="conn-field"><label for="conn-f-auth" data-i18n="modal.conn.field.auth">Auth</label><select id="conn-f-auth"><option value="password" data-i18n="modal.conn.field.password">Password</option><option value="key" data-i18n="modal.conn.field.privateKey">Private Key</option></select></div>
+          <div class="conn-field" id="conn-f-password-wrap"><label for="conn-f-password" data-i18n="modal.conn.field.password">Password</label><div class="psw-wrap"><input type="password" id="conn-f-password" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show password" data-i18n-title="modal.conn.showPassword"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
+          <div class="conn-field" id="conn-f-pem-wrap" style="display:none"><label for="conn-f-pem" data-i18n="modal.conn.field.privateKey">Private Key</label><textarea id="conn-f-pem" spellcheck="false" rows="4"></textarea></div>
+          <div class="conn-field" id="conn-f-passphrase-wrap" style="display:none"><label for="conn-f-passphrase" data-i18n="modal.conn.field.passphrase">Key Passphrase (optional)</label><div class="psw-wrap"><input type="password" id="conn-f-passphrase" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show" data-i18n-title="modal.conn.show"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
+          <div class="conn-field"><label for="conn-f-shell" data-i18n="modal.conn.field.shell">Default Shell (optional)</label><input type="text" id="conn-f-shell" placeholder="auto-detect" data-i18n-placeholder="modal.conn.field.shellPlaceholder" autocomplete="off"></div>
+          <div class="conn-field"><label for="conn-f-proxy" data-i18n="modal.conn.field.proxy">Proxy (optional, SOCKS5 URL)</label><input type="text" id="conn-f-proxy" placeholder="socks5://user:pass@127.0.0.1:1080" autocomplete="off"></div>
+          <div class="jump-arrow" title="SSH traffic to this host is tunneled through the bastions below, in order" data-i18n-title="modal.conn.jumps.hint" data-i18n="modal.conn.jumps.title">SSH Jumps Chain</div>
           <div class="jump-chain" id="conn-jumps"></div>
-          <div class="conn-field"><button type="button" class="btn" id="conn-add-jump" style="font-size:0.8rem">+ add jump</button></div>
+          <div class="conn-field"><button type="button" class="btn" id="conn-add-jump" style="font-size:0.8rem" data-i18n="modal.conn.addJump">+ add jump</button></div>
         </form>
         <!-- JSON view -->
         <div id="conn-config-view" style="display:none">
-          <label for="conn-config">config</label>
+          <label for="conn-config" data-i18n="modal.conn.config">config</label>
           <textarea id="conn-config" spellcheck="false"></textarea>
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn" id="conn-duplicate" style="display:none">Duplicate</button>
-          <button type="button" class="btn btn-danger" id="conn-delete" style="display:none">Delete</button>
-          <button type="button" class="btn" id="conn-test">Test</button>
-          <button type="button" class="btn btn-primary" id="conn-save">Save</button>
+          <button type="button" class="btn" id="conn-duplicate" style="display:none" data-i18n="common.duplicate">Duplicate</button>
+          <button type="button" class="btn btn-danger" id="conn-delete" style="display:none" data-i18n="common.delete">Delete</button>
+          <button type="button" class="btn" id="conn-test" data-i18n="common.test">Test</button>
+          <button type="button" class="btn btn-primary" id="conn-save" data-i18n="common.save">Save</button>
         </div>
         <p id="conn-test-result" style="display:none;margin:8px 0 0;font-size:0.82rem;word-break:break-word"></p>
       </div>
@@ -145,20 +162,20 @@
   <div id="modal-start" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
-        <h2 id="start-title">Start session</h2>
-        <button type="button" class="btn" id="modal-start-close">Close</button>
+        <h2 id="start-title" data-i18n="modal.start.title">Start session</h2>
+        <button type="button" class="btn" id="modal-start-close" data-i18n="common.close">Close</button>
           </div>
       <div class="modal-body">
         <p id="modal-start-err" class="err" style="display:none"></p>
         <input type="hidden" id="start-ssh-config">
-        <label for="start-name">Session name (optional)</label>
-        <input type="text" id="start-name" placeholder="Default: connection name" autocomplete="off">
-        <label for="start-cmd">Command (optional)</label>
-        <input type="text" id="start-cmd" placeholder="Empty = SSH login shell; or bash, powershell, …" autocomplete="off">
-        <label for="start-mode">Mode</label>
+        <label for="start-name" data-i18n="modal.start.name">Session name (optional)</label>
+        <input type="text" id="start-name" placeholder="Default: connection name" data-i18n-placeholder="modal.start.namePlaceholder" autocomplete="off">
+        <label for="start-cmd" data-i18n="modal.start.cmd">Command (optional)</label>
+        <input type="text" id="start-cmd" placeholder="Empty = SSH login shell; or bash, powershell, …" data-i18n-placeholder="modal.start.cmdPlaceholder" autocomplete="off">
+        <label for="start-mode" data-i18n="modal.start.mode">Mode</label>
         <select id="start-mode"><option value="pty">pty</option><option value="pipe">pipe</option></select>
         <div class="modal-actions">
-          <button type="button" class="btn btn-primary" id="start-run">Connect</button>
+          <button type="button" class="btn btn-primary" id="start-run" data-i18n="modal.start.run">Connect</button>
         </div>
       </div>
     </div>
@@ -167,20 +184,22 @@
   <div id="modal-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
-        <h2 id="modal-confirm-title">Confirm</h2>
-        <button type="button" id="modal-confirm-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <h2 id="modal-confirm-title" data-i18n="common.confirm">Confirm</h2>
+        <button type="button" id="modal-confirm-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-confirm-msg" style="margin:0 0 4px;color:#1f2328;font-size:0.9rem;word-break:break-word"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" id="modal-confirm-cancel">Cancel</button>
-          <button type="button" class="btn btn-danger" id="modal-confirm-ok">Delete</button>
+          <button type="button" class="btn" id="modal-confirm-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="modal-confirm-ok" data-i18n="common.delete">Delete</button>
         </div>
       </div>
     </div>
   </div>
 
   <script src="static/xterm/xterm.js"></script>
+  <script src="static/js/i18n-catalog.js"></script>
+  <script src="static/js/i18n.js"></script>
   <script src="static/js/util.js"></script>
   <script src="static/js/shell-windows.js"></script>
   <script src="static/js/forward-modal.js"></script>
