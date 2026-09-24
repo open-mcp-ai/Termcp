@@ -38,7 +38,7 @@ func TestSession_PtyResizeReachesChild(t *testing.T) {
 		var out string
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
-			if err := s.SendInput(testShellInput("stty size"), false); err != nil {
+			if err := s.PrimaryShell().SendTerminalBytes([]byte(testShellInput("stty size")), false); err != nil {
 				t.Fatalf("send stty: %v", err)
 			}
 			chunk, _ := s.ReadOutput(context.Background(), 300*time.Millisecond, true, 0, 0)
