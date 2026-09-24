@@ -54,10 +54,7 @@ var placeholderRe = regexp.MustCompile(`\{(\w+)\}`)
 // loadCatalogs parses i18n-catalog.js into lang -> key -> value.
 func loadCatalogs(t *testing.T) map[string]map[string]string {
 	t.Helper()
-	body, err := readAsset("static/js/i18n-catalog.js")
-	if err != nil {
-		t.Fatalf("i18n-catalog.js must exist and be embedded: %v", err)
-	}
+	body := readAssetLF(t, "static/js/i18n-catalog.js")
 	locs := catalogLangRe.FindAllStringSubmatchIndex(body, -1)
 	if len(locs) != 3 {
 		t.Fatalf("found %d language blocks in i18n-catalog.js, want 3 (en, zh-Hans, zh-Hant)", len(locs))
@@ -119,10 +116,7 @@ func TestCatalogsHaveIdenticalKeys(t *testing.T) {
 // "modal.foward.title" on screen instead of failing anything.
 func TestIndexHTMLKeysExist(t *testing.T) {
 	cat := loadCatalogs(t)
-	index, err := readAsset("index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	index := readAssetLF(t, "index.html")
 	refs := i18nAttrRe.FindAllStringSubmatch(index, -1)
 	if len(refs) < 50 {
 		t.Fatalf("index.html references only %d i18n keys; the static markup lost its markers", len(refs))
@@ -158,10 +152,7 @@ func jsModules(t *testing.T) []string {
 // later" and is already stale.
 func TestNoOrphanKeys(t *testing.T) {
 	cat := loadCatalogs(t)
-	index, err := readAsset("index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	index := readAssetLF(t, "index.html")
 	referenced := map[string]bool{}
 	for _, m := range i18nAttrRe.FindAllStringSubmatch(index, -1) {
 		referenced[m[1]] = true
@@ -169,10 +160,7 @@ func TestNoOrphanKeys(t *testing.T) {
 	mods := jsModules(t)
 	calls := 0
 	for _, f := range mods {
-		body, err := readAsset(f)
-		if err != nil {
-			t.Fatal(err)
-		}
+		body := readAssetLF(t, f)
 		// The modules also generate markup, so the data-i18n* markers they embed
 		// in their template strings are references too.
 		for _, m := range i18nAttrRe.FindAllStringSubmatch(body, -1) {
@@ -274,10 +262,7 @@ func TestCoreKeysTranslated(t *testing.T) {
 // the engine's entry point, and the dictionaries load before the modules that
 // read them at load time.
 func TestLanguageSelectorIsWired(t *testing.T) {
-	index, err := readAsset("index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	index := readAssetLF(t, "index.html")
 	if !strings.Contains(index, `class="lang-icon"`) {
 		t.Error("index.html no longer shows the language glyph")
 	}
@@ -285,10 +270,7 @@ func TestLanguageSelectorIsWired(t *testing.T) {
 	// colour, which means its reference lives in the stylesheet rather than in
 	// index.html; check it there and check that the file is really served, since
 	// the markup no longer points at it.
-	css, err := readAsset("static/css/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
+	css := readAssetLF(t, "static/css/app.css")
 	if !strings.Contains(css, "icons/language.svg") {
 		t.Error("app.css no longer masks the language glyph in; the icon would not render")
 	}
@@ -355,10 +337,7 @@ func TestUntranslatedAudit(t *testing.T) {
 	skipTextRe := regexp.MustCompile(`application/json|text/plain|text/html|charset=|Content-Type|GET |POST |PUT |DELETE |HTTP |://|Monaco|Consolas|px|vh|dvw|calc\(|rgba\(|termcp|[Ss]erver response|session_id|shell_id`)
 	found := 0
 	for _, f := range jsModules(t) {
-		body, err := readAsset(f)
-		if err != nil {
-			t.Fatal(err)
-		}
+		body := readAssetLF(t, f)
 		for i, line := range strings.Split(body, "\n") {
 			if skipLineRe.MatchString(line) {
 				continue
