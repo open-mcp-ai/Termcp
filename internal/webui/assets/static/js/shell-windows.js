@@ -61,6 +61,7 @@ function refreshSessionTabbar() {
       tab._win = w;
       tab.innerHTML = '<span class="session-tab-num"></span>' +
         '<span class="session-tab-label"></span>' +
+        '<span class="session-tab-review" hidden data-i18n-title="tab.reviewWaiting"></span>' +
         '<span class="session-tab-close" role="button" title="Close window (session keeps running)" data-i18n-title="tab.closeWindow" aria-label="Close window" data-i18n-aria="tab.aria.closeWindow">' +
         '<svg viewBox="0 0 12 12" width="10" height="10"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></span>';
       tab.addEventListener('click', function (e) {
@@ -90,6 +91,10 @@ function refreshSessionTabbar() {
     order.push(tab);
   });
   order.forEach(function (t) { scroll.appendChild(t); });
+  // A minimized window shows nothing but its tab, so the tab is where its queue
+  // has to be visible. This runs at load time too (this module loads before
+  // approval.js), hence the guard: the counts arrive with the first queue read.
+  if (typeof applyApprovalCounts === 'function') applyApprovalCounts();
 }
 
 // Keep the tab bar in sync as shell windows are opened/closed anywhere.

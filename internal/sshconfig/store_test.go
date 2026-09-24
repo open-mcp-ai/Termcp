@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -68,7 +69,10 @@ func TestStoreRemoteRoundTrip(t *testing.T) {
 	if err != nil || e.Host != "h.example" {
 		t.Fatalf("load prod: %+v %v", e, err)
 	}
-	// Leftover disk internal dir is ignored; still only one "internal" in list.
+	// A directory literally named "internal" is NOT the override: that would make
+	// the loopback profile's stored settings depend on a path a user could create
+	// by hand as a remote profile. The override lives in .internal/ and is skipped
+	// by the list scan.
 	if err := os.MkdirAll(filepath.Join(dir, "ssh_configs", "internal"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +94,28 @@ func TestStoreRemoteRoundTrip(t *testing.T) {
 	}
 	in, err = s.Load("internal")
 	if err != nil || in.Kind != KindInternal {
-		t.Fatalf("disk leftover must not override virtual internal: %+v %v", in, err)
+		t.Fatalf("a disk directory named internal must not be mistaken for the override: %+v %v", in, err)
 	}
-	if err := s.Save("internal", InternalTemplate()); err == nil {
-		t.Fatal("expected Save(internal) to fail")
+	if in.DefaultApproval {
+		t.Error("the internal profile picked up settings from an unrelated disk directory")
+	}
+	// Saving internal is how the loopback profile is configured; it writes the
+	// override and the next Load must see it.
+	if err := s.Save("internal", []byte("kind = \"internal\"\ndefault_approval = true\n")); err != nil {
+		t.Fatalf("Save(internal) must be allowed (it writes the override): %v", err)
+	}
+	in, err = s.Load("internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !in.DefaultApproval {
+		t.Error("the internal override did not take effect")
+	}
+	if in.Kind != KindInternal {
+		t.Errorf("override changed kind to %q", in.Kind)
+	}
+	if in.Description == "" {
+		t.Error("the override dropped the built-in description; absent keys must keep their default")
 	}
 }
 
@@ -101,5 +123,79 @@ func TestLoad_UnknownReturnsErrNotFound(t *testing.T) {
 	s := NewStore(t.TempDir())
 	if _, err := s.Load("no-such-config"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// A profile can make review the default for every session started from it, so
+// "all writes to this host are reviewed" is a property of the connection and
+// not a switch someone has to remember after each launch.
+//
+// The field must survive a TOML round trip and default to off for a profile
+// that never mentioned it: a missing key meaning "on" would gate sessions whose
+// owner never asked.
+func TestDefaultApprovalRoundTripsAndDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+
+	off, err := ParseAndValidate([]byte("kind = \"remote\"\nhost = \"h\"\nuser = \"u\"\npassword = \"p\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.DefaultApproval {
+		t.Error("a profile that never set default_approval must not gate: a missing key cannot mean on")
+	}
+	if EffectiveApproval(off) {
+		t.Error("EffectiveApproval must report false for an unset field")
+	}
+	if EffectiveApproval(nil) {
+		t.Error("a nil entry must not gate: a profile that failed to load cannot silently turn review on")
+	}
+
+	on, err := ParseAndValidate([]byte("kind = \"remote\"\nhost = \"h\"\nuser = \"u\"\npassword = \"p\"\ndefault_approval = true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.DefaultApproval {
+		t.Fatal("default_approval = true did not survive parsing")
+	}
+	if !EffectiveApproval(on) {
+		t.Error("EffectiveApproval must report true when the profile sets it")
+	}
+
+	// Marshal/unmarshal is the path that matters: the UI saves by marshalling an
+	// Entry back to TOML, so a field lost there would be silently dropped on the
+	// first edit.
+	body, err := toml.Marshal(on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ParseAndValidate(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.DefaultApproval {
+		t.Error("default_approval was lost in a marshal/unmarshal round trip")
+	}
+
+	// And through the store, which is what a saved profile actually goes through.
+	if err := s.Save("gated", body); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load("gated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.DefaultApproval {
+		t.Error("default_approval was lost through Save/Load")
+	}
+
+	// A field set to false must not appear in the TOML at all: a file a human
+	// reads should not state a default.
+	plain, err := toml.Marshal(off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "default_approval") {
+		t.Errorf("default_approval = false was written to TOML; it is the default and should be omitted:\n%s", plain)
 	}
 }

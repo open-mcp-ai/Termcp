@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -264,9 +265,24 @@ func main() {
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
 	webuiH := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}
+	// File transfers and port forwards are held by the same review queue as
+	// command lines, but the operations live with the MCP server (it owns the
+	// SFTP and forward machinery). The Web UI decides; this is how its decision
+	// gets replayed where the operation is implemented.
+	webuiH.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
 	webuiH.Register(mux)
 	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
 	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
+
+	// An approval decision must also wake an agent parked on shell_notify, so it
+	// learns the outcome without polling. Fan-out stays in one place: the web UI
+	// keeps its own listener (installed in Register) and this one forwards the
+	// same transitions to the notify subsystem's rules.
+	sessMgr.AddApprovalListener(func(sessionID string, req approval.Request) {
+		if req.ShellID != "" {
+			mcpSrv.NotifyManager().OnApprovalChange(req.ShellID, "approval "+string(req.State))
+		}
+	})
 	if verifier != nil {
 		mainSrv.Handler = auth.Middleware(verifier, mux)
 	}

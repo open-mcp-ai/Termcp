@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -20,7 +21,19 @@ func (s *Server) handleMessageOps(ctx context.Context, request mcpgo.CallToolReq
 
 // handleForwardOps is the low-frequency port-forward entry point.
 func (s *Server) handleForwardOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	switch getString(request.GetArguments(), "action", "") {
+	args := request.GetArguments()
+	action := getString(args, "action", "")
+	// list is a read. Opening a tunnel exposes a port and closing one tears down
+	// something someone may be relying on; both are changes to the host, so both
+	// are gated. The action is checked before dispatch so the reviewer's summary
+	// can say which one it is.
+	if action != "list" {
+		sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+		if res, held := s.gateOperation(ctx, request, "forward", sessionID); held {
+			return res, nil
+		}
+	}
+	switch action {
 	case "local":
 		return s.handleLocalForward(ctx, request)
 	case "remote":

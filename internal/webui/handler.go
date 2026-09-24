@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/notify"
@@ -58,6 +59,13 @@ type Handler struct {
 	NotifyMgr  *notify.Manager // active shell notification rules (read-only listing + delete)
 	NoInternal bool            // when true, hide and refuse the built-in loopback profile
 
+	// ExecuteOperation replays an approved non-terminal request (a file transfer,
+	// a port forward). Wired by main to the MCP server, which owns those
+	// operations; nil when no such server exists, in which case only command
+	// lines can be approved. It exists so the queue can gate operations it does
+	// not itself know how to perform.
+	ExecuteOperation func(approval.Request) error
+
 	sessHub   *sessionListHub
 	notifyHub *uiNotifyHub
 }
@@ -67,6 +75,12 @@ type Handler struct {
 func (h *Handler) Register(mux *http.ServeMux) {
 	if h.Sessions != nil {
 		h.Sessions.SetSessionListListener(h.sessionHub().broadcast)
+		// Approval transitions are pushed as payloads (unlike the list hub's
+		// bare signal): the browser needs the request body to render the card.
+		// The notifyHub is allocated here so the sink is live before any session
+		// can enable approval mode.
+		_ = h.uiNotifyHub()
+		h.Sessions.AddApprovalListener(h.BroadcastApproval)
 	}
 	if h.ForwardMgr != nil {
 		h.ForwardMgr.SetOnChange(h.sessionHub().broadcast)
@@ -93,6 +107,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/sessions/{id}", h.handleRenameSession)
 	// DELETE purges the session (terminate + remove its on-disk directory).
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handlePurgeSession)
+	// Approval mode: per-session gate control, plus the approver worklist and
+	// decisions. See approval.go for why the two groups are separate.
+	mux.HandleFunc("GET /api/sessions/{id}/approval", h.handleSessionApproval)
+	mux.HandleFunc("PATCH /api/sessions/{id}/approval", h.handleSessionApproval)
+	mux.HandleFunc("GET /api/approvals", h.handleApprovalList)
+	mux.HandleFunc("POST /api/approvals/{id}/approve", h.handleApprovalDecision)
+	mux.HandleFunc("POST /api/approvals/{id}/reject", h.handleApprovalDecision)
 	mux.HandleFunc("GET /api/ui/ws", h.handleWebUIWS)
 	// output-range path id is shell_id (or session_id for primary-shell fallback).
 	mux.HandleFunc("GET /api/sessions/{id}/output-range", h.handleSessionOutputRange)
@@ -155,6 +176,9 @@ type connectionSummary struct {
 	Host        string `json:"host,omitempty"`
 	User        string `json:"user,omitempty"`
 	Port        int    `json:"port,omitempty"`
+	// DefaultApproval is the profile's review default for new sessions. It is
+	// served on the list so the card can show the flag without a second fetch.
+	DefaultApproval bool `json:"default_approval"`
 }
 
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +206,12 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 }
 
 func summarizeConnection(name string, ent *sshconfig.Entry) connectionSummary {
-	cs := connectionSummary{Name: name, Kind: ent.Kind, Description: ent.Description}
+	cs := connectionSummary{
+		Name:            name,
+		Kind:            ent.Kind,
+		Description:     ent.Description,
+		DefaultApproval: ent.DefaultApproval,
+	}
 	if ent.Kind == sshconfig.KindRemote {
 		cs.Host = strings.TrimSpace(ent.Host)
 		cs.User = strings.TrimSpace(ent.User)
@@ -221,8 +250,14 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(name), "internal") {
-		http.Error(w, "built-in internal profile is not editable", http.StatusForbidden)
-		return
+		// The internal profile IS editable, but only as an override: the store
+		// layers it over the built-in defaults, so setting one field does not
+		// mean restating kind/description. Renaming it is still refused — the
+		// name is how the built-in connection is addressed.
+		if from := strings.TrimSpace(r.URL.Query().Get("from")); from != "" && !strings.EqualFold(from, name) {
+			http.Error(w, "the built-in internal profile cannot be renamed", http.StatusForbidden)
+			return
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -352,13 +387,14 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess, err := h.Sessions.Create(session.Config{
-		Command: cmd,
-		Args:    args,
-		Mode:    api.SessionMode(mode),
-		Name:    sessName,
-		Rows:    rows,
-		Cols:    cols,
-		Remote:  remote,
+		Command:  cmd,
+		Args:     args,
+		Mode:     api.SessionMode(mode),
+		Name:     sessName,
+		Rows:     rows,
+		Cols:     cols,
+		Remote:   remote,
+		Approval: sshconfig.EffectiveApproval(ent),
 	})
 	if err != nil {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
@@ -507,7 +543,7 @@ func (h *Handler) redirectShells(w http.ResponseWriter, r *http.Request) {
 
 // resolveOutputShell resolves a shell for output-range endpoints.
 // Prefer shell_id; fall back to session primary shell when a session_id is passed.
-func (h *Handler) resolveOutputShell(id string) session.TerminalShell {
+func (h *Handler) resolveOutputShell(id string) *session.ChildShell {
 	if cs := h.Sessions.GetChildShell(id); cs != nil {
 		return cs
 	}

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
@@ -15,6 +16,16 @@ import (
 
 // Manager is a thread-safe registry of sessions with persistence.
 type Manager struct {
+	// approvalMu guards approvalListeners, which fan approval transitions out to
+	// every interested subsystem (the web UI hub, the notify wake-up).
+	//
+	// It is a list rather than a single slot because the subscribers are
+	// independent: main installs the agent wake-up and the web UI installs its
+	// push, and neither is a replacement for the other. A single slot silently
+	// dropped one of them.
+	approvalMu        sync.Mutex
+	approvalListeners []func(sessionID string, req approval.Request)
+
 	sessions    sync.Map // string → *Session
 	internalSSH *sshserver.Server
 	msgMgr      *message.Manager
@@ -61,6 +72,31 @@ func (m *Manager) notifyClose(shellID string) {
 	m.listChangeMu.RUnlock()
 	if fn != nil {
 		fn(shellID)
+	}
+}
+
+// AddApprovalListener registers a callback invoked for every approval queue
+// transition (submission, approval, rejection, expiry, cancellation).
+//
+// Subscribers are additive: several subsystems observe the same transitions.
+// A callback runs without any manager lock held, so it may call back into the
+// session (the web UI broadcaster does).
+func (m *Manager) AddApprovalListener(fn func(sessionID string, req approval.Request)) {
+	if fn == nil {
+		return
+	}
+	m.approvalMu.Lock()
+	m.approvalListeners = append(m.approvalListeners, fn)
+	m.approvalMu.Unlock()
+}
+
+// notifyApproval forwards one queue transition to every registered listener.
+func (m *Manager) notifyApproval(sessionID string, req approval.Request) {
+	m.approvalMu.Lock()
+	listeners := append([]func(string, approval.Request){}, m.approvalListeners...)
+	m.approvalMu.Unlock()
+	for _, fn := range listeners {
+		fn(sessionID, req)
 	}
 }
 
@@ -140,6 +176,21 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 	}
 	m.sessions.Store(s.ID, s)
 
+	// A profile can make review the default for the host. This runs after the
+	// session is registered and has its change sink installed (below), so the
+	// gate is on before the caller can send anything and the UI is told about it
+	// through the same path a manual switch uses.
+	//
+	// One reviewer, no timeout: a profile says whether to review, not how many
+	// people must. A queued request must not expire on its own either — a session
+	// whose review mode silently lapsed while a command waited would be worse
+	// than one that never gated it.
+	if cfg.Approval {
+		if err := s.EnableApproval(1, 0); err != nil {
+			slog.Error("session approval default failed", "session_id", s.ID, "err", err)
+		}
+	}
+
 	sid := s.ID
 	// Exit watchers started by New() may already be reading these callbacks;
 	// atomic stores make the assignment race-free (a watcher firing in the
@@ -163,6 +214,15 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 	s.onShellExit.Store(&onShellExit)
 	onShellClose := m.notifyClose
 	s.onShellClose.Store(&onShellClose)
+
+	// Approval is a session-scoped resource: when the session goes away, every
+	// pending request is cancelled rather than left waiting for a decision that
+	// can no longer be executed. Attached here so a session created before
+	// approval mode is enabled is still covered.
+	s.AttachCleanup(func() { s.DisableApproval() })
+	// The change sink is installed per session at creation; approval mode may be
+	// switched on much later, so the sink must be in place beforehand.
+	s.SetApprovalChangeHandler(m.notifyApproval)
 
 	m.persist()
 	m.notifyListChange()
@@ -362,6 +422,44 @@ func (m *Manager) Rename(id, name string) error {
 	}
 	s.mu.Lock()
 	s.Name = name
+	s.UpdatedAt = clock.Now()
+	s.mu.Unlock()
+	m.persist()
+	m.notifyListChange()
+	return nil
+}
+
+// EnableApproval turns on approval mode for one session and tells the UI about it.
+//
+// The broadcast is why this lives on the Manager rather than the Session: a
+// session cannot notify the browser list on its own, and without the frame the
+// open cards keep rendering the old state until something else happens to
+// refresh them (the lock would appear not to have worked).
+func (m *Manager) EnableApproval(id string, need int, timeout time.Duration) error {
+	s := m.Get(id)
+	if s == nil {
+		return fmt.Errorf("session %q not found", id)
+	}
+	if err := s.EnableApproval(need, timeout); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.UpdatedAt = clock.Now()
+	s.mu.Unlock()
+	m.persist()
+	m.notifyListChange()
+	return nil
+}
+
+// DisableApproval turns approval mode off for one session and broadcasts the
+// change. Anything still pending is cancelled by the session itself.
+func (m *Manager) DisableApproval(id string) error {
+	s := m.Get(id)
+	if s == nil {
+		return fmt.Errorf("session %q not found", id)
+	}
+	s.DisableApproval()
+	s.mu.Lock()
 	s.UpdatedAt = clock.Now()
 	s.mu.Unlock()
 	m.persist()

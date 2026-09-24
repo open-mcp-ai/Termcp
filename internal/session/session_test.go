@@ -133,7 +133,7 @@ func TestSession_SendInputReadOutput(t *testing.T) {
 	var output string
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := s.SendInput(testShellInput(testInteractiveOutputCommand("session_test")), false); err != nil {
+		if err := s.PrimaryShell().SendTerminalBytes([]byte(testShellInput(testInteractiveOutputCommand("session_test"))), false); err != nil {
 			t.Fatal(err)
 		}
 		chunk, _ := s.ReadOutput(context.Background(), 1*time.Second, true, 0, 0)
@@ -345,11 +345,11 @@ func TestSession_SendInputAfterExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.SendInput(testShellInput("exit"), false)
+	s.PrimaryShell().SendTerminalBytes([]byte(testShellInput("exit")), false)
 
 	time.Sleep(1 * time.Second)
 
-	err = s.SendInput("should fail", true)
+	err = s.PrimaryShell().SendTerminalBytes([]byte("should fail"), true)
 	if err == nil {
 		t.Fatal("expected error sending input to exited process")
 	}
@@ -580,7 +580,7 @@ func TestSession_ReadOutputWithMaxBytes(t *testing.T) {
 	// Generate predictable output longer than maxBytes
 	longText := strings.Repeat("ABCDEFGHIJ", 100) // 1000 bytes
 	cmd := testInteractiveOutputCommand(longText)
-	if err := s.SendInput(testShellInput(cmd), false); err != nil {
+	if err := s.PrimaryShell().SendTerminalBytes([]byte(testShellInput(cmd)), false); err != nil {
 		t.Fatal(err)
 	}
 

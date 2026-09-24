@@ -33,6 +33,11 @@ var _connTemplateRemote = [
   '# Optional: tunnel SSH through a SOCKS5 proxy.',
   '# proxy = "socks5://user:pass@127.0.0.1:1080"',
   '',
+  '# Optional: review every AI write by default. With this on, sessions started',
+  '# from this profile begin with review mode enabled — each command waits for a',
+  '# human to accept it before any byte reaches the shell.',
+  '# default_approval = true',
+  '',
   '# Optional: bastion / ProxyJump chain (self-contained, inline).',
   '# [jump]',
   '# host = "bastion.example"',
@@ -184,20 +189,31 @@ function _jumpToLines(c, depth) {
 }
 
 function _connFormToTOML() {
-  var lines = ['kind = "remote"'];
-  var h = document.getElementById('conn-f-host').value.trim(); lines.push('host = ' + _tomlVal(h));
-  var p = parseInt(document.getElementById('conn-f-port').value, 10) || 22;
-  if (p !== 22) lines.push('port = ' + p);
-  lines.push('user = ' + _tomlVal(document.getElementById('conn-f-user').value.trim()));
-  var auth = document.getElementById('conn-f-auth').value;
-  if (auth === 'password') lines.push('password = ' + _tomlVal(document.getElementById('conn-f-password').value));
-  else lines.push('private_key = """\n' + document.getElementById('conn-f-pem').value + '\n"""');
-  var pp = document.getElementById('conn-f-passphrase').value;
-  if (pp) lines.push('key_passphrase = ' + _tomlVal(pp));
+  // The internal profile's override carries only the settings it actually uses.
+  // Emitting host/credentials for it would either be ignored on load (confusing)
+  // or, worse, make a loopback profile look like it dials somewhere.
+  var isInternal = editingConnName === 'internal';
+  var lines = [isInternal ? 'kind = "internal"' : 'kind = "remote"'];
+  if (!isInternal) {
+    var h = document.getElementById('conn-f-host').value.trim(); lines.push('host = ' + _tomlVal(h));
+    var p = parseInt(document.getElementById('conn-f-port').value, 10) || 22;
+    if (p !== 22) lines.push('port = ' + p);
+    lines.push('user = ' + _tomlVal(document.getElementById('conn-f-user').value.trim()));
+    var auth = document.getElementById('conn-f-auth').value;
+    if (auth === 'password') lines.push('password = ' + _tomlVal(document.getElementById('conn-f-password').value));
+    else lines.push('private_key = """\n' + document.getElementById('conn-f-pem').value + '\n"""');
+    var pp = document.getElementById('conn-f-passphrase').value;
+    if (pp) lines.push('key_passphrase = ' + _tomlVal(pp));
+  }
   var sh = document.getElementById('conn-f-shell').value.trim();
   if (sh) lines.push('default_shell = ' + _tomlVal(sh));
-  var px = document.getElementById('conn-f-proxy').value.trim();
-  if (px) lines.push('proxy = ' + _tomlVal(px));
+  // Written only when on: `default_approval = false` is the default, and a line
+  // stating the default is noise in a file a human is meant to read.
+  if (document.getElementById('conn-f-approval').checked) lines.push('default_approval = true');
+  if (!isInternal) {
+    var px = document.getElementById('conn-f-proxy').value.trim();
+    if (px) lines.push('proxy = ' + _tomlVal(px));
+  }
   lines.push('trust_unknown_host = true');
   for (var j = 0; j < jumpCards.length; j++) {
     lines = lines.concat(_jumpToLines(jumpCards[j], j + 1));
@@ -214,6 +230,7 @@ function _connTOMLToForm(toml) {
   document.getElementById('conn-f-pem').value = o.private_key || '';
   document.getElementById('conn-f-passphrase').value = o.key_passphrase || '';
   document.getElementById('conn-f-shell').value = o.default_shell || '';
+  document.getElementById('conn-f-approval').checked = o.default_approval === true;
   document.getElementById('conn-f-proxy').value = o.proxy || '';
   document.getElementById('conn-f-auth').value = o.private_key ? 'key' : 'password';
   _connAuthChange();
@@ -255,17 +272,30 @@ function _connGetBody() {
 }
 
 function openConnModal(edit, name, kind) {
-  if (edit && kind === 'internal') return; // built-in virtual profile is not editable
+  // The internal profile is editable too: its settings are stored as an
+  // override over the built-in defaults, which is how the loopback connection
+  // gets a review default. It cannot be renamed or deleted (the name is how the
+  // built-in connection is addressed), and the form hides those two controls
+  // for it below.
   editingConnName = edit ? name : '';
   _connDirty = false;
   connEntries = null; // refresh import dropdown options
   document.getElementById('modal-conn-err').style.display = 'none';
+  var isInternal = edit && kind === 'internal';
   document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
-  document.getElementById('conn-delete').style.display = edit ? 'inline-block' : 'none';
-  document.getElementById('conn-duplicate').style.display = edit ? 'inline-block' : 'none';
+  document.getElementById('conn-delete').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
+  document.getElementById('conn-duplicate').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   var nameEl = document.getElementById('conn-name');
   nameEl.value = edit ? name : '';
-  nameEl.readOnly = false;
+  // The name is the profile's identity and the id used in `/api/connections/{name}`.
+  // For internal it is also the only way to address the built-in connection, so
+  // it is pinned; the host/user/auth fields below are hidden since the loopback
+  // dial ignores them.
+  nameEl.readOnly = !!edit;
+  var loopbackOnly = document.getElementById('conn-f-loopback-only');
+  if (loopbackOnly) loopbackOnly.style.display = isInternal ? '' : 'none';
+  var remoteFields = document.getElementById('conn-f-remote-fields');
+  if (remoteFields) remoteFields.style.display = isInternal ? 'none' : '';
   // Start in form view
   document.getElementById('conn-form-view').style.display = '';
   document.getElementById('conn-config-view').style.display = 'none';

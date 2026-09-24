@@ -90,9 +90,18 @@ function renderConnGrid(connections, bannerMsg) {
     tile.className = 'conn-tile entry-card';
     tile.setAttribute('data-conn-name', c.name);
     var icon = c.kind === 'internal' ? '🔁' : '🌐';
-    var editBtn = c.kind === 'internal' ? '' :
+    // The internal profile is editable too: its settings (review default, shell)
+    // are stored as an override. There is nothing to rename or delete, but there
+    // is a setting to change, so the button belongs here as well.
+    var editBtn =
       '<button type="button" class="conn-edit-btn" title="Edit profile" data-i18n-title="conn.aria.editProfile" aria-label="Edit profile" data-i18n-aria="conn.aria.editProfile">' + SVG_CONN_EDIT + '</button>';
     var quickBtn = '<button type="button" class="conn-quick-btn" title="Launch options (session name, command)" data-i18n-title="conn.title.launchOptions" aria-label="Launch options" data-i18n-aria="conn.aria.launchOptions">' + SVG_CONN_QUICK + '</button>';
+    // A profile that reviews by default says so on the card: which connections
+    // are gated is a property of the host, and having to open the editor to
+    // find out is how someone launches a production box ungated.
+    var apprMark = c.default_approval
+      ? '<span class="conn-approval" title="Sessions from this profile start with review mode on" data-i18n-title="conn.approval.mark" aria-label="Reviews by default" data-i18n-aria="conn.approval.markAria">' + SVG_LOCK_CLOSED + '</span>'
+      : '';
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<div class="conn-tile-stack">' +
@@ -105,6 +114,7 @@ function renderConnGrid(connections, bannerMsg) {
       '<button type="button" class="sess-copy-btn" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
       '</span>' +
       quickBtn +
+      apprMark +
       editBtn +
       '</div>' +
       '</div>' +
