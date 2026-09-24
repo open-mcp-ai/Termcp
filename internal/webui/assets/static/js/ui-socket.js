@@ -175,11 +175,11 @@ function connectUIWebSocket() {
           } else if (!win2._streamDone) {
             win2._streamDone = true;
             try {
-              win2._term.writeln('\r\n\x1b[33m[Session ended]\x1b[0m', function () {
+              win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m', function () {
                 shellTermScrollToBottomIfStuck(win2._term, true);
               });
             } catch (e2) {
-              try { win2._term.writeln('\r\n\x1b[33m[Session ended]\x1b[0m'); } catch (e3) {}
+              try { win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m'); } catch (e3) {}
               shellTermScrollToBottomIfStuck(win2._term, true);
             }
           }
@@ -196,7 +196,7 @@ function connectUIWebSocket() {
     window._sessionListSSEBackoff = 1000;
     // Avoid redrawing from a stale snapshot: first _lastSessionsSnapshot may be undefined→[] and clear tiles
     // before the first sessions frame arrives.
-    setLoadBanner(document.getElementById('session-load-banner'), 'Syncing session list…');
+    setLoadBanner(document.getElementById('session-load-banner'), t('banner.syncing'));
     flushPendingTerminalWatches();
     resubscribeAllTerminalWatches();
   };
@@ -209,7 +209,7 @@ function connectUIWebSocket() {
     if (window._sessionListSSERetryTimer) return;
     var delay = window._sessionListSSEBackoff || 1000;
     window._sessionListSSEBackoff = sseBackoffNext(delay);
-    renderSessionGrid(window._lastSessionsSnapshot || [], 'Disconnected. Reconnecting in ~' + Math.ceil(delay / 1000) + 's…');
+    renderSessionGrid(window._lastSessionsSnapshot || [], t('banner.reconnecting', { s: Math.ceil(delay / 1000) }));
     window._sessionListSSERetryTimer = setTimeout(function () {
       window._sessionListSSERetryTimer = null;
       connectUIWebSocket();
@@ -538,7 +538,7 @@ function bootstrapShellFullHistory(sessionId, term) {
     var capLeft = SHELL_HISTORY_DISPLAY_CAP - shown;
     if (capLeft <= 0) {
       try {
-        term.write('\r\n\x1b[33m[Earlier output not shown (browser cap ~' + Math.round(SHELL_HISTORY_DISPLAY_CAP / (1024 * 1024)) + ' MiB)]\x1b[0m\r\n');
+        term.write('\r\n\x1b[33m' + t('term.history.cap', { mb: Math.round(SHELL_HISTORY_DISPLAY_CAP / (1024 * 1024)) }) + '\x1b[0m\r\n');
       } catch (e0) {}
       return Promise.resolve();
     }
@@ -563,7 +563,7 @@ function bootstrapShellFullHistory(sessionId, term) {
       if (total === 0) return Promise.resolve();
       if (off >= total) return Promise.resolve();
       if (shown >= SHELL_HISTORY_DISPLAY_CAP) {
-        try { term.write('\r\n\x1b[33m[Earlier output omitted (size cap)]\x1b[0m\r\n'); } catch (e2) {}
+        try { term.write('\r\n\x1b[33m' + t('term.history.omitted') + '\x1b[0m\r\n'); } catch (e2) {}
         return Promise.resolve();
       }
       return one();

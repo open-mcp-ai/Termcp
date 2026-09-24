@@ -3,9 +3,9 @@ function sessionTabbarEl() {
 }
 
 function sessionTabLabel(win) {
-  if (win._placeholder) return (win._pendingConnName || 'connecting') + '…';
+  if (win._placeholder) return (win._pendingConnName || t('tab.connecting')) + '…';
   if (win._connName) return win._connName + ' · ' + (win._sid ? stripSessionPrefix(win._sid) : '');
-  return win._sid ? stripSessionPrefix(win._sid) : 'session';
+  return win._sid ? stripSessionPrefix(win._sid) : t('tab.session');
 }
 
 /** Open-order sequence number (matches the shell-window-N counter). */
@@ -61,7 +61,7 @@ function refreshSessionTabbar() {
       tab._win = w;
       tab.innerHTML = '<span class="session-tab-num"></span>' +
         '<span class="session-tab-label"></span>' +
-        '<span class="session-tab-close" role="button" title="Close window (session keeps running)" aria-label="Close window">' +
+        '<span class="session-tab-close" role="button" title="Close window (session keeps running)" data-i18n-title="tab.closeWindow" aria-label="Close window" data-i18n-aria="tab.aria.closeWindow">' +
         '<svg viewBox="0 0 12 12" width="10" height="10"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></span>';
       tab.addEventListener('click', function (e) {
         if (e.target.closest('.session-tab-close')) return;
@@ -126,8 +126,9 @@ function refreshSessionTabbar() {
     var sel = document.createElement('select');
     sel.id = 'session-tabbar-strategy';
     sel.className = 'session-tabbar-select';
-    sel.title = 'Pane arrangement strategy';
-    sel.innerHTML = '<option value="auto">Auto</option><option value="cols">Columns</option><option value="rows">Rows</option><option value="pairs">2 cols</option>';
+    sel.setAttribute('data-i18n-title', 'pane.strategy.title');
+    sel.innerHTML = '<option value="auto" data-i18n="pane.strategy.auto">Auto</option><option value="cols" data-i18n="pane.strategy.cols">Columns</option><option value="rows" data-i18n="pane.strategy.rows">Rows</option><option value="pairs" data-i18n="pane.strategy.pairs">2 cols</option>';
+    applyI18n(sel);
     try {
       var saved = localStorage.getItem('termcp_pane_strategy');
       if (saved) sel.value = saved;
@@ -149,7 +150,7 @@ function updateTileToggleButton() {
   if (!b) return;
   var tiled = _layoutMode === 'tile';
   b.classList.toggle('active', tiled);
-  b.title = tiled ? 'Switch to floating windows' : 'Tile all terminal windows';
+  b.title = tiled ? t('layout.tip.float') : t('layout.tip.tile');
   b.innerHTML = tiled
     ? '<svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5V2h3M12 9v3H9M2 2l4 4M12 12L8 8"/></svg>'
     : '<svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1" y="1" width="5" height="5" rx="1"/><rect x="8" y="1" width="5" height="5" rx="1"/><rect x="1" y="8" width="5" height="5" rx="1"/><rect x="8" y="8" width="5" height="5" rx="1"/></svg>';
@@ -387,7 +388,7 @@ function toggleAllWindowsVisible() { _winsHidden ? showAllWindows() : hideAllWin
 function updateSessionTabbarToggle() {
   var btn = document.getElementById('session-tabbar-toggle');
   if (!btn) return;
-  btn.title = _winsHidden ? 'Show terminal windows' : 'Hide terminal windows';
+  btn.title = _winsHidden ? t('win.showAll') : t('win.hideAll');
   btn.setAttribute('aria-label', btn.title);
   btn.innerHTML = _winsHidden
     ? '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg>'
@@ -514,7 +515,8 @@ function toggleShellWindowMax(win) {
     var r = win._maxSavedRect || {};
     win.style.left = r.left || ''; win.style.top = r.top || '';
     win.style.width = r.width || ''; win.style.height = r.height || '';
-    win.querySelector('.shell-window-max-btn').title = 'Maximize (dblclick header)';
+    var maxBtn = win.querySelector('.shell-window-max-btn');
+    if (maxBtn) { maxBtn.setAttribute('data-i18n-title', 'win.max.tip'); maxBtn.title = t('win.max.tip'); }
   } else {
     win._maxed = true;
     win._maxSavedRect = { left: win.style.left, top: win.style.top, width: win.style.width, height: win.style.height };
@@ -522,7 +524,8 @@ function toggleShellWindowMax(win) {
     /* dvh, not vh: iOS Safari's 100vh includes the collapsing address bar, so a
        vh-based maximize leaves the bottom of the terminal cut off. */
     win.style.width = 'calc(100vw - 16px)'; win.style.height = 'calc(100dvh - 16px)';
-    win.querySelector('.shell-window-max-btn').title = 'Restore (dblclick header / Esc)';
+    var maxBtnR = win.querySelector('.shell-window-max-btn');
+    if (maxBtnR) { maxBtnR.setAttribute('data-i18n-title', 'win.restore.tip'); maxBtnR.title = t('win.restore.tip'); }
   }
   bringShellWindowToFront(win);
   _fitWinSoon(win);
@@ -697,7 +700,8 @@ function expandShellWindow(win) {
     var icD = btn.querySelector('.ic-d');
     var icU = btn.querySelector('.ic-u');
     if (icD && icU) { icD.style.display = ''; icU.style.display = 'none'; }
-    btn.title = 'Collapse';
+    btn.setAttribute('data-i18n-title', 'win.collapse');
+    btn.title = t('win.collapse');
   }
   var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
   if (ch && ch.term && ch.instEl) fitShellTerminal(ch.term, ch.instEl, win, true);
@@ -715,7 +719,8 @@ function collapseShellWindow(win) {
     var icD = btn.querySelector('.ic-d');
     var icU = btn.querySelector('.ic-u');
     if (icD && icU) { icD.style.display = 'none'; icU.style.display = ''; }
-    btn.title = 'Expand';
+    btn.setAttribute('data-i18n-title', 'win.expand');
+    btn.title = t('win.expand');
   }
 }
 
@@ -730,9 +735,9 @@ function bindShellWindowCloseButton(win, closeBtn) {
     var sid = win && win._sid;
     if (!sid || win._placeholder) { closeShellWindow(win); return; }
     confirmDialog({
-      title: 'Delete session',
-      message: 'Delete "' + stripSessionPrefix(sid) + '"?',
-      okText: 'Delete',
+      title: t('session.delete.title'),
+      message: t('session.delete.message', { name: stripSessionPrefix(sid) }),
+      okText: t('common.delete'),
       danger: true
     }).then(function (ok) {
       if (!ok) return;
@@ -742,7 +747,7 @@ function bindShellWindowCloseButton(win, closeBtn) {
           var w = getShellWindowBySid(sid) || win;
           if (w) closeShellWindow(w);
         })
-        .catch(function (err) { showCopyToast('Delete failed: ' + (err.message || err)); });
+        .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
     });
   });
 }
@@ -798,3 +803,11 @@ function focusSessionWindow(connLabel, sessionId, clickEvent, opts) {
 // openForwardModal and read by createForward.
 var _fwdSshCfg = '';
 var _fwdSessionId = '';
+
+/* Language switch: three idempotent redraws of state this module already holds
+   (no requests, no window rebuilds). */
+onLangChange(function () {
+  updateTileToggleButton();
+  updateSessionTabbarToggle();
+  refreshSessionTabbar();
+});
