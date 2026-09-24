@@ -116,47 +116,50 @@ function renderJumps() {
     if (idx === jumpEditingIdx) {
       var authIsKey = c.auth === 'key';
       card.innerHTML =
-        '<div class="jump-card-h"><span>jump ' + (idx+1) + '</span>' +
+        '<div class="jump-card-h"><span>' + escapeHtml(t('jump.label', { n: idx+1 })) + '</span>' +
           '<span class="jump-card-actions">' +
-            '<button type="button" class="btn jump-save" style="font-size:0.72rem;padding:2px 8px">save</button>' +
-            '<button type="button" class="btn jump-cancel" style="font-size:0.72rem;padding:2px 8px">cancel</button>' +
+            '<button type="button" class="btn jump-save" style="font-size:0.72rem;padding:2px 8px" data-i18n="jump.save">save</button>' +
+            '<button type="button" class="btn jump-cancel" style="font-size:0.72rem;padding:2px 8px" data-i18n="jump.cancel">cancel</button>' +
           '</span></div>' +
-        '<div class="conn-field"><label>Import from entry</label><select class="jump-import"><option value="">— select entry —</option></select></div>' +
+        '<div class="conn-field"><label data-i18n="jump.import">Import from host</label><select class="jump-import"><option value="" data-i18n="jump.import.select">— select entry —</option></select></div>' +
         '<div class="conn-row">' +
-          '<div class="conn-field"><label>Host</label><input type="text" data-f="host" value="' + _hesc(c.host) + '"></div>' +
-          '<div class="conn-field"><label>Port</label><input type="number" data-f="port" value="' + _hesc(c.port||22) + '"></div>' +
-          '<div class="conn-field"><label>User</label><input type="text" data-f="user" value="' + _hesc(c.user) + '"></div>' +
+          '<div class="conn-field"><label data-i18n="modal.conn.field.host">Host</label><input type="text" data-f="host" value="' + _hesc(c.host) + '"></div>' +
+          '<div class="conn-field"><label data-i18n="modal.conn.field.port">Port</label><input type="number" data-f="port" value="' + _hesc(c.port||22) + '"></div>' +
+          '<div class="conn-field"><label data-i18n="modal.conn.field.user">User</label><input type="text" data-f="user" value="' + _hesc(c.user) + '"></div>' +
         '</div>' +
-        '<div class="conn-field"><label>Auth</label><select data-f="auth"><option value="password"' + (authIsKey?'':' selected') + '>Password</option><option value="key"' + (authIsKey?' selected':'') + '>Private Key</option></select></div>' +
-        '<div class="conn-field j-pw" style="' + (authIsKey?'display:none':'') + '"><label>Password</label><input type="password" data-f="password" value="' + _hesc(c.password) + '"></div>' +
-        '<div class="conn-field j-pem" style="' + (authIsKey?'':'display:none') + '"><label>Private Key</label><textarea data-f="pem" rows="3">' + _hesc(c.pem) + '</textarea></div>' +
-        '<div class="conn-field j-passphrase" style="' + (authIsKey?'':'display:none') + '"><label>Key Passphrase (optional)</label><input type="password" data-f="passphrase" value="' + _hesc(c.passphrase) + '"></div>' +
-        '<div class="conn-field"><label>Proxy (optional)</label><input type="text" data-f="proxy" placeholder="socks5://..." value="' + _hesc(c.proxy) + '"></div>';
+        '<div class="conn-field"><label data-i18n="modal.conn.field.auth">Auth</label><select data-f="auth"><option value="password" data-i18n="modal.conn.field.password"' + (authIsKey?'':' selected') + '>Password</option><option value="key" data-i18n="modal.conn.field.privateKey"' + (authIsKey?' selected':'') + '>Private Key</option></select></div>' +
+        '<div class="conn-field j-pw" style="' + (authIsKey?'display:none':'') + '"><label data-i18n="modal.conn.field.password">Password</label><input type="password" data-f="password" value="' + _hesc(c.password) + '"></div>' +
+        '<div class="conn-field j-pem" style="' + (authIsKey?'':'display:none') + '"><label data-i18n="modal.conn.field.privateKey">Private Key</label><textarea data-f="pem" rows="3">' + _hesc(c.pem) + '</textarea></div>' +
+        '<div class="conn-field j-passphrase" style="' + (authIsKey?'':'display:none') + '"><label data-i18n="modal.conn.field.passphrase">Key Passphrase (optional)</label><input type="password" data-f="passphrase" value="' + _hesc(c.passphrase) + '"></div>' +
+        '<div class="conn-field"><label data-i18n="jump.proxy">Proxy (optional)</label><input type="text" data-f="proxy" placeholder="socks5://..." value="' + _hesc(c.proxy) + '"></div>';
     } else {
-      var host = c.host || '(empty)';
+      var host = c.host || t('jump.empty');
       var info = (c.user ? c.user + '@' : '') + host + (c.port && c.port !== 22 ? ':' + c.port : '');
       var tag = c.auth === 'key' ? 'key' : (c.password || c.pem ? 'pwd' : '');
       card.className = 'jump-card jump-summary';
-      card.setAttribute('title', 'click to edit');
+      card.setAttribute('title', t('jump.editTip'));
       card.innerHTML =
         '<span class="jump-summary-idx">' + (idx+1) + '</span>' +
         '<span class="jump-summary-info">' + _hesc(info) + (tag ? ' <em>' + tag + '</em>' : '') + '</span>' +
-        '<button type="button" class="btn jump-rm" style="font-size:0.72rem;padding:2px 8px" title="remove">remove</button>';
+        '<button type="button" class="btn jump-rm" style="font-size:0.72rem;padding:2px 8px" title="remove" data-i18n-title="jump.remove">remove</button>';
     }
     box.appendChild(card);
   });
+  // Fill the data-i18n* markers baked into the cards above.
+  applyI18n(box);
   _populateJumpImports();
 }
 
 function _populateJumpImports() {
   function fill() {
     document.querySelectorAll('.jump-import').forEach(function(sel) {
-      var opts = '<option value="">— select entry —</option>';
+      var opts = '<option value="" data-i18n="jump.import.select">— select entry —</option>';
       (connEntries || []).forEach(function(c) {
         if (!c || c.kind !== 'remote') return;
         opts += '<option value="' + _hesc(c.name) + '">' + _hesc(c.name) + '</option>';
       });
       sel.innerHTML = opts;
+      applyI18n(sel);
     });
   }
   if (connEntries) { fill(); return; }
@@ -257,7 +260,7 @@ function openConnModal(edit, name, kind) {
   _connDirty = false;
   connEntries = null; // refresh import dropdown options
   document.getElementById('modal-conn-err').style.display = 'none';
-  document.getElementById('modal-conn-title').textContent = edit ? 'Edit connection' : 'Add connection';
+  document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = edit ? 'inline-block' : 'none';
   document.getElementById('conn-duplicate').style.display = edit ? 'inline-block' : 'none';
   var nameEl = document.getElementById('conn-name');
@@ -416,7 +419,7 @@ document.getElementById('conn-test').onclick = function () {
   var btn = this;
   var body = _connGetBody();
   btn.disabled = true;
-  btn.textContent = 'Testing…';
+  btn.textContent = t('test.testing');
   fetch('/api/connections/test', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
@@ -425,21 +428,21 @@ document.getElementById('conn-test').onclick = function () {
     .then(function (j) {
       out.style.display = 'block';
       if (j.ok) {
-        out.textContent = '✓ Connected in ' + (j.duration_ms || 0) + ' ms';
+        out.textContent = t('test.ok', { ms: j.duration_ms || 0 });
         out.style.color = '#1a7f37';
       } else {
-        out.textContent = '✗ ' + (j.error || 'connection failed');
+        out.textContent = t('test.failed', { msg: j.error || t('test.connectionFailed') });
         out.style.color = '#cf222e';
       }
     })
     .catch(function (e) {
       out.style.display = 'block';
-      out.textContent = '✗ ' + String(e.message || e);
+      out.textContent = t('test.failed', { msg: String(e.message || e) });
       out.style.color = '#cf222e';
     })
     .finally(function () {
       btn.disabled = false;
-      btn.textContent = 'Test';
+      btn.textContent = t('common.test');
     });
 };
 document.getElementById('conn-save').onclick = function () {
@@ -447,9 +450,9 @@ document.getElementById('conn-save').onclick = function () {
   err.style.display = 'none';
   var name = document.getElementById('conn-name').value.trim();
   var body = _connGetBody();
-  if (!name) { err.textContent = 'Profile name is required'; err.style.display = 'block'; return; }
+  if (!name) { err.textContent = t('err.name.required'); err.style.display = 'block'; return; }
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(name)) {
-    err.textContent = 'Name must start with a letter/digit and contain only letters, digits, _ or - (max 64)';
+    err.textContent = t('err.name.invalid');
     err.style.display = 'block';
     return;
   }
@@ -458,7 +461,7 @@ document.getElementById('conn-save').onclick = function () {
   for (var i = 0; i < tiles.length; i++) {
     var n = tiles[i].getAttribute('data-conn-name');
     if (n && n.toLowerCase() === name.toLowerCase() && n.toLowerCase() !== editingConnName.toLowerCase()) {
-      err.textContent = 'Profile "' + name + '" already exists';
+      err.textContent = t('err.name.exists', { name: name });
       err.style.display = 'block';
       return;
     }
@@ -480,9 +483,9 @@ document.getElementById('conn-delete').onclick = function () {
   var name = document.getElementById('conn-name').value.trim();
   if (!name) return;
   confirmDialog({
-    title: 'Delete connection',
-    message: 'Delete connection "' + name + '"? This cannot be undone.',
-    okText: 'Delete',
+    title: t('dialog.conn.delete.title'),
+    message: t('dialog.conn.delete.msg', { name: name }),
+    okText: t('common.delete'),
     danger: true
   }).then(function (ok) {
     if (!ok) return;
@@ -509,7 +512,7 @@ document.getElementById('conn-duplicate').onclick = function () {
   editingConnName = '';
   nameEl.value = '';
   nameEl.readOnly = false;
-  document.getElementById('modal-conn-title').textContent = 'Add connection';
+  document.getElementById('modal-conn-title').textContent = t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = 'none';
   document.getElementById('conn-duplicate').style.display = 'none';
   var err = document.getElementById('modal-conn-err');
@@ -523,7 +526,7 @@ function openStartModal(connName, clickEvent) {
   document.getElementById('start-ssh-config').value = connName;
   var startNameEl = document.getElementById('start-name');
   if (startNameEl) startNameEl.value = connName;
-  document.getElementById('start-title').textContent = 'Connect · ' + connName;
+  document.getElementById('start-title').textContent = t('modal.start.titleConnect', { name: connName });
   document.getElementById('start-cmd').value = '';
   document.getElementById('start-mode').value = 'pty';
   showModal('modal-start');
@@ -555,16 +558,16 @@ document.getElementById('start-run').onclick = function () {
 document.getElementById('btn-clear-dead').onclick = function (e) {
   e.stopPropagation();
   var dead = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id && s.status !== 'running'; });
-  if (!dead.length) { showCopyToast('No dead sessions to clear'); return; }
+  if (!dead.length) { showCopyToast(t('toast.dead.none')); return; }
   confirmDialog({
-    title: 'Clear dead sessions',
-    message: 'Permanently delete ' + dead.length + ' dead session' + (dead.length === 1 ? '' : 's') + '? This cannot be undone.',
-    okText: 'Clear (' + dead.length + ')',
+    title: t('section.batch.clearDead'),
+    message: tCount('clear.dead.msg.one', 'clear.dead.msg.other', { count: dead.length }),
+    okText: t('clear.dead.ok', { count: dead.length }),
     danger: true
   }).then(function (ok) {
     if (!ok) return;
     var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, 'Clearing ' + dead.length + ' dead sessions\u2026');
+    if (banner) setLoadBanner(banner, tCount('banner.clearing.one', 'banner.clearing.other', { count: dead.length }));
     return dead.reduce(function (p, s) {
       return p.then(function () {
         return fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
@@ -580,12 +583,12 @@ document.getElementById('btn-clear-dead').onclick = function (e) {
       });
     }, Promise.resolve()).then(function () {
       if (banner) setLoadBanner(banner, '');
-      showCopyToast('Cleared ' + dead.length + ' dead session' + (dead.length === 1 ? '' : 's'));
+      showCopyToast(tCount('toast.dead.cleared.one', 'toast.dead.cleared.other', { count: dead.length }));
       loadForwards();
       startUIWebSocket();
       renderSessionGrid(window._lastSessionsSnapshot || [], '');
     }).catch(function (err) {
-      if (banner) setLoadBanner(banner, 'Clear failed: ' + String(err.message || err));
+      if (banner) setLoadBanner(banner, t('toast.clear.failed', { msg: String(err.message || err) }));
       renderSessionGrid(window._lastSessionsSnapshot || [], '');
     });
   });
@@ -609,19 +612,19 @@ if (btnBatchDel) {
     var snapshot = window._lastSessionsSnapshot || [];
     var targets = snapshot.filter(function (s) { return s && s.id && _selectedSessionIds.has(s.id); });
     if (!targets.length) {
-      showCopyToast('No sessions selected');
+      showCopyToast(t('toast.sessions.none'));
       return;
     }
-    var msg = 'Permanently delete ' + targets.length + ' selected session' + (targets.length === 1 ? '' : 's') + '? This cannot be undone.';
+    var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
     confirmDialog({
-      title: 'Delete selected sessions',
+      title: t('batch.del.dialog'),
       message: msg,
-      okText: 'Delete (' + targets.length + ')',
+      okText: t('batch.del.ok', { count: targets.length }),
       danger: true
     }).then(function (ok) {
       if (!ok) return;
       var banner = document.getElementById('session-load-banner');
-      if (banner) setLoadBanner(banner, 'Deleting ' + targets.length + ' sessions…');
+      if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
       return targets.reduce(function (p, s) {
         return p.then(function () {
           return fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
@@ -637,12 +640,12 @@ if (btnBatchDel) {
         });
       }, Promise.resolve()).then(function () {
         if (banner) setLoadBanner(banner, '');
-        showCopyToast('Deleted ' + targets.length + ' session' + (targets.length === 1 ? '' : 's'));
+        showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: targets.length }));
         loadForwards();
         startUIWebSocket();
         renderSessionGrid(window._lastSessionsSnapshot || [], '');
       }).catch(function (err) {
-        if (banner) setLoadBanner(banner, 'Delete failed: ' + String(err.message || err));
+        if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
         renderSessionGrid(window._lastSessionsSnapshot || [], '');
       });
     });
@@ -651,10 +654,10 @@ if (btnBatchDel) {
 function reasonLabel(r) {
   if (!r) return '';
   switch (String(r)) {
-    case 'explicit': return 'ended manually';
-    case 'crash': return 'unexpected disconnect';
-    case 'exited': return 'process exited';
-    case 'shutdown': return 'server shutdown';
+    case 'explicit': return t('reason.explicit');
+    case 'crash': return t('reason.crash');
+    case 'exited': return t('reason.exited');
+    case 'shutdown': return t('reason.shutdown');
     default: return String(r);
   }
 }

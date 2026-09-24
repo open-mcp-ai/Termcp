@@ -32,9 +32,10 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
   tab.className = 'shell-channel-tab active';
   tab.setAttribute('data-chsid', sessionId);
   tab.innerHTML = '<span class="shell-channel-tab-label">' + escapeHtml(label || 'shell') + '</span>' +
-    '<button type="button" class="shell-channel-tab-copy" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
-    '<span class="shell-channel-tab-ended" style="display:none" title="Session ended">end</span>' +
-    '<button type="button" class="shell-channel-tab-close" title="Close shell">&times;</button>';
+    '<button type="button" class="shell-channel-tab-copy" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
+    '<span class="shell-channel-tab-ended" style="display:none" title="Session ended" data-i18n-title="session.ended" data-i18n="channel.endedTab">end</span>' +
+    '<button type="button" class="shell-channel-tab-close" title="Close shell" data-i18n-title="channel.close">&times;</button>';
+  applyI18n(tab);
   if (addBtn) tabsBar.insertBefore(tab, addBtn);
 
   // Deactivate all other tabs
@@ -160,7 +161,7 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
     e.preventDefault();
     e.stopPropagation();
     var url = resourceUrlShell(win._parentSid || win._sid || '', urlIndex);
-    copyTextToClipboard(url).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+    copyTextToClipboard(url).then(function () { showCopyToast(); }).catch(function () { showCopyToast(t('toast.copy.failed')); });
   });
 
   // Close button
@@ -306,8 +307,10 @@ function setupTermScrollFab(win) {
   var fab = document.createElement('button');
   fab.type = 'button';
   fab.className = 'shell-term-scroll-fab';
-  fab.title = 'Back to latest output';
-  fab.setAttribute('aria-label', 'Back to latest output');
+  fab.setAttribute('data-i18n-title', 'term.scroll.latest');
+  fab.setAttribute('data-i18n-aria', 'term.scroll.latest');
+  fab.title = t('term.scroll.latest');
+  fab.setAttribute('aria-label', t('term.scroll.latest'));
   fab.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V3M4 8l4 4 4-4"/></svg>';
   fab.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   fab.addEventListener('click', function (e) {
@@ -341,7 +344,10 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
   var minBtn = win.querySelector('.shell-window-min-btn');
   bindShellWindowMouseToFront(win);
   if (collapseBtn) collapseBtn.style.display = '';
-  if (closeBtn) closeBtn.title = 'Delete session';
+  if (closeBtn) {
+    closeBtn.setAttribute('data-i18n-title', 'session.delete.title');
+    closeBtn.title = t('session.delete.title');
+  }
   bindShellWindowMinButton(win, minBtn);
   var titleCopyBtn = win.querySelector('.title-copy-btn');
   if (titleCopyBtn) {
@@ -350,7 +356,7 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     titleCopyBtn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      copyTextToClipboard(resourceUrlSession(sessionId)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+      copyTextToClipboard(resourceUrlSession(sessionId)).then(function () { showCopyToast(); }).catch(function () { showCopyToast(t('toast.copy.failed')); });
     });
   }
 
@@ -379,7 +385,8 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     ntfTabBtn.type = 'button';
     ntfTabBtn.className = 'shell-tab-btn';
     ntfTabBtn.setAttribute('data-stab', 'notify');
-    ntfTabBtn.title = 'Notifications';
+    ntfTabBtn.setAttribute('data-i18n-title', 'win.notify.tab');
+    ntfTabBtn.title = t('win.notify.tab');
     ntfTabBtn.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6a3.5 3.5 0 017 0c0 2.5 1 3.5 1 3.5H2.5s1-1 1-3.5z"/><path d="M5.8 11.5a1.2 1.2 0 002.4 0"/></svg>';
     tabBarEl.appendChild(ntfTabBtn);
   }
@@ -438,7 +445,7 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     if (!listEl) return;
     var cfg = connLabel || 'internal';
     var fwds = (window._lastForwards || []).filter(function(f) { return forwardMatchesConfig(f, cfg); });
-    if (!fwds.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">No active forwards</div>'; return; }
+    if (!fwds.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">' + escapeHtml(t('fw.empty')) + '</div>'; return; }
     listEl.innerHTML = fwds.map(function(f){
       var dirLabel = f.direction;
       var dirColor = dirLabel === 'local' ? '#3fb950' : (dirLabel === 'dynamic' ? '#58a6ff' : '#d29922');
@@ -464,15 +471,16 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     var listEl = w.querySelector('.shell-ntf-list');
     if (!listEl) return;
     var rules = (window._lastNotifications || []).filter(function(n) { return n.session_id === sessionId; });
-    if (!rules.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">No active notifications</div>'; return; }
+    if (!rules.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">' + escapeHtml(t('ntf.empty')) + '</div>'; return; }
     listEl.innerHTML = rules.map(function(n){
       var evColor = n.event === 'exit' ? '#f85149' : (n.event === 'silence' ? '#d29922' : '#3fb950');
       var extra = (n.event === 'silence' && n.silence_seconds) ? ' ' + n.silence_seconds + 's' : '';
-      var chLabel = n.channel === 'sampling' ? 'sampling' : 'resource';
+      var chLabel = n.channel === 'sampling' ? t('ntf.channel.sampling') : t('ntf.channel.resource');
+      var unregisterTip = t('ntf.unregister');
       return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #21262d" onmouseover="this.style.background=\'#161b22\'" onmouseout="this.style.background=\'\'">' +
         '<span style="font-size:0.65rem;font-weight:600;text-transform:uppercase;padding:1px 5px;border-radius:3px;color:' + evColor + ';border:1px solid ' + evColor + ';flex-shrink:0;min-width:56px;text-align:center">' + escapeHtml(n.event) + escapeHtml(extra) + '</span>' +
         '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem"><span style="color:#8b949e">' + escapeHtml(chLabel) + '</span> <span style="color:#484f58">·</span> <span style="color:#c9d1d9">' + escapeHtml(n.shell_id) + '</span></span>' +
-        '<button class="shell-ntf-del-btn" data-ntfid="' + escapeHtml(n.rule_id) + '" title="Unregister" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:#484f58;cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'#f85149\';this.style.color=\'#f85149\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'#484f58\'">✕</button>' +
+        '<button class="shell-ntf-del-btn" data-ntfid="' + escapeHtml(n.rule_id) + '" title="' + unregisterTip + '" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:#484f58;cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'#f85149\';this.style.color=\'#f85149\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'#484f58\'">✕</button>' +
         '</div>';
     }).join('');
     listEl.querySelectorAll('.shell-ntf-del-btn').forEach(function(btn) {
@@ -518,12 +526,12 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
   function shellFileBrowse() {
     var path = filePathInput.value.trim() || '/';
     if (!fileListing) return;
-    fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">Loading...</div>';
+    fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">' + escapeHtml(t('common.loading')) + '</div>';
     if (fileCtxMenu) fileCtxMenu.style.display = 'none';
     fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path))
       .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function(data) { renderShellFileList(data, path); })
-      .catch(function(e) { fileListing.innerHTML = '<div style="padding:8px;color:#f85149">Error: ' + escapeHtml(String(e.message||e)) + '</div>'; });
+      .catch(function(e) { fileListing.innerHTML = '<div style="padding:8px;color:#f85149">' + escapeHtml(t('file.loadFailed', { msg: String(e.message||e) })) + '</div>'; });
   }
 
   var _ctxPath = '', _ctxIsDir = false;
@@ -538,20 +546,20 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     if (action === 'download') {
       window.open('/api/sessions/' + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
     } else if (action === 'delete') {
-      if (!confirm('Delete ' + path + '?')) return;
+      if (!confirm(t('file.deleteConfirm', { path: path }))) return;
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
-        .catch(function(e) { alert('Delete failed: ' + e.message); });
+        .catch(function(e) { alert(t('toast.delete.failed', { msg: e.message })); });
     } else if (action === 'rename') {
-      var newName = prompt('Rename ' + name, name);
+      var newName = prompt(t('file.renamePrompt', { name: name }), name);
       if (!newName || newName === name) return;
       var parts = base.split('/'); parts.pop();
       var to = (parts.join('/') || '') + '/' + newName;
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
-        .catch(function(e) { alert('Rename failed: ' + e.message); });
+        .catch(function(e) { alert(t('toast.rename.failed', { msg: e.message })); });
     }
   }
 
@@ -595,21 +603,21 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     if (action === 'download') {
       window.open('/api/sessions/' + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
     } else if (action === 'delete') {
-      if (!confirm('Delete ' + path + '?')) return;
+      if (!confirm(t('file.deleteConfirm', { path: path }))) return;
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
-        .catch(function(e) { alert('Delete failed: ' + e.message); });
+        .catch(function(e) { alert(t('toast.delete.failed', { msg: e.message })); });
     } else if (action === 'rename') {
       var pre = btn.getAttribute('data-file-name') || path.split('/').pop() || '';
-      var nm = prompt('Rename', pre);
+      var nm = prompt(t('common.rename'), pre);
       if (!nm || nm === pre) return;
       var pp = path.replace(/\/+$/, '').split('/'); pp.pop();
       var to = (pp.join('/') || '') + '/' + nm;
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
-        .catch(function(e) { alert('Rename failed: ' + e.message); });
+        .catch(function(e) { alert(t('toast.rename.failed', { msg: e.message })); });
     }
   });
 
@@ -621,18 +629,18 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
       var nm = data.name || currentPath;
       var detailHtml = '<div class="shell-file-detail" data-file-path="' + escapeHtml(currentPath) + '">';
       detailHtml += '<div style="font-size:0.85rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px"><span>📄</span><span style="word-break:break-all">' + escapeHtml(nm) + '</span></div>';
-      detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">Size: ' + formatSize(data.size||0) + '</div>';
-      if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">Modified: ' + escapeHtml(fmtTime(data.mod_time)) + '</div>';
+      detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">' + escapeHtml(t('file.size', { size: formatSize(data.size||0) })) + '</div>';
+      if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">' + escapeHtml(t('file.modified', { time: fmtTime(data.mod_time) })) + '</div>';
       detailHtml += '<div class="shell-file-detail-actions">';
-      detailHtml += '<button class="sf-dl" data-file-action="download" data-file-path="' + escapeHtml(currentPath) + '">Download</button>';
-      detailHtml += '<button data-file-action="rename" data-file-path="' + escapeHtml(currentPath) + '" data-file-name="' + escapeHtml(nm) + '">Rename</button>';
-      detailHtml += '<button class="sf-del" data-file-action="delete" data-file-path="' + escapeHtml(currentPath) + '">Delete</button>';
+      detailHtml += '<button class="sf-dl" data-file-action="download" data-file-path="' + escapeHtml(currentPath) + '">' + escapeHtml(t('common.download')) + '</button>';
+      detailHtml += '<button data-file-action="rename" data-file-path="' + escapeHtml(currentPath) + '" data-file-name="' + escapeHtml(nm) + '">' + escapeHtml(t('common.rename')) + '</button>';
+      detailHtml += '<button class="sf-del" data-file-action="delete" data-file-path="' + escapeHtml(currentPath) + '">' + escapeHtml(t('common.delete')) + '</button>';
       detailHtml += '</div></div>';
       fileListing.innerHTML = detailHtml;
       return;
     }
     var children = data.children || [];
-    if (!children.length) { fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">Empty</div>'; return; }
+    if (!children.length) { fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">' + escapeHtml(t('file.empty')) + '</div>'; return; }
     var basePath = currentPath.replace(/\/+$/, '');
     fileListing.innerHTML = children.map(function(c) {
       var icon = c.is_dir ? '📁' : '📄';
@@ -640,7 +648,7 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
       return '<div class="shell-file-row" data-path="' + escapeHtml(fullPath) + '" data-isdir="' + (c.is_dir?'1':'0') + '" data-name="' + escapeHtml(c.name) + '" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;border-bottom:1px solid #30363d;white-space:nowrap">' +
         '<span style="flex-shrink:0">' + icon + '</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(c.name) + '</span>' +
         (!c.is_dir ? '<span style="flex-shrink:0;color:#8b949e;font-size:0.7rem;margin-right:2px">' + formatSize(c.size||0) + '</span>' : '') +
-        '<button class="shell-file-menu-btn" title="Menu" style="flex-shrink:0">&vellip;</button>' +
+        '<button class="shell-file-menu-btn" title="' + escapeHtml(t('file.menu')) + '" style="flex-shrink:0">&vellip;</button>' +
         '</div>';
     }).join('');
     // Bind row events
@@ -695,6 +703,10 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     });
   }
 
+  /* Exposed so reapplyWindowLanguage can redraw this window's file list from the
+     path it already shows (no navigation, no request beyond the listing). */
+  win._shellFileBrowse = shellFileBrowse;
+
   requestAnimationFrame(function () {
     var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
     if (ch && ch.term) try { ch.term.focus(); } catch (e1) {}
@@ -705,35 +717,35 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
   // Shared shell-window tab panels (Forwardings + Files)
   var SHELL_WINDOW_PANELS_HTML =       '<div class="shell-tab-panel" data-stab="fw" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:12px 16px">' +
       '<div style="display:flex;align-items:center;margin-bottom:10px;flex-shrink:0">' +
-      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3">Port Forwardings</span>' +
-      '<button type="button" class="shell-fw-refresh-btn" title="Refresh" style="width:24px;height:24px;margin-left:auto;padding:0;border:1px solid #484f58;border-radius:4px;background:transparent;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-right:4px;transition:color .12s,background .12s,border-color .12s" onmouseover="this.style.color=\'#ccc\';this.style.borderColor=\'#666\'" onmouseout="this.style.color=\'#888\';this.style.borderColor=\'#484f58\'" onmousedown="this.style.background=\'rgba(255,255,255,.06)\'" onmouseup="this.style.background=\'transparent\'"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 0111.3 3.8M12.5 7A5.5 5.5 0 012.7 10.2"/><path d="M12.5 1.5v2.5H10M1.5 12.5v-2.5H4"/></svg></button>' +
-      '<button type="button" class="shell-fw-add-btn" title="Add forwarding" style="width:24px;height:24px;padding:0;border:1px solid #2ea043;border-radius:4px;background:transparent;color:#3fb950;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 3v8M3 7h8"/></svg></button>' +
+      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3" data-i18n="fw.panel.title">Port Forwardings</span>' +
+      '<button type="button" class="shell-fw-refresh-btn" title="Refresh" data-i18n-title="common.refresh" style="width:24px;height:24px;margin-left:auto;padding:0;border:1px solid #484f58;border-radius:4px;background:transparent;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-right:4px;transition:color .12s,background .12s,border-color .12s" onmouseover="this.style.color=\'#ccc\';this.style.borderColor=\'#666\'" onmouseout="this.style.color=\'#888\';this.style.borderColor=\'#484f58\'" onmousedown="this.style.background=\'rgba(255,255,255,.06)\'" onmouseup="this.style.background=\'transparent\'"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 0111.3 3.8M12.5 7A5.5 5.5 0 012.7 10.2"/><path d="M12.5 1.5v2.5H10M1.5 12.5v-2.5H4"/></svg></button>' +
+      '<button type="button" class="shell-fw-add-btn" title="Add forwarding" data-i18n-title="fw.add" style="width:24px;height:24px;padding:0;border:1px solid #2ea043;border-radius:4px;background:transparent;color:#3fb950;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 3v8M3 7h8"/></svg></button>' +
       '</div>' +
-      '<div class="shell-fw-list" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;background:#0d1117">Loading...</div>' +
+      '<div class="shell-fw-list" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;background:#0d1117" data-i18n="common.loading">Loading...</div>' +
     '</div>' +
     '<div class="shell-tab-panel" data-stab="file" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:12px 16px 12px">' +
-      '<div style="font-size:0.82rem;font-weight:600;color:#e6edf3;margin-bottom:8px">Files</div>' +
+      '<div style="font-size:0.82rem;font-weight:600;color:#e6edf3;margin-bottom:8px" data-i18n="win.files.tab">Files</div>' +
       '<div style="display:flex;gap:0;margin-bottom:6px;align-items:stretch;flex-shrink:0;border:1px solid #484f58;overflow:hidden">' +
-      '<button type="button" class="shell-file-up" title="Parent" style="width:30px;height:30px;padding:0;border:none;border-right:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 10l5-5 5 5"/></svg></button>' +
+      '<button type="button" class="shell-file-up" title="Parent" data-i18n-title="file.parent" style="width:30px;height:30px;padding:0;border:none;border-right:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 10l5-5 5 5"/></svg></button>' +
       '<input type="text" class="shell-file-path" placeholder="/" style="flex:1;min-width:0;border:none;outline:none;font-family:ui-monospace,monospace;font-size:0.78rem;padding:0 8px;background:#1e1e1e;color:#d4d4d4">' +
       '<input type="file" class="shell-file-upload-input" style="display:none">' +
-      '<button type="button" class="shell-file-upload-btn" title="Upload" style="width:30px;height:30px;padding:0;border:none;border-left:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M7 2v8M4 5.5l3-3 3 3M2 10v1.5a1 1 0 001 1h8a1 1 0 001-1V10"/></svg></button>' +
-      '<button type="button" class="shell-file-go" title="Load" style="width:30px;height:30px;padding:0;border:none;border-left:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M1 7a6 6 0 0111.2-3.8M13 7a6 6 0 01-11.2 3.8"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M13 2v2.5h-2.5M1 12v-2.5h2.5"/></svg></button>' +
+      '<button type="button" class="shell-file-upload-btn" title="Upload" data-i18n-title="common.upload" style="width:30px;height:30px;padding:0;border:none;border-left:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M7 2v8M4 5.5l3-3 3 3M2 10v1.5a1 1 0 001 1h8a1 1 0 001-1V10"/></svg></button>' +
+      '<button type="button" class="shell-file-go" title="Load" data-i18n-title="file.load" style="width:30px;height:30px;padding:0;border:none;border-left:1px solid #484f58;background:#2d2d2d;color:#aaa;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M1 7a6 6 0 0111.2-3.8M13 7a6 6 0 01-11.2 3.8"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M13 2v2.5h-2.5M1 12v-2.5h2.5"/></svg></button>' +
       '</div>' +
       '<div class="shell-file-listing" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;font-family:ui-monospace,monospace;border:1px solid #484f58;background:#1e1e1e;color:#d4d4d4"></div>' +
-        '<div class="shell-file-ctx-menu" style="display:none"><div class="file-ctx-item" data-action="download">Download</div><div class="file-ctx-item" data-action="rename">Rename</div><div class="file-ctx-item" data-action="delete" class="file-ctx-danger">Delete</div></div>' +
+        '<div class="shell-file-ctx-menu" style="display:none"><div class="file-ctx-item" data-action="download" data-i18n="common.download">Download</div><div class="file-ctx-item" data-action="rename" data-i18n="common.rename">Rename</div><div class="file-ctx-item" data-action="delete" class="file-ctx-danger" data-i18n="common.delete">Delete</div></div>' +
     '</div>' +
     '<div class="shell-tab-panel" data-stab="notify" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:12px 16px">' +
       '<div style="display:flex;align-items:center;margin-bottom:10px;flex-shrink:0">' +
-      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3">Notifications</span>' +
-      '<button type="button" class="shell-ntf-refresh-btn" title="Refresh" style="width:24px;height:24px;margin-left:auto;padding:0;border:1px solid #484f58;border-radius:4px;background:transparent;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .12s,background .12s,border-color .12s" onmouseover="this.style.color=\'#ccc\';this.style.borderColor=\'#666\'" onmouseout="this.style.color=\'#888\';this.style.borderColor=\'#484f58\'" onmousedown="this.style.background=\'rgba(255,255,255,.06)\'" onmouseup="this.style.background=\'transparent\'"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 0111.3 3.8M12.5 7A5.5 5.5 0 012.7 10.2"/><path d="M12.5 1.5v2.5H10M1.5 12.5v-2.5H4"/></svg></button>' +
+      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3" data-i18n="win.notify.tab">Notifications</span>' +
+      '<button type="button" class="shell-ntf-refresh-btn" title="Refresh" data-i18n-title="common.refresh" style="width:24px;height:24px;margin-left:auto;padding:0;border:1px solid #484f58;border-radius:4px;background:transparent;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .12s,background .12s,border-color .12s" onmouseover="this.style.color=\'#ccc\';this.style.borderColor=\'#666\'" onmouseout="this.style.color=\'#888\';this.style.borderColor=\'#484f58\'" onmousedown="this.style.background=\'rgba(255,255,255,.06)\'" onmouseup="this.style.background=\'transparent\'"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 0111.3 3.8M12.5 7A5.5 5.5 0 012.7 10.2"/><path d="M12.5 1.5v2.5H10M1.5 12.5v-2.5H4"/></svg></button>' +
       '</div>' +
-      '<div class="shell-ntf-list" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;background:#0d1117">Loading...</div>' +
+      '<div class="shell-ntf-list" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;background:#0d1117" data-i18n="common.loading">Loading...</div>' +
     '</div>' +
     '</div>'; // end SHELL_WINDOW_PANELS_HTML
 
 function openPendingShellWindow(connName, clickEvent, abortCtl) {
-  if (typeof Terminal === 'undefined') { alert('xterm failed to load'); return null; }
+  if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return null; }
   var container = shellWindowsEl();
   if (!container) return null;
   shellWindowCount += 1;
@@ -754,43 +766,48 @@ function openPendingShellWindow(connName, clickEvent, abortCtl) {
       '<span class="shell-title-id-group">' +
       '<span class="shell-sid-copy">' +
       '<span class="sid">…</span>' +
-      '<button type="button" class="title-copy-btn" style="display:none" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
+      '<button type="button" class="title-copy-btn" style="display:none" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
       '</span>' +
       '</span>' +
       '</h3>' +
       '</div>' +
       '<div class="shell-tab-bar">' +
-        '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
-        '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
-        '<button type="button" class="shell-tab-btn" data-stab="file" title="Files"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal" data-i18n-title="win.term.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings" data-i18n-title="win.fw.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn" data-stab="file" title="Files" data-i18n-title="win.files.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
         '</div>' +
       '<div class="shell-window-header-btns">' +
-        '<button type="button" class="shell-window-max-btn" title="Maximize (dblclick header)"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 5V2h3M10 7v3H7M2 2l3.5 3.5M10 10L6.5 6.5"/></svg></button><button type="button" class="shell-window-collapse-btn" title="Collapse">' +
+        '<button type="button" class="shell-window-max-btn" title="Maximize (dblclick header)" data-i18n-title="win.max.tip"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 5V2h3M10 7v3H7M2 2l3.5 3.5M10 10L6.5 6.5"/></svg></button><button type="button" class="shell-window-collapse-btn" title="Collapse" data-i18n-title="win.collapse">' +
           '<svg class="ic-d" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>' +
           '<svg class="ic-u" viewBox="0 0 12 8" width="12" height="8" style="display:none"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 6l5-4 5 4"/></svg>' +
         '</button>' +
-        '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)">' +
+        '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)" data-i18n-title="win.minimize">' +
           '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 6h8"/></svg>' +
         '</button>' +
-        '<button type="button" class="close-btn" title="Close (cancel connect)">' +
+        '<button type="button" class="close-btn" title="Close (cancel connect)" data-i18n-title="win.closeCancel">' +
           '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
         '</button>' +
       '</div>' +
     '</div>' +
     '<div class="shell-window-content"><div class="shell-terminal-wrap">' +
       '<div class="shell-channel-body">' +
-        '<div class="shell-pending"><div class="shell-pending-spinner" aria-hidden="true"></div><div>Connecting <strong>' + escapeHtml(connName) + '</strong>…</div></div>' +
+        '<div class="shell-pending"><div class="shell-pending-spinner" aria-hidden="true"></div><div><span data-i18n="win.connecting.label">Connecting</span> <strong>' + escapeHtml(connName) + '</strong>…</div></div>' +
       '</div>' +
       '<div class="shell-channel-tabs">' +
-        '<button type="button" class="shell-channel-tab-add" title="New shell channel">+</button>' +
+        '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
-        '<span>No shell channels</span>' +
-        '<button type="button" class="shell-channel-empty-add">+ New Shell</button>' +
+        '<span data-i18n="channel.empty">No shell channels</span>' +
+        '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
       '</div>' +
     '</div>' +
 SHELL_WINDOW_PANELS_HTML +
-    '<div class="shell-window-resize-handle" title="Drag to resize"></div>';
+    '<div class="shell-window-resize-handle" title="Drag to resize" data-i18n-title="win.resize"></div>';
+
+  /* The template above carries English fallbacks plus data-i18n* keys; fill them
+     here so a window created after a language switch is not born in the previous
+     language. */
+  applyI18n(win);
 
   var termEl = win.querySelector('.shell-channel-body');
   var header = win.querySelector('.shell-window-header');
@@ -842,7 +859,7 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEve
 function openShellWindow(connLabel, sessionId, clickEvent, opts) {
   opts = opts || {};
   var readOnly = !!opts.readOnly;
-  if (typeof Terminal === 'undefined') { alert('xterm failed to load'); return; }
+  if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return; }
   if (getShellWindowBySid(sessionId)) {
     focusSessionWindow(connLabel, sessionId, clickEvent, opts);
     return;
@@ -865,25 +882,25 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
       '<span class="shell-title-id-group">' +
       '<span class="shell-sid-copy">' +
       '<span class="sid">' + escapeHtml(stripSessionPrefix(sessionId)) + '</span>' +
-      '<button type="button" class="title-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
+      '<button type="button" class="title-copy-btn" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
       '</span>' +
       '</span>' +
       '</h3>' +
       '</div>' +
       '<div class="shell-tab-bar">' +
-        '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
-        '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
-        '<button type="button" class="shell-tab-btn" data-stab="file" title="Files"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal" data-i18n-title="win.term.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings" data-i18n-title="win.fw.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
+        '<button type="button" class="shell-tab-btn" data-stab="file" title="Files" data-i18n-title="win.files.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
         '</div>' +
       '<div class="shell-window-header-btns">' +
-        '<button type="button" class="shell-window-max-btn" title="Maximize (dblclick header)"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 5V2h3M10 7v3H7M2 2l3.5 3.5M10 10L6.5 6.5"/></svg></button><button type="button" class="shell-window-collapse-btn" title="Collapse">' +
+        '<button type="button" class="shell-window-max-btn" title="Maximize (dblclick header)" data-i18n-title="win.max.tip"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M2 5V2h3M10 7v3H7M2 2l3.5 3.5M10 10L6.5 6.5"/></svg></button><button type="button" class="shell-window-collapse-btn" title="Collapse" data-i18n-title="win.collapse">' +
           '<svg class="ic-d" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>' +
           '<svg class="ic-u" viewBox="0 0 12 8" width="12" height="8" style="display:none"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 6l5-4 5 4"/></svg>' +
         '</button>' +
-        '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)">' +
+        '<button type="button" class="shell-window-min-btn" title="Minimize (session keeps running)" data-i18n-title="win.minimize">' +
           '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 6h8"/></svg>' +
         '</button>' +
-        '<button type="button" class="close-btn" title="Delete session">' +
+        '<button type="button" class="close-btn" title="Delete session" data-i18n-title="session.delete.title">' +
           '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
         '</button>' +
       '</div>' +
@@ -891,15 +908,20 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
     '<div class="shell-window-content"><div class="shell-terminal-wrap">' +
       '<div class="shell-channel-body"></div>' +
       '<div class="shell-channel-tabs">' +
-        '<button type="button" class="shell-channel-tab-add" title="New shell channel">+</button>' +
+        '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
-        '<span>No shell channels</span>' +
-        '<button type="button" class="shell-channel-empty-add">+ New Shell</button>' +
+        '<span data-i18n="channel.empty">No shell channels</span>' +
+        '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
       '</div>' +
     '</div>' +
 SHELL_WINDOW_PANELS_HTML +
-    '<div class="shell-window-resize-handle" title="Drag to resize"></div>';
+    '<div class="shell-window-resize-handle" title="Drag to resize" data-i18n-title="win.resize"></div>';
+
+  /* The template above carries English fallbacks plus data-i18n* keys; fill them
+     here so a window created after a language switch is not born in the previous
+     language. */
+  applyI18n(win);
 
   positionShellWindowFromClick(win, clickEvent);
   /* First mount only — never re-append this node to reorder; use bringShellWindowToFront (z-index). */
@@ -1092,7 +1114,7 @@ function openSessionSwitchMenu(anchorBtn) {
   if (wins.length === 0) {
     var empty = document.createElement('div');
     empty.className = 'shell-switch-empty';
-    empty.textContent = 'No open sessions';
+    empty.textContent = t('switch.empty');
     el.appendChild(empty);
   }
 
@@ -1138,7 +1160,7 @@ function setupMobileSessionSwitcher(win) {
       icon.setAttribute('role', 'button');
       icon.setAttribute('tabindex', '0');
       icon.setAttribute('aria-haspopup', 'true');
-      icon.title = 'Active sessions';
+      icon.title = t('win.aria.activeSessions');
     }
     icon._switchWin = win;
     var activate = function (e) {
@@ -1164,7 +1186,7 @@ function setupMobileSessionSwitcher(win) {
         icon.setAttribute('role', 'button');
         icon.setAttribute('tabindex', '0');
         icon.setAttribute('aria-haspopup', 'true');
-        icon.title = 'Active sessions';
+        icon.title = t('win.aria.activeSessions');
       } else {
         closeSessionSwitchMenu();
         icon.classList.remove('shell-header-icon-btn');
@@ -1183,8 +1205,8 @@ function setupMobileSessionSwitcher(win) {
   var drawerBtn = document.createElement('button');
   drawerBtn.type = 'button';
   drawerBtn.className = 'shell-window-drawer-btn';
-  drawerBtn.title = 'Connections';
-  drawerBtn.setAttribute('aria-label', 'Connections');
+  drawerBtn.title = t('win.aria.connections');
+  drawerBtn.setAttribute('aria-label', t('win.aria.connections'));
   drawerBtn.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>';
   group.insertBefore(drawerBtn, group.firstChild);
 
@@ -1200,3 +1222,38 @@ function setupMobileSessionSwitcher(win) {
      tab order disagreeing with what the user sees. */
   header.insertBefore(group, header.firstChild);
 }
+
+/* Re-apply the current language to one open shell window.
+ *
+ *  Only attributes and text are rewritten: win._channels holds live xterm
+ *  instances, and every header button has a listener bound directly to its node,
+ *  so re-rendering the window (win.innerHTML = ...) would drop the listeners and
+ *  orphan the terminals mid-stream. Idempotent.
+ *
+ *  Known residuals, deliberately not chased: a native prompt/confirm/alert that is
+ *  already on screen when the language changes, the session switch menu
+ *  (.shell-switch-menu is rebuilt on every open) and a validation line currently
+ *  on screen. Each picks up the new language the next time it is drawn. */
+function reapplyWindowLanguage(win) {
+  if (!win) return;
+  applyI18n(win);
+  updateTermScrollButton(win);
+  /* These three titles encode state, so the template default from applyI18n is
+     only correct for the state it was written for. */
+  var maxBtn = win.querySelector('.shell-window-max-btn');
+  if (maxBtn) maxBtn.title = win._maxed ? t('win.restore.tip') : t('win.max.tip');
+  var collapseBtn = win.querySelector('.shell-window-collapse-btn');
+  if (collapseBtn) {
+    collapseBtn.title = win.classList.contains('shell-window-collapsed') ? t('win.expand') : t('win.collapse');
+  }
+  if (win._syncSwitcherAffordance) {
+    try { win._syncSwitcherAffordance(); } catch (e) {}
+  }
+  if (win._refreshFwList) win._refreshFwList();
+  if (win._refreshNtfList) win._refreshNtfList();
+  if (win._shellFileBrowse) win._shellFileBrowse();
+}
+
+/* Language switch: replay every open window in place, so no window is rebuilt
+   and no terminal loses its stream. */
+onLangChange(function () { allShellWins().forEach(reapplyWindowLanguage); });
