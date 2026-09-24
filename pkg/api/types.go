@@ -38,6 +38,15 @@ type Session struct {
 	Cols      int           `json:"cols"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).
 	SSHEndpoint string `json:"ssh_endpoint,omitempty"`
+	// ApprovalMode reports whether this session gates input behind N-person
+	// approval. It is a session-level policy, not a per-shell one: turning it on
+	// covers every shell channel in the session. The Web UI reads it to show that
+	// typing is refused and to offer the approval composer instead.
+	ApprovalMode bool `json:"approval_mode,omitempty"`
+	// ApprovalNeed is the number of distinct approvers required while
+	// ApprovalMode is on.
+	ApprovalNeed int `json:"approval_need,omitempty"`
+
 	// Shells is a per-shell metadata snapshot, populated only when the session is
 	// persisted/restored so a DEAD session can still render its tabs after a
 	// restart. Never set on a live running session's Info().
@@ -58,6 +67,15 @@ const (
 	// LogAPIInput is bytes entered through the HTTP/WebSocket API (the human at
 	// the browser).
 	LogAPIInput LogStatus = "i"
+	// LogApprovalRequest marks the point where an input was queued for approval
+	// instead of being written. The bytes do not exist yet at this offset: the
+	// span says "a decision was requested here", and the bytes that eventually
+	// appear carry their own input status once an approver releases them.
+	LogApprovalRequest LogStatus = "q"
+	// LogApprovalGranted marks the point where an approved input was written.
+	// A reader replaying the log can therefore tell reviewed input from input
+	// that never passed a gate.
+	LogApprovalGranted LogStatus = "A"
 )
 
 // LogMark is one line of log.jsonl: a transition to `Status` at byte `Offset`

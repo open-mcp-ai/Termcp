@@ -40,6 +40,14 @@ func (h *Handler) handleShellInput(w http.ResponseWriter, r *http.Request) {
 	if cs == nil {
 		return
 	}
+	// Review mode does NOT gate this path, for the same reason as the WebSocket:
+	// it is the operator's own interface.
+	//
+	// This endpoint is the script/CLI mirror of the browser terminal, and the Web
+	// UI's file browser is built on the same REST API. Gating it would lock the
+	// operator out of their own tooling to stop an attacker who, holding the same
+	// token, could approve their own request just as directly. It protects against
+	// an agent making unattended changes, not against a token holder.
 	if err := cs.SendTerminalBytes([]byte(req.Text), req.PressEnter); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -66,6 +74,7 @@ func (h *Handler) handleShellKey(w http.ResponseWriter, r *http.Request) {
 	if cs == nil {
 		return
 	}
+	// Same as /input: the operator's own key path, not the AI's.
 	if err := cs.PressKey(req.Key, req.Repeat); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

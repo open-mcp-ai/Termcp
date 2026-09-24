@@ -38,8 +38,14 @@ type Entry struct {
 	Description  string `toml:"description,omitempty"`
 	DefaultShell string `toml:"default_shell,omitempty"`
 	DefaultMode  string `toml:"default_mode,omitempty"`
-	DialSpec     `toml:",squash"`
-	Jump         *JumpSpec `toml:"jump,omitempty"` // optional bastion chain (ProxyJump)
+	// DefaultApproval makes every session created from this profile start with
+	// review mode on. It is a property of the connection because the decision is
+	// about the host, not about one session: a production box is the reason to
+	// want every write reviewed, and remembering to flip the switch after each
+	// `termcp://entry` launch is exactly the step that gets forgotten.
+	DefaultApproval bool `toml:"default_approval,omitempty"`
+	DialSpec        `toml:",squash"`
+	Jump            *JumpSpec `toml:"jump,omitempty"` // optional bastion chain (ProxyJump)
 }
 
 // JumpSpec is a self-contained bastion hop: a DialSpec plus a nested Jump for
@@ -181,9 +187,50 @@ func EffectiveMode(ent *Entry, mode string) string {
 	return "pty"
 }
 
+// EffectiveApproval reports whether a session created from ent starts gated.
+//
+// A nil entry (no profile, or one that failed to load) is not gated: the field
+// can only say "on" for a profile that was actually read, so a missing profile
+// cannot silently gate a session whose owner never asked for it. A caller that
+// wants the safe answer when a profile is missing must say so itself.
+func EffectiveApproval(ent *Entry) bool {
+	return ent != nil && ent.DefaultApproval
+}
+
 // InternalTemplate is the built-in loopback SSH entry.
 func InternalTemplate() []byte {
 	return []byte("# termcp loopback SSH config (TOML)\nkind = \"internal\"\ndescription = \"Built-in termcp loopback SSH (no host credentials).\"\n")
+}
+
+// ParseInternalOverride layers a stored internal config over the built-in
+// defaults.
+//
+// The point of layering rather than replacing: the internal profile has real
+// defaults (its kind, its description) that a user setting one field should not
+// have to restate. TOML decoding only writes the keys the document actually
+// contains, so starting from the template gives "absent key keeps the default,
+// present key overrides it" for free — which is exactly the rule a config file
+// is expected to follow.
+func ParseInternalOverride(data []byte, base *Entry) (*Entry, error) {
+	if len(data) > maxConfigFileSize {
+		return nil, fmt.Errorf("config file too large (max %d bytes)", maxConfigFileSize)
+	}
+	e := *base
+	if err := toml.Unmarshal(data, &e); err != nil {
+		return nil, fmt.Errorf("config toml: %w", err)
+	}
+	k := strings.TrimSpace(strings.ToLower(e.Kind))
+	if k != KindInternal {
+		// A stored override for the loopback profile cannot turn it into a
+		// remote one: the name means the built-in connection, and silently
+		// honouring kind="remote" here would make "internal" dial elsewhere.
+		return nil, fmt.Errorf("the internal profile must keep kind = %q, got %q", KindInternal, k)
+	}
+	e.Kind = KindInternal
+	if err := validateDefaultMode(&e); err != nil {
+		return nil, err
+	}
+	return &e, nil
 }
 
 // RemoteFromEntry converts an sshconfig Entry into session.RemoteSSH dial settings,

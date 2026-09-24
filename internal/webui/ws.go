@@ -58,7 +58,12 @@ type uiWS struct {
 var errWSSessionNotFound = errors.New("session not found")
 
 // getTerminalShell looks up a shell channel by shell_id.
-func (c *uiWS) getTerminalShell(sid string) session.TerminalShell {
+//
+// The concrete *ChildShell is returned rather than the TerminalShell interface:
+// every write path needs ChildShell's full method set, and nothing in the code
+// base ever treats a *Session as a terminal. The interface only made the two
+// look interchangeable while one of them was unreachable.
+func (c *uiWS) getTerminalShell(sid string) *session.ChildShell {
 	if cs := c.h.Sessions.GetChildShell(sid); cs != nil {
 		return cs
 	}
@@ -206,6 +211,19 @@ func (c *uiWS) handleWSInput(msg *wsClientMsg) {
 	if shell.Info().Status != api.SessionRunning {
 		return
 	}
+	// Review mode does NOT gate this path: this is the human's keyboard.
+	//
+	// The gate exists to review what the AI sends, and the AI's surface is MCP —
+	// the same distinction the InputSource constants already draw (InputFromAPI is
+	// "a human typing through the HTTP/WebSocket API", InputFromAI is "an AI agent
+	// driving the shell through MCP"). Dropping the stream here locked the operator
+	// out of their own terminal the moment they turned review on, which is not
+	// what "review the AI" means: a person watching a command run must still be
+	// able to interrupt it.
+	//
+	// A token holder can still bypass the gate by writing to the API directly,
+	// but they can approve their own request just as directly, so gating this path
+	// would cost the operator real usability and buy no security.
 	// msg.D is the JSON string xterm produced, not base64: the frame is standard
 	// JSON, so encoding/json already recovered the text and no decode step is
 	// needed. See the "传输编码" section of docs/design/session-storage.md.
@@ -247,7 +265,7 @@ func (c *uiWS) sendTerminalDonePayload(payload []byte) {
 	}
 }
 
-func (c *uiWS) endWatch(sid string, shell session.TerminalShell, rid int) {
+func (c *uiWS) endWatch(sid string, shell *session.ChildShell, rid int) {
 	shell.UnregisterReader(rid)
 	c.mu.Lock()
 	if ent, ok := c.watch[sid]; ok && ent != nil && ent.rid == rid {
@@ -256,7 +274,7 @@ func (c *uiWS) endWatch(sid string, shell session.TerminalShell, rid int) {
 	c.mu.Unlock()
 }
 
-func (c *uiWS) runWatch(ctx context.Context, shell session.TerminalShell, sid string, rid int) {
+func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid string, rid int) {
 	defer c.endWatch(sid, shell, rid)
 	for {
 		if ctx.Err() != nil {

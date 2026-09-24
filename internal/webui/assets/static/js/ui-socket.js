@@ -188,6 +188,11 @@ function connectUIWebSocket() {
         // Pushed by the MCP notify_user tool: toast + system notification +
         // optional session-card highlight.
         showUiNotify(j);
+      } else if (j.type === 'approval') {
+        // A session's approval queue changed state (submitted, approved,
+        // rejected, expired, cancelled). Same delivery as a notification, plus a
+        // worklist refresh when the approver has it open.
+        onApprovalEvent(j);
       }
     } catch (e) { console.error(e); }
   };
@@ -199,6 +204,9 @@ function connectUIWebSocket() {
     setLoadBanner(document.getElementById('session-load-banner'), t('banner.syncing'));
     flushPendingTerminalWatches();
     resubscribeAllTerminalWatches();
+    // A page that loads while commands are already queued must show them: the
+    // push events for those requests happened before this tab existed.
+    refreshApprovalCounts();
   };
 
   ws.onerror = function () {};
@@ -318,12 +326,16 @@ function setupShellWindowDrag(win, header) {
 
 function setupShellWindowResize(win) {
   if (win._termcpShellResizeBound) return;
-  var handle = win.querySelector('.shell-window-resize-handle');
-  if (!handle) return;
+  var handles = win.querySelectorAll('.shell-window-resize-handle');
+  if (!handles.length) return;
   win._termcpShellResizeBound = true;
   var resizing = false, pointerId = null;
-  var startX = 0, startY = 0, startW = 0, startH = 0;
-  var pendingW = 0, pendingH = 0, frame = 0;
+  var startX = 0, startY = 0, startW = 0, startH = 0, startLeft = 0, startTop = 0;
+  var pendingW = 0, pendingH = 0, pendingLeft = null, pendingTop = null, frame = 0;
+  /* Which edges this drag moves. Set on pointerdown from the grip's corner. */
+  var dirE = true, dirS = true;
+  /* The grip owning the current drag, for releasing pointer capture. */
+  var activeHandle = null;
 
   function activeChannel() {
     return (win._activeChannelSid && win._channels && win._channels[win._activeChannelSid]) || null;
@@ -338,6 +350,8 @@ function setupShellWindowResize(win) {
     if (pendingW > 0 && pendingH > 0) {
       win.style.width = pendingW + 'px';
       win.style.height = pendingH + 'px';
+      if (pendingLeft !== null) win.style.left = pendingLeft + 'px';
+      if (pendingTop !== null) win.style.top = pendingTop + 'px';
       /* Measure after the new size is committed, not the previous layout. */
       void win.offsetHeight;
     }
@@ -353,8 +367,18 @@ function setupShellWindowResize(win) {
   function onMove(e) {
     if (!resizing || e.pointerId !== pointerId) return;
     e.preventDefault();
-    pendingW = Math.max(320, startW + e.clientX - startX);
-    pendingH = Math.max(240, startH + e.clientY - startY);
+    // The dx/dy apply to the edge being dragged: dragging the east edge grows
+    // the width, dragging the west edge moves it and grows the width by the
+    // same amount. The minimum is clamped on the size, then left/top are derived
+    // from it, so a west grip cannot push the window off to the right.
+    var dx = e.clientX - startX;
+    var dy = e.clientY - startY;
+    if (dirE) pendingW = Math.max(320, startW + dx);
+    else pendingW = Math.max(320, startW - dx);
+    if (dirS) pendingH = Math.max(240, startH + dy);
+    else pendingH = Math.max(240, startH - dy);
+    if (!dirE) pendingLeft = startLeft + (startW - pendingW);
+    if (!dirS) pendingTop = startTop + (startH - pendingH);
     scheduleApply();
   }
   function finish() {
@@ -371,9 +395,10 @@ function setupShellWindowResize(win) {
       win._shellResizeSyncTimer = null;
     }
     applyPending(true);
-    if (pointerId !== null && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
-      try { handle.releasePointerCapture(pointerId); } catch (e) {}
+    if (pointerId !== null && activeHandle && activeHandle.hasPointerCapture && activeHandle.hasPointerCapture(pointerId)) {
+      try { activeHandle.releasePointerCapture(pointerId); } catch (e) {}
     }
+    activeHandle = null;
     pointerId = null;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
@@ -387,20 +412,31 @@ function setupShellWindowResize(win) {
     if (!resizing || e.pointerId !== pointerId) return;
     finish();
   }
-  handle.addEventListener('pointerdown', function (e) {
+  function beginResize(e, handle, corner) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     bringShellWindowToFront(win);
     var rect = win.getBoundingClientRect();
+    // The window is positioned with left/top by the drag code, but a tiled or
+    // viewport-locked window may not be; read the real box for the bases.
+    var cs = getComputedStyle(win);
+    dirE = corner.indexOf('e') >= 0;
+    dirS = corner.indexOf('s') >= 0;
     resizing = true;
     pointerId = e.pointerId;
     startX = e.clientX; startY = e.clientY;
     startW = rect.width; startH = rect.height;
+    startLeft = cs.left === 'auto' ? rect.left : parseFloat(cs.left);
+    startTop = cs.top === 'auto' ? rect.top : parseFloat(cs.top);
     pendingW = startW; pendingH = startH;
-    document.body.style.cursor = 'nwse-resize';
+    pendingLeft = dirE ? null : startLeft;
+    pendingTop = dirS ? null : startTop;
+    var cursors = { se: 'nwse-resize', nw: 'nwse-resize', sw: 'nesw-resize', ne: 'nesw-resize' };
+    document.body.style.cursor = cursors[corner] || 'nwse-resize';
     document.body.style.userSelect = 'none';
     win.classList.add('shell-window-resizing');
+    activeHandle = handle;
     if (handle.setPointerCapture) {
       try { handle.setPointerCapture(pointerId); } catch (e2) {}
     }
@@ -410,6 +446,11 @@ function setupShellWindowResize(win) {
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', finish);
     window.addEventListener('blur', finish);
+  }
+  handles.forEach(function (h) {
+    h.addEventListener('pointerdown', function (e) {
+      beginResize(e, h, h.getAttribute('data-corner') || 'se');
+    });
   });
 }
 

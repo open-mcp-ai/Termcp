@@ -283,13 +283,14 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 	}
 
 	sess, err := s.sessMgr.Create(session.Config{
-		Command: cmd,
-		Args:    execArgs,
-		Mode:    api.SessionMode(mode),
-		Name:    sessName,
-		Rows:    int(getFloat64(args, "rows", 24)),
-		Cols:    int(getFloat64(args, "cols", 80)),
-		Remote:  remote,
+		Command:  cmd,
+		Args:     execArgs,
+		Mode:     api.SessionMode(mode),
+		Name:     sessName,
+		Rows:     int(getFloat64(args, "rows", 24)),
+		Cols:     int(getFloat64(args, "cols", 80)),
+		Remote:   remote,
+		Approval: sshconfig.EffectiveApproval(ent),
 	})
 	if err != nil {
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
@@ -315,6 +316,19 @@ func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequ
 	if bad != nil {
 		return bad, nil
 	}
+
+	// Under approval mode the text is held, not written and not yet queued.
+	//
+	// A command line is text plus the enter that ends it, and those arrive as two
+	// calls. Staging the text keeps a reviewer's unit whole: they see `echo hi`
+	// and the newline as one command, not two decisions that could disagree.
+	if shell.RequiresApproval() {
+		if err := shell.StageForApproval("mcp", text); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return reviewPendingResult(false), nil
+	}
+
 	// An agent's keystrokes are tagged as AI input, so a transcript can say who
 	// typed what. The bytes themselves reach the log through the terminal's echo.
 	if err := shell.SendTerminalBytesFrom([]byte(text), false, session.InputFromAI); err != nil {
@@ -335,10 +349,43 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 	if bad != nil {
 		return bad, nil
 	}
+
+	if shell.RequiresApproval() {
+		// The ending key commits whatever text this shell staged, so the queue holds
+		// one complete command line. With nothing staged the key alone is the unit:
+		// ctrl+c interrupts a running process, and a bare enter runs an empty line,
+		// either of which a reviewer must still see.
+		if _, err := shell.CommitStagedForApproval("mcp", key, repeat); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return reviewPendingResult(true), nil
+	}
+
 	if err := shell.PressKeyFrom(key, repeat, session.InputFromAI); err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
+}
+
+// reviewPendingResult is the reply to input that review mode intercepted. It is
+// deliberately not an error: the call succeeded, it is the write that is waiting.
+//
+// It carries no id and no polling instruction. The agent cannot decide the request
+// itself — decisions are made by a human in the Web UI — and it has nothing useful
+// to do with an id, so handing one over would only invite a retry loop. An agent
+// that needs the outcome reads the shell's output afterwards, which shows whether
+// the command ran.
+func reviewPendingResult(queued bool) *mcpgo.CallToolResult {
+	msg := "Held for review: send the ending key (shell_key enter) to submit the line for approval."
+	if queued {
+		msg = "Submitted for review. A human decides it in the Web UI; nothing is written until then."
+	}
+	return jsonResult(map[string]any{
+		"ok":             true,
+		"approved":       false,
+		"review_pending": true,
+		"message":        msg,
+	})
 }
 
 func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -683,12 +730,16 @@ func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallTo
 	description := strings.TrimSpace(getString(args, "description", ""))
 	defaultShell := strings.TrimSpace(getString(args, "default_shell", ""))
 	defaultMode := strings.TrimSpace(getString(args, "default_mode", ""))
+	// On create an absent field is simply "off". The presence check that matters
+	// is on edit, where it distinguishes "turn it off" from "do not touch it".
+	defaultApproval := getBool(args, "default_approval", false)
 
 	entry := &sshconfig.Entry{
-		Kind:         sshconfig.KindRemote,
-		Description:  description,
-		DefaultShell: defaultShell,
-		DefaultMode:  defaultMode,
+		Kind:            sshconfig.KindRemote,
+		Description:     description,
+		DefaultShell:    defaultShell,
+		DefaultMode:     defaultMode,
+		DefaultApproval: defaultApproval,
 		DialSpec: sshconfig.DialSpec{
 			Host:               host,
 			Port:               port,
@@ -825,6 +876,12 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 	}
 	if v := getString(args, "default_mode", ""); v != "" {
 		existing.DefaultMode = strings.TrimSpace(v)
+	}
+	// Presence, not truth: sending `default_approval: false` is how a profile is
+	// turned back off. Requiring the key to be present is what keeps an unrelated
+	// edit from clearing a setting the caller never mentioned.
+	if _, ok := args["default_approval"]; ok {
+		existing.DefaultApproval = getBool(args, "default_approval", false)
 	}
 	if v := getString(args, "known_hosts", ""); v != "" {
 		existing.KnownHosts = strings.TrimSpace(v)
@@ -1074,6 +1131,9 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	if res, held := s.gateOperation(ctx, request, "file_write", sessionID); held {
+		return res, nil
+	}
 	remotePath := getString(args, "remote_path", "")
 	offset := int64(getFloat64(args, "offset", 0))
 	data := getString(args, "data", "")
@@ -1130,6 +1190,9 @@ func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolReq
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
+	if res, held := s.gateOperation(ctx, request, "file_delete", sessionID); held {
+		return res, nil
+	}
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
@@ -1151,6 +1214,9 @@ func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolReq
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	fromPath := getString(args, "from_path", "")
+	if res, held := s.gateOperation(ctx, request, "file_rename", sessionID); held {
+		return res, nil
+	}
 	toPath := getString(args, "to_path", "")
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
@@ -1173,6 +1239,9 @@ func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRe
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
+	if res, held := s.gateOperation(ctx, request, "file_mkdir", sessionID); held {
+		return res, nil
+	}
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
@@ -1212,10 +1281,13 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 }
 
 // handleFilePerm dispatches chmod, chown, chtimes.
-func (s *Server) handleFilePerm(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFilePerm(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
+	if res, held := s.gateOperation(ctx, request, "file_perm", sessionID); held {
+		return res, nil
+	}
 
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
@@ -1273,10 +1345,17 @@ func (s *Server) handleFilePerm(_ context.Context, request mcpgo.CallToolRequest
 }
 
 // handleFileLinkOp dispatches readlink, symlink, link.
-func (s *Server) handleFileLinkOp(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileLinkOp(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
+	// readlink changes nothing, so it is not gated: putting a read behind a
+	// decision teaches a reviewer to click Accept without reading.
+	if action != "readlink" {
+		if res, held := s.gateOperation(ctx, request, "file_link", sessionID); held {
+			return res, nil
+		}
+	}
 
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
@@ -1323,10 +1402,16 @@ func (s *Server) handleFileLinkOp(_ context.Context, request mcpgo.CallToolReque
 }
 
 // handleFileFsOp dispatches truncate, realpath, statvfs.
-func (s *Server) handleFileFsOp(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
+	// realpath and statvfs are reads; only truncate changes the host.
+	if action == "truncate" {
+		if res, held := s.gateOperation(ctx, request, "file_fs", sessionID); held {
+			return res, nil
+		}
+	}
 
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil

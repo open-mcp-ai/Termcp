@@ -72,6 +72,20 @@ function renderSessionGrid(sessions, bannerMsg) {
       escapeHtml(statusText) + '" role="img" aria-label="' +
       escapeHtml(statusText) + '"></span>';
 
+    /* Approval lock: a state indicator that is also the switch. It sits in the
+       meta row with the lamp and the id, which is already the line that reads
+       "what state is this session in". Only live sessions can be gated — a DEAD
+       session has no input to gate. */
+    var gated = !!s.approval_mode;
+    var lockHtml = !dead
+      ? '<button type="button" class="sess-lock' + (gated ? ' is-on' : '') + '" ' +
+          'title="' + escapeHtml(gated ? t('review.disableTip') : t('review.enableTip')) + '" ' +
+          'aria-pressed="' + (gated ? 'true' : 'false') + '" ' +
+          'aria-label="' + escapeHtml(t('review.mode')) + '">' +
+          (gated ? SVG_LOCK_CLOSED : SVG_LOCK_OPEN) +
+        '</button>'
+      : '';
+
     var actionCornerHtml =
       '<button type="button" class="sess-x" title="Delete session" data-i18n-title="session.delete.title" aria-label="Delete session" data-i18n-aria="session.delete.title">' +
         '<svg viewBox="0 0 12 12" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
@@ -89,12 +103,23 @@ function renderSessionGrid(sessions, bannerMsg) {
       '</div>' +
       '<div class="sess-meta-row">' +
       statusIc +
+      lockHtml +
       '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" data-i18n-title="session.aria.copyUrl" aria-label="Copy session URL" data-i18n-aria="session.aria.copyUrl">' + escapeHtml(sid) + '</span>' +
       '</div>' +
+      reviewBadgeHtml(sid) +
       '</div>' +
       '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
 
     tile.title = (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
+
+    var lockBtn = tile.querySelector('.sess-lock');
+    if (lockBtn) {
+      lockBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleSessionApproval(s, gated, lockBtn);
+      };
+    }
 
     var sx = tile.querySelector('.sess-x');
     var delConf = {
@@ -209,6 +234,21 @@ function renderSessionGrid(sessions, bannerMsg) {
   updateSessionBatchBar();
 }
 
+/** reviewBadgeHtml builds a session card's pending-review badge from the counts
+ *  already in hand.
+ *
+ *  The grid is rebuilt from scratch on every session frame, and submitting a
+ *  request emits one of those frames (the manager's list-change broadcast). A
+ *  badge painted only by a later pass was therefore wiped by the very frame that
+ *  announced the request: measured in a browser, the tab bar showed "1" while
+ *  the card stayed empty. Building the badge into the tile is what makes it
+ *  survive its own re-render. */
+function reviewBadgeHtml(sid) {
+  var n = (window._approvalCounts || {})[sid] || 0;
+  if (!n) return '<div class="sess-review" hidden></div>';
+  return '<div class="sess-review">' + escapeHtml(tCount('review.badge.one', 'review.badge.other', { count: n })) + '</div>';
+}
+
 /** Convert a live terminal window to read-only when its session becomes DEAD:
  *  stop streaming/input while keeping the ordinary xterm screen and tabs. Also
  *  surfaces a "dead" badge in the window title so the DEAD state is visible
@@ -278,6 +318,58 @@ function showTerminalEndedMarker(win, ch) {
   }
 }
 
+/**
+ * toggleSessionApproval flips a session's approval gate.
+ *
+ * Turning it on asks for the threshold first: the number of approvers is the
+ * real control (termcp authenticates a deployment with one token, so it cannot
+ * prove who an approver is), and defaulting it silently to 1 would hide that.
+ * Turning it off cancels everything pending server-side, hence the confirmation.
+ */
+function toggleSessionApproval(s, gated, btn) {
+  if (!s || !s.id) return;
+  if (gated) {
+    confirmDialog({
+      title: t('review.disable.title'),
+      message: t('review.disable.msgSession', { session: displaySessionShort(s) }),
+      okText: t('review.disable.ok')
+    }).then(function (ok) {
+      if (!ok) return;
+      setSessionApproval(s.id, false).catch(function (e) {
+        showCopyToast(t('review.toast.failed', { msg: String(e.message || e) }));
+      });
+    });
+    return;
+  }
+  setSessionApproval(s.id, true).catch(function (e) {
+    showCopyToast('Failed: ' + String(e.message || e));
+  });
+}
+
+/** setSessionApproval PATCHes the gate. The session-list frame re-renders the
+ *  card, so no local state is kept here — the server is the single source.
+ *
+ *  No reviewer count is sent: review has one reviewer, so a number would be a
+ *  field with a single valid value.
+ */
+function setSessionApproval(sessionID, enabled) {
+  var body = enabled ? { enabled: true } : { enabled: false };
+  return fetch(sessionAPI(sessionID, '/approval'), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return r.json();
+  }).then(function (j) {
+    showCopyToast(enabled ? t('review.toast.on') : t('review.toast.off'));
+    // The server broadcasts the new session list (Manager.EnableApproval), and the
+    // WebSocket frame re-renders the cards. Nothing is refreshed locally: reading
+    // back here would be a second source of truth for the same state.
+    return j;
+  });
+}
+
 function applySessionsSnapshot(sessions) {
   window._lastSessionsSnapshot = sessions;
   renderSessionGrid(sessions, '');
@@ -303,6 +395,10 @@ function applySessionsSnapshot(sessions) {
       continue;
     }
     if (s.status !== 'running') lockWindowReadonly(w);
+    // Approval mode is part of the session snapshot, so an open window reflects a
+    // switch flipped in another tab without needing its own request.
+    w._approvalNeed = s.approval_need || 1;
+    applyApprovalMode(w, !!s.approval_mode);
   }
   // Prune invisible client-side state for sessions that have left the
   // server registry entirely, even if no window was open when they died.

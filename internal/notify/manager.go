@@ -360,6 +360,50 @@ func (m *Manager) OnOutput(shellID string) {
 	}
 }
 
+// OnApprovalChange wakes up rules registered on a shell whose approval queue
+// changed state, so an agent waiting on shell_notify does not have to poll.
+//
+// It reuses the output-event dispatch path on purpose: a rule registered for
+// event=output already means "tell me when something happens on this shell", and
+// a decision on a queued command is exactly that. Inventing a separate approval
+// event would make agents register twice for one thing.
+//
+// shellID may be empty when the request belonged to a shell that already went
+// away; the transition is then still delivered to session-level observers by the
+// web UI hub, and there is no shell rule to wake.
+func (m *Manager) OnApprovalChange(shellID, status string) {
+	if shellID == "" {
+		return
+	}
+	m.mu.RLock()
+	rulesMap := m.shellRules[shellID]
+	if len(rulesMap) == 0 {
+		m.mu.RUnlock()
+		return
+	}
+	rules := make([]*Rule, 0, len(rulesMap))
+	for _, r := range rulesMap {
+		rules = append(rules, r)
+	}
+	m.mu.RUnlock()
+
+	for _, rule := range rules {
+		rule.mu.Lock()
+		if rule.stopped {
+			rule.mu.Unlock()
+			continue
+		}
+		if rule.Event != EventOutput {
+			// exit/silence rules describe the process lifecycle, which an
+			// approval transition does not touch.
+			rule.mu.Unlock()
+			continue
+		}
+		rule.mu.Unlock()
+		go m.dispatchWithCooldown(rule, EventOutput, status, false)
+	}
+}
+
 // OnExit is called when a shell exits or is aborted.
 // It executes One-Shot notification for EventExit rules, followed by automatic cleanup.
 func (m *Manager) OnExit(shellID string, exitCode *int) {

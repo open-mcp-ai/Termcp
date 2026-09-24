@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/open-mcp-ai/termcp/internal/ansi"
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/buffer"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -60,6 +61,10 @@ type Config struct {
 	Rows    int
 	Cols    int
 	Remote  *RemoteSSH
+	// Approval turns review mode on as the session is created, so a profile can
+	// make "every write to this host is reviewed" the default rather than a
+	// switch someone has to remember after launching.
+	Approval bool
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -90,6 +95,14 @@ type Session struct {
 	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
 
 	shells sync.Map // *ChildShell by ID
+	// approval gates input for the whole session when non-nil (see approval.go).
+	// It is session-scoped because production access is per-target: one
+	// deployment can hold a scratch host and a prod host at the same time.
+	approval *approvalState
+	// approvalSink is the change handler installed before approval mode is
+	// enabled, so a handler set at startup is not lost.
+	approvalSink func(sessionID string, req approval.Request)
+
 	// shellHistory retains the last-known per-shell metadata (id, name, status)
 	// so a DEAD session can still render per-shell tabs after shells leave the
 	// live map on exit. Also persisted to the shell manifests for restart restore.
@@ -367,11 +380,6 @@ func (s InputSource) logStatus() api.LogStatus {
 	return api.LogAPIInput
 }
 
-// SendInput writes text to the process stdin and records it in the byte log.
-func (s *Session) SendInput(text string, pressEnter bool) error {
-	return s.sendInput([]byte(text), pressEnter, true)
-}
-
 // PrimaryShellID returns the first shell created with this session.
 func (s *Session) PrimaryShellID() string {
 	return s.primaryShellID
@@ -382,53 +390,12 @@ func (s *Session) PrimaryShell() *ChildShell {
 	return s.GetChildShell(s.primaryShellID)
 }
 
-// SendTerminalBytes writes raw keystrokes to the primary shell stdin (web UI / REST).
-func (s *Session) SendTerminalBytes(data []byte, pressEnter bool) error {
-	return s.SendTerminalBytesFrom(data, pressEnter, InputFromAPI)
-}
-
-// SendTerminalBytesFrom writes raw keystrokes and records them with the status of
-// the given source, so the log distinguishes human input from agent input.
-func (s *Session) SendTerminalBytesFrom(data []byte, pressEnter bool, src InputSource) error {
-	cs := s.PrimaryShell()
-	if cs == nil {
-		return fmt.Errorf("session shell has exited")
-	}
-	return cs.SendTerminalBytesFrom(data, pressEnter, src)
-}
-
 // appendEnter returns data with the line ending appropriate for the shell family.
 func appendEnter(data []byte, crlf bool) []byte {
 	if crlf {
 		return append(append([]byte(nil), data...), '\r', '\n')
 	}
 	return append(append([]byte(nil), data...), '\n')
-}
-
-func (s *Session) sendInput(data []byte, pressEnter bool, persist bool) error {
-	s.mu.RLock()
-	running := s.Status == api.SessionRunning
-	s.mu.RUnlock()
-	if !running {
-		return fmt.Errorf("process has %s, cannot send input", s.Status)
-	}
-	crlf := s.enterCRLF
-	var toWrite []byte
-	if pressEnter {
-		toWrite = appendEnter(data, crlf)
-	} else {
-		toWrite = data
-	}
-	s.stdinMu.Lock()
-	_, err := s.execSession.WriteStdin(toWrite)
-	s.stdinMu.Unlock()
-	if err != nil {
-		return err
-	}
-	if persist && s.msgMgr != nil {
-		_ = s.msgMgr.AppendMarkOnly(s.ID, s.primaryShellID, InputFromAPI.logStatus())
-	}
-	return nil
 }
 
 func (s *Session) readOutput(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, persist bool, maxBytes int) (string, error) {
@@ -683,8 +650,8 @@ func (s *Session) Disconnect() {
 
 func (s *Session) beginClosing() {
 	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
 	if s.closing {
+		s.shellStateMu.Unlock()
 		return
 	}
 	s.closing = true
@@ -695,6 +662,18 @@ func (s *Session) beginClosing() {
 		cs.mu.Unlock()
 		return true
 	})
+	s.shellStateMu.Unlock()
+
+	// A closing session can no longer execute anything, so its pending requests
+	// must not stay decidable. Without this, Terminate (which does not run the
+	// scope cascade) left them pending: a later approve succeeded and recorded a
+	// grant, while the bytes were refused because the process was already gone.
+	// The decision then read as effective in the audit trail when nothing ran.
+	//
+	// Called after releasing shellStateMu: the lock order in this file is
+	// shellStateMu then s.mu (see CreateChildShell), and DisableApproval takes
+	// s.mu.
+	s.DisableApproval()
 }
 
 // terminateChildren closes all child shells. Called during parent session termination.
@@ -734,11 +713,23 @@ func (s *Session) ResizePty(rows, cols int) error {
 // Info returns a deep copy of the session metadata.
 func (s *Session) Info() api.Session {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	approvalState := s.approval
 	cp := s.Session
 	if cp.ExitCode != nil {
 		v := *cp.ExitCode
 		cp.ExitCode = &v
+	}
+	s.mu.RUnlock()
+
+	// Approval fields are derived from live state rather than stored on the
+	// embedded api.Session, so a manifest written before approval mode existed
+	// cannot claim the session is gated (or ungated).
+	if approvalState != nil {
+		cp.ApprovalMode = true
+		cp.ApprovalNeed = approvalState.queue.Need()
+	} else {
+		cp.ApprovalMode = false
+		cp.ApprovalNeed = 0
 	}
 	return cp
 }
@@ -799,28 +790,13 @@ func (s *Session) IsBufferClosed() bool {
 	return s.buf.IsClosed()
 }
 
-// TerminalShell is the interface used by WebSocket/REST handlers for terminal I/O.
-// Both *Session and *ChildShell implement this interface.
-type TerminalShell interface {
-	Info() api.Session
-	SendTerminalBytes(data []byte, pressEnter bool) error
-	ResizePty(rows, cols int) error
-	RegisterReader() (int, error)
-	RegisterReaderFromBufferStart() (int, error)
-	UnregisterReader(id int)
-	ReadTerminalStream(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error)
-	HasMoreOutput(readerID int) bool
-	ReaderCursor(readerID int) int64
-	IsBufferClosed() bool
-	OutputByteRange(start int64, max int) ([]byte, int64, error)
-	// OutputBaseOffset is the absolute offset of the earliest retained byte, which
-	// moves forward only when the buffer drops a prefix to reclaim memory.
-	OutputBaseOffset() int64
-	BufferLen() int64
-}
-
 // ChildShell is a lightweight shell channel sharing the parent Session's SSH connection.
-// It implements TerminalShell so it can be used interchangeably with *Session in WebSocket handlers.
+//
+// It is the only terminal the API surface addresses: a session is a connection
+// container, and every read or write of terminal bytes goes to one of its shell
+// channels. The dead TerminalShell interface used to suggest a *Session could
+// stand in for one; nothing ever did that, and widening it back would reopen a
+// second write path around the approval gate.
 type ChildShell struct {
 	ID          string
 	Name        string

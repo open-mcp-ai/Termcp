@@ -438,6 +438,7 @@ func (s *Server) RegisterSSHConfigWriteTools() {
 			mcpgo.WithString("description"),
 			mcpgo.WithString("default_shell"),
 			mcpgo.WithString("default_mode", mcpgo.Description("Default mode: pty or pipe")),
+			mcpgo.WithBoolean("default_approval", mcpgo.Description("create/edit: start sessions from this profile with review mode on (required approvals per AI write). On edit, sending false turns it off; omitting it keeps the current value")),
 			mcpgo.WithString("jump_host"),
 			mcpgo.WithString("jump_user"),
 			mcpgo.WithNumber("jump_port", mcpgo.DefaultNumber(22)),
