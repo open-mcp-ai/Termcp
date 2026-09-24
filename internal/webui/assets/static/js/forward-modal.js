@@ -2,7 +2,7 @@ function openForwardModal(sessionId, sshConfig) {
   var err = document.getElementById('modal-forward-err');
   if (err) { err.style.display = 'none'; err.textContent = ''; }
   if (!sessionId) {
-    if (err) { err.textContent = 'No active session — open terminal first'; err.style.display = 'block'; }
+    if (err) { err.textContent = t('modal.forward.err.noSession'); err.style.display = 'block'; }
     showModal('modal-forward');
     return;
   }
@@ -18,7 +18,7 @@ function openForwardModal(sessionId, sshConfig) {
 }
 function createForward(body) {
   if (!_fwdSessionId) {
-    return Promise.reject(new Error('No active session — open terminal first'));
+    return Promise.reject(new Error(t('modal.forward.err.noSession')));
   }
   return fetch(sessionAPI(_fwdSessionId, '/forwards'), {
     method: 'POST',
@@ -46,7 +46,7 @@ if (_fwCreate) _fwCreate.onclick = function () {
   var dir = document.getElementById('fw-direction').value;
   var remoteHost = document.getElementById('fw-remote-host').value.trim();
   var remotePort = parseInt(document.getElementById('fw-remote-port').value) || 0;
-  if (dir !== 'dynamic' && (!remoteHost || !remotePort)) { err.textContent = 'Target host and port are required'; err.style.display = 'block'; return; }
+  if (dir !== 'dynamic' && (!remoteHost || !remotePort)) { err.textContent = t('modal.forward.err.required'); err.style.display = 'block'; return; }
   var body = {
     direction: dir,
     remote_host: remoteHost,
@@ -69,7 +69,7 @@ document.getElementById('fw-direction').onchange = function () {
   var lh = document.getElementById('fw-local-host');
   if (lh) { var lbl = lh.closest('label'); if (lbl) lbl.style.display = isDynamic ? 'none' : ''; lh.style.display = isDynamic ? 'none' : ''; }
   var pl = document.getElementById('fw-local-port-label');
-  if (pl) pl.textContent = isDynamic ? 'SOCKS5 port (0 = random)' : 'Listen port (0 = random)';
+  if (pl) pl.textContent = isDynamic ? t('modal.forward.socksPort') : t('modal.forward.listenPort');
 };
 
 function forwardMatchesConfig(f, sshConfig) {

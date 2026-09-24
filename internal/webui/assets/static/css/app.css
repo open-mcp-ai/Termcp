@@ -1,12 +1,70 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; font-family: ui-sans-serif, system-ui, sans-serif; background: #f6f8fa; color: #24292f; }
   .app-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid #d0d7de; background: #fff; box-shadow: 0 1px 0 rgba(27,31,36,.04); }
-  .app-header-nav { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  /* The nav wraps instead of squeezing: with the language switch in it, a phone
+     width cannot hold the control and the API link side by side, and without
+     this the browser breaks the link's label across two lines inside its
+     border. nowrap keeps the label intact and the whole link moves to the next
+     row, still right-aligned. */
+  .app-header-nav { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
   .app-header-nav a {
-    font-size: 0.82rem; color: #0969da; text-decoration: none;
+    font-size: 0.82rem; color: #0969da; text-decoration: none; white-space: nowrap;
     padding: 6px 10px; border-radius: 6px; border: 1px solid #d0d7de; background: #fff;
   }
   .app-header-nav a:hover { background: #f0f6fc; border-color: #afb8c1; }
+
+  /* Language switch: a trigger shaped like the API link beside it (same border,
+     radius and blue label) showing the language in use, plus the menu it drops.
+     flex-shrink: 0 keeps the header from squeezing the control instead of
+     wrapping it onto its own row. */
+  .lang-switch { position: relative; display: inline-flex; flex-shrink: 0; }
+  .lang-btn {
+    display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 0.82rem;
+    color: #0969da; padding: 6px 8px; border-radius: 6px; border: 1px solid #d0d7de;
+    background: #fff; cursor: pointer;
+  }
+  .lang-btn:hover { background: #f0f6fc; border-color: #afb8c1; }
+  .lang-btn[aria-expanded="true"] { background: #f0f6fc; border-color: #afb8c1; }
+  /* The glyph is an external SVG worn as a mask, not an <img>: an image would
+     keep its own black fill, while a mask paints in the trigger's colour
+     (currentColor) and follows it into hover and active states. The url() is
+     relative to this stylesheet: /static/css/ -> /icons/.
+     The artwork is 1280x1024 but its ink only spans y=192..832 (measured), so
+     the mask is sized by hand instead of with `contain`: a mask 18.72px tall
+     draws its ink 18.72 * 640/1024 = 11.7px tall, i.e. 30% taller than the 9px
+     `contain` produced in an 18px box. The box stays 18px tall so the height of
+     the trigger (and its match with the API link) does not move, and the ink is
+     centred, so the 0.36px of empty padding it clips top and bottom is nothing. */
+  .lang-icon {
+    display: inline-block; width: 23.4px; height: 18px; flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url(../../icons/language.svg) center / auto 18.72px no-repeat;
+            mask: url(../../icons/language.svg) center / auto 18.72px no-repeat;
+  }
+  /* The four labels are 3-4 characters (Auto/ENG/简中/繁中); a 2.4em floor covers
+     the widest of them, so switching never resizes the trigger, and it is no
+     wider than it has to be. */
+  .lang-current { min-width: 2.4em; text-align: left; }
+  .lang-caret { width: 8px; height: 8px; flex-shrink: 0; opacity: .65; }
+  .lang-menu {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 100;
+    display: flex; flex-direction: column; min-width: 100%; padding: 3px;
+    border: 1px solid #d0d7de; border-radius: 6px; background: #fff;
+    box-shadow: 0 8px 24px rgba(140,149,159,.2);
+  }
+  .lang-menu.hidden { display: none; }
+  .lang-opt {
+    font: inherit; font-size: 0.82rem; text-align: left; white-space: nowrap;
+    padding: 7px 8px; border: none; border-radius: 4px; background: transparent;
+    color: #24292f; cursor: pointer;
+  }
+  .lang-opt:hover { background: #f0f6fc; }
+  /* The language the page is currently rendered in. */
+  .lang-opt.active { background: #0969da; color: #fff; font-weight: 600; }
+  /* Traditional glyph shapes are chosen by the system locale, which can hand
+     back Simplified forms on a Simplified-first machine; naming the TC faces
+     covers macOS (PingFang TC) and Windows (Microsoft JhengHei). */
+  body.lang-hant { font-family: ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
   .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: #1f2328; }
   .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #d0d7de; background: #f6f8fa; color: #24292f; cursor: pointer; }
   .btn:hover { background: #eaeef2; border-color: #afb8c1; }
@@ -979,7 +1037,7 @@
    size itself to 188-300px reads as ragged. Session tiles stay the compact
    128px cards they are on desktop and wrap several per row — stretching those
    to full width turns each into a mostly-empty band. */
-/* "Add connection" is an affordance, not a destination: a dashed border reads
+/* "Add Host" is an affordance, not a destination: a dashed border reads
    as "empty slot you can fill" and keeps it distinct from real entries without
    a different shape or colour. */
 .conn-tile.entry-card.entry-card-add {
@@ -1026,4 +1084,8 @@
      the extra class to outrank the desktop rule above (three classes beat two),
      which is why it is repeated here instead of relying on the rule just above. */
   .conn-tile.entry-card.entry-card-add { width: 100%; max-width: none; }
+  /* Touch: a 30px-tall trigger and 32px menu rows are below the 34px target.
+     Only the vertical padding grows; the horizontal stays tight on purpose. */
+  .lang-btn { padding: 9px 8px; }
+  .lang-opt { padding: 10px 10px; }
 }
