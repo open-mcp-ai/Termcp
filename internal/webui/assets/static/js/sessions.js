@@ -10,13 +10,13 @@ function updateSessionBatchBar() {
   var allSelected = total > 0 && count >= total;
   if (selAllBtn) {
     selAllBtn.classList.toggle('all-checked', allSelected);
-    selAllBtn.title = allSelected ? 'Clear selection' : 'Select all';
+    selAllBtn.title = allSelected ? t('section.batch.clearSelection') : t('section.batch.selectAll');
     selAllBtn.disabled = total === 0;
   }
   if (countEl) {
     if (count > 0) {
       countEl.style.display = '';
-      countEl.textContent = count + ' selected';
+      countEl.textContent = t('batch.count.selected', { count: count });
     } else {
       countEl.style.display = 'none';
       countEl.textContent = '';
@@ -24,7 +24,9 @@ function updateSessionBatchBar() {
   }
   if (delBtn) {
     delBtn.disabled = count === 0;
-    delBtn.title = count > 0 ? 'Delete ' + count + ' selected session' + (count === 1 ? '' : 's') : 'Delete selected';
+    delBtn.title = count > 0
+      ? tCount('batch.del.title.one', 'batch.del.title.other', { count: count })
+      : t('section.batch.deleteSelected');
   }
 }
 
@@ -42,7 +44,7 @@ function renderSessionGrid(sessions, bannerMsg) {
     updateSessionBatchBar();
     var empty = document.createElement('div');
     empty.style.cssText = 'padding:8px 4px;font-size:0.85rem;color:#656d76';
-    empty.textContent = 'No sessions.';
+    empty.textContent = t('session.empty');
     grid.appendChild(empty);
     return;
   }
@@ -62,37 +64,45 @@ function renderSessionGrid(sessions, bannerMsg) {
     var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
     /* Status lamp at the left of the id: green while the session is up, red once
        it is over. The reason still travels in the tooltip. */
+    var statusText = dead
+      ? t('session.status.dead', { reason: reasonLabel(s.reason) })
+      : t('session.status.running');
     var statusIc =
       '<span class="sess-status-ic ' + (dead ? 'is-dead' : 'is-live') + '" title="' +
-      escapeHtml(dead ? ('Dead: ' + reasonLabel(s.reason)) : 'Running') + '" role="img" aria-label="' +
-      escapeHtml(dead ? ('Dead: ' + reasonLabel(s.reason)) : 'Running') + '"></span>';
+      escapeHtml(statusText) + '" role="img" aria-label="' +
+      escapeHtml(statusText) + '"></span>';
 
     var actionCornerHtml =
-      '<button type="button" class="sess-x" title="Delete session" aria-label="Delete session">' +
+      '<button type="button" class="sess-x" title="Delete session" data-i18n-title="session.delete.title" aria-label="Delete session" data-i18n-aria="session.delete.title">' +
         '<svg viewBox="0 0 12 12" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
       '</button>';
 
     tile.innerHTML =
       '<div class="conn-tile-stack">' +
       actionCornerHtml +
-      '<div class="icon-wrap" title="' + (dead ? 'Open history' : 'Open terminal') + '"><span class="sess-terminal-ic">' + terminalIconImgHtml() + '</span></div>' +
+      '<div class="icon-wrap" title="' + escapeHtml(dead ? t('session.openHistory') : t('session.openTerminal')) + '"><span class="sess-terminal-ic">' + terminalIconImgHtml() + '</span></div>' +
       '</div>' +
       '<div class="sess-tile-body">' +
       '<div class="sess-name-row">' +
-      '<input type="checkbox" class="sess-checkbox" title="Select session" aria-label="Select session"' + (isSelected ? ' checked' : '') + '>' +
-      '<div class="sess-entry-line" role="button" tabindex="0" title="Rename session" aria-label="Rename session">' + escapeHtml(entryLine) + '</div>' +
+      '<input type="checkbox" class="sess-checkbox" title="Select session" data-i18n-title="session.aria.select" aria-label="Select session" data-i18n-aria="session.aria.select"' + (isSelected ? ' checked' : '') + '>' +
+      '<div class="sess-entry-line" role="button" tabindex="0" title="Rename session" data-i18n-title="session.aria.rename" aria-label="Rename session" data-i18n-aria="session.aria.rename">' + escapeHtml(entryLine) + '</div>' +
       '</div>' +
       '<div class="sess-meta-row">' +
       statusIc +
-      '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" aria-label="Copy session URL">' + escapeHtml(sid) + '</span>' +
+      '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" data-i18n-title="session.aria.copyUrl" aria-label="Copy session URL" data-i18n-aria="session.aria.copyUrl">' + escapeHtml(sid) + '</span>' +
       '</div>' +
       '</div>' +
       '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
 
-    tile.title = (dead ? 'Open history (read-only)' : 'Open terminal') + ' · ' + sid;
+    tile.title = (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
 
     var sx = tile.querySelector('.sess-x');
-    var delConf = { title: 'Delete session', message: 'Delete "' + entryLine + '"?', okText: 'Delete', danger: true };
+    var delConf = {
+      title: t('session.delete.title'),
+      message: t('session.delete.message', { name: entryLine }),
+      okText: t('common.delete'),
+      danger: true
+    };
     if (sx) {
       sx.onclick = function (e) {
         e.preventDefault();
@@ -105,7 +115,7 @@ function renderSessionGrid(sessions, bannerMsg) {
               var w = getShellWindowBySid(s.id);
               if (w) closeShellWindow(w);
             })
-            .catch(function (err) { showCopyToast('Delete failed: ' + String(err.message || err)); });
+            .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: String(err.message || err) })); });
         });
       };
     }
@@ -130,7 +140,7 @@ function renderSessionGrid(sessions, bannerMsg) {
       var doCopy = function (e) {
         e.preventDefault();
         e.stopPropagation();
-        copyTextToClipboard(resourceUrlSession(sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlSession(sid)).then(function () { showCopyToast(); }).catch(function () { showCopyToast(t('toast.copy.failed')); });
       };
       sidEl.addEventListener('mousedown', function (e) { e.stopPropagation(); });
       sidEl.addEventListener('click', doCopy);
@@ -146,10 +156,10 @@ function renderSessionGrid(sessions, bannerMsg) {
       e.stopPropagation();
       var cur = String((s.name || '').trim());
       if (cur.indexOf('session-') === 0) cur = '';
-      var input = prompt('Rename session', cur);
+      var input = prompt(t('session.prompt.rename'), cur);
       if (input === null) return;
       var newName = input.trim();
-      if (!newName || (cur && newName === cur)) { showCopyToast('Name unchanged'); return; }
+      if (!newName || (cur && newName === cur)) { showCopyToast(t('session.toast.unchanged')); return; }
       fetch('/api/sessions/' + encodeURIComponent(sid), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -157,7 +167,7 @@ function renderSessionGrid(sessions, bannerMsg) {
       })
         .then(function (r) {
           if (!r.ok) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
-          showCopyToast('Renamed');
+          showCopyToast(t('session.toast.renamed'));
           // Local optimistic refresh; the server broadcast reconciles shortly.
           var snap = (window._lastSessionsSnapshot || []).slice();
           for (var i = 0; i < snap.length; i++) {
@@ -165,7 +175,7 @@ function renderSessionGrid(sessions, bannerMsg) {
           }
           applySessionsSnapshot(snap);
         })
-        .catch(function (err) { showCopyToast('Rename failed: ' + (err.message || err)); });
+        .catch(function (err) { showCopyToast(t('toast.rename.failed', { msg: (err.message || err) })); });
     };
     /* The name is the rename control: the pencil it replaced sat next to the sid
        and read as "edit the id", which is not what it did. */
@@ -186,11 +196,12 @@ function renderSessionGrid(sessions, bannerMsg) {
       var fwds = (window._lastForwards || []).filter(function(f) { return f.ssh_config === s.name; });
       if (fwds.length > 0) {
         fwdInfo.style.display = 'block';
-        fwdInfo.textContent = fwds.length + ' forward' + (fwds.length > 1 ? 's' : '') + ': ' + fwds.map(function(f){ return f.listen_addr + '\u2192' + f.target_addr; }).join(', ');
+        fwdInfo.textContent = tCount('fwd.count.one', 'fwd.count.other', { count: fwds.length }) + ': ' + fwds.map(function(f){ return f.listen_addr + '\u2192' + f.target_addr; }).join(', ');
       }
     }
     grid.appendChild(tile);
   });
+  applyI18n(grid);
   var liveIds = new Set(all.map(function(s) { return s.id; }));
   _selectedSessionIds.forEach(function(id) {
     if (!liveIds.has(id)) _selectedSessionIds.delete(id);
@@ -237,8 +248,8 @@ function setWindowDeadBadge(win) {
   win._deadBadgeAdded = true;
   var st = document.createElement('span');
   st.className = 'shell-dead-badge';
-  st.title = 'Session ended (read-only)';
-  st.textContent = 'dead';
+  st.title = t('session.dead.badgeTitle');
+  st.textContent = t('session.dead.badge');
   title.appendChild(st);
 }
 
@@ -257,11 +268,11 @@ function showTerminalEndedMarker(win, ch) {
   }
   if (ch.term) {
     try {
-      ch.term.writeln('\r\n\x1b[33m[Session ended]\x1b[0m', function () {
+      ch.term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m', function () {
         shellTermScrollToBottomIfStuck(ch.term, true);
       });
     } catch (e) {
-      try { ch.term.writeln('\r\n\x1b[33m[Session ended]\x1b[0m'); } catch (e2) {}
+      try { ch.term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m'); } catch (e2) {}
       shellTermScrollToBottomIfStuck(ch.term, true);
     }
   }
@@ -390,4 +401,7 @@ function syncWindowTabs(win, shells) {
     if (!found && existing[sid]) closeChannelTab(win, sid);
   });
 }
+
+/* Language switch: re-render the tiles from the snapshot in memory (no request). */
+onLangChange(function () { renderSessionGrid(window._lastSessionsSnapshot || [], ''); });
 

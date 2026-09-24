@@ -7,7 +7,7 @@ function hideModal(id) { document.getElementById(id).classList.add('hidden'); }
  */
 function pageHasLiveState() {
   var openWins = (typeof allShellWins === 'function' ? allShellWins() : []).length;
-  if (openWins > 0) return openWins + ' open terminal window' + (openWins > 1 ? 's' : '');
+  if (openWins > 0) return tCount('msg.leave.windows.one', 'msg.leave.windows.other', { count: openWins });
   return '';
 }
 
@@ -17,7 +17,7 @@ window.addEventListener('beforeunload', function (e) {
   e.preventDefault();
   // Modern browsers always show a generic dialog regardless of text; legacy
   // browsers render returnValue verbatim.
-  e.returnValue = 'termcp still has ' + live + '. Leaving closes the terminal view — sessions keep running on the server.';
+  e.returnValue = t('msg.leave.detail', { windows: live });
 });
 
 // Style-consistent replacement for the native confirm() dialog.
@@ -29,9 +29,9 @@ function confirmDialog(opts) {
   var okBtn = document.getElementById('modal-confirm-ok');
   var cancelBtn = document.getElementById('modal-confirm-cancel');
   var closeBtn = document.getElementById('modal-confirm-close');
-  title.textContent = opts.title || 'Confirm';
+  title.textContent = opts.title || t('common.confirm');
   msg.textContent = opts.message || '';
-  okBtn.textContent = opts.okText || 'OK';
+  okBtn.textContent = opts.okText || t('common.ok');
   okBtn.className = opts.danger ? 'btn btn-danger' : 'btn btn-primary';
   // Replace handlers without accumulating listeners: clone node each call.
   var freshOk = okBtn.cloneNode(true);
@@ -58,6 +58,24 @@ function confirmDialog(opts) {
   });
 }
 
+/* The entry banner carries information the user may need to read after the
+   switch (why the list is empty, why a connect failed), so it remembers its
+   catalog key + params instead of being re-rendered away. The message is only
+   replayed while the banner is actually on screen, so any later successful load
+   that clears the banner also retires the remembered one. */
+var _connBanner = null; // { key, params } | null
+
+function rememberConnBanner(key, params) {
+  _connBanner = key ? { key: key, params: params || null } : null;
+}
+
+/** The remembered banner in the current language, or '' when it is not shown. */
+function connBannerText() {
+  var el = document.getElementById('conn-load-banner');
+  if (!el || el.style.display === 'none') return '';
+  return _connBanner ? t(_connBanner.key, _connBanner.params) : '';
+}
+
 function renderConnGrid(connections, bannerMsg) {
   var grid = document.getElementById('conn-grid');
   if (!grid) return;
@@ -73,8 +91,8 @@ function renderConnGrid(connections, bannerMsg) {
     tile.setAttribute('data-conn-name', c.name);
     var icon = c.kind === 'internal' ? '🔁' : '🌐';
     var editBtn = c.kind === 'internal' ? '' :
-      '<button type="button" class="conn-edit-btn" title="Edit profile" aria-label="Edit profile">' + SVG_CONN_EDIT + '</button>';
-    var quickBtn = '<button type="button" class="conn-quick-btn" title="Launch options (session name, command)" aria-label="Launch options">' + SVG_CONN_QUICK + '</button>';
+      '<button type="button" class="conn-edit-btn" title="Edit profile" data-i18n-title="conn.aria.editProfile" aria-label="Edit profile" data-i18n-aria="conn.aria.editProfile">' + SVG_CONN_EDIT + '</button>';
+    var quickBtn = '<button type="button" class="conn-quick-btn" title="Launch options (session name, command)" data-i18n-title="conn.title.launchOptions" aria-label="Launch options" data-i18n-aria="conn.aria.launchOptions">' + SVG_CONN_QUICK + '</button>';
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<div class="conn-tile-stack">' +
@@ -83,8 +101,8 @@ function renderConnGrid(connections, bannerMsg) {
       '<div class="entry-card-main">' +
       '<div class="conn-nm-row">' +
       '<span class="conn-nm-cluster">' +
-      '<span class="conn-nm" title="Connect">' + escapeHtml(c.name) + '</span>' +
-      '<button type="button" class="sess-copy-btn" title="Copy URL" aria-label="Copy URL">' + SVG_COPY_12 + '</button>' +
+      '<span class="conn-nm" title="Connect" data-i18n-title="conn.title.connect">' + escapeHtml(c.name) + '</span>' +
+      '<button type="button" class="sess-copy-btn" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
       '</span>' +
       quickBtn +
       editBtn +
@@ -92,9 +110,9 @@ function renderConnGrid(connections, bannerMsg) {
       '</div>' +
       '</div>';
     var inner = tile.querySelector('.entry-card-inner');
-    var tipConnect = 'Click to connect directly; ▶ for options (session name, command)';
+    var tipConnect = t('conn.tip.connect');
     if (c.kind === 'internal') {
-      inner.title = tipConnect + ' (built-in loopback; not editable)';
+      inner.title = tipConnect + ' · ' + t('conn.tip.internal');
     } else {
       var hostLine = ((c.user || '') + '@' + (c.host || '') + (c.port && c.port !== 22 ? ':' + c.port : '')).trim();
       inner.title = hostLine ? (tipConnect + ' — ' + hostLine) : tipConnect;
@@ -104,6 +122,7 @@ function renderConnGrid(connections, bannerMsg) {
       if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn')) return;
       var b = document.getElementById('conn-load-banner');
       if (b) setLoadBanner(b, '');
+      rememberConnBanner(null);
       tile.classList.add('entry-connecting');
       inner.classList.add('entry-connecting');
       startSessionAndOpenShell(c.name, e)
@@ -111,7 +130,8 @@ function renderConnGrid(connections, bannerMsg) {
           if (err && err.name === 'AbortError') return;
           console.error(err);
           var msg = (err && err.message) ? err.message : String(err);
-          if (b) setLoadBanner(b, 'Connection failed: ' + msg);
+          rememberConnBanner('banner.conn.failed', { msg: msg });
+          if (b) setLoadBanner(b, t('banner.conn.failed', { msg: msg }));
         })
         .finally(function () {
           tile.classList.remove('entry-connecting');
@@ -133,7 +153,7 @@ function renderConnGrid(connections, bannerMsg) {
       entryCopyBtn.addEventListener('click', function (ev) {
         ev.preventDefault();
         ev.stopPropagation();
-        copyTextToClipboard(resourceUrlEntry(c.name)).then(function () { showCopyToast(); }).catch(function () { showCopyToast('Copy failed'); });
+        copyTextToClipboard(resourceUrlEntry(c.name)).then(function () { showCopyToast(); }).catch(function () { showCopyToast(t('toast.copy.failed')); });
       });
     }
     var editEl = tile.querySelector('.conn-edit-btn');
@@ -147,7 +167,7 @@ function renderConnGrid(connections, bannerMsg) {
     grid.appendChild(tile);
   });
 
-  /* "Add connection" as a trailing card rather than a header button: it belongs
+  /* "Add Host" as a trailing card rather than a header button: it belongs
      with the list it extends, and the header keeps only the section toggle. The
      card is the plus alone — the label said nothing the glyph does not, and on a
      phone it turned the row into a wide band with one word in it. The accessible
@@ -156,7 +176,7 @@ function renderConnGrid(connections, bannerMsg) {
   addCard.className = 'conn-tile entry-card entry-card-add';
   addCard.setAttribute('role', 'button');
   addCard.setAttribute('tabindex', '0');
-  addCard.setAttribute('aria-label', 'Add connection');
+  addCard.setAttribute('aria-label', t('conn.aria.add'));
   addCard.innerHTML =
     '<div class="entry-card-inner">' +
     '<div class="conn-tile-stack">' +
@@ -169,6 +189,8 @@ function renderConnGrid(connections, bannerMsg) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAdd(); }
   });
   grid.appendChild(addCard);
+  // Fill the data-i18n* markers baked into the cards above.
+  applyI18n(grid);
 }
 
 
@@ -216,13 +238,23 @@ function loadConnections() {
       });
     })
     .then(function (j) {
-      renderConnGrid(j.connections || [], '');
+      window._lastConnections = j.connections || [];
+      rememberConnBanner(null);
+      renderConnGrid(window._lastConnections, '');
     })
     .catch(function (e) {
       console.error(e);
+      window._lastConnections = [];
       var msg = (e && e.message) ? e.message : String(e);
-      renderConnGrid([], 'Failed to load entries: ' + msg + '. Ensure termcp is running and you use the correct port. You can still add a profile with +.');
+      rememberConnBanner('banner.entries.failed', { msg: msg });
+      renderConnGrid([], t('banner.entries.failed', { msg: msg }));
     });
 }
 
 // ---- connection form helpers ----
+
+/* Language switch: re-render the entry grid from the in-memory snapshot.
+   Refetching would flicker, and would blank the list while offline. The banner
+   is passed back in so a failure the user is still reading survives the switch
+   in the new language. */
+onLangChange(function () { renderConnGrid(window._lastConnections || [], connBannerText()); });
