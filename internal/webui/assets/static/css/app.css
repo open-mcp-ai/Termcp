@@ -146,6 +146,36 @@
   }
   .conn-tile.sess-tile .sess-status-ic.is-live { background: #1a7f37; }
   .conn-tile.sess-tile .sess-status-ic.is-dead { background: #cf222e; }
+
+  /* Approval lock on a session card. It is a state indicator and the switch in
+     one: the glyph carries the state (closed = gated), and the colour only
+     reinforces it, so the control still reads if colour is unavailable. */
+  .conn-tile.sess-tile .sess-lock {
+    flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; padding: 0; margin: 0;
+    border: none; border-radius: 3px; background: transparent;
+    color: #8c959f; cursor: pointer; opacity: .55;
+    transition: opacity .12s, color .12s, background .12s;
+  }
+  .conn-tile.sess-tile:hover .sess-lock { opacity: 1; }
+  .conn-tile.sess-tile .sess-lock:hover { background: rgba(0,0,0,.06); color: #57606a; }
+  /* Gated sessions stay fully visible: this is a warning state, not a hint. */
+  .conn-tile.sess-tile .sess-lock.is-on { opacity: 1; color: #bf8700; }
+  .conn-tile.sess-tile .sess-lock:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; opacity: 1; }
+  /* Touch: the 16px target is too small, and there is no hover to reveal it. */
+  @media (pointer: coarse) and (hover: none) {
+    .conn-tile.sess-tile .sess-lock { width: 26px; height: 26px; opacity: 1; }
+  }
+  /* Pending-review count on a session card. The card is where a session is seen
+     from the page, so it carries the count even though the decision is made in
+     the terminal's panel — otherwise a session nobody has open would sit on a
+     queued command silently. */
+  .conn-tile.sess-tile .sess-review {
+    margin-top: 3px; font-size: 0.6rem; font-weight: 600;
+    color: #cf222e; background: rgba(207,34,46,.1);
+    border: 1px solid rgba(207,34,46,.35); border-radius: 10px; padding: 1px 6px;
+  }
+  .conn-tile.sess-tile .sess-review[hidden] { display: none; }
   /* Sessions toolbar: always-visible select-all / delete-selected / clear-dead */
   .icon-btn-sm { width: 28px; height: 28px; border-radius: 6px; }
   .icon-btn-sm svg { width: 16px; height: 16px; }
@@ -262,10 +292,24 @@
     font-size: inherit;
   }
   .conn-tile .nm { font-size: 0.85rem; font-weight: 600; word-break: break-all; line-height: 1.2; color: #1f2328; cursor: default; }
-  .conn-tile.entry-card .conn-nm-row { margin-top: 0; justify-content: flex-start; }
+  .conn-tile.entry-card .conn-nm-row { margin-top: 0; justify-content: flex-start; align-items: center; }
   /* Name + copy button hug each other; the edit button stays at the row's far right. */
   .conn-tile.entry-card .conn-nm-cluster { display: flex; align-items: flex-start; gap: 4px; min-width: 0; flex: 1 1 auto; }
   .conn-tile.entry-card .conn-nm { flex: 0 1 auto; }
+  /* Review-by-default marker: the same closed lock the session card uses for a
+     gated session, so one glyph means one thing in both places. Amber because
+     it is the state that needs attention, not a neutral caption.
+
+     It sits to the RIGHT of the ▶ launch button, as a peer of the row's other
+     controls, and is centered on the row's axis: the name wraps to several
+     lines, so an align-items:flex-start marker drifted to the top of the card
+     instead of lining up with the buttons beside it. */
+  .conn-tile.entry-card .conn-approval {
+    display: inline-flex; align-items: center; justify-content: center;
+    align-self: center; flex: 0 0 auto;
+    width: 22px; height: 22px;
+    color: #bf8700;
+  }
   /* Borderless copy button, mirroring the edit button's quiet look. */
   .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
   .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: #0969da; background: rgba(9,105,218,.08); }
@@ -441,6 +485,12 @@
     to { opacity: 1; transform: none; }
   }
   .ui-notify-card.ui-notify-out { opacity: 0; transform: translateX(24px); transition: opacity .18s ease, transform .18s ease; }
+  /* A notification that names a session is a link to it. The affordance is
+     limited to those entries: one without a session has nowhere to go, so it
+     must not look clickable. */
+  .ui-notify-card.ui-notify-clickable { cursor: pointer; }
+  .ui-notify-card.ui-notify-clickable:hover { border-color: #afb8c1; box-shadow: 0 10px 28px rgba(27,31,36,.22); }
+  .ui-notify-card.ui-notify-clickable:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
   .ui-notify-card.ntf-success { border-left-color: #1a7f37; }
   .ui-notify-card.ntf-warn { border-left-color: #bf8700; }
   .ui-notify-card.ntf-error { border-left-color: #cf222e; }
@@ -492,11 +542,93 @@
   .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid #d0d7de; background: #fff; color: #24292f; margin-bottom: 12px; }
   .modal-body textarea { min-height: 220px; font-family: ui-monospace, monospace; font-size: 12px; }
   .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 8px; }
+
+  /* ---- Approval mode --------------------------------------------------
+     The queue row is what a decision is made against: the command, then two
+     buttons. Nothing here is editable — the AI wrote the command, and a human's
+     choice is to accept it or refuse it. */
+  .approval-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 10px; }
+  .approval-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: ui-monospace, monospace; font-size: 0.72rem;
+    padding: 2px 6px; border-radius: 4px;
+    background: #ddf4ff; border: 1px solid #54aeff; color: #0a3069;
+  }
+
+  .approval-item { border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .approval-item-done { opacity: .6; }
+  .approval-item-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 0.72rem; color: #656d76; }
+  .approval-src {
+    text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
+    padding: 1px 5px; border-radius: 3px; background: #eaeef2; color: #57606a;
+  }
+  .approval-sid { font-family: ui-monospace, monospace; }
+  /* The kind chip says what the row will do (file write, port forward, …). It is
+     distinct from .approval-src (who submitted it) because a reviewer needs both
+     answers to a row: who, and what. */
+  .approval-kind {
+    text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
+    padding: 1px 5px; border-radius: 3px;
+    background: rgba(191,135,0,.14); color: #9a6700;
+  }
+  /* An operation's summary is prose, not a command: it keeps the command box's
+     shape (so rows line up) without inviting the reader to parse it as input. */
+  .approval-code-op { font-style: italic; color: #57606a; }
+  /* The command on the left, the decision stacked on the right. The actions
+     are a column rather than a row: two buttons stacked are ~2×22px tall,
+     which the command box can fill with text instead of leaving empty space
+     beside a single button line. */
+  .approval-row { display: flex; align-items: flex-start; gap: 10px; }
+  .approval-main { flex: 1 1 auto; min-width: 0; }
+  .approval-code {
+    display: block; font-family: ui-monospace, monospace; font-size: 0.8rem;
+    padding: 6px 8px; border-radius: 6px; background: #f6f8fa; border: 1px solid #d0d7de;
+    color: #1f2328;
+    /* Read-only by construction: a textarea-sized box that is not an input, so
+       there is nothing to edit and nothing to resize.
+       Exactly two lines are visible and a longer command scrolls inside the box.
+       The height is arithmetic, not a magic number: `border-box` means the
+       padding (6px×2) and border (1px×2) come OUT of the declared height, so a
+       plain `2.6em` showed ONE line — measured. 3em is two lines of the 1.5
+       line-height set below, then the 14px of padding+border are added back. */
+    line-height: 1.5; height: calc(3em + 14px); overflow: auto;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  /* The decision column: Accept over Reject. No top offset — the buttons start
+     level with the command's first line, and the column's own height is what
+     the command box matches. */
+  .approval-row .approval-actions { flex: 0 0 auto; flex-direction: column; }
+  .approval-actions { display: flex; gap: 6px; }
+  .approval-actions .btn { padding: 4px 12px; font-size: 0.78rem; }
+  .approval-state { font-size: 0.78rem; color: #656d76; text-transform: capitalize; flex: 0 0 auto; }
+  /* Touch: the approver decides from a phone, so the buttons need real height,
+     and they go back side by side — a narrow screen has no room to waste on a
+     stacked pair, and 40px is a comfortable thumb target either way. */
+  @media (pointer: coarse) and (hover: none) {
+    .approval-row { flex-direction: column; align-items: stretch; gap: 6px; }
+    .approval-row .approval-actions { flex-direction: row; }
+    .approval-row .approval-actions .btn { min-height: 40px; flex: 1; }
+    .approval-chip { font-size: 0.78rem; padding: 4px 8px; }
+  }
   .err { color: #cf222e; font-size: 0.85rem; margin: 0 0 8px; }
   .conn-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
   .conn-field label { font-size: 0.78rem; font-weight: 500; color: #57606a; }
   .conn-field input, .conn-field select, .conn-field textarea { font-size: 0.85rem; padding: 4px 8px; border: 1px solid #d0d7de; border-radius: 4px; }
   .conn-field select { background: #fff; }
+  /* The checkbox row is a label and a box on one line, not a stacked field: the
+     generic `.conn-field input` rule above would give the checkbox a text
+     box's padding and border, and the label must sit BESIDE the box rather than
+     over it, since clicking either toggles it. */
+  .conn-field.conn-field-check { gap: 3px; }
+  .conn-field.conn-field-check label.conn-check {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.82rem; font-weight: 500; color: #1f2328; cursor: pointer;
+  }
+  .conn-field.conn-field-check input[type="checkbox"] {
+    width: 14px; height: 14px; margin: 0; padding: 0; flex: 0 0 auto;
+    border-radius: 3px; accent-color: #bf8700; cursor: pointer;
+  }
+  .conn-check-hint { font-size: 0.68rem; line-height: 1.35; color: #6e7681; }
   .conn-row { display: flex; gap: 8px; }
   .conn-row > .conn-field { flex: 1; }
   .jump-chain { margin-top: 6px; }
@@ -533,6 +665,16 @@
   .session-tab.active .session-tab-num { background: #58a6ff; color: #1e1e1e; }
   .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tab .session-tab-close:hover { background: #cf222e; color: #fff; }
+  /* Pending-review count on a session tab. A minimized window shows nothing but
+     its tab, so this is the only place its queue can be seen. */
+  .session-tab .session-tab-review {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 15px; height: 15px; padding: 0 4px; flex-shrink: 0;
+    border-radius: 8px; background: #cf222e; color: #fff;
+    font-size: 10px; font-weight: 600; line-height: 15px;
+  }
+  .session-tab .session-tab-review[hidden] { display: none; }
+  .session-tab.has-review { border-color: #cf222e; }
   /* ---- pane workspace (tiled mode) ---- */
   .pane-workspace { position: fixed; inset: 0; z-index: 10000; background: rgba(13,17,23,.72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
@@ -643,8 +785,11 @@
   .shell-window-collapse-btn { position: relative; margin-right: 2px; }
   .shell-window-collapse-btn .ic-u, .shell-window-collapse-btn .ic-d { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
   .shell-window-header-btns button:hover { color: #eee; background: rgba(255,255,255,.08); }
-  .shell-window-content { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: #1e1e1e; }
-  .shell-terminal-wrap { flex: 1; min-height: 100px; min-width: 0; padding: 6px 6px 0; overflow: hidden; display: flex; flex-direction: column; }
+  /* position: relative so the review panel anchors here and not to the terminal
+     wrapper: that wrapper is display:none while the Files or Forwardings tab is
+     open, and an approval for a file write arrives exactly there. */
+  .shell-window-content { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: #1e1e1e; position: relative; }
+  .shell-terminal-wrap { flex: 1; min-height: 100px; min-width: 0; padding: 6px 6px 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
   .shell-pending {
     flex: 1;
     display: flex;
@@ -693,7 +838,10 @@
     border: 2px solid #1e1e1e;
   }
   .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #6e7681; }
-  /* Floating "back to latest output" button (offset upward so it never covers the bottom-right resize handle) */
+  /* Floating "back to latest output" button (offset upward so it never covers the
+     bottom-right resize grip). It is a child of .shell-channel-body, whose box
+     ends at the footer, so clearing the grip needs its height plus a gap — not
+     the footer's too. */
   .shell-term-scroll-fab {
     position: absolute; right: 14px; bottom: 36px; z-index: 15;
     width: 30px; height: 30px; padding: 0;
@@ -711,30 +859,206 @@
   .shell-window.shell-window-collapsed .shell-window-content,
   .shell-window.shell-window-collapsed .shell-window-resize-handle { display: none; }
   .shell-window.shell-window-collapsed { height: auto; min-height: 0; }
-  .shell-window-resize-handle { position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; z-index: 30; touch-action: none; cursor: nwse-resize; }
-  .shell-window-resize-handle::after { content: ''; position: absolute; right: 5px; bottom: 5px; width: 18px; height: 18px; pointer-events: none; border-right: 2px solid rgba(255,255,255,.4); border-bottom: 2px solid rgba(255,255,255,.4); }
+  /* Four corner grips, no drawn glyph: the corner itself is the target.
+
+     Each grip is a thin strip along the window's vertical edge — 6px thick and
+     44px long from the corner — not a 30x30 block. A block that size overlaps
+     the controls that live in the header and footer rows, and those rows are
+     full-width, so stacking them above the grip buried it completely: measured
+     in a real browser, 0% of the north grips were reachable and the south ones
+     were down to a 4-6px sliver.
+
+     A 6px strip sits in the rows' own edge padding, where nothing interactive
+     lives — the header's close button is 9px in from the window edge and the
+     footer's review button 13px — so the strip and the controls never overlap
+     and no z-index is needed at all. It is also a longer target than the old
+     corner block (44px along the edge) and still includes the exact corner, so
+     a diagonal drag from the corner resizes both axes. */
+  .shell-window { --shell-resize-grip: 6px; --shell-resize-len: 44px; }
+  .shell-window-resize-handle {
+    position: absolute; z-index: 33; touch-action: none;
+    width: var(--shell-resize-grip); height: var(--shell-resize-len);
+  }
+  /* One rule per corner, stating all three properties. Grouping them by axis
+     ("the north pair", "the south pair") is what put the wrong cursor on the
+     left: the cursor follows the DIAGONAL, not the axis, so nw shares
+     nwse-resize with se, and ne shares nesw-resize with sw. Per-corner rules
+     make that pairing readable and impossible to mis-group. */
+  .shell-window-resize-handle[data-corner="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+  .shell-window-resize-handle[data-corner="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+  .shell-window-resize-handle[data-corner="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
+  .shell-window-resize-handle[data-corner="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
   .shell-window.shell-window-resizing { user-select: none !important; }
   .shell-window.shell-window-resizing .shell-window-content { pointer-events: none !important; }
-  .shell-tab-bar { display: flex; align-items: flex-end; gap: 0; flex-shrink: 0; padding-left: 8px; align-self: stretch; }
+  /* The strip holds the review lock and the pane tabs, and it is the one part of
+     the header that may be longer than the space left for it. So it takes the
+     leftover width, shrinks to it, and scrolls horizontally instead of pushing
+     the session name out of the row: the name is clipped by its own overflow, but
+     the tabs stay reachable at any width. The scrollbar is hidden because the row
+     is only 34px tall and a bar would eat the glyphs it exists to reach. */
+  .shell-tab-bar { display: flex; align-items: flex-end; gap: 0; flex: 0 1 auto; min-width: 0; padding-left: 8px; align-self: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .shell-tab-bar::-webkit-scrollbar { display: none; }
   .shell-tab-btn { width: 28px; height: 100%; padding: 0 4px; border: 1px solid transparent; border-radius: 4px 4px 0 0; background: transparent; color: #8b949e; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .12s, background .12s, border-color .12s; position: relative; bottom: -1px; }
   .shell-tab-btn:hover { color: #eee; background: rgba(255,255,255,.04); }
   .shell-tab-btn.active { color: #e6edf3; background: #1e1e1e; border-color: #333; border-bottom-color: #1e1e1e; }
   /* Shell channel tabs (bottom of terminal area, one tab per multiplexed shell) */
-  .shell-channel-tabs {
+  /* Terminal footer: tabs on the left, review controls on the right. The row
+     owns the border and background so the two halves line up as one bar. */
+  .shell-window-footer {
     display: flex;
-    align-items: center;
-    gap: 0;
+    align-items: stretch;
     flex-shrink: 0;
     order: 10;
     background: #252526;
     border-top: 1px solid #333;
-    min-height: 28px;
-    max-height: 28px;
+    min-height: 30px;
+    max-height: 30px;
+  }
+  .shell-channel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+    background: #252526;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: thin;
     scrollbar-color: #484f58 transparent;
   }
+  /* Review, in the terminal's title bar: one icon-only lock beside the session
+     title.
+
+     It replaced a labelled pill ("Review: off"). The title bar is the most
+     crowded row on the window — on a phone it already holds the drawer and
+     session glyphs, four pane tabs, collapse, minimize and close — and a pill
+     with words in it was the widest of them for a one-bit state. The lock is the
+     same glyph the session card uses, so the shape alone carries the meaning.
+
+     Its width matches the header's other buttons (26px) so the row's rhythm is
+     unbroken, and it is aligned by the flex parent rather than by its own
+     margins: the title wraps to several lines, so a self-aligned control drifts.
+     No border or background until hover, like the header's other glyphs. */
+  .shell-review-lock {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
+    align-self: center;
+    border: none; border-radius: 4px;
+    background: transparent; color: #8b949e; cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .shell-review-lock:hover { color: #eee; background: rgba(255,255,255,.08); }
+  .shell-review-lock[aria-expanded="true"] { color: #e6edf3; background: rgba(255,255,255,.08); }
+  .shell-review-lock-icon { display: flex; align-items: center; justify-content: center; line-height: 0; }
+  /* Gated: amber, matching the session card's lock so the two read as one state.
+     The open lock (the default) is neutral: review off is the ordinary case and
+     must not look like a warning. */
+  .shell-review-lock.is-on { color: #d29922; }
+  .shell-review-lock.is-on:hover { color: #e3b341; background: rgba(210,153,34,.16); }
+  .shell-review-lock[disabled] { opacity: .5; cursor: default; }
+  /* The count, on the control that opens the queue the count refers to.
+     It hangs off the corner so the lock keeps its 26px and the header row does not
+     reflow when a request arrives. */
+  .shell-review-lock { position: relative; }
+  .shell-review-count {
+    position: absolute; top: -1px; right: -1px;
+    min-width: 14px; height: 14px; padding: 0 3px;
+    border-radius: 7px; background: #cf222e; color: #fff;
+    font-size: 9px; font-weight: 600; line-height: 14px; text-align: center;
+    pointer-events: none;
+  }
+  .shell-review-count[hidden] { display: none; }
+
+  /* Review panel: a floating card over the window, not a flex sibling.
+     Taking height from the terminal reflowed the PTY on every open — and a
+     queue that gets checked often is the worst place to move the screen you are
+     reading. Capped and scrollable so it never covers the whole view either.
+
+     A child of .shell-window-content, which is positioned: it must outlive the
+     terminal wrapper. That wrapper is display:none while the Files or
+     Forwardings tab is open, so a panel inside it disappeared exactly when a file
+     write or a forward was the thing waiting.
+
+     Anchored to the TOP-right, under the title bar the lock lives in. */
+  .shell-review-sheet {
+    /* Above the corner grips (30) and the control rows (31/32): the panel is an
+       interactive surface the user opened, and a resize affordance must not sit
+       on top of its buttons. The grip under it is unusable until it is closed. */
+    position: absolute; right: 8px; top: 8px; z-index: 40;
+    width: min(420px, calc(100% - 16px));
+    max-height: min(60%, 340px);
+    display: flex; flex-direction: column;
+    background: #252526;
+    border: 1px solid #3a3a3a; border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+  .shell-review-sheet[hidden] { display: none; }
+  .shell-review-sheet-h {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 6px 5px 8px; flex-shrink: 0;
+    border-bottom: 1px solid #333;
+  }
+  .shell-review-sheet-title { font-size: 0.72rem; font-weight: 600; color: #c9d1d9; letter-spacing: .02em; }
+  /* The panel's switch: a small track + knob, not a full-size button. The mode
+     is one bit, so the control for it is one switch; its label reads the state.
+     Hidden checkbox + styled track is the standard shape, and it keeps keyboard
+     and screen-reader behaviour without re-implementing either. */
+  .shell-review-switch {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.66rem; color: #8b949e; cursor: pointer; user-select: none;
+  }
+  .shell-review-toggle {
+    position: absolute; opacity: 0; width: 0; height: 0; margin: 0;
+  }
+  .shell-review-switch-track {
+    position: relative; flex-shrink: 0;
+    width: 26px; height: 14px; border-radius: 8px;
+    background: #3a3a3a; border: 1px solid #4a4a4a;
+    transition: background .14s, border-color .14s;
+  }
+  .shell-review-switch-track::after {
+    content: ''; position: absolute; top: 1px; left: 1px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #8b949e; transition: transform .14s, background .14s;
+  }
+  .shell-review-switch:hover .shell-review-switch-track { border-color: #6e7681; }
+  .shell-review-toggle:checked + .shell-review-switch-track {
+    background: rgba(210,153,34,.22); border-color: #d29922;
+  }
+  .shell-review-toggle:checked + .shell-review-switch-track::after {
+    transform: translateX(12px); background: #e3b341;
+  }
+  .shell-review-toggle:focus-visible + .shell-review-switch-track { outline: 2px solid #58a6ff; outline-offset: 1px; }
+  .shell-review-toggle:checked ~ .shell-review-switch-text { color: #e3b341; }
+  .shell-review-toggle[disabled] + .shell-review-switch-track { opacity: .5; }
+  .shell-review-sheet-close {
+    margin-left: auto; width: 22px; height: 22px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer;
+  }
+  .shell-review-sheet-close:hover { background: #303030; color: #e6edf3; }
+  .shell-review-sheet-b { padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .shell-review-hint { font-size: 0.66rem; color: #6e7681; line-height: 1.35; }
+  .shell-review-queue-h {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.68rem; color: #8b949e;
+  }
+  .shell-review-refresh {
+    width: 20px; height: 20px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer;
+  }
+  .shell-review-refresh:hover { background: #303030; color: #e6edf3; }
+  .shell-review-list { display: flex; flex-direction: column; gap: 6px; }
+  /* Queue rows are compact: this panel is a card over a terminal, not a page. */
+  .shell-review-list .approval-item { margin: 0; padding: 6px 8px; background: #1e1e1e; border-color: #3a3a3a; }
+  .shell-review-list .approval-item-head { font-size: 0.62rem; }
+  .shell-review-list .approval-code { font-size: 0.72rem; }
+  .shell-review-list .approval-row { gap: 6px; }
+  .shell-review-list .approval-actions { gap: 5px; }
+  .shell-review-list .approval-actions .btn { font-size: 0.68rem; padding: 3px 8px; }
+  .shell-review-empty { font-size: 0.68rem; color: #6e7681; padding: 2px 0 4px; }
   .shell-channel-tabs::-webkit-scrollbar { height: 3px; }
   .shell-channel-tabs::-webkit-scrollbar-track { background: transparent; }
   .shell-channel-tabs::-webkit-scrollbar-thumb { background: #484f58; border-radius: 2px; }
@@ -942,6 +1266,19 @@
        specificity of the base rule (.shell-window-header-btns button, 0,1,1) —
        a bare class loses to it despite coming later in the file. */
     .shell-window-header-btns button.shell-window-max-btn { display: none; }
+    /* Collapse is meaningless here for the same reason maximize is: the window is
+       already the screen, so collapsing it leaves a header bar floating over the
+       page with the terminal gone — a state with no way back that a phone user
+       reaches by accident. Matched to the base rule's specificity for the same
+       reason as the rule above. */
+    .shell-window-header-btns button.shell-window-collapse-btn { display: none; }
+    /* The session name keeps a floor rather than being squeezed to zero. It is
+       clipped by its own overflow, so this is a sliver of text, not a reflow — and
+       what it buys is that the tab strip scrolls instead of the name vanishing.
+       Measured: with the name's floor and collapse gone, 320px holds the drawer,
+       the session glyph, this sliver, the lock, the tabs and the two remaining
+       window buttons without scrolling at all. */
+    .shell-window-title-cluster { min-width: 44px; }
   }
 
   /* Control group at the left of the terminal header. Order matches the DOM:
@@ -1003,9 +1340,19 @@
   }
   .shell-switch-item:hover, .shell-switch-item:active { background: #30363d; color: #fff; }
   .shell-switch-item.current { background: #094771; color: #fff; }
+  /* A dead session is listed too: it is still readable, and hiding it from the
+     switcher would make the list disagree with the session tiles. */
+  .shell-switch-item.dead { color: #8b949e; }
+  .shell-switch-item.dead .shell-switch-label::after { content: ' · dead'; color: #6e7681; }
   .shell-switch-empty { padding: 10px 12px; color: #8b949e; font-size: 0.78rem; }
   .shell-switch-num { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; min-width: 12px; }
   .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* The review row in the session menu. It is an action on THIS window's session,
+     not another session in the list, so it is pushed to the bottom behind a
+     separator and its state is spelled out on the right. The label's flex:1 is
+     what pushes that state across; no auto margin needed. */
+  .shell-switch-review { margin-top: 4px; border-top: 1px solid #3a3a3a; border-radius: 0 0 6px 6px; }
+  .shell-switch-review .shell-switch-state { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; }
 
   /* File context menu (dark, matches shell-window) */
   .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:#252526; border:1px solid #484f58; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:150px; padding:4px 0; }

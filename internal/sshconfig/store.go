@@ -80,11 +80,27 @@ func InternalEntry() *Entry {
 }
 
 // Load reads and validates a named config.
-// name "internal" is always the virtual built-in entry (disk leftovers are ignored).
+// name "internal" is the built-in entry, optionally overridden by a stored
+// internal/config.toml (see ParseInternalOverride).
 func (s *Store) Load(name string) (*Entry, error) {
 	name = strings.TrimSpace(name)
 	if isInternalName(name) {
-		return InternalEntry(), nil
+		base := InternalEntry()
+		data, err := os.ReadFile(s.internalOverridePath())
+		if err != nil {
+			if os.IsNotExist(err) {
+				return base, nil // no override: the defaults ARE the profile
+			}
+			return nil, err
+		}
+		ent, err := ParseInternalOverride(data, base)
+		if err != nil {
+			// A broken override is reported, not silently ignored: falling back
+			// to the defaults would run the session UNGATED after the user asked
+			// for a gate, which is the one direction this must never fail.
+			return nil, fmt.Errorf("internal profile override: %w", err)
+		}
+		return ent, nil
 	}
 	p, err := s.configPath(name)
 	if err != nil {
@@ -101,10 +117,20 @@ func (s *Store) Load(name string) (*Entry, error) {
 }
 
 // ReadRaw returns the raw config.toml bytes for a name.
-// For the virtual internal profile it returns InternalTemplate().
+//
+// For the internal profile it returns the stored override when one exists and
+// the built-in template otherwise, so the editor round-trips what is actually
+// in effect rather than a constant it cannot change.
 func (s *Store) ReadRaw(name string) ([]byte, error) {
 	name = strings.TrimSpace(name)
 	if isInternalName(name) {
+		data, err := os.ReadFile(s.internalOverridePath())
+		if err == nil {
+			return data, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
 		return InternalTemplate(), nil
 	}
 	p, err := s.configPath(name)
@@ -154,17 +180,32 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
-// Save writes config for a remote name (validates first).
-// The virtual internal profile cannot be saved.
+// Save writes config for a name (validates first).
+//
+// The internal profile is saved as an override file that Load layers over the
+// built-in defaults, so setting one field does not mean restating the rest.
 func (s *Store) Save(name string, data []byte) error {
+	if isInternalName(name) {
+		if _, err := ParseInternalOverride(data, InternalEntry()); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		p := s.internalOverridePath()
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			return err
+		}
+		if err := writeFileAtomic(p, data); err != nil {
+			return err
+		}
+		s.notifyChange()
+		return nil
+	}
 	if _, err := ParseAndValidate(data); err != nil {
 		return err
 	}
 	if err := ValidateName(name); err != nil {
 		return err
-	}
-	if isInternalName(name) {
-		return fmt.Errorf("cannot save reserved virtual ssh config %q", "internal")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,6 +213,24 @@ func (s *Store) Save(name string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
+	if err := writeFileAtomic(p, data); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// internalOverridePath is where a stored internal-profile override lives. The
+// name is dot-prefixed so the directory scan that builds the profile list skips
+// it (that scan treats any dot-directory as private).
+func (s *Store) internalOverridePath() string {
+	return filepath.Join(s.root(), ".internal", "config.toml")
+}
+
+// writeFileAtomic writes data through a temp file and renames it into place, so
+// a crash cannot leave a half-written config behind. The file is 0600: profiles
+// hold credentials.
+func writeFileAtomic(p string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-cfg-*")
 	if err != nil {
 		return err
@@ -193,7 +252,6 @@ func (s *Store) Save(name string, data []byte) error {
 	if err := os.Rename(tmpPath, p); err != nil {
 		return err
 	}
-	s.notifyChange()
 	return nil
 }
 

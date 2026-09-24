@@ -111,6 +111,16 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
   // onData
   term.onData(function (data) {
     if (win._inputClosed) return;
+    // Review mode does NOT block this path: this is the human's keyboard.
+    //
+    // The gate reviews what the AI sends, and the AI's surface is MCP. Blocking
+    // the operator's own typing locked them out of the session they were
+    // watching the moment they turned review on — they could not even interrupt
+    // a running command. A reviewer who cannot touch the terminal is not
+    // reviewing it, they are locked out of it.
+    //
+    // `win._approvalMode` is still read elsewhere (the title bar shows the
+    // state), so nothing here needs it.
     var ch = win._channels[sessionId];
     if (!ch) return;
     if (ch.streamDone) {
@@ -277,6 +287,121 @@ function addChannelClick(win) {
 }
 
 /** Wire up channel tab bar events (called once per window). */
+
+/**
+ * Wire the review lock and its panel.
+ *
+ * The lock is one control carrying the mode (its open/closed glyph), and the panel
+ * it opens holds the switch and the queue. The panel floats over the window, so
+ * opening it never resizes the PTY — an earlier version was a flex sibling and
+ * reflowed the terminal on every open.
+ */
+function wireReviewBar(win) {
+  var btn = win.querySelector('.shell-review-lock');
+  var sheet = win.querySelector('.shell-review-sheet');
+  if (btn && sheet) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      setReviewSheetOpen(win, sheet.hidden);
+    });
+  }
+  if (sheet) {
+    var close = sheet.querySelector('.shell-review-sheet-close');
+    if (close) close.addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      setReviewSheetOpen(win, false);
+    });
+    var refresh = sheet.querySelector('.shell-review-refresh');
+    if (refresh) refresh.addEventListener('click', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      loadReviewQueue(win);
+    });
+    var tg = sheet.querySelector('.shell-review-toggle');
+    if (tg) tg.addEventListener('change', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      applyReviewToggle(win, tg);
+    });
+  }
+  // Escape closes the panel, like any other overlay in the app.
+  win.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && sheet && !sheet.hidden) {
+      e.stopPropagation();
+      setReviewSheetOpen(win, false);
+    }
+  });
+}
+
+/** updateReviewLockTitle composes the lock's tooltip: the mode, then the count
+ *  if there is one. Both are read off the window, so the two writers (a mode
+ *  change and a count change) say the same thing instead of racing each other.
+ *  `_approvalCounts` lives in approval.js, which loads after this module, hence
+ *  the guard. */
+function updateReviewLockTitle(win) {
+  if (!win) return;
+  var btn = win.querySelector('.shell-review-lock');
+  if (!btn) return;
+  var n = (window._approvalCounts || {})[win._parentSid] || 0;
+  btn.title = (win._approvalMode ? t('review.lock.on') : t('review.lock.off')) +
+    (n ? t('review.lock.waitingCount', { count: n }) : t('review.lock.clickOpen'));
+}
+
+/** setReviewSheetOpen shows or hides the queue panel.
+ *
+ * No refit, by design: the panel is absolutely positioned over the terminal and
+ * takes no height from it, so opening it never reflows the PTY. */
+function setReviewSheetOpen(win, open) {
+  var sheet = win.querySelector('.shell-review-sheet');
+  if (!sheet) return;
+  sheet.hidden = !open;
+  var btn = win.querySelector('.shell-review-lock');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) loadReviewQueue(win);
+}
+
+/** applyReviewToggle flips the gate from the panel's own switch. It reuses the
+ *  same server call the session card uses, so both entrances share one write
+ *  path and its rules.
+ *
+ *  One person is enough: whoever turns review on is the reviewer. Counting
+ *  approvers is left to a future permission model, because termcp cannot prove
+ *  who an approver is until accounts exist — a threshold over claimed names
+ *  would look like security without being any.
+ */
+function applyReviewToggle(win, tg) {
+  var sid = win._parentSid;
+  if (!sid || !tg) return;
+  tg.disabled = true;
+  var turningOff = !!win._approvalMode;
+  var p;
+  if (turningOff) {
+    p = confirmDialog({
+      title: t('review.disable.title'),
+      message: t('review.disable.msg'),
+      okText: t('review.disable.ok')
+    }).then(function (ok) {
+      if (!ok) return null;
+      return setSessionApproval(sid, false).then(function (r) {
+        // Turning it off cancels everything pending, so the count this window
+        // carries is about to be wrong. The server's frame fixes the mode; the
+        // number is ours to drop.
+        clearApprovalCount(sid);
+        return r;
+      });
+    });
+  } else {
+    p = setSessionApproval(sid, true);
+  }
+  return p.catch(function (err) {
+    showCopyToast(t('review.toast.failed', { msg: String(err.message || err) }));
+  }).then(function () {
+    tg.disabled = false;
+  });
+}
+
+// loadReviewQueue / renderApprovalItem / decideApproval live in approval.js:
+// the queue is rendered once for both the terminal's panel and the session
+// tile's badge, so the two cannot drift.
 function _wireChannelTabBar(win) {
   var addBtn = win.querySelector('.shell-channel-tab-add');
   if (addBtn && !addBtn._chWired) {
@@ -288,6 +413,98 @@ function _wireChannelTabBar(win) {
     emptyBtn._chWired = true;
     emptyBtn.addEventListener('click', function() { addChannelClick(win); });
   }
+}
+
+/** applyApprovalModeFromSnapshot seeds a window's review UI, then corrects it
+ *  from the server.
+ *
+ *  The snapshot is a cache and can be stale for a session created after it was
+ *  taken (or gated a moment ago). Trusting it made a gated session render as
+ *  "Review: off", so typing looked accepted while the server dropped every byte:
+ *  the failure was silent on both ends. The cache still gives the window an
+ *  immediate, usually-correct state; the fetch is what makes it true. */
+function applyApprovalModeFromSnapshot(win, sessionId) {
+  var list = window._lastSessionsSnapshot || [];
+  var found = false;
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id === sessionId) {
+      win._approvalNeed = list[i].approval_need || 1;
+      applyApprovalMode(win, !!list[i].approval_mode);
+      found = true;
+      break;
+    }
+  }
+  if (!found) applyApprovalMode(win, false);
+  refreshApprovalState(win, sessionId);
+}
+
+/** refreshApprovalState reads the authoritative gate for one session and applies
+ *  it to an open window. A failure leaves the cached state in place: the server
+ *  is still the thing enforcing the gate, so a failed read must not silently
+ *  unlock the UI. */
+function refreshApprovalState(win, sessionId) {
+  if (!win || !sessionId) return;
+  fetch(sessionAPI(sessionId, '/approval'))
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (!j || !win.parentNode) return;
+      // Only apply to the window that asked: the user may have closed it and
+      // opened another for the same session in the meantime.
+      if (win._parentSid !== sessionId) return;
+      win._approvalNeed = j.need || 1;
+      applyApprovalMode(win, !!j.approval_mode);
+    })
+    .catch(function () {});
+}
+
+/** paintReviewLabels redraws every review label that encodes the mode, from the
+ *  state the window already holds. Split out of applyApprovalMode so the language
+ *  switch can repaint copy without refetching anything: a redraw that hits the
+ *  network blanks the queue while offline and flickers while not. */
+function paintReviewLabels(win) {
+  if (!win) return;
+  var on = !!win._approvalMode;
+  var btn = win.querySelector('.shell-review-lock');
+  if (btn) {
+    btn.classList.toggle('is-on', on);
+    // The glyph IS the state, so it has to change: a closed lock left on an
+    // ungated session would claim a gate that is not there.
+    var ic = btn.querySelector('.shell-review-lock-icon');
+    if (ic) ic.innerHTML = on ? SVG_LOCK_CLOSED : SVG_LOCK_OPEN;
+    btn.setAttribute('aria-label', on ? t('review.aria.on') : t('review.aria.off'));
+    updateReviewLockTitle(win);
+  }
+  var sheet = win.querySelector('.shell-review-sheet');
+  if (!sheet) return;
+  // A checkbox, so the state is `checked` rather than a label: the box reflects
+  // the mode, and the text next to it names what the mode is.
+  var tg = sheet.querySelector('.shell-review-toggle');
+  if (tg) {
+    tg.checked = !!on;
+    tg.disabled = false;
+  }
+  var txt = sheet.querySelector('.shell-review-switch-text');
+  if (txt) txt.textContent = on ? t('review.on') : t('review.off');
+}
+
+/** applyApprovalMode turns the typing gate on or off for one window.
+ *
+ *  The window keeps rendering output either way: approval gates input, not the
+ *  view. The title-bar lock carries the state — closed and amber while the AI's
+ *  writes wait for a decision, open and neutral while they do not — and the tab
+ *  bar carries how many are waiting (see applyApprovalCounts). */
+function applyApprovalMode(win, on) {
+  if (!win) return;
+  win._approvalMode = !!on;
+  paintReviewLabels(win);
+  // The number is not on the lock: it belongs to the pane tabs, where it can say
+  // WHICH face is waiting (a file write vs a command) instead of only how many.
+  applyApprovalCounts();
+  win.classList.toggle('win-approval', !!on);
+  // Turning review on or off changes what the queue means (dropped on off), so
+  // an open panel re-reads it rather than showing the previous mode's list.
+  var sheet = win.querySelector('.shell-review-sheet');
+  if (sheet && !sheet.hidden) loadReviewQueue(win);
 }
 
 /** ResizeObserver wrapper that tracks which channel SID to resize. */
@@ -385,8 +602,8 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     ntfTabBtn.type = 'button';
     ntfTabBtn.className = 'shell-tab-btn';
     ntfTabBtn.setAttribute('data-stab', 'notify');
-    ntfTabBtn.setAttribute('data-i18n-title', 'win.notify.tab');
-    ntfTabBtn.title = t('win.notify.tab');
+    ntfTabBtn.setAttribute('data-i18n-title', 'win.notify.tip');
+    ntfTabBtn.title = t('win.notify.tip');
     ntfTabBtn.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6a3.5 3.5 0 017 0c0 2.5 1 3.5 1 3.5H2.5s1-1 1-3.5z"/><path d="M5.8 11.5a1.2 1.2 0 002.4 0"/></svg>';
     tabBarEl.appendChild(ntfTabBtn);
   }
@@ -471,7 +688,18 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     var listEl = w.querySelector('.shell-ntf-list');
     if (!listEl) return;
     var rules = (window._lastNotifications || []).filter(function(n) { return n.session_id === sessionId; });
-    if (!rules.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">' + escapeHtml(t('ntf.empty')) + '</div>'; return; }
+    if (!rules.length) {
+      // This tab lists wake-up RULES (the ones the notify tool registers), not the
+      // toasts that appear in the corner. Those are two different things, and an
+      // empty panel beside a toast that just popped reads as a bug — so the empty
+      // state says which thing is empty.
+      listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center;line-height:1.6">'
+        + escapeHtml(t('ntf.empty'))
+        + '<div style="margin-top:6px;font-size:0.72rem;color:#6e7681">'
+        + escapeHtml(t('ntf.emptyHint'))
+        + '</div></div>';
+      return;
+    }
     listEl.innerHTML = rules.map(function(n){
       var evColor = n.event === 'exit' ? '#f85149' : (n.event === 'silence' ? '#d29922' : '#3fb950');
       var extra = (n.event === 'silence' && n.silence_seconds) ? ' ' + n.silence_seconds + 's' : '';
@@ -737,7 +965,7 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     '</div>' +
     '<div class="shell-tab-panel" data-stab="notify" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:12px 16px">' +
       '<div style="display:flex;align-items:center;margin-bottom:10px;flex-shrink:0">' +
-      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3" data-i18n="win.notify.tab">Notifications</span>' +
+      '<span style="font-size:0.82rem;font-weight:600;color:#e6edf3" title="Wake-up rules for this shell (notify tool)" data-i18n-title="win.notify.tip" data-i18n="win.notify.tab">Notifications</span>' +
       '<button type="button" class="shell-ntf-refresh-btn" title="Refresh" data-i18n-title="common.refresh" style="width:24px;height:24px;margin-left:auto;padding:0;border:1px solid #484f58;border-radius:4px;background:transparent;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .12s,background .12s,border-color .12s" onmouseover="this.style.color=\'#ccc\';this.style.borderColor=\'#666\'" onmouseout="this.style.color=\'#888\';this.style.borderColor=\'#484f58\'" onmousedown="this.style.background=\'rgba(255,255,255,.06)\'" onmouseup="this.style.background=\'transparent\'"><svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 7A5.5 5.5 0 0111.3 3.8M12.5 7A5.5 5.5 0 012.7 10.2"/><path d="M12.5 1.5v2.5H10M1.5 12.5v-2.5H4"/></svg></button>' +
       '</div>' +
       '<div class="shell-ntf-list" style="flex:1;min-height:0;overflow:auto;font-size:0.78rem;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;background:#0d1117" data-i18n="common.loading">Loading...</div>' +
@@ -772,6 +1000,9 @@ function openPendingShellWindow(connName, clickEvent, abortCtl) {
       '</h3>' +
       '</div>' +
       '<div class="shell-tab-bar">' +
+        // The lock leads the tab strip: it is the session-wide gate, and the
+        // tabs to its right are the faces it governs.
+        SHELL_REVIEW_LOCK_HTML +
         '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal" data-i18n-title="win.term.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
         '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings" data-i18n-title="win.fw.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
         '<button type="button" class="shell-tab-btn" data-stab="file" title="Files" data-i18n-title="win.files.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
@@ -793,16 +1024,19 @@ function openPendingShellWindow(connName, clickEvent, abortCtl) {
       '<div class="shell-channel-body">' +
         '<div class="shell-pending"><div class="shell-pending-spinner" aria-hidden="true"></div><div><span data-i18n="win.connecting.label">Connecting</span> <strong>' + escapeHtml(connName) + '</strong>…</div></div>' +
       '</div>' +
-      '<div class="shell-channel-tabs">' +
-        '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+      '<div class="shell-window-footer">' +
+        '<div class="shell-channel-tabs">' +
+          '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+        '</div>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
         '<span data-i18n="channel.empty">No shell channels</span>' +
         '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
       '</div>' +
     '</div>' +
+SHELL_REVIEW_SHEET_HTML +
 SHELL_WINDOW_PANELS_HTML +
-    '<div class="shell-window-resize-handle" title="Drag to resize" data-i18n-title="win.resize"></div>';
+    SHELL_RESIZE_HANDLES_HTML;
 
   /* The template above carries English fallbacks plus data-i18n* keys; fill them
      here so a window created after a language switch is not born in the previous
@@ -852,10 +1086,87 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEve
   if (pend) pend.remove();
   _wireChannelTabBar(win);
   _initShellWindowUI(win, connLabel, sessionId, clickEvent);
+  wireReviewBar(win);
+  // Seed the review UI here as well as in openShellWindow. This is the path a
+  // session created in this tab takes, and without it _approvalMode stays
+  // undefined, so typing is forwarded and the server silently drops it.
+  applyApprovalModeFromSnapshot(win, sessionId);
   createChannelTab(win, win._primaryShellId);
   refreshSessionTabbar();
 }
 
+/**
+/**
+ * The review lock, beside the session title.
+ *
+ * One control, icon-only, because the title bar is the most crowded row on the
+ * window and a phone has no room for a labelled pill there. The glyph is the
+ * same closed/open lock the session card uses, so one shape means one thing: is
+ * this session's AI gated. It opens the panel, which holds the switch and the
+ * queue.
+ *
+ * It replaces the label the pill carried. "Review: off" told a reader the mode,
+ * but the mode is also legible from the panel and from the session card, while
+ * the width it cost was paid on every session that never uses review. The queue
+ * count moved to the tab bar (see renderTabBadges), where it can say WHICH face
+ * has work waiting instead of only how much.
+ */
+var SHELL_REVIEW_LOCK_HTML =
+  '<button type="button" class="shell-review-lock" aria-expanded="false" aria-label="Review" data-i18n-aria="review.title">' +
+    '<span class="shell-review-lock-icon" aria-hidden="true">' + SVG_LOCK_OPEN + '</span>' +
+    '<span class="shell-review-count" hidden>0</span>' +
+  '</button>';
+
+var SHELL_RESIZE_HANDLES_HTML =
+  '<div class="shell-window-resize-handle" data-corner="nw" title="Drag to resize" data-i18n-title="win.resize"></div>' +
+  '<div class="shell-window-resize-handle" data-corner="ne" title="Drag to resize" data-i18n-title="win.resize"></div>' +
+  '<div class="shell-window-resize-handle" data-corner="sw" title="Drag to resize" data-i18n-title="win.resize"></div>' +
+  '<div class="shell-window-resize-handle" data-corner="se" title="Drag to resize" data-i18n-title="win.resize"></div>';
+
+/**
+ * The review panel: a floating card over the terminal's top-right corner.
+ *
+ * It floats rather than taking height on purpose. As a flex sibling it pushed
+ * the terminal up by its own height, so every open reflowed the PTY and moved
+ * the lines you were reading — the wrong trade for a queue that is checked
+ * often. Its height is capped and it scrolls, so it never covers the whole
+ * screen either.
+ *
+ * It holds the switch and the queue, and nothing else. There is no composer:
+ * the commands in the queue are written by the AI, not typed here, and a human's
+ * job is to accept or refuse them.
+ *
+ * The switch is a small track-and-knob rather than a full-size "Turn on review"
+ * button: the mode is one bit, and a padded button for it read as the panel's
+ * primary action while taking a row of its own. The footer button carries the
+ * same state, so it stays legible with the panel closed.
+ */
+var SHELL_REVIEW_SHEET_HTML =
+  '<div class="shell-review-sheet" hidden>' +
+    '<div class="shell-review-sheet-h">' +
+      '<span class="shell-review-sheet-title" data-i18n="review.title">Review</span>' +
+      '<label class="shell-review-switch" title="Review every write the AI sends to this session" data-i18n-title="review.switch.tip">' +
+        '<input type="checkbox" class="shell-review-toggle" role="switch" aria-label="Review mode" data-i18n-aria="review.mode">' +
+        '<span class="shell-review-switch-track" aria-hidden="true"></span>' +
+        '<span class="shell-review-switch-text" data-i18n="review.off">Review</span>' +
+      '</label>' +
+      '<button type="button" class="shell-review-sheet-close" title="Close" aria-label="Close" data-i18n-title="common.close" data-i18n-aria="common.close">' +
+        '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
+      '</button>' +
+    '</div>' +
+    '<div class="shell-review-sheet-b">' +
+      '<div class="shell-review-hint" data-i18n="review.hint">While review is on, every write the AI sends to this session waits here until a human accepts it.</div>' +
+      '<div class="shell-review-queue">' +
+        '<div class="shell-review-queue-h">' +
+          '<span data-i18n="review.waiting">Waiting for review</span>' +
+          '<button type="button" class="shell-review-refresh" title="Refresh" data-i18n-title="common.refresh">' +
+            '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2.5V5h-2.5"/></svg>' +
+          '</button>' +
+        '</div>' +
+        '<div class="shell-review-list"></div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
 function openShellWindow(connLabel, sessionId, clickEvent, opts) {
   opts = opts || {};
   var readOnly = !!opts.readOnly;
@@ -888,6 +1199,9 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
       '</h3>' +
       '</div>' +
       '<div class="shell-tab-bar">' +
+        // The lock leads the tab strip: it is the session-wide gate, and the
+        // tabs to its right are the faces it governs.
+        SHELL_REVIEW_LOCK_HTML +
         '<button type="button" class="shell-tab-btn active" data-stab="term" title="Terminal" data-i18n-title="win.term.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1" y="2" width="12" height="10" rx="1.5"/><path d="M4 5l2 2-2 2"/><line x1="8" y1="9" x2="11" y2="9"/></svg></button>' +
         '<button type="button" class="shell-tab-btn" data-stab="fw" title="Forwardings" data-i18n-title="win.fw.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><path d="M1 7h3.5M9.5 7h3.5M7 1v3.5M7 9.5v3.5" stroke-linecap="round"/></svg></button>' +
         '<button type="button" class="shell-tab-btn" data-stab="file" title="Files" data-i18n-title="win.files.tab"><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v9a1 1 0 001 1h10a1 1 0 001-1V4.5a1 1 0 00-1-1h-5L5.5 2H2a1 1 0 00-1 1z"/></svg></button>' +
@@ -907,16 +1221,19 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
     '</div>' +
     '<div class="shell-window-content"><div class="shell-terminal-wrap">' +
       '<div class="shell-channel-body"></div>' +
-      '<div class="shell-channel-tabs">' +
-        '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+      '<div class="shell-window-footer">' +
+        '<div class="shell-channel-tabs">' +
+          '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+        '</div>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
         '<span data-i18n="channel.empty">No shell channels</span>' +
         '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
       '</div>' +
     '</div>' +
+SHELL_REVIEW_SHEET_HTML +
 SHELL_WINDOW_PANELS_HTML +
-    '<div class="shell-window-resize-handle" title="Drag to resize" data-i18n-title="win.resize"></div>';
+    SHELL_RESIZE_HANDLES_HTML;
 
   /* The template above carries English fallbacks plus data-i18n* keys; fill them
      here so a window created after a language switch is not born in the previous
@@ -935,6 +1252,11 @@ SHELL_WINDOW_PANELS_HTML +
   win._connName = connLabel || '';
   win._inputClosed = readOnly;
   _wireChannelTabBar(win);
+  wireReviewBar(win);
+  // Seed the approval UI from the snapshot the page already has. Without this the
+  // Approve button stays hidden until the next session-list frame arrives, which
+  // can be a long time after the window opens.
+  applyApprovalModeFromSnapshot(win, sessionId);
   _initShellWindowUI(win, connLabel, sessionId, clickEvent);
   // _initShellWindowUI resets the input gate; enforce read-only DEAD mode after.
   win._inputClosed = readOnly;
@@ -1076,48 +1398,58 @@ function _onSessionSwitchMenuKey(e) {
 
 /** Live sessions with an open terminal window. Minimized windows still count:
  *  they are alive, just hidden. Ended (read-only) views are left out. */
-function liveSessionWindows() {
-  return allShellWins().filter(function (w) {
-    return w && !w._placeholder && !w._readOnly && !w._streamDone;
-  });
-}
-
 function openSessionSwitchMenu(anchorBtn) {
   var alreadyOpen = !!_sessionSwitchMenu;
   closeSessionSwitchMenu();
   if (alreadyOpen) return;   // second press toggles it shut
 
-  var wins = liveSessionWindows();
+  // The menu lists SESSIONS from the server snapshot, not open windows.
+  //
+  // Listing windows made the menu a view of this tab's client state: a session
+  // created from another terminal (or another device) existed on the server and
+  // in the tile grid, but had no window here, so it never appeared. The snapshot
+  // is already pushed over the WebSocket on every change, so reading it keeps
+  // the menu live without a second source of truth.
+  var sessions = (window._lastSessionsSnapshot || []).filter(function (s) {
+    return s && s.id;
+  });
   var el = document.createElement('div');
   el.className = 'shell-window-switch-menu';
   el.setAttribute('role', 'menu');
-  wins.forEach(function (w) {
+  var currentSid = anchorBtn._switchWin ? anchorBtn._switchWin._parentSid : null;
+  sessions.forEach(function (s) {
     var item = document.createElement('button');
     item.type = 'button';
     item.className = 'shell-switch-item';
     item.setAttribute('role', 'menuitem');
-    if (w === anchorBtn._switchWin) item.classList.add('current');
+    var dead = s.status !== 'running';
+    if (dead) item.classList.add('dead');
+    if (s.id === currentSid) item.classList.add('current');
     item.innerHTML =
       '<span class="shell-switch-num"></span>' +
       '<span class="shell-switch-label"></span>';
-    item.querySelector('.shell-switch-num').textContent = String(sessionTabNum(w) || '');
-    item.querySelector('.shell-switch-label').textContent = sessionTabLabel(w);
+    // The number is the window's open-order slot when it has one; a session with
+    // no window here has none, and an empty slot is honest about that.
+    var w = getShellWindowBySid(s.id);
+    item.querySelector('.shell-switch-num').textContent = w ? String(sessionTabNum(w) || '') : '';
+    item.querySelector('.shell-switch-label').textContent = s.name || stripSessionPrefix(s.id);
+    if (dead) item.title = 'Dead: read-only history';
     item.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
       closeSessionSwitchMenu();
-      if (!w._sid) return;
-      focusSessionWindow(w._connName || '', w._sid, null, null);
+      // Same entrance the session tiles use, so a session with no window yet is
+      // opened rather than ignored.
+      focusSessionWindow(s.name || '', s.id, null, dead ? { readOnly: true } : null);
     });
     el.appendChild(item);
   });
-  if (wins.length === 0) {
+  if (sessions.length === 0) {
     var empty = document.createElement('div');
     empty.className = 'shell-switch-empty';
     empty.textContent = t('switch.empty');
     el.appendChild(empty);
   }
-
   document.body.appendChild(el);
   _sessionSwitchMenu = el;
 
@@ -1252,6 +1584,11 @@ function reapplyWindowLanguage(win) {
   if (win._refreshFwList) win._refreshFwList();
   if (win._refreshNtfList) win._refreshNtfList();
   if (win._shellFileBrowse) win._shellFileBrowse();
+  /* The lock's title and its switch text encode the mode, so they are written
+     from t() at paint time and are not data-i18n nodes. Repainting the labels
+     (not re-applying the mode) keeps a stale mode label from surviving the
+     switch without refetching the queue. */
+  paintReviewLabels(win);
 }
 
 /* Language switch: replay every open window in place, so no window is rebuilt

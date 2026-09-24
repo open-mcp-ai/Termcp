@@ -4,6 +4,9 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -271,6 +274,43 @@ func TestNoUnreachableUI(t *testing.T) {
 			if strings.Contains(body, fn) {
 				t.Errorf("%s re-declares %q; it belongs to util.js only", f, fn)
 			}
+		}
+	}
+}
+
+// TestModulesParse asserts every served JS module is a syntactically valid
+// script. Nothing else here can see a parse error: the assertions are string
+// matches on the source, so a module can lose one comment marker and stop
+// parsing entirely while every test stays green. That is not hypothetical —
+// a `//` dropped from a comment in terminal-view.js made the whole file fail to
+// parse, and every function it declares (openShellWindow among them) vanished
+// from the page, so clicking a session did nothing.
+//
+// node is used when present because it is the real parser; without it the test
+// skips rather than reporting a false pass.
+func TestModulesParse(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot check module syntax")
+	}
+	mods, err := fs.Glob(Assets(), "static/js/*.js")
+	if err != nil || len(mods) == 0 {
+		t.Fatalf("no modules to check: %v", err)
+	}
+	for _, m := range mods {
+		// node --check needs a real file; the embedded copy is written to a temp
+		// file so the check runs against exactly what the browser is served.
+		body, err := fs.ReadFile(Assets(), m)
+		if err != nil {
+			t.Errorf("module %s not embedded: %v", m, err)
+			continue
+		}
+		tmp := filepath.Join(t.TempDir(), filepath.Base(m))
+		if err := os.WriteFile(tmp, body, 0o600); err != nil {
+			t.Fatalf("write %s: %v", tmp, err)
+		}
+		if out, err := exec.Command(node, "--check", tmp).CombinedOutput(); err != nil {
+			t.Errorf("%s does not parse: %v\n%s", m, err, out)
 		}
 	}
 }

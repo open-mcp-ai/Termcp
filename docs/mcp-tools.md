@@ -206,6 +206,21 @@ ssh_config(action=list)
 
 `enter`：PTY 下为 `\r`；pipe 下按 shell family 为 `\n` 或 `\r\n`。
 
+#### 会话开了审阅时
+
+会话可以开启**审阅**（Web UI 终端标题栏左侧标签条头部的锁图标，或它打开的面板里的开关；触屏同样可用）。开启后 `shell_input` / `shell_key` 不直接写字节：
+
+```json
+{ "ok": true, "approved": false, "review_pending": true }
+```
+
+- `shell_input` 先把文本**暂存**，不入队——人类要审的是**一条完整命令行**，而「文本」和「结束它的回车」是两次调用。
+- `shell_key` 提交：把暂存的文本与这个键合成**一条**待审请求。没有暂存文本时，这个键自身就是一条（裸 `ctrl+c` 中断进程、裸 enter 执行空行，都该被人看到）。
+- 返回里**没有 pending_id**：Agent 无权裁决自己的请求，给了 id 只会诱发重试循环。人类在 Web UI 点 Approve / Reject，一次批准即执行。
+- 关闭或重开审阅时，**暂存但未提交的文本会被丢弃**（它从未成为可审对象）；已入队的请求随关闭而作废（fail-closed）。
+
+完整语义（单一审阅者、一人一票、审计标记、裁决端点）见 [`docs/api.md` §12](./api.md)。
+
 ### shell_output
 
 **统一输出读取工具**：活会话（内存缓冲）、已退出会话（保留缓冲）、已关闭/重启恢复的会话（磁盘消息流）全部用同一套字节流游标语义读取。
@@ -405,6 +420,7 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `dial_timeout_seconds` | number | 否 | 默认 30 |
 | `proxy` | string | 否 | SOCKS5 代理 URL |
 | `description` / `default_shell` / `default_mode` | string | 否 | 会话默认值 |
+| `default_approval` | bool | 否 | 会话默认开启审阅（每次 AI 写入都等人裁决）。edit 时不传则保持原值，传 `false` 则关掉 |
 | `jump_*` | — | 否 | 单层 bastion（ProxyJump）：`jump_host` / `jump_user` / `jump_port` / `jump_password` / `jump_private_key` / `jump_key_passphrase` / `jump_trust_unknown_host` / `jump_known_hosts` / `jump_dial_timeout_seconds` / `jump_proxy` |
 | `source_name` / `target_name` | string | 条件 | copy：源与目标（目标须不存在） |
 

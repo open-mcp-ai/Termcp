@@ -9,6 +9,11 @@ function escapeHtml(s) {
 }
 
 var SVG_COPY_12 = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg>';
+/* Approval lock glyphs. Closed = gated, open = ungated: the shape carries the
+   state, so the switch reads correctly without colour. */
+var SVG_LOCK_CLOSED = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></svg>';
+var SVG_LOCK_OPEN = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 014.9-.6"/></svg>';
+
 var SVG_CONN_QUICK = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor"><path d="M5 3.5a.75.75 0 011.12-.65l7.5 4.5a.75.75 0 010 1.3l-7.5 4.5a.75.75 0 01-1.12-.65v-9z"/></svg>';
 
 var SVG_CONN_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
@@ -195,8 +200,60 @@ function showUiNotify(n) {
   closeBtn.className = 'ui-notify-close';
   closeBtn.setAttribute('aria-label', t('notify.dismiss'));
   closeBtn.textContent = '×';
-  closeBtn.addEventListener('click', function () { dismissUiNotify(card); });
+  closeBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    dismissUiNotify(card);
+  });
   card.appendChild(closeBtn);
+
+  /* A notification names a session, so clicking it goes there. It reuses
+     focusSessionWindow rather than reaching for the window directly: that one
+     already handles every state the session can be in — no window yet (opens
+     it), minimized (restores it), collapsed (expands it), tiled (raises the
+     pane) — which is exactly the set of cases a "go to this session" click has
+     to cover. A notification about a minimized terminal is the common case, and
+     opening a second window for it would be wrong. */
+  if (sid) {
+    card.classList.add('ui-notify-clickable');
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.title = t('session.open.tip', { sid: sid });
+    var openSession = function (e) {
+      if (e.target.closest('.ui-notify-close')) return;
+      var snap = window._lastSessionsSnapshot || [];
+      var name = '', dead = false;
+      for (var i = 0; i < snap.length; i++) {
+        if (snap[i] && snap[i].id === sid) {
+          name = snap[i].name || '';
+          dead = snap[i].status !== 'running';
+          break;
+        }
+      }
+      dismissUiNotify(card);
+      // Same entrance the session tiles use, so a session with no window yet is
+      // opened rather than ignored, and a DEAD one opens read-only.
+      var win = focusSessionWindow(name, sid, null, dead ? { readOnly: true } : null);
+      // A notification about a pending decision should land on the decision, not
+      // just on the session that has one: arriving at a terminal and still having
+      // to find the queue is the step this click exists to remove. Waiting for the
+      // window to exist matters because a session with no window yet is created by
+      // the call above, and its panel cannot be opened before it is built.
+      if (n.open_review) {
+        var openPanel = function () {
+          var w = win || getShellWindowBySid(sid);
+          if (w && !w._placeholder) { setReviewSheetOpen(w, true); return true; }
+          return false;
+        };
+        if (!openPanel()) setTimeout(openPanel, 120);
+      }
+    };
+    card.addEventListener('click', openSession);
+    card.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      openSession(e);
+    });
+  }
   if (dur > 0) {
     var bar = document.createElement('div');
     bar.className = 'ui-notify-bar';
