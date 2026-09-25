@@ -128,7 +128,8 @@ An Agent natively runs only one-shot commands, while real work is largely **mult
 - **🟧 Built-in visual management** — Browser live terminals, session dashboard, tabbed shells, tiling workspace, read-only replay of closed sessions, file and forward panels; `/api.html` holds the API / MCP / SKILLS cheat sheet.
 - **🟨 Multiple Agents, no lost output** — Parallel readers of one session keep independent cursors; a closed session (explicit close, exit, crash, or restart) stays in the registry as a read-only DEAD tile with its full output intact, so you can still replay, page through, or delete it whenever you like. After a drop, open a fresh session from the same entry (`termcp://<entry>`) and carry on.
 - **🟥 Proactive notifications, no polling** — `shell_notify` wakes the Agent on process exit, silence, or new output — signal only, no payload (pull the text when needed); `channel="sampling"` sends `sampling/createMessage` directly.
-- **🔍 Review mode — the Agent asks before it writes** — Turn it on per session, or by default for a host through `default_approval` on its connection profile. Every write the Agent makes over MCP is then held for one decision: terminal input (the whole command line, text plus its ending key), file transfers, and port forwards. The Web UI shows the queue with a readable summary per entry (*"write 1.2 KB to /etc/hosts"*), and the pane tab count sits on the lock that opens it. **Your own keyboard and the Web UI file browser are never gated** — the gate covers the Agent's programmatic surface (MCP), not the human's interactive one; reads are never gated either.
+- **🌐 Multi-language Web UI** — The interface follows the browser language on first load and can be overridden from the header; the choice is remembered, and switching never reloads the page or rebuilds open terminals.
+- **🔍 Optional review mode** — Under it, the Agent's command executions and file changes run only after human approval — for production hosts.
 - **🔒 Credential-safe by design** — Passwords, private keys, and passphrases written through `ssh_config` are never readable back, so plaintext never enters the Agent's context; config-writing tools stay off unless `--mcp-manage-ssh-configs` is set.
 
 ## Quick Start
@@ -522,18 +523,10 @@ Same 31 tools either way: enabling the flag never removes tools, it only withhol
 - **File and forward tools need a live connection.** On a closed (DEAD) session they return `session_not_running`; output reading still works via `shell_output`, and a session's port forwards are closed automatically when it goes DEAD.
 - **Basic authentication needs TLS outside localhost.** The browser login challenge uses HTTP Basic, whose credentials are only Base64-encoded. Put a TLS-terminating reverse proxy in front of Termcp when exposing it beyond a trusted local network; the static token is still never logged or placed in a URL.
 
-### 🚨 Security boundary: Termcp does not enforce security (it is a pipe, not an antivirus)
+### 🚨 Security boundary
 
-> **The defence line belongs at the AI's output side and your gateway — not in the terminal pipe. Termcp is NOT an antivirus, EDR, or WAF.**
-
-Termcp is a **transparent real-terminal and multiplexed-session pipe** (PTY transport) with the same freedom and power as the machine's own terminal. It therefore **cannot and should not judge the intent of what it carries**:
-
-1. **Why a terminal pipe cannot detect malicious intent.**
-   - **Upload-and-execute cannot be stopped here.** Malicious content arrives Base64-decoded through a pipe, written in fragments, or fetched by legitimate tools (`curl` / `wget`) in multiple stages and then chmod'ed and run. Termcp is a **data pipe, not a malware scanner**: inspecting every streaming byte for a trojan is simply not something a byte transport can do.
-   - **Obfuscation and concatenation are undecidable at the byte layer.** An AI can split a dangerous command into string fragments (`a="rm -"; b="rf /"; $a$b`), rebuild it through variable renaming, dynamic `eval`, `printf` injection, environment-variable stitching, or by writing several partial files and executing them. To the PTY every character is a legal keystroke; the transport cannot tell "obfuscated payload" from "ordinary development script".
-2. **Security must be enforced upstream.**
-   - **The caller (host application / Agent harness) must guard the AI's output before the tool call.** Wrap `shell_input` / `file_write` with output guardrails, an instruction-compliance policy layer, sensitive-content filters, or a safety model that inspects the generated command **before** it reaches termcp. Termcp does not enforce command allowlists, path jails, or policy-based risk tiers.
-   - **Keep humans in the loop for privileged or destructive steps.** The Web UI shows every session live and lets you take over or interrupt at any time. Treat `sudo`, destructive, or irreversible commands as human-approval events — and never hand unattended high-privilege terminal access to a production host that is not sandboxed.
+- **Do not put an Agent on a production host unattended. If you must, turn review mode on.** Every write it makes over MCP — terminal input, file transfer, port forward — then waits in the Web UI for a human to accept or reject it, forcing a person into the loop for every change.
+- **Review mode is not a guarantee of safety.** Review mode needs human confirmation, but a script execution or a file upload can still slip through when the reviewer is careless.
 
 ---
 
