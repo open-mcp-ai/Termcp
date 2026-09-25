@@ -1,4 +1,4 @@
-# termcp 终端进程通信流程架构
+# Termcp 终端进程通信流程架构
 
 ## 零、HTTP 入口与认证中间件（可选）
 
@@ -30,7 +30,7 @@
 
 ## 一、整体分层
 
-termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑四个平行入口**——Web UI（人）、AI Agent 的两种接入方式——MCP 与 Agent Skill（实例自带 `/skills.md`，安装一次后用 curl 走 REST 面，并用 `GET /api/resolve` 解析 `termcp://` 定位符）、REST/WebSocket（脚本程序）。它们操作同一批会话，互不冲突。
+Termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑四个平行入口**——Web UI（人）、AI Agent 的两种接入方式——MCP 与 Agent Skill（实例自带 `/skills.md`，安装一次后用 curl 走 REST 面，并用 `GET /api/resolve` 解析 `termcp://` 定位符）、REST/WebSocket（脚本程序）。它们操作同一批会话，互不冲突。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -419,7 +419,7 @@ finalize()  ──►  scope.Release()  ──►  逆序执行所有已挂载�
 
 ### 1. 跨平台与纯 Go 无 CGO 设计
 
-termcp 采用 **100% 纯 Go 实现（`CGO_ENABLED=0`）**：
+Termcp 采用 **100% 纯 Go 实现（`CGO_ENABLED=0`）**：
 
 - **零系统 C 库绑定**：不引入 libc / glibc / musl 动态链接约束，单个二进制文件静态自包含，可在 Alpine、CentOS、Debian、Ubuntu、macOS、Windows 等任意环境下即拷即用，无环境依赖地支持交叉编译。
 - **全平台一致的真实 PTY**：
@@ -431,11 +431,11 @@ termcp 采用 **100% 纯 Go 实现（`CGO_ENABLED=0`）**：
 
 > **核心原则：安全防线必须建立在 AI 模型的输出端（Output Guardrails / Tool Call Validator）与应用网关，而非底层终端管道。**
 
-termcp 本质上是**透明的真实终端与多路交互管道**（PTY Transport），不包含任何业务意图审计；期望底层终端识别或拦截恶意意图是不切实际且不可行的：
+Termcp 本质上是**透明的真实终端与多路交互管道**（PTY Transport），不包含任何业务意图审计；期望底层终端识别或拦截恶意意图是不切实际且不可行的：
 
 1. **为什么终端管道无法防范恶意行为？**
    - **语义混淆在底层不可判定**：AI 可以将破坏性指令切片拼接（如 `a="rm -"; b="rf /"; $a$b`）、通过变量重组、`eval` 注入、`printf` 格式化拼接、环境变量构造执行、或拆解为多步分片写入后执行。在 PTY 看来，这些输入完全是合法的键盘按键与字符流，底层通道绝无可能在不破坏正常开发操作的前提下区分“混淆攻击”与“正常开发脚本”。
    - **Payload 交付方式千变万化**：攻击性行为可通过 Base64 管道还原、分段追加写入、乃至使用合法的 `curl`/`wget`/`ssh` 远程拉取多阶段执行体。终端与 SFTP 只是原始字节输送管，无法也不应该扮演杀毒引擎或 EDR 的角色。
 2. **责任共担模型（Shared Responsibility）**：
    - **调用方自负防线**：宿主程序、Agent Harness 或集成框架必须在模型发起 `shell_input` 或 `file_write` 调用**之前**完成安全过滤——包括模型输出敏感指令检测、正则阻断、参数合规审计与指令沙箱隔离。
-   - **人机接力作为最后屏障**：termcp 原生提供 Web UI 实时同屏监视与强制接管能力。对高风险命令、权限跃迁（`sudo`、MFA 等）默认暂停等待人工确认，切忌在缺乏隔离的真实生产机器上完全放任 AI 无人值守执行。
+   - **人机接力作为最后屏障**：Termcp 原生提供 Web UI 实时同屏监视与强制接管能力。对高风险命令、权限跃迁（`sudo`、MFA 等）默认暂停等待人工确认，切忌在缺乏隔离的真实生产机器上完全放任 AI 无人值守执行。

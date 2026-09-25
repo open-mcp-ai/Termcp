@@ -3,9 +3,9 @@ name: termcp
 description: Drive the termcp terminal-platform over its HTTP REST API with curl + jq (curl only). Use whenever a request mentions termcp, a termcp URL/locator (termcp://rock64, termcp://#<session>, termcp://#<session>:2), "open/connect to <host> through termcp", or termcp sessions/shells. Always fetch the instance's own <origin>/api.md first for version-exact endpoints, then use the recipes for resolving locators, creating sessions, polling output in chunks (live and closed sessions), sending input/keys, resizing PTYs, terminating or purging sessions, transferring files, and managing port forwards. For server sweeps, batch commands, CI, and agents that only have HTTP access.
 ---
 
-# termcp over HTTP
+# Termcp over HTTP
 
-termcp is a terminal-session platform: one HTTP port serves REST, WebSocket and
+Termcp is a terminal-session platform: one HTTP port serves REST, WebSocket and
 MCP. This skill uses curl only.
 
 The documentation endpoints (`/api.md`, `/skills.md`) are public: they work with
@@ -46,8 +46,8 @@ curl -fsS "${AUTH[@]}" "$BASE/api.md"             # authoritative reference — 
 
 ## 3. Resource locators (termcp://)
 
-Users copy locators from the termcp Web UI and paste them into chat. A locator is
-an **address for a termcp object**, not a URL to open in a browser and not a
+Users copy locators from the Termcp Web UI and paste them into chat. A locator is
+an **address for a Termcp object**, not a URL to open in a browser and not a
 shell argument:
 
 | Locator | Names | Resolves to |
@@ -116,7 +116,7 @@ curl -fsS -X POST "${AUTH[@]}" "$BASE/api/sessions/$SID/terminate"
 curl -fsS -X DELETE "${AUTH[@]}" "$BASE/api/sessions/$SID"
 ```
 
-`ssh_config`: `"internal"` (the termcp host) or a configured profile name;
+`ssh_config`: `"internal"` (the Termcp host) or a configured profile name;
 `GET /api/connections` lists names only (never credentials).
 
 ## 5. Read output (cursor semantics)
@@ -137,7 +137,7 @@ END=$(jq -r .end <<<"$R"); TOTAL=$(jq -r .total <<<"$R")
 
 `d` is the raw byte window in a standard JSON string, not base64. Byte sequences
 that are not valid UTF-8 cannot survive a JSON string (Windows ConPTY already
-replaces them before termcp sees them; a Linux `cat` of binary data may show
+replaces them before Termcp sees them; a Linux `cat` of binary data may show
 U+FFFD) — `log.bin` itself is byte-exact.
 
 After issuing a command, re-poll until output stops growing — the read blocks

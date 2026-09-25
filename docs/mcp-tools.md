@@ -1,6 +1,6 @@
 # MCP 工具参考
 
-termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 MCP 工具（同一监听端口）。
+Termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 MCP 工具（同一监听端口）。
 
 ## 对接方式（传输）
 
@@ -24,13 +24,13 @@ MCP resources, and a `learn-api` prompt:
   (Tool arguments/results are described by the `tools/list` schemas themselves, so no
   separate tool reference document is served.)
 - Prompt: `learn-api` (optional argument `task`) — primes an agent with `/api.md`
-  and `/skills.md` before it scripts against termcp over REST.
+  and `/skills.md` before it scripts against Termcp over REST.
 
 两个文档端点在开启鉴权后仍可**无凭据**获取（仅 GET/HEAD，纯静态、无数据）；其余所有面（REST/MCP/WS/Web UI）依旧要求 token。
 
 ## 工具懒加载（deferred tool loading）
 
-termcp 的 31 个工具按"热路径 / 低频面"分成两类。MCP 标准的 `defer_loading` 标记可以让客户端**按需加载**低频工具的 Schema，但这套机制**默认关闭**：
+Termcp 的 31 个工具按"热路径 / 低频面"分成两类。MCP 标准的 `defer_loading` 标记可以让客户端**按需加载**低频工具的 Schema，但这套机制**默认关闭**：
 
 - **核心常驻**（永远不标记）：`session_start` / `session_list` / `session_info` / `session_terminate` / `session_delete` / `shell_open` / `shell_list` / `shell_close` / `shell_input` / `shell_key` / `shell_output` / `notify_user`。这些构成"开会话 → 打字 → 读输出"的主循环，若需先搜索才能用，每次交互都要多一个来回——**开启懒加载时它们依然立即可见**。
 - **低频宽面**（19 个，`--mcp-defer-tools` 下才标记）：11 个 SFTP 文件工具、`forward`、`shell_resize` / `shell_detect` / `shell_notify` / `shell_reader_register` / `shell_reader_unregister`、`message`、`ssh_config`。这些工具参数面宽、调用频率低，客户端可按需检索后再拉取 Schema，节省每轮注入的上下文预算。
@@ -306,7 +306,7 @@ ssh_config(action=list)
 
 ### shell_notify
 
-为某个 shell 注册**主动通知（push）**：termcp 在事件发生时**主动通知 AI Agent** —— 进程退出 / 输出停顿 / 有新输出时即刻推送“醒来”信令，Agent 收到后再用 `shell_output` 拉取输出（通知**只带信令、不带终端内容**，避免污染上下文）。Agent 无需持续轮询，非常适合长任务挂起等待。
+为某个 shell 注册**主动通知（push）**：Termcp 在事件发生时**主动通知 AI Agent** —— 进程退出 / 输出停顿 / 有新输出时即刻推送“醒来”信令，Agent 收到后再用 `shell_output` 拉取输出（通知**只带信令、不带终端内容**，避免污染上下文）。Agent 无需持续轮询，非常适合长任务挂起等待。
 
 `action` 三选一：
 
@@ -338,7 +338,7 @@ ssh_config(action=list)
 { "action": "register", "shell_id": "<shell_id>", "channel": "sampling", "event": "exit" }
 // → { "ok": true, "rule_id": "notif_...", "...": "..." }
 
-// 2) 等 termcp 主动唤醒（通知不带内容），再用 shell_output 拉取结果
+// 2) 等 Termcp 主动唤醒（通知不带内容），再用 shell_output 拉取结果
 { "shell_id": "<shell_id>", "timeout": 0 }
 ```
 
@@ -346,7 +346,7 @@ ssh_config(action=list)
 
 ### notify_user
 
-向**人类用户**（而非 AI Agent）推送浏览器通知：在 termcp Web UI 的**每个已打开页面**弹出彩色 toast，并尝试触发**浏览器系统通知**（需浏览器授权，页面在后台也能收到）；指定 `session_id` 时，该 session 的卡片会**高亮**（脉冲描边，滚到可视区；若其终端窗口已打开，窗口头部也会闪烁）。与 `shell_notify` 正相反 —— 后者是通知 AI Agent，本工具是 Agent 通知人。
+向**人类用户**（而非 AI Agent）推送浏览器通知：在 Termcp Web UI 的**每个已打开页面**弹出彩色 toast，并尝试触发**浏览器系统通知**（需浏览器授权，页面在后台也能收到）；指定 `session_id` 时，该 session 的卡片会**高亮**（脉冲描边，滚到可视区；若其终端窗口已打开，窗口头部也会闪烁）。与 `shell_notify` 正相反 —— 后者是通知 AI Agent，本工具是 Agent 通知人。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -400,13 +400,13 @@ ssh_config(action=list)
 
 ### shell_detect
 
-探测 termcp **宿主机**（不是 ssh_config 目标）的可用交互 shell。无参数。
+探测 Termcp **宿主机**（不是 ssh_config 目标）的可用交互 shell。无参数。
 
 **返回**：`{ path, family, hint }`
 
 ### ssh_config（统一入口）
 
-SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启动 termcp 时加 `--mcp-manage-ssh-configs`。
+SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启动 Termcp 时加 `--mcp-manage-ssh-configs`。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -434,8 +434,8 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 
 | action | OpenSSH | 语义 |
 |--------|---------|------|
-| `local` | `-L` | termcp 侧监听本地端口，隧道到远端目标 |
-| `remote` | `-R` | 远端监听端口，隧道回 termcp 侧目标 |
+| `local` | `-L` | Termcp 侧监听本地端口，隧道到远端目标 |
+| `remote` | `-R` | 远端监听端口，隧道回 Termcp 侧目标 |
 | `dynamic` | `-D` | 本机 SOCKS5 代理 |
 | `list` | — | 列出全部转发 |
 | `close` | — | 按 `forward_id` 关闭 |
@@ -445,7 +445,7 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `action` | string | **是** | — | `local` / `remote` / `dynamic` / `list` / `close` |
 | `session_id` | string | 条件 | — | local/remote/dynamic 必填 |
 | `remote_host` | string | 否 | `"localhost"` | local：目标主机（相对远端） |
-| `remote_port` | number | 条件 | — | local：远端目标端口；remote：termcp 侧目标端口 |
+| `remote_port` | number | 条件 | — | local：远端目标端口；remote：Termcp 侧目标端口 |
 | `local_port` | number | 条件 | `0` | local/dynamic：本地监听端口（0=随机）；remote：远端监听端口（必填） |
 | `local_host` | string | 否 | `"0.0.0.0"` | remote：远端监听绑定地址 |
 | `forward_id` | string | 条件 | — | close：来自 `action=list` |
@@ -462,7 +462,7 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 
 | 工具 | 说明 |
 |------|------|
-| `file_read` | 读文件（text/hex 或下载到 termcp 主机） |
+| `file_read` | 读文件（text/hex 或下载到 Termcp 主机） |
 | `file_write` | 写文件（内联数据或从 host 文件流式写入） |
 | `file_stat` | 文件/目录元信息（size、is_dir、children） |
 | `file_delete` | 删除文件或空目录 |

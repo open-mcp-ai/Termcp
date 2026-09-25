@@ -6,15 +6,15 @@
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="./docs/assets/logo.png" width="150" alt="termcp logo">
+    <img src="./docs/assets/logo.png" width="150" alt="Termcp logo">
   </a>
 </p>
 
-<h1 align="center">⚡ termcp</h1>
+<h1 align="center">⚡ Termcp</h1>
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=An+AI-native+terminal+platform;Cross-platform+%C2%B7+Visual+%C2%B7+Built+for+Human%E2%80%93Agent+Collaboration;One+port%2C+four+entrances;Drive+real+terminals+over+MCP+and+SKILLS" alt="termcp tagline">
+    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=An+AI-native+terminal+platform;Cross-platform+%C2%B7+Visual+%C2%B7+Built+for+Human%E2%80%93Agent+Collaboration;One+port%2C+four+entrances;Drive+real+terminals+over+MCP+and+SKILLS" alt="Termcp tagline">
   </a>
 </p>
 
@@ -60,7 +60,7 @@
 
 ## Introduction
 
-`termcp` is an AI-native terminal platform: many hosts and many sessions at once, fully visualized. Those sessions are managed and maintained by humans and AI together, each side free to take over from or hand back to the other at any time; connection profiles are maintained independently by the platform, so an Agent can use a connection without ever reading its credentials.
+Termcp is an AI-native terminal platform: many hosts and many sessions at once, fully visualized. Those sessions are managed and maintained by humans and AI together, each side free to take over from or hand back to the other at any time; connection profiles are maintained independently by the platform, so an Agent can use a connection without ever reading its credentials.
 
 - **You (human)** — a browser-based Web UI for live observation and instant takeover of any session;
 - **AI Agents** — drive the same real terminals through **MCP** or **SKILLS**;
@@ -72,7 +72,7 @@ On the platform layer, long-lived sessions with read-only replay, parallel multi
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
-## Why termcp
+## Why Termcp
 
 ### Multi-session visual management
 
@@ -92,13 +92,13 @@ A powerful Web UI manages many hosts and many sessions in one place: start it lo
 
 Seamless human–agent interaction and pair operation: the Agent is a standing user of the terminal, alongside you and your scripts.
 
-An Agent natively runs only one-shot commands, while real work is largely **multi-turn interaction** — SSH login needs a password first, a Python REPL is debugged line by line, an installer asks `[Y/n]`, tools like `top`/`htop`/impacket need a terminal. `termcp` hands the Agent a real terminal: one session stays alive and gets reused, so **TUIs**, **REPLs**, **GDB**, **msfconsole** and **vim** can be driven continuously the way a human would — through MCP or through the instance's own [Agent Skill](#agent-skill-curl-only-no-mcp) over plain `curl`.
+An Agent natively runs only one-shot commands, while real work is largely **multi-turn interaction** — SSH login needs a password first, a Python REPL is debugged line by line, an installer asks `[Y/n]`, tools like `top`/`htop`/impacket need a terminal. Termcp hands the Agent a real terminal: one session stays alive and gets reused, so **TUIs**, **REPLs**, **GDB**, **msfconsole** and **vim** can be driven continuously the way a human would — through MCP or through the instance's own [Agent Skill](#agent-skill-curl-only-no-mcp) over plain `curl`.
 
 ![pic1](docs/assets/pic1.png)
 
 - **One session layer, peer entrances.** MCP, SKILLS and REST/WebSocket sit at the same level as the Web UI, sharing the same real sessions. You can watch every Agent step in the browser and take over at any time; the Agent in turn can pause and hand a password/MFA prompt to you.
 - **Built for token and turn budgets.** Tool schemas are compact and can be deferred-loaded (see [`docs/mcp-tools.md`](./docs/mcp-tools.md)); `shell_output` pages by tail/offset cursors so only the slices you ask for ever enter the context window; `shell_notify` sends a bare wake-up signal.
-- **Self-describing instances.** Every running termcp serves its own `/api.md` and `/skills.md` (no token needed) and registers them as MCP resources plus a `learn-api` prompt, so a fresh Agent can drive this exact instance straight away, using only these two files.
+- **Self-describing instances.** Every running Termcp serves its own `/api.md` and `/skills.md` (no token needed) and registers them as MCP resources plus a `learn-api` prompt, so a fresh Agent can drive this exact instance straight away, using only these two files.
 - **Secrets stay server-side.** Passwords, private keys and passphrases written through `ssh_config` are stored only on the host, and the MCP read interface returns profile names only; the SSH-config write tools stay off unless the operator opts in with `--mcp-manage-ssh-configs`.
 - **Failure-tolerant, resumable work.** A closed, crashed or restarted session stays in the session list as a read-only DEAD tile with its output readable, so an Agent (or you) can pick up from the interrupted state; reconnecting the same `termcp://<entry>` starts a fresh session.
 - **Humans always keep the option to step in.** `notify_user` reaches you directly, privileged prompts are meant to be typed by you in the Web UI, and writes to one shell are serialized, so a human and an Agent can type on the same terminal with their inputs applied in order.
@@ -122,7 +122,7 @@ An Agent natively runs only one-shot commands, while real work is largely **mult
 - **🔌 One port, four entrances** — Web UI (humans), MCP / SKILLS (Agents), and REST + WebSocket (scripts) share one port.
 - **🤝 Human–AI relay** — You and the Agent share one live session and you can take over or interrupt at any time; the Agent pauses at `sudo` / password / MFA prompts for you to type in the Web UI; input is serialized so keystrokes never collide.
 - **🟦 Multi-turn interaction on a real terminal** — The process keeps running, so an Agent drives TUIs, REPLs, GDB, msfconsole, or vim across conversation turns; a full PTY (ConPTY on Windows) behaves the same on every platform.
-- **🟫 Local or remote, one workflow** — Zero-config access to the termcp host (`ssh_config="internal"`) or any remote machine over SSH profiles; commands, file transfer (SFTP plus resumable HTTP URLs), and port forwarding (`-L` / `-R` / `-D`) all run over that single connection.
+- **🟫 Local or remote, one workflow** — Zero-config access to the Termcp host (`ssh_config="internal"`) or any remote machine over SSH profiles; commands, file transfer (SFTP plus resumable HTTP URLs), and port forwarding (`-L` / `-R` / `-D`) all run over that single connection.
 - **🟧 Built-in visual management** — Browser live terminals, session dashboard, tabbed shells, tiling workspace, read-only replay of closed sessions, file and forward panels; `/api.html` holds the API / MCP / SKILLS cheat sheet.
 - **🟨 Multiple Agents, no lost output** — Parallel readers of one session keep independent cursors; a closed session (explicit close, exit, crash, or restart) stays in the registry as a read-only DEAD tile with its full output intact, so you can still replay, page through, or delete it whenever you like. After a drop, open a fresh session from the same entry (`termcp://<entry>`) and carry on.
 - **🟥 Proactive notifications, no polling** — `shell_notify` wakes the Agent on process exit, silence, or new output — signal only, no payload (pull the text when needed); `channel="sampling"` sends `sampling/createMessage` directly.
@@ -139,7 +139,7 @@ The fastest way to install — one command, no clone, no build:
 go install github.com/open-mcp-ai/termcp@latest
 ```
 
-`go install` resolves the module through the Go proxy (use `GOPROXY=https://goproxy.cn,direct` in mainland China) and drops the `termcp` binary into `$(go env GOPATH)/bin` — make sure that directory is on your `PATH`. termcp is written in Go, so install is `go install` or a prebuilt Release binary: there is no `npx`/`uvx` variant, and it needs no Node or Python runtime. Being a Go module, it also supports source-level integration: `go get github.com/open-mcp-ai/termcp` to bring it in as a dependency, or fork and build a customized binary from source. Then run:
+`go install` resolves the module through the Go proxy (use `GOPROXY=https://goproxy.cn,direct` in mainland China) and drops the `termcp` binary into `$(go env GOPATH)/bin` — make sure that directory is on your `PATH`. Termcp is written in Go, so install is `go install` or a prebuilt Release binary: there is no `npx`/`uvx` variant, and it needs no Node or Python runtime. Being a Go module, it also supports source-level integration: `go get github.com/open-mcp-ai/termcp` to bring it in as a dependency, or fork and build a customized binary from source. Then run:
 
 ```bash
 termcp
@@ -193,7 +193,7 @@ termcp [flags]
 | `--auth-token`   | *(unset)*    | Static token for HTTP authentication (or `$TERMCP_AUTH_TOKEN`). Every client — API, MCP, browser — must present it. Mutually exclusive with `--auth-hash`. |
 | `--auth-hash`    | *(unset)*    | Salted SHA-256 hash of the token (`sha256-<salt_hex>-<digest_hex>`) so the server never holds the plaintext (or `$TERMCP_AUTH_HASH`). Generate with `termcp --gen-auth-hash`. Mutually exclusive with `--auth-token`. |
 | `--disable-auth` | `false`      | Turn HTTP authentication off **on purpose**, including on a non-loopback bind (or `$TERMCP_DISABLE_AUTH_TOKEN=1`). Pair it with a loopback port so only local callers can reach the port. Combining it with `--auth-token`/`--auth-hash` is an error rather than a silently-won argument. |
-| `--mcp-defer-tools` | `false`   | Tag low-frequency MCP tools (`file_*`, `forward`, `shell_resize`, …) with `defer_loading` so clients fetch their schemas on demand, shrinking the initial `tools/list`. Off by default: clients that ignore the marker — or talk to termcp through a gateway that drops it — would otherwise never see those tools. See [Deferred tool loading](#deferred-tool-loading). |
+| `--mcp-defer-tools` | `false`   | Tag low-frequency MCP tools (`file_*`, `forward`, `shell_resize`, …) with `defer_loading` so clients fetch their schemas on demand, shrinking the initial `tools/list`. Off by default: clients that ignore the marker — or talk to Termcp through a gateway that drops it — would otherwise never see those tools. See [Deferred tool loading](#deferred-tool-loading). |
 | `--gen-auth-hash` | *(action)* | Generate the salted SHA-256 hash of a token for `--auth-hash`, then exit (token from an argument, or from stdin without echo on a terminal). |
 | `--version`      | *(action)*   | Print version, commit, and build date, then exit. The version follows the git tag automatically (release builds inject it via `-ldflags`; plain `go build` / `go install module@vX.Y.Z` falls back to the module version embedded by the Go toolchain). |
 
@@ -244,11 +244,11 @@ Behavior notes:
 - A colon inside the token is fine: the server also accepts the whole decoded `user:pass` string when it equals the token, so clients that split at the first colon (e.g. `curl -u user:pass`) still authenticate. `curl -u :<token>` remains the canonical form.
 - Without a token or hash, startup fails on any non-loopback host (`0.0.0.0`, a LAN IP, or a hostname other than `localhost`), so an accidentally exposed instance can never run unauthenticated.
 - `--disable-auth` (or `TERMCP_DISABLE_AUTH_TOKEN=1`) explicitly lifts that requirement. It is the escape hatch for loopback-only setups — demo videos, screen recordings, single-user workstations — where the token protects nothing. Because it is a deliberate override, combining it with `--auth-token`/`--auth-hash` is a startup error rather than a silently-won argument, and the startup log switches from the informational auth line to a warning.
-- Browsers use HTTP Basic, which is Base64, not encryption. When serving termcp beyond your own machine, terminate TLS in a reverse proxy in front of it — the `termcp_token` cookie then gets the `Secure` flag automatically only when the request arrived over TLS.
+- Browsers use HTTP Basic, which is Base64, not encryption. When serving Termcp beyond your own machine, terminate TLS in a reverse proxy in front of it — the `termcp_token` cookie then gets the `Secure` flag automatically only when the request arrived over TLS.
 
 ### Connecting to Remote Hosts
 
-Zero setup: `ssh_config="internal"` drives the termcp host itself. To reach a remote machine, create an SSH profile — in the Web UI's new-connection dialog (it ships a TOML template and a **Test connection** button), or via the REST API `PUT /api/connections/<name>` with a TOML body:
+Zero setup: `ssh_config="internal"` drives the Termcp host itself. To reach a remote machine, create an SSH profile — in the Web UI's new-connection dialog (it ships a TOML template and a **Test connection** button), or via the REST API `PUT /api/connections/<name>` with a TOML body:
 
 ```toml
 kind = "remote"
@@ -272,7 +272,7 @@ user = "ops"
 password = "..."
 ```
 
-Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_config(action=list)`. Credentials written this way are never readable back. Agents can create profiles too, but only when termcp was started with `--mcp-manage-ssh-configs`.
+Profiles live in `data-dir/ssh_configs/<name>/config.toml`; list them with `ssh_config(action=list)`. Credentials written this way are never readable back. Agents can create profiles too, but only when Termcp was started with `--mcp-manage-ssh-configs`.
 
 ## Docker Deployment
 
@@ -290,17 +290,17 @@ docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP
 
 #### Docker without a token (loopback only)
 
-For a throwaway demo, a screen recording, or a single-user workstation, the token is friction with no benefit. Publish the port on the **host loopback only** and tell termcp explicitly that the missing credentials are intentional:
+For a throwaway demo, a screen recording, or a single-user workstation, the token is friction with no benefit. Publish the port on the **host loopback only** and tell Termcp explicitly that the missing credentials are intentional:
 
 ```bash
 docker run -d --name termcp -p 127.0.0.1:18765:18765 -v termcp-data:/home/termcp ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765 --disable-auth
 ```
 
-Two details make this safe rather than merely convenient. `-p 127.0.0.1:18765:18765` binds the published port to the host's loopback, so the container stays reachable to this machine and invisible to the LAN — the container itself still listens on `0.0.0.0` because that is the only address routable from outside its network namespace. And `--disable-auth` is required precisely because termcp refuses to start unauthenticated on a non-loopback bind: the flag is the operator taking responsibility, which is why it also downgrades the startup log to a warning. The equivalent environment form is `-e TERMCP_DISABLE_AUTH_TOKEN=1` instead of the flag.
+Two details make this safe rather than merely convenient. `-p 127.0.0.1:18765:18765` binds the published port to the host's loopback, so the container stays reachable to this machine and invisible to the LAN — the container itself still listens on `0.0.0.0` because that is the only address routable from outside its network namespace. And `--disable-auth` is required precisely because Termcp refuses to start unauthenticated on a non-loopback bind: the flag is the operator taking responsibility, which is why it also downgrades the startup log to a warning. The equivalent environment form is `-e TERMCP_DISABLE_AUTH_TOKEN=1` instead of the flag.
 
-### Multi-stage build: add termcp to any container
+### Multi-stage build: add Termcp to any container
 
-Drop this `Dockerfile` into your application project: the build stage installs termcp with `go install`, then `COPY --from` copies the binary into the target image — no Go runtime needed there.
+Drop this `Dockerfile` into your application project: the build stage installs Termcp with `go install`, then `COPY --from` copies the binary into the target image — no Go runtime needed there.
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -334,7 +334,7 @@ docker logs -f my-app-termcp
 
 Append `--mcp-manage-ssh-configs` to open the SSH-config write tools to Agents.
 
-If termcp must share a container with another main process, start it from the existing entrypoint or process manager; otherwise run it as a separate service and reach it at `http://termcp:18765/stream`.
+If Termcp must share a container with another main process, start it from the existing entrypoint or process manager; otherwise run it as a separate service and reach it at `http://termcp:18765/stream`.
 
 ### Docker Compose startup
 
@@ -361,9 +361,9 @@ docker compose up -d --build
 
 ## Connecting AI Clients (MCP)
 
-termcp speaks **both MCP transports** on the same port (18765). Choose whichever your client supports — the tool surface is identical.
+Termcp speaks **both MCP transports** on the same port (18765). Choose whichever your client supports — the tool surface is identical.
 
-termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode).
+Termcp is a long-running service: the same port serves the Web UI, any number of MCP clients, and session persistence. It therefore offers **HTTP transports only** — Streamable HTTP and SSE — and does **not** support stdio (there is no local subprocess mode).
 
 Alternative: the [Agent Skill](#agent-skill-curl-only-no-mcp) drives the same sessions over plain `curl` — the instance serves it at `/skills.md`. The MCP server is one interface layer of the platform, embeddable into any MCP-capable host — Claude Code, Cursor, Codex, Open WebUI, or your own client.
 
@@ -387,7 +387,7 @@ claude mcp add --transport http termcp http://localhost:18765/stream
 ```
 
 - Same machine: `http://127.0.0.1:18765/stream`.
-- Open WebUI in Docker, termcp on the host: `http://host.docker.internal:18765/stream` (macOS/Windows), or the host's LAN IP.
+- Open WebUI in Docker, Termcp on the host: `http://host.docker.internal:18765/stream` (macOS/Windows), or the host's LAN IP.
 - Both in Docker on the same network (see [Docker Deployment](#docker-deployment)): `http://termcp:18765/stream`.
 
 ### Option B — SSE (`/sse`)
@@ -419,7 +419,7 @@ The Web UI's **API / MCP / SKILLS** page (`/api.html`) offers copy-ready config 
 ## Agent Skill (curl-only, no MCP)
 
 Don't want to configure an MCP client? The instance ships an installable
-**Agent Skill** that teaches any agent to drive termcp with `curl` alone —
+**Agent Skill** that teaches any agent to drive Termcp with `curl` alone —
 including the `termcp://` locators users paste from the Web UI.
 
 ```bash
@@ -489,7 +489,7 @@ curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://your-server:18765/api/
 
 ## Tool Reference
 
-termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes live in [`docs/mcp-tools.md`](./docs/mcp-tools.md).
+Termcp exposes 31 MCP tools. Full parameters, return shapes, and error codes live in [`docs/mcp-tools.md`](./docs/mcp-tools.md).
 
 | Area | Tools |
 |------|-------|
@@ -506,11 +506,11 @@ Run a command as `shell_input` + `shell_key(key="enter")` + `shell_output`. Fail
 
 ## Deferred tool loading
 
-An MCP client fetches every tool's JSON schema in `tools/list`, so tool-heavy servers pay for that in context budget. The MCP spec offers an escape hatch: mark low-frequency tools with `defer_loading`, and a client loads their schema on demand. termcp's 31 tools split into a hot path of **12** (session lifecycle + shell input/output — always listed) and **19** wide, low-frequency surfaces (the 11 SFTP `file_*` tools, `forward`, `shell_resize`/`shell_detect`/`shell_notify`, `shell_reader_register`/`shell_reader_unregister`, `message`, `ssh_config`).
+An MCP client fetches every tool's JSON schema in `tools/list`, so tool-heavy servers pay for that in context budget. The MCP spec offers an escape hatch: mark low-frequency tools with `defer_loading`, and a client loads their schema on demand. Termcp's 31 tools split into a hot path of **12** (session lifecycle + shell input/output — always listed) and **19** wide, low-frequency surfaces (the 11 SFTP `file_*` tools, `forward`, `shell_resize`/`shell_detect`/`shell_notify`, `shell_reader_register`/`shell_reader_unregister`, `message`, `ssh_config`).
 
 `--mcp-defer-tools` turns the marker on and is **off by default**, so:
 
-- **Default** — all 31 tools are listed eagerly with full schema. This is what every client that does not implement deferred loading needs — including any Codex that talks to termcp through a gateway such as AxonHub, which can drop the `defer_loading` marker. With the marker lost, those tools are not reloadable on demand and would simply vanish from the model's view.
+- **Default** — all 31 tools are listed eagerly with full schema. This is what every client that does not implement deferred loading needs — including any Codex that talks to Termcp through a gateway such as AxonHub, which can drop the `defer_loading` marker. With the marker lost, those tools are not reloadable on demand and would simply vanish from the model's view.
 - **`--mcp-defer-tools`** — the 19 low-frequency tools carry `defer_loading`; the 12 core tools stay eager so the `session_start → shell_input → shell_output` loop never requires a search round trip. Clients that support on-demand loading (mcp-go based clients, Claude Code) pay only for the schemas they actually use.
 
 Same 31 tools either way: enabling the flag never removes tools, it only withholds schemas from the initial listing.
@@ -518,19 +518,19 @@ Same 31 tools either way: enabling the flag never removes tools, it only withhol
 ## Known Limitations & Security Model
 
 - **File and forward tools need a live connection.** On a closed (DEAD) session they return `session_not_running`; output reading still works via `shell_output`, and a session's port forwards are closed automatically when it goes DEAD.
-- **Basic authentication needs TLS outside localhost.** The browser login challenge uses HTTP Basic, whose credentials are only Base64-encoded. Put a TLS-terminating reverse proxy in front of termcp when exposing it beyond a trusted local network; the static token is still never logged or placed in a URL.
+- **Basic authentication needs TLS outside localhost.** The browser login challenge uses HTTP Basic, whose credentials are only Base64-encoded. Put a TLS-terminating reverse proxy in front of Termcp when exposing it beyond a trusted local network; the static token is still never logged or placed in a URL.
 
-### 🚨 Security boundary: termcp does not enforce security (it is a pipe, not an antivirus)
+### 🚨 Security boundary: Termcp does not enforce security (it is a pipe, not an antivirus)
 
-> **The defence line belongs at the AI's output side and your gateway — not in the terminal pipe. termcp is NOT an antivirus, EDR, or WAF.**
+> **The defence line belongs at the AI's output side and your gateway — not in the terminal pipe. Termcp is NOT an antivirus, EDR, or WAF.**
 
-termcp is a **transparent real-terminal and multiplexed-session pipe** (PTY transport) with the same freedom and power as the machine's own terminal. It therefore **cannot and should not judge the intent of what it carries**:
+Termcp is a **transparent real-terminal and multiplexed-session pipe** (PTY transport) with the same freedom and power as the machine's own terminal. It therefore **cannot and should not judge the intent of what it carries**:
 
 1. **Why a terminal pipe cannot detect malicious intent.**
-   - **Upload-and-execute cannot be stopped here.** Malicious content arrives Base64-decoded through a pipe, written in fragments, or fetched by legitimate tools (`curl` / `wget`) in multiple stages and then chmod'ed and run. termcp is a **data pipe, not a malware scanner**: inspecting every streaming byte for a trojan is simply not something a byte transport can do.
+   - **Upload-and-execute cannot be stopped here.** Malicious content arrives Base64-decoded through a pipe, written in fragments, or fetched by legitimate tools (`curl` / `wget`) in multiple stages and then chmod'ed and run. Termcp is a **data pipe, not a malware scanner**: inspecting every streaming byte for a trojan is simply not something a byte transport can do.
    - **Obfuscation and concatenation are undecidable at the byte layer.** An AI can split a dangerous command into string fragments (`a="rm -"; b="rf /"; $a$b`), rebuild it through variable renaming, dynamic `eval`, `printf` injection, environment-variable stitching, or by writing several partial files and executing them. To the PTY every character is a legal keystroke; the transport cannot tell "obfuscated payload" from "ordinary development script".
 2. **Security must be enforced upstream.**
-   - **The caller (host application / Agent harness) must guard the AI's output before the tool call.** Wrap `shell_input` / `file_write` with output guardrails, an instruction-compliance policy layer, sensitive-content filters, or a safety model that inspects the generated command **before** it reaches termcp. termcp does not enforce command allowlists, path jails, or policy-based risk tiers.
+   - **The caller (host application / Agent harness) must guard the AI's output before the tool call.** Wrap `shell_input` / `file_write` with output guardrails, an instruction-compliance policy layer, sensitive-content filters, or a safety model that inspects the generated command **before** it reaches termcp. Termcp does not enforce command allowlists, path jails, or policy-based risk tiers.
    - **Keep humans in the loop for privileged or destructive steps.** The Web UI shows every session live and lets you take over or interrupt at any time. Treat `sudo`, destructive, or irreversible commands as human-approval events — and never hand unattended high-privilege terminal access to a production host that is not sandboxed.
 
 ---

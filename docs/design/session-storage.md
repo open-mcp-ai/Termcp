@@ -184,7 +184,7 @@ WS / REST 直接把 `log.bin` 的字节放进**标准 JSON 字符串**，不引�
 
 **约束**：JSON 字符串只能承载合法 UTF-8。依赖前提：`log.bin` 内容是合法 UTF-8。
 
-- Windows：ConPTY 在到达 termcp 之前已把非法序列替换为 U+FFFD（实测确认），前提成立
+- Windows：ConPTY 在到达 Termcp 之前已把非法序列替换为 U+FFFD（实测确认），前提成立
 - Linux：PTY 原样透传，`cat` 二进制会产生非法序列，此时 JSON 会替换为 U+FFFD
 
 即：**乱码内容可能变成 U+FFFD，但结构不受影响**（offset 仍是文件位置，`log.bin` 本身不丢字节）。

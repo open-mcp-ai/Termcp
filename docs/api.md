@@ -1,15 +1,15 @@
-# termcp HTTP API
+# Termcp HTTP API
 
 Base URL: `http://localhost:18765`
 
-termcp is a terminal-session platform. One port serves the same sessions to four
+Termcp is a terminal-session platform. One port serves the same sessions to four
 kinds of callers:
 
 | Entrance | Path | Caller |
 |----------|------|--------|
 | Web UI | `/` + `/api.html` | Humans (browser) |
 | MCP | `/sse` + `/message` or `/stream` | AI agents with an MCP client |
-| Agent Skill + REST | `/skills.md` (install once) + `/api/*` | AI agents driving termcp with `curl` |
+| Agent Skill + REST | `/skills.md` (install once) + `/api/*` | AI agents driving Termcp with `curl` |
 | REST + WebSocket | `/api/*` + `/api/ui/ws` | Scripts / programs |
 
 This document covers the REST surface (scripting). Real-time terminal I/O goes over
@@ -37,7 +37,7 @@ can learn the API without MCP and without version drift:
 
 | Document | Path | When to use it |
 |----------|------|----------------|
-| HTTP API reference (this file) | `/api.md` | You drive termcp over HTTP yourself (REST/WebSocket): endpoints, bodies, output-cursor semantics |
+| HTTP API reference (this file) | `/api.md` | You drive Termcp over HTTP yourself (REST/WebSocket): endpoints, bodies, output-cursor semantics |
 | HTTP skill (curl recipes) | `/skills.md` | Install once into a skills directory so the curl workflow is available on demand later |
 
 `/skills.md` is served flat (as guessable as `/api.md`) but is a real Agent Skill:
@@ -170,7 +170,7 @@ Response 200:
 
 ## 5. Resource locators (termcp://)
 
-A locator names a termcp object in one string. The Web UI's copy buttons emit
+A locator names a Termcp object in one string. The Web UI's copy buttons emit
 them (entry cards, session cards, shell tabs) so a user can paste "open this"
 into a chat, an issue, or a script. MCP tools accept locators anywhere an id or
 profile name is expected; over plain HTTP, resolve them first with
@@ -407,7 +407,7 @@ Response 200:
 
 > `d` is the raw byte window placed in a standard JSON string (not base64). A
 > byte sequence that is not valid UTF-8 cannot survive a JSON string; on Windows
-> ConPTY already replaces such sequences before termcp sees them, and on Linux
+> ConPTY already replaces such sequences before Termcp sees them, and on Linux
 > `cat` of binary data may appear as U+FFFD. The bytes in `log.bin` are never
 > altered — only this transport representation is lossy.
 
@@ -803,7 +803,7 @@ rather than leaving it ambiguous.
 Whoever turns review on is the reviewer, and one approval is enough. There is no
 approver count, and no name is collected.
 
-This is deliberate rather than a simplification. termcp authenticates a
+This is deliberate rather than a simplification. Termcp authenticates a
 deployment with a single token, so it cannot verify who clicked; a self-declared
 name would look like attribution in the audit trail while proving nothing, and a
 threshold over claimed names would look like a second opinion without being one.
