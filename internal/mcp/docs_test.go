@@ -122,7 +122,7 @@ func TestResourcesListAndRead(t *testing.T) {
 	if err := json.Unmarshal(result, &read); err != nil {
 		t.Fatal(err)
 	}
-	if len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, "termcp HTTP API") {
+	if len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, "Termcp HTTP API") {
 		t.Fatalf("unexpected resources/read payload: %s", result)
 	}
 
