@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -382,7 +383,7 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 	if bad != nil {
 		t.Fatalf("sftp: %v", bad)
 	}
-	const target = "/tmp/termcp-approval-probe.txt"
+	target := filepath.Join(t.TempDir(), "termcp-approval-probe.txt")
 	_ = dir.RemoveFile(target)
 	_ = dir.Close()
 
@@ -463,7 +464,7 @@ func TestFileWriteIsNotExecutedOnRejection(t *testing.T) {
 	s := newTestServer(t)
 	sessionID, _ := startGatedSession(t, s, 1, time.Minute)
 
-	const target = "/tmp/termcp-approval-rejected.txt"
+	target := filepath.Join(t.TempDir(), "termcp-approval-rejected.txt")
 	cli, _ := s.sftpClient(sessionID)
 	_ = cli.RemoveFile(target)
 	_ = cli.Close()

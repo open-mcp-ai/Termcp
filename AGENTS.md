@@ -23,6 +23,14 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 Project docs live under `docs/` (`docs/mcp-tools.md`, `docs/api.md`, `docs/architecture.md`, `docs/design/`).
 
+### Tests run in CI on three OSes
+
+Whenever you write or modify a test, remember it must pass in
+`.github/workflows/test.yml` — ubuntu, macos and windows, via
+`go test ./internal/... -count=1 -timeout 120s`. Assume concurrency, a fresh
+runner, and dirty state from other tests or processes. Never hardcode a shared
+absolute path; `t.TempDir()` is the default. See `docs/agents/testing.md`.
+
 ## Driving termcp's MCP tools
 
 Working in this repo usually means driving termcp itself. The full tool
