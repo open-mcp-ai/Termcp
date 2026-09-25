@@ -31,9 +31,9 @@ Whenever you write or modify a test, remember it must pass in
 runner, and dirty state from other tests or processes. Never hardcode a shared
 absolute path; `t.TempDir()` is the default. See `docs/agents/testing.md`.
 
-## Driving termcp's MCP tools
+## Driving Termcp's MCP tools
 
-Working in this repo usually means driving termcp itself. The full tool
+Working in this repo usually means driving Termcp itself. The full tool
 reference is `docs/mcp-tools.md`; every running instance also serves its own
 docs (`resources/list` returns real `http://<origin>/api.md` and
 `http://<origin>/skills.md` URLs). Three invariants are cheap to keep in mind
