@@ -35,6 +35,25 @@ func (m *mockSender) counts() (resCount, sampCount int) {
 	return len(m.resourceCalls), len(m.samplingCalls)
 }
 
+// waitFor polls until cond holds, or fails the test at the deadline. These tests
+// assert on WHEN a timer fires, so they cannot sleep a fixed duration and then
+// read a count: a loaded CI runner (or a coarse Windows timer tick) makes the
+// event land late, and a fixed sleep turns that into a flake. Polling waits for
+// the event and fails only if it never happens.
+func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatalf("timed out after %v waiting for %s", timeout, what)
+	}
+}
+
 func TestNotifyManager_RegisterAndList(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
@@ -116,12 +135,11 @@ func TestNotifyManager_ExitOneShotAndAutoCleanup(t *testing.T) {
 	exitCode := 0
 	mgr.OnExit("shell-1", &exitCode)
 
-	time.Sleep(50 * time.Millisecond)
-
-	_, samp := sender.counts()
-	if samp != 1 {
-		t.Fatalf("expected 1 sampling notification for exit, got %d", samp)
-	}
+	// The exit dispatch runs on its own goroutine; wait for the send.
+	waitFor(t, time.Second, "the exit notification", func() bool {
+		_, samp := sender.counts()
+		return samp == 1
+	})
 
 	// All rules for shell-1 must be auto-cleaned up
 	if len(mgr.List("shell-1")) != 0 {
@@ -142,32 +160,34 @@ func TestNotifyManager_OutputDualEdgeAndCooldown(t *testing.T) {
 		t.Fatalf("register failed: %v", err)
 	}
 
-	// 1st output: Immediate notification should fire
+	// 1st output: the immediate notification fires. The dispatch runs on its own
+	// goroutine, so wait for the send rather than assuming it already ran.
 	mgr.OnOutput("shell-1")
-	time.Sleep(10 * time.Millisecond)
-	res, _ := sender.counts()
-	if res != 1 {
-		t.Fatalf("expected immediate leading-edge notification, got %d", res)
-	}
+	waitFor(t, time.Second, "the immediate leading-edge notification", func() bool {
+		res, _ := sender.counts()
+		return res == 1
+	})
 
-	// 2nd output within cooldown (10ms later): immediate should be dropped by cooldown,
-	// and trailing timer should be reset to +60ms from now
+	// 2nd output within cooldown: the immediate send must be dropped by the
+	// cooldown gate, and the trailing timer reset to +60ms from now.
+	//
+	// This asserts an ABSENCE, so it has to let the cooldown genuinely elapse:
+	// there is no event to poll for. 10ms + 20ms = 30ms against a 40ms cooldown
+	// leaves a 10ms margin while staying inside the window.
 	time.Sleep(10 * time.Millisecond)
 	mgr.OnOutput("shell-1")
-
-	// Wait 15ms (total ~35ms from 1st output, still within cooldown of 40ms)
-	time.Sleep(15 * time.Millisecond)
-	res, _ = sender.counts()
-	if res != 1 {
-		t.Fatalf("cooldown should have prevented second immediate notification, got %d", res)
+	time.Sleep(20 * time.Millisecond)
+	if res, _ := sender.counts(); res != 1 {
+		t.Fatalf("cooldown should have prevented a second immediate notification, got %d", res)
 	}
 
-	// Wait for trailing timer (60ms from 2nd output = fires at ~80ms from 1st output, well past cooldown of 40ms)
-	time.Sleep(80 * time.Millisecond)
-	res, _ = sender.counts()
-	if res != 2 {
-		t.Fatalf("expected trailing edge notification to fire once output stopped, got %d", res)
-	}
+	// The trailing edge fires once output stops (60ms after the 2nd output). Poll
+	// for it: on a loaded runner the timer lands later than a fixed 80ms sleep,
+	// which is exactly the flake this replaced.
+	waitFor(t, 3*time.Second, "the trailing-edge notification", func() bool {
+		res, _ := sender.counts()
+		return res == 2
+	})
 }
 
 func TestNotifyManager_SilenceOneShot(t *testing.T) {
@@ -183,24 +203,28 @@ func TestNotifyManager_SilenceOneShot(t *testing.T) {
 
 	mgr.OnOutput("shell-1")
 
-	// Within 500ms, silence should not have triggered yet
+	// Within 500ms the silence must not have triggered. This asserts an ABSENCE,
+	// so it does need to wait out the part of the window it is testing: 400ms of a
+	// 1s timer leaves 600ms of margin, so a slow runner only makes the window
+	// safer, never flakier.
 	time.Sleep(400 * time.Millisecond)
 	_, samp := sender.counts()
 	if samp != 0 {
 		t.Fatalf("silence should not have triggered yet, got %d", samp)
 	}
 
-	// Wait for 1s silence timer to expire
-	time.Sleep(800 * time.Millisecond)
-	_, samp = sender.counts()
-	if samp != 1 {
-		t.Fatalf("expected silence notification, got %d", samp)
-	}
+	// The 1s silence timer then fires. Poll instead of sleeping a fixed 800ms, so a
+	// late timer fails only if it never arrives.
+	waitFor(t, 3*time.Second, "the silence notification", func() bool {
+		_, samp := sender.counts()
+		return samp == 1
+	})
 
-	// One-shot silence rule should be automatically unregistered
-	if len(mgr.List("shell-1")) != 0 {
-		t.Fatalf("expected silence rule to be auto-unregistered, still found %d", len(mgr.List("shell-1")))
-	}
+	// One-shot silence rule should be automatically unregistered. The unregister
+	// is deferred in dispatchWithCooldown, so it lands just after the send.
+	waitFor(t, time.Second, "the silence rule to auto-unregister", func() bool {
+		return len(mgr.List("shell-1")) == 0
+	})
 	_ = rule
 }
 
@@ -220,13 +244,21 @@ func TestNotifyManager_OutputBurstCollapsesToOneLeadingAndOneTrailing(t *testing
 		mgr.OnOutput("shell-1")
 	}
 
-	time.Sleep(30 * time.Millisecond)
-	if res, _ := sender.counts(); res != 1 {
-		t.Fatalf("burst should yield exactly 1 leading notification, got %d", res)
-	}
+	// The leading edge is dispatched on its own goroutine; wait for it rather than
+	// sleeping a fixed 30ms that a contended runner can overrun.
+	waitFor(t, time.Second, "the single leading notification", func() bool {
+		res, _ := sender.counts()
+		return res >= 1
+	})
 
 	// Wait past the trailing delay; the trailing edge fires once.
-	time.Sleep(120 * time.Millisecond)
+	waitFor(t, 3*time.Second, "the trailing-edge notification", func() bool {
+		res, _ := sender.counts()
+		return res == 2
+	})
+	// A burst must collapse to exactly one trailing edge: a short settle afterwards
+	// must not produce a third send.
+	time.Sleep(150 * time.Millisecond)
 	if res, _ := sender.counts(); res != 2 {
 		t.Fatalf("burst should yield 1 leading + 1 trailing, got %d", res)
 	}

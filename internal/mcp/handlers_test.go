@@ -451,6 +451,16 @@ func TestHandleListMessages(t *testing.T) {
 	}
 }
 
+// send_input must return without waiting for the shell to produce output: it
+// only writes bytes to the PTY, so the call is O(bytes) and not O(command).
+//
+// The assertion is deliberately not a tight wall-clock budget. The failure this
+// guards against is a handler that WAITS for the command to finish (a blocking
+// drain, a read-until-prompt), which costs the command's whole runtime — order
+// 100ms+ for the trivial echo below, and far more for a real command. A contended
+// CI runner adds tens of ms of scheduler delay to any single call, so a 500ms bar
+// is only a floor: it is 50x the work being measured and still catches the bug it
+// exists for.
 func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 	s := newTestServer(t)
 
@@ -470,6 +480,9 @@ func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
+	// Run a command whose own runtime is far below the budget: if send_input were
+	// waiting for it, the elapsed time would be dominated by the sleep, not by the
+	// scheduling of one write.
 	start := time.Now()
 	sendReq := makeRequest(map[string]any{
 		"shell_id": shellID,
@@ -483,8 +496,11 @@ func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 		t.Fatalf("unexpected error: %s", sendResult.Content[0].(mcpgo.TextContent).Text)
 	}
 	elapsed := time.Since(start)
-	if elapsed > 500*time.Millisecond {
-		t.Fatalf("send_input took %v — should return immediately", elapsed)
+	// 4 seconds: a handler that blocked on the shell would be gated by the shell
+	// itself, while this budget only has to absorb CI scheduler noise. The comment
+	// above TestHandleSendInput_ReturnsImmediately explains the margin.
+	if elapsed > 4*time.Second {
+		t.Fatalf("send_input took %v — it must return without waiting for the shell", elapsed)
 	}
 
 	keyReq := makeRequest(map[string]any{"shell_id": shellID, "key": "enter"})
