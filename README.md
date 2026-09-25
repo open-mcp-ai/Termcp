@@ -96,6 +96,8 @@ An Agent natively runs only one-shot commands, while real work is largely **mult
 
 ![pic1](https://github.com/user-attachments/assets/a78146ee-ab6c-4f16-b95d-b1de186037ff)
 
+![1](https://github.com/user-attachments/assets/a0f4cfc1-4b73-4725-b8e8-97b85e19583b)
+
 - **One session layer, peer entrances.** MCP, SKILLS and REST/WebSocket sit at the same level as the Web UI, sharing the same real sessions. You can watch every Agent step in the browser and take over at any time; the Agent in turn can pause and hand a password/MFA prompt to you.
 - **Built for token and turn budgets.** Tool schemas are compact and can be deferred-loaded (see [`docs/mcp-tools.md`](./docs/mcp-tools.md)); `shell_output` pages by tail/offset cursors so only the slices you ask for ever enter the context window; `shell_notify` sends a bare wake-up signal.
 - **Self-describing instances.** Every running Termcp serves its own `/api.md` and `/skills.md` (no token needed) and registers them as MCP resources plus a `learn-api` prompt, so a fresh Agent can drive this exact instance straight away, using only these two files.
