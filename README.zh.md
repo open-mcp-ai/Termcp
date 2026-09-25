@@ -6,15 +6,15 @@
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="./docs/assets/logo.png" width="150" alt="termcp logo">
+    <img src="./docs/assets/logo.png" width="150" alt="Termcp logo">
   </a>
 </p>
 
-<h1 align="center">⚡ termcp</h1>
+<h1 align="center">⚡ Termcp</h1>
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="https://readme-typing-svg.demolab.com?font=Noto+Sans+SC&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=%E4%B8%80%E4%B8%AA+AI+Native+%E7%9A%84%E7%BB%88%E7%AB%AF%E5%B9%B3%E5%8F%B0;%E8%B7%A8%E5%B9%B3%E5%8F%B0+%C2%B7+%E5%8F%AF%E8%A7%86%E5%8C%96+%C2%B7+%E4%BA%BA%E6%9C%BA%E5%8D%8F%E4%BD%9C;%E4%B8%80%E4%B8%AA%E7%AB%AF%E5%8F%A3%EF%BC%8C%E5%9B%9B%E4%B8%AA%E5%85%A5%E5%8F%A3;%E7%94%A8+MCP+%E4%B8%8E+SKILLS+%E9%A9%B1%E5%8A%A8%E7%9C%9F%E5%AE%9E%E7%BB%88%E7%AB%AF" alt="termcp 标语">
+    <img src="https://readme-typing-svg.demolab.com?font=Noto+Sans+SC&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=%E4%B8%80%E4%B8%AA+AI+Native+%E7%9A%84%E7%BB%88%E7%AB%AF%E5%B9%B3%E5%8F%B0;%E8%B7%A8%E5%B9%B3%E5%8F%B0+%C2%B7+%E5%8F%AF%E8%A7%86%E5%8C%96+%C2%B7+%E4%BA%BA%E6%9C%BA%E5%8D%8F%E4%BD%9C;%E4%B8%80%E4%B8%AA%E7%AB%AF%E5%8F%A3%EF%BC%8C%E5%9B%9B%E4%B8%AA%E5%85%A5%E5%8F%A3;%E7%94%A8+MCP+%E4%B8%8E+SKILLS+%E9%A9%B1%E5%8A%A8%E7%9C%9F%E5%AE%9E%E7%BB%88%E7%AB%AF" alt="Termcp 标语">
   </a>
 </p>
 
@@ -60,7 +60,7 @@
 
 ## 简介
 
-`termcp` 是一款 AI Native 的终端平台：多主机、多会话同时管理，全程可视化。这些会话由人和 AI 共同管理、共同维护，随时可以互相接管与交接；连接配置由平台独立维护，Agent 无需读取凭据即可使用。
+Termcp 是一款 AI Native 的终端平台：多主机、多会话同时管理，全程可视化。这些会话由人和 AI 共同管理、共同维护，随时可以互相接管与交接；连接配置由平台独立维护，Agent 无需读取凭据即可使用。
 
 - **人** —— 浏览器实时查看、操作、接管任何会话；
 - **AI Agent** —— 通过 MCP 或 SKILLS 驱动同一批终端；
@@ -72,7 +72,7 @@
 
 https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
-## 为什么选 termcp
+## 为什么选 Termcp
 
 ### 多会话可视化管理
 
@@ -92,13 +92,13 @@ https://github.com/user-attachments/assets/d06a3c36-250a-4eeb-aefa-e80d13d1551c
 
 无缝人机交互、结对操作：Agent 是终端的常驻用户，与你和脚本并列。
 
-Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互**（SSH 登录先输密码、Python REPL 逐行调试、回答安装程序的 `[Y/n]` 提示、驱动 `top`/`htop`/impacket）。`termcp` 把真实终端直接交给 Agent：会话持续复用，**TUI**、**REPL**、**GDB**、**msfconsole**、**vim** 都能像人一样被持续管理——走 MCP，或用实例自带的 [Agent Skill](#agent-skill纯-curl无需-mcp) 走纯 `curl`。
+Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互**（SSH 登录先输密码、Python REPL 逐行调试、回答安装程序的 `[Y/n]` 提示、驱动 `top`/`htop`/impacket）。Termcp 把真实终端直接交给 Agent：会话持续复用，**TUI**、**REPL**、**GDB**、**msfconsole**、**vim** 都能像人一样被持续管理——走 MCP，或用实例自带的 [Agent Skill](#agent-skill纯-curl无需-mcp) 走纯 `curl`。
 
 ![pic1_zh](docs/assets/pic1_zh.png)
 
 - **同一套会话层，平级入口。** MCP、SKILLS、REST/WebSocket 与 Web UI 同处一层，共用同一批真实会话。Agent 的每一步操作，你在浏览器里都看得见、随时能接管；反过来，Agent 需要时也可以停下来，把密码/MFA 提示交给你输入。
 - **为 token 与轮次预算设计。** 工具 schema 紧凑、支持按需延迟加载（见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)）；`shell_output` 用 tail/offset 游标分页，模型上下文只载入你真正需要的输出；`shell_notify` 只发唤醒信号。
-- **实例自描述。** 每个运行中的 termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
+- **实例自描述。** 每个运行中的 Termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
 - **密钥留在平台侧。** 经 `ssh_config` 写入的密码、私钥、口令仅保存在平台侧，MCP 的读取接口只返回配置名；SSH 配置写入工具默认关闭，需运维显式开启 `--mcp-manage-ssh-configs`。
 - **失败可恢复。** 关闭、崩溃或重启过的会话仍以只读 DEAD 条目留在会话列表里，输出依旧可读，Agent（或你）可以接着中断前的状态继续；重连同一个 `termcp://<entry>` 即可开启下一段会话。
 - **人始终保留中断权。** `notify_user` 可直接通知到你；需要提权的提示由你在 Web UI 里输入；同一 shell 的写入串行化，人与 Agent 的输入按序生效。
@@ -139,7 +139,7 @@ Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互
 go install github.com/open-mcp-ai/termcp@latest
 ```
 
-`go install` 会通过 Go 模块代理拉取（中国大陆可用 `GOPROXY=https://goproxy.cn,direct`），把 `termcp` 二进制放到 `$(go env GOPATH)/bin`，请确保该目录在 `PATH` 中。termcp 用 Go 编写，安装方式就是 `go install` 或 Releases 预编译二进制，没有 npx/uvx 版本，也不需要 Node/Python 运行时。作为 Go module，它还支持**源码级集成**：可 `go get github.com/open-mcp-ai/termcp` 作为依赖引入，或 fork 源码构建定制版本。随后直接运行：
+`go install` 会通过 Go 模块代理拉取（中国大陆可用 `GOPROXY=https://goproxy.cn,direct`），把 `termcp` 二进制放到 `$(go env GOPATH)/bin`，请确保该目录在 `PATH` 中。Termcp 用 Go 编写，安装方式就是 `go install` 或 Releases 预编译二进制，没有 npx/uvx 版本，也不需要 Node/Python 运行时。作为 Go module，它还支持**源码级集成**：可 `go get github.com/open-mcp-ai/termcp` 作为依赖引入，或 fork 源码构建定制版本。随后直接运行：
 
 ```bash
 termcp
@@ -245,11 +245,11 @@ TERMCP_AUTH_HASH='sha256-...' ./termcp
 - `--auth-token` 与 `--auth-hash` 互斥；同一配置项 flag 优先于环境变量。
 - Token 含冒号也兼容：解码后的整个 `user:pass` 串与原 token 完全一致时同样放行，因此按首个冒号拆分的客户端（如 `curl -u user:pass`）也能通过；规范写法仍是 `curl -u :<token>`。
 - 未配置 Token/哈希时，绑定任何非 loopback 地址（`0.0.0.0`、局域网 IP、非 `localhost` 的主机名）都会启动失败——被误暴露的实例不可能无认证运行。
-- 浏览器走的是 HTTP Basic，只是 Base64 编码而非加密。对外提供服务时请在 termcp 前面用反向代理终止 TLS；此时仅当请求本身来自 TLS 时 `termcp_token` cookie 才会自动带上 `Secure` 标志。
+- 浏览器走的是 HTTP Basic，只是 Base64 编码而非加密。对外提供服务时请在 Termcp 前面用反向代理终止 TLS；此时仅当请求本身来自 TLS 时 `termcp_token` cookie 才会自动带上 `Secure` 标志。
 
 ### 连接远程主机
 
-零配置：`ssh_config="internal"` 直接操作 termcp 本机。要连远程机器，在 Web UI 新建连接对话框创建 SSH profile（内置 TOML 模板与「测试连接」按钮），或通过 REST `PUT /api/connections/<name>` 提交 TOML：
+零配置：`ssh_config="internal"` 直接操作 Termcp 本机。要连远程机器，在 Web UI 新建连接对话框创建 SSH profile（内置 TOML 模板与「测试连接」按钮），或通过 REST `PUT /api/connections/<name>` 提交 TOML：
 
 ```toml
 kind = "remote"
@@ -273,7 +273,7 @@ user = "ops"
 password = "..."
 ```
 
-profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config(action=list)` 查询；按此方式写入的凭据一律不可读回。Agent 也能创建 profile，但仅在 termcp 以 `--mcp-manage-ssh-configs` 启动时可用。
+profile 存放在 `data-dir/ssh_configs/<name>/config.toml`，可用 `ssh_config(action=list)` 查询；按此方式写入的凭据一律不可读回。Agent 也能创建 profile，但仅在 Termcp 以 `--mcp-manage-ssh-configs` 启动时可用。
 
 ## Docker 部署
 
@@ -291,17 +291,17 @@ docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP
 
 #### 不启用 Token 的 Docker 运行方式（仅限本机）
 
-如果是临时演示、录屏、或单机自用，token 只是妨碍而没有任何保护价值。把端口只发布到**宿主 loopback**，并明确告知 termcp 缺凭据是有意为之：
+如果是临时演示、录屏、或单机自用，token 只是妨碍而没有任何保护价值。把端口只发布到**宿主 loopback**，并明确告知 Termcp 缺凭据是有意为之：
 
 ```bash
 docker run -d --name termcp -p 127.0.0.1:18765:18765 -v termcp-data:/home/termcp ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765 --disable-auth
 ```
 
-这里两个细节让它安全而不只是方便：`-p 127.0.0.1:18765:18765` 把发布端口绑在宿主 loopback 上，容器对本机可达、对局域网不可见（容器内仍必须监听 `0.0.0.0`，因为那是它网络命名空间之外唯一可路由的地址）；而 `--disable-auth` 之所以必需，正是因为 termcp 拒绕在非 loopback 绑定上无认证启动——该 flag 就是运维主动承担责任，因此启动日志也从信息级降为警告级。等价的环变量写法是把 flag 换成 `-e TERMCP_DISABLE_AUTH_TOKEN=1`。
+这里两个细节让它安全而不只是方便：`-p 127.0.0.1:18765:18765` 把发布端口绑在宿主 loopback 上，容器对本机可达、对局域网不可见（容器内仍必须监听 `0.0.0.0`，因为那是它网络命名空间之外唯一可路由的地址）；而 `--disable-auth` 之所以必需，正是因为 Termcp 拒绕在非 loopback 绑定上无认证启动——该 flag 就是运维主动承担责任，因此启动日志也从信息级降为警告级。等价的环变量写法是把 flag 换成 `-e TERMCP_DISABLE_AUTH_TOKEN=1`。
 
 ### 多阶段构建：添加到任意容器
 
-把下面的 `Dockerfile` 放进应用项目：构建阶段用 `go install` 安装 termcp，再用 `COPY --from` 把二进制复制进目标镜像——目标容器不需要 Go 运行时。
+把下面的 `Dockerfile` 放进应用项目：构建阶段用 `go install` 安装 Termcp，再用 `COPY --from` 把二进制复制进目标镜像——目标容器不需要 Go 运行时。
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -335,7 +335,7 @@ docker logs -f my-app-termcp
 
 在启动参数后追加 `--mcp-manage-ssh-configs` 即可放开 SSH 配置写入工具。
 
-必须与原应用共用同一容器时，从原有 entrypoint 或进程管理器启动 termcp；否则建议作为独立服务运行，通过 `http://termcp:18765/stream` 访问。
+必须与原应用共用同一容器时，从原有 entrypoint 或进程管理器启动 Termcp；否则建议作为独立服务运行，通过 `http://termcp:18765/stream` 访问。
 
 ### Docker Compose 启动
 
@@ -362,9 +362,9 @@ docker compose up -d --build
 
 ## 接入 AI 客户端（MCP）
 
-termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
+Termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
 
-termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。
+Termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。
 
 完全不想装 MCP 客户端？可以跳过本节，直接安装 [Agent Skill](#agent-skill纯-curl无需-mcp)：实例在 `/skills.md` 提供，装一次即可用 `curl` 驱动同一批会话。作为 AI 控制层，MCP 服务器只是它诸多能力面之一，可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）。
 
@@ -388,7 +388,7 @@ claude mcp add --transport http termcp http://localhost:18765/stream
 ```
 
 - 同机：`http://127.0.0.1:18765/stream`。
-- Open WebUI 在 Docker 内、termcp 在宿主机：`http://host.docker.internal:18765/stream`（macOS/Windows），或宿主机局域网 IP。
+- Open WebUI 在 Docker 内、Termcp 在宿主机：`http://host.docker.internal:18765/stream`（macOS/Windows），或宿主机局域网 IP。
 - 两者都在 Docker 内（同一网络，见 [Docker 部署](#docker-部署)）：`http://termcp:18765/stream`。
 
 ### 方式 B —— SSE (`/sse`)
@@ -420,7 +420,7 @@ Web UI 的 **API / MCP / SKILLS** 页面（`/api.html`）提供两种传输的�
 ## Agent Skill（纯 curl，无需 MCP）
 
 不想配 MCP 客户端？实例自带一份可安装的 **Agent Skill**，让任意 agent 只用
-`curl` 就能驱动 termcp —— 包括识别用户从 Web UI 复制的 `termcp://` 定位符。
+`curl` 就能驱动 Termcp —— 包括识别用户从 Web UI 复制的 `termcp://` 定位符。
 
 ```bash
 # 公开端点：下载文档本身不需要 token
@@ -486,7 +486,7 @@ curl -H "Authorization: Bearer $TERMCP_AUTH_TOKEN" http://your-server:18765/api/
 
 ## 工具参考
 
-termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
+Termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请参见 [`docs/mcp-tools.md`](./docs/mcp-tools.md)。
 
 | 分类 | 工具列表 |
 |------|---------|
@@ -503,11 +503,11 @@ termcp 共提供 31 个 MCP 工具。完整参数、返回结构与错误码请�
 
 ## 工具懒加载
 
-MCP 客户端在 `tools/list` 时会拉取每个工具的 JSON Schema，工具多的服务就要为此付出上下文预算。MCP 规范留了一个口子：把低频工具标记为 `defer_loading`，客户端按需再拉 schema。termcp 的 31 个工具分为热路径 **12 个**（会话生命周期 + 终端输入输出，永远立即可见）与低频宽面 **19 个**（11 个 SFTP `file_*`、`forward`、`shell_resize`/`shell_detect`/`shell_notify`、`shell_reader_register`/`shell_reader_unregister`、`message`、`ssh_config`）。
+MCP 客户端在 `tools/list` 时会拉取每个工具的 JSON Schema，工具多的服务就要为此付出上下文预算。MCP 规范留了一个口子：把低频工具标记为 `defer_loading`，客户端按需再拉 schema。Termcp 的 31 个工具分为热路径 **12 个**（会话生命周期 + 终端输入输出，永远立即可见）与低频宽面 **19 个**（11 个 SFTP `file_*`、`forward`、`shell_resize`/`shell_detect`/`shell_notify`、`shell_reader_register`/`shell_reader_unregister`、`message`、`ssh_config`）。
 
 `--mcp-defer-tools` 才开启该标记，**默认关闭**：
 
-- **默认**——全 31 个工具连同完整 schema 一次列出。这是所有不支持懒加载的客户端所需要的，包括经 AxonHub 这类网关访问 termcp 的 Codex（网关可能丢掉 `defer_loading` 标记）。标记一旦丢失，这些工具无法再按需拉取，只会从模型视野里直接消失。
+- **默认**——全 31 个工具连同完整 schema 一次列出。这是所有不支持懒加载的客户端所需要的，包括经 AxonHub 这类网关访问 Termcp 的 Codex（网关可能丢掉 `defer_loading` 标记）。标记一旦丢失，这些工具无法再按需拉取，只会从模型视野里直接消失。
 - **`--mcp-defer-tools`**——19 个低频工具带上 `defer_loading`；12 个核心工具保持立即可见，使 `session_start → shell_input → shell_output` 主循环永远不需要先搜工具。支持按需加载的客户端（mcp-go 系、Claude Code）只为自己真正用到的 schema 付费。
 
 两种模式都是同样 31 个工具：开启开关从不删除工具，只影响首次列表是否附带 schema。
@@ -515,19 +515,19 @@ MCP 客户端在 `tools/list` 时会拉取每个工具的 JSON Schema，工具�
 ## 已知限制与安全模型
 
 - **文件与转发操作需活跃连接**：在已关闭（DEAD）的会话上调用文件或转发工具将返回 `session_not_running` 错误码；终端输出仍可通过 `shell_output` 读取，且会话转入 DEAD 时其端口转发会自动级联关闭。
-- **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
+- **Basic 认证在局域网外需要 TLS**：浏览器登录框走 HTTP Basic，凭据只是 Base64 编码。把 Termcp 暴露到可信局域网之外时，请在前面部署终止 TLS 的反向代理；静态 Token 本身不会被写入日志，也不会出现在 URL 中。
 
-### 🚨 安全边界：termcp 不负责安全防范（它只是管道，不是杀软）
+### 🚨 安全边界：Termcp 不负责安全防范（它只是管道，不是杀软）
 
-> **核心原则：termcp 是纯透明的终端字节管道（Byte Pipe），绝不是杀毒软件（Antivirus）、EDR 或应用防火墙；安全防线必须由调用方建立在 AI 输出端与业务网关。**
+> **核心原则：Termcp 是纯透明的终端字节管道（Byte Pipe），绝不是杀毒软件（Antivirus）、EDR 或应用防火墙；安全防线必须由调用方建立在 AI 输出端与业务网关。**
 
-termcp 具备与系统真实终端完全一致的自由度与控制力。**作为底层管道，termcp 既无能力、也不可能替你判定执行内容的安全性**：
+Termcp 具备与系统真实终端完全一致的自由度与控制力。**作为底层管道，Termcp 既无能力、也不可能替你判定执行内容的安全性**：
 
-- **无法防范“上传并执行”恶意行为**：AI 可以通过 Base64 解码、分段追加写入文件、或调用系统现成的 `curl`/`wget` 从外部拉取脚本或二进制 Payload 并赋予执行权限。**termcp 是数据流通道，不是病毒查杀引擎**，它不可能去扫描流经管道的每个字节是不是木马。
+- **无法防范“上传并执行”恶意行为**：AI 可以通过 Base64 解码、分段追加写入文件、或调用系统现成的 `curl`/`wget` 从外部拉取脚本或二进制 Payload 并赋予执行权限。**Termcp 是数据流通道，不是病毒查杀引擎**，它不可能去扫描流经管道的每个字节是不是木马。
 - **无法通过简单正则断定命令意图**：危险指令可以通过各种方式混淆（变量切片拼接 `a="rm -"; b="rf /"; $a$b`、动态 `eval`、`printf` 展开、环境变量替换、甚至写入临时文件后执行）。在 PTY 视界中，一切输入都只是合法的键盘敲击序列，底层管道无法区分这是“混淆攻击”还是“正常的前端/运维脚本”。
 - **安全防线必须前置在 AI 输出端**：
   - 调用方（宿主、Agent 框架）必须在 AI 触发 `shell_input`、`file_write` 等操作**之前**，于外部部署 Guardrails、敏感词审查、高危命令合规拦截或安全大模型。
-  - **关键操作坚持人工在环（Human-in-the-loop）**：termcp 提供了 Web UI 实时同屏与一键接管机制。遇到 `sudo`、破坏性指令、格式化、不可逆数据修改等操作时，切勿在无人值守的生产环境完全信任 AI，请务必人工介入确认。
+  - **关键操作坚持人工在环（Human-in-the-loop）**：Termcp 提供了 Web UI 实时同屏与一键接管机制。遇到 `sudo`、破坏性指令、格式化、不可逆数据修改等操作时，切勿在无人值守的生产环境完全信任 AI，请务必人工介入确认。
 
 ---
 
@@ -552,4 +552,3 @@ termcp 具备与系统真实终端完全一致的自由度与控制力。**作�
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=0:2786FF,100:6E4AFF&height=110&section=footer" width="100%" alt="footer">
 </p>
-

@@ -4,64 +4,33 @@
 
 ### Breaking
 
-- **输出改为按字节偏移追加的 `log.bin`，旧布局不再读取**：不再按条（message record）存储输出，每个 shell 的输出落成一个追加文件，字节的偏移量就是它的文件位置，不需要再从记录长度反推。布局改为 `sessions/<session_id>/{manifest.json,<shell_id>/{manifest.json,log.bin,log.jsonl}}`——`log.bin` 是唯一真源，`log.jsonl` 只记「谁、何时、从哪个偏移开始」的状态标记（`o` 输出 / `a` Agent 输入 / `i` 人工输入）。会话列表由目录树导出，不再有第二份可漂移的副本（`sessions.json` 与 `messages/` 移除）。`docs/design/session-storage.md` 记录了取舍：旧的磁盘布局**不读、不迁移、不清理**——旧目录原地不动，其中的会话不会出现在 `session_list` 里。设计说明见 `docs/design/session-storage.md`。
-- **终端字节以普通 JSON 字符串传输，不再是 base64**：WS/REST 帧本来就是标准 JSON，`encoding/json` 两侧都已还原文本，base64 只是把刚解码的内容再编码一次（一次按键要经过 xterm → TextEncoder → base64 → JSON → base64 解码）。**客户端必须停止对 `d` 做 base64 解码**。代价：JSON 字符串无法表示非法 UTF-8 字节序列，这类输出可能显示为 U+FFFD（Windows ConPTY 在 termcp 见到之前就已替换；Linux 下 `cat` 二进制数据会出现）。`log.bin` 本身不受影响，只有传输表示是有损的。
-- **删除 `GET /api/connection-templates`**：它只服务于 Web UI 新建连接表单的预填，现在模板由前端自己持有；服务端不再携带一份它从不写入磁盘的文本。
+- **会话输出改用追加式字节日志**：每个 shell 现在以 `log.bin` 保存终端看到的完整字节流，并以 `log.jsonl` 记录来源、时间和偏移；会话与 shell 列表直接从 `sessions/<session_id>/<shell_id>/` 目录树派生，不再维护 `sessions.json`、`messages/` 等重复索引。旧布局不会迁移、删除或继续读取，因此升级后旧会话不会出现在 `session_list` 中。所有时间戳统一为 Unix 毫秒；`message` 工具只保留 `action="list"`，内容改由 `shell_output` 按 offset 读取。
+- **终端传输不再使用 base64**：WebSocket 与 REST 响应中的 `d` 现在是普通 JSON 字符串，客户端必须停止 base64 解码。磁盘上的 `log.bin` 仍保留原始字节；只有传输层遇到非法 UTF-8 时会显示为 U+FFFD。
+- **删除 `GET /api/connection-templates`**：新建主机表单的默认模板由 Web UI 自己维护，服务端不再提供该端点。
 
 ### 新功能
 
-- **审阅模式（会话级，终端写入）**：会话可单独开启审阅，覆盖其**全部** shell 频道。开启后 AI 的写入不直接落字节，而是进入终端的审阅面板，由人在 Web UI 点 Accept / Reject 裁决。**范围明确限定为终端**：文件传输与端口转发尚未纳入（需要时再做细粒度），文档与面板文案都不把它说成覆盖一切。
-
-  - **单一审阅者，一人一票**：谁开启审阅谁就是审阅者，一次批准即执行。**没有审批人数，也不采集名字**——termcp 单 token 认证，无法证明点击者是谁；自报的名字在审计里看着像身份、实际什么都不是，靠名字凑出来的「2 人门槛」也只是看起来像第二意见。审计记录为 `local`，即服务端真正知道的事：这个请求是经由本部署被接受的。等按人发凭据（JWT）之后再引入阈值才有意义，那时再加。
-  - **队列的单位是「命令行」，不是按键**：MCP/`REST` 的 `shell_input` 先**暂存**文本，`shell_key` 才提交——因为人类要审的是**一条完整命令行**，而「文本」和「结束它的回车」是两次调用。分开审有两个错：一条命令要审两次；可以批了文本、拒了回车，在 shell 里留下半截命令。没有暂存文本时，键自身就是一条（裸 `ctrl+c` 中断进程、裸 enter 执行空行，都该被人看到）。暂存按 shell 隔离；关闭或重开审阅时**丢弃暂存**——它从未成为可审对象，带进下一个策略就是没人看过的输入偷偷复活。
-  - **AI 无法自批（删掉了 `approval` MCP 工具）**：此前存在一个 `approval` 工具，理由是「headless 环境没有浏览器」。这条理由本身是错的——**AI 能批准 = 审阅不是门禁而是仪式**，被拦住的 agent 自己调一次 approve 就过去了，不需要任何人类参与。整个工具已删除：AI 提交后收到 `{ok:true, approved:false, review_pending:true}`，**不含 `pending_id`**（Agent 无权裁决，给 id 只会诱发重试循环），继续干活即可，需要知道结果就事后读 `shell_output`（命令跑了或没跑一目了然）。裁决只在 HTTP（`POST /api/approvals/{id}/approve|reject`，**空 body 即可**），等 JWT 到位后按人配权限。
-  - **闸门跟的是「面」，不是「字节」：只拦 AI（MCP），不拦人（WebSocket / REST）**。这是本轮最大的语义修正：上一版把 WS 字符流直接丢弃，结果是**人一开审阅就被关在自己的终端外面**——看着命令在跑却按不了 `Ctrl+C`，这不是「审阅 AI」而是锁人。判据不是新发明的：代码里本来就有 `InputFromAPI`（“a human typing through the HTTP/WebSocket API”）与 `InputFromAI`（“an AI agent driving the shell through MCP”），只是闸门挂错了地方。现在规则是：**MCP 是 AI 的面，WebSocket 与 REST 是人的面**。REST 尤其不能拦——Web UI 的文件浏览器就是建在 REST 上的（8 处调用），拦它等于把人自己的工具也锁了。这不是漏洞：拿着部署 token 的人本来就能直接批准自己的请求，闸门防的从来不是他，而是**无人看着时 agent 对主机做的改动**。相应地删掉了 `[approval mode] typing is disabled` 提示（打字能用了，那句话就是假的），`websocket_input` 字段改为恒为 `true`（它回答的是“我能打字吗”，答案是能）。
-  - **文件传输与端口转发纳入同一个闸门**（此前只有终端）。理由与上一条相同：能改主机的三条路（终端、文件、转发）必须全盖上，**有洞的闸门比没闸门更糟**，因为它读起来像保护。队列因此泛化：`Request` 新增 `Kind` / `Summary` / `Payload`，`Submit` 改为接收一个 `Submission`（`SubmitShellInput` 保留为命令行入口）。**操作类请求存的是工具名 + 原始参数，批准时回到同一个 handler 重放**——这样 SFTP 与转发只有一份实现，闸门不需要（也不应该）知道怎么写文件；一个 `context` 标记区分「重放」与「新调用」，避免重放时再次入队。**只读操作不入闸**（`file_read` / `file_stat` / `forward list` 等）：让审阅者批准一个目录列表，会训练他习惯性点 Accept，而那正是闸门失效的方式。摘要必须写清楚对象与规模（`write 1.2 KB to /etc/hosts`），因为**看不懂的请求就是无法裁决的请求**。面板对操作类显示摘要 + kind 标签，命令行仍显示命令文本。
-  - **审计落盘复用 `log.jsonl`**：新增两个开放集状态 `q`（在某偏移请求审阅）与 `A`（已批准输入在此写入）。被拒/过期/取消的请求在日志里停在 `q`——其后本就没有字节，重放时即可区分「过审的输入」与「从未过闸的输入」。
-  - **接口与清理**：`TerminalShell` 接口与 `Session.SendInput`/`SendTerminalBytes*` 一并删除——`*Session` 实际从未被当作 terminal 使用，留着就是绕过闸门的第二条写路径；写入收窄为唯一处 `ChildShell.SendTerminalBytesFrom`。
-  - **审阅开关从页脚移到标题栏，且只放一个图标（锁）**：开关的位置一直在说错话——页脚是「每个 shell 的通道标签」，而审阅管的是整个会话。更重要的是，**旧位置在 Files / Forwardings 两个标签上是坏的**：按钮与队列面板都住在 `.shell-terminal-wrap` 里，而切标签时 `terminalWrap.style.display = 'none'` 把整块隐藏，于是**恰好在这两个现在需要审批的标签上，开关和整个队列一起消失**——人在 Files 标签上根本看不到有东西在等他批。实测（headless Chrome，`elementFromPoint`）确认。现在按钮是标题栏里一个 26px 的锁（闭合=开审阅、琥珀色；打开=关；后一轮挪进标签条，见下条），**计数不再挂在这个按钮上，而是挂到 pane 标签上**：待批的文件写入给 Files 标签挂红点、转发给 Forwardings、终端输入给终端标签。一个「1」挂在一个按钮上只能说「某处有东西在等」，挂在标签上才说出**该打开哪一面**。标签徽标由 JS 按需创建（两个窗口模板 + 注入的 Notifications 标签共用一个 tab 栏，写进三处模板就是三处要同步），且 `position:absolute` 挂在图标角落，**不改变标签宽度**——请求到达时标签变宽会推开同一行所有标签，而这一行已经是最挤的一行。面板则移出 `.shell-terminal-wrap`，改挂 `.shell-window-content`（其 `position:relative` 即为此），**因此在文件与转发标签上依然可见**。
-  - **审批通知点击后直接弹出审批面板，而不只是跳到会话**。原来点击只做 `focusSessionWindow`（打开/还原/展开/置顶窗口），人到了终端还得自己找队列——而这一步正是这个点击要省掉的。现在 `showUiNotify` 认一个 `open_review` 旗标（`approval.js` 单独开启），点击先聚焦会话、再对那个窗口 `setReviewSheetOpen(w, true)`；**要等窗口建好**：会话还没有窗口时是这次聚焦把它创建出来的，面板不可能在此之前打开，所以对 `_placeholder` 有等待重试。最小化那一种最要紧——那种情况下通知往往是「有东西在等你」的唯一信号。**实测**：无窗口 + 最小化两种状态，点击后窗口都在、面板都开着、队列都读到了条目；**负控制**：把 `open_review` 的实现体改成空操作 → Go 测试与浏览器探针同时 FAIL「did not open the review panel」。
-  - **修复：队列行互相嵌套（每行把上面所有行都包进去了）**。`renderApprovalItem` 的返回表达式里有一个**多写的 `+`**（`'</div>' + +`），而 `x + + y` 对字符串来说就是 `x + y`——**静默拼接，不报错**。代价是每个 item 少一个闭合标签，第 2 条于是嵌进第 1 条、第 3 条嵌进第 2 条……渲染出来就是「每个都嵌到上面那个里面」。**负控制把画面精确复现了**：把那个 `+` 放回去，实测 row1 含 4 个 `.approval-row`、row2 含 3 个、row3 含 2 个，第 2 行出现 6 个按钮。新增的浏览器探针断言「每个 item 必须是队列的直接子节点、每个 item 恰好 1 个 head + 1 个 row + 2 个按钮」，这类静默拼接因此不会再靠肉眼发现。
-  - **修复（严重）：批准文件传输 / 端口转发「报告失败但什么都没发生」**。shell 命令能执行，文件和转发一律 409 `approved but execution failed: shell  is no longer attached`（注意 `shell ` 后面那个空 id）。根因是 `executeApproved` **对所有 kind 都先 `GetChildShell(req.ShellID)`**，而操作类请求的 payload 只有 `session_id`、没有 `shell_id`，于是查空 shell 直接失败、**根本没走到操作重放**。`ExecuteOperation` 这个钩子在 `handler.go` 声明、在 `main.go` 接好，**却从来没被调用过**。现在按 kind 分流：命令行走 shell 路径，操作类走 `ExecuteOperation` 重放；没有 MCP server 的部署则明确报「本部署不能执行该操作」，而不是含糊失败。**为什么测试没抓到**：MCP 侧测试直接调 `ExecuteApprovedOperation`，跳过了这个 dispatcher；bug 正好活在两份测试覆盖范围的**缝里**。新增 `TestApprovedOperationGoesToTheOperationExecutor` 与 `TestApprovedShellInputStillUsesTheShellPath` 跨过这道缝（前者断言 200 且执行器收到请求，后者断言命令行不会误入操作执行器）。**负控制**：把分流删掉 → 测试报出与你看到的**一模一样**的 `shell  is no longer attached`。**真实端到端**：批准一条 `file_write` 后 `cat /tmp/probe.txt` 输出 `approved-ok`（与我入队的内容一致）；批准一条 `forward_open` 后转发列表出现 `status=active`。
-  - **修复：审批通知的 content 显示 `(empty)`**——根因是**逻辑重复**，不是缺个分支。`approvalSummary`（给 toast 生成一行描述）自己从 `Text`/`Keys` 重算了一遍描述，而这套重算在 `approval.ShellInputSummary` 里已经有一份。文件传输和端口转发**两者都没有 Text/Keys**（它们带的是 `Summary`，也正是面板显示的那句），于是每条操作类通知都弹字面的 `(empty)`：告诉你有东西在等，却不说是什么。命令行通知正常，所以只有文件/转发才现形。**修法不是加分支、也不是把它改成空白，而是删掉重算**：`approvalSummary` 现在就是 `return req.Summary`。这可行的前提是 **`Submit` 已经强制 summary 非空**（`"a request needs a summary a reviewer can read"`）且它是唯一构造器（队列是纯内存的，没有反序列化路径），所以那个 `switch` 整段是**死代码**、`(empty)` 不可达。**故意不留 fallback**：空白比 `(empty)` 更糟——它看起来像渲染故障而不是「缺描述」，会把 bug 藏起来；这种情况由 `Submit` 的报错拦截。**负控制**：把 `Submit` 的 summary 校验删掉 → 测试 FAIL「Submit must refuse a request with no summary」；把重算加回去 → 真机 toast 复现 `"message": "(empty)"`。
-  - **修复：小红点从 pane 标签挪回锁图标**。上一版把计数分别挂到 Shell / Files / Forwardings 标签上，想在标签上说出「哪一面在等」。**实际用起来是错的**：那几个标签显示的是文件列表和转发列表，**不是队列**——点进去什么也看不到，于是红点成了一个兑现不了的承诺，只会训练人忽略红点。现在计数只挂在锁的角上（`position:absolute`，不吃锁的 26px），而**锁正是打开队列的那个控件**。会话标签栏上的红点保留：那是另一块面，最小化窗口的锁是 `display:none`，那里是它唯一能说自己有东西在等的地方。
-  - **手机上要加锁，就不跟会话名抢宽度：锁放进标签条，标签条横向可滚**。上一版是「手机上不放锁、审阅塞进会话菜单」——那是**在锁与标题并排**的前提下唯一正确的答案（320px 下把会话名压成 0 宽、标签栏压在锁上导致点不到）。锁挪进标签条后这笔账变了：标签条是标题栏里**可以让步的那一段**（`flex: 0 1 auto` + `min-width: 0` + `overflow-x: auto`），它带着锁和四个 pane 标签一起横向滚动，名字则被自己的 `overflow: hidden` 裁掉、不再被压成零。**实测 320px 下名字仍有 108px 可见文字**（旧布局 0px），锁 26px 在、可点、面板可开；滚动条隐藏（34px 高的行放不下它，会吃掉它要触达的图标）。**负控制**：标签条改回 `flex-shrink: 0`（不滚）→ Go 测试与真机探针双双 FAIL「strip is not scrollable」；把锁挪回标题栏旁边 → Go 测试 FAIL「must not sit in the title cluster」。
-  - **Notifications 标签页空是设计如此，现在把它说清楚了**。这个标签列的是 **wake-up 规则**（`notify` 工具通过 `/api/notifications` 注册的），**不是**角落里的 toast，两者是不同的东西。空面板旁边就飘着一个刚出现的 toast，读起来像 bug，所以空状态现在写明「No wake-up rules for this shell」并补一句两者区别，标签标题也从 `Notifications` 改为 `Notify rules`。
-  - **删掉页面级工作台（横幅里的 Approvals 按钮 + `modal-approvals`）**：裁决永远是「某个 session 的某一条命令行」，而终端本身就说明了是哪个 session；一个先问「哪个 session」的弹窗是在问终端已经回答过的问题。计数与队列因此合并到一条读路径：每次读队列都顺便更新所有计数徽标（`approval.js` 的 `keepApprovalCounts`），不再有第二处 `/api/approvals` 渲染器。
-  - **最小化 / 未打开窗口也能看见待审**：终端最小化后 `display:none`，面板和页脚计数都看不见，因此在**会话标签页（底部 tab 栏）上加红色计数徽标**（会话卡片上也有 `N awaiting review`）。**徽标由 tile 自己渲染**：网格在每个 session 帧都整体重建，而提交请求正好发一帧（manager 的列表变更广播），只靠事后一遍涂色会被这一帧擦掉——实测 tab 显示 `1` 而卡片是空的；因此计数随卡片一起生成，重渲染自带徽标。WebSocket 一连上就先读一次队列，因为那些请求的推送事件发生在本次加载之前。
-  - **裁决即执行，且执行失败会说出来**：批准的那次调用负责写字节，写失败返回 `409` 并说明，而不是报告成功却什么都没发生。
-  - **命名键显示为 chip，但 `Enter` 不显示**：Enter 是结束命令行的那个键，它永远不变，而请求本身就是一条命令——每行都挂一个 `Enter` 是噪声。真正携带信息的键照旧显示（也许人无法从文本推断）：`Ctrl+C` 中断进程、`Tab` 补全、方向键移动光标。只有 Enter 一条的请求因此不显示任何 chip。
-  - **修复：已死会话仍可被批准（会谎报 `approved`）**。`Terminate` 不跑 `finalize`，因此注册在 scope 上的清理不执行，pending 请求留在队列里：之后批准会**成功**并把状态记为 `approved`（审计记 `A`），但字节被写路径的存活检查拒掉——审计里于是留下一条「已批准」而实际什么都没跑。现在 `beginClosing()` 关闭审阅（在释放 `shellStateMu` 之后调用，避免与该文件既有的 `shellStateMu → s.mu` 顺序互锁），pending 一律作废，fail-closed。回归测试覆盖「会话死亡后 pending 必须终止」「死亡后批准必须不再执行」。
-  - **修复：门开着却显示 `Review: off`**。窗口状态原先只从页面缓存的会话快照里播种，而快照对「本页加载后才创建、随后被开启审阅」的会话没有条目——窗口渲染成未开启，前端于是照常转发按键，服务端（正确地）全部丢弃：现象就是「不点 Approve 也能输入，但没反应」，两端都不报错。现在播种后**回读服务端权威状态** `/api/sessions/{id}/approval` 覆盖，读失败则保留原状态（绝不解锁 UI）；`finalizePendingShellWindow`（本页创建会话走的路径）也补上了播种，此前它完全没设 `_approvalMode`。回归测试 `TestApprovalStateIsReadFromTheServerNotOnlyTheSnapshot` 钉住调用点（负控制：删掉调用或删掉创建路径的播种都会 FAIL）。
-  - **清理：审核面板不再有死的撰写区**。面板改为开关 + 队列后，`modal-approval-compose` 弹窗、键码面板、`openApprovalComposer`、`submitReviewComposition`、`toggleSessionApprovalForWindow` 全部删除；`approval.js` 只留下裁决与队列渲染（并保留 `keyLabel` 用于把 `ctrl+c` 渲染成 `Ctrl+C`，未知键回退为原样显示，绝不出现空白 chip）。
-  - **边界（明确写出，避免虚假安全感）**：审阅对象是**输入串与操作参数，而非解析后的语义**（`shell_input("rm -rf / ; ls")` 是一条审阅、两条命令，不做 shell 语法解析）；**读类操作不在闸门内**（列目录、读文件、列出转发）；MCP `session_start(command=…)` 不在本次闸门内（生产准入由后续 entry 标签 + JWT 决定）；**不拦人**——拿着 token 的人可以直接调 REST 绕过闸门，也能直接批准自己的请求，因此这个闸门防的是无人负责时 agent 的改动，而不是有权限的操作者。
-
-- **窗体四角均可拖动改大小，去掉右下角画出来的三角**：原先那个 30×30 的角标 `z-index:30` 浮在同样 30px 高的页脚之上，正好吃掉页脚最右端控件的点击（按钮渲染正常但点不到）。现在**整个角**就是拖动区、不画图标，因此既没有图标可挡、也无需为它预留空间（`--shell-resize-corner` 与页脚预留 padding 一并移除）。西北/东北/西南角拖动会同时调整 `left`/`top` 与尺寸，而不是只改尺寸。**光标按对角线而非按轴分组**：`nw`/`se` 是 `nwse-resize`，`ne`/`sw` 是 `nesw-resize`。改前把左侧两个错归为同一组，于是**悬停时**光标反向、**按下拖动后**又变对（`ui-socket.js` 的拖拽光标表本来就是对的）；现在一个角一条 CSS 规则、三个属性写全，分组错误无处可藏，回归测试同时钉住 CSS（悬停）与 JS（拖拽）两侧。
-- **修复：手机端左上角会话切换菜单不实时**。该菜单原先列的是**本标签页已打开的窗口**（`liveSessionWindows()`），而不是服务端会话列表——于是从别的终端（或别的设备）创建的 session 虽然已经在服务端、也已经出现在会话卡片网格里，却因为这里没有窗口而永远不出现在菜单中。现在改为读服务端推送的会话快照（`window._lastSessionsSnapshot`，本就随 WebSocket 每次变更下发），因此增删都是实时的；选中一个尚无窗口的会话会**打开**它（与点击卡片同一条入口 `focusSessionWindow`），DEAD 会话以只读方式列出（与卡片网格保持一致，标注 `· dead`），不再被静默省略。顺带删除已无调用者的 `liveSessionWindows()`。
-- **通知卡片可点击，直达那个会话**：带 `session_id` 的通知卡片成为 `role=button`（可 Tab、Enter/Space），点击走 `focusSessionWindow`——它同时覆盖「尚未开窗」「最小化」「折叠」「平铺」四种状态，因此不必在卡片里重写一套开窗逻辑；关闭按钮自己 `stopPropagation`，点它只关不掉进去。
-- **连接可设审阅默认（`default_approval`）**：profile 上新增一个开关，开了以后**从该 profile 创建的会话一开始就是审阅模式**，不需要人再去点一次。开关放在 connection 上而不是 session 上，因为「要不要审」是关于**主机**的决定：生产机的理由从一开始就存在，而“每次 `termcp://entry` 启动后再去翻一遍开关”正是会忘的那一步；尤其对 Agent 自己创建的会话，忘了翻就等于没开。
-  - **缺席 = 关，不 = 开**：未设该字段的 profile 不审（`EffectiveApproval(nil)` 也为 false）。缺字段被当成“开”会把从没要求审阅的会话默默闸住，这个方向的错误更贵；profile 加载失败时同样不解锁也不上锁，由调用方自己决定。
-  - **只影响创建，不影响已运行会话**：在创建那一刻开启（`session.Config.Approval` → `EnableApproval(1, 0)`），之后与手动开的审阅**完全同一条路径**（同一个 queue、同一个 UI 帧、可随时关掉）。不设 timeout：profile 只说“要不要审”，不说多久过期——审核中的请求自己过期，比一开始不闸更糟。
-  - **edit 用“字段是否存在”而不是真假**：传 `default_approval: false` 是关掉，不传是保持原值，因此改一个无关字段不会顺手把审阅关掉。表单里是复选框 + 一句说明，卡片上符合的 profile 挂一个**闭合锁**（与会话卡片的锁同一个字符，同一形状只表示一件事）；不勾时不写 `default_approval = false`——默认值不写进给人读的文件。
-  - **`internal` 也可配置（存为覆盖文件，缺席即用默认）**：内置 loopback profile 不再是只读常量。它的设置存于 `ssh_configs/.internal/config.toml`（点开头，所以不会被 profile 列表扫到），`Load` 先取内置默认再叠加该文件——**TOML 只写文档里出现的键，于是「缺席保留默认、存在则覆盖」是白送的**，改一个字段不必重述 kind/description。`kind` 不允许改成 remote：那个名字就代表内置连接，把 `internal` 指向外部是个陷阱。配置损坏时报错而**不回退默认**——回退会让用户明明要求了闸门却跑出未闸门的会话，这是唯一绝不能倒的方向。UI 上它可编辑（表单隐藏 host/凭据/jump，loopback 不用这些），但不可改名、不可删除。
-
-- **手机端全屏终端（触屏设备）**：手机上的终端此前是 640×480 浮窗，只占 57% 屏幕，横屏时整个挂到屏幕外。触屏设备现在使用全屏终端（RFC 的 full-screen layer），桌面端浮窗/平铺/拖拽行为完全不变。
-  - **手机判据是触控能力，不是宽度**：`pointer:coarse` + `hover:none`。横屏手机宽约 844px，`max-width:768px` 判不中，于是既不进全屏也不隐藏 tab 栏，留下一个浮窗压在浮动栏下面。
-  - **几何来自样式表，不来自 inline**：JS 会清掉它自己写过的 inline `width`/`height`/`z-index`——inline 值压得过媒体查询，这条是实测（给元素写 inline 640px 后，媒体查询命中仍保持 640px 宽）。
-  - 新增 `resize`/`orientationchange` 重算（旋转会跨过手机判据边界，inline 几何否则会存活下来）；`maximize` 改用 `100dvh`（iOS Safari 的 `100vh` 含收起的地址栏，会切掉终端底部）；触屏上不显示最大化开关（双击是缩放手势）。
-  - 随之修掉的一批触屏缺陷：`[−]` 之前调用 `closeShellWindow`，把窗口销毁（xterm 释放、监听摘掉、节点移除），此后点会话卡片再无反应——现在只加 `.win-minimized`，`restoreShellWindow` 还原；全屏窗口之间无法互相抬升（样式表给每个全屏窗口同一个 `z-index: 21000`），顶位改为「移交」而非「递增」，上限固定，不会爬过抽屉的 24000。
-- **手机端首页：entries 变左侧抽屉，会话先到首屏**：22 个连接排成网格约 1960px 高，用户自己的会话要滚过 **2081px** 才出现——两屏才能到目的地。触屏上 entries 改为左侧滑入抽屉，由区段标题自身开启（不额外加汉堡键），带 scrim、safe-area 内边距，点卡片/scrim/Escape/回到桌面宽度都会关闭；会话区段标题 **2081px → 117px**。entry 卡片在手机上撑满整行；「新建连接」从标题栏按钮改为末尾的虚线卡片（原来的绑定写在顶层，元素缺失会在那里抛错，导致其后所有初始化都不执行——症状是零 entry 卡片，而不是少一个按钮）。
-- **区段加载横幅移出可折叠区段**：两个横幅此前挂在区段 body 内，而两个容器都会隐藏内容——`#sec-entries-body` 在触屏上是滑出屏幕的固定抽屉（点卡片就关），`#sec-sessions-body` 折叠时是 `display:none` 且折叠状态持久化在 localStorage（可以永久折叠）。于是「连接失败」与「已断开，正在重连」恰好写在用户最需要读的时刻被藏起来。现在两者都放在页面列顶部，位于它们所报告的区段之前，并带关闭按钮。
-- **会话卡片：把操作放到它作用的对象上**：卡片上 id 旁的铅笔读起来是「编辑 id」，实际是重命名会话；复制按钮是紧挨着 id 的第二个目标，而 id 本身就是你要瞄准的东西。现在**名字**是重命名控件，**sid** 是复制控件（各自带 `role=button`/`tabindex`/Enter/Space），铅笔与独立复制按钮随之移除；状态从名字旁的 `dead` 文字徽标改为 id 左侧的指示灯（绿=运行、红=已退出，原因仍在 tooltip），用 7px 的 CSS 圆点而非图标，以保持行高不变、让 id 始终是那一行的阅读重点；选择复选框从图标左上角（读起来像属于图标）移到名字所在行。名字行把复选框与名字**作为一组**居中：名字盒若为 `flex: 1 1 auto` 会撑满剩余宽度，`gap` 就不起作用（实测视觉间隙 42px，而 CSS 里写的是 4px），改为 `flex: 0 1 auto`（保留 `min-width: 0` 以便长名字省略号生效）后两个元素才真正相邻。
+- **复核模式：Agent 写入前由人审批**：可按会话开启，覆盖该会话的全部 shell。开启后，Agent 经 MCP 发起的终端输入、文件写操作和端口转发变更都会先进入复核队列；读取操作以及人通过 WebSocket / REST / Web UI 发起的操作不受影响。
+  - `shell_input` 先暂存文本，`shell_key` 再把文本与结束键合成一条完整命令行，避免把一次命令拆成多次审批；裸 `Ctrl+C`、`Enter` 等按键仍可独立进入队列。文件与转发请求显示可读摘要和操作类型。
+  - 每个请求由一名复核者批准或拒绝；AI 不能自行审批，也拿不到可用于审批的 `pending_id`。批准会立即执行原操作，执行失败返回 `409`；拒绝、过期、关闭复核或会话结束都会 fail-closed，未执行内容不会在之后恢复。
+  - 复核面板由终端标签条中的锁打开，锁、会话标签和会话卡片都会显示待复核数量；点击审批通知会直接聚焦对应会话并打开面板。手机端标签条可横向滚动，复核入口不会挤掉会话标题。
+  - 终端输入的复核状态写入对应 shell 的 `log.jsonl`（`q` 表示进入队列，`A` 表示批准并写入）；Agent 可用 `shell_notify` 等待审批结果，无需轮询。
+  - 连接配置新增 `default_approval`，可让由该配置创建的会话默认开启复核，包括 Agent 创建的会话。内置 `internal` 配置也可保存这一覆盖项；未配置时默认关闭，损坏的覆盖文件会报错而不是静默放行。
+  - 复核的边界是 MCP 写操作，不解析 shell 语义；`session_start(command=…)` 当前仍不进入复核队列。
+- **Web UI 支持三种语言**：新增 English、简体中文和繁体中文（台湾用语），首次访问按 `navigator.languages` 选择，也可在标题栏切换并持久化为 Auto / ENG / 简中 / 繁中。切换语言不会刷新页面、重新请求列表或重建正在运行的终端。
+- **触屏端专用工作区**：手机和平板按触控能力识别，终端使用全屏布局并适配旋转、动态视口和安全区；标题栏提供主机抽屉与实时会话切换。主机列表改为左侧抽屉，会话区直接出现在首屏，新增主机入口位于列表末尾。
 
 ### 改进
 
-- **Web UI 拆成可独立缓存的模块**：`index.html` 原本是一个 **252 KB** 的单文件，标记、CSS、脚本全部内联，每次浏览器加载都要重取全部内容。现在拆成薄页面 + 独立资源：`index.html` **252625 → 21578 B**，原内联 `<style>` 落为 `static/css/app.css`，逻辑按功能域分成 **8 个** `static/js/*.js` 模块。原代码是单个 IIFE，而按文件拆分的 IIFE 无法共享作用域，因此去掉包装，顶层 `var`/`function` 声明成为所有模块可见的全局量（拆分前已核对：全部 201 个顶层声明都是 `var`/`function`，无 `let`/`const`、无重名、不与 window 内建或 xterm 导出冲突、无跨文件加载期前向引用）。无 Go 改动，行为不变（HTML body、JS body、CSS 各自与拆分前逐字节比对，并与拆分前的构建在 4 个视口做 A/B：DOM、计算样式、交互、布局一致）。
-- **文档补全**：`docs/api.md` 记录新的传输编码及其唯一取舍；`docs/design/session-storage.md` 记录字节日志模型与旧布局策略；新增 `docs/design/mobile-terminal.md`（移动端目标、21 条实测陷阱、执行计划与残余风险——含「真实 iOS Safari 与微信/XWebView 未在真机验证」）。
+- **Web UI 导航与窗口交互**：桌面会话标签栏可拖动并记住位置；终端窗口初始尺寸会限制在视口内，四角均可调整大小。触屏端可在未开窗、最小化、折叠和全屏状态之间可靠地切换、恢复并置顶会话。
+- **会话卡片语义更直接**：点击名称即可重命名，点击 session ID 即可复制；运行状态改为 ID 左侧的绿/红指示灯，选择框与名称归为一组。带 `session_id` 的通知支持鼠标和键盘直达对应会话。
+- **错误信息始终可见**：连接失败和 WebSocket 重连提示移到可折叠区段之外，并可单独关闭；即使主机抽屉已收起或会话区已折叠，也不会隐藏关键状态。
+- **前端资源模块化**：原本约 252 KB 的单文件 Web UI 拆为精简 HTML、独立 CSS 和按功能划分的 JavaScript 模块，便于浏览器分别缓存；同时删除无入口且与终端内 Files / Forwardings 重复的旧工具面板。
 
 ### 修复
 
-- **`between()` 不再静默降级（测试工具）**：CI 在 Windows 上 checkout 后资源文件是 CRLF，测试用 `"\n}\n"` 切片取函数体，终止符永不匹配，而 `between()` 不是失败而是返回**文件剩余全部内容**——于是该切片越过自己的收尾括号、吞掉下一个函数，断言在最小化绑定里看到了销毁路径，报出一个并不存在的 bug。现在各资源统一以 LF 读取（复用 `normalizeNL`），且 `between()` 在终止符缺失时直接判失败：无法定界的切片是断言写坏了，不是「范围更宽」。
+- **SSH 客户端断开后不再遗留子进程**：内部 SSH 会话会在连接上下文结束时终止仍在运行的 child process，避免泄漏进程、goroutine 和 Windows PTY 句柄。
+- **修复触屏端会话恢复与层级问题**：最小化不再销毁终端；全屏窗口可正确置顶；会话切换菜单使用最新服务端快照；主机编辑弹窗、加载提示和新增主机卡片在窄屏下保持可见、可点。
 
 ## v0.2.1 — 2026-09-20
 
@@ -86,7 +55,7 @@
 
 - **单一静态 Token 的 HTTP 认证**：新增 `internal/auth` 包 + 共享 mux 外层中间件，一次覆盖 Web UI、REST、MCP SSE、`/stream`、WebSocket。配置 `--auth-token` / `TERMCP_AUTH_TOKEN`（明文）或 `--auth-hash` / `TERMCP_AUTH_HASH`（`sha256-<salt_hex>-<digest_hex>`，`digest = SHA256(salt || token)`，服务端不落明文），二者互斥、flag 优先于环境变量。凭据按序尝试 `Authorization: Bearer` → `Authorization: Basic`（密码字段即 token，用户名忽略）→ `termcp_token` cookie（Basic 成功后自动下发：HttpOnly、SameSite=Strict，TLS 下带 Secure；解决浏览器 WebSocket 握手无法自定义请求头的问题）；全部失败返回 `401` + `WWW-Authenticate: Basic`（浏览器原生登录框，无自定义登录页、无 `/auth/login`）。校验用 `crypto/subtle` 常数时间比对，token 不进日志、不进 URL。新增 `--gen-auth-hash` flag：生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或在不带参数时从 stdin 无回显读取（不进 shell 历史）。文档同步更新 README（中英）、`docs/api.md`、`docs/architecture.md`、Web UI `api.html` 与 Docker 示例。
 - **反向唤醒通知 `shell_notify`**（信令与数据分离）：新增 `internal/notify` 统一通知内核，支持 `event=output`（双沿触发：立即 + 2s 尾沿兜底）/`exit`（一次性，进程退出/SSH 中断）/`silence`（N 秒无输出，一次性）；双通道 `resource`（广播 `notifications/resources/updated`，uri `termcp://shells/<id>`）与 `sampling`（向**注册规则的客户端 session** 发送 `sampling/createMessage`，systemPrompt `termcp notification daemon`）；全局 1s 冷却阀防刷屏；`register`/`unregister`/`list` 三个 action，shell 退出/关闭/会话删除自动级联反注册（零协程/定时器泄漏）。MCP 层用 `AddTerminateListener` 与 forward 清理共存（不再互相覆盖）；sampling 在注册时捕获 `ClientSession`，解决定时器 goroutine 中无 session 导致发送失败的问题。Web UI 终端窗口新增 **Notifications 标签页**：实时列出该会话已注册的通知规则（event/channel/silence 秒数），可一键拆除；新增 `GET /api/notifications`（支持 `shell_id`/`session_id` 过滤）与 `DELETE /api/notifications/{id}`，规则变更经 `notify.Manager` 回调广播实时刷新。文档：`docs/mcp-tools.md` 新增 `shell_notify` 章节，README 特性表补充。
-- **资源 URL 寻址与复制按钮**：为 termcp 资源定义统一的 URL 寻址——entry `termcp://[entry_name]`（如 `termcp://internal`）；session `termcp://#[session_name]`；shell `termcp://#[session_name]:[shell_index]`。`[session_name]` 取**会话 id**（卡片上等宽小字，无 `session-` 前缀），`[shell_index]` 取会话内**频道顺序（1 起）**，与频道标签 `shell-1`/`shell-2` 一致，省略序号 = 首个 shell。session/shell 一律使用无 entry 前缀的**短格式**（会话名由用户命名、与 entry 名无对应关系，前缀不可靠）；旧的长格式 `termcp://[entry]#[session][:N]` 仍被接受以兼容既有链接，但 entry 部分被忽略、以会话 id 为准。`termcp://shells/<shell_id>` 是通知广播专用 URI，明确拒绝作为定位符。Web UI 新增/改造小复制按钮，统一复制短格式 URL：entry 卡片名字旁（新增，紧贴名字）、session 卡片（原复制 session id 改为 URL）、终端窗口标题栏与 Tools 面板、以及**每个底部 shell 频道标签**（新增，复制该频道的 `:index` URL）。点击复制按钮不触发连接/切换频道/关闭窗口。
+- **资源 URL 寻址与复制按钮**：为 Termcp 资源定义统一的 URL 寻址——entry `termcp://[entry_name]`（如 `termcp://internal`）；session `termcp://#[session_name]`；shell `termcp://#[session_name]:[shell_index]`。`[session_name]` 取**会话 id**（卡片上等宽小字，无 `session-` 前缀），`[shell_index]` 取会话内**频道顺序（1 起）**，与频道标签 `shell-1`/`shell-2` 一致，省略序号 = 首个 shell。session/shell 一律使用无 entry 前缀的**短格式**（会话名由用户命名、与 entry 名无对应关系，前缀不可靠）；旧的长格式 `termcp://[entry]#[session][:N]` 仍被接受以兼容既有链接，但 entry 部分被忽略、以会话 id 为准。`termcp://shells/<shell_id>` 是通知广播专用 URI，明确拒绝作为定位符。Web UI 新增/改造小复制按钮，统一复制短格式 URL：entry 卡片名字旁（新增，紧贴名字）、session 卡片（原复制 session id 改为 URL）、终端窗口标题栏与 Tools 面板、以及**每个底部 shell 频道标签**（新增，复制该频道的 `:index` URL）。点击复制按钮不触发连接/切换频道/关闭窗口。
 - **MCP 工具直接接受 `termcp://` 定位符**（`internal/mcp/resource_url.go`）：新增定位符解析器并接入工具参数解析链，用户可直接把 Web UI 复制的 URL 粘进对话，无需先查询再换裸 id。`session_start(ssh_config="termcp://mac")` 解析为 entry profile；`session_terminate` / `session_info` 的 `session_id` 接受 `termcp://#<sid>`；`shell_input` / `shell_key` / `shell_output` 等 `shell_id` 参数接受 `termcp://#<sid>`（→ 首个 shell）与 `termcp://#<sid>:N`（→ 第 N 个频道），同时兼容传入裸 session id（自动落到主 shell）。已关闭（DEAD）会话的定位符或裸 id 返回带提示的 `session_not_found` 错误（引导改用 `shell_output` 读取），频道序号越界返回 `shell_not_found` 并附会话实际频道数，畸形定位符返回 `invalid_argument` 并附解析诊断。MCP instructions 与工具 schema 同步说明定位符用法。
 - **AI 直读文档（HTTP + MCP resources）**：实例把自己的文档随二进制发布，同一 HTTP 端口直接提供 `GET /api.md`（全英文 REST + WebSocket 权威参考，`text/markdown` 显式声明、不依赖平台 mime 表）与 `/skills.md`（curl 技能包，下载后存为 `~/.agents/skills/termcp/SKILL.md` 即为可加载的 agent skill）；MCP 侧工具参数全部由 `tools/list` schema 自描述，不冗余提供工具文档——不装 MCP、不用打开 Web UI 也能让 AI 学会调用 HTTP API。MCP 侧把这两份文档注册为 resources（`resources/read` 的 URI 就是实例的 `<origin>/…` HTTP 地址，一个 URI 两条获取路径），新增 `learn-api` prompt 引导 agent 先读文档再动手；initialize instructions 增补第 10 条指向这批文档。Web UI 的 **API / MCP** 页（`/api.html`）新增 **2. Agent docs & skill** 区：技能下载地址（可点 Download / 一键 Copy）、`curl` 安装命令与两份文档的 URL 列表，不再只能靠手拼路径。仓库内 `docs/api.md` 为唯一真源，`make sync-assets` 同步到 `internal/webui/assets/`，`TestSyncedDocsMatchSource` 防漂移；同时修正 `WithResourceCapabilities(true,true)` 的虚假声明（mcp-go v0.50 无 subscribe 处理，改为不宣称 subscribe/listChanged）。
 - **文档端点免认证（仅 GET/HEAD）**：`/api.md` 与 `/skills.md` 是纯静态、零数据、零机密的文档，配置 `--auth-token` 后也允许**无凭据**获取——否则"不装 MCP、先读文档再用 API"的流程在带 token 的实例上直接 401 死锁（agent 还没拿到 token 就没法学怎么用）。其余所有面（Web UI/REST/MCP/WS）依旧全部要求凭据；写方法与路径穿越均不放行（`internal/auth` 白名单精确匹配 + 测试覆盖）。
@@ -110,7 +79,7 @@
 - **Web UI Sessions 列表批量选择与删除**：标题栏常驻三个纯图标按钮——全选/取消全选（复选框两态图标）、红色垃圾桶批量删除选中（无选中时置灰，气泡提示选中数量）、扫帚一键清理已退出 Dead 会话（弹窗确认后顺序批量删除）；标题栏左侧在选中数 N>0 时实时显示 `[N selected]`。卡片右上角叉号始终可单删；右下角复选框常驻，点击（`stopPropagation`）切换选中态，卡片主体点按仍打开/聚焦终端；选中卡片显示蓝色描边。动态刷新保留已选集合并与全选状态、计数双向联动。
 - **引导 Agent 偏好长连接交互会话**：精简 instructions 第 2 条明确指出推荐单个交互会话（保持 cwd/env/审计历史），澄清 `shell_output` 返回的是新增字节（读空 ≠ 没输出，需继续轮询），警告 `session_start` 的 `command/args` 是 run-and-exit 单次程序，不应用于多次分拆 `bash -c`。
 - **已关闭会话默认读取不再全量倾倒**：无 `offset`/`tail_lines` 的已关闭会话读取默认返回末尾最近一块（≤8 KiB，行对齐），配合 `has_more`/`end_offset` 翻页；`max_bytes` 缺省 8192 与 schema 一致（显式 `0` 仍表示不限）。
-- **SSH 连接失败可见性**：会话创建失败（如 `ssh dial` 超时/拒绝）现在在 termcp 终端打出 `[ERROR] session create failed`（含目标地址、超时、模式，不含凭据）；MCP 工具错误结果从 Debug 升级为 `[WARN]` 并附带错误预览；Web UI "测试连接"失败同步打 `[WARN]`。连接类错误（超时/拒绝/不可达/重置）自动追加 `Hint:` 诊断提示，MCP 工具结果与 Web UI 响应同样携带。
+- **SSH 连接失败可见性**：会话创建失败（如 `ssh dial` 超时/拒绝）现在在 Termcp 终端打出 `[ERROR] session create failed`（含目标地址、超时、模式，不含凭据）；MCP 工具错误结果从 Debug 升级为 `[WARN]` 并附带错误预览；Web UI "测试连接"失败同步打 `[WARN]`。连接类错误（超时/拒绝/不可达/重置）自动追加 `Hint:` 诊断提示，MCP 工具结果与 Web UI 响应同样携带。
 - **拨号错误上下文**：直连失败错误信息包含目标地址与拨号超时，如 `ssh dial: connect 192.168.0.145:22 (timeout 30s): dial tcp ...`，不再只有裸的 `i/o timeout` / `connectex ...`。
 
 - **`ReadOutput` timeout 修复**：接受 `timeout=0`（非阻塞轮询），下限从 0.1 改为 0。
@@ -133,7 +102,7 @@
 - **README 工具表去重**：`session_start`/`session_list`/`session_info`/`session_terminate` 不再出现两次，`session_delete` 并入会话容器行（31 个工具一一列出）。
 - **README（中英）新增 “AI-native by design / AI Native 设计” 小节**：把“Agent 是常驻用户”的定位落到具体机制上——同层平级入口、token/轮次预算（延迟加载、tail/offset 游标、唤醒信号）、实例自描述（`/api.md`、`/skills.md`、`learn-api`）、密钥留在平台侧、DEAD 可恢复、人工保留中断权。
 - **README（中英）标语与简介精简**：去掉“不仅是一个 MCP…更是一个平台”的句式，标语改为“一个 AI Native 的终端平台：跨平台、可视化、人机协作 / An AI-native terminal platform: cross-platform, visual, built for human–agent collaboration”（避免“跨平台…平台”叠字）；简介首段删掉 PTY/标签页/SFTP 与“接入本机/远程”等实现细节和 MCP 角色说明，改为“多主机、多会话同时管理、全程可视化”与“连接配置由平台独立维护，Agent 无需读取凭据即可使用”；结尾改为“跨平台、云原生、纯 Go 无 CGO；单二进制、低开销、可长期驻留”。
-- **“为什么选 termcp”重排为两大板块**：“多会话可视化管理”（功能强大的 Web UI，本地一行命令或云端容器同一套界面）与“AI Native 设计”（无缝人机交互、结对操作），把原“打破边界”（跨轮次驱动 TUI/REPL 的能力）并进 AI Native 开头，删除与简介重复的四入口表格与独立的“可视化管理”小节。
+- **“为什么选 Termcp”重排为两大板块**：“多会话可视化管理”（功能强大的 Web UI，本地一行命令或云端容器同一套界面）与“AI Native 设计”（无缝人机交互、结对操作），把原“打破边界”（跨轮次驱动 TUI/REPL 的能力）并进 AI Native 开头，删除与简介重复的四入口表格与独立的“可视化管理”小节。
 
 ---
 
@@ -275,7 +244,7 @@
 
 ### 修复
 
-- **Enter 按目标系统发送**：换行符按目标 shell 所属平台（Windows CRLF / Unix LF）而非 termcp 本机 OS 决定，修复从 Windows 管理 Unix 主机时的输入异常。
+- **Enter 按目标系统发送**：换行符按目标 shell 所属平台（Windows CRLF / Unix LF）而非 Termcp 本机 OS 决定，修复从 Windows 管理 Unix 主机时的输入异常。
 
 ## v0.1.0 — 2026-06-30
 
@@ -334,7 +303,7 @@
 
 ### 新功能
 
-- **detect_shell MCP 工具**：探测 termcp 主机上的可用交互 shell（bash/zsh/fish/pwsh/cmd），返回路径、family 和提示。跨平台混合环境中 Agent 可据此选择正确的命令语法。
+- **detect_shell MCP 工具**：探测 Termcp 主机上的可用交互 shell（bash/zsh/fish/pwsh/cmd），返回路径、family 和提示。跨平台混合环境中 Agent 可据此选择正确的命令语法。
 
 ### 改进
 
@@ -378,4 +347,4 @@
 
 ### 初始发布
 
-- termcp 首个版本：把交互式程序作为持久 SSH 会话暴露给 AI Agent 的 MCP server。
+- Termcp 首个版本：把交互式程序作为持久 SSH 会话暴露给 AI Agent 的 MCP server。

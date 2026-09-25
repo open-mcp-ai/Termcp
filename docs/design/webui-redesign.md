@@ -6,7 +6,7 @@
 
 ## 一、定位与目标
 
-- termcp 的 Web UI 是一个 **H5 应用**（无"页面"概念、无路由），是平台四入口之一（Web UI / MCP / SKILLS / REST）。
+- Termcp 的 Web UI 是一个 **H5 应用**（无"页面"概念、无路由），是平台四入口之一（Web UI / MCP / SKILLS / REST）。
 - 需满足三种形态：**桌面浏览器（PC）、平板、手机**。
 - 最终可**对外分发 SDK**，供二开者在自己前端里嵌入终端（宿主注入 xterm.js）。
 
