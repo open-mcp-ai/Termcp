@@ -399,6 +399,12 @@ func (s *Server) Start() error {
 }
 
 // Stop shuts down the SSH server.
+//
+// This does not wait for in-flight session handlers: Close() tears down the
+// connections, which cancels each session's context, and handleSession uses that
+// to kill the child it started. Nothing here needs to join the handlers — the
+// goroutine count comes back down on its own — and a WaitGroup on this path would
+// add an Add/Wait race (a panic, not an error) to satisfy a wait nobody needs.
 func (s *Server) Stop() error {
 	if !s.started.Load() {
 		return nil
@@ -513,7 +519,29 @@ func (s *Server) handleSession(sess ssh.Session) {
 		}()
 	}
 
-	cmd.Wait()
+	// Wait for the child, but never let a dead connection leave it running.
+	//
+	// cmd.Wait() blocks until the CHILD exits, and nothing else notices when the
+	// client disappears: a dropped connection (server shutdown, a crashed agent, a
+	// closed socket) left the shell running as an orphan with this handler blocked
+	// on it forever — one leaked goroutine and one leaked process per dropped
+	// session, and on Windows a held PTY that later teardowns then fail on. So the
+	// wait is raced against the session context, which the library cancels when the
+	// connection goes away, and the child is killed if the connection lost.
+	waitDone := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-sess.Context().Done():
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-waitDone
+	}
+
 	// Detach and stop the forwarder. sess.Signals(nil) makes the library buffer
 	// (bounded) any late signal instead of sending into a channel nobody reads,
 	// which would block its request loop while holding the session lock. It takes
