@@ -537,10 +537,64 @@ func TestManager_DeleteRunningSession(t *testing.T) {
 	}
 }
 
+// goroutineCountStable returns the process goroutine count once it has stopped
+// changing for two consecutive samples, so a baseline is not taken in the middle
+// of an earlier test's teardown. Falls back to the last sample at the deadline,
+// since a busy process may never be perfectly still.
+func goroutineCountStable(timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	last := runtime.NumGoroutine()
+	stable := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		now := runtime.NumGoroutine()
+		if now == last {
+			stable++
+			if stable >= 2 {
+				return now
+			}
+			continue
+		}
+		stable = 0
+		last = now
+	}
+	return last
+}
+
+// waitGoroutinesAtMost polls until the count falls to at most want and stays
+// there for a short settle window. Goroutine counting is process-wide, so this
+// waits for a release instead of sampling once after a fixed sleep: cleanup
+// takes longer on a loaded CI runner, and a fixed sleep turns that latency into
+// a flake. A real leak never settles, so it still fails.
+func waitGoroutinesAtMost(want int, timeout time.Duration) (int, bool) {
+	deadline := time.Now().Add(timeout)
+	settled := 0
+	last := runtime.NumGoroutine()
+	for time.Now().Before(deadline) {
+		last = runtime.NumGoroutine()
+		if last <= want {
+			settled++
+			// Stay below the bar across a few samples, so a concurrent dip in some
+			// other test's teardown cannot be mistaken for our own cleanup.
+			if settled >= 3 {
+				return last, true
+			}
+		} else {
+			settled = 0
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return last, false
+}
+
+// Terminating a session must release the goroutines it started. The count is
+// process-wide, so the assertion is on a SETTLED baseline versus a settled end
+// state rather than on one sample: other tests in this package leave sessions
+// and servers winding down, and their churn must not read as our leak.
 func TestSession_GoroutinesCleanedUp(t *testing.T) {
 	srv := startTestServer(t)
 
-	before := runtime.NumGoroutine()
+	before := goroutineCountStable(2 * time.Second)
 
 	s, err := New(srv, Config{Command: testShell(), Args: testInteractiveShellArgs(), Mode: api.ModePTY, Rows: 24, Cols: 80}, nil)
 	if err != nil {
@@ -557,12 +611,8 @@ func TestSession_GoroutinesCleanedUp(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	time.Sleep(200 * time.Millisecond)
-
-	after := runtime.NumGoroutine()
-	leaked := after - before
-	if leaked > 2 {
-		t.Fatalf("leaked %d goroutines after terminate (before=%d, after=%d)", leaked, before, after)
+	if after, ok := waitGoroutinesAtMost(before+2, 15*time.Second); !ok {
+		t.Fatalf("goroutines did not settle after terminate: before=%d after=%d (a released session must not keep its goroutines)", before, after)
 	}
 }
 
