@@ -1,4 +1,4 @@
-# 任务：termcp Web UI 多语言（简体中文 / 繁体中文 / English）
+# 任务：Termcp Web UI 多语言（简体中文 / 繁体中文 / English）
 
 > 这是一份**可独立执行的交付提示词**。执行者不需要参与过前期设计讨论，所有决策已定，
 > 不要重新讨论方案、不要扩大范围。有疑问先提问，不要自行发挥。
@@ -7,7 +7,7 @@
 
 ## 0. 交付目标
 
-给 termcp 的浏览器 Web UI 加三语言支持，满足三条硬性要求：
+给 Termcp 的浏览器 Web UI 加三语言支持，满足三条硬性要求：
 
 1. **自动检测浏览器语言** —— 用户不做任何操作时，界面语言跟随浏览器
 2. **可手动设置语言** —— 用户可覆盖，选择被记住
@@ -19,7 +19,7 @@
 
 ## 1. 项目背景（必读，决定实现形态）
 
-termcp 是一个 Go 单二进制的终端平台。Web UI 是 `internal/webui/assets/` 下的静态资源，
+Termcp 是一个 Go 单二进制的终端平台。Web UI 是 `internal/webui/assets/` 下的静态资源，
 通过 `//go:embed assets`（`internal/webui/handler.go:28`）编进二进制。
 
 ### 1.1 前端的硬性约束（违反会导致测试红或不兼容微信 WebView）
@@ -437,7 +437,7 @@ t('toast.session.deleted', { count: n })
 | dead | 已结束 | 已結束 |
 | shell | shell | shell |
 | pty / pipe | pty / pipe | pty / pipe |
-| MCP / SSH / SOCKS5 / TOML / termcp | 不翻 | 不翻 |
+| MCP / SSH / SOCKS5 / TOML / Termcp | 不翻 | 不翻 |
 | banner / toast | 提示条 / 提示 | 提示列 / 提示 |
 | Rename | 重命名 | 重新命名 |
 | Upload / Download | 上传 / 下载 | 上傳 / 下載 |
