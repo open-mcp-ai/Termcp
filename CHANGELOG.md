@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.2 — 2026-09-25
+
 ### Breaking
 
 - **会话输出改用追加式字节日志**：每个 shell 现在以 `log.bin` 保存终端看到的完整字节流，并以 `log.jsonl` 记录来源、时间和偏移；会话与 shell 列表直接从 `sessions/<session_id>/<shell_id>/` 目录树派生，不再维护 `sessions.json`、`messages/` 等重复索引。旧布局不会迁移、删除或继续读取，因此升级后旧会话不会出现在 `session_list` 中。所有时间戳统一为 Unix 毫秒；`message` 工具只保留 `action="list"`，内容改由 `shell_output` 按 offset 读取。
