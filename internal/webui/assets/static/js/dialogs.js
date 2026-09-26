@@ -58,6 +58,54 @@ function confirmDialog(opts) {
   });
 }
 
+/* Style-consistent replacement for the native prompt() dialog.
+ *
+ * opts: { title, placeholder, required, onSubmit }. One caller-supplied action
+ * and one input — no generic form builder, because the only fields a caller has
+ * ever needed are these. */
+function openCommandPrompt(opts) {
+  opts = opts || {};
+  var input = document.getElementById('modal-cmd-input');
+  var errEl = document.getElementById('modal-cmd-err');
+  document.getElementById('modal-cmd-title').textContent = opts.title || t('channel.cmd.titlePty');
+  input.value = '';
+  input.placeholder = opts.placeholder || '';
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+  var okBtn = document.getElementById('modal-cmd-run');
+  var cancelBtn = document.getElementById('modal-cmd-cancel');
+  var closeBtn = document.getElementById('modal-cmd-close');
+  // Clone to drop a previous call's listeners (the modal is a singleton).
+  var freshOk = okBtn.cloneNode(true);
+  okBtn.parentNode.replaceChild(freshOk, okBtn);
+  var freshCancel = cancelBtn.cloneNode(true);
+  cancelBtn.parentNode.replaceChild(freshCancel, cancelBtn);
+  var freshClose = closeBtn.cloneNode(true);
+  closeBtn.parentNode.replaceChild(freshClose, closeBtn);
+  function close() {
+    hideModal('modal-cmd');
+    input.removeEventListener('keydown', onKey);
+  }
+  function submit() {
+    var v = input.value.trim();
+    if (!v && opts.required) {
+      errEl.textContent = t('channel.cmd.required');
+      errEl.style.display = 'block';
+      return;
+    }
+    close();
+    opts.onSubmit(v);
+  }
+  function onOk() { submit(); }
+  function onKey(e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } }
+  freshOk.addEventListener('click', onOk);
+  freshCancel.addEventListener('click', close);
+  freshClose.addEventListener('click', close);
+  input.addEventListener('keydown', onKey);
+  showModal('modal-cmd');
+  try { input.focus(); } catch (e) {}
+}
+
 /* The entry banner carries information the user may need to read after the
    switch (why the list is empty, why a connect failed), so it remembers its
    catalog key + params instead of being re-rendered away. The message is only

@@ -320,3 +320,111 @@ func TestModulesParse(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitCommandLineParsesTypedLines pins the one behaviour a typed command
+// needs and no Go test can see: the shell APIs take argv, humans type a line.
+// Sending the line whole made `echo hi` arrive as a single argv element, so the
+// far side answered "executable file not found" — a shell channel that opens and
+// immediately shows an error instead of running anything.
+//
+// util.js touches window at load time, so the function is sliced out by
+// brace-counting and evaluated by node: the test fails if it is deleted, renamed,
+// or stops grouping quotes.
+func TestSplitCommandLineParsesTypedLines(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot execute the splitter")
+	}
+	body, err := fs.ReadFile(Assets(), "static/js/util.js")
+	if err != nil {
+		t.Fatalf("util.js not embedded: %v", err)
+	}
+	if !strings.Contains(string(body), "function splitCommandLine(") {
+		t.Fatal("util.js no longer declares splitCommandLine; a typed command line would be sent as one argv element")
+	}
+	tmp := filepath.Join(t.TempDir(), "util.js")
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function splitCommandLine(');
+let depth = 0, end = -1;
+for (let i = src.indexOf('{', start); i < src.length; i++) {
+  if (src[i] === '{') depth++;
+  else if (src[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+}
+eval(src.slice(start, end));
+const cases = [
+  ["echo hello world", ["echo", "hello", "world"]],
+  ['"/Program Files/x/y" -v', ["/Program Files/x/y", "-v"]],
+  ["  ", []],
+  ["single", ["single"]],
+];
+let bad = 0;
+for (const [inp, want] of cases) {
+  const got = splitCommandLine(inp);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.error("splitCommandLine(" + JSON.stringify(inp) + ") = " + JSON.stringify(got) + ", want " + JSON.stringify(want));
+    bad++;
+  }
+}
+process.exit(bad ? 1 : 0);
+`
+	scriptPath := filepath.Join(t.TempDir(), "check.js")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, scriptPath, tmp).CombinedOutput(); err != nil {
+		t.Errorf("splitCommandLine check failed: %v\n%s", err, out)
+	}
+}
+
+// TestChannelTabInsertAnchorIsWrapped pins the anchor for inserting a channel
+// tab. The add control is a split button, so the "+" lives inside a wrapper and
+// is NOT a child of the tab bar. insertBefore(tab, "+") then throws
+// NotFoundError — swallowed by the caller's catch, which logged and returned —
+// so the shell was created on the server while no tab ever appeared: the window
+// looked like the press did nothing.
+func TestChannelTabInsertAnchorIsWrapped(t *testing.T) {
+	tv, err := readAsset("static/js/terminal-view.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tv, "tabsBar.insertBefore(tab, addAnchor)") {
+		t.Error("terminal-view.js must insert the channel tab before the add-anchor, not the raw \"+\" button")
+	}
+	if strings.Contains(tv, "tabsBar.insertBefore(tab, addBtn)") {
+		t.Error("inserting before the \"+\" button throws NotFoundError once it is wrapped in the split control")
+	}
+	if !strings.Contains(tv, "addBtn.parentNode !== tabsBar") {
+		t.Error("the insert anchor must resolve the wrapper when the add button is nested")
+	}
+}
+
+// TestChannelAddMenuUsesPressedAnchor pins that the mode menu anchors to the
+// caret that was pressed. Both carets (footer tab strip and empty state) exist in
+// the DOM simultaneously, so re-querying for one always found the footer button
+// and the menu appeared at the bottom of the window even when the empty-state
+// caret was pressed.
+func TestChannelAddMenuUsesPressedAnchor(t *testing.T) {
+	tv, err := readAsset("static/js/terminal-view.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tv, "function openChannelAddMenu(win, anchorEl)") {
+		t.Error("openChannelAddMenu must take the pressed button as its anchor")
+	}
+	for _, want := range []string{
+		"openChannelAddMenu(win, menuBtn)",
+		"openChannelAddMenu(win, emptyMenuBtn)",
+	} {
+		if !strings.Contains(tv, want) {
+			t.Errorf("both carets must pass themselves as the anchor: missing %q", want)
+		}
+	}
+	if !strings.Contains(tv, "var anchor = anchorEl ||") {
+		t.Error("the pressed anchor must win over the querySelector fallback")
+	}
+}
