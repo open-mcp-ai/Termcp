@@ -387,14 +387,15 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess, err := h.Sessions.Create(session.Config{
-		Command:  cmd,
-		Args:     args,
-		Mode:     api.SessionMode(mode),
-		Name:     sessName,
-		Rows:     rows,
-		Cols:     cols,
-		Remote:   remote,
-		Approval: sshconfig.EffectiveApproval(ent),
+		Command:      cmd,
+		Args:         args,
+		Mode:         api.SessionMode(mode),
+		Name:         sessName,
+		Rows:         rows,
+		Cols:         cols,
+		Remote:       remote,
+		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
+		Approval:     sshconfig.EffectiveApproval(ent),
 	})
 	if err != nil {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
@@ -521,6 +522,10 @@ func (h *Handler) handleCreateShell(w http.ResponseWriter, r *http.Request) {
 	mode := body.Mode
 	if mode == "" {
 		mode = "pty"
+	}
+	if mode != "pty" && mode != "pipe" {
+		http.Error(w, "mode must be pty or pipe", http.StatusBadRequest)
+		return
 	}
 
 	cs, err := parent.CreateChildShell(body.Command, body.Args, mode == "pty", rows, cols, strings.TrimSpace(body.Name))

@@ -31,8 +31,7 @@ const mcpServerInstructions = `termcp agent rules:
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
 8) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken.
-9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.
-10) Docs: before REST/CLI work read this instance's own reference via resources/list (URIs are real http://.../api.md and http://.../skills.md URLs; same paths over plain HTTP). MCP tool args/results come from tools/list, not from docs.`
+9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.`
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
@@ -178,10 +177,10 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		sessMgr.SetNotifyHooks(s.notifyMgr.OnOutput, s.notifyMgr.OnExit, s.notifyMgr.ClearShell)
 	}
 	mcpServer.AddTool(s.newTool("session_start",
-		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED: a profile name from ssh_config(action=list), \"internal\" for the termcp host loopback, or a termcp:// entry locator pasted by the user (e.g. \"termcp://mac\" — parsed directly, no lookup needed). Empty command/args = login shell / profile defaults. WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
+		mcpgo.WithDescription("Start a session (connection container) plus its primary shell. ssh_config REQUIRED: a profile name from ssh_config(action=list), \"internal\" for the termcp host loopback, or a termcp:// entry locator pasted by the user (e.g. \"termcp://mac\" — parsed directly, no lookup needed). Empty command/args = the profile's default_shell, else the target's own login shell (pty), else an error (pipe). WARNING: command/args = single run-and-exit program; for multi-step or stateful work omit them and drive an interactive shell instead. Returns session_id and shell_id."),
 		mcpgo.WithString("command", mcpgo.Description("Executable line; empty with no args = login shell / profile default_shell")),
 		mcpgo.WithArray("args", mcpgo.Description("Argv after command"), mcpgo.WithStringItems()),
-		mcpgo.WithString("mode", mcpgo.Description("\"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented)"), mcpgo.DefaultString("pty")),
+		mcpgo.WithString("mode", mcpgo.Description("Mode of the primary shell only (per-shell setting): \"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented). Other shells pick their own mode in shell_open."), mcpgo.DefaultString("pty")),
 		mcpgo.WithString("name"),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),
@@ -192,8 +191,8 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		mcpgo.WithDescription("Open another shell channel on an existing session connection (reuses SSH transport). Returns shell_id for I/O and session_id of the parent."),
 		mcpgo.WithString("session_id", mcpgo.Required()),
 		mcpgo.WithString("name"),
-		mcpgo.WithString("command", mcpgo.Description("Executable; leave empty for login shell")),
-		mcpgo.WithString("mode", mcpgo.Description("pty (default) or pipe"), mcpgo.DefaultString("pty")),
+		mcpgo.WithString("command", mcpgo.Description("Executable; empty = resolve down the chain: profile default_shell, then (pty only) the target's own login shell. pipe with an empty command and no default_shell is refused — there is no login shell to request on a pipe channel.")),
+		mcpgo.WithString("mode", mcpgo.Description("Mode for this shell channel: \"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented run-to-exit command). Per shell — the session is only the connection."), mcpgo.DefaultString("pty")),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),
 	), withLogging("shell_open", s.handleStartSubShell))
@@ -237,7 +236,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		mcpgo.WithDescription("Return metadata for every running parent session (exited ones are auto-removed). Child shells excluded — use shell_list."),
 	), withLogging("session_list", s.handleListSessions))
 	mcpServer.AddTool(s.newTool("session_info",
-		mcpgo.WithDescription("Return a JSON document with detailed fields for one session: identifiers, command line, mode, PTY size, remote connection metadata, exit state, etc. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\")."),
+		mcpgo.WithDescription("Return a JSON document with detailed fields for one session: identifiers, command line, PTY size, remote connection metadata, exit state, etc. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). Mode is a per-shell property and is not on the session record; read it from shell_list."),
 		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
 	), withLogging("session_info", s.handleGetSessionInfo))
 
@@ -254,7 +253,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("session_delete", s.handleDeleteSession))
 
 	mcpServer.AddTool(s.newTool("shell_resize",
-		mcpgo.WithDescription("Update PTY rows/cols for a shell channel (propagates to SSH remote PTY when applicable)."),
+		mcpgo.WithDescription("Update PTY rows/cols for a shell channel (propagates to SSH remote PTY when applicable). Requires a pty shell; a pipe shell has no TTY and returns an error."),
 		mcpgo.WithString("shell_id", mcpgo.Required()),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),

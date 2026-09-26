@@ -44,7 +44,7 @@ SSH 连接
 
 **退出（自然）与关闭（手动）的区别**：
 - 自然退出：shell 状态置为 `exited`，保留在 channel 列表中供读取末尾输出；DEAD/只读视图会展示其快照 tab。
-- 手动关闭：直接从 Session 中删除，不留任何状态；pipe 容器的最后一个 shell 被关闭时，容器转为 `exited`（DEAD）；PTY 容器保持 `running` 可继续新建 shell。
+- 手动关闭：直接从 Session 中删除，不留任何状态。shell 的生命周期不决定容器的生命周期：即使关掉最后一个 shell（或最后一个 pipe shell 自然退出），容器保持 `running`，端口转发、SFTP 和新建 shell 都继续可用。
 
 ## Forward
 
@@ -72,8 +72,10 @@ SSH 连接
 
 **自然退出与容器状态**：
 
-- PTY 会话的 Shell 正常退出后，容器保持 `running`（可继续新建 Shell），退出的 Shell 以 `exited` 元数据保留，供只读读取末尾输出。
-- Pipe 会话的**最后一个** Shell 正常退出时，`markDeadIfNoShells` 将容器翻为 DEAD，避免留下零 Shell 的僵尸 `running` 容器；PTY 容器保持可复用。
+- Shell 正常退出后，容器保持 `running`（可继续新建 Shell 或使用端口转发/SFTP），退出的 Shell 以 `exited` 元数据保留，供只读读取末尾输出。
+- 容器的状态只由 SSH transport 决定，跟 shell 的数量与生命周期无关：关掉最后一个 shell（或最后一个 pipe shell 自然退出）不会把容器翻为 DEAD —— 零 shell 但 `running` 的容器是合法的可复用状态（transport 仍承载端口转发、SFTP 与 `shell_open`）。
+
+**已知边界**：断线检测没有独立的后台探测器，它跟着 shell 的 watcher 跑。零 shell 时 transport 断了不会立即被抓到，要等下一次操作（`shell_open` / 端口转发 / SFTP）失败才暴露；TCP keepalive 已开启，半开连接最终也会被内核回收。若要求零 shell 也即时收敛，需要加一个与 shell 无关的连接监视器。
 
 **DEAD 的边界**：断线收敛只把 Session **就地置为 DEAD（`exited`），保留在 registry 中只读**（"断开 ≠ 删除"）。释放资源需显式 `Delete`，移入历史库需 `ArchiveAndForget`（见 `docs/api.md`）。
 

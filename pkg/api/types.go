@@ -9,7 +9,7 @@ const (
 	SessionError   SessionStatus = "error"
 )
 
-// SessionMode represents the execution mode for a session.
+// SessionMode represents the execution mode for one shell channel.
 type SessionMode string
 
 const (
@@ -24,11 +24,15 @@ const (
 // use it. Formatting for display is the client's job (see the Web UI's
 // fmtTime), so a value never has to be parsed back out of a string.
 type Session struct {
-	ID        string        `json:"id"`
-	Name      string        `json:"name"`
-	Command   string        `json:"command"`
-	Args      []string      `json:"args"`
-	Mode      SessionMode   `json:"mode"`   // "pty" | "pipe"
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+	// Mode is a per-shell property: each shell channel picks its own ("pty" for
+	// an interactive terminal, "pipe" for a line-oriented run-to-exit command).
+	// It is empty on session records — a session is a connection container and
+	// owns no mode. The session_start mode is merely the mode of the first shell.
+	Mode      SessionMode   `json:"mode,omitempty"`
 	Status    SessionStatus `json:"status"` // running | exited | error
 	ExitCode  *int          `json:"exit_code"`
 	PID       int           `json:"pid"`

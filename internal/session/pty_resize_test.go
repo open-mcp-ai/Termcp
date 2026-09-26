@@ -57,7 +57,7 @@ func TestSession_PtyResizeReachesChild(t *testing.T) {
 
 	// Each resize must be observable by the child, not just tracked client-side.
 	for _, size := range []struct{ rows, cols int }{{30, 100}, {40, 110}, {50, 120}} {
-		if err := s.ResizePty(size.rows, size.cols); err != nil {
+		if err := s.PrimaryShell().ResizePty(size.rows, size.cols); err != nil {
 			t.Fatalf("resize %dx%d: %v", size.rows, size.cols, err)
 		}
 		if out := askSize(size.rows, size.cols); !strings.Contains(out, fmt.Sprintf("%d %d", size.rows, size.cols)) {

@@ -161,7 +161,7 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 		// the failing host:port for remote dials.
 		attrs := []any{"err", err}
 		if cfg.Mode != "" {
-			attrs = append(attrs, "mode", cfg.Mode)
+			attrs = append(attrs, "mode", cfg.Mode) // mode of the first shell
 		}
 		if cfg.Name != "" {
 			attrs = append(attrs, "name", cfg.Name)

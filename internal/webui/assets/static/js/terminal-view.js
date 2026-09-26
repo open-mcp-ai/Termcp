@@ -20,7 +20,12 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
 
   var tabsBar = win.querySelector('.shell-channel-tabs');
   var body = win.querySelector('.shell-channel-body');
+  // The add control is a split button (the "+" is wrapped with its caret half),
+  // so the anchor for insertBefore is the wrapper inside the tab bar, not the "+"
+  // itself: inserting before a nested node throws NotFoundError, which showed up
+  // as a shell that was created on the server but never got a tab.
   var addBtn = tabsBar ? tabsBar.querySelector('.shell-channel-tab-add') : null;
+  var addAnchor = addBtn && addBtn.parentNode && addBtn.parentNode !== tabsBar ? addBtn.parentNode : addBtn;
   var emptyEl = win.querySelector('.shell-channel-empty');
 
   // Hide empty state, restore body
@@ -36,7 +41,7 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
     '<span class="shell-channel-tab-ended" style="display:none" title="Session ended" data-i18n-title="session.ended" data-i18n="channel.endedTab">end</span>' +
     '<button type="button" class="shell-channel-tab-close" title="Close shell" data-i18n-title="channel.close">&times;</button>';
   applyI18n(tab);
-  if (addBtn) tabsBar.insertBefore(tab, addBtn);
+  if (addAnchor) tabsBar.insertBefore(tab, addAnchor);
 
   // Deactivate all other tabs
   tabsBar.querySelectorAll('.shell-channel-tab').forEach(function(t) {
@@ -271,19 +276,154 @@ function _showChannelEmpty(win, show) {
   if (body) body.style.display = show ? 'none' : '';
 }
 
-/** "+" button / empty-state click handler. */
+/** "+" button / empty-state click handler: create the default shell.
+ *  One press is the common case, so it stays one press; the caret beside it is
+ *  where the mode menu lives. */
 function addChannelClick(win) {
+  createChannel(win, 'pty', '');
+}
+
+/**
+ * The caret half of the add control: opens the mode menu. Pressing "+" itself
+ * opens the default shell instead — the menu is for the two choices that need a
+ * decision (mode, and a command), not for the common case.
+ *
+ * `anchorEl` is the button that was pressed and MUST be passed: both carets exist
+ * in the DOM at once (footer tab strip and empty state), so re-querying picked the
+ * footer one and the menu appeared at the bottom of the window no matter which
+ * caret was pressed.
+ *
+ * Reuses the session-switch menu's markup so the dismissal rules (outside click,
+ * Escape, resize) come from one pattern.
+ */
+function openChannelAddMenu(win, anchorEl) {
   if (!win._parentSid || win._readOnly) return;
-  fetch('/api/sessions/' + encodeURIComponent(win._parentSid) + '/shells', {
+  if (typeof _channelAddMenu !== 'undefined' && _channelAddMenu) {
+    var same = _channelAddMenu._win === win;
+    closeChannelAddMenu();
+    if (same) return; // second press toggles shut
+  }
+  var anchor = anchorEl || win.querySelector('.shell-channel-add-caret') || win.querySelector('.shell-channel-empty-caret');
+  if (!anchor) return;
+  var el = document.createElement('div');
+  el.className = 'shell-window-switch-menu shell-channel-add-menu';
+  el.setAttribute('role', 'menu');
+  /* Literal t() keys, not a computed key: the i18n test only sees static
+     arguments, and an orphan-key check is worth more than the loop. */
+  [
+    { label: t('channel.add.pty'), mode: 'pty' },
+    { label: t('channel.add.pipe'), mode: 'pipe' }
+  ].forEach(function (item) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'shell-switch-item shell-channel-add-item';
+    b.setAttribute('role', 'menuitem');
+    b.setAttribute('data-channel-mode', item.mode);
+    var label = document.createElement('span');
+    label.className = 'shell-switch-label';
+    label.textContent = item.label;
+    b.appendChild(label);
+    b.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeChannelAddMenu();
+      promptChannelCommand(win, item.mode);
+    });
+    el.appendChild(b);
+  });
+  document.body.appendChild(el);
+  _channelAddMenu = el;
+  el._win = win;
+
+  /* Fixed positioning against the pressed button's viewport rect. Opens below when
+     there is room (the empty state sits mid-window), and flips above when there is
+     not — the footer button is on the bottom edge. */
+  var r = anchor.getBoundingClientRect();
+  var maxLeft = Math.max(8, window.innerWidth - el.offsetWidth - 8);
+  el.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
+  var below = r.bottom + 4;
+  if (below + el.offsetHeight > window.innerHeight - 8) below = r.top - el.offsetHeight - 4;
+  el.style.top = Math.max(8, below) + 'px';
+  anchor.classList.add('active');
+
+  /* Deferred so the click that opened the menu does not reach the closing
+     listener on the same tick. */
+  setTimeout(function () {
+    document.addEventListener('click', _onChannelAddMenuDocClick, true);
+    document.addEventListener('keydown', _onChannelAddMenuKey);
+    window.addEventListener('resize', closeChannelAddMenu);
+  }, 0);
+}
+
+var _channelAddMenu = null;
+
+function closeChannelAddMenu() {
+  if (_channelAddMenu) {
+    _channelAddMenu.remove();
+    _channelAddMenu = null;
+  }
+  document.removeEventListener('click', _onChannelAddMenuDocClick, true);
+  document.removeEventListener('keydown', _onChannelAddMenuKey);
+  window.removeEventListener('resize', closeChannelAddMenu);
+  Array.prototype.forEach.call(document.querySelectorAll('.shell-channel-add-caret.active, .shell-channel-empty-caret.active, .shell-channel-tab-add.active, .shell-channel-empty-add.active'), function (b) {
+    b.classList.remove('active');
+  });
+}
+
+function _onChannelAddMenuDocClick(e) {
+  if (!_channelAddMenu) return;
+  if (_channelAddMenu.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('.shell-channel-add-caret, .shell-channel-empty-caret, .shell-channel-tab-add, .shell-channel-empty-add')) return;
+  closeChannelAddMenu();
+}
+
+function _onChannelAddMenuKey(e) {
+  if (e.key === 'Escape') closeChannelAddMenu();
+}
+
+/** promptChannelCommand asks for the command a custom shell runs, then opens it.
+ *  pty + empty command is the login shell; a command runs that command with a
+ *  TTY. pipe + command is a line-oriented run-to-exit command, and pipe without
+ *  one is refused by the server (there is no login shell to fall back on), so it
+ *  is required there. */
+function promptChannelCommand(win, mode) {
+  openCommandPrompt({
+    title: mode === 'pipe' ? t('channel.cmd.titlePipe') : t('channel.cmd.titlePty'),
+    placeholder: t('channel.cmd.placeholder'),
+    required: mode === 'pipe',
+    onSubmit: function (cmd) { createChannel(win, mode, cmd); }
+  });
+}
+
+/** createChannel POSTs a new shell channel and opens its tab.
+ *
+ * `command` is a typed command LINE, not an executable: it is split into an
+ * executable plus args here, because the REST API takes argv. A line sent whole
+ * would be a single argv element and fail with "executable file not found". */
+function createChannel(win, mode, command) {
+  if (!win._parentSid || win._readOnly) return Promise.resolve(null);
+  var body = { rows: 24, cols: 80, mode: mode || 'pty' };
+  var argv = splitCommandLine((command || '').trim());
+  if (argv.length) {
+    body.command = argv[0];
+    if (argv.length > 1) body.args = argv.slice(1);
+  }
+  return fetch('/api/sessions/' + encodeURIComponent(win._parentSid) + '/shells', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rows: 24, cols: 80 })
-  }).then(function(r) {
-    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (txt) { throw new Error(txt); });
     return r.json();
-  }).then(function(j) {
+  }).then(function (j) {
     createChannelTab(win, j.shell_id || j.session_id);
-  }).catch(function(err) { console.error('add channel failed', err); });
+    return j;
+  }).catch(function (err) {
+    var msg = String(err && err.message ? err.message : err).trim();
+    console.error('add channel failed', err);
+    showCopyToast(t('channel.add.failed', { msg: msg }));
+    return null;
+  });
 }
 
 /** Wire up channel tab bar events (called once per window). */
@@ -413,8 +553,17 @@ function _wireChannelTabBar(win) {
     emptyBtn._chWired = true;
     emptyBtn.addEventListener('click', function() { addChannelClick(win); });
   }
+  var menuBtn = win.querySelector('.shell-channel-add-caret');
+  if (menuBtn && !menuBtn._chWired) {
+    menuBtn._chWired = true;
+    menuBtn.addEventListener('click', function(e) { e.preventDefault(); openChannelAddMenu(win, menuBtn); });
+  }
+  var emptyMenuBtn = win.querySelector('.shell-channel-empty-caret');
+  if (emptyMenuBtn && !emptyMenuBtn._chWired) {
+    emptyMenuBtn._chWired = true;
+    emptyMenuBtn.addEventListener('click', function(e) { e.preventDefault(); openChannelAddMenu(win, emptyMenuBtn); });
+  }
 }
-
 /** applyApprovalModeFromSnapshot seeds a window's review UI, then corrects it
  *  from the server.
  *
@@ -1026,12 +1175,20 @@ function openPendingShellWindow(connName, clickEvent, abortCtl) {
       '</div>' +
       '<div class="shell-window-footer">' +
         '<div class="shell-channel-tabs">' +
-          '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+          '<span class="shell-split">' +
+            '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+            '<button type="button" class="shell-channel-add-caret" aria-haspopup="menu" title="New shell channel · choose mode" data-i18n-title="channel.addMenu">▾</button>' +
+          '</span>' +
         '</div>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
         '<span data-i18n="channel.empty">No shell channels</span>' +
-        '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
+        /* Split control, same as the footer "+": label presses for the default
+           shell, caret opens the mode menu. */
+        '<span class="shell-split">' +
+          '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
+          '<button type="button" class="shell-channel-empty-caret" aria-haspopup="menu" title="New shell channel · choose mode" data-i18n-title="channel.addMenu">▾</button>' +
+        '</span>' +
       '</div>' +
     '</div>' +
 SHELL_REVIEW_SHEET_HTML +
@@ -1223,12 +1380,20 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
       '<div class="shell-channel-body"></div>' +
       '<div class="shell-window-footer">' +
         '<div class="shell-channel-tabs">' +
-          '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+          '<span class="shell-split">' +
+            '<button type="button" class="shell-channel-tab-add" title="New shell channel" data-i18n-title="channel.add">+</button>' +
+            '<button type="button" class="shell-channel-add-caret" aria-haspopup="menu" title="New shell channel · choose mode" data-i18n-title="channel.addMenu">▾</button>' +
+          '</span>' +
         '</div>' +
       '</div>' +
       '<div class="shell-channel-empty">' +
         '<span data-i18n="channel.empty">No shell channels</span>' +
-        '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
+        /* Split control, same as the footer "+": label presses for the default
+           shell, caret opens the mode menu. */
+        '<span class="shell-split">' +
+          '<button type="button" class="shell-channel-empty-add" data-i18n="channel.newShell">+ New Shell</button>' +
+          '<button type="button" class="shell-channel-empty-caret" aria-haspopup="menu" title="New shell channel · choose mode" data-i18n-title="channel.addMenu">▾</button>' +
+        '</span>' +
       '</div>' +
     '</div>' +
 SHELL_REVIEW_SHEET_HTML +

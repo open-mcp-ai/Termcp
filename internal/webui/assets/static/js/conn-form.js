@@ -296,6 +296,10 @@ function openConnModal(edit, name, kind) {
   if (loopbackOnly) loopbackOnly.style.display = isInternal ? '' : 'none';
   var remoteFields = document.getElementById('conn-f-remote-fields');
   if (remoteFields) remoteFields.style.display = isInternal ? 'none' : '';
+  // Proxy and the jump chain are the dial path; loopback dials this machine, so it
+  // hides them too — but it keeps 默认 Shell / 默认审核, which are its own settings.
+  var remoteExtra = document.getElementById('conn-f-remote-extra');
+  if (remoteExtra) remoteExtra.style.display = isInternal ? 'none' : '';
   // Start in form view
   document.getElementById('conn-form-view').style.display = '';
   document.getElementById('conn-config-view').style.display = 'none';

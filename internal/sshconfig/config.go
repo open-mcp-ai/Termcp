@@ -172,6 +172,17 @@ func EffectiveCommand(ent *Entry, cmd string, args []string) (string, []string) 
 	return "", nil
 }
 
+// EffectiveDefaultShell returns the profile's default shell line (may carry
+// arguments), or "" when the profile sets none. A session keeps this so shells
+// opened later on the same connection resolve their shell the same way the
+// first one did: caller's command, then the profile, then the server's own.
+func EffectiveDefaultShell(ent *Entry) string {
+	if ent == nil {
+		return ""
+	}
+	return strings.TrimSpace(ent.DefaultShell)
+}
+
 // EffectiveMode returns pty or pipe; default is pty unless ent.DefaultMode overrides when mode is empty.
 func EffectiveMode(ent *Entry, mode string) string {
 	m := strings.TrimSpace(strings.ToLower(mode))

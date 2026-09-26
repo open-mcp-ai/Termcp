@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/shell"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -216,16 +215,23 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 
 	var startErr error
 	if trimmed := strings.TrimSpace(command); trimmed == "" && len(args) == 0 {
-		switch {
-		case pty:
-			if err := session.Shell(); err != nil {
-				sh, shArgs := shell.NewDetector().Argv()
-				startErr = session.Start(shellQuote(sh, shArgs))
-			}
-		default:
-			sh, shArgs := shell.NewDetector().Argv()
-			startErr = session.Start(shellQuote(sh, shArgs))
+		if !pty {
+			// Pipe mode has no "give me a login shell" request: it can only exec a
+			// concrete command. Guessing one from THIS host's detector sends the
+			// local path (e.g. C:\Program Files\WindowsApps\…\pwsh.exe) to the
+			// remote sshd, which answers "command not found". Refuse instead.
+			err := fmt.Errorf("empty command in pipe mode: a pipe shell runs a command, not a login shell")
+			closeIfCloser(stderr)
+			closeIfCloser(stdout)
+			stdin.Close()
+			session.Close()
+			closeClient()
+			return nil, err
 		}
+		// PTY: the shell request lets the SERVER decide its login shell. The
+		// client never supplies one — a path from the local detector is only valid
+		// when the target is this host, and the client cannot ask which it is.
+		startErr = session.Shell()
 	} else {
 		startErr = session.Start(shellQuote(trimmed, args))
 	}
