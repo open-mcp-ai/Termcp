@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.3 — 2026-09-27
+
 ### Breaking
 
 - **会话不再决定容器的生死**：shell 的自然退出、手动关闭（哪怕关掉最后一个）都不再把 Session 翻为 `exited`/DEAD。Session 持有的是 SSH transport，端口转发、SFTP 和 `shell_open` 都只依赖它，因此“零 shell 但 `running`”是合法且可复用的状态；`exited` 只由 `session_terminate`、断线、server shutdown 产生。此前 `session_start(mode="pipe")` 的单次命令跑完就丢掉整个连接（连带关闭端口转发），现在需要显式 `session_terminate`。
