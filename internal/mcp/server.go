@@ -31,8 +31,7 @@ const mcpServerInstructions = `termcp agent rules:
 6) Other keys use JSON \u001b escapes in shell_input. Repeating traceback → session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang → session_info.
 7) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
 8) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken.
-9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.
-10) Docs: before REST/CLI work read this instance's own reference via resources/list (URIs are real http://.../api.md and http://.../skills.md URLs; same paths over plain HTTP). MCP tool args/results come from tools/list, not from docs.`
+9) notify_user(message, level, session_id?) toasts the human's Web UI (not the Agent); shell_notify wakes the Agent.`
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
