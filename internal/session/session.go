@@ -56,11 +56,17 @@ type RemoteSSH struct {
 type Config struct {
 	Command string
 	Args    []string
-	Mode    api.SessionMode
-	Name    string
-	Rows    int
-	Cols    int
-	Remote  *RemoteSSH
+	// Mode applies to the first shell only. Mode is per shell channel; a session
+	// is a connection container and owns no mode of its own.
+	Mode   api.SessionMode
+	Name   string
+	Rows   int
+	Cols   int
+	Remote *RemoteSSH
+	// DefaultShell is the profile's default_shell, kept so shells opened later on
+	// this connection resolve their shell the same way the first one did: the
+	// caller's command, then this, then the server's own login shell.
+	DefaultShell string
 	// Approval turns review mode on as the session is created, so a profile can
 	// make "every write to this host is reviewed" the default rather than a
 	// switch someone has to remember after launching.
@@ -92,6 +98,7 @@ type Session struct {
 	onShellExit    atomic.Pointer[func(shellID string, exitCode *int)]
 	onShellClose   atomic.Pointer[func(shellID string)]
 	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
+	defaultShell   string // profile default_shell, applied to shells opened later
 	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
 
 	shells sync.Map // *ChildShell by ID
@@ -223,7 +230,6 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 			Name:        name,
 			Command:     cfg.Command,
 			Args:        cfg.Args,
-			Mode:        cfg.Mode,
 			Status:      api.SessionRunning,
 			CreatedAt:   clock.Now(),
 			UpdatedAt:   clock.Now(),
@@ -232,6 +238,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 			SSHEndpoint: sshEndpointPublic,
 		},
 		enterCRLF:      enterCRLF,
+		defaultShell:   cfg.DefaultShell,
 		execSession:    execSession,
 		buf:            buf,
 		readerID:       rid,
@@ -522,17 +529,6 @@ func (s *Session) markDeadWithMessage(systemMessage string) {
 	s.markDeadLocked(systemMessage)
 }
 
-// markDeadIfNoShells performs the zero-live-shell check under the same lock used
-// by CreateChildShell, so a new channel cannot appear during the DEAD transition.
-func (s *Session) markDeadIfNoShells(systemMessage string) {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
-	if s.liveShellCount() != 0 {
-		return
-	}
-	s.markDeadLocked(systemMessage)
-}
-
 // markDeadLocked requires shellStateMu.
 func (s *Session) markDeadLocked(systemMessage string) {
 	s.closing = true
@@ -693,23 +689,6 @@ func (s *Session) terminateChildren() {
 	}
 }
 
-// ResizePty adjusts the terminal dimensions (pty mode only) on the primary shell.
-func (s *Session) ResizePty(rows, cols int) error {
-	if s.Mode != api.ModePTY {
-		return fmt.Errorf("PTY resize only available in pty mode")
-	}
-	cs := s.PrimaryShell()
-	if cs == nil {
-		return fmt.Errorf("session shell has exited")
-	}
-	if err := cs.ResizePty(rows, cols); err != nil {
-		return err
-	}
-	s.Rows = rows
-	s.Cols = cols
-	return nil
-}
-
 // Info returns a deep copy of the session metadata.
 func (s *Session) Info() api.Session {
 	s.mu.RLock()
@@ -863,6 +842,19 @@ func (cs *ChildShell) Info() api.Session {
 	return s
 }
 
+// resolveShellCommand applies the connection's default_shell when the caller
+// sends no command of its own. It is the second step of the shell priority
+// chain (caller → profile → server-side detection); an explicit command of any
+// kind, including args-only, wins outright.
+func (s *Session) resolveShellCommand(command string, args []string) (string, []string) {
+	if strings.TrimSpace(command) == "" && len(args) == 0 && s.defaultShell != "" {
+		if f := strings.Fields(s.defaultShell); len(f) > 0 {
+			return f[0], f[1:]
+		}
+	}
+	return command, args
+}
+
 // Done returns a channel that closes when the child shell process exits.
 func (cs *ChildShell) Done() <-chan struct{} {
 	return cs.done
@@ -959,10 +951,15 @@ func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) erro
 	return nil
 }
 
-// ResizePty adjusts the child shell's terminal dimensions.
+// ResizePty adjusts the child shell's terminal dimensions. Only a pty shell has
+// a terminal: a pipe shell has no TTY, so this reports an error instead of
+// forwarding a meaningless window-change to the transport.
 func (cs *ChildShell) ResizePty(rows, cols int) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	if cs.mode != api.ModePTY {
+		return fmt.Errorf("PTY resize only available in pty mode (shell mode %q)", cs.mode)
+	}
 	if cs.Status != api.SessionRunning {
 		return fmt.Errorf("process not running")
 	}
@@ -1221,23 +1218,6 @@ func (s *Session) removeChildShell(id string) {
 	s.notifyChildChange()
 }
 
-// liveShellCount returns the number of child shells whose processes are still running.
-// Exited shells stay in the map so MCP/WebUI readers can drain retained output.
-func (s *Session) liveShellCount() int {
-	n := 0
-	s.shells.Range(func(_, v any) bool {
-		cs := v.(*ChildShell)
-		cs.mu.RLock()
-		running := cs.Status == api.SessionRunning
-		cs.mu.RUnlock()
-		if running {
-			n++
-		}
-		return true
-	})
-	return n
-}
-
 // startChildReaders starts the stdout/stderr pipe goroutines and exit watcher for a child shell.
 func (cs *ChildShell) startReaders() {
 	cs.pipeToBuffer(cs.execSession.Stdout)
@@ -1297,15 +1277,12 @@ func (cs *ChildShell) startReaders() {
 		if reparent != nil && !deliberate && cs.execSession.Aborted() {
 			slog.Debug("session DEAD via transport abort", "session_id", reparent.ID, "child_shell_id", cs.ID)
 			reparent.markDeadWithMessage("❌ SSH connection lost — network disconnected")
-		} else if reparent != nil && !deliberate && reparent.Mode == api.ModePipe {
-			// A clean exit of the last pipe shell would otherwise leave a running
-			// container with zero shells. Flip the parent to DEAD so the container
-			// disappears from the running list; output/history stays for manual
-			// cleanup (clear-dead button). PTY sessions remain reusable after a
-			// shell exits, preserving the interactive-session contract.
-			slog.Debug("pipe shell exited cleanly; checking parent", "session_id", reparent.ID, "child_shell_id", cs.ID)
-			reparent.markDeadIfNoShells("Session ended — last shell exited")
 		}
+		// A shell ending — cleanly or not — never ends the container. The session
+		// owns the SSH transport, and that transport is what carries forwards, SFTP
+		// and new shell channels; a run-to-exit pipe command finishing (or every
+		// shell being closed) must leave all of those working. Only an aborted
+		// transport, session_terminate, or manager shutdown flips a session DEAD.
 		slog.Debug("child shell exited", "child_shell_id", cs.ID, "exit_code", code)
 	}()
 }
@@ -1330,6 +1307,12 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 	if name == "" {
 		name = fmt.Sprintf("shell-%s", id)
 	}
+
+	// Shell resolution: the caller's command, else the profile's default_shell.
+	// When both are empty the transport decides — a pty shell asks the server for
+	// its login shell (see sshclient.startSession); a pipe shell has no such
+	// request and is refused there rather than guessed from the client's PATH.
+	command, args = s.resolveShellCommand(command, args)
 
 	execSession, err := sshclient.StartWithClient(sshClient, command, args, pty, rows, cols)
 	if err != nil {
@@ -1370,9 +1353,9 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 // CloseChildShell terminates and removes a child shell from the parent.
 // Manual close is a DELETE, not a DEAD transition: the shell is dropped from
 // the live map, the per-shell history snapshot, and any persisted restore, so
-// it never reappears as a dead/"end" tab. A pipe container whose last shell is
-// closed flips to DEAD (same contract as a clean last-shell exit); PTY
-// containers stay running and can spawn new shells.
+// it never reappears as a dead/"end" tab. Closing a shell — even the last one —
+// leaves the container running: the session owns the SSH transport, so forwards,
+// SFTP and new shells keep working with zero live shells.
 func (s *Session) CloseChildShell(id string) error {
 	v, ok := s.shells.Load(id)
 	if !ok {
@@ -1391,9 +1374,6 @@ func (s *Session) CloseChildShell(id string) error {
 		s.shellHistory.Delete(id)
 		s.removeChildShell(id)
 	})
-	if s.Mode == api.ModePipe {
-		s.markDeadIfNoShells("")
-	}
 	slog.Debug("child shell closed", "parent_id", s.ID, "child_shell_id", id)
 	return nil
 }

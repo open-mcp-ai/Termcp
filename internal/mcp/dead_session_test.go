@@ -16,6 +16,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // waitForExited polls the session registry until the session reports status
@@ -211,17 +212,16 @@ func TestForwardsCascadeOnSessionDead(t *testing.T) {
 	}
 }
 
-// TestCleanExitPipeSessionIsReadOnly pins the DEAD contract for the case that
-// used to slip through: a pipe session whose command exits on its own. The
-// container flips to exited without closing its SSH client (only terminate,
-// disconnect, and Delete do), so the refusal below can only come from the
-// session-status guard — never from a dead transport. That live-transport
-// precondition is asserted, so a transport-liveness guard cannot pass this test
-// by closing the connection earlier. The forward path shares the same guard
-// (sshClientForSession → requireRunningSession) and stays covered by
-// TestDeadSessionFileAndForwardRejected.
-func TestCleanExitPipeSessionIsReadOnly(t *testing.T) {
+// TestCleanExitPipeShellKeepsContainerRunning pins the container contract: a
+// pipe shell is a run-to-exit command, and when it exits the container does NOT
+// follow it into DEAD. The session owns the SSH transport, and that transport is
+// what carries forwards, SFTP and new shell channels — a finished command must
+// leave all of them working. Only terminate/disconnect/shutdown (or an aborted
+// transport) end the container.
+func TestCleanExitPipeShellKeepsContainerRunning(t *testing.T) {
 	s := newTestServer(t)
+	s.forwardMgr = forward.NewForwardManager()
+	s.sessMgr.SetOnDeadHook(s.forwardMgr.CloseBySession)
 
 	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
 		"command":    "echo",
@@ -231,17 +231,26 @@ func TestCleanExitPipeSessionIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sid := parseResult(t, startRes)["session_id"].(string)
+	res := parseResult(t, startRes)
+	sid := res["session_id"].(string)
+	shellID := res["shell_id"].(string)
 
-	if !waitForExited(t, s, sid, 5*time.Second) {
-		t.Fatal("cleanly-exited pipe session did not turn DEAD in time")
+	// Wait for the pipe command to finish, then assert the container survived.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cs := s.sessMgr.GetChildShell(shellID); cs != nil && cs.Info().Status != api.SessionRunning {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if info := s.sessMgr.Get(sid).Info(); info.Status != api.SessionRunning {
+		t.Fatalf("container must stay running after its pipe command exits, got %q", info.Status)
 	}
 	if sess := s.sessMgr.Get(sid); sess == nil || sess.SSHClient() == nil {
-		t.Fatal("precondition failed: a cleanly-exited session keeps its SSH transport until Delete")
+		t.Fatal("precondition failed: the finished command must not close the SSH transport")
 	}
 
-	// A file that exists on every platform: if the guard ever regresses, this
-	// read succeeds instead of failing for an unrelated reason.
+	// The transport is what file tools and forwards need: both must still work.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
@@ -254,5 +263,26 @@ func TestCleanExitPipeSessionIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertErrorCode(t, readRes, "session_not_running", "file_read on a cleanly-exited session")
+	if readRes.IsError {
+		t.Fatalf("file_read must keep working on a container with zero live shells: %s",
+			readRes.Content[0].(mcpgo.TextContent).Text)
+	}
+
+	// This is the port-forwarding case the container rule exists for: closing or
+	// losing every shell is not closing the session, so a forward still works.
+	fwdRes, err := s.handleForwardOps(context.Background(), makeRequest(map[string]any{
+		"action":      "local",
+		"session_id":  sid,
+		"remote_host": "localhost",
+		"remote_port": float64(80),
+		"local_port":  float64(0),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fwdRes.IsError {
+		t.Fatalf("forward on a zero-live-shell running session must succeed: %s",
+			fwdRes.Content[0].(mcpgo.TextContent).Text)
+	}
+	s.forwardMgr.CloseBySession(sid)
 }

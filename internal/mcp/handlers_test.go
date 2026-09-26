@@ -622,6 +622,77 @@ func TestHandlePressKey_UnknownKey(t *testing.T) {
 	s.handleTerminateSession(context.Background(), termReq)
 }
 
+// Mode is a property of each shell channel, not of the container: the same
+// session must be able to hold a pty shell and a pipe shell at once, each
+// reporting its own mode, and an invalid mode must be refused rather than
+// silently treated as pipe (which is what `mode == "pty"` used to do).
+func TestHandleStartSubShell_ModeIsPerShell(t *testing.T) {
+	s := newTestServer(t)
+
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("start session failed: %v %+v", err, startRes)
+	}
+	sessionID := parseResult(t, startRes)["session_id"].(string)
+
+	for _, mode := range []string{"websocket", "PTY", "x"} {
+		res, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
+			"session_id": sessionID,
+			"mode":       mode,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := decodeToolError(t, res); code != CodeInvalidArgument {
+			t.Fatalf("mode %q: expected %s, got %q", mode, CodeInvalidArgument, code)
+		}
+	}
+
+	pipeRes, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
+		"session_id": sessionID,
+		"mode":       "pipe",
+		"command":    "echo",
+		"args":       []string{"hi"},
+	}))
+	if err != nil || pipeRes.IsError {
+		t.Fatalf("shell_open(pipe) failed: %v %+v", err, pipeRes)
+	}
+	pipeShellID := parseResult(t, pipeRes)["shell_id"].(string)
+
+	listRes, err := s.handleListSubshells(context.Background(), makeRequest(map[string]any{"session_id": sessionID}))
+	if err != nil || listRes.IsError {
+		t.Fatalf("shell_list failed: %v %+v", err, listRes)
+	}
+	var listed struct {
+		Shells []api.Session `json:"shells"`
+	}
+	if err := json.Unmarshal([]byte(listRes.Content[0].(mcpgo.TextContent).Text), &listed); err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]api.SessionMode{}
+	for _, sh := range listed.Shells {
+		modes[sh.ID] = sh.Mode
+	}
+	if got := modes[pipeShellID]; got != api.ModePipe {
+		t.Fatalf("pipe shell reports mode %q, want %q", got, api.ModePipe)
+	}
+
+	// A pipe shell has no TTY, so resizing it must fail; the pty shell must not.
+	resizeRes, err := s.handleResizePty(context.Background(), makeRequest(map[string]any{
+		"shell_id": pipeShellID, "rows": float64(40), "cols": float64(120),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resizeRes.IsError {
+		t.Fatal("resizing a pipe shell must fail: it has no TTY")
+	}
+}
+
 func TestHandleStartSession_InvalidMode(t *testing.T) {
 	s := newTestServer(t)
 	for _, mode := range []string{"websocket", "x"} {
