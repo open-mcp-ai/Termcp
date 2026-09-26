@@ -241,6 +241,12 @@ func TestNoUnreachableUI(t *testing.T) {
 		"function createForward(",
 		"function deleteForward(",
 		"function forwardMatchesConfig(",
+		// openForwardModal must record which session it was opened for, or
+		// createForward rejects every request with noSession (the v0.2.2
+		// regression: the assignment vanished with the deleted tools panel,
+		// leaving _fwdSessionId null at runtime — invisible to the compiler,
+		// to the HTML, and to every other test).
+		"_fwdSessionId = sessionId;",
 	} {
 		if !strings.Contains(fm, want) {
 			t.Errorf("forward-modal.js lost %q; the forward modal needs it", want)

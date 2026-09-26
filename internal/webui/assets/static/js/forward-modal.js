@@ -6,6 +6,8 @@ function openForwardModal(sessionId, sshConfig) {
     showModal('modal-forward');
     return;
   }
+  _fwdSessionId = sessionId;
+  _fwdSshCfg = sshConfig || 'internal';
   var cfgEl = document.getElementById('fw-ssh-config-modal');
   if (cfgEl) cfgEl.value = _fwdSshCfg;
   document.getElementById('fw-remote-host').value = '';
