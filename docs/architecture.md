@@ -355,7 +355,7 @@ message.Manager.AppendOutput(sessionID, shellID, chunk)
 Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `status`。当前状态的含义如下：
 
 - `running`：Session 未关闭，SSH transport 可用；这是 Session 的正常在线状态。Shell 可以是 `running`，也可以是自然退出后仍保留在 channel 列表中的 `exited`。
-- `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown，或 pipe 模式最后一个 shell 自然退出/被关闭）。Session 仍保留在 registry，缓冲区、字节流日志和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
+- `exited`（代码/界面常称 DEAD）：Session 已结束（显式 terminate、SSH transport 异常断线、server shutdown）。Shell 的存亡与它无关：Shell 自然退出、手动关闭、甚至全部关掉，容器都保持 `running`（transport 仍然可用，端口转发/SFTP/新建 shell 继续工作）。Session 仍保留在 registry，缓冲区、字节流日志和自然退出 shell 快照用于只读查看，直到显式 `DELETE`。
 - `error`：保留给启动失败等错误；当前启动失败直接返回错误，不会创建 Session。
 
 ```
@@ -368,7 +368,7 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
                            └──┬─────┬─────┘
                               │     │
            Session terminate/ │     │  传输异常断线
-           disconnect/shutdown│     │  或 pipe 最后 shell 结束
+           disconnect/shutdown│     │
                               │     │
                               └──┬──┘
                                  ▼
@@ -380,17 +380,17 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
                                   ▼
                                [gone]
 
-      running ── shell 自然退出 ──> running（PTY；shell 留在列表供 drain）
-      running ── shell 手动关闭 ──> running（PTY；shell 直接删除）
-      running ── 最后 pipe shell 手动关闭 ──> exited（shell 直接删除）
+      running ── shell 自然退出 ──> running（shell 留在列表供 drain）
+      running ── shell 手动关闭 ──> running（shell 直接删除；关掉最后一个也一样）
+      running ── 所有 shell 关闭/退出 ──> running（transport 仍可用：转发/SFTP/shell_open 照常）
 ```
 
 **关键不变量：**
 
-1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭就把仍可用的 PTY Session 标成 DEAD。
+1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭（哪怕一个不剩）就把仍可用的 Session 标成 DEAD —— 容器持有的是 SSH transport，端口转发、SFTP 与 `shell_open` 都只依赖它。
 2. 手动关闭 Shell 是删除操作：从 live map、shell history snapshot 和持久化的 shell manifest 中移除；它不会产生 `exited` shell，也不会被 UI 渲染成 `end` tab。
 3. 只有自然退出或 transport 异常断线的 shell，才会保留 `exited` 元数据供 DEAD/只读视图使用。
-4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。
+4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。`exited` 只由 terminate/disconnect/transport 断线/shutdown 产生，永远不由 shell 生命周期产生。
 
 **exitOnce / closeOnce 保证**：无论是进程自然退出还是 terminate/手动关闭触发，状态转换和 Done channel 都只执行一次；手动关闭与自然退出并发时，关闭标记优先，避免 shell 被重新写回历史快照。
 

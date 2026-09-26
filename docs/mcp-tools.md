@@ -115,8 +115,8 @@ ssh_config(action=list)
       → shell_input(shell_id, text)         # 只打字，不回车
       → shell_key(shell_id, key="enter")    # 只按键
       → shell_output(shell_id, timeout≤3)
-      → shell_open(session_id) → { shell_id, session_id }
-      → shell_close(shell_id)
+      → shell_open(session_id) → { shell_id, session_id }   # 关掉全部 shell 后仍可新建
+  → shell_close(shell_id)                  # 关掉 shell 不关会话：forward/file_* 照常
       → forward(session_id, action=local|remote|dynamic, ...)
       → file_*(session_id, ...)
   → session_terminate(session_id)           # 关闭会话（转入 DEAD：断连接+杀进程；force=true 强杀）
@@ -140,9 +140,9 @@ ssh_config(action=list)
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `command` | string | 否 | — | 可执行文件；省略 = 登录 shell（默认）。仅 REPL/服务/独立原子任务需要填写 |
+| `command` | string | 否 | — | 可执行文件；空 = 按**命令优先级链**解析：profile 的 `default_shell` → （仅 pty）目标机自己的登录 shell。`pipe` + 空命令且 profile 无 `default_shell` 会被拒绝：pipe 通道没有登录 shell 可申请，客户端也不会拿本机 PATH 去猜目标机的 shell |
 | `args` | string[] | 否 | `[]` | 命令行参数，仅 `command` 非空时有效 |
-| `mode` | string | 否 | `"pty"` | `"pty"` 或 `"pipe"` |
+| `mode` | string | 否 | `"pty"` | **首个 shell** 的模式：`"pty"` 或 `"pipe"`。模式属于 shell，不属于会话；后续 shell 的 mode 由 `shell_open` 决定 |
 | `name` | string | 否 | ssh_config | 会话显示名称 |
 | `rows` | number | 否 | `24` | 初始 PTY 行数（1–1000） |
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |
@@ -158,8 +158,8 @@ ssh_config(action=list)
 |------|------|------|------|------|
 | `session_id` | string | **是** | — | 父会话 ID |
 | `name` | string | 否 | — | 子通道显示名 |
-| `command` | string | 否 | — | 可执行文件；空 = 登录 shell |
-| `mode` | string | 否 | `"pty"` | `"pty"` 或 `"pipe"` |
+| `command` | string | 否 | — | **可执行文件**（非命令行）；空 = 按**命令优先级链**解析：profile 的 `default_shell` → （仅 pty）目标机自己的登录 shell。`pipe` + 空命令且 profile 无 `default_shell` 会被拒绝。传 `"ls -la"` 会被当成单个文件名报 `executable file not found`，应传 `command="ls"` + `args=["-la"]` |
+| `mode` | string | 否 | `"pty"` | 本 shell 通道的模式：`"pty"` 或 `"pipe"`（`"pipe"` = 无 TTY、逐行、运行即退出的命令）。模式是 shell 级属性，同一个会话可以同时挂 pty 与 pipe shell |
 | `rows` | number | 否 | `24` | PTY 行数 |
 | `cols` | number | 否 | `80` | PTY 列数 |
 
@@ -177,7 +177,7 @@ ssh_config(action=list)
 
 ### shell_close
 
-按 `shell_id` **删除**一个 shell 通道（手动关闭 = 删除，不是 DEAD；不会留下死态 tab）。不拆会话连接，不影响同会话其它 shell。internal 主 shell 关闭为 no-op（进程可存活于 tab 之外）。pipe 会话的最后一个 shell 被关闭时，容器转为 `exited`（DEAD）；PTY 容器保持 `running` 可再新建 shell。彻底停止会话用 `session_terminate`。
+按 `shell_id` **删除**一个 shell 通道（手动关闭 = 删除，不是 DEAD；不会留下死态 tab）。不拆会话连接，不影响同会话其它 shell。internal 主 shell 关闭为 no-op（进程可存活于 tab 之外）。关掉最后一个 shell 也只是少了一个通道：容器保持 `running`，端口转发、SFTP、新建 shell 继续可用（shell 生命周期不决定容器生命周期）。彻底停止会话用 `session_terminate`。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -419,7 +419,7 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `known_hosts` | string | 否 | 内容或路径 |
 | `dial_timeout_seconds` | number | 否 | 默认 30 |
 | `proxy` | string | 否 | SOCKS5 代理 URL |
-| `description` / `default_shell` / `default_mode` | string | 否 | 会话默认值 |
+| `description` / `default_shell` / `default_mode` | string | 否 | 新建会话的默认值。`default_shell` 是**命令优先级链**的第二级（调用方未给命令时生效，对该连接上的每个 shell 都有效）；`default_mode` 只作用于**首个 shell**，后续 shell 各自在 `shell_open` 里定 |
 | `default_approval` | bool | 否 | 会话默认开启审阅（每次 AI 写入都等人裁决）。edit 时不传则保持原值，传 `false` 则关掉 |
 | `jump_*` | — | 否 | 单层 bastion（ProxyJump）：`jump_host` / `jump_user` / `jump_port` / `jump_password` / `jump_private_key` / `jump_key_passphrase` / `jump_trust_unknown_host` / `jump_known_hosts` / `jump_dial_timeout_seconds` / `jump_proxy` |
 | `source_name` / `target_name` | string | 条件 | copy：源与目标（目标须不存在） |

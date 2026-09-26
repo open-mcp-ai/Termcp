@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Breaking
+
+- **会话不再决定容器的生死**：shell 的自然退出、手动关闭（哪怕关掉最后一个）都不再把 Session 翻为 `exited`/DEAD。Session 持有的是 SSH transport，端口转发、SFTP 和 `shell_open` 都只依赖它，因此“零 shell 但 `running`”是合法且可复用的状态；`exited` 只由 `session_terminate`、断线、server shutdown 产生。此前 `session_start(mode="pipe")` 的单次命令跑完就丢掉整个连接（连带关闭端口转发），现在需要显式 `session_terminate`。
+- **模式（pty/pipe）改为 shell 级属性**：`session_start` 的 `mode` 只作用于它创建的首个 shell（`default_mode` 同理），后续 shell 由 `shell_open` 的 `mode` 决定；会话记录不再带 `mode` 字段。`shell_resize` 只接受 pty shell，对 pipe shell 报错而不是静默无效。
+
+### 修复
+
+- **Web UI 端口转发弹窗不再报“没有活动会话”**：弹窗打开时没有记录当前会话上下文，导致每次创建转发都被前端拒绝；现在恢复该上下文赋值（回归来自 v0.2.2 删除旧工具面板的改动）。
+- **不再拿本机 PATH 去猜目标机的 shell**：`command` 为空时客户端曾用本机探测到的 shell（Windows 上常是 `C:\Program Files\WindowsApps\...\pwsh.exe`）作为 SSH exec 命令，远端 zsh 因此报 `command not found`。现在空命令按**命令优先级链**解析：调用方 command → profile 的 `default_shell` →（仅 pty）目标机自己的登录 shell。`pipe` + 空命令且 profile 无 `default_shell` 直接拒绝——pipe 通道没有登录 shell 可申请，猜一个只会把本机路径发到远端。`default_shell` 现在是该连接上**每个** shell 的默认命令，不再只影响首个 shell。
+
+### 新功能
+
+- **Web UI 新建 shell 通道改为按钮 + 展开菜单**：标签条尾部与空面板的 “+” 按钮为主键（直接新建默认 pty 登录 shell）+ 下拉箭头（向上展开菜单）。菜单可选 `pty` / `pipe`，选定后弹对话框填写命令：pty 留空即登录 shell，pipe 必填。对话框接受**命令行**（`ls -la`、`python -m http.server`），前端拆成可执行文件 + 参数再发请求——REST/MCP 接口收的仍是 argv，整行直接当作可执行文件会报 `executable file not found`。
+- **主机配置表单按连接顺序排列**：凭据 → 本配置项（默认 Shell、默认审核）→ 网络路径（代理 → SSH 跳板链），跳板链置于表单最下方——它是最后真正拨号到目标的一段。内建回环配置只需隐藏网络路径部分，不再连带隐藏默认 Shell / 默认审核。
+
 ## v0.2.2 — 2026-09-25
 
 ### Breaking
