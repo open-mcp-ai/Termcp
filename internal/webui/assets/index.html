@@ -191,6 +191,24 @@
        a modal asking "which session?" is a question the terminal already
        answered. -->
 
+  <div id="modal-cmd" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-h">
+        <h2 id="modal-cmd-title" data-i18n="channel.cmd.titlePty">Run command</h2>
+        <button type="button" id="modal-cmd-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p id="modal-cmd-err" class="err" style="display:none;margin:0 0 8px;color:#cf222e;font-size:0.8rem"></p>
+        <label for="modal-cmd-input" data-i18n="channel.cmd.label">Command</label>
+        <input type="text" id="modal-cmd-input" autocomplete="off" spellcheck="false">
+        <div class="modal-actions">
+          <button type="button" class="btn" id="modal-cmd-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="modal-cmd-run" data-i18n="common.ok">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
