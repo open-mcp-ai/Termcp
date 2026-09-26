@@ -239,7 +239,7 @@ Lists every session in the registry: running ones plus closed (DEAD) read-only t
 Response 200:
 {
   "sessions": [
-    { "id": "abc123", "name": "pi", "mode": "pty", "status": "running",
+    { "id": "abc123", "name": "pi", "status": "running",
       "pid": 12345, "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
   ]
 }
@@ -256,7 +256,7 @@ Request:
                          // MCP's session_start requires it explicitly
   "command": "",         // command; empty = login shell
   "args": [],
-  "mode": "pty",         // "pty" | "pipe"
+  "mode": "pty",         // "pty" | "pipe" — mode of the FIRST shell only
   "name": "my-session",  // display name, defaults to ssh_config
   "rows": 24,
   "cols": 80
@@ -329,6 +329,19 @@ Response 200:
 ### `POST /api/sessions/{id}/shells`
 
 Opens another shell channel on an existing session (reusing the SSH connection).
+The requested `mode` applies to this shell only; `"pipe"` runs a command to exit
+without a TTY.
+
+An empty `command` resolves through the shell priority chain: the profile's
+`default_shell` first, then — pty only — the target's own login shell. `"pipe"`
+with an empty command and no profile `default_shell` is rejected (400): a pipe
+channel has no login shell to request, and termcp never guesses one from the
+PATH of the machine it happens to run on.
+
+`command` is an executable, not a command line: the shell is started by exec'ing
+`command` with `args`, so `"ls -la"` is one file name and fails with "executable
+file not found". Send `{"command":"ls","args":["-la"]}`. (The Web UI dialog
+accepts a line and splits it client-side.)
 
 ```
 Request:
@@ -346,8 +359,9 @@ not DEAD: the shell disappears from the live list, the retained snapshot, and
 shells are untouched. Closing the internal primary shell is a no-op (the process can
 outlive the tab).
 
-Closing the last shell of a pipe session turns the container `exited` (DEAD, read-only);
-a PTY container stays `running` and can open new shells.
+Closing a shell — even the last one — leaves the container `running`: the session owns the
+SSH transport, and forwards, SFTP and new shells all ride it. Only `DELETE /api/sessions/{id}`,
+terminate/disconnect, or a lost connection turn the container `exited` (DEAD, read-only).
 
 Closing a shell that no longer exists also returns 204 (idempotent).
 
@@ -470,7 +484,8 @@ never as a raw byte, so a reviewer reads `Ctrl+C` instead of an invisible
 ### `POST /api/shells/{id}/resize`
 
 Resize a shell's PTY window (path id is **shell_id**). TUI programs re-layout on the
-next redraw.
+next redraw. Only a `pty` shell has a window to resize: a `pipe` shell has no TTY and
+the request is rejected with `409`.
 
 ```
 Request:  { "rows": 40, "cols": 120 }
