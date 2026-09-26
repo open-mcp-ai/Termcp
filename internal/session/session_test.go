@@ -112,8 +112,13 @@ func TestSession_CreateAndInfo(t *testing.T) {
 	if info.Status != api.SessionRunning {
 		t.Fatalf("expected status 'running', got %q", info.Status)
 	}
-	if info.Mode != api.ModePTY {
-		t.Fatalf("expected mode 'pty', got %q", info.Mode)
+	if info.Mode != "" {
+		t.Fatalf("session records must carry no mode (it is per shell), got %q", info.Mode)
+	}
+	if ps := s.PrimaryShell(); ps == nil {
+		t.Fatal("expected a live primary shell")
+	} else if got := ps.Info().Mode; got != api.ModePTY {
+		t.Fatalf("expected primary shell mode 'pty', got %q", got)
 	}
 }
 
@@ -309,16 +314,18 @@ func TestSession_ResizePty(t *testing.T) {
 	}
 	defer s.Terminate(true, 0)
 
-	if err := s.ResizePty(50, 120); err != nil {
+	if err := s.PrimaryShell().ResizePty(50, 120); err != nil {
 		t.Fatalf("ResizePty failed: %v", err)
 	}
 
-	info := s.Info()
+	info := s.PrimaryShell().Info()
 	if info.Rows != 50 || info.Cols != 120 {
 		t.Fatalf("expected 50x120, got %dx%d", info.Rows, info.Cols)
 	}
 }
 
+// A pipe shell has no TTY, so resizing it must fail on the shell, not silently
+// on the session. Mode is per shell: the check lives in ChildShell.ResizePty.
 func TestSession_ResizePtyPipeMode(t *testing.T) {
 	srv := startTestServer(t)
 
@@ -328,9 +335,8 @@ func TestSession_ResizePtyPipeMode(t *testing.T) {
 	}
 	defer s.Terminate(true, 0)
 
-	err = s.ResizePty(50, 120)
-	if err == nil {
-		t.Fatal("expected error when resizing PTY in pipe mode")
+	if err := s.PrimaryShell().ResizePty(50, 120); err == nil {
+		t.Fatal("expected error when resizing a pipe shell")
 	}
 }
 
@@ -376,11 +382,13 @@ func TestSession_NaturalExit(t *testing.T) {
 	}
 }
 
-// TestManager_PipeSessionLastExitMarksDead locks the pipe-mode contract: when the
-// last (root) pipe shell exits cleanly, the container flips to DEAD (retained, not
-// auto-deleted) so it disappears from the running list while keeping its output for
-// read-only viewing / manual cleanup. PTY sessions stay running after a shell exit.
-func TestManager_PipeSessionLastExitMarksDead(t *testing.T) {
+// TestManager_PipeShellExitKeepsSessionRunning locks the container contract: a
+// shell is a channel, and its lifetime never decides the session's. A run-to-exit
+// pipe command finishing cleanly must leave the container running (retained,
+// reusable) so forwards, SFTP and new shells still work — only terminate,
+// disconnect, or shutdown flip it DEAD. The exited shell stays in the map so its
+// output can still be drained.
+func TestManager_PipeShellExitKeepsSessionRunning(t *testing.T) {
 	srv := startTestServer(t)
 	mgr := NewManager(nil, nil, srv)
 
@@ -390,22 +398,27 @@ func TestManager_PipeSessionLastExitMarksDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	defer mgr.Delete(id)
 
-	deadline := time.Now().Add(4 * time.Second)
-	for time.Now().Before(deadline) && mgr.Get(id) != nil && mgr.Get(id).Info().Status != api.SessionExited {
+	// Wait for the shell to reach a terminal status.
+	shellDeadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(shellDeadline) {
+		shells := s.ListChildShells()
+		if len(shells) == 1 && shells[0].Status != api.SessionRunning {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	got := mgr.Get(id)
 	if got == nil {
-		t.Fatal("pipe session should be retained (DEAD, not deleted) after last shell exits")
+		t.Fatal("session must stay registered after its last shell exits")
 	}
-	if got.Info().Status != api.SessionExited {
-		t.Fatalf("pipe session should become DEAD after last shell exits, got %q", got.Info().Status)
+	if got.Info().Status != api.SessionRunning {
+		t.Fatalf("session must stay running after a pipe shell exits, got %q", got.Info().Status)
 	}
-	// Output must remain readable from the retained (still registered) shell.
-	shells := got.ListChildShells()
-	if len(shells) == 0 {
+	// Output must remain readable from the retained shell.
+	if len(got.ListChildShells()) == 0 {
 		t.Fatal("expected exited shell retained in map for reading output")
 	}
 }
@@ -838,9 +851,10 @@ func TestManager_CloseChildShellNotResurrectedAfterRestart(t *testing.T) {
 	}
 }
 
-// Closing the last shell of a pipe container finishes it (DEAD) — the same
-// contract as a clean last-shell exit. PTY containers stay running instead.
-func TestManager_CloseLastPipeShellMarksDead(t *testing.T) {
+// Closing a shell is never a session event: a pipe container whose last shell is
+// closed stays running and reusable, exactly like a PTY one. Forwards and SFTP
+// ride the container's SSH transport, which no shell close may take away.
+func TestManager_CloseLastPipeShellStaysRunning(t *testing.T) {
 	srv := startTestServer(t)
 	m := NewManager(nil, nil, srv)
 
@@ -857,18 +871,11 @@ func TestManager_CloseLastPipeShellMarksDead(t *testing.T) {
 	if err := s.CloseChildShell(s.PrimaryShellID()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(4 * time.Second)
-	for time.Now().Before(deadline) {
-		info := m.Get(s.ID).Info()
-		if info.Status == api.SessionExited {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+	if got := m.Get(s.ID).Info().Status; got != api.SessionRunning {
+		t.Fatalf("pipe session must stay running after its last shell is closed, got %q", got)
 	}
-	if got := m.Get(s.ID).Info().Status; got != api.SessionExited {
-		t.Fatalf("pipe session must flip DEAD after its last shell is closed, got %q", got)
-	}
-	// The shell is closed (deleted), so the DEAD view has no retained tabs for it.
+	// The shell is closed (deleted), so the live view has no retained tabs for it.
 	if len(s.SnapshotShells()) != 0 {
 		t.Fatal("snapshot should be empty: the closed shell is deleted, not retained")
 	}
@@ -950,5 +957,30 @@ func TestSessionScopeReleasesIndependentSubsystems(t *testing.T) {
 	}
 	if len(order) != 2 || order[0] != "notify" || order[1] != "forward" {
 		t.Fatalf("expected LIFO release order [notify forward], got %v", order)
+	}
+}
+
+// Shell resolution for a shell channel is: the caller's command, else the
+// profile's default_shell, else — pty only — whatever the server picks as its
+// login shell. Step three is deliberately not a client-side guess: the client's
+// PATH describes the wrong machine for a remote target.
+func TestResolveShellCommand_DefaultShellPriority(t *testing.T) {
+	s := &Session{defaultShell: "my-shell -i -l"}
+
+	if cmd, args := s.resolveShellCommand("", nil); cmd != "my-shell" || len(args) != 2 || args[0] != "-i" || args[1] != "-l" {
+		t.Fatalf("empty command must fall back to default_shell, got %q %v", cmd, args)
+	}
+	if cmd, args := s.resolveShellCommand("explicit", []string{"x"}); cmd != "explicit" || len(args) != 1 || args[0] != "x" {
+		t.Fatalf("explicit command must win, got %q %v", cmd, args)
+	}
+	// Args-only counts as explicit too: the caller named a program via args.
+	if cmd, args := s.resolveShellCommand("  ", []string{"-c", "hi"}); cmd != "  " || len(args) != 2 {
+		t.Fatalf("args-only input must not be replaced, got %q %v", cmd, args)
+	}
+
+	// No default_shell: both empty, so the transport decides.
+	plain := &Session{}
+	if cmd, args := plain.resolveShellCommand("", nil); cmd != "" || len(args) != 0 {
+		t.Fatalf("without a default_shell the command must stay empty, got %q %v", cmd, args)
 	}
 }
