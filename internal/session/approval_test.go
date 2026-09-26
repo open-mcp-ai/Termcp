@@ -232,6 +232,23 @@ func TestApprovedInputReachesTheShell(t *testing.T) {
 	cs := s.PrimaryShell()
 	q := s.ApprovalQueue()
 
+	// Wait for the shell to reach its prompt before gating anything. A cold
+	// PowerShell under ConPTY can take many seconds on a contended runner, and
+	// bytes written before the process reads stdin are dropped by the TTY. In CI
+	// this test used to report "approved input never reached the shell" with a
+	// completely empty transcript: nothing had passed the gate, the shell had
+	// simply not started yet. Waiting is also what gives the pre-approval check
+	// below teeth — against a shell that never came up it passed by proving
+	// nothing.
+	readyDeadline := time.Now().Add(20 * time.Second)
+	var banner string
+	for time.Now().Before(readyDeadline) && banner == "" {
+		banner = drainOutput(s)
+	}
+	if banner == "" {
+		t.Fatal("shell produced no output; the terminal never came up")
+	}
+
 	marker := "approval_exec_marker"
 	id, err := cs.SubmitForApproval("mcp", marker+"\n", nil)
 	if err != nil {
