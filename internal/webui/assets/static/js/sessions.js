@@ -468,32 +468,29 @@ function syncWindowTabs(win, shells) {
   }
   var running = shells.filter(function(s) { return s.status === 'running'; });
   var exited = shells.filter(function(s) { return s.status !== 'running'; });
-  // Live container whose shells have all exited: keep the exited-history tabs
-  // read-only (don't recreate them from scratch each refresh).
-  if (running.length === 0 && exited.length > 0) {
-    (exited).forEach(function(s) {
-      var sid = s.shell_id || s.id;
-      if (!existing[sid]) createChannelTab(win, sid, null, true);
-    });
-    return;
-  }
-  // Add new running shells that don't have a tab yet.
-  // Primary shell tab is created on explicit open (session create / restore). Sync only
-  // adds additional shells so closing a tab does not recreate it on the next refresh.
+  // Add tabs for shells the window does not show yet. An already-exited shell is
+  // opened read-only: its stream is over, and a pipe channel exists precisely to
+  // run to exit, so its tab is the output the user asked for — not a corpse to
+  // sweep away.
+  exited.forEach(function(s) {
+    var sid = s.shell_id || s.id;
+    if (!existing[sid]) createChannelTab(win, sid, null, true);
+  });
+  // Primary shell tab is created on explicit open (session create / restore).
+  // Sync only adds additional shells so closing a tab does not recreate it on
+  // the next refresh.
   running.forEach(function(s) {
     var sid = s.shell_id || s.id;
     if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid);
   });
-  // Remove tabs for shells that are no longer running. The primary (root) shell
-  // is never pruned here: during teardown its exit can surface in a still-RUNNING
-  // list frame before the session flips to DEAD, and pruning it here would close
-  // the first shell on disconnect/kill. The DEAD lock (readOnly) keeps it; child
-  // shells added via "+" are pruned as before on genuine exit. Read-only history
-  // channels from an exited container are also kept.
+  // Prune tabs for shells the server no longer lists at all — closed elsewhere
+  // (MCP shell_close, another window). A shell that merely exited stays listed
+  // with its buffer, so its tab stays too; the primary (root) shell is never
+  // pruned here, because during teardown its exit can surface in a still-RUNNING
+  // list frame before the session flips to DEAD.
   Object.keys(existing).forEach(function(sid) {
     if (sid === win._primaryShellId) return;
-    if (existing[sid] && existing[sid].readOnlyHistory) return;
-    var found = running.some(function(s) { return (s.shell_id || s.id) === sid; });
+    var found = shells.some(function(s) { return (s.shell_id || s.id) === sid; });
     if (!found && existing[sid]) closeChannelTab(win, sid);
   });
 }

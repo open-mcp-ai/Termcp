@@ -283,14 +283,15 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 	}
 
 	sess, err := s.sessMgr.Create(session.Config{
-		Command:  cmd,
-		Args:     execArgs,
-		Mode:     api.SessionMode(mode),
-		Name:     sessName,
-		Rows:     int(getFloat64(args, "rows", 24)),
-		Cols:     int(getFloat64(args, "cols", 80)),
-		Remote:   remote,
-		Approval: sshconfig.EffectiveApproval(ent),
+		Command:      cmd,
+		Args:         execArgs,
+		Mode:         api.SessionMode(mode),
+		Name:         sessName,
+		Rows:         int(getFloat64(args, "rows", 24)),
+		Cols:         int(getFloat64(args, "cols", 80)),
+		Remote:       remote,
+		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
+		Approval:     sshconfig.EffectiveApproval(ent),
 	})
 	if err != nil {
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
@@ -394,6 +395,9 @@ func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRe
 	name := getString(args, "name", "")
 	command := getString(args, "command", "")
 	mode := strings.TrimSpace(getString(args, "mode", "pty"))
+	if mode != "pty" && mode != "pipe" {
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("mode must be 'pty' or 'pipe', got %q", mode)), nil
+	}
 	rows := int(getFloat64(args, "rows", 24))
 	cols := int(getFloat64(args, "cols", 80))
 

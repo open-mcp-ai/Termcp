@@ -133,19 +133,25 @@
         <form id="conn-form-view" autocomplete="off" onsubmit="return false">
           <div id="conn-f-loopback-only" style="display:none" class="conn-field conn-check-hint" data-i18n="modal.conn.loopbackOnly">Built-in loopback connection: it dials this machine over termcp's own SSH server, so host, credentials and jumps do not apply. Only the settings below are used.</div>
           <div id="conn-f-remote-fields">
-          <div class="conn-field"><label for="conn-f-host" data-i18n="modal.conn.field.host">Host</label><input type="text" id="conn-f-host" placeholder="192.168.1.1" autocomplete="off"></div>
-          <div class="conn-row"><div class="conn-field"><label for="conn-f-port" data-i18n="modal.conn.field.port">Port</label><input type="number" id="conn-f-port" value="22" autocomplete="off"></div><div class="conn-field"><label for="conn-f-user" data-i18n="modal.conn.field.user">User</label><input type="text" id="conn-f-user" placeholder="root" autocomplete="username"></div></div>
-          <div class="conn-field"><label for="conn-f-auth" data-i18n="modal.conn.field.auth">Auth</label><select id="conn-f-auth"><option value="password" data-i18n="modal.conn.field.password">Password</option><option value="key" data-i18n="modal.conn.field.privateKey">Private Key</option></select></div>
-          <div class="conn-field" id="conn-f-password-wrap"><label for="conn-f-password" data-i18n="modal.conn.field.password">Password</label><div class="psw-wrap"><input type="password" id="conn-f-password" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show password" data-i18n-title="modal.conn.showPassword"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-          <div class="conn-field" id="conn-f-pem-wrap" style="display:none"><label for="conn-f-pem" data-i18n="modal.conn.field.privateKey">Private Key</label><textarea id="conn-f-pem" spellcheck="false" rows="4"></textarea></div>
-          <div class="conn-field" id="conn-f-passphrase-wrap" style="display:none"><label for="conn-f-passphrase" data-i18n="modal.conn.field.passphrase">Key Passphrase (optional)</label><div class="psw-wrap"><input type="password" id="conn-f-passphrase" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show" data-i18n-title="modal.conn.show"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-          <div class="jump-arrow" title="SSH traffic to this host is tunneled through the bastions below, in order" data-i18n-title="modal.conn.jumps.hint" data-i18n="modal.conn.jumps.title">SSH Jumps Chain</div>
-          <div class="jump-chain" id="conn-jumps"></div>
-          <div class="conn-field"><button type="button" class="btn" id="conn-add-jump" style="font-size:0.8rem" data-i18n="modal.conn.addJump">+ add jump</button></div>
-          <div class="conn-field"><label for="conn-f-proxy" data-i18n="modal.conn.field.proxy">Proxy (optional, SOCKS5 URL)</label><input type="text" id="conn-f-proxy" placeholder="socks5://user:pass@127.0.0.1:1080" autocomplete="off"></div>
+            <div class="conn-field"><label for="conn-f-host" data-i18n="modal.conn.field.host">Host</label><input type="text" id="conn-f-host" placeholder="192.168.1.1" autocomplete="off"></div>
+            <div class="conn-row"><div class="conn-field"><label for="conn-f-port" data-i18n="modal.conn.field.port">Port</label><input type="number" id="conn-f-port" value="22" autocomplete="off"></div><div class="conn-field"><label for="conn-f-user" data-i18n="modal.conn.field.user">User</label><input type="text" id="conn-f-user" placeholder="root" autocomplete="username"></div></div>
+            <div class="conn-field"><label for="conn-f-auth" data-i18n="modal.conn.field.auth">Auth</label><select id="conn-f-auth"><option value="password" data-i18n="modal.conn.field.password">Password</option><option value="key" data-i18n="modal.conn.field.privateKey">Private Key</option></select></div>
+            <div class="conn-field" id="conn-f-password-wrap"><label for="conn-f-password" data-i18n="modal.conn.field.password">Password</label><div class="psw-wrap"><input type="password" id="conn-f-password" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show password" data-i18n-title="modal.conn.showPassword"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
+            <div class="conn-field" id="conn-f-pem-wrap" style="display:none"><label for="conn-f-pem" data-i18n="modal.conn.field.privateKey">Private Key</label><textarea id="conn-f-pem" spellcheck="false" rows="4"></textarea></div>
+            <div class="conn-field" id="conn-f-passphrase-wrap" style="display:none"><label for="conn-f-passphrase" data-i18n="modal.conn.field.passphrase">Key Passphrase (optional)</label><div class="psw-wrap"><input type="password" id="conn-f-passphrase" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show" data-i18n-title="modal.conn.show"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
           </div>
           <div class="conn-field"><label for="conn-f-shell" data-i18n="modal.conn.field.shell">Default Shell (optional)</label><input type="text" id="conn-f-shell" placeholder="auto-detect" data-i18n-placeholder="modal.conn.field.shellPlaceholder" autocomplete="off"></div>
           <div class="conn-field conn-field-check"><label class="conn-check" for="conn-f-approval"><input type="checkbox" id="conn-f-approval"><span data-i18n="modal.conn.field.approval">Review every AI write by default</span></label><div class="conn-check-hint" data-i18n="modal.conn.field.approvalHint">Sessions started from this profile begin with review mode on: each command waits for you to Accept or Reject it before any byte reaches the shell.</div></div>
+          <!-- The network path: how the dial reaches the host, ordered
+               outermost-last — the proxy gets to the bastions, the bastion chain
+               is what finally dials the host, so the chain sits at the bottom of
+               the form. The loopback profile ignores all of it. -->
+          <div id="conn-f-remote-extra">
+            <div class="conn-field"><label for="conn-f-proxy" data-i18n="modal.conn.field.proxy">Proxy (optional, SOCKS5 URL)</label><input type="text" id="conn-f-proxy" placeholder="socks5://user:pass@127.0.0.1:1080" autocomplete="off"></div>
+            <div class="jump-arrow" title="SSH traffic to this host is tunneled through the bastions below, in order" data-i18n-title="modal.conn.jumps.hint" data-i18n="modal.conn.jumps.title">SSH Jumps Chain</div>
+            <div class="jump-chain" id="conn-jumps"></div>
+            <div class="conn-field"><button type="button" class="btn" id="conn-add-jump" style="font-size:0.8rem" data-i18n="modal.conn.addJump">+ add jump</button></div>
+          </div>
         </form>
         <!-- JSON view -->
         <div id="conn-config-view" style="display:none">
@@ -190,6 +196,24 @@
        worklist — a decision is always about one command line in one session, and
        a modal asking "which session?" is a question the terminal already
        answered. -->
+
+  <div id="modal-cmd" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-h">
+        <h2 id="modal-cmd-title" data-i18n="channel.cmd.titlePty">Run command</h2>
+        <button type="button" id="modal-cmd-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p id="modal-cmd-err" class="err" style="display:none;margin:0 0 8px;color:#cf222e;font-size:0.8rem"></p>
+        <label for="modal-cmd-input" data-i18n="channel.cmd.label">Command</label>
+        <input type="text" id="modal-cmd-input" autocomplete="off" spellcheck="false">
+        <div class="modal-actions">
+          <button type="button" class="btn" id="modal-cmd-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="modal-cmd-run" data-i18n="common.ok">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="modal-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">

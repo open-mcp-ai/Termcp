@@ -52,6 +52,31 @@ function copyTextFallback(text) {
 }
 
 var _copyToastTimer;
+/** Split a typed command line into argv.
+ *
+ * The shell APIs take an executable plus an argv array, but a human types a line
+ * (`ls -la`, `python -m http.server`). Passing the line as the executable sends
+ * the whole thing as one argv element and the far side answers "executable file
+ * not found". Quotes group a token, so paths with spaces still work. */
+function splitCommandLine(line) {
+  var out = [], cur = '', quote = null, started = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line.charAt(i);
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'" || c === '`') {
+      quote = c; started = true;
+    } else if (c === ' ' || c === '\t') {
+      if (started) { out.push(cur); cur = ''; started = false; }
+    } else {
+      cur += c; started = true;
+    }
+  }
+  if (started) out.push(cur);
+  return out;
+}
+
 function showCopyToast(msg) {
   msg = msg || t('toast.copied');
   var el = document.getElementById('ui-copy-toast');

@@ -251,3 +251,52 @@ func TestDefaultPTYModes(t *testing.T) {
 		}
 	}
 }
+
+// An empty command in pipe mode must be refused outright. There is no login
+// shell to ask for on a pipe channel, and the client must not invent one from
+// its own PATH: that path describes the machine termcp runs on, which for a
+// remote target is the wrong machine entirely. (Reported as a remote zsh host
+// receiving `C:\...\pwsh.exe` as its exec command.)
+func TestStart_PipeModeEmptyCommandRefused(t *testing.T) {
+	srv := startTestSSHServer(t)
+	cfg := mintClientConfig(t, srv)
+	conn, err := srv.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	es, err := StartWithConn(conn, cfg, "", nil, false, 24, 80)
+	if err == nil {
+		es.Close()
+		t.Fatal("expected an error for an empty pipe command")
+	}
+	if !strings.Contains(err.Error(), "pipe") {
+		t.Fatalf("error should name the pipe mode, got %v", err)
+	}
+	// The refusal must not leak this host's shell path into the message either.
+	if strings.Contains(err.Error(), testShell()) {
+		t.Fatalf("error must not suggest a local shell, got %v", err)
+	}
+}
+
+// A pty shell with no command asks the SERVER for its login shell. The test
+// server always has one, so this asserts the request is made rather than that a
+// particular shell name came back.
+func TestStart_PtyModeEmptyCommandUsesServerShell(t *testing.T) {
+	srv := startTestSSHServer(t)
+	es := dialAndStart(t, srv, "", nil, true, 24, 80)
+	defer es.Close()
+	time.Sleep(200 * time.Millisecond)
+	es.Stdin.Write([]byte(testShellInput("echo server_shell_ok")))
+	buf := make([]byte, 4096)
+	var out string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(out, "server_shell_ok") {
+		n, _ := es.Stdout.Read(buf)
+		out += string(buf[:n])
+	}
+	if !strings.Contains(out, "server_shell_ok") {
+		t.Fatalf("pty shell with no command should run the server's login shell, got %q", out)
+	}
+}

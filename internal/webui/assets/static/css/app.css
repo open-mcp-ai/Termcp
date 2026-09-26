@@ -1164,6 +1164,31 @@
   }
   .shell-channel-tab-add:hover { color: #fff; background: rgba(255,255,255,.06); }
   .shell-channel-tab-add:active { background: rgba(255,255,255,.1); }
+  /* Split control: two buttons that read as one. The label half is the common
+     action, the caret half reveals the choices that need a decision. */
+  .shell-split { display: inline-flex; align-items: stretch; }
+  .shell-split > :first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .shell-split > :last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; }
+  .shell-channel-add-caret {
+    flex-shrink: 0;
+    width: 16px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #888;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+    transition: color .1s, background .1s;
+  }
+  .shell-channel-add-caret:hover { color: #fff; background: rgba(255,255,255,.06); }
+  .shell-channel-add-caret.active { color: #fff; background: rgba(255,255,255,.12); }
+  .shell-channel-add-menu { min-width: 180px; }
+  .shell-channel-add-item { min-height: 32px; font-size: 0.78rem; }
   /* Channel body fills most of the terminal area */
   .shell-channel-body {
     flex: 1;
@@ -1203,6 +1228,13 @@
     font-size: 12px;
   }
   .shell-channel-empty button:hover { background: #3d3d3d; border-color: #666; }
+  .shell-channel-empty .shell-channel-empty-add { border-radius: 4px 0 0 4px; }
+  .shell-channel-empty .shell-channel-empty-caret {
+    padding: 4px 8px;
+    border-radius: 0 4px 4px 0;
+    font-size: 10px;
+  }
+  .shell-channel-empty .shell-channel-empty-caret.active { background: #3d3d3d; border-color: #666; }
 
   /* Narrow screens rail the window to the viewport width; short screens rail the
      height. Both are checked separately: a phone in landscape is ~844px wide
