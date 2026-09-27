@@ -139,6 +139,7 @@ func main() {
 	flag.StringVar(&cfg.Host, "host", cfg.Host, "HTTP bind address (127.0.0.1 = loopback default; 0.0.0.0 = all interfaces)")
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
 	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Data directory for JSON storage (default: $TERMCP_DATA_DIR or ~/.termcp)")
+	flag.StringVar(&cfg.AssetsDir, "assets", cfg.AssetsDir, "External static assets directory: files there override the embedded Web UI and docs; missing files fall back to the embed (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)")
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log verbosity: debug|info|warn|error")
 	flag.BoolVar(&cfg.NoInternal, "no-internal", cfg.NoInternal, "Disable the built-in loopback SSH profile (no internal connection)")
 	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable MCP tools to create/edit/delete SSH configs (off by default; passwords/keys are never exposed)")
@@ -187,6 +188,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "data dir %q is not writable: %v\n", cfg.DataDir, err)
 		os.Exit(1)
 	}
+
+	// Assets precedence: --assets flag > $TERMCP_ASSETS_DIR > ~/.termcp/assets.
+	// Unlike the data dir this one is never created and never required: an absent
+	// directory simply leaves every asset served from the embed, so a stock
+	// install behaves exactly as if the option did not exist.
+	if cfg.AssetsDir == "" {
+		dir, err := config.DefaultAssetsDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot resolve default assets dir: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.AssetsDir = dir
+	}
+	// An existing path that is a file can never serve assets; refusing it beats
+	// starting with an override that silently does nothing.
+	if st, err := os.Stat(cfg.AssetsDir); err == nil && !st.IsDir() {
+		fmt.Fprintf(os.Stderr, "assets %q is not a directory\n", cfg.AssetsDir)
+		os.Exit(1)
+	}
+	// Must run before any consumer reads Assets(): the MCP docs FS and the Web UI
+	// static server both resolve through it.
+	webui.SetAssetsDir(cfg.AssetsDir)
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
