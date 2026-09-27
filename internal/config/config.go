@@ -11,6 +11,9 @@ import (
 // EnvDataDir overrides the default data directory when set.
 const EnvDataDir = "TERMCP_DATA_DIR"
 
+// EnvAssetsDir overrides the default external assets directory when set.
+const EnvAssetsDir = "TERMCP_ASSETS_DIR"
+
 // EnvAuthToken / EnvAuthHash configure HTTP authentication from the
 // environment. Flags take precedence over these when both are set.
 const (
@@ -28,6 +31,7 @@ type Config struct {
 	Host                string // HTTP server bind address (default: "127.0.0.1" = loopback; use 0.0.0.0 for all interfaces)
 	Port                int    // HTTP server port, must be 1-65535 (default: 18765)
 	DataDir             string // persistent storage directory; empty means default ($TERMCP_DATA_DIR or ~/.termcp)
+	AssetsDir           string // external static assets directory; files there override the embedded UI/docs (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)
 	LogLevel            string // log verbosity: debug|info|warn|error (default: "info")
 	NoInternal          bool   // disable the built-in loopback SSH profile
 	MCPManageSSHConfigs bool   // enable MCP tools for creating/editing/deleting SSH configs (default: false)
@@ -59,6 +63,21 @@ func DefaultDataDir() (string, error) {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	return filepath.Join(home, ".termcp"), nil
+}
+
+// DefaultAssetsDir resolves the default external assets directory:
+// $TERMCP_ASSETS_DIR when set, otherwise ~/.termcp/assets. The directory is
+// allowed not to exist: a missing override leaves every request served from the
+// copy embedded in the binary, which is the normal case for a stock install.
+func DefaultAssetsDir() (string, error) {
+	if env := strings.TrimSpace(os.Getenv(EnvAssetsDir)); env != "" {
+		return filepath.Clean(env), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".termcp", "assets"), nil
 }
 
 // ApplyEnv fills unset auth fields from the corresponding environment
