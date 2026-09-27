@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"golang.org/x/crypto/ssh"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,13 +28,11 @@ import (
 //go:embed assets
 var embeddedAssets embed.FS
 
-// embeddedStaticServer serves index.html, inline page script, and vendor/xterm from embed.FS at URL / and /vendor/... .
+// embeddedStaticServer serves index.html, inline page script, and vendor/xterm at URL / and /vendor/... .
+// It reads through Assets(), so an operator-supplied --assets directory overrides the embedded copy
+// file by file and a file the directory does not contain is served from the embed.
 func embeddedStaticServer() http.Handler {
-	root, err := fs.Sub(embeddedAssets, "assets")
-	if err != nil {
-		panic("webui: embed assets: " + err.Error())
-	}
-	return markdownContentType(http.FileServer(http.FS(root)))
+	return markdownContentType(http.FileServer(http.FS(Assets())))
 }
 
 // markdownContentType pins text/markdown on .md responses. Go's built-in mime
