@@ -78,6 +78,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		// can enable approval mode.
 		_ = h.uiNotifyHub()
 		h.Sessions.AddApprovalListener(h.BroadcastApproval)
+		// Input an agent sends over MCP is invisible to the browser, so the tab's
+		// channel status would only ever reflect local typing. Pushed for both
+		// sources so one code path paints it.
+		h.Sessions.AddActivityListener(func(shellID string, src session.InputSource, submit bool) {
+			h.BroadcastShellActivity(shellID, src, submit)
+		})
 	}
 	if h.ForwardMgr != nil {
 		h.ForwardMgr.SetOnChange(h.sessionHub().broadcast)
@@ -119,6 +125,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Shells (globally unique IDs — virtual top-level resource)
 	mux.HandleFunc("GET /api/shells/{id}/output-range", h.handleShellOutputRange)
+	// The status index behind output-range: where each span starts and what made it.
+	mux.HandleFunc("GET /api/shells/{id}/marks", h.handleShellMarks)
+	// The row layout of that log for one terminal width, with the marks on it.
+	mux.HandleFunc("GET /api/shells/{id}/rail", h.handleShellRail)
 	mux.HandleFunc("DELETE /api/shells/{id}", h.handleCloseShell)
 	// Terminal I/O over REST for scripts/CLI (the WebSocket stays the real-time path).
 	mux.HandleFunc("POST /api/shells/{id}/input", h.handleShellInput)

@@ -392,6 +392,39 @@ Bidirectional real-time channel.
 |------|--------|---------|
 | `sessions` | `sessions` | Session list (on connect and on change) |
 | `terminal` | `id`, `d`(string) | Terminal output chunk |
+| `shell_activity` | `shell_id`, `src`(`api`\|`ai`), `submit` | A shell received input, and from where |
+| `ui_notify` | `title`, `message`, `level`, `session_id`, `duration_seconds` | User-facing notification (MCP `notify_user`) |
+| `approval` | session, request | Approval queue changed (see §12) |
+
+The row↔byte mapping the timeline rail draws from is not carried on this frame:
+a mapping recorded as bytes arrive cannot survive a reload (one write delivers
+the whole transcript) or a resize (every line reflows), so the Web UI asks the
+server to lay the log out at the width in hand — `GET /api/shells/{id}/rail` —
+and draws one timeline cell per terminal row. Rows, not bytes: a progress bar's
+megabyte is one row of the terminal, while two bytes spread over ten rows by a
+slow paste are ten, and a rail sized by bytes ranks those two exactly backwards.
+
+`shell_activity` is emitted for every input a shell receives, including the
+browser's own keystrokes (so one server-side path paints the channel status,
+rather than a local guess racing the push). `src` says who sent it — `api` for
+the HTTP/WebSocket surface, `ai` for MCP — which the page cannot work out on its
+own: an agent's keystrokes exist only on the server. `submit` says whether that
+input ended the line (enter, or a key sequence a line editor treats as one).
+It is reported rather than inferred because a terminal's byte stream does not
+delimit lines: a redraw emits a line break and a cursor move without ending
+anything, so a consumer that watched newlines for line ends would close a line
+that is still being typed.
+
+A client showing what a shell is doing has to combine these frames with the
+`terminal` ones, because neither is meaningful alone: every keystroke is echoed
+back as output, and the echo of a submitted line is byte-for-byte the shape of a
+redraw. `submit` is what separates them — the Web UI holds the status while an
+input has a line pending (a keystroke that did not submit) and lets the submit
+hand the channel over to output. It deliberately does not guess from timing
+instead: an echo-window heuristic fails both ways, holding real output from a
+fast command (`ls`) and letting a slow echo through on a laggy link. A silence
+of a few seconds is reported as "finished" on top of that, since a byte stream
+offers no better a signal that a command returned.
 | `terminal_done` | `id` | Shell exited |
 
 > Terminal I/O `id` values are shell IDs; session IDs are only for connection-level
@@ -424,6 +457,134 @@ Response 200:
 > ConPTY already replaces such sequences before Termcp sees them, and on Linux
 > `cat` of binary data may appear as U+FFFD. The bytes in `log.bin` are never
 > altered — only this transport representation is lossy.
+
+### `GET /api/shells/{id}/marks`
+
+The status index behind `output-range`: every span of a shell's byte log, in
+order, with what produced it. This is the REST twin of the MCP
+`message(action=list)` tool — both read the same `log.jsonl` through the same
+manager, so the two surfaces never disagree about a span or its unit.
+
+```
+Response 200:
+{
+  "marks": [
+    { "status": "o", "time": 1758499205123, "start": 0,    "end": 1024 },
+    { "status": "i", "time": 1758499206000, "start": 1024, "end": 1080 },
+    { "status": "a", "time": 1758499207412, "start": 1080, "end": 2048 }
+  ],
+  "total_bytes": 2048,
+  "session_id": "sess-abc123"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `o` shell output · `i` a write from the HTTP/WebSocket API (the human at the browser) · `a` a write from an AI agent through MCP · `q`/`A` a review decision (no bytes of its own) |
+| `time` | Unix **milliseconds** — the moment the span started. Same unit as every other timestamp in this API (`clock.Now`, the manifests, `log.jsonl`) |
+| `start` | Byte offset in `log.bin` where the span starts |
+| `end` | The next mark's `start`; the last span ends at `total_bytes` |
+| `total_bytes` | Current length of the byte log |
+
+Spans carry no payload: the bytes are read through `output-range`. An input span
+(`i`/`a`) is recorded when the input *submits a line* (enter, or a key sequence a
+line editor treats as one) and is zero-length: it marks who submitted a command
+and when, and the bytes of what they typed are the terminal's echo, already in
+the log as output. Keystrokes that do not submit anything write no span at all,
+so a command still being typed does not appear. `end` is derived rather than
+stored, so a mark whose bytes were never written still yields a consistent chain.
+
+Path id is a **shell_id**; a `session_id` falls back to that session's primary
+shell (same compatibility as `output-range`). DEAD and restart-restored sessions
+answer from the persisted index, so a closed session's timeline stays readable.
+
+| Query | Meaning |
+|-------|---------|
+| `start`, `end` | Restrict the answer to the byte window `[start, end)` of `log.bin`. Both must be given together (`400` otherwise), `start >= 0` and `end >= start` |
+
+With no parameters the response is the shell's whole index, exactly as above —
+the window is an addition, not a change. A windowed response is the part of the
+index that **decides** those bytes, in the same shape and with the same `end`
+derivation: the span the window starts inside (so the rows at the top of a screen
+still have a status), every mark that starts inside it, and — as the derived `end`
+of the last one — the offset of the first mark at or after `end`. Because that
+boundary is a value and not a span, the last span of a windowed response can end
+at a mark that is not in the list, and `end` is still the true end of the bytes
+shown. Costs of the two answers are not comparable: for a shell with 200k marks
+over a 97 MiB log, the whole index is a 12 MiB body produced in ~360 ms, while a
+24-row window is ~1.7 KB served in ~0.1 ms. The rail asks for windows (through
+`/rail`, which bundles the marks of the rows it laid out); tooling that wants to
+reason over the entire history asks without them.
+
+Errors: `404` unknown shell; `400` a half-named or invalid window
+(`start and end must be byte offsets with start <= end`).
+
+### `GET /api/shells/{id}/rail`
+
+Which bytes of the shell's log sit on which terminal row: the row↔byte mapping
+the Web UI draws its timeline rail from. The index above says what a span *is*;
+this says where its bytes ended up on screen, which is the only thing a strip
+beside a terminal can be indexed by — a row is what the reader sees.
+
+```
+GET /api/shells/{id}/rail?cols=120&top=1840&count=24&height=24
+
+Response 200:
+{
+  "cols": 120,
+  "top": 1840,
+  "spans": [
+    { "start": 98120, "end": 98201 },   // row 1840
+    null,                                // row 1841: erased, no bytes to colour
+    { "start": 98231, "end": 98302 }
+  ],
+  "marks": [ { "status": "i", "time": 1758499206000, "start": 98120, "end": 101244 } ],
+  "total_rows": 20481
+}
+```
+
+| Query | Meaning |
+|-------|---------|
+| `cols` | **Required.** The terminal's width in columns. Half the input to the layout, and a wrong one puts every cell on the wrong row, so it is a parameter rather than a default |
+| `top` | First row wanted, in the terminal's own numbering (`viewportY`). Default `0`; at most 100000 |
+| `count` | How many rows to answer for. Default `0`; at most 2048 |
+| `height` | The terminal's height in rows, which the layout needs to know where the top of the screen is when a program addresses the cursor. Defaults to `count` |
+
+`top`, `count` and `height` are read leniently: a value outside its range falls
+back to the default rather than failing the request. `cols` is the one parameter
+that is required and validated.
+
+| Field | Meaning |
+|-------|---------|
+| `spans[i]` | Row `top+i`'s byte range `[start, end)`, or `null` for a row holding no bytes |
+| `marks` | The marks covering the byte window those rows hold — the same shape as `GET /api/shells/{id}/marks`, so the client needs no second request and there is one definition of a span |
+| `total_rows` | Rows the layout has, so the client can tell how far the rail extends |
+
+The mapping is **derived from the log and the width per request**, never
+recorded: a reloaded channel delivers its whole transcript in one write, and a
+resize reflows every line, so a recorded row number is stale the moment either
+happens. The bytes are replayed through a small terminal model — wrap at `cols`, a
+carriage return overwrites from column one, cursor addressing moves the cursor,
+erases blank rows — and each row ends up with the bytes that reached it.
+
+**Rows tile the log.** Every byte the terminal consumed belongs to the row the
+cursor was on at the time, the line ending included, so no byte falls between two
+rows — and neither can a mark, which is what would otherwise leave an input bar
+missing from the strip. A blank line a program printed therefore holds its line
+break and draws a cell like any other line. The one exception is a row the
+terminal **erased**: its bytes are not on screen any more, so the row holds
+nothing and no cell is drawn.
+
+Only rows that put text somewhere are modelled: colours and the modes that decide
+how a terminal behaves are parsed but not applied. A normal shell's transcript
+(prompts, commands, their output) is exact. A **full-screen program** (vim, less,
+the pagers) paints the alternate screen, which the transcript does not contain:
+none of its bytes reach a row, and the rows that come back when it exits are the
+ones standing there before it started. What stays approximate is a program that
+repaints rows it already passed *without* the alternate screen — a model with no
+scrolling region cannot follow that faithfully.
+
+Errors: `404` unknown shell; `400` a missing or out-of-range `cols`.
 
 ### `POST /api/shells/{id}/input`
 

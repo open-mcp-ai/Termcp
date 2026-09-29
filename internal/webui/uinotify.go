@@ -3,6 +3,8 @@ package webui
 import (
 	"encoding/json"
 	"sync"
+
+	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
 // uiNotifyHub fans out UI notification payloads (pre-marshaled JSON) to every
@@ -57,6 +59,30 @@ func (h *Handler) uiNotifyHub() *uiNotifyHub {
 		h.notifyHub = newUINotifyHub()
 	}
 	return h.notifyHub
+}
+
+// BroadcastShellActivity tells every open Web UI tab that a shell received input
+// and where it came from.
+//
+// The source matters and cannot be inferred: a browser tab knows its own
+// keystrokes, but a command an agent sends over MCP never touches the page. The
+// tab's own sends are announced the same way so one path paints the status,
+// instead of a local guess racing a server event for the same field.
+func (h *Handler) BroadcastShellActivity(shellID string, src session.InputSource, submit bool) int {
+	who := "api"
+	if src == session.InputFromAI {
+		who = "ai"
+	}
+	return h.uiNotifyHub().broadcast(map[string]any{
+		"type":     "shell_activity",
+		"shell_id": shellID,
+		"src":      who,
+		// Whether the line was submitted. Sent because the browser cannot derive
+		// it: the echo of a submitted line looks exactly like a redraw, and
+		// treating a redraw as a submit is what made the status flip away from
+		// "an agent is typing" milliseconds after it appeared.
+		"submit": submit,
+	})
 }
 
 // BroadcastUINotify delivers a user-facing notification to every open Web UI tab

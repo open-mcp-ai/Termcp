@@ -26,6 +26,16 @@ type Manager struct {
 	approvalMu        sync.Mutex
 	approvalListeners []func(sessionID string, req approval.Request)
 
+	// activityMu guards activityListeners, which report that a shell received
+	// input and from where. A browser keystroke is known to the tab that sent it,
+	// but input an agent sends over MCP happens entirely server-side, so without
+	// this signal a channel driven by MCP would never show it.
+	//
+	// A list for the same reason as approvalListeners: subscribers are
+	// independent and one must not displace another.
+	activityMu        sync.Mutex
+	activityListeners []func(shellID string, src InputSource, submit bool)
+
 	sessions    sync.Map // string → *Session
 	internalSSH *sshserver.Server
 	msgMgr      *message.Manager
@@ -72,6 +82,30 @@ func (m *Manager) notifyClose(shellID string) {
 	m.listChangeMu.RUnlock()
 	if fn != nil {
 		fn(shellID)
+	}
+}
+
+// AddActivityListener registers a callback invoked whenever a shell receives
+// input, with the source that sent it. The bytes themselves are not carried:
+// a subscriber wants to know *that* someone is typing and who it is, which is
+// what a status display needs, and the keystrokes already reach the browser
+// through the terminal's own echo.
+func (m *Manager) AddActivityListener(fn func(shellID string, src InputSource, submit bool)) {
+	if fn == nil {
+		return
+	}
+	m.activityMu.Lock()
+	m.activityListeners = append(m.activityListeners, fn)
+	m.activityMu.Unlock()
+}
+
+// notifyActivity forwards one input event to every registered listener.
+func (m *Manager) notifyActivity(shellID string, src InputSource, submit bool) {
+	m.activityMu.Lock()
+	listeners := append([]func(string, InputSource, bool){}, m.activityListeners...)
+	m.activityMu.Unlock()
+	for _, fn := range listeners {
+		fn(shellID, src, submit)
 	}
 }
 
@@ -210,6 +244,8 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 
 	onOutput := m.notifyOutput
 	s.onOutput.Store(&onOutput)
+	onInput := m.notifyActivity
+	s.onInput.Store(&onInput)
 	onShellExit := m.notifyExit
 	s.onShellExit.Store(&onShellExit)
 	onShellClose := m.notifyClose
@@ -344,6 +380,20 @@ func (m *Manager) Marks(sessionID, shellID string) ([]api.LogMark, error) {
 		return nil, nil
 	}
 	return m.msgMgr.Marks(sessionID, m.resolveShellID(sessionID, shellID))
+}
+
+// MarksWindow returns the marks deciding the byte window [start, end) of one
+// shell (or, with an empty shellID, the session's primary shell), plus the offset
+// of the mark that closes the last of them (0 when the window runs to the end of
+// the log). The marks a window answers with are the ones that start inside it plus
+// the one it starts inside, so a reader can ask for the screen it is showing
+// rather than the whole history; a zero-byte window is still answered, since the
+// mark on its start byte is what colours a just-printed line.
+func (m *Manager) MarksWindow(sessionID, shellID string, start, end int64) ([]api.LogMark, int64, error) {
+	if m.msgMgr == nil {
+		return nil, 0, nil
+	}
+	return m.msgMgr.MarksWindow(sessionID, m.resolveShellID(sessionID, shellID), start, end)
 }
 
 // OutputByteRange reads a window of a shell's persisted byte log. It exists so
