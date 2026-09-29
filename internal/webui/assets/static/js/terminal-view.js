@@ -38,7 +38,7 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
   tab.setAttribute('data-chsid', sessionId);
   tab.innerHTML = '<span class="shell-channel-tab-label">' + escapeHtml(label || 'shell') + '</span>' +
     '<button type="button" class="shell-channel-tab-copy" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
-    '<span class="shell-channel-tab-ended" style="display:none" title="Session ended" data-i18n-title="session.ended" data-i18n="channel.endedTab">end</span>' +
+    '<span class="shell-channel-tab-state" style="display:none"></span>' +
     '<button type="button" class="shell-channel-tab-close" title="Close shell" data-i18n-title="channel.close">&times;</button>';
   applyI18n(tab);
   if (addAnchor) tabsBar.insertBefore(tab, addAnchor);
@@ -154,6 +154,12 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
       showTerminalEndedMarker(win, chLoaded);
     } else {
       queueTerminalWatch(sessionId);
+      /* A live channel that is quiet needs no event to reach its resting state:
+         "nothing changed for three seconds" is already true when its history
+         lands, and a shell that sends no frame at all would otherwise leave the
+         chip blank until the operator touched it. Arming the idle timer here is
+         the same rule the byte path uses, just started from the restored log. */
+      shellStatusTouch(win, sessionId);
     }
     try {
       var ro = attachShellTerminalResizeObserverForChannel(win, term, inst, sessionId);
@@ -1088,6 +1094,12 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
     if (ch && ch.term) try { ch.term.focus(); } catch (e1) {}
   });
+
+  /* Mount the timeline rail (timeline.js) over this window's terminal. Last
+     thing in this function on purpose: it reads win._activeChannelSid and the
+     channel map, so those must exist first, and it is idempotent so the reused-
+     window path that also calls this function keeps the rail it has. */
+  initShellTimeline(win);
 }
 
 /** After clicking an entry: show placeholder + spinner immediately to prevent double-connect. */
@@ -1735,6 +1747,15 @@ function reapplyWindowLanguage(win) {
   if (!win) return;
   applyI18n(win);
   updateTermScrollButton(win);
+  /* The channel chip's text is its state, so it is written from t() at paint
+     time and is not a data-i18n node; re-run the paint so a language switch does
+     not leave the previous language's word on the tab. */
+  if (win._channels) {
+    Object.keys(win._channels).forEach(function (sid) {
+      var ch = win._channels[sid];
+      if (ch && ch.statusState) shellStatusPaint(ch, ch.statusState);
+    });
+  }
   /* These three titles encode state, so the template default from applyI18n is
      only correct for the state it was written for. */
   var maxBtn = win.querySelector('.shell-window-max-btn');

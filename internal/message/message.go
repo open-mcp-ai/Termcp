@@ -171,3 +171,16 @@ func (m *Manager) Marks(sessionID, shellID string) ([]api.LogMark, error) {
 	}
 	return m.store.ReadMarks(sessionID, shellID)
 }
+
+// MarksWindow returns the part of a shell's status index that decides the byte
+// window [start, end): every span overlapping it, and separately the offset of
+// the mark that closes the last one (0 when the window runs to the end of the
+// log). It is the same index Marks returns, read through the store's sparse seek
+// table, so a reader that only needs one screen of a long log does not pay for
+// the whole of it.
+func (m *Manager) MarksWindow(sessionID, shellID string, start, end int64) ([]api.LogMark, int64, error) {
+	if m.store == nil {
+		return nil, 0, nil
+	}
+	return m.store.ReadMarksWindow(sessionID, shellID, start, end)
+}

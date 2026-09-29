@@ -95,6 +95,7 @@ type Session struct {
 	onDead         atomic.Pointer[func()] // invoked once when the session turns DEAD; assigned by the manager right after New(), while exit watchers may already be reading
 	onChildChange  atomic.Pointer[func()] // invoked when child shells are added/removed; assigned under the same constraint
 	onOutput       atomic.Pointer[func(shellID string)]
+	onInput        atomic.Pointer[func(shellID string, src InputSource, submit bool)] // invoked when a shell receives input
 	onShellExit    atomic.Pointer[func(shellID string, exitCode *int)]
 	onShellClose   atomic.Pointer[func(shellID string)]
 	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
@@ -885,35 +886,91 @@ func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src In
 	} else {
 		toWrite = data
 	}
+	// Whether this input submits the line. Reported rather than inferred from the
+	// output: the terminal's byte stream does not delimit lines (a redraw emits a
+	// line break and a cursor-move sequence without ending anything), so a
+	// consumer watching newlines sees a line end when the terminal only repainted.
+	// The input side knows the truth — the user pressed enter.
+	submit := submitsLine(toWrite)
+	// Record the input *before* the bytes go out, and only when it submits the
+	// line: the status display is live feedback that must not wait on the write,
+	// and a keystroke that leaves the line open is not a span of the transcript.
+	// See logInput for why a partial line writes nothing.
+	cs.logInput(src, submit)
 	cs.stdinMu.Lock()
 	_, err := cs.execSession.WriteStdin(toWrite)
 	cs.stdinMu.Unlock()
 	if err != nil {
 		return err
 	}
-	// Input is recorded as a zero-length status mark, not as bytes: the terminal
-	// already writes the keystrokes back into the output stream as echo, so storing
-	// them here too would put every keystroke in the log twice. A zero-length mark
-	// says who typed when, without duplicating what the screen already shows.
-	//
-	// Input the terminal never echoes (a password prompt) therefore leaves no bytes
-	// anywhere — that is intended, not a gap to fill in.
-	cs.logInput(src)
 	return nil
 }
 
-// logInput records that input happened, as a zero-length status mark at the
-// current end of the shell's log.
+// logInput records that input happened, and reports it to the live status
+// display.
 //
-// It writes no bytes: keystrokes reach log.bin through the terminal's echo, which
-// keeps log.bin byte-for-byte equal to what the screen showed. Adding the bytes
-// here as well would duplicate them on every replay.
-func (cs *ChildShell) logInput(src InputSource) {
+// **Only a submitted line is recorded in the log.** A keystroke that leaves the
+// line open changes nothing: the prefix of a line is not a span of the
+// transcript, and its echo is not the shell's output either — the terminal is
+// merely repeating what was typed. Marking the moment typing started would put an
+// input bar on the timeline for a command the operator is still composing, and
+// would capture the bytes in between: output from a command still running would
+// be relabelled as part of the input, shortening the output span that follows.
+// Waiting for the enter key makes one line exactly one mark, which is also what
+// keeps the log from fragmenting: the echo of a long line arrives as dozens of
+// separate reads, every one of them carries output status, so they extend the
+// output span already open instead of cutting it into strips.
+//
+// The line's bytes reach log.bin through that echo, so nothing is written here:
+// adding the bytes too would duplicate every keystroke on replay. `log.bin` stays
+// byte-for-byte equal to what the screen showed.
+//
+// The live status display is told about *every* input event, not only submitted
+// ones: whether a line was submitted is exactly what the tab's chip needs in order
+// to stay steady while someone types. That event is reported before the write,
+// since it must not be hostage to the write succeeding, and it is the only way
+// the browser can learn that an agent — whose keystrokes never touch the page — is
+// driving.
+func (cs *ChildShell) logInput(src InputSource, submit bool) {
 	p := cs.parent
-	if p == nil || p.msgMgr == nil {
+	if p == nil {
+		return
+	}
+	if fn := p.onInput.Load(); fn != nil {
+		(*fn)(cs.ID, src, submit)
+	}
+	// A partial line is not a transcript span: report it to the chip and stop.
+	if !submit {
+		return
+	}
+	if p.msgMgr == nil {
 		return
 	}
 	_ = p.msgMgr.AppendMarkOnly(p.ID, cs.ID, src.logStatus())
+}
+
+// submitsLine reports whether a write ends the line being typed, which is what
+// the channel status chip needs and what the byte stream cannot tell it.
+//
+// It looks at the *last* byte rather than at "contains a line ending": a paste
+// of several lines arrives as one write whose final byte is the only one that
+// ends the line, and counting an interior newline as a submit would report a
+// half-typed command as submitted.
+//
+// Besides the line endings themselves, the control characters that abandon a
+// line count as ending it: ctrl+c aborts the command, ctrl+d sends EOF, ctrl+z
+// suspends it. They matter beyond elegance — a chip that only ever left "typing"
+// on an enter would sit on "typing" for the rest of the session after an
+// interrupt, which is a common thing to do to a running command.
+func submitsLine(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	switch payload[len(payload)-1] {
+	case '\r', '\n', 0x03, 0x04, 0x1a:
+		return true
+	}
+	return false
 }
 
 // PressKey writes a named key sequence (enter, ctrl+c, arrows, …) repeat times.
@@ -941,13 +998,18 @@ func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) erro
 		return fmt.Errorf("process has %s, cannot send input", cs.Status)
 	}
 	payload := bytes.Repeat(seq, repeat)
+	// A named key submits a line too (enter, and the ctrl sequences a line editor
+	// treats as one), so the signal comes from the bytes actually sent rather than
+	// from the key's name: the name is a label, the sequence is what the terminal
+	// receives.
+	submit := submitsLine(payload)
+	cs.logInput(src, submit)
 	cs.stdinMu.Lock()
 	_, err = cs.execSession.WriteStdin(payload)
 	cs.stdinMu.Unlock()
 	if err != nil {
 		return err
 	}
-	cs.logInput(src)
 	return nil
 }
 
