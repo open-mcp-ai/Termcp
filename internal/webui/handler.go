@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/crypto/ssh"
@@ -24,9 +23,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
-
-//go:embed assets
-var embeddedAssets embed.FS
 
 // embeddedStaticServer serves index.html, inline page script, and vendor/xterm at URL / and /vendor/... .
 // It reads through Assets(), so an operator-supplied --assets directory overrides the embedded copy
@@ -55,6 +51,7 @@ type Handler struct {
 	ForwardMgr *forward.ForwardManager
 	NotifyMgr  *notify.Manager // active shell notification rules (read-only listing + delete)
 	NoInternal bool            // when true, hide and refuse the built-in loopback profile
+	Version    string          // build version (`termcp -version`), served at GET /api/version
 
 	// ExecuteOperation replays an approved non-terminal request (a file transfer,
 	// a port forward). Wired by main to the MCP server, which owns those
@@ -94,6 +91,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	if h.SSH != nil {
 		h.SSH.SetOnChange(h.sessionHub().broadcast)
 	}
+	// Build metadata
+	mux.HandleFunc("GET /api/version", h.handleVersion)
+
 	// Connection profiles
 	mux.HandleFunc("GET /api/connections", h.handleListConnections)
 	mux.HandleFunc("GET /api/connections/{name}", h.handleGetConnection)
@@ -168,7 +168,23 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{id}/files/rename", h.handleRenameFile)
 	mux.HandleFunc("POST /api/sessions/{id}/files/mkdir", h.handleMakeDir)
 
-	mux.Handle("/", embeddedStaticServer())
+	if uiEmbedded {
+		mux.Handle("/", embeddedStaticServer())
+	} else {
+		// Pure-API build (go build -tags no_webui): the browser UI is neither
+		// embedded nor routed. The two agent documents stay, each on its own
+		// path; everything else under / is a 404.
+		docs := embeddedStaticServer()
+		mux.Handle("/api.md", docs)
+		mux.Handle("/skills.md", docs)
+	}
+}
+
+// handleVersion reports the build the instance is serving — the same string
+// `termcp -version` prints first. The Web UI header labels itself with it so a
+// screenshot or a page always says which build it came from.
+func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"version": h.Version})
 }
 
 func (h *Handler) handleListSessions(w http.ResponseWriter, r *http.Request) {

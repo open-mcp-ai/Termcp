@@ -21,3 +21,8 @@ jobs:
 
       - name: Test
         run: go test ./internal/... -count=1 -timeout 120s
+
+      - name: Test pure-API build
+        run: |
+          go build -tags no_webui ./...
+          go test -tags no_webui -count=1 -run TestNoWebUIBuildCarriesDocsOnly ./internal/webui/

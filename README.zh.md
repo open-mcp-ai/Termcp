@@ -142,7 +142,7 @@ Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互
 go install github.com/open-mcp-ai/termcp@latest
 ```
 
-`go install` 会通过 Go 模块代理拉取（中国大陆可用 `GOPROXY=https://goproxy.cn,direct`），把 `termcp` 二进制放到 `$(go env GOPATH)/bin`，请确保该目录在 `PATH` 中。Termcp 用 Go 编写，安装方式就是 `go install` 或 Releases 预编译二进制，没有 npx/uvx 版本，也不需要 Node/Python 运行时。作为 Go module，它还支持**源码级集成**：可 `go get github.com/open-mcp-ai/termcp` 作为依赖引入，或 fork 源码构建定制版本。随后直接运行：
+`go install` 会通过 Go 模块代理拉取（中国大陆可用 `GOPROXY=https://goproxy.cn,direct`），把 `termcp` 二进制放到 `$(go env GOPATH)/bin`，请确保该目录在 `PATH` 中。Termcp 用 Go 编写，安装方式就是 `go install` 或 Releases 预编译二进制，不需要 Node/Python 等运行时。作为 Go module，它还支持**源码级集成**：可 `go get github.com/open-mcp-ai/termcp` 作为依赖引入，或 fork 源码构建定制版本。随后直接运行：
 
 ```bash
 termcp
@@ -170,6 +170,10 @@ cd termcp
 
 # 编译（纯 Go，无需 CGO，支持任意平台交叉编译）
 CGO_ENABLED=0 go build -o termcp .
+
+# 纯 API 编译（-tags no_webui）：只服务 REST / MCP / WebSocket。
+# 不嵌入也不服务 Web 界面（GET / 返回 404）；/api.md、/skills.md 保留。
+CGO_ENABLED=0 go build -tags no_webui -o termcp-api .
 
 # 运行（默认：loopback，端口 18765；数据存于 ~/.termcp）
 ./termcp

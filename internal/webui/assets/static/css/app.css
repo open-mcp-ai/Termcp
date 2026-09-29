@@ -66,6 +66,9 @@
      covers macOS (PingFang TC) and Windows (Microsoft JhengHei). */
   body.lang-hant { font-family: ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
   .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: #1f2328; }
+  /* Build version beside the wordmark, filled in from GET /api/version. Left
+     margin, not a space, so a failed fetch leaves no gap after the wordmark. */
+  .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: #6e7781; }
   .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #d0d7de; background: #f6f8fa; color: #24292f; cursor: pointer; }
   .btn:hover { background: #eaeef2; border-color: #afb8c1; }
   .btn-primary { background: #2da44e; border-color: #2da44e; color: #fff; }

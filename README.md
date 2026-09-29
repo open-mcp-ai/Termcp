@@ -142,7 +142,7 @@ The fastest way to install — one command, no clone, no build:
 go install github.com/open-mcp-ai/termcp@latest
 ```
 
-`go install` resolves the module through the Go proxy (use `GOPROXY=https://goproxy.cn,direct` in mainland China) and drops the `termcp` binary into `$(go env GOPATH)/bin` — make sure that directory is on your `PATH`. Termcp is written in Go, so install is `go install` or a prebuilt Release binary: there is no `npx`/`uvx` variant, and it needs no Node or Python runtime. Being a Go module, it also supports source-level integration: `go get github.com/open-mcp-ai/termcp` to bring it in as a dependency, or fork and build a customized binary from source. Then run:
+`go install` resolves the module through the Go proxy (use `GOPROXY=https://goproxy.cn,direct` in mainland China) and drops the `termcp` binary into `$(go env GOPATH)/bin` — make sure that directory is on your `PATH`. Termcp is written in Go, so install is `go install` or a prebuilt Release binary: it needs no Node or Python runtime. Being a Go module, it also supports source-level integration: `go get github.com/open-mcp-ai/termcp` to bring it in as a dependency, or fork and build a customized binary from source. Then run:
 
 ```bash
 termcp
@@ -170,6 +170,10 @@ cd termcp
 
 # Build (pure Go — no CGO needed, cross-compiles to any platform)
 CGO_ENABLED=0 go build -o termcp .
+
+# Pure-API build (-tags no_webui): REST, MCP and WebSocket only. The browser UI
+# is neither embedded nor served (GET / is a 404); /api.md and /skills.md stay.
+CGO_ENABLED=0 go build -tags no_webui -o termcp-api .
 
 # Run (defaults: loopback, port 18765; data goes to ~/.termcp)
 ./termcp

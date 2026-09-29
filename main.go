@@ -287,7 +287,7 @@ func main() {
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	webuiH := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal}
+	webuiH := &webui.Handler{Sessions: sessMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), NoInternal: cfg.NoInternal, Version: versionString()}
 	// File transfers and port forwards are held by the same review queue as
 	// command lines, but the operations live with the MCP server (it owns the
 	// SFTP and forward machinery). The Web UI decides; this is how its decision

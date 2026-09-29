@@ -701,6 +701,16 @@ loadNotifications();
 loadConnections();
 startUIWebSocket();
 
+// The header labels the build (the string `termcp -version` prints first). The
+// page is static, so the number is fetched once; a failure just leaves it blank.
+fetch('/api/version')
+  .then(function (r) { return r.ok ? r.json() : null; })
+  .then(function (j) {
+    var el = document.getElementById('app-version');
+    if (el && j && j.version) el.textContent = j.version;
+  })
+  .catch(function () {});
+
 // Section collapse/expand with localStorage persistence
 ['entries', 'sessions'].forEach(function (key) {
   var header = document.getElementById('sec-' + key);
