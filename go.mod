@@ -11,6 +11,7 @@ require (
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
+	golang.org/x/text v0.36.0
 )
 
 require (
@@ -25,5 +26,4 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 )

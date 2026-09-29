@@ -146,6 +146,9 @@ function connectUIWebSocket() {
           var tm = ch ? ch.term : win._term;
           var done = ch ? ch.streamDone : win._streamDone;
           if (tm && !done) {
+            /* The chip is updated from the frame, before the write: it must not
+               wait on xterm's render, and the bytes are known either way. */
+            shellStatusOnBytes(win, j.id, j.d);
             var bytes = textToBytes(j.d);
             tm.write(bytes, function () {
               requestAnimationFrame(function () {
@@ -171,6 +174,11 @@ function connectUIWebSocket() {
             // A per-channel endedMarkPrinted flag guards against re-print if a
             // watch re-subscribes after a reconnect and re-emits terminal_done.
             ch2.streamDone = true;
+            if (ch2.statusTimer) {
+              clearTimeout(ch2.statusTimer);
+              ch2.statusTimer = 0;
+            }
+            shellStatusSet(win2, j.id, 'ended');
             showTerminalEndedMarker(win2, ch2);
           } else if (!win2._streamDone) {
             win2._streamDone = true;
@@ -184,6 +192,15 @@ function connectUIWebSocket() {
             }
           }
         }
+      } else if (j.type === 'shell_activity') {
+        /* Input arrived, and the source is authoritative: an MCP-driven
+           keystroke exists only on the server, so the page cannot tell an agent
+           from a person on its own. A local send also comes back through here,
+           which is deliberate — one path paints the chip instead of a local
+           guess racing a server event for the same field. */
+        var winA = getShellWindowBySid(j.shell_id);
+        if (!winA) winA = findShellWindowByChannelSid(j.shell_id);
+        if (winA) shellStatusOnInput(winA, j.shell_id, j.src, j.submit);
       } else if (j.type === 'ui_notify') {
         // Pushed by the MCP notify_user tool: toast + system notification +
         // optional session-card highlight.
@@ -223,6 +240,178 @@ function connectUIWebSocket() {
       connectUIWebSocket();
     }, delay);
   };
+}
+
+/* --- channel status (the chip on a shell tab) -----------------------------
+ *
+ * What a channel is doing right now, from the events the page already receives.
+ * The chip used to show one thing ("ended"); it now shows the live state, and
+ * the interesting part is the rule that decides it.
+ *
+ * Two facts about a terminal make the obvious rule ("the last event wins")
+ * wrong, and the whole machine is the answer to them:
+ *
+ *   1. Every keystroke is echoed straight back as output. Painting on arrival
+ *      flips the chip to "output" one character after a person starts typing
+ *      and back again on the next key: it strobes while they type.
+ *   2. The echo of a submitted line, a redraw after a wrap, and a command's
+ *      result are the same bytes. Nothing in the byte stream says which is
+ *      which, so a rule that watches bytes for line breaks ended an agent's
+ *      line 13ms after it opened (a real capture, not a hypothetical) and the
+ *      chip read "output" for a line the agent was still writing.
+ *
+ * The input side is what knows, and it says so: the server reports who sent the
+ * input and whether that input *submitted the line* — enter, or a key sequence a
+ * line editor treats as one. A keystroke that does not submit leaves a line
+ * pending, and the echo of that line cannot close it; only a submit can. No
+ * timing is involved, which is the point: guessing "these bytes arrived soon
+ * after a keystroke, so they must be echo" breaks in both directions — a laggy
+ * link puts a real echo past the guess and strobes the chip, and a fast command
+ * (`ls`, `echo`) puts real output inside it and the chip reads "typing" for a
+ * command that already finished.
+ *
+ *   input, no submit  a line is pending, and the chip names who is typing. The
+ *                     echo that follows is held: it is the terminal
+ *                     acknowledging these keystrokes, not the command talking.
+ *   input, submit     the line is closed and the command owns the channel: the
+ *                     chip says "output" from here, which is what a submitted
+ *                     command is doing until it prints or goes quiet.
+ *   output            with no line pending this is the command's own output;
+ *                     while a line is pending it is held as echo or redraw.
+ *   silence           no bytes for the idle window: whatever ran has finished.
+ *
+ * State, per channel:
+ *   lineKind    the pending line's kind (0 when no line is pending)
+ *   statusTimer the pending "no bytes for a while" transition
+ *
+ * The pending kind only rises — api < ai — so a person typing on a line an agent
+ * is also writing reads as the agent's line, whoever typed last. A submit clears
+ * it; that is the only thing that does.
+ */
+
+var SHELL_KIND_OUTPUT = 0;
+var SHELL_KIND_API = 1;
+var SHELL_KIND_AI = 2;
+
+/* Silence means finished: no bytes for this long and the channel is done.
+   Meant to be short-lived — it is re-armed by every byte a channel produces and
+   cleared by the next one, so a command that keeps printing never reaches it. */
+var SHELL_STATUS_IDLE_MS = 3000;
+
+/* Paint one channel's chip. The node is the .shell-channel-tab-state span; a
+   channel without one (an older tab, a restored window) is skipped, not an
+   error. textContent is written from t() at call time rather than left to
+   data-i18n, because the chip's text *is* the state: a language switch
+   re-applies it through reapplyWindowLanguage, which re-runs this. */
+function shellStatusPaint(ch, state) {
+  if (!ch || !ch.tabEl) return;
+  var el = ch.tabEl.querySelector('.shell-channel-tab-state');
+  if (!el) return;
+  ch.statusState = state;
+  /* Literal t() calls per state rather than a computed key: the catalog tests
+     only see literal arguments, so 'channel.state.' + state would read as an
+     orphan and the key would be pruned from the catalog. `ended` keeps its
+     original key — it is the state that predates the chip and the existing
+     translation is already the shortest correct label — with the fuller sentence
+     as its tooltip. */
+  var label, tip;
+  if (state === 'typing') { label = t('channel.state.typing'); tip = label; }
+  else if (state === 'ai') { label = t('channel.state.ai'); tip = label; }
+  else if (state === 'running') { label = t('channel.state.running'); tip = label; }
+  else if (state === 'done') { label = t('channel.state.done'); tip = label; }
+  else { label = t('channel.endedTab'); tip = t('session.ended'); }
+  el.textContent = label;
+  el.className = 'shell-channel-tab-state shell-state-' + state;
+  el.style.display = '';
+  el.title = tip;
+}
+
+/* The chip for a finished channel stays put: "ended" is not a transient state
+   and must survive every later repaint, so it is recorded on the channel and
+   short-circuits the machine. */
+function shellStatusSet(win, sid, state) {
+  var ch = win && win._channels && win._channels[sid];
+  if (!ch) return;
+  if (ch.statusState === 'ended' && state !== 'ended') return;
+  shellStatusPaint(ch, state);
+}
+
+/* An input event arrived: a person or an agent is typing on this channel.
+   `submit` says the input ended the line (the enter key, or a key sequence a
+   line editor treats as one). It comes from the server because it cannot be
+   inferred from the output: the echo of a submitted line and the line break of
+   a redraw are the same bytes. */
+function shellStatusOnInput(win, sid, src, submit) {
+  var ch = win && win._channels && win._channels[sid];
+  if (!ch || ch.statusState === 'ended') return;
+  /* Arm the idle timer first: a submitted command that prints nothing at all is
+     still a channel that has gone quiet, and this event is its only signal. */
+  shellStatusTouch(win, sid);
+  /* A submit is the one thing that closes the line. The chip moves to "output"
+     at once, because that is what a submitted command is doing until it prints
+     or goes quiet. */
+  if (submit) {
+    ch.lineKind = SHELL_KIND_OUTPUT;
+    shellStatusPaint(ch, 'running');
+    return;
+  }
+  /* Still typing: the line is pending, and the chip names its kind — not this
+     event's. A person's keystroke on a line an agent is also writing must not
+     lower the chip back to "typing": a line carrying agent input reads as agent
+     input, whoever typed last. */
+  var kind = src === 'ai' ? SHELL_KIND_AI : SHELL_KIND_API;
+  if (kind > (ch.lineKind || 0)) ch.lineKind = kind;
+  shellStatusPaint(ch, ch.lineKind === SHELL_KIND_AI ? 'ai' : 'typing');
+}
+
+/* Bytes arrived on a channel: the terminal's own output, or the echo of what was
+   just typed — the same bytes, which is the whole reason this machine exists. */
+function shellStatusOnBytes(win, sid, text) {
+  var ch = win && win._channels && win._channels[sid];
+  if (!ch || ch.statusState === 'ended') return;
+  if (text == null || String(text).length === 0) return;
+  shellStatusTouch(win, sid);
+
+  /* While a line is pending the chip holds, however long the echo takes: these
+     bytes are the terminal acknowledging the keystrokes or repainting the line,
+     and no property of them says which. Only the input side can close the line
+     (a submit), so nothing here may. Repainting the pending kind rather than
+     returning early matters after a silence longer than the idle window: those
+     bytes are a change, so the chip must leave "done" for the state the channel
+     is actually in. It repaints to the state it is already showing in the normal
+     case, so there is no flicker. */
+  if (ch.lineKind > SHELL_KIND_OUTPUT) {
+    var pending = ch.lineKind === SHELL_KIND_AI ? 'ai' : 'typing';
+    if (ch.statusState !== pending) shellStatusPaint(ch, pending);
+    return;
+  }
+  if (ch.statusState === 'running') return;
+  shellStatusPaint(ch, 'running');
+}
+
+/* A channel with no bytes for the idle window has finished what it was doing:
+   the terminal's contents stopped changing, which is as close to "the command
+   returned" as a byte stream gets. */
+function shellStatusOnIdle(win, sid) {
+  var ch = win && win._channels && win._channels[sid];
+  if (!ch || ch.statusState === 'ended' || ch.statusState === 'done') return;
+  /* The chip is "done" even for a line that was never submitted: it has stopped
+     changing, and a later keystroke repaints its kind. Leaving it on "typing"
+     would make a channel someone walked away from read as one being typed on. */
+  shellStatusPaint(ch, 'done');
+}
+
+/* Schedule the idle transition: one timer per channel, re-armed by every byte
+   and by every input event, so a streaming command stays "running" and the
+   channel settles on "done" only once it has actually gone quiet. */
+function shellStatusTouch(win, sid) {
+  var ch = win && win._channels && win._channels[sid];
+  if (!ch || ch.statusState === 'ended') return;
+  if (ch.statusTimer) clearTimeout(ch.statusTimer);
+  ch.statusTimer = setTimeout(function () {
+    ch.statusTimer = 0;
+    shellStatusOnIdle(win, sid);
+  }, SHELL_STATUS_IDLE_MS);
 }
 
 function startUIWebSocket() {
@@ -592,13 +781,15 @@ function bootstrapShellFullHistory(sessionId, term) {
       var T = Number(j.total);
       if (isFinite(T) && T >= 0) total = T;
       var d = j.d || '';
-      if (d) {
-        var u = textToBytes(d);
-        try { term.write(u); } catch (e1) {}
-        shown += u.length;
-      }
       var end = Number(j.end);
       if (!isFinite(end)) end = off;
+      if (d) {
+        var u = textToBytes(d);
+        try {
+          term.write(u);
+        } catch (e1) {}
+        shown += u.length;
+      }
       off = end;
       if (off === prevOff) return Promise.resolve();
       if (total === 0) return Promise.resolve();

@@ -276,3 +276,301 @@ func TestLog_HandlesArePerShell(t *testing.T) {
 		t.Error("deleted shell directory still present")
 	}
 }
+
+// A windowed read answers with the spans that decide the window's bytes: the span
+// the window starts inside, the marks that start within it, and the mark that
+// closes the last overlap. That last one is what lets the caller derive every
+// span's end without the window having to say where it came from.
+func TestMarks_WindowIsTheSpansDecidingIt(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s7", "sh7"
+
+	// Marks at 0, 100, 200, 300 over a log of 400 bytes.
+	for _, off := range []int64{0, 100, 200, 300} {
+		if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: off, Offset: off}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.AppendLog(sess, shell, make([]byte, 400)); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name       string
+		start, end int64
+		want       []int64
+		wantCloser int64
+	}{
+		// The window starts inside span [0,100): that span's mark is the carry, 100
+		// starts inside the window, and 200 is the boundary the last of them ends at —
+		// returned as the closer rather than as a span, since its own span does not
+		// overlap the window.
+		{"middle of a span", 50, 150, []int64{0, 100}, 200},
+		// A mark exactly on the window's start is the carry, not a member.
+		{"start on a mark", 100, 150, []int64{100}, 200},
+		// A mark exactly on the end is the closer: it is where the window's last span
+		// ends, and it does not itself belong to the window.
+		{"end on a mark", 100, 200, []int64{100}, 200},
+		// The whole log: every span, and no closer (there is nothing past it).
+		{"whole log", 0, 400, []int64{0, 100, 200, 300}, 0},
+		// A window past the last mark still gets that mark carried in, so a row of
+		// bytes written after it is coloured — and no closer, the log ends there.
+		{"past the last mark", 350, 400, []int64{300}, 0},
+		// An empty window is legal and answered: the mark on its start byte is what
+		// a zero-length span sits on, and the next mark closes it.
+		{"empty window", 200, 200, []int64{200}, 300},
+		// A window before the first mark is the mark on its start byte and the one
+		// that closes it.
+		{"before the first mark", 0, 50, []int64{0}, 100},
+	}
+	for _, tc := range cases {
+		marks, closer, err := st.ReadMarksWindow(sess, shell, tc.start, tc.end)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var got []int64
+		for _, m := range marks {
+			got = append(got, m.Offset)
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: offsets %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: offsets %v, want %v", tc.name, got, tc.want)
+				break
+			}
+		}
+		if closer != tc.wantCloser {
+			t.Errorf("%s: closer %d, want %d", tc.name, closer, tc.wantCloser)
+		}
+	}
+}
+
+// Marks sharing the window's start offset are all kept. A submitted line and the
+// review decision about it are both zero-length at the same byte, so a carry that
+// kept only the newest would drop the row's own status and leave the row reading
+// as the decision that was made about it.
+func TestMarks_WindowKeepsEveryMarkAtTheStartOffset(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s8", "sh8"
+
+	for _, m := range []api.LogMark{
+		{Status: api.LogOutput, Time: 1, Offset: 0},
+		{Status: api.LogAPIInput, Time: 2, Offset: 40},
+		{Status: api.LogApprovalRequest, Time: 3, Offset: 40},
+		{Status: api.LogOutput, Time: 4, Offset: 40},
+		{Status: api.LogOutput, Time: 5, Offset: 90},
+	} {
+		if err := st.AppendMark(sess, shell, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	marks, closer, err := st.ReadMarksWindow(sess, shell, 60, 95)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The carry is the whole offset-40 group; 90 starts inside the window, so it is
+	// a span of it too, and there is no closer above the window.
+	want := []struct {
+		status api.LogStatus
+		offset int64
+	}{
+		{api.LogAPIInput, 40},
+		{api.LogApprovalRequest, 40},
+		{api.LogOutput, 40},
+		{api.LogOutput, 90},
+	}
+	if len(marks) != len(want) {
+		t.Fatalf("got %d marks, want %d: %+v", len(marks), len(want), marks)
+	}
+	for i, w := range want {
+		if marks[i].Status != w.status || marks[i].Offset != w.offset {
+			t.Errorf("marks[%d] = %+v, want %s@%d", i, marks[i], w.status, w.offset)
+		}
+	}
+	if closer != 0 {
+		t.Errorf("closer = %d, want 0: no mark sits at or past the window's end", closer)
+	}
+}
+
+// The sparse index must not change what a window answers: the same index backs a
+// read that lands mid-stride as one that lands exactly on an entry, and a log long
+// enough to have many entries exercises both. A mark count just past a stride
+// boundary is where an off-by-one in the seek would show up as a missing carry.
+func TestMarks_WindowAnswersTheSameAtEveryOffset(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s9", "sh9"
+
+	// 200 marks, so the index has several entries and a read of any single-mark
+	// window has to seek to the group holding it.
+	const n = 200
+	for i := 0; i < n; i++ {
+		off := int64(i * 10)
+		if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: off, Offset: off}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	total := int64(n * 10)
+	if _, err := st.AppendLog(sess, shell, make([]byte, total)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The full read is the reference: a one-span window at mark i must agree with
+	// it about that span and the next one, wherever the seek landed.
+	all, err := st.ReadMarks(sess, shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != n {
+		t.Fatalf("full read returned %d marks, want %d", len(all), n)
+	}
+	for i := 0; i < n; i++ {
+		start := int64(i * 10)
+		marks, closer, err := st.ReadMarksWindow(sess, shell, start, start+1)
+		if err != nil {
+			t.Fatalf("window at %d: %v", start, err)
+		}
+		// A one-byte window holds exactly the span over that byte, and the next mark
+		// is the boundary it ends at. The last mark has no successor to report.
+		want := 1
+		wantCloser := start + 10
+		if i == n-1 {
+			wantCloser = 0
+		}
+		if len(marks) != want {
+			t.Fatalf("window at %d returned %d marks, want %d: %+v", start, len(marks), want, marks)
+		}
+		if marks[0] != all[i] {
+			t.Errorf("window at %d returned %+v, want %+v", start, marks[0], all[i])
+		}
+		if closer != wantCloser {
+			t.Errorf("window at %d: closer %d, want %d", start, closer, wantCloser)
+		}
+	}
+}
+
+// The sparse index is extended by what was appended, so a window read after new
+// marks arrive sees them without re-reading the file from its start.
+func TestMarks_WindowSeesAppendedMarks(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s10", "sh10"
+
+	for i := 0; i < 70; i++ {
+		if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: int64(i), Offset: int64(i * 10)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// First read builds the index up to here.
+	if _, _, err := st.ReadMarksWindow(sess, shell, 0, 10); err != nil {
+		t.Fatal(err)
+	}
+	// Marks written after that read must be found by the next one: the index
+	// consumes the appended bytes, not the file again.
+	if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogAIInput, Time: 800, Offset: 710}); err != nil {
+		t.Fatal(err)
+	}
+
+	marks, _, err := st.ReadMarksWindow(sess, shell, 700, 720)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The carry is the last mark below the window (690), then the new mark itself:
+	// a window read after an append sees it without re-reading the file.
+	if len(marks) != 2 || marks[0].Offset != 690 || marks[1].Status != api.LogAIInput || marks[1].Offset != 710 {
+		t.Fatalf("appended marks are not in the window: %+v", marks)
+	}
+}
+
+// A malformed line is skipped by the index exactly as a read skips it, and it is
+// not counted either: the index and the read must agree on which lines are marks,
+// or a window would seek by a count of lines that is not the file's.
+func TestMarks_WindowSkipsMalformedAndTornLines(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s12", "sh12"
+
+	for i := 0; i < 70; i++ {
+		if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: int64(i), Offset: int64(i * 10)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A torn append that a later write closes into an invalid line: a crash between
+	// the bytes and the newline leaves exactly this.
+	f, err := os.OpenFile(st.MarkPath(sess, shell), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("{\"s\":\"o\",\"t\":999,\"i\":70\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogAIInput, Time: 800, Offset: 710}); err != nil {
+		t.Fatal(err)
+	}
+
+	marks, _, err := st.ReadMarksWindow(sess, shell, 700, 720)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(marks) != 2 || marks[0].Offset != 690 || marks[1].Status != api.LogAIInput {
+		t.Fatalf("a malformed line derailed the window: %+v", marks)
+	}
+
+	// A torn line at the very end is not a mark: the index stops before it, and a
+	// window either side of it still answers from the marks that are complete.
+	f, err = os.OpenFile(st.MarkPath(sess, shell), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"s":"o","t":1000,"i"`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, _, err := st.ReadMarksWindow(sess, shell, 710, 711); err != nil {
+		t.Fatalf("a torn trailing line must not fail the read: %v", err)
+	}
+	marks, _, err = st.ReadMarksWindow(sess, shell, 700, 720)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(marks) != 2 || marks[1].Offset != 710 {
+		t.Fatalf("a torn trailing line changed the window: %+v", marks)
+	}
+}
+
+// Deleting a shell drops its index, so a new shell that reuses the id is not
+// answered from positions in a log that no longer exists.
+func TestMarks_WindowIndexDiesWithTheShell(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s11", "sh11"
+
+	for i := 0; i < 80; i++ {
+		if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: int64(i), Offset: int64(i * 100)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.ReadMarks(sess, shell); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteShell(sess, shell); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same id, a much shorter file: a stale index would seek past its end and
+	// come back empty.
+	if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: 1, Offset: 0}); err != nil {
+		t.Fatal(err)
+	}
+	marks, closer, err := st.ReadMarksWindow(sess, shell, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(marks) != 1 || marks[0].Offset != 0 {
+		t.Fatalf("a reused shell id was answered from the deleted shell's index: %+v", marks)
+	}
+	if closer != 0 {
+		t.Errorf("closer = %d, want 0: the only mark is the last one", closer)
+	}
+}

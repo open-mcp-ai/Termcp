@@ -303,8 +303,11 @@ function showTerminalEndedMarker(win, ch) {
   if (!ch || ch.endedMarkPrinted) return;
   ch.endedMarkPrinted = true;
   if (win && ch.tabEl) {
-    var eb = ch.tabEl.querySelector('.shell-channel-tab-ended');
-    if (eb) eb.style.display = '';
+    /* The chip is repainted, not revealed: it carries a state, and "ended" is
+       only one of them, so the node is always present and its text is written
+       by whoever changes the state. */
+    var sid = ch.tabEl.getAttribute('data-chsid');
+    if (sid) shellStatusSet(win, sid, 'ended');
   }
   if (ch.term) {
     try {
