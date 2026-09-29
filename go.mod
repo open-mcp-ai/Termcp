@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/ssh v0.0.0-20250826160808-ebfa259c7309
 	github.com/gorilla/websocket v1.5.3
 	github.com/pkg/sftp v1.13.10
+	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
