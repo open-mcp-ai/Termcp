@@ -26,10 +26,7 @@ func TestChannelStatusRule(t *testing.T) {
 	if err != nil {
 		t.Skip("node not on PATH; cannot exercise the status machine")
 	}
-	body, err := readAsset("static/js/ui-socket.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := readAssetLF(t, "static/js/ui-socket.js")
 	// The machine's functions plus the constants and t() they need.
 	names := []string{
 		"function shellStatusPaint(",
