@@ -1175,7 +1175,22 @@ through the same `output` event path.
 
 ---
 
-## 13. Backward-compatible routes
+## 13. Instance info
+
+### `GET /api/version`
+
+Reports the version of the build being served — the same string `termcp -version`
+prints first (`v0.2.4`, or `dev` on an untagged build). The Web UI shows it beside
+the wordmark; scripts can gate on it without parsing `termcp -version` output.
+
+```
+GET /api/version
+
+Response 200:
+{ "version": "v0.2.4" }
+```
+
+## 14. Backward-compatible routes
 
 Old routes still work and delegate to the new ones. New code should use the canonical
 paths above.

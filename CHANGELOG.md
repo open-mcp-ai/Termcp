@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### 新功能
+
+- **纯 API 构建（`-tags no_webui`，`make build-api`）**：产物是 `dist/termcp-api-<os>-<arch>`，可与完整版并存。该构建不嵌入也不注册 Web UI——`/`、`/api.html`、`/static/*` 一律 404——只保留 REST、MCP、WebSocket 与两份 agent 文档（`/api.md`、`/skills.md`）；默认构建（`make build`）完全不受影响。CI 在三种平台上编译该变体并跑配套测试。
+- **Web UI 标题旁显示构建版本**：`h1` 右侧由新端点 `GET /api/version` 填写版本号，与 `termcp -version` 的首行相同（未打标构建为 `dev`），脚本可据此判断实例版本而无需解析 CLI 输出；取不到就留空，不占位。浏览器标签页图标（Web UI 与 `api.html`）新增为与终端一致的 `terminal-shell.svg`。`docs/api.md` 新增第 13 节记录该端点。
+
 ## v0.2.4 — 2026-09-29
 
 ### 新功能

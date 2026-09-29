@@ -1,4 +1,4 @@
-.PHONY: build build-debug test clean dist sync-assets
+.PHONY: build build-api build-debug test clean dist sync-assets
 
 # Plain `make` must keep meaning "build the release binary" (GNU make otherwise
 # picks the first target in the file as the default goal).
@@ -9,6 +9,10 @@ GOARCH ?= $(shell go env GOARCH)
 BIN := termcp-$(GOOS)-$(GOARCH)
 ifeq ($(GOOS),windows)
 BIN := $(BIN).exe
+endif
+HBIN := termcp-api-$(GOOS)-$(GOARCH)
+ifeq ($(GOOS),windows)
+HBIN := $(HBIN).exe
 endif
 
 # release 模式：-s 去掉符号表，-w 去掉 DWARF 调试信息，-trimpath 去掉本机路径等个人信息
@@ -29,6 +33,13 @@ LDFLAGS_VERSION := $(if $(VERSION),-X main.version=$(VERSION)) \
 build:
 	mkdir -p dist
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS_RELEASE) $(LDFLAGS_VERSION)" -o dist/$(BIN) .
+
+# 纯 API 构建：-tags no_webui 令二进制不嵌入 Web UI 静态资源、也不注册其路由
+# （`/`、`/api.html`、`/static/*` 一律 404），只保留 REST/MCP/WS 与 /api.md、
+# /skills.md 两份文档。产物带 api 后缀，可与完整版并存于 dist/。
+build-api:
+	mkdir -p dist
+	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -tags no_webui -trimpath -ldflags "$(LDFLAGS_RELEASE) $(LDFLAGS_VERSION)" -o dist/$(HBIN) .
 
 # 调试模式构建（保留符号信息，便于 delve 调试）
 build-debug:
