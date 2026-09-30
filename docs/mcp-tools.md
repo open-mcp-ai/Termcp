@@ -1,6 +1,6 @@
 # MCP 工具参考
 
-Termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 MCP 工具（同一监听端口）。
+Termcp 通过 **SSE**、**Streamable HTTP** 与 **stdio 桥**三种方式暴露同一套 MCP 工具（SSE 与 Streamable HTTP 共用同一监听端口，stdio 桥是本地子进程、转发到其中之一）。
 
 ## 对接方式（传输）
 
@@ -8,6 +8,7 @@ Termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 |------|------|------|------|
 | SSE | `GET /sse` | `POST /message` | 客户端只配置 `/sse`；SDK 自动用 `/message` 发 JSON-RPC |
 | Streamable HTTP | `/stream` | — | 单路径；不要拼 `/sse` 或 `/message` |
+| stdio（桥） | 本地子进程 | `termcp stdio` | 只认 stdio 的客户端。桥把 stdin/stdout 上的 MCP 消息转发到上表任一 HTTP 端点，`termcp daemon stdio` 则先拉起实例再进桥；详见 README 的方式 C |
 
 - SSE：`http://<host>:18765/sse`（Claude：`--transport sse` / `type: "sse"`）
 - Streamable HTTP：`http://<host>:18765/stream`（Claude：`--transport http` / `type: "http"`）

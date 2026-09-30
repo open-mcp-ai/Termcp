@@ -24,6 +24,7 @@ integration surface for AI agents. Pick one transport depending on client suppor
 |-----------|------|-------|
 | SSE | `GET /sse` + `POST /message` | Configure only `/sse`; JSON-RPC goes over `/message` |
 | Streamable HTTP | `/stream` | Single endpoint; used by Open WebUI and similar |
+| stdio (bridge) | local subprocess | Stdio-only clients: `termcp stdio` relays stdin/stdout to one of the two HTTP endpoints above; `termcp daemon stdio` brings the instance up first. See the README's *Option C* |
 
 MCP tool arguments, results, and error codes are described by the tool schemas from
 `tools/list` (and summarized in the repository's `docs/mcp-tools.md`). Browser users
@@ -99,6 +100,10 @@ Constraints:
   recordings, single-user workstations). Combining it with a token or hash is a
   startup error, and the env var only accepts `1`/`true`/`yes`/`on` — `=0` means
   "not set" rather than "open the server".
+- A **hash-configured** server also accepts the hash string itself as the
+  credential (`Authorization: Bearer sha256-<salt>-<digest>`), so tooling that
+  kept only the hash — `termcp daemon` management, `termcp stdio` — can
+  still authenticate. The hash then doubles as a secret.
 - Tokens are never logged and must not go into URLs (query strings) — use headers.
 - Public exception: the two documentation endpoints `/api.md` and `/skills.md`
   (GET/HEAD only, no data inside) are served **without** credentials, so agents
@@ -1206,6 +1211,64 @@ GET /api/version
 Response 200:
 { "version": "v0.2.4" }
 ```
+
+### `GET /api/daemon`
+
+Reports what instance this is: whether it runs as a daemon (a detached instance
+started by `termcp daemon start` or `termcp daemon stdio`, which may carry an
+idle countdown), plus its pid, version, start time, the effective idle countdown,
+and — for daemons — the log
+file it appends to. Every CLI
+management action is built on this probe and nothing else, so an instance is
+found by its endpoint no matter which data dir or platform started it.
+
+```
+GET /api/daemon
+
+Response 200:
+{
+  "daemon": true,
+  "pid": 4242,
+  "version": "v0.2.4",
+  "started_at": "2026-09-30T10:00:00Z",
+  "log": "/home/you/.termcp/termcp.log",
+  "idle_timeout_ms": 30000
+}
+```
+
+`daemon` is `false` on a manually started instance, and `log` is empty unless
+the instance is a daemon. `idle_timeout_ms` is the countdown actually in force
+(`0` = it never exits on its own); the `termcp stdio` bridge reads it so it can
+ping faster than the real countdown instead of assuming the default. The route
+sits behind the auth middleware like the rest of `/api/*`.
+
+The daemon probe is exempt from the idle countdown: a status query must never
+keep an instance alive. That exemption covers the whole probe, including the
+credential-free `/api.md` fingerprint it falls back to when the probe is
+rejected — every request a management command makes carries `X-Termcp-Probe`,
+and the instance counts that header as no activity. Without it, an
+unauthenticated `termcp daemon status` against a guarded instance would feed the
+very countdown it reports on.
+
+### `POST /api/daemon/stop`
+
+Asks a daemon instance to shut down gracefully — the same path a `SIGTERM`
+takes (sessions marked DEAD, log flushed). The acknowledgment is written before
+the shutdown begins.
+
+```
+POST /api/daemon/stop
+
+Response 200:
+{ "ok": true }
+
+Response 409 (a manually started instance — stop it where it was started):
+{ "error": "not a daemon instance" }
+```
+
+Only daemon instances accept the stop; a manually started instance is refused
+with `409` rather than being hunted down as a process. `termcp daemon stop`
+does exactly this over HTTP.
 
 ## 14. Backward-compatible routes
 

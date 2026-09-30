@@ -3,7 +3,10 @@
 // The server is configured with either a plaintext token (--auth-token /
 // TERMCP_AUTH_TOKEN) or a salted SHA-256 hash of one (--auth-hash /
 // TERMCP_AUTH_HASH), so deployments that prefer not to store the cleartext
-// can keep only the hash. One token guards the whole HTTP surface: Web UI,
+// can keep only the hash — and a hash-configured server additionally accepts
+// that hash string itself as a credential, so an operator holding only the
+// hash can drive `termcp daemon` management and `termcp stdio`. One token
+// guards the whole HTTP surface: Web UI,
 // REST API, MCP SSE, MCP streamable HTTP, and the WebSocket — except for the
 // read-only documentation endpoints in publicPaths, which carry no data and no
 // credentials, and must be fetchable before a client has a token configured
@@ -90,6 +93,7 @@ type Verifier struct {
 	token  string
 	salt   []byte
 	digest []byte
+	hash   string
 }
 
 // NewVerifier builds a Verifier from a plaintext token and/or a hash string.
@@ -103,22 +107,30 @@ func NewVerifier(token, hash string) (*Verifier, error) {
 	}
 	v := &Verifier{token: token}
 	if hash != "" {
-		salt, digest, err := parseHash(strings.TrimSpace(hash))
+		hash = strings.TrimSpace(hash)
+		salt, digest, err := parseHash(hash)
 		if err != nil {
 			return nil, err
 		}
-		v.salt, v.digest = salt, digest
+		v.salt, v.digest, v.hash = salt, digest, hash
 	}
 	return v, nil
 }
 
-// Verify reports whether token matches the configured secret.
+// Verify reports whether token matches the configured secret. A hash-configured
+// verifier accepts both the plaintext token and the configured hash string
+// itself: an operator who kept only the hash (e.g. the value in a deployment's
+// config) can still drive `termcp daemon` management and `termcp stdio`.
+// The hash is a credential then, as sensitive as the token.
 func (v *Verifier) Verify(token string) bool {
 	if v == nil || token == "" {
 		return false
 	}
 	if v.salt != nil {
-		return subtle.ConstantTimeCompare(digestOf(v.salt, token), v.digest) == 1
+		if subtle.ConstantTimeCompare(digestOf(v.salt, token), v.digest) == 1 {
+			return true
+		}
+		return subtle.ConstantTimeCompare([]byte(token), []byte(v.hash)) == 1
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(v.token)) == 1
 }

@@ -40,6 +40,35 @@ func TestHash_RoundTrip(t *testing.T) {
 	}
 }
 
+// A hash-configured verifier also accepts the hash string itself, so an
+// operator holding only the hash can drive `termcp daemon` management and
+// `termcp stdio`.
+// A token-configured verifier does not: there is no hash to speak of there.
+func TestVerifier_AcceptsConfiguredHashString(t *testing.T) {
+	const token = "correct horse battery staple"
+	h, err := Hash(token)
+	if err != nil {
+		t.Fatalf("Hash() error: %v", err)
+	}
+	v, err := NewVerifier("", h)
+	if err != nil {
+		t.Fatalf("NewVerifier() error: %v", err)
+	}
+	if !v.Verify(h) {
+		t.Fatal("Verify(hash string) = false, want true")
+	}
+	if v.Verify("sha256-00" + strings.TrimPrefix(h, "sha256-")) {
+		t.Fatal("Verify() = true for a different hash string")
+	}
+	vt, err := NewVerifier(token, "")
+	if err != nil {
+		t.Fatalf("NewVerifier() error: %v", err)
+	}
+	if vt.Verify(h) {
+		t.Fatal("token-configured verifier accepted a hash string")
+	}
+}
+
 func TestHash_UniqueSalt(t *testing.T) {
 	a, err := Hash("same")
 	if err != nil {

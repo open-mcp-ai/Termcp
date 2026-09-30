@@ -53,6 +53,22 @@ type Handler struct {
 	NoInternal bool            // when true, hide and refuse the built-in loopback profile
 	Version    string          // build version (`termcp -version`), served at GET /api/version
 
+	// Daemon marks this process as a background instance (started with
+	// `termcp daemon start` or `termcp daemon stdio`): it may carry an idle
+	// countdown and accepts the graceful stop. GET /api/daemon — the probe
+	// every management query is built on — also serves StartedAt, DaemonLog
+	// (the file the instance's output goes to; empty for a manually started
+	// one) and IdleTimeout.
+	Daemon      bool
+	StartedAt   string
+	DaemonLog   string
+	IdleTimeout time.Duration // effective idle countdown; 0 = never auto-exits
+
+	// StopDaemon asks the process to shut down gracefully; main wires it to the
+	// same path a SIGTERM takes. Called from POST /api/daemon/stop once the
+	// response is on the wire.
+	StopDaemon func()
+
 	// ExecuteOperation replays an approved non-terminal request (a file transfer,
 	// a port forward). Wired by main to the MCP server, which owns those
 	// operations; nil when no such server exists, in which case only command
@@ -93,6 +109,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	}
 	// Build metadata
 	mux.HandleFunc("GET /api/version", h.handleVersion)
+	// Daemon management (`termcp daemon status|start|stop`): an instance is
+	// found and stopped purely over HTTP, wherever it listens.
+	mux.HandleFunc("GET /api/daemon", h.handleDaemonInfo)
+	mux.HandleFunc("POST /api/daemon/stop", h.handleDaemonStop)
 
 	// Connection profiles
 	mux.HandleFunc("GET /api/connections", h.handleListConnections)
