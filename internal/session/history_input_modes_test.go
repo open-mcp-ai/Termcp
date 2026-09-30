@@ -219,7 +219,14 @@ func TestHistoryInterruptedLineIsNotAnExecutedCommand(t *testing.T) {
 	}
 	waitForIdleBytes(t, mm, s.ID, cs.ID)
 
-	if err := cs.SendTerminalBytes([]byte(testInteractiveOutputCommand("HISTORY_CANCELLED")), false); err != nil {
+	// Build the output token at execution time. The typed command itself does
+	// not contain HISTORY_CANCELLED, so terminal echo behavior cannot affect
+	// the assertion on whether the command actually ran.
+	command := "printf 'HISTORY_%s\\n' CANCELLED"
+	if runtime.GOOS == "windows" {
+		command = "Write-Output ('HISTORY_' + 'CANCELLED')"
+	}
+	if err := cs.SendTerminalBytes([]byte(command), false); err != nil {
 		t.Fatal(err)
 	}
 	if got := historyInputMarks(t, mm, s.ID, cs.ID); len(got) != 0 {
@@ -236,7 +243,7 @@ func TestHistoryInterruptedLineIsNotAnExecutedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.Count(string(out), "HISTORY_CANCELLED"); count != 1 {
-		t.Fatalf("cancelled command appeared %d times in terminal output, want only its input echo", count)
+	if strings.Contains(string(out), "HISTORY_CANCELLED") {
+		t.Fatal("cancelled command produced execution output")
 	}
 }
