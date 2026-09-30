@@ -268,9 +268,11 @@ ssh_config(action=list)
 
 终止并**关闭**会话：关闭全部 shell，并关闭 SSH 连接（级联清理 forwards / 通知规则）。会话**保留在注册表**中（状态 `exited` / DEAD），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。彻底删除用 `session_delete`。`force=true` 立即强杀；只关一个通道用 `shell_close`。
 
+`session_id` 可用**逗号分隔多个** id/定位符（批量）：逐条独立关闭，单条失败（如 not found）不中断其余，返回逐条 `results` 数组（`ok` / `code` / `error`）。
+
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `session_id` | string | **是** | — | |
+| `session_id` | string | **是** | — | id / `termcp://` 定位符 / 逗号分隔列表 |
 | `force` | boolean | 否 | `false` | true = 跳过 grace_period 直接强杀 |
 | `grace_period` | number | 否 | `5` | SIGTERM 后等待秒数（0–60） |
 
@@ -388,9 +390,11 @@ ssh_config(action=list)
 
 **永久删除**一个会话：关闭仍存活的进程/传输，释放全部子资源（shell 通道、端口转发、通知规则、内存缓冲），从注册表移除（Web UI 上的 tile 随之消失），并删除磁盘上的会话目录（manifest + `log.bin` + `log.jsonl`）。**不可逆**。
 
+`session_id` 可用**逗号分隔多个** id/定位符（批量）：逐条独立删除，单条失败不中断其余，返回逐条 `results` 数组。
+
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `session_id` | string | **是** | session_id 或 `termcp://` 定位符 |
+| `session_id` | string | **是** | session_id / `termcp://` 定位符 / 逗号分隔列表 |
 
 > **close ≠ delete**：`session_terminate` 只**关闭**会话——断开连接、结束进程，但会话仍留在注册表中（状态 `exited`），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。只有 `session_delete` 才真正抹除。
 

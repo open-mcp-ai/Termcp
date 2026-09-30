@@ -588,6 +588,45 @@ document.getElementById('start-run').onclick = function () {
     });
 };
 
+// Session lifecycle batch helpers. One request for every id (comma-separated
+// path), so N deletes are not N round trips and one stuck session cannot stall
+// the rest — the server reports per-id outcomes. Ids reported as
+// session_not_found count as cleared here: another client already got there.
+function deleteSessionsBatch(ids) {
+  var path = '/api/sessions/' + ids.map(encodeURIComponent).join(',');
+  return fetch(path, { method: 'DELETE' }).then(function (r) {
+    if (r.ok && r.status !== 204) {
+      return r.json().then(function (j) { return (j && j.results) || []; });
+    }
+    if (r.status === 204 || r.status === 404) {
+      return ids.map(function (id) { return { id: id, ok: true }; });
+    }
+    return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  });
+}
+
+// Closes the terminal windows and drops the selection of every id that is gone,
+// then hands (clearedCount, failedEntries) to onDone. failedEntries carry
+// {id, error} for the failure toast.
+function settleSessionDeletes(results, banner, onDone) {
+  var failed = [];
+  (results || []).forEach(function (r) {
+    if (r.ok || r.code === 'session_not_found') {
+      var w = getShellWindowBySid(r.id);
+      if (w) closeShellWindow(w);
+      _selectedSessionIds.delete(r.id);
+    } else {
+      failed.push(r);
+    }
+  });
+  if (banner) setLoadBanner(banner, '');
+  onDone((results || []).length - failed.length, failed);
+}
+
+function sessionFailuresText(failed) {
+  return failed.map(function (r) { return r.id + (r.error ? ': ' + r.error : ''); }).join('; ');
+}
+
 // Session selection toolbar actions
 document.getElementById('btn-clear-dead').onclick = function (e) {
   e.stopPropagation();
@@ -602,25 +641,14 @@ document.getElementById('btn-clear-dead').onclick = function (e) {
     if (!ok) return;
     var banner = document.getElementById('session-load-banner');
     if (banner) setLoadBanner(banner, tCount('banner.clearing.one', 'banner.clearing.other', { count: dead.length }));
-    return dead.reduce(function (p, s) {
-      return p.then(function () {
-        return fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
-          .then(function (r) {
-            if (r.ok || r.status === 204 || r.status === 404) {
-              var w = getShellWindowBySid(s.id);
-              if (w) closeShellWindow(w);
-              _selectedSessionIds.delete(s.id);
-              return;
-            }
-            return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-          });
+    return deleteSessionsBatch(dead.map(function (s) { return s.id; })).then(function (results) {
+      settleSessionDeletes(results, banner, function (cleared, failed) {
+        if (failed.length) showCopyToast(t('toast.clear.failed', { msg: sessionFailuresText(failed) }));
+        else showCopyToast(tCount('toast.dead.cleared.one', 'toast.dead.cleared.other', { count: cleared }));
+        loadForwards();
+        startUIWebSocket();
+        renderSessionGrid(window._lastSessionsSnapshot || [], '');
       });
-    }, Promise.resolve()).then(function () {
-      if (banner) setLoadBanner(banner, '');
-      showCopyToast(tCount('toast.dead.cleared.one', 'toast.dead.cleared.other', { count: dead.length }));
-      loadForwards();
-      startUIWebSocket();
-      renderSessionGrid(window._lastSessionsSnapshot || [], '');
     }).catch(function (err) {
       if (banner) setLoadBanner(banner, t('toast.clear.failed', { msg: String(err.message || err) }));
       renderSessionGrid(window._lastSessionsSnapshot || [], '');
@@ -659,25 +687,14 @@ if (btnBatchDel) {
       if (!ok) return;
       var banner = document.getElementById('session-load-banner');
       if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-      return targets.reduce(function (p, s) {
-        return p.then(function () {
-          return fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
-            .then(function (r) {
-              if (r.ok || r.status === 204 || r.status === 404) {
-                var w = getShellWindowBySid(s.id);
-                if (w) closeShellWindow(w);
-                _selectedSessionIds.delete(s.id);
-                return;
-              }
-              return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-            });
+      return deleteSessionsBatch(targets.map(function (s) { return s.id; })).then(function (results) {
+        settleSessionDeletes(results, banner, function (cleared, failed) {
+          if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
+          else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
+          loadForwards();
+          startUIWebSocket();
+          renderSessionGrid(window._lastSessionsSnapshot || [], '');
         });
-      }, Promise.resolve()).then(function () {
-        if (banner) setLoadBanner(banner, '');
-        showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: targets.length }));
-        loadForwards();
-        startUIWebSocket();
-        renderSessionGrid(window._lastSessionsSnapshot || [], '');
       }).catch(function (err) {
         if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
         renderSessionGrid(window._lastSessionsSnapshot || [], '');

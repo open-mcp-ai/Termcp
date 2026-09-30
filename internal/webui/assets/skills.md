@@ -178,7 +178,9 @@ Bodies are in `/api.md`. Essentials:
 ## 8. Pitfalls
 
 - `DELETE /api/sessions/{id}` is **permanent**;
-  use `terminate` to keep the session visible and readable.
+  use `terminate` to keep the session visible and readable. Both accept a
+  comma-separated id list (`a,b,c`): one call, per-id results, and one failing
+  entry does not stop the rest — the way to clear several DEAD sessions at once.
 - `shell_id` ≠ `session_id`: terminal I/O (output-range / input / key / resize)
   takes `shell_id`.
 - With auth enabled, every API endpoint needs credentials (`/api.md` and

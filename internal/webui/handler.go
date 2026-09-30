@@ -445,12 +445,50 @@ func (h *Handler) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess.Info())
 }
 
+// batchSessionResults applies op to every id in a comma-separated batch (the
+// session lifecycle routes accept one). Entries run independently: a missing id
+// or a failed op is reported as {"id":...,"ok":false,"code":...,"error":...}
+// and never stops the remaining entries; successes are {"id":...,"ok":true}.
+// The codes mirror the MCP error codes (session_not_found / operation_failed)
+// so clients can branch without parsing error text — the Web UI treats
+// session_not_found as already cleared.
+func (h *Handler) batchSessionResults(rawIDs string, op func(id string) error) []map[string]any {
+	results := make([]map[string]any, 0)
+	for _, id := range strings.Split(rawIDs, ",") {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		if h.Sessions.Get(id) == nil {
+			results = append(results, map[string]any{"id": id, "ok": false, "code": "session_not_found", "error": "session '" + id + "' not found"})
+			continue
+		}
+		if err := op(id); err != nil {
+			results = append(results, map[string]any{"id": id, "ok": false, "code": "operation_failed", "error": err.Error()})
+			continue
+		}
+		results = append(results, map[string]any{"id": id, "ok": true})
+	}
+	return results
+}
+
 // handleDeleteSession closes a session in place (terminate + DEAD), keeping it
 // in the registry so the Web UI shows it as a read-only tile and its output
 // stays readable. POST /api/sessions/{id}/terminate and /disconnect both route
 // here. Use DELETE /api/sessions/{id} to erase it for good.
+//
+// {id} may be a comma-separated batch (a,b,c): every entry is closed
+// independently, the response is 200 with a per-id results array instead of
+// 204, and one bad entry does not stop the rest. A single id is unchanged.
 func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if strings.Contains(id, ",") {
+		results := h.batchSessionResults(id, func(sid string) error {
+			h.Sessions.Terminate(sid, true, 0)
+			return nil
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"results": results})
+		return
+	}
 	if h.Sessions.Get(id) == nil {
 		http.NotFound(w, r)
 		return
@@ -463,8 +501,17 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 
 // handlePurgeSession terminates a live session and permanently removes its
 // on-disk directory (DELETE /api/sessions/{id}).
+//
+// {id} may be a comma-separated batch (a,b,c): 200 with per-id results; a
+// failing entry (locked log file, session already gone) does not stop the
+// others. A single id is unchanged (204 or 404).
 func (h *Handler) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if strings.Contains(id, ",") {
+		results := h.batchSessionResults(id, h.Sessions.Delete)
+		writeJSON(w, http.StatusOK, map[string]any{"results": results})
+		return
+	}
 	if h.Sessions.Get(id) != nil {
 		if err := h.Sessions.Delete(id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})

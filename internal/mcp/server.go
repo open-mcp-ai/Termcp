@@ -241,15 +241,15 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("session_info", s.handleGetSessionInfo))
 
 	mcpServer.AddTool(s.newTool("session_terminate",
-		mcpgo.WithDescription("Close a session: terminates all shells, closes the SSH transport, cascades forwards, but keeps the entry in the registry (status: exited / DEAD) and in the Web UI as a read-only tile, so output remains readable via shell_output. session_id accepts a raw id or a termcp:// locator (\"termcp://#<sid>\"). force=true = immediate kill; force=false waits grace_period after SIGTERM. To permanently erase the session and its on-disk byte logs, use session_delete. To close one shell only, use shell_close."),
-		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
+		mcpgo.WithDescription("Close a session: terminates all shells, closes the SSH transport, cascades forwards, but keeps the entry in the registry (status: exited / DEAD) and in the Web UI as a read-only tile, so output remains readable via shell_output. session_id accepts a raw id, a termcp:// locator (\"termcp://#<sid>\"), or a comma-separated list of these (batch): a batch closes every entry independently — one failing entry (e.g. a not-found id) does not stop the rest — and returns per-session outcomes JSON. force=true = immediate kill; force=false waits grace_period after SIGTERM. To permanently erase the session and its on-disk byte logs, use session_delete. To close one shell only, use shell_close."),
+		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id, termcp:// locator (termcp://#<sid>), or a comma-separated list of these")),
 		mcpgo.WithBoolean("force", mcpgo.Description("If true, end immediately without honoring grace_period"), mcpgo.DefaultBool(false)),
 		mcpgo.WithNumber("grace_period", mcpgo.Description("Seconds to allow after SIGTERM before hard close when force is false (0–60)"), mcpgo.DefaultNumber(5)),
 	), withLogging("session_terminate", s.handleTerminateSession))
 
 	mcpServer.AddTool(s.newTool("session_delete",
-		mcpgo.WithDescription("Permanently delete a session: finalizes its process (running or DEAD), releases every child resource (shells, forwards, notification rules, buffers), drops the registry entry (its tile disappears from the Web UI) and removes its on-disk directory (manifests + log.bin + log.jsonl). Irreversible. To merely stop a session and keep reading its output, use session_terminate."),
-		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id or termcp:// locator (termcp://#<sid>)")),
+		mcpgo.WithDescription("Permanently delete a session: finalizes its process (running or DEAD), releases every child resource (shells, forwards, notification rules, buffers), drops the registry entry (its tile disappears from the Web UI) and removes its on-disk directory (manifests + log.bin + log.jsonl). Irreversible. session_id accepts a raw id, a termcp:// locator, or a comma-separated list (batch): every entry is deleted independently — one failing entry does not stop the rest — and the result carries per-session outcomes. To merely stop a session and keep reading its output, use session_terminate."),
+		mcpgo.WithString("session_id", mcpgo.Required(), mcpgo.Description("session_id, termcp:// locator (termcp://#<sid>), or a comma-separated list of these")),
 	), withLogging("session_delete", s.handleDeleteSession))
 
 	mcpServer.AddTool(s.newTool("shell_resize",

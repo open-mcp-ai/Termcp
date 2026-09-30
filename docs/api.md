@@ -284,9 +284,26 @@ Irreversible.
 Response: 204 No Content
 ```
 
+**Batch**: `{id}` may be a comma-separated list (`DELETE /api/sessions/a,b,c`).
+Every entry is deleted independently — one failing entry (locked log file,
+already-gone session) does not stop the rest — and the batch answers 200 with
+per-id outcomes instead of 204:
+
+```
+Response 200:
+{ "results": [
+  { "id": "a", "ok": true },
+  { "id": "b", "ok": false, "code": "session_not_found", "error": "session 'b' not found" }
+] }
+```
+
+`code` is `session_not_found` or `operation_failed`, mirroring the MCP error
+codes. A single id keeps the original contract above.
+
 > Note: this differs from `POST /api/sessions/{id}/terminate` (close only — the
 > session stays in the registry as a read-only DEAD tile and its output remains
-> readable).
+> readable). `terminate` and `disconnect` also accept the comma-separated batch
+> form, with the same per-id results shape and no batch-level status code.
 
 ### `PATCH /api/sessions/{id}`
 
@@ -1209,4 +1226,5 @@ paths above.
 
 > Note: the legacy `terminate` / `disconnect` only **close** a session (it stays in
 > the registry as a DEAD, read-only entry). To erase it for good use
-> `DELETE /api/sessions/{id}`.
+> `DELETE /api/sessions/{id}`. All three routes accept a comma-separated id
+> list (batch) and then answer 200 with per-id results — see section 6.

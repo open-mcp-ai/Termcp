@@ -4,6 +4,7 @@
 
 ### 新功能
 
+- **会话生命周期命令支持批量（逗号分隔 id）**：`session_terminate` / `session_delete`（MCP）与 `DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/terminate|/disconnect`（REST）的 id 参数接受逗号分隔列表（如 `a,b,c`；MCP 侧每项同样可以是 `termcp://` 定位符）。逐条独立执行、逐条返回结果（`ok` / `code` / `error`，code 为 `session_not_found` 或 `operation_failed`），单条失败不再中断其余——此前 Web UI 清理已结束会话与批量删除逐个发请求，中途一条失败（会话已被其他客户端清掉、Windows 上日志文件被占用）整条链就断，后面的全部不执行。单 id 的请求与响应契约完全不变（204/404 等）；Web UI 两处批量流程改为一次请求，部分失败时在提示里列出具体是哪几条。
 - **纯 API 构建（`-tags no_webui`，`make build-api`）**：产物是 `dist/termcp-api-<os>-<arch>`，可与完整版并存。该构建不嵌入也不注册 Web UI——`/`、`/api.html`、`/static/*` 一律 404——只保留 REST、MCP、WebSocket 与两份 agent 文档（`/api.md`、`/skills.md`）；默认构建（`make build`）完全不受影响。CI 在三种平台上编译该变体并跑配套测试。
 - **Web UI 标题旁显示构建版本**：`h1` 右侧由新端点 `GET /api/version` 填写版本号，与 `termcp -version` 的首行相同（未打标构建为 `dev`），脚本可据此判断实例版本而无需解析 CLI 输出；取不到就留空，不占位。浏览器标签页图标（Web UI 与 `api.html`）新增为与终端一致的 `terminal-shell.svg`。`docs/api.md` 新增第 13 节记录该端点。
 
