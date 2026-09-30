@@ -93,13 +93,16 @@ func (m *Manager) AppendMarkOnly(sessionID, shellID string, status api.LogStatus
 	if m.store == nil {
 		return nil
 	}
+	mu := m.sessionLock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	// AppendOutput uses the same lock. Read the size while holding it so an
+	// output append cannot land between the size snapshot and this mark; that
+	// would make a zero-byte input mark cover those output bytes.
 	size, err := m.store.LogSize(sessionID, shellID)
 	if err != nil {
 		return err
 	}
-	mu := m.sessionLock(sessionID)
-	mu.Lock()
-	defer mu.Unlock()
 	return m.markIfChanged(sessionID, shellID, status, size)
 }
 
