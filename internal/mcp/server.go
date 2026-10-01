@@ -208,7 +208,8 @@ func (s *Server) NotifyManager() *notify.Manager {
 // New creates and configures the MCP server with all tools registered.
 // sshConfigs may be nil (session_start / ssh_config(action=list) will error or return empty).
 // version is the build version reported in initialize's serverInfo (main passes the
-// same value `termcp --version` prints); an empty string falls back to "dev".
+// same value `termcp --version` prints, which is never empty in practice). An empty
+// string falls back to "dev" so an in-process caller cannot advertise nothing.
 // opts tune the server: DeferTools() lazily loads low-frequency tools, and
 // WithHTTPServer() attaches the shared http.Server to the SSE transport.
 func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfig.Store, forwardMgr *forward.ForwardManager, version string, opts ...Option) *Server {

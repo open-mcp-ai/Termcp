@@ -40,23 +40,30 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/webui"
 )
 
-// Build metadata. Release builds override these with -ldflags, e.g.
+// Build metadata. Release builds override these with -ldflags (the Makefile's
+// LDFLAGS_VERSION does), e.g.
 //
-//	go build -ldflags "-X main.version=$(git describe --tags --always) \
-//	  -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%FT%TZ)"
+//	go build -ldflags "-X main.version=v1.2.3 -X main.commit=$(git rev-parse --short HEAD) \
+//	  -X main.date=$(date -u +%FT%TZ)"
 //
-// When they are not injected (plain `go build`, `go install pkg@v0.1.16`),
-// versionString falls back to the module version embedded by the Go toolchain,
-// so `termcp -version` always reports something truthful.
+// When they are not injected, versionString falls back to the module version
+// the Go toolchain embeds: the release tag for a `go install module@vX.Y.Z`
+// build, a vX.Y.Z-0.<time>-<commit> pseudo-version (`+dirty` on a modified
+// tree) for a `go build` inside a checkout. `dev` is what remains when no
+// module version was embedded at all — `-buildvcs=false`, an unpacked source
+// tarball, or `go run`, which records build settings but no version. So
+// `termcp -version` always says something truthful, and `dev` means "this
+// binary carries no version information", not "this is a git checkout".
 var (
 	version = "dev"
 	commit  = ""
 	date    = ""
 )
 
-// versionString returns the build version, preferring the ldflags-injected tag
-// and falling back to the Go toolchain's embedded module version (which carries
-// the git tag for `go install module@version` builds).
+// versionString returns the build version: the ldflags-injected one when present,
+// else the Go toolchain's embedded module version (the release tag for a
+// `go install module@version` build). `dev` is the last resort — no version was
+// injected and none was embedded, which is also the value `version` starts at.
 func versionString() string {
 	if version != "dev" {
 		return version

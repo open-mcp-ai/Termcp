@@ -56,6 +56,29 @@ client that reached the instance through a LAN IP, a proxy name or a tunnel is h
 that address, and `resources/read` accepts the URI it was just given (the registration
 is matched by path, so any origin works).
 
+The instance's own address is published to agents, so one can tell a human where to look
+(watch live output, type a secret, approve a reviewed command) instead of naming a page
+they would have to find themselves. It rides on the `notify_user` tool description in
+`tools/list` — the one channel guaranteed to reach the model, since a client that drops
+the tool listing cannot call any tool at all. It is deliberately **not** in the
+`initialize` instructions (optional in MCP, routinely discarded, and a per-request value
+baked into a fixed rule set would be a second source of truth) and not a resource
+(`termcp://…` is the [locator scheme](#5-resource-locators-termcp), so a
+`termcp://instance` would parse as an SSH entry named `instance`).
+
+The origin is the one the **request** arrived on — the host the client dialed (or
+`X-Forwarded-Host`, when a proxy rewrote `Host`), with the scheme taken from TLS or
+`X-Forwarded-Proto` — so the client that dialed a LAN IP, a proxy name, or a tunnel host
+is told exactly the address it reached, and a human on that same path can open it. It is
+resolved per request, so one instance can serve several addresses at once, and every
+published address follows it: the `notify_user` description, the `resources/list` URIs,
+the `resources/read` reply and the `learn-api` prompt all name the caller's own address.
+A proxy must
+keep `Host` (or set `X-Forwarded-Host`); one that rewrites it to an internal upstream
+name makes the published address unusable, since termcp has no self-origin override.
+The one fallback is a request that names no host at all (HTTP/1.0 without `Host`), which
+is handed the discovered bind address instead.
+
 Authentication does not apply to these two read-only documents: they carry no data
 and no secrets, and a fresh client (an agent before MCP setup, a script) has to be
 able to fetch them before it can use the API, so `/api.md` and `/skills.md` stay
@@ -1205,8 +1228,10 @@ through the same `output` event path.
 ### `GET /api/version`
 
 Reports the version of the build being served — the same string `termcp -version`
-prints first (`v0.2.4`, or `dev` on an untagged build). The Web UI shows it beside
-the wordmark; scripts can gate on it without parsing `termcp -version` output.
+prints first: the exact tag (`v0.2.4`) on a tagged commit, `dev-<commit>` otherwise
+(a `make build` from a dirty tree appends `-dirty`; a bare `go build` falls back to
+the module pseudo-version). The Web UI shows it beside the wordmark; scripts can
+gate on it without parsing `termcp -version` output.
 
 ```
 GET /api/version

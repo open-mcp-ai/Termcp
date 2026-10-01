@@ -24,6 +24,11 @@ MCP resources, and a `learn-api` prompt:
   URIs are the instance's real HTTP addresses, so the same string works for `curl`.
   (Tool arguments/results are described by the `tools/list` schemas themselves, so no
   separate tool reference document is served.)
+
+  What the `notify_user` description advertises — which address, from what, and why not
+  on the instructions or a resource — is documented once, in `docs/api.md` §2
+  *Agent-facing documents (HTTP + MCP resources)*; this file does not repeat it. The
+  resource URIs and the `learn-api` prompt follow the same per-request origin.
 - Prompt: `learn-api` (optional argument `task`) — primes an agent with `/api.md`
   and `/skills.md` before it scripts against Termcp over REST.
 
@@ -370,6 +375,8 @@ ssh_config(action=list)
 ```
 
 > 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。
+>
+> 要告诉人**去哪里看**，直接用本工具描述里带的实例地址（`This instance's Web UI: <origin>/`）。`delivered=0` 时它正是把 URL 说给用户的那条信息。
 
 ### message（会话输出区段索引）
 

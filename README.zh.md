@@ -103,6 +103,7 @@ Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互
 - **实例自描述。** 每个运行中的 Termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
 - **密钥留在平台侧。** 经 `ssh_config` 写入的密码、私钥、口令仅保存在平台侧，MCP 的读取接口只返回配置名；SSH 配置写入工具默认关闭，需运维显式开启 `--mcp-manage-ssh-configs`。
 - **失败可恢复。** 关闭、崩溃或重启过的会话仍以只读 DEAD 条目留在会话列表里，输出依旧可读，Agent（或你）可以接着中断前的状态继续；重连同一个 `termcp://<entry>` 即可开启下一段会话。
+- **Agent 知道该把人指向哪里。** 客户端连进来的那个地址挂在 `notify_user` 的工具描述上，Agent 因此能报出确切的 Web UI 网址，而不是只说“打开 Web UI”让人自己去找。这是唯一保证送达的通道：客户端丢掉工具列表就根本调不了任何工具；而 `initialize` 的 instructions 在 MCP 里是可选的、很多客户端直接丢弃。地址取自请求本身——客户端连的那个主机名（或 `X-Forwarded-Host`），协议由 TLS 或 `X-Forwarded-Proto` 判定——所以局域网 IP、以及保留 `Host` 或设置转发头的反代都不会错；反代把 `Host` 改写成内网名时应改设 `X-Forwarded-Host`。`termcp stdio` 桥走回环，此时公布的地址也就是回环地址。
 - **人始终保留中断权。** `notify_user` 可直接通知到你；需要提权的提示由你在 Web UI 里输入；同一 shell 的写入串行化，人与 Agent 的输入按序生效。
 
 ## 快速导航
@@ -204,7 +205,7 @@ termcp [flags]
 | `--mcp-defer-tools` | `false` | 给低频工具（`file_*`、`forward`、`shell_resize` 等）打上 `defer_loading` 标记，让客户端按需拉取 schema，缩小首次 `tools/list`。默认关闭：不认识该标记的客户端、或被网关丢弃标记的链路（如 Codex 经 AxonHub），会干脆看不到这些工具。详见[工具懒加载](#工具懒加载)。 |
 | `--idle-timeout` | `30s / 不限时` | 守护实例在无任何连接或请求后自行退出前的等待时长，如 `10m`；`0` 关闭。默认值：`termcp daemon stdio` 拉起的实例 30 秒，`termcp daemon start` 不限时。 |
 | `--gen-auth-hash` | *(action)* | 生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或不带参数时从终端 stdin 无回显读取。 |
-| `--version`     | *(action)*  | 打印版本、commit 与构建时间后退出。版本自动跟随 git tag：release 构建通过 `-ldflags` 注入；直接 `go build` 或 `go install module@vX.Y.Z` 时回退到 Go 工具链嵌入的模块版本。 |
+| `--version`     | *(action)*  | 打印版本、commit 与构建时间后退出。`make build` / release 构建通过 `-ldflags` 注入：HEAD 正好带 tag 时用该 tag，否则为 `dev-<commit>`，工作区有改动再缀 `-dirty`；直接 `go build` 或 `go install module@vX.Y.Z` 时回退到 Go 工具链嵌入的模块版本（即 release tag，或本地检出对应的伪版本）。`dev` 表示二进制里根本没有版本信息——`go run`、`-buildvcs=false`、解包后的源码包——不代表源码未打 tag。 |
 
 除 flag 外，`termcp` 还提供以下子命令：
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.5 — 2026-10-01
 
 ### 新功能
 
@@ -12,9 +12,10 @@
   - **服务端新增两个端点**：`GET /api/daemon`（是否守护实例、pid、版本、启动时间、日志路径、生效的空闲倒计时 `idle_timeout_ms`；受认证保护）与 `POST /api/daemon/stop`（仅守护实例生效，手动实例回 409；先回 200 再优雅关闭）。`docs/api.md` 同步记录。
   - **认证贯穿 daemon 与 stdio**：管理命令（status/start/stop）与桥都按配置出示凭据——明文 token（`--auth-token` / `$TERMCP_AUTH_TOKEN`），或只保留了哈希时用哈希串本身（`--auth-hash` / `$TERMCP_AUTH_HASH`）；哈希配置的实例同时接受哈希串作为凭据（与明文等同机密），因此 `GET /api/daemon`、`POST /api/daemon/stop`、`/stream`、`/sse` 在两种配置下都可用。凭据经环境变量传给后台实例，不进 argv。
 
+- **Agent 现在知道实例地址，也就能把人指到对的地方**：客户端连进来的那个地址挂在 `tools/list` 里 `notify_user` 的工具描述上，Agent 因此能在该让人去看、去输密码、去批准某条复核命令时直接给出 URL，而不是说"打开 Web UI"却不给地址。选这条通道是因为它是**唯一保证送达模型**的：工具描述不到达，模型就根本调不了该工具；而 `initialize` 的 instructions 在 MCP 里是可选的、很多客户端直接丢弃，把随请求变化的地址塞进这份固定规则还会多出一个真相来源。也不提供 `termcp://instance` 资源：`termcp://` 是 SSH 主机/会话/shell 的定位符命名空间，那个 URI 会被解析成一台名为 `instance` 的主机配置。地址每次请求各算一次、不会重复追加：主机名取自请求本身（`X-Forwarded-Host` 优先，反代改写了 `Host` 时靠它兜住），协议由 TLS 或 `X-Forwarded-Proto` 判定；只有不带 `Host` 的请求（HTTP/1.0）才回落到绑定地址，因此 `termcp stdio` 桥这类走回环的客户端拿到的是回环地址。`resources/list`、`resources/read` 的返回 URI 与 `learn-api` prompt 里的地址同样按请求各算一次，同一个实例对同一个客户端只给一个地址；读取时按路径匹配回注册的 URI，所以客户端拿到的地址直接读回来即可。
 - **会话生命周期命令支持批量（逗号分隔 id）**：`session_terminate` / `session_delete`（MCP）与 `DELETE /api/sessions/{id}`、`POST /api/sessions/{id}/terminate|/disconnect`（REST）的 id 参数接受逗号分隔列表（如 `a,b,c`；MCP 侧每项同样可以是 `termcp://` 定位符）。逐条独立执行、逐条返回结果（`ok` / `code` / `error`，code 为 `session_not_found` 或 `operation_failed`），单条失败不再中断其余——此前 Web UI 清理已结束会话与批量删除逐个发请求，中途一条失败（会话已被其他客户端清掉、Windows 上日志文件被占用）整条链就断，后面的全部不执行。单 id 的请求与响应契约完全不变（204/404 等）；Web UI 两处批量流程改为一次请求，部分失败时在提示里列出具体是哪几条。
 - **纯 API 构建（`-tags no_webui`，`make build-api`）**：产物是 `dist/termcp-api-<os>-<arch>`，可与完整版并存。该构建不嵌入也不注册 Web UI——`/`、`/api.html`、`/static/*` 一律 404——只保留 REST、MCP、WebSocket 与两份 agent 文档（`/api.md`、`/skills.md`）；默认构建（`make build`）完全不受影响。CI 在三种平台上编译该变体并跑配套测试。
-- **Web UI 标题旁显示构建版本**：`h1` 右侧由新端点 `GET /api/version` 填写版本号，与 `termcp -version` 的首行相同（未打标构建为 `dev`），脚本可据此判断实例版本而无需解析 CLI 输出；取不到就留空，不占位。浏览器标签页图标（Web UI 与 `api.html`）新增为与终端一致的 `terminal-shell.svg`。`docs/api.md` 新增第 13 节记录该端点。
+- **Web UI 标题旁显示构建版本**：`h1` 右侧由新端点 `GET /api/version` 填写版本号，与 `termcp -version` 的首行相同（HEAD 正好带 tag 时为该 tag，否则 `dev-<commit>`，脏工作区再缀 `-dirty`；`go build`/`go install` 则回落到 Go 工具链嵌入的模块版本——release tag 或本地检出对应的伪版本；`dev` 表示二进制里没有任何版本信息，`go run` 与 `-buildvcs=false` 都属此类，不代表源码未打 tag），脚本可据此判断实例版本而无需解析 CLI 输出；取不到就留空，不占位。浏览器标签页图标（Web UI 与 `api.html`）新增为与终端一致的 `terminal-shell.svg`。`docs/api.md` 新增第 13 节记录该端点。
 
 ## v0.2.4 — 2026-09-29
 
