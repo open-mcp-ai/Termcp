@@ -51,7 +51,10 @@ session afterwards; adding/removing a skill is just writing/deleting that folder
 MCP clients get the same bytes as resources: `resources/list` exposes these two files
 and the `resources/read` URIs are exactly the `<origin>/…` HTTP addresses above (one
 URI, two access paths). The `learn-api` prompt primes an agent with these documents
-before it acts.
+before it acts. Like the tool listing, these addresses follow the **request**: a
+client that reached the instance through a LAN IP, a proxy name or a tunnel is handed
+that address, and `resources/read` accepts the URI it was just given (the registration
+is matched by path, so any origin works).
 
 Authentication does not apply to these two read-only documents: they carry no data
 and no secrets, and a fresh client (an agent before MCP setup, a script) has to be

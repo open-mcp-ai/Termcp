@@ -2,13 +2,19 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/webui"
 )
 
@@ -16,15 +22,31 @@ import (
 // handler and returns the raw "result" payload.
 func callMCP(t *testing.T, s *Server, method string, params map[string]any) json.RawMessage {
 	t.Helper()
+	return callMCPCtx(t, s, context.Background(), method, params)
+}
+
+// callMCPCtx is callMCP with a caller-supplied context, so a test can carry the
+// request origin the transports install (see originContext).
+func callMCPCtx(t *testing.T, s *Server, ctx context.Context, method string, params map[string]any) json.RawMessage {
+	t.Helper()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method}
 	if params != nil {
 		req["params"] = params
 	}
+	return dispatchMCP(t, s, ctx, req)
+}
+
+// dispatchMCP runs one already-built JSON-RPC request under ctx.
+func dispatchMCP(t *testing.T, s *Server, ctx context.Context, req map[string]any) json.RawMessage {
+	t.Helper()
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg := s.mcpServer.HandleMessage(context.Background(), raw)
+	msg := s.mcpServer.HandleMessage(ctx, raw)
 	b, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +62,7 @@ func callMCP(t *testing.T, s *Server, method string, params map[string]any) json
 		t.Fatalf("bad JSON-RPC envelope %s: %v", b, err)
 	}
 	if envelope.Error != nil {
-		t.Fatalf("%s failed: %s", method, envelope.Error.Message)
+		t.Fatalf("%v failed: %s", req["method"], envelope.Error.Message)
 	}
 	return envelope.Result
 }
@@ -182,4 +204,412 @@ func TestLearnAPIPrompt(t *testing.T) {
 	if got.Messages[0].Role != string(mcpgo.RoleUser) {
 		t.Errorf("expected user role, got %q", got.Messages[0].Role)
 	}
+}
+
+// originContext fakes what the transports' context hook installs: the origin of
+// the request being answered.
+func originContext(origin string) context.Context {
+	return context.WithValue(context.Background(), originKey{}, origin)
+}
+
+// originFromRequest is the whole derivation: where the request was dialed (or
+// what a proxy recorded in X-Forwarded-Host after rewriting Host) and the scheme
+// it arrived on.
+func TestOriginFromRequest(t *testing.T) {
+	cases := []struct {
+		name    string
+		host    string
+		fwdHost string
+		tls     bool
+		proto   string
+		want    string
+	}{
+		{name: "plain host", host: "127.0.0.1:18765", want: "http://127.0.0.1:18765"},
+		{name: "lan ip", host: "192.168.1.9:9000", want: "http://192.168.1.9:9000"},
+		{name: "no port", host: "termcp.example.com", want: "http://termcp.example.com"},
+		{name: "tls", host: "termcp.example.com", tls: true, want: "https://termcp.example.com"},
+		{name: "forwarded proto", host: "termcp.example.com", proto: "https", want: "https://termcp.example.com"},
+		{name: "forwarded proto case", host: "termcp.example.com", proto: "HTTPS", want: "https://termcp.example.com"},
+		{name: "forwarded http stays http", host: "termcp.example.com", proto: "http", want: "http://termcp.example.com"},
+		{name: "forwarded host wins", host: "127.0.0.1:18765", fwdHost: "public.example.com", want: "http://public.example.com"},
+		{name: "forwarded host with port", host: "127.0.0.1:18765", fwdHost: "public.example.com:8443", want: "http://public.example.com:8443"},
+		{name: "forwarded host first of a list", host: "127.0.0.1:18765", fwdHost: "public.example.com, inner.example", want: "http://public.example.com"},
+		{name: "forwarded host padded", host: "127.0.0.1:18765", fwdHost: "  public.example.com  ", want: "http://public.example.com"},
+		{name: "empty forwarded host falls back", host: "b.example", fwdHost: " ", want: "http://b.example"},
+		{name: "empty host", host: "", want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, err := http.NewRequest(http.MethodPost, "http://placeholder/stream", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Host = c.host
+			if c.fwdHost != "" {
+				r.Header.Set("X-Forwarded-Host", c.fwdHost)
+			}
+			if c.proto != "" {
+				r.Header.Set("X-Forwarded-Proto", c.proto)
+			}
+			if c.tls {
+				r.TLS = &tls.ConnectionState{}
+			}
+			if got := originFromRequest(r); got != c.want {
+				t.Errorf("originFromRequest(host=%q fwd=%q tls=%v proto=%q) = %q, want %q", c.host, c.fwdHost, c.tls, c.proto, got, c.want)
+			}
+		})
+	}
+}
+
+// listToolsRaw dispatches tools/list and hands back the raw result, for callers
+// that need the payload itself rather than the parsed tools.
+func listToolsRaw(t *testing.T, s *Server, ctx context.Context) json.RawMessage {
+	t.Helper()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(s.mcpServer.HandleMessage(ctx, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(b, &envelope); err != nil {
+		t.Fatalf("bad JSON-RPC envelope %s: %v", b, err)
+	}
+	return envelope.Result
+}
+
+// listTools runs tools/list under ctx and returns the tools.
+func listTools(t *testing.T, s *Server, ctx context.Context) []mcpgo.Tool {
+	t.Helper()
+	var result struct {
+		Tools []mcpgo.Tool `json:"tools"`
+	}
+	if err := json.Unmarshal(listToolsRaw(t, s, ctx), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result.Tools
+}
+
+// notifyDescription returns the notify_user tool description as the model would
+// receive it under ctx, and fails if the tool is missing from the listing at all.
+func notifyDescription(t *testing.T, s *Server, ctx context.Context) string {
+	t.Helper()
+	for _, tool := range listTools(t, s, ctx) {
+		if tool.Name == "notify_user" {
+			return tool.Description
+		}
+	}
+	t.Fatal("notify_user missing from tools/list")
+	return ""
+}
+
+// The tool listing is the one channel guaranteed to reach the model: a client
+// that drops it cannot call any tool. So the instance address rides on the
+// description of the tool that exists to reach the human -- unlike the
+// instructions, which are optional in MCP and routinely discarded.
+func TestToolListingCarriesInstanceAddress(t *testing.T) {
+	const origin = "http://10.1.2.3:18994"
+	s := New(nil, nil, nil, nil, "test")
+
+	for _, tool := range listTools(t, s, originContext(origin)) {
+		if tool.Name == "notify_user" {
+			continue
+		}
+		if strings.Contains(tool.Description, origin) {
+			t.Errorf("tool %s carries the address; only notify_user should:\n%s", tool.Name, tool.Description)
+		}
+	}
+	if notify := notifyDescription(t, s, originContext(origin)); !strings.Contains(notify, origin) {
+		t.Errorf("notify_user description misses the address %q:\n%s", origin, notify)
+	}
+}
+
+// The decoration must be computed per request and never accumulate: repeated
+// listings under different hosts each carry exactly their own address.
+func TestToolListingAddressIsPerRequestAndNotAccumulated(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	for _, origin := range []string{"http://a.example:1", "http://b.example:2", "http://a.example:1"} {
+		notify := notifyDescription(t, s, originContext(origin))
+		if n := strings.Count(notify, "This instance's Web UI:"); n != 1 {
+			t.Fatalf("address appended %d times for %s:\n%s", n, origin, notify)
+		}
+		if !strings.Contains(notify, origin+"/") {
+			t.Errorf("listing for %s carries the wrong address:\n%s", origin, notify)
+		}
+		if strings.Contains(notify, "a.example") && strings.Contains(notify, "b.example") {
+			t.Errorf("listing mixes two origins:\n%s", notify)
+		}
+	}
+}
+
+// With no host anywhere the address falls back to the discovered bind address
+// rather than a dangling label or an invented name. (An in-process call reaches
+// this path too, which is why the fallback exists at all.)
+func TestToolListingFallsBackToBindAddress(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	s.baseURL = "http://127.0.0.1:18765"
+
+	if notify := notifyDescription(t, s, nil); !strings.Contains(notify, "http://127.0.0.1:18765/") {
+		t.Errorf("description misses the bind address:\n%s", notify)
+	}
+}
+
+// No address at all (no host to answer, no bind address yet) must leave the
+// description exactly as written rather than gain a dangling label.
+func TestToolListingUnchangedWithoutOrigin(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	if notify := notifyDescription(t, s, nil); strings.Contains(notify, "This instance's Web UI:") {
+		t.Errorf("description advertises an address that was never set:\n%s", notify)
+	}
+}
+
+// The instructions are the fixed rule set and must NOT carry the instance
+// address: they are optional in MCP, frequently dropped, and a per-request value
+// baked into them would be a second source of truth. The address lives on the
+// notify_user description (see the tests above) and nowhere else.
+func TestInstructionsDoNotCarryInstanceAddress(t *testing.T) {
+	for _, want := range []string{"This instance:", "http://127.0.0.1", "http://localhost"} {
+		if strings.Contains(mcpServerInstructions, want) {
+			t.Errorf("instructions carry instance-address machinery %q; it belongs on the tool listing", want)
+		}
+	}
+}
+
+// The unit tests above exercise the hook directly; this one holds the wire the
+// hook hangs on. A transport that never installs it would keep every other test
+// green while no real client ever saw its own address.
+func TestStreamableTransportAdvertisesRequestHost(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	ts := httptest.NewServer(s.StreamableHTTPHandler())
+	defer ts.Close()
+
+	req := func(id int, method string, session string) *http.Request {
+		t.Helper()
+		r, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(
+			`{"jsonrpc":"2.0","id":`+strconv.Itoa(id)+`,"method":"`+method+`","params":{}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
+		r.Host = "termcp.lan.example:9000" // what the client dialed
+		if session != "" {
+			r.Header.Set("Mcp-Session-Id", session)
+		}
+		return r
+	}
+
+	rr, err := ts.Client().Do(req(1, "initialize", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := rr.Header.Get("Mcp-Session-Id")
+	initBody, err := io.ReadAll(rr.Body)
+	rr.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(initBody)
+	if session == "" {
+		t.Fatalf("initialize returned no session id: %s", body)
+	}
+	if strings.Contains(body, "termcp.lan.example") {
+		t.Errorf("the initialize reply carries the request address; the instructions must stay a fixed rule set:\n%s", body)
+	}
+
+	rr2, err := ts.Client().Do(req(2, "tools/list", session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listBody, err := io.ReadAll(rr2.Body)
+	rr2.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing := string(listBody)
+	if !strings.Contains(listing, "This instance's Web UI: http://termcp.lan.example:9000/") {
+		t.Errorf("tools/list does not carry the address the client dialed:\n%s", listing)
+	}
+}
+
+// The resource listing travels the same wire as the tool listing, so it must
+// name the same address. A transport that installed the origin hook for tools
+// only would leave resources pointing at the bind address.
+func TestStreamableTransportAdvertisesRequestHostInResources(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	s.SetDocsFS(webui.Assets())
+	s.baseURL = "http://127.0.0.1:18765"
+	s.registerDocs()
+	ts := httptest.NewServer(s.StreamableHTTPHandler())
+	defer ts.Close()
+
+	post := func(id int, method, session string) (string, string) {
+		t.Helper()
+		body := `{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"method":"` + method + `","params":{}}`
+		r, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
+		r.Host = "termcp.lan.example:9000" // what the client dialed
+		if session != "" {
+			r.Header.Set("Mcp-Session-Id", session)
+		}
+		rr, err := ts.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rr.Body.Close()
+		b, err := io.ReadAll(rr.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rr.Header.Get("Mcp-Session-Id"), string(b)
+	}
+
+	session, _ := post(1, "initialize", "")
+	if session == "" {
+		t.Fatal("initialize returned no session id")
+	}
+	_, listing := post(2, "resources/list", session)
+	if !strings.Contains(listing, "http://termcp.lan.example:9000/api.md") {
+		t.Errorf("resources/list does not carry the address the client dialed:\n%s", listing)
+	}
+	if strings.Contains(listing, "127.0.0.1:18765") {
+		t.Errorf("resources/list names the bind address instead of the caller's:\n%s", listing)
+	}
+}
+
+// termcp:// is the locator scheme: termcp://<name> parses as an SSH entry, so an
+// "instance" resource under it would read as a host called `instance` and
+// collide with the namespace users paste into ssh_config args. The address is
+// published through the notify_user description instead — never as a locator.
+func TestNoLocatorShapedInstanceResource(t *testing.T) {
+	s := New(nil, nil, nil, nil, "test")
+	s.SetDocsFS(webui.Assets())
+	s.registerDocs()
+
+	var list struct {
+		Resources []struct {
+			URI string `json:"uri"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(callMCP(t, s, "resources/list", nil), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Resources) == 0 {
+		t.Fatal("resources/list returned nothing; the guard would pass vacuously")
+	}
+	for _, r := range list.Resources {
+		if strings.HasPrefix(r.URI, locator.Scheme) && !strings.Contains(r.URI, "shells/") {
+			t.Errorf("resource %q lives in the locator namespace; it would parse as an SSH entry named %q", r.URI, strings.TrimPrefix(r.URI, locator.Scheme))
+		}
+	}
+}
+
+// One instance can be reached by several addresses at once, so every published
+// address must follow the request that asked for it: resources/list, the
+// resources/read reply and the learn-api prompt must name the same origin the
+// notify_user description does (see TestToolListingCarriesInstanceAddress).
+func TestResourcesFollowRequestOrigin(t *testing.T) {
+	const origin = "https://termcp.example.com"
+	s := docsTestServer(t)
+	ctx := originContext(origin)
+
+	var list struct {
+		Resources []struct {
+			URI  string `json:"uri"`
+			Name string `json:"name"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(listResourcesRaw(t, s, ctx), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Resources) == 0 {
+		t.Fatal("resources/list returned nothing")
+	}
+	for _, r := range list.Resources {
+		if !strings.HasPrefix(r.URI, origin+"/") {
+			t.Errorf("resource %s lists as %q, want it under the caller's origin %s", r.Name, r.URI, origin)
+		}
+	}
+
+	// A client that reads the URI it was just handed must be routed to the
+	// right document -- mcp-go matches resource URIs by exact string.
+	var read struct {
+		Contents []struct {
+			URI  string `json:"uri"`
+			Text string `json:"text"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(callMCPCtx(t, s, ctx, "resources/read", map[string]any{"uri": origin + "/api.md"}), &read); err != nil {
+		t.Fatal(err)
+	}
+	if len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, "Termcp HTTP API") {
+		t.Fatalf("reading %s/api.md returned %s", origin, read.Contents)
+	}
+	if read.Contents[0].URI != origin+"/api.md" {
+		t.Errorf("resources/read echoed %q, want the address the caller used", read.Contents[0].URI)
+	}
+
+	// The learn-api prompt points at the same instance by the same address.
+	get := callMCPCtx(t, s, ctx, "prompts/get", map[string]any{"name": "learn-api"})
+	var got struct {
+		Messages []struct {
+			Content struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(get, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) == 0 {
+		t.Fatalf("prompts/get returned nothing: %s", get)
+	}
+	text := got.Messages[0].Content.Text
+	for _, want := range []string{origin + "/api.md", origin + "/skills.md"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("learn-api prompt misses %s:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "127.0.0.1:18765") {
+		t.Errorf("learn-api prompt names the bind address instead of the caller's:\n%s", text)
+	}
+}
+
+// With no request origin at all (an in-process call, HTTP/1.0 without Host) the
+// canonical startup address is still published, so the listing never goes blank.
+func TestResourcesFallBackToBindAddress(t *testing.T) {
+	s := docsTestServer(t)
+	var list struct {
+		Resources []struct {
+			URI string `json:"uri"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(listResourcesRaw(t, s, nil), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Resources) == 0 {
+		t.Fatal("resources/list returned nothing")
+	}
+	for _, r := range list.Resources {
+		if !strings.HasPrefix(r.URI, "http://127.0.0.1:18765/") {
+			t.Errorf("resource URI %q does not fall back to the bind address", r.URI)
+		}
+	}
+}
+
+// listResourcesRaw dispatches resources/list under ctx and returns the result.
+func listResourcesRaw(t *testing.T, s *Server, ctx context.Context) json.RawMessage {
+	t.Helper()
+	return callMCPCtx(t, s, ctx, "resources/list", nil)
 }

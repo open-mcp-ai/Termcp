@@ -12,7 +12,9 @@ func TestTokenBudgetGuard(t *testing.T) {
 	s := New(nil, nil, nil, nil, "test")
 	s.RegisterSSHConfigWriteTools()
 
-	tools := s.mcpServer.ListTools()
+	// Measure the listing as the model receives it, decorated address included:
+	// that per-request decoration is part of the payload this guard protects.
+	tools := listTools(t, s, originContext("http://127.0.0.1:18765"))
 	if len(tools) != 31 {
 		t.Fatalf("expected 31 tools, got %d", len(tools))
 	}
@@ -21,13 +23,13 @@ func TestTokenBudgetGuard(t *testing.T) {
 	descBytes := 0
 	propDescBytes := 0
 	for _, st := range tools {
-		b, err := json.Marshal(st.Tool)
+		b, err := json.Marshal(st)
 		if err != nil {
 			t.Fatal(err)
 		}
 		total += len(b)
-		descBytes += len(st.Tool.Description)
-		props := st.Tool.InputSchema.Properties
+		descBytes += len(st.Description)
+		props := st.InputSchema.Properties
 		for _, pv := range props {
 			pm, ok := pv.(map[string]any)
 			if !ok {
@@ -38,6 +40,8 @@ func TestTokenBudgetGuard(t *testing.T) {
 			}
 		}
 	}
+	// Instructions are a fixed constant again: the address is not duplicated
+	// there, because `instructions` is optional and often dropped.
 	instructionsLen := len(mcpServerInstructions)
 
 	t.Logf("tools/list total: %d B", total)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -60,14 +61,16 @@ func (s *Server) registerDocs() {
 				mcpgo.WithResourceDescription(doc.description),
 				mcpgo.WithMIMEType("text/markdown"),
 			),
-			func(_ context.Context, _ mcpgo.ReadResourceRequest) ([]mcpgo.ResourceContents, error) {
+			func(ctx context.Context, _ mcpgo.ReadResourceRequest) ([]mcpgo.ResourceContents, error) {
 				// mcp-go routes by exact URI, so this closure only ever serves doc.
 				text, err := s.readDoc(doc.path)
 				if err != nil {
 					return nil, err
 				}
 				return []mcpgo.ResourceContents{mcpgo.TextResourceContents{
-					URI:      uri,
+					// The address of the caller's own request, matching what
+					// resources/list advertised and what tools/list publishes.
+					URI:      s.docURLFor(ctx, doc.path),
 					MIMEType: "text/markdown",
 					Text:     text,
 				}}, nil
@@ -76,14 +79,65 @@ func (s *Server) registerDocs() {
 	s.registerLearnAPIPrompt()
 }
 
-// docURL returns the canonical resource URI for a doc: the HTTP address served
-// by this instance, so resources/read and curl use the same string.
+// docURL returns the canonical (startup) resource URI for a doc. It is the URI
+// the resource is registered under, and the fallback when a request carries no
+// origin of its own.
 func (s *Server) docURL(p string) string {
 	base := s.baseURL
 	if base == "" {
 		base = "http://127.0.0.1"
 	}
 	return strings.TrimSuffix(base, "/") + "/" + p
+}
+
+// docURLFor returns the URI for a doc as **this** caller should see it: the
+// address the request arrived on (see originFor), else the canonical one. One
+// instance behind several addresses publishes one doc under several URIs, and
+// each client is told the address it actually reached.
+func (s *Server) docURLFor(ctx context.Context, p string) string {
+	if origin := s.originFor(ctx); origin != "" {
+		return origin + "/" + p
+	}
+	return s.docURL(p)
+}
+
+// canonicalDocURI maps any-address doc URI back to the URI the resource is
+// registered under. mcp-go routes resources by exact string, so a client that
+// lists `http://lan.example:9000/api.md` and then reads it would miss the
+// registration made at the startup baseURL. This is the one place the mapping
+// happens; the read hook below applies it.
+func (s *Server) canonicalDocURI(raw string) string {
+	if p := docPathOf(raw); p != "" {
+		return s.docURL(p)
+	}
+	return raw
+}
+
+// docPathOf returns the asset path a doc resource URI names ("api.md"), or ""
+// when the URI is not one of this instance's docs. Only the path matters: the
+// origin varies per request, the document does not.
+func docPathOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	for _, doc := range docResources {
+		if u.Path == "/"+doc.path {
+			return doc.path
+		}
+	}
+	return ""
+}
+
+// decorateResources rewrites the listed doc URIs to the address of the request
+// being answered, so resources/list and tools/list agree on where this instance
+// is (see decorateTools).
+func (s *Server) decorateResources(ctx context.Context, result *mcpgo.ListResourcesResult) {
+	for i := range result.Resources {
+		if p := docPathOf(result.Resources[i].URI); p != "" {
+			result.Resources[i].URI = s.docURLFor(ctx, p)
+		}
+	}
 }
 
 // readDoc reads one documentation asset.
@@ -103,9 +157,11 @@ func (s *Server) registerLearnAPIPrompt() {
 			mcpgo.WithPromptDescription("Load this instance's HTTP API reference (and the curl skill) and report what termcp can do. Use before scripting against termcp over REST."),
 			mcpgo.WithArgument("task", mcpgo.ArgumentDescription("Optional concrete task to plan once the API is loaded")),
 		),
-		func(_ context.Context, req mcpgo.GetPromptRequest) (*mcpgo.GetPromptResult, error) {
-			apiURL := s.docURL("api.md")
-			skillURL := s.docURL("skills.md")
+		func(ctx context.Context, req mcpgo.GetPromptRequest) (*mcpgo.GetPromptResult, error) {
+			// Resolved per request: a client that reached this instance by a LAN
+			// name, a proxy or a tunnel is handed the address it can actually open.
+			apiURL := s.docURLFor(ctx, "api.md")
+			skillURL := s.docURLFor(ctx, "skills.md")
 			task := strings.TrimSpace(req.Params.Arguments["task"])
 
 			var b strings.Builder

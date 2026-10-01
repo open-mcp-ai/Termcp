@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -19,7 +20,9 @@ import (
 
 // mcpServerInstructions is returned in initialize (MCP "instructions") so clients may
 // inject it into the model context. Keep it terse because clients may include it
-// in every model turn.
+// in every model turn. It is a fixed rule set and never carries this instance's
+// address: `instructions` is optional in MCP and often discarded, so the address
+// rides on the notify_user tool description instead (see decorateTools).
 const mcpServerInstructions = `termcp agent rules:
 
 0) Tools: session_*/shell_* are standalone; forward/message/ssh_config and file_perm/file_link/file_fs take an "action" parameter (enum in each schema).
@@ -64,6 +67,73 @@ type Option func(*Server)
 // to, so the SSE and streamable-HTTP handlers share termcp's listener.
 func WithHTTPServer(h *http.Server) Option {
 	return func(s *Server) { s.sseOpts = append(s.sseOpts, mcpserver.WithHTTPServer(h)) }
+}
+
+// originKey carries the request's origin ("scheme://host") from the transport's
+// context hook to the tools/list decoration.
+type originKey struct{}
+
+// originFromRequest builds "scheme://host" from the request the client sent: the
+// host it dialed (or the one a proxy recorded after rewriting Host) and the
+// scheme it reached us on. This is the address that works for whoever made the
+// call — a LAN IP, a proxy name, a tunnel — and it changes with --host/--port, so
+// it cannot be a startup-time constant.
+//
+// Both headers are client-supplied. They are used to tell a human where this
+// instance is, never as a trust decision.
+func originFromRequest(r *http.Request) string {
+	host := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + host
+}
+
+func withRequestOrigin(ctx context.Context, r *http.Request) context.Context {
+	if origin := originFromRequest(r); origin != "" {
+		return context.WithValue(ctx, originKey{}, origin)
+	}
+	return ctx
+}
+
+// originFor resolves the origin to advertise to this particular caller: the
+// address of the request being answered, else the bind address as a last resort.
+// Resolution happens per call because the right answer is "wherever this client
+// reached us", which the request knows and a startup flag cannot. The fallback
+// only fires for a request that names no host at all (HTTP/1.0 without Host) or
+// an in-process call; it is also what a stdio bridge on loopback advertises.
+func (s *Server) originFor(ctx context.Context) string {
+	if o, _ := ctx.Value(originKey{}).(string); o != "" {
+		return strings.TrimSuffix(o, "/")
+	}
+	return strings.TrimSuffix(s.baseURL, "/")
+}
+
+// decorateTools adds this instance's address to the description of the tool that
+// exists to reach the human. This is the one channel guaranteed to arrive: a tool
+// description that never reaches the model means the tool can never be called,
+// so no client can drop it -- unlike `instructions` (see mcpServerInstructions).
+// Only notify_user carries it, keeping tools/list from growing by more than that
+// one line. The result is per-request, so the decoration never accumulates on
+// the stored tool.
+func (s *Server) decorateTools(ctx context.Context, result *mcpgo.ListToolsResult) {
+	origin := s.originFor(ctx)
+	if origin == "" {
+		return
+	}
+	for i := range result.Tools {
+		switch result.Tools[i].Name {
+		case "notify_user":
+			result.Tools[i].Description = strings.TrimSuffix(result.Tools[i].Description, " ") + " This instance's Web UI: " + origin + "/"
+		}
+	}
 }
 
 // shouldDeferTool reports whether a tool's schema may be withheld from the
@@ -170,6 +240,46 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		// no subscribe handler, and claiming it would break clients that try.
 		mcpserver.WithResourceCapabilities(false, false),
 		mcpserver.WithPromptCapabilities(false),
+		// The address is NOT in the instructions (see mcpServerInstructions): it
+		// rides on the listing, which must reach the model or no tool can be called.
+		// Every published address follows the request that asked for it, so one
+		// instance behind several addresses tells each client its own.
+		mcpserver.WithHooks(&mcpserver.Hooks{
+			OnAfterListTools: []mcpserver.OnAfterListToolsFunc{
+				func(ctx context.Context, _ any, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
+					s.decorateTools(ctx, result)
+				},
+			},
+			OnAfterListResources: []mcpserver.OnAfterListResourcesFunc{
+				func(ctx context.Context, _ any, _ *mcpgo.ListResourcesRequest, result *mcpgo.ListResourcesResult) {
+					s.decorateResources(ctx, result)
+				},
+			},
+			// mcp-go routes resources by exact URI, so a read of the URI this
+			// instance just advertised must be mapped back to the registration
+			// before routing (see canonicalDocURI).
+			OnBeforeReadResource: []mcpserver.OnBeforeReadResourceFunc{
+				func(_ context.Context, _ any, request *mcpgo.ReadResourceRequest) {
+					request.Params.URI = s.canonicalDocURI(request.Params.URI)
+				},
+			},
+			OnAfterReadResource: []mcpserver.OnAfterReadResourceFunc{
+				func(ctx context.Context, _ any, request *mcpgo.ReadResourceRequest, result *mcpgo.ReadResourceResult) {
+					p := docPathOf(request.Params.URI)
+					if p == "" {
+						return
+					}
+					// ResourceContents is an interface; only the text variant is
+					// served here (see registerDocs).
+					for i, c := range result.Contents {
+						if tc, ok := c.(mcpgo.TextResourceContents); ok {
+							tc.URI = s.docURLFor(ctx, p)
+							result.Contents[i] = tc
+						}
+					}
+				},
+			},
+		}),
 	)
 
 	s.notifyMgr = notify.NewManager(s)
@@ -409,10 +519,12 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	), withLogging("file_getwd", s.handleFileGetwd))
 
 	s.mcpServer = mcpServer
-	s.sseServer = mcpserver.NewSSEServer(mcpServer, s.sseOpts...)
+	// Both transports lift the request's own origin into the context, so a tools/list
+	// answer can name the address that client actually reached.
+	s.sseServer = mcpserver.NewSSEServer(mcpServer, append(s.sseOpts, mcpserver.WithSSEContextFunc(withRequestOrigin))...)
 	// Streamable HTTP (MCP spec): mount at /stream for clients such as Open WebUI.
 	// Do not use WithStreamableHTTPServer(mainSrv) here — Shutdown must not close the shared listener.
-	s.streamServer = mcpserver.NewStreamableHTTPServer(mcpServer)
+	s.streamServer = mcpserver.NewStreamableHTTPServer(mcpServer, mcpserver.WithHTTPContextFunc(withRequestOrigin))
 	return s
 }
 
