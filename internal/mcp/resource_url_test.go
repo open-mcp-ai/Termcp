@@ -146,7 +146,7 @@ func TestRequireShellArchivedLocator(t *testing.T) {
 		"termcp://#" + sid + ":1", // shell locator
 		sid,                       // raw archived session id
 	} {
-		_ , bad := s.requireShell(id)
+		_, bad := s.requireShell(id)
 		if bad == nil {
 			t.Fatalf("%s: expected an error for a closed session", id)
 		}

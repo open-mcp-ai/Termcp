@@ -3,8 +3,8 @@ package webui
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"

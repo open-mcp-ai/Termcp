@@ -19,7 +19,7 @@ const defaultDialTimeout = 30 * time.Second
 type DialAuth struct {
 	User              string
 	Password          string
-	PrivateKey     string
+	PrivateKey        string
 	KeyPassphrase     string
 	TrustUnknownHost  bool
 	KnownHostsContent string
