@@ -1,0 +1,196 @@
+package notify
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+)
+
+// OnOutput is called when a shell produces output.
+// It executes:
+// 1. For EventOutput rules:
+//   - Action 1: Attempts immediate notification (subject to Cooldown Gate)
+//   - Action 2: Cancels existing trailing timer and sets a new trailing timer (2s)
+//
+// 2. For EventSilence rules:
+//   - Cancels existing silence timer and sets a new silence timer (SilenceSec)
+func (m *Manager) OnOutput(shellID string) {
+	m.mu.RLock()
+	rulesMap := m.shellRules[shellID]
+	if len(rulesMap) == 0 {
+		m.mu.RUnlock()
+		return
+	}
+	// Copy slice under read lock to iterate safely
+	rules := make([]*Rule, 0, len(rulesMap))
+	for _, r := range rulesMap {
+		rules = append(rules, r)
+	}
+	m.mu.RUnlock()
+
+	for _, rule := range rules {
+		rule.mu.Lock()
+		if rule.stopped {
+			rule.mu.Unlock()
+			continue
+		}
+
+		switch rule.Event {
+		case EventOutput:
+			// Action 1: leading edge. Throttle at the source so a fast producer
+			// (e.g. 4 KiB chunks from a busy build) cannot spawn one goroutine per
+			// chunk; the global cooldown gate still decides the actual send.
+			if time.Since(rule.lastLeading) >= m.cooldown {
+				rule.lastLeading = time.Now()
+				go m.dispatchWithCooldown(rule, EventOutput, "running", false)
+			}
+
+			// Action 2: reset the trailing-edge timer (2s after output stops).
+			if rule.timer == nil {
+				ruleCopy := rule
+				rule.timer = time.AfterFunc(m.trailingSec, func() {
+					m.dispatchWithCooldown(ruleCopy, EventOutput, "running", false)
+				})
+			} else {
+				rule.timer.Reset(m.trailingSec)
+			}
+
+		case EventSilence:
+			// Reset the silence timer (one-shot once output stays quiet long enough).
+			delay := time.Duration(rule.SilenceSec) * time.Second
+			if delay <= 0 {
+				delay = 3 * time.Second
+			}
+			if rule.timer == nil {
+				ruleCopy := rule
+				rule.timer = time.AfterFunc(delay, func() {
+					m.dispatchWithCooldown(ruleCopy, EventSilence, "running", true)
+				})
+			} else {
+				rule.timer.Reset(delay)
+			}
+		}
+		rule.mu.Unlock()
+	}
+}
+
+// OnApprovalChange wakes up rules registered on a shell whose approval queue
+// changed state, so an agent waiting on shell_notify does not have to poll.
+//
+// It reuses the output-event dispatch path on purpose: a rule registered for
+// event=output already means "tell me when something happens on this shell", and
+// a decision on a queued command is exactly that. Inventing a separate approval
+// event would make agents register twice for one thing.
+//
+// shellID may be empty when the request belonged to a shell that already went
+// away; the transition is then still delivered to session-level observers by the
+// web UI hub, and there is no shell rule to wake.
+func (m *Manager) OnApprovalChange(shellID, status string) {
+	if shellID == "" {
+		return
+	}
+	m.mu.RLock()
+	rulesMap := m.shellRules[shellID]
+	if len(rulesMap) == 0 {
+		m.mu.RUnlock()
+		return
+	}
+	rules := make([]*Rule, 0, len(rulesMap))
+	for _, r := range rulesMap {
+		rules = append(rules, r)
+	}
+	m.mu.RUnlock()
+
+	for _, rule := range rules {
+		rule.mu.Lock()
+		if rule.stopped {
+			rule.mu.Unlock()
+			continue
+		}
+		if rule.Event != EventOutput {
+			// exit/silence rules describe the process lifecycle, which an
+			// approval transition does not touch.
+			rule.mu.Unlock()
+			continue
+		}
+		rule.mu.Unlock()
+		go m.dispatchWithCooldown(rule, EventOutput, status, false)
+	}
+}
+
+// OnExit is called when a shell exits or is aborted.
+// It executes One-Shot notification for EventExit rules, followed by automatic cleanup.
+func (m *Manager) OnExit(shellID string, exitCode *int) {
+	m.mu.RLock()
+	rulesMap := m.shellRules[shellID]
+	rules := make([]*Rule, 0, len(rulesMap))
+	for _, r := range rulesMap {
+		rules = append(rules, r)
+	}
+	m.mu.RUnlock()
+
+	status := "exited"
+	if exitCode != nil {
+		status = fmt.Sprintf("exited with code %d", *exitCode)
+	}
+
+	for _, rule := range rules {
+		rule.mu.Lock()
+		if rule.stopped {
+			rule.mu.Unlock()
+			continue
+		}
+		isExitRule := rule.Event == EventExit
+		rule.mu.Unlock()
+
+		if isExitRule {
+			// One-shot exit notification. Dispatch on its own goroutine: a sampling
+			// request blocks until the client answers (up to the 10s timeout), and
+			// the exit watcher must not be stalled — the DEAD transition and UI
+			// refresh follow this call.
+			r := rule
+			go m.dispatchWithCooldown(r, EventExit, status, true)
+		}
+	}
+
+	// Clean up all remaining rules for this shell
+	m.ClearShell(shellID)
+}
+
+// dispatchWithCooldown handles the final cooldown gate check and dispatches the notification.
+// If oneShot is true, the rule is automatically unregistered.
+func (m *Manager) dispatchWithCooldown(rule *Rule, event Event, status string, oneShot bool) {
+	if oneShot {
+		defer m.Unregister(rule.ID)
+	}
+
+	m.mu.Lock()
+	now := time.Now()
+	if now.Sub(m.lastSentAt) < m.cooldown {
+		elapsed := now.Sub(m.lastSentAt)
+		m.mu.Unlock()
+		slog.Debug("notification dropped by cooldown gate", "shell_id", rule.ShellID, "channel", rule.Channel, "elapsed", elapsed)
+		return
+	}
+	m.lastSentAt = now
+	m.mu.Unlock()
+
+	if m.sender == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	switch rule.Channel {
+	case ChannelResource:
+		if err := m.sender.SendResourceNotification(ctx, rule.ShellID); err != nil {
+			slog.Debug("failed to send resource notification", "shell_id", rule.ShellID, "err", err)
+		}
+	case ChannelSampling:
+		if err := m.sender.SendSamplingNotification(ctx, rule.ShellID, rule.Target, event, status); err != nil {
+			slog.Debug("failed to send sampling notification", "shell_id", rule.ShellID, "err", err)
+		}
+	}
+}

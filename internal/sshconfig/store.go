@@ -65,20 +65,6 @@ func (s *Store) configPath(name string) (string, error) {
 	return filepath.Join(s.root(), name, "config.toml"), nil
 }
 
-func isInternalName(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), "internal")
-}
-
-// InternalEntry returns the built-in loopback profile (not loaded from disk).
-func InternalEntry() *Entry {
-	ent, err := ParseAndValidate(InternalTemplate())
-	if err != nil {
-		// Template is compile-time constant; fallback if somehow invalid.
-		return &Entry{Kind: KindInternal}
-	}
-	return ent
-}
-
 // Load reads and validates a named config.
 // name "internal" is the built-in entry, optionally overridden by a stored
 // internal/config.toml (see ParseInternalOverride).
