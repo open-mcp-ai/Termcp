@@ -1,9 +1,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -603,5 +607,98 @@ func TestWithLogging_TruncatesLongText(t *testing.T) {
 	}
 	if !strings.HasSuffix(logged, "...") {
 		t.Fatalf("expected truncated text ending with '...', got %q", logged)
+	}
+}
+
+// A panicking tool handler must become a normal failed tool result, not a
+// protocol error and not the end of the process. Both audiences are checked,
+// because the point of the middleware is that they get different things: the
+// client a shape it already knows how to branch on, the operator the panic.
+func TestPanicRecovery_ToolErrorForClientAndStackForLog(t *testing.T) {
+	cap := withCapturedLogger(t)
+
+	s := newTestServer(t)
+	s.mcpServer.AddTool(mcpgo.NewTool("zz_boom"), withLogging("zz_boom",
+		func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			panic("sentinel-panic-value")
+		}))
+
+	h := s.StreamableHTTPHandler()
+	post := func(body, sid string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if sid != "" {
+			req.Header.Set("Mcp-Session-Id", sid)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`
+	rr := post(initBody, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("initialize status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	sid := rr.Header().Get("Mcp-Session-Id")
+	if sid == "" {
+		sid = rr.Header().Get("mcp-session-id")
+	}
+	if sid == "" {
+		t.Fatalf("no session id; headers=%v", rr.Header())
+	}
+
+	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"zz_boom","arguments":{}}}`
+	rr2 := post(callBody, sid)
+	body := rr2.Body.String()
+
+	// --- client ------------------------------------------------------------
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("panic produced status %d, want 200 with a failed tool result; body=%s", rr2.Code, body)
+	}
+	if !strings.Contains(body, CodeInternalError) {
+		t.Errorf("response lacks error_code=%q: %s", CodeInternalError, body)
+	}
+	if !strings.Contains(body, `"isError":true`) {
+		t.Errorf("response is not marked isError: %s", body)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(body), &env); err == nil {
+		if e, ok := env["error"]; ok && e != nil {
+			t.Errorf("panic surfaced as a JSON-RPC protocol error instead of a tool result: %v", e)
+		}
+	}
+	// The panic value names internals, so it must not reach the client.
+	if strings.Contains(body, "sentinel-panic-value") {
+		t.Error("panic value leaked into the client response")
+	}
+
+	// --- operator ----------------------------------------------------------
+	// Recovering a panic without logging it would trade a loud crash for a quiet
+	// wrong answer, so the log is part of the contract, not a nicety.
+	var logged []string
+	for _, r := range cap.snapshot() {
+		var sb strings.Builder
+		sb.WriteString(r.Message)
+		r.Attrs(func(a slog.Attr) bool {
+			sb.WriteString(" ")
+			sb.WriteString(a.Key)
+			sb.WriteString("=")
+			sb.WriteString(a.Value.String())
+			return true
+		})
+		logged = append(logged, sb.String())
+	}
+	all := strings.Join(logged, "\n")
+	for _, want := range []string{
+		"panic recovered in tool handler",
+		"sentinel-panic-value", // the panic value itself
+		"goroutine",            // debug.Stack output
+		"zz_boom",              // which tool panicked
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("log is missing %q; logged:\n%s", want, all)
+		}
 	}
 }

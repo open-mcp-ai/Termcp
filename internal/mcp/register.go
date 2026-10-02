@@ -88,6 +88,10 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 				},
 			},
 		}),
+		// Outermost of the tool middlewares, so it also covers a panic in the
+		// logging wrapper itself. See withPanicRecovery for why this is not
+		// mcpserver.WithRecovery().
+		withPanicRecovery(),
 	)
 
 	s.notifyMgr = notify.NewManager(s)
