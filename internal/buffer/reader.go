@@ -180,6 +180,16 @@ func (b *Buffer) Len() int64 {
 // stream length. A start below the earliest retained byte clamps forward, so the
 // caller can compare its request against BaseOffset to detect a shortened read.
 // No reader cursors are advanced.
+//
+// Both the argument and the reported total are absolute: baseOffset is added when
+// the total is computed and subtracted when the argument is translated, so a
+// caller can treat the stream as one unbroken sequence of bytes. That is what
+// makes compaction invisible to callers - dropping a prefix moves baseOffset, not
+// a byte - but it also means the two numbers belong to different scales, and the
+// window must be clamped against the one that indexes master. Clamping against
+// the absolute total allowed start+n to run past master, which the slice
+// expression then rejected (or, when n still fit the capacity, satisfied with
+// zeroed bytes that were never written).
 func (b *Buffer) ByteRange(start int64, max int) (out []byte, total int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -192,12 +202,13 @@ func (b *Buffer) ByteRange(start int64, max int) (out []byte, total int64) {
 	if start < 0 {
 		start = 0
 	}
-	if start >= total || max <= 0 {
+	if max <= 0 || start >= int64(len(b.master)) {
 		return nil, total
 	}
+	// Clamp against the retained bytes, which is what the slice below indexes.
 	n := int64(max)
-	if start+n > total {
-		n = total - start
+	if avail := int64(len(b.master)) - start; n > avail {
+		n = avail
 	}
 	if n <= 0 {
 		return nil, total

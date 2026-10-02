@@ -552,3 +552,136 @@ func TestBuffer_UndrainedReaderPinsCompactionUntilUnregistered(t *testing.T) {
 		t.Fatalf("stream length must keep growing across compaction: before=%d after=%d", pinned, after)
 	}
 }
+
+// ByteRange numbers its argument in the ABSOLUTE stream (baseOffset + position),
+// which is the numbering every caller uses: an offset from shell_output, from a
+// log file, or from a previous read all mean the same thing. Compaction drops a
+// prefix of master and absorbs it into baseOffset, so after compaction the
+// absolute total is much larger than the retained slice. These two tests cover
+// the two ways that mismatch used to escape: a panic, and a window of NUL bytes.
+
+// TestBuffer_ByteRangeClampsAgainstRetainedBytes is the panic case. A caller
+// asks for a window derived from the absolute total - which is exactly what
+// shell_output does for offset=0 with max_bytes=0 ("no limit", a documented
+// value) - and the retained slice is far shorter. Clamping the window against
+// the absolute total instead of the retained length asked the slice expression
+// for more bytes than it had.
+func TestBuffer_ByteRangeClampsAgainstRetainedBytes(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := []byte(strings.Repeat("0123456789", 100)) // 1000 bytes
+	if err := b.Write(chunk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(chunk[:100]); err != nil {
+		t.Fatal(err)
+	}
+
+	base := b.BaseOffset()
+	if base == 0 {
+		t.Fatal("compaction did not happen; the test no longer exercises a dropped prefix")
+	}
+	total := b.Len()
+	if total <= int64(len(b.master)) {
+		t.Fatalf("expected the absolute total (%d) to exceed the retained bytes (%d)", total, len(b.master))
+	}
+
+	// The documented shape: offset 0 with no byte limit.
+	out, got := b.ByteRange(0, int(total))
+
+	if got != total {
+		t.Errorf("total = %d, want %d: the absolute stream length must not change", got, total)
+	}
+	// start 0 is before the earliest retained byte, so it clamps forward to base:
+	// the caller gets the retained suffix and can tell it was shortened by
+	// comparing its request against BaseOffset.
+	if len(out) != len(b.master) {
+		t.Errorf("returned %d bytes, want the %d retained", len(out), len(b.master))
+	}
+	if want := strings.Repeat("0123456789", 10); string(out) != want {
+		t.Errorf("returned %q, want the retained suffix %q", out, want)
+	}
+}
+
+// TestBuffer_ByteRangeNeverReturnsUnwrittenBytes is the silent case. When the
+// requested window happens to fit in the slice's CAPACITY but not its LENGTH,
+// a Go slice expression succeeds and the copy returns zeroed bytes: no panic,
+// just a screen of NULs that the caller believes is terminal output. The
+// returned window must never contain a byte that was not written.
+func TestBuffer_ByteRangeNeverReturnsUnwrittenBytes(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only 'A's are ever written, so any other byte in a result is fabricated.
+	chunk := []byte(strings.Repeat("A", 1000))
+	if err := b.Write(chunk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(chunk[:100]); err != nil {
+		t.Fatal(err)
+	}
+	if b.BaseOffset() == 0 {
+		t.Fatal("compaction did not happen")
+	}
+
+	// Ask for the whole absolute stream, which starts before the retained bytes.
+	out, _ := b.ByteRange(0, int(b.Len()))
+	for i, c := range out {
+		if c != 'A' {
+			t.Fatalf("byte %d of the window is %q; only 'A' was ever written", i, c)
+		}
+	}
+}
+
+// TestBuffer_ByteRangeWindowInsideRetainedData pins that the clamp still returns
+// exactly the requested window when it lies entirely within the retained bytes,
+// so the fix cannot be "return less than asked" for the normal case.
+func TestBuffer_ByteRangeWindowInsideRetainedData(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write([]byte(strings.Repeat("Z", 200))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write([]byte("abcdefghij")); err != nil {
+		t.Fatal(err)
+	}
+	base := b.BaseOffset()
+	if base == 0 {
+		t.Fatal("compaction did not happen")
+	}
+
+	// A window wholly inside the retained region, addressed absolutely.
+	out, total := b.ByteRange(base+2, 4)
+	if total != b.Len() {
+		t.Errorf("total = %d, want %d", total, b.Len())
+	}
+	if string(out) != "cdef" {
+		t.Errorf("got %q, want cdef (absolute offset %d, 4 bytes)", out, base+2)
+	}
+}
