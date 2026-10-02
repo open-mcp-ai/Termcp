@@ -116,9 +116,16 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 
 	if cs := s.sessMgr.GetChildShell(id); cs != nil {
 		info := cs.Info()
-		sessID := id
-		if parent := s.sessMgr.GetByShellID(id); parent != nil {
-			sessID = parent.ID
+		// The shell already knows its parent, so asking the manager would be a second
+		// full scan of every session to learn what cs.ParentSessionID returns directly.
+		// GetByShellID would find this same session, because the only way
+		// GetChildShell(id) can return cs is from that session's own shell map.
+		sessID := cs.ParentSessionID()
+		if sessID == "" {
+			// Not reachable for a shell found through a session's shell map (both the
+			// root and every child are stored with their parent already set), but the
+			// value is reported as the session id rather than empty if it ever is.
+			sessID = id
 		}
 		return &outputSource{live: cs, sessID: sessID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 	}

@@ -68,8 +68,9 @@ func (m *Manager) CloseChildShell(id string) (bool, error) {
 	err := parent.CloseChildShell(id)
 	// Persist the updated per-shell snapshot right away so a restart cannot
 	// resurrect the closed shell from the shell manifest; notify the UI so closed
-	// shells disappear from tabs immediately.
-	m.persist()
+	// shells disappear from tabs immediately. Only this parent is written: a shell
+	// belongs to one session, so no other session's manifests can be affected.
+	m.persistOne(parent.ID)
 	m.notifyListChange()
 	return true, err
 }

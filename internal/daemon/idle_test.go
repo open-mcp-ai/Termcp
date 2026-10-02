@@ -182,3 +182,50 @@ func TestIdleWatcherProbeRequestsDoNotFeedCountdown(t *testing.T) {
 	}
 	t.Fatal("repeated daemon status probes kept the countdown from firing")
 }
+
+// The watcher keeps four fields in agreement (inFlight, timer, gen, fired) and
+// arms or disarms a timer as a side effect of counting. The failure mode of that
+// state machine is quiet: a request overlapping a firing timer could leave the
+// countdown disarmed, so the daemon would never exit on its own again - and an idle
+// daemon that stays alive looks exactly like a daemon with traffic.
+//
+// Each field is individually safe to touch, which is why this is worth testing
+// rather than reading: the invariant is about the four together, and a request
+// racing a firing timer is the case that exercises it. The overlap is driven
+// deliberately and the watcher must still be able to fire afterwards.
+func TestIdleWatcherStillFiresAfterOverlappingRequests(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		fired := make(chan struct{}, 1)
+		w := NewIdleWatcher(3*time.Millisecond, func() {
+			select {
+			case fired <- struct{}{}:
+			default:
+			}
+		})
+		ts := httptest.NewServer(w.Track(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 12; j++ {
+					resp, err := http.Get(ts.URL)
+					if err == nil {
+						resp.Body.Close()
+					}
+					time.Sleep(time.Duration(round%3) * time.Millisecond)
+				}
+			}()
+		}
+		wg.Wait()
+		ts.Close()
+
+		select {
+		case <-fired:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("round %d: watcher never fired after traffic stopped - countdown left disarmed",
+				round)
+		}
+	}
+}

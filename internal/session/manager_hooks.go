@@ -23,12 +23,26 @@ func (m *Manager) notifyOutput(shellID string) {
 }
 
 func (m *Manager) notifyExit(shellID string, exitCode *int) {
+	// A shell's exit is a durable state change: its status becomes exited and its
+	// exit code is set, and both are read back after a restart to render the shell
+	// tab. Nothing else writes them - the exit watcher only retains them in memory
+	// (shellHistory) - so without this the manifest kept saying "running" and a
+	// restart resurrected finished shells as live ones.
+	//
+	// Persist only the owning session, and resolve it from the shell rather than
+	// scanning, since this runs on every shell exit. The lookup can legitimately
+	// fail (a shell closed concurrently), in which case there is no owner left to
+	// describe and skipping is correct.
 	m.listChangeMu.RLock()
 	fn := m.onExitHook
 	m.listChangeMu.RUnlock()
 	if fn != nil {
 		fn(shellID, exitCode)
 	}
+	if owner := m.GetByShellID(shellID); owner != nil {
+		m.persistOne(owner.ID)
+	}
+	m.notifyListChange()
 }
 
 func (m *Manager) notifyClose(shellID string) {

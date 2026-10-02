@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -792,5 +793,120 @@ func TestDeleteSession_ReusedIDIsWritableAgain(t *testing.T) {
 	}
 	if _, err := st.AppendLog(sess, shell, []byte("fresh")); err != nil {
 		t.Fatalf("append after re-creating the session id must be accepted: %v", err)
+	}
+}
+
+// writeManifest skips a write whose encoded bytes match the last one it wrote, which
+// is what makes a whole-table sweep cost only the sessions that changed. The check is
+// on the observable consequence rather than the cache: an unchanged manifest is not
+// rewritten, so its mtime does not move. A rewrite of identical bytes would need a
+// new temp file and rename, so a stable mtime means no write happened.
+func TestSaveSession_UnchangedManifestIsNotRewritten(t *testing.T) {
+	st := newStore(t)
+	sess := api.Session{ID: "s1", Name: "n", Status: api.SessionRunning, CreatedAt: 1, UpdatedAt: 2}
+	if err := st.SaveSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.sessionDir(sess.ID), "manifest.json")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same content, repeatedly.
+	for i := 0; i < 5; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if err := st.SaveSession(sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("manifest was rewritten despite identical content (mtime %v -> %v)",
+			before.ModTime(), after.ModTime())
+	}
+
+	// A real change must still be written.
+	sess.Name = "renamed"
+	if err := st.SaveSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.ModTime().Equal(before.ModTime()) {
+		t.Error("a changed manifest was NOT written")
+	}
+	got, err := st.readManifest(st.sessionDir(sess.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "renamed" {
+		t.Errorf("on-disk name = %q, want renamed", got.Name)
+	}
+}
+
+// The dangerous case: a manifest is removed from disk while its content hash is
+// still cached. Skipping the next write would leave a directory with no manifest,
+// which LoadSessions then ignores forever.
+func TestSaveSession_DeletedManifestIsRewrittenNotSkipped(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+	session := api.Session{ID: sess, Name: "n", Status: api.SessionRunning, CreatedAt: 1}
+	sh := api.Session{ID: shell, Status: api.SessionRunning, CreatedAt: 1}
+
+	if err := st.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the whole session (drops hashes), then reuse the id with identical
+	// content: the write must happen.
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(st.sessionDir(sess), "manifest.json")); err != nil {
+		t.Fatalf("ORPHAN: manifest not written after delete+recreate: %v", err)
+	}
+	loaded, err := st.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != sess {
+		t.Errorf("LoadSessions saw %d sessions, want the recreated one", len(loaded))
+	}
+}
+
+// DeleteShell removes one shell's manifest while the session hash stays cached;
+// the shell's own hash must go too.
+func TestSaveShell_DeletedManifestIsRewritten(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	sh := api.Session{ID: shell, Status: api.SessionRunning, CreatedAt: 1}
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteShell(sess, shell); err != nil {
+		t.Fatal(err)
+	}
+	// Same shell content again.
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.shellDir(sess, shell), "manifest.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("ORPHAN: shell manifest not rewritten after delete: %v", err)
 	}
 }
