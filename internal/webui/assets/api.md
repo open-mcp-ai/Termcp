@@ -271,10 +271,12 @@ Response 200:
 {
   "sessions": [
     { "id": "abc123", "name": "pi", "status": "running",
-      "pid": 12345, "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
+      "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
   ]
 }
 ```
+
+Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 
 ### `POST /api/sessions`
 
@@ -294,8 +296,12 @@ Request:
 }
 
 Response 200:
-{ "session_id": "abc123", "shell_id": "def456", "pid": 12345, "ssh_config": "pi" }
+{ "session_id": "abc123", "shell_id": "def456", "ssh_config": "pi" }
 ```
+
+No `pid` is returned: the process lives on the remote side and SSH does not report its
+number, so the field could only ever have been a constant. To get the real one, ask the
+shell itself (`echo $$`).
 
 ### `GET /api/sessions/{id}`
 

@@ -59,10 +59,12 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
 	}
 
+	// No pid: the process runs on the remote, and SSH does not report its number
+	// back to us, so any value here could only be a constant. Clients that need a
+	// pid can take it from the shell itself (e.g. `echo $$`).
 	result := map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),
-		"pid":        sess.PID,
 		"ssh_config": cfgName,
 	}
 	return jsonResult(result), nil

@@ -35,7 +35,6 @@ type Session struct {
 	Mode      SessionMode   `json:"mode,omitempty"`
 	Status    SessionStatus `json:"status"` // running | exited | error
 	ExitCode  *int          `json:"exit_code"`
-	PID       int           `json:"pid"`
 	CreatedAt int64         `json:"created_at"` // Unix ms
 	UpdatedAt int64         `json:"updated_at"` // Unix ms
 	Rows      int           `json:"rows"`

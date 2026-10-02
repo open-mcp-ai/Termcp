@@ -99,10 +99,11 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
 		return
 	}
+	// No pid here either - see the MCP session_start handler for why (the process
+	// is remote and SSH does not report its number).
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),
-		"pid":        sess.PID,
 		"ssh_config": cfgName,
 	})
 }
