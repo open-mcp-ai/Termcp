@@ -15,6 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check release metadata
+        env:
+          RELEASE_PR_HEAD_REF: ${{ github.head_ref }}
+          RELEASE_PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python scripts/release_metadata.py check
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"

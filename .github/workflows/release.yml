@@ -18,6 +18,13 @@ jobs:
         with:
           go-version: '1.25'
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check release metadata
+        run: python3 scripts/release_metadata.py check --expected "$GITHUB_REF_NAME"
+
       - name: Build
         run: |
           mkdir -p dist

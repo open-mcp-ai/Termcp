@@ -23,6 +23,13 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 Project docs live under `docs/` (`docs/mcp-tools.md`, `docs/api.md`, `docs/architecture.md`, `docs/design/`).
 
+### Releases
+
+Use the release PR process in `docs/releasing.md` before tagging. Give the PR
+a `release/vX.Y.Z` head branch or `release: vX.Y.Z` title, run
+`make prepare-release RELEASE_VERSION=vX.Y.Z`, and review the generated
+changelog and `server.json` changes. CI checks both files before merge.
+
 ### Tests run in CI on three OSes
 
 Whenever you write or modify a test, remember it must pass in

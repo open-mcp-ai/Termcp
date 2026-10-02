@@ -1,4 +1,4 @@
-.PHONY: build build-api build-debug test clean dist sync-assets
+.PHONY: build build-api build-debug test clean dist sync-assets prepare-release check-release
 
 # Plain `make` must keep meaning "build the release binary" (GNU make otherwise
 # picks the first target in the file as the default goal).
@@ -48,6 +48,13 @@ build-debug:
 # 运行全部单元测试（-count=1 跳过测试结果缓存，保证每次都真实执行）
 test:
 	go test -count=1 ./...
+
+# 发布 PR：将 Unreleased 归档到指定版本，并同步 server.json。
+prepare-release:
+	python3 scripts/release_metadata.py prepare "$(RELEASE_VERSION)"
+
+check-release:
+	python3 scripts/release_metadata.py check $(if $(RELEASE_VERSION),--expected "$(RELEASE_VERSION)")
 
 # 清理构建文件
 clean:
