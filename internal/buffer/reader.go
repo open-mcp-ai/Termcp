@@ -24,70 +24,99 @@ func (b *Buffer) ReadLimited(ctx context.Context, readerID int, timeout time.Dur
 		b.mu.Unlock()
 		return nil, ErrReader
 	}
-
 	if data := b.drainLocked(rs, maxBytes, maxLines); data != nil {
 		b.mu.Unlock()
 		return data, nil
 	}
-
 	if b.closed {
 		b.mu.Unlock()
 		return nil, io.EOF
 	}
-
+	// timeout <= 0 means "do not wait", whatever the context says.
 	if timeout <= 0 {
 		b.mu.Unlock()
 		return nil, nil
 	}
-
-	deadline := time.Now().Add(timeout)
-	stop := make(chan struct{})
+	// The lock is held and there is nothing to deliver, so this call is going to
+	// wait; everything the wait needs is set up below. A nil context is not
+	// tolerated, matching the wait this replaces, which dereferenced it too.
+	wake := b.wake
 	ctxDone := ctx.Done()
-	timer := time.NewTimer(time.Until(deadline))
-	go func() {
-		select {
-		case <-timer.C:
-			b.cond.Broadcast()
-		case <-ctxDone:
-			b.cond.Broadcast()
-		case <-stop:
-		}
-	}()
-	defer func() {
-		close(stop)
-		timer.Stop()
-	}()
+	b.mu.Unlock()
 
-	for rs.readPos >= int64(len(b.master)) && !b.closed {
-		if time.Until(deadline) <= 0 {
-			b.mu.Unlock()
-			return nil, nil
-		}
-		if ctxDone != nil {
-			select {
-			case <-ctxDone:
-				b.mu.Unlock()
-				return nil, nil
-			default:
-			}
-		}
-		b.cond.Wait()
-		if _, ok := b.readers[readerID]; !ok {
+	// A context that is already done is checked before waiting so a cancelled read
+	// does not sleep for a timeout first.
+	select {
+	case <-ctxDone:
+		return nil, nil
+	default:
+	}
+
+	return b.waitForData(readerID, timeout, maxBytes, maxLines, wake, ctxDone)
+}
+
+// waitForData blocks until there is data, the deadline passes, the context is
+// cancelled, the buffer closes, or the reader is unregistered, then delivers what
+// it can. It is the slow path of ReadLimited: the caller has already taken the
+// lock, found nothing to deliver, and established that a wait is wanted.
+//
+// The wait is a select over the deadline, the context and the buffer's wake
+// channel, so ending it needs no other goroutine. This replaces a sync.Cond, which
+// can only wait untimed: there, a deadline had to be delivered by a timer calling
+// Broadcast from a helper goroutine, so every waiting read started a second
+// goroutine. Here the caller's own goroutine does the waiting and the deadline is
+// one of the things it waits on - measured, 24 waiters went from 48 goroutines to
+// 24. The accuracy of the deadline is unchanged (both overshoot by about the same
+// amount on this machine); what changes is how much a waiter costs.
+func (b *Buffer) waitForData(readerID int, timeout time.Duration, maxBytes, maxLines int, wake <-chan struct{}, ctxDone <-chan struct{}) ([]byte, error) {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		b.mu.Lock()
+		rs, ok := b.readers[readerID]
+		if !ok {
 			b.mu.Unlock()
 			return nil, ErrReader
 		}
-	}
+		if data := b.drainLocked(rs, maxBytes, maxLines); data != nil {
+			b.mu.Unlock()
+			return data, nil
+		}
+		if b.closed {
+			b.mu.Unlock()
+			return nil, io.EOF
+		}
 
-	if data := b.drainLocked(rs, maxBytes, maxLines); data != nil {
+		// Every reason to stop is checked before waiting, and the wait can also end
+		// on any of them. A wake can arrive for a change this reader does not care
+		// about (another reader was unregistered), which is why this is a loop.
+		if !time.Now().Before(deadline) {
+			b.mu.Unlock()
+			return nil, nil
+		}
+		select {
+		case <-ctxDone:
+			b.mu.Unlock()
+			return nil, nil
+		default:
+		}
+
+		// Take the channel the next change will close, then release the lock. A write
+		// cannot land in between: it would need the lock, which is still held while
+		// wake is read, and it replaces the channel as it releases it.
+		wake = b.wake
 		b.mu.Unlock()
-		return data, nil
-	}
 
-	b.mu.Unlock()
-	if b.closed {
-		return nil, io.EOF
+		// time.After is an allocation per call, but this path only runs when a wait is
+		// actually needed. A read that finds data never reaches here.
+		select {
+		case <-wake:
+		case <-time.After(time.Until(deadline)):
+			return nil, nil
+		case <-ctxDone:
+			return nil, nil
+		}
 	}
-	return nil, nil
 }
 
 // drainLocked copies up to one slice from readPos forward and advances readPos. b.mu held.

@@ -3,6 +3,7 @@ package buffer
 import (
 	"context"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -683,5 +684,146 @@ func TestBuffer_ByteRangeWindowInsideRetainedData(t *testing.T) {
 	}
 	if string(out) != "cdef" {
 		t.Errorf("got %q, want cdef (absolute offset %d, 4 bytes)", out, base+2)
+	}
+}
+
+// A waiter must not cost a goroutine beyond the one the caller already has. The
+// old wait used sync.Cond, which cannot wait with a deadline, so each waiting read
+// started a helper goroutine for a timer to broadcast through - two goroutines per
+// waiter instead of one. This pins the count: with 24 simultaneous waiters the
+// delta must stay near 24, not near 48.
+func TestBuffer_WaitCostsNoExtraGoroutine(t *testing.T) {
+	const waiters = 24
+	const slack = 8
+
+	for attempt := 0; attempt < 3; attempt++ {
+		b := New(1 << 20)
+		ids := make([]int, waiters)
+		for i := range ids {
+			id, err := b.NewReader()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids[i] = id
+		}
+
+		base := runtime.NumGoroutine()
+		blocked := make(chan struct{}, waiters)
+		release := make(chan struct{})
+		for _, id := range ids {
+			go func(id int) {
+				blocked <- struct{}{}
+				_, _ = b.Read(context.Background(), id, 5*time.Second, 0)
+				<-release
+			}(id)
+		}
+		for i := 0; i < waiters; i++ {
+			<-blocked
+		}
+
+		// Sample the maximum over a window rather than breaking at the first
+		// reading that reaches `waiters`: the goroutines that have signalled are
+		// not necessarily inside Read yet, so an early break would measure the
+		// moment before any helper goroutine exists and pass for the wrong reason.
+		peak := 0
+		deadline := time.Now().Add(300 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if d := runtime.NumGoroutine() - base; d > peak {
+				peak = d
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+
+		close(release)
+		b.Close()
+		time.Sleep(50 * time.Millisecond)
+
+		if peak <= waiters+slack {
+			return // good: one goroutine per waiter
+		}
+		if attempt == 2 {
+			t.Fatalf("waiting cost %d goroutines for %d waiters (want <= %d): "+
+				"a helper goroutine is being started per wait", peak, waiters, waiters+slack)
+		}
+	}
+}
+
+// timeout <= 0 means "do not wait": a read with no wait budget returns immediately
+// with whatever is available, even when a cancellable context is also supplied.
+func TestBuffer_ZeroTimeoutNeverWaits(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	data, err := b.Read(ctx, r, 0, 0)
+	el := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("got %q", data)
+	}
+	if el > 20*time.Millisecond {
+		t.Fatalf("timeout=0 waited %v", el)
+	}
+}
+
+// A waiter must end when the thing it is waiting on is removed, not when its
+// timeout expires. Unregister closes no data and writes no bytes, so it needs its
+// own wake; without one the reader would sit until the deadline and then report
+// ErrReader only by accident, having waited out a timeout for a reader that no
+// longer exists.
+func TestBuffer_UnregisterWakesPromptly(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	start := time.Now()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := b.Read(context.Background(), r, 10*time.Second, 0)
+		errCh <- err
+	}()
+	time.Sleep(80 * time.Millisecond)
+	b.Unregister(r)
+	select {
+	case err := <-errCh:
+		if err != ErrReader {
+			t.Fatalf("want ErrReader, got %v", err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("took %v", el)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Unregister did not wake the waiter")
+	}
+}
+
+// A write must end a wait with data, not merely end it: the waiter re-checks the
+// buffer after every wake, so data written just before the wake is delivered on the
+// same call.
+func TestBuffer_WriteWakesWithData(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	type res struct {
+		s   string
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		d, err := b.Read(context.Background(), r, 10*time.Second, 0)
+		ch <- res{string(d), err}
+	}()
+	time.Sleep(80 * time.Millisecond)
+	_ = b.Write([]byte("woken"))
+	select {
+	case got := <-ch:
+		if got.err != nil || got.s != "woken" {
+			t.Fatalf("got %q err=%v", got.s, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Write did not wake the waiter")
 	}
 }

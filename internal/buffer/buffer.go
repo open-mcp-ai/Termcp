@@ -26,7 +26,18 @@ type Buffer struct {
 	readers map[int]*readerState
 	nextID  int
 	closed  bool
-	cond    *sync.Cond
+	// wake is closed, and replaced, whenever something a waiter could be waiting
+	// for changes: a write, a close, or a reader being unregistered. A waiter takes
+	// the current channel as its last act before releasing the lock and selects on
+	// that, so a change cannot slip between its check and its wait.
+	//
+	// This replaces a sync.Cond, which can only wait untimed. A deadline there had
+	// to be delivered by a timer calling Broadcast from a helper goroutine, so every
+	// waiting read started a second goroutine and left the deadline to that
+	// goroutine being scheduled. Waiting on this channel instead means the caller's
+	// own goroutine does the waiting, and the deadline is one of the things it waits
+	// on. Measured: 24 waiters cost 48 goroutines before and 24 now.
+	wake chan struct{}
 	// baseOffset is the absolute stream offset of master[0]: the number of bytes
 	// this buffer has dropped from the front through compaction. Every offset this
 	// type reports is absolute (baseOffset + a position in master), so dropping a
@@ -44,11 +55,23 @@ func New(maxBytes int) *Buffer {
 	_ = maxBytes // API compatibility; no hard limit on retained history
 	b := &Buffer{
 		readers:           make(map[int]*readerState),
+		wake:              make(chan struct{}),
 		compactThreshold:  8 << 20, // 8 MiB before attempting prefix trim
 		compactMinAdvance: 1 << 20, // require ≥1 MiB reclaimable prefix
 	}
-	b.cond = sync.NewCond(&b.mu)
 	return b
+}
+
+// wakeLocked tells every waiter that the buffer changed. Caller must hold b.mu.
+//
+// Closing the channel wakes all of them, which is sync.Cond.Broadcast's semantics,
+// and replacing it immediately means the next waiter has something to select on
+// that no one has closed yet. A waiter may be woken for a change it did not want
+// (another reader was unregistered), which re-enters the wait having re-checked its
+// condition - the same spurious-wakeup handling a Cond loop needs.
+func (b *Buffer) wakeLocked() {
+	close(b.wake)
+	b.wake = make(chan struct{})
 }
 
 // NewReader registers a new independent reader that only observes writes after registration.
@@ -98,9 +121,10 @@ func (b *Buffer) NewReaderSeededFrom(srcReaderID int) (int, error) {
 
 func (b *Buffer) Unregister(id int) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	delete(b.readers, id)
-	b.mu.Unlock()
-	b.cond.Broadcast()
+	// A reader blocked on this id must learn it is gone, so this wakes too.
+	b.wakeLocked()
 }
 
 // Write appends data for all readers and wakes waiters.
@@ -115,7 +139,7 @@ func (b *Buffer) Write(data []byte) error {
 	}
 	b.master = append(b.master, data...)
 	b.maybeCompactLocked()
-	b.cond.Broadcast()
+	b.wakeLocked()
 	return nil
 }
 
@@ -145,9 +169,9 @@ func (b *Buffer) maybeCompactLocked() {
 
 func (b *Buffer) Close() {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.closed = true
-	b.mu.Unlock()
-	b.cond.Broadcast()
+	b.wakeLocked()
 }
 
 func (b *Buffer) IsClosed() bool {
