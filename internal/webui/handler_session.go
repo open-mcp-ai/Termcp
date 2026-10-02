@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
@@ -100,7 +99,6 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
 		return
 	}
-	time.Sleep(100 * time.Millisecond)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),

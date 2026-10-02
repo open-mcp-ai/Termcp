@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,4 +331,52 @@ func TestManager_ShellExitStatusIsPersisted(t *testing.T) {
 	if !persisted {
 		t.Errorf("SHELL EXIT NOT PERSISTED: memory=%s disk=%s after 5s", inMemory, onDisk)
 	}
+}
+
+// A session is usable the moment Create returns. The handlers used to sleep 100ms
+// after Create before answering session_start, which suggested the session needed
+// time to settle; it does not, and the sleep could not have helped even if it did.
+// First output takes ~240ms to arrive on this machine (measured), so no fixed sleep
+// shorter than that could guarantee output was ready, while input sent immediately
+// after Create is accepted and echoed. The sleep therefore only added latency to
+// every session creation, and this test is what keeps it from coming back: it fails
+// if a future change makes input require a settling period.
+func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
+	srv := startTestServer(t)
+	store := storage.New(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	m := NewManager(message.NewManager(store), store, srv)
+
+	var command string
+	var args []string
+	if runtime.GOOS == "windows" {
+		command = "powershell.exe"
+		args = []string{"-NoProfile", "-Command", "$input | ForEach-Object { Write-Output ('GOT_' + $_) }"}
+	} else {
+		command = "/bin/cat"
+	}
+	s, err := m.Create(testConfig(command, args, api.ModePipe, "immediate-input"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Delete(s.ID) })
+
+	cs := s.PrimaryShell()
+	if cs == nil {
+		t.Fatal("session has no primary shell")
+	}
+	// No sleep: send as soon as Create has returned.
+	if err := cs.SendTerminalBytes([]byte("hello"), true); err != nil {
+		t.Fatalf("input immediately after Create was rejected: %v", err)
+	}
+
+	// And it must actually reach the process, not merely be accepted.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if out, _ := s.ReadOutput(nil, 0, false, 0, 0); strings.Contains(out, "GOT_hello") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("input sent immediately after Create never reached the process")
 }

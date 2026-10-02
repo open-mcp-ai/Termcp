@@ -59,8 +59,6 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
 	result := map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),
