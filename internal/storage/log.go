@@ -30,23 +30,7 @@ func (s *Store) AppendLog(sessionID, shellID string, data []byte) (int64, error)
 	if len(data) == 0 {
 		return s.LogSize(sessionID, shellID)
 	}
-
-	f, err := s.logHandle(sessionID, shellID)
-	if err != nil {
-		return 0, err
-	}
-
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-
-	off, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := f.Write(data); err != nil {
-		return off, err
-	}
-	return off, nil
+	return s.logSink.append(sessionID, shellID, data)
 }
 
 // AppendMark appends one status transition to a shell's log.jsonl.
@@ -121,49 +105,4 @@ func (s *Store) ReadLog(sessionID, shellID string, offset int64, max int) ([]byt
 		return nil, err
 	}
 	return buf[:n], nil
-}
-
-// logHandle returns the cached append handle for a shell, opening it if needed.
-func (s *Store) logHandle(sessionID, shellID string) (*os.File, error) {
-	key := sessionID + "\x00" + shellID
-
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	if f, ok := s.logs[key]; ok {
-		return f, nil
-	}
-
-	dir := s.shellDir(sessionID, shellID)
-	if err := s.initDir(dir); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "log.bin"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, err
-	}
-	s.logs[key] = f
-	return f, nil
-}
-
-func (s *Store) closeLog(sessionID, shellID string) {
-	key := sessionID + "\x00" + shellID
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	if f, ok := s.logs[key]; ok {
-		f.Close()
-		delete(s.logs, key)
-	}
-}
-
-// closeSessionLogs closes every cached handle belonging to a session.
-func (s *Store) closeSessionLogs(sessionID string) {
-	prefix := sessionID + "\x00"
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	for k, f := range s.logs {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			f.Close()
-			delete(s.logs, k)
-		}
-	}
 }

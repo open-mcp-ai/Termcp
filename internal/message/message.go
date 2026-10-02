@@ -1,13 +1,17 @@
 package message
 
 import (
-	"strings"
+	"errors"
 	"sync"
 
-	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
+
+// ErrSessionForgotten is returned by an append that arrives after the session's
+// in-memory state was released. Bytes already written stay on disk; the caller is
+// expected to stop writing, which is what the transcript loop does on any error.
+var ErrSessionForgotten = errors.New("session state was released")
 
 // Manager persists a session's transcript as a byte log per shell plus an index
 // of status marks (see docs/design/session-storage.md).
@@ -16,46 +20,71 @@ import (
 // log.bin and is never recomputed from record lengths. The mark index only says
 // which status produced which span, so it can be missing, stale, or incomplete
 // without affecting where a byte lives.
+//
+// Appends are serialized by ownership, not by a lock. Each session has exactly
+// one writer goroutine (see sessionWriter) and every append is a request to it:
+// that goroutine performs both halves of an append - the bytes and the mark that
+// describes them - so nothing can land between them. It also owns the remembered
+// status per shell, so that map needs no lock of its own.
+//
+// A per-session mutex used to live in a map and be deleted by ForgetSession. An
+// append that loaded the mutex before the delete and one that loaded it after
+// held two different mutexes for the same log, so the byte write and its mark
+// could interleave. Releasing state must not be able to split a lock in two: the
+// writer here is owned by the session, its lifetime is the session's lifetime,
+// and ForgetSession stops and joins it before the id can be reused.
 type Manager struct {
 	store *storage.Store
-	// session holds per-session locks so concurrent appends to one log cannot
-	// interleave a byte write with a mark write.
-	session sync.Map // string → *sync.Mutex
-
-	// lastStatus remembers the status of each shell's most recent mark, so a mark
-	// is only appended when the status actually changes. Without this the index
-	// would grow one line per read chunk.
-	lastMu     sync.Mutex
-	lastStatus map[string]api.LogStatus
+	// sessions holds one *sessionWriter per session id. "One writer for one
+	// session" is the whole design, and it is enforced by an invariant worth
+	// stating once:
+	//
+	//	an entry exists if and only if its writer is still running
+	//
+	// Both directions are what keep a second writer from appearing. Creation uses
+	// LoadOrStore, so it stores a writer only where there is no entry, and there is
+	// no entry only where no writer is running. Removal is done by the writer's own
+	// goroutine as its last act, so an entry is never removed while its writer is
+	// alive. Together they mean no two writers for one id can overlap, and nothing
+	// outside this file has to preserve that by ordering its calls correctly.
+	sessions sync.Map // string → *sessionWriter
 }
 
 // NewManager creates a Manager backed by the given Store.
 func NewManager(store *storage.Store) *Manager {
-	return &Manager{store: store, lastStatus: make(map[string]api.LogStatus)}
-}
-
-func (m *Manager) sessionLock(sessionID string) *sync.Mutex {
-	if v, ok := m.session.Load(sessionID); ok {
-		return v.(*sync.Mutex)
-	}
-	mu := &sync.Mutex{}
-	actual, _ := m.session.LoadOrStore(sessionID, mu)
-	return actual.(*sync.Mutex)
+	return &Manager{store: store}
 }
 
 // ForgetSession releases in-memory state for a session. On-disk data is kept and
 // is removed only by DeleteSession.
+//
+// The session's writer is stopped and joined, so when this returns nothing is in
+// flight and no remembered status survives. A later append for the same id starts
+// a fresh writer; joining is what makes that safe, since a retired writer still
+// holding the status map would otherwise share it with the new one.
+//
+// Note what this does not do: it does not delete the map entry. The writer removes
+// its own entry as the last thing its goroutine does (see run), which is what makes
+// "one writer per session" hold without this function having to sequence anything.
+// If the entry were deleted here, the order of deleting against stopping would
+// decide whether a concurrent append could find an empty slot and create a second
+// writer for the same log:
+//
+//	stop then delete  - correct, but only because the order happened to be right
+//	delete then stop  - an append in the window finds no entry, creates a
+//	                    successor, and both writers append the same log
+//
+// Making that a rule the caller has to remember is what the entry-owns-itself
+// arrangement avoids: an entry exists exactly while its writer is alive, so a
+// successor cannot be created no matter how this function is ordered. What remains
+// here is only the join, which is a liveness property (release the goroutine and
+// its state) rather than a correctness one.
 func (m *Manager) ForgetSession(sessionID string) {
-	m.session.Delete(sessionID)
-
-	m.lastMu.Lock()
-	prefix := sessionID + "\x00"
-	for k := range m.lastStatus {
-		if strings.HasPrefix(k, prefix) {
-			delete(m.lastStatus, k)
-		}
+	v, ok := m.sessions.Load(sessionID)
+	if !ok {
+		return
 	}
-	m.lastMu.Unlock()
+	v.(*sessionWriter).stop()
 }
 
 // AppendOutput appends shell output to its byte log and returns the absolute
@@ -68,22 +97,8 @@ func (m *Manager) AppendOutput(sessionID, shellID string, data []byte) (int64, e
 	if m.store == nil || len(data) == 0 {
 		return 0, nil
 	}
-	mu := m.sessionLock(sessionID)
-	mu.Lock()
-	defer mu.Unlock()
-
-	offset, err := m.store.AppendLog(sessionID, shellID, data)
-	if err != nil {
-		return 0, err
-	}
-	if err := m.markIfChanged(sessionID, shellID, api.LogOutput, offset); err != nil {
-		// The bytes are durable; only the status mark failed. Report it, but the
-		// caller can keep going: a missing mark makes the span read as a
-		// continuation of the previous status, which is a labelling inaccuracy, not
-		// a lost byte or a moved offset.
-		return offset, err
-	}
-	return offset, nil
+	w := m.writer(sessionID)
+	return w.append(shellID, data)
 }
 
 // AppendMarkOnly records a status change that produced no bytes (for example an
@@ -93,38 +108,8 @@ func (m *Manager) AppendMarkOnly(sessionID, shellID string, status api.LogStatus
 	if m.store == nil {
 		return nil
 	}
-	mu := m.sessionLock(sessionID)
-	mu.Lock()
-	defer mu.Unlock()
-	// AppendOutput uses the same lock. Read the size while holding it so an
-	// output append cannot land between the size snapshot and this mark; that
-	// would make a zero-byte input mark cover those output bytes.
-	size, err := m.store.LogSize(sessionID, shellID)
-	if err != nil {
-		return err
-	}
-	return m.markIfChanged(sessionID, shellID, status, size)
-}
-
-// markIfChanged appends a mark when the shell's status differs from the last one
-// recorded, so log.jsonl holds one line per transition rather than one per write.
-func (m *Manager) markIfChanged(sessionID, shellID string, status api.LogStatus, offset int64) error {
-	key := sessionID + "\x00" + shellID
-
-	m.lastMu.Lock()
-	prev, seen := m.lastStatus[key]
-	if seen && prev == status {
-		m.lastMu.Unlock()
-		return nil
-	}
-	m.lastStatus[key] = status
-	m.lastMu.Unlock()
-
-	return m.store.AppendMark(sessionID, shellID, api.LogMark{
-		Status: status,
-		Time:   clock.Now(),
-		Offset: offset,
-	})
+	w := m.writer(sessionID)
+	return w.markOnly(shellID, status)
 }
 
 // OutputSize returns the length of a shell's byte log, i.e. the offset just past

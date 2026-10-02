@@ -39,11 +39,12 @@ type Store struct {
 	dataDir string
 	mu      sync.RWMutex
 
-	// logs caches one open append handle per shell. Output arrives in bursts,
-	// so keeping the file open turns "one open+seek+write per 4096 bytes" into
-	// a single write; see the cost measurements in the design doc.
-	logsMu sync.Mutex
-	logs   map[string]*os.File
+	// logSink owns every open append handle and performs every append; see
+	// logsink.go. It replaces a mutex plus a handle map: a lock guarding handles
+	// that are opened on first append and closed on delete has a lifetime shorter
+	// than the files it protects, and deletion is exactly where that breaks.
+	// Ownership by one goroutine removes the window instead of narrowing it.
+	logSink *logSink
 
 	// markIdx caches one sparse index per shell (see markIndex). It is memory the
 	// files do not have to carry: the index is rebuilt from log.jsonl on demand and
@@ -54,11 +55,14 @@ type Store struct {
 
 // New creates a Store rooted at dataDir.
 func New(dataDir string) *Store {
-	return &Store{
+	s := &Store{
 		dataDir: dataDir,
-		logs:    make(map[string]*os.File),
 		markIdx: make(map[string]*markIndex),
 	}
+	// One owner goroutine per Store, started here rather than on first append so
+	// that "who may write a log" has one answer from construction onward.
+	s.logSink = newLogSink(s)
+	return s
 }
 
 func (s *Store) initDir(path string) error {
@@ -162,7 +166,7 @@ func (s *Store) DeleteShell(sessionID, shellID string) error {
 	if err := validateID(shellID); err != nil {
 		return err
 	}
-	s.closeLog(sessionID, shellID)
+	s.logSink.closeShell(sessionID, shellID)
 	s.dropMarkIndex(sessionID, shellID)
 
 	s.mu.Lock()
@@ -176,7 +180,7 @@ func (s *Store) DeleteSession(sessionID string) error {
 	if err := validateID(sessionID); err != nil {
 		return err
 	}
-	s.closeSessionLogs(sessionID)
+	s.logSink.closeSession(sessionID)
 	s.dropSessionMarkIndex(sessionID)
 
 	s.mu.Lock()
@@ -270,17 +274,15 @@ func (s *Store) readManifest(dir string) (*api.Session, error) {
 
 // Close releases every cached log handle. Call on shutdown so buffered writes
 // are not lost.
+//
+// It closes the handles by asking the owner goroutine to, so a Close cannot race
+// an append onto a just-closed file. The goroutine itself is left running: appends
+// after Close used to reopen a handle and still do, which keeps Close meaning
+// "release the handles" rather than "retire this store". The cost is one goroutine
+// per Store for the life of the process, which is what the previous design spent a
+// mutex to avoid and is worth it for having no shared handle map at all.
 func (s *Store) Close() error {
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	var firstErr error
-	for k, f := range s.logs {
-		if err := f.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		delete(s.logs, k)
-	}
-	return firstErr
+	return s.logSink.closeAll()
 }
 
 // HasPersistedHistory reports whether a session has a manifest on disk, i.e.
