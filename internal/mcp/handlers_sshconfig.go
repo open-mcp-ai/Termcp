@@ -156,6 +156,62 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 
+	applyEntryEdits(existing, args)
+
+	applyJumpEdits(existing, args)
+
+	body, err := toml.Marshal(existing)
+	if err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	if _, err := sshconfig.ParseAndValidate(body); err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	if err := s.sshConfigs.Save(name, body); err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	return successResult(), nil
+}
+
+func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if s.sshConfigs == nil {
+		return jsonResult(map[string]any{"ssh_configs": []any{}}), nil
+	}
+	names, err := s.sshConfigs.List()
+	if err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	arr := make([]any, 0, len(names))
+	for _, n := range names {
+		if s.NoInternal && strings.EqualFold(n, "internal") {
+			continue
+		}
+		arr = append(arr, n)
+	}
+	return jsonResult(map[string]any{"ssh_configs": arr}), nil
+}
+
+func (s *Server) handleDetectShell(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	path, family, hint := shell.NewDetector().Detect()
+	if path == "" {
+		return toolError(CodeOperationFailed, "%s", hint), nil
+	}
+	result := map[string]any{
+		"path":   path,
+		"family": family,
+		"hint":   hint,
+	}
+	return jsonResult(result), nil
+}
+
+// --- Port forwarding tool handlers ---
+
+// applyEntryEdits overlays the arguments a caller supplied onto an existing
+// profile. Only non-empty values overwrite: the edit form sends the fields the
+// operator actually changed, and requiring a value to be present is what keeps
+// an unrelated edit from clearing a setting nobody mentioned. The two boolean
+// fields are the exception - they are decided by presence, see each case.
+func applyEntryEdits(existing *sshconfig.Entry, args map[string]any) {
 	// Merge: apply non-empty values from args over existing entry.
 	if v := getString(args, "host", ""); v != "" {
 		existing.Host = strings.TrimSpace(v)
@@ -203,7 +259,13 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 		t := getBool(args, "trust_unknown_host", false)
 		existing.TrustUnknownHost = &t
 	}
+}
 
+// applyJumpEdits overlays a bastion (ProxyJump) onto an existing profile. It is
+// separate from applyEntryEdits because a jump is all-or-nothing on its host:
+// without jump_host there is no bastion to fill in, and the remaining jump_*
+// arguments are ignored rather than silently creating one.
+func applyJumpEdits(existing *sshconfig.Entry, args map[string]any) {
 	// Jump merge
 	if jh := getString(args, "jump_host", ""); jh != "" {
 		if existing.Jump == nil {
@@ -239,49 +301,4 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 			existing.Jump.TrustUnknownHost = &t
 		}
 	}
-
-	body, err := toml.Marshal(existing)
-	if err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	if _, err := sshconfig.ParseAndValidate(body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	if err := s.sshConfigs.Save(name, body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	return successResult(), nil
 }
-
-func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	if s.sshConfigs == nil {
-		return jsonResult(map[string]any{"ssh_configs": []any{}}), nil
-	}
-	names, err := s.sshConfigs.List()
-	if err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
-	}
-	arr := make([]any, 0, len(names))
-	for _, n := range names {
-		if s.NoInternal && strings.EqualFold(n, "internal") {
-			continue
-		}
-		arr = append(arr, n)
-	}
-	return jsonResult(map[string]any{"ssh_configs": arr}), nil
-}
-
-func (s *Server) handleDetectShell(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	path, family, hint := shell.NewDetector().Detect()
-	if path == "" {
-		return toolError(CodeOperationFailed, "%s", hint), nil
-	}
-	result := map[string]any{
-		"path":   path,
-		"family": family,
-		"hint":   hint,
-	}
-	return jsonResult(result), nil
-}
-
-// --- Port forwarding tool handlers ---

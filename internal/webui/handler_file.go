@@ -106,58 +106,81 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve offset/length: Range header takes priority, then ?offset=&length= query params.
-	var offset, length int64
-	var isRange bool
-	if rh := r.Header.Get("Range"); rh != "" {
-		isRange = true
-	} else {
-		offset, _ = strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
-		length, _ = strconv.ParseInt(r.URL.Query().Get("length"), 10, 64)
-	}
+	offset, length, isRange := downloadRange(r)
 
 	_, sshClient, ok := h.resolveFileSession(sid, w)
 	if !ok {
 		return
 	}
 	if sshClient == nil {
-		// Internal / local: http.ServeFile handles Range + If-Modified-Since natively.
-		// Only use manual path when explicit ?offset=&length= query params are set.
-		if !isRange && r.URL.Query().Get("offset") == "" {
-			http.ServeFile(w, r, path)
-			return
-		}
-		if isRange {
-			http.ServeFile(w, r, path)
-			return
-		}
-		// Explicit ?offset=&length= for local files — manual partial stream.
-		f, err := os.Open(path)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
-			return
-		}
-		defer f.Close()
-		fi, err := f.Stat()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		if length <= 0 || offset+length > fi.Size() {
-			length = fi.Size() - offset
-		}
-		if offset > 0 {
-			f.Seek(offset, io.SeekStart)
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", length))
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.WriteHeader(http.StatusOK)
-		io.CopyN(w, f, length)
+		serveLocalFile(w, r, path, offset, length, isRange)
 		return
 	}
+	serveRemoteFile(w, r, path, sshClient, offset, length, isRange)
+}
 
+// downloadRange reads the byte window a download asks for. The Range header wins
+// when present: it is what a browser and curl send, and it carries its own syntax
+// that only parseRange can decode, so nothing is parsed here beyond noticing it.
+// Otherwise the explicit ?offset=&length= query parameters are read, and a missing
+// or unparsable one stays zero - meaning "from the start" and "to the end".
+func downloadRange(r *http.Request) (offset, length int64, isRange bool) {
+	// Range header takes priority over ?offset=&length= query params.
+	if rh := r.Header.Get("Range"); rh != "" {
+		isRange = true
+	} else {
+		offset, _ = strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
+		length, _ = strconv.ParseInt(r.URL.Query().Get("length"), 10, 64)
+	}
+	return offset, length, isRange
+}
+
+// serveLocalFile streams a file that lives on the termcp host itself. There is no
+// SFTP involved, so http.ServeFile is used whenever possible: it implements Range
+// and If-Modified-Since natively. The manual path exists only for an explicit
+// ?offset=&length= window, which ServeFile has no way to express.
+func serveLocalFile(w http.ResponseWriter, r *http.Request, path string, offset, length int64, isRange bool) {
+	// Internal / local: http.ServeFile handles Range + If-Modified-Since natively.
+	// Only use manual path when explicit ?offset=&length= query params are set.
+	if !isRange && r.URL.Query().Get("offset") == "" {
+		http.ServeFile(w, r, path)
+		return
+	}
+	if isRange {
+		http.ServeFile(w, r, path)
+		return
+	}
+	// Explicit ?offset=&length= for local files — manual partial stream.
+	f, err := os.Open(path)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if length <= 0 || offset+length > fi.Size() {
+		length = fi.Size() - offset
+	}
+	if offset > 0 {
+		f.Seek(offset, io.SeekStart)
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", length))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.WriteHeader(http.StatusOK)
+	io.CopyN(w, f, length)
+}
+
+// serveRemoteFile streams a file over SFTP from the session's SSH connection. It
+// resolves the Range header against the remote size, then hands the window to
+// StreamReadTo, which reads exactly the requested bytes instead of pulling the
+// whole file to the termcp host first.
+func serveRemoteFile(w http.ResponseWriter, r *http.Request, path string, sshClient *ssh.Client, offset, length int64, isRange bool) {
 	// Remote — SFTP streaming.
 	sftpCli, err := sftp.NewClient(sshClient)
 	if err != nil {

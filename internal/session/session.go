@@ -115,61 +115,9 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	usePty := cfg.Mode == api.ModePTY
 
-	var execSession *sshclient.ExecSession
-	var sshEndpointPublic string // "internal" | "remote" for MCP / JSON (no host or credentials)
-
-	if isRemote(cfg) {
-		r := cfg.Remote
-		port := r.Port
-		if port == 0 {
-			port = 22
-		}
-		if port < 1 || port > 65535 {
-			return nil, fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
-		}
-		sshEndpointPublic = "remote"
-
-		var err error
-		if r.Jump != nil {
-			client, closers, derr := buildChainClient(r)
-			if derr != nil {
-				return nil, derr
-			}
-			execSession, err = sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		} else {
-			dialAddr := remoteDialAddr(r)
-			clientCfg, cerr := remoteClientConfig(r)
-			if cerr != nil {
-				return nil, cerr
-			}
-			execSession, err = sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		}
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		if internal == nil {
-			return nil, errors.New("internal ssh server is not configured")
-		}
-		minted, err := internal.MintClientConfig()
-		if err != nil {
-			return nil, err
-		}
-		conn, err := internal.Dial()
-		if err != nil {
-			// The credential was never used: drop it instead of leaving a dead
-			// entry in the server's pending map for the process lifetime.
-			internal.RevokeClientConfig(minted.User)
-			return nil, err
-		}
-		sshEndpointPublic = "internal"
-		execSession, err = sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		if err != nil {
-			// A failed handshake consumes nothing, so the one-time credential is
-			// still pending; revoke it to keep the map bounded by live sessions.
-			internal.RevokeClientConfig(minted.User)
-			return nil, err
-		}
+	execSession, sshEndpointPublic, err := dialTransport(internal, cfg, usePty)
+	if err != nil {
+		return nil, err
 	}
 
 	buf := buffer.New(1024 * 1024)
@@ -245,6 +193,74 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	slog.Debug("session started", "session_id", sessionID, "shell_id", shellID, "command", cfg.Command, "ssh_endpoint", sshEndpointPublic)
 
 	return s, nil
+}
+
+// dialTransport establishes the transport a session runs on and reports which
+// kind it is ("internal" or "remote", the two values published to MCP and the
+// JSON API - never a host or a credential).
+//
+// It is the branch that decides between the process's own loopback sshd and a
+// real remote target, which are the two ways a session can exist; separating it
+// keeps the session constructor about assembling a Session rather than about
+// dialing. The internal branch revokes its one-time credential on every failure
+// path: the credential is minted before the dial, and leaving it pending would
+// grow the server's map by one dead entry per failed attempt for the life of the
+// process.
+func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
+	if !isRemote(cfg) {
+		if internal == nil {
+			return nil, "", errors.New("internal ssh server is not configured")
+		}
+		minted, err := internal.MintClientConfig()
+		if err != nil {
+			return nil, "", err
+		}
+		conn, err := internal.Dial()
+		if err != nil {
+			// The credential was never used: drop it instead of leaving a dead
+			// entry in the server's pending map for the process lifetime.
+			internal.RevokeClientConfig(minted.User)
+			return nil, "", err
+		}
+		es, err := sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		if err != nil {
+			// A failed handshake consumes nothing, so the one-time credential is
+			// still pending; revoke it to keep the map bounded by live sessions.
+			internal.RevokeClientConfig(minted.User)
+			return nil, "", err
+		}
+		return es, "internal", nil
+	}
+
+	r := cfg.Remote
+	port := r.Port
+	if port == 0 {
+		port = 22
+	}
+	if port < 1 || port > 65535 {
+		return nil, "", fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
+	}
+	if r.Jump != nil {
+		client, closers, err := buildChainClient(r)
+		if err != nil {
+			return nil, "", err
+		}
+		es, err := sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		if err != nil {
+			return nil, "", err
+		}
+		return es, "remote", nil
+	}
+	dialAddr := remoteDialAddr(r)
+	clientCfg, err := remoteClientConfig(r)
+	if err != nil {
+		return nil, "", err
+	}
+	es, err := sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+	if err != nil {
+		return nil, "", err
+	}
+	return es, "remote", nil
 }
 
 // PrimaryShellID returns the first shell created with this session.

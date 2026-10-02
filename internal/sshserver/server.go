@@ -247,69 +247,28 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// lock, so reading that struct here would race it. Window changes are applied
 	// by drainWindowChanges plus the library's own drain goroutine.
 	ps, hasPty := takePTY(sess)
-	var started bool
-	if hasPty {
-		setPtySysProcAttr(cmd)
-		cmd.Env = append(os.Environ(), "TERM="+ps.pty.Term)
-		// Serialized with the library's PTY teardown: see sessionPTY.
-		ps.mu.Lock()
-		startErr := ps.pty.Start(cmd)
-		ps.mu.Unlock()
-		if startErr != nil {
-			io.WriteString(sess, startErr.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		started = true
-	} else {
-		// Pipe mode (no TTY). Use StdinPipe so exec.Cmd does not spawn a stdin
-		// copy goroutine that cmd.Wait() would block on forever. We copy the SSH
-		// stream to the process stdin in our own goroutine, which unblocks only on
-		// client EOF — independent of cmd.Wait(). Without this, any non-interactive
-		// command (echo, ls, …) deadlocks: cmd.Wait() waits for the stdin copy to
-		// finish, which waits on sess.Read(), which never returns because the
-		// channel only closes after sess.Exit() below (which never runs).
-		in, err := cmd.StdinPipe()
-		if err != nil {
-			io.WriteString(sess, err.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		cmd.Stdout = sess
-		cmd.Stderr = sess.Stderr()
-		if err := cmd.Start(); err != nil {
-			_ = in.Close()
-			io.WriteString(sess, err.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		started = true
-		go func() {
-			_, _ = io.Copy(in, sess)
-			in.Close()
-		}()
+	if !startProcess(cmd, sess, ps, hasPty) {
+		return
 	}
 
 	// Forward signals from client to local process. Now that cmd.Start() has
 	// populated cmd.Process (and pty.Start calls it too), reading it here cannot
 	// race with the Start() write.
 	sigDone := make(chan struct{})
-	if started {
-		go func() {
-			for {
-				select {
-				case sig := <-sigCh:
-					if cmd.Process != nil {
-						if osSig := sshSignalToOSSig(sig); osSig != nil {
-							cmd.Process.Signal(osSig)
-						}
+	go func() {
+		for {
+			select {
+			case sig := <-sigCh:
+				if cmd.Process != nil {
+					if osSig := sshSignalToOSSig(sig); osSig != nil {
+						cmd.Process.Signal(osSig)
 					}
-				case <-sigDone:
-					return
 				}
+			case <-sigDone:
+				return
 			}
-		}()
-	}
+		}
+	}()
 
 	// Wait for the child, but never let a dead connection leave it running.
 	//
@@ -348,4 +307,55 @@ func (s *Server) handleSession(sess ssh.Session) {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	sess.Exit(exitCode)
+}
+
+// startProcess launches cmd on the session and reports whether it started. On
+// failure it has already written the reason to the client and ended the session
+// with exit code 1, so the caller's only job is to return.
+//
+// The two modes are genuinely different, which is why they live together here
+// rather than in the caller: with a PTY the process owns the terminal, and
+// without one the SSH stream has to be wired up by hand.
+func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) bool {
+	if hasPty {
+		setPtySysProcAttr(cmd)
+		cmd.Env = append(os.Environ(), "TERM="+ps.pty.Term)
+		// Serialized with the library's PTY teardown: see sessionPTY.
+		ps.mu.Lock()
+		startErr := ps.pty.Start(cmd)
+		ps.mu.Unlock()
+		if startErr != nil {
+			io.WriteString(sess, startErr.Error()+"\n")
+			sess.Exit(1)
+			return false
+		}
+		return true
+	}
+
+	// Pipe mode (no TTY). Use StdinPipe so exec.Cmd does not spawn a stdin copy
+	// goroutine that cmd.Wait() would block on forever. We copy the SSH stream to
+	// the process stdin in our own goroutine, which unblocks only on client EOF -
+	// independent of cmd.Wait(). Without this, any non-interactive command (echo,
+	// ls, ...) deadlocks: cmd.Wait() waits for the stdin copy to finish, which
+	// waits on sess.Read(), which never returns because the channel only closes
+	// after sess.Exit() below (which never runs).
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		io.WriteString(sess, err.Error()+"\n")
+		sess.Exit(1)
+		return false
+	}
+	cmd.Stdout = sess
+	cmd.Stderr = sess.Stderr()
+	if err := cmd.Start(); err != nil {
+		_ = in.Close()
+		io.WriteString(sess, err.Error()+"\n")
+		sess.Exit(1)
+		return false
+	}
+	go func() {
+		_, _ = io.Copy(in, sess)
+		in.Close()
+	}()
+	return true
 }

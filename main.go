@@ -277,7 +277,19 @@ func main() {
 		runDaemonFront(cfg, ensure, bridging, idleTimeoutArg, idleTimeout, target)
 		return
 	}
+	runServer(cfg, idleTimeoutArg, idleTimeout, isDaemonChild)
+}
 
+// runServer is the serving half of the command: it builds the runtime - auth,
+// logging, the internal sshd, the storage and managers, the MCP server and the
+// Web UI - wires the parts that have to know about each other, and then serves
+// until a signal or a daemon idle countdown asks it to stop.
+//
+// It is separate from main because the two halves have different failure models.
+// main only classifies the command line and prints to stderr; from here on the
+// flags are already accepted, so messages go through slog and a startup failure
+// exits the process - there is nothing sensible left to fall back to.
+func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Duration, isDaemonChild bool) {
 	var verifier *auth.Verifier
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
 		v, err := auth.NewVerifier(cfg.AuthToken, cfg.AuthHash)

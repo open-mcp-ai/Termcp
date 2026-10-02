@@ -227,10 +227,47 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 	if id == "" {
 		return toolError(CodeInvalidArgument, "%s", "shell_id is required"), nil
 	}
+	p, bad := parseReadParams(args)
+	if bad != nil {
+		return bad, nil
+	}
+
+	src, bad := s.resolveOutputSource(id)
+	if bad != nil {
+		return bad, nil
+	}
+	if p.readerID > 0 && src.live == nil {
+		return toolError(CodeInvalidArgument, "%s", "reader_id requires a live shell; closed sessions are read with offset/tail_lines"), nil
+	}
+
+	win, bad := readOutputWindow(ctx, src, p)
+	if bad != nil {
+		return bad, nil
+	}
+	return jsonResult(win.result(src)), nil
+}
+
+// readParams is a shell_output request after parsing: which bytes to return, how
+// to render them, and how long to wait for a live cursor.
+type readParams struct {
+	stripAnsi bool
+	timeout   float64
+	maxLines  int
+	maxBytes  int
+	readerID  int
+	offset    int64
+	tailLines int
+}
+
+// parseReadParams reads and range-checks the arguments of a shell_output call.
+// The ranges are part of the tool contract rather than defensive noise: timeout,
+// tail_lines and offset each have a documented domain, and a caller that sends
+// something outside it gets told why instead of silently getting a different read.
+func parseReadParams(args map[string]any) (readParams, *mcpgo.CallToolResult) {
 	stripAnsi := getBool(args, "strip_ansi", true)
 	timeout := getFloat64(args, "timeout", 3.0)
 	if timeout < 0 || timeout > 60 {
-		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("timeout must be between 0 and 60, got %v", timeout)), nil
+		return readParams{}, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("timeout must be between 0 and 60, got %v", timeout))
 	}
 	maxLines := int(getFloat64(args, "max_lines", 0))
 	maxBytes := int(getFloat64(args, "max_bytes", 8192))
@@ -238,83 +275,46 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 	offset := int64(getFloat64(args, "offset", -1))
 	tailLines := int(getFloat64(args, "tail_lines", 0))
 	if tailLines < 0 {
-		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("tail_lines must be >= 0, got %d", tailLines)), nil
+		return readParams{}, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("tail_lines must be >= 0, got %d", tailLines))
 	}
 	if offset < -1 {
-		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("offset must be >= -1, got %d", offset)), nil
+		return readParams{}, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("offset must be >= -1, got %d", offset))
 	}
+	return readParams{
+		stripAnsi: stripAnsi,
+		timeout:   timeout,
+		maxLines:  maxLines,
+		maxBytes:  maxBytes,
+		readerID:  readerID,
+		offset:    offset,
+		tailLines: tailLines,
+	}, nil
+}
 
-	src, bad := s.resolveOutputSource(id)
-	if bad != nil {
-		return bad, nil
-	}
-	if readerID > 0 && src.live == nil {
-		return toolError(CodeInvalidArgument, "%s", "reader_id requires a live shell; closed sessions are read with offset/tail_lines"), nil
-	}
-	clean := func(raw []byte) string {
-		if !stripAnsi {
-			return string(raw)
-		}
-		return ansi.Compact(ansi.Strip(string(raw)))
-	}
+// outputWindow is the slice of a shell's output that a read returned, plus where
+// that slice sits in the whole stream. Those offsets are what lets a caller page:
+// end_offset is where the next read starts, and has_more says whether anything
+// follows it.
+type outputWindow struct {
+	output  string
+	start   int64
+	end     int64
+	total   int64
+	hasMore bool
+}
 
-	var output string
-	var start, end, total int64
-	var hasMore bool
-
-	switch {
-	case tailLines > 0 || (src.live == nil && offset < 0):
-		raw, st, tot, err := src.scanTailWindow(tailLines, maxBytes)
-		if err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		output, start, end, total, hasMore = clean(raw), st, tot, tot, false
-	case offset >= 0:
-		tot, err := src.Len()
-		if err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		total = tot
-		max := maxBytes
-		if max <= 0 {
-			max = int(total - offset)
-			if max < 0 {
-				max = 0
-			}
-		}
-		raw, _, err := src.ByteRange(offset, max)
-		if err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		raw = truncateAtLines(raw, maxLines, offset+int64(len(raw)) >= total)
-		start, end = offset, offset+int64(len(raw))
-		hasMore = end < total
-		output = clean(raw)
-	default:
-		// Live streaming cursor path (unchanged semantics).
-		pre := src.live.ReaderCursor(readerID)
-		if pre < 0 {
-			return toolError(CodeReaderNotRegistered, "%s", fmt.Sprintf("reader_id %d is not registered on this shell", readerID)), nil
-		}
-		out, err := src.live.ReadTerminalStream(ctx, readerID, time.Duration(timeout*float64(time.Second)), stripAnsi, maxLines, maxBytes)
-		if err != nil {
-			return toolError(CodeOperationFailed, "%s", err.Error()), nil
-		}
-		output = out
-		end = src.live.ReaderCursor(readerID)
-		total = src.live.BufferLen()
-		start = pre
-		hasMore = end < total
-	}
-
+// result renders the window as the tool's JSON payload. The stream identity comes
+// from the source, so it is passed in rather than stored: a window is a fact about
+// one read, not about the shell it was read from.
+func (w outputWindow) result(src *outputSource) map[string]any {
 	result := map[string]any{
-		"output":         output,
-		"has_more":       hasMore,
-		"lines_returned": strings.Count(output, "\n"),
-		"bytes_returned": len(output),
-		"start_offset":   start,
-		"end_offset":     end,
-		"total_bytes":    total,
+		"output":         w.output,
+		"has_more":       w.hasMore,
+		"lines_returned": strings.Count(w.output, "\n"),
+		"bytes_returned": len(w.output),
+		"start_offset":   w.start,
+		"end_offset":     w.end,
+		"total_bytes":    w.total,
 		"source":         src.source(),
 		"session_id":     src.sessID,
 		"shell_id":       src.shellID,
@@ -323,7 +323,64 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 	if src.live != nil {
 		result["session_uptime_seconds"] = int(clock.Since(src.created).Seconds())
 	}
-	return jsonResult(result), nil
+	return result
+}
+
+// readOutputWindow produces the window a read asked for. The three forms share a
+// result shape but not a source, which is the point of shell_output being one tool:
+// a tail or a positional offset reads bytes, so it works on a live shell and on a
+// closed one alike, while a reader_id read is a live cursor that consumes the stream
+// and only exists while the shell does.
+func readOutputWindow(ctx context.Context, src *outputSource, p readParams) (outputWindow, *mcpgo.CallToolResult) {
+	clean := func(raw []byte) string {
+		if !p.stripAnsi {
+			return string(raw)
+		}
+		return ansi.Compact(ansi.Strip(string(raw)))
+	}
+
+	var w outputWindow
+	switch {
+	case p.tailLines > 0 || (src.live == nil && p.offset < 0):
+		raw, st, tot, err := src.scanTailWindow(p.tailLines, p.maxBytes)
+		if err != nil {
+			return outputWindow{}, toolError(CodeOperationFailed, "%s", err.Error())
+		}
+		w = outputWindow{output: clean(raw), start: st, end: tot, total: tot}
+	case p.offset >= 0:
+		total, err := src.Len()
+		if err != nil {
+			return outputWindow{}, toolError(CodeOperationFailed, "%s", err.Error())
+		}
+		max := p.maxBytes
+		if max <= 0 {
+			max = int(total - p.offset)
+			if max < 0 {
+				max = 0
+			}
+		}
+		raw, _, err := src.ByteRange(p.offset, max)
+		if err != nil {
+			return outputWindow{}, toolError(CodeOperationFailed, "%s", err.Error())
+		}
+		raw = truncateAtLines(raw, p.maxLines, p.offset+int64(len(raw)) >= total)
+		end := p.offset + int64(len(raw))
+		w = outputWindow{output: clean(raw), start: p.offset, end: end, total: total, hasMore: end < total}
+	default:
+		// Live streaming cursor path (unchanged semantics).
+		pre := src.live.ReaderCursor(p.readerID)
+		if pre < 0 {
+			return outputWindow{}, toolError(CodeReaderNotRegistered, "%s", fmt.Sprintf("reader_id %d is not registered on this shell", p.readerID))
+		}
+		out, err := src.live.ReadTerminalStream(ctx, p.readerID, time.Duration(p.timeout*float64(time.Second)), p.stripAnsi, p.maxLines, p.maxBytes)
+		if err != nil {
+			return outputWindow{}, toolError(CodeOperationFailed, "%s", err.Error())
+		}
+		end := src.live.ReaderCursor(p.readerID)
+		total := src.live.BufferLen()
+		w = outputWindow{output: out, start: pre, end: end, total: total, hasMore: end < total}
+	}
+	return w, nil
 }
 
 func (s *Server) handleResizePty(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
