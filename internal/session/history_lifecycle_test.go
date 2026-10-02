@@ -349,9 +349,11 @@ func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
 
 	var command string
 	var args []string
+	wantOutput := "hello"
 	if runtime.GOOS == "windows" {
 		command = "powershell.exe"
 		args = []string{"-NoProfile", "-Command", "$input | ForEach-Object { Write-Output ('GOT_' + $_) }"}
+		wantOutput = "GOT_hello"
 	} else {
 		command = "/bin/cat"
 	}
@@ -373,7 +375,7 @@ func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
 	// And it must actually reach the process, not merely be accepted.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if out, _ := s.ReadOutput(nil, 0, false, 0, 0); strings.Contains(out, "GOT_hello") {
+		if out, _ := s.ReadOutput(nil, 0, false, 0, 0); strings.Contains(out, wantOutput) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
