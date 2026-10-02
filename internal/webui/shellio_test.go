@@ -225,6 +225,28 @@ func TestApiPageShowsSkillDownload(t *testing.T) {
 	}
 }
 
+// TestApiPageShowsStdioConfig keeps the client-config page offering the stdio
+// bridge next to the two HTTP transports, with the address following the page.
+func TestApiPageShowsStdioConfig(t *testing.T) {
+	b, err := readAsset("api.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`id="cfg-stdio-cli"`,  // copy-ready claude mcp add command
+		`id="cfg-stdio-json"`, // copy-ready mcpServers JSON
+		`var stdioArgs = ['daemon', 'stdio'];`,
+		`'claude mcp add termcp -- termcp ' + stdioArgs.join(' ')`,
+		`location.hostname`, // the bridge address follows the browser origin
+		`location.port`,
+		`TERMCP_AUTH_TOKEN`, // credential travels via the environment
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("api.html misses %s", want)
+		}
+	}
+}
+
 // readAsset reads one embedded asset as text.
 func readAsset(p string) (string, error) {
 	b, err := fs.ReadFile(Assets(), p)

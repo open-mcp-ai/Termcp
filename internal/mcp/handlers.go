@@ -111,6 +111,56 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.Call
 	return sess, nil
 }
 
+// splitBatchIDs splits the comma-separated form of a session_id argument, which
+// the lifecycle commands (session_terminate / session_delete) accept. A value
+// with no comma is a single id and isBatch stays false, so the caller keeps the
+// single-session code path and its exact error shapes. Whitespace around
+// entries is trimmed; empty entries (stray commas) are dropped.
+func splitBatchIDs(v string) (ids []string, isBatch bool) {
+	if !strings.Contains(v, ",") {
+		return []string{v}, false
+	}
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			ids = append(ids, part)
+		}
+	}
+	return ids, true
+}
+
+// batchSessionResult runs op over every id in a batch, reporting one outcome per
+// entry: {"session_id":...,"ok":true} or {"session_id":...,"ok":false,
+// "code":...,"error":...}. Entries resolve independently, so one missing id (or
+// a locator that no longer resolves) never aborts the rest — the caller sees
+// exactly which entries succeeded. The result echoes the argument text; op
+// receives the resolved raw id (a locator entry resolves to its session).
+func (s *Server) batchSessionResult(ids []string, op func(id string) error) *mcpgo.CallToolResult {
+	results := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		sess, bad := s.requireSession(id)
+		if bad != nil {
+			results = append(results, map[string]any{
+				"session_id": id,
+				"ok":         false,
+				"code":       CodeSessionNotFound,
+				"error":      fmt.Sprintf("Session '%s' not found", id),
+			})
+			continue
+		}
+		if err := op(sess.ID); err != nil {
+			results = append(results, map[string]any{
+				"session_id": id,
+				"ok":         false,
+				"code":       CodeOperationFailed,
+				"error":      err.Error(),
+			})
+			continue
+		}
+		results = append(results, map[string]any{"session_id": id, "ok": true})
+	}
+	return jsonResult(map[string]any{"results": results})
+}
+
 // requireRunningSession resolves a session and rejects closed (DEAD) sessions:
 // a DEAD session is a read-only record — its output stays readable via
 // shell_output, and nothing new is created on it. The check is the session
@@ -591,6 +641,16 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("grace_period must be between 0 and 60, got %v", gracePeriod)), nil
 	}
 
+	// Comma-separated form: close every listed session independently so one bad
+	// entry does not stop the rest; the JSON result carries per-session outcomes.
+	if ids, isBatch := splitBatchIDs(sessionID); isBatch {
+		grace := time.Duration(gracePeriod * float64(time.Second))
+		return s.batchSessionResult(ids, func(id string) error {
+			s.sessMgr.Terminate(id, force, grace)
+			return nil
+		}), nil
+	}
+
 	_, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return bad, nil
@@ -605,6 +665,12 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 func (s *Server) handleDeleteSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
+
+	// Comma-separated form: erase every listed session independently so one bad
+	// entry does not stop the rest; the JSON result carries per-session outcomes.
+	if ids, isBatch := splitBatchIDs(sessionID); isBatch {
+		return s.batchSessionResult(ids, func(id string) error { return s.sessMgr.Delete(id) }), nil
+	}
 
 	_, bad := s.requireSession(sessionID)
 	if bad != nil {

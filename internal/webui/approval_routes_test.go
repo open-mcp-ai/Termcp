@@ -234,8 +234,11 @@ func TestRESTInputIsNotGatedUnderReview(t *testing.T) {
 	}
 
 	// It must actually run, not merely be accepted: "not gated" that silently
-	// drops the bytes is the same bug wearing a different mask.
-	deadline := time.Now().Add(5 * time.Second)
+	// drops the bytes is the same bug wearing a different mask. The budget is
+	// generous because bytes typed before the shell reaches its prompt sit
+	// unread until the line editor comes up — a cold PowerShell loading an
+	// oh-my-posh profile takes seconds before it echoes anything.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(readSessionOutput(e.sess), marker) {
 			return

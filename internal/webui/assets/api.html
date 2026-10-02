@@ -207,6 +207,12 @@
         <button type="button" class="copy-btn" data-copy="cfg-stream-cli">Copy</button>
         <pre id="cfg-stream-cli"></pre>
       </div>
+      <h4>stdio (local subprocess)</h4>
+      <div class="block">
+        <button type="button" class="copy-btn" data-copy="cfg-stdio-cli">Copy</button>
+        <pre id="cfg-stdio-cli"></pre>
+      </div>
+      <p class="muted">The client runs this command as its local MCP server: it ensures a background instance at this page's address — flags appear only when they are not the defaults — and relays MCP over stdin/stdout. Against an instance you already manage, a bare <code class="inline">termcp stdio</code> is enough.</p>
     </div>
 
     <div class="card">
@@ -222,6 +228,12 @@
         <button type="button" class="copy-btn" data-copy="cfg-stream-json">Copy</button>
         <pre id="cfg-stream-json"></pre>
       </div>
+      <h4>stdio (local subprocess)</h4>
+      <div class="block">
+        <button type="button" class="copy-btn" data-copy="cfg-stdio-json">Copy</button>
+        <pre id="cfg-stdio-json"></pre>
+      </div>
+      <p class="muted">stdio clients launch the bridge on their own machine. If the instance requires authentication, pass the credential through the environment — <code class="inline">"env": {"TERMCP_AUTH_TOKEN": "&lt;token&gt;"}</code>, or <code class="inline">TERMCP_AUTH_HASH</code> when only the hash is kept — not in argv or the URL.</p>
     </div>
 
     <div class="card">
@@ -268,7 +280,7 @@
           <tr><td>Connection</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/connections/{name}</code></td></tr>
           <tr><td>Test connection</td><td>POST</td><td><code class="inline">/api/connections/test</code> <span class="muted">(validates connectivity, does not save)</span></td></tr>
           <tr><td>Sessions</td><td>GET / POST</td><td><code class="inline">/api/sessions</code></td></tr>
-          <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE removes the session directory permanently)</span></td></tr>
+          <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE removes the session directory permanently; {id} may be a comma-separated list — a batch answers 200 with per-id results)</span></td></tr>
           <tr><td>Shells</td><td>GET / POST</td><td><code class="inline">/api/sessions/{id}/shells</code></td></tr>
           <tr><td>Shell</td><td>DELETE</td><td><code class="inline">/api/shells/{id}</code> <span class="muted">(shell_id)</span></td></tr>
           <tr><td>Shell input</td><td>POST</td><td><code class="inline">/api/shells/{id}/input</code> <span class="muted">({"text", "press_enter"})</span></td></tr>
@@ -340,6 +352,27 @@
         termcp: {
           type: 'http',
           url: stream
+        }
+      }
+    }, null, 2));
+
+    // stdio: the client launches a local bridge to this instance. Host and
+    // port follow the browser origin so the snippet stays right when the
+    // instance is not on the defaults; loopback spellings stay implicit.
+    var stdioArgs = ['daemon', 'stdio'];
+    var stdioHost = location.hostname.replace(/^\[|\]$/g, '');
+    if (stdioHost && stdioHost !== '127.0.0.1' && stdioHost !== 'localhost' && stdioHost !== '::1') {
+      stdioArgs.push('--host', stdioHost);
+    }
+    if (location.port && location.port !== '18765') {
+      stdioArgs.push('--port', location.port);
+    }
+    setText('cfg-stdio-cli', 'claude mcp add termcp -- termcp ' + stdioArgs.join(' '));
+    setText('cfg-stdio-json', JSON.stringify({
+      mcpServers: {
+        termcp: {
+          command: 'termcp',
+          args: stdioArgs
         }
       }
     }, null, 2));

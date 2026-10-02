@@ -162,6 +162,10 @@ func TestSubmitsLine(t *testing.T) {
 		// being built, and treating the interior newline as a submit would close
 		// the line early.
 		{"an interior newline is not a submit", []byte("one\ntwo"), false},
+		// xterm wraps a paste in bracketed-paste delimiters when the remote
+		// program enables that mode. The final byte is then '~', even if the
+		// pasted text itself ends in a newline.
+		{"bracketed paste hides a final newline from the last-byte rule", []byte("\x1b[200~one\ntwo\n\x1b[201~"), false},
 		// Control characters that abandon the line count as ending it, so the chip
 		// cannot get stuck on "typing" after an interrupt.
 		{"ctrl+c abandons the line", []byte{0x03}, true},

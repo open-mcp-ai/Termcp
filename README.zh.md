@@ -103,6 +103,7 @@ Agent 原生只能执行一次性命令，而真实工作大量是**多轮交互
 - **实例自描述。** 每个运行中的 Termcp 都对外提供自己的 `/api.md` 与 `/skills.md`（免 token），并注册为 MCP resources 与 `learn-api` prompt；新 Agent 单单靠这两个文件就能驱动这个实例的当前版本。
 - **密钥留在平台侧。** 经 `ssh_config` 写入的密码、私钥、口令仅保存在平台侧，MCP 的读取接口只返回配置名；SSH 配置写入工具默认关闭，需运维显式开启 `--mcp-manage-ssh-configs`。
 - **失败可恢复。** 关闭、崩溃或重启过的会话仍以只读 DEAD 条目留在会话列表里，输出依旧可读，Agent（或你）可以接着中断前的状态继续；重连同一个 `termcp://<entry>` 即可开启下一段会话。
+- **Agent 知道该把人指向哪里。** 客户端连进来的那个地址挂在 `notify_user` 的工具描述上，Agent 因此能报出确切的 Web UI 网址，而不是只说“打开 Web UI”让人自己去找。这是唯一保证送达的通道：客户端丢掉工具列表就根本调不了任何工具；而 `initialize` 的 instructions 在 MCP 里是可选的、很多客户端直接丢弃。地址取自请求本身——客户端连的那个主机名（或 `X-Forwarded-Host`），协议由 TLS 或 `X-Forwarded-Proto` 判定——所以局域网 IP、以及保留 `Host` 或设置转发头的反代都不会错；反代把 `Host` 改写成内网名时应改设 `X-Forwarded-Host`。`termcp stdio` 桥走回环，此时公布的地址也就是回环地址。
 - **人始终保留中断权。** `notify_user` 可直接通知到你；需要提权的提示由你在 Web UI 里输入；同一 shell 的写入串行化，人与 Agent 的输入按序生效。
 
 ## 快速导航
@@ -199,11 +200,25 @@ termcp [flags]
 | `--assets`      | `~/.termcp/assets` | 外部静态资源目录（Web UI 与文档）。目录中存在的文件覆盖内嵌副本，缺失的文件回退内嵌；目录不存在属正常情况，行为不变。默认值可用 `$TERMCP_ASSETS_DIR` 覆盖。 |
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
 | `--auth-token`  | *(未设置)*  | HTTP 认证静态 Token（或 `$TERMCP_AUTH_TOKEN`）。API、MCP、浏览器全部客户端都须携带。与 `--auth-hash` 互斥。 |
-| `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。与 `--auth-token` 互斥。 |
+| `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。哈希配置的实例同时接受哈希串本身作为凭据——只留了哈希也能驱动 `termcp daemon` 与 `termcp stdio`——因此哈希须按机密对待。与 `--auth-token` 互斥。 |
 | `--disable-auth` | `false` | **主动**关闭 HTTP 认证，非 loopback 绑定也放行（或 `$TERMCP_DISABLE_AUTH_TOKEN=1`）。建议同时把端口限定在 loopback，只让本机访问。与 `--auth-token`/`--auth-hash` 同时出现会直接报错，不会静默取其一。 |
 | `--mcp-defer-tools` | `false` | 给低频工具（`file_*`、`forward`、`shell_resize` 等）打上 `defer_loading` 标记，让客户端按需拉取 schema，缩小首次 `tools/list`。默认关闭：不认识该标记的客户端、或被网关丢弃标记的链路（如 Codex 经 AxonHub），会干脆看不到这些工具。详见[工具懒加载](#工具懒加载)。 |
+| `--idle-timeout` | `30s / 不限时` | 守护实例在无任何连接或请求后自行退出前的等待时长，如 `10m`；`0` 关闭。默认值：`termcp daemon stdio` 拉起的实例 30 秒，`termcp daemon start` 不限时。 |
 | `--gen-auth-hash` | *(action)* | 生成 token 的 salted SHA-256 哈希（供 `--auth-hash` 使用）后退出；token 取自参数，或不带参数时从终端 stdin 无回显读取。 |
-| `--version`     | *(action)*  | 打印版本、commit 与构建时间后退出。版本自动跟随 git tag：release 构建通过 `-ldflags` 注入；直接 `go build` 或 `go install module@vX.Y.Z` 时回退到 Go 工具链嵌入的模块版本。 |
+| `--version`     | *(action)*  | 打印版本、commit 与构建时间后退出。`make build` / release 构建通过 `-ldflags` 注入：HEAD 正好带 tag 时用该 tag，否则为 `dev-<commit>`，工作区有改动再缀 `-dirty`；直接 `go build` 或 `go install module@vX.Y.Z` 时回退到 Go 工具链嵌入的模块版本（即 release tag，或本地检出对应的伪版本）。`dev` 表示二进制里根本没有版本信息——`go run`、`-buildvcs=false`、解包后的源码包——不代表源码未打 tag。 |
+
+除 flag 外，`termcp` 还提供以下子命令：
+
+| 命令 | 作用 |
+|---|---|
+| `stdio` | 以 stdin/stdout 提供 MCP，把每条消息转发到 `--host`/`--port` 的 HTTP MCP 端点——一条独立命令，面向已在应答的实例（从不自己拉起实例）。可选端点值直接跟在 `stdio` 后：`sse`/`/sse` 走 SSE 传输，`stream`/`/stream` 走 streamable 传输（默认），完整的 `http(s)://` URL 指向任意 MCP HTTP 端点（路径以 `/sse` 结尾即 SSE 传输）。daemon 子命令的 `stdio` 动作则是组合形式：先确保实例在跑、再进桥。 |
+| `daemon` | 管理在 `--host`/`--port` 上应答的实例；不带动作时列出可用动作，完整参数与细节用 `termcp daemon --help`。 |
+| `daemon start` | 确保后台实例在跑：端点上有实例应答就复用（手动起的那个也算），没有就拉起一个分离的后台实例并等它就绪。实例会一直运行到被停止——不传 `--idle-timeout` 就没有空闲倒计时。 |
+| `daemon stdio` | 和 `start` 一样确保实例在跑，然后本进程留在前台当 stdio 桥（可选端点值直接跟在动作后，如 `termcp daemon stdio sse`）。它拉起的实例在桥不在时开始倒计时。 |
+| `daemon stop` | 请后台实例优雅停机；只有守护实例接受，手动起的实例会提示在原处停止。 |
+| `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。被动查询——它自己的请求被空闲倒计时豁免，所以“问一句”不会把被问的实例一直吊着。 |
+
+子命令写在最前、flag 再跟在后面；daemon 的动作紧跟子命令（如 `termcp daemon start --port 9000`），两个 stdio 形式的可选端点值也写在名字后（`termcp stdio sse`、`termcp daemon stdio sse`）。daemon 的每个动作都只通过 HTTP 端点找实例，不查进程表——实例在哪里监听就能在哪里找到。用法见[接入 AI 客户端](#接入-ai-客户端mcp)的方式 C。
 
 这些 flag 就是**能力门控**：`--no-internal` 把 Agent 收窄到只能连远程主机，`--mcp-manage-ssh-configs` 才放开 SSH 配置写入。按场景收紧或放开 Agent 能触达的面。认证详见下节[认证](#认证)。
 
@@ -370,9 +385,9 @@ docker compose up -d --build
 
 ## 接入 AI 客户端（MCP）
 
-Termcp 在**同一端口（18765）同时支持两种 MCP 传输**，按客户端能力二选一即可，工具面完全一致。
+Termcp 在**同一端口（18765）同时支持两种 MCP 传输**，并为只能拉起本地子进程的客户端提供 **stdio 桥**（`termcp stdio`，见下方方式 C）；三种方式工具面完全一致。
 
-Termcp 是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，因此只提供 **HTTP 传输**（Streamable HTTP / SSE），**不支持 stdio**（没有本地子进程模式）。
+Termcp 本身是常驻服务：同一端口同时服务 Web UI、任意数量的 MCP 客户端与会话持久化，没有本地 stdio *服务端*模式。对只认 stdio 的客户端，`termcp stdio` 是一条独立命令：进程的 stdin/stdout 承载 MCP JSON-RPC，每条消息转发到已在应答实例的 HTTP MCP 端点。`termcp daemon stdio` 则是组合命令——先确保分离的后台实例、再进桥；它拉起的实例空闲即自行退出，细节见下方方式 C。
 
 完全不想装 MCP 客户端？可以跳过本节，直接安装 [Agent Skill](#agent-skill纯-curl无需-mcp)：实例在 `/skills.md` 提供，装一次即可用 `curl` 驱动同一批会话。作为 AI 控制层，MCP 服务器只是它诸多能力面之一，可嵌入任意 MCP 宿主（Claude Code、Cursor、Codex、Open WebUI 或自研客户端）。
 
@@ -418,12 +433,45 @@ claude mcp add --transport http termcp http://localhost:18765/stream
 claude mcp add --transport sse termcp http://localhost:18765/sse
 ```
 
+### 方式 C —— stdio 桥（`termcp stdio`）
+
+Claude Desktop 这类客户端只会拉起本地子进程。让子进程跑 `termcp daemon stdio`：一条命令先把后台实例拉起来，再进桥——桥把 stdin/stdout 上的 MCP 消息转发到实例的 HTTP 端点。
+
+```json
+{
+  "mcpServers": {
+    "termcp": {
+      "command": "termcp",
+      "args": ["daemon", "stdio"]
+    }
+  }
+}
+```
+
+```bash
+claude mcp add termcp -- termcp daemon stdio
+```
+
+这个动作是两半：先像 `daemon start` 一样确保实例在跑（见上文子命令表），再留在前台进桥。也可以分开：后台实例由你先安排好——`termcp daemon start`、直接 `termcp`、或交给服务管理器——客户端只跑 `termcp stdio`，桥接到已在应答的实例。（动作写错位置会被指回正确拼写：`termcp daemon start stdio` 会提示 `termcp daemon stdio`。）
+
+桥接目标默认为 `http://<host>:<port>/stream`（streamable HTTP），由可选端点值改选：`termcp daemon stdio sse` 或 `termcp stdio sse`（`/sse` 同义）走 SSE 传输；完整的 `http(s)://` URL 指向任意 MCP HTTP 端点（路径以 `/sse` 结尾即 SSE）。只有落在 `--host`/`--port` 实例上的端点，才能这样和 `daemon stdio` 合成一条命令。
+
+启动后：
+
+- `daemon stdio`（与 `daemon start` 一样）先找 `--host`/`--port` 上应答的实例并复用——**包括你手动起的那个**（会提示它没有空闲倒计时、需在原处停止）——都没有才拉起一个分离的后台实例并等它就绪。
+- 后台实例就是**完整 Termcp**：浏览器打开它的 URL（默认 `http://127.0.0.1:18765`）即可看到 agent 正在驱动的同一批会话——Web UI、REST 与 HTTP MCP 都可用，与桥并存。
+- 桥在前台运行：stdin 按行读取，每条 MCP 消息转发到端点（默认 `/stream`；走 `/sse` 时先打开事件流、再 POST 到流里声明的消息地址），服务端回复（含通知）写回 stdout。状态信息全走 stderr，stdout 只承载 MCP 消息；管道批量输入后立即关闭（脚本场景，非交互客户端）也会先取回全部回复再退出。
+- **它拉起的实例在无连接、无请求满 30 秒后自行退出**（`--idle-timeout 10m` 调整、`--idle-timeout 0` 关闭；直接 `termcp daemon start` 起来的实例例外——不传 `--idle-timeout` 就一直没有倒计时，运行到被停止为止）。桥在线就算活跃：MCP 会话建立前，桥以轻量心跳把倒计时一次次推迟；会话建立后由它打开的长连接接管——桥连着，实例就不退出，桥退出后重新开始倒计时。心跳间隔按实例**自己上报**的倒计时算（`GET /api/daemon` 带这个值），所以用 `--idle-timeout 6s` 之类短倒计时起来的旧实例同样吊得住，而不只是跑 30 秒默认值的那个。
+- 日志在 `<data-dir>/termcp.log`（追加写，不轮转）。`termcp daemon status` 汇报 pid / URL / 版本 / 日志路径且不重置倒计时；`termcp daemon stop` 请守护实例优雅停机（`POST /api/daemon/stop`），手动起的实例需在原处停止。端点受认证保护时，管理命令要带上同一个 `--auth-token`。
+- 认证贯穿所有命令：管理命令与桥按配置出示凭据——明文 token（`--auth-token` / `$TERMCP_AUTH_TOKEN`），或只保留了哈希时用哈希串本身（`--auth-hash` / `$TERMCP_AUTH_HASH`，哈希配置的实例接受它）。两种凭据都等同机密；拉起实例的动作（`termcp daemon start`、`termcp daemon stdio`）会把同一凭据交给后台实例。
+
 ### 速查
 
 - Streamable HTTP → `http://<host>:18765/stream`
 - SSE → `http://<host>:18765/sse`（JSON-RPC 走 `POST /message`）
+- stdio（本地子进程）→ 还没实例时 `termcp daemon stdio`（顺带把实例拉起，桥退出后闲置即自行退出）；已有实例在应答时 `termcp stdio`；加 `sse`（`termcp daemon stdio sse`、`termcp stdio sse`）改走 SSE 传输（而非 `/stream`），或给完整 URL 指向任意 MCP HTTP 端点
 
-Web UI 的 **API / MCP / SKILLS** 页面（`/api.html`）提供两种传输的可复制配置，以及本实例的 Agent 文档与 skill 下载地址。
+Web UI 的 **API / MCP / SKILLS** 页面（`/api.html`）提供两种 HTTP 传输与 stdio 桥的可复制配置（地址随页面所在实例生成），以及本实例的 Agent 文档与 skill 下载地址。
 
 ## Agent Skill（纯 curl，无需 MCP）
 
@@ -468,7 +516,7 @@ curl -X POST http://127.0.0.1:18765/api/sessions -H "Authorization: Bearer $TERM
 
 ### 开启认证时的接入
 
-服务端以 `--auth-token` / `--auth-hash` 启动后，所有 MCP 请求都要带 `Authorization: Bearer` 请求头：
+服务端以 `--auth-token` / `--auth-hash` 启动后，所有 MCP 请求都要带 `Authorization: Bearer` 请求头（哈希配置的服务端，同一请求头里放哈希串本身同样有效）：
 
 ```bash
 claude mcp add --transport http termcp http://your-server:18765/stream --header "Authorization: Bearer $TERMCP_AUTH_TOKEN"

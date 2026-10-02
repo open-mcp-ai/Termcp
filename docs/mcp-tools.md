@@ -1,6 +1,6 @@
 # MCP 工具参考
 
-Termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 MCP 工具（同一监听端口）。
+Termcp 通过 **SSE**、**Streamable HTTP** 与 **stdio 桥**三种方式暴露同一套 MCP 工具（SSE 与 Streamable HTTP 共用同一监听端口，stdio 桥是本地子进程、转发到其中之一）。
 
 ## 对接方式（传输）
 
@@ -8,6 +8,7 @@ Termcp 通过 **SSE** 与 **Streamable HTTP** 两套对等传输暴露同一套 
 |------|------|------|------|
 | SSE | `GET /sse` | `POST /message` | 客户端只配置 `/sse`；SDK 自动用 `/message` 发 JSON-RPC |
 | Streamable HTTP | `/stream` | — | 单路径；不要拼 `/sse` 或 `/message` |
+| stdio（桥） | 本地子进程 | `termcp stdio` | 只认 stdio 的客户端。桥把 stdin/stdout 上的 MCP 消息转发到上表任一 HTTP 端点，`termcp daemon stdio` 则先拉起实例再进桥；详见 README 的方式 C |
 
 - SSE：`http://<host>:18765/sse`（Claude：`--transport sse` / `type: "sse"`）
 - Streamable HTTP：`http://<host>:18765/stream`（Claude：`--transport http` / `type: "http"`）
@@ -23,6 +24,11 @@ MCP resources, and a `learn-api` prompt:
   URIs are the instance's real HTTP addresses, so the same string works for `curl`.
   (Tool arguments/results are described by the `tools/list` schemas themselves, so no
   separate tool reference document is served.)
+
+  What the `notify_user` description advertises — which address, from what, and why not
+  on the instructions or a resource — is documented once, in `docs/api.md` §2
+  *Agent-facing documents (HTTP + MCP resources)*; this file does not repeat it. The
+  resource URIs and the `learn-api` prompt follow the same per-request origin.
 - Prompt: `learn-api` (optional argument `task`) — primes an agent with `/api.md`
   and `/skills.md` before it scripts against Termcp over REST.
 
@@ -268,9 +274,11 @@ ssh_config(action=list)
 
 终止并**关闭**会话：关闭全部 shell，并关闭 SSH 连接（级联清理 forwards / 通知规则）。会话**保留在注册表**中（状态 `exited` / DEAD），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。彻底删除用 `session_delete`。`force=true` 立即强杀；只关一个通道用 `shell_close`。
 
+`session_id` 可用**逗号分隔多个** id/定位符（批量）：逐条独立关闭，单条失败（如 not found）不中断其余，返回逐条 `results` 数组（`ok` / `code` / `error`）。
+
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `session_id` | string | **是** | — | |
+| `session_id` | string | **是** | — | id / `termcp://` 定位符 / 逗号分隔列表 |
 | `force` | boolean | 否 | `false` | true = 跳过 grace_period 直接强杀 |
 | `grace_period` | number | 否 | `5` | SIGTERM 后等待秒数（0–60） |
 
@@ -367,6 +375,8 @@ ssh_config(action=list)
 ```
 
 > 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。
+>
+> 要告诉人**去哪里看**，直接用本工具描述里带的实例地址（`This instance's Web UI: <origin>/`）。`delivered=0` 时它正是把 URL 说给用户的那条信息。
 
 ### message（会话输出区段索引）
 
@@ -388,9 +398,11 @@ ssh_config(action=list)
 
 **永久删除**一个会话：关闭仍存活的进程/传输，释放全部子资源（shell 通道、端口转发、通知规则、内存缓冲），从注册表移除（Web UI 上的 tile 随之消失），并删除磁盘上的会话目录（manifest + `log.bin` + `log.jsonl`）。**不可逆**。
 
+`session_id` 可用**逗号分隔多个** id/定位符（批量）：逐条独立删除，单条失败不中断其余，返回逐条 `results` 数组。
+
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `session_id` | string | **是** | session_id 或 `termcp://` 定位符 |
+| `session_id` | string | **是** | session_id / `termcp://` 定位符 / 逗号分隔列表 |
 
 > **close ≠ delete**：`session_terminate` 只**关闭**会话——断开连接、结束进程，但会话仍留在注册表中（状态 `exited`），Web UI 上显示为灰色只读 tile，终端输出仍可用 `shell_output` 读取，重启后也会恢复。只有 `session_delete` 才真正抹除。
 

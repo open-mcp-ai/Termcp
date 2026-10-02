@@ -291,7 +291,12 @@ func TestStart_PtyModeEmptyCommandUsesServerShell(t *testing.T) {
 	es.Stdin.Write([]byte(testShellInput("echo server_shell_ok")))
 	buf := make([]byte, 4096)
 	var out string
-	deadline := time.Now().Add(5 * time.Second)
+	// The server's login shell is this host's own — on a developer machine a
+	// PowerShell loading an oh-my-posh profile takes seconds before it reads
+	// stdin, and command bytes typed before that simply sit unread. The
+	// generous budget keeps the assertion about the server's shell choice, not
+	// about profile startup speed.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(out, "server_shell_ok") {
 		n, _ := es.Stdout.Read(buf)
 		out += string(buf[:n])

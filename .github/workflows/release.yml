@@ -21,7 +21,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          VERSION="${GITHUB_REF_NAME:?release tag is required}"
           COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           LDFLAGS="-s -w -X main.version=$VERSION"

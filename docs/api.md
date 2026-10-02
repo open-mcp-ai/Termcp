@@ -24,6 +24,7 @@ integration surface for AI agents. Pick one transport depending on client suppor
 |-----------|------|-------|
 | SSE | `GET /sse` + `POST /message` | Configure only `/sse`; JSON-RPC goes over `/message` |
 | Streamable HTTP | `/stream` | Single endpoint; used by Open WebUI and similar |
+| stdio (bridge) | local subprocess | Stdio-only clients: `termcp stdio` relays stdin/stdout to one of the two HTTP endpoints above; `termcp daemon stdio` brings the instance up first. See the README's *Option C* |
 
 MCP tool arguments, results, and error codes are described by the tool schemas from
 `tools/list` (and summarized in the repository's `docs/mcp-tools.md`). Browser users
@@ -50,7 +51,33 @@ session afterwards; adding/removing a skill is just writing/deleting that folder
 MCP clients get the same bytes as resources: `resources/list` exposes these two files
 and the `resources/read` URIs are exactly the `<origin>/…` HTTP addresses above (one
 URI, two access paths). The `learn-api` prompt primes an agent with these documents
-before it acts.
+before it acts. Like the tool listing, these addresses follow the **request**: a
+client that reached the instance through a LAN IP, a proxy name or a tunnel is handed
+that address, and `resources/read` accepts the URI it was just given (the registration
+is matched by path, so any origin works).
+
+The instance's own address is published to agents, so one can tell a human where to look
+(watch live output, type a secret, approve a reviewed command) instead of naming a page
+they would have to find themselves. It rides on the `notify_user` tool description in
+`tools/list` — the one channel guaranteed to reach the model, since a client that drops
+the tool listing cannot call any tool at all. It is deliberately **not** in the
+`initialize` instructions (optional in MCP, routinely discarded, and a per-request value
+baked into a fixed rule set would be a second source of truth) and not a resource
+(`termcp://…` is the [locator scheme](#5-resource-locators-termcp), so a
+`termcp://instance` would parse as an SSH entry named `instance`).
+
+The origin is the one the **request** arrived on — the host the client dialed (or
+`X-Forwarded-Host`, when a proxy rewrote `Host`), with the scheme taken from TLS or
+`X-Forwarded-Proto` — so the client that dialed a LAN IP, a proxy name, or a tunnel host
+is told exactly the address it reached, and a human on that same path can open it. It is
+resolved per request, so one instance can serve several addresses at once, and every
+published address follows it: the `notify_user` description, the `resources/list` URIs,
+the `resources/read` reply and the `learn-api` prompt all name the caller's own address.
+A proxy must
+keep `Host` (or set `X-Forwarded-Host`); one that rewrites it to an internal upstream
+name makes the published address unusable, since termcp has no self-origin override.
+The one fallback is a request that names no host at all (HTTP/1.0 without `Host`), which
+is handed the discovered bind address instead.
 
 Authentication does not apply to these two read-only documents: they carry no data
 and no secrets, and a fresh client (an agent before MCP setup, a script) has to be
@@ -99,6 +126,10 @@ Constraints:
   recordings, single-user workstations). Combining it with a token or hash is a
   startup error, and the env var only accepts `1`/`true`/`yes`/`on` — `=0` means
   "not set" rather than "open the server".
+- A **hash-configured** server also accepts the hash string itself as the
+  credential (`Authorization: Bearer sha256-<salt>-<digest>`), so tooling that
+  kept only the hash — `termcp daemon` management, `termcp stdio` — can
+  still authenticate. The hash then doubles as a secret.
 - Tokens are never logged and must not go into URLs (query strings) — use headers.
 - Public exception: the two documentation endpoints `/api.md` and `/skills.md`
   (GET/HEAD only, no data inside) are served **without** credentials, so agents
@@ -284,9 +315,26 @@ Irreversible.
 Response: 204 No Content
 ```
 
+**Batch**: `{id}` may be a comma-separated list (`DELETE /api/sessions/a,b,c`).
+Every entry is deleted independently — one failing entry (locked log file,
+already-gone session) does not stop the rest — and the batch answers 200 with
+per-id outcomes instead of 204:
+
+```
+Response 200:
+{ "results": [
+  { "id": "a", "ok": true },
+  { "id": "b", "ok": false, "code": "session_not_found", "error": "session 'b' not found" }
+] }
+```
+
+`code` is `session_not_found` or `operation_failed`, mirroring the MCP error
+codes. A single id keeps the original contract above.
+
 > Note: this differs from `POST /api/sessions/{id}/terminate` (close only — the
 > session stays in the registry as a read-only DEAD tile and its output remains
-> readable).
+> readable). `terminate` and `disconnect` also accept the comma-separated batch
+> form, with the same per-id results shape and no batch-level status code.
 
 ### `PATCH /api/sessions/{id}`
 
@@ -1180,8 +1228,10 @@ through the same `output` event path.
 ### `GET /api/version`
 
 Reports the version of the build being served — the same string `termcp -version`
-prints first (`v0.2.4`, or `dev` on an untagged build). The Web UI shows it beside
-the wordmark; scripts can gate on it without parsing `termcp -version` output.
+prints first: the exact tag (`v0.2.4`) on a tagged commit, `dev-<commit>` otherwise
+(a `make build` from a dirty tree appends `-dirty`; a bare `go build` falls back to
+the module pseudo-version). The Web UI shows it beside the wordmark; scripts can
+gate on it without parsing `termcp -version` output.
 
 ```
 GET /api/version
@@ -1189,6 +1239,64 @@ GET /api/version
 Response 200:
 { "version": "v0.2.4" }
 ```
+
+### `GET /api/daemon`
+
+Reports what instance this is: whether it runs as a daemon (a detached instance
+started by `termcp daemon start` or `termcp daemon stdio`, which may carry an
+idle countdown), plus its pid, version, start time, the effective idle countdown,
+and — for daemons — the log
+file it appends to. Every CLI
+management action is built on this probe and nothing else, so an instance is
+found by its endpoint no matter which data dir or platform started it.
+
+```
+GET /api/daemon
+
+Response 200:
+{
+  "daemon": true,
+  "pid": 4242,
+  "version": "v0.2.4",
+  "started_at": "2026-09-30T10:00:00Z",
+  "log": "/home/you/.termcp/termcp.log",
+  "idle_timeout_ms": 30000
+}
+```
+
+`daemon` is `false` on a manually started instance, and `log` is empty unless
+the instance is a daemon. `idle_timeout_ms` is the countdown actually in force
+(`0` = it never exits on its own); the `termcp stdio` bridge reads it so it can
+ping faster than the real countdown instead of assuming the default. The route
+sits behind the auth middleware like the rest of `/api/*`.
+
+The daemon probe is exempt from the idle countdown: a status query must never
+keep an instance alive. That exemption covers the whole probe, including the
+credential-free `/api.md` fingerprint it falls back to when the probe is
+rejected — every request a management command makes carries `X-Termcp-Probe`,
+and the instance counts that header as no activity. Without it, an
+unauthenticated `termcp daemon status` against a guarded instance would feed the
+very countdown it reports on.
+
+### `POST /api/daemon/stop`
+
+Asks a daemon instance to shut down gracefully — the same path a `SIGTERM`
+takes (sessions marked DEAD, log flushed). The acknowledgment is written before
+the shutdown begins.
+
+```
+POST /api/daemon/stop
+
+Response 200:
+{ "ok": true }
+
+Response 409 (a manually started instance — stop it where it was started):
+{ "error": "not a daemon instance" }
+```
+
+Only daemon instances accept the stop; a manually started instance is refused
+with `409` rather than being hunted down as a process. `termcp daemon stop`
+does exactly this over HTTP.
 
 ## 14. Backward-compatible routes
 
@@ -1209,4 +1317,5 @@ paths above.
 
 > Note: the legacy `terminate` / `disconnect` only **close** a session (it stays in
 > the registry as a DEAD, read-only entry). To erase it for good use
-> `DELETE /api/sessions/{id}`.
+> `DELETE /api/sessions/{id}`. All three routes accept a comma-separated id
+> list (batch) and then answer 200 with per-id results — see section 6.
