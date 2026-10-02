@@ -46,7 +46,7 @@ func (s *Store) AppendMark(sessionID, shellID string, mark api.LogMark) error {
 		return err
 	}
 	dir := s.shellDir(sessionID, shellID)
-	if err := s.initDir(dir); err != nil {
+	if err := s.initLogDir(sessionID, shellID); err != nil {
 		return err
 	}
 	line, err := json.Marshal(mark)

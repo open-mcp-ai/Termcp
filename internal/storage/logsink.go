@@ -131,8 +131,7 @@ func (sink *logSink) handle(handles map[string]*os.File, sessionID, shellID stri
 		return f, nil
 	}
 
-	dir := sink.store.shellDir(sessionID, shellID)
-	if err := sink.store.initDir(dir); err != nil {
+	if err := sink.store.initLogDir(sessionID, shellID); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(sink.store.LogPath(sessionID, shellID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)

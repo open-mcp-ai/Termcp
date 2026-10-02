@@ -719,3 +719,78 @@ func TestAppendLog_DeleteShellThenAppendReopens(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, "second")
 	}
 }
+
+// Closing a session is a delete, and a delete has to stay deleted. A writer that had
+// not yet noticed (the transcript loop can be draining when the delete lands) used to
+// have its next append recreate the session directory through MkdirAll - without the
+// manifest LoadSessions needs, so the directory was invisible to the loader and could
+// never be cleaned up. Refusing the append keeps the delete final and tells the writer
+// to stop, which is what it does on any append error.
+func TestDeleteSession_LateAppendDoesNotResurrectTheDirectory(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(st.sessionDir(sess)); !os.IsNotExist(err) {
+		t.Fatalf("session dir still present after delete: %v", err)
+	}
+
+	if _, err := st.AppendLog(sess, shell, []byte("late")); err == nil {
+		t.Error("late append succeeded; expected refusal")
+	}
+	if _, err := os.Stat(st.sessionDir(sess)); err == nil {
+		t.Error("ORPHAN: late append recreated the deleted session directory")
+	}
+}
+
+// The other half of the rule above, and the reason it cannot simply refuse whenever
+// the directory is missing: a session starts its output pipes in New, before Create
+// persists it, so the first bytes of a session's life arrive before its directory
+// exists. Those bytes must be written. Refusing them would drop real output to fix a
+// delete-path bug.
+func TestAppendLog_BeforeFirstPersistIsAllowed(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	off, err := st.AppendLog(sess, shell, []byte("first bytes"))
+	if err != nil {
+		t.Fatalf("first append to an unpersisted session must be accepted: %v", err)
+	}
+	if off != 0 {
+		t.Errorf("offset = %d, want 0", off)
+	}
+	if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: 1, Offset: 0}); err != nil {
+		t.Fatalf("mark on an unpersisted session must be accepted: %v", err)
+	}
+}
+
+// An id reused after a delete must be writable again.
+func TestDeleteSession_ReusedIDIsWritableAgain(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("late")); err == nil {
+		t.Error("append after delete should be refused")
+	}
+	// A new session claiming the same id.
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("fresh")); err != nil {
+		t.Fatalf("append after re-creating the session id must be accepted: %v", err)
+	}
+}

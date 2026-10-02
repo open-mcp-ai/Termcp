@@ -15,7 +15,11 @@ import (
 
 var (
 	ErrInvalidID = errors.New("storage: invalid ID")
-	validIDRe    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	// ErrSessionGone reports that a write was refused because the session it would
+	// belong to no longer exists on disk. It is not a transient failure: the caller
+	// is writing into a deleted session and should stop.
+	ErrSessionGone = errors.New("storage: session no longer exists")
+	validIDRe      = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
 func validateID(id string) error {
@@ -51,6 +55,12 @@ type Store struct {
 	// dropped with the shell's directory.
 	idxMu   sync.Mutex
 	markIdx map[string]*markIndex
+
+	// deleted remembers sessions whose directory was removed, so a late append is
+	// refused instead of recreating it. Guarded by mu, and cleared by SaveSession:
+	// a session id can legitimately be reused after a delete, and the new session's
+	// appends must be accepted.
+	deleted map[string]bool
 }
 
 // New creates a Store rooted at dataDir.
@@ -58,6 +68,7 @@ func New(dataDir string) *Store {
 	s := &Store{
 		dataDir: dataDir,
 		markIdx: make(map[string]*markIndex),
+		deleted: make(map[string]bool),
 	}
 	// One owner goroutine per Store, started here rather than on first append so
 	// that "who may write a log" has one answer from construction onward.
@@ -67,6 +78,34 @@ func New(dataDir string) *Store {
 
 func (s *Store) initDir(path string) error {
 	return os.MkdirAll(path, 0700)
+}
+
+// initLogDir creates a shell's log directory, but refuses once the session's
+// directory has been deleted.
+//
+// The distinction matters because a session directory is the session: it holds the
+// manifest that LoadSessions reads, so a directory with logs but no manifest is
+// invisible to the loader and can never be cleaned up. AppendLog used to create
+// whatever was missing, which meant an append arriving after DeleteSession
+// recreated the directory it had just removed - the session stayed deleted in
+// memory and on disk, but a shell directory with no manifest remained under
+// sessions/, orphaned for good.
+//
+// "Deleted" is not the same as "not there yet", and the difference is load-bearing.
+// A session starts its output pipes in New, before Create persists it, so the first
+// bytes of a session's life legitimately arrive before its directory exists; those
+// must be written. Only a session that has been through DeleteSession must not come
+// back, so the fact is remembered explicitly rather than inferred from the absence
+// of a directory. Deleting also drops the cached handle, so this state is consulted
+// on the append after a delete, not on every append.
+func (s *Store) initLogDir(sessionID, shellID string) error {
+	s.mu.RLock()
+	deleted := s.deleted[sessionID]
+	s.mu.RUnlock()
+	if deleted {
+		return fmt.Errorf("%w: session %q was deleted", ErrSessionGone, sessionID)
+	}
+	return os.MkdirAll(s.shellDir(sessionID, shellID), 0700)
 }
 
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
@@ -130,6 +169,9 @@ func (s *Store) SaveSession(sess api.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A session that exists on disk is not deleted, whatever happened before this.
+	delete(s.deleted, sess.ID)
+
 	dir := s.sessionDir(sess.ID)
 	if err := s.initDir(dir); err != nil {
 		return err
@@ -185,6 +227,12 @@ func (s *Store) DeleteSession(sessionID string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Record the deletion before removing the directory, so an append that arrives
+	// during the removal is refused rather than racing to recreate it.
+	if s.deleted == nil {
+		s.deleted = make(map[string]bool)
+	}
+	s.deleted[sessionID] = true
 	return os.RemoveAll(s.sessionDir(sessionID))
 }
 
