@@ -310,6 +310,30 @@ func notifyDescription(t *testing.T, s *Server, ctx context.Context) string {
 	return ""
 }
 
+// TestNotifyUserDescriptionRequiresProactiveHumanAlert keeps the behavioral rule in
+// the compact, model-facing description. The longer registration text is replaced
+// by compactToolDescriptions before tools/list is sent, so testing tools.go alone
+// would miss a regression that silently removes the instruction from the model.
+func TestNotifyUserDescriptionRequiresProactiveHumanAlert(t *testing.T) {
+	desc := notifyDescription(t, docsTestServer(t), originContext("http://127.0.0.1:18765"))
+	for _, want := range []string{
+		"CALL IT BEFORE ASKING THE HUMAN FOR ANYTHING",
+		"password/sudo/MFA/passphrase",
+		"confirmation, approval",
+		"duration_seconds=0",
+		"long task ends or fails",
+		"delivered=0",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("notify_user model-facing description misses %q:\n%s", want, desc)
+		}
+	}
+	if !strings.Contains(mcpServerInstructions, "before any password/sudo/passphrase/MFA") ||
+		!strings.Contains(mcpServerInstructions, "before any ask") {
+		t.Errorf("initialize instructions no longer require notify_user before human input:\n%s", mcpServerInstructions)
+	}
+}
+
 // The tool listing is the one channel guaranteed to reach the model: a client
 // that drops it cannot call any tool. So the instance address rides on the
 // description of the tool that exists to reach the human -- unlike the

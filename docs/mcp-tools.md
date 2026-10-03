@@ -366,12 +366,16 @@ ssh_config(action=list)
 
 **返回**：`{ ok, delivered, title, level, session_id? }` —— `delivered` 是实际收到通知的已打开页面数（WebSocket 标签页）；为 `0` 表示当前没有页面打开，通知未展示（附 `hint` 说明）。
 
-**什么时候用**：由 Agent 自行判断 —— 只要“人应该被提醒”就用，例如会话在等人（凭据、确认、MFA、交互式提问）、长任务结束、任务失败、需要人做决定。不限于固定场景清单。阻塞类提醒建议 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片）；同时要在回复里说同一件事，因为 `delivered=0` 说明没有页面打开、通知未展示。
+**什么时候用**：**凡是要向人要东西，先通知再问** —— 密码/sudo/passphrase/MFA、确认、批准、选项、任何交互式输入，以及长任务结束、任务失败、需要人做决定。这不是一份固定清单，而是一条硬性顺序：人可能没盯着这个对话，一句没预告的提问会一直卡在那里，直到他碰巧看到。阻塞类提醒用 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片），并在回复里说同一件事——`delivered=0` 说明没有页面打开、通知并未展示。
 
 **典型用法**：
 
 ```jsonc
+// 长任务结束
 { "message": "构建已完成，耗时 2m31s", "level": "success", "session_id": "<session_id>" }
+
+// 会话在等人输密码 / 做确认：先通知，再发问
+{ "message": "需要 sudo 密码才能继续安装依赖", "level": "warn", "duration_seconds": 0, "session_id": "<session_id>" }
 ```
 
 > 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。
