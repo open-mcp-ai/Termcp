@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### 修复
+
+- **`TestSession_InputWorksImmediatelyAfterCreate` 在 unix 上永远不可能通过**：断言找的是 `GOT_hello`，而只有 Windows 分支的 PowerShell 会打印这个串，unix 分支用的 `/bin/cat` 只会回显 `hello`——于是它等满 5 秒后以「输入没到达进程」失败，正是这个测试名字所否定的那件事，而输入其实早就到了。现在两端都用会**应答**（而非仅回显）的命令：`sh -c` 的读循环与 PowerShell 的 `ForEach-Object` 各打一条带 `GOT_` 前缀的行，断言在三种平台上同一句。
+
+
+
 ## v0.2.5 — 2026-10-01
 
 ### 新功能

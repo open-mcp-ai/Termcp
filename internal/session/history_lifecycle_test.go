@@ -347,6 +347,16 @@ func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	m := NewManager(message.NewManager(store), store, srv)
 
+	// The process must *answer* the input, not merely echo it back: the read
+	// below looks for a string the shell had to produce after receiving the
+	// line, so a transport that lost the write cannot look like a success. Both
+	// branches echo a line back under a marker of its own, which is what makes
+	// the assertion below the same one on every OS.
+	//
+	// `/bin/cat` was here and it could never pass: the assertion looks for
+	// "GOT_hello", which only the PowerShell branch prints, so on unix the test
+	// waited out its five seconds and then failed for the one reason the test is
+	// named after — input that had in fact arrived perfectly well.
 	var command string
 	var args []string
 	wantOutput := "hello"
@@ -355,7 +365,8 @@ func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
 		args = []string{"-NoProfile", "-Command", "$input | ForEach-Object { Write-Output ('GOT_' + $_) }"}
 		wantOutput = "GOT_hello"
 	} else {
-		command = "/bin/cat"
+		command = "/bin/sh"
+		args = []string{"-c", `while IFS= read -r line; do printf 'GOT_%s\n' "$line"; done`}
 	}
 	s, err := m.Create(testConfig(command, args, api.ModePipe, "immediate-input"))
 	if err != nil {
