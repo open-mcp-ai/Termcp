@@ -697,6 +697,24 @@ function fitShellTerminal(term, container, win, syncRemote) {
     if (lh > 0) lineHeight = lh;
   }
   var cols = Math.max(2, Math.floor(w / charWidth));
+  // The timeline rail occupies the terminal's right side, immediately before the
+  // scrollbar. It must not be an overlay: leave its width (plus the small gap that
+  // keeps the strip clear of the scrollbar gutter) out of the text grid before
+  // resizing xterm. The CSS uses the same variables for the visual strip, so the
+  // last text column ends before the rail while the viewport/scrollbar box itself
+  // stays at the original right edge.
+  //
+  // The values are read off the container, not a named ancestor: custom properties
+  // inherit, so wherever the rail is defined above the terminal the container sees
+  // it, and a theme that redefines the width is honoured without this code knowing
+  // the name of the box that declared it.
+  if (typeof getComputedStyle === 'function') {
+    var css = getComputedStyle(container);
+    var railW = parseFloat(css.getPropertyValue('--term-rail-w')) || 0;
+    var railGap = parseFloat(css.getPropertyValue('--term-rail-gap')) || 0;
+    var reserve = railW + railGap;
+    if (reserve > 0 && reserve < w) cols = Math.max(2, Math.floor((w - reserve) / charWidth));
+  }
   var rows = Math.max(2, Math.floor((h - 4) / lineHeight));
   /* Avoid term.resize when grid unchanged — xterm resets viewport scroll on resize; spurious RO/focus jitter was jumping scroll to top. */
   var changed = cols !== prevCols || rows !== prevRows;

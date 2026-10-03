@@ -842,11 +842,12 @@
   }
   .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #6e7681; }
   /* Floating "back to latest output" button (offset upward so it never covers the
-     bottom-right resize grip). It is a child of .shell-channel-body, whose box
-     ends at the footer, so clearing the grip needs its height plus a gap — not
-     the footer's too. */
+     bottom-right resize grip, and leftward so it clears the rail's reserved column
+     — the button belongs to the terminal's own box, and the rail occupies its right
+     edge). It is a child of .shell-channel-body, whose box ends at the footer, so
+     clearing the grip needs its height plus a gap — not the footer's too. */
   .shell-term-scroll-fab {
-    position: absolute; right: 14px; bottom: 36px; z-index: 15;
+    position: absolute; right: calc(var(--term-rail-gap, 10px) + var(--term-rail-w, 14px) + 8px); bottom: 36px; z-index: 15;
     width: 30px; height: 30px; padding: 0;
     border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
     background: rgba(46,58,76,.92); color: #d4d4d4;
@@ -1203,8 +1204,24 @@
   .shell-channel-add-caret.active { color: #fff; background: rgba(255,255,255,.12); }
   .shell-channel-add-menu { min-width: 180px; }
   .shell-channel-add-item { min-height: 32px; font-size: 0.78rem; }
-  /* Channel body fills most of the terminal area */
+  /* Channel body fills most of the terminal area.
+
+     Two variables describe the rail's column, both consumed by the stylesheet
+     below and by fitShellTerminal (ui-socket.js): `--term-rail-w` is how wide the
+     strip is and `--term-rail-gap` how far it sits from the body's right edge.
+     They live here rather than on the strip because the *terminal* has to know
+     them: the rail occupies the terminal's right side without covering it, and the
+     only way to do that is for the fitted column count to leave the room.
+
+     The reservation is unconditional. A column that appeared and vanished with the
+     marks would reflow the PTY (and every row of the derived layout) every time a
+     full-screen program opened or a shell had nothing to colour. */
   .shell-channel-body {
+    --term-rail-w: 14px;
+    /* The scrollbar's width: the strip sits immediately left of it, so the
+       scrollbar stays exactly where it was — at the far right, where a reader
+       expects to grab it — and the strip is between it and the text. */
+    --term-rail-gap: 10px;
     flex: 1;
     min-height: 0;
     position: relative;
@@ -1212,6 +1229,9 @@
     display: flex;
     flex-direction: column;
   }
+  /* The terminal keeps its whole box, scrollbar included. Only the number of
+     columns changes (fitShellTerminal reserves the strip's column), which is what
+     leaves the text clear of the strip without moving anything else. */
   .shell-channel-instance {
     position: absolute;
     inset: 0;
@@ -1484,22 +1504,26 @@
 }
 
 /* --- terminal timeline rail (timeline.js) --------------------------------
-   A status index drawn over the right edge of the terminal: one cell per
-   terminal row, coloured by what that row holds. It is absolutely positioned
-   inside .shell-channel-body, so it never takes layout width from the terminal —
-   the PTY keeps every column it had and reflows for nothing.
+   A status index along the right side of the terminal: one cell per terminal row,
+   coloured by what that row holds. The order left to right is text, rail,
+   scrollbar — the strip takes the room out of the terminal's own width rather than
+   sitting on top of it, and the scrollbar stays exactly where it was, at the far
+   right where a reader reaches for it.
+
+   Two halves make that work, and both are needed:
+
+     - `right: var(--term-rail-gap)` places the strip just left of the scrollbar's
+       gutter, and `width: var(--term-rail-w)` gives it the reserved column.
+     - `fitShellTerminal` (ui-socket.js) subtracts the same width when it computes
+       the column count, so the text stops before the strip instead of running under
+       it. The strip is inside the terminal's box; what keeps it off the text is that
+       the terminal was fitted to fewer columns.
 
    The strip is aligned to the text lines by measurement, not by its own box: the
    module reads `.xterm-screen` and sets top/height in pixels, because the channel
    body and the terminal's screen box are not the same box. When nothing has been
    measured yet (a hidden window) it falls back to the rule below, and the cells —
    percentages of the strip — still tile correctly in whatever box it gets.
-
-   right: 16px clears the 14px scrollbar gutter `.xterm-screen` is inset by (see
-   the rule above): the rail is an interactive strip, and sitting in the gutter
-   would take the gutter's pointer events with it, so the scrollbar could no
-   longer be dragged. It floats over the last few pixels of the text area
-   instead, which is the cheaper thing to cover.
 
    `hidden` is the only visibility switch: the module hides the rail when a shell
    has no marks or no row/byte anchors, and the UA rule for [hidden] is enough
@@ -1508,9 +1532,9 @@
 .term-rail {
   position: absolute;
   top: 0;
-  right: 16px;
+  right: var(--term-rail-gap, 10px);
   bottom: 0;
-  width: 12px;
+  width: var(--term-rail-w, 14px);
   z-index: 5;
 }
 .term-rail[hidden] { display: none; }
@@ -1526,7 +1550,7 @@
    and a rounded, inset cell turns a five-row run into five beads that a reader
    counts instead of reading. What separates one status from the next is its hue,
    not a gap. The width inset (left/right) stays: the strip is wider than the band
-   so a finger has a target, and the band keeps clear of the terminal's text.
+   so a finger has a target, and the band keeps clear of the terminal's edge.
 
    A cause frame (see below) is the one border a cell may carry, and it is drawn
    on the left and right edges only, so it outlines a stretch of output without
@@ -1598,10 +1622,13 @@
 
 /* The label. A node inside the rail, not a native title: a tooltip is not
    reachable on touch, and the time of a row is exactly what a phone user taps
-   to see. right: 14px clears the strip; translateY centres it on the cell. */
+   to see. It opens to the *left* of the strip — over the terminal, which is the
+   only room there is beside a right-hand column — and `right: 100%` keeps it
+   clear of the cells themselves. translateY centres it on the cell. */
 .term-rail-pop {
   position: absolute;
-  right: 14px;
+  right: 100%;
+  margin-right: 4px;
   top: 0;
   transform: translateY(-50%);
   padding: 3px 7px;
@@ -1617,13 +1644,14 @@
 }
 .term-rail-pop[hidden] { display: none; }
 
-/* A finger needs a wider target than a mouse. The strip grows, the cells stay as
-   thin as they look: the terminal still loses no columns because the whole rail
-   is an overlay. */
+/* A finger needs a wider target than a mouse. The reserved column grows with the
+   strip, and fitShellTerminal reads the same variable, so the terminal gives up the
+   extra columns rather than the strip covering them: a target drawn over the text is
+   one the reader has to aim through. */
 @media (pointer: coarse) and (hover: none) {
-  .term-rail { width: 20px; }
+  .shell-channel-body { --term-rail-w: 22px; }
   .term-rail-cell { left: 4px; right: 4px; }
-  .term-rail-pop { right: 22px; font-size: 0.72rem; padding: 5px 9px; }
+  .term-rail-pop { font-size: 0.72rem; padding: 5px 9px; }
 }
 
 /* The detail card: what a tap or click opens. Bigger than the hover label and
@@ -1632,7 +1660,8 @@
    cells (not a child) so a rebuilding repaint never tears it down mid-read. */
 .term-rail-card {
   position: absolute;
-  right: 16px;
+  right: 100%;
+  margin-right: 4px;
   z-index: 6;
   min-width: 190px;
   padding: 7px 9px;

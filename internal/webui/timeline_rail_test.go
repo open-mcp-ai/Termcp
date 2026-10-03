@@ -228,6 +228,59 @@ console.log('ok');
 	}
 }
 
+// TestRailReservesAColumnBeforeTheScrollbar pins the non-overlap contract. The
+// terminal keeps its full viewport box, and therefore its scrollbar at the far
+// right; fitShellTerminal gives the text grid fewer columns, while the rail is
+// placed in the newly free column immediately before that scrollbar.
+//
+// The two halves have to agree. A rail placed beside a grid that still uses the
+// full width paints over the last columns, and a grid narrowed without a rail
+// leaves a gutter of dead space — so both the CSS variables and the fit arithmetic
+// are pinned here.
+func TestRailReservesAColumnBeforeTheScrollbar(t *testing.T) {
+	css := readAssetLF(t, "static/css/app.css")
+	// The two variables are read as a set and from the rule that owns them: a bare
+	// substring search would also match the coarse-pointer override, so a desktop
+	// width change could pass while the media query silently stopped being the
+	// override. Each variable is asserted in the declaration block it belongs to.
+	body := between(t, css, "\n  .shell-channel-body {", "\n  }")
+	for _, want := range []string{"--term-rail-w: 14px", "--term-rail-gap: 10px"} {
+		if !strings.Contains(body, want) {
+			t.Errorf(".shell-channel-body misses %q; the rail column would not be reserved beside the scrollbar: %s", want, body)
+		}
+	}
+	coarse := between(t, css, "@media (pointer: coarse) and (hover: none) {\n  .shell-channel-body", "\n}")
+	if !strings.Contains(coarse, "--term-rail-w: 22px") {
+		t.Errorf("the coarse-pointer override no longer widens the reserved column; the strip would be a target over the text: %s", coarse)
+	}
+	// The strip itself sits in that column, immediately left of the scrollbar's
+	// gutter — not at `right: 16px`, which was the overlay that covered the text.
+	rail := between(t, css, "\n.term-rail {", "\n}")
+	for _, want := range []string{"right: var(--term-rail-gap, 10px)", "width: var(--term-rail-w, 14px)"} {
+		if !strings.Contains(rail, want) {
+			t.Errorf(".term-rail misses %q; the strip would not sit in the reserved column: %s", want, rail)
+		}
+	}
+	// The terminal instance must keep the body's full box. Insetting it before the
+	// rail is the tempting mistake: it drags the scrollbar left with it, so the
+	// scrollbar no longer sits at the far right where a reader reaches for it.
+	inst := between(t, css, "\n  .shell-channel-instance {", "\n  }")
+	if !strings.Contains(inst, "inset: 0;") {
+		t.Errorf("the terminal instance no longer fills the channel body; the scrollbar would move: %s", inst)
+	}
+
+	js := readAssetLF(t, "static/js/ui-socket.js")
+	for _, want := range []string{
+		"getPropertyValue('--term-rail-w')",
+		"getPropertyValue('--term-rail-gap')",
+		"Math.floor((w - reserve) / charWidth)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("ui-socket.js misses %q; xterm would still paint text beneath the rail", want)
+		}
+	}
+}
+
 // TestRailFetchGapFollowsWindowedCost pins the gap between two marks fetches at a
 // value the request can afford.
 //
