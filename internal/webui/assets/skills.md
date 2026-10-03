@@ -56,6 +56,13 @@ shell argument:
 | `termcp://#<session>` | a session | `session_id` |
 | `termcp://#<session>:<N>` | shell channel N of that session (1 = first tab) | `session_id` + `shell_id` |
 
+`<N>` is the channel's number inside the session: assigned by the server when
+the channel is created, and never renumbered or reused. Closing an earlier
+channel therefore does not move the others, so a locator a user copied keeps
+naming the same channel; a locator for a closed channel is a `404`, never a
+different shell. The `index` field in `/api/sessions/{id}/shells` and in the
+`shell_open` response is that same number — use it rather than counting shells.
+
 Resolve any of them in one call — never parse or guess by hand:
 
 ```bash
@@ -69,13 +76,15 @@ Then act on the ids (see sections 4–6 for the full recipes):
 
 - `"kind":"entry"` — "open termcp://rock64" means **connect to that profile**:
   `POST /api/sessions -d '{"ssh_config":"rock64"}'` → returns `session_id` +
-  `shell_id`. Then drive them like any other session. 404 = no such profile
+  `shell_id` + `index` (the primary channel is always `index: 1`). Then drive
+  them like any other session. 404 = no such profile
   (`GET /api/connections` lists them; one must be created first in the Web UI).
 - `"kind":"session"` — an existing session: use `session_id` for output/files/
   forwards. `"status":"exited"` means read-only (closed): use
   `output-range`, not input.
 - `"kind":"shell"` — use `shell_id` for input/key/output-range/resize; the
-  `index` matches the `shell-1`/`shell-2` tabs.
+  `index` matches the `shell-1`/`shell-2` tabs and is the N the locator carried
+  (stable across later channel closes).
 
 Errors: `400` malformed locator, `404` unknown profile/session/out-of-range shell
 index, `409` shell locator on a closed (read-only) session.
@@ -106,7 +115,8 @@ OUT=$(curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
   -d '{"ssh_config":"internal","name":"investigate"}' "$BASE/api/sessions")
 SID=$(jq -r .session_id <<<"$OUT"); SHELL_ID=$(jq -r .shell_id <<<"$OUT")
 
-# Open another shell channel on an existing session
+# Open another shell channel on an existing session; the response's index is that
+# channel's locator number for termcp://#<session>:<index> (never renumbered)
 curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
   -d '{"name":"shell-2"}' "$BASE/api/sessions/$SID/shells" | jq .
 

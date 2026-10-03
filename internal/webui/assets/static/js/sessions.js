@@ -465,7 +465,7 @@ function syncWindowTabs(win, shells) {
     // prune on refresh (all snapshot shells report exited) and never send input.
     (shells || []).forEach(function(s) {
       var sid = s.shell_id || s.id;
-      if (!existing[sid]) createChannelTab(win, sid);
+      if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0 });
     });
     return;
   }
@@ -477,14 +477,14 @@ function syncWindowTabs(win, shells) {
   // sweep away.
   exited.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid]) createChannelTab(win, sid, null, true);
+    if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
   });
   // Primary shell tab is created on explicit open (session create / restore).
   // Sync only adds additional shells so closing a tab does not recreate it on
   // the next refresh.
   running.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid);
+    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid, { index: s.index || 0 });
   });
   // Prune tabs for shells the server no longer lists at all — closed elsewhere
   // (MCP shell_close, another window). A shell that merely exited stays listed

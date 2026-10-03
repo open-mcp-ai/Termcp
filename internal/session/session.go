@@ -77,6 +77,7 @@ type Session struct {
 	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
 	defaultShell   string // profile default_shell, applied to shells opened later
 	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
+	nextShellIndex int    // guarded by shellStateMu; monotonically assigns channel indexes
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
@@ -103,11 +104,21 @@ type Session struct {
 	watchWG sync.WaitGroup
 }
 
+// newResourceID mints one resource id. Session and shell ids are the same kind
+// of value — a short opaque token that names an object in a URL and on disk — so
+// they come from one place rather than two copies of the same expression. The
+// 12-hex-character form keeps ids short enough to read out of a URL while
+// staying collision-free in practice; storage.validateID accepts it (lowercase
+// hex is within [a-zA-Z0-9_-]).
+func newResourceID() string {
+	return uuid.New().String()[:12]
+}
+
 // New creates and starts a new Session.
 // internal must be the built-in sshserver.Server (after Start) when cfg.Remote is nil; it may be nil for remote-only callers.
 func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Session, error) {
-	sessionID := uuid.New().String()[:12]
-	shellID := uuid.New().String()[:12]
+	sessionID := newResourceID()
+	shellID := newResourceID()
 	name := cfg.Name
 	if name == "" {
 		name = fmt.Sprintf("session-%s", sessionID)
@@ -137,6 +148,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	// First shell is a peer in shells map; its id is never equal to session id.
 	root := &ChildShell{
 		ID:          shellID,
+		Index:       1,
 		Name:        name,
 		execSession: execSession,
 		buf:         buf,
@@ -169,6 +181,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		readerID:       rid,
 		msgMgr:         msgMgr,
 		primaryShellID: shellID,
+		nextShellIndex: 1,
 		scope:          newResourceScope(),
 	}
 

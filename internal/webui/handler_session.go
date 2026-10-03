@@ -101,10 +101,14 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// No pid here either - see the MCP session_start handler for why (the process
 	// is remote and SSH does not report its number).
+	//
+	// index is the primary channel's number, from the session rather than a literal,
+	// so it cannot drift from what the locator resolver honours.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),
 		"ssh_config": cfgName,
+		"index":      sess.PrimaryShellIndex(),
 	})
 }
 

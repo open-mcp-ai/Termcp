@@ -43,19 +43,40 @@ func filterRunning(in []api.Session) []api.Session {
 	return out
 }
 
+// requireSession resolves a session_id argument into the session it names. It is
+// the one place a session is looked up for a tool argument, so every tool accepts
+// the same spellings and acts on the same canonical object.
+//
+// Accepted: a raw session id, a termcp:// session locator, a termcp:// shell
+// locator (its session part), or a raw shell id (both the root and child shells
+// are stored with their parent, so a shell id names its container).
+//
+// Callers must use the RETURNED session's ID. Echoing the argument back would
+// leak a locator into fields that are later used as ids — a forward stores its
+// SessionID for the DEAD cascade, and a locator there never matches the real id.
 func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
-	sess := s.sessMgr.Get(sessionID)
-	if sess == nil {
-		if p, err := parseResourceURL(sessionID); err == nil {
-			if p.Kind == resourceURLSession || p.Kind == resourceURLShell {
-				sess = s.sessMgr.Get(p.SessionID)
+	if sess := s.sessMgr.Get(sessionID); sess != nil {
+		return sess, nil
+	}
+	if sess := s.sessMgr.GetByShellID(sessionID); sess != nil {
+		return sess, nil
+	}
+	if looksLikeResourceLocator(sessionID) {
+		p, err := parseResourceURL(sessionID)
+		if err != nil {
+			return nil, toolError(CodeInvalidArgument, "%s", err.Error())
+		}
+		switch p.Kind {
+		case resourceURLEntry:
+			return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session", sessionID))
+		case resourceURLSession, resourceURLShell:
+			if sess := s.sessMgr.Get(p.SessionID); sess != nil {
+				return sess, nil
 			}
+			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", p.SessionID))
 		}
 	}
-	if sess == nil {
-		return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID))
-	}
-	return sess, nil
+	return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", sessionID))
 }
 
 // splitBatchIDs splits the comma-separated form of a session_id argument, which
@@ -159,8 +180,22 @@ func (s *Server) sftpClient(sessionID string) (*sftp.Client, *mcpgo.CallToolResu
 // session id (→ primary shell), or a raw shell id. Closed (DEAD) sessions are
 // rejected: their process is gone, so the only remaining operation is reading
 // output via shell_output.
+//
+// A raw shell id reaches the shell object even after its session went DEAD,
+// because the retained shell is still in the live map (it is kept so its tail
+// output stays readable). The status check is therefore repeated here for that
+// path: without it a write would travel all the way to the (already closed)
+// transport and come back as a generic operation failure, which reads like a
+// transient error instead of "this session is closed". Reading is not affected —
+// shell_output resolves through resolveOutputSource, which is allowed to serve a
+// DEAD session from its persisted log.
 func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallToolResult) {
 	if cs := s.sessMgr.GetChildShell(shellID); cs != nil {
+		if sess := s.sessMgr.Get(cs.ParentSessionID()); sess != nil {
+			if status := sess.Info().Status; status != api.SessionRunning {
+				return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is read-only via shell_output", sess.ID, status))
+			}
+		}
 		return cs, nil
 	}
 	if sess := s.sessMgr.Get(shellID); sess != nil {

@@ -62,10 +62,15 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 	// No pid: the process runs on the remote, and SSH does not report its number
 	// back to us, so any value here could only be a constant. Clients that need a
 	// pid can take it from the shell itself (e.g. `echo $$`).
+	//
+	// index is the primary channel's number, read from the session rather than
+	// hardcoded: it must be the number the locator resolver will honour, because
+	// the browser labels and copies the first tab from this value.
 	result := map[string]any{
 		"session_id": sess.ID,
 		"shell_id":   sess.PrimaryShellID(),
 		"ssh_config": cfgName,
+		"index":      sess.PrimaryShellIndex(),
 	}
 	return jsonResult(result), nil
 }
@@ -171,7 +176,10 @@ func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRe
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
-	return jsonResult(map[string]any{"shell_id": cs.ID, "session_id": parentID, "name": cs.Name}), nil
+	// Echo sess.ID, not the argument: the response's ids must be usable as ids, and
+	// a locator echoed into session_id would be pasted back verbatim by a caller
+	// that trusts the response.
+	return jsonResult(map[string]any{"shell_id": cs.ID, "session_id": sess.ID, "name": cs.Name, "index": cs.Index}), nil
 }
 
 func (s *Server) handleListSubshells(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -183,29 +191,36 @@ func (s *Server) handleListSubshells(_ context.Context, request mcpgo.CallToolRe
 		return bad, nil
 	}
 	all := sess.ListChildShells()
-	return jsonResult(map[string]any{"session_id": parentID, "shells": filterRunning(all)}), nil
+	return jsonResult(map[string]any{"session_id": sess.ID, "shells": filterRunning(all)}), nil
 }
 
 // handleCloseShell closes a single shell channel without tearing down the parent session.
 // For a parent session id: closes the root shell channel only (remote) / no-op (internal);
 // the SSH connection and other child shells keep running. For a child shell id: closes
 // just that channel. Use session_terminate to fully stop a session.
+//
+// shell_id accepts everything requireShell accepts (raw id, session id, or a
+// termcp:// locator); the close acts on the resolved shell, not the argument.
 func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	if shellID == "" {
 		return toolError(CodeInvalidArgument, "%s", "shell_id is required"), nil
 	}
+	shell, bad := s.requireShell(shellID)
+	if bad != nil {
+		return bad, nil
+	}
 	// Internal primary shell: tab close is a no-op (process outlives the tab).
-	if sess := s.sessMgr.GetByShellID(shellID); sess != nil && sess.PrimaryShellID() == shellID && sess.SSHEndpoint == "internal" {
+	if sess := s.sessMgr.GetByShellID(shell.ID); sess != nil && sess.IsInternalPrimaryShell(shell.ID) {
 		return successResult(), nil
 	}
-	found, err := s.sessMgr.CloseChildShell(shellID)
+	found, err := s.sessMgr.CloseChildShell(shell.ID)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if !found {
-		return toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID)), nil
+		return toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shell.ID)), nil
 	}
 	return successResult(), nil
 }
@@ -410,13 +425,38 @@ func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolR
 	sessionID := getString(args, "session_id", "")
 	shellID := getString(args, "shell_id", "")
 
-	marks, err := s.sessMgr.Marks(sessionID, shellID)
+	// Resolve both ids before reading logs. The manager looks a shell up by id, so
+	// a locator would silently address nothing and return an empty transcript.
+	// shell_id may name the session instead (the primary shell), and an empty
+	// shell_id means the same thing.
+	sess, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return bad, nil
+	}
+	if shellID == "" {
+		shellID = sess.PrimaryShellID()
+	} else {
+		// A READ must tolerate a DEAD session: the marks live in log.bin, which
+		// outlives the transport. requireShell refuses a closed session (writes must
+		// not reach a dead transport), so resolving through it here would make
+		// message(shell_id=...) fail on exactly the sessions its output is still
+		// readable from — while message(session_id=...) succeeded. Resolve the
+		// spelling, then accept the shell if the session still knows it, live or
+		// retained.
+		resolved, bad := s.resolveShellIDForRead(sess, shellID)
+		if bad != nil {
+			return bad, nil
+		}
+		shellID = resolved
+	}
+
+	marks, err := s.sessMgr.Marks(sess.ID, shellID)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	// Each span's end is the next mark's start; the last span runs to the current
 	// end of the log, so it is derived rather than stored.
-	size, _ := s.sessMgr.OutputSize(sessionID, shellID)
+	size, _ := s.sessMgr.OutputSize(sess.ID, shellID)
 	spans := make([]map[string]any, 0, len(marks))
 	for i, m := range marks {
 		end := size
@@ -433,8 +473,53 @@ func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolR
 	return jsonResult(map[string]any{
 		"spans":       spans,
 		"total_bytes": size,
-		"session_id":  sessionID,
+		"session_id":  sess.ID,
+		"shell_id":    shellID,
 	}), nil
+}
+
+// resolveShellIDForRead maps a shell_id argument onto a shell id that a READ can
+// address, on a session that may already be DEAD.
+//
+// It differs from requireShell in exactly one way: it does not reject a closed
+// session. Reading a shell's log is legal after the session ends — that is what
+// keeps DEAD sessions useful — so a read path must not inherit the write path's
+// status check. A shell the session does not know at all is still an error.
+func (s *Server) resolveShellIDForRead(sess *session.Session, shellID string) (string, *mcpgo.CallToolResult) {
+	// Live and retained shells are both in the session's own map.
+	if cs := sess.GetChildShell(shellID); cs != nil {
+		return cs.ID, nil
+	}
+	if looksLikeResourceLocator(shellID) {
+		p, err := parseResourceURL(shellID)
+		if err != nil {
+			return "", toolError(CodeInvalidArgument, "%s", err.Error())
+		}
+		if p.Kind == resourceURLEntry {
+			return "", toolError(CodeInvalidArgument, "%s", fmt.Sprintf("resource URL %q names an entry, not a session or shell", shellID))
+		}
+		// A locator may name a different session than the session_id argument; the
+		// shell it resolves to is what the caller asked to read.
+		if p.SessionID != sess.ID {
+			target := s.sessMgr.Get(p.SessionID)
+			if target == nil {
+				return "", toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' not found", p.SessionID))
+			}
+			sess = target
+		}
+		idx := p.Index
+		if idx == 0 {
+			idx = 1
+		}
+		if cs, ok := sess.ShellByIndex(idx); ok {
+			return cs.ID, nil
+		}
+		if sh, ok := sess.SnapshotShellByIndex(idx); ok {
+			return sh.ID, nil
+		}
+		return "", toolError(CodeShellNotFound, "%s", session.ShellIndexOutOfRangeError(sess.ID, idx, sess.LiveShellCount()).Error())
+	}
+	return "", toolError(CodeShellNotFound, "%s", fmt.Sprintf("Shell '%s' not found", shellID))
 }
 
 func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

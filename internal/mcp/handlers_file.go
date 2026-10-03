@@ -89,14 +89,25 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	// Resolve for the echoed id and URLs; the SFTP client above already proved the
+	// session exists and is running, so a failure here is only about the spelling.
+	sess, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return bad, nil
+	}
 	result, err := sftpCli.StatFile(remotePath)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	m := toMap(result)
-	m["download_url"] = s.baseURL + "/api/sessions/" + sessionID + "/files/download?path=" + url.QueryEscape(remotePath)
-	m["upload_url"] = s.baseURL + "/api/sessions/" + sessionID + "/files/upload"
-	m["session_id"] = sessionID
+	// Build the URLs and the echoed id from the RESOLVED session, never the
+	// argument: a locator here would produce
+	// /api/sessions/termcp://#<sid>/files/download, a URL containing '#' and '://'
+	// that addresses nothing.
+	sessID := sess.ID
+	m["download_url"] = s.baseURL + "/api/sessions/" + sessID + "/files/download?path=" + url.QueryEscape(remotePath)
+	m["upload_url"] = s.baseURL + "/api/sessions/" + sessID + "/files/upload"
+	m["session_id"] = sessID
 	return jsonResult(m), nil
 }
 
@@ -186,10 +197,16 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 	if _, bad := s.requireRunningSession(sessionID); bad != nil {
 		return bad, nil
 	}
+	sess, bad := s.requireSession(sessionID)
+	if bad != nil {
+		return bad, nil
+	}
+	// sess.ID, not the argument: these URLs are meant to be opened, and a locator
+	// would put '#' and '://' into the path.
 	return jsonResult(map[string]any{
-		"download_url": s.baseURL + "/api/sessions/" + sessionID + "/files/download?path=" + url.QueryEscape(remotePath),
-		"upload_url":   s.baseURL + "/api/sessions/" + sessionID + "/files/upload",
-		"session_id":   sessionID,
+		"download_url": s.baseURL + "/api/sessions/" + sess.ID + "/files/download?path=" + url.QueryEscape(remotePath),
+		"upload_url":   s.baseURL + "/api/sessions/" + sess.ID + "/files/upload",
+		"session_id":   sess.ID,
 		"remote_path":  remotePath,
 	}), nil
 }

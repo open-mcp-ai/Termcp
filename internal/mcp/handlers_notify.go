@@ -65,7 +65,12 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 		// notifications can be delivered later from timer/exit goroutines, where
 		// the dispatch context no longer carries the client session.
 		target := mcpserver.ClientSessionFromContext(ctx)
-		rule, err := s.notifyMgr.Register(sessionID, shellID, channel, event, silenceSec, target)
+		// Register under the resolved shell id: the rule's ShellID is what the
+		// cascade matches on (ClearShell from the exit watcher, and the session's
+		// ResourceScope) and what the broadcast URI carries
+		// (termcp://shells/<shell_id>). A locator stored here would make both the
+		// cleanup and the URI name something that is not a shell.
+		rule, err := s.notifyMgr.Register(sessionID, shell.ID, channel, event, silenceSec, target)
 		if err != nil {
 			return toolError(CodeOperationFailed, "%s", err.Error()), nil
 		}
@@ -94,6 +99,15 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 
 	case "list":
 		shellID := strings.TrimSpace(getString(args, "shell_id", ""))
+		// An optional filter: resolve it so a locator selects the same rules a bare
+		// id would, instead of matching nothing.
+		if shellID != "" {
+			shell, bad := s.requireShell(shellID)
+			if bad != nil {
+				return bad, nil
+			}
+			shellID = shell.ID
+		}
 		rules := s.notifyMgr.List(shellID)
 		return jsonResult(map[string]any{"rules": rules}), nil
 
@@ -144,9 +158,12 @@ func (s *Server) handleNotifyUser(ctx context.Context, request mcpgo.CallToolReq
 
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	if sessionID != "" {
-		if _, bad := s.requireSession(sessionID); bad != nil {
+		sess, bad := s.requireSession(sessionID)
+		if bad != nil {
 			return bad, nil
 		}
+		// The resolved id is what the Web UI matches when it highlights a card.
+		sessionID = sess.ID
 	}
 
 	delivered := 0

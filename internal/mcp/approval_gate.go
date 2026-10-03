@@ -101,8 +101,14 @@ func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolReques
 	if sessionID == "" {
 		return nil, false // the handler will report the missing session
 	}
-	sess := s.sessMgr.Get(sessionID)
-	if sess == nil || !sess.ApprovalEnabled() {
+	// Resolve the argument the same way every handler does. The gate must not
+	// inspect the raw spelling: a locator (termcp://#<sid>) would not be found here,
+	// the gate would decline, and the handler would then resolve it itself and
+	// perform the operation — an approval-gated write executing with nobody asked.
+	// The lookup is by the resolved session, so a locator gates exactly like the id
+	// it names. A failure here is not reported: the handler owns the error message.
+	sess, bad := s.requireSession(sessionID)
+	if bad != nil || sess == nil || !sess.ApprovalEnabled() {
 		return nil, false
 	}
 

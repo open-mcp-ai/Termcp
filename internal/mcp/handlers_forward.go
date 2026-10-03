@@ -25,7 +25,14 @@ func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolR
 	if bad != nil {
 		return bad, nil
 	}
-	fw, err := s.forwardMgr.CreateLocal(sessionID, sess.Info().Name, remoteHost, remotePort, localPort, sshCli)
+	if s.forwardMgr == nil {
+		return toolError(CodeNotConfigured, "%s", "forward manager not available"), nil
+	}
+	// Register under the resolved session id: the forward's SessionID is what the
+	// DEAD cascade matches on (forwardMgr.CloseBySession), so storing the argument
+	// verbatim would leave the listener alive when the session goes down if that
+	// argument was a locator.
+	fw, err := s.forwardMgr.CreateLocal(sess.ID, sess.Info().Name, remoteHost, remotePort, localPort, sshCli)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
@@ -60,7 +67,11 @@ func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallTool
 	if bad != nil {
 		return bad, nil
 	}
-	fw, err := s.forwardMgr.CreateRemote(sessionID, sess.Info().Name, localHost, localPort, remoteHost, remotePort, sshCli)
+	if s.forwardMgr == nil {
+		return toolError(CodeNotConfigured, "%s", "forward manager not available"), nil
+	}
+	// sess.ID, not the argument — see handleLocalForward.
+	fw, err := s.forwardMgr.CreateRemote(sess.ID, sess.Info().Name, localHost, localPort, remoteHost, remotePort, sshCli)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
@@ -84,8 +95,12 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToo
 	if bad != nil {
 		return bad, nil
 	}
+	if s.forwardMgr == nil {
+		return toolError(CodeNotConfigured, "%s", "forward manager not available"), nil
+	}
 	info := sess.Info()
-	fw, err := s.forwardMgr.CreateDynamic(sessionID, info.Name, localPort, sshCli, info.SSHEndpoint == "internal")
+	// sess.ID, not the argument — see handleLocalForward.
+	fw, err := s.forwardMgr.CreateDynamic(sess.ID, info.Name, localPort, sshCli, info.SSHEndpoint == "internal")
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}

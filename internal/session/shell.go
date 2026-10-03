@@ -27,7 +27,13 @@ import (
 // stand in for one; nothing ever did that, and widening it back would reopen a
 // second write path around the approval gate.
 type ChildShell struct {
-	ID          string
+	ID string
+	// Index is this channel's 1-based number inside the parent session (1 = the
+	// first shell). It is assigned once at creation and never renumbered, so
+	// termcp://#<session>:<index> keeps naming the same channel after other
+	// channels are closed. 0 means "not assigned" (a shell built directly in a
+	// test, or one restored from a manifest written before Index existed).
+	Index       int
 	Name        string
 	parent      *Session // nil if not yet attached to a session
 	execSession *sshclient.ExecSession
@@ -77,6 +83,7 @@ func (cs *ChildShell) Info() api.Session {
 	defer cs.mu.RUnlock()
 	s := api.Session{
 		ID:        cs.ID,
+		Index:     cs.Index,
 		Name:      cs.Name,
 		Mode:      cs.mode,
 		Status:    cs.Status,

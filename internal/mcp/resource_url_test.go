@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
 // TestResourceURLStartSessionEndToEnd: "termcp://internal" as ssh_config in
@@ -31,6 +33,195 @@ func TestResourceURLStartSessionEndToEnd(t *testing.T) {
 		"session_id": m["session_id"],
 		"force":      true,
 	}))
+}
+
+// TestShellLocatorIndexStableAcrossClose is the regression for issue #73, driven
+// through the tool surface the user actually hits.
+//
+// The Web UI's copy button emits termcp://#<sid>:N, and N used to be a *position*
+// in the session's current shell list — recomputed per lookup. Closing an earlier
+// channel then shifted every survivor down one, so the locator the user had copied
+// as :2 started naming what had been :3. The channel index is now assigned at
+// creation and never reused, and MCP resolves it through the same helper the REST
+// resolver and the Web UI use.
+func TestShellLocatorIndexStableAcrossClose(t *testing.T) {
+	s := newTestServer(t)
+	res, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, res)
+	sid := m["session_id"].(string)
+	primary := m["shell_id"].(string)
+
+	// Two more channels, so :2 and :3 exist and the middle one can be watched.
+	second := startSubShell(t, s, sid)
+	third := startSubShell(t, s, sid)
+
+	// :2 and :3 name the channels they were created as.
+	if cs, bad := s.requireShell("termcp://#" + sid + ":2"); bad != nil || cs.ID != second {
+		t.Fatalf(":2 = %v (bad=%v), want %q", cs, bad, second)
+	}
+	if cs, bad := s.requireShell("termcp://#" + sid + ":3"); bad != nil || cs.ID != third {
+		t.Fatalf(":3 = %v (bad=%v), want %q", cs, bad, third)
+	}
+
+	// Close the MIDDLE channel. A positional lookup would now answer :3 with
+	// whatever slid into third place, which is the bug from the issue report.
+	// (The primary channel is not used here because closing the internal primary
+	// shell is deliberately a no-op — see handleCloseShell — so it would never
+	// actually leave the list.)
+	closeShell(t, s, second)
+
+	cs, bad := s.requireShell("termcp://#" + sid + ":3")
+	if bad != nil {
+		t.Fatalf(":3 after closing the middle channel failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+	}
+	if cs.ID != third {
+		t.Fatalf(":3 after the close resolved to %q, want the third channel %q", cs.ID, third)
+	}
+	if cs, bad := s.requireShell("termcp://#" + sid + ":1"); bad != nil || cs.ID != primary {
+		t.Fatalf(":1 = %v (bad=%v), want the untouched primary %q", cs, bad, primary)
+	}
+
+	// The closed channel's number is retired, not handed to a survivor: a locator
+	// for it must fail cleanly instead of addressing a different shell.
+	_, bad = s.requireShell("termcp://#" + sid + ":2")
+	if bad == nil {
+		t.Fatal(":2 must not resolve after its channel was closed")
+	}
+	if code, _ := decodeToolError(t, bad); code != CodeShellNotFound {
+		t.Fatalf(":2 error_code = %q, want %q", code, CodeShellNotFound)
+	}
+
+	// shell_output resolves through the same numbering, so a copied :3 must read the
+	// same channel shell_input would write.
+	src, bad := s.resolveOutputSource("termcp://#" + sid + ":3")
+	if bad != nil {
+		t.Fatalf("shell_output :3 failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+	}
+	if src.shellID != third {
+		t.Fatalf("shell_output :3 read shell %q, want %q", src.shellID, third)
+	}
+
+	_, _ = s.handleTerminateSession(context.Background(), makeRequest(map[string]any{
+		"session_id": sid,
+		"force":      true,
+	}))
+}
+
+// TestShellLocatorResolvesAgainstLiveSetNotSnapshot covers the branch that made
+// issue #73 worse than a plain renumbering. Live-vs-snapshot used to be decided
+// from the *primary* shell: with the first channel closed, a session that was
+// still running was treated as DEAD, so :N was answered from the persisted
+// snapshot — a different source (and a different set) than the one the Web UI
+// was showing. A session with any live channel must keep answering from the live
+// map.
+//
+// The primary channel is closed on the session object rather than through
+// shell_close, because the tool deliberately no-ops for the internal endpoint
+// (the process outlives the tab). The state under test — live channels, no
+// primary — is reachable at the session layer and over a remote shell-close
+// path, which is what the resolver must handle.
+func TestShellLocatorResolvesAgainstLiveSetNotSnapshot(t *testing.T) {
+	s := newTestServer(t)
+	res, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseResult(t, res)
+	sid := m["session_id"].(string)
+	primary := m["shell_id"].(string)
+
+	second := startSubShell(t, s, sid)
+	third := startSubShell(t, s, sid)
+
+	sess := s.sessMgr.Get(sid)
+	if sess == nil {
+		t.Fatal("session vanished")
+	}
+	if err := sess.CloseChildShell(primary); err != nil {
+		t.Fatalf("close primary channel: %v", err)
+	}
+
+	// Preconditions for the branch under test: the session is still live and has
+	// live channels, but its primary shell is gone — so the old check
+	// (PrimaryShell() != nil) sent it down the DEAD/snapshot path.
+	if !sess.HasLiveShells() {
+		t.Fatal("session unexpectedly has no live shells")
+	}
+	if sess.PrimaryShell() != nil {
+		t.Fatal("primary shell still present; the test no longer exercises the branch")
+	}
+
+	// :2 is the channel the user copied. It must resolve, to the right shell, and
+	// from the live stream rather than the persisted log of a running session.
+	src, bad := s.resolveOutputSource("termcp://#" + sid + ":2")
+	if bad != nil {
+		t.Fatalf("shell_output :2 failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+	}
+	if src.live == nil {
+		t.Fatalf(":2 resolved through the persisted snapshot for a session with live shells (shellID=%s)", src.shellID)
+	}
+	if src.shellID != second {
+		t.Fatalf(":2 read shell %q, want the live second channel %q", src.shellID, second)
+	}
+
+	// The survivors keep the numbers they were created with, including the one
+	// that was never the primary.
+	if cs, bad := s.requireShell("termcp://#" + sid + ":3"); bad != nil || cs.ID != third {
+		t.Fatalf(":3 = %v (bad=%v), want the live third channel %q", cs, bad, third)
+	}
+
+	// The closed channel's number is retired, not reused by a survivor.
+	if _, bad := s.requireShell("termcp://#" + sid + ":1"); bad == nil {
+		t.Fatal(":1 must not resolve after the primary channel was closed")
+	}
+
+	_, _ = s.handleTerminateSession(context.Background(), makeRequest(map[string]any{
+		"session_id": sid,
+		"force":      true,
+	}))
+}
+
+// startSubShell opens one channel and returns its shell_id, failing the test if
+// the tool refuses.
+func startSubShell(t *testing.T, s *Server, sid string) string {
+	t.Helper()
+	res, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{"session_id": sid}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("shell_open failed: %s", res.Content[0].(mcpgo.TextContent).Text)
+	}
+	id, _ := parseResult(t, res)["shell_id"].(string)
+	if id == "" {
+		t.Fatalf("shell_open returned no shell_id: %s", res.Content[0].(mcpgo.TextContent).Text)
+	}
+	return id
+}
+
+// closeShell closes one channel and fails the test if the tool refuses.
+func closeShell(t *testing.T, s *Server, shellID string) {
+	t.Helper()
+	res, err := s.handleCloseShell(context.Background(), makeRequest(map[string]any{"shell_id": shellID}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("shell_close %q failed: %s", shellID, res.Content[0].(mcpgo.TextContent).Text)
+	}
 }
 
 // TestRequireShellResourceURL: shell_input / shell_output must accept the

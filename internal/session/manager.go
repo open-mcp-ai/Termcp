@@ -370,9 +370,18 @@ func (m *Manager) RestoreDead() error {
 		onChildChange := m.notifyListChange
 		s.onDead.Store(&onDead)
 		s.onChildChange.Store(&onChildChange)
+		// Backfill the channel index on a manifest that predates the field, before
+		// the entries are retained, so what answers a locator carries the same
+		// numbering the live session would have given it.
+		backfillShellIndexes(meta.Shells)
 		for _, sh := range meta.Shells {
 			s.shellHistory.Store(sh.ID, sh)
 		}
+		// Continue the channel numbering where the persisted shells left off. A
+		// restored session has no live shells, but its retained ones still answer
+		// termcp://#<session>:N, and a new channel opened on it must take a fresh N
+		// rather than colliding with a retained one.
+		s.nextShellIndex = maxShellIndex(meta.Shells)
 		m.sessions.Store(meta.ID, s)
 		m.slogf("restored DEAD session", meta.ID)
 	}
@@ -383,4 +392,39 @@ func (m *Manager) RestoreDead() error {
 
 func (m *Manager) slogf(msg, id string) {
 	slog.Debug(msg, "session_id", id)
+}
+
+// maxShellIndex returns the highest channel index in a persisted shell
+// snapshot, or 0 when none carries one. Callers backfill first (see
+// backfillShellIndexes) so a snapshot written before Index existed still yields
+// the numbering its creation order implies.
+func maxShellIndex(shells []api.Session) int {
+	max := 0
+	for _, sh := range shells {
+		if sh.Index > max {
+			max = sh.Index
+		}
+	}
+	return max
+}
+
+// backfillShellIndexes fills Index on a snapshot whose entries predate the
+// field, using the order the snapshot is already in (storage sorts shells by
+// creation time, which is exactly what the index counted before it was stored).
+//
+// The numbering is either wholly present or wholly absent: a manifest written by
+// a build that had the field carries an index on every shell, and one written
+// before it carries none on any. That makes the two cases distinguishable, and
+// it is why a partially numbered snapshot is left alone rather than patched —
+// renumbering it could hand two shells the same index, which is the very failure
+// this numbering exists to prevent.
+func backfillShellIndexes(shells []api.Session) {
+	for _, sh := range shells {
+		if sh.Index > 0 {
+			return
+		}
+	}
+	for i := range shells {
+		shells[i].Index = i + 1
+	}
 }

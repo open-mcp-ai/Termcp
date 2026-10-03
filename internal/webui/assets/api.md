@@ -207,14 +207,45 @@ into a chat, an issue, or a script. MCP tools accept locators anywhere an id or
 profile name is expected; over plain HTTP, resolve them first with
 `GET /api/resolve`.
 
+The two surfaces expose locators differently, and the difference is deliberate:
+
+- **MCP** — every tool that takes `session_id`, `shell_id` or `ssh_config`
+  accepts a locator for it. A `session_id` argument also accepts a shell id (a
+  shell names its container), and a `shell_id` argument also accepts a session id
+  (the primary channel). Responses always carry the **resolved** ids, never the
+  locator that was passed in, so the values can be pasted straight back into the
+  next call.
+- **HTTP** — path and query parameters are plain ids; a locator is turned into
+  ids by `GET /api/resolve` first. This is not a convenience gap: a locator
+  contains `#` and `:` and cannot survive a URL path, so accepting one there
+  would only work for the encodings that happen to be unambiguous. Write tools
+  named in an `ssh_config` body field do accept an entry locator
+  (`termcp://<entry>`), because that field is a JSON body value rather than a
+  path segment.
+
+Both surfaces resolve through the same code (`internal/locator` for syntax,
+`internal/session` for shell lookup), so a locator cannot mean one thing in a
+chat and another in curl.
+
 | Locator | Names | Resolves to |
 |---------|-------|-------------|
 | `termcp://<entry>` | a connection profile (ssh_config), e.g. `termcp://rock64` | `ssh_config` name |
 | `termcp://#<session>` | a session | `session_id` |
 | `termcp://#<session>:<N>` | shell channel N of that session | `session_id` + `shell_id` |
 
-The shell index is 1-based creation order, matching the `shell-1`/`shell-2` tabs;
-without `:N` the primary (first) shell is meant. The long form
+A bare name with no scheme and no `#` (including `session-<id>`) is **not** a
+locator: connection profile names and session ids share that namespace, so a
+profile may legitimately be called `session-foo` and must keep resolving. Only an
+explicit session address is recognised as one — `#<id>`, `termcp://#<id>`, or
+`termcp://<entry>#<id>` — and the `session-` prefix is stripped there (so
+`#session-foo` means session `foo`).
+
+The shell index is the channel's number inside its session: 1-based, assigned
+when the channel is created, and **never renumbered or reused** — closing an
+earlier channel does not change it, so a locator you copied keeps naming the same
+channel (and a number whose channel is gone resolves to nothing rather than to a
+neighbour). It matches the `shell-1`/`shell-2` tab labels; without `:N` the
+primary (first) shell is meant. The long form
 `termcp://<entry>#<session>` is accepted for back-compat, but the entry prefix is
 ignored — session ids are unique, profile names are not. `termcp://shells/<id>`
 is a notification broadcast URI, not a locator.
@@ -242,6 +273,11 @@ Response 200 (closed / DEAD session — read-only):
 Response 200 (shell channel):
 { "kind": "shell", "session_id": "abc123", "shell_id": "def456", "index": 2, "name": "shell-2", "status": "running" }
 ```
+
+`index` is the channel's number inside the session and is the same value the
+locator carries. It is stable for the channel's whole life, so resolving a copied
+`termcp://#<session>:2` after other channels were closed still returns the same
+`shell_id`; a locator for a closed channel is a `404`, never a different shell.
 
 Then use the ids with the ordinary endpoints: an `entry` becomes
 `POST /api/sessions` with that `ssh_config`; a `session_id` drives output,
@@ -296,8 +332,12 @@ Request:
 }
 
 Response 200:
-{ "session_id": "abc123", "shell_id": "def456", "ssh_config": "pi" }
+{ "session_id": "abc123", "shell_id": "def456", "ssh_config": "pi", "index": 1 }
 ```
+
+`index` is the first shell's channel number (always 1) — returned with the ids so
+a client labels and copies the primary tab from server data rather than assuming
+a number of its own. See section 5 for the locator meaning of `index`.
 
 No `pid` is returned: the process lives on the remote side and SSH does not report its
 number, so the field could only ever have been a constant. To get the real one, ask the
@@ -374,11 +414,19 @@ Lists a session's shells.
 Response 200:
 {
   "shells": [
-    { "id": "abc123", "name": "pi", "status": "running", ... },
-    { "id": "def456", "name": "shell-2", "status": "running", ... }
+    { "id": "abc123", "index": 1, "name": "pi", "status": "running", ... },
+    { "id": "def456", "index": 2, "name": "shell-2", "status": "running", ... }
   ]
 }
 ```
+
+`index` is the channel number the `termcp://#<session>:N` locator resolves, and it
+is per-channel stable: closing one channel leaves the others' numbers untouched, so
+a copied locator keeps meaning what it meant. Numbers are not reused, so a locator
+for a closed channel never points at a different shell. An
+`exited` (DEAD) session's snapshot carries the same numbers, and a session restored
+from a manifest written before the field existed has them backfilled from creation
+order — the numbering does not change across a restart.
 
 ### `POST /api/sessions/{id}/shells`
 
@@ -402,8 +450,13 @@ Request:
 { "command": "", "name": "shell-2", "mode": "pty", "rows": 24, "cols": 80 }
 
 Response 200:
-{ "shell_id": "def456", "session_id": "abc123", "name": "shell-2" }
+{ "shell_id": "def456", "session_id": "abc123", "name": "shell-2", "index": 2 }
 ```
+
+`index` is this channel's number in the session (the N of
+`termcp://#<session>:N`). It is assigned by the server, so a client labels and
+copies the tab from it rather than from a counter of its own — a counter would
+disagree with the resolver as soon as an earlier channel was closed.
 
 ### `DELETE /api/shells/{id}`
 

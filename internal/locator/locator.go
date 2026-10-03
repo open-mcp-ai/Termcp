@@ -10,13 +10,15 @@
 //	termcp://<entry>              – ssh_config profile name ("internal" = loopback)
 //	termcp://#[session]           – a session (short form, always preferred)
 //	termcp://#[session]:[index]   – a shell channel of that session:
-//	                                :1 = first shell (the primary), :N = Nth by creation order
+//	                                :1 = first shell (the primary), :N = the
+//	                                stable channel number assigned at creation
 //	termcp://<entry>#[session]    – accepted for back-compat; entry is IGNORED
 //	                                (session ids are unique, entry prefixes are not reliable)
 //
-// Shell channel index is 1-based creation order (matches the Web UI's
-// shell-1/shell-2 tab labels), NOT the raw id. Only the short form (no entry)
-// is emitted by the UI copy buttons.
+// Shell channel indexes are 1-based, assigned when channels are created, and
+// never reused or renumbered. They match the Web UI's shell-1/shell-2 labels;
+// they are not positions in the current live-shell list and are not raw ids.
+// Only the short form (no entry) is emitted by the UI copy buttons.
 //
 // Locators name live sessions. A closed (DEAD) session is deliberately NOT
 // resolvable: it has no transport left, so its channels are read-only and are
@@ -49,9 +51,17 @@ type Parsed struct {
 	Index     int    // shell index, 1-based; 0 = unset (session-kind)
 }
 
-// Parse parses a possibly-scheme-qualified termcp resource locator. Bare ids
-// ("abc123"), "session-abc123", and "#abc123" are accepted as the short session
-// form; a trailing ":N" selects a shell channel.
+// Parse parses a possibly-scheme-qualified termcp resource locator.
+//
+// Session forms: "#<id>", "termcp://#<id>", "termcp://<entry>#<id>" (the entry
+// is ignored — session ids are unique, profile names are not), each with an
+// optional trailing ":N" selecting a shell channel. A leading "session-" is
+// stripped in all of them, so "#session-foo" means session "foo".
+//
+// A bare name ("abc123", "session-foo") is NOT a session: with no scheme and no
+// '#', it is an ENTRY (profile) name. ssh_config profile names and session ids
+// share that namespace, so a profile may legitimately be called "session-foo" and
+// must keep resolving; LooksLike agrees and does not claim the bare form.
 func Parse(raw string) (*Parsed, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -124,12 +134,17 @@ func Parse(raw string) (*Parsed, error) {
 }
 
 // LooksLike reports whether s is written in termcp resource-URL syntax (scheme
-// or "#" short form, or a "session-" prefixed id) rather than as a bare id.
-// Bare ids skip the parser so an unknown id still gets the plain "not found"
-// message instead of parser diagnostics.
+// or "#" short form) rather than as a bare id. Bare ids skip the parser so an
+// unknown id still gets the plain "not found" message instead of parser
+// diagnostics.
+//
+// A bare "session-<id>" is deliberately NOT claimed. Parse reads it as an entry
+// name, and ssh_config profile names live in the same namespace — a profile may
+// legitimately be called "session-foo", so claiming the bare form would route it
+// through the parser and away from the profile store. The prefixed spelling still
+// resolves as a session wherever a session is already expected, i.e. after a '#'
+// or a scheme.
 func LooksLike(s string) bool {
 	s = strings.TrimSpace(s)
-	return strings.HasPrefix(s, Scheme) ||
-		strings.HasPrefix(s, "#") ||
-		strings.HasPrefix(s, "session-")
+	return strings.HasPrefix(s, Scheme) || strings.HasPrefix(s, "#")
 }

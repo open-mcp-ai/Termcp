@@ -46,14 +46,17 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 		}), nil
 	}
 
-	_, bad := s.requireSession(sessionID)
+	// Resolve first, then act on the resolved id: Terminate is a no-op for an id it
+	// cannot find, so passing a locator straight through would report success for a
+	// session that was never touched.
+	sess, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	// Close only: the process/transport stops and the entry becomes DEAD, but it
 	// stays in the registry (and in the Web UI as a read-only tile) so its output
 	// remains readable via shell_output. session_delete removes it for good.
-	s.sessMgr.Terminate(sessionID, force, time.Duration(gracePeriod*float64(time.Second)))
+	s.sessMgr.Terminate(sess.ID, force, time.Duration(gracePeriod*float64(time.Second)))
 	return successResult(), nil
 }
 
@@ -67,14 +70,17 @@ func (s *Server) handleDeleteSession(ctx context.Context, request mcpgo.CallTool
 		return s.batchSessionResult(ids, func(id string) error { return s.sessMgr.Delete(id) }), nil
 	}
 
-	_, bad := s.requireSession(sessionID)
+	// Resolve first, then act on the resolved id: Delete validates its argument as a
+	// storage path component, so a locator (which contains '#' and ':') would be
+	// rejected as an invalid id instead of deleting the session it names.
+	sess, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	// Permanent: closes any live transport, releases the session's resources
 	// (shells, forwards, notification rules, buffers) and removes its on-disk
 	// directory (manifests + log.bin + log.jsonl). Irreversible.
-	if err := s.sessMgr.Delete(sessionID); err != nil {
+	if err := s.sessMgr.Delete(sess.ID); err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil

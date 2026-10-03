@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
@@ -173,6 +174,20 @@ func (h *Handler) resolveSSH(name string) (cfgName string, ent *sshconfig.Entry,
 		return "", nil, nil, fmt.Errorf("ssh config store not configured")
 	}
 	name = strings.TrimSpace(name)
+	// An entry locator is accepted here for the same reason MCP accepts one in
+	// session_start(ssh_config=...): the user copies "termcp://rock64" from a card
+	// and pastes it as the connection. It is a JSON body field, so the '#' and ':'
+	// that keep locators out of URL paths are not a problem.
+	if locator.LooksLike(name) {
+		p, perr := locator.Parse(name)
+		if perr != nil {
+			return "", nil, nil, fmt.Errorf("invalid ssh_config locator: %w", perr)
+		}
+		if p.Kind != locator.KindEntry {
+			return "", nil, nil, fmt.Errorf("ssh_config %q is a session/shell locator; pass an entry name or termcp://<entry>", name)
+		}
+		name = p.Entry
+	}
 	if name == "" {
 		if h.NoInternal {
 			return "", nil, nil, fmt.Errorf("ssh_config is required when internal profile is disabled")

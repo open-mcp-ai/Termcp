@@ -55,6 +55,10 @@ func (h *Handler) handleCreateShell(w http.ResponseWriter, r *http.Request) {
 		"shell_id":   cs.ID,
 		"session_id": parentID,
 		"name":       cs.Name,
+		// The channel index is what termcp://#<session>:N addresses and what the
+		// tab label shows. Returning it lets the UI label a new tab from the
+		// server's numbering instead of guessing a number of its own.
+		"index": cs.Index,
 	})
 }
 
@@ -224,7 +228,7 @@ func (h *Handler) handleCloseShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Internal primary shell: tab close is a no-op (process outlives the tab).
-	if sess := h.Sessions.GetByShellID(id); sess != nil && sess.PrimaryShellID() == id && sess.SSHEndpoint == "internal" {
+	if sess := h.Sessions.GetByShellID(id); sess != nil && sess.IsInternalPrimaryShell(id) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

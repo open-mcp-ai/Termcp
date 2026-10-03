@@ -9,14 +9,30 @@ function _channelNeighbor(win, sid) {
   }
   return prev || null;
 }
-
-/** Create a channel tab + xterm instance for sessionId. */
-function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
-  if (!win._channels) { win._channels = {}; win._channelCount = 0; win._channelSeq = 0; }
+/** Create a channel tab + xterm instance for sessionId.
+ *
+ * `opt.index` is the channel's server-assigned number — the N of
+ * termcp://#<session>:N, and the number the tab label shows. It must come from
+ * the server rather than from a client-side counter: closing an earlier channel
+ * leaves the server's numbering untouched, while a client counter would renumber
+ * the survivors and make the label disagree with a locator copied earlier.
+ * `opt.readOnlyHistory` marks a channel rendered from already-exited output.
+ *
+ * A missing index is a programming error (every caller has one). It is reported
+ * rather than silently replaced by a guessed number, because a guessed number is
+ * exactly the drift this parameter exists to remove. The tab is still created so
+ * the channel stays usable in this browser; only its copy button is disabled. */
+function createChannelTab(win, sessionId, opt) {
+  opt = opt || {};
+  if (!win._channels) { win._channels = {}; win._channelCount = 0; }
   if (win._channels[sessionId]) { switchChannelTab(win, sessionId); return; }
-  var label = optLabel || ('shell-' + (win._channelSeq + 1));
-  var urlIndex = win._channelSeq + 1;
-  var readOnlyHistory = !!optReadOnlyHistory;
+  var urlIndex = Number(opt.index);
+  var haveIndex = Number.isInteger(urlIndex) && urlIndex >= 1;
+  if (!haveIndex) {
+    console.error('shell channel is missing its server index; the copy button will stay disabled', sessionId, opt);
+  }
+  var label = haveIndex ? ('shell-' + urlIndex) : 'shell';
+  var readOnlyHistory = !!opt.readOnlyHistory;
 
   var tabsBar = win.querySelector('.shell-channel-tabs');
   var body = win.querySelector('.shell-channel-body');
@@ -101,7 +117,6 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
   };
   win._activeChannelSid = sessionId;
   win._channelCount += 1;
-  win._channelSeq += 1;
 
   // Deactivate previous tabs
   Object.keys(win._channels).forEach(function(sid) {
@@ -175,12 +190,18 @@ function createChannelTab(win, sessionId, optLabel, optReadOnlyHistory) {
     switchChannelTab(win, sessionId);
   });
 
-  // Copy this shell's resource URL
+  // Copy this shell's resource URL. Without a server index there is no correct
+  // locator to emit, so the button is disabled rather than copying a guess.
   var tabCopyBtn = tab.querySelector('.shell-channel-tab-copy');
+  if (!haveIndex) {
+    tabCopyBtn.disabled = true;
+    tabCopyBtn.title = 'No channel index from the server';
+  }
   tabCopyBtn.addEventListener('mousedown', function(e) { e.stopPropagation(); });
   tabCopyBtn.addEventListener('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
+    if (!haveIndex) return;
     var url = resourceUrlShell(win._parentSid || win._sid || '', urlIndex);
     copyTextToClipboard(url).then(function () { showCopyToast(); }).catch(function () { showCopyToast(t('toast.copy.failed')); });
   });
@@ -260,7 +281,6 @@ function closeChannelTab(win, sessionId) {
   // Update state
   delete win._channels[sessionId];
   win._channelCount = Math.max(0, win._channelCount - 1);
-  if (win._channelCount === 0) win._channelSeq = 0;
 
   // Switch or show empty
   if (win._activeChannelSid === sessionId) {
@@ -422,7 +442,7 @@ function createChannel(win, mode, command) {
     if (!r.ok) return r.text().then(function (txt) { throw new Error(txt); });
     return r.json();
   }).then(function (j) {
-    createChannelTab(win, j.shell_id || j.session_id);
+    createChannelTab(win, j.shell_id || j.session_id, { index: j.index || 0 });
     return j;
   }).catch(function (err) {
     var msg = String(err && err.message ? err.message : err).trim();
@@ -1239,7 +1259,8 @@ SHELL_WINDOW_PANELS_HTML +
   return win;
 }
 
-function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEvent) {
+function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEvent, opt) {
+  opt = opt || {};
   if (!win || !win.parentNode || !sessionId) return;
   win._connectAbort = null;
   win._placeholder = false;
@@ -1260,7 +1281,7 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEve
   // session created in this tab takes, and without it _approvalMode stays
   // undefined, so typing is forwarded and the server silently drops it.
   applyApprovalModeFromSnapshot(win, sessionId);
-  createChannelTab(win, win._primaryShellId);
+  createChannelTab(win, win._primaryShellId, { index: opt.index > 0 ? opt.index : 1 });
   refreshSessionTabbar();
 }
 
@@ -1449,7 +1470,7 @@ SHELL_WINDOW_PANELS_HTML +
       // empty, while keeping the ability to open a new shell. Running parents
       // with zero shells still render the exited history instead of a blank view.
       if (running.length === 0 && exited.length > 0 && !readOnly) {
-        exited.forEach(function(s) { createChannelTab(win, s.shell_id || s.id, null, true); });
+        exited.forEach(function(s) { createChannelTab(win, s.shell_id || s.id, { index: s.index || 0, readOnlyHistory: true }); });
         return;
       }
       var tabs = shells.filter(function(s) { return readOnly || s.status === 'running'; });
@@ -1457,7 +1478,7 @@ SHELL_WINDOW_PANELS_HTML +
         if (!win._primaryShellId) {
           win._primaryShellId = (tabs[0].shell_id || tabs[0].id);
         }
-        tabs.forEach(function(s) { createChannelTab(win, s.shell_id || s.id); });
+        tabs.forEach(function(s) { createChannelTab(win, s.shell_id || s.id, { index: s.index || 0 }); });
         // Restore last active tab.
         var lastActive = window._shellLastActive && window._shellLastActive[sessionId];
         if (lastActive && win._channels[lastActive]) switchChannelTab(win, lastActive);
@@ -1507,7 +1528,7 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
       if (!shellId) throw new Error('No shell_id in response');
       pendingWin._connectAbort = null;
       if (pendingWin.parentNode) {
-        finalizePendingShellWindow(pendingWin, connName || 'session', sid, shellId, clickEvt);
+        finalizePendingShellWindow(pendingWin, connName || 'session', sid, shellId, clickEvt, { index: j.index || 0 });
       } else {
         openShellWindow(connName || 'session', sid, clickEvt);
       }

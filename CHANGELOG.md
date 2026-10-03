@@ -8,6 +8,28 @@
 
 ### 修复
 
+- **定位符在所有接受 id 的 MCP 工具上真正生效，且不再泄漏到内部索引（#73 后续）**：文档一直承诺「MCP 工具在任何 id / profile 位置上接受定位符」，但每个 handler 各自解析 id，所以只在有人记得接线的地方成立。之前解析集中的是「语法」（`internal/locator`，MCP 与 REST 共用），而「解析后的查找」是各写一份，实测有六处不一致：
+  - **`shell_close` 直接拒收定位符**（报 `shell_not_found`），尽管同一个定位符在 `shell_resize` / `shell_reader_register` 上都能用。
+  - **`session_terminate` 更糟：它“成功”了但什么也没做**。它用定位符解析出会话，却把**原始参数**传给 `Manager.Terminate`——那里找不到 id 就静默 no-op，于是工具回 `{"success":true}` 而会话仍在跑。假成功比报错危险：调用方以为资源已经关了。（`session_delete` 则因把定位符当存储路径名校验而被拒。）
+  - **forward 把定位符当 `session_id` 存进注册表**（`internal/forward`），而会话 DEAD 时的级联回收是按真实 id 匹配的——这个本地监听端口会活过它所属的会话，成为一个没人能再关掉的死端点（实测复现：terminate 后 `forward(list)` 仍在）。
+  - **`shell_notify` 同病**：规则把定位符存成 `ShellID`，于是（a）退出 watcher 按真实 shell id 的级联清理找不到它，定时器为已不存在的 shell 继续跑；（b）`channel="resource"` 广播的 uri 变成 `termcp://shells/termcp://#<sid>:2`，这个名字不对应任何东西。
+  - **`message(action=list)` 静默返回空转录**：marks 用原始参数去读日志，定位符指向一个不存在的日志文件，于是“没有输出”与“读错了位置”无法区分。
+  - **`forward` 的三个创建动作在无 forward manager 的部署（`-tags no_webui` 纯 API 构建）里会 panic**（nil 解引用），而同一工具的 `list`/`close` 都做了 nil 检查。
+  - **审批模式可被定位符绕过（最严重）**：审批闸门（`gateOperation`）用**原始参数**查会话，查不到就“不拦截”，而 handler 随后自己把同一个参数解析成功并执行操作。结果：同一个受审批保护的写操作，用裸 id 写会被挂起等人工批准，**换成定位符就直接执行了**（探针实测：`file_write` 裸 id → 进审核队列、文件未创建；`termcp://#<sid>` → 文件立刻创建、队列为空）。`file_write` / `file_delete` / `file_rename` / `file_mkdir` / `file_perm` / `file_link` / `file_fs` 与 `forward` 八个写操作全中。
+  - **`file_stat` / `file_urls` 把定位符回显进 `session_id` 与 URL**：`download_url` / `upload_url` 直接用原始参数拼路径，得到 `/api/sessions/termcp://#<sid>/files/download` —— 一个含 `#` 和 `://`、指向不了任何会话的 URL。
+
+  现在只有一个解析入口：`requireSession` 统一接受**裸 id / session 定位符 / shell 定位符 / 裸 shell id**（shell 属于哪个容器是确定的），`requireShell` 统一接受**裸 id / session id / 定位符**；每个 handler 一律对**解析后的真实 id** 行事，而不是对传参行事。审批闸门也改为走同一条解析（否则闸门与它保护的操作会对同一个字符串给出不同结论）。所有响应中的 `session_id` / `shell_id` 与由它们拼出的 URL 都改为用解析后的值（`shell_open` / `shell_list` / `message` / `file_stat` / `file_urls` 之前会把定位符原样回显，而调用方通常会把这些字段贴回下一次调用）。`shell_notify` 的 `list` 过滤、`notify_user` 的卡片高亮同样先解析。`forward` 创建动作补上 nil 检查，与 `list`/`close` 行为一致。修复后用探针验证：上述八个场景全部转为正确行为，且新增回归测试大多在旧代码上会失败。
+
+- **HTTP 的 `ssh_config` 字段也接受 entry 定位符**：`POST /api/sessions` 的 `ssh_config` 之前会直接送去 profile 存储校验名字，于是从连接卡片复制的 `termcp://rock64` 在 MCP 的 `session_start` 能用、在 curl 里却报 `invalid ssh config name`。它是 JSON body 字段（不是 URL 路径），`#` 与 `:` 在这里没有歧义，所以现在与 MCP 一致：接受 `termcp://<entry>`，解析成 profile 名；传入 session/shell 定位符仍报错并提示改用 entry。
+
+- **读取路径不再继承写路径的状态检查**：`message(action=list)` 显式给 `shell_id` 时会在已关闭（DEAD）会话上报错，而只给 `session_id` 时却能正常读——同一个读操作因为写法不同而两种结果，原因是它复用了写路径的 `requireShell`（后者必须拒绝已死会话，避免写进已关闭的 transport）。marks 存在 `log.bin` 里，本来就活过 transport，现在读路径用自己的解析（不检查会话状态），两种写法一致可用。
+
+- **裸 session id 读取保留为“频道 1”语义并写明**：`shell_output(shell_id=<裸会话id>)` 仍按 `PrimaryShell()` 判断走活缓冲区还是持久化日志，与 `:N` 路径改用的 `HasLiveShells()` 不同。这是有意保留而非遗漏：裸 id 问的是“1 号频道”，若因为它恰好不在世而改答另一个活着的频道，就是在回答另一个问题。已在代码里写明这一取舍。
+
+- **裸 `session-<id>` 被误判为定位符（#73 后续）**：`LooksLike` 声称 `session-abc123` 是定位符，但 `Parse` 把它当成 **entry 名**（`KindEntry`）——也就是说一个 profile 名会被拿去当会话 id 使。而 profile 名与会话 id 共用同一命名空间：ssh_config 名字允许 `session-` 前缀，所以 `session-foo` 可以是一个正当的 profile。现在约定收紧为：**裸名字（无 scheme、无 `#`）不是定位符**，保持原来的意义；只有显式会话写法（`#<id>`、`termcp://#<id>`、`termcp://<entry>#<id>`）才按会话解析，`session-` 前缀在这些位置剥掉。新增 `TestLooksLikeAgreesWithParse` 把 `LooksLike` 与 `Parse` 的类型判定逐个对齐锁定，并显式覆盖 `session-foo` 作为 profile 的正当性。
+
+- **复制得到的 shell 定位符与 MCP/REST 解析不一致（#73）**：Web UI 频道标签上的复制按钮发出的 `termcp://#<会话id>:N` 与 MCP/REST 实际解析到的频道会对不上。原因是 `N` 有两套算法：**复制时**用频道创建当时的序号，**解析时**却把「当前存活列表里的下标」当序号——只要关掉靠前的频道，剩下的频道就整体前移（关到只剩一个时它变成 `:1`），于是先前复制的 `:2` 被解析成别的频道。现在频道编号由服务端在创建时分配（`ChildShell.Index` / `api.Session.Index`）并**终生不变、不复用**：关掉靠前的频道不会让后面的编号前移，编号已关闭的频道解析为 `shell_not_found` / `404`，不会滑到邻居身上。`/api/sessions/{id}/shells`、`session_start` 与 `shell_open` 的返回都带上 `index`，Web UI 的标签与复制按钮直接用这个服务端值（不再自行编号，拿不到编号时禁用复制而不是瞎猜）。已关闭（DEAD）/ 重启恢复的会话按持久化快照里的同一编号解析；早于该字段的旧 manifest 在恢复时按创建顺序回填，因此重启不改变定位符的含义。MCP 的 `shell_output`、REST 的 `/api/resolve` 与 Web UI 现在共用 `session.ShellByIndex` / `SnapshotShellByIndex` 同一套查找。
+
 - **rail 与终端文本错位**：行↔字节映射的服务端模型有若干处与真实终端不符，累积起来让格子落到离文本很远的地方。
   - **`height` 不再被 `count` 抬高**：`/rail` 曾用 `if height < count { height = count }` 把模型的屏幕高度补到请求的窗口大小。客户端为了「滚动落在余量内只重绘、不请求」会一次要屏幕两侧各一屏的余量，于是模型以为自己有 121 行屏幕，`ESC[H`／`ESC[2J`／`ESC[K` 这些「相对屏幕」的序列全部按错误的屏幕原点执行，`clear` 更是从错误的位置擦掉一整屏。现在 `height` 就是终端高度（仅省略时回落到 `count`），窗口大小不再影响布局。
   - **`ESC[3J` 现在会裁剪并重编号**：这是 `clear` 实际发出的「擦除已保存行」，xterm 收到后把滚动缓冲整段丢掉、只留一屏，并让幸存行的编号整体下移。模型此前完全忽略它，于是它继续描述一个终端已经没有的缓冲——实测某个真实会话：模型 122 行、xterm 25 行，每个格子偏了约四屏。等价地，退出全屏程序后的行号也一并归位。
@@ -50,6 +72,8 @@
 - **`--assets`：外置静态资源目录**（默认 `~/.termcp/assets`，可用 `$TERMCP_ASSETS_DIR` 覆盖）：目录里存在的文件覆盖内嵌副本，目录里没有的文件回落到内嵌，目录不存在等于什么都没发生。Web UI 与 MCP 文档资源经同一个组合 FS 解析，因此改一处样式不必重新编译。路径存在但是文件（不是目录）时启动即报错，而不是带着一个永远不生效的覆盖继续跑。
 
 ### 改进
+
+- **定位符相关的重复实现收敛到一处**：这一轮修复暴露出同一条规则被复制在多个包/多个 handler 里，任何一份漂移都会让「同一个字符串」在两个入口得到不同结论（#73 与审批绕过都是这个成因）。因此顺手收敛：`session.PrimaryShellIndex()` 取代 MCP 与 Web UI 各自私有的 `primaryIndex` / `primaryShellIndex`；`session.ShellIndexOutOfRangeError()` 统一四处「序号越界」文案（MCP 活会话、MCP DEAD 会话、MCP 读路径、REST `/api/resolve`），同一个定位符不会再因入口不同而收到不同解释；`api.LessShellCreationOrder()` 成为唯一的创建序比较器（`storage` 排序持久化快照、`session` 排序内存快照与位置回退共用），避免 tie-break 不同导致同一个 N 解析到不同频道；`session.IsInternalPrimaryShell()` 收拢「内部主 shell 的关闭是无操作」这条策略（MCP `shell_close` 与 Web UI `DELETE /api/shells/{id}` 共用），避免一个入口删掉另一个入口拒绝删的东西。行为不变，仅收敛实现。
 
 - **`docs/api.md` 记录时间轴与新的 WS 帧**：新增 `/rail` 一节——查询参数、`spans`/`marks`/`total_rows`、模型能精确到什么、备用屏为什么什么都不画；`marks` 一节写明窗口参数与两种取数的成本差；WS 帧表补上 `shell_activity`，`terminal` 帧不再携带日志字节区间——能记录的映射都会在重载或缩放时过时，行映射由 `/rail` 推导。
 

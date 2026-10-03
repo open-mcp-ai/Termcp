@@ -9,6 +9,22 @@ const (
 	SessionError   SessionStatus = "error"
 )
 
+// LessShellCreationOrder reports whether a precedes b in creation order: by
+// CreatedAt, then by ID so the order is total and stable.
+//
+// This is the order a shell's channel index counted before the index was stored
+// (see session.SnapshotShells), so it decides which shell a legacy manifest's
+// termcp://#<session>:N resolves to. It lives on the shared type rather than in
+// each package that sorts shells — storage sorts the persisted snapshot, session
+// sorts its in-memory one — because the two must agree: a tie broken by directory
+// or map order would let the same locator resolve to different channels.
+func LessShellCreationOrder(a, b Session) bool {
+	if a.CreatedAt == b.CreatedAt {
+		return a.ID < b.ID
+	}
+	return a.CreatedAt < b.CreatedAt
+}
+
 // SessionMode represents the execution mode for one shell channel.
 type SessionMode string
 
@@ -28,6 +44,12 @@ type Session struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
+	// Index is a shell's channel number inside its session: the N of
+	// termcp://#<session>:N and the number in the shell-N tab label. It is
+	// assigned when the channel is created and never reused or renumbered, so a
+	// locator copied from the UI keeps naming the same shell after other channels
+	// are closed. A session record is not a channel, so it carries no index.
+	Index int `json:"index,omitempty"`
 	// Mode is a per-shell property: each shell channel picks its own ("pty" for
 	// an interactive terminal, "pipe" for a line-oriented run-to-exit command).
 	// It is empty on session records — a session is a connection container and
