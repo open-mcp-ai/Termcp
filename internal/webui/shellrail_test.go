@@ -1,9 +1,84 @@
 package webui
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/open-mcp-ai/termcp/internal/message"
+	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
+
+// railBody is the rail endpoint's response as a client sees it.
+type railBody struct {
+	Cols      int             `json:"cols"`
+	Top       int             `json:"top"`
+	Spans     []*shellRowSpan `json:"spans"`
+	TotalRows int             `json:"total_rows"`
+}
+
+// serveRail writes `log` into a store, restores it, and answers one rail request
+// against the real handler. The endpoint is the only thing that decides how much
+// of the log to replay and which `height` to hand the model, so a test that calls
+// newRowLayout directly cannot see those choices at all — it would pass with the
+// endpoint replaying the wrong bytes or rewriting the screen height.
+func serveRail(t *testing.T, log []byte, query string) railBody {
+	t.Helper()
+	dir := t.TempDir()
+	store := storage.New(dir)
+	const sessID, shellID = "s-rail", "sh-rail"
+	if _, err := store.AppendLog(sessID, shellID, log); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMark(sessID, shellID, api.LogMark{Status: api.LogOutput, Time: 1758499205123, Offset: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSession(api.Session{ID: sessID, Name: "rail", Status: api.SessionExited}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveShell(sessID, api.Session{ID: shellID, Name: "shell-1", Status: api.SessionExited}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store2 := storage.New(dir)
+	sessMgr := session.NewManager(message.NewManager(store2), store2, nil)
+	if err := sessMgr.RestoreDead(); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{Sessions: sessMgr}
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/shells/"+shellID+"/rail?"+query, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET rail?%s = %d (%s), want 200", query, rr.Code, rr.Body.String())
+	}
+	var body railBody
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode rail body: %v (%s)", err, rr.Body.String())
+	}
+	return body
+}
+
+// railLog builds `lines` numbered lines followed by a clear and one line after it.
+func railLog(lines int) []byte {
+	var log []byte
+	for i := 0; i < lines; i++ {
+		log = append(log, []byte(fmt.Sprintf("L%03d\r\n", i))...)
+	}
+	log = append(log, []byte("\x1b[3J\x1b[H\x1b[2J")...)
+	log = append(log, []byte("after\r\n")...)
+	return log
+}
 
 // TestShellRailLayoutWrapsAndMarksRows pins the row<->byte mapping the rail is
 // drawn from.
@@ -204,7 +279,7 @@ func TestShellRailSplitReadsAgree(t *testing.T) {
 		for row := 0; row < ref.rowCount(); row++ {
 			if g.rows[row] != ref.rows[row] {
 				t.Errorf("reading in %d-byte pieces puts row %d at [%d,%d), one read puts it at [%d,%d)",
-					size, ref.first+row, g.rows[row].Start, g.rows[row].End,
+					size, row, g.rows[row].Start, g.rows[row].End,
 					ref.rows[row].Start, ref.rows[row].End)
 			}
 		}
@@ -302,6 +377,50 @@ func TestShellRailParsesCursorAddressing(t *testing.T) {
 	}
 }
 
+// TestShellRailReplaysPastTheWindow checks that the endpoint lays out the whole log
+// before it answers, not a prefix of it.
+//
+// Two independent things are pinned here, both of which made the rail describe rows
+// that no longer exist:
+//
+//   - The read must advance by the bytes it received. `OutputByteRange` reports its
+//     second value as the log's *total* size, and assigning that to the offset moved
+//     the cursor to the end of the log after the first chunk, so every log larger
+//     than shellRailReadChunk was laid out from its first 256 KiB alone.
+//   - The replay must run to the end. Rows are not settled when the cursor leaves
+//     them: `CSI 3 J` (what `clear` sends) drops the scrollback and renumbers every
+//     surviving row, so a window answered before it names rows the clear erased.
+//
+// The log is deliberately larger than one read chunk, because a single-chunk log
+// cannot tell the two apart.
+func TestShellRailReplaysPastTheWindow(t *testing.T) {
+	log := railLog(40000) // comfortably more than one shellRailReadChunk
+	if len(log) <= shellRailReadChunk {
+		t.Fatalf("the log is %d bytes, not enough to need more than one read chunk", len(log))
+	}
+
+	// After the clear the buffer holds one screenful: row 0 is the line printed after
+	// it, and rows 1.. are null. A replay that stopped early would instead answer the
+	// numbered lines the clear erased, and one that never left the first chunk would
+	// answer them too — the clear is past the first chunk.
+	body := serveRail(t, log, "cols=20&top=0&count=25&height=4")
+	if body.TotalRows != 4 {
+		t.Errorf("the layout holds %d rows, want the clear's one screenful (the whole log was not replayed)", body.TotalRows)
+	}
+	if len(body.Spans) == 0 || body.Spans[0] == nil {
+		t.Fatalf("row 0 is not answered: %+v", body.Spans)
+	}
+	if got := log[body.Spans[0].Start:body.Spans[0].End]; string(got) != "after\r\n" {
+		t.Errorf("row 0 holds %q, want the line printed after the clear", got)
+	}
+	for i := 1; i < len(body.Spans); i++ {
+		if body.Spans[i] != nil {
+			t.Errorf("row %d holds %q, but the clear left only one screenful; the window was answered before the end of the log",
+				i, log[body.Spans[i].Start:body.Spans[i].End])
+		}
+	}
+}
+
 // TestShellRailRouteIsMounted pins the route and the required width parameter.
 //
 // The rail's layout depends on the terminal width, and a request without one
@@ -331,6 +450,53 @@ func TestShellRailRouteIsMounted(t *testing.T) {
 	}
 	if !strings.Contains(js, "onResize") {
 		t.Error("a resize no longer re-lays the log out; the rows in hand would name reflowed-away lines")
+	}
+}
+
+// TestShellRailHeightIsTheScreenNotTheWindow pins the parameter that decides where
+// every screen-relative sequence lands.
+//
+// The client asks for more rows than the screen — the screen plus a screen of
+// margin on each side, so a scroll inside the margin is a repaint instead of a
+// request — and the endpoint used to widen the modelled screen to fit that window.
+// The model's screen height is not a window size: `ESC[H` counts from the top of the
+// screen, `ESC[2J` erases a screenful, and the buffer trims at `scrollback + screen`,
+// so a screen widened to 121 rows made `clear` erase and renumber against a screen
+// the terminal does not have — cells landing rows away from their text.
+//
+// This is checked through the endpoint, because `height` is the endpoint's to pass
+// on: it is the handler that reads the query and builds the layout, and asserting on
+// a layout the test built itself would stay green while the handler rewrote the
+// value. The tell is the response's own numbers: after a clear the layout holds one
+// screenful and the rows above the surviving screen answer null.
+func TestShellRailHeightIsTheScreenNotTheWindow(t *testing.T) {
+	log := railLog(16) // four screens of output on a 4-row screen
+
+	// The height is taken as given; a wider window changes nothing about the layout.
+	for _, count := range []int{4, 25, 121} {
+		body := serveRail(t, log, fmt.Sprintf("cols=20&top=0&count=%d&height=4", count))
+		if body.TotalRows != 4 {
+			t.Errorf("count=%d: the layout holds %d rows, want the screen (4)", count, body.TotalRows)
+		}
+		if len(body.Spans) != count {
+			t.Errorf("count=%d: the response has %d spans", count, len(body.Spans))
+		}
+		// Row 0 of the surviving screen is the line printed after the clear. It is
+		// the whole point of the sequence: a screen widened to the window would erase
+		// against an origin 121 rows up and leave the answer somewhere else entirely.
+		if len(body.Spans) == 0 || body.Spans[0] == nil {
+			t.Fatalf("count=%d: row 0 has no span; the clear left no screen", count)
+		}
+		if got := log[body.Spans[0].Start:body.Spans[0].End]; string(got) != "after\r\n" {
+			t.Errorf("count=%d: row 0 holds %q, want the line printed after the clear", count, got)
+		}
+		// Every row past the surviving screen is null: those rows were dropped, not
+		// blanked, so they are not in the buffer to be answered at all.
+		for i := 4; i < len(body.Spans); i++ {
+			if body.Spans[i] != nil {
+				t.Errorf("count=%d: row %d has a span past the buffer (%+v)", count, i, body.Spans[i])
+			}
+		}
 	}
 }
 
@@ -389,7 +555,7 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	for r := 0; r < g.rowCount(); r++ {
 		sp := &g.rows[r]
 		if sp.End > sp.Start && sp.Start < iExit && sp.End > openEnd {
-			t.Errorf("row %d reaches into the full-screen program's screen: [%d,%d)", g.first+r, sp.Start, sp.End)
+			t.Errorf("row %d reaches into the full-screen program's screen: [%d,%d)", r, sp.Start, sp.End)
 		}
 	}
 
@@ -427,7 +593,7 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	for r := 0; r < cg.rowCount(); r++ {
 		sp := &cg.rows[r]
 		if sp.End > sp.Start && sp.Start <= wantSecond && wantSecond < sp.End {
-			row = cg.first + r
+			row = r
 		}
 	}
 	if row != 1 {
@@ -447,7 +613,7 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 		sp := &gg.rows[r]
 		if sp.End > sp.Start && sp.End > iOpen+int64(len("\x1b[?1049h")) {
 			t.Errorf("row %d records a log that ends inside a full-screen program: [%d,%d)",
-				gg.first+r, sp.Start, sp.End)
+				r, sp.Start, sp.End)
 		}
 	}
 	if sp := gg.window(0, 1)[0]; sp == nil || open[sp.Start:sp.End] != "start\r\n" {
@@ -472,7 +638,7 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 		for r := 0; r < g.rowCount(); r++ {
 			if pieces.rows[r] != g.rows[r] {
 				t.Errorf("reading in %d-byte pieces puts row %d at [%d,%d), one read puts it at [%d,%d)",
-					size, g.first+r, pieces.rows[r].Start, pieces.rows[r].End, g.rows[r].Start, g.rows[r].End)
+					size, r, pieces.rows[r].Start, pieces.rows[r].End, g.rows[r].Start, g.rows[r].End)
 			}
 		}
 	}
@@ -492,6 +658,64 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 // The log below is a shell's own output: a banner with blank lines in it, then a
 // prompt the shell repaints (the bracketed-paste sequence, colour codes, a
 // carriage return and an erase) before echoing a typed command.
+// TestShellRailBufferCapIsScrollbackPlusScreen pins where the terminal stops keeping
+// rows, because a cap one screenful out puts every row number off by the screen
+// height for the rest of the session — right until the assumption wears off, then
+// wrong by a fixed amount.
+//
+// xterm sizes its line buffer to the configured scrollback *plus* the screen it is
+// showing (`getCorrectBufferLength`), so the oldest row falls off at `scrollback +
+// rows`. The model has to drop at the same point and say so with the same numbers.
+func TestShellRailBufferCapIsScrollbackPlusScreen(t *testing.T) {
+	// The cap itself, exercised at the boundary instead of by filling 100k rows: one
+	// row over `scrollback + height` drops exactly one row off the front, and the rows
+	// that survive keep their own bytes — which is the whole point of moving them down
+	// rather than dropping them all. A cap that ignored the height would trim one
+	// screenful early; one that used the height as the cap would throw the scrollback
+	// away entirely.
+	const height = 4
+	g := newRowLayout(20, height)
+	// A buffer filled to the cap, with a byte range on each row so a moved row can be
+	// told from an empty one.
+	g.rows = make([]shellRowSpan, shellRailScrollback+height)
+	for i := range g.rows {
+		g.rows[i] = shellRowSpan{Start: int64(i), End: int64(i) + 1}
+	}
+	g.row, g.top = shellRailScrollback+height-1, shellRailScrollback+height-height
+
+	// One row past the cap: the oldest goes and the rest slide down by one.
+	g.ensure(shellRailScrollback + height)
+	if got := len(g.rows); got != shellRailScrollback+height {
+		t.Errorf("past the cap the buffer holds %d rows, want it held at %d", got, shellRailScrollback+height)
+	}
+	if g.rows[0].Start != 1 {
+		t.Errorf("the oldest surviving row starts at %d, want 1: the front row should have been dropped", g.rows[0].Start)
+	}
+	if got := g.row; got != shellRailScrollback+height-2 {
+		t.Errorf("the cursor is on row %d after one row was dropped above it, want %d: it must stay on the same text",
+			got, shellRailScrollback+height-2)
+	}
+	if got := g.top; got != shellRailScrollback+height-height-1 {
+		t.Errorf("the screen top is %d after one row was dropped, want %d", got, shellRailScrollback+height-height-1)
+	}
+
+	// A buffer well inside the cap is untouched: the cap is a limit, not a size the
+	// layout is padded to. Printing `n` lines on a small screen leaves one row per line
+	// plus the one the final newline opened, and none of them is dropped however small
+	// the screen is.
+	for _, lines := range []int{3, 7, 9} {
+		short := newRowLayout(20, height)
+		var log []byte
+		for i := 0; i < lines; i++ {
+			log = append(log, []byte("L\r\n")...)
+		}
+		short.feed(0, log)
+		if got, want := short.rowCount(), lines+1; got != want {
+			t.Errorf("%d lines on a %d-row screen hold %d rows, want %d", lines, height, got, want)
+		}
+	}
+}
+
 func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 	prompt := "\x1b[?2004h\x1b[31mmain\x1b[0m$ "
 	// A banner with a blank line, the prompt, a repaint of that prompt, the typed
@@ -517,9 +741,9 @@ func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 			sp := g.rows[row]
 			if sp.End > sp.Start && sp.Start <= m.Start && m.Start < sp.End {
 				if hit >= 0 {
-					t.Errorf("mark %s at %d is on two rows: %d and %d", m.Status, m.Start, hit, g.first+row)
+					t.Errorf("mark %s at %d is on two rows: %d and %d", m.Status, m.Start, hit, row)
 				}
-				hit = g.first + row
+				hit = row
 			}
 		}
 		if hit < 0 {
@@ -550,7 +774,7 @@ func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 		}
 		if at >= 0 && sp.Start != at {
 			t.Errorf("row %d starts at %d but the row above ended at %d: the live rows leave a gap",
-				g.first+row, sp.Start, at)
+				row, sp.Start, at)
 		}
 		at = sp.End
 	}

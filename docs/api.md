@@ -602,7 +602,7 @@ Response 200:
 | `cols` | **Required.** The terminal's width in columns. Half the input to the layout, and a wrong one puts every cell on the wrong row, so it is a parameter rather than a default |
 | `top` | First row wanted, in the terminal's own numbering (`viewportY`). Default `0`; at most 100000 |
 | `count` | How many rows to answer for. Default `0`; at most 2048 |
-| `height` | The terminal's height in rows, which the layout needs to know where the top of the screen is when a program addresses the cursor. Defaults to `count` |
+| `height` | The terminal's height in rows, which the layout needs to know where the top of the screen is when a program addresses the cursor and where the terminal buffer trims. This is the screen height, **not** `count`: the client may ask for a larger window with margin rows. Defaults to `count` when omitted, for a caller that asks for exactly one screen; when supplied it is never raised to match `count` |
 
 `top`, `count` and `height` are read leniently: a value outside its range falls
 back to the default rather than failing the request. `cols` is the one parameter
@@ -612,7 +612,23 @@ that is required and validated.
 |-------|---------|
 | `spans[i]` | Row `top+i`'s byte range `[start, end)`, or `null` for a row holding no bytes |
 | `marks` | The marks covering the byte window those rows hold — the same shape as `GET /api/shells/{id}/marks`, so the client needs no second request and there is one definition of a span |
-| `total_rows` | Rows the layout has, so the client can tell how far the rail extends |
+| `total_rows` | Rows the layout has, so the client can tell how far the rail extends. This is an **absolute row number** (the terminal's own numbering), not a length counted from `top`; a client deciding whether a response already covers the viewport has to bound it by this as well as by `spans.length`, which is only the requested `count` |
+
+The row number is the terminal's own buffer number (`viewportY`). The model keeps the
+same retention rules as xterm: the line buffer holds `scrollback + height` rows, and
+`CSI 3 J` — the erase-saved-lines sequence a shell's `clear` sends — trims the
+scrollback and renumbers the surviving screen rows. Both matter after a clear:
+without them every later cell would be indexed in the pre-clear scrollback's
+numbering and would sit far from the text it describes.
+
+The whole log is replayed before the window is answered, never just the part up to
+`top + count`. Rows are not settled when the cursor leaves them: a cursor-addressing
+sequence further down rewrites rows that were already passed, and `CSI 3 J`
+renumbers the entire buffer, so stopping at the window answers in a numbering the
+rest of the log has not finished deciding. The cost is bounded by the trim being
+amortized constant — a 20 MB log replays in roughly 0.2s — and a client watching a
+live shell has its viewport at the end of the log, where the loop ran to the end
+anyway.
 
 The mapping is **derived from the log and the width per request**, never
 recorded: a reloaded channel delivers its whole transcript in one write, and a

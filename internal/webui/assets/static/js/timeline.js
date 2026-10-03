@@ -149,13 +149,36 @@ function railFetchWindow(vis) {
 
 /* Whether the layout in hand already describes the rows on screen, so a repaint
    can use it instead of asking again. Also requires the width to match: after a
-   reflow the rows in the response name lines that no longer exist. */
+   reflow the rows in the response name lines that no longer exist.
+
+   The window a response covers is bounded by two different things, and only one of
+   them is its array length. `spans` is answered at the requested `count` — it is
+   padded with nulls for rows past the end of the log — so its length says how many
+   rows were *asked for*, while `total_rows` says how many the layout actually has,
+   in the terminal's own numbering (so it is an absolute row number, not a length
+   counted from `top`). A fetch made while the log was shorter therefore answers a
+   full-looking array whose tail is nulls, and testing the screen against the
+   array's length alone claims coverage of rows that hold no span: the cells for the
+   newest output are not drawn, and because this is the test that decides whether to
+   fetch, nothing asks again until the screen has scrolled past the stale tail.
+
+   That is the read as "the bar is shorter than the output": the strip stops a few
+   rows above the tail and refills only once enough new output has arrived to push
+   the screen out of the range the client believed it had. */
 function railCoversWindow(st, vis, cols) {
   var b = st && st.lastBody;
   if (!b || !b.spans || !vis) return false;
   if (Number(b.cols) !== cols) return false;
   var top = Number(b.top) || 0;
-  return vis.top >= top && vis.top + vis.rows <= top + b.spans.length;
+  var end = top + b.spans.length;
+  /* The layout's own extent, when the server reported one: rows at or past it hold
+     no span, so they are not covered however long the array is. The number is an
+     absolute row, which is why it is compared against `end` and not added to `top`
+     — reading it as a count would extend the window past every row the terminal
+     has. */
+  var total = Number(b.total_rows);
+  if (isFinite(total) && total >= 0 && total < end) end = total;
+  return vis.top >= top && vis.top + vis.rows <= end;
 }
 
 /* The row spans of the visible screen, taken out of the layout in hand. A span is

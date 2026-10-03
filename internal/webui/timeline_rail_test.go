@@ -1,6 +1,9 @@
 package webui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -187,6 +190,41 @@ func TestRailCallsTheRealTerminalGeometry(t *testing.T) {
 	}
 	if !strings.Contains(js, "xterm-viewport") {
 		t.Error("the scroll listener is no longer on the viewport element")
+	}
+}
+
+// TestRailCoverageUsesAbsoluteTotalRows exercises the client's stale-tail guard.
+//
+// `spans.length` is the requested count, while `total_rows` is an absolute row
+// number. During a streaming command the response can therefore contain 121 array
+// slots while the log only has 1427 rows and the viewport already reaches row 1431.
+// Treating the array length as the extent says the response covers the viewport and
+// leaves the newest rows without cells. The JS path is run, not only searched, so a
+// later refactor cannot silently reintroduce the off-by-top arithmetic.
+func TestRailCoverageUsesAbsoluteTotalRows(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot execute rail coverage helper")
+	}
+	js := readAssetLF(t, "static/js/timeline.js")
+	path := filepath.Join(t.TempDir(), "timeline.js")
+	if err := os.WriteFile(path, []byte(js), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const probe = `
+const fs = require('fs'), vm = require('vm');
+vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
+const body = { cols: 80, top: 1354, spans: Array(121).fill(null), total_rows: 1427 };
+const staleTail = railCoversWindow({ lastBody: body }, { top: 1406, rows: 25 }, 80);
+if (staleTail) throw new Error('a 121-slot response was treated as covering rows past absolute total_rows');
+body.total_rows = 1450;
+const covered = railCoversWindow({ lastBody: body }, { top: 1406, rows: 25 }, 80);
+if (!covered) throw new Error('a viewport inside absolute total_rows was rejected');
+console.log('ok');
+`
+	cmd := exec.Command(node, "-e", probe, path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rail coverage probe failed: %v\n%s", err, out)
 	}
 }
 

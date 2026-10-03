@@ -71,7 +71,10 @@ type shellRailResponse struct {
 // The model's limits. The scrollback cap is the xterm option the client sets
 // (terminal-view.js): xterm drops the oldest lines past it, and because the rail
 // indexes rows the way the terminal does, the layout has to drop them too or every
-// row number below the trim point would be off by the difference.
+// row number below the trim point would be off by the difference. xterm's buffer
+// holds the scrollback *plus* the screen (see getCorrectBufferLength in xterm.js),
+// so the cap is raised by the terminal's height in capacity() rather than being a
+// hard number here.
 const (
 	shellRailScrollback = 100000
 	shellRailTabStop    = 8
@@ -89,8 +92,17 @@ const (
 // `cols` is the terminal's width and is required: it is half the input to the
 // layout, and a wrong one puts every cell on the wrong row. `top` and `count` name
 // the rows wanted in the numbering the terminal itself uses (viewportY), and
-// `height` is its height, which the model needs to know where the top of the
-// screen is when a program addresses the cursor.
+// `height` is its height, which the model needs for two things that both feed back
+// into the row numbers: where the top of the screen is when a program addresses
+// the cursor, and where the buffer trims (a screenful survives on top of the
+// configured scrollback).
+//
+// `height` is taken as given and never derived from `count`. The client asks for
+// the screen plus a screen of margin on either side — a wider window than the
+// screen on purpose, so a scroll inside the margin is a repaint instead of a
+// request — and letting the window widen the modelled screen made every
+// screen-relative sequence land on the wrong row: `clear`, which is
+// `ESC[H ESC[2J`, then erased a screenful-sized region from the wrong origin.
 func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sessionID, shellID, ok := h.marksTarget(id)
@@ -103,12 +115,11 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cols must be a terminal width between 2 and "+strconv.Itoa(shellRailMaxCols), http.StatusBadRequest)
 		return
 	}
-	top := queryInt(r, "top", 0, 0, shellRailScrollback)
+	// `top` may name any row the buffer can still hold: the scrollback plus the
+	// screen above it, which is where the terminal stops keeping rows.
+	top := queryInt(r, "top", 0, 0, shellRailScrollback+shellRailMaxRows)
 	count := queryInt(r, "count", 0, 1, shellRailMaxRows)
 	height := queryInt(r, "height", count, 1, shellRailMaxRows)
-	if height < count {
-		height = count
-	}
 
 	total, err := h.Sessions.OutputSize(sessionID, shellID)
 	if err != nil {
@@ -116,12 +127,37 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A row's byte range is settled once the layout has moved past it, so the read
-	// stops as soon as the rows wanted are: a rail drawn at the bottom of the log
-	// pays for the log, not for the rows beyond the window.
+	// The whole log is replayed, to the end, before the window is answered.
+	//
+	// The read has to advance by the bytes it got, not by the size the stream
+	// reports. `OutputByteRange` answers its second value as the log's *total* length
+	// (that is what lets a caller tell an empty stream from a truncated one), so
+	// assigning it to `off` moved the cursor straight to the end of the log after the
+	// first chunk: every log larger than shellRailReadChunk was laid out from its
+	// first 256 KiB alone, and the rail described rows the rest of the log had
+	// already scrolled away — newest output with no cells, which is exactly what a
+	// rail that is "shorter than the terminal" looks like. Pinned by
+	// TestShellRailReplaysPastTheWindow, which answers a window over a log that spans
+	// several chunks.
+	//
+	// Replaying to the end is also required for correctness, not only for coverage:
+	// rows are not settled when the cursor leaves them. A cursor-addressing sequence
+	// further down rewrites a row that was already passed, and `CSI 3 J` (what
+	// `clear` sends) renumbers every row by dropping the scrollback, so stopping at
+	// the requested window answers in a numbering the rest of the log has not
+	// finished deciding.
+	//
+	// And it is not the optimization it looks like: the window is resolved in the
+	// log's *final* numbering, while a client watching a live shell has its viewport
+	// at the bottom of the log — the case the rail exists for — so there is nothing
+	// past the window to skip. The cost is bounded by the trim being amortized
+	// constant (see trimFront): the parser runs at about 100 MB/s, so a 20 MB log
+	// replays in about 0.2s. Before that fix the same replay spent 7.2s copying rows
+	// at the retention limit — the copying, not the parsing, was what made a full
+	// replay expensive.
 	layout := newRowLayout(cols, height)
-	for off := int64(0); off < total && !layout.reached(top+count); {
-		chunk, end, err := h.Sessions.OutputByteRange(sessionID, shellID, off, shellRailReadChunk)
+	for off := int64(0); off < total; {
+		chunk, _, err := h.Sessions.OutputByteRange(sessionID, shellID, off, shellRailReadChunk)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -130,7 +166,7 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		layout.feed(off, chunk)
-		off = end
+		off += int64(len(chunk))
 	}
 
 	spans := layout.window(top, count)

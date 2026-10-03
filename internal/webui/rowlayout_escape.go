@@ -64,7 +64,7 @@ func (g *rowLayout) feedEscape(base int64, data []byte) int {
 				// The program's cursor, not the transcript's.
 				return 1
 			}
-			if g.row > g.first {
+			if g.row > 0 {
 				g.row--
 			}
 			g.pending = true
@@ -152,8 +152,8 @@ func (g *rowLayout) applyCSI(body []byte, final byte) {
 	switch final {
 	case 'A':
 		g.row -= arg(0, 1)
-		if g.row < g.first {
-			g.row = g.first
+		if g.row < 0 {
+			g.row = 0
 		}
 		g.armRepaint()
 	case 'B':
@@ -177,8 +177,8 @@ func (g *rowLayout) applyCSI(body []byte, final byte) {
 		g.ensure(g.row)
 	case 'F':
 		g.row -= arg(0, 1)
-		if g.row < g.first {
-			g.row = g.first
+		if g.row < 0 {
+			g.row = 0
 		}
 		g.col = 0
 		g.armRepaint()
@@ -211,8 +211,13 @@ func (g *rowLayout) applyCSI(body []byte, final byte) {
 		switch arg(0, 0) {
 		case 1:
 			g.erase(top, g.row+1)
-		case 2, 3:
+		case 2:
 			g.erase(top, bottom)
+		case 3:
+			// Erase saved lines: the scrollback goes, the screen stays, and every row
+			// number above it slides down. This is not a repaint of the screen — it is
+			// the buffer losing its history — so it renumbers rather than blanks.
+			g.trimToScrollback()
 		default:
 			g.erase(g.row, bottom)
 		}

@@ -61,13 +61,24 @@ import (
 // one the terminal reports `viewportY` in, and it loses rows: the cursor would
 // come back down onto a row it had already passed and overwrite the prompt and
 // command standing on it.
+//
+// The buffer's retention limits are the one exception, and they are not optional:
+// past `scrollback + height` rows the terminal itself drops the oldest and slides
+// every remaining row number down, so a model that kept them would be counting in
+// a space the terminal has already left. See ensure for where that trim happens.
 type rowLayout struct {
 	cols   int
 	height int
-	rows   []shellRowSpan
-	first  int // absolute row number of rows[0]
-	row    int // the cursor's row
-	col    int
+	// rows is the buffer, indexed by the row number the terminal itself would use:
+	// rows[0] is the oldest row it still holds. That makes the index the number in
+	// the API — the one `viewportY` is reported in — and it is why the slice is
+	// trimmed from the front rather than kept whole with an offset: a trim moves
+	// every row number down, so an offset would have to be subtracted from every
+	// one of them on the way out, and any path that forgot would name a row the
+	// terminal does not have.
+	rows []shellRowSpan
+	row  int // the cursor's row
+	col  int
 	// pending says the row the cursor is on is about to be rewritten, so the next
 	// printable rune starts a new version of the row instead of extending the old one.
 	// A row therefore holds what is standing on it now: a prompt the shell repainted
@@ -138,12 +149,6 @@ func newRowLayout(cols, height int) *rowLayout {
 	return &rowLayout{cols: cols, height: height}
 }
 
-// reached reports whether the layout has passed row `r`, so the rows above it are
-// settled and no later byte can change them.
-func (g *rowLayout) reached(r int) bool {
-	return g.first+len(g.rows) >= r
-}
-
 // rowCount is the number of rows the log has.
 func (g *rowLayout) rowCount() int { return len(g.rows) }
 
@@ -152,7 +157,7 @@ func (g *rowLayout) rowCount() int { return len(g.rows) }
 func (g *rowLayout) window(top, count int) []*shellRowSpan {
 	out := make([]*shellRowSpan, count)
 	for i := 0; i < count; i++ {
-		r := top + i - g.first
+		r := top + i
 		if r < 0 || r >= len(g.rows) || g.rows[r].End <= g.rows[r].Start {
 			continue
 		}
@@ -182,10 +187,12 @@ func (g *rowLayout) feed(base int64, data []byte) {
 		switch {
 		case b == 0x1b:
 			g.esc, g.escStart, i = escEsc, g.at+int64(i), i+1
-		case b == '\n':
+		case b == '\n' || b == '\v' || b == '\f':
 			// The newline belongs to the row it ends, which is what gives a blank
 			// line a range of its own: a line break and nothing else is still a
-			// lineful of output.
+			// lineful of output. Vertical tab and form feed are the same thing to a
+			// terminal — xterm wires VT and FF to its line-feed handler — so they are
+			// treated as the break they are rather than as one more control byte.
 			g.touch(g.row, g.at+int64(i), g.at+int64(i)+1)
 			g.newRow()
 			i++
@@ -284,7 +291,7 @@ func (g *rowLayout) touch(row int, start, end int64) {
 	if g.alt {
 		return
 	}
-	if row < g.first || end <= start {
+	if row < 0 || end <= start {
 		return // its row has aged out of the scrollback
 	}
 	sp := g.span(row)
@@ -331,5 +338,8 @@ func (g *rowLayout) newRow() {
 // span returns one row's span, growing the layout so the row exists.
 func (g *rowLayout) span(row int) *shellRowSpan {
 	g.ensure(row)
-	return &g.rows[row-g.first]
+	if row < 0 {
+		row = 0
+	}
+	return &g.rows[row]
 }

@@ -39,30 +39,101 @@ func (g *rowLayout) ensure(row int) {
 	if g.alt {
 		return
 	}
-	if row < g.first {
+	if row < 0 {
 		return
 	}
-	for g.first+len(g.rows) <= row {
+	for len(g.rows) <= row {
 		g.rows = append(g.rows, shellRowSpan{})
 	}
-	// Past the scrollback cap the oldest rows fall off, and every row number slides
-	// down with them, exactly as they do in the terminal’s own trimmed buffer. This is
-	// the only thing that renumbers rows: the screen scrolling is a window moving over
-	// the buffer, not a row leaving it. The cursor and the screen top keep pointing at
-	// the same text, so they move by the same amount.
-	if over := len(g.rows) - shellRailScrollback; over > 0 {
-		g.rows = append(g.rows[:0], g.rows[over:]...)
-		g.first += over
-		g.top -= over
-		g.row -= over
+	// Past the retention limit the oldest rows fall off and every row number slides
+	// down with them, exactly as they do in the terminal’s own trimmed buffer. This
+	// is the only thing that renumbers rows: the screen scrolling is a window moving
+	// over the buffer, not a row leaving it. The cursor and the screen top keep
+	// pointing at the same text, so they move by the same amount.
+	//
+	// The limit is `scrollback + height`, not `scrollback`: xterm sizes its line
+	// buffer to hold a screenful on top of the scrollback it was configured with
+	// (`getCorrectBufferLength`), so trimming one screenful early would put every
+	// row number off by the screen height for the rest of the session — a rail that
+	// is right until the assumption wears off, then wrong by a fixed amount, which is
+	// the hardest kind of misalignment to see.
+	if over := len(g.rows) - g.capacity(); over > 0 {
+		g.trimFront(over)
+	}
+}
+
+// capacity is how many rows the buffer holds before the oldest falls off.
+func (g *rowLayout) capacity() int {
+	if g.height >= shellRailScrollback {
+		return g.height
+	}
+	return shellRailScrollback + g.height
+}
+
+// trimToScrollback applies an erase-saved-lines sequence (CSI 3 J): the terminal
+// throws away everything in the scrollback and keeps the screen, and every row
+// number above it slides down by what was dropped.
+//
+// This is the sequence `clear` actually sends, and its effect on the numbering is
+// total: xterm trims to exactly one screenful and renumbers from there, so a model
+// that ignored it would keep describing a buffer the terminal no longer has —
+// measured on one real session, 122 modelled rows against xterm's 25, which puts
+// every cell about four screens away from the text it is supposed to be beside.
+//
+// The trim only reaches the scrollback: rows on the screen stay, and so do the
+// cursor and the screen top, which are already inside the last `height` rows.
+func (g *rowLayout) trimToScrollback() {
+	if g.alt {
+		// A full-screen program erasing its own screen's saved lines changes nothing
+		// about the transcript's buffer; the rows it is painting are not recorded and
+		// the primary screen keeps its own. saveState/restoreState carry the top back.
+		return
+	}
+	drop := len(g.rows) - g.height
+	if drop <= 0 {
+		return
+	}
+	g.trimFront(drop)
+}
+
+// trimFront drops `drop` rows off the top of the buffer, which is what the
+// terminal does to both of its ends: the row numbers above the dropped ones slide
+// down, so the cursor and the screen top move with them and the rows left behind
+// keep pointing at the same text.
+//
+// Reslicing is intentional. Copying the survivors with
+// `append(rows[:0], rows[drop:]...)` runs once per row at the retention limit, so
+// a buffer at its 100k-row capacity memmoves 1.6 MB for every line that scrolls
+// off: a 20 MB log measured 7.2s of pure copying, during which the rail simply
+// does not answer and the cells sit where the previous response left them. A
+// reslice makes the trim constant work. Appending new rows eventually exhausts
+// the remaining capacity and Go allocates a fresh backing array, copying the live
+// rows once; that is amortized over the rows which filled that capacity, rather
+// than paid on every trim. The live slice remains `rows[0:]`, so all row-indexed
+// accesses continue to use the terminal's numbering directly.
+func (g *rowLayout) trimFront(drop int) {
+	if drop <= 0 {
+		return
+	}
+	if drop > len(g.rows) {
+		drop = len(g.rows)
+	}
+	g.rows = g.rows[drop:]
+	g.row -= drop
+	if g.row < 0 {
+		g.row = 0
+	}
+	g.top -= drop
+	if g.top < 0 {
+		g.top = 0
 	}
 }
 
 // screenTop is the row a cursor-addressing sequence counts from: the top of the
 // screen, which is the window the cursor has scrolled into view.
 func (g *rowLayout) screenTop() int {
-	if g.top < g.first {
-		return g.first
+	if g.top < 0 {
+		return 0
 	}
 	return g.top
 }
@@ -75,15 +146,15 @@ func (g *rowLayout) erase(from, to int) {
 	if g.alt {
 		return
 	}
-	if from < g.first {
-		from = g.first
+	if from < 0 {
+		from = 0
 	}
-	if to > g.first+len(g.rows) {
-		to = g.first + len(g.rows)
+	if to > len(g.rows) {
+		to = len(g.rows)
 	}
 	for r := from; r < to; r++ {
 		g.ensure(r)
-		g.rows[r-g.first] = shellRowSpan{}
+		g.rows[r] = shellRowSpan{}
 	}
 	if g.row >= from && g.row < to {
 		g.pending = true
@@ -112,14 +183,16 @@ func (g *rowLayout) eraseLine(mode int) {
 		return
 	}
 	if mode == 2 {
-		g.rows[g.row-g.first] = shellRowSpan{}
+		g.ensure(g.row)
+		g.rows[g.row] = shellRowSpan{}
 		g.pending = true
 		return
 	}
 	// Erase to the right of the cursor. The row keeps what it holds up to the
 	// cursor; when the cursor is at the start of the row that is the whole row.
 	if g.col <= 0 {
-		g.rows[g.row-g.first] = shellRowSpan{}
+		g.ensure(g.row)
+		g.rows[g.row] = shellRowSpan{}
 		g.pending = true
 	}
 }
