@@ -150,6 +150,9 @@ function renderConnGrid(connections, bannerMsg) {
     var apprMark = c.default_approval
       ? '<span class="conn-approval" title="Sessions from this profile start with review mode on" data-i18n-title="conn.approval.mark" aria-label="Reviews by default" data-i18n-aria="conn.approval.markAria">' + SVG_LOCK_CLOSED + '</span>'
       : '';
+    var temporaryMark = c.temporary
+      ? '<span class="conn-temporary-mark" data-i18n-title="conn.temporary.hint" title="Temporary host" data-i18n="conn.temporary.mark">TEMP</span>'
+      : '';
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<div class="conn-tile-stack">' +
@@ -162,6 +165,7 @@ function renderConnGrid(connections, bannerMsg) {
       '<button type="button" class="sess-copy-btn" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
       '</span>' +
       quickBtn +
+      temporaryMark +
       apprMark +
       editBtn +
       '</div>' +

@@ -282,6 +282,10 @@ function openConnModal(edit, name, kind) {
   connEntries = null; // refresh import dropdown options
   document.getElementById('modal-conn-err').style.display = 'none';
   var isInternal = edit && kind === 'internal';
+	var temporaryEl = document.getElementById('conn-temporary');
+	var current = (window._lastConnections || []).find(function(c) { return c.name === name; });
+	temporaryEl.checked = !!(edit && current && current.temporary);
+	document.getElementById('conn-temporary-wrap').style.display = isInternal ? 'none' : '';
   document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   document.getElementById('conn-duplicate').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
@@ -501,9 +505,10 @@ document.getElementById('conn-save').onclick = function () {
     }
   }
   var url = '/api/connections/' + encodeURIComponent(name);
-  if (editingConnName && editingConnName !== name) {
-    url += '?from=' + encodeURIComponent(editingConnName);
-  }
+  var params = new URLSearchParams();
+  params.set('temporary', document.getElementById('conn-temporary').checked ? 'true' : 'false');
+  if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
+  url += '?' + params.toString();
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
@@ -552,6 +557,70 @@ document.getElementById('conn-duplicate').onclick = function () {
   var err = document.getElementById('modal-conn-err');
   if (err) { err.style.display = 'none'; err.textContent = ''; }
   try { nameEl.focus(); } catch (e) {}
+};
+
+document.getElementById('conn-import-open').onclick = function (e) {
+  e.stopPropagation();
+  document.getElementById('conn-import-file').value = '';
+  document.getElementById('conn-import-temporary').checked = false;
+  document.getElementById('conn-import-err').style.display = 'none';
+  document.getElementById('conn-import-result').style.display = 'none';
+  showModal('modal-conn-import');
+};
+document.getElementById('conn-import-close').onclick = function () { hideModal('modal-conn-import'); };
+document.getElementById('conn-import-run').onclick = function () {
+  var file = document.getElementById('conn-import-file').files[0];
+  var err = document.getElementById('conn-import-err');
+  err.style.display = 'none';
+  document.getElementById('conn-import-result').style.display = 'none';
+  if (!file) { err.textContent = t('conn.batch.selectFile'); err.style.display = 'block'; return; }
+  var btn = this;
+  btn.disabled = true;
+  var temporary = document.getElementById('conn-import-temporary').checked;
+  // The file is opaque to the UI; the backend parses and validates its TOML.
+  fetch('/api/connections/batch?temporary=' + temporary, {
+    method: 'POST', headers: { 'Content-Type': 'application/toml' }, body: file
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
+    return r.json();
+  }).then(function (result) {
+    loadConnections();
+    if (result.renamed && result.renamed.length) {
+      var lines = [t('conn.batch.imported', { count: result.imported })];
+      result.renamed.forEach(function (entry) {
+        lines.push(t('conn.batch.renamed', { from: entry.from, to: entry.to }));
+      });
+      var output = document.getElementById('conn-import-result');
+      output.textContent = lines.join('\n');
+      output.style.display = 'block';
+      document.getElementById('conn-import-file').value = '';
+    } else {
+      hideModal('modal-conn-import');
+      showCopyToast(t('conn.batch.imported', { count: result.imported }));
+    }
+  }).catch(function (e) {
+    err.textContent = String(e.message || e);
+    err.style.display = 'block';
+  }).finally(function () { btn.disabled = false; });
+};
+document.getElementById('conn-export').onclick = function (e) {
+  e.stopPropagation();
+  var btn = this;
+  btn.disabled = true;
+  fetch('/api/connections/batch').then(function (r) {
+    if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
+    return r.blob();
+  }).then(function (blob) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'termcp-connections.toml';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }).catch(function (e) { showCopyToast(t('conn.batch.exportFailed', { msg: String(e.message || e) })); })
+    .finally(function () { btn.disabled = false; });
 };
 
 function openStartModal(connName, clickEvent) {

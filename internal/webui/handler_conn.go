@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
@@ -22,6 +23,7 @@ type connectionSummary struct {
 	// DefaultApproval is the profile's review default for new sessions. It is
 	// served on the list so the card can show the flag without a second fetch.
 	DefaultApproval bool `json:"default_approval"`
+	Temporary       bool `json:"temporary"`
 }
 
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +45,9 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		if h.NoInternal && ent.Kind == sshconfig.KindInternal {
 			continue
 		}
-		list = append(list, summarizeConnection(n, ent))
+		cs := summarizeConnection(n, ent)
+		cs.Temporary = h.SSH.IsTemporary(n)
+		list = append(list, cs)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": list})
 }
@@ -81,7 +85,7 @@ func (h *Handler) handleGetConnection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -112,17 +116,78 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from := strings.TrimSpace(r.URL.Query().Get("from"))
+	temporary := h.SSH.IsTemporary(name)
+	if from != "" && from != name {
+		temporary = h.SSH.IsTemporary(from)
+	}
+	if values, ok := r.URL.Query()["temporary"]; ok {
+		if len(values) != 1 {
+			http.Error(w, "temporary must be true or false", http.StatusBadRequest)
+			return
+		}
+		temporary, err = strconv.ParseBool(values[0])
+		if err != nil {
+			http.Error(w, "temporary must be true or false", http.StatusBadRequest)
+			return
+		}
+	}
 	if from != "" && from != name {
 		if err := h.SSH.Rename(from, name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
-	if err := h.SSH.Save(name, body); err != nil {
+	if err := h.SSH.SaveWithOptions(name, body, temporary); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// The browser uploads and downloads opaque TOML bytes. Parsing and validation
+// belong entirely to the backend so every client uses the same format.
+func (h *Handler) handleExportConnections(w http.ResponseWriter, r *http.Request) {
+	if h.SSH == nil {
+		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	data, err := h.SSH.ExportBatch()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="termcp-connections.toml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (h *Handler) handleImportConnections(w http.ResponseWriter, r *http.Request) {
+	if h.SSH == nil {
+		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	temporary := false
+	if raw := r.URL.Query().Get("temporary"); raw != "" {
+		var err error
+		temporary, err = strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "temporary must be true or false", http.StatusBadRequest)
+			return
+		}
+	}
+	const maxUpload = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxUpload+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := h.SSH.ImportBatch(body, temporary)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 
 func (h *Handler) handleDeleteConnection(w http.ResponseWriter, r *http.Request) {

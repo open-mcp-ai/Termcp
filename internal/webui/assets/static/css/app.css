@@ -313,6 +313,8 @@
     width: 22px; height: 22px;
     color: #bf8700;
   }
+  .conn-temporary-mark { align-self:center; font-size:.62rem; font-weight:700; color:#8250df; letter-spacing:.03em; }
+  .host-batch-btn { font-size:.72rem; padding:3px 7px; }
   /* Borderless copy button, mirroring the edit button's quiet look. */
   .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
   .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: #0969da; background: rgba(9,105,218,.08); }

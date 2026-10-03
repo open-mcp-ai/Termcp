@@ -162,13 +162,21 @@ and remembering to flip the switch after each launch is the step that gets
 forgotten. Set it in the connection editor's checkbox or as
 `default_approval = true` in the profile's TOML.
 
+`temporary: true` marks a remote profile held only in process memory. It remains
+available to REST, MCP, and the Web UI until termcp exits. It is never written
+under `ssh_configs/`.
+
 ### `GET /api/connections/{name}`
 
 Returns the raw TOML of one connection profile.
 
 ### `PUT /api/connections/{name}`
 
-Creates or updates a connection profile. Body is TOML.
+Creates or updates a connection profile. Body is TOML. Add
+`?temporary=true` to keep a remote profile only in memory, or
+`?temporary=false` to persist it. When omitted, an existing profile keeps its
+current storage mode; a new profile is persisted. The built-in `internal`
+profile cannot be temporary.
 
 ```
 Response: 204 No Content
@@ -181,6 +189,43 @@ Deletes a connection profile.
 ```
 Response: 204 No Content
 ```
+
+### `GET /api/connections/batch`
+
+Downloads all remote profiles as one TOML file, including temporary profiles.
+The built-in `internal` profile is excluded. The file contains credentials, so
+handle it as a secret.
+
+### `POST /api/connections/batch?temporary=false`
+
+Imports a TOML file. Send its bytes as the request body (`Content-Type:
+application/toml`). Set `temporary=true` to keep **all** imported profiles only
+in memory. The upload limit is 16 MiB. Existing names, case-insensitive
+duplicates, and the reserved `internal` name receive a unique `-2`, `-3`, …
+suffix; existing profiles are never overwritten. Invalid profiles reject the
+whole import before any profile is added. The format is the same for import and
+export:
+
+```toml
+[[connections]]
+name = "host-one"
+kind = "remote"
+host = "host-one.example"
+user = "tester"
+password = "placeholder"
+
+[[connections]]
+name = "host-two"
+kind = "remote"
+host = "host-two.example"
+user = "tester"
+password = "placeholder"
+```
+
+Response: `201 { "imported": 2, "renamed": [{ "from": "host-one", "to": "host-one-2" }] }`
+when a name is changed; `renamed` is omitted when no names change. The Web UI
+passes the file to this endpoint unchanged; parsing and validation happen on
+the server.
 
 ### `POST /api/connections/test`
 

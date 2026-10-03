@@ -18,9 +18,10 @@ var ErrNotFound = errors.New("not found")
 // Store manages dataDir/ssh_configs/<name>/config.toml for remote profiles.
 // The built-in "internal" profile is virtual: it is never written to disk.
 type Store struct {
-	dataDir  string
-	mu       sync.Mutex
-	onChange atomic.Value // func(), set via SetOnChange, called after Save/Delete/Rename
+	dataDir   string
+	mu        sync.Mutex
+	temporary map[string][]byte // process-local profiles; guarded by mu
+	onChange  atomic.Value      // func(), set via SetOnChange, called after Save/Delete/Rename
 }
 
 // SetOnChange registers a callback fired after Save, Delete, or Rename succeeds.
@@ -92,7 +93,14 @@ func (s *Store) Load(name string) (*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	s.mu.Lock()
+	data, inMemory := s.temporary[name]
+	data = append([]byte(nil), data...)
+	s.mu.Unlock()
+	if inMemory {
+		return ParseAndValidate(data)
+	}
+	data, err = os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("ssh config %q %w (use data-dir/ssh_configs/%s/config.toml)", name, ErrNotFound, name)
@@ -123,7 +131,14 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	s.mu.Lock()
+	data, inMemory := s.temporary[name]
+	data = append([]byte(nil), data...)
+	s.mu.Unlock()
+	if inMemory {
+		return data, nil
+	}
+	data, err = os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -133,28 +148,29 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	return data, nil
 }
 
-// List returns sorted config names: virtual "internal" plus remote profiles on disk.
+// List returns sorted config names: virtual "internal", temporary profiles, and profiles on disk.
 // Leftover ssh_configs/internal/ directories are ignored.
 func (s *Store) List() ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.root(), 0700); err != nil {
-		return nil, err
-	}
 	entries, err := os.ReadDir(s.root())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []string{"internal"}, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
 	}
 	names := []string{"internal"}
+	seen := map[string]bool{"internal": true}
+	for name := range s.temporary {
+		names = append(names, name)
+		seen[name] = true
+	}
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		name := e.Name()
-		if isInternalName(name) {
+		if isInternalName(name) || seen[name] {
 			continue // disk leftover; virtual entry already listed
 		}
 		cfg := filepath.Join(s.root(), name, "config.toml")
@@ -171,7 +187,16 @@ func (s *Store) List() ([]string, error) {
 // The internal profile is saved as an override file that Load layers over the
 // built-in defaults, so setting one field does not mean restating the rest.
 func (s *Store) Save(name string, data []byte) error {
+	return s.SaveWithOptions(name, data, false)
+}
+
+// SaveWithOptions stores a remote profile only in memory when temporary is true.
+// Switching an existing profile between modes removes its previous copy.
+func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error {
 	if isInternalName(name) {
+		if temporary {
+			return fmt.Errorf("internal profile cannot be temporary")
+		}
 		if _, err := ParseInternalOverride(data, InternalEntry()); err != nil {
 			return err
 		}
@@ -195,14 +220,56 @@ func (s *Store) Save(name string, data []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkNameCollisionLocked(name, name); err != nil {
+		return err
+	}
 	p := filepath.Join(s.root(), name, "config.toml")
+	if temporary {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		_ = os.Remove(filepath.Dir(p))
+		if s.temporary == nil {
+			s.temporary = make(map[string][]byte)
+		}
+		s.temporary[name] = append([]byte(nil), data...)
+		s.notifyChange()
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
 	if err := writeFileAtomic(p, data); err != nil {
 		return err
 	}
+	delete(s.temporary, name)
 	s.notifyChange()
+	return nil
+}
+
+// IsTemporary reports whether the profile exists only in this process.
+func (s *Store) IsTemporary(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.temporary[name]
+	return ok
+}
+
+func (s *Store) checkNameCollisionLocked(name, exclude string) error {
+	for existing := range s.temporary {
+		if existing != exclude && strings.EqualFold(existing, name) {
+			return fmt.Errorf("config already exists: %s", existing)
+		}
+	}
+	entries, err := os.ReadDir(s.root())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != exclude && strings.EqualFold(entry.Name(), name) {
+			return fmt.Errorf("config already exists: %s", entry.Name())
+		}
+	}
 	return nil
 }
 
@@ -262,6 +329,23 @@ func (s *Store) Rename(oldName, newName string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkNameCollisionLocked(newName, oldName); err != nil {
+		return err
+	}
+	if data, ok := s.temporary[oldName]; ok {
+		if _, exists := s.temporary[newName]; exists {
+			return fmt.Errorf("config already exists: %s", newName)
+		}
+		if _, err := os.Stat(newPath); err == nil {
+			return fmt.Errorf("config already exists: %s", newName)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		s.temporary[newName] = data
+		delete(s.temporary, oldName)
+		s.notifyChange()
+		return nil
+	}
 
 	oldDir := filepath.Dir(oldPath)
 	newDir := filepath.Dir(newPath)
@@ -300,6 +384,9 @@ func (s *Store) Delete(name string) error {
 		return err
 	}
 	dir := filepath.Dir(p)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.temporary, name)
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
 	}

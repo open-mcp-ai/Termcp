@@ -106,6 +106,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Connection profiles
 	mux.HandleFunc("GET /api/connections", h.handleListConnections)
+	mux.HandleFunc("GET /api/connections/batch", h.handleExportConnections)
+	mux.HandleFunc("POST /api/connections/batch", h.handleImportConnections)
 	mux.HandleFunc("GET /api/connections/{name}", h.handleGetConnection)
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)

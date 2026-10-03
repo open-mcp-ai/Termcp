@@ -45,6 +45,9 @@
     <div class="section-header entries-section-header" id="sec-entries" aria-expanded="true" role="button" tabindex="0">
       <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
       <span data-i18n="sec.entries">Host</span>
+      <span style="flex:1"></span>
+      <button type="button" class="btn host-batch-btn" id="conn-import-open" data-i18n="conn.batch.import">Import Config</button>
+      <button type="button" class="btn host-batch-btn" id="conn-export" data-i18n="conn.batch.export">Export Config</button>
     </div>
     <div class="section-body" id="sec-entries-body">
       <div id="conn-grid" class="conn-grid"></div>
@@ -130,6 +133,7 @@
           </button>
         </div>
         <input type="text" id="conn-name" placeholder="my-server" autocomplete="off" style="margin-bottom:8px;width:100%">
+        <div class="conn-field conn-field-check" id="conn-temporary-wrap"><label class="conn-check" for="conn-temporary"><input type="checkbox" id="conn-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.temporary.hint">Removed when termcp stops; never saved to a config file.</div></div>
         <!-- Form view -->
         <form id="conn-form-view" autocomplete="off" onsubmit="return false">
           <div id="conn-f-loopback-only" style="display:none" class="conn-field conn-check-hint" data-i18n="modal.conn.loopbackOnly">Built-in loopback connection: it dials this machine over termcp's own SSH server, so host, credentials and jumps do not apply. Only the settings below are used.</div>
@@ -166,6 +170,23 @@
           <button type="button" class="btn btn-primary" id="conn-save" data-i18n="common.save">Save</button>
         </div>
         <p id="conn-test-result" style="display:none;margin:8px 0 0;font-size:0.82rem;word-break:break-word"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-conn-import" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:440px">
+      <div class="modal-h">
+        <h2 data-i18n="conn.batch.import">Import Config</h2>
+        <button type="button" class="btn" id="conn-import-close" data-i18n="common.close">Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="conn-import-err" class="err" style="display:none"></p>
+        <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,application/toml,text/plain"></div>
+        <div class="conn-field conn-field-check"><label class="conn-check" for="conn-import-temporary"><input type="checkbox" id="conn-import-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.batch.temporaryHint">Applies to every host in this file. Temporary hosts disappear when termcp stops.</div></div>
+        <p class="conn-check-hint" data-i18n="conn.batch.collisionHint">Conflicting host names are renamed automatically. Invalid files import no hosts.</p>
+        <p id="conn-import-result" role="status" style="display:none;white-space:pre-line;font-size:0.82rem;color:#1a7f37"></p>
+        <div class="modal-actions"><button type="button" class="btn btn-primary" id="conn-import-run" data-i18n="conn.batch.import">Import Config</button></div>
       </div>
     </div>
   </div>
