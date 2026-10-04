@@ -825,16 +825,17 @@ fetch('/api/version')
   });
 });
 
-// ---- Entries drawer (touch devices) ----
-// On touch devices the connection list becomes a left slide-in drawer instead of
-// an expanded section: 22 entries expanded are ~2000px tall, which pushes the
-// user's own sessions off-screen. The section header itself is the trigger (there
-// is no separate hamburger), so the same row that expands in place on desktop
-// opens the drawer on touch. Picking a connection closes it again.
+// ---- Entries drawer (every viewport) ----
+// The connection list is a left slide-in drawer, not a section in the flow: 22
+// entries expanded are ~2000px tall, which pushes the user's own sessions
+// off-screen — on a phone that is the wrong thing to lead with, and on a wide
+// screen a permanently visible host column is space the session list wanted.
+// Sessions own the page in every viewport; hosts are opened on demand from the
+// "+" in the sessions header, and picking a connection closes the drawer again.
 (function () {
-  var header = document.getElementById('sec-entries');
+  var trigger = document.getElementById('open-host-drawer');
   var body = document.getElementById('sec-entries-body');
-  if (!header || !body) return;
+  if (!trigger || !body) return;
 
   var scrim = document.createElement('div');
   scrim.className = 'drawer-scrim';
@@ -846,23 +847,21 @@ fetch('/api/version')
   function setOpen(open) {
     body.classList.toggle('drawer-open', open);
     scrim.classList.toggle('drawer-open', open);
-    header.setAttribute('aria-expanded', String(open));
+    trigger.setAttribute('aria-expanded', String(open));
     /* Prevent the page behind from scrolling under the drawer. */
     document.body.style.overflow = open ? 'hidden' : '';
   }
 
-  /* In drawer mode the section header toggles the drawer instead of the inline
-     collapse, so swallow the click before the shared collapse handler sees it.
-     Capture phase: the collapse listener is on the same element. */
-  header.addEventListener('click', function (e) {
-    if (!isMobileViewport()) return;        // desktop keeps the inline collapse
-    if (e.target.closest('button')) return;
+  /* stopPropagation is not enough here: the sessions header carries the shared
+     section-collapse listener, and a capture-phase listener on the same element
+     fires before it. Swallow the click in capture so opening the drawer never
+     also collapses the sessions list. */
+  trigger.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     e.preventDefault();
     setOpen(!isOpen());
   }, true);
-  header.addEventListener('keydown', function (e) {
-    if (!isMobileViewport()) return;
+  trigger.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -878,21 +877,12 @@ fetch('/api/version')
   body.addEventListener('click', function (e) {
     if (e.target.closest('.conn-tile')) setOpen(false);
   });
-  window.addEventListener('resize', function () {
-    if (isOpen() && !isMobileViewport()) setOpen(false);
-  });
-
-  /* On touch the drawer starts closed, so the chevron must show the collapsed
-     state — the shared collapse logic above seeds aria-expanded from
-     localStorage (default "true"), which would otherwise leave the icon saying
-     "expanded" next to a closed drawer. */
-  if (isMobileViewport()) header.setAttribute('aria-expanded', 'false');
+  /* The drawer starts closed, so the trigger must report that state. */
+  trigger.setAttribute('aria-expanded', 'false');
 
   /* The terminal header's switcher button opens this drawer too, so a full-screen
-     terminal can switch connection without going home first. Desktop has no
-     drawer (entries expand in place), so the call is a no-op there. */
+     terminal can switch connection without going home first. */
   window.termcpToggleEntriesDrawer = function (forceOpen) {
-    if (!isMobileViewport()) return false;
     setOpen(forceOpen === undefined ? !isOpen() : !!forceOpen);
     return true;
   };

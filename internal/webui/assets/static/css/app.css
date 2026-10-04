@@ -1,6 +1,129 @@
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: near-black navy, the way a breaker's UI sits on a dark plate. */
+  --bg-canvas: #05080f;
+  --bg-subtle: #080d17;
+  --bg-card: #0b1220;
+  --bg-card-hover: #101a2b;
+  --bg-elevated: #0d1626;
+  --bg-input: #070c16;
+
+  /* Type: cool hologram white over the dark plate. */
+  --text-primary: #dff3ff;
+  --text-secondary: #8fb4cc;
+  --text-muted: #5f8199;
+  --text-faint: #45637a;
+  --text-bright: #eafcff;
+  --text-on-accent: #04121a;
+
+  /* ---- Palette: shared colour values -------------------------------------
+     Names in this layer describe a colour, never a UI state or a component.
+     Semantic tokens below only point here; they do not own another copy of a
+     hue. A hue also carries its RGB channels, so a translucent use reads the
+     hue from here — rgba(var(--cyan-rgb), .13) — and adds only its own alpha,
+     instead of restating the digits. */
+  --cyan-rgb: 110, 226, 255;
+  --cyan: rgb(var(--cyan-rgb));
+  --cyan-hover: #9beeff;
+  --cyan-deep: #0b3a4d;
+  --cyan-surface: rgba(var(--cyan-rgb), .14);
+  --cyan-border: rgba(var(--cyan-rgb), .5);
+  --green-rgb: 82, 227, 164;
+  --green: rgb(var(--green-rgb));
+  --green-hover: #74f0ba;
+  --green-dark: #2fbf83;
+  --green-deep: #10543c;
+  --green-bright: #86f4c6;
+  --yellow-rgb: 252, 238, 10;
+  --yellow: rgb(var(--yellow-rgb));
+  --yellow-bright: #fff45c;
+  --yellow-deep: #cbb800;
+  --pink-rgb: 255, 61, 110;
+  --pink: rgb(var(--pink-rgb));
+  --pink-hover: #ff6a92;
+  --pink-soft: #ff8aa9;
+  --purple-rgb: 192, 139, 255;
+  --purple: rgb(var(--purple-rgb));
+  --purple-surface: rgba(var(--purple-rgb), .18);
+  --orange-rgb: 255, 180, 84;
+  --orange: rgb(var(--orange-rgb));
+  --orange-surface: rgba(var(--orange-rgb), .16);
+  --orange-border: rgba(var(--orange-rgb), .5);
+
+  /* Hairlines are cold cyan glass, never neutral grey. */
+  --border-subtle: rgba(var(--cyan-rgb), .14);
+  --border-strong: rgba(var(--cyan-rgb), .3);
+  --border-focus: rgba(var(--cyan-rgb), .62);
+
+  /* ---- Meaning: what a colour is FOR ------------------------------------
+     Cyan chrome, breaker yellow for the numbers that matter, hot magenta for a
+     breach. Every token here names a hue from the palette or takes its alpha
+     off one; none writes a colour value of its own, so retuning a hue moves all
+     of them together. */
+  --accent: var(--cyan);
+  --accent-hover: var(--cyan-hover);
+  --accent-surface: rgba(var(--cyan-rgb), .13);
+  --accent-surface-soft: rgba(var(--cyan-rgb), .07);
+  --accent-border: rgba(var(--cyan-rgb), .4);
+  --accent-ring: rgba(var(--cyan-rgb), .26);
+
+  --success: var(--green);
+  --success-hover: var(--green-hover);
+  --success-dark: var(--green-dark);
+  --success-deep: var(--green-deep);
+  --success-bright: var(--green-bright);
+  --success-surface: rgba(var(--green-rgb), .13);
+  --success-border: rgba(var(--green-rgb), .45);
+  --warning: var(--yellow);
+  --warning-bright: var(--yellow-bright);
+  --warning-deep: var(--yellow-deep);
+  --warning-surface: rgba(var(--yellow-rgb), .11);
+  --warning-surface-strong: rgba(var(--yellow-rgb), .2);
+  --warning-border: rgba(var(--yellow-rgb), .45);
+  --danger: var(--pink);
+  --danger-hover: var(--pink-hover);
+  --danger-soft: var(--pink-soft);
+  --danger-surface: rgba(var(--pink-rgb), .14);
+  --danger-strong-surface: rgba(var(--pink-rgb), .55);
+  --danger-border: rgba(var(--pink-rgb), .42);
+
+  /* Terminal chrome: the values the floating window already used, so its look is
+     unchanged; there is now one place to restyle it. */
+
+  /* Header, overlays and shadows. Shadow tokens carry a COLOUR only: they are
+     spliced into literal box-shadow declarations. */
+  --bg-header: rgba(5, 8, 15, .86);
+  --overlay-scrim: rgba(2, 5, 10, .72);
+  --overlay-modal: rgba(2, 5, 10, .82);
+  --toast-bg: rgba(8, 14, 24, .96);
+  --glow-white-04: rgba(var(--cyan-rgb), .05);
+  --glow-white-10: rgba(var(--cyan-rgb), .12);
+  --surface-hover-soft: rgba(var(--cyan-rgb), .07);
+  --shadow-dropdown: rgba(0, 0, 0, .46);
+  --shadow-drawer: rgba(0, 0, 0, .5);
+  --shadow-soft: rgba(0, 0, 0, .26);
+  --shadow-card-soft: rgba(0, 0, 0, .2);
+  --shadow-card: rgba(0, 0, 0, .28);
+  --shadow-card-hover: rgba(0, 0, 0, .36);
+  --shadow-modal: rgba(0, 0, 0, .5);
+  --live-glow: rgba(var(--cyan-rgb), .45);
+
+  /* Typography: a modern stack, monospace for ids and ports. */
+  --font-sans: Inter, Geist, ui-sans-serif, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: ui-sans-serif, system-ui, sans-serif; background: #f6f8fa; color: #24292f; }
-  .app-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid #d0d7de; background: #fff; box-shadow: 0 1px 0 rgba(27,31,36,.04); }
+  html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); background: var(--bg-canvas); color: var(--text-primary); }
+  body { letter-spacing: .005em; }
+  button, input, select, textarea { font-family: inherit; }
+  /* Ports, ids, counts and clock values must not jitter as digits change width. */
+  :where(.sess-entry-line, .sess-sid-line, .sess-review, .batch-count, .app-version, .conn-temporary-mark, .session-tab-num) { font-variant-numeric: tabular-nums; }
+  /* Sticky and translucent: the page scrolls under it, so the wordmark and the
+     language switch stay reachable in a long session list. blur() is what keeps
+     the bar readable over scrolling cards without painting a solid slab. */
+  .app-header { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-header); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   /* The nav wraps instead of squeezing: with the language switch in it, a phone
      width cannot hold the control and the API link side by side, and without
      this the browser breaks the link's label across two lines inside its
@@ -8,10 +131,17 @@
      row, still right-aligned. */
   .app-header-nav { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
   .app-header-nav a {
-    font-size: 0.82rem; color: #0969da; text-decoration: none; white-space: nowrap;
-    padding: 6px 10px; border-radius: 6px; border: 1px solid #d0d7de; background: #fff;
+    font-size: 0.82rem; color: var(--accent); text-decoration: none; white-space: nowrap;
+    padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-card);
   }
-  .app-header-nav a:hover { background: #f0f6fc; border-color: #afb8c1; }
+  .app-header-nav a:hover { background: var(--accent-surface); border-color: var(--border-strong); }
+  /* The docs link carries a glyph so it is still identifiable once the label is
+     dropped on a narrow header (see the media query at the end of the file).
+     inline-flex + gap keeps the two centred as a unit; the glyph inherits
+     currentColor, so it follows the link's hover colour for free. */
+  .api-nav-link { display: inline-flex; align-items: center; gap: 6px; }
+  .api-nav-icon { display: block; flex-shrink: 0; }
+  .api-nav-label { white-space: nowrap; }
 
   /* Language switch: a trigger shaped like the API link beside it (same border,
      radius and blue label) showing the language in use, plus the menu it drops.
@@ -20,11 +150,11 @@
   .lang-switch { position: relative; display: inline-flex; flex-shrink: 0; }
   .lang-btn {
     display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 0.82rem;
-    color: #0969da; padding: 6px 8px; border-radius: 6px; border: 1px solid #d0d7de;
-    background: #fff; cursor: pointer;
+    color: var(--accent); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-subtle);
+    background: var(--bg-card); cursor: pointer;
   }
-  .lang-btn:hover { background: #f0f6fc; border-color: #afb8c1; }
-  .lang-btn[aria-expanded="true"] { background: #f0f6fc; border-color: #afb8c1; }
+  .lang-btn:hover { background: var(--accent-surface); border-color: var(--border-strong); }
+  .lang-btn[aria-expanded="true"] { background: var(--accent-surface); border-color: var(--border-strong); }
   /* The glyph is an external SVG worn as a mask, not an <img>: an image would
      keep its own black fill, while a mask paints in the trigger's colour
      (currentColor) and follows it into hover and active states. The url() is
@@ -49,86 +179,48 @@
   .lang-menu {
     position: absolute; top: calc(100% + 4px); right: 0; z-index: 100;
     display: flex; flex-direction: column; min-width: 100%; padding: 3px;
-    border: 1px solid #d0d7de; border-radius: 6px; background: #fff;
-    box-shadow: 0 8px 24px rgba(140,149,159,.2);
+    border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
+    box-shadow: 0 8px 24px var(--shadow-dropdown);
   }
   .lang-menu.hidden { display: none; }
   .lang-opt {
     font: inherit; font-size: 0.82rem; text-align: left; white-space: nowrap;
     padding: 7px 8px; border: none; border-radius: 4px; background: transparent;
-    color: #24292f; cursor: pointer;
+    color: var(--text-primary); cursor: pointer;
   }
-  .lang-opt:hover { background: #f0f6fc; }
+  .lang-opt:hover { background: var(--accent-surface); }
   /* The language the page is currently rendered in. */
-  .lang-opt.active { background: #0969da; color: #fff; font-weight: 600; }
+  .lang-opt.active { background: var(--accent); color: var(--text-on-accent); font-weight: 600; }
   /* Traditional glyph shapes are chosen by the system locale, which can hand
      back Simplified forms on a Simplified-first machine; naming the TC faces
      covers macOS (PingFang TC) and Windows (Microsoft JhengHei). */
-  body.lang-hant { font-family: ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
-  .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: #1f2328; }
+  body.lang-hant { font-family: Inter, Geist, ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
   /* Build version beside the wordmark, filled in from GET /api/version. Left
      margin, not a space, so a failed fetch leaves no gap after the wordmark. */
-  .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: #6e7781; }
-  .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #d0d7de; background: #f6f8fa; color: #24292f; cursor: pointer; }
-  .btn:hover { background: #eaeef2; border-color: #afb8c1; }
-  .btn-primary { background: #2da44e; border-color: #2da44e; color: #fff; }
-  .btn-primary:hover { background: #2c974b; border-color: #2c974b; }
-  .btn-danger { background: #cf222e; border-color: #cf222e; color: #fff; }
-  .btn-danger:hover { background: #a40e26; border-color: #a40e26; }
+  .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
+  .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; }
+  .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
+  .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
+  .btn-primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
   .dock { padding: 16px; min-height: calc(100% - 52px); }
 
-  /* Entries (connection profiles) as a left slide-in drawer on touch devices.
-     Expanded in place they are 22 cards ~2000px tall, which pushes the user's
-     own sessions two screens down — on a phone that is the wrong thing to lead
-     with. The drawer keeps the list intact but out of the way, and the scrim
-     plus the peeking panel are the "layered" look from the design. */
-  .drawer-scrim { display: none; }
-  @media (pointer: coarse) and (hover: none) {
-    .dock { padding: 12px; }
-    /* The drawer's trigger is the section header itself — no extra button. */
-    .entries-section-header { cursor: pointer; }
-
-    #sec-entries-body {
-      position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
-      width: min(86vw, 360px);
-      padding: 12px; overflow-y: auto; overscroll-behavior: contain;
-      background: #f6f8fa; border-right: 1px solid #d0d7de;
-      box-shadow: 8px 0 28px rgba(0,0,0,.22);
-      /* Left edge inset so the drawer clears the status bar / home indicator. */
-      padding-left: calc(12px + env(safe-area-inset-left, 0px));
-      padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-      transform: translateX(-100%);
-      transition: transform .22s ease;
-      will-change: transform;
-    }
-    #sec-entries-body.drawer-open { transform: translateX(0); }
-    /* The scrim dims the page behind and makes the panel read as a layer. */
-    .drawer-scrim {
-      display: block; position: fixed; inset: 0; z-index: 23900;
-      background: rgba(31,35,38,.35);
-      opacity: 0; pointer-events: none; transition: opacity .22s ease;
-    }
-    .drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
-    /* Collapsed state is meaningless once the drawer owns visibility. */
-    #sec-entries-body.collapsed { display: block; }
-
-  }
   .icon-btn {
-    width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid #d0d7de;
-    background: #fff; color: #24292f; cursor: pointer;
+    width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid var(--border-subtle);
+    background: var(--bg-card); color: var(--text-primary); cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
     transition: background .12s, border-color .12s, color .12s;
   }
-  .icon-btn:hover { background: #eaeef2; border-color: #afb8c1; }
+  .icon-btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
   .icon-btn svg { width: 18px; height: 18px; display: block; }
   .section-header {
     display: flex; align-items: center; gap: 6px;
-    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #656d76;
+    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
     min-height: 36px; margin-bottom: 10px; cursor: pointer; user-select: none;
     padding: 4px 6px; border-radius: 4px;
     transition: background .12s;
   }
-  .section-header:hover { background: #eaeef2; }
+  .section-header:hover { background: var(--bg-card-hover); }
   .section-header[aria-expanded="false"] .sec-chevron { transform: rotate(-90deg); opacity: .5; }
   .section-header .sec-chevron {
     width: 12px; height: 12px; display: inline-block; flex-shrink: 0;
@@ -137,9 +229,10 @@
   .section-body.collapsed { display: none; }
   .conn-tile.sess-tile.archived { opacity: .68; }
   .conn-tile.sess-tile.archived:hover { opacity: .9; }
-  /* Status lamp at the left of the id: green while the session is up, red once it
-     is over. A dot rather than a badge, so the row keeps its height and the id
-     stays the thing you read. */
+  /* Status lamp at the left of the id: a dot rather than a badge, so the row
+     keeps its height and the id stays the thing you read. Its two colours are
+     declared with the rest of the lamp below; a hex here would be a second
+     palette the theme could not reach. */
   .conn-tile.sess-tile .sess-status-ic {
     flex-shrink: 0;
     width: 7px;
@@ -147,8 +240,6 @@
     border-radius: 50%;
     cursor: help;
   }
-  .conn-tile.sess-tile .sess-status-ic.is-live { background: #1a7f37; }
-  .conn-tile.sess-tile .sess-status-ic.is-dead { background: #cf222e; }
 
   /* Approval lock on a session card. It is a state indicator and the switch in
      one: the glyph carries the state (closed = gated), and the colour only
@@ -157,14 +248,14 @@
     flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
     width: 16px; height: 16px; padding: 0; margin: 0;
     border: none; border-radius: 3px; background: transparent;
-    color: #8c959f; cursor: pointer; opacity: .55;
+    color: var(--text-faint); cursor: pointer; opacity: .55;
     transition: opacity .12s, color .12s, background .12s;
   }
   .conn-tile.sess-tile:hover .sess-lock { opacity: 1; }
-  .conn-tile.sess-tile .sess-lock:hover { background: rgba(0,0,0,.06); color: #57606a; }
+  .conn-tile.sess-tile .sess-lock:hover { background: var(--surface-hover-soft); color: var(--text-secondary); }
   /* Gated sessions stay fully visible: this is a warning state, not a hint. */
-  .conn-tile.sess-tile .sess-lock.is-on { opacity: 1; color: #bf8700; }
-  .conn-tile.sess-tile .sess-lock:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; opacity: 1; }
+  .conn-tile.sess-tile .sess-lock.is-on { opacity: 1; color: var(--warning); }
+  .conn-tile.sess-tile .sess-lock:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
   /* Touch: the 16px target is too small, and there is no hover to reveal it. */
   @media (pointer: coarse) and (hover: none) {
     .conn-tile.sess-tile .sess-lock { width: 26px; height: 26px; opacity: 1; }
@@ -175,28 +266,27 @@
      queued command silently. */
   .conn-tile.sess-tile .sess-review {
     margin-top: 3px; font-size: 0.6rem; font-weight: 600;
-    color: #cf222e; background: rgba(207,34,46,.1);
-    border: 1px solid rgba(207,34,46,.35); border-radius: 10px; padding: 1px 6px;
+    color: var(--danger); background: var(--danger-surface);
+    border: 1px solid var(--danger-border); border-radius: 10px; padding: 1px 6px;
   }
   .conn-tile.sess-tile .sess-review[hidden] { display: none; }
   /* Sessions toolbar: always-visible select-all / delete-selected / clear-dead */
   .icon-btn-sm { width: 28px; height: 28px; border-radius: 6px; }
   .icon-btn-sm svg { width: 16px; height: 16px; }
   .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
-  .icon-btn-danger { color: #cf222e; }
-  .icon-btn-danger:hover:not(:disabled) { background: #cf222e; border-color: #cf222e; color: #fff; }
+  .icon-btn-danger { color: var(--text-muted); }
   .icon-btn .ic-checked { display: none; }
   .icon-btn.all-checked .ic-empty { display: none; }
   .icon-btn.all-checked .ic-checked { display: block; }
   .batch-count {
     font-size: .68rem; font-weight: 600; text-transform: none; letter-spacing: 0;
-    color: #0969da; background: rgba(9,105,218,.1);
-    border: 1px solid rgba(9,105,218,.35); border-radius: 10px; padding: 1px 7px;
+    color: var(--accent); background: var(--accent-surface);
+    border: 1px solid var(--accent-border); border-radius: 10px; padding: 1px 7px;
   }
   .conn-tile.sess-tile.batch-selected {
     border-radius: 6px;
-    box-shadow: 0 0 0 2px #0969da;
-    background: rgba(9,105,218,.06);
+    box-shadow: 0 0 0 2px var(--accent);
+    background: var(--accent-surface-soft);
   }
   /* The checkbox sits at the left of the name row, on the same line as the name
      it selects. It used to be pinned to the icon's top-left corner, where it
@@ -216,7 +306,7 @@
   .conn-tile.sess-tile .sess-checkbox {
     flex-shrink: 0;
     width: 16px; height: 16px; margin: 0; padding: 0;
-    cursor: pointer; accent-color: #0969da;
+    cursor: pointer; accent-color: var(--accent);
   }
   .conn-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
   .conn-tile { position: relative; text-align: center; user-select: none; }
@@ -226,10 +316,10 @@
     min-width: 188px;
     max-width: 300px;
     padding: 10px 12px;
-    background: #fff;
-    border: 1px solid #d0d7de;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
     border-radius: 0;
-    box-shadow: 0 1px 3px rgba(27,31,36,.08);
+    box-shadow: 0 1px 3px var(--shadow-card-soft);
     transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
     text-align: left;
   }
@@ -252,22 +342,17 @@
     flex-direction: column;
     justify-content: center;
   }
-  .conn-tile.entry-card:hover {
-    border-color: #8c959f;
-    box-shadow: 0 10px 28px rgba(27,31,36,.14);
-    transform: translateY(-5px);
-  }
   .conn-tile.entry-card:active {
     transform: translateY(-1px) scale(0.985);
-    box-shadow: 0 4px 14px rgba(27,31,36,.12);
+    box-shadow: 0 4px 14px var(--shadow-card);
     transition-duration: 0.08s;
   }
   .entry-card-inner.entry-connecting {
     opacity: 0.9;
   }
   .conn-tile.entry-card.entry-connecting {
-    border-color: #0969da;
-    box-shadow: 0 0 0 2px rgba(9,105,218,.22), 0 10px 28px rgba(27,31,36,.12);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ring), 0 10px 28px var(--shadow-card);
     transform: translateY(-3px);
   }
   .conn-tile.entry-card:hover .conn-tile-stack > .icon-wrap {
@@ -294,7 +379,7 @@
   .conn-tile.sess-tile .conn-tile-stack > .icon-wrap {
     font-size: inherit;
   }
-  .conn-tile .nm { font-size: 0.85rem; font-weight: 600; word-break: break-all; line-height: 1.2; color: #1f2328; cursor: default; }
+  .conn-tile .nm { font-size: 0.85rem; font-weight: 600; word-break: break-all; line-height: 1.2; color: var(--text-primary); cursor: default; }
   .conn-tile.entry-card .conn-nm-row { margin-top: 0; justify-content: flex-start; align-items: center; }
   /* Name + copy button hug each other; the edit button stays at the row's far right. */
   .conn-tile.entry-card .conn-nm-cluster { display: flex; align-items: flex-start; gap: 4px; min-width: 0; flex: 1 1 auto; }
@@ -311,19 +396,19 @@
     display: inline-flex; align-items: center; justify-content: center;
     align-self: center; flex: 0 0 auto;
     width: 22px; height: 22px;
-    color: #bf8700;
+    color: var(--warning);
   }
-  .conn-temporary-mark { align-self:center; font-size:.62rem; font-weight:700; color:#8250df; letter-spacing:.03em; }
+  .conn-temporary-mark { align-self:center; font-size:.62rem; font-weight:700; color:var(--purple); letter-spacing:.03em; }
   .host-batch-btn { font-size:.72rem; padding:3px 7px; }
   /* Borderless copy button, mirroring the edit button's quiet look. */
   .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
-  .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: #0969da; background: rgba(9,105,218,.08); }
+  .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: var(--accent); background: var(--accent-surface); }
   .conn-nm-row { display: flex; align-items: flex-start; justify-content: center; gap: 4px; margin-top: 4px; max-width: 100%; }
-  .conn-nm { font-size: 0.9rem; font-weight: 600; word-break: break-all; line-height: 1.25; color: #1f2328; cursor: inherit; text-align: left; flex: 1; min-width: 0; }
+  .conn-nm { font-size: 0.9rem; font-weight: 600; word-break: break-all; line-height: 1.25; color: var(--text-primary); cursor: inherit; text-align: left; flex: 1; min-width: 0; }
   .conn-nm:hover { color: inherit; }
   .conn-edit-btn {
     flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
-    background: transparent; cursor: pointer; color: #57606a;
+    background: transparent; cursor: pointer; color: var(--text-secondary);
     position: relative;
     z-index: 1;
     display: flex;
@@ -331,15 +416,15 @@
     justify-content: center;
   }
   .conn-edit-btn svg { width: 14px; height: 14px; display: block; }
-  .conn-edit-btn:hover { color: #0969da; background: rgba(9,105,218,.08); }
+  .conn-edit-btn:hover { color: var(--accent); background: var(--accent-surface); }
   .conn-quick-btn {
     flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
-    background: transparent; cursor: pointer; color: #1a7f37;
+    background: transparent; cursor: pointer; color: var(--success-dark);
     position: relative; z-index: 1;
     display: flex; align-items: center; justify-content: center;
   }
-  .conn-quick-btn:hover { color: #116329; background: rgba(26,127,55,.12); }
-  .conn-tile .sub { font-size: 0.68rem; color: #656d76; margin-top: 2px; line-height: 1.2; max-height: 2.4em; overflow: hidden; }
+  .conn-quick-btn:hover { color: var(--success-deep); background: var(--success-surface); }
+  .conn-tile .sub { font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2; max-height: 2.4em; overflow: hidden; }
   .conn-tile.sess-tile { cursor: pointer; width: 128px; }
   .sess-tile-body {
     display: flex;
@@ -352,7 +437,7 @@
   .sess-entry-line {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #1f2328;
+    color: var(--text-primary);
     line-height: 1.2;
     text-align: center;
     overflow: hidden;
@@ -369,8 +454,8 @@
     user-select: none;
     border-radius: 3px;
   }
-  .sess-entry-line:hover { color: #0969da; text-decoration: underline dotted; }
-  .sess-entry-line:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
+  .sess-entry-line:hover { color: var(--accent); text-decoration: underline dotted; }
+  .sess-entry-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sess-meta-row {
     display: flex;
     align-items: center;
@@ -380,8 +465,8 @@
   }
   .sess-sid-line {
     font-size: 0.65rem;
-    font-family: ui-monospace, monospace;
-    color: #656d76;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -393,17 +478,17 @@
     user-select: none;
     border-radius: 3px;
   }
-  .sess-sid-line:hover { color: #0969da; text-decoration: underline dotted; }
-  .sess-sid-line:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
+  .sess-sid-line:hover { color: var(--accent); text-decoration: underline dotted; }
+  .sess-sid-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sess-copy-btn {
     flex-shrink: 0;
     width: 22px;
     height: 22px;
     padding: 0;
-    border: 1px solid #d0d7de;
+    border: 1px solid var(--border-subtle);
     border-radius: 4px;
-    background: #fff;
-    color: #57606a;
+    background: var(--bg-card);
+    color: var(--text-secondary);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -411,7 +496,7 @@
     position: relative;
     z-index: 1;
   }
-  .sess-copy-btn:hover { border-color: #0969da; color: #0969da; background: #f6f8fa; }
+  .sess-copy-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-subtle); }
   .sess-terminal-ic {
     display: flex;
     align-items: center;
@@ -419,7 +504,7 @@
     flex-shrink: 0;
     width: 55px;
     height: 55px;
-    background: #fff;
+    background: var(--bg-card);
     border-radius: 3px;
     overflow: hidden;
     line-height: 0;
@@ -435,14 +520,14 @@
      the end. Visible state is applied inline (display:flex) because an inline
      declaration outranks any class rule here, so the hide/show has to live in
      the same place setLoadBanner writes it. */
-  .conn-load-banner { display: none; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: #fff8c5; border: 1px solid #d4a72c; color: #24292f; font-size: 0.85rem; }
+  .conn-load-banner { display: none; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: var(--warning-surface); border: 1px solid var(--warning-border); color: var(--text-primary); font-size: 0.85rem; }
   .conn-load-banner-close {
     flex-shrink: 0; width: 22px; height: 22px; padding: 0; margin-left: auto;
     border: none; border-radius: 4px; background: transparent;
-    color: #57606a; cursor: pointer; line-height: 1;
+    color: var(--text-secondary); cursor: pointer; line-height: 1;
     display: flex; align-items: center; justify-content: center; font-size: 15px;
   }
-  .conn-load-banner-close:hover { background: rgba(31,35,38,.1); color: #1f2328; }
+  .conn-load-banner-close:hover { background: var(--surface-hover-soft); color: var(--text-primary); }
   #ui-copy-toast {
     position: fixed;
     left: 50%;
@@ -450,10 +535,10 @@
     transform: translateX(-50%);
     padding: 7px 14px;
     font-size: 13px;
-    color: #fff;
-    background: rgba(35, 38, 42, 0.94);
+    color: var(--text-bright);
+    background: var(--toast-bg);
     border-radius: 6px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+    box-shadow: 0 4px 14px var(--shadow-soft);
     z-index: 25000;
     pointer-events: none;
     opacity: 0;
@@ -476,11 +561,11 @@
   .ui-notify-card {
     position: relative;
     pointer-events: auto;
-    background: #fff;
-    border: 1px solid #d0d7de;
-    border-left: 4px solid #0969da;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 4px solid var(--accent);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(27, 31, 36, .16);
+    box-shadow: 0 8px 24px var(--shadow-card);
     padding: 10px 30px 12px 12px;
     overflow: hidden;
     animation: uiNotifyIn .2s ease;
@@ -494,38 +579,38 @@
      limited to those entries: one without a session has nowhere to go, so it
      must not look clickable. */
   .ui-notify-card.ui-notify-clickable { cursor: pointer; }
-  .ui-notify-card.ui-notify-clickable:hover { border-color: #afb8c1; box-shadow: 0 10px 28px rgba(27,31,36,.22); }
-  .ui-notify-card.ui-notify-clickable:focus-visible { outline: 2px solid #0969da; outline-offset: 1px; }
-  .ui-notify-card.ntf-success { border-left-color: #1a7f37; }
-  .ui-notify-card.ntf-warn { border-left-color: #bf8700; }
-  .ui-notify-card.ntf-error { border-left-color: #cf222e; }
-  .ui-notify-title { font-size: 0.82rem; font-weight: 600; color: #1f2328; margin-bottom: 3px; word-break: break-word; }
-  .ui-notify-msg { font-size: 0.8rem; color: #424a53; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
-  .ui-notify-sess { font-size: 0.68rem; color: #656d76; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  .ui-notify-card.ui-notify-clickable:hover { border-color: var(--border-strong); box-shadow: 0 10px 28px var(--shadow-card-hover); }
+  .ui-notify-card.ui-notify-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ui-notify-card.ntf-success { border-left-color: var(--success-dark); }
+  .ui-notify-card.ntf-warn { border-left-color: var(--warning); }
+  .ui-notify-card.ntf-error { border-left-color: var(--danger); }
+  .ui-notify-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; word-break: break-word; }
+  .ui-notify-msg { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+  .ui-notify-sess { font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono); word-break: break-all; }
   .ui-notify-close {
     position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
-    border: none; background: transparent; color: #656d76; cursor: pointer; border-radius: 4px;
+    border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px;
     display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
   }
-  .ui-notify-close:hover { background: #f0f3f6; color: #1f2328; }
-  .ui-notify-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: rgba(31, 35, 38, .35); transform-origin: left center; }
+  .ui-notify-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+  .ui-notify-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--overlay-scrim); transform-origin: left center; }
   /* Highlight the card of a session referenced by a notification; cleared on click. */
-  .conn-tile.sess-tile.sess-notified { outline: 2px solid #0969da; outline-offset: 2px; border-radius: 8px; animation: sessNotifiedPulse 1.4s ease-in-out infinite; }
+  .conn-tile.sess-tile.sess-notified { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; animation: sessNotifiedPulse 1.4s ease-in-out infinite; }
   @keyframes sessNotifiedPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(9, 105, 218, .0); }
-    50% { box-shadow: 0 0 0 5px rgba(9, 105, 218, .28); }
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 5px var(--accent-ring); }
   }
   .shell-window.shell-window-notified .shell-window-header { animation: shellHeaderFlash 1.2s ease-in-out 3; }
   @keyframes shellHeaderFlash {
-    0%, 100% { box-shadow: inset 0 0 0 0 rgba(88, 166, 255, 0); }
-    50% { box-shadow: inset 0 0 0 2px #58a6ff; }
+    0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+    50% { box-shadow: inset 0 0 0 2px var(--accent); }
   }
   .conn-tile .conn-tile-stack .sess-x {
-    position: absolute; right: -3px; top: 2px; z-index: 3; width: 25px; height: 25px; padding: 0; border: 1px solid rgba(207,34,46,.35); border-radius: 4px;
-    background: #fff; color: #cf222e; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,.12); opacity: 1; transition: background .12s, color .12s, border-color .12s;
+    position: absolute; right: -3px; top: 2px; z-index: 3; width: 25px; height: 25px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 4px;
+    background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px var(--shadow-soft); opacity: .95; transition: background .12s, color .12s, border-color .12s, opacity .12s;
   }
-  .conn-tile .conn-tile-stack .sess-x:hover { background: #cf222e; border-color: #cf222e; color: #fff; }
+  .conn-tile .conn-tile-stack .sess-x:hover { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); opacity: 1; }
 
   /* Modals are a layer above page content, so they outrank every surface that
      can open one: the entries drawer and its scrim (24000/23900), the
@@ -537,16 +622,31 @@
      already the case when this sat at 20000: a server-pushed notify_user
      message hidden behind a dialog is exactly the message the user was meant to
      see, so a dialog must not be able to swallow it. */
-  .modal-backdrop { position: fixed; inset: 0; background: rgba(31,35,38,.45); z-index: 24500; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-backdrop { position: fixed; inset: 0; background: var(--overlay-modal); z-index: 24500; display: flex; align-items: center; justify-content: center; padding: 16px; }
   .modal-backdrop.hidden { display: none; }
-  .modal { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; max-width: 720px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 16px 48px rgba(27,31,36,.18); }
-  .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #d0d7de; background: #f6f8fa; }
-  .modal-h h2 { margin: 0; font-size: 1rem; color: #1f2328; }
-  .modal-body { padding: 16px; }
-  .modal-body label { display: block; font-size: 0.75rem; color: #656d76; margin-bottom: 4px; }
-  .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid #d0d7de; background: #fff; color: #24292f; margin-bottom: 12px; }
-  .modal-body textarea { min-height: 220px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; max-width: 720px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 16px 48px var(--shadow-modal); }
+  .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); }
+  .modal-h h2 { margin: 0; font-size: 1rem; color: var(--text-primary); }
+  .modal-body { padding: 8px 24px; }
+  .modal-body label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
+  .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary); margin-bottom: 12px; }
+  .modal-body textarea { min-height: 220px; font-family: var(--font-mono); font-size: 12px; }
   .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 8px; }
+  /* Close affordances and small print. These used to carry literal hex colours
+     in inline style attributes, which is how a light-theme grey (#1f2328, ~1.2:1
+     on this plate) survived the dark conversion and made a dialog body read as
+     blank. Colour belongs to the theme, not to the markup. */
+  .modal-x {
+    width: 28px; height: 28px; padding: 0; border: none; border-radius: 4px;
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-x:hover { color: var(--text-bright); background: var(--accent-surface); }
+  .modal-msg { margin: 0 0 4px; color: var(--text-primary); font-size: .9rem; word-break: break-word; }
+  .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
+  .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
+  .sess-empty { padding: 8px 4px; color: var(--text-secondary); font-size: .85rem; }
+  .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
 
   /* ---- Approval mode --------------------------------------------------
      The queue row is what a decision is made against: the command, then two
@@ -555,30 +655,30 @@
   .approval-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 10px; }
   .approval-chip {
     display: inline-flex; align-items: center; gap: 4px;
-    font-family: ui-monospace, monospace; font-size: 0.72rem;
+    font-family: var(--font-mono); font-size: 0.72rem;
     padding: 2px 6px; border-radius: 4px;
-    background: #ddf4ff; border: 1px solid #54aeff; color: #0a3069;
+    background: var(--cyan-surface); border: 1px solid var(--cyan-border); color: var(--cyan-deep);
   }
 
-  .approval-item { border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .approval-item { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .approval-item-done { opacity: .6; }
-  .approval-item-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 0.72rem; color: #656d76; }
+  .approval-item-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 0.72rem; color: var(--text-muted); }
   .approval-src {
     text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
-    padding: 1px 5px; border-radius: 3px; background: #eaeef2; color: #57606a;
+    padding: 1px 5px; border-radius: 3px; background: var(--bg-card-hover); color: var(--text-secondary);
   }
-  .approval-sid { font-family: ui-monospace, monospace; }
+  .approval-sid { font-family: var(--font-mono); }
   /* The kind chip says what the row will do (file write, port forward, …). It is
      distinct from .approval-src (who submitted it) because a reviewer needs both
      answers to a row: who, and what. */
   .approval-kind {
     text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
     padding: 1px 5px; border-radius: 3px;
-    background: rgba(191,135,0,.14); color: #9a6700;
+    background: var(--warning-surface); color: var(--warning-deep);
   }
   /* An operation's summary is prose, not a command: it keeps the command box's
      shape (so rows line up) without inviting the reader to parse it as input. */
-  .approval-code-op { font-style: italic; color: #57606a; }
+  .approval-code-op { font-style: italic; color: var(--text-secondary); }
   /* The command on the left, the decision stacked on the right. The actions
      are a column rather than a row: two buttons stacked are ~2×22px tall,
      which the command box can fill with text instead of leaving empty space
@@ -586,9 +686,9 @@
   .approval-row { display: flex; align-items: flex-start; gap: 10px; }
   .approval-main { flex: 1 1 auto; min-width: 0; }
   .approval-code {
-    display: block; font-family: ui-monospace, monospace; font-size: 0.8rem;
-    padding: 6px 8px; border-radius: 6px; background: #f6f8fa; border: 1px solid #d0d7de;
-    color: #1f2328;
+    display: block; font-family: var(--font-mono); font-size: 0.8rem;
+    padding: 6px 8px; border-radius: 6px; background: var(--bg-subtle); border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
     /* Read-only by construction: a textarea-sized box that is not an input, so
        there is nothing to edit and nothing to resize.
        Exactly two lines are visible and a longer command scrolls inside the box.
@@ -605,7 +705,7 @@
   .approval-row .approval-actions { flex: 0 0 auto; flex-direction: column; }
   .approval-actions { display: flex; gap: 6px; }
   .approval-actions .btn { padding: 4px 12px; font-size: 0.78rem; }
-  .approval-state { font-size: 0.78rem; color: #656d76; text-transform: capitalize; flex: 0 0 auto; }
+  .approval-state { font-size: 0.78rem; color: var(--text-muted); text-transform: capitalize; flex: 0 0 auto; }
   /* Touch: the approver decides from a phone, so the buttons need real height,
      and they go back side by side — a narrow screen has no room to waste on a
      stacked pair, and 40px is a comfortable thumb target either way. */
@@ -615,11 +715,11 @@
     .approval-row .approval-actions .btn { min-height: 40px; flex: 1; }
     .approval-chip { font-size: 0.78rem; padding: 4px 8px; }
   }
-  .err { color: #cf222e; font-size: 0.85rem; margin: 0 0 8px; }
+  .err { color: var(--danger); font-size: 0.85rem; margin: 0 0 8px; }
   .conn-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .conn-field label { font-size: 0.78rem; font-weight: 500; color: #57606a; }
-  .conn-field input, .conn-field select, .conn-field textarea { font-size: 0.85rem; padding: 4px 8px; border: 1px solid #d0d7de; border-radius: 4px; }
-  .conn-field select { background: #fff; }
+  .conn-field label { font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); }
+  .conn-field input, .conn-field select, .conn-field textarea { font-size: 0.85rem; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--bg-input); color: var(--text-primary); }
+  .conn-field select { background: var(--bg-input); }
   /* The checkbox row is a label and a box on one line, not a stacked field: the
      generic `.conn-field input` rule above would give the checkbox a text
      box's padding and border, and the label must sit BESIDE the box rather than
@@ -627,87 +727,87 @@
   .conn-field.conn-field-check { gap: 3px; }
   .conn-field.conn-field-check label.conn-check {
     display: flex; align-items: center; gap: 7px;
-    font-size: 0.82rem; font-weight: 500; color: #1f2328; cursor: pointer;
+    font-size: 0.82rem; font-weight: 500; color: var(--text-primary); cursor: pointer;
   }
   .conn-field.conn-field-check input[type="checkbox"] {
     width: 14px; height: 14px; margin: 0; padding: 0; flex: 0 0 auto;
-    border-radius: 3px; accent-color: #bf8700; cursor: pointer;
+    border-radius: 3px; accent-color: var(--warning); cursor: pointer;
   }
-  .conn-check-hint { font-size: 0.68rem; line-height: 1.35; color: #6e7681; }
+  .conn-check-hint { font-size: 0.68rem; line-height: 1.35; color: var(--text-muted); }
   .conn-row { display: flex; gap: 8px; }
   .conn-row > .conn-field { flex: 1; }
   .jump-chain { margin-top: 6px; }
-  .jump-arrow { text-align:center; color:#8c959f; font-size:0.7rem; margin:2px 0; letter-spacing:1px; }
-  .jump-card { border:1px solid #d0d7de; border-radius:6px; padding:10px; margin-bottom:8px; background:#f6f8fa; }
-  .jump-card-h { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-size:0.8rem; font-weight:600; color:#57606a; }
+  .jump-arrow { text-align:center; color:var(--text-faint); font-size:0.7rem; margin:2px 0; letter-spacing:1px; }
+  .jump-card { border:1px solid var(--border-subtle); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--bg-elevated); }
+  .jump-card-h { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-size:0.8rem; font-weight:600; color:var(--text-secondary); }
   .jump-card .conn-field { margin-bottom:6px; }
   .jump-card-actions { display:flex; gap:4px; }
   .jump-summary { display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; }
-  .jump-summary:hover { background:#eaeef2; }
-  .jump-summary-idx { font-size:0.7rem; font-weight:700; color:#8c959f; min-width:14px; }
-  .jump-summary-info { flex:1; font-size:0.82rem; color:#24292f; word-break:break-all; }
-  .jump-summary-info em { font-style:normal; font-size:0.68rem; color:#8c959f; margin-left:4px; padding:1px 5px; border:1px solid #d0d7de; border-radius:3px; }
+  .jump-summary:hover { background:var(--bg-card-hover); }
+  .jump-summary-idx { font-size:0.7rem; font-weight:700; color:var(--text-faint); min-width:14px; }
+  .jump-summary-info { flex:1; font-size:0.82rem; color:var(--text-primary); word-break:break-all; }
+  .jump-summary-info em { font-style:normal; font-size:0.68rem; color:var(--text-faint); margin-left:4px; padding:1px 5px; border:1px solid var(--border-subtle); border-radius:3px; }
   .psw-wrap { position: relative; margin-bottom: 12px; }
   .psw-wrap .psw-input { width: 100%; padding: 4px 28px 4px 8px; margin-bottom: 0; box-sizing: border-box; }
-  .psw-eye { position: absolute; right: 2px; top: 0; bottom: 0; width: 26px; padding: 0; border: none; background: transparent; color: #888; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .psw-eye { position: absolute; right: 2px; top: 0; bottom: 0; width: 26px; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
   /* Floating terminal: dark theme; main page stays light */
   .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
   .shell-windows-container > * { pointer-events: auto; }
-  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: rgba(29,29,31,.94); border: 1px solid #333; border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); max-width: 92vw; pointer-events: auto; }
+  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: var(--term-panel-94); border: 1px solid var(--term-border); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px var(--term-black-35); max-width: 92vw; pointer-events: auto; }
   /* Left grip: the bar is draggable, but only from here so clicks on tabs and
      the action cluster keep working. Kept wide enough to grab comfortably. */
   .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 8px 0 0 8px; cursor: move; touch-action: none; }
   .session-tabbar.dragging { cursor: move; user-select: none; }
   .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; max-width: calc(92vw - 170px); }
-  .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid #3a3a3a; flex-shrink: 0; }
+  .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--term-border-2); flex-shrink: 0; }
   .session-tabbar.hidden { display: none; }
-  .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: #ccc; background: #2d2d2d; border: 1px solid #3a3a3a; border-radius: 6px; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
-  .session-tab:hover { color: #fff; border-color: #555; }
-  .session-tab.active { color: #fff; background: #1e1e1e; border-color: #58a6ff; }
+  .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: var(--term-fg); background: var(--term-surface); border: 1px solid var(--term-border-2); border-radius: 6px; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
+  .session-tab:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tab.active { color: var(--term-fg-white); background: var(--term-bg); border-color: var(--term-accent); }
   .session-tab .session-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 4px; background: #3a3a3a; color: #8b949e; font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-  .session-tab.active .session-tab-num { background: #58a6ff; color: #1e1e1e; }
-  .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer; padding: 0; flex-shrink: 0; }
-  .session-tab .session-tab-close:hover { background: #cf222e; color: #fff; }
+  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 4px; background: var(--term-border-2); color: var(--term-fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .session-tab.active .session-tab-num { background: var(--term-accent); color: var(--term-bg); }
+  .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: var(--term-fg-soft); cursor: pointer; padding: 0; flex-shrink: 0; }
+  .session-tab .session-tab-close:hover { background: var(--term-danger); color: var(--term-fg-white); }
   /* Pending-review count on a session tab. A minimized window shows nothing but
      its tab, so this is the only place its queue can be seen. */
   .session-tab .session-tab-review {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 15px; height: 15px; padding: 0 4px; flex-shrink: 0;
-    border-radius: 8px; background: #cf222e; color: #fff;
+    border-radius: 8px; background: var(--term-danger); color: var(--term-fg-white);
     font-size: 10px; font-weight: 600; line-height: 15px;
   }
   .session-tab .session-tab-review[hidden] { display: none; }
-  .session-tab.has-review { border-color: #cf222e; }
+  .session-tab.has-review { border-color: var(--term-danger); }
   /* ---- pane workspace (tiled mode) ---- */
-  .pane-workspace { position: fixed; inset: 0; z-index: 10000; background: rgba(13,17,23,.72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
+  .pane-workspace { position: fixed; inset: 0; z-index: 10000; background: var(--term-pane-72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
   .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
   .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
   .pane-grid > .shell-window .shell-window-resize-handle { display: none; }
   .pane-grid > .shell-window .shell-window-header { cursor: default; }
-  .pane-grid > .shell-window.pane-active { outline: 2px solid #58a6ff; outline-offset: -2px; }
+  .pane-grid > .shell-window.pane-active { outline: 2px solid var(--term-accent); outline-offset: -2px; }
   .pane-grid > .shell-window.pane-maxed { grid-column: 1 / -1; grid-row: 1 / -1; }
   .shell-window.win-hidden { display: none !important; }
   /* Minimized: hidden but alive. Separate from .win-hidden, which is the tab
      bar's global show/hide-all flag. */
   .shell-window.win-minimized { display: none !important; }
-  .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid #3a3a3a; border-radius: 6px; background: #2d2d2d; color: #8b949e; cursor: pointer; padding: 0; flex-shrink: 0; }
-  .session-tabbar-toggle:hover { color: #fff; border-color: #555; }
-  .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid #3a3a3a; border-radius: 6px; background: #2d2d2d; color: #8b949e; cursor: pointer; font-size: 11px; white-space: nowrap; }
-  .session-tabbar-tile:hover { color: #fff; border-color: #555; }
-  .session-tabbar-tile.active { background: #58a6ff; border-color: #58a6ff; color: #1e1e1e; }
-  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid #3a3a3a; border-radius: 6px; background: #2d2d2d; color: #8b949e; cursor: pointer; font-size: 11px; }
-  .session-tabbar-select:hover { color: #fff; border-color: #555; }
-  .session-tabbar-select option { color: #ccc; }
-  .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: #1e1e1e; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,.4); border: 1px solid #333; display: flex; flex-direction: column; overflow: hidden; z-index: 10001; }
-  .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid #333; background: #2d2d2d; cursor: move; user-select: none; flex-shrink: 0; z-index: 2; min-height: 34px; flex-wrap: nowrap; }
+  .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
+  .session-tabbar-toggle:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
+  .session-tabbar-tile:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-tile.active { background: var(--term-accent); border-color: var(--term-accent); color: var(--term-bg); }
+  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
+  .session-tabbar-select:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-select option { color: var(--term-fg); }
+  .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: 10001; }
+  .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid var(--term-border); background: var(--term-surface); cursor: move; user-select: none; flex-shrink: 0; z-index: 2; min-height: 34px; flex-wrap: nowrap; }
   .shell-window-title-cluster { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 8px; }
   .shell-window-title {
     margin: 0;
     font-size: 13px;
-    color: #eee;
+    color: var(--term-fg-bright);
     flex: 1;
     min-width: 0;
     display: flex;
@@ -715,16 +815,16 @@
     gap: 10px;
     overflow: hidden;
   }
-  .shell-window-title .sw-conn { color: #ccc; flex-shrink: 0; }
+  .shell-window-title .sw-conn { color: var(--term-fg); flex-shrink: 0; }
   .shell-window-title .shell-dead-badge {
     flex-shrink: 0;
     align-self: center;
     margin-left: 2px;
     padding: 1px 6px;
     border-radius: 10px;
-    background: rgba(207,34,46,.16);
-    color: #ff7b72;
-    border: 1px solid rgba(255,123,114,.5);
+    background: var(--term-danger-16);
+    color: var(--term-danger-soft);
+    border: 1px solid var(--term-danger-soft-5);
     font-size: 0.6rem;
     text-transform: uppercase;
     letter-spacing: .03em;
@@ -753,14 +853,14 @@
     align-self: center;
     width: 18px;
     height: 18px;
-    color: #8b949e;
+    color: var(--term-fg-muted);
     margin-left: 6px;
     margin-right: 2px;
     line-height: 0;
   }
   .shell-sid-copy .sid {
     font-size: 12px;
-    color: #7ee787;
+    color: var(--term-success-soft);
     font-weight: 600;
     font-family: ui-monospace, monospace;
     min-width: 0;
@@ -777,23 +877,23 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: #aaa;
+    color: var(--term-fg-faint-4);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .title-copy-btn:hover { color: #eee; background: rgba(255,255,255,.08); }
+  .title-copy-btn:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
   .title-copy-btn svg { display: block; }
   .shell-window-header-btns { display: flex; gap: 0; flex-shrink: 0; margin-left: auto; align-self: center; }
-  .shell-window-header-btns button { width: 26px; height: 26px; padding: 0; border: none; background: transparent; color: #aaa; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+  .shell-window-header-btns button { width: 26px; height: 26px; padding: 0; border: none; background: transparent; color: var(--term-fg-faint-4); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
   .shell-window-collapse-btn { position: relative; margin-right: 2px; }
   .shell-window-collapse-btn .ic-u, .shell-window-collapse-btn .ic-d { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
-  .shell-window-header-btns button:hover { color: #eee; background: rgba(255,255,255,.08); }
+  .shell-window-header-btns button:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
   /* position: relative so the review panel anchors here and not to the terminal
      wrapper: that wrapper is display:none while the Files or Forwardings tab is
      open, and an approval for a file write arrives exactly there. */
-  .shell-window-content { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: #1e1e1e; position: relative; }
+  .shell-window-content { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: transparent; position: relative; }
   .shell-terminal-wrap { flex: 1; min-height: 100px; min-width: 0; padding: 6px 6px 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
   .shell-pending {
     flex: 1;
@@ -802,7 +902,7 @@
     align-items: center;
     justify-content: center;
     gap: 14px;
-    color: #8b949e;
+    color: var(--term-fg-muted);
     font-size: 14px;
     min-height: 160px;
     text-align: center;
@@ -811,8 +911,8 @@
   .shell-pending-spinner {
     width: 30px;
     height: 30px;
-    border: 3px solid rgba(255,255,255,.2);
-    border-top-color: #58a6ff;
+    border: 3px solid var(--term-white-2);
+    border-top-color: var(--term-accent);
     border-radius: 50%;
     animation: shell-pending-spin 0.75s linear infinite;
   }
@@ -831,18 +931,49 @@
     right: 14px;
     width: auto;
   }
+  /* Glass chrome and a translucent terminal.
+
+     The page behind a floating terminal is near-black and mostly flat, so a
+     *darker* tint over it reads as nothing at all — blurring black leaves black.
+     The frost lifts the surface instead: a cool translucent white that catches
+     ambient light, plus a bright top hairline. Those are the cues the eye reads
+     as glass on a dark UI. The xterm theme and viewport must both stay fully
+     transparent; either one being opaque turns the terminal into a flat plate. */
+  .shell-window {
+    background: var(--term-glass-frost);
+    backdrop-filter: blur(28px) saturate(150%);
+    -webkit-backdrop-filter: blur(28px) saturate(150%);
+    border: 1px solid var(--term-glass-border);
+    /* The bright inner hairline along the top edge is the main "glass" cue. */
+    box-shadow: inset 0 1px 0 var(--term-glass-edge),
+                0 0 0 1px rgba(var(--cyan-rgb), .12),
+                0 22px 60px var(--term-glass-shadow);
+  }
+/* Keep the title glassy. The bottom bar has no plate of its own: its tabs and
+   content show the terminal surface through them. This is intentionally after
+   the base footer rule and after the terminal palette block, so it wins over
+   the footer's historical opaque panel background. */
+.shell-window-header { background: var(--term-glass-surface); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.shell-terminal-wrap { background: var(--term-glass-tint); box-shadow: inset 0 1px 0 var(--term-glass-edge); }
+.shell-window-footer, .shell-window-footer .shell-channel-tabs { background: transparent; }
+  .shell-terminal-wrap .xterm,
+  .shell-terminal-wrap .xterm .xterm-viewport,
+  .shell-terminal-wrap .xterm .xterm-screen {
+    background: transparent !important;
+  }
   .shell-terminal-wrap .xterm .xterm-viewport {
-    background-color: #1e1e1e !important;
-    scrollbar-color: #484f58 #1e1e1e;
+    background-color: transparent !important;
+    scrollbar-color: var(--term-border-4) transparent;
   }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar { width: 10px; height: 10px; }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-track { background: #1e1e1e; }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
   .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb {
-    background: #484f58;
-    border-radius: 5px;
-    border: 2px solid #1e1e1e;
+    background: var(--term-border-4);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #6e7681; }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--term-fg-faint); background-clip: content-box; }
   /* Floating "back to latest output" button (offset upward so it never covers the
      bottom-right resize grip, and leftward so it clears the rail's reserved column
      — the button belongs to the terminal's own box, and the rail occupies its right
@@ -851,15 +982,15 @@
   .shell-term-scroll-fab {
     position: absolute; right: calc(var(--term-rail-gap, 10px) + var(--term-rail-w, 14px) + 8px); bottom: 36px; z-index: 15;
     width: 30px; height: 30px; padding: 0;
-    border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
-    background: rgba(46,58,76,.92); color: #d4d4d4;
+    border: 1px solid var(--term-white-18); border-radius: 50%;
+    background: var(--term-fab-92); color: var(--term-fg-dim);
     cursor: pointer; display: flex; align-items: center; justify-content: center;
     opacity: 0; pointer-events: none;
     transition: opacity .15s, background .15s, transform .1s;
-    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+    box-shadow: 0 2px 10px var(--term-black-4);
   }
   .shell-term-scroll-fab.visible { opacity: 1; pointer-events: auto; }
-  .shell-term-scroll-fab:hover { background: rgba(66,82,104,.96); color: #fff; }
+  .shell-term-scroll-fab:hover { background: var(--term-fab-hover-96); color: var(--term-fg-white); }
   .shell-term-scroll-fab:active { transform: scale(.94); }
   .shell-term-scroll-fab svg { width: 16px; height: 16px; display: block; }
   .shell-window.shell-window-collapsed .shell-window-content,
@@ -904,19 +1035,21 @@
      is only 34px tall and a bar would eat the glyphs it exists to reach. */
   .shell-tab-bar { display: flex; align-items: flex-end; gap: 0; flex: 0 1 auto; min-width: 0; padding-left: 8px; align-self: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
   .shell-tab-bar::-webkit-scrollbar { display: none; }
-  .shell-tab-btn { width: 28px; height: 100%; padding: 0 4px; border: 1px solid transparent; border-radius: 4px 4px 0 0; background: transparent; color: #8b949e; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .12s, background .12s, border-color .12s; position: relative; bottom: -1px; }
-  .shell-tab-btn:hover { color: #eee; background: rgba(255,255,255,.04); }
-  .shell-tab-btn.active { color: #e6edf3; background: #1e1e1e; border-color: #333; border-bottom-color: #1e1e1e; }
+  .shell-tab-btn { width: 28px; height: 100%; padding: 0 4px; border: 1px solid transparent; border-radius: 4px 4px 0 0; background: transparent; color: var(--term-fg-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .12s, background .12s, border-color .12s; position: relative; bottom: -1px; }
+  .shell-tab-btn:hover { color: var(--term-fg-bright); background: var(--term-white-04); }
+  .shell-tab-btn.active { color: var(--term-fg-soft); background: var(--term-bg); border-color: var(--term-border); border-bottom-color: var(--term-bg); }
   /* Shell channel tabs (bottom of terminal area, one tab per multiplexed shell) */
   /* Terminal footer: tabs on the left, review controls on the right. The row
-     owns the border and background so the two halves line up as one bar. */
+     owns the border, but deliberately no plate: it sits on the terminal's own
+     surface so the terminal reads as one continuous pane down to the bottom
+     edge. The title bar above keeps the glass plate instead. */
   .shell-window-footer {
     display: flex;
     align-items: stretch;
     flex-shrink: 0;
     order: 10;
-    background: #252526;
-    border-top: 1px solid #333;
+    background: transparent;
+    border-top: 1px solid var(--term-border);
     min-height: 30px;
     max-height: 30px;
   }
@@ -926,11 +1059,11 @@
     gap: 0;
     flex: 1 1 auto;
     min-width: 0;
-    background: #252526;
+    background: transparent;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: thin;
-    scrollbar-color: #484f58 transparent;
+    scrollbar-color: var(--term-border-4) transparent;
   }
   /* Review, in the terminal's title bar: one icon-only lock beside the session
      title.
@@ -950,17 +1083,17 @@
     width: 26px; height: 26px; padding: 0;
     align-self: center;
     border: none; border-radius: 4px;
-    background: transparent; color: #8b949e; cursor: pointer;
+    background: transparent; color: var(--term-fg-muted); cursor: pointer;
     flex: 0 0 auto;
   }
-  .shell-review-lock:hover { color: #eee; background: rgba(255,255,255,.08); }
-  .shell-review-lock[aria-expanded="true"] { color: #e6edf3; background: rgba(255,255,255,.08); }
+  .shell-review-lock:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
+  .shell-review-lock[aria-expanded="true"] { color: var(--term-fg-soft); background: var(--term-white-08); }
   .shell-review-lock-icon { display: flex; align-items: center; justify-content: center; line-height: 0; }
   /* Gated: amber, matching the session card's lock so the two read as one state.
      The open lock (the default) is neutral: review off is the ordinary case and
      must not look like a warning. */
-  .shell-review-lock.is-on { color: #d29922; }
-  .shell-review-lock.is-on:hover { color: #e3b341; background: rgba(210,153,34,.16); }
+  .shell-review-lock.is-on { color: var(--term-warning); }
+  .shell-review-lock.is-on:hover { color: var(--term-warning-bright); background: var(--term-warning-16); }
   .shell-review-lock[disabled] { opacity: .5; cursor: default; }
   /* The count, on the control that opens the queue the count refers to.
      It hangs off the corner so the lock keeps its 26px and the header row does not
@@ -969,7 +1102,7 @@
   .shell-review-count {
     position: absolute; top: -1px; right: -1px;
     min-width: 14px; height: 14px; padding: 0 3px;
-    border-radius: 7px; background: #cf222e; color: #fff;
+    border-radius: 7px; background: var(--term-danger); color: var(--term-fg-white);
     font-size: 9px; font-weight: 600; line-height: 14px; text-align: center;
     pointer-events: none;
   }
@@ -994,25 +1127,25 @@
     width: min(420px, calc(100% - 16px));
     max-height: min(60%, 340px);
     display: flex; flex-direction: column;
-    background: #252526;
-    border: 1px solid #3a3a3a; border-radius: 8px;
-    box-shadow: 0 8px 28px rgba(0,0,0,.5);
+    background: var(--term-panel);
+    border: 1px solid var(--term-border-2); border-radius: 8px;
+    box-shadow: 0 8px 28px var(--term-black-5);
     overflow: hidden;
   }
   .shell-review-sheet[hidden] { display: none; }
   .shell-review-sheet-h {
     display: flex; align-items: center; gap: 8px;
     padding: 5px 6px 5px 8px; flex-shrink: 0;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--term-border);
   }
-  .shell-review-sheet-title { font-size: 0.72rem; font-weight: 600; color: #c9d1d9; letter-spacing: .02em; }
+  .shell-review-sheet-title { font-size: 0.72rem; font-weight: 600; color: var(--term-fg-mid); letter-spacing: .02em; }
   /* The panel's switch: a small track + knob, not a full-size button. The mode
      is one bit, so the control for it is one switch; its label reads the state.
      Hidden checkbox + styled track is the standard shape, and it keeps keyboard
      and screen-reader behaviour without re-implementing either. */
   .shell-review-switch {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 0.66rem; color: #8b949e; cursor: pointer; user-select: none;
+    font-size: 0.66rem; color: var(--term-fg-muted); cursor: pointer; user-select: none;
   }
   .shell-review-toggle {
     position: absolute; opacity: 0; width: 0; height: 0; margin: 0;
@@ -1020,54 +1153,54 @@
   .shell-review-switch-track {
     position: relative; flex-shrink: 0;
     width: 26px; height: 14px; border-radius: 8px;
-    background: #3a3a3a; border: 1px solid #4a4a4a;
+    background: var(--term-border-2); border: 1px solid var(--term-border-5);
     transition: background .14s, border-color .14s;
   }
   .shell-review-switch-track::after {
     content: ''; position: absolute; top: 1px; left: 1px;
     width: 10px; height: 10px; border-radius: 50%;
-    background: #8b949e; transition: transform .14s, background .14s;
+    background: var(--term-fg-muted); transition: transform .14s, background .14s;
   }
-  .shell-review-switch:hover .shell-review-switch-track { border-color: #6e7681; }
+  .shell-review-switch:hover .shell-review-switch-track { border-color: var(--term-fg-faint); }
   .shell-review-toggle:checked + .shell-review-switch-track {
-    background: rgba(210,153,34,.22); border-color: #d29922;
+    background: var(--term-warning-22); border-color: var(--term-warning);
   }
   .shell-review-toggle:checked + .shell-review-switch-track::after {
-    transform: translateX(12px); background: #e3b341;
+    transform: translateX(12px); background: var(--term-warning-bright);
   }
-  .shell-review-toggle:focus-visible + .shell-review-switch-track { outline: 2px solid #58a6ff; outline-offset: 1px; }
-  .shell-review-toggle:checked ~ .shell-review-switch-text { color: #e3b341; }
+  .shell-review-toggle:focus-visible + .shell-review-switch-track { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  .shell-review-toggle:checked ~ .shell-review-switch-text { color: var(--term-warning-bright); }
   .shell-review-toggle[disabled] + .shell-review-switch-track { opacity: .5; }
   .shell-review-sheet-close {
     margin-left: auto; width: 22px; height: 22px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer;
+    border: none; border-radius: 4px; background: transparent; color: var(--term-fg-muted); cursor: pointer;
   }
-  .shell-review-sheet-close:hover { background: #303030; color: #e6edf3; }
+  .shell-review-sheet-close:hover { background: var(--term-hover-3); color: var(--term-fg-soft); }
   .shell-review-sheet-b { padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-  .shell-review-hint { font-size: 0.66rem; color: #6e7681; line-height: 1.35; }
+  .shell-review-hint { font-size: 0.66rem; color: var(--term-fg-faint); line-height: 1.35; }
   .shell-review-queue-h {
     display: flex; align-items: center; gap: 6px;
-    font-size: 0.68rem; color: #8b949e;
+    font-size: 0.68rem; color: var(--term-fg-muted);
   }
   .shell-review-refresh {
     width: 20px; height: 20px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    border: none; border-radius: 4px; background: transparent; color: #8b949e; cursor: pointer;
+    border: none; border-radius: 4px; background: transparent; color: var(--term-fg-muted); cursor: pointer;
   }
-  .shell-review-refresh:hover { background: #303030; color: #e6edf3; }
+  .shell-review-refresh:hover { background: var(--term-hover-3); color: var(--term-fg-soft); }
   .shell-review-list { display: flex; flex-direction: column; gap: 6px; }
   /* Queue rows are compact: this panel is a card over a terminal, not a page. */
-  .shell-review-list .approval-item { margin: 0; padding: 6px 8px; background: #1e1e1e; border-color: #3a3a3a; }
+  .shell-review-list .approval-item { margin: 0; padding: 6px 8px; background: var(--term-bg); border-color: var(--term-border-2); }
   .shell-review-list .approval-item-head { font-size: 0.62rem; }
   .shell-review-list .approval-code { font-size: 0.72rem; }
   .shell-review-list .approval-row { gap: 6px; }
   .shell-review-list .approval-actions { gap: 5px; }
   .shell-review-list .approval-actions .btn { font-size: 0.68rem; padding: 3px 8px; }
-  .shell-review-empty { font-size: 0.68rem; color: #6e7681; padding: 2px 0 4px; }
+  .shell-review-empty { font-size: 0.68rem; color: var(--term-fg-faint); padding: 2px 0 4px; }
   .shell-channel-tabs::-webkit-scrollbar { height: 3px; }
   .shell-channel-tabs::-webkit-scrollbar-track { background: transparent; }
-  .shell-channel-tabs::-webkit-scrollbar-thumb { background: #484f58; border-radius: 2px; }
+  .shell-channel-tabs::-webkit-scrollbar-thumb { background: var(--term-border-4); border-radius: 2px; }
   .shell-channel-tab {
     display: flex;
     align-items: center;
@@ -1076,9 +1209,9 @@
     min-width: 50px;
     max-width: 140px;
     height: 24px;
-    border-right: 1px solid #333;
-    background: #2d2d2d;
-    color: #999;
+    border-right: 1px solid var(--term-border);
+    background: var(--term-surface);
+    color: var(--term-fg-faint-3);
     cursor: pointer;
     font-size: 11px;
     font-family: ui-sans-serif, system-ui, sans-serif;
@@ -1088,8 +1221,8 @@
     user-select: none;
     transition: background .1s, color .1s;
   }
-  .shell-channel-tab:hover { background: #373737; color: #ccc; }
-  .shell-channel-tab.active { background: #1e1e1e; color: #e0e0e0; border-top: 2px solid #58a6ff; }
+  .shell-channel-tab:hover { background: var(--term-hover); color: var(--term-fg); }
+  .shell-channel-tab.active { background: var(--term-bg); color: var(--term-fg-soft-2); border-top: 2px solid var(--term-accent); }
   .shell-channel-tab-label {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1112,15 +1245,15 @@
     letter-spacing: .03em;
     font-weight: 600;
     line-height: 1.4;
-    background: rgba(139,148,158,.16);
-    color: #8b949e;
-    border: 1px solid rgba(139,148,158,.4);
+    background: var(--term-neutral-16);
+    color: var(--term-fg-muted);
+    border: 1px solid var(--term-neutral-4);
   }
-  .shell-state-typing { background: rgba(53,184,255,.16); color: #35b8ff; border-color: rgba(53,184,255,.5); }
-  .shell-state-ai     { background: rgba(255,157,46,.16); color: #ff9d2e; border-color: rgba(255,157,46,.5); }
-  .shell-state-running{ background: rgba(46,230,107,.16); color: #2ee66b; border-color: rgba(46,230,107,.5); }
-  .shell-state-done   { background: rgba(139,148,158,.16); color: #8b949e; border-color: rgba(139,148,158,.4); }
-  .shell-state-ended  { background: rgba(207,34,46,.16); color: #ff7b72; border-color: rgba(255,123,114,.5); }
+  .shell-state-typing { background: var(--cyan-surface); color: var(--cyan); border-color: var(--cyan-border); }
+  .shell-state-ai     { background: var(--orange-surface); color: var(--orange); border-color: var(--orange-border); }
+  .shell-state-running{ background: var(--term-success-16); color: var(--term-success-bright); border-color: var(--term-success-5); }
+  .shell-state-done   { background: var(--term-neutral-16); color: var(--term-fg-muted); border-color: var(--term-neutral-4); }
+  .shell-state-ended  { background: var(--term-danger-16); color: var(--term-danger-soft); border-color: var(--term-danger-soft-5); }
   .shell-channel-tab-close {
     flex-shrink: 0;
     width: 14px;
@@ -1129,7 +1262,10 @@
     border: none;
     border-radius: 3px;
     background: transparent;
-    color: #666;
+    /* Was --term-border-hover-2 (#666): 2.4:1 on the tab's own plate, i.e. a
+       close control you have to hunt for. --term-fg-faint-4 (#aaa) clears AA at
+       4.2:1 on the terminal background and 5.9:1 on the tab plate. */
+    color: var(--term-fg-faint-4);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1141,7 +1277,7 @@
   }
   .shell-channel-tab:hover .shell-channel-tab-close,
   .shell-channel-tab.active .shell-channel-tab-close { opacity: 1; }
-  .shell-channel-tab-close:hover { color: #fff; background: rgba(207,34,46,.6); }
+  .shell-channel-tab-close:hover { color: var(--term-fg-white); background: var(--term-danger-6); }
   .shell-channel-tab-copy {
     flex-shrink: 0;
     width: 16px;
@@ -1150,7 +1286,7 @@
     border: none;
     border-radius: 3px;
     background: transparent;
-    color: #8b949e;
+    color: var(--term-fg-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1161,7 +1297,7 @@
   }
   .shell-channel-tab:hover .shell-channel-tab-copy,
   .shell-channel-tab.active .shell-channel-tab-copy { opacity: 1; }
-  .shell-channel-tab-copy:hover { color: #e6edf3; background: rgba(255,255,255,.1); }
+  .shell-channel-tab-copy:hover { color: var(--term-fg-soft); background: var(--term-white-1); }
   .shell-channel-tab-copy svg { display: block; }
   .shell-channel-tab-add {
     flex-shrink: 0;
@@ -1169,9 +1305,9 @@
     height: 24px;
     padding: 0;
     border: none;
-    border-left: 1px solid #333;
+    border-left: 1px solid var(--term-border);
     background: transparent;
-    color: #888;
+    color: var(--term-fg-faint-2);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1179,8 +1315,8 @@
     font-size: 14px;
     transition: color .1s, background .1s;
   }
-  .shell-channel-tab-add:hover { color: #fff; background: rgba(255,255,255,.06); }
-  .shell-channel-tab-add:active { background: rgba(255,255,255,.1); }
+  .shell-channel-tab-add:hover { color: var(--term-fg-white); background: var(--term-white-06); }
+  .shell-channel-tab-add:active { background: var(--term-white-1); }
   /* Split control: two buttons that read as one. The label half is the common
      action, the caret half reveals the choices that need a decision. */
   .shell-split { display: inline-flex; align-items: stretch; }
@@ -1193,7 +1329,7 @@
     padding: 0;
     border: none;
     background: transparent;
-    color: #888;
+    color: var(--term-fg-faint-2);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1202,8 +1338,8 @@
     line-height: 1;
     transition: color .1s, background .1s;
   }
-  .shell-channel-add-caret:hover { color: #fff; background: rgba(255,255,255,.06); }
-  .shell-channel-add-caret.active { color: #fff; background: rgba(255,255,255,.12); }
+  .shell-channel-add-caret:hover { color: var(--term-fg-white); background: var(--term-white-06); }
+  .shell-channel-add-caret.active { color: var(--term-fg-white); background: var(--term-white-12); }
   .shell-channel-add-menu { min-width: 180px; }
   .shell-channel-add-item { min-height: 32px; font-size: 0.78rem; }
   /* Channel body fills most of the terminal area.
@@ -1249,28 +1385,28 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    color: #8b949e;
+    color: var(--term-fg-muted);
     font-size: 12px;
     min-height: 100px;
   }
   .shell-channel-empty.show { display: flex; }
   .shell-channel-empty button {
     padding: 4px 12px;
-    border: 1px solid #484f58;
+    border: 1px solid var(--term-border-4);
     border-radius: 4px;
-    background: #2d2d2d;
-    color: #ccc;
+    background: var(--term-surface);
+    color: var(--term-fg);
     cursor: pointer;
     font-size: 12px;
   }
-  .shell-channel-empty button:hover { background: #3d3d3d; border-color: #666; }
+  .shell-channel-empty button:hover { background: var(--term-hover-2); border-color: var(--term-border-hover-2); }
   .shell-channel-empty .shell-channel-empty-add { border-radius: 4px 0 0 4px; }
   .shell-channel-empty .shell-channel-empty-caret {
     padding: 4px 8px;
     border-radius: 0 4px 4px 0;
     font-size: 10px;
   }
-  .shell-channel-empty .shell-channel-empty-caret.active { background: #3d3d3d; border-color: #666; }
+  .shell-channel-empty .shell-channel-empty-caret.active { background: var(--term-hover-2); border-color: var(--term-border-hover-2); }
 
   /* Narrow screens rail the window to the viewport width; short screens rail the
      height. Both are checked separately: a phone in landscape is ~844px wide
@@ -1368,7 +1504,7 @@
   /* The monitor glyph doubles as the session menu on touch devices. On desktop
      it stays a plain icon (the tab bar owns switching), so the affordance is
      added only where the interaction exists. */
-  .shell-header-icon-btn.active { color: #fff; }
+  .shell-header-icon-btn.active { color: var(--term-fg-white); }
   @media (pointer: coarse) and (hover: none) {
     /* A tap target, not just an 18px glyph. */
     .shell-header-icon-btn {
@@ -1376,7 +1512,7 @@
       width: 32px; height: 32px; margin-left: 2px; margin-right: 0;
       border-radius: 6px;
     }
-    .shell-header-icon-btn.active { color: #fff; background: #3a3a3a; }
+    .shell-header-icon-btn.active { color: var(--term-fg-white); background: var(--term-border-2); }
   }
 
   /* Drawer button in the terminal header: opens the entries drawer. Same touch
@@ -1385,10 +1521,10 @@
     display: none;
     flex-shrink: 0; align-items: center; justify-content: center;
     width: 30px; height: 30px; padding: 0;
-    border: 1px solid #3a3a3a; border-radius: 6px;
-    background: #2d2d2d; color: #8b949e; cursor: pointer;
+    border: 1px solid var(--term-border-2); border-radius: 6px;
+    background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer;
   }
-  .shell-window-drawer-btn:hover { color: #fff; border-color: #555; }
+  .shell-window-drawer-btn:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   @media (pointer: coarse) and (hover: none) {
     .shell-window-drawer-btn { display: inline-flex; }
   }
@@ -1396,52 +1532,52 @@
     position: fixed; z-index: 30001;
     min-width: 200px; max-width: calc(100vw - 16px);
     max-height: 60dvh; overflow-y: auto;
-    padding: 4px; border: 1px solid #484f58; border-radius: 8px;
-    background: #252526; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    padding: 4px; border: 1px solid var(--term-border-4); border-radius: 8px;
+    background: var(--term-panel); box-shadow: 0 6px 24px var(--term-black-5);
   }
   .shell-switch-item {
     display: flex; align-items: center; gap: 8px; width: 100%;
     min-height: 40px; padding: 0 10px;
     border: none; border-radius: 6px; background: transparent;
-    color: #c9d1d9; font: inherit; font-size: 0.82rem; text-align: left;
+    color: var(--term-fg-mid); font: inherit; font-size: 0.82rem; text-align: left;
     cursor: pointer; white-space: nowrap;
   }
-  .shell-switch-item:hover, .shell-switch-item:active { background: #30363d; color: #fff; }
-  .shell-switch-item.current { background: #094771; color: #fff; }
+  .shell-switch-item:hover, .shell-switch-item:active { background: var(--term-border-3); color: var(--term-fg-white); }
+  .shell-switch-item.current { background: var(--term-current); color: var(--term-fg-white); }
   /* A dead session is listed too: it is still readable, and hiding it from the
      switcher would make the list disagree with the session tiles. */
-  .shell-switch-item.dead { color: #8b949e; }
-  .shell-switch-item.dead .shell-switch-label::after { content: ' · dead'; color: #6e7681; }
-  .shell-switch-empty { padding: 10px 12px; color: #8b949e; font-size: 0.78rem; }
-  .shell-switch-num { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; min-width: 12px; }
+  .shell-switch-item.dead { color: var(--term-fg-muted); }
+  .shell-switch-item.dead .shell-switch-label::after { content: ' · dead'; color: var(--term-fg-faint); }
+  .shell-switch-empty { padding: 10px 12px; color: var(--term-fg-muted); font-size: 0.78rem; }
+  .shell-switch-num { flex-shrink: 0; color: var(--term-fg-muted); font-size: 0.72rem; min-width: 12px; }
   .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* The review row in the session menu. It is an action on THIS window's session,
      not another session in the list, so it is pushed to the bottom behind a
      separator and its state is spelled out on the right. The label's flex:1 is
      what pushes that state across; no auto margin needed. */
-  .shell-switch-review { margin-top: 4px; border-top: 1px solid #3a3a3a; border-radius: 0 0 6px 6px; }
-  .shell-switch-review .shell-switch-state { flex-shrink: 0; color: #8b949e; font-size: 0.72rem; }
+  .shell-switch-review { margin-top: 4px; border-top: 1px solid var(--term-border-2); border-radius: 0 0 6px 6px; }
+  .shell-switch-review .shell-switch-state { flex-shrink: 0; color: var(--term-fg-muted); font-size: 0.72rem; }
 
   /* File context menu (dark, matches shell-window) */
-  .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:#252526; border:1px solid #484f58; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); min-width:150px; padding:4px 0; }
-  .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:#ccc; white-space:nowrap; }
-  .file-ctx-item:hover { background:#094771; color:#fff; }
-  .file-ctx-item.file-ctx-danger { color:#f85149; }
-  .file-ctx-item.file-ctx-danger:hover { background:#5a1d1d; color:#ff7b7b; }
+  .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
+  .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:var(--term-fg); white-space:nowrap; }
+  .file-ctx-item:hover { background:var(--term-current); color:var(--term-fg-white); }
+  .file-ctx-item.file-ctx-danger { color:var(--term-danger-2); }
+  .file-ctx-item.file-ctx-danger:hover { background:var(--term-danger-deep); color:var(--term-danger-soft-2); }
   /* File row menu button */
-  .shell-file-menu-btn { flex-shrink:0; width:22px; height:22px; padding:0; border:none; border-radius:4px; background:transparent; color:#8b949e; cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .12s; font-size:1rem; line-height:1; }
+  .shell-file-menu-btn { flex-shrink:0; width:22px; height:22px; padding:0; border:none; border-radius:4px; background:transparent; color:var(--term-fg-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .12s; font-size:1rem; line-height:1; }
   .shell-file-row:hover .shell-file-menu-btn { opacity:1; }
-  .shell-file-menu-btn:focus { opacity:1; background:#30363d; color:#e6edf3; }
-  .shell-file-menu-btn:active { background:#484f58; }
+  .shell-file-menu-btn:focus { opacity:1; background:var(--term-border-3); color:var(--term-fg-soft); }
+  .shell-file-menu-btn:active { background:var(--term-border-4); }
   /* File detail panel inside listing */
-  .shell-file-detail { padding:12px; border-bottom:1px solid #30363d; }
+  .shell-file-detail { padding:12px; border-bottom:1px solid var(--term-border-3); }
   .shell-file-detail-actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
-  .shell-file-detail-actions button { font-size:0.75rem; padding:4px 12px; border-radius:4px; border:1px solid #484f58; background:#2d2d2d; color:#ccc; cursor:pointer; }
-  .shell-file-detail-actions button:hover { background:#3d3d3d; border-color:#666; color:#fff; }
-  .shell-file-detail-actions .sf-dl { border-color:#2da44e; color:#2da44e; }
-  .shell-file-detail-actions .sf-dl:hover { background:#1a3d1a; }
-  .shell-file-detail-actions .sf-del { border-color:#f85149; color:#f85149; }
-  .shell-file-detail-actions .sf-del:hover { background:#3d1a1a; }
+  .shell-file-detail-actions button { font-size:0.75rem; padding:4px 12px; border-radius:4px; border:1px solid var(--term-border-4); background:var(--term-surface); color:var(--term-fg); cursor:pointer; }
+  .shell-file-detail-actions button:hover { background:var(--term-hover-2); border-color:var(--term-border-hover-2); color:var(--term-fg-white); }
+  .shell-file-detail-actions .sf-dl { border-color:var(--term-success); color:var(--term-success); }
+  .shell-file-detail-actions .sf-dl:hover { background:var(--term-success-deep); }
+  .shell-file-detail-actions .sf-del { border-color:var(--term-danger-2); color:var(--term-danger-2); }
+  .shell-file-detail-actions .sf-del:hover { background:var(--term-danger-deep-2); }
 
 /* ---- Touch / single-column layout ----------------------------------------
    Kept at the end of the file on purpose: this overrides the entry card's
@@ -1457,8 +1593,7 @@
    a different shape or colour. */
 .conn-tile.entry-card.entry-card-add {
   border-style: dashed;
-  border-color: #afb8c1;
-  background: transparent;
+  border-color: var(--border-strong);
   box-shadow: none;
   /* The card holds one glyph, so on desktop it sizes to that glyph rather than
      stretching into a mostly-empty row. On a phone it is the last of the list
@@ -1472,23 +1607,14 @@
    left alignment reads as a stray glyph. */
 .conn-tile.entry-card.entry-card-add .entry-card-inner { justify-content: center; }
 .conn-tile.entry-card.entry-card-add:hover {
-  border-color: #0969da;
-  background: rgba(9,105,218,.04);
+  border-color: var(--accent);
   box-shadow: none;
   transform: none;
 }
-.conn-tile.entry-card.entry-card-add .icon-wrap { color: #57606a; }
-.conn-tile.entry-card.entry-card-add:hover .icon-wrap { color: #0969da; }
+.conn-tile.entry-card.entry-card-add .icon-wrap { color: var(--text-secondary); }
+.conn-tile.entry-card.entry-card-add:hover .icon-wrap { color: var(--accent); }
 
 @media (pointer: coarse) and (hover: none) {
-  /* Chevron pinned to the collapsed glyph: on touch the drawer is a layer over
-     the page, so an expanded/collapsed reading of it means nothing. The ID in
-     the selector outranks the base .section-header[aria-expanded] rule, so one
-     selector covers both states. */
-  .section-header#sec-entries .sec-chevron {
-    transform: rotate(-90deg);
-    opacity: .5;
-  }
   .conn-grid { gap: 10px; }
   /* Only entries are list rows that fill the row. Session tiles stay the
      compact cards they are on desktop and wrap several per row — stretching
@@ -1565,28 +1691,22 @@
   margin: 0;
   border: none;
   border-radius: 0;
-  background: #3fb950;
+  background: var(--term-success-3);
   cursor: pointer;
   opacity: .9;
 }
 .term-rail-cell:hover,
 .term-rail-cell:focus-visible {
   opacity: 1;
-  outline: 2px solid #f0f6fc;
+  outline: 2px solid var(--term-fg-white-2);
   outline-offset: 1px;
   z-index: 2;
 }
 
-/* The palette. Four hues chosen to stay apart at a row's height on a dark
-   terminal: the three the rail is about sit far from each other on the wheel
-   (green / cyan-blue / orange) and differ strongly in lightness as well, so they
-   survive both a small size and a monochrome-ish display. Review is a neutral
-   violet — it never colours a row (a decision is about a line, not content of its
-   own) and is used by the card's badge and swatch. */
-.term-rail-output { background: #2ee66b; }  /* o — bright green: shell output */
-.term-rail-input  { background: #35b8ff; }  /* i — cyan-blue: the human's input */
-.term-rail-agent  { background: #ff9d2e; }  /* a — orange: an AI agent's input */
-.term-rail-review { background: #a371f7; }  /* q/A — violet: a review decision */
+.term-rail-output { background: var(--term-rail-output); }  /* o — bright green: shell output */
+.term-rail-input  { background: var(--term-rail-input); }  /* i — yellow: the human's input */
+.term-rail-agent  { background: var(--term-rail-agent); }  /* a — pink: an AI agent's input */
+.term-rail-review { background: var(--term-rail-review); }  /* q/A — violet: a review decision */
 
 /* Which input produced an output row.
 
@@ -1619,8 +1739,8 @@
 }
 .term-rail-cause-top { border-top-width: 1px; border-top-style: solid; }
 .term-rail-cause-bottom { border-bottom-width: 1px; border-bottom-style: solid; }
-.term-rail-cause-input { --rail-cause: #35b8ff; }  /* i — the human typed it */
-.term-rail-cause-agent { --rail-cause: #ff9d2e; }  /* a — an agent sent it */
+.term-rail-cause-input { --rail-cause: var(--term-rail-input); }  /* i — the human typed it */
+.term-rail-cause-agent { --rail-cause: var(--term-rail-agent); }  /* a — an agent sent it */
 
 /* The label. A node inside the rail, not a native title: a tooltip is not
    reachable on touch, and the time of a row is exactly what a phone user taps
@@ -1634,15 +1754,15 @@
   top: 0;
   transform: translateY(-50%);
   padding: 3px 7px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--term-border-3);
   border-radius: 4px;
-  background: #161b22;
-  color: #e6edf3;
+  background: var(--term-deep);
+  color: var(--term-fg-soft);
   font-size: 0.7rem;
   line-height: 1.3;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0,0,0,.4);
+  box-shadow: 0 2px 8px var(--term-black-4);
 }
 .term-rail-pop[hidden] { display: none; }
 
@@ -1667,13 +1787,13 @@
   z-index: 6;
   min-width: 190px;
   padding: 7px 9px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--term-border-3);
   border-radius: 6px;
-  background: #161b22;
-  color: #e6edf3;
+  background: var(--term-deep);
+  color: var(--term-fg-soft);
   font-size: 0.72rem;
   line-height: 1.5;
-  box-shadow: 0 4px 14px rgba(0,0,0,.5);
+  box-shadow: 0 4px 14px var(--term-black-5);
   pointer-events: none;
 }
 .term-rail-card[hidden] { display: none; }
@@ -1700,8 +1820,8 @@
   margin-left: auto;
   padding: 1px 5px;
   border-radius: 999px;
-  background: rgba(163, 113, 247, .18);
-  color: #a371f7;
+  background: var(--purple-surface);
+  color: var(--purple);
   font-size: 0.66rem;
   font-weight: 500;
 }
@@ -1709,10 +1829,585 @@
   display: flex;
   gap: 8px;
   justify-content: space-between;
-  color: #8b949e;
+  color: var(--term-fg-muted);
 }
 .term-rail-card-row b {
-  color: #c9d1d9;
+  color: var(--term-fg-mid);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- Workspace layout: full sessions + host drawer ---------------------
+   Hosts are on-demand navigation, not the page's main content. The wrapper
+   keeps both existing sections and all JS hooks intact, while the session panel
+   owns the available width in every viewport. */
+.workspace-layout { display: block; min-width: 0; }
+.workspace-panel { min-width: 0; }
+/* The hosts panel is not a flow column any more: its body is the fixed drawer
+   (#sec-entries-body), so the wrapper itself must not reserve width or the
+   sessions panel would sit beside an empty strip. */
+.workspace-hosts { display: contents; }
+.workspace-sessions {
+  width: 100%; min-width: 0; border: 1px solid var(--border-subtle);
+  border-radius: 12px; background: var(--bg-card);
+  box-shadow: inset 0 1px 0 var(--glow-white-04);
+}
+.workspace-sessions .section-header {
+  margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
+  border-radius: 12px 12px 0 0; background: var(--bg-card);
+  font-size: .78rem; font-weight: 600; letter-spacing: .02em;
+  text-transform: none; color: var(--text-secondary);
+}
+.workspace-sessions .section-header:hover { background: var(--bg-card-hover); }
+.workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }
+.workspace-sessions .conn-grid { gap: 12px; }
+
+/* Hosts are always a drawer. It is closed by default and leaves the sessions
+   surface as the only content in the page flow. The existing JS toggles the
+   same .drawer-open class on the same id; this only broadens the media scope. */
+#sec-entries-body {
+  position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
+  width: min(86vw, 360px); padding: 12px; overflow-y: auto;
+  overscroll-behavior: contain; background: var(--bg-subtle);
+  border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
+  box-shadow: 12px 0 40px var(--shadow-drawer);
+  padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-100%); transition: transform .22s ease;
+  will-change: transform;
+}
+#sec-entries-body.drawer-open { transform: translateX(0); }
+#sec-entries-body.collapsed { display: block; }
+.drawer-scrim {
+  display: block; position: fixed; inset: 0; z-index: 23900;
+  background: var(--overlay-scrim); backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none; transition: opacity .22s ease;
+}
+.drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
+/* The sessions header's "+" opens the drawer. It is a header control, so it
+   centres its glyph inside the same 28px box as its neighbours. */
+.host-drawer-open { flex: 0 0 auto; }
+.drawer-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--border-subtle); border-radius: 9px;
+  background: var(--bg-elevated); color: var(--text-secondary);
+  cursor: pointer; z-index: 2; touch-action: manipulation;
+}
+.drawer-close:hover, .drawer-close:active { background: var(--bg-card-hover); color: var(--text-primary); }
+.drawer-close svg { display: block; }
+.drawer-toolbar {
+  display: flex; gap: 6px; padding: 0 42px 10px 0;
+  border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
+}
+/* One row, one control height: these buttons sit level with the close "X" beside
+   them (also 34px), so the toolbar reads as a single strip. Icon-only, so the
+   base rule's text padding is dropped and the glyph is what centres. */
+.drawer-toolbar .host-batch-btn {
+  flex: 1; min-width: 0;
+  height: 34px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.drawer-toolbar .host-batch-btn svg { display: block; }
+
+/* Wide screen: the drawer gets a little more room, but the sessions panel still
+   spans the entire workspace — no permanent left column and no dead gutter. */
+@media (min-width: 1024px) {
+  .dock { width: 100%; max-width: 1560px; margin: 0 auto; padding: 16px 20px; }
+  #sec-entries-body { width: min(32vw, 420px); }
+}
+
+/* Narrow header: the docs link collapses to its glyph.
+
+   The full label is 193px of a 462px header row (measured), which is what pushes
+   the nav onto a second row on a phone. The glyph is 16px, so the link still
+   identifies itself while giving the language switch its room back. 768px is the
+   same "narrow" breakpoint the terminal windows use, so the page has one
+   definition of narrow rather than two. Only the visible label goes: the link
+   keeps its title and aria-label, so the tooltip and the screen-reader name are
+   unchanged at every width. */
+@media (max-width: 768px) {
+  .api-nav-label { display: none; }
+  .api-nav-link { width: 32px; height: 32px; padding: 0; justify-content: center; }
+  /* Keep the language trigger as a single glyph on narrow screens too. The
+     current label still exists for i18n updates and screen-reader context, but
+     it no longer consumes the header's scarce horizontal space. */
+  .lang-current, .lang-caret { display: none; }
+  .lang-btn { width: 32px; height: 32px; padding: 0; justify-content: center; }
+}
+
+/* Narrow screens keep compact session cards and comfortable drawer targets. */
+@media (pointer: coarse) and (hover: none) {
+  .dock { padding: 12px; }
+  #sec-entries-body { width: min(88vw, 340px); }
+  .drawer-close { width: 36px; height: 36px; }
+  .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
+}
+
+/* ---- Ghost buttons ---------------------------------------------------- */
+.btn { transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease; }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible, .icon-btn:focus-visible, .lang-btn:focus-visible {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+.btn-danger:hover {
+  background: linear-gradient(180deg, var(--danger-hover), var(--danger));
+  border-color: var(--danger-hover); color: var(--text-on-accent);
+}
+.btn-primary:hover { box-shadow: 0 0 0 3px var(--success-surface); }
+
+/* ---- Cards: hairline in, glow on hover -------------------------------- */
+.conn-tile.entry-card {
+  border-radius: 10px;
+  transition: background .16s ease, box-shadow .2s ease, transform .2s ease, border-color .16s ease;
+}
+.conn-tile.entry-card:hover {
+  transform: translateY(-2px); border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 10px 26px var(--shadow-card-hover);
+}
+.conn-tile.entry-card:active { transform: translateY(0) scale(.99); }
+.conn-tile.sess-tile {
+  padding: 10px 8px 8px; background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: 10px; transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:hover {
+  background: var(--bg-card-hover); border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 8px 20px var(--shadow-card);
+}
+.conn-tile.sess-tile.archived { background: var(--bg-subtle); }
+.conn-tile.sess-tile.batch-selected {
+  border-color: var(--accent-border); background: var(--accent-surface-soft);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
+
+/* ---- Live session lamp ------------------------------------------------ */
+.conn-tile.sess-tile .sess-status-ic.is-live {
+  background: var(--success-dark); box-shadow: 0 0 6px var(--live-glow);
+  animation: sessLivePulse 2.8s ease-in-out infinite;
+}
+.conn-tile.sess-tile .sess-status-ic.is-dead { background: var(--danger); }
+@keyframes sessLivePulse {
+  0%, 100% { box-shadow: 0 0 4px var(--live-glow); opacity: .85; }
+  50% { box-shadow: 0 0 9px var(--live-glow); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conn-tile.sess-tile .sess-status-ic.is-live { animation: none; opacity: 1; }
+  .conn-tile.entry-card:hover, .conn-tile.entry-card:active { transform: none; }
+}
+
+/* ---- Inputs and overlays ---------------------------------------------- */
+.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
+.conn-field input:focus, .conn-field select:focus, .conn-field textarea:focus {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.modal-body input, .modal-body textarea, .modal-body select,
+.conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
+.modal-backdrop { backdrop-filter: blur(3px); }
+.modal { background: var(--bg-elevated); }
+.modal-h { background: var(--bg-card); }
+.modal-h h2 { color: var(--text-bright); font-weight: 600; }
+
+/* No native scrollbars anywhere on the page layer: an OS-grey track in a neon
+   panel reads as a rendering bug. Scrolling still works (wheel, trackpad, touch,
+   keyboard); what disappears is the bar itself. */
+.workspace-sessions .section-body, #sec-entries-body, .modal, .modal-body,
+.modal-body textarea, #ui-notify-stack, .lang-menu {
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.workspace-sessions .section-body::-webkit-scrollbar, #sec-entries-body::-webkit-scrollbar,
+.modal::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .modal-body textarea::-webkit-scrollbar,
+#ui-notify-stack::-webkit-scrollbar, .lang-menu::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.workspace-hosts .section-body > #conn-grid { padding-right: 2px; }
+
+/* Inside the drawer the entries are list rows, one per line, at every viewport —
+   the same shape a phone gets. The drawer is a fixed 360-420px slab whatever the
+   screen is, so the wide-screen card sizing (188-300px, wrapping two per row)
+   would pack the drawer with ragged half-width cards and no reading order. The
+   "Add Host" card fills its own row here for the same reason it does on touch:
+   among full-width rows, a glyph-sized card reads as a stray.
+
+   Scoped to #conn-grid: the session grid keeps its compact wrapping cards. */
+#conn-grid .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+#conn-grid .conn-tile.entry-card.entry-card-add { width: 100%; max-width: none; }
+
+/* The terminal's own chrome tokens. Surfaces, hairlines and greys are the
+   terminal's own (a floating window needs its own depth ramp), but every HUE the
+   two share is the page's, taken by reference — so the terminal and the page
+   cannot drift apart, and restyling the page restyles the terminal. Naming the
+   page token instead of repeating its hex is the point: a literal here is a
+   second palette waiting to go stale. */
+:root, .shell-windows-container, .term-rail, .session-tabbar, #pane-workspace, .shell-file-ctx-menu {
+  --term-accent: var(--accent);
+  --term-bg: var(--bg-card);
+  --term-black-35: rgba(0,0,0,.35);
+  --term-black-4: rgba(0,0,0,.4);
+  --term-black-5: rgba(0,0,0,.5);
+  --term-border: #1E2E3C;
+  --term-border-2: #24384A;
+  --term-border-3: #1A2836;
+  --term-border-4: #2C4256;
+  --term-border-5: #2A3E50;
+  --term-border-hover: #35506A;
+  --term-border-hover-2: #3E5C78;
+  --term-current: #0E3A46;
+  --term-danger: var(--danger);
+  --term-danger-16: var(--danger-surface);
+  --term-danger-2: var(--danger);
+  --term-danger-6: var(--danger-strong-surface);
+  --term-danger-deep: var(--danger-surface);
+  --term-danger-deep-2: var(--danger-surface);
+  --term-danger-soft: var(--danger-soft);
+  --term-danger-soft-2: var(--danger-soft);
+  --term-danger-soft-5: var(--danger-border);
+  --term-deep: var(--bg-canvas);
+  --term-fab-92: rgba(19,33,46,.92);
+  --term-fab-hover-96: rgba(34,55,74,.96);
+  --term-fg: #ccc;
+  --term-fg-bright: #eee;
+  --term-fg-dim: #d4d4d4;
+  --term-fg-faint: #7E93A8;
+  --term-fg-faint-2: #888;
+  --term-fg-faint-3: #999;
+  --term-fg-faint-4: #aaa;
+  --term-fg-mid: #c9d1d9;
+  --term-fg-muted: #8b949e;
+  --term-fg-soft: #e6edf3;
+  --term-fg-soft-2: #e0e0e0;
+  --term-fg-white: #fff;
+  --term-fg-white-2: #f0f6fc;
+  --term-hover: #1B2C3B;
+  --term-hover-2: #22374A;
+  --term-hover-3: #101D28;
+  --term-neutral-16: rgba(139,148,158,.16);
+  --term-neutral-4: rgba(139,148,158,.4);
+  --term-pane-72: rgba(8,17,26,.72);
+  --term-panel: #0C1721;
+  --term-panel-94: rgba(12,23,33,.94);
+  --term-success: var(--success);
+  --term-success-16: var(--success-surface);
+  --term-success-3: var(--success);
+  --term-success-5: var(--success-border);
+  --term-success-bright: var(--success-bright);
+  --term-success-deep: var(--success-deep);
+  --term-success-soft: var(--success-hover);
+  --term-surface: #13212E;
+  --term-warning: var(--warning);
+  --term-warning-16: var(--warning-surface);
+  --term-warning-22: var(--warning-surface-strong);
+  --term-warning-bright: var(--warning-bright);
+  --term-white-04: rgba(255,255,255,.04);
+  --term-white-06: rgba(255,255,255,.06);
+  --term-white-08: rgba(255,255,255,.08);
+  --term-white-1: rgba(255,255,255,.1);
+  --term-white-12: rgba(255,255,255,.12);
+  --term-white-18: rgba(255,255,255,.18);
+  --term-white-2: rgba(255,255,255,.2);
+  /* The rail's four states: who wrote a row. Named for that state and reading
+     the palette directly — never through an unrelated page state such as
+     --danger, whose name would put the wrong word in a reader's head. */
+  --term-rail-output: var(--green-bright);
+  --term-rail-input: var(--yellow);
+  --term-rail-agent: var(--pink);
+  --term-rail-review: var(--purple);
+  /* Glass chrome and a translucent terminal.
+
+     The page behind a floating terminal is near-black and mostly flat, so a
+     *darker* tint over it reads as nothing at all — blurring black leaves black.
+     The frost therefore lifts the surface instead of darkening it: a cool
+     translucent white that catches ambient light, plus a bright top hairline.
+     Those two are what the eye reads as glass on a dark UI. */
+  /* Opacity knobs: xterm itself is 0 alpha. The terminal body stacks frost and
+     tint, so effective coverage is 1 - (1 - frost) * (1 - tint) ≈ 11.7% here.
+     Lower both numbers for more see-through; raise them only if text loses
+     contrast. */
+  --term-glass-frost: rgba(126, 176, 232, .08);
+  --term-glass-tint: rgba(150, 196, 255, .04);
+  --term-glass-surface: rgba(160, 205, 255, .07);
+  --term-glass-edge: rgba(255, 255, 255, .16);
+  --term-glass-border: rgba(255, 255, 255, .16);
+  --term-glass-shadow: rgba(0, 0, 0, .56);
+}
+
+/* ---- Cyberpunk panel treatment ------------------------------------------
+   The quickhack screen's language, applied to the workspace: near-black plates,
+   cyan neon hairlines, a cut corner instead of a radius, mono uppercase labels,
+   and a left edge that lights up when a row is live. All of it is decoration on
+   top of the structure above — removing this block leaves a working page. */
+
+/* CP2077 quickhack plates.
+
+   The top-right corner is a real 45° cut, and its edge is still DRAWN — that is
+   the part that reads as a fabricated plate rather than a clipped box. clip-path
+   alone cannot do that: it clips the element's own border away, so the two
+   diagonal edges are painted as background layers instead. Backgrounds do not
+   scroll with an element's contents, so the lines stay put in the scrolling
+   panels (.modal, the drawer) where a positioned pseudo-element would slide away.
+
+   The bottom-left notch is the plates' fold: the lower left wall steps in at 45°.
+   It belongs to the shape, so every plate carries it — see the single rule below,
+   which is also the only place the corner geometry is declared. */
+
+/* Every fabricated plate shares ONE outline rule: the top-right 45° cut and the
+   bottom-left fold together. Keeping the cut and the notch in a single rule is the
+   point — when they lived in two rules with different selector lists, the plates
+   only named in one of them (conn-load-banner, the session tiles, the jump card,
+   the approval rows, the notify cards, the drawer) silently kept the old origin
+   shape with a square bottom-left corner.
+
+   The notch is a fold, not a corner cut. The left wall runs straight down to
+   --notch-left, steps in and down at 45° over --notch-run, and drops straight to
+   the bottom edge at that new x. Two knobs, and everything else is derived:
+     --notch-left   how far up the LEFT edge the fold sits, as a share of height
+     --notch-run    how far the wall is inset: the step's run AND its rise
+   A 45° step is what makes the fold drawable as a stroke — the step is the
+   diagonal of a square --notch-run box, the one box a 45° gradient paints as the
+   step at every panel size. (The shape this replaced ran its diagonal from the
+   fold all the way to the bottom edge, so its slope was a fraction of the panel's
+   height and drifted with the panel's aspect ratio.)
+
+   Two of the notch's edges need no stroke of their own: above the fold the left
+   wall is the plate's own border, and right of the notch the bottom edge is too.
+   What the clip removes is padding, so the guards below are the only layout side
+   effect.
+
+   The batch keys are named by two classes, not one. They are `.btn`s, and `.btn`
+   sets a clip-path and a background shorthand of its own: a bare `.host-batch-btn`
+   ties with `.btn` on specificity and loses on source order, so the chip's corner
+   would paint over the plate's — which is what "the notch does nothing on these
+   buttons" looked like. Two classes outrank `.btn` wherever these rules sit.
+
+   Scope: only wide containers with a bounded height. A notch is a corner treatment
+   for a plate that reads as a plate — a session card is nearly square (128x132),
+   an approval row's height follows its command, the jump editor's follows its
+   fields, and the host drawer is full-height, so the clipped wall would cut into
+   their content. Those keep a plain rectangular plate.
+
+   The keys share the declaration too, with the fold switched off below: one
+   clip-path in this file, not one per component, so the corner cannot drift. */
+.workspace-sessions, .modal, .conn-tile.entry-card,
+.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn, .icon-btn {
+  --cut: 14px;
+  --notch-left: 50%;
+  --notch-run: 8px;
+  --panel-line: var(--border-strong);
+  --cut-line: linear-gradient(45deg,
+    transparent 47.4746%, var(--panel-line) 47.4746%,
+    var(--panel-line) 52.5254%, transparent 52.5254%);
+  /* The step's stroke. The layer is the square whose top-left corner IS the fold,
+     so its main diagonal — what a 45deg band at 50% paints — is the step, and a
+     1px band on it stays 1px wide and on the step at every panel size.
+
+     The half-run is not padding, it is a correction: a percentage in
+     background-position is measured against (positioning area - image), not
+     against the area, so `top: var(--notch-left)` would land the square half its
+     own height too high and the stroke would draw above the clip — i.e. vanish.
+     Adding half a run back cancels exactly that term, whatever the panel's size.
+     (The wall's stroke needs no correction: its offset is a length.) */
+  --notch-line: linear-gradient(45deg,
+    transparent calc(50% - .5px), var(--panel-line) calc(50% - .5px),
+    var(--panel-line) calc(50% + .5px), transparent calc(50% + .5px));
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--cut)) 0,
+    100% var(--cut),
+    100% 100%,
+    var(--notch-run) 100%,
+    var(--notch-run) calc(100% - var(--notch-left) + var(--notch-run)),
+    0 calc(100% - var(--notch-left))
+  );
+  border-radius: 0;
+}
+
+/* Content inset, not plate decoration. The clipped wall is a shape, so it must
+   not carry layout: putting padding on the shape rule would drag every plate into
+   the same inset, including ones whose own padding is part of their look. These
+   are the content boxes that sit against a notched wall. */
+.modal-body { padding: 8px 16px; }
+.workspace-sessions .section-body { padding: 8px 16px; }
+#sec-entries-body > .drawer-toolbar,
+#sec-entries-body > #conn-grid { margin-left: 16px; margin-right: 16px; }
+.workspace-sessions, .modal, #sec-entries-body {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-10), 0 0 0 1px rgba(var(--cyan-rgb), .08),
+              0 18px 48px var(--shadow-modal);
+}
+
+/* Section titles become terminal read-outs: mono, uppercase, tracked out, with a
+   cyan tick on the left and the breaker's corner marks on the right. */
+.workspace-sessions .section-header {
+  font-family: var(--font-mono); font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .16em; color: var(--accent);
+  border-bottom: 1px solid var(--border-subtle);
+  background: linear-gradient(90deg, var(--accent-surface-soft), transparent 55%);
+}
+.workspace-sessions .section-header::before {
+  content: ''; width: 3px; height: 14px; margin-right: 2px; flex: 0 0 auto;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.workspace-sessions .section-header:hover { background: linear-gradient(90deg, var(--accent-surface), transparent 60%); }
+
+/* Host cards: a hacker's target list. The left rail is the row's state, the
+   label carries the name, and the host line is mono so addresses line up. */
+.conn-tile.entry-card {
+  border-left: 0; padding-left: 14px;
+  background: linear-gradient(90deg, var(--bg-card-hover), var(--bg-card) 42%);
+}
+.conn-tile.entry-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--border-strong);
+}
+.conn-tile.entry-card:hover { border-color: var(--accent-border); }
+.conn-tile.entry-card:hover::before { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.conn-nm, .conn-tile .nm { font-family: var(--font-mono); letter-spacing: .01em; color: var(--text-bright); }
+.conn-tile .sub, .sess-sid-line { font-family: var(--font-mono); }
+
+/* Session tiles: read them like records. Name in mono, the id as a dim read-out,
+   and a cyan rail that lights on hover so the card reads as "selected target". */
+.conn-tile.sess-tile { background: linear-gradient(180deg, var(--bg-card-hover), var(--bg-card)); }
+.conn-tile.sess-tile::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent 70%);
+  opacity: 0; transition: opacity .18s ease;
+}
+.conn-tile.sess-tile:hover::after { opacity: 1; }
+.conn-tile.sess-tile .sess-entry-line { font-family: var(--font-mono); color: var(--text-bright); }
+.conn-tile.sess-tile .sess-entry-line:hover { color: var(--accent); text-shadow: 0 0 10px var(--accent-ring); }
+
+/* Numbers and state chips: breaker yellow, mono, tabular. Yellow is reserved for
+   quantities — it is the one hue the rest of the chrome does not use. */
+.batch-count, .app-version, .conn-temporary-mark {
+  font-family: var(--font-mono); color: var(--warning);
+  background: var(--warning-surface); border: 1px solid var(--warning-border);
+  text-transform: uppercase; letter-spacing: .08em;
+}
+.batch-count { border-radius: 0; padding: 1px 6px; }
+.app-version { background: none; border: none; color: var(--warning-deep); }
+.conn-temporary-mark { border: none; background: none; color: var(--orange); }
+.conn-tile.sess-tile .sess-review {
+  font-family: var(--font-mono); border-radius: 0; text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+/* Buttons: a breaker's keys. Flat plate, cyan hairline, cyan label; the primary
+   key is the only filled one and it is yellow-black, like a confirm prompt. */
+/* A key is the same outline with the fold off: a 20-34px control has no room for
+   a notch, so both knobs go to zero and the polygon degenerates to the cut corner
+   every button already had. The zeros carry UNITS: a bare `0` makes
+   `calc(100% - var(--notch-left) + var(--notch-run))` a percentage-minus-number,
+   which is invalid and takes the whole clip-path down with it.
+   `.drawer-toolbar .host-batch-btn` outranks this and opts back into the full
+   plate. */
+.btn { --cut: 7px; --notch-left: 0%; --notch-run: 0px; }
+.icon-btn { --cut: 6px; --notch-left: 0%; --notch-run: 0px; }
+
+.btn {
+  font-family: var(--font-mono); font-size: .78rem; letter-spacing: .04em;
+  text-transform: uppercase; border-radius: 0; border-color: var(--border-strong);
+  background: var(--bg-elevated); color: var(--accent);
+}
+.btn:hover { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
+.btn-primary {
+  background: var(--warning); border-color: var(--warning);
+  color: var(--text-on-accent); font-weight: 700;
+}
+.btn-primary:hover { background: var(--warning-bright); border-color: var(--warning-bright); box-shadow: 0 0 18px var(--warning-surface-strong); }
+.btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+.btn-danger:hover { background: var(--danger); border-color: var(--danger); color: var(--text-on-accent); }
+.icon-btn { border-radius: 0; }
+.icon-btn-danger:hover:not(:disabled) { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+
+/* The header is a HUD strip: thin, cold, with a hairline that glows. */
+.app-header {
+  border-bottom: 1px solid var(--accent-border);
+  box-shadow: 0 1px 0 rgba(var(--cyan-rgb), .12), 0 8px 28px rgba(0, 0, 0, .5);
+}
+.app-header h1 { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .18em; color: var(--text-bright); }
+.app-header-nav a, .lang-btn { border-radius: 0; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.lang-menu { border-radius: 0; border-color: var(--accent-border); box-shadow: 0 0 0 1px rgba(var(--cyan-rgb), .1), 0 18px 40px var(--shadow-dropdown); }
+.lang-opt.active { background: var(--warning); color: var(--text-on-accent); }
+
+/* The live lamp is the one breathing thing on the page: cyan now, not green. */
+.conn-tile.sess-tile .sess-status-ic.is-live {
+  background: var(--accent); box-shadow: 0 0 7px var(--live-glow);
+  animation: sessCyanPulse 2.6s ease-in-out infinite;
+}
+@keyframes sessCyanPulse {
+  0%, 100% { box-shadow: 0 0 4px var(--live-glow); opacity: .8; }
+  50% { box-shadow: 0 0 12px var(--live-glow); opacity: 1; }
+}
+
+/* Inputs: dark wells with a cyan focus edge, no rounding. */
+.modal-body input, .modal-body textarea, .modal-body select,
+.conn-field input, .conn-field select, .conn-field textarea {
+  border-radius: 0; border-color: var(--border-subtle); background: var(--bg-input);
+  font-family: var(--font-mono); color: var(--text-bright);
+}
+.modal-body label, .conn-field label, .conn-check-hint {
+  font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; font-size: .68rem;
+}
+.modal-h { border-bottom: 1px solid var(--accent-border); background: linear-gradient(90deg, var(--accent-surface-soft), transparent 60%); }
+.modal-h h2 { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .12em; font-size: .86rem; color: var(--accent); }
+.modal-backdrop { background: var(--overlay-modal); backdrop-filter: blur(4px); }
+.drawer-scrim { backdrop-filter: blur(3px); }
+
+/* Notifications and the approval queue follow the same plate language. */
+.ui-notify-card { border-left-width: 3px; background: var(--bg-elevated); }
+.ui-notify-title { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--text-bright); }
+.approval-code { border-radius: 0; background: var(--bg-input); border-color: var(--border-subtle); }
+.approval-chip, .approval-src, .approval-kind { border-radius: 0; font-family: var(--font-mono); letter-spacing: .06em; }
+.approval-chip { background: var(--cyan-surface); border-color: var(--cyan-border); color: var(--cyan); }
+
+/* The host drawer slab: darker plate, cyan edge, its own scrim above the page. */
+#sec-entries-body {
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--accent-border);
+  box-shadow: 12px 0 44px rgba(0, 0, 0, .62), inset -1px 0 0 rgba(var(--cyan-rgb), .1);
+}
+.drawer-close { border-radius: 0; border-color: var(--border-strong); color: var(--accent); }
+.drawer-close:hover, .drawer-close:active { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
+
+/* The drawn edges of the CP2077 plates.
+
+   This block is last on purpose: a `background` shorthand anywhere above resets
+   background-image, so the diagonal layers have to be applied after every rule
+   that paints a panel. background-origin: border-box is what anchors them to the
+   border box — the clipped corner is measured from there, so padding-box origin
+   would leave the line floating off the cut. */
+.workspace-sessions, .modal, .conn-tile.entry-card,
+.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn {
+  /* Three explicit strokes: the top-right \ chamfer, the notch's 45° step, and the
+     vertical that carries the inset wall down to the bottom edge. Nothing is drawn
+     along the bottom edge itself: right of the notch it is the plate's own border,
+     and inside the notch it is clipped away.
+
+     Both notch layers are derived from the knobs. The step is the square whose
+     top-left corner sits on the fold, so its diagonal — what the 45deg band paints
+     — IS the step. The vertical is a 1px unit on the bottom edge, as tall as the
+     wall it draws: the fold is --notch-left up from the bottom, and the step takes
+     its run off that.
+
+     Positions use the four-value syntax on purpose. With `left calc(100% - Npx)`
+     the offset is measured against (container - image), exactly as the step's
+     `top` percentage is — which is what put both lines in the wrong place. */
+  background-image:
+    var(--cut-line),
+    var(--notch-line),
+    linear-gradient(90deg, var(--panel-line), var(--panel-line));
+  background-repeat: no-repeat;
+  background-position:
+    right 0 top 0,
+    left 0 top calc(var(--notch-left) + var(--notch-run) / 2),
+    left var(--notch-run) bottom 0;
+  background-size:
+    var(--cut) var(--cut),
+    var(--notch-run) var(--notch-run),
+    1px calc(var(--notch-left) - var(--notch-run));
+  background-origin: border-box;
+  background-clip: border-box;
 }

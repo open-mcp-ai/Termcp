@@ -636,6 +636,35 @@ function positionShellWindowFromClick(win, clickEvent) {
   win.style.top = top + 'px';
 }
 
+/** Pull a floating window back inside the windows container after a drag.
+ *
+ *  A drag tracks the cursor with no bound — that is what makes it feel direct —
+ *  but it also lets the window be released past the edge, and a window released
+ *  fully off-screen has no header left to grab: the only way back would be the
+ *  session tab bar. Clamping on release rather than during the move keeps the
+ *  pointer and the window locked together while it matters, and settles the
+ *  position once the drag is over.
+ *
+ *  Bounded by the container, not the viewport: the container is what windows are
+ *  positioned against, so if it ever gains an inset this stays correct. When the
+ *  window is larger than the container on an axis the leading edge wins, which
+ *  keeps the title and its close button on screen. */
+function clampShellWindowIntoContainer(win) {
+  if (!win || isTiledWin(win)) return;
+  var host = win.parentNode;
+  if (!host || typeof host.getBoundingClientRect !== 'function') return;
+  var box = host.getBoundingClientRect();
+  var areaW = host.clientWidth || box.width;
+  var areaH = host.clientHeight || box.height;
+  var r = win.getBoundingClientRect();
+  var maxLeft = Math.max(box.left, box.left + areaW - r.width);
+  var maxTop = Math.max(box.top, box.top + areaH - r.height);
+  var left = Math.min(Math.max(box.left, r.left), maxLeft);
+  var top = Math.min(Math.max(box.top, r.top), maxTop);
+  if (left !== r.left) win.style.left = left + 'px';
+  if (top !== r.top) win.style.top = top + 'px';
+}
+
 /** Idempotent: z-order on mousedown + focus only when clicking wrap padding (not .xterm / not header). */
 function bindShellWindowMouseToFront(win) {
   if (win._termcpMouseToFrontBound) return;

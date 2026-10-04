@@ -494,6 +494,7 @@ function setupShellWindowDrag(win, header) {
   function onUp() {
     if (!drag.active) return;
     drag.active = false;
+    clampShellWindowIntoContainer(win);
     document.body.style.cursor = '';
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);

@@ -79,12 +79,20 @@ function createChannelTab(win, sessionId, opt) {
     cursorBlink: true,
     fontSize: 13,
     fontFamily: 'Consolas, Monaco, monospace',
+    /* Let the terminal canvas participate in the glass surface. Without this,
+       xterm paints an opaque rectangle over the window's backdrop-filter. */
+    allowTransparency: true,
     theme: {
-      background: '#1e1e1e',
+      /* xterm paints this literal into its canvas. Keep it fully transparent and
+         let the CSS chrome supply the tint: an alpha here would stack on top of
+         the window's own layers and end up effectively opaque. */
+      background: 'rgba(0, 0, 0, 0)',
       foreground: '#d4d4d4',
-      cursor: '#d4d4d4',
-      cursorAccent: '#1e1e1e',
-      selectionBackground: '#264f7844'
+      /* Preserve the terminal's existing cursor and selection colours; the page's
+         cyan belongs to the chrome and status accents, not to input paint. */
+      cursor: '#6ee2ff',
+      cursorAccent: '#0b1220',
+      selectionBackground: 'rgba(110, 226, 255, 0.22)'
     },
     scrollback: 100000
   });
@@ -782,6 +790,14 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     ntfTabBtn.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6a3.5 3.5 0 017 0c0 2.5 1 3.5 1 3.5H2.5s1-1 1-3.5z"/><path d="M5.8 11.5a1.2 1.2 0 002.4 0"/></svg>';
     tabBarEl.appendChild(ntfTabBtn);
   }
+  /* The lock is declared here — before the pane tabs, so the markup still reads
+     gate-then-faces and no template has to know about the bell. The bell is
+     injected below and the lock is then moved after it, so the row reads
+     term · fw · file · notify · review: the two state controls sit together at
+     the end, away from the navigation. */
+  var reviewBtn = tabBarEl && tabBarEl.querySelector('.shell-review-lock');
+  var notifyBtn = tabBarEl && tabBarEl.querySelector('.shell-tab-btn[data-stab="notify"]');
+  if (reviewBtn && notifyBtn) tabBarEl.appendChild(reviewBtn);
   var tabBtns = win.querySelectorAll('.shell-tab-btn');
   var terminalWrap = win.querySelector('.shell-terminal-wrap');
   var tabPanels = win.querySelectorAll('.shell-tab-panel');

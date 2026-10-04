@@ -43,7 +43,7 @@ function renderSessionGrid(sessions, bannerMsg) {
     _selectedSessionIds.clear();
     updateSessionBatchBar();
     var empty = document.createElement('div');
-    empty.style.cssText = 'padding:8px 4px;font-size:0.85rem;color:#656d76';
+    empty.className = 'sess-empty';
     empty.textContent = t('session.empty');
     grid.appendChild(empty);
     return;
@@ -108,7 +108,7 @@ function renderSessionGrid(sessions, bannerMsg) {
       '</div>' +
       reviewBadgeHtml(sid) +
       '</div>' +
-      '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
+      '<div class="sess-fwd-info" style="display:none"></div>';
 
     tile.title = (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
 

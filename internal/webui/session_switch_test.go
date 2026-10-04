@@ -485,9 +485,33 @@ func TestSessionTileNameRenamesAndCheckboxSitsOnItsRow(t *testing.T) {
 	if i, j := strings.Index(meta, "statusIc"), strings.Index(meta, "sess-sid-line"); i > j {
 		t.Error("the lamp must precede the sid, not follow it")
 	}
-	for _, want := range []string{".sess-status-ic.is-live { background: #1a7f37; }", ".sess-status-ic.is-dead { background: #cf222e; }"} {
+	// The lamp's colours come from tokens. A hardcoded pair is a second palette
+	// the theme cannot reach — and because the skin layer re-declares the lamp
+	// further down, a hex in the base layer is a value that never renders at all.
+	// Both layers are asserted: the base one is the fallback the page keeps if the
+	// skin block is dropped, the skin one is what a browser actually paints.
+	base := between(t, css, ".conn-tile.sess-tile .sess-status-ic.is-live {", "}")
+	skin := css[strings.LastIndex(css, ".conn-tile.sess-tile .sess-status-ic.is-live {"):]
+	skin = skin[:strings.Index(skin, "}")+1]
+	for name, rule := range map[string]string{"base": base, "skin": skin} {
+		if !strings.Contains(rule, "background: var(--") {
+			t.Errorf("the %s lamp declares no token background: %q", name, rule)
+		}
+	}
+	if !strings.Contains(skin, "background: var(--accent)") {
+		t.Errorf("the painted lamp is the accent hue; got %q", skin)
+	}
+	for _, want := range []string{
+		"animation: sessCyanPulse",
+		".conn-tile.sess-tile .sess-status-ic.is-dead { background: var(--danger); }",
+	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("the status lamp should style %s", want)
+		}
+	}
+	for _, hardcoded := range []string{"#1a7f37", "#cf222e"} {
+		if strings.Contains(css, hardcoded) {
+			t.Errorf("the lamp hardcodes %s; its colour belongs to a token", hardcoded)
 		}
 	}
 }

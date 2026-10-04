@@ -29,7 +29,14 @@
           <button type="button" class="lang-opt" data-lang="zh-Hant" onclick="chooseLang('zh-Hant')">繁中</button>
         </span>
       </span>
-      <a href="/api.html" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title">API / MCP / SKILLS</a>
+      <a href="/api.html" class="api-nav-link" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title" aria-label="MCP, HTTP API and Agent skill integration docs" data-i18n-aria="nav.api.title">
+        <svg class="api-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.25 2.5h3.1c1.13 0 2.05.92 2.05 2.05v8.2c-.5-.62-1.22-.98-2.05-.98h-3.1z"/>
+          <path d="M13.75 2.5h-3.1c-1.13 0-2.05.92-2.05 2.05v8.2c.5-.62 1.22-.98 2.05-.98h3.1z"/>
+          <path d="M8 4.55v8.2"/>
+        </svg>
+        <span class="api-nav-label">API / MCP / SKILLS</span>
+      </a>
     </nav>
   </header>
   <div class="dock">
@@ -42,34 +49,43 @@
          to read. -->
     <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
     <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
-    <div class="section-header entries-section-header" id="sec-entries" aria-expanded="true" role="button" tabindex="0">
-      <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span data-i18n="sec.entries">Host</span>
-      <span style="flex:1"></span>
-      <button type="button" class="btn host-batch-btn" id="conn-import-open" data-i18n="conn.batch.import">Import Config</button>
-      <button type="button" class="btn host-batch-btn" id="conn-export" data-i18n="conn.batch.export">Export Config</button>
-    </div>
-    <div class="section-body" id="sec-entries-body">
-      <div id="conn-grid" class="conn-grid"></div>
-    </div>
-    <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
-      <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span data-i18n="sec.sessions">Sessions</span>
-      <span id="session-batch-count" class="batch-count" style="display:none"></span>
-      <span style="flex:1"></span>
-      <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-        <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
-        <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
-      </button>
-      <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" disabled onclick="event.stopPropagation()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-      </button>
-      <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" data-i18n-title="section.batch.clearDead" aria-label="Clear all dead sessions" data-i18n-aria="section.batch.clearDeadAria" onclick="event.stopPropagation()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4 12 12"/><path d="M12 12l-6 6 4 1 1 4 6-6z"/><path d="M14 10l-2-2"/></svg>
-      </button>
-    </div>
-    <div class="section-body" id="sec-sessions-body">
-      <div id="session-grid" class="conn-grid"></div>
+    <div class="workspace-layout">
+      <div class="workspace-panel workspace-hosts">
+        <div class="section-body" id="sec-entries-body">
+          <div class="drawer-toolbar" role="toolbar">
+            <button type="button" class="btn host-batch-btn" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
+            <button type="button" class="btn host-batch-btn" id="conn-export" title="Export Config" data-i18n-title="conn.batch.export" aria-label="Export Config" data-i18n-aria="conn.batch.export"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
+          </div>
+          <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
+            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
+          </button>
+          <div id="conn-grid" class="conn-grid"></div>
+        </div>
+      </div>
+      <div class="workspace-panel workspace-sessions">
+        <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
+          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
+          <span data-i18n="sec.sessions">Sessions</span>
+          <span id="session-batch-count" class="batch-count" style="display:none"></span>
+          <button type="button" class="icon-btn icon-btn-sm host-drawer-open" id="open-host-drawer" title="Hosts" data-i18n-title="sec.entries" aria-label="Hosts" data-i18n-aria="sec.entries" aria-controls="sec-entries-body" aria-expanded="false" onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <span style="flex:1"></span>
+          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
+            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" disabled onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" data-i18n-title="section.batch.clearDead" aria-label="Clear all dead sessions" data-i18n-aria="section.batch.clearDeadAria" onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4 12 12"/><path d="M12 12l-6 6 4 1 1 4 6-6z"/><path d="M14 10l-2-2"/></svg>
+          </button>
+        </div>
+        <div class="section-body" id="sec-sessions-body">
+          <div id="session-grid" class="conn-grid"></div>
+        </div>
+      </div>
     </div>
 
 
@@ -77,7 +93,7 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-forward-title" data-i18n="modal.forward.title">New Forwarding</h2>
-        <button type="button" id="modal-forward-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-forward-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-forward-err" class="err" style="display:none"></p>
@@ -88,7 +104,7 @@
           <option value="remote" data-i18n="modal.forward.dir.remote">Remote (ssh -R)</option>
           <option value="dynamic" data-i18n="modal.forward.dir.dynamic">SOCKS5 (ssh -D)</option>
         </select>
-        <p style="font-size:0.7rem;color:#656d76;margin:-8px 0 8px 0">
+        <p class="conn-field-hint">
           <span id="fw-dir-hint-local" data-i18n="modal.forward.dirHint.local">local listen → remote target</span>
           <span id="fw-dir-hint-remote" style="display:none" data-i18n="modal.forward.dirHint.remote">remote listen → local target</span>
           <span id="fw-dir-hint-dynamic" style="display:none" data-i18n="modal.forward.dirHint.dynamic">SOCKS5 → any target</span>
@@ -121,7 +137,7 @@
     <div class="modal">
       <div class="modal-h">
         <h2 id="modal-conn-title" data-i18n="modal.conn.titleAdd">Add Host</h2>
-        <button type="button" id="modal-conn-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-conn-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-conn-err" class="err" style="display:none"></p>
@@ -185,7 +201,7 @@
         <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,application/toml,text/plain"></div>
         <div class="conn-field conn-field-check"><label class="conn-check" for="conn-import-temporary"><input type="checkbox" id="conn-import-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.batch.temporaryHint">Applies to every host in this file. Temporary hosts disappear when termcp stops.</div></div>
         <p class="conn-check-hint" data-i18n="conn.batch.collisionHint">Conflicting host names are renamed automatically. Invalid files import no hosts.</p>
-        <p id="conn-import-result" role="status" style="display:none;white-space:pre-line;font-size:0.82rem;color:#1a7f37"></p>
+        <p id="conn-import-result" role="status" class="form-ok" style="display:none"></p>
         <div class="modal-actions"><button type="button" class="btn btn-primary" id="conn-import-run" data-i18n="conn.batch.import">Import Config</button></div>
       </div>
     </div>
@@ -223,10 +239,10 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-cmd-title" data-i18n="channel.cmd.titlePty">Run command</h2>
-        <button type="button" id="modal-cmd-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-cmd-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
-        <p id="modal-cmd-err" class="err" style="display:none;margin:0 0 8px;color:#cf222e;font-size:0.8rem"></p>
+        <p id="modal-cmd-err" class="err" style="display:none"></p>
         <label for="modal-cmd-input" data-i18n="channel.cmd.label">Command</label>
         <input type="text" id="modal-cmd-input" autocomplete="off" spellcheck="false">
         <div class="modal-actions">
@@ -241,10 +257,10 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-confirm-title" data-i18n="common.confirm">Confirm</h2>
-        <button type="button" id="modal-confirm-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-confirm-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
-        <p id="modal-confirm-msg" style="margin:0 0 4px;color:#1f2328;font-size:0.9rem;word-break:break-word"></p>
+        <p id="modal-confirm-msg" class="modal-msg"></p>
         <div class="modal-actions">
           <button type="button" class="btn" id="modal-confirm-cancel" data-i18n="common.cancel">Cancel</button>
           <button type="button" class="btn btn-danger" id="modal-confirm-ok" data-i18n="common.delete">Delete</button>
