@@ -221,7 +221,7 @@ func TestPlaceholdersMatchAcrossLanguages(t *testing.T) {
 func TestCoreKeysTranslated(t *testing.T) {
 	cat := loadCatalogs(t)
 	core := []string{
-		"sec.entries", "sec.sessions",
+		"sec.sessions",
 		"session.delete.title", "session.delete.message", "session.status.running",
 		"modal.forward.title", "modal.conn.titleAdd", "modal.start.title",
 		"common.cancel", "common.delete", "common.close", "common.confirm",

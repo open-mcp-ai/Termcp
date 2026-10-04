@@ -683,7 +683,7 @@ function settleSessionDeletes(results, banner, onDone) {
     if (r.ok || r.code === 'session_not_found') {
       var w = getShellWindowBySid(r.id);
       if (w) closeShellWindow(w);
-      _selectedSessionIds.delete(r.id);
+      _sessionRegions.forEach(function (region) { region.ids.delete(r.id); });
     } else {
       failed.push(r);
     }
@@ -696,81 +696,113 @@ function sessionFailuresText(failed) {
   return failed.map(function (r) { return r.id + (r.error ? ': ' + r.error : ''); }).join('; ');
 }
 
-// Session selection toolbar actions
-document.getElementById('btn-clear-dead').onclick = function (e) {
-  e.stopPropagation();
-  var dead = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id && s.status !== 'running'; });
-  if (!dead.length) { showCopyToast(t('toast.dead.none')); return; }
+/** Delete one plate's selected sessions after confirming.
+ *
+ *  Both plates share this: the only difference is which ids they own, and the
+ *  wording of the dialog is the same operation either way. Taking the ids from
+ *  the caller (rather than from a global selection) is what keeps the two
+ *  regions independent.
+ */
+function deleteSelectedInRegion(region) {
+  var snapshot = window._lastSessionsSnapshot || [];
+  var targets = sessionsForRegion(region, snapshot).filter(function (s) { return region.ids.has(s.id); });
+  if (!targets.length) {
+    showCopyToast(t('toast.sessions.none'));
+    return;
+  }
+  var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
   confirmDialog({
-    title: t('section.batch.clearDead'),
-    message: tCount('clear.dead.msg.one', 'clear.dead.msg.other', { count: dead.length }),
-    okText: t('clear.dead.ok', { count: dead.length }),
+    title: t('batch.del.dialog'),
+    message: msg,
+    okText: t('batch.del.ok', { count: targets.length }),
     danger: true
   }).then(function (ok) {
     if (!ok) return;
     var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, tCount('banner.clearing.one', 'banner.clearing.other', { count: dead.length }));
-    return deleteSessionsBatch(dead.map(function (s) { return s.id; })).then(function (results) {
+    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
+    return deleteSessionsBatch(targets.map(function (s) { return s.id; })).then(function (results) {
       settleSessionDeletes(results, banner, function (cleared, failed) {
-        if (failed.length) showCopyToast(t('toast.clear.failed', { msg: sessionFailuresText(failed) }));
-        else showCopyToast(tCount('toast.dead.cleared.one', 'toast.dead.cleared.other', { count: cleared }));
+        if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
+        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
         loadForwards();
         startUIWebSocket();
-        renderSessionGrid(window._lastSessionsSnapshot || [], '');
+        renderSessionGrid('');
       });
     }).catch(function (err) {
-      if (banner) setLoadBanner(banner, t('toast.clear.failed', { msg: String(err.message || err) }));
-      renderSessionGrid(window._lastSessionsSnapshot || [], '');
+      if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
+      renderSessionGrid('');
     });
   });
-};
+}
 
-// Select-all / clear-selection button
-var btnSelAll = document.getElementById('batch-sel-all');
-if (btnSelAll) {
-  btnSelAll.onclick = function (e) {
+// Each plate's trash and select-all act on that plate's own selection.
+_sessionRegions.forEach(function (region) {
+  var delBtn = document.getElementById(region.delId);
+  if (delBtn) {
+    delBtn.onclick = function (e) {
+      e.stopPropagation();
+      deleteSelectedInRegion(region);
+    };
+  }
+  var selAllBtn = document.getElementById(region.selAllId);
+  if (selAllBtn) {
+    selAllBtn.onclick = function (e) {
+      e.stopPropagation();
+      var members = sessionsForRegion(region, window._lastSessionsSnapshot || []);
+      var allSelected = members.length > 0 && members.every(function (s) { return region.ids.has(s.id); });
+      if (allSelected) members.forEach(function (s) { region.ids.delete(s.id); });
+      else members.forEach(function (s) { region.ids.add(s.id); });
+      renderSessionGrid('');
+    };
+  }
+});
+
+// The sessions add card opens the host list: a session is always created from a
+// host, so the plus is the same door as the NetHub control rather than a second
+// creation path with its own rules.
+var sessionAddEl = document.getElementById('session-add');
+if (sessionAddEl) {
+  var openSessionAdd = function (e) {
+    e.preventDefault();
     e.stopPropagation();
-    var snapshot = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id; });
-    var allSelected = snapshot.length > 0 && snapshot.every(function (s) { return _selectedSessionIds.has(s.id); });
-    if (allSelected) snapshot.forEach(function (s) { _selectedSessionIds.delete(s.id); });
-    else snapshot.forEach(function (s) { _selectedSessionIds.add(s.id); });
-    renderSessionGrid(window._lastSessionsSnapshot || [], '');
+    if (typeof window.termcpToggleEntriesDrawer === 'function') window.termcpToggleEntriesDrawer(true);
   };
+  sessionAddEl.addEventListener('click', openSessionAdd);
+  sessionAddEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') openSessionAdd(e);
+  });
 }
-var btnBatchDel = document.getElementById('batch-del-btn');
-if (btnBatchDel) {
-  btnBatchDel.onclick = function () {
-    var snapshot = window._lastSessionsSnapshot || [];
-    var targets = snapshot.filter(function (s) { return s && s.id && _selectedSessionIds.has(s.id); });
-    if (!targets.length) {
-      showCopyToast(t('toast.sessions.none'));
-      return;
+
+// Collapse/expand each section with localStorage persistence. The archive is a
+// plate rather than a section header, so only its header id differs; its body is
+// the same .section-body and it shares this one implementation.
+['entries', 'sessions', 'archive'].forEach(function (key) {
+  var header = document.getElementById(key === 'archive' ? 'sec-archive-header' : 'sec-' + key);
+  var body = document.getElementById('sec-' + key + '-body');
+  if (!header || !body) return;
+  var stored = localStorage.getItem('termcp.section.' + key);
+  var collapsed = stored
+    ? stored === 'collapsed'
+    : header.getAttribute('aria-expanded') !== 'true';
+  header.setAttribute('aria-expanded', String(!collapsed));
+  body.classList.toggle('collapsed', collapsed);
+  header.addEventListener('click', function (e) {
+    if (e.target.closest('.icon-btn')) return;
+    var collapsed = header.getAttribute('aria-expanded') === 'false';
+    header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
+    if (collapsed) {
+      body.classList.remove('collapsed');
+      localStorage.setItem('termcp.section.' + key, 'expanded');
+    } else {
+      body.classList.add('collapsed');
+      localStorage.setItem('termcp.section.' + key, 'collapsed');
     }
-    var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
-    confirmDialog({
-      title: t('batch.del.dialog'),
-      message: msg,
-      okText: t('batch.del.ok', { count: targets.length }),
-      danger: true
-    }).then(function (ok) {
-      if (!ok) return;
-      var banner = document.getElementById('session-load-banner');
-      if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-      return deleteSessionsBatch(targets.map(function (s) { return s.id; })).then(function (results) {
-        settleSessionDeletes(results, banner, function (cleared, failed) {
-          if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
-          else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
-          loadForwards();
-          startUIWebSocket();
-          renderSessionGrid(window._lastSessionsSnapshot || [], '');
-        });
-      }).catch(function (err) {
-        if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
-        renderSessionGrid(window._lastSessionsSnapshot || [], '');
-      });
-    });
-  };
-}
+  });
+  header.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
+  });
+});
+
 function reasonLabel(r) {
   if (!r) return '';
   switch (String(r)) {
@@ -797,44 +829,17 @@ fetch('/api/version')
   })
   .catch(function () {});
 
-// Section collapse/expand with localStorage persistence
-['entries', 'sessions'].forEach(function (key) {
-  var header = document.getElementById('sec-' + key);
-  var body = document.getElementById('sec-' + key + '-body');
-  if (!header || !body) return;
-  var stored = localStorage.getItem('termcp.section.' + key);
-  var collapsed = stored
-    ? stored === 'collapsed'
-    : header.getAttribute('aria-expanded') !== 'true';
-  header.setAttribute('aria-expanded', String(!collapsed));
-  body.classList.toggle('collapsed', collapsed);
-  header.addEventListener('click', function (e) {
-    if (e.target.closest('.icon-btn')) return;
-    var collapsed = header.getAttribute('aria-expanded') === 'false';
-    header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
-    if (collapsed) {
-      body.classList.remove('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'expanded');
-    } else {
-      body.classList.add('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'collapsed');
-    }
-  });
-  header.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
-  });
-});
-
 // ---- Entries drawer (every viewport) ----
 // The connection list is a left slide-in drawer, not a section in the flow: 22
 // entries expanded are ~2000px tall, which pushes the user's own sessions
 // off-screen — on a phone that is the wrong thing to lead with, and on a wide
 // screen a permanently visible host column is space the session list wanted.
 // Sessions own the page in every viewport; hosts are opened on demand from the
-// "+" in the sessions header, and picking a connection closes the drawer again.
+// NetHub control, and picking a connection closes the drawer again.
 (function () {
   var trigger = document.getElementById('open-host-drawer');
   var body = document.getElementById('sec-entries-body');
+  var add = document.getElementById('conn-add');
   if (!trigger || !body) return;
 
   var scrim = document.createElement('div');
@@ -852,10 +857,9 @@ fetch('/api/version')
     document.body.style.overflow = open ? 'hidden' : '';
   }
 
-  /* stopPropagation is not enough here: the sessions header carries the shared
-     section-collapse listener, and a capture-phase listener on the same element
-     fires before it. Swallow the click in capture so opening the drawer never
-     also collapses the sessions list. */
+  /* The entry is a standalone control now, but keep capture-phase handling so
+     clicks from any wrapper or future layout control cannot leak into a shared
+     section listener. */
   trigger.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     e.preventDefault();
@@ -877,6 +881,14 @@ fetch('/api/version')
   body.addEventListener('click', function (e) {
     if (e.target.closest('.conn-tile')) setOpen(false);
   });
+  if (add) {
+    add.setAttribute('aria-label', t('conn.aria.add'));
+    add.title = t('conn.aria.add');
+    add.addEventListener('click', function () { openConnModal(false, ''); });
+    add.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openConnModal(false, ''); }
+    });
+  }
   /* The drawer starts closed, so the trigger must report that state. */
   trigger.setAttribute('aria-expanded', 'false');
 

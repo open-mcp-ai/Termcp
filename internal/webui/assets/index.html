@@ -9,6 +9,10 @@
   <link rel="stylesheet" href="static/css/app.css">
 </head>
 <body>
+  <!-- Drop-in Blackwall artwork: replace icons/blackwall.svg without touching the
+       page layer. The fixed layer never participates in layout or input, and
+       stays below the app surfaces while translucent plates let it show through. -->
+  <div class="page-backdrop" aria-hidden="true"></div>
   <header class="app-header">
     <h1>termcp<span class="app-version" id="app-version" title="termcp -version"></span></h1>
     <nav class="app-header-nav" aria-label="Docs" data-i18n-aria="nav.docs">
@@ -49,43 +53,107 @@
          to read. -->
     <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
     <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
-    <div class="workspace-layout">
-      <div class="workspace-panel workspace-hosts">
-        <div class="section-body" id="sec-entries-body">
-          <div class="drawer-toolbar" role="toolbar">
-            <button type="button" class="btn host-batch-btn" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
-            <button type="button" class="btn host-batch-btn" id="conn-export" title="Export Config" data-i18n-title="conn.batch.export" aria-label="Export Config" data-i18n-aria="conn.batch.export"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
-          </div>
-          <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
-            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
-          </button>
-          <div id="conn-grid" class="conn-grid"></div>
+    <!-- The host drawer: closed by default, fixed when open, and out of the flow
+         entirely (display: contents on its wrapper), so it is a sibling of the
+         layout frame rather than a child of it — a fixed element inside a
+         grid/backdrop context would resolve against that ancestor instead of the
+         viewport. -->
+    <div class="workspace-panel workspace-hosts">
+      <div class="section-body" id="sec-entries-body">
+        <div class="drawer-toolbar" role="toolbar">
+          <button type="button" class="btn host-batch-btn" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
+          <button type="button" class="btn host-batch-btn" id="conn-export" title="Export Config" data-i18n-title="conn.batch.export" aria-label="Export Config" data-i18n-aria="conn.batch.export"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
+        </div>
+        <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
+          <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
+        </button>
+        <div id="conn-grid" class="conn-grid"></div>
+        <div class="drawer-add" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </div>
       </div>
+    </div>
+    <!-- NetHub gets a track of its own instead of a place in the sessions column.
+         As a flex sibling it could squeeze the plates and the plates could wrap
+         it, so which one won depended on how wide the label happened to be in
+         the current language. The frame below is a three-track grid — NetHub's
+         width, content, the same width again — so the reservation is a length:
+         the middle track is the only one that flexes, and therefore the only one
+         the plates ever get their width from. The control is laid out in the
+         leading track rather than positioned over it, and it is exactly as wide
+         as that track, so the reservation and the control are one length. -->
+    <div class="workspace-frame">
+      <button type="button" class="nethub-btn" id="open-host-drawer" title="NetHub" data-i18n-title="nav.nethub" aria-label="NetHub" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="false" onclick="event.stopPropagation()">
+        <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
+        <span class="nethub-label" data-i18n="nav.nethub">NetHub</span>
+      </button>
+      <!-- Sessions and the archive are one column in the middle track, so the
+           two plates share both edges at every width: as separate tracks the
+           archive would start at the row's left edge while sessions started
+           after NetHub. This column is also the only track that flexes, which is
+           what gives the plates their width. -->
+      <div class="workspace-main">
       <div class="workspace-panel workspace-sessions">
         <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
           <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
           <span data-i18n="sec.sessions">Sessions</span>
           <span id="session-batch-count" class="batch-count" style="display:none"></span>
-          <button type="button" class="icon-btn icon-btn-sm host-drawer-open" id="open-host-drawer" title="Hosts" data-i18n-title="sec.entries" aria-label="Hosts" data-i18n-aria="sec.entries" aria-controls="sec-entries-body" aria-expanded="false" onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
           <span style="flex:1"></span>
-          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
+          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="session-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="session-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
             <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
             <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
           </button>
-          <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" disabled onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-          </button>
-          <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" data-i18n-title="section.batch.clearDead" aria-label="Clear all dead sessions" data-i18n-aria="section.batch.clearDeadAria" onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4 12 12"/><path d="M12 12l-6 6 4 1 1 4 6-6z"/><path d="M14 10l-2-2"/></svg>
-          </button>
         </div>
         <div class="section-body" id="sec-sessions-body">
-          <div id="session-grid" class="conn-grid"></div>
+          <div id="session-grid" class="conn-grid">
+            <!-- A card the size of a session tile, and the same door as NetHub:
+                 a session is always created from a host, so the plus opens the
+                 host list rather than a second creation path. It lives inside
+                 the grid so it takes its place in the same wrapping row, and
+                 renderTileGrid re-appends this node after every re-render. -->
+            <div class="conn-tile sess-tile sess-add-card" id="session-add" role="button" tabindex="0" title="Open hosts" data-i18n-title="sec.nethub" aria-label="Open hosts" data-i18n-aria="sec.nethub">
+              <div class="sess-add-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div>
+            </div>
+          </div>
         </div>
       </div>
+      <!-- The archive is a second plate under the sessions one, not another
+           section: it holds the same cards, for sessions that are over. Its
+           header mirrors the sessions header's placement so the two read as a
+           pair, and the actions live here rather than in a shared toolbar
+           because each plate acts on its own selection. -->
+      <div class="workspace-panel workspace-sessions workspace-archive">
+        <div class="section-header" id="sec-archive-header" role="button" tabindex="0" aria-expanded="true">
+          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
+          <span data-i18n="sec.archive">Archive</span>
+          <span id="archive-batch-count" class="batch-count" style="display:none"></span>
+          <span style="flex:1"></span>
+          <!-- Selection and deletion are one region's actions, and the trash
+               only appears once that region has something selected: an
+               always-present disabled button reads as "broken", while the
+               checkbox beside it is the control that reveals it. -->
+          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="archive-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected archived sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="archive-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
+            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
+          </button>
+        </div>
+        <div class="section-body" id="sec-archive-body">
+          <div id="archive-grid" class="conn-grid"></div>
+        </div>
+      </div>
+      </div>
+      <!-- The trailing placeholder: the same reserved width on the right. It
+           paints nothing and holds nothing — what it buys is the middle track's
+           position, because NetHub's width on both sides is what puts the plates
+           on the dock's own centre instead of a track to the right of it. -->
+      <div class="workspace-slot-trail" aria-hidden="true"></div>
+    </div>
     </div>
 
 

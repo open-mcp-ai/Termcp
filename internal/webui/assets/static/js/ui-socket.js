@@ -234,7 +234,7 @@ function connectUIWebSocket() {
     if (window._sessionListSSERetryTimer) return;
     var delay = window._sessionListSSEBackoff || 1000;
     window._sessionListSSEBackoff = sseBackoffNext(delay);
-    renderSessionGrid(window._lastSessionsSnapshot || [], t('banner.reconnecting', { s: Math.ceil(delay / 1000) }));
+    renderSessionGrid(t('banner.reconnecting', { s: Math.ceil(delay / 1000) }));
     window._sessionListSSERetryTimer = setTimeout(function () {
       window._sessionListSSERetryTimer = null;
       connectUIWebSocket();

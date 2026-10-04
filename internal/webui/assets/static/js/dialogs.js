@@ -229,28 +229,9 @@ function renderConnGrid(connections, bannerMsg) {
     grid.appendChild(tile);
   });
 
-  /* "Add Host" as a trailing card rather than a header button: it belongs
-     with the list it extends, and the header keeps only the section toggle. The
-     card is the plus alone — the label said nothing the glyph does not, and on a
-     phone it turned the row into a wide band with one word in it. The accessible
-     name still carries the meaning. */
-  var addCard = document.createElement('div');
-  addCard.className = 'conn-tile entry-card entry-card-add';
-  addCard.setAttribute('role', 'button');
-  addCard.setAttribute('tabindex', '0');
-  addCard.setAttribute('aria-label', t('conn.aria.add'));
-  addCard.innerHTML =
-    '<div class="entry-card-inner">' +
-    '<div class="conn-tile-stack">' +
-    '<div class="icon-wrap"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div>' +
-    '</div>' +
-    '</div>';
-  function openAdd() { openConnModal(false, ''); }
-  addCard.addEventListener('click', openAdd);
-  addCard.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAdd(); }
-  });
-  grid.appendChild(addCard);
+  /* The "Add Host" control is not part of this list any more: it is a fixed
+     action under the scrolling host list (see #conn-add in conn-form.js), so a
+     long list never pushes it out of reach and the list holds hosts only. */
   // Fill the data-i18n* markers baked into the cards above.
   applyI18n(grid);
 }
@@ -261,7 +242,7 @@ function loadForwards() {
     .then(function (r) { return r.json(); })
     .then(function (j) {
       window._lastForwards = j.forwards || [];
-      renderSessionGrid(window._lastSessionsSnapshot || [], '');
+      renderSessionGrid('');
       document.querySelectorAll('.shell-window').forEach(function(w) { if (w._refreshFwList) w._refreshFwList(); });
     })
     .catch(function (e) { window._lastForwards = []; });

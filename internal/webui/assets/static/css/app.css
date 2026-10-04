@@ -9,6 +9,24 @@
   --bg-elevated: #0d1626;
   --bg-input: #070c16;
 
+  /* Glass: the workspace plates and the cards on them are translucent, so the
+     page's own backdrop reads through the product surface instead of being
+     sealed under it. Each value is the opaque surface above, with an alpha —
+     the hue still comes from the palette, so retuning a surface moves the glass
+     with it. The blur is what keeps text legible over the moving backdrop: a
+     plain alpha leaves the backdrop's own edges behind the glyphs, and those
+     edges are exactly what a low-contrast theme cannot afford. */
+  --glass-plate: rgba(11, 18, 32, .52);
+  --glass-plate-strong: rgba(11, 18, 32, .68);
+  --glass-tile: rgba(16, 26, 43, .74);
+  --glass-archived: rgba(8, 13, 23, .62);
+  --glass-blur: 7px;
+
+  /* The page's backdrop artwork, as a variable on purpose: the finished effect
+     is dropped in by re-pointing this one value (or by replacing the file), so
+     the artwork never has to be edited into the stylesheet. */
+  --blackwall-image: url(../../icons/blackwall.svg);
+
   /* Type: cool hologram white over the dark plate. */
   --text-primary: #dff3ff;
   --text-secondary: #8fb4cc;
@@ -115,8 +133,24 @@
 }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); background: var(--bg-canvas); color: var(--text-primary); }
+  /* The canvas colour belongs to the ROOT element, not to body. body's
+     background would paint over .page-backdrop (a negative-z-index child of
+     body is painted with the root stacking context's negative layer, which body's
+     own block background then covers), so the backdrop would be invisible at
+     exactly the moment it is the point of the page. */
+  html { background: var(--bg-canvas); }
+  html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); color: var(--text-primary); }
   body { letter-spacing: .005em; }
+  /* Blackwall: one fixed layer under the whole page. z-index: -1 is load-bearing
+     rather than decoration: a positioned element at auto/0 paints with the
+     in-flow, z-index:0 layer — above every static background and card — so the
+     artwork would sit ON the page instead of behind it. pointer-events: none
+     keeps a full-viewport box out of hit testing, and the layer is decoration
+     only, so it is created and never touched again. */
+  .page-backdrop {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background: var(--blackwall-image) center / cover no-repeat;
+  }
   button, input, select, textarea { font-family: inherit; }
   /* Ports, ids, counts and clock values must not jitter as digits change width. */
   :where(.sess-entry-line, .sess-sid-line, .sess-review, .batch-count, .app-version, .conn-temporary-mark, .session-tab-num) { font-variant-numeric: tabular-nums; }
@@ -203,7 +237,7 @@
   .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
   .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
   .btn-primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
-  .dock { padding: 16px; min-height: calc(100% - 52px); }
+  .dock { --dock-pad-x: 0px; padding: 16px var(--dock-pad-x); min-height: calc(100% - 52px); }
 
   .icon-btn {
     width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid var(--border-subtle);
@@ -274,7 +308,6 @@
   .icon-btn-sm { width: 28px; height: 28px; border-radius: 6px; }
   .icon-btn-sm svg { width: 16px; height: 16px; }
   .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
-  .icon-btn-danger { color: var(--text-muted); }
   .icon-btn .ic-checked { display: none; }
   .icon-btn.all-checked .ic-empty { display: none; }
   .icon-btn.all-checked .ic-checked { display: block; }
@@ -645,7 +678,6 @@
   .modal-msg { margin: 0 0 4px; color: var(--text-primary); font-size: .9rem; word-break: break-word; }
   .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
-  .sess-empty { padding: 8px 4px; color: var(--text-secondary); font-size: .85rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
 
   /* ---- Approval mode --------------------------------------------------
@@ -1588,43 +1620,12 @@
    size itself to 188-300px reads as ragged. Session tiles stay the compact
    128px cards they are on desktop and wrap several per row — stretching those
    to full width turns each into a mostly-empty band. */
-/* "Add Host" is an affordance, not a destination: a dashed border reads
-   as "empty slot you can fill" and keeps it distinct from real entries without
-   a different shape or colour. */
-.conn-tile.entry-card.entry-card-add {
-  border-style: dashed;
-  border-color: var(--border-strong);
-  box-shadow: none;
-  /* The card holds one glyph, so on desktop it sizes to that glyph rather than
-     stretching into a mostly-empty row. On a phone it is the last of the list
-     rows, so it fills the row like every other entry there — see the touch rule
-     at the end of the file. */
-  width: auto; min-width: 0; max-width: none;
-}
-/* The glyph is the whole card, so it centres in whatever width the card ends up
-   with. Needed because the row layout is shared with real entries, which are
-   left-aligned next to their label — this card has no label to sit beside, so
-   left alignment reads as a stray glyph. */
-.conn-tile.entry-card.entry-card-add .entry-card-inner { justify-content: center; }
-.conn-tile.entry-card.entry-card-add:hover {
-  border-color: var(--accent);
-  box-shadow: none;
-  transform: none;
-}
-.conn-tile.entry-card.entry-card-add .icon-wrap { color: var(--text-secondary); }
-.conn-tile.entry-card.entry-card-add:hover .icon-wrap { color: var(--accent); }
-
 @media (pointer: coarse) and (hover: none) {
   .conn-grid { gap: 10px; }
   /* Only entries are list rows that fill the row. Session tiles stay the
      compact cards they are on desktop and wrap several per row — stretching
      them to full width turns each one into a mostly-empty band. */
   .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
-  /* The "add" card is a list row too while the drawer is open — it closes the
-     list, so a glyph-sized card among full-width rows reads as a stray. Needs
-     the extra class to outrank the desktop rule above (three classes beat two),
-     which is why it is repeated here instead of relying on the rule just above. */
-  .conn-tile.entry-card.entry-card-add { width: 100%; max-width: none; }
   /* Touch: a 30px-tall trigger and 32px menu rows are below the 34px target.
      Only the vertical padding grows; the horizontal stays tight on purpose. */
   .lang-btn { padding: 9px 8px; }
@@ -1837,28 +1838,118 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Workspace layout: full sessions + host drawer ---------------------
-   Hosts are on-demand navigation, not the page's main content. The wrapper
-   keeps both existing sections and all JS hooks intact, while the session panel
-   owns the available width in every viewport. */
-.workspace-layout { display: block; min-width: 0; }
+/* ---- Workspace layout: NetHub + full sessions + host drawer ------------
+   The host list is on-demand, so its panel stays out of the flow. What is left
+   is a grid of three tracks: NetHub's box, the sessions column, and the same box
+   mirrored on the right. Both end tracks are lengths in the template and only
+   the middle one flexes, so neither end can trade width with the plates — a flex
+   row promised neither half, because there the widest translation of the label
+   decided whether NetHub squeezed the plates or wrapped beside them.
+
+   The mirrored reservation is also what centres the plates: the frame is the
+   dock's CONTENT box, and with an equal track on either side the column lands on
+   that box's centre. The control is laid out as the grid's FIRST track (an
+   absolutely positioned control beside the frame would not be clickable), so it
+   cancels the dock's horizontal padding with its own margin and is glued to the
+   container's left edge. Both lengths read --dock-pad-x, the same variable the
+   .dock rules declare, so the attachment and the centring hold at every
+   breakpoint. */
+.workspace-frame {
+  display: grid;
+  grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--nethub-w);
+  align-items: start;
+  gap: 12px;
+  /* NetHub's box, in one place: the control, the track it is laid out in and the
+     row it takes on narrow screens all read these two, so the reservation
+     cannot drift from the control it reserves. 132px is the widest of the three
+     labels (126.34px) with the slack the ellipsis absorbs. */
+  --nethub-w: 132px;
+  --nethub-h: 50px;
+}
+/* The trailing reservation: the leading track's width, stated once more so both
+   ends of the centring come from one variable. It paints nothing and holds
+   nothing. */
+.workspace-slot-trail { width: var(--nethub-w); }
+/* When the two reservations plus a readable sessions column no longer fit, the
+   grid drops to a single column: the control takes the row above the plates
+   instead of a track beside them, so the two never share one line. The trailing
+   reservation goes with the template rather than stacking a second empty row,
+   and the control's own margin stays, where it simply glues the full-row
+   control to the container's left edge.
+
+   800px is where the fit runs out, not a round number: the frame is V - 16 wide
+   at the fine-pointer padding (V - 12 on a coarse pointer), the reservations and
+   their gaps take 288px, so the middle track only keeps the 480px a 3-across
+   session grid needs from V = 784 (780 on touch). Stacking a few pixels early
+   costs an unused line at 790px; stacking late would clip a card column. */
+@media (max-width: 799px) {
+  .workspace-frame { grid-template-columns: minmax(0, 1fr); }
+  /* display:none, not an empty track: with the template dropped this child would
+     take an implicit row of its own — 0px tall, plus the frame's 12px gap —
+     under every phone's plates. */
+  .workspace-slot-trail { display: none; }
+}
 .workspace-panel { min-width: 0; }
-/* The hosts panel is not a flow column any more: its body is the fixed drawer
-   (#sec-entries-body), so the wrapper itself must not reserve width or the
-   sessions panel would sit beside an empty strip. */
 .workspace-hosts { display: contents; }
+/* Sessions and the archive are one column in the frame's middle track. As
+   separate tracks the archive would start at the frame's left edge while
+   sessions started after NetHub, so the two plates would not line up; one column
+   is what makes them share both edges at every width.
+
+   The column's width is a cap, not a length: the middle track is the only part
+   of the frame that flexes, and in one row it measures V - 288..V - 264 across
+   the whole range the frame is used at, so the cap is simply unbound and the
+   track alone decides. In the stacked mode below 800px the frame is the full
+   width, so the cap is what keeps the plates from becoming a single very wide
+   card column on a desktop-sized window — and it is centred
+   (margin-inline: auto) rather than left-aligned, or a capped column would sit
+   against the frame's left edge while the row above it spreads. */
+.workspace-main {
+  width: min(100%, 85rem); margin-inline: auto; min-inline-size: 0;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.nethub-btn {
+  /* Laid out in the track, one length for the two of them: the control is as
+     wide as the reservation whatever the label translates to, so the plates'
+     width never depends on it. The negative margin is the dock's own horizontal
+     padding, cancelled here and nowhere else: it pulls this one control out over
+     the gutter to the container's edge while the frame keeps the full content
+     box the plates are centred on. */
+  width: var(--nethub-w); height: var(--nethub-h);
+  margin-left: calc(-1 * var(--dock-pad-x));
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px 7px 8px;
+  border: 1px solid var(--border-subtle); border-left: 0;
+  border-radius: 0 10px 10px 0;
+  background: var(--bg-card); color: var(--accent); cursor: pointer;
+  font: inherit; font-family: var(--font-mono); font-size: .72rem;
+  font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+.nethub-btn:hover { background: var(--bg-card-hover); border-color: var(--accent-border); color: var(--accent-hover); }
+.nethub-btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.nethub-icon { display: block; width: 34px; height: 34px; flex: 0 0 34px; }
+.nethub-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-sessions {
-  width: 100%; min-width: 0; border: 1px solid var(--border-subtle);
-  border-radius: 12px; background: var(--bg-card);
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px; background-color: var(--glass-plate);
+  /* The plate is the one element that blurs: every card inside it composites over
+     this already-blurred backdrop, so a translucent tile needs no filter of its
+     own and the cost stays one blur per plate instead of one per session. */
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   box-shadow: inset 0 1px 0 var(--glow-white-04);
 }
+.workspace-archive { width: 100%; }
+.workspace-archive .section-header { border-radius: 12px 12px 0 0; }
 .workspace-sessions .section-header {
   margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
-  border-radius: 12px 12px 0 0; background: var(--bg-card);
+  border-radius: 12px 12px 0 0; background-color: var(--glass-plate-strong);
   font-size: .78rem; font-weight: 600; letter-spacing: .02em;
   text-transform: none; color: var(--text-secondary);
 }
-.workspace-sessions .section-header:hover { background: var(--bg-card-hover); }
+.workspace-sessions .section-header:hover { background-color: var(--bg-card-hover); }
 .workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }
 .workspace-sessions .conn-grid { gap: 12px; }
 
@@ -1867,7 +1958,8 @@
    same .drawer-open class on the same id; this only broadens the media scope. */
 #sec-entries-body {
   position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
-  width: min(86vw, 360px); padding: 12px; overflow-y: auto;
+  display: flex; flex-direction: column;
+  width: min(86vw, 360px); padding: 12px; overflow: hidden;
   overscroll-behavior: contain; background: var(--bg-subtle);
   border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
   box-shadow: 12px 0 40px var(--shadow-drawer);
@@ -1878,16 +1970,18 @@
   will-change: transform;
 }
 #sec-entries-body.drawer-open { transform: translateX(0); }
-#sec-entries-body.collapsed { display: block; }
+/* The panel is a flex column, and the shared collapse rule must not take that
+   away: the drawer has no section header of its own, so `display: block` would
+   only unpick the fixed toolbar above the scrolling list. */
+#sec-entries-body.collapsed { display: flex; }
 .drawer-scrim {
   display: block; position: fixed; inset: 0; z-index: 23900;
   background: var(--overlay-scrim); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity .22s ease;
 }
 .drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
-/* The sessions header's "+" opens the drawer. It is a header control, so it
-   centres its glyph inside the same 28px box as its neighbours. */
-.host-drawer-open { flex: 0 0 auto; }
+/* The sessions header's "+" is gone: the trigger is the NetHub control in the
+   layout row beside this panel. */
 .drawer-close {
   display: inline-flex; align-items: center; justify-content: center;
   position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
@@ -1899,6 +1993,7 @@
 .drawer-close:hover, .drawer-close:active { background: var(--bg-card-hover); color: var(--text-primary); }
 .drawer-close svg { display: block; }
 .drawer-toolbar {
+  flex: 0 0 auto;
   display: flex; gap: 6px; padding: 0 42px 10px 0;
   border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
 }
@@ -1912,11 +2007,38 @@
   display: inline-flex; align-items: center; justify-content: center;
 }
 .drawer-toolbar .host-batch-btn svg { display: block; }
+/* The list is the only scrolling region, and it GROWS ONLY WHEN IT OVERFLOWS.
+   `flex: 0 1 auto` is the whole rule: the list is as tall as its entries and no
+   taller, so a short host list leaves the add control right under the last one,
+   while a long list gives up the height it cannot fit (`min-height: 0` is what
+   lets it shrink) and scrolls with the add control landing against the bottom
+   edge. `1 1 auto` would be wrong: it stretches the list to the drawer's full
+   height and pins a lone "add" bar to the bottom of an empty drawer. */
+#sec-entries-body > #conn-grid {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  align-content: flex-start;
+}
+/* The add control is its own component, not a host card: it is the drawer's
+   bottom action, so it carries no card rail, no hover lift and no list row —
+   only the "empty slot you can fill" dashed edge that marks it as an affordance. */
+.drawer-add {
+  flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 16px 0;
+  padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border-strong); border-radius: 0;
+  background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+  user-select: none;
+}
+.drawer-add svg { display: block; }
+.drawer-add:hover, .drawer-add:focus-visible {
+  background: var(--accent-surface); border-color: var(--accent); color: var(--accent);
+}
+.drawer-add:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
 
 /* Wide screen: the drawer gets a little more room, but the sessions panel still
    spans the entire workspace — no permanent left column and no dead gutter. */
 @media (min-width: 1024px) {
-  .dock { width: 100%; max-width: 1560px; margin: 0 auto; padding: 16px 20px; }
+  .dock { width: 100%; margin: 0 auto; --dock-pad-x: 20px; padding: 16px var(--dock-pad-x); }
   #sec-entries-body { width: min(32vw, 420px); }
 }
 
@@ -1941,7 +2063,7 @@
 
 /* Narrow screens keep compact session cards and comfortable drawer targets. */
 @media (pointer: coarse) and (hover: none) {
-  .dock { padding: 12px; }
+  .dock { --dock-pad-x: 0px; padding: 12px var(--dock-pad-x); }
   #sec-entries-body { width: min(88vw, 340px); }
   .drawer-close { width: 36px; height: 36px; }
   .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
@@ -1971,19 +2093,32 @@
 }
 .conn-tile.entry-card:active { transform: translateY(0) scale(.99); }
 .conn-tile.sess-tile {
-  padding: 10px 8px 8px; background: var(--bg-card); border: 1px solid var(--border-subtle);
-  border-radius: 10px; transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+  padding: 10px 8px 8px;
+  background-color: var(--glass-tile);
+  border-radius: 10px; transition: background .16s ease, box-shadow .16s ease;
 }
 .conn-tile.sess-tile:hover {
-  background: var(--bg-card-hover); border-color: var(--border-strong);
+  background-color: var(--bg-card-hover);
   box-shadow: inset 0 1px 0 var(--glow-white-04), 0 8px 20px var(--shadow-card);
 }
-.conn-tile.sess-tile.archived { background: var(--bg-subtle); }
+/* Archived cards keep their dimmer read while staying translucent: the fill
+   changes, not the plate's, so one archived card never darkens its neighbours. */
+.conn-tile.sess-tile.archived { background-color: var(--glass-archived); }
 .conn-tile.sess-tile.batch-selected {
-  border-color: var(--accent-border); background: var(--accent-surface-soft);
+  background: var(--accent-surface-soft);
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
 .sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.sess-add-card {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 128px; min-height: 128px; padding: 10px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-secondary); cursor: pointer;
+}
+.sess-add-card:hover, .sess-add-card:focus-visible { color: var(--accent); background: var(--accent-surface); }
+.sess-add-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sess-add-icon { display: flex; align-items: center; justify-content: center; width: 55px; height: 55px; }
+.batch-trash[hidden] { display: none; }
 .sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
 
 /* ---- Live session lamp ------------------------------------------------ */
@@ -2015,12 +2150,13 @@
 
 /* No native scrollbars anywhere on the page layer: an OS-grey track in a neon
    panel reads as a rendering bug. Scrolling still works (wheel, trackpad, touch,
-   keyboard); what disappears is the bar itself. */
-.workspace-sessions .section-body, #sec-entries-body, .modal, .modal-body,
+   keyboard); what disappears is the bar itself. The drawer's host list replaced
+   #sec-entries-body in this list when the drawer itself stopped scrolling. */
+.workspace-sessions .section-body, #conn-grid, .modal, .modal-body,
 .modal-body textarea, #ui-notify-stack, .lang-menu {
   scrollbar-width: none; -ms-overflow-style: none;
 }
-.workspace-sessions .section-body::-webkit-scrollbar, #sec-entries-body::-webkit-scrollbar,
+.workspace-sessions .section-body::-webkit-scrollbar, #conn-grid::-webkit-scrollbar,
 .modal::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .modal-body textarea::-webkit-scrollbar,
 #ui-notify-stack::-webkit-scrollbar, .lang-menu::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .workspace-hosts .section-body > #conn-grid { padding-right: 2px; }
@@ -2028,13 +2164,10 @@
 /* Inside the drawer the entries are list rows, one per line, at every viewport —
    the same shape a phone gets. The drawer is a fixed 360-420px slab whatever the
    screen is, so the wide-screen card sizing (188-300px, wrapping two per row)
-   would pack the drawer with ragged half-width cards and no reading order. The
-   "Add Host" card fills its own row here for the same reason it does on touch:
-   among full-width rows, a glyph-sized card reads as a stray.
+   would pack the drawer with ragged half-width cards and no reading order.
 
    Scoped to #conn-grid: the session grid keeps its compact wrapping cards. */
 #conn-grid .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
-#conn-grid .conn-tile.entry-card.entry-card-add { width: 100%; max-width: none; }
 
 /* The terminal's own chrome tokens. Surfaces, hairlines and greys are the
    terminal's own (a floating window needs its own depth ramp), but every HUE the
@@ -2186,11 +2319,13 @@
    for a plate that reads as a plate — a session card is nearly square (128x132),
    an approval row's height follows its command, the jump editor's follows its
    fields, and the host drawer is full-height, so the clipped wall would cut into
-   their content. Those keep a plain rectangular plate.
+   their content. Those keep a plain rectangular plate. The add control is a plate
+   of its own: a full-width, 40px-tall action bar, which is exactly the wide,
+   bounded shape the treatment is for.
 
    The keys share the declaration too, with the fold switched off below: one
    clip-path in this file, not one per component, so the corner cannot drift. */
-.workspace-sessions, .modal, .conn-tile.entry-card,
+.workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
 .conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn, .icon-btn {
   --cut: 14px;
   --notch-left: 50%;
@@ -2244,13 +2379,13 @@
   font-family: var(--font-mono); font-size: .72rem; font-weight: 700;
   text-transform: uppercase; letter-spacing: .16em; color: var(--accent);
   border-bottom: 1px solid var(--border-subtle);
-  background: linear-gradient(90deg, var(--accent-surface-soft), transparent 55%);
+  background-image: linear-gradient(90deg, var(--accent-surface-soft), transparent 55%);
 }
 .workspace-sessions .section-header::before {
   content: ''; width: 3px; height: 14px; margin-right: 2px; flex: 0 0 auto;
   background: var(--accent); box-shadow: 0 0 8px var(--accent);
 }
-.workspace-sessions .section-header:hover { background: linear-gradient(90deg, var(--accent-surface), transparent 60%); }
+.workspace-sessions .section-header:hover { background-image: linear-gradient(90deg, var(--accent-surface), transparent 60%); }
 
 /* Host cards: a hacker's target list. The left rail is the row's state, the
    label carries the name, and the host line is mono so addresses line up. */
@@ -2269,7 +2404,6 @@
 
 /* Session tiles: read them like records. Name in mono, the id as a dim read-out,
    and a cyan rail that lights on hover so the card reads as "selected target". */
-.conn-tile.sess-tile { background: linear-gradient(180deg, var(--bg-card-hover), var(--bg-card)); }
 .conn-tile.sess-tile::after {
   content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
   background: linear-gradient(90deg, var(--accent), transparent 70%);
@@ -2320,7 +2454,6 @@
 .btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
 .btn-danger:hover { background: var(--danger); border-color: var(--danger); color: var(--text-on-accent); }
 .icon-btn { border-radius: 0; }
-.icon-btn-danger:hover:not(:disabled) { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
 
 /* The header is a HUD strip: thin, cold, with a hairline that glows. */
 .app-header {
@@ -2379,7 +2512,7 @@
    that paints a panel. background-origin: border-box is what anchors them to the
    border box — the clipped corner is measured from there, so padding-box origin
    would leave the line floating off the cut. */
-.workspace-sessions, .modal, .conn-tile.entry-card,
+.workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
 .conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn {
   /* Three explicit strokes: the top-right \ chamfer, the notch's 45° step, and the
      vertical that carries the inset wall down to the bottom edge. Nothing is drawn

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Blackwall background — PLACEHOLDER.
+
+  This file is the drop-in slot for the finished "Blackwall erosion" artwork:
+  replace the SVG below with the real one, keeping the filename, and nothing
+  else in the app has to change. It is referenced only through the CSS custom
+  property --blackwall-image on .page-backdrop.
+
+  The placeholder does the one job the slot needs before the artwork exists:
+  it is a dark, low-contrast layer that covers the viewport and is provably
+  visible, so the translucent plates can be judged against something. It is
+  deliberately not an attempt at the effect.
+
+  Contract for the real artwork:
+    * viewBox 0 0 1600 900, ratio 16:9, preserveAspectRatio xMidYMid slice
+      (the CSS stretches it with background-size: cover).
+    * Dark by design: the plates sit at ~52-74% alpha over it, so bright pixels
+      bleed through the text. Keep the mean luminance low.
+    * No text, no gradients that band at 8bpp, no external references, no
+      animation (the page does not re-fetch it, and a CSS-only page cannot see
+      one).
+    * Full-bleed: the layer is position:fixed/inset:0, so no internal margins.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900"
+     preserveAspectRatio="xMidYMid slice" role="img" aria-label="Background">
+  <defs>
+    <!-- The page's own canvas colour, so the layer seats into the theme. -->
+    <radialGradient id="bw-seat" cx="50%" cy="42%" r="78%">
+      <stop offset="0%" stop-color="#0a1120"/>
+      <stop offset="55%" stop-color="#070c16"/>
+      <stop offset="100%" stop-color="#05080f"/>
+    </radialGradient>
+    <!-- A cold ember: the only "erosion" mark here, kept dim on purpose. -->
+    <radialGradient id="bw-ember" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3a0d14" stop-opacity=".55"/>
+      <stop offset="60%" stop-color="#1b0a12" stop-opacity=".22"/>
+      <stop offset="100%" stop-color="#05080f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bw-seat)"/>
+  <ellipse cx="1180" cy="700" rx="760" ry="520" fill="url(#bw-ember)"/>
+  <ellipse cx="300" cy="180" rx="620" ry="420" fill="url(#bw-ember)" opacity=".45"/>
+</svg>
