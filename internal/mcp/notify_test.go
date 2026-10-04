@@ -248,7 +248,7 @@ func TestShellNotify_SamplingDispatchToRegisteringClient(t *testing.T) {
 
 	startRes, err := cli.CallTool(ctx, callReq("session_start", map[string]any{
 		"command":    testShell(),
-		"args":       testShellEchoArgs("notify_ok"),
+		"args":       testShellIdleArgs(),
 		"mode":       "pipe",
 		"ssh_config": "internal",
 	}))
@@ -324,7 +324,7 @@ func TestShellNotify_ResourceDispatchEndToEnd(t *testing.T) {
 
 	startRes, err := cli.CallTool(ctx, callReq("session_start", map[string]any{
 		"command":    testShell(),
-		"args":       testShellEchoArgs("notify_ok"),
+		"args":       testShellIdleArgs(),
 		"mode":       "pipe",
 		"ssh_config": "internal",
 	}))

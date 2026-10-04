@@ -118,6 +118,19 @@ func testShellEchoArgs(s string) []any {
 	return testShellArgs("-c", "echo "+s)
 }
 
+// testShellIdleArgs runs a shell that stays alive and prints nothing. Use it to
+// register a notification rule and then drive the dispatch by hand: a shell that
+// exits instead (testShellEchoArgs) makes OnExit cascade-clear the rule, so the
+// hand-driven OnOutput can land on a rule that no longer exists and the test then
+// waits out its full timeout. Printing nothing also keeps the shell's own output
+// hook from racing the dispatch under test.
+func testShellIdleArgs() []any {
+	if runtime.GOOS == "windows" {
+		return testShellArgs("-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
+	}
+	return testShellArgs("-c", "sleep 60")
+}
+
 func testReadOutputUntil(t *testing.T, s *Server, shellID, marker string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
