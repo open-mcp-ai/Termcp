@@ -49,6 +49,7 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 		Args:         execArgs,
 		Mode:         api.SessionMode(mode),
 		Name:         sessName,
+		SSHConfig:    cfgName,
 		Rows:         int(getFloat64(args, "rows", 24)),
 		Cols:         int(getFloat64(args, "cols", 80)),
 		Remote:       remote,

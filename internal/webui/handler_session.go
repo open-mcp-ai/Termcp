@@ -89,6 +89,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Args:         args,
 		Mode:         api.SessionMode(mode),
 		Name:         sessName,
+		SSHConfig:    cfgName,
 		Rows:         rows,
 		Cols:         cols,
 		Remote:       remote,

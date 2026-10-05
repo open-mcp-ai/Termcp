@@ -131,10 +131,17 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A session keeps the profile it was created from, so a renamed profile leaves
+	// running sessions still pointing at the old name. Rewriting it here is what
+	// makes the NetHub card keep answering "which host is this" instead of dropping
+	// to offline the moment its label changes.
 	if from != "" && from != name {
 		if err := h.SSH.Rename(from, name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if h.Sessions != nil {
+			h.Sessions.RenameSSHConfig(from, name)
 		}
 	}
 	if err := h.SSH.SaveWithOptions(name, body, temporary); err != nil {

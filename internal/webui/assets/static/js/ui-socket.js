@@ -568,7 +568,13 @@ function closeShellWindow(win) {
   // Release everything registered through addWinDisposable (document-level
   // listeners, drag/resize finish hooks, pending requests).
   disposeWinResources(win);
+  var wasPending = !!win._placeholder;
   win.remove();
+  // Only a placeholder window is the source of the host card's "connecting"
+  // state, so only its close has to wake the card. A failed or cancelled dial
+  // produces no session frame, and without this repaint the card would keep the
+  // yellow lamp of a connection that already gave up.
+  if (wasPending && typeof repaintNodeStates === 'function') repaintNodeStates();
 }
 
 function setupShellWindowDrag(win, header) {

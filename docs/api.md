@@ -357,6 +357,11 @@ Response 200:
 }
 ```
 
+A session record also carries `ssh_config` (the profile it was created from), a
+non-secret label added for host attribution. It is separate from `name` because
+the display name is user-editable: the NetHub reads it to decide which host a
+session belongs to, so a renamed session keeps its lamp.
+
 Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 
 ### `POST /api/sessions`

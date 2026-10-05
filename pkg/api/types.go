@@ -61,6 +61,9 @@ type Session struct {
 	UpdatedAt int64         `json:"updated_at"` // Unix ms
 	Rows      int           `json:"rows"`
 	Cols      int           `json:"cols"`
+	// SSHConfig is the canonical, non-secret profile name used to create this session.
+	// It is separate from Name because callers may rename a session after it starts.
+	SSHConfig string `json:"ssh_config,omitempty"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).
 	SSHEndpoint string `json:"ssh_endpoint,omitempty"`
 	// ApprovalMode reports whether this session gates input behind N-person

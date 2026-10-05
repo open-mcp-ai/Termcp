@@ -3,6 +3,9 @@ package webui
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -238,6 +241,127 @@ func readAssetLF(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return normalizeNL(s)
+}
+
+// TestNetHubAttributesHostsByProfileNotDisplayName runs the real attribution
+// predicate and the real state derivation from dialogs.js under node.
+//
+// Two bugs live here. The first: the card derived its state by comparing a
+// session's NAME to the profile name, so a renamed session — or one started by
+// an agent or another tab with its own name — matched nothing and the host read
+// "offline" while a live session was running on it. Only the server-stamped
+// profile is allowed to decide, and a session that carries none (a record
+// written before the field existed) falls back to the old spellings.
+//
+// The second: a profile with no session was called "offline", which claims the
+// machine is down on the strength of a connection Termcp never attempted. The
+// two absences are now separate states — "idle" (never dialled, unknown) and
+// "offline" (a session was held here and none is running now) — and this pins
+// the boundary: a RETAINED dead session is what makes the word "offline"
+// earned.
+func TestNetHubAttributesHostsByProfileNotDisplayName(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot exercise the host attribution")
+	}
+	body := readAssetLF(t, "static/js/dialogs.js")
+	// sessionBelongsToNode, runningSessionsForNode and nodeState are contiguous:
+	// the slice runs from the first to the comment that opens the repaint helper.
+	state := between(t, body, "function sessionBelongsToNode(", "\n/** Repaint the node cards")
+
+	script := `
+const fs = require('fs');
+const vm = require('vm');
+
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = {};
+vm.createContext(sandbox);
+vm.runInContext('var window = {};\nfunction allShellWins() { return window.wins || []; }\n' + src, sandbox);
+
+let bad = 0;
+function check(name, got, want) {
+  if (got !== want) { console.log('FAIL ' + name + ': got ' + got + ' want ' + want); bad++; }
+  else console.log('PASS ' + name);
+}
+
+function belongs(sess, node, wins) {
+  sandbox.sess = sess; sandbox.node = node;
+  sandbox.wins = wins || [];
+  return vm.runInContext('sessionBelongsToNode(sess, node, wins)', sandbox);
+}
+
+// The profile decides, whatever the session is called.
+check('renamed session still belongs',
+  belongs({ id: 'a', name: 'my-scratch-box', ssh_config: 'prod' }, 'prod'), true);
+check('another host is not mine',
+  belongs({ id: 'a', name: 'prod', ssh_config: 'staging' }, 'prod'), false);
+
+// A pre-field record keeps the old evidence: its name, or a window that names
+// the profile it was opened from.
+check('legacy record falls back to its name',
+  belongs({ id: 'b', name: 'prod' }, 'prod'), true);
+check('legacy record matches an open window',
+  belongs({ id: 'c', name: 'session-c' }, 'prod', [{ _connName: 'prod', _sid: 'c' }]), true);
+check('a window for another session does not match',
+  belongs({ id: 'd', name: 'session-d' }, 'prod', [{ _connName: 'prod', _sid: 'someone-else' }]), false);
+check('a stamped session ignores a foreign window',
+  belongs({ id: 'e', name: 'session-e', ssh_config: 'staging' }, 'prod', [{ _connName: 'prod', _sid: 'e' }]), false);
+
+function stateFor(sessions, wins) {
+  sandbox.conns = [{ name: 'prod' }];
+  sandbox.sessions = sessions;
+  sandbox.wins = wins || [];
+  vm.runInContext('window._lastConnections = conns; window._lastSessionsSnapshot = sessions; window.wins = wins;', sandbox);
+  return vm.runInContext('nodeState(\'prod\')', sandbox);
+}
+function prime(connections, sessions) {
+  sandbox.connections = connections; sandbox.sessions = sessions;
+  vm.runInContext('window._lastConnections = connections; window._lastSessionsSnapshot = sessions; window.wins = [];', sandbox);
+}
+
+prime(null, null);
+check('before either list arrives the readout is reading',
+  vm.runInContext('nodeState(\'prod\')', sandbox), 'loading');
+
+// Never dialled: no evidence either way — NOT a claim that the machine is down.
+prime([{ name: 'prod' }], []);
+check('a profile with no session at all is not called offline', stateFor([], []), 'idle');
+
+// A retained DEAD session is evidence Termcp did reach it and no longer does.
+prime([{ name: 'prod' }], [{ id: 'z', name: 'anything', ssh_config: 'prod', status: 'exited' }]);
+check('a host Termcp has connected to before reads disconnected', stateFor([{ id: 'z', name: 'anything', ssh_config: 'prod', status: 'exited' }], []), 'offline');
+
+// Live work, and the dial that precedes it, still win.
+const live = [{ id: 'y', name: 'renamed-live', ssh_config: 'prod', status: 'running' }];
+prime([{ name: 'prod' }], live);
+check('a running session is online', stateFor(live, []), 'online');
+check('an open dial is connecting',
+  stateFor([], [{ _placeholder: true, _pendingConnName: 'prod' }]), 'connecting');
+
+// A session on another host must not colour this card either way.
+prime([{ name: 'prod' }], [{ id: 'w', name: 'prod', ssh_config: 'staging', status: 'exited' }]);
+check('another host\'s history does not make this one disconnected',
+  stateFor([{ id: 'w', name: 'prod', ssh_config: 'staging', status: 'exited' }], []), 'idle');
+
+console.log(bad === 0 ? 'ATTRIBUTION OK' : bad + ' attribution failure(s)');
+process.exit(bad === 0 ? 0 : 1);
+`
+	tmp := t.TempDir()
+	predicatePath := filepath.Join(tmp, "predicate.js")
+	if err := os.WriteFile(predicatePath, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(tmp, "predicate_test.js")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, scriptPath, predicatePath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("host attribution probe failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ATTRIBUTION OK") {
+		t.Fatalf("host attribution probe did not pass:\n%s", out)
+	}
 }
 
 // between returns the slice of src from the marker up to (but not including) end.

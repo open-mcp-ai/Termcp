@@ -132,18 +132,37 @@ function connBannerText() {
  *
  *    connecting — a session window for this profile is still dialling
  *    online     — the profile has at least one running session
- *    offline    — the profile has none, and the list has been read at least once
+ *    offline    — the profile HAS been connected (it has a session record, live
+ *                 or retained as DEAD) and nothing is running on it now
+ *    idle       — the profile has no session record at all: it has never been
+ *                 dialled, so Termcp has no evidence either way
  *
- *  A profile that has never been dialled therefore reads "offline". That is a
- *  statement about Termcp's reach to it rather than about the machine, which is
- *  what this column is for: it answers "do I have a live way in", not "is the
- *  box up". Probing every stored host on render would be a network round-trip
- *  per card per session frame.
+ *  "idle" and "offline" are deliberately separate words. Having no session is
+ *  not evidence that the machine is down — it is the absence of evidence, and a
+ *  fresh profile, a host reached from another machine, or one simply not tried
+ *  yet all land there. Only a profile Termcp has actually held a connection to
+ *  can be called disconnected. What this column answers is "do I have a live way
+ *  in", not "is the box up"; probing every stored host on render would be a
+ *  network round-trip per card per session frame.
  *
- *  The link from a session back to its profile: the session snapshot carries no
- *  profile field, so a running session is attributed by its name (the server
- *  defaults that to the profile's own) or, when it was renamed, by the
- *  connection name the open window still holds. */
+ *  The link from a session back to its profile: the profile is stamped on the
+ *  session by the server (`ssh_config`), because everything else on the record
+ *  that could look like one is a display value. A session's NAME is whatever the
+ *  user (or the launch dialog) typed and can be renamed at any moment; a window's
+ *  `_connName` exists only on the page that opened the window, so it cannot see a
+ *  session started by an agent or by another tab. Attributing by name made the
+ *  card fall back to "offline" the moment a session was renamed or started under
+ *  another name — a live session under a red lamp. The old spellings are kept
+ *  only as a fallback for records written before the field existed. */
+function sessionBelongsToNode(s, name, wins) {
+  if (s.ssh_config) return s.ssh_config === name;
+  if (s.name === name) return true;
+  for (var j = 0; j < wins.length; j++) {
+    if (wins[j] && wins[j]._connName === name && wins[j]._sid === s.id) return true;
+  }
+  return false;
+}
+
 function runningSessionsForNode(name) {
   var sess = window._lastSessionsSnapshot || [];
   var wins = (typeof allShellWins === 'function') ? allShellWins() : [];
@@ -151,21 +170,54 @@ function runningSessionsForNode(name) {
   for (var i = 0; i < sess.length; i++) {
     var s = sess[i];
     if (!s || s.status !== 'running') continue;
-    if (s.name === name) { out.push(s); continue; }
-    for (var j = 0; j < wins.length; j++) {
-      if (wins[j] && wins[j]._connName === name && wins[j]._sid === s.id) { out.push(s); break; }
-    }
+    if (sessionBelongsToNode(s, name, wins)) out.push(s);
   }
   return out;
 }
 
 function nodeState(name) {
-  if (!window._lastConnections) return 'loading';
+  /* Both lists feed this readout — the connection list says the node exists, the
+     session snapshot says whether anything is live or has ever been held on it.
+     The latter gates the word "offline": the connection list resolves first, and
+     painting offline on that alone labelled every fresh host dead before the
+     socket's first frame. */
+  if (!window._lastConnections || !window._lastSessionsSnapshot) return 'loading';
   var wins = (typeof allShellWins === 'function') ? allShellWins() : [];
   for (var i = 0; i < wins.length; i++) {
     if (wins[i] && wins[i]._placeholder && wins[i]._pendingConnName === name) return 'connecting';
   }
-  return runningSessionsForNode(name).length ? 'online' : 'offline';
+  // One pass over the snapshot: whether any record is ours, and whether one of
+  // them is live. A running session outranks a retained one whatever the order.
+  var held = false;
+  var sessions = window._lastSessionsSnapshot || [];
+  for (var j = 0; j < sessions.length; j++) {
+    var s = sessions[j];
+    if (!s || !sessionBelongsToNode(s, name, wins)) continue;
+    if (s.status === 'running') return 'online';
+    held = true;
+  }
+  return held ? 'offline' : 'idle';
+}
+
+/** Repaint the node cards from what the page already holds.
+ *
+ *  "connecting" is the one state that exists only in a window: a placeholder
+ *  window for this profile means a dial is open, and it stops being one when the
+ *  session arrives or the dial fails. Nothing else changes on those two events
+ *  (a successful dial also brings a session frame; a FAILED one brings nothing),
+ *  so the transition has to be painted from the window itself or the card keeps
+ *  claiming whatever it said before the click.
+ *
+ *  Coalesced through a timer: a batch of window closes — select-all then delete —
+ *  fires this once per closed window, and rebuilding the whole card list once per
+ *  id would cost the batch its responsiveness for no visible difference. */
+var _nodeRepaintTimer = 0;
+function repaintNodeStates() {
+  if (_nodeRepaintTimer) return;
+  _nodeRepaintTimer = setTimeout(function () {
+    _nodeRepaintTimer = 0;
+    if (typeof window.renderNodeStates === 'function') window.renderNodeStates();
+  }, 0);
 }
 
 /** Live session count for a profile, plus whether any of them is in a window. */
@@ -198,8 +250,20 @@ function nodeAddress(c) {
 function nodeStatusLabel(state) {
   if (state === 'online') return t('nethub.state.online');
   if (state === 'connecting') return t('nethub.state.connecting');
+  if (state === 'offline') return t('nethub.state.offline');
   if (state === 'loading') return t('nethub.state.loading');
-  return t('nethub.state.offline');
+  return t('nethub.state.idle');
+}
+
+/** What the state means when the word alone could still be read as a claim about
+ *  the machine. "Not connected" and "disconnected" are different facts — one is
+ *  the absence of evidence, the other a connection Termcp held and lost — and the
+ *  hint is where that distinction is spelled out, since the node row itself is
+ *  small and uppercased. */
+function nodeStatusHint(state) {
+  if (state === 'idle') return t('nethub.hint.idle');
+  if (state === 'offline') return t('nethub.hint.offline');
+  return '';
 }
 
 /** The rail: the expand key, then one lamp per access node.
@@ -230,11 +294,13 @@ function renderNodeRail(connections) {
   list.forEach(function (c) {
     var state = nodeState(c.name);
     var info = nodeSessionInfo(c.name);
+    var hint = nodeStatusHint(state);
     var item = document.createElement('button');
     item.type = 'button';
     item.className = 'nethub-rail-item';
     item.setAttribute('data-conn-name', c.name);
     item.title = c.name + ' · ' + nodeProtocol(c) + ' · ' + nodeStatusLabel(state)
+      + (hint ? ' · ' + hint : '')
       + (info.count ? ' · ' + tCount('nethub.sessions.one', 'nethub.sessions.other', { count: info.count }) : '');
     item.setAttribute('aria-label', item.title);
     item.innerHTML =
@@ -312,7 +378,7 @@ function renderConnGrid(connections, bannerMsg) {
     /* The node's readout, in the order the column is meant to be read: what it
        is (name), how Termcp reaches it (protocol + state), at which address, and
        whether anything is currently running on it. */
-    var statusText = nodeStatusLabel(state) + (state === 'offline' ? ' · ' + t('nethub.state.untried') : '');
+    var statusText = nodeStatusLabel(state);
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<span class="node-lamp is-' + state + '" aria-hidden="true"></span>' +
@@ -345,6 +411,13 @@ function renderConnGrid(connections, bannerMsg) {
     } else {
       inner.title = addr ? (tipConnect + ' — ' + addr) : tipConnect;
     }
+    /* The two states that describe the absence of a connection say so on the
+       card itself, under the status word: the row is uppercased and small, and
+       "offline" read on its own is a claim about a machine this page never
+       dialled. "idle" in particular is not a fault state — see nodeState. */
+    var statusEl = tile.querySelector('.node-status');
+    var stateHint = nodeStatusHint(state);
+    if (statusEl && stateHint) statusEl.title = stateHint;
     // Clicking the card body connects directly (most frequent action).
     inner.addEventListener('click', function (e) {
       if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn')) return;

@@ -215,6 +215,33 @@ func (m *Manager) Rename(id, name string) error {
 	return nil
 }
 
+// RenameSSHConfig rewrites the stored profile name on every session created
+// from fromName. It is called when an ssh config is renamed, so a session's host
+// attribution follows its profile instead of freezing on the old label.
+// SSHConfig is only a profile name, never a secret; a missing value (a session
+// created before profile attribution existed) is left alone.
+func (m *Manager) RenameSSHConfig(fromName, toName string) {
+	if fromName == "" || fromName == toName {
+		return
+	}
+	m.sessions.Range(func(_, v any) bool {
+		s := v.(*Session)
+		// Lock, rewrite, unlock, then persist: persistOne reads the session back
+		// through Info(), so it cannot run under the write lock.
+		s.mu.Lock()
+		if s.SSHConfig != fromName {
+			s.mu.Unlock()
+			return true
+		}
+		s.SSHConfig = toName
+		s.UpdatedAt = clock.Now()
+		s.mu.Unlock()
+		m.persistOne(s.ID)
+		return true
+	})
+	m.notifyListChange()
+}
+
 // EnableApproval turns on approval mode for one session and tells the UI about it.
 //
 // The broadcast is why this lives on the Manager rather than the Session: a
@@ -253,8 +280,8 @@ func (m *Manager) DisableApproval(id string) error {
 	return nil
 }
 
-// FindActiveBySSHConfig returns the first running session that matches the given
-// ssh_config name (by session name or ssh_endpoint), or nil if none found.
+// FindActiveBySSHConfig returns the first running session that matches the
+// profile name, endpoint, or legacy display name.
 func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
 	var found *Session
 	m.sessions.Range(func(_, v any) bool {
@@ -263,7 +290,7 @@ func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
 		if info.Status != api.SessionRunning {
 			return true
 		}
-		if info.SSHEndpoint == sshConfig || info.Name == sshConfig {
+		if info.SSHConfig == sshConfig || info.SSHEndpoint == sshConfig || info.Name == sshConfig {
 			found = s
 			return false
 		}

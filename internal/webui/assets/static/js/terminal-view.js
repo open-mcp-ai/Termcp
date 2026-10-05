@@ -1292,6 +1292,12 @@ SHELL_WINDOW_PANELS_HTML +
   if (_layoutMode === 'tile') { tileWindow(win); openPaneWorkspace(); }
   else { _layoutMaybeAutoTile(); }
   if (_winsHidden) showAllWindows();
+  /* The card's "connecting" state lives in this window, so opening and closing
+     one is what changes it. Painted here rather than only on the session frame:
+     a dial that fails never produces one, and a card left on "connecting" for a
+     connection that already gave up is the same wrong answer as a red lamp under
+     a live session. */
+  if (typeof repaintNodeStates === 'function') repaintNodeStates();
   return win;
 }
 
@@ -1320,6 +1326,10 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, pos, opt
   applyApprovalModeFromSnapshot(win, sessionId);
   createChannelTab(win, win._primaryShellId, { index: opt.index > 0 ? opt.index : 1 });
   refreshSessionTabbar();
+  // The placeholder that made this profile read "connecting" is gone; repaint so
+  // the card shows the session it just got (or, on the failure path below, stops
+  // showing a dial that is no longer running).
+  if (typeof repaintNodeStates === 'function') repaintNodeStates();
 }
 
 /**
