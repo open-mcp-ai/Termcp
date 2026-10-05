@@ -254,7 +254,7 @@
   .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
   .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
   .btn-primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
-  .dock { --dock-pad-x: 0px; padding: 16px var(--dock-pad-x); min-height: calc(100% - 52px); }
+  .dock { padding: 16px 0; min-height: calc(100% - 52px); }
 
   .icon-btn {
     width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid var(--border-subtle);
@@ -803,19 +803,20 @@
   /* Floating terminal: dark theme; main page stays light */
   .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
   .shell-windows-container > * { pointer-events: auto; }
-  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: var(--term-panel-94); border: 1px solid var(--term-border); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px var(--term-black-35); max-width: 92vw; pointer-events: auto; }
+  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: var(--term-panel-94); border: 1px solid var(--term-border); border-radius: 0; padding: 4px; box-shadow: 0 4px 16px var(--term-black-35), inset 0 1px 0 var(--term-white-08); max-width: 92vw; pointer-events: auto; }
   /* Left grip: the bar is draggable, but only from here so clicks on tabs and
      the action cluster keep working. Kept wide enough to grab comfortably. */
-  .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 8px 0 0 8px; cursor: move; touch-action: none; }
+  .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 0; cursor: move; touch-action: none; }
   .session-tabbar.dragging { cursor: move; user-select: none; }
   .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; max-width: calc(92vw - 170px); }
   .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--term-border-2); flex-shrink: 0; }
   .session-tabbar.hidden { display: none; }
-  .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: var(--term-fg); background: var(--term-surface); border: 1px solid var(--term-border-2); border-radius: 6px; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
+  .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: var(--term-fg); background: var(--term-surface); border: 1px solid var(--term-border-2); border-radius: 0; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
+  .session-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
   .session-tab:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
-  .session-tab.active { color: var(--term-fg-white); background: var(--term-bg); border-color: var(--term-accent); }
-  .session-tab .session-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 4px; background: var(--term-border-2); color: var(--term-fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .session-tab.active { color: var(--term-fg-white); background: var(--term-bg); border-color: var(--term-accent); box-shadow: inset 0 -2px 0 var(--term-accent); }
+  .session-tab .session-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--font-mono); }
+  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 0; background: var(--term-border-2); color: var(--term-fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   .session-tab.active .session-tab-num { background: var(--term-accent); color: var(--term-bg); }
   .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: var(--term-fg-soft); cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tab .session-tab-close:hover { background: var(--term-danger); color: var(--term-fg-white); }
@@ -842,12 +843,13 @@
   /* Minimized: hidden but alive. Separate from .win-hidden, which is the tab
      bar's global show/hide-all flag. */
   .shell-window.win-minimized { display: none !important; }
-  .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
+  .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tabbar-toggle:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
-  .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
+  .session-tabbar-toggle:focus-visible, .session-tabbar-tile:focus-visible, .session-tabbar-select:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
   .session-tabbar-tile:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   .session-tabbar-tile.active { background: var(--term-accent); border-color: var(--term-accent); color: var(--term-bg); }
-  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 6px; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
+  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
   .session-tabbar-select:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   .session-tabbar-select option { color: var(--term-fg); }
   .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: 10001; }
@@ -908,9 +910,9 @@
     line-height: 0;
   }
   .shell-sid-copy .sid {
-    font-size: 12px;
-    color: var(--term-success-soft);
-    font-weight: 600;
+    font-size: 11px;
+    color: var(--term-fg-muted);
+    font-weight: 500;
     font-family: ui-monospace, monospace;
     min-width: 0;
     overflow: hidden;
@@ -939,6 +941,7 @@
   .shell-window-collapse-btn { position: relative; margin-right: 2px; }
   .shell-window-collapse-btn .ic-u, .shell-window-collapse-btn .ic-d { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
   .shell-window-header-btns button:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
+  .shell-window-header-btns button:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; color: var(--term-fg-bright); }
   /* position: relative so the review panel anchors here and not to the terminal
      wrapper: that wrapper is display:none while the Files or Forwardings tab is
      open, and an approval for a file write arrives exactly there. */
@@ -958,15 +961,28 @@
     padding: 16px;
   }
   .shell-pending-spinner {
-    width: 30px;
-    height: 30px;
-    border: 3px solid var(--term-white-2);
-    border-top-color: var(--term-accent);
-    border-radius: 50%;
-    animation: shell-pending-spin 0.75s linear infinite;
+    width: 34px;
+    height: 12px;
+    border: 1px solid var(--term-border-4);
+    border-left-color: var(--term-accent);
+    border-right-color: var(--term-accent);
+    border-radius: 0;
+    position: relative;
+    animation: shell-pending-scan 1.8s ease-in-out infinite;
   }
-  @keyframes shell-pending-spin {
-    to { transform: rotate(360deg); }
+  .shell-pending-spinner::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    top: 4px;
+    height: 1px;
+    background: var(--term-accent);
+    opacity: .75;
+  }
+  @keyframes shell-pending-scan {
+    0%, 100% { opacity: .45; transform: scaleX(.72); }
+    50% { opacity: 1; transform: scaleX(1); }
   }
   .shell-terminal-wrap .xterm { height: 100%; min-height: 0; }
   /* xterm appends .xterm-screen after .xterm-viewport (siblings). The screen layer stacks on top
@@ -997,6 +1013,7 @@
     box-shadow: inset 0 1px 0 var(--term-glass-edge),
                 0 0 0 1px rgba(var(--cyan-rgb), .12),
                 0 22px 60px var(--term-glass-shadow);
+    transition: border-color .16s ease, box-shadow .16s ease;
   }
 /* Keep the title glassy. The bottom bar has no plate of its own: its tabs and
    content show the terminal surface through them. This is intentionally after
@@ -1263,7 +1280,7 @@
     color: var(--term-fg-faint-3);
     cursor: pointer;
     font-size: 11px;
-    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-mono);
     white-space: nowrap;
     overflow: hidden;
     flex-shrink: 0;
@@ -1271,6 +1288,7 @@
     transition: background .1s, color .1s;
   }
   .shell-channel-tab:hover { background: var(--term-hover); color: var(--term-fg); }
+  .shell-channel-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; z-index: 1; }
   .shell-channel-tab.active { background: var(--term-bg); color: var(--term-fg-soft-2); border-top: 2px solid var(--term-accent); }
   .shell-channel-tab-label {
     overflow: hidden;
@@ -1855,90 +1873,41 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Workspace layout: NetHub + full sessions + host drawer ------------
-   The host list is on-demand, so its panel stays out of the flow. What is left
-   is a grid of three tracks: NetHub's box, the sessions column, and the same box
-   mirrored on the right. Both end tracks are lengths in the template and only
-   the middle one flexes, so neither end can trade width with the plates — a flex
-   row promised neither half, because there the widest translation of the label
-   decided whether NetHub squeezed the plates or wrapped beside them.
+/* ---- Workspace layout: NetHub resource sidebar -------------------------
+   NetHub is the page's control layer, so it is a layout column rather than a
+   page-level overlay: the central workspace is the row's only flexible track,
+   which is what gives the terminal its room back when the sidebar collapses.
+   The collapse is a change of ONE length (--nethub-w) plus the body's own
+   max-height, so the workspace reflows instead of being covered.
 
-   The mirrored reservation is also what centres the plates: the frame is the
-   dock's CONTENT box, and with an equal track on either side the column lands on
-   that box's centre. The control is laid out as the grid's FIRST track (an
-   absolutely positioned control beside the frame would not be clickable), so it
-   cancels the dock's horizontal padding with its own margin and is glued to the
-   container's left edge. Both lengths read --dock-pad-x, the same variable the
-   .dock rules declare, so the attachment and the centring hold at every
-   breakpoint. */
+   The same element becomes a narrow rail of status lamps when collapsed, and
+   the drawer the small screens have always used below 800px. Those are the two
+   places its body leaves normal flow; desktop never overlays. */
 .workspace-frame {
   display: grid;
-  grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--nethub-w);
+  grid-template-columns: var(--nethub-w) minmax(0, 1fr);
   align-items: start;
-  gap: 12px;
-  /* NetHub's box, in one place: the control, the track it is laid out in and the
-     row it takes on narrow screens all read these two, so the reservation
-     cannot drift from the control it reserves. 132px is the widest of the three
-     labels (126.34px) with the slack the ellipsis absorbs. */
-  --nethub-w: 132px;
-  --nethub-h: 50px;
-}
-/* The trailing reservation: the leading track's width, stated once more so both
-   ends of the centring come from one variable. It paints nothing and holds
-   nothing. */
-.workspace-slot-trail { width: var(--nethub-w); }
-/* When the two reservations plus a readable sessions column no longer fit, the
-   grid drops to a single column: the control takes the row above the plates
-   instead of a track beside them, so the two never share one line. The trailing
-   reservation goes with the template rather than stacking a second empty row,
-   and the control's own margin stays, where it simply glues the full-row
-   control to the container's left edge.
-
-   800px is where the fit runs out, not a round number: the frame is V - 16 wide
-   at the fine-pointer padding (V - 12 on a coarse pointer), the reservations and
-   their gaps take 288px, so the middle track only keeps the 480px a 3-across
-   session grid needs from V = 784 (780 on touch). Stacking a few pixels early
-   costs an unused line at 790px; stacking late would clip a card column. */
-@media (max-width: 799px) {
-  .workspace-frame { grid-template-columns: minmax(0, 1fr); }
-  /* display:none, not an empty track: with the template dropped this child would
-     take an implicit row of its own — 0px tall, plus the frame's 12px gap —
-     under every phone's plates. */
-  .workspace-slot-trail { display: none; }
+  gap: 16px;
+  --nethub-w: 276px;
+  transition: grid-template-columns .24s ease;
 }
 .workspace-panel { min-width: 0; }
-.workspace-hosts { display: contents; }
-/* Sessions and the archive are one column in the frame's middle track. As
-   separate tracks the archive would start at the frame's left edge while
-   sessions started after NetHub, so the two plates would not line up; one column
-   is what makes them share both edges at every width.
-
-   The column's width is a cap, not a length: the middle track is the only part
-   of the frame that flexes, and in one row it measures V - 288..V - 264 across
-   the whole range the frame is used at, so the cap is simply unbound and the
-   track alone decides. In the stacked mode below 800px the frame is the full
-   width, so the cap is what keeps the plates from becoming a single very wide
-   card column on a desktop-sized window — and it is centred
-   (margin-inline: auto) rather than left-aligned, or a capped column would sit
-   against the frame's left edge while the row above it spreads. */
 .workspace-main {
   width: min(100%, 85rem); margin-inline: auto; min-inline-size: 0;
   display: flex; flex-direction: column; gap: 12px;
 }
+.nethub {
+  position: sticky; top: 68px; z-index: 20;
+  min-width: 0; min-height: 0; align-self: start;
+  display: flex; flex-direction: column;
+  color: var(--text-secondary);
+}
 .nethub-btn {
-  /* Laid out in the track, one length for the two of them: the control is as
-     wide as the reservation whatever the label translates to, so the plates'
-     width never depends on it. The negative margin is the dock's own horizontal
-     padding, cancelled here and nowhere else: it pulls this one control out over
-     the gutter to the container's edge while the frame keeps the full content
-     box the plates are centred on. */
-  width: var(--nethub-w); height: var(--nethub-h);
-  margin-left: calc(-1 * var(--dock-pad-x));
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 7px 12px 7px 8px;
-  border: 1px solid var(--border-subtle); border-left: 0;
-  border-radius: 0 10px 10px 0;
-  background: var(--bg-card); color: var(--accent); cursor: pointer;
+  width: 100%; height: 50px; flex: 0 0 50px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--glass-plate-strong); color: var(--accent); cursor: pointer;
   font: inherit; font-family: var(--font-mono); font-size: .72rem;
   font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
   transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
@@ -1946,7 +1915,100 @@
 .nethub-btn:hover { background: var(--bg-card-hover); border-color: var(--accent-border); color: var(--accent-hover); }
 .nethub-btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
 .nethub-icon { display: block; width: 34px; height: 34px; flex: 0 0 34px; }
-.nethub-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nethub-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nethub-caret { display: inline-flex; margin-left: auto; flex: 0 0 auto; opacity: .7; transition: transform .2s ease; }
+/* Collapsed: the header key keeps only the glyph, and the caret turns to point
+   the way the panel will move. Alignment is centred so the icon sits on the
+   rail's axis instead of the plate's left edge. */
+.workspace-frame.nethub-collapsed .nethub-btn { padding-inline: 0; justify-content: center; }
+.workspace-frame.nethub-collapsed .nethub-label,
+.workspace-frame.nethub-collapsed .nethub-caret { display: none; }
+/* The resource column: a plate of its own, translucent like the session plates
+   so the Blackwall still reads through the control layer. */
+.nethub-body {
+  display: flex; flex-direction: column; min-width: 0; min-height: 220px;
+  max-height: calc(100vh - 134px); max-height: calc(100dvh - 134px);
+  margin-top: 8px; padding: 10px 0 12px;
+  overflow: hidden; opacity: 1; visibility: visible;
+  border: 1px solid var(--accent-border); background: var(--bg-subtle);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 12px 32px var(--shadow-card);
+  transition: opacity .16s ease, max-height .24s ease, transform .24s ease;
+}
+.nethub-rail { display: none; }
+/* The desktop pair of states. Both run through one length change, and the body
+   keeps a minimum height so collapsing never re-triggers a layout pass on the
+   terminal: it stays where the flow put it and only its width changes. */
+@media (min-width: 800px) {
+  .workspace-frame.nethub-collapsed { --nethub-w: 56px; }
+  .nethub-rail {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    min-width: 0; max-height: 0; padding: 0; overflow: hidden;
+    opacity: 0; pointer-events: none;
+    transition: max-height .24s ease, opacity .16s ease, padding .24s ease;
+  }
+  .workspace-frame.nethub-collapsed .nethub-body {
+    max-height: 0; min-height: 0; margin-top: 0; padding-block: 0;
+    opacity: 0; visibility: hidden; transform: translateX(-6px); pointer-events: none;
+  }
+  .workspace-frame.nethub-collapsed .nethub-rail {
+    max-height: calc(100vh - 134px); max-height: calc(100dvh - 134px);
+    padding: 10px 0 12px; opacity: 1; pointer-events: auto;
+  }
+}
+/* The rail: NetHub's glyph, the expand key, and one status lamp per access
+   node. The lamps are the point — a collapsed sidebar still answers "which
+   machines can I reach", which a fully hidden panel cannot. */
+.nethub-rail-expand, .nethub-rail-item {
+  position: relative; width: 42px; height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--glass-plate); color: var(--accent); cursor: pointer;
+  font: inherit;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.nethub-rail-expand:hover, .nethub-rail-item:hover,
+.nethub-rail-expand:focus-visible, .nethub-rail-item:focus-visible {
+  border-color: var(--accent-border); background: var(--accent-surface); color: var(--accent-hover);
+}
+.nethub-rail-expand:focus-visible, .nethub-rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-rail-expand svg { display: block; }
+.nethub-rail-status {
+  position: absolute; left: 6px; top: 6px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--text-faint); box-shadow: 0 0 0 1px var(--bg-subtle);
+}
+.nethub-rail-status.is-online { background: var(--success-dark); box-shadow: 0 0 7px var(--live-glow); }
+.nethub-rail-status.is-connecting { background: var(--warning); animation: nethubStatusPulse 1.5s ease-in-out infinite; }
+.nethub-rail-status.is-offline { background: var(--danger); }
+.nethub-rail-active {
+  position: absolute; right: 6px; bottom: 6px; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--live-glow);
+}
+/* The rail's overflow key: the remainder of a long node list, as text. The
+   lamp strip is a status readout, not a second list, so past the cap this is
+   what the last row says. */
+.nethub-rail-glyph { font: 700 .68rem var(--font-mono); color: var(--text-muted); line-height: 1; }
+@keyframes nethubStatusPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+/* The node row: a resource, not a host card. The status lamp leads the row. */
+.conn-tile.node-card .entry-card-inner { gap: 9px; align-items: flex-start; }
+.node-lamp {
+  flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
+  background: var(--text-faint); box-shadow: 0 0 0 1px var(--bg-subtle);
+}
+.node-lamp.is-online { background: var(--success-dark); box-shadow: 0 0 7px var(--live-glow); }
+.node-lamp.is-connecting { background: var(--warning); animation: nethubStatusPulse 1.5s ease-in-out infinite; }
+.node-lamp.is-offline { background: var(--danger); }
+.conn-tile.node-card .conn-nm { font-size: .82rem; word-break: break-word; }
+.node-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.node-proto { color: var(--accent); }
+.node-meta .node-sep { color: var(--text-faint); }
+.node-status { color: var(--text-muted); }
+.node-status.is-online { color: var(--success-dark); }
+.node-status.is-connecting { color: var(--warning); }
+.node-status.is-offline { color: var(--danger); }
+.node-addr { margin-top: 3px; font: 400 .66rem var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.conn-tile.node-card .node-sess { margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; color: var(--text-secondary); }
+.conn-tile.node-card.node-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+
 .workspace-sessions {
   width: 100%;
   border: 1px solid var(--border-subtle);
@@ -1970,78 +2032,23 @@
 .workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }
 .workspace-sessions .conn-grid { gap: 12px; }
 
-/* Hosts are always a drawer. It is closed by default and leaves the sessions
-   surface as the only content in the page flow. The existing JS toggles the
-   same .drawer-open class on the same id; this only broadens the media scope. */
-#sec-entries-body {
-  position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
-  display: flex; flex-direction: column;
-  width: min(86vw, 360px); padding: 12px; overflow: hidden;
-  overscroll-behavior: contain; background: var(--bg-subtle);
-  border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
-  box-shadow: 12px 0 40px var(--shadow-drawer);
-  padding-left: calc(12px + env(safe-area-inset-left, 0px));
-  padding-top: calc(12px + env(safe-area-inset-top, 0px));
-  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  transform: translateX(-100%); transition: transform .22s ease;
-  will-change: transform;
-}
-#sec-entries-body.drawer-open { transform: translateX(0); }
-/* The panel is a flex column, and the shared collapse rule must not take that
-   away: the drawer has no section header of its own, so `display: block` would
-   only unpick the fixed toolbar above the scrolling list. */
-#sec-entries-body.collapsed { display: flex; }
-.drawer-scrim {
-  display: block; position: fixed; inset: 0; z-index: 23900;
-  background: var(--overlay-scrim); backdrop-filter: blur(2px);
-  opacity: 0; pointer-events: none; transition: opacity .22s ease;
-}
-.drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
-/* The sessions header's "+" is gone: the trigger is the NetHub control in the
-   layout row beside this panel. */
-.drawer-close {
-  display: inline-flex; align-items: center; justify-content: center;
-  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
-  width: 34px; height: 34px; padding: 0;
-  border: 1px solid var(--border-subtle); border-radius: 9px;
-  background: var(--bg-elevated); color: var(--text-secondary);
-  cursor: pointer; z-index: 2; touch-action: manipulation;
-}
-.drawer-close:hover, .drawer-close:active { background: var(--bg-card-hover); color: var(--text-primary); }
-.drawer-close svg { display: block; }
-.drawer-toolbar {
-  flex: 0 0 auto;
-  display: flex; gap: 6px; padding: 0 42px 10px 0;
-  border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
-}
-/* One row, one control height: these buttons sit level with the close "X" beside
-   them (also 34px), so the toolbar reads as a single strip. Icon-only, so the
-   base rule's text padding is dropped and the glyph is what centres. */
-.drawer-toolbar .host-batch-btn {
-  flex: 1; min-width: 0;
-  height: 34px;
-  padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.drawer-toolbar .host-batch-btn svg { display: block; }
-/* The list is the only scrolling region, and it GROWS ONLY WHEN IT OVERFLOWS.
-   `flex: 0 1 auto` is the whole rule: the list is as tall as its entries and no
-   taller, so a short host list leaves the add control right under the last one,
-   while a long list gives up the height it cannot fit (`min-height: 0` is what
-   lets it shrink) and scrolls with the add control landing against the bottom
-   edge. `1 1 auto` would be wrong: it stretches the list to the drawer's full
-   height and pins a lone "add" bar to the bottom of an empty drawer. */
+/* The resource list is the only scrolling region, and it GROWS ONLY WHEN IT
+   OVERFLOWS. `flex: 0 1 auto` is the whole rule: the list is as tall as its
+   nodes and no taller, so a short list leaves the add control right under the
+   last one, while a long list gives up the height it cannot fit (`min-height: 0`
+   is what lets it shrink) and scrolls with the add control against the bottom
+   edge. `1 1 auto` would be wrong: it stretches the list to the column's full
+   height and pins a lone "add" bar to the bottom of an empty sidebar. */
 #sec-entries-body > #conn-grid {
   flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-  align-content: flex-start;
+  align-content: flex-start; padding: 0 10px;
 }
-/* The add control is its own component, not a host card: it is the drawer's
-   bottom action, so it carries no card rail, no hover lift and no list row —
-   only the "empty slot you can fill" dashed edge that marks it as an affordance. */
+/* The add control is its own component, not a node card: it is the column's
+   bottom action, so it carries no card rail and no hover lift — only the "empty
+   slot you can fill" dashed edge that marks it as an affordance. */
 .drawer-add {
-  flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 16px 0;
-  padding: 0;
-  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 10px 0;
+  padding: 0; display: flex; align-items: center; justify-content: center; gap: 7px;
   border: 1px dashed var(--border-strong); border-radius: 0;
   background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
   user-select: none;
@@ -2051,12 +2058,83 @@
   background: var(--accent-surface); border-color: var(--accent); color: var(--accent);
 }
 .drawer-add:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.drawer-add-label { font: 600 .66rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
 
-/* Wide screen: the drawer gets a little more room, but the sessions panel still
-   spans the entire workspace — no permanent left column and no dead gutter. */
+/* The narrow header controls the panel for small screens only: the close key and
+   the scrim exist to dismiss an overlay, and an overlay is what the panel becomes
+   below 800px. Above it they are not part of the layout at all. */
+.drawer-toolbar {
+  flex: 0 0 auto;
+  display: flex; gap: 6px; padding: 0 10px 10px;
+  border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
+}
+.drawer-toolbar .host-batch-btn {
+  flex: 1; min-width: 0; height: 34px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.drawer-toolbar .host-batch-btn svg { display: block; }
+.drawer-close {
+  display: none; align-items: center; justify-content: center;
+  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background: var(--bg-elevated); color: var(--accent);
+  cursor: pointer; z-index: 2; touch-action: manipulation;
+}
+.drawer-close:hover, .drawer-close:active { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
+.drawer-close svg { display: block; }
+.drawer-scrim {
+  display: none; position: fixed; inset: 0; z-index: 23900;
+  background: var(--overlay-scrim); backdrop-filter: blur(3px);
+  opacity: 0; pointer-events: none; transition: opacity .22s ease;
+}
+.drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
+/* The panel is a flex column, and the shared collapse rule must not take that
+   away: this body has no section header of its own, so `display: block` would
+   only unpick the fixed toolbar above the scrolling list. */
+#sec-entries-body.collapsed { display: flex; }
+
+/* Wide screen: the dock's own gutter, and the sidebar takes its room from the
+   flexible track — no dead gutter, no permanently overlaid column. */
 @media (min-width: 1024px) {
-  .dock { width: 100%; margin: 0 auto; --dock-pad-x: 20px; padding: 16px var(--dock-pad-x); }
-  #sec-entries-body { width: min(32vw, 420px); }
+  .dock { width: 100%; margin: 0 auto; padding: 16px 20px; }
+}
+
+/* Narrow: the panel leaves the flow and becomes the drawer it always was. The
+   sidebar and the rail are desktop states; below 800px the compact trigger sits
+   above the sessions and opens this overlay, scrim and all. */
+@media (max-width: 799px) {
+  .workspace-frame { display: block; }
+  /* z-index: auto is load-bearing, not tidying: the base rule gives .nethub
+     z-index: 20 for its sticky column, and a positioned ancestor with a
+     z-index creates a stacking context. The drawer inside it is position:fixed
+     at z-index 24000, but it would then paint at the ANCESTOR's 20 — under the
+     scrim, which is a sibling at 23900. That is the frosted pane over an open
+     drawer. Resetting the ancestor lets the fixed child reach the root context. */
+  .nethub { position: relative; top: auto; z-index: auto; margin-bottom: 10px; }
+  .nethub-btn { width: min(100%, 276px); }
+  .nethub-caret { display: none; }
+  #sec-entries-body {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
+    display: flex; flex-direction: column;
+    width: min(86vw, 360px); padding: 12px; overflow: hidden;
+    min-height: 0; max-height: none; margin-top: 0;
+    overscroll-behavior: contain; background: var(--bg-subtle);
+    border: 0; border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
+    box-shadow: 12px 0 44px rgba(0, 0, 0, .62), inset -1px 0 0 rgba(var(--cyan-rgb), .1);
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transform: translateX(-100%); transition: transform .22s ease; will-change: transform;
+  }
+  #sec-entries-body.drawer-open { transform: translateX(0); }
+  #sec-entries-body > #conn-grid { padding: 0; }
+  .drawer-add { margin-inline: 0; }
+  .drawer-toolbar { padding-right: 42px; }
+  .drawer-close { display: inline-flex; }
+  .drawer-scrim { display: block; }
+  .workspace-main { width: 100%; }
 }
 
 /* Narrow header: the docs link collapses to its glyph.
@@ -2080,7 +2158,7 @@
 
 /* Narrow screens keep compact session cards and comfortable drawer targets. */
 @media (pointer: coarse) and (hover: none) {
-  .dock { --dock-pad-x: 0px; padding: 12px var(--dock-pad-x); }
+  .dock { padding: 12px 0; }
   #sec-entries-body { width: min(88vw, 340px); }
   .drawer-close { width: 36px; height: 36px; }
   .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
@@ -2126,15 +2204,6 @@
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
 .sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
-.sess-add-card {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 128px; min-height: 128px; padding: 10px;
-  border: 1px dashed var(--border-strong);
-  color: var(--text-secondary); cursor: pointer;
-}
-.sess-add-card:hover, .sess-add-card:focus-visible { color: var(--accent); background: var(--accent-surface); }
-.sess-add-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.sess-add-icon { display: flex; align-items: center; justify-content: center; width: 55px; height: 55px; }
 .batch-trash[hidden] { display: none; }
 .sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
 
@@ -2163,7 +2232,6 @@
 }
 .modal-body input, .modal-body textarea, .modal-body select,
 .conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
-.modal-backdrop { backdrop-filter: blur(3px); }
 .modal { background: var(--bg-elevated); }
 .modal-h { background: var(--bg-card); }
 .modal-h h2 { color: var(--text-bright); font-weight: 600; }
@@ -2179,7 +2247,9 @@
 .workspace-sessions .section-body::-webkit-scrollbar, #conn-grid::-webkit-scrollbar,
 .modal::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .modal-body textarea::-webkit-scrollbar,
 #ui-notify-stack::-webkit-scrollbar, .lang-menu::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.workspace-hosts .section-body > #conn-grid { padding-right: 2px; }
+/* The .drawer-* selectors below keep their historic names: they are the body,
+   toolbar, close key and add action of #sec-entries-body, which on desktop is
+   NetHub's column rather than a page-level drawer. */
 
 /* Inside the drawer the entries are list rows, one per line, at every viewport —
    the same shape a phone gets. The drawer is a fixed 360-420px slab whatever the
@@ -2343,6 +2413,11 @@
    of its own: a full-width, 40px-tall action bar, which is exactly the wide,
    bounded shape the treatment is for.
 
+   A node card inherits this shape like any other host card: it is a wide, bounded
+   plate with the state rail on its left, so it wears the same corner. Nothing
+   here may restate the shape for it — a second clip-path is how the plates
+   drifted apart once already.
+
    The keys share the declaration too, with the fold switched off below: one
    clip-path in this file, not one per component, so the corner cannot drift. */
 .workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
@@ -2384,9 +2459,6 @@
    the same inset, including ones whose own padding is part of their look. These
    are the content boxes that sit against a notched wall. */
 .modal-body { padding: 8px 16px; }
-.workspace-sessions .section-body { padding: 8px 16px; }
-#sec-entries-body > .drawer-toolbar,
-#sec-entries-body > #conn-grid { margin-left: 16px; margin-right: 16px; }
 .workspace-sessions, .modal, #sec-entries-body {
   border-color: var(--border-strong);
   box-shadow: inset 0 1px 0 var(--glow-white-10), 0 0 0 1px rgba(var(--cyan-rgb), .08),
@@ -2507,7 +2579,6 @@
 .modal-h { border-bottom: 1px solid var(--accent-border); background: linear-gradient(90deg, var(--accent-surface-soft), transparent 60%); }
 .modal-h h2 { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .12em; font-size: .86rem; color: var(--accent); }
 .modal-backdrop { background: var(--overlay-modal); backdrop-filter: blur(4px); }
-.drawer-scrim { backdrop-filter: blur(3px); }
 
 /* Notifications and the approval queue follow the same plate language. */
 .ui-notify-card { border-left-width: 3px; background: var(--bg-elevated); }
@@ -2515,15 +2586,6 @@
 .approval-code { border-radius: 0; background: var(--bg-input); border-color: var(--border-subtle); }
 .approval-chip, .approval-src, .approval-kind { border-radius: 0; font-family: var(--font-mono); letter-spacing: .06em; }
 .approval-chip { background: var(--cyan-surface); border-color: var(--cyan-border); color: var(--cyan); }
-
-/* The host drawer slab: darker plate, cyan edge, its own scrim above the page. */
-#sec-entries-body {
-  background: var(--bg-subtle);
-  border-right: 1px solid var(--accent-border);
-  box-shadow: 12px 0 44px rgba(0, 0, 0, .62), inset -1px 0 0 rgba(var(--cyan-rgb), .1);
-}
-.drawer-close { border-radius: 0; border-color: var(--border-strong); color: var(--accent); }
-.drawer-close:hover, .drawer-close:active { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
 
 /* The drawn edges of the CP2077 plates.
 
@@ -2564,3 +2626,117 @@
   background-origin: border-box;
   background-clip: border-box;
 }
+
+/* ---- Product console refinement -----------------------------------------
+   Small, state-first adjustments only. The existing Blackwall, floating windows
+   and notched plates remain the visual system; this layer gives them a quieter
+   depth ramp and makes the current state legible before the detail is read. */
+
+/* A floating window is a surface in the workspace, not a red alarm frame. The
+   active window gets a cool lift and a restrained edge; approval remains the only
+   persistent urgent cue. The :not() is load-bearing: a full-screen window sets
+   border: none and box-shadow: none, and this rule has the same specificity but
+   comes later, so without it a phone terminal would grow a cyan frame. */
+.shell-window.win-active:not(.win-fullscreen) {
+  border-color: rgba(var(--cyan-rgb), .42);
+  box-shadow: inset 0 1px 0 var(--term-glass-edge),
+              0 0 0 1px rgba(var(--cyan-rgb), .08),
+              0 24px 64px var(--term-glass-shadow);
+}
+/* The notify pulse stays: it is how a session that needs attention is found. The
+   hairline is added under it as the resting mark, so a window stays recognisable
+   once the three pulses are over. */
+.shell-window.shell-window-notified .shell-window-header::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 1px; background: var(--term-accent); opacity: .8;
+}
+.shell-window-header { position: relative; }
+.shell-window-title .sw-conn { font-family: var(--font-mono); letter-spacing: .015em; }
+.shell-window-title .shell-dead-badge { border-radius: 0; letter-spacing: .1em; }
+.shell-window-title .shell-dead-badge::before { content: '— '; opacity: .55; }
+
+/* State markers live beside the identity, so connecting/live/dead is visible
+   without turning the title into a large status pill. */
+.shell-link-state {
+  width: 6px; height: 6px; flex: 0 0 auto; align-self: center;
+  border-radius: 50%; background: var(--term-fg-faint-2);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+}
+.shell-link-state.is-connecting { background: var(--term-warning); animation: shellStatePulse 1.8s ease-in-out infinite; }
+.shell-link-state.is-live { background: var(--term-accent); box-shadow: 0 0 7px rgba(var(--cyan-rgb), .42); }
+.shell-link-state.is-dead { background: var(--term-danger); }
+@keyframes shellStatePulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* The channel footer is an instrument strip: mono labels and one accent edge on
+   the active tab (the base rule already draws its top border, so this layer adds
+   no second line — two hairlines one pixel apart read as a mistake). */
+.shell-channel-tab { letter-spacing: .02em; }
+.shell-channel-tab.active { font-weight: 600; }
+
+/* The window controls are chrome, not content: crisp corners, quiet until they
+   are hovered or reached by keyboard. Squaring them is not styling for its own
+   sake — every other control on the page (.btn, .icon-btn, the drawer, the
+   inputs) is square, so a 4px radius here was the odd one out. The header
+   cluster, the title's copy key and the channel tab keys are all covered; the
+   14px close keys keep their shape because a hover target that small reads as a
+   dot rather than a button once its corners are cut. */
+.shell-window-header-btns button, .title-copy-btn, .shell-channel-tab-add,
+.shell-channel-add-caret, .shell-tab-btn { border-radius: 0; }
+.shell-window-header-btns button:hover { background: rgba(var(--cyan-rgb), .1); }
+
+/* Product connecting readout: a state line, not a generic spinner. The state word
+   is tracked out and accented; the connection NAME is left exactly as it is — a
+   name is an identity, and text-transform would rewrite it on screen. */
+.shell-pending { gap: 10px; font-family: var(--font-mono); font-size: 12px; }
+.shell-pending [data-i18n] { color: var(--term-accent); font-size: 9px; text-transform: uppercase; letter-spacing: .16em; }
+.shell-pending strong { color: var(--term-fg-soft); font-weight: 600; }
+
+/* Focus is an interaction state, not a glow effect. Cover the controls that
+   are created dynamically, including icon-only actions in the session HUD. */
+.shell-tab-btn:focus-visible, .shell-channel-tab-add:focus-visible,
+.shell-channel-add-caret:focus-visible, .shell-channel-tab-copy:focus-visible,
+.shell-channel-tab-close:focus-visible, .shell-review-lock:focus-visible,
+.shell-window-min-btn:focus-visible, .close-btn:focus-visible,
+.shell-header-icon-btn:focus-visible {
+  outline: 2px solid var(--term-accent); outline-offset: -2px;
+}
+
+/* The grid card is a record with a state rail. It stays rectangular and
+   translucent, and the rail is the only signal: the plate is already bordered,
+   so a second ring would compete with the selection state. */
+.conn-tile.sess-tile::before {
+  content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 2px;
+  background: var(--border-subtle); transition: background .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:not(.archived):hover::before { background: var(--accent); box-shadow: 0 0 8px var(--accent-ring); }
+.conn-tile.sess-tile.has-open-window::before { background: var(--accent); }
+.conn-tile.sess-tile.has-open-window .sess-terminal-ic { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-surface); }
+.conn-tile.sess-tile.archived::before { background: var(--danger-border); }
+
+/* The Blackwall reacts through a single low-cost opacity overlay. The base image
+   keeps its slow breathing; these states only add a brief local disturbance and
+   never turn the page into an esports HUD. */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  opacity: 0; background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--cyan-rgb), .13), transparent 22%);
+}
+body.bw-session-active::after { opacity: .22; transition: opacity .35s ease; }
+body.bw-ai-active::after { background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--orange-rgb), .18), transparent 18%); opacity: .34; transition: opacity .2s ease; }
+body.bw-review-pending::after { background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--yellow-rgb), .18), transparent 14%); opacity: .4; transition: opacity .15s ease; }
+body.bw-error::after { background: linear-gradient(90deg, transparent 0 42%, rgba(var(--pink-rgb), .1) 50%, transparent 58%); opacity: .42; }
+@media (prefers-reduced-motion: reduce) {
+  .shell-link-state.is-connecting, .shell-pending-spinner { animation: none; }
+  body.bw-session-active::after, body.bw-ai-active::after, body.bw-review-pending::after, body.bw-error::after { transition: none; }
+}
+
+/* An empty plate reads as a terminal that printed nothing, not as a dashboard
+   placeholder. The sentence itself comes from the catalog (sessions.js writes
+   it), so no copy is baked into the stylesheet. */
+.sess-plate-empty {
+  width: 100%; padding: 26px 8px; text-align: center;
+  color: var(--text-muted); font: 600 .7rem/1.6 var(--font-mono);
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.sess-plate-empty::before, .sess-plate-empty::after { color: var(--accent); opacity: .5; }
+.sess-plate-empty::before { content: '› '; }
+.sess-plate-empty::after { content: ' ‹'; }

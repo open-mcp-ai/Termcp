@@ -188,12 +188,18 @@ func TestNotchedPlatesKeepContentClearOfTheNotch(t *testing.T) {
 	for _, want := range []string{
 		".modal-body { padding: 8px 16px; }",
 		".workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }",
-		"#sec-entries-body > #conn-grid { margin-left: 16px; margin-right: 16px; }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("app.css has no content inset %q; padding belongs on content, not the "+
 				"notch container", want)
 		}
+	}
+	// NetHub's resource list carries its own inset rather than inheriting one from
+	// the plate rule: the sidebar is a grid column with a flat clip, but the rule
+	// this test defends is the same one — spacing lives on the content box.
+	list := between(t, css, "#sec-entries-body > #conn-grid {", "}")
+	if !strings.Contains(list, "padding:") && !strings.Contains(list, "margin-left:") {
+		t.Errorf("the resource list must carry its own content inset; got %q", list)
 	}
 
 	// The shape rule itself must not grow layout padding. Its declaration block is

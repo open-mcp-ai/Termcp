@@ -58,8 +58,21 @@
          layout frame rather than a child of it — a fixed element inside a
          grid/backdrop context would resolve against that ancestor instead of the
          viewport. -->
-    <div class="workspace-panel workspace-hosts">
-      <div class="section-body" id="sec-entries-body">
+    <div class="workspace-frame">
+      <!-- NetHub is the page's control layer: the access nodes Termcp can dial
+           are a persistent left column, not a drawer. Collapsing it leaves a rail
+           of status dots rather than nothing, so "which machines can I reach" is
+           never a question the page stops answering. Below 800px the same element
+           is the fixed drawer it always was; the sidebar and the rail are the two
+           desktop states of one node, switched by .nethub-collapsed on the frame. -->
+      <aside class="nethub" id="nethub">
+        <button type="button" class="nethub-btn" id="open-host-drawer" title="NetHub" data-i18n-title="nav.nethub" aria-label="NetHub" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="true" onclick="event.stopPropagation()">
+          <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
+          <span class="nethub-label" data-i18n="nav.nethub">NetHub</span>
+          <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
+        </button>
+        <div class="nethub-rail" id="nethub-rail" role="list" aria-label="NetHub" data-i18n-aria="nav.nethub"></div>
+        <div class="nethub-body" id="sec-entries-body">
         <div class="drawer-toolbar" role="toolbar">
           <button type="button" class="btn host-batch-btn" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
           <button type="button" class="btn host-batch-btn" id="conn-export" title="Export Config" data-i18n-title="conn.batch.export" aria-label="Export Config" data-i18n-aria="conn.batch.export"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
@@ -70,28 +83,15 @@
         <div id="conn-grid" class="conn-grid"></div>
         <div class="drawer-add" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="drawer-add-label" data-i18n="nethub.add">Add access</span>
         </div>
       </div>
-    </div>
-    <!-- NetHub gets a track of its own instead of a place in the sessions column.
-         As a flex sibling it could squeeze the plates and the plates could wrap
-         it, so which one won depended on how wide the label happened to be in
-         the current language. The frame below is a three-track grid — NetHub's
-         width, content, the same width again — so the reservation is a length:
-         the middle track is the only one that flexes, and therefore the only one
-         the plates ever get their width from. The control is laid out in the
-         leading track rather than positioned over it, and it is exactly as wide
-         as that track, so the reservation and the control are one length. -->
-    <div class="workspace-frame">
-      <button type="button" class="nethub-btn" id="open-host-drawer" title="NetHub" data-i18n-title="nav.nethub" aria-label="NetHub" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="false" onclick="event.stopPropagation()">
-        <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
-        <span class="nethub-label" data-i18n="nav.nethub">NetHub</span>
-      </button>
-      <!-- Sessions and the archive are one column in the middle track, so the
-           two plates share both edges at every width: as separate tracks the
-           archive would start at the row's left edge while sessions started
-           after NetHub. This column is also the only track that flexes, which is
-           what gives the plates their width. -->
+      </aside>
+      <!-- Sessions and the archive are one column, so the two plates share both
+           edges at every width: as separate flex items the archive would start
+           at the row's left edge while sessions started after NetHub. This column
+           is the only part of the row that flexes, which is what gives the plates
+           their width as the sidebar collapses. -->
       <div class="workspace-main">
       <div class="workspace-panel workspace-sessions">
         <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
@@ -108,16 +108,7 @@
           </button>
         </div>
         <div class="section-body" id="sec-sessions-body">
-          <div id="session-grid" class="conn-grid">
-            <!-- A card the size of a session tile, and the same door as NetHub:
-                 a session is always created from a host, so the plus opens the
-                 host list rather than a second creation path. It lives inside
-                 the grid so it takes its place in the same wrapping row, and
-                 renderTileGrid re-appends this node after every re-render. -->
-            <div class="conn-tile sess-tile sess-add-card" id="session-add" role="button" tabindex="0" title="Open hosts" data-i18n-title="sec.nethub" aria-label="Open hosts" data-i18n-aria="sec.nethub">
-              <div class="sess-add-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div>
-            </div>
-          </div>
+          <div id="session-grid" class="conn-grid"></div>
         </div>
       </div>
       <!-- The archive is a second plate under the sessions one, not another
@@ -148,11 +139,6 @@
         </div>
       </div>
       </div>
-      <!-- The trailing placeholder: the same reserved width on the right. It
-           paints nothing and holds nothing — what it buys is the middle track's
-           position, because NetHub's width on both sides is what puts the plates
-           on the dock's own centre instead of a track to the right of it. -->
-      <div class="workspace-slot-trail" aria-hidden="true"></div>
     </div>
     </div>
 

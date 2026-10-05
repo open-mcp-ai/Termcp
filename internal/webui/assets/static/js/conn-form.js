@@ -623,7 +623,11 @@ document.getElementById('conn-export').onclick = function (e) {
     .finally(function () { btn.disabled = false; });
 };
 
-function openStartModal(connName, clickEvent) {
+/* The host list's launch-options dialog. Its entry point is a host card, so the
+   window it starts is centred like the card's own click — see dialogs.js. The
+   dialog outlives the click that opened it, so a pointer position captured here
+   would only ever be a stale coordinate from behind a modal backdrop. */
+function openStartModal(connName) {
   startConnName = connName;
   document.getElementById('modal-start-err').style.display = 'none';
   document.getElementById('start-ssh-config').value = connName;
@@ -633,7 +637,6 @@ function openStartModal(connName, clickEvent) {
   document.getElementById('start-cmd').value = '';
   document.getElementById('start-mode').value = 'pty';
   showModal('modal-start');
-  window._startClickEvt = clickEvent;
 }
 document.getElementById('modal-start-close').onclick = function () { hideModal('modal-start'); };
 document.getElementById('start-run').onclick = function () {
@@ -645,7 +648,7 @@ document.getElementById('start-run').onclick = function () {
   // connection progress (spinner). On failure the dialog reopens with the
   // error so inputs stay editable for a retry.
   hideModal('modal-start');
-  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, window._startClickEvt, {
+  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, null, {
     command: cmd,
     mode: document.getElementById('start-mode').value,
     name: sname || undefined
@@ -757,22 +760,6 @@ _sessionRegions.forEach(function (region) {
   }
 });
 
-// The sessions add card opens the host list: a session is always created from a
-// host, so the plus is the same door as the NetHub control rather than a second
-// creation path with its own rules.
-var sessionAddEl = document.getElementById('session-add');
-if (sessionAddEl) {
-  var openSessionAdd = function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (typeof window.termcpToggleEntriesDrawer === 'function') window.termcpToggleEntriesDrawer(true);
-  };
-  sessionAddEl.addEventListener('click', openSessionAdd);
-  sessionAddEl.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') openSessionAdd(e);
-  });
-}
-
 // Collapse/expand each section with localStorage persistence. The archive is a
 // plate rather than a section header, so only its header id differs; its body is
 // the same .section-body and it shares this one implementation.
@@ -829,13 +816,11 @@ fetch('/api/version')
   })
   .catch(function () {});
 
-// ---- Entries drawer (every viewport) ----
-// The connection list is a left slide-in drawer, not a section in the flow: 22
-// entries expanded are ~2000px tall, which pushes the user's own sessions
-// off-screen — on a phone that is the wrong thing to lead with, and on a wide
-// screen a permanently visible host column is space the session list wanted.
-// Sessions own the page in every viewport; hosts are opened on demand from the
-// NetHub control, and picking a connection closes the drawer again.
+// ---- NetHub wiring -------------------------------------------------------
+// The resource sidebar is a layout column on desktop and the same left overlay
+// it always was on a phone; both states are one boolean in dialogs.js
+// (setNetHubCollapsed), so this block only binds the controls. Nothing here
+// decides a width, and no click opens a modal: collapsing is a layout state.
 (function () {
   var trigger = document.getElementById('open-host-drawer');
   var body = document.getElementById('sec-entries-body');
@@ -846,40 +831,38 @@ fetch('/api/version')
   scrim.className = 'drawer-scrim';
   scrim.setAttribute('aria-hidden', 'true');
   document.body.appendChild(scrim);
+  /* The scrim is created here, after dialogs.js applied the initial state at
+     load (it cannot exist before this expression runs). Re-apply that state so
+     a narrow first paint with a stored desktop preference shows the overlay
+     AND its scrim together — otherwise the body opens behind a scrim that
+     never learns it is open. */
+  setNetHubCollapsed(currentNetHubCollapsed(), false);
 
-  function isOpen() { return body.classList.contains('drawer-open'); }
-
-  function setOpen(open) {
-    body.classList.toggle('drawer-open', open);
-    scrim.classList.toggle('drawer-open', open);
-    trigger.setAttribute('aria-expanded', String(open));
-    /* Prevent the page behind from scrolling under the drawer. */
-    document.body.style.overflow = open ? 'hidden' : '';
-  }
-
-  /* The entry is a standalone control now, but keep capture-phase handling so
-     clicks from any wrapper or future layout control cannot leak into a shared
-     section listener. */
+  /* The header button and the rail's expand key run the same toggle, so the
+     control is one decision with two doors. Capture phase keeps a click from
+     leaking into a shared section listener. */
   trigger.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     e.preventDefault();
-    setOpen(!isOpen());
+    toggleNetHub();
   }, true);
   trigger.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.stopImmediatePropagation();
     e.preventDefault();
-    setOpen(!isOpen());
+    toggleNetHub();
   }, true);
 
-  scrim.addEventListener('click', function () { setOpen(false); });
+  /* The scrim and Escape belong to the overlay state only; on desktop neither
+     element is in the layout, so they cannot close a sidebar the user wants. */
+  scrim.addEventListener('click', function () { setNetHubCollapsed(true, false); });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && isOpen()) setOpen(false);
+    if (e.key === 'Escape' && netHubIsDrawer() && !netHubCollapsed()) setNetHubCollapsed(true, false);
   });
-  /* Picking a connection from the drawer should reveal what it opened rather
-     than leave the drawer covering the page. */
+  /* Choosing a node from the overlay should reveal what it opened rather than
+     leave the panel covering the page it just put a window on. */
   body.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-tile')) setOpen(false);
+    if (e.target.closest('.conn-tile') && netHubIsDrawer()) setNetHubCollapsed(true, false);
   });
   if (add) {
     add.setAttribute('aria-label', t('conn.aria.add'));
@@ -889,13 +872,19 @@ fetch('/api/version')
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openConnModal(false, ''); }
     });
   }
-  /* The drawer starts closed, so the trigger must report that state. */
-  trigger.setAttribute('aria-expanded', 'false');
 
-  /* The terminal header's switcher button opens this drawer too, so a full-screen
-     terminal can switch connection without going home first. */
+  /* The terminal header's switcher button opens the panel too, so a full-screen
+     terminal can reach another node without going home first. */
   window.termcpToggleEntriesDrawer = function (forceOpen) {
-    setOpen(forceOpen === undefined ? !isOpen() : !!forceOpen);
+    setNetHubCollapsed(forceOpen === undefined ? !netHubCollapsed() : !forceOpen, false);
     return true;
+  };
+
+  /* A node's state is read from the session list and the pending windows, so the
+     cards have to be repainted when either changes. The session frame is the
+     shared wake signal for both (see ui-socket.js), and this is the hook that
+     keeps a card from claiming "offline" under a running session. */
+  window.renderNodeStates = function () {
+    renderConnGrid(window._lastConnections || [], connBannerText());
   };
 })();

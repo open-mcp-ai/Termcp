@@ -393,4 +393,16 @@ function bringShellWindowToFront(win) {
   refreshSessionTabbar();
 }
 
+/** Session cards mirror the windows open for them, so the grid and the floating
+ *  layer agree about which session is already on screen. Called from the tab bar
+ *  refresh, the one path every open/close/raise already runs through. */
+function paintSessionTileWindowMarkers() {
+  var open = {};
+  allShellWins().forEach(function (w) { if (w._parentSid) open[w._parentSid] = true; });
+  document.querySelectorAll('.conn-tile.sess-tile').forEach(function (t) {
+    var sid = t.getAttribute('data-sid');
+    if (sid) t.classList.toggle('has-open-window', !!open[sid]);
+  });
+}
+
 // ---- session tab bar (multi-session switching) ----

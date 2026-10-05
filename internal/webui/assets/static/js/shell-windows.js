@@ -43,6 +43,22 @@ function refreshSessionTabbar() {
     });
   }
   // Reuse existing tab nodes keyed by window id to keep hover state and avoid flicker.
+  /* The raised window is the one the eye is in, and that has to be legible from
+     the window itself: before this, the only difference between the front window
+     and the rest was an inline z-index the stylesheet cannot read. Tiled panes
+     keep their own marker (.pane-active, painted by setActivePane), so they are
+     left out. Both painters run before the tab list is rebuilt so an early
+     return below cannot leave a stale mark on a closed window. */
+  wins.forEach(function (w) {
+    w.classList.toggle('win-active', w === topWin && !isTiledWin(w));
+  });
+  /* The grid is rebuilt from scratch on every session frame, so the tile marker
+     is re-painted here too: the tab bar refresh is the one hook that every open,
+     close and raise already runs through. The Blackwall reads the same windows,
+     so it follows — closing the last AI-driven terminal must let the backdrop
+     settle. Guarded: this runs once at load, before ui-socket.js is evaluated. */
+  if (typeof paintSessionTileWindowMarkers === 'function') paintSessionTileWindowMarkers();
+  if (typeof blackwallPaint === 'function') blackwallPaint();
   var scroll = document.getElementById('session-tabs-scroll');
   if (!scroll) return;
   var byId = {};
@@ -610,30 +626,47 @@ function applyWindowViewportMode(win) {
   win._maxed = false;
 }
 
-/** Initial placement for a new .shell-window (caller must have incremented shellWindowCount).
+/** Fallback placement for a new .shell-window (caller must have incremented shellWindowCount).
+ *
+ *  Takes an explicit position — {x, y} in client coordinates, or null for the
+ *  centred cascade — and never an event. The host drawer is pinned to the left
+ *  edge while its click is still being handled, so a caller that passed the
+ *  click itself would place the window against the screen's left wall, under
+ *  the drawer (the clamp below keeps it on screen, which is exactly what pinned
+ *  it there). Callers pass a position only when the click is a real target.
+ *
  *  On mobile the window fills the viewport and CSS owns its geometry (see
- *  applyWindowViewportMode). Otherwise it starts at 640x480, clamped to the
- *  viewport: a phone in landscape is only ~390px tall, so a fixed 480px window
- *  would hang off the bottom with its toolbar unreachable. */
-function positionShellWindowFromClick(win, clickEvent) {
+ *  applyWindowViewportMode); the cascade steps aside for the same reason. */
+function positionShellWindowFromClick(win, pos) {
   if (isMobileViewport()) { applyWindowViewportMode(win); return; }
   var MARGIN = 8;
   var winW = Math.min(640, window.innerWidth - MARGIN * 2);
   var winH = Math.min(480, window.innerHeight - MARGIN * 2);
   win.style.width = winW + 'px';
   win.style.height = winH + 'px';
-  var th = 21;
-  var left, top;
-  if (clickEvent && typeof clickEvent.clientX === 'number') {
-    left = Math.max(MARGIN, Math.min(clickEvent.clientX - winW / 2, window.innerWidth - winW - MARGIN));
-    top = Math.max(MARGIN, Math.min(clickEvent.clientY - th, window.innerHeight - winH - MARGIN));
-  } else {
+  /* A null position means "centre it", not "guess": the caller decides, so a
+     guessed coordinate can never place the window against the edge again.
+     Consecutive windows cascade from the centre rather than stacking exactly,
+     which decides the top window on a click that never named one. */
+  if (!pos) {
     var off = (shellWindowCount - 1) % 5;
-    left = Math.max(MARGIN, 80 + off * 24);
-    top = Math.max(MARGIN, 60 + off * 24);
+    var centreL = Math.round((window.innerWidth - winW) / 2) + off * 24;
+    var centreT = Math.round((window.innerHeight - winH) / 2) + off * 24;
+    win.style.left = Math.max(MARGIN, Math.min(centreL, window.innerWidth - winW - MARGIN)) + 'px';
+    win.style.top = Math.max(MARGIN, Math.min(centreT, window.innerHeight - winH - MARGIN)) + 'px';
+    return;
   }
-  win.style.left = left + 'px';
-  win.style.top = top + 'px';
+  var th = 21;
+  win.style.left = Math.max(MARGIN, Math.min(pos.x - winW / 2, window.innerWidth - winW - MARGIN)) + 'px';
+  win.style.top = Math.max(MARGIN, Math.min(pos.y - th, window.innerHeight - winH - MARGIN)) + 'px';
+}
+
+/** The pointer position a click event names, or null when there is none (a
+ *  keyboard activation) or the window is not placed at the pointer at all — the
+ *  centring decision every host-list entry point shares. */
+function windowPositionFromClick(ev) {
+  if (!ev || typeof ev.clientX !== 'number') return null;
+  return { x: ev.clientX, y: ev.clientY };
 }
 
 /** Pull a floating window back inside the windows container after a drag.
@@ -806,11 +839,11 @@ function findShellWindowByChannelSid(sessionId) {
  *  here: the session tiles, the mobile switcher, and the session tab bar. It
  *  normalises the three states a window can be in (minimized, collapsed, tiled)
  *  before raising it, so callers never have to know about any of them. */
-function focusSessionWindow(connLabel, sessionId, clickEvent, opts) {
+function focusSessionWindow(connLabel, sessionId, pos, opts) {
   opts = opts || {};
   var ex = getShellWindowBySid(sessionId);
   if (!ex) {
-    openShellWindow(connLabel, sessionId, clickEvent, opts);
+    openShellWindow(connLabel, sessionId, pos, opts);
     return;
   }
   /* Minimized: bring it back before anything else looks at its geometry. */

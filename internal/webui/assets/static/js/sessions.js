@@ -86,17 +86,16 @@ function renderTileGrid(region, all) {
   var grid = document.getElementById(region.gridId);
   if (!grid) return;
   var selectedIds = region.ids;
-  // The sessions grid also holds the add card, which must outlive every
-  // re-render: this loop rebuilds the tiles alone, so the card is detached
-  // first and re-appended at the end. Without this it would vanish on the first
-  // server frame — and it is markup, not a tile, so nothing would rebuild it.
-  var addCard = grid.querySelector('.sess-add-card');
-  if (addCard && addCard.parentNode) addCard.parentNode.removeChild(addCard);
   grid.innerHTML = '';
   // Unified card: DEAD sessions are the same tile as running ones (the registry
   // retains them); a DEAD tile opens its terminal window in read-only mode.
-  all.filter(function (s) { return isDeadSession(s) === region.dead; })
-    .forEach(function (s) {
+  var rows = all.filter(function (s) { return isDeadSession(s) === region.dead; });
+  /* A rowless plate says why it is rowless instead of being a blank strip. It
+     only appears once a snapshot has arrived: before the first frame every plate
+     is trivially empty, and "no live sessions" would be a claim about a list the
+     page has not read yet. */
+  if (rows.length === 0 && window._lastSessionsSnapshot) grid.appendChild(sessionPlateEmpty(region));
+  rows.forEach(function (s) {
     var sid = s.id || '';
     // This plate renders one kind of session, so the card's DEAD state follows
     // from which plate built it — the same reason the card markup is shared.
@@ -264,7 +263,9 @@ function renderTileGrid(region, all) {
     tile.onclick = function (e) {
       if (e.target.closest('.sess-x') || e.target.closest('.sess-checkbox') || e.target.closest('.sess-entry-line') || e.target.closest('.sess-sid-line') || e.target.closest('.sess-status-ic')) return;
       clearSessNotified(sid); // opening the session acknowledges its notification highlight
-      focusSessionWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
+      /* The card names the position, so a click on the session grid still opens
+         the terminal at the pointer; a keyboard activation has none and centres. */
+      focusSessionWindow(s.name || '', s.id, windowPositionFromClick(e), dead ? { readOnly: true } : null);
     };
     if (!dead) {
       var fwdInfo = tile.querySelector('.sess-fwd-info');
@@ -276,8 +277,17 @@ function renderTileGrid(region, all) {
     }
     grid.appendChild(tile);
   });
-  if (addCard) grid.appendChild(addCard);
   applyI18n(grid);
+}
+
+/** A plate with no rows reads as a terminal that printed nothing. The sentence
+ *  is the catalog's (one per plate), and the node replaces what would otherwise
+ *  be an empty grid — the plate would still be there, saying nothing about why. */
+function sessionPlateEmpty(region) {
+  var el = document.createElement('div');
+  el.className = 'sess-plate-empty';
+  el.textContent = region.dead ? t('plate.archive.empty') : t('plate.sessions.empty');
+  return el;
 }
 
 /** reviewBadgeHtml builds a session card's pending-review badge from the counts
@@ -328,6 +338,9 @@ function lockWindowReadonly(win) {
  *  sits inside the existing .shell-window-title flex row. */
 function setWindowDeadBadge(win) {
   if (!win) return;
+  /* The header lamp tracks the same transition: a window that just became
+     read-only must not keep claiming a live link. */
+  if (typeof setWindowLinkState === 'function') setWindowLinkState(win, 'is-dead');
   if (win._deadBadgeAdded) return;
   var title = win.querySelector('.shell-window-title');
   if (!title) return;

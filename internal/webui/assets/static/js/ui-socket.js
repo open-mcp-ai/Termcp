@@ -133,7 +133,15 @@ function connectUIWebSocket() {
         // The session registry retains DEAD entries, so the same snapshot
         // reconciles running and read-only windows without an archive cache.
         applySessionsSnapshot(j.sessions || []);
-        if (j.connections) renderConnGrid(j.connections, '');
+        /* NetHub's nodes derive their online/session readout from this snapshot,
+           so they are repainted on the frame that changed it rather than on a
+           timer of their own. When the frame carries the connection list too,
+           the snapshot is taken first: the fresh list is what the cards must be
+           built from, or a node added in another tab stays invisible here. */
+        if (j.connections) {
+          window._lastConnections = j.connections;
+          renderConnGrid(j.connections, '');
+        } else if (typeof window.renderNodeStates === 'function') window.renderNodeStates();
         // Notification rules share this wake signal (notify.Manager onChange →
         // sessionHub.broadcast), so keep the rule panels in sync too.
         loadNotifications();
@@ -216,6 +224,8 @@ function connectUIWebSocket() {
 
   ws.onopen = function () {
     window._sessionListSSEBackoff = 1000;
+    _uiLinkDown = false;
+    blackwallPaint();
     // Avoid redrawing from a stale snapshot: first _lastSessionsSnapshot may be undefined→[] and clear tiles
     // before the first sessions frame arrives.
     setLoadBanner(document.getElementById('session-load-banner'), t('banner.syncing'));
@@ -231,6 +241,10 @@ function connectUIWebSocket() {
   ws.onclose = function () {
     if (window._uiWS !== ws) return;
     window._uiWS = null;
+    /* A lost link is the one state the page itself must announce: every terminal
+       on screen is frozen until it comes back. */
+    _uiLinkDown = true;
+    blackwallPaint();
     if (window._sessionListSSERetryTimer) return;
     var delay = window._sessionListSSEBackoff || 1000;
     window._sessionListSSEBackoff = sseBackoffNext(delay);
@@ -324,6 +338,10 @@ function shellStatusPaint(ch, state) {
   el.className = 'shell-channel-tab-state shell-state-' + state;
   el.style.display = '';
   el.title = tip;
+  /* The page-level reaction is derived from these same states, so it is
+     repainted here rather than pushed twice for one event. Guarded because this
+     function is extracted and executed on its own by the status-machine test. */
+  if (typeof blackwallPaint === 'function') blackwallPaint();
 }
 
 /* The chip for a finished channel stays put: "ended" is not a transient state
@@ -412,6 +430,77 @@ function shellStatusTouch(win, sid) {
     ch.statusTimer = 0;
     shellStatusOnIdle(win, sid);
   }, SHELL_STATUS_IDLE_MS);
+}
+
+/* ---- The Blackwall's reaction ------------------------------------------
+   The artwork reacts to what the workbench is DOING, not to a timer: a quiet
+   page breathes (the base animation), a lap of activity warms the layer near the
+   active terminal, an agent's input briefly disturbs it, a queue waiting for a
+   human reads as a local anomaly, and a lost link glitches once. All of it is a
+   single opacity/composited overlay on body::after — the artwork itself is never
+   re-filtered, so a streaming terminal pays nothing for the effect.
+
+   The state is DERIVED from what is already painted (the channel chips, the
+   approval counts, the link flag) rather than pushed by every writer: one
+   function answers "what is the workbench doing" from the DOM, so a new writer
+   cannot forget to tell it. It runs on state transitions only, never per byte. */
+var BW_ORDER = ['error', 'review-pending', 'ai-active', 'session-active'];
+var _bwPainted = '';
+var _uiLinkDown = false;
+
+function blackwallState() {
+  /* A lost link is the one state that outranks the work itself: every terminal
+     on screen is frozen until it comes back. */
+  if (_uiLinkDown) return 'error';
+  var counts = window._approvalCounts || {};
+  var keys = Object.keys(counts);
+  for (var k = 0; k < keys.length; k++) {
+    if (counts[keys[k]]) return 'review-pending';
+  }
+  var wins = document.querySelectorAll('.shell-window');
+  var busy = false;
+  for (var i = 0; i < wins.length; i++) {
+    var chans = wins[i]._channels;
+    if (!chans) continue;
+    var sids = Object.keys(chans);
+    for (var j = 0; j < sids.length; j++) {
+      var st = chans[sids[j]].statusState;
+      if (st === 'ai') return 'ai-active';
+      if (st === 'typing' || st === 'running') busy = true;
+    }
+  }
+  return busy ? 'session-active' : '';
+}
+function blackwallPaint() {
+  if (!document.body) return;
+  var state = blackwallState();
+  if (state === _bwPainted) return;
+  _bwPainted = state;
+  BW_ORDER.forEach(function (c) { document.body.classList.toggle('bw-' + c, c === state); });
+  /* The disturbance sits where the work is. Read once per transition from the
+     frontmost visible window: a whole-page wash would say nothing about which
+     terminal moved. */
+  var w = topVisibleShellWindow();
+  if (!w) return;
+  try {
+    var r = w.getBoundingClientRect();
+    document.body.style.setProperty('--bw-x', Math.round(r.left + r.width / 2) + 'px');
+    document.body.style.setProperty('--bw-y', Math.round(r.top + r.height / 2) + 'px');
+  } catch (e) {}
+}
+
+/** The window the eye is on: the topmost floating one, or the active pane. */
+function topVisibleShellWindow() {
+  var best = null, bestZ = -1;
+  var wins = document.querySelectorAll('.shell-window');
+  for (var i = 0; i < wins.length; i++) {
+    var w = wins[i];
+    if (w.classList.contains('win-minimized') || w.classList.contains('win-hidden')) continue;
+    var z = parseInt(w.style.zIndex, 10);
+    if (isNaN(z)) z = w.classList.contains('pane-active') ? FULLSCREEN_Z : 10001;
+    if (z >= bestZ) { bestZ = z; best = w; }
+  }
+  return best;
 }
 
 function startUIWebSocket() {

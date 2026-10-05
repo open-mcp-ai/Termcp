@@ -361,214 +361,136 @@ func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
 	}
 }
 
-// The host drawer is a fixed-height panel with one scrolling region, so its
-// toolbar cannot scroll away: the batch import/export keys sit above a list that
-// may be 22 hosts tall, and a toolbar that leaves with the list means the keys
-// are only reachable when the list happens to be short.
-func TestDrawerToolbarStaysAboveTheScrollingList(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
-
-	// The drawer is the flex column; the list is the item that gives up space.
-	drawer := between(t, css, "#sec-entries-body {", "}")
-	for _, want := range []string{"display: flex", "flex-direction: column", "overflow: hidden"} {
-		if !strings.Contains(drawer, want) {
-			t.Errorf("the drawer should be a fixed flex column (%q missing); got %q", want, drawer)
-		}
-	}
-	if !strings.Contains(between(t, css, ".drawer-toolbar {", "}"), "flex: 0 0 auto") {
-		t.Error("the toolbar must not shrink or grow: it is a fixed strip above the list")
-	}
-	// The list grows only when it overflows: `0 1 auto` keeps it content-height so
-	// a short list leaves the add control right under the last entry, and lets it
-	// shrink (with `min-height: 0`) so a long list scrolls instead of pushing the
-	// drawer's bottom off screen. `1 1 auto` would stretch the list to the drawer's
-	// full height and strand the add bar at the bottom of a nearly empty drawer.
-	grid := between(t, css, "#sec-entries-body > #conn-grid {", "}")
-	for _, want := range []string{"flex: 0 1 auto", "min-height: 0", "overflow-y: auto"} {
-		if !strings.Contains(grid, want) {
-			t.Errorf("the host list should stay content-height until it overflows, then scroll (%q missing); got %q", want, grid)
-		}
-	}
-	if strings.Contains(grid, "flex: 1 1 auto") {
-		t.Error("the host list must not grow when it does not overflow: the add control would be stranded at the drawer's bottom")
-	}
-
-	// The list has to be height-capped for the scroll to happen at all. It is: the
-	// drawer is pinned top:0/bottom:0 and the list gives up the leftover height
-	// (`flex: 0 1 auto` on the column's main axis + `min-height: 0`, without which
-	// the item refuses to shrink below its content and the drawer overflows).
-	drawerBounds := between(t, css, "#sec-entries-body {", "}")
-	if !strings.Contains(drawerBounds, "top: 0") || !strings.Contains(drawerBounds, "bottom: 0") {
-		t.Errorf("the drawer must stay a fixed slab (top:0/bottom:0) so its column has a height to distribute: %q", drawerBounds)
-	}
-	if strings.Contains(drawer, "overflow-y: auto") {
-		t.Error("the drawer itself must not scroll: a scrolling drawer carries the toolbar with it")
-	}
-
-	// The panel is a flex column, so the shared collapse rule must not reset its
-	// display back to block — that would unpick the whole strip.
-	if !strings.Contains(css, "#sec-entries-body.collapsed { display: flex; }") {
-		t.Error("the entries collapse rule must keep the drawer's flex column")
-	}
-}
-
-// NetHub is a grid track of its own, not a card floating inside the sessions
-// column: the frame's leading track is reserved for it, the trailing track
-// mirrors that reservation, and the plates sit between the two — which is what
-// centres them on the dock rather than a track to the right of its edge. The
-// control itself cancels the dock's horizontal padding so it stays glued to the
-// container's left edge without the tracks moving to meet it.
-//
-// The reservation is a length on purpose. In the flex row this replaced, NetHub
-// and the sessions column traded space, so the widest translation of the label
-// decided which of the two gave way — a CJK label is ~20px wider than the English
-// one, which is exactly the margin these layouts run out of.
-func TestNetHubTriggerHugsTheDockEdge(t *testing.T) {
+// NetHub is the resource column, not a desktop drawer. The desktop frame has
+// one flexible workspace track and one explicit sidebar length; the only drawer
+// selectors are in the narrow media query and the JS keeps that breakpoint in
+// step with its own layout decision.
+func TestNetHubIsAResponsiveResourceSidebar(t *testing.T) {
 	css := readAssetLF(t, "static/css/app.css")
 	index := readAssetLF(t, "index.html")
+	forms := readAssetLF(t, "static/js/conn-form.js")
+	dialogs := readAssetLF(t, "static/js/dialogs.js")
 
-	if !strings.Contains(index, `class="nethub-btn" id="open-host-drawer"`) {
-		t.Error("the drawer trigger should be the NetHub layout control")
+	if !strings.Contains(index, `<aside class="nethub" id="nethub"`) {
+		t.Fatal("index.html should place NetHub in a persistent aside")
 	}
-	button := between(t, css, ".nethub-btn {", "}")
-	for _, want := range []string{
-		"border-left: 0", "border-radius: 0 10px 10px 0",
-		// Laid out in the track it reserves, at that track's exact width: as a
-		// percentage or an auto width the control and the reservation could
-		// disagree, and the wider of the two sets the plates' offset.
-		"width: var(--nethub-w)",
-		// The edge attachment is the dock's own padding, cancelled here and
-		// nowhere else. A hardcoded value would drift the moment the dock's
-		// padding changes at a breakpoint; a margin on the frame instead would
-		// move the plates off centre.
-		"margin-left: calc(-1 * var(--dock-pad-x))",
-	} {
-		if !strings.Contains(button, want) {
-			t.Errorf("NetHub must be %q; got %q", want, button)
-		}
+	if !strings.Contains(index, `id="nethub-rail"`) {
+		t.Fatal("the collapsed state needs a visible rail mount")
 	}
-
-	// Every .dock rule that sets padding has to name the same variable the
-	// control cancels, or the trigger stops being attached at that breakpoint
-	// while the CSS still looks right in the other two.
-	dockRules := 0
-	for rest := css; ; {
-		i := strings.Index(rest, ".dock {")
-		if i < 0 {
-			break
-		}
-		rest = rest[i:]
-		j := strings.Index(rest, "}")
-		if j < 0 {
-			t.Fatal("an unclosed .dock rule")
-		}
-		rule := rest[:j]
-		rest = rest[j:]
-		if !strings.Contains(rule, "padding") {
-			continue
-		}
-		dockRules++
-		if !strings.Contains(rule, "--dock-pad-x") {
-			t.Errorf("a .dock padding rule must read --dock-pad-x, the same value the trigger cancels: %q", rule)
-		}
-		if !strings.Contains(rule, "padding: 16px var(--dock-pad-x)") &&
-			!strings.Contains(rule, "padding: 12px var(--dock-pad-x)") {
-			t.Errorf("the .dock padding should be expressed with --dock-pad-x, not wrapped around it: %q", rule)
-		}
+	if !strings.Contains(index, `id="conn-grid"`) || !strings.Contains(index, `id="conn-add"`) {
+		t.Fatal("the sidebar must retain its node list and add action")
 	}
-	if dockRules < 3 {
-		t.Errorf("expected the three dock paddings (base, wide, touch) to declare --dock-pad-x; found %d", dockRules)
-	}
-
 	frame := between(t, css, ".workspace-frame {", "}")
 	for _, want := range []string{
 		"display: grid",
-		"grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--nethub-w)",
+		"grid-template-columns: var(--nethub-w) minmax(0, 1fr)",
+		"transition: grid-template-columns",
 	} {
 		if !strings.Contains(frame, want) {
-			t.Errorf("the layout frame should have %q; got %q", want, frame)
+			t.Errorf("desktop NetHub layout must contain %q; got %q", want, frame)
 		}
 	}
-	// The frame must NOT escape the dock. `margin-left: calc(50% - 50vw)` landed
-	// NetHub on the window's left edge, which also slid the plates left of the
-	// dock's centre; both ends of the reservation are tracks inside the dock now.
-	if strings.Contains(frame, "50vw") {
-		t.Errorf("the frame must stay inside the dock's content box, or the plates leave its centre: %q", frame)
-	}
-	// The escape belongs to the trigger, not to the frame: a negative margin here
-	// would drag the tracks — and with them the plates' centre — off the dock.
-	if strings.Contains(frame, "margin-left: calc(-1") {
-		t.Errorf("the frame must not cancel the dock padding; only the trigger does: %q", frame)
-	}
-	// The reservation and the control must read the SAME value, or the button
-	// paints wider than the track under it and overlaps the plates. The leading
-	// track is sized by the frame's template (checked above) and the control by
-	// --nethub-w (checked above); the trailing placeholder states the width
-	// again, so it has to name the variable too.
-	if !strings.Contains(between(t, css, ".workspace-slot-trail {", "}"), "width: var(--nethub-w)") {
-		t.Error("the trailing placeholder must reserve NetHub's width from --nethub-w, or the two ends of the reservation drift apart")
-	}
-}
-
-// Centring is a consequence of the two reservations being equal, so it is
-// pinned here rather than left to a reading of the template: equal end tracks
-// and one flexible middle track is what puts the plates on the dock's centre.
-func TestWorkspaceMainIsCentredByTheMirroredTracks(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
-
-	frame := between(t, css, ".workspace-frame {", "}")
-	tracks := strings.TrimSpace(between(t, frame, "grid-template-columns:", ";"))
-	tracks = strings.TrimPrefix(tracks, "grid-template-columns:")
-	tracks = strings.TrimSpace(tracks)
-	// The two ends name the same length — that equality IS the centring, so it is
-	// asserted as one string instead of by index: a template whose ends differ by
-	// a variable or a magic number would put the plates off the dock's centre.
-	if tracks != "var(--nethub-w) minmax(0, 1fr) var(--nethub-w)" {
-		t.Errorf("the frame should be reservation/content/reservation with one shared length; got %q", tracks)
-	}
-}
-
-// The three tracks have to stay three tracks: a flex row let NetHub share a line
-// with the plates, and that is the arrangement this shape exists to prevent. The
-// narrow fallback is where the sharing is allowed — as two ROWS, never one — and
-// it drops the trailing reservation with the template, which would otherwise add
-// an empty row under the plates on every phone.
-func TestNarrowLayoutStacksNetHubAboveThePlates(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
-	index := readAssetLF(t, "index.html")
-
-	// Markup order is what makes the stacked mode push the plates DOWN: NetHub is
-	// the grid's first child, so it becomes the first row and the trailing
-	// placeholder becomes the last one.
-	lead := strings.Index(index, `class="nethub-btn" id="open-host-drawer"`)
-	main := strings.Index(index, `class="workspace-main"`)
-	trail := strings.Index(index, `class="workspace-slot-trail"`)
-	if lead < 0 || main < 0 || trail < 0 {
-		t.Fatal("index.html must carry NetHub and the trailing placeholder around .workspace-main")
-	}
-	if !(lead < main && main < trail) {
-		t.Errorf("NetHub and the placeholder must bracket the content column (lead %d, main %d, trail %d), or the stacked mode pushes nothing down", lead, main, trail)
-	}
-
-	// One column when the three tracks no longer fit, with the trailing
-	// reservation gone rather than stacked under the plates.
-	i := strings.Index(css, "@media (max-width: 799px) {")
-	if i < 0 {
-		t.Fatal("app.css has no narrow fallback for the workspace frame")
-	}
-	narrow := css[i:]
-	if j := strings.Index(narrow, "\n}"); j >= 0 {
-		narrow = narrow[:j+2]
+	if strings.Contains(frame, "position: fixed") || strings.Contains(frame, "50vw") {
+		t.Errorf("the desktop frame must stay in layout, not escape into a drawer: %q", frame)
 	}
 	for _, want := range []string{
-		".workspace-frame { grid-template-columns: minmax(0, 1fr); }",
-		// display:none on the leftover child, because with the template dropped
-		// the grid would give it an implicit row of its own.
-		".workspace-slot-trail { display: none; }",
+		".workspace-frame.nethub-collapsed { --nethub-w: 56px; }",
+		"@media (max-width: 799px)",
+		"#sec-entries-body.drawer-open { transform: translateX(0); }",
+		".drawer-scrim { display: block; }",
 	} {
-		if !strings.Contains(narrow, want) {
-			t.Errorf("the narrow workspace fallback should declare %q; got %q", want, narrow)
+		if !strings.Contains(css, want) {
+			t.Errorf("responsive NetHub layout must contain %q", want)
 		}
+	}
+	if !strings.Contains(dialogs, "localStorage.getItem(NETHUB_STATE_KEY)") ||
+		!strings.Contains(dialogs, "localStorage.setItem(NETHUB_STATE_KEY") {
+		t.Error("manual NetHub state should persist through the existing localStorage mechanism")
+	}
+	if !strings.Contains(forms, "toggleNetHub()") || !strings.Contains(forms, "window.termcpToggleEntriesDrawer") {
+		t.Error("the trigger and terminal header should use the shared NetHub state")
+	}
+	if strings.Contains(forms, "transform: translateX") || strings.Contains(forms, "document.body.style.overflow = open") {
+		t.Error("conn-form.js must not own a desktop drawer implementation")
+	}
+}
+
+// The sidebar is an access resource readout: cards carry identity, protocol,
+// runtime state, address metadata and session count, while the rail keeps state
+// dots and the active-node mark when the body is collapsed.
+func TestNetHubCardsKeepNodeAndSessionHierarchy(t *testing.T) {
+	css := readAssetLF(t, "static/css/app.css")
+	dialogs := readAssetLF(t, "static/js/dialogs.js")
+	for _, want := range []string{
+		"node-lamp", "node-proto", "node-status", "node-addr", "node-sess",
+		"nethub-rail-status", "nethub-rail-active", "nethub-rail-expand",
+	} {
+		if !strings.Contains(css, want) || !strings.Contains(dialogs, want) {
+			t.Errorf("NetHub should paint %q in both the resource card and rail", want)
+		}
+	}
+	for _, want := range []string{
+		"runningSessionsForNode", "nodeSessionInfo", "nethub.sessions.one",
+		"nethub.sessions.other", "nodeProtocol(c)", "nodeStatusLabel(state)",
+	} {
+		if !strings.Contains(dialogs, want) {
+			t.Errorf("NetHub renderer misses %q", want)
+		}
+	}
+	if !strings.Contains(dialogs, "status !== 'running'") {
+		t.Error("session counts must distinguish active sessions from archived records")
+	}
+}
+
+// The three visual regressions that are easiest to miss in source review are
+// pinned here at the selector/wiring level: the rail owns no second cluster icon,
+// the narrow drawer's ancestor cannot create the low stacking context that put it
+// under the scrim, and node cards share the host-card rail and corner instead of
+// being excluded from them.
+func TestNetHubRegressionFixes(t *testing.T) {
+	css := readAssetLF(t, "static/css/app.css")
+	dialogs := readAssetLF(t, "static/js/dialogs.js")
+	ui := readAssetLF(t, "static/js/ui-socket.js")
+
+	if strings.Contains(dialogs, "rail.appendChild(glyph)") || strings.Contains(dialogs, "glyph.innerHTML = '<img class=\"nethub-icon\"") {
+		t.Error("the rail must not append a second NetHub cluster glyph; the trigger already owns it")
+	}
+	if !strings.Contains(dialogs, "item.className = 'nethub-rail-item'") ||
+		!strings.Contains(dialogs, "class=\"nethub-rail-status is-") {
+		t.Error("the collapsed rail must still render node items and their status lamps")
+	}
+	if !strings.Contains(css, ".nethub { position: relative; top: auto; z-index: auto; margin-bottom: 10px; }") {
+		t.Error("the narrow breakpoint must remove .nethub's stacking context so the drawer can outrank the scrim")
+	}
+	if !strings.Contains(css, "#sec-entries-body {\n    position: fixed") ||
+		!strings.Contains(css, "z-index: 24000") || !strings.Contains(css, "#sec-entries-body.drawer-open { transform: translateX(0); }") {
+		t.Error("the narrow drawer must be fixed, high in the root stack, and open through its transform")
+	}
+	// A node card is a host card with a status readout on it, not a different plate:
+	// it takes the state rail, the lit left gradient and the notched corner from the
+	// shared rules. Excluding it — with a :not(.node-card) variant, or by restating
+	// padding/background on a node-card rule — is exactly what shaved its left edge
+	// and erased the rail, so both spellings of that mistake are pinned here.
+	if strings.Contains(css, "not(.node-card)") {
+		t.Error("node cards must share the host-card rules; a :not(.node-card) exclusion drops their left rail and corner")
+	}
+	for _, rule := range []string{
+		".conn-tile.entry-card {",
+		".workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,",
+	} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("the shared host-card/notch rule %q must name the whole entry card, node cards included", rule)
+		}
+	}
+	if strings.Contains(css, ".conn-tile.node-card {") {
+		t.Error(".conn-tile.node-card must not be a rule of its own: restating padding/background " +
+			"overrides the host-card rail inset and the lit gradient it inherits")
+	}
+	if !strings.Contains(css, ".conn-tile.node-card .") {
+		t.Error("the node card's own treatment belongs in descendant rules, which leave the plate alone")
+	}
+	if !strings.Contains(ui, "window._lastConnections = j.connections") {
+		t.Error("a session WebSocket frame carrying connections must refresh the stored NetHub list")
 	}
 }
 

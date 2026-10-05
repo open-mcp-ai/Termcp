@@ -737,7 +737,7 @@ function updateTermScrollButton(win) {
 }
 
 /** Initialize shell window UI (header buttons, drag, resize, tab switching) — no xterm. */
-function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
+function _initShellWindowUI(win, connLabel, sessionId) {
   var header = win.querySelector('.shell-window-header');
   var collapseBtn = win.querySelector('.shell-window-collapse-btn');
   var closeBtn = win.querySelector('.close-btn');
@@ -1169,7 +1169,25 @@ function _initShellWindowUI(win, connLabel, sessionId, clickEvent) {
     '</div>' +
     '</div>'; // end SHELL_WINDOW_PANELS_HTML
 
-function openPendingShellWindow(connName, clickEvent, abortCtl) {
+/** The window's link state, in one place: connecting while the dial is open,
+ *  live once a session exists, dead once it is read-only history. The marker is a
+ *  6px dot beside the identity rather than a worded badge: the state has to be
+ *  readable at a glance across several windows, and the words are already on the
+ *  tab bar and the session card. */
+function setWindowLinkState(win, state) {
+  if (!win) return;
+  var el = win.querySelector('.shell-link-state');
+  if (!el) return;
+  el.className = 'shell-link-state ' + state;
+  var tip = state === 'is-dead' ? t('session.dead.badgeTitle')
+    : state === 'is-connecting' ? t('tab.connecting')
+    : t('session.status.running');
+  el.title = tip;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', tip);
+}
+
+function openPendingShellWindow(connName, pos, abortCtl) {
   if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return null; }
   var container = shellWindowsEl();
   if (!container) return null;
@@ -1186,6 +1204,7 @@ function openPendingShellWindow(connName, clickEvent, abortCtl) {
     '<div class="shell-window-header">' +
       '<span class="shell-header-icon"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5 14.5h6M8 11.5v3"/></svg></span>' +
       '<div class="shell-window-title-cluster">' +
+      '<span class="shell-link-state"></span>' +
       '<h3 class="shell-window-title">' +
       '<span class="sw-conn">' + escapeHtml(connName) + '</span>' +
       '<span class="shell-title-id-group">' +
@@ -1247,12 +1266,13 @@ SHELL_WINDOW_PANELS_HTML +
      here so a window created after a language switch is not born in the previous
      language. */
   applyI18n(win);
+  setWindowLinkState(win, 'is-connecting');
 
   var termEl = win.querySelector('.shell-channel-body');
   var header = win.querySelector('.shell-window-header');
   var closeBtn = win.querySelector('.close-btn');
   var minBtn = win.querySelector('.shell-window-min-btn');
-  positionShellWindowFromClick(win, clickEvent);
+  positionShellWindowFromClick(win, pos);
   /* First mount only — never re-append this node to reorder; use bringShellWindowToFront (z-index). */
   container.appendChild(win);
 
@@ -1275,12 +1295,13 @@ SHELL_WINDOW_PANELS_HTML +
   return win;
 }
 
-function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEvent, opt) {
+function finalizePendingShellWindow(win, connLabel, sessionId, shellId, pos, opt) {
   opt = opt || {};
   if (!win || !win.parentNode || !sessionId) return;
   win._connectAbort = null;
   win._placeholder = false;
   win._pendingConnName = '';
+  setWindowLinkState(win, 'is-live');
 
   win._sid = sessionId;
   win._parentSid = sessionId;
@@ -1291,7 +1312,7 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, clickEve
   var pend = win.querySelector('.shell-pending');
   if (pend) pend.remove();
   _wireChannelTabBar(win);
-  _initShellWindowUI(win, connLabel, sessionId, clickEvent);
+  _initShellWindowUI(win, connLabel, sessionId);
   wireReviewBar(win);
   // Seed the review UI here as well as in openShellWindow. This is the path a
   // session created in this tab takes, and without it _approvalMode stays
@@ -1373,12 +1394,12 @@ var SHELL_REVIEW_SHEET_HTML =
       '</div>' +
     '</div>' +
   '</div>';
-function openShellWindow(connLabel, sessionId, clickEvent, opts) {
+function openShellWindow(connLabel, sessionId, pos, opts) {
   opts = opts || {};
   var readOnly = !!opts.readOnly;
   if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return; }
   if (getShellWindowBySid(sessionId)) {
-    focusSessionWindow(connLabel, sessionId, clickEvent, opts);
+    focusSessionWindow(connLabel, sessionId, pos, opts);
     return;
   }
   var container = shellWindowsEl();
@@ -1394,6 +1415,7 @@ function openShellWindow(connLabel, sessionId, clickEvent, opts) {
     '<div class="shell-window-header">' +
       '<span class="shell-header-icon"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5 14.5h6M8 11.5v3"/></svg></span>' +
       '<div class="shell-window-title-cluster">' +
+      '<span class="shell-link-state"></span>' +
       '<h3 class="shell-window-title">' +
       (connLabel ? ('<span class="sw-conn">' + escapeHtml(connLabel) + '</span>') : '') +
       '<span class="shell-title-id-group">' +
@@ -1453,8 +1475,9 @@ SHELL_WINDOW_PANELS_HTML +
      here so a window created after a language switch is not born in the previous
      language. */
   applyI18n(win);
+  setWindowLinkState(win, readOnly ? 'is-dead' : 'is-live');
 
-  positionShellWindowFromClick(win, clickEvent);
+  positionShellWindowFromClick(win, pos);
   /* First mount only — never re-append this node to reorder; use bringShellWindowToFront (z-index). */
   container.appendChild(win);
   bindShellWindowMaxButton(win);
@@ -1471,7 +1494,7 @@ SHELL_WINDOW_PANELS_HTML +
   // Approve button stays hidden until the next session-list frame arrives, which
   // can be a long time after the window opens.
   applyApprovalModeFromSnapshot(win, sessionId);
-  _initShellWindowUI(win, connLabel, sessionId, clickEvent);
+  _initShellWindowUI(win, connLabel, sessionId);
   // _initShellWindowUI resets the input gate; enforce read-only DEAD mode after.
   win._inputClosed = readOnly;
 
@@ -1509,8 +1532,13 @@ SHELL_WINDOW_PANELS_HTML +
     });
 }
 
-/** POST /api/sessions/start then open shell window. command/mode may be '' to use server defaults (login shell, profile default_mode). */
-function startSessionAndOpenShell(connName, clickEvt, opt) {
+/** POST /api/sessions/start then open shell window. command/mode may be '' to use server defaults (login shell, profile default_mode).
+ *
+ *  pos is the window's placement: a {x, y} client position, or null for the
+ *  centred cascade. Callers that went through the host drawer pass null — that
+ *  drawer is pinned to the left edge while the click is handled, so a position
+ *  taken from that click would land the window against the left wall. */
+function startSessionAndOpenShell(connName, pos, opt) {
   opt = opt || {};
   var dup = getPendingShellWindowForConn(connName);
   if (dup) {
@@ -1518,7 +1546,7 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
     return Promise.resolve(null);
   }
   var ac = new AbortController();
-  var pendingWin = openPendingShellWindow(connName, clickEvt, ac);
+  var pendingWin = openPendingShellWindow(connName, pos, ac);
   if (!pendingWin) {
     return Promise.reject(new Error('Could not open terminal window'));
   }
@@ -1544,9 +1572,9 @@ function startSessionAndOpenShell(connName, clickEvt, opt) {
       if (!shellId) throw new Error('No shell_id in response');
       pendingWin._connectAbort = null;
       if (pendingWin.parentNode) {
-        finalizePendingShellWindow(pendingWin, connName || 'session', sid, shellId, clickEvt, { index: j.index || 0 });
+        finalizePendingShellWindow(pendingWin, connName || 'session', sid, shellId, pos, { index: j.index || 0 });
       } else {
-        openShellWindow(connName || 'session', sid, clickEvt);
+        openShellWindow(connName || 'session', sid, pos);
       }
       return j;
     })
@@ -1653,7 +1681,8 @@ function openSessionSwitchMenu(anchorBtn) {
       e.stopPropagation();
       closeSessionSwitchMenu();
       // Same entrance the session tiles use, so a session with no window yet is
-      // opened rather than ignored.
+      // opened rather than ignored. Centred: this menu is anchored to the window
+      // header, not to a point on the page the user aimed at.
       focusSessionWindow(s.name || '', s.id, null, dead ? { readOnly: true } : null);
     });
     el.appendChild(item);
@@ -1784,6 +1813,9 @@ function reapplyWindowLanguage(win) {
   if (!win) return;
   applyI18n(win);
   updateTermScrollButton(win);
+  if (typeof setWindowLinkState === 'function') {
+    setWindowLinkState(win, win._placeholder ? 'is-connecting' : (win._readOnly ? 'is-dead' : 'is-live'));
+  }
   /* The channel chip's text is its state, so it is written from t() at paint
      time and is not a data-i18n node; re-run the paint so a language switch does
      not leave the previous language's word on the tab. */
