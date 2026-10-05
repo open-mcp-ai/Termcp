@@ -146,10 +146,27 @@
      in-flow, z-index:0 layer — above every static background and card — so the
      artwork would sit ON the page instead of behind it. pointer-events: none
      keeps a full-viewport box out of hit testing, and the layer is decoration
-     only, so it is created and never touched again. */
+     only, so it is created and never touched again.
+
+     It breathes instead of sitting still, but only through opacity on this one
+     layer: the full glitch artwork was measured against a streaming terminal and
+     cost far more than its look, while a single opacity animation is composited
+     and leaves the terminal's own paint alone. The amplitude stays inside the
+     artwork's dark range so the plates above keep their contrast.
+
+     The swing is deliberately wide (.45 -> 1). A narrower one (.82 -> 1) is
+     mathematically present and visually invisible: over this dark artwork it
+     moved the page by ~1.3 luminance levels and only 5% of pixels by more than
+     three, which reads as a static background. .45 -> 1 moves ~3.5 levels and
+     ~45% of pixels, which is what actually reads as breathing. */
   .page-backdrop {
     position: fixed; inset: 0; z-index: -1; pointer-events: none;
     background: var(--blackwall-image) center / cover no-repeat;
+    animation: blackwallBreathe 8s ease-in-out infinite;
+  }
+  @keyframes blackwallBreathe {
+    0%, 100% { opacity: .45; }
+    50% { opacity: 1; }
   }
   button, input, select, textarea { font-family: inherit; }
   /* Ports, ids, counts and clock values must not jitter as digits change width. */
@@ -2134,6 +2151,9 @@
 @media (prefers-reduced-motion: reduce) {
   .conn-tile.sess-tile .sess-status-ic.is-live { animation: none; opacity: 1; }
   .conn-tile.entry-card:hover, .conn-tile.entry-card:active { transform: none; }
+  /* A breathing backdrop is decoration: at rest it simply stays at its brighter
+     value, so nothing about the page's contrast changes. */
+  .page-backdrop { animation: none; opacity: 1; }
 }
 
 /* ---- Inputs and overlays ---------------------------------------------- */

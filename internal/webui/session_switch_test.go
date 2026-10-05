@@ -664,6 +664,49 @@ func TestBackdropIsAFixedDropInLayer(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("the backdrop artwork %s is not served (GET /%s = %d)", m[1], m[1], rr.Code)
 	}
+
+	// The breathing backdrop is deliberately the CHEAPEST possible animation: one
+	// opacity animation on this single fixed layer. A full animated glitch layer
+	// (SVG turbulence, clip-path tearing, blend modes) was measured against a
+	// streaming terminal and cost frames the terminal itself needs, so this pins
+	// the layer to opacity only — anything that filters, blends, clips or repaints
+	// the artwork behind every terminal frame has to fail here instead of shipping.
+	if !strings.Contains(rule, "animation: blackwallBreathe") {
+		t.Errorf("the backdrop should breathe through its own animation; got %q", rule)
+	}
+	frames := between(t, css, "@keyframes blackwallBreathe {", "\n  }\n")
+	if !strings.Contains(frames, "opacity:") {
+		t.Errorf("blackwallBreathe should animate opacity; got %q", frames)
+	}
+	// The swing has to be wide enough to SEE. A keyframe that only nudges opacity
+	// (e.g. .82 -> 1 over this dark artwork) is present in the cascade and still
+	// reads as a static background, which is exactly the bug this guards: the
+	// effect has to move a meaningful share of the layer's luminance.
+	low := regexp.MustCompile(`opacity:\s*\.(\d+)`).FindStringSubmatch(frames)
+	if low == nil {
+		t.Fatalf("blackwallBreathe has no low opacity value: %q", frames)
+	}
+	lowVal, err := strconv.ParseFloat("0."+low[1], 64)
+	if err != nil {
+		t.Fatalf("cannot read the low opacity %q: %v", low[0], err)
+	}
+	if lowVal > 0.6 {
+		t.Errorf("blackwallBreathe only dips to %.2f; over this dark artwork that is invisible — use a wider swing", lowVal)
+	}
+	if !strings.Contains(frames, "opacity: 1") {
+		t.Errorf("blackwallBreathe should reach full opacity at its peak; got %q", frames)
+	}
+	for _, heavy := range []string{"filter:", "mix-blend-mode", "clip-path", "transform:"} {
+		if strings.Contains(frames, heavy) {
+			t.Errorf("blackwallBreathe animates %s, which forces extra work per frame; only opacity stays composited", heavy)
+		}
+	}
+	// A reduced-motion user gets the artwork still, at its brighter value: an
+	// opacity animation is exactly what that preference asks to be spared.
+	reduced := between(t, css, "@media (prefers-reduced-motion: reduce) {", "\n}")
+	if !strings.Contains(reduced, ".page-backdrop { animation: none") {
+		t.Errorf("the backdrop's breathing is not disabled under prefers-reduced-motion; got %q", reduced)
+	}
 }
 
 // The add control is a plate of the drawer's own language, so it carries the
