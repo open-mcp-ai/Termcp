@@ -187,6 +187,9 @@ func TestShellIndexSurvivesRestart(t *testing.T) {
 	}
 	id := s.ID
 	primary := s.PrimaryShellID()
+	// Delete joins the exit watcher that outlives Terminate (store.Close only
+	// releases log handles); see TestManager_TerminateKeepsSessionDead.
+	t.Cleanup(func() { _ = m1.Delete(id) })
 
 	second, err := s.CreateChildShell(command, args, false, 24, 80, "")
 	if err != nil {

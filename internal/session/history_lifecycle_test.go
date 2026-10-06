@@ -30,6 +30,10 @@ func TestManager_TerminateKeepsSessionDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// The shell's exit watcher persists its final manifest AFTER Terminate
+	// returns. Delete joins that watcher and purges the session directory, so
+	// t.TempDir's RemoveAll cannot race a late writer ("directory not empty").
+	t.Cleanup(func() { _ = m.Delete(id) })
 
 	m.Terminate(id, true, 0)
 
@@ -91,6 +95,9 @@ func TestManager_RestoreDeadAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// m1 owns the session whose exit watcher outlives Terminate; Delete joins it
+	// before t.TempDir's RemoveAll (see TestManager_TerminateKeepsSessionDead).
+	t.Cleanup(func() { _ = m1.Delete(id) })
 
 	// Write a mark so the session has something persisted on disk, then DEAD the
 	// session (which persists the manifest via onDead → manager.persist).
@@ -148,6 +155,9 @@ func TestManager_OutputReadsResolveEmptyShellID(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// Delete joins the exit watcher that outlives Terminate, as in
+	// TestManager_TerminateKeepsSessionDead.
+	t.Cleanup(func() { _ = m.Delete(id) })
 
 	// Bytes must exist for the read to be meaningful.
 	payload := []byte("hello byte log\n")
