@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -618,6 +619,78 @@ func TestNetHubRegressionFixes(t *testing.T) {
 	}
 }
 
+// TestNetHubSidebarKeepsThePageFromScrolling guards the bug where the WHOLE body
+// scrolled: the resource panel capped itself at `calc(100dvh - 134px)`, a hand-count
+// of the chrome above and below it (header 57 + dock padding 16 + gap 8 + trigger 50
+// + dock bottom padding 16). Those sum to 147, not 134, so the panel was permanently
+// 13px too tall and the document grew a scrollbar of its own — however few nodes the
+// list held. That it was a CONSTANT error and not a content one is what made it hard
+// to see: 30 nodes and 60 nodes overflowed by exactly the same 13px (measured in
+// headless Chrome), and the page scrolled with an EMPTY sidebar too.
+//
+// The number cannot be re-derived from the stylesheet alone, so what is pinned here is
+// its shape: the ceiling is a viewport minus a single chrome constant, and the same
+// constant serves both the panel and the rail that replaces it collapsed. Two
+// different numbers is exactly how the two drifted apart.
+func TestNetHubSidebarKeepsThePageFromScrolling(t *testing.T) {
+	css := readAppCSS(t)
+
+	// The chrome the panel must reserve: everything between the viewport top and the
+	// panel, plus what sits below it. Each term is pinned to the rule that owns it, so
+	// changing one of them fails here instead of silently reintroducing the scrollbar.
+	header := between(t, css, ".app-header {", "}")
+	if !strings.Contains(header, "padding: 12px 16px") {
+		t.Error("the header's padding changed; the chrome above the dock is 57px (48 + two 1px borders), " +
+			"so the sidebar ceiling in workspace.css must be recounted")
+	}
+	if !strings.Contains(header, "border-bottom: 1px solid") {
+		t.Error("the header's bottom border is part of its height; the chrome constant counts it")
+	}
+	dock := between(t, css, ".dock { padding: 16px 0;", "}")
+	if dock == "" {
+		t.Error("the dock no longer declares `padding: 16px 0`; the chrome constant counts that padding")
+	}
+	btn := between(t, css, ".nethub-btn {", "}")
+	if !strings.Contains(btn, "flex: 0 0 50px") {
+		t.Errorf("the trigger's height changed; the chrome constant counts it: %q", btn)
+	}
+	body := between(t, css, ".nethub-body {", "}")
+	if !strings.Contains(body, "margin-top: 8px") {
+		t.Errorf("the gap above the panel changed; the chrome constant counts it: %q", body)
+	}
+
+	// Chrome = header 57 + dock top padding 16 + (panel gap 8 + trigger 50) + dock
+	// bottom padding 16. The panel itself sits below the trigger, so it reserves the
+	// header, both dock paddings and the trigger's own row.
+	const chrome = 147
+	for _, m := range []struct{ name, rule string }{
+		{"the panel", body},
+		{"the collapsed rail", between(t, css, ".workspace-frame.nethub-collapsed .nethub-rail {", "}")},
+	} {
+		want := fmt.Sprintf("calc(100dvh - %dpx)", chrome)
+		if !strings.Contains(m.rule, want) {
+			t.Errorf("%s must cap itself at %q so it cannot push the page past the viewport; got %q",
+				m.name, want, m.rule)
+		}
+	}
+
+	// One constant, two consumers. A second literal is how 134 and 147 coexisted.
+	if n := strings.Count(css, fmt.Sprintf("calc(100dvh - %dpx)", chrome)); n != 2 {
+		t.Errorf("expected the panel and the rail to share ONE chrome constant; found %d uses", n)
+	}
+	if strings.Contains(css, "100dvh - 134px") {
+		t.Error("134px is the old hand-count; the chrome is 147px (header 57 + dock padding 32 + gap 8 + trigger 50)")
+	}
+
+	// The dock's min-height used to subtract a guessed 52px header from a percentage
+	// that resolved to auto anyway, so it never applied — dead arithmetic that looked
+	// like it held the dock to the viewport while the panel's ceiling did the work.
+	if strings.Contains(css, "min-height: calc(100% - 52px)") {
+		t.Error("the dock's min-height subtracted a guessed header height and never applied; " +
+			"the sidebar's viewport ceiling is what keeps the page from scrolling")
+	}
+}
+
 // Sessions and the archive are translucent, and the plate is the ONE element that
 // blurs. Every card composites over that already-blurred backdrop, so a blur per
 // card would only add work: a 22-session list would pay 22 filters for the same
@@ -777,21 +850,36 @@ func TestAddControlCarriesThePlateCorner(t *testing.T) {
 	}
 }
 
-// The add control is the drawer's bottom action, not a host card in the list: a
-// trailing card inside the scrolling list would roll the affordance off screen
-// exactly when the list got long enough to need it. It stays its own component —
-// a host card's rail and hover lift are the list's language, not an action bar's
-// — and every glyph-only control centres its glyph.
-//
-// It is pinned to the drawer's bottom edge only while the list overflows. Below
-// that the list owns its content height and the control follows the last entry,
-// which is why the list's flex is `0 1 auto` and not `1 1 auto`.
+// The drawer's bottom row holds the two ways a profile enters the list: the
+// add control, which takes the row's width, and the import key, a fixed square
+// icon beside it. The row is pinned to the drawer's bottom edge only while the
+// list overflows — below that the list owns its content height and the row
+// follows the last entry, which is why the list's flex is `0 1 auto` and not
+// `1 1 auto`. Both keys keep the dashed "empty slot" look and stay their own
+// component — a host card's rail and hover lift are the list's language, not
+// an action bar's.
 func TestAddControlIsTheDrawersBottomAction(t *testing.T) {
 	css := readAppCSS(t)
-	rule := between(t, css, ".drawer-add {", "}")
-	for _, want := range []string{"flex: 0 0 auto", "align-items: center", "justify-content: center"} {
-		if !strings.Contains(rule, want) {
-			t.Errorf("the add action should be %q; got %q", want, rule)
+	row := between(t, css, ".drawer-add-row {", "}")
+	if !strings.Contains(row, "flex: 0 0 auto") {
+		t.Errorf("the bottom row must be pinned outside the list's flex; got %q", row)
+	}
+	add := between(t, css, ".drawer-add-grow {", "}")
+	for _, want := range []string{"flex: 1 1 0", "min-width: 0", "margin: 0"} {
+		if !strings.Contains(add, want) {
+			t.Errorf("the add control should take the row's width; got %q", add)
+		}
+	}
+	importKey := between(t, css, ".drawer-add-row .drawer-import {", "}")
+	if !strings.Contains(importKey, "flex: 0 0 44px") {
+		t.Errorf("the import key is a square icon beside the add control; got %q", importKey)
+	}
+	// The shared plate rule keeps both keys centred and self-sized; the row
+	// override only changes how they share the width.
+	plate := between(t, css, ".drawer-add {", "}")
+	for _, want := range []string{"align-items: center", "justify-content: center"} {
+		if !strings.Contains(plate, want) {
+			t.Errorf("the add plate should be %q; got %q", want, plate)
 		}
 	}
 	if !strings.Contains(between(t, css, "#sec-entries-body > #conn-grid {", "}"), "flex: 0 1 auto") {

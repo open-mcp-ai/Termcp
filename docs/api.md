@@ -184,17 +184,29 @@ Response: 204 No Content
 
 ### `DELETE /api/connections/{name}`
 
-Deletes a connection profile.
+Deletes a connection profile. Running sessions are untouched: a session owns
+its already-open connection, so only future dials lose the profile.
 
 ```
 Response: 204 No Content
 ```
+
+`{name}` may be a comma-separated batch (`a,b,c`) — profile names cannot
+contain a comma, so the split is unambiguous. Every entry is deleted
+independently and the response is `200` with a per-name `results` array instead
+of `204`; one bad entry does not stop the rest. The codes mirror the session
+routes: `reserved_profile` names the built-in `internal` profile, and
+`connection_not_found` means the profile was already gone (treat as cleared).
 
 ### `GET /api/connections/batch`
 
 Downloads all remote profiles as one TOML file, including temporary profiles.
 The built-in `internal` profile is excluded. The file contains credentials, so
 handle it as a secret.
+
+`?names=a,b` filters the download to exactly those profiles; a name that no
+longer resolves is skipped rather than failing the file. Naming `internal` in
+`names` is refused with `400` — export of the built-in profile does not exist.
 
 ### `POST /api/connections/batch?temporary=false`
 

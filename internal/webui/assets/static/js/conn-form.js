@@ -603,11 +603,13 @@ document.getElementById('conn-import-run').onclick = function () {
     err.style.display = 'block';
   }).finally(function () { btn.disabled = false; });
 };
-document.getElementById('conn-export').onclick = function (e) {
-  e.stopPropagation();
-  var btn = this;
-  btn.disabled = true;
-  fetch('/api/connections/batch').then(function (r) {
+/* The TOML download shared by the batch bar's export. The backend composes the
+   document either way (names filter or all), so the browser stays a pipe for
+   opaque bytes. */
+function downloadConnectionsToml(names) {
+  var path = '/api/connections/batch';
+  if (names && names.length) path += '?names=' + names.map(encodeURIComponent).join(',');
+  return fetch(path).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
     return r.blob();
   }).then(function (blob) {
@@ -619,9 +621,212 @@ document.getElementById('conn-export').onclick = function (e) {
     link.click();
     link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-  }).catch(function (e) { showCopyToast(t('conn.batch.exportFailed', { msg: String(e.message || e) })); })
-    .finally(function () { btn.disabled = false; });
-};
+  });
+}
+
+/* ---- NetHub selection actions ---------------------------------------------
+ * The toolbar's switch (nethub-select-toggle) re-aims the node cards: off, a
+ * card click connects; on, it ticks the card and the batch bar appears. With a
+ * selection, three actions exist — open a session per host, export exactly the
+ * selected profiles (the same TOML shape as export-all, so it imports back),
+ * and a comma-batch delete with per-name results. The selection state itself
+ * lives in dialogs.js; this block binds the controls and does the work. */
+
+function selectedNodeNames() {
+  if (!nodeSelectModeOn()) return [];
+  var names = selectableNodeNames().filter(function (n) { return _nodeSelIds.has(n); });
+  // Name order, which is the order the grid shows them in.
+  names.sort(function (a, b) { return a.localeCompare(b); });
+  return names;
+}
+
+function openSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  /* In drawer mode the windows open under the panel, so the panel leaves the
+     way a single card click's does — staying up would cover exactly what just
+     launched. */
+  if (netHubIsDrawer()) setNetHubCollapsed(true, false);
+  var settled = 0;
+  var failed = [];
+  names.forEach(function (name, i) {
+    /* Staggered, not simultaneous: each dial opens a window, and a bunch that
+       lands in the same instant piles into one unusable heap. 150ms is a
+       cascade, not a queue. */
+    setTimeout(function () {
+      startSessionAndOpenShell(name, null)
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          console.error(err);
+          failed.push(name);
+        })
+        .finally(function () {
+          settled++;
+          if (settled !== names.length) return;
+          // The ticks are spent: clear the selection, keep the mode on so
+          // another batch can be picked without reaching for the switch.
+          _nodeSelIds.clear();
+          renderConnGrid(window._lastConnections || [], connBannerText());
+          if (failed.length) showCopyToast(t('nethub.batch.openFailed', { count: failed.length, msg: failed[0] }));
+        });
+    }, i * 150);
+  });
+}
+
+/* The built-in profile rides along in any selection (open works for it), but
+   export and delete have nothing to do with it — the server refuses both, so
+   the buttons refuse first and say why instead of shipping a request that can
+   only partly succeed. */
+function selectionHasInternal(names) {
+  for (var i = 0; i < names.length; i++) {
+    if (String(names[i]).toLowerCase() === 'internal') return true;
+  }
+  return false;
+}
+
+function exportSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  if (selectionHasInternal(names)) {
+    showCopyToast(t('nethub.batch.exportInternal'));
+    return;
+  }
+  downloadConnectionsToml(names).catch(function (e) {
+    showCopyToast(t('conn.batch.exportFailed', { msg: String(e.message || e) }));
+  });
+}
+
+// One request for every id (comma-separated path, like the session routes):
+// the server reports per-id outcomes, and <resource>_not_found counts as
+// cleared here — another client already got there. Sessions and connections
+// share the shape, so they share the helper; only the resource segment differs.
+function deleteResourcesBatch(resource, ids) {
+  var path = '/api/' + resource + '/' + ids.map(encodeURIComponent).join(',');
+  return fetch(path, { method: 'DELETE' }).then(function (r) {
+    if (r.ok && r.status !== 204) {
+      return r.json().then(function (j) { return (j && j.results) || []; });
+    }
+    if (r.status === 204 || r.status === 404) {
+      return ids.map(function (id) { return { id: id, ok: true }; });
+    }
+    return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+  });
+}
+
+function deleteSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  if (selectionHasInternal(names)) {
+    showCopyToast(t('nethub.batch.deleteInternal'));
+    return;
+  }
+  // Deleting a profile never closes the sessions dialed from it — a session
+  // owns its already-open connection — so the dialog says so when the
+  // selection carries any.
+  var withSessions = 0;
+  names.forEach(function (n) { if (runningSessionsForNode(n).length > 0) withSessions++; });
+  var message = tCount('nethub.batch.deleteMsg.one', 'nethub.batch.deleteMsg.other', { count: names.length });
+  if (withSessions > 0) message += ' ' + t('nethub.batch.deleteSessionsHint', { count: withSessions });
+  confirmDialog({
+    title: t('nethub.batch.deleteTitle'),
+    message: message,
+    okText: t('batch.del.ok', { count: names.length }),
+    danger: true
+  }).then(function (ok) {
+    if (!ok) return;
+    deleteResourcesBatch('connections', names).then(function (results) {
+      var failed = [];
+      (results || []).forEach(function (r) {
+        if (r.ok || r.code === 'connection_not_found') {
+          _nodeSelIds.delete(r.id);
+        } else {
+          failed.push(r.id + ': ' + (r.error || r.code || 'failed'));
+        }
+      });
+      // loadConnections refetches, re-renders, prunes the selection and syncs
+      // the batch bar — one refresh path, the same one every other editor
+      // action already uses.
+      loadConnections();
+      if (failed.length) showCopyToast(t('toast.delete.failed', { msg: failed.join('; ') }));
+    }).catch(function (err) {
+      showCopyToast(t('toast.delete.failed', { msg: String(err.message || err) }));
+    });
+  });
+}
+
+// The play split-key's dropdown, as plain functions: the NetHub wiring's
+// Escape handler folds it before it folds the selection mode, so the state has
+// to be reachable from there.
+function nodeOpenMenuIsOpen() {
+  var menu = document.getElementById('nethub-open-menu');
+  return !!(menu && !menu.hidden);
+}
+
+function closeNodeOpenMenu() {
+  var wasOpen = nodeOpenMenuIsOpen();
+  var menu = document.getElementById('nethub-open-menu');
+  var caret = document.getElementById('nethub-open-caret');
+  if (menu) menu.hidden = true;
+  if (caret) caret.setAttribute('aria-expanded', 'false');
+  return wasOpen;
+}
+
+function toggleNodeOpenMenu() {
+  var menu = document.getElementById('nethub-open-menu');
+  if (!menu) return;
+  menu.hidden = !menu.hidden;
+  var caret = document.getElementById('nethub-open-caret');
+  if (caret) caret.setAttribute('aria-expanded', String(!menu.hidden));
+}
+
+// The toolbar's wiring. dialogs.js owns the selection state; this block only
+// binds the controls, the same split the drawer's collapse uses (see the
+// NetHub wiring below).
+(function () {
+  var toggle = document.getElementById('nethub-select-toggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', function (e) {
+    e.stopPropagation();
+    setNodeSelectMode(!nodeSelectModeOn());
+  });
+  var invert = document.getElementById('nethub-sel-invert');
+  if (invert) invert.addEventListener('click', function (e) {
+    e.stopPropagation();
+    selectableNodeNames().forEach(function (n) {
+      if (_nodeSelIds.has(n)) _nodeSelIds.delete(n);
+      else _nodeSelIds.add(n);
+    });
+    renderConnGrid(window._lastConnections || [], connBannerText());
+  });
+  // The play split-key: the wide half opens every ticked host, the caret
+  // unfolds export and delete. Any click outside the menu folds it; Escape
+  // folds it here first, before the mode-exit handler below folds the mode.
+  var caret = document.getElementById('nethub-open-caret');
+  if (caret) caret.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleNodeOpenMenu();
+  });
+  document.addEventListener('click', function (e) {
+    if (!nodeOpenMenuIsOpen()) return;
+    if (e.target.closest('#nethub-open-menu') || e.target.closest('#nethub-open-caret')) return;
+    closeNodeOpenMenu();
+  });
+  var menuEl = document.getElementById('nethub-open-menu');
+  if (menuEl) menuEl.addEventListener('click', function (e) { e.stopPropagation(); });
+  var menuExport = document.getElementById('nethub-menu-export');
+  if (menuExport) menuExport.addEventListener('click', function () {
+    closeNodeOpenMenu();
+    exportSelectedNodes();
+  });
+  var menuDelete = document.getElementById('nethub-menu-delete');
+  if (menuDelete) menuDelete.addEventListener('click', function () {
+    closeNodeOpenMenu();
+    deleteSelectedNodes();
+  });
+  var openBtn = document.getElementById('nethub-batch-open');
+  if (openBtn) openBtn.addEventListener('click', function (e) { e.stopPropagation(); openSelectedNodes(); });
+})();
 
 /* The host list's launch-options dialog. Its entry point is a host card, so the
    window it starts is centred like the card's own click — see dialogs.js. The
@@ -659,23 +864,6 @@ document.getElementById('start-run').onclick = function () {
       showModal('modal-start');
     });
 };
-
-// Session lifecycle batch helpers. One request for every id (comma-separated
-// path), so N deletes are not N round trips and one stuck session cannot stall
-// the rest — the server reports per-id outcomes. Ids reported as
-// session_not_found count as cleared here: another client already got there.
-function deleteSessionsBatch(ids) {
-  var path = '/api/sessions/' + ids.map(encodeURIComponent).join(',');
-  return fetch(path, { method: 'DELETE' }).then(function (r) {
-    if (r.ok && r.status !== 204) {
-      return r.json().then(function (j) { return (j && j.results) || []; });
-    }
-    if (r.status === 204 || r.status === 404) {
-      return ids.map(function (id) { return { id: id, ok: true }; });
-    }
-    return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-  });
-}
 
 // Closes the terminal windows and drops the selection of every id that is gone,
 // then hands (clearedCount, failedEntries) to onDone. failedEntries carry
@@ -723,7 +911,7 @@ function deleteSelectedInRegion(region) {
     if (!ok) return;
     var banner = document.getElementById('session-load-banner');
     if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-    return deleteSessionsBatch(targets.map(function (s) { return s.id; })).then(function (results) {
+    return deleteResourcesBatch('sessions', targets.map(function (s) { return s.id; })).then(function (results) {
       settleSessionDeletes(results, banner, function (cleared, failed) {
         if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
         else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
@@ -857,12 +1045,23 @@ fetch('/api/version')
      element is in the layout, so they cannot close a sidebar the user wants. */
   scrim.addEventListener('click', function () { setNetHubCollapsed(true, false); });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && netHubIsDrawer() && !netHubCollapsed()) setNetHubCollapsed(true, false);
+    if (e.key !== 'Escape') return;
+    /* Escape folds the innermost layer first: the open dropdown, then the
+       selection mode, then the drawer. Leaving the mode is the smaller undo,
+       and closing the panel would also take the batch keys out of sight while
+       their selection is still being picked. */
+    if (closeNodeOpenMenu()) return;
+    if (nodeSelectModeOn()) { setNodeSelectMode(false); return; }
+    if (netHubIsDrawer() && !netHubCollapsed()) setNetHubCollapsed(true, false);
   });
   /* Choosing a node from the overlay should reveal what it opened rather than
-     leave the panel covering the page it just put a window on. */
+     leave the panel covering the page it just put a window on. A tick is not a
+     choice of a window: in selection mode the panel stays up so several hosts
+     can be ticked in one look. */
   body.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-tile') && netHubIsDrawer()) setNetHubCollapsed(true, false);
+    if (!e.target.closest('.conn-tile') || !netHubIsDrawer()) return;
+    if (nodeSelectModeOn()) return;
+    setNetHubCollapsed(true, false);
   });
   if (add) {
     add.setAttribute('aria-label', t('conn.aria.add'));

@@ -47,7 +47,7 @@ func TestBatchImportExportAndTemporaryLifetime(t *testing.T) {
 	if err != nil || !entry.DefaultApproval || entry.Jump == nil || entry.Jump.Host != "jump.example" {
 		t.Fatalf("temporary load lost fields: %+v %v", entry, err)
 	}
-	exported, err := s.ExportBatch()
+	exported, err := s.ExportBatch(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

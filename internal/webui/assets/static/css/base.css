@@ -123,7 +123,12 @@
   .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
   .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
   .btn-primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
-  .dock { padding: 16px 0; min-height: calc(100% - 52px); }
+  /* No min-height here on purpose: the old `calc(100% - 52px)` subtracted a
+     guessed header height from a percentage that resolves to auto anyway, so it
+     never applied — it only looked like it held the dock to the viewport. The
+     dock is as tall as its content, and the sidebar caps itself (see .nethub in
+     workspace.css) so that content fits. */
+  .dock { padding: 16px 0; }
 
   .icon-btn {
     width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid var(--border-subtle);
@@ -318,7 +323,6 @@
     color: var(--warning);
   }
   .conn-temporary-mark { align-self:center; font-size:.62rem; font-weight:700; color:var(--purple); letter-spacing:.03em; }
-  .host-batch-btn { font-size:.72rem; padding:3px 7px; }
   /* Borderless copy button, mirroring the edit button's quiet look. */
   .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
   .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: var(--accent); background: var(--accent-surface); }

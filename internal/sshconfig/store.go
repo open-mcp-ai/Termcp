@@ -15,6 +15,12 @@ import (
 // branch on it with errors.Is instead of matching the message.
 var ErrNotFound = errors.New("not found")
 
+// ErrReserved reports that a name denotes the built-in internal profile, which
+// is virtual and cannot be deleted. It is a sentinel so a batch caller can turn
+// it into its own per-name code without re-testing the name or restating the
+// message that Delete already carries.
+var ErrReserved = errors.New("reserved ssh config")
+
 // Store manages dataDir/ssh_configs/<name>/config.toml for remote profiles.
 // The built-in "internal" profile is virtual: it is never written to disk.
 type Store struct {
@@ -71,7 +77,7 @@ func (s *Store) configPath(name string) (string, error) {
 // internal/config.toml (see ParseInternalOverride).
 func (s *Store) Load(name string) (*Entry, error) {
 	name = strings.TrimSpace(name)
-	if isInternalName(name) {
+	if IsInternalName(name) {
 		base := InternalEntry()
 		data, err := os.ReadFile(s.internalOverridePath())
 		if err != nil {
@@ -117,7 +123,7 @@ func (s *Store) Load(name string) (*Entry, error) {
 // in effect rather than a constant it cannot change.
 func (s *Store) ReadRaw(name string) ([]byte, error) {
 	name = strings.TrimSpace(name)
-	if isInternalName(name) {
+	if IsInternalName(name) {
 		data, err := os.ReadFile(s.internalOverridePath())
 		if err == nil {
 			return data, nil
@@ -170,7 +176,7 @@ func (s *Store) List() ([]string, error) {
 			continue
 		}
 		name := e.Name()
-		if isInternalName(name) || seen[name] {
+		if IsInternalName(name) || seen[name] {
 			continue // disk leftover; virtual entry already listed
 		}
 		cfg := filepath.Join(s.root(), name, "config.toml")
@@ -193,7 +199,7 @@ func (s *Store) Save(name string, data []byte) error {
 // SaveWithOptions stores a remote profile only in memory when temporary is true.
 // Switching an existing profile between modes removes its previous copy.
 func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error {
-	if isInternalName(name) {
+	if IsInternalName(name) {
 		if temporary {
 			return fmt.Errorf("internal profile cannot be temporary")
 		}
@@ -315,7 +321,7 @@ func (s *Store) Rename(oldName, newName string) error {
 	if oldName == newName {
 		return nil
 	}
-	if isInternalName(oldName) || isInternalName(newName) {
+	if IsInternalName(oldName) || IsInternalName(newName) {
 		return fmt.Errorf("cannot rename reserved ssh config %q", "internal")
 	}
 	oldPath, err := s.configPath(oldName)
@@ -376,8 +382,8 @@ func (s *Store) Rename(oldName, newName string) error {
 
 // Delete removes a remote config; the virtual internal profile cannot be deleted.
 func (s *Store) Delete(name string) error {
-	if isInternalName(name) {
-		return fmt.Errorf("cannot delete reserved ssh config %q", name)
+	if IsInternalName(name) {
+		return fmt.Errorf("cannot delete reserved ssh config %q: %w", name, ErrReserved)
 	}
 	p, err := s.configPath(name)
 	if err != nil {

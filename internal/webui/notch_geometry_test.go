@@ -29,6 +29,38 @@ func ruleContaining(t *testing.T, css, marker string) string {
 	return css[start : i+close+1]
 }
 
+// effectiveKnob resolves a custom property for one single-class selector the way
+// the cascade does, for the LAST declaration that matches it. The plate knobs live
+// in a shared multi-selector rule, so "is the selector named there?" is not the
+// question that matters — a later rule of equal specificity wins, and that is how
+// the NetHub keys lost their corner while still being listed in the plate rule.
+// Only single-class selectors are handled: it is the case that broke, and a full
+// cascade is not what this guards.
+func effectiveKnob(css, selector, prop string) string {
+	decls := regexp.MustCompile(`(?s)([^{}]+)\{([^}]*)\}`).FindAllStringSubmatch(css, -1)
+	got := ""
+	for _, d := range decls {
+		sel, body := d[1], d[2]
+		// Comments between rules are not part of a selector list.
+		sel = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(sel, "")
+		matched := false
+		for _, s := range strings.Split(sel, ",") {
+			if strings.TrimSpace(s) == selector {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		re := regexp.MustCompile(regexp.QuoteMeta(prop) + `:\s*([^;]+);`)
+		if m := re.FindStringSubmatch(body); m != nil {
+			got = strings.TrimSpace(m[1])
+		}
+	}
+	return got
+}
+
 // TestNotchGeometryMatchesItsKnobs pins the numbers a reader cannot see are linked.
 //
 // The notch is a fold: the left wall steps in at 45° over --notch-run and drops
@@ -142,7 +174,8 @@ func TestNotchGeometryMatchesItsKnobs(t *testing.T) {
 	strokeRule := ruleContaining(t, css, "background-position:")
 	for _, plate := range []string{
 		".workspace-sessions", ".modal", ".conn-tile.entry-card",
-		".conn-load-banner", ".jump-card.jump-summary", ".drawer-toolbar .host-batch-btn",
+		".conn-load-banner", ".jump-card.jump-summary",
+		".nethub-select-toggle", ".nethub-open-plate", ".nethub-batch-icon",
 	} {
 		if !strings.Contains(notchRule, plate) {
 			t.Errorf("the notched plate rule is missing %s", plate)
@@ -152,11 +185,37 @@ func TestNotchGeometryMatchesItsKnobs(t *testing.T) {
 		}
 	}
 	// Content-height plates and the full-height drawer stay rectangular on purpose.
+	// The NetHub toolbar's keys are plates too: they ride the SAME knobs as the
+	// panels above, so the fold must not be turned off for them.
 	for _, plate := range []string{".conn-tile.sess-tile", ".approval-item", ".ui-notify-card", "#sec-entries-body"} {
 		for _, rule := range []string{notchRule, strokeRule} {
 			if strings.Contains(rule, plate) {
 				t.Errorf("%s has a content-driven or full height, so the notch would clip its "+
 					"own content", plate)
+			}
+		}
+	}
+	for _, key := range []string{".nethub-select-toggle", ".nethub-open-plate", ".nethub-batch-icon"} {
+		for _, rule := range []string{notchRule, strokeRule} {
+			if !strings.Contains(rule, key) {
+				t.Errorf("%s wears the plate, so it must be named in the shared notch and "+
+					"stroke rules; a knob override that re-pins the corner is how its "+
+					"polygon went missing once", key)
+			}
+		}
+		// Naming the key in the shared rule is not enough: these are single-class
+		// selectors, so a LATER rule of the same specificity wins, and a rule that
+		// re-pins the knobs turns the fold off — which looks exactly like "the
+		// polygon was removed". Ask the cascade what the key actually resolves to.
+		for prop, want := range map[string]string{
+			"--cut":        "14px",
+			"--notch-left": "50%",
+			"--notch-run":  "8px",
+		} {
+			if got := effectiveKnob(css, key, prop); got != want {
+				t.Errorf("%s resolves %s to %q, not the plate's %q — nothing may re-declare "+
+					"the plate knobs for it, or its corner goes missing again",
+					key, prop, got, want)
 			}
 		}
 	}

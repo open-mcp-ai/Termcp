@@ -60,3 +60,97 @@ func TestConnectionBatchHTTPAndTemporaryFlag(t *testing.T) {
 		t.Fatalf("duplicate rename response: %+v", renamed)
 	}
 }
+
+// newConnectionTestHandler wires a handler over a store holding profiles one
+// and two (persistent) for the batch-endpoint tests below.
+func newConnectionTestHandler(t *testing.T) (*Handler, *sshconfig.Store, *http.ServeMux) {
+	t.Helper()
+	store := sshconfig.NewStore(t.TempDir())
+	h := &Handler{SSH: store}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	profile := "kind = \"remote\"\nhost = \"sample.example\"\nuser = \"tester\"\npassword = \"placeholder\"\n"
+	for _, name := range []string{"one", "two"} {
+		put := httptest.NewRecorder()
+		mux.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/api/connections/"+name, strings.NewReader(profile)))
+		if put.Code != http.StatusNoContent {
+			t.Fatalf("PUT %s: status=%d body=%s", name, put.Code, put.Body.String())
+		}
+	}
+	return h, store, mux
+}
+
+// The comma-batch delete reports one outcome per name, deletes the real ones,
+// and refuses the built-in profile without stopping the rest — a missing name
+// reports connection_not_found instead of pretending to have deleted it.
+func TestConnectionBatchDeleteHTTP(t *testing.T) {
+	_, store, mux := newConnectionTestHandler(t)
+	del := httptest.NewRecorder()
+	mux.ServeHTTP(del, httptest.NewRequest(http.MethodDelete, "/api/connections/one,two,internal,ghost", nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("batch delete: status=%d body=%s", del.Code, del.Body.String())
+	}
+	var response struct {
+		Results []struct {
+			ID   string `json:"id"`
+			OK   bool   `json:"ok"`
+			Code string `json:"code"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(del.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct {
+		ok   bool
+		code string
+	}{
+		"one":      {true, ""},
+		"two":      {true, ""},
+		"internal": {false, "reserved_profile"},
+		"ghost":    {false, "connection_not_found"},
+	}
+	if len(response.Results) != len(want) {
+		t.Fatalf("batch delete results: %+v", response.Results)
+	}
+	for _, r := range response.Results {
+		w := want[r.ID]
+		if r.OK != w.ok || r.Code != w.code {
+			t.Fatalf("result for %q: ok=%v code=%q, want ok=%v code=%q", r.ID, r.OK, r.Code, w.ok, w.code)
+		}
+	}
+	for _, name := range []string{"one", "two"} {
+		if _, err := store.Load(name); err == nil {
+			t.Fatalf("profile %q survived batch delete", name)
+		}
+	}
+	if _, err := store.Load("internal"); err != nil {
+		t.Fatalf("internal profile must survive: %v", err)
+	}
+}
+
+// names=a,b filters the exported TOML to exactly the named profiles; a name
+// that no longer resolves is skipped rather than failing the download, and no
+// names parameter keeps exporting everything.
+func TestConnectionExportSelectedHTTP(t *testing.T) {
+	_, _, mux := newConnectionTestHandler(t)
+	one := httptest.NewRecorder()
+	mux.ServeHTTP(one, httptest.NewRequest(http.MethodGet, "/api/connections/batch?names=one", nil))
+	if one.Code != http.StatusOK || !strings.Contains(one.Body.String(), `name = "one"`) || strings.Contains(one.Body.String(), `name = "two"`) {
+		t.Fatalf("export one: status=%d body=%s", one.Code, one.Body.String())
+	}
+	stale := httptest.NewRecorder()
+	mux.ServeHTTP(stale, httptest.NewRequest(http.MethodGet, "/api/connections/batch?names=one,ghost", nil))
+	if stale.Code != http.StatusOK || !strings.Contains(stale.Body.String(), `name = "one"`) {
+		t.Fatalf("export with stale names: status=%d body=%s", stale.Code, stale.Body.String())
+	}
+	reserved := httptest.NewRecorder()
+	mux.ServeHTTP(reserved, httptest.NewRequest(http.MethodGet, "/api/connections/batch?names=one,internal", nil))
+	if reserved.Code != http.StatusBadRequest {
+		t.Fatalf("export naming internal: status=%d body=%s", reserved.Code, reserved.Body.String())
+	}
+	all := httptest.NewRecorder()
+	mux.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/api/connections/batch", nil))
+	if all.Code != http.StatusOK || !strings.Contains(all.Body.String(), `name = "one"`) || !strings.Contains(all.Body.String(), `name = "two"`) {
+		t.Fatalf("export all: status=%d body=%s", all.Code, all.Body.String())
+	}
+}

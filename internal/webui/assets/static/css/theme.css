@@ -233,11 +233,12 @@
    What the clip removes is padding, so the guards below are the only layout side
    effect.
 
-   The batch keys are named by two classes, not one. They are `.btn`s, and `.btn`
-   sets a clip-path and a background shorthand of its own: a bare `.host-batch-btn`
-   ties with `.btn` on specificity and loses on source order, so the chip's corner
-   would paint over the plate's — which is what "the notch does nothing on these
-   buttons" looked like. Two classes outrank `.btn` wherever these rules sit.
+   Each key is a single class, and none of them is a `.btn`. That matters: a
+   rule that re-declared the knobs for one of these would tie on specificity
+   and win on source order, quietly handing that key a different corner — which
+   is exactly how the NetHub toolbar's keys turned into plain rectangles once.
+   A key's own knobs belong with `.btn` below; the plates here are the only
+   place the shared corner is declared.
 
    Scope: only wide containers with a bounded height. A notch is a corner treatment
    for a plate that reads as a plate — a session card is nearly square (128x132),
@@ -252,10 +253,11 @@
    here may restate the shape for it — a second clip-path is how the plates
    drifted apart once already.
 
-   The keys share the declaration too, with the fold switched off below: one
+   The keys share the declaration too — the NetHub toolbar's switch, its play
+   split and its invert key are plates like the panels, and this is the one
    clip-path in this file, not one per component, so the corner cannot drift. */
 .workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
-.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn, .icon-btn {
+.conn-load-banner, .jump-card.jump-summary, .nethub-select-toggle, .nethub-open-plate, .nethub-batch-icon, .icon-btn {
   --cut: 14px;
   --notch-left: 50%;
   --notch-run: 8px;
@@ -361,8 +363,10 @@
    every button already had. The zeros carry UNITS: a bare `0` makes
    `calc(100% - var(--notch-left) + var(--notch-run))` a percentage-minus-number,
    which is invalid and takes the whole clip-path down with it.
-   `.drawer-toolbar .host-batch-btn` outranks this and opts back into the full
-   plate. */
+   The NetHub toolbar's keys are deliberately absent from both lists: they are
+   not `.btn`s, so nothing here outranks the plate above and their polygon stays
+   the plate's. A rule that re-pins a knob for them is how their corner went
+   missing once — name them THERE, not here. */
 .btn { --cut: 7px; --notch-left: 0%; --notch-run: 0px; }
 .icon-btn { --cut: 6px; --notch-left: 0%; --notch-run: 0px; }
 
@@ -429,7 +433,7 @@
    border box — the clipped corner is measured from there, so padding-box origin
    would leave the line floating off the cut. */
 .workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
-.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn {
+.conn-load-banner, .jump-card.jump-summary, .nethub-select-toggle, .nethub-open-plate, .nethub-batch-icon {
   /* Three explicit strokes: the top-right \ chamfer, the notch's 45° step, and the
      vertical that carries the inset wall down to the bottom edge. Nothing is drawn
      along the bottom edge itself: right of the notch it is the plate's own border,
@@ -561,6 +565,8 @@ body.bw-error::after { background: linear-gradient(90deg, transparent 0 42%, rgb
 @media (prefers-reduced-motion: reduce) {
   .shell-link-state.is-connecting, .shell-pending-spinner { animation: none; }
   body.bw-session-active::after, body.bw-ai-active::after, body.bw-review-pending::after, body.bw-error::after { transition: none; }
+  .nethub-select-toggle { transition: none; }
+  .nethub-toggle-count, .nethub-selecting .nethub-batch-icon, .nethub-selecting .nethub-open-split { animation: none; }
 }
 
 /* An empty plate reads as a terminal that printed nothing, not as a dashboard

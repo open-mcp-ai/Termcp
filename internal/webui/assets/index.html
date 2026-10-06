@@ -74,16 +74,62 @@
         <div class="nethub-rail" id="nethub-rail" role="list" aria-label="NetHub" data-i18n-aria="nav.nethub"></div>
         <div class="nethub-body" id="sec-entries-body">
         <div class="drawer-toolbar" role="toolbar">
-          <button type="button" class="btn host-batch-btn" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
-          <button type="button" class="btn host-batch-btn" id="conn-export" title="Export Config" data-i18n-title="conn.batch.export" aria-label="Export Config" data-i18n-aria="conn.batch.export"><svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg></button>
+          <!-- One row, two states. Collapsed: the list-checks key spans the
+               toolbar and a card click connects. Pressed: it squares off at the
+               row's left edge — the ticked count rides its face — the dashed
+               invert key sits right of it, and card clicks tick instead. The
+               dropdown carries export (a download: the file leaves the server)
+               and delete. Pressing the switch again restores and clears. -->
+          <button type="button" class="nethub-select-toggle" id="nethub-select-toggle" aria-pressed="false" title="Batch select" data-i18n-title="nethub.batch.selectTitle" aria-label="Batch select" data-i18n-aria="nethub.batch.select" onclick="event.stopPropagation()">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1"/><path d="M3.1 4.1l1.1 1.1 2.2-2.4"/><path d="M9.5 4h5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 12h5"/></svg>
+            <span class="nethub-toggle-count" id="nethub-toggle-count" hidden>0</span>
+          </button>
+          <button type="button" class="nethub-batch-icon" id="nethub-sel-invert" title="Invert selection" data-i18n-title="nethub.batch.invert" aria-label="Invert selection" data-i18n-aria="nethub.batch.invert" onclick="event.stopPropagation()">
+            <svg class="ic-hollow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
+            <svg class="ic-solid" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
+          </button>
+          <div class="nethub-open-split" id="nethub-open-split">
+            <!-- The plate is an inner box on purpose: it carries the shared
+                 clip-path, and a clip cuts DESCENDANTS too. With the menu
+                 inside the clipped element it was sliced off the moment it
+                 opened, so the menu is a sibling of this plate below. -->
+            <div class="nethub-open-plate">
+              <button type="button" id="nethub-batch-open" title="Open a session for each selected host" data-i18n-title="nethub.batch.openTitle" aria-label="Open selected hosts" data-i18n-aria="nethub.batch.openTitle">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5.14v13.72c0 .8.88 1.29 1.56.86l10.8-6.86a1.03 1.03 0 000-1.72L9.56 4.28A1.03 1.03 0 008 5.14z" fill="currentColor"/></svg>
+              </button>
+              <button type="button" id="nethub-open-caret" aria-haspopup="menu" aria-expanded="false" title="More actions" data-i18n-title="nethub.batch.more" aria-label="More actions" data-i18n-aria="nethub.batch.more">
+                <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
+              </button>
+            </div>
+            <!-- Anchored to the split itself (top: 100%), so it follows the key
+                 wherever the row puts it — no hardcoded offset to drift. -->
+            <div class="nethub-open-menu" id="nethub-open-menu" role="menu" aria-label="Batch actions" data-i18n-aria="nethub.batch.menuAria" hidden>
+              <button type="button" class="nethub-menu-item" id="nethub-menu-export" role="menuitem" title="Export Config" data-i18n-title="conn.batch.export">
+                <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+                <span data-i18n="conn.batch.export">Export Config</span>
+              </button>
+              <button type="button" class="nethub-menu-item nethub-menu-danger" id="nethub-menu-delete" role="menuitem" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected hosts" data-i18n-aria="nethub.batch.deleteTitle">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
+                <span data-i18n="common.delete">Delete</span>
+              </button>
+            </div>
+          </div>
         </div>
         <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
           <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
         </button>
         <div id="conn-grid" class="conn-grid"></div>
-        <div class="drawer-add" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          <span class="drawer-add-label" data-i18n="nethub.add">Add access</span>
+        <!-- The column's two fixed bottom actions share one row: creating and
+             importing are the two ways a profile enters the list, so they read
+             as a pair rather than as an add button with a stranger beside it. -->
+        <div class="drawer-add-row">
+          <div class="drawer-add drawer-add-grow" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span class="drawer-add-label" data-i18n="nethub.add">Add access</span>
+          </div>
+          <button type="button" class="drawer-add drawer-import" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import">
+            <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+          </button>
         </div>
       </div>
       </aside>

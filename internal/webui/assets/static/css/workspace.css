@@ -52,7 +52,17 @@
    so the Blackwall still reads through the control layer. */
 .nethub-body {
   display: flex; flex-direction: column; min-width: 0; min-height: 220px;
-  max-height: calc(100vh - 134px); max-height: calc(100dvh - 134px);
+  /* The panel may not grow past the viewport, and this ceiling is the whole
+     reason the page itself never scrolls.
+
+     The number is the chrome above and below the panel: header 57, the dock's top
+     padding 16, the gap 8, the trigger 50, the dock's bottom padding 16. It used
+     to read 134, four short of that sum, so the panel was permanently 13px too
+     tall and the WHOLE PAGE scrolled however few nodes the list held. That it was
+     a constant error and not a content one is what made it hard to see: 30 nodes
+     and 60 nodes overflowed by exactly the same 13px, with an empty list too.
+     test/session_switch asserts the arithmetic that keeps this honest. */
+  max-height: calc(100dvh - 147px);
   margin-top: 8px; padding: 10px 0 12px;
   overflow: hidden; opacity: 1; visibility: visible;
   border: 1px solid var(--accent-border); background: var(--bg-subtle);
@@ -76,7 +86,9 @@
     opacity: 0; visibility: hidden; transform: translateX(-6px); pointer-events: none;
   }
   .workspace-frame.nethub-collapsed .nethub-rail {
-    max-height: calc(100vh - 134px); max-height: calc(100dvh - 134px);
+    /* Same ceiling as the body it replaces: the rail takes the panel's place in
+       the column, so it must not be allowed to grow past it either. */
+    max-height: calc(100dvh - 147px);
     padding: 10px 0 12px; opacity: 1; pointer-events: auto;
   }
 }
@@ -134,6 +146,20 @@
 .conn-tile.node-card .node-sess { margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; color: var(--text-secondary); }
 .conn-tile.node-card.node-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 
+/* Selection mode leaves the cards alone: no markers, no quieted buttons — the
+   row looks exactly as it does while connecting. The one thing selection may
+   paint is a card the user actually ticked, and only while it stays ticked. */
+.nethub-selecting .conn-tile.node-card.batch-selected {
+  border-color: var(--accent);
+  /* background-color, never the shorthand: the plate's corner strokes are
+     background-image layers declared at the end of the cascade, and a
+     background shorthand here would reset them. A solid tint under those
+     layers is the locked look; the plate's own shape stays untouched. */
+  background-color: var(--accent-surface-soft);
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 16px var(--accent-ring);
+}
+.nethub-selecting .conn-tile.node-card.batch-selected .conn-nm { color: var(--accent); }
+
 .workspace-sessions {
   width: 100%;
   border: 1px solid var(--border-subtle);
@@ -171,12 +197,21 @@
 /* The add control is its own component, not a node card: it is the column's
    bottom action, so it carries no card rail and no hover lift — only the "empty
    slot you can fill" dashed edge that marks it as an affordance. */
+/* The column's two fixed bottom actions share one row: creating and importing
+   are the two ways a profile enters the list, so they read as a pair. The add
+   control takes the row's width — it is the primary door — and the import key
+   is a square icon beside it: the file dialog it opens explains the arrow. */
+.drawer-add-row {
+  flex: 0 0 auto; display: flex; gap: 8px; margin: 10px 10px 0;
+}
+.drawer-add-row .drawer-add-grow { flex: 1 1 0; min-width: 0; margin: 0; }
+.drawer-add-row .drawer-import { flex: 0 0 44px; margin: 0; }
 .drawer-add {
   flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 10px 0;
   padding: 0; display: flex; align-items: center; justify-content: center; gap: 7px;
   border: 1px dashed var(--border-strong); border-radius: 0;
   background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
-  user-select: none;
+  user-select: none; font: inherit;
 }
 .drawer-add svg { display: block; }
 .drawer-add:hover, .drawer-add:focus-visible {
@@ -193,11 +228,123 @@
   display: flex; gap: 6px; padding: 0 10px 10px;
   border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
 }
-.drawer-toolbar .host-batch-btn {
-  flex: 1; min-width: 0; height: 34px; padding: 0;
+/* One row, two states. The keys wear the SAME plate as the panels — the cut
+   corner and the fold come from theme.css's single shape rule, so nothing here
+   restates the polygon; all this file does is set the fill the outline sits on
+   (the plate's strokes are background layers, so a transparent key would draw
+   them over whatever is behind it). Collapsed: the list-checks glyph alone
+   spans the toolbar and a card click connects. Pressed: its face becomes the
+   ticked count, and the play split plus the invert check join the row while
+   card clicks tick. Pressing the switch again restores and clears. */
+.drawer-toolbar { position: relative; }
+.nethub-select-toggle {
+  position: relative;
+  /* flex-basis carries the toggle animation: full-width (basis 0%, grow 1)
+     collapses to a 34px square (basis 34px, grow 0) and back. Basis and grow
+     are both interpolable, so the key visibly slides shut towards its left
+     edge — the row's first item stays pinned there — and slides open again. */
+  flex: 1 1 0%; height: 34px; padding: 0 12px;
   display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary); cursor: pointer;
+  transition: color .14s ease, flex-basis .22s ease, flex-grow .22s ease;
 }
-.drawer-toolbar .host-batch-btn svg { display: block; }
+.nethub-select-toggle:hover { color: var(--accent-hover); }
+.nethub-select-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-select-toggle[aria-pressed="true"] {
+  flex: 0 0 34px; padding: 0;
+  color: var(--accent);
+}
+.nethub-select-toggle svg { display: block; }
+.nethub-select-toggle .nethub-toggle-count[hidden] { display: none; }
+/* With targets locked the switch's face IS the count — one glyph, the digit —
+   and the list icon only returns when the selection is spent. The digit pops
+   in as the key settles shut. */
+.nethub-toggle-count { font: 700 .88rem var(--font-mono); color: inherit; line-height: 1; animation: nethubCountIn .18s ease; }
+@keyframes nethubCountIn { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+/* The invert check: hollow while nothing is ticked, solid once something is —
+   the key shows the state it would flip. Hover and focus tint the glyph, and
+   there is deliberately no fill to light up. The row's companion keys fade in
+   from the left as the switch shuts, and fade out as it opens again. */
+.nethub-batch-icon {
+  display: none;
+  flex: 0 0 34px; width: 34px; height: 34px; padding: 0;
+  align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elevated);
+  color: var(--text-muted); cursor: pointer;
+  transition: color .14s ease;
+}
+.nethub-selecting .nethub-batch-icon { display: inline-flex; animation: nethubKeyIn .18s ease; }
+.nethub-batch-icon:disabled { pointer-events: none; opacity: .45; }
+.nethub-batch-icon:hover { color: var(--accent-hover); }
+.nethub-batch-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-batch-icon svg { display: block; }
+#nethub-sel-invert .ic-solid { display: none; }
+.has-selection #nethub-sel-invert .ic-hollow { display: none; }
+.has-selection #nethub-sel-invert .ic-solid { display: block; color: var(--accent); }
+/* The play split-key: the wide half opens every ticked host, the narrow half
+   unfolds export and delete. A hairline divides the halves; hover is a colour
+   change, for the key has no fill to light up. The SPLIT is only the row slot
+   and the dropdown's positioning parent; the plated box is the inner
+   .nethub-open-plate, because the plate's clip would otherwise slice off the
+   menu — a clip cuts descendants, and the menu hangs below the key. */
+.nethub-open-split {
+  position: relative;
+  display: none;
+  flex: 1 1 auto; min-width: 0; height: 34px;
+}
+.nethub-selecting .nethub-open-split { display: block; animation: nethubKeyIn .18s ease; }
+.nethub-open-split.is-disabled { pointer-events: none; opacity: .45; }
+/* The plate: the shared corner from theme.css, and the fill its strokes read
+   against. Nothing here restates the polygon. */
+.nethub-open-plate {
+  display: flex; height: 100%;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elevated);
+}
+/* Scoped to the PLATE, not the split: a bare `.nethub-open-split button` also
+   matches the dropdown's items, which are descendants of that wrapper. Its
+   `height: 100%` then beat `.nethub-menu-item`'s own height on specificity and
+   squashed every item to the height of its text — the menu looked like a strip
+   of unclickable labels. The plate holds exactly the two half-keys. */
+.nethub-open-plate button {
+  height: 100%; border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color .14s ease;
+}
+.nethub-open-plate button:hover { color: var(--accent-hover); }
+#nethub-batch-open { flex: 1 1 auto; min-width: 0; padding: 0 10px; gap: 8px; }
+#nethub-open-caret { flex: 0 0 22px; border-left: 1px solid var(--border-subtle); }
+.nethub-open-plate button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+@keyframes nethubKeyIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+/* The dropdown: export and delete. It is anchored to the split key's RIGHT
+   edge (right: 0), because the trigger is the caret at that end — anchoring
+   left put it under the far end of the key, which reads as "the menu opened
+   somewhere else". min-width: 100% makes it at least as wide as the key it
+   drops from, so the items are the key's width instead of a squat box. */
+.nethub-open-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  min-width: 100%;
+  display: flex; flex-direction: column; padding: 4px;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--bg-elevated); box-shadow: 0 10px 28px var(--shadow-card);
+}
+.nethub-open-menu[hidden] { display: none; }
+.nethub-menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  height: 32px; padding: 0 12px;
+  border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  font: 600 .68rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+  text-align: left; white-space: nowrap;
+}
+.nethub-menu-item:hover { background: var(--accent-surface); color: var(--accent); }
+.nethub-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.nethub-menu-item:disabled { pointer-events: none; opacity: .45; }
+.nethub-menu-item svg { display: block; flex: 0 0 auto; }
+.nethub-menu-item.nethub-menu-danger { color: var(--danger); }
+.nethub-menu-item.nethub-menu-danger:hover { background: var(--danger-surface); color: var(--danger); }
 .drawer-close {
   display: none; align-items: center; justify-content: center;
   position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
@@ -255,7 +402,7 @@
   }
   #sec-entries-body.drawer-open { transform: translateX(0); }
   #sec-entries-body > #conn-grid { padding: 0; }
-  .drawer-add { margin-inline: 0; }
+  .drawer-add-row { margin-inline: 0; }
   .drawer-toolbar { padding-right: 42px; }
   .drawer-close { display: inline-flex; }
   .drawer-scrim { display: block; }

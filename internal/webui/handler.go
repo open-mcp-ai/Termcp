@@ -18,7 +18,20 @@ import (
 // It reads through Assets(), so an operator-supplied --assets directory overrides the embedded copy
 // file by file and a file the directory does not contain is served from the embed.
 func embeddedStaticServer() http.Handler {
-	return markdownContentType(http.FileServer(http.FS(Assets())))
+	return noCacheForEmbeddedAssets(markdownContentType(http.FileServer(http.FS(Assets()))))
+}
+
+// noCacheForEmbeddedAssets marks the embedded UI assets no-cache. Embedded files
+// carry no modification time, so http.FileServer sends no Last-Modified and no
+// ETag — a response with neither a validator nor a freshness directive leaves
+// the browser heuristically caching a stylesheet from a PREVIOUS binary, which
+// then paints the new markup with old rules until a hard refresh. The embed
+// lives in memory and is cheap to resend, so every load simply refetches.
+func noCacheForEmbeddedAssets(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // markdownContentType pins text/markdown on .md responses. Go's built-in mime

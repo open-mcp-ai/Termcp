@@ -128,10 +128,11 @@ process.exit(bad === 0 ? 0 : 1);
 // TestHostListEntryPointsLeaveThePlacementToTheDrawer pins the wiring the
 // placement test cannot see: which callers name a position.
 //
-// The host list has two ways to start a session, the card body and the
-// launch-options dialog, and both sit inside a drawer pinned to the left edge.
-// Passing the click event again would restore the reported bug while every
-// placement unit test above still passed, so the call sites are pinned here.
+// Every session entry point that lives in or behind the host drawer — the card
+// body, the launch-options dialog, the selection mode's open action — hands the
+// placement to the centred cascade. Passing a click event again would restore
+// the reported bug while every placement unit test above still passed, so all
+// call sites are pinned here.
 func TestHostListEntryPointsLeaveThePlacementToTheDrawer(t *testing.T) {
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
 	at := strings.Index(dialogs, "startSessionAndOpenShell(")
@@ -147,12 +148,25 @@ func TestHostListEntryPointsLeaveThePlacementToTheDrawer(t *testing.T) {
 	if strings.Contains(connForm, "_startClickEvt") {
 		t.Error("the launch-options dialog captures a click position again; the dialog outlives that click")
 	}
-	at = strings.Index(connForm, "startSessionAndOpenShell(")
-	if at < 0 {
-		t.Fatal("conn-form.js no longer starts a session from the launch-options dialog")
+	for _, at := range indexOfAll(connForm, "startSessionAndOpenShell(") {
+		call := connForm[at : at+strings.Index(connForm[at:], "\n")]
+		if !strings.Contains(call, ", null") {
+			t.Errorf("every drawer-side entry point must open its window centred; got %q", call)
+		}
 	}
-	dialogCall := connForm[at : at+strings.Index(connForm[at:], "\n")]
-	if !strings.Contains(dialogCall, ", null,") {
-		t.Errorf("the launch-options dialog must open its window centred; got %q", dialogCall)
+}
+
+// indexOfAll returns the start offset of every non-overlapping occurrence of
+// needle in s.
+func indexOfAll(s, needle string) []int {
+	var out []int
+	for i := 0; i+len(needle) <= len(s); {
+		at := strings.Index(s[i:], needle)
+		if at < 0 {
+			break
+		}
+		out = append(out, i+at)
+		i += at + len(needle)
 	}
+	return out
 }

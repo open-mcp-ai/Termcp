@@ -21,20 +21,31 @@ type BatchImportResult struct {
 	Renamed  []BatchRename `json:"renamed,omitempty"`
 }
 
-// ExportBatch returns a TOML document containing all remote profiles, including
-// temporary ones. The built-in internal profile is intentionally excluded.
-func (s *Store) ExportBatch() ([]byte, error) {
-	names, err := s.List()
-	if err != nil {
-		return nil, err
+// ExportBatch returns a TOML document containing remote profiles, including
+// temporary ones. An empty only exports every stored profile; otherwise exactly
+// the named ones are exported — a name that does not resolve is skipped rather
+// than failing the whole file, so a selection captured before a deletion still
+// downloads. The built-in internal profile is intentionally excluded in both
+// modes (the KindRemote filter below is what drops it).
+func (s *Store) ExportBatch(only []string) ([]byte, error) {
+	names := only
+	if len(names) == 0 {
+		list, err := s.List()
+		if err != nil {
+			return nil, err
+		}
+		names = list
 	}
 	profiles := make([]map[string]any, 0, len(names))
 	for _, name := range names {
-		if isInternalName(name) {
+		if IsInternalName(name) {
 			continue
 		}
 		raw, err := s.ReadRaw(name)
 		if err != nil {
+			if len(only) > 0 && os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("profile %q: %w", name, err)
 		}
 		var profile map[string]any
