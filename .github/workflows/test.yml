@@ -12,6 +12,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # -race needs cgo; all three runner images ship a gcc (windows: 15.2.0).
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -30,9 +33,12 @@ jobs:
           go-version: "1.25"
 
       - name: Test
-        run: go test ./internal/... -count=1 -timeout 120s
+        # Keep these flags in sync with the Makefile `test` target; the stress
+        # variant (make test-stress) perturbs scheduling to flush out lifecycle
+        # races that -race cannot see. See docs/agents/testing.md.
+        run: go test ./... -count=1 -shuffle=on -race -timeout 240s
 
       - name: Test pure-API build
         run: |
           go build -tags no_webui ./...
-          go test -tags no_webui -count=1 -run TestNoWebUIBuildCarriesDocsOnly ./internal/webui/
+          go test -tags no_webui -count=1 -race -run TestNoWebUIBuildCarriesDocsOnly ./internal/webui/

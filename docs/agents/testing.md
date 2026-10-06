@@ -1,10 +1,11 @@
 # Writing tests that survive CI
 
 Every test lands in `.github/workflows/test.yml`, which runs
-`go test ./internal/... -count=1 -timeout 120s` on **ubuntu, macos and windows**
-runners, on every PR. A test that passes on your machine and flakes in CI costs
-everyone a re-run and teaches people to ignore red. Write for the runner, not
-for your checkout.
+`go test ./... -count=1 -shuffle=on -race -timeout 240s` on **ubuntu, macos and
+windows** runners, on every PR — byte-for-byte the command `make test` runs, so
+the two must change together. A test that passes on your machine and flakes in
+CI costs everyone a re-run and teaches people to ignore red. Write for the
+runner, not for your checkout.
 
 ## Never hardcode a shared path
 
@@ -55,14 +56,53 @@ within 100ms" is a flake waiting to happen. Poll with a deadline (`require.Event
 or a loop with a `time.After` bound) instead of sleeping a fixed duration, and
 always give the timeout clear headroom over the expected latency.
 
+## Terminate leaves a background writer; Delete joins it
+
+A test that terminates a session created against a real store
+(`storage.New(t.TempDir())`) must register a cleanup that *deletes* the session,
+not merely close the store. `Terminate` deliberately does not wait for the
+per-shell exit watcher — joining it there would self-deadlock the natural-exit
+path, where the watcher itself drives the DEAD transition — so the watcher's
+final manifest persist lands milliseconds *after* `Terminate` returns. A test
+that ends right after Terminate then hands a still-live writer to `t.TempDir`'s
+`RemoveAll`: a `.tmp-*` (or renamed manifest) appears between the directory
+listing and the `rmdir`, and cleanup fails with "directory not empty". This is
+invisible to `-race` (no memory is touched) and it shipped to CI twice before it
+was caught.
+
+`Delete → finalize` is the join point: it waits for the watcher before
+`DeleteSession` removes the directory, and the store's `deleted` set refuses any
+straggling append afterwards. So register, right after Create (before `t.TempDir`
+in LIFO order — see the cleanup rule above):
+
+```go
+t.Cleanup(func() { _ = m.Delete(id) })
+```
+
+For restart-style tests that build a second manager over the same store, delete
+through the *first* manager — it owns the session object with the watcher; the
+restored copy has none.
+
 ## Before you push
 
 ```bash
-go test ./internal/... -count=1 -timeout 120s      # the CI command exactly
-go test ./internal/<pkg>/ -count=5 -shuffle=on     # order and repeat independence
+make test         # the CI command exactly; -race is on wherever the toolchain supports it
+make test-stress  # scheduling perturbation: -cpu=1,2,4 × -count=2 × -shuffle=on
 ```
 
-`-count=5` catches state leaked between runs in one process; `-shuffle=on`
-catches a test that only passes after some other test has run. For packages that
-touch the filesystem, run two copies concurrently in separate shells — that is
-what a second CI job does to your assumptions.
+The two targets cover the two sources of test-owned races:
+
+- **Memory races** — `-race` (CI always; locally wherever cgo and a C compiler
+  exist, which `make test` probes and prints when it has to skip).
+- **Filesystem/lifecycle races** — invisible to `-race`. The stress target's
+  `-cpu=1` leg squeezes goroutines onto one scheduler, which interleaves
+  teardown with background writers the way a loaded CI runner does;
+  `-count` repeats, `-shuffle` reorders. This is the harness that reproduced
+  `internal/session`'s TempDir race 28 runs out of 30, on a machine where
+  plain `-count=15` had never caught it.
+
+`-count` also catches state leaked between runs in one process; `-shuffle=on`
+catches a test that only passes after some other test has run (failures print a
+seed — rerun with `go test -shuffle=<seed>` to confirm). For packages that touch
+the filesystem, run two copies concurrently in separate shells — that is what a
+second CI job does to your assumptions.
