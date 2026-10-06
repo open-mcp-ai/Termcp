@@ -139,22 +139,15 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 // reviewPendingResult is the reply to input that review mode intercepted. It is
 // deliberately not an error: the call succeeded, it is the write that is waiting.
 //
-// It carries no id and no polling instruction. The agent cannot decide the request
-// itself — decisions are made by a human in the Web UI — and it has nothing useful
-// to do with an id, so handing one over would only invite a retry loop. An agent
-// that needs the outcome reads the shell's output afterwards, which shows whether
-// the command ran.
+// The two cases need opposite next steps, so they get opposite messages: staged
+// text still needs its ending key, queued text must not be retried (reviewWaitTail
+// says so) and is checked later through the shell's output.
 func reviewPendingResult(queued bool) *mcpgo.CallToolResult {
-	msg := "Held for review: send the ending key (shell_key enter) to submit the line for approval."
-	if queued {
-		msg = "Submitted for review. A human decides it in the Web UI; nothing is written until then."
+	if !queued {
+		return reviewPendingReply("Held for review: send the ending key (shell_key enter) to submit the line for approval.")
 	}
-	return jsonResult(map[string]any{
-		"ok":             true,
-		"approved":       false,
-		"review_pending": true,
-		"message":        msg,
-	})
+	return reviewPendingReply("Submitted for review. " + reviewWaitTail +
+		" Read the shell's output later to see whether it ran.")
 }
 
 func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

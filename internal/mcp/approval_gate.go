@@ -146,18 +146,40 @@ type gatedPayload struct {
 	Args map[string]any `json:"args"`
 }
 
-// reviewPendingOperationResult is the reply to an operation that review mode
-// intercepted. Like the command-line case it carries no id: the agent cannot
-// decide its own request, so an id would only invite a retry loop.
-func reviewPendingOperationResult(summary string) *mcpgo.CallToolResult {
+// reviewWaitTail is the operational half of every review-mode reply: what the
+// agent must not do while a request waits. It is a shared constant because a held
+// command line and a held operation answer the same question, and two spellings of
+// one prohibition invite the agent to treat the weaker one as the rule.
+const reviewWaitTail = "A human decides it in the Web UI; nothing happens until then. " +
+	"There is no id to poll: do not resubmit, reword or retry - WAIT."
+
+// reviewPendingReply is the single constructor of a review-mode reply, shared by
+// the two points where review intercepts a call: a held command line
+// (handlers_shell.go) and a held file or forward operation (below).
+//
+// The reply carries no id and no polling instruction. The agent cannot decide the
+// request itself -- decisions are made by a human in the Web UI -- and it has
+// nothing useful to do with an id, so handing one over would only invite a retry
+// loop.
+//
+// The JSON shape is built once, here, so the two replies cannot drift apart: a
+// model branches on approved/review_pending, and a shape that differed between
+// them would read as two different states.
+func reviewPendingReply(msg string) *mcpgo.CallToolResult {
 	return jsonResult(map[string]any{
 		"ok":             true,
 		"approved":       false,
 		"review_pending": true,
-		"message": fmt.Sprintf(
-			"Submitted for review: %s. A human decides it in the Web UI; nothing happens until then.",
-			summary),
+		"message":        msg,
 	})
+}
+
+// reviewPendingOperationResult is the reply to an operation that review mode
+// intercepted. The summary is echoed back so the agent can tell which of its calls
+// is now waiting: unlike a command line, none of these operations left a trace
+// anywhere the agent can read later.
+func reviewPendingOperationResult(summary string) *mcpgo.CallToolResult {
+	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail))
 }
 
 // summarizeOperation renders one line a reviewer can decide on.
