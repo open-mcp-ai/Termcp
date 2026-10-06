@@ -11,7 +11,7 @@ import (
 // be used as the locator's source, because closing an earlier channel makes that
 // counter disagree with the MCP/REST resolver.
 func TestShellTabCopyUsesServerAssignedIndex(t *testing.T) {
-	js := readAssetLF(t, "static/js/terminal-view.js")
+	js := readTerminalJS(t)
 	sessions := readAssetLF(t, "static/js/sessions.js")
 
 	create := between(t, js, "function createChannelTab(", "\n}\n")

@@ -197,7 +197,7 @@ termcp [flags]
 | `--data-dir`    | `~/.termcp` | 持久化目录（会话、消息、SSH 配置）。不存在则自动创建。默认值可用环境变量 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level`   | `info`      | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 显示全部 MCP 工具调用；失败的工具调用与会话创建错误始终以 `warn`/`error` 打印。 |
 | `--no-internal` | `false`     | 禁用内建 loopback SSH profile。                                |
-| `--assets`      | `~/.termcp/assets` | 外部静态资源目录（Web UI 与文档）。目录中存在的文件覆盖内嵌副本，缺失的文件回退内嵌；目录不存在属正常情况，行为不变。默认值可用 `$TERMCP_ASSETS_DIR` 覆盖。 |
+| `--assets`      | `~/.termcp/assets` | 外部静态资源目录（Web UI 与文档）。目录中存在的文件覆盖内嵌副本，缺失的文件回退内嵌；目录不存在属正常情况，行为不变。默认值可用 `$TERMCP_ASSETS_DIR` 覆盖。覆盖按文件生效：`app.css` 如今是 `@import` 各 CSS 分块的清单，因此通过 `--assets` 改样式需覆盖 `static/css/` 整个目录——只换清单会让未覆盖的分块仍用内嵌版本。 |
 | `--mcp-manage-ssh-configs` | `false` | 允许 AI 通过 MCP 管理 SSH 配置（凭据永不暴露）。                |
 | `--auth-token`  | *(未设置)*  | HTTP 认证静态 Token（或 `$TERMCP_AUTH_TOKEN`）。API、MCP、浏览器全部客户端都须携带。与 `--auth-hash` 互斥。 |
 | `--auth-hash`   | *(未设置)*  | Token 的 salted SHA-256 哈希（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。哈希配置的实例同时接受哈希串本身作为凭据——只留了哈希也能驱动 `termcp daemon` 与 `termcp stdio`——因此哈希须按机密对待。与 `--auth-token` 互斥。 |

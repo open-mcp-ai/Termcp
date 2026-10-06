@@ -119,8 +119,8 @@ process.exit(bad === 0 ? 0 : 1);
 func TestConsoleStateIsPaintedOnTheWindow(t *testing.T) {
 	shell := readAssetLF(t, "static/js/shell-windows.js")
 	util := readAssetLF(t, "static/js/util.js")
-	tv := readAssetLF(t, "static/js/terminal-view.js")
-	css := readAssetLF(t, "static/css/app.css")
+	tv := readTerminalJS(t)
+	css := readAppCSS(t)
 
 	tabbar := between(t, shell, "function refreshSessionTabbar() {", "\n}\n")
 	if !strings.Contains(tabbar, "paintSessionTileWindowMarkers()") {
@@ -198,7 +198,7 @@ func TestConsoleStateIsPaintedOnTheWindow(t *testing.T) {
 // (TestCatalogsHaveIdenticalKeys covers the last part).
 func TestEmptyPlatesSpeakThroughTheCatalog(t *testing.T) {
 	sessions := readAssetLF(t, "static/js/sessions.js")
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	for _, want := range []string{"t('plate.sessions.empty')", "t('plate.archive.empty')", "'sess-plate-empty'"} {
 		if !strings.Contains(sessions, want) {
 			t.Errorf("sessions.js misses %q; an empty plate would say nothing", want)

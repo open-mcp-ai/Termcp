@@ -1,0 +1,133 @@
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: near-black navy, the way a breaker's UI sits on a dark plate. */
+  --bg-canvas: #05080f;
+  --bg-subtle: #080d17;
+  --bg-card: #0b1220;
+  --bg-card-hover: #101a2b;
+  --bg-elevated: #0d1626;
+  --bg-input: #070c16;
+
+  /* Glass: the workspace plates and the cards on them are translucent, so the
+     page's own backdrop reads through the product surface instead of being
+     sealed under it. Each value is the opaque surface above, with an alpha —
+     the hue still comes from the palette, so retuning a surface moves the glass
+     with it. The blur is what keeps text legible over the moving backdrop: a
+     plain alpha leaves the backdrop's own edges behind the glyphs, and those
+     edges are exactly what a low-contrast theme cannot afford. */
+  --glass-plate: rgba(11, 18, 32, .52);
+  --glass-plate-strong: rgba(11, 18, 32, .68);
+  --glass-tile: rgba(16, 26, 43, .74);
+  --glass-archived: rgba(8, 13, 23, .62);
+  --glass-blur: 7px;
+
+  /* The page's backdrop artwork, as a variable on purpose: the finished effect
+     is dropped in by re-pointing this one value (or by replacing the file), so
+     the artwork never has to be edited into the stylesheet. */
+  --blackwall-image: url(../../icons/blackwall.svg);
+
+  /* Type: cool hologram white over the dark plate. */
+  --text-primary: #dff3ff;
+  --text-secondary: #8fb4cc;
+  --text-muted: #5f8199;
+  --text-faint: #45637a;
+  --text-bright: #eafcff;
+  --text-on-accent: #04121a;
+
+  /* ---- Palette: shared colour values -------------------------------------
+     Names in this layer describe a colour, never a UI state or a component.
+     Semantic tokens below only point here; they do not own another copy of a
+     hue. A hue also carries its RGB channels, so a translucent use reads the
+     hue from here — rgba(var(--cyan-rgb), .13) — and adds only its own alpha,
+     instead of restating the digits. */
+  --cyan-rgb: 110, 226, 255;
+  --cyan: rgb(var(--cyan-rgb));
+  --cyan-hover: #9beeff;
+  --cyan-deep: #0b3a4d;
+  --cyan-surface: rgba(var(--cyan-rgb), .14);
+  --cyan-border: rgba(var(--cyan-rgb), .5);
+  --green-rgb: 82, 227, 164;
+  --green: rgb(var(--green-rgb));
+  --green-hover: #74f0ba;
+  --green-dark: #2fbf83;
+  --green-deep: #10543c;
+  --green-bright: #86f4c6;
+  --yellow-rgb: 252, 238, 10;
+  --yellow: rgb(var(--yellow-rgb));
+  --yellow-bright: #fff45c;
+  --yellow-deep: #cbb800;
+  --pink-rgb: 255, 61, 110;
+  --pink: rgb(var(--pink-rgb));
+  --pink-hover: #ff6a92;
+  --pink-soft: #ff8aa9;
+  --purple-rgb: 192, 139, 255;
+  --purple: rgb(var(--purple-rgb));
+  --purple-surface: rgba(var(--purple-rgb), .18);
+  --orange-rgb: 255, 180, 84;
+  --orange: rgb(var(--orange-rgb));
+  --orange-surface: rgba(var(--orange-rgb), .16);
+  --orange-border: rgba(var(--orange-rgb), .5);
+
+  /* Hairlines are cold cyan glass, never neutral grey. */
+  --border-subtle: rgba(var(--cyan-rgb), .14);
+  --border-strong: rgba(var(--cyan-rgb), .3);
+  --border-focus: rgba(var(--cyan-rgb), .62);
+
+  /* ---- Meaning: what a colour is FOR ------------------------------------
+     Cyan chrome, breaker yellow for the numbers that matter, hot magenta for a
+     breach. Every token here names a hue from the palette or takes its alpha
+     off one; none writes a colour value of its own, so retuning a hue moves all
+     of them together. */
+  --accent: var(--cyan);
+  --accent-hover: var(--cyan-hover);
+  --accent-surface: rgba(var(--cyan-rgb), .13);
+  --accent-surface-soft: rgba(var(--cyan-rgb), .07);
+  --accent-border: rgba(var(--cyan-rgb), .4);
+  --accent-ring: rgba(var(--cyan-rgb), .26);
+
+  --success: var(--green);
+  --success-hover: var(--green-hover);
+  --success-dark: var(--green-dark);
+  --success-deep: var(--green-deep);
+  --success-bright: var(--green-bright);
+  --success-surface: rgba(var(--green-rgb), .13);
+  --success-border: rgba(var(--green-rgb), .45);
+  --warning: var(--yellow);
+  --warning-bright: var(--yellow-bright);
+  --warning-deep: var(--yellow-deep);
+  --warning-surface: rgba(var(--yellow-rgb), .11);
+  --warning-surface-strong: rgba(var(--yellow-rgb), .2);
+  --warning-border: rgba(var(--yellow-rgb), .45);
+  --danger: var(--pink);
+  --danger-hover: var(--pink-hover);
+  --danger-soft: var(--pink-soft);
+  --danger-surface: rgba(var(--pink-rgb), .14);
+  --danger-strong-surface: rgba(var(--pink-rgb), .55);
+  --danger-border: rgba(var(--pink-rgb), .42);
+
+  /* Terminal chrome: the values the floating window already used, so its look is
+     unchanged; there is now one place to restyle it. */
+
+  /* Header, overlays and shadows. Shadow tokens carry a COLOUR only: they are
+     spliced into literal box-shadow declarations. */
+  --bg-header: rgba(5, 8, 15, .86);
+  --overlay-scrim: rgba(2, 5, 10, .72);
+  --overlay-modal: rgba(2, 5, 10, .82);
+  --toast-bg: rgba(8, 14, 24, .96);
+  --glow-white-04: rgba(var(--cyan-rgb), .05);
+  --glow-white-10: rgba(var(--cyan-rgb), .12);
+  --surface-hover-soft: rgba(var(--cyan-rgb), .07);
+  --shadow-dropdown: rgba(0, 0, 0, .46);
+  --shadow-drawer: rgba(0, 0, 0, .5);
+  --shadow-soft: rgba(0, 0, 0, .26);
+  --shadow-card-soft: rgba(0, 0, 0, .2);
+  --shadow-card: rgba(0, 0, 0, .28);
+  --shadow-card-hover: rgba(0, 0, 0, .36);
+  --shadow-modal: rgba(0, 0, 0, .5);
+  --live-glow: rgba(var(--cyan-rgb), .45);
+
+  /* Typography: a modern stack, monospace for ids and ports. */
+  --font-sans: Inter, Geist, ui-sans-serif, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

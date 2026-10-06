@@ -20,7 +20,7 @@ import (
 // twelve pixels wide on a dark background, two statuses with one colour are one
 // status as far as the reader is concerned.
 func TestRailDistinctCues(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	// A status colour is declared on a bare status rule (`.term-rail-output {
 	// background: … }`) and nowhere else: the compound rules a cell also carries
@@ -238,7 +238,7 @@ console.log('ok');
 // leaves a gutter of dead space — so both the CSS variables and the fit arithmetic
 // are pinned here.
 func TestRailReservesAColumnBeforeTheScrollbar(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	// The two variables are read as a set and from the rule that owns them: a bare
 	// substring search would also match the coarse-pointer override, so a desktop
 	// width change could pass while the media query silently stopped being the

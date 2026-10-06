@@ -1,0 +1,566 @@
+
+  * { box-sizing: border-box; }
+  /* The canvas colour belongs to the ROOT element, not to body. body's
+     background would paint over .page-backdrop (a negative-z-index child of
+     body is painted with the root stacking context's negative layer, which body's
+     own block background then covers), so the backdrop would be invisible at
+     exactly the moment it is the point of the page. */
+  html { background: var(--bg-canvas); }
+  html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); color: var(--text-primary); }
+  body { letter-spacing: .005em; }
+  /* Blackwall: one fixed layer under the whole page. z-index: -1 is load-bearing
+     rather than decoration: a positioned element at auto/0 paints with the
+     in-flow, z-index:0 layer — above every static background and card — so the
+     artwork would sit ON the page instead of behind it. pointer-events: none
+     keeps a full-viewport box out of hit testing, and the layer is decoration
+     only, so it is created and never touched again.
+
+     It breathes instead of sitting still, but only through opacity on this one
+     layer: the full glitch artwork was measured against a streaming terminal and
+     cost far more than its look, while a single opacity animation is composited
+     and leaves the terminal's own paint alone. The amplitude stays inside the
+     artwork's dark range so the plates above keep their contrast.
+
+     The swing is deliberately wide (.45 -> 1). A narrower one (.82 -> 1) is
+     mathematically present and visually invisible: over this dark artwork it
+     moved the page by ~1.3 luminance levels and only 5% of pixels by more than
+     three, which reads as a static background. .45 -> 1 moves ~3.5 levels and
+     ~45% of pixels, which is what actually reads as breathing. */
+  .page-backdrop {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background: var(--blackwall-image) center / cover no-repeat;
+    animation: blackwallBreathe 8s ease-in-out infinite;
+  }
+  @keyframes blackwallBreathe {
+    0%, 100% { opacity: .45; }
+    50% { opacity: 1; }
+  }
+  button, input, select, textarea { font-family: inherit; }
+  /* Ports, ids, counts and clock values must not jitter as digits change width. */
+  :where(.sess-entry-line, .sess-sid-line, .sess-review, .batch-count, .app-version, .conn-temporary-mark, .session-tab-num) { font-variant-numeric: tabular-nums; }
+  /* Sticky and translucent: the page scrolls under it, so the wordmark and the
+     language switch stay reachable in a long session list. blur() is what keeps
+     the bar readable over scrolling cards without painting a solid slab. */
+  .app-header { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-header); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  /* The nav wraps instead of squeezing: with the language switch in it, a phone
+     width cannot hold the control and the API link side by side, and without
+     this the browser breaks the link's label across two lines inside its
+     border. nowrap keeps the label intact and the whole link moves to the next
+     row, still right-aligned. */
+  .app-header-nav { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+  .app-header-nav a {
+    font-size: 0.82rem; color: var(--accent); text-decoration: none; white-space: nowrap;
+    padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-card);
+  }
+  .app-header-nav a:hover { background: var(--accent-surface); border-color: var(--border-strong); }
+  /* The docs link carries a glyph so it is still identifiable once the label is
+     dropped on a narrow header (see the media query at the end of the file).
+     inline-flex + gap keeps the two centred as a unit; the glyph inherits
+     currentColor, so it follows the link's hover colour for free. */
+  .api-nav-link { display: inline-flex; align-items: center; gap: 6px; }
+  .api-nav-icon { display: block; flex-shrink: 0; }
+  .api-nav-label { white-space: nowrap; }
+
+  /* Language switch: a trigger shaped like the API link beside it (same border,
+     radius and blue label) showing the language in use, plus the menu it drops.
+     flex-shrink: 0 keeps the header from squeezing the control instead of
+     wrapping it onto its own row. */
+  .lang-switch { position: relative; display: inline-flex; flex-shrink: 0; }
+  .lang-btn {
+    display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 0.82rem;
+    color: var(--accent); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-subtle);
+    background: var(--bg-card); cursor: pointer;
+  }
+  .lang-btn:hover { background: var(--accent-surface); border-color: var(--border-strong); }
+  .lang-btn[aria-expanded="true"] { background: var(--accent-surface); border-color: var(--border-strong); }
+  /* The glyph is an external SVG worn as a mask, not an <img>: an image would
+     keep its own black fill, while a mask paints in the trigger's colour
+     (currentColor) and follows it into hover and active states. The url() is
+     relative to this stylesheet: /static/css/ -> /icons/.
+     The artwork is 1280x1024 but its ink only spans y=192..832 (measured), so
+     the mask is sized by hand instead of with `contain`: a mask 18.72px tall
+     draws its ink 18.72 * 640/1024 = 11.7px tall, i.e. 30% taller than the 9px
+     `contain` produced in an 18px box. The box stays 18px tall so the height of
+     the trigger (and its match with the API link) does not move, and the ink is
+     centred, so the 0.36px of empty padding it clips top and bottom is nothing. */
+  .lang-icon {
+    display: inline-block; width: 23.4px; height: 18px; flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url(../../icons/language.svg) center / auto 18.72px no-repeat;
+            mask: url(../../icons/language.svg) center / auto 18.72px no-repeat;
+  }
+  /* The four labels are 3-4 characters (Auto/ENG/简中/繁中); a 2.4em floor covers
+     the widest of them, so switching never resizes the trigger, and it is no
+     wider than it has to be. */
+  .lang-current { min-width: 2.4em; text-align: left; }
+  .lang-caret { width: 8px; height: 8px; flex-shrink: 0; opacity: .65; }
+  .lang-menu {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 100;
+    display: flex; flex-direction: column; min-width: 100%; padding: 3px;
+    border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
+    box-shadow: 0 8px 24px var(--shadow-dropdown);
+  }
+  .lang-menu.hidden { display: none; }
+  .lang-opt {
+    font: inherit; font-size: 0.82rem; text-align: left; white-space: nowrap;
+    padding: 7px 8px; border: none; border-radius: 4px; background: transparent;
+    color: var(--text-primary); cursor: pointer;
+  }
+  .lang-opt:hover { background: var(--accent-surface); }
+  /* The language the page is currently rendered in. */
+  .lang-opt.active { background: var(--accent); color: var(--text-on-accent); font-weight: 600; }
+  /* Traditional glyph shapes are chosen by the system locale, which can hand
+     back Simplified forms on a Simplified-first machine; naming the TC faces
+     covers macOS (PingFang TC) and Windows (Microsoft JhengHei). */
+  body.lang-hant { font-family: Inter, Geist, ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+  /* Build version beside the wordmark, filled in from GET /api/version. Left
+     margin, not a space, so a failed fetch leaves no gap after the wordmark. */
+  .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
+  .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; }
+  .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
+  .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
+  .btn-primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
+  .dock { padding: 16px 0; min-height: calc(100% - 52px); }
+
+  .icon-btn {
+    width: 36px; height: 36px; padding: 0; border-radius: 8px; border: 1px solid var(--border-subtle);
+    background: var(--bg-card); color: var(--text-primary); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .icon-btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+  .icon-btn svg { width: 18px; height: 18px; display: block; }
+  .section-header {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+    min-height: 36px; margin-bottom: 10px; cursor: pointer; user-select: none;
+    padding: 4px 6px; border-radius: 4px;
+    transition: background .12s;
+  }
+  .section-header:hover { background: var(--bg-card-hover); }
+  .section-header[aria-expanded="false"] .sec-chevron { transform: rotate(-90deg); opacity: .5; }
+  .section-header .sec-chevron {
+    width: 12px; height: 12px; display: inline-block; flex-shrink: 0;
+    transition: transform 0.2s ease, opacity .12s;
+  }
+  .section-body.collapsed { display: none; }
+  .conn-tile.sess-tile.archived { opacity: .68; }
+  .conn-tile.sess-tile.archived:hover { opacity: .9; }
+  /* Status lamp at the left of the id: a dot rather than a badge, so the row
+     keeps its height and the id stays the thing you read. Its two colours are
+     declared with the rest of the lamp below; a hex here would be a second
+     palette the theme could not reach. */
+  .conn-tile.sess-tile .sess-status-ic {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    cursor: help;
+  }
+
+  /* Approval lock on a session card. It is a state indicator and the switch in
+     one: the glyph carries the state (closed = gated), and the colour only
+     reinforces it, so the control still reads if colour is unavailable. */
+  .conn-tile.sess-tile .sess-lock {
+    flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; padding: 0; margin: 0;
+    border: none; border-radius: 3px; background: transparent;
+    color: var(--text-faint); cursor: pointer; opacity: .55;
+    transition: opacity .12s, color .12s, background .12s;
+  }
+  .conn-tile.sess-tile:hover .sess-lock { opacity: 1; }
+  .conn-tile.sess-tile .sess-lock:hover { background: var(--surface-hover-soft); color: var(--text-secondary); }
+  /* Gated sessions stay fully visible: this is a warning state, not a hint. */
+  .conn-tile.sess-tile .sess-lock.is-on { opacity: 1; color: var(--warning); }
+  .conn-tile.sess-tile .sess-lock:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+  /* Touch: the 16px target is too small, and there is no hover to reveal it. */
+  @media (pointer: coarse) and (hover: none) {
+    .conn-tile.sess-tile .sess-lock { width: 26px; height: 26px; opacity: 1; }
+  }
+  /* Pending-review count on a session card. The card is where a session is seen
+     from the page, so it carries the count even though the decision is made in
+     the terminal's panel — otherwise a session nobody has open would sit on a
+     queued command silently. */
+  .conn-tile.sess-tile .sess-review {
+    margin-top: 3px; font-size: 0.6rem; font-weight: 600;
+    color: var(--danger); background: var(--danger-surface);
+    border: 1px solid var(--danger-border); border-radius: 10px; padding: 1px 6px;
+  }
+  .conn-tile.sess-tile .sess-review[hidden] { display: none; }
+  /* Sessions toolbar: always-visible select-all / delete-selected / clear-dead */
+  .icon-btn-sm { width: 28px; height: 28px; border-radius: 6px; }
+  .icon-btn-sm svg { width: 16px; height: 16px; }
+  .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .icon-btn .ic-checked { display: none; }
+  .icon-btn.all-checked .ic-empty { display: none; }
+  .icon-btn.all-checked .ic-checked { display: block; }
+  .batch-count {
+    font-size: .68rem; font-weight: 600; text-transform: none; letter-spacing: 0;
+    color: var(--accent); background: var(--accent-surface);
+    border: 1px solid var(--accent-border); border-radius: 10px; padding: 1px 7px;
+  }
+  .conn-tile.sess-tile.batch-selected {
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px var(--accent);
+    background: var(--accent-surface-soft);
+  }
+  /* The checkbox sits at the left of the name row, on the same line as the name
+     it selects. It used to be pinned to the icon's top-left corner, where it
+     read as belonging to the icon rather than to the session. */
+  .conn-tile.sess-tile .sess-name-row {
+    display: flex;
+    align-items: center;
+    /* Centred as a pair. The name sizes to its text (see .sess-entry-line), so
+       the two sit together and the group is what gets centred — centring the
+       text inside a full-width box instead strands the checkbox at the card's
+       left edge and reads as unrelated to the name. */
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 4px;
+  }
+  .conn-tile.sess-tile .sess-checkbox {
+    flex-shrink: 0;
+    width: 16px; height: 16px; margin: 0; padding: 0;
+    cursor: pointer; accent-color: var(--accent);
+  }
+  .conn-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .conn-tile { position: relative; text-align: center; user-select: none; }
+  /* Entry card: horizontal layout; address only in icon title */
+  .conn-tile.entry-card {
+    width: auto;
+    min-width: 188px;
+    max-width: 300px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 0;
+    box-shadow: 0 1px 3px var(--shadow-card-soft);
+    transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
+    text-align: left;
+  }
+  .entry-card-inner {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+  }
+  .conn-tile.entry-card .conn-tile-stack {
+    margin: 0;
+    flex-shrink: 0;
+    width: auto;
+  }
+  .entry-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .conn-tile.entry-card:active {
+    transform: translateY(-1px) scale(0.985);
+    box-shadow: 0 4px 14px var(--shadow-card);
+    transition-duration: 0.08s;
+  }
+  .entry-card-inner.entry-connecting {
+    opacity: 0.9;
+  }
+  .conn-tile.entry-card.entry-connecting {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ring), 0 10px 28px var(--shadow-card);
+    transform: translateY(-3px);
+  }
+  .conn-tile.entry-card:hover .conn-tile-stack > .icon-wrap {
+    transform: none;
+  }
+  /* Icon and dismiss (×) share positioning context */
+  .conn-tile-stack { position: relative; width: 72px; margin: 0 auto 8px; }
+  .conn-tile .conn-tile-stack > .icon-wrap {
+    width: 72px; height: 72px; margin: 0; border-radius: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 2rem; background: transparent; border: none;
+    box-shadow: none; transition: transform .12s, filter .12s;
+    cursor: pointer;
+  }
+  .conn-tile.entry-card .conn-tile-stack > .icon-wrap {
+    width: 52px;
+    height: 52px;
+    font-size: 1.45rem;
+    cursor: inherit;
+  }
+  .conn-tile.sess-tile:hover .conn-tile-stack > .icon-wrap {
+    transform: translateY(-2px);
+    filter: brightness(1.1);
+  }
+  .conn-tile.sess-tile .conn-tile-stack > .icon-wrap {
+    font-size: inherit;
+  }
+  .conn-tile .nm { font-size: 0.85rem; font-weight: 600; word-break: break-all; line-height: 1.2; color: var(--text-primary); cursor: default; }
+  .conn-tile.entry-card .conn-nm-row { margin-top: 0; justify-content: flex-start; align-items: center; }
+  /* Name + copy button hug each other; the edit button stays at the row's far right. */
+  .conn-tile.entry-card .conn-nm-cluster { display: flex; align-items: flex-start; gap: 4px; min-width: 0; flex: 1 1 auto; }
+  .conn-tile.entry-card .conn-nm { flex: 0 1 auto; }
+  /* Review-by-default marker: the same closed lock the session card uses for a
+     gated session, so one glyph means one thing in both places. Amber because
+     it is the state that needs attention, not a neutral caption.
+
+     It sits to the RIGHT of the ▶ launch button, as a peer of the row's other
+     controls, and is centered on the row's axis: the name wraps to several
+     lines, so an align-items:flex-start marker drifted to the top of the card
+     instead of lining up with the buttons beside it. */
+  .conn-tile.entry-card .conn-approval {
+    display: inline-flex; align-items: center; justify-content: center;
+    align-self: center; flex: 0 0 auto;
+    width: 22px; height: 22px;
+    color: var(--warning);
+  }
+  .conn-temporary-mark { align-self:center; font-size:.62rem; font-weight:700; color:var(--purple); letter-spacing:.03em; }
+  .host-batch-btn { font-size:.72rem; padding:3px 7px; }
+  /* Borderless copy button, mirroring the edit button's quiet look. */
+  .conn-tile.entry-card .sess-copy-btn { border: none; border-radius: 0; background: transparent; }
+  .conn-tile.entry-card .sess-copy-btn:hover { border: none; color: var(--accent); background: var(--accent-surface); }
+  .conn-nm-row { display: flex; align-items: flex-start; justify-content: center; gap: 4px; margin-top: 4px; max-width: 100%; }
+  .conn-nm { font-size: 0.9rem; font-weight: 600; word-break: break-all; line-height: 1.25; color: var(--text-primary); cursor: inherit; text-align: left; flex: 1; min-width: 0; }
+  .conn-nm:hover { color: inherit; }
+  .conn-edit-btn {
+    flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
+    background: transparent; cursor: pointer; color: var(--text-secondary);
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .conn-edit-btn svg { width: 14px; height: 14px; display: block; }
+  .conn-edit-btn:hover { color: var(--accent); background: var(--accent-surface); }
+  .conn-quick-btn {
+    flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
+    background: transparent; cursor: pointer; color: var(--success-dark);
+    position: relative; z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .conn-quick-btn:hover { color: var(--success-deep); background: var(--success-surface); }
+  .conn-tile .sub { font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2; max-height: 2.4em; overflow: hidden; }
+  .conn-tile.sess-tile { cursor: pointer; width: 128px; }
+  .sess-tile-body {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    margin-top: 4px;
+    max-width: 100%;
+  }
+  .sess-entry-line {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.2;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* Sizes to its text rather than to the leftover width, so the checkbox stays
+       next to the name. Still shrinks (0 1 auto + min-width:0) when the name is
+       too long, which is what lets the ellipsis above take effect. */
+    flex: 0 1 auto;
+    min-width: 0;
+    /* It is the rename control, so it gets the affordance of one: no text
+       selection, a pointer, and a focus ring for keyboard users. */
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
+  }
+  .sess-entry-line:hover { color: var(--accent); text-decoration: underline dotted; }
+  .sess-entry-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .sess-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .sess-sid-line {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    /* The id copies the session URL — it inherited that from the button that used
+       to sit next to it, since the id is already the thing you aim at. */
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
+  }
+  .sess-sid-line:hover { color: var(--accent); text-decoration: underline dotted; }
+  .sess-sid-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .sess-copy-btn {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 1;
+  }
+  .sess-copy-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-subtle); }
+  .sess-terminal-ic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 55px;
+    height: 55px;
+    background: var(--bg-card);
+    border-radius: 3px;
+    overflow: hidden;
+    line-height: 0;
+    box-sizing: border-box;
+  }
+  .sess-terminal-ic img.terminal-shell-icon {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+  }
+  /* Flex row so the message wraps and the dismiss button keeps its own column at
+     the end. Visible state is applied inline (display:flex) because an inline
+     declaration outranks any class rule here, so the hide/show has to live in
+     the same place setLoadBanner writes it. */
+  .conn-load-banner { display: none; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; background: var(--warning-surface); border: 1px solid var(--warning-border); color: var(--text-primary); font-size: 0.85rem; }
+  .conn-load-banner-close {
+    flex-shrink: 0; width: 22px; height: 22px; padding: 0; margin-left: auto;
+    border: none; border-radius: 4px; background: transparent;
+    color: var(--text-secondary); cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+  }
+  .conn-load-banner-close:hover { background: var(--surface-hover-soft); color: var(--text-primary); }
+  #ui-copy-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    padding: 7px 14px;
+    font-size: 13px;
+    color: var(--text-bright);
+    background: var(--toast-bg);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px var(--shadow-soft);
+    z-index: 25000;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  #ui-copy-toast.ui-copy-toast-visible { opacity: 1; }
+  /* Server-pushed user notifications (MCP notify_user): toast stack, top-right. */
+  #ui-notify-stack {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(340px, calc(100vw - 28px));
+    max-height: calc(100dvh - 28px);
+    z-index: 26000;
+    pointer-events: none;
+  }
+  .ui-notify-card {
+    position: relative;
+    pointer-events: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px var(--shadow-card);
+    padding: 10px 30px 12px 12px;
+    overflow: hidden;
+    animation: uiNotifyIn .2s ease;
+  }
+  @keyframes uiNotifyIn {
+    from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: none; }
+  }
+  .ui-notify-card.ui-notify-out { opacity: 0; transform: translateX(24px); transition: opacity .18s ease, transform .18s ease; }
+  /* A notification that names a session is a link to it. The affordance is
+     limited to those entries: one without a session has nowhere to go, so it
+     must not look clickable. */
+  .ui-notify-card.ui-notify-clickable { cursor: pointer; }
+  .ui-notify-card.ui-notify-clickable:hover { border-color: var(--border-strong); box-shadow: 0 10px 28px var(--shadow-card-hover); }
+  .ui-notify-card.ui-notify-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ui-notify-card.ntf-success { border-left-color: var(--success-dark); }
+  .ui-notify-card.ntf-warn { border-left-color: var(--warning); }
+  .ui-notify-card.ntf-error { border-left-color: var(--danger); }
+  .ui-notify-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; word-break: break-word; }
+  .ui-notify-msg { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+  .ui-notify-sess { font-size: 0.68rem; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono); word-break: break-all; }
+  .ui-notify-close {
+    position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
+    border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+  }
+  .ui-notify-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+  .ui-notify-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--overlay-scrim); transform-origin: left center; }
+  /* Highlight the card of a session referenced by a notification; cleared on click. */
+  .conn-tile.sess-tile.sess-notified { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; animation: sessNotifiedPulse 1.4s ease-in-out infinite; }
+  @keyframes sessNotifiedPulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 5px var(--accent-ring); }
+  }
+  .shell-window.shell-window-notified .shell-window-header { animation: shellHeaderFlash 1.2s ease-in-out 3; }
+  @keyframes shellHeaderFlash {
+    0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+    50% { box-shadow: inset 0 0 0 2px var(--accent); }
+  }
+  .conn-tile .conn-tile-stack .sess-x {
+    position: absolute; right: -3px; top: 2px; z-index: 3; width: 25px; height: 25px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 4px;
+    background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px var(--shadow-soft); opacity: .95; transition: background .12s, color .12s, border-color .12s, opacity .12s;
+  }
+  .conn-tile .conn-tile-stack .sess-x:hover { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); opacity: 1; }
+
+  /* Modals are a layer above page content, so they outrank every surface that
+     can open one: the entries drawer and its scrim (24000/23900), the
+     full-screen terminal (21000) and the session tab bar (20000). The
+     edit-connection dialog is reachable from all of them, so anything lower
+     would open a dialog underneath the surface that opened it.
+
+     Still below the toasts (25000) and the notify stack (26000), which was
+     already the case when this sat at 20000: a server-pushed notify_user
+     message hidden behind a dialog is exactly the message the user was meant to
+     see, so a dialog must not be able to swallow it. */
+  .modal-backdrop { position: fixed; inset: 0; background: var(--overlay-modal); z-index: 24500; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-backdrop.hidden { display: none; }
+  .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; max-width: 720px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 16px 48px var(--shadow-modal); }
+  .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); }
+  .modal-h h2 { margin: 0; font-size: 1rem; color: var(--text-primary); }
+  .modal-body { padding: 8px 24px; }
+  .modal-body label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
+  .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary); margin-bottom: 12px; }
+  .modal-body textarea { min-height: 220px; font-family: var(--font-mono); font-size: 12px; }
+  .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 8px; }
+  /* Close affordances and small print. These used to carry literal hex colours
+     in inline style attributes, which is how a light-theme grey (#1f2328, ~1.2:1
+     on this plate) survived the dark conversion and made a dialog body read as
+     blank. Colour belongs to the theme, not to the markup. */
+  .modal-x {
+    width: 28px; height: 28px; padding: 0; border: none; border-radius: 4px;
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-x:hover { color: var(--text-bright); background: var(--accent-surface); }
+  .modal-msg { margin: 0 0 4px; color: var(--text-primary); font-size: .9rem; word-break: break-word; }
+  .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
+  .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
+  .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
+

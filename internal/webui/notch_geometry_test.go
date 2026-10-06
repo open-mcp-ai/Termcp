@@ -45,7 +45,7 @@ func ruleContaining(t *testing.T, css, marker string) string {
 // The stroke's size and position are derived from the knobs, so retuning the notch
 // means moving the knobs and nothing else.
 func TestNotchGeometryMatchesItsKnobs(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	knob := func(name string) float64 {
 		t.Helper()
@@ -184,7 +184,7 @@ func TestNotchGeometryMatchesItsKnobs(t *testing.T) {
 // boxes, not on the shape rule. The plate's clip is decoration; padding/margins are
 // layout and belong to the things inside it.
 func TestNotchedPlatesKeepContentClearOfTheNotch(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	for _, want := range []string{
 		".modal-body { padding: 8px 16px; }",
 		".workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }",
@@ -216,7 +216,7 @@ func TestNotchedPlatesKeepContentClearOfTheNotch(t *testing.T) {
 // silently kept an older shape. Every element that draws the corner — the plates
 // and the keys alike — has to read from ONE clip-path declaration.
 func TestPlateShapeDeclaredOnce(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	if n := strings.Count(css, "clip-path:"); n != 1 {
 		t.Errorf("app.css declares %d clip-paths; the corner shape must be declared once "+
 			"and shared through its knobs, or the copies drift apart", n)

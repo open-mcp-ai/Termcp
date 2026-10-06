@@ -344,7 +344,7 @@ func TestShellActivityIsWired(t *testing.T) {
 		}
 	}
 	// The tab must carry the chip node, and the language switch must repaint it.
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	if !strings.Contains(tv, "shell-channel-tab-state") {
 		t.Error("terminal-view.js no longer renders the channel status chip")
 	}

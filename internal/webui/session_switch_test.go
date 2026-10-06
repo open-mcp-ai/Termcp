@@ -25,9 +25,9 @@ import (
 // restored by anything.
 func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
 	shellWins := readAssetLF(t, "static/js/shell-windows.js")
-	termView := readAssetLF(t, "static/js/terminal-view.js")
+	termView := readTerminalJS(t)
 	sessions := readAssetLF(t, "static/js/sessions.js")
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	// One menu singleton, rebuilt per open, rather than a node per window.
 	if !strings.Contains(termView, "var _sessionSwitchMenu = null;") {
@@ -69,7 +69,7 @@ func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
 // on touch devices: on desktop the session tab bar already switches sessions, so
 // clicking the glyph must do nothing there.
 func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
-	termView := readAssetLF(t, "static/js/terminal-view.js")
+	termView := readTerminalJS(t)
 	setup := between(t, termView, "function setupMobileSessionSwitcher", "\n}\n")
 
 	if !strings.Contains(setup, ".shell-header-icon") {
@@ -82,7 +82,7 @@ func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
 	}
 
 	// The old standalone hamburger must be gone.
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	if strings.Contains(css, ".shell-window-switch-btn") || strings.Contains(termView, "shell-window-switch-btn") {
 		t.Error("the standalone switch button should be replaced by the header glyph")
 	}
@@ -151,7 +151,7 @@ func TestFocusSessionWindowNormalisesState(t *testing.T) {
 }
 
 func TestMinimizedCSSCannotBeConfusedWithHidden(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	if !strings.Contains(css, ".shell-window.win-minimized") {
 		t.Error("css should define .shell-window.win-minimized")
 	}
@@ -184,7 +184,7 @@ func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
 
 	// The constant has to sit between the tab bar and the drawer, or the
 	// terminal hides the drawer (or sinks behind the tab bar).
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	full := between(t, css, ".shell-window.win-fullscreen {", "}")
 	if !strings.Contains(full, "z-index: 21000") {
 		t.Errorf("the stylesheet full-screen z-index should be 21000; got %q", strings.TrimSpace(full))
@@ -200,7 +200,7 @@ func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
 // another session or reach another profile, so the pending window needs the same
 // wiring as a connected one.
 func TestPendingWindowHasWorkingHeaderControls(t *testing.T) {
-	termView := readAssetLF(t, "static/js/terminal-view.js")
+	termView := readTerminalJS(t)
 	pending := between(t, termView, "function openPendingShellWindow", "\n}\n")
 
 	for _, want := range []string{
@@ -392,7 +392,7 @@ func between(t *testing.T, src, marker, end string) string {
 // string changes — assert the two agree instead of pinning either spelling.
 func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 	util := readAssetLF(t, "static/js/util.js")
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	banner := between(t, util, "function setLoadBanner", "\n}\n")
 	if !strings.Contains(banner, "conn-load-banner-close") {
@@ -447,7 +447,7 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 // it. Nothing errors when that happens — the class is removed and the dialog is
 // briefly in the DOM and invisible — so it is pinned here instead.
 func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	z := func(sel string) int {
 		t.Helper()
 		// A selector can appear in several rules (e.g. .drawer-scrim is first
@@ -490,7 +490,7 @@ func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
 // selectors are in the narrow media query and the JS keeps that breakpoint in
 // step with its own layout decision.
 func TestNetHubIsAResponsiveResourceSidebar(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	index := readAssetLF(t, "index.html")
 	forms := readAssetLF(t, "static/js/conn-form.js")
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
@@ -543,7 +543,7 @@ func TestNetHubIsAResponsiveResourceSidebar(t *testing.T) {
 // runtime state, address metadata and session count, while the rail keeps state
 // dots and the active-node mark when the body is collapsed.
 func TestNetHubCardsKeepNodeAndSessionHierarchy(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
 	for _, want := range []string{
 		"node-lamp", "node-proto", "node-status", "node-addr", "node-sess",
@@ -572,7 +572,7 @@ func TestNetHubCardsKeepNodeAndSessionHierarchy(t *testing.T) {
 // under the scrim, and node cards share the host-card rail and corner instead of
 // being excluded from them.
 func TestNetHubRegressionFixes(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
 	ui := readAssetLF(t, "static/js/ui-socket.js")
 
@@ -623,7 +623,7 @@ func TestNetHubRegressionFixes(t *testing.T) {
 // card would only add work: a 22-session list would pay 22 filters for the same
 // pixels.
 func TestWorkspaceSurfacesAreTranslucent(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	plate := between(t, css, ".workspace-sessions {", "}")
 	if !strings.Contains(plate, "background-color: var(--glass-plate)") {
@@ -671,7 +671,7 @@ func TestWorkspaceSurfacesAreTranslucent(t *testing.T) {
 // by replacing one file, with the stylesheet pointing at it through a variable
 // rather than growing an effect of its own.
 func TestBackdropIsAFixedDropInLayer(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	index := readAssetLF(t, "index.html")
 
 	if !strings.Contains(index, `class="page-backdrop"`) {
@@ -761,7 +761,7 @@ func TestBackdropIsAFixedDropInLayer(t *testing.T) {
 // only correct way to give it the corner is to name it in the shared rules — a
 // clip-path of its own would be a second shape waiting to drift.
 func TestAddControlCarriesThePlateCorner(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	notchRule := ruleContaining(t, css, "--notch-run:")
 	strokeRule := ruleContaining(t, css, "background-position:")
 	for _, rule := range []struct{ name, body string }{{"corner", notchRule}, {"edge strokes", strokeRule}} {
@@ -787,7 +787,7 @@ func TestAddControlCarriesThePlateCorner(t *testing.T) {
 // that the list owns its content height and the control follows the last entry,
 // which is why the list's flex is `0 1 auto` and not `1 1 auto`.
 func TestAddControlIsTheDrawersBottomAction(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	rule := between(t, css, ".drawer-add {", "}")
 	for _, want := range []string{"flex: 0 0 auto", "align-items: center", "justify-content: center"} {
 		if !strings.Contains(rule, want) {
@@ -838,7 +838,7 @@ func TestAddControlIsTheDrawersBottomAction(t *testing.T) {
 // tile's open handler must ignore clicks that land on it.
 func TestSessionTileNameRenamesAndCheckboxSitsOnItsRow(t *testing.T) {
 	sessions := readAssetLF(t, "static/js/sessions.js")
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	// The checkbox is inside the name row, not the icon stack.
 	if !strings.Contains(sessions, `'<div class="sess-name-row">' +`) {

@@ -1,0 +1,576 @@
+/* ---- Ghost buttons ---------------------------------------------------- */
+.btn { transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease; }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible, .icon-btn:focus-visible, .lang-btn:focus-visible {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+.btn-danger:hover {
+  background: linear-gradient(180deg, var(--danger-hover), var(--danger));
+  border-color: var(--danger-hover); color: var(--text-on-accent);
+}
+.btn-primary:hover { box-shadow: 0 0 0 3px var(--success-surface); }
+
+/* ---- Cards: hairline in, glow on hover -------------------------------- */
+.conn-tile.entry-card {
+  border-radius: 10px;
+  transition: background .16s ease, box-shadow .2s ease, transform .2s ease, border-color .16s ease;
+}
+.conn-tile.entry-card:hover {
+  transform: translateY(-2px); border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 10px 26px var(--shadow-card-hover);
+}
+.conn-tile.entry-card:active { transform: translateY(0) scale(.99); }
+.conn-tile.sess-tile {
+  padding: 10px 8px 8px;
+  background-color: var(--glass-tile);
+  border-radius: 10px; transition: background .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:hover {
+  background-color: var(--bg-card-hover);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 8px 20px var(--shadow-card);
+}
+/* Archived cards keep their dimmer read while staying translucent: the fill
+   changes, not the plate's, so one archived card never darkens its neighbours. */
+.conn-tile.sess-tile.archived { background-color: var(--glass-archived); }
+.conn-tile.sess-tile.batch-selected {
+  background: var(--accent-surface-soft);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.batch-trash[hidden] { display: none; }
+.sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
+
+/* ---- Live session lamp ------------------------------------------------ */
+.conn-tile.sess-tile .sess-status-ic.is-live {
+  background: var(--success-dark); box-shadow: 0 0 6px var(--live-glow);
+  animation: sessLivePulse 2.8s ease-in-out infinite;
+}
+.conn-tile.sess-tile .sess-status-ic.is-dead { background: var(--danger); }
+@keyframes sessLivePulse {
+  0%, 100% { box-shadow: 0 0 4px var(--live-glow); opacity: .85; }
+  50% { box-shadow: 0 0 9px var(--live-glow); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conn-tile.sess-tile .sess-status-ic.is-live { animation: none; opacity: 1; }
+  .conn-tile.entry-card:hover, .conn-tile.entry-card:active { transform: none; }
+  /* A breathing backdrop is decoration: at rest it simply stays at its brighter
+     value, so nothing about the page's contrast changes. */
+  .page-backdrop { animation: none; opacity: 1; }
+}
+
+/* ---- Inputs and overlays ---------------------------------------------- */
+.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
+.conn-field input:focus, .conn-field select:focus, .conn-field textarea:focus {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.modal-body input, .modal-body textarea, .modal-body select,
+.conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
+.modal { background: var(--bg-elevated); }
+.modal-h { background: var(--bg-card); }
+.modal-h h2 { color: var(--text-bright); font-weight: 600; }
+
+/* No native scrollbars anywhere on the page layer: an OS-grey track in a neon
+   panel reads as a rendering bug. Scrolling still works (wheel, trackpad, touch,
+   keyboard); what disappears is the bar itself. The drawer's host list replaced
+   #sec-entries-body in this list when the drawer itself stopped scrolling. */
+.workspace-sessions .section-body, #conn-grid, .modal, .modal-body,
+.modal-body textarea, #ui-notify-stack, .lang-menu {
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.workspace-sessions .section-body::-webkit-scrollbar, #conn-grid::-webkit-scrollbar,
+.modal::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .modal-body textarea::-webkit-scrollbar,
+#ui-notify-stack::-webkit-scrollbar, .lang-menu::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* The .drawer-* selectors below keep their historic names: they are the body,
+   toolbar, close key and add action of #sec-entries-body, which on desktop is
+   NetHub's column rather than a page-level drawer. */
+
+/* Inside the drawer the entries are list rows, one per line, at every viewport —
+   the same shape a phone gets. The drawer is a fixed 360-420px slab whatever the
+   screen is, so the wide-screen card sizing (188-300px, wrapping two per row)
+   would pack the drawer with ragged half-width cards and no reading order.
+
+   Scoped to #conn-grid: the session grid keeps its compact wrapping cards. */
+#conn-grid .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+
+/* The terminal's own chrome tokens. Surfaces, hairlines and greys are the
+   terminal's own (a floating window needs its own depth ramp), but every HUE the
+   two share is the page's, taken by reference — so the terminal and the page
+   cannot drift apart, and restyling the page restyles the terminal. Naming the
+   page token instead of repeating its hex is the point: a literal here is a
+   second palette waiting to go stale. */
+:root, .shell-windows-container, .term-rail, .session-tabbar, #pane-workspace, .shell-file-ctx-menu {
+  --term-accent: var(--accent);
+  --term-bg: var(--bg-card);
+  --term-black-35: rgba(0,0,0,.35);
+  --term-black-4: rgba(0,0,0,.4);
+  --term-black-5: rgba(0,0,0,.5);
+  --term-border: #1E2E3C;
+  --term-border-2: #24384A;
+  --term-border-3: #1A2836;
+  --term-border-4: #2C4256;
+  --term-border-5: #2A3E50;
+  --term-border-hover: #35506A;
+  --term-border-hover-2: #3E5C78;
+  --term-current: #0E3A46;
+  --term-danger: var(--danger);
+  --term-danger-16: var(--danger-surface);
+  --term-danger-2: var(--danger);
+  --term-danger-6: var(--danger-strong-surface);
+  --term-danger-deep: var(--danger-surface);
+  --term-danger-deep-2: var(--danger-surface);
+  --term-danger-soft: var(--danger-soft);
+  --term-danger-soft-2: var(--danger-soft);
+  --term-danger-soft-5: var(--danger-border);
+  --term-deep: var(--bg-canvas);
+  --term-fab-92: rgba(19,33,46,.92);
+  --term-fab-hover-96: rgba(34,55,74,.96);
+  --term-fg: #ccc;
+  --term-fg-bright: #eee;
+  --term-fg-dim: #d4d4d4;
+  --term-fg-faint: #7E93A8;
+  --term-fg-faint-2: #888;
+  --term-fg-faint-3: #999;
+  --term-fg-faint-4: #aaa;
+  --term-fg-mid: #c9d1d9;
+  --term-fg-muted: #8b949e;
+  --term-fg-soft: #e6edf3;
+  --term-fg-soft-2: #e0e0e0;
+  --term-fg-white: #fff;
+  --term-fg-white-2: #f0f6fc;
+  --term-hover: #1B2C3B;
+  --term-hover-2: #22374A;
+  --term-hover-3: #101D28;
+  --term-neutral-16: rgba(139,148,158,.16);
+  --term-neutral-4: rgba(139,148,158,.4);
+  --term-pane-72: rgba(8,17,26,.72);
+  --term-panel: #0C1721;
+  --term-panel-94: rgba(12,23,33,.94);
+  --term-success: var(--success);
+  --term-success-16: var(--success-surface);
+  --term-success-3: var(--success);
+  --term-success-5: var(--success-border);
+  --term-success-bright: var(--success-bright);
+  --term-success-deep: var(--success-deep);
+  --term-success-soft: var(--success-hover);
+  --term-surface: #13212E;
+  --term-warning: var(--warning);
+  --term-warning-16: var(--warning-surface);
+  --term-warning-22: var(--warning-surface-strong);
+  --term-warning-bright: var(--warning-bright);
+  --term-white-04: rgba(255,255,255,.04);
+  --term-white-06: rgba(255,255,255,.06);
+  --term-white-08: rgba(255,255,255,.08);
+  --term-white-1: rgba(255,255,255,.1);
+  --term-white-12: rgba(255,255,255,.12);
+  --term-white-18: rgba(255,255,255,.18);
+  --term-white-2: rgba(255,255,255,.2);
+  /* The rail's four states: who wrote a row. Named for that state and reading
+     the palette directly — never through an unrelated page state such as
+     --danger, whose name would put the wrong word in a reader's head. */
+  --term-rail-output: var(--green-bright);
+  --term-rail-input: var(--yellow);
+  --term-rail-agent: var(--pink);
+  --term-rail-review: var(--purple);
+  /* Glass chrome and a translucent terminal.
+
+     The page behind a floating terminal is near-black and mostly flat, so a
+     *darker* tint over it reads as nothing at all — blurring black leaves black.
+     The frost therefore lifts the surface instead of darkening it: a cool
+     translucent white that catches ambient light, plus a bright top hairline.
+     Those two are what the eye reads as glass on a dark UI. */
+  /* Opacity knobs: xterm itself is 0 alpha. The terminal body stacks frost and
+     tint, so effective coverage is 1 - (1 - frost) * (1 - tint) ≈ 11.7% here.
+     Lower both numbers for more see-through; raise them only if text loses
+     contrast. */
+  --term-glass-frost: rgba(126, 176, 232, .08);
+  --term-glass-tint: rgba(150, 196, 255, .04);
+  --term-glass-surface: rgba(160, 205, 255, .07);
+  --term-glass-edge: rgba(255, 255, 255, .16);
+  --term-glass-border: rgba(255, 255, 255, .16);
+  --term-glass-shadow: rgba(0, 0, 0, .56);
+}
+
+/* ---- Cyberpunk panel treatment ------------------------------------------
+   The quickhack screen's language, applied to the workspace: near-black plates,
+   cyan neon hairlines, a cut corner instead of a radius, mono uppercase labels,
+   and a left edge that lights up when a row is live. All of it is decoration on
+   top of the structure above — removing this block leaves a working page. */
+
+/* CP2077 quickhack plates.
+
+   The top-right corner is a real 45° cut, and its edge is still DRAWN — that is
+   the part that reads as a fabricated plate rather than a clipped box. clip-path
+   alone cannot do that: it clips the element's own border away, so the two
+   diagonal edges are painted as background layers instead. Backgrounds do not
+   scroll with an element's contents, so the lines stay put in the scrolling
+   panels (.modal, the drawer) where a positioned pseudo-element would slide away.
+
+   The bottom-left notch is the plates' fold: the lower left wall steps in at 45°.
+   It belongs to the shape, so every plate carries it — see the single rule below,
+   which is also the only place the corner geometry is declared. */
+
+/* Every fabricated plate shares ONE outline rule: the top-right 45° cut and the
+   bottom-left fold together. Keeping the cut and the notch in a single rule is the
+   point — when they lived in two rules with different selector lists, the plates
+   only named in one of them (conn-load-banner, the session tiles, the jump card,
+   the approval rows, the notify cards, the drawer) silently kept the old origin
+   shape with a square bottom-left corner.
+
+   The notch is a fold, not a corner cut. The left wall runs straight down to
+   --notch-left, steps in and down at 45° over --notch-run, and drops straight to
+   the bottom edge at that new x. Two knobs, and everything else is derived:
+     --notch-left   how far up the LEFT edge the fold sits, as a share of height
+     --notch-run    how far the wall is inset: the step's run AND its rise
+   A 45° step is what makes the fold drawable as a stroke — the step is the
+   diagonal of a square --notch-run box, the one box a 45° gradient paints as the
+   step at every panel size. (The shape this replaced ran its diagonal from the
+   fold all the way to the bottom edge, so its slope was a fraction of the panel's
+   height and drifted with the panel's aspect ratio.)
+
+   Two of the notch's edges need no stroke of their own: above the fold the left
+   wall is the plate's own border, and right of the notch the bottom edge is too.
+   What the clip removes is padding, so the guards below are the only layout side
+   effect.
+
+   The batch keys are named by two classes, not one. They are `.btn`s, and `.btn`
+   sets a clip-path and a background shorthand of its own: a bare `.host-batch-btn`
+   ties with `.btn` on specificity and loses on source order, so the chip's corner
+   would paint over the plate's — which is what "the notch does nothing on these
+   buttons" looked like. Two classes outrank `.btn` wherever these rules sit.
+
+   Scope: only wide containers with a bounded height. A notch is a corner treatment
+   for a plate that reads as a plate — a session card is nearly square (128x132),
+   an approval row's height follows its command, the jump editor's follows its
+   fields, and the host drawer is full-height, so the clipped wall would cut into
+   their content. Those keep a plain rectangular plate. The add control is a plate
+   of its own: a full-width, 40px-tall action bar, which is exactly the wide,
+   bounded shape the treatment is for.
+
+   A node card inherits this shape like any other host card: it is a wide, bounded
+   plate with the state rail on its left, so it wears the same corner. Nothing
+   here may restate the shape for it — a second clip-path is how the plates
+   drifted apart once already.
+
+   The keys share the declaration too, with the fold switched off below: one
+   clip-path in this file, not one per component, so the corner cannot drift. */
+.workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
+.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn, .icon-btn {
+  --cut: 14px;
+  --notch-left: 50%;
+  --notch-run: 8px;
+  --panel-line: var(--border-strong);
+  --cut-line: linear-gradient(45deg,
+    transparent 47.4746%, var(--panel-line) 47.4746%,
+    var(--panel-line) 52.5254%, transparent 52.5254%);
+  /* The step's stroke. The layer is the square whose top-left corner IS the fold,
+     so its main diagonal — what a 45deg band at 50% paints — is the step, and a
+     1px band on it stays 1px wide and on the step at every panel size.
+
+     The half-run is not padding, it is a correction: a percentage in
+     background-position is measured against (positioning area - image), not
+     against the area, so `top: var(--notch-left)` would land the square half its
+     own height too high and the stroke would draw above the clip — i.e. vanish.
+     Adding half a run back cancels exactly that term, whatever the panel's size.
+     (The wall's stroke needs no correction: its offset is a length.) */
+  --notch-line: linear-gradient(45deg,
+    transparent calc(50% - .5px), var(--panel-line) calc(50% - .5px),
+    var(--panel-line) calc(50% + .5px), transparent calc(50% + .5px));
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--cut)) 0,
+    100% var(--cut),
+    100% 100%,
+    var(--notch-run) 100%,
+    var(--notch-run) calc(100% - var(--notch-left) + var(--notch-run)),
+    0 calc(100% - var(--notch-left))
+  );
+  border-radius: 0;
+}
+
+/* Content inset, not plate decoration. The clipped wall is a shape, so it must
+   not carry layout: putting padding on the shape rule would drag every plate into
+   the same inset, including ones whose own padding is part of their look. These
+   are the content boxes that sit against a notched wall. */
+.modal-body { padding: 8px 16px; }
+.workspace-sessions, .modal, #sec-entries-body {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-10), 0 0 0 1px rgba(var(--cyan-rgb), .08),
+              0 18px 48px var(--shadow-modal);
+}
+
+/* Section titles become terminal read-outs: mono, uppercase, tracked out, with a
+   cyan tick on the left and the breaker's corner marks on the right. */
+.workspace-sessions .section-header {
+  font-family: var(--font-mono); font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .16em; color: var(--accent);
+  border-bottom: 1px solid var(--border-subtle);
+  background-image: linear-gradient(90deg, var(--accent-surface-soft), transparent 55%);
+}
+.workspace-sessions .section-header::before {
+  content: ''; width: 3px; height: 14px; margin-right: 2px; flex: 0 0 auto;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.workspace-sessions .section-header:hover { background-image: linear-gradient(90deg, var(--accent-surface), transparent 60%); }
+
+/* Host cards: a hacker's target list. The left rail is the row's state, the
+   label carries the name, and the host line is mono so addresses line up. */
+.conn-tile.entry-card {
+  border-left: 0; padding-left: 14px;
+  background: linear-gradient(90deg, var(--bg-card-hover), var(--bg-card) 42%);
+}
+.conn-tile.entry-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--border-strong);
+}
+.conn-tile.entry-card:hover { border-color: var(--accent-border); }
+.conn-tile.entry-card:hover::before { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.conn-nm, .conn-tile .nm { font-family: var(--font-mono); letter-spacing: .01em; color: var(--text-bright); }
+.conn-tile .sub, .sess-sid-line { font-family: var(--font-mono); }
+
+/* Session tiles: read them like records. Name in mono, the id as a dim read-out,
+   and a cyan rail that lights on hover so the card reads as "selected target". */
+.conn-tile.sess-tile::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent 70%);
+  opacity: 0; transition: opacity .18s ease;
+}
+.conn-tile.sess-tile:hover::after { opacity: 1; }
+.conn-tile.sess-tile .sess-entry-line { font-family: var(--font-mono); color: var(--text-bright); }
+.conn-tile.sess-tile .sess-entry-line:hover { color: var(--accent); text-shadow: 0 0 10px var(--accent-ring); }
+
+/* Numbers and state chips: breaker yellow, mono, tabular. Yellow is reserved for
+   quantities — it is the one hue the rest of the chrome does not use. */
+.batch-count, .app-version, .conn-temporary-mark {
+  font-family: var(--font-mono); color: var(--warning);
+  background: var(--warning-surface); border: 1px solid var(--warning-border);
+  text-transform: uppercase; letter-spacing: .08em;
+}
+.batch-count { border-radius: 0; padding: 1px 6px; }
+.app-version { background: none; border: none; color: var(--warning-deep); }
+.conn-temporary-mark { border: none; background: none; color: var(--orange); }
+.conn-tile.sess-tile .sess-review {
+  font-family: var(--font-mono); border-radius: 0; text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+/* Buttons: a breaker's keys. Flat plate, cyan hairline, cyan label; the primary
+   key is the only filled one and it is yellow-black, like a confirm prompt. */
+/* A key is the same outline with the fold off: a 20-34px control has no room for
+   a notch, so both knobs go to zero and the polygon degenerates to the cut corner
+   every button already had. The zeros carry UNITS: a bare `0` makes
+   `calc(100% - var(--notch-left) + var(--notch-run))` a percentage-minus-number,
+   which is invalid and takes the whole clip-path down with it.
+   `.drawer-toolbar .host-batch-btn` outranks this and opts back into the full
+   plate. */
+.btn { --cut: 7px; --notch-left: 0%; --notch-run: 0px; }
+.icon-btn { --cut: 6px; --notch-left: 0%; --notch-run: 0px; }
+
+.btn {
+  font-family: var(--font-mono); font-size: .78rem; letter-spacing: .04em;
+  text-transform: uppercase; border-radius: 0; border-color: var(--border-strong);
+  background: var(--bg-elevated); color: var(--accent);
+}
+.btn:hover { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
+.btn-primary {
+  background: var(--warning); border-color: var(--warning);
+  color: var(--text-on-accent); font-weight: 700;
+}
+.btn-primary:hover { background: var(--warning-bright); border-color: var(--warning-bright); box-shadow: 0 0 18px var(--warning-surface-strong); }
+.btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+.btn-danger:hover { background: var(--danger); border-color: var(--danger); color: var(--text-on-accent); }
+.icon-btn { border-radius: 0; }
+
+/* The header is a HUD strip: thin, cold, with a hairline that glows. */
+.app-header {
+  border-bottom: 1px solid var(--accent-border);
+  box-shadow: 0 1px 0 rgba(var(--cyan-rgb), .12), 0 8px 28px rgba(0, 0, 0, .5);
+}
+.app-header h1 { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .18em; color: var(--text-bright); }
+.app-header-nav a, .lang-btn { border-radius: 0; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.lang-menu { border-radius: 0; border-color: var(--accent-border); box-shadow: 0 0 0 1px rgba(var(--cyan-rgb), .1), 0 18px 40px var(--shadow-dropdown); }
+.lang-opt.active { background: var(--warning); color: var(--text-on-accent); }
+
+/* The live lamp is the one breathing thing on the page: cyan now, not green. */
+.conn-tile.sess-tile .sess-status-ic.is-live {
+  background: var(--accent); box-shadow: 0 0 7px var(--live-glow);
+  animation: sessCyanPulse 2.6s ease-in-out infinite;
+}
+@keyframes sessCyanPulse {
+  0%, 100% { box-shadow: 0 0 4px var(--live-glow); opacity: .8; }
+  50% { box-shadow: 0 0 12px var(--live-glow); opacity: 1; }
+}
+
+/* Inputs: dark wells with a cyan focus edge, no rounding. */
+.modal-body input, .modal-body textarea, .modal-body select,
+.conn-field input, .conn-field select, .conn-field textarea {
+  border-radius: 0; border-color: var(--border-subtle); background: var(--bg-input);
+  font-family: var(--font-mono); color: var(--text-bright);
+}
+.modal-body label, .conn-field label, .conn-check-hint {
+  font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; font-size: .68rem;
+}
+.modal-h { border-bottom: 1px solid var(--accent-border); background: linear-gradient(90deg, var(--accent-surface-soft), transparent 60%); }
+.modal-h h2 { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .12em; font-size: .86rem; color: var(--accent); }
+.modal-backdrop { background: var(--overlay-modal); backdrop-filter: blur(4px); }
+
+/* Notifications and the approval queue follow the same plate language. */
+.ui-notify-card { border-left-width: 3px; background: var(--bg-elevated); }
+.ui-notify-title { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--text-bright); }
+.approval-code { border-radius: 0; background: var(--bg-input); border-color: var(--border-subtle); }
+.approval-chip, .approval-src, .approval-kind { border-radius: 0; font-family: var(--font-mono); letter-spacing: .06em; }
+.approval-chip { background: var(--cyan-surface); border-color: var(--cyan-border); color: var(--cyan); }
+
+/* The drawn edges of the CP2077 plates.
+
+   This block is last on purpose: a `background` shorthand anywhere above resets
+   background-image, so the diagonal layers have to be applied after every rule
+   that paints a panel. background-origin: border-box is what anchors them to the
+   border box — the clipped corner is measured from there, so padding-box origin
+   would leave the line floating off the cut. */
+.workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
+.conn-load-banner, .jump-card.jump-summary, .drawer-toolbar .host-batch-btn {
+  /* Three explicit strokes: the top-right \ chamfer, the notch's 45° step, and the
+     vertical that carries the inset wall down to the bottom edge. Nothing is drawn
+     along the bottom edge itself: right of the notch it is the plate's own border,
+     and inside the notch it is clipped away.
+
+     Both notch layers are derived from the knobs. The step is the square whose
+     top-left corner sits on the fold, so its diagonal — what the 45deg band paints
+     — IS the step. The vertical is a 1px unit on the bottom edge, as tall as the
+     wall it draws: the fold is --notch-left up from the bottom, and the step takes
+     its run off that.
+
+     Positions use the four-value syntax on purpose. With `left calc(100% - Npx)`
+     the offset is measured against (container - image), exactly as the step's
+     `top` percentage is — which is what put both lines in the wrong place. */
+  background-image:
+    var(--cut-line),
+    var(--notch-line),
+    linear-gradient(90deg, var(--panel-line), var(--panel-line));
+  background-repeat: no-repeat;
+  background-position:
+    right 0 top 0,
+    left 0 top calc(var(--notch-left) + var(--notch-run) / 2),
+    left var(--notch-run) bottom 0;
+  background-size:
+    var(--cut) var(--cut),
+    var(--notch-run) var(--notch-run),
+    1px calc(var(--notch-left) - var(--notch-run));
+  background-origin: border-box;
+  background-clip: border-box;
+}
+
+/* ---- Product console refinement -----------------------------------------
+   Small, state-first adjustments only. The existing Blackwall, floating windows
+   and notched plates remain the visual system; this layer gives them a quieter
+   depth ramp and makes the current state legible before the detail is read. */
+
+/* A floating window is a surface in the workspace, not a red alarm frame. The
+   active window gets a cool lift and a restrained edge; approval remains the only
+   persistent urgent cue. The :not() is load-bearing: a full-screen window sets
+   border: none and box-shadow: none, and this rule has the same specificity but
+   comes later, so without it a phone terminal would grow a cyan frame. */
+.shell-window.win-active:not(.win-fullscreen) {
+  border-color: rgba(var(--cyan-rgb), .42);
+  box-shadow: inset 0 1px 0 var(--term-glass-edge),
+              0 0 0 1px rgba(var(--cyan-rgb), .08),
+              0 24px 64px var(--term-glass-shadow);
+}
+/* The notify pulse stays: it is how a session that needs attention is found. The
+   hairline is added under it as the resting mark, so a window stays recognisable
+   once the three pulses are over. */
+.shell-window.shell-window-notified .shell-window-header::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 1px; background: var(--term-accent); opacity: .8;
+}
+.shell-window-header { position: relative; }
+.shell-window-title .sw-conn { font-family: var(--font-mono); letter-spacing: .015em; }
+.shell-window-title .shell-dead-badge { border-radius: 0; letter-spacing: .1em; }
+.shell-window-title .shell-dead-badge::before { content: '— '; opacity: .55; }
+
+/* State markers live beside the identity, so connecting/live/dead is visible
+   without turning the title into a large status pill. */
+.shell-link-state {
+  width: 6px; height: 6px; flex: 0 0 auto; align-self: center;
+  border-radius: 50%; background: var(--term-fg-faint-2);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+}
+.shell-link-state.is-connecting { background: var(--term-warning); animation: shellStatePulse 1.8s ease-in-out infinite; }
+.shell-link-state.is-live { background: var(--term-accent); box-shadow: 0 0 7px rgba(var(--cyan-rgb), .42); }
+.shell-link-state.is-dead { background: var(--term-danger); }
+@keyframes shellStatePulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* The channel footer is an instrument strip: mono labels and one accent edge on
+   the active tab (the base rule already draws its top border, so this layer adds
+   no second line — two hairlines one pixel apart read as a mistake). */
+.shell-channel-tab { letter-spacing: .02em; }
+.shell-channel-tab.active { font-weight: 600; }
+
+/* The window controls are chrome, not content: crisp corners, quiet until they
+   are hovered or reached by keyboard. Squaring them is not styling for its own
+   sake — every other control on the page (.btn, .icon-btn, the drawer, the
+   inputs) is square, so a 4px radius here was the odd one out. The header
+   cluster, the title's copy key and the channel tab keys are all covered; the
+   14px close keys keep their shape because a hover target that small reads as a
+   dot rather than a button once its corners are cut. */
+.shell-window-header-btns button, .title-copy-btn, .shell-channel-tab-add,
+.shell-channel-add-caret, .shell-tab-btn { border-radius: 0; }
+.shell-window-header-btns button:hover { background: rgba(var(--cyan-rgb), .1); }
+
+/* Product connecting readout: a state line, not a generic spinner. The state word
+   is tracked out and accented; the connection NAME is left exactly as it is — a
+   name is an identity, and text-transform would rewrite it on screen. */
+.shell-pending { gap: 10px; font-family: var(--font-mono); font-size: 12px; }
+.shell-pending [data-i18n] { color: var(--term-accent); font-size: 9px; text-transform: uppercase; letter-spacing: .16em; }
+.shell-pending strong { color: var(--term-fg-soft); font-weight: 600; }
+
+/* Focus is an interaction state, not a glow effect. Cover the controls that
+   are created dynamically, including icon-only actions in the session HUD. */
+.shell-tab-btn:focus-visible, .shell-channel-tab-add:focus-visible,
+.shell-channel-add-caret:focus-visible, .shell-channel-tab-copy:focus-visible,
+.shell-channel-tab-close:focus-visible, .shell-review-lock:focus-visible,
+.shell-window-min-btn:focus-visible, .close-btn:focus-visible,
+.shell-header-icon-btn:focus-visible {
+  outline: 2px solid var(--term-accent); outline-offset: -2px;
+}
+
+/* The grid card is a record with a state rail. It stays rectangular and
+   translucent, and the rail is the only signal: the plate is already bordered,
+   so a second ring would compete with the selection state. */
+.conn-tile.sess-tile::before {
+  content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 2px;
+  background: var(--border-subtle); transition: background .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:not(.archived):hover::before { background: var(--accent); box-shadow: 0 0 8px var(--accent-ring); }
+.conn-tile.sess-tile.has-open-window::before { background: var(--accent); }
+.conn-tile.sess-tile.has-open-window .sess-terminal-ic { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-surface); }
+.conn-tile.sess-tile.archived::before { background: var(--danger-border); }
+
+/* The Blackwall reacts through a single low-cost opacity overlay. The base image
+   keeps its slow breathing; these states only add a brief local disturbance and
+   never turn the page into an esports HUD. */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  opacity: 0; background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--cyan-rgb), .13), transparent 22%);
+}
+body.bw-session-active::after { opacity: .22; transition: opacity .35s ease; }
+body.bw-ai-active::after { background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--orange-rgb), .18), transparent 18%); opacity: .34; transition: opacity .2s ease; }
+body.bw-review-pending::after { background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--yellow-rgb), .18), transparent 14%); opacity: .4; transition: opacity .15s ease; }
+body.bw-error::after { background: linear-gradient(90deg, transparent 0 42%, rgba(var(--pink-rgb), .1) 50%, transparent 58%); opacity: .42; }
+@media (prefers-reduced-motion: reduce) {
+  .shell-link-state.is-connecting, .shell-pending-spinner { animation: none; }
+  body.bw-session-active::after, body.bw-ai-active::after, body.bw-review-pending::after, body.bw-error::after { transition: none; }
+}
+
+/* An empty plate reads as a terminal that printed nothing, not as a dashboard
+   placeholder. The sentence itself comes from the catalog (sessions.js writes
+   it), so no copy is baked into the stylesheet. */
+.sess-plate-empty {
+  width: 100%; padding: 26px 8px; text-align: center;
+  color: var(--text-muted); font: 600 .7rem/1.6 var(--font-mono);
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.sess-plate-empty::before, .sess-plate-empty::after { color: var(--accent); opacity: .5; }
+.sess-plate-empty::before { content: '› '; }
+.sess-plate-empty::after { content: ' ‹'; }
