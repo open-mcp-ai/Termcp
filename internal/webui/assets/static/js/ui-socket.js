@@ -775,7 +775,10 @@ function fitShellTerminal(term, container, win, syncRemote) {
   var h = container.clientHeight;
   if (w <= 0 || h <= 0) return false;
   var fontSize = (typeof term.getOption === 'function' && term.getOption('fontSize')) || 13;
-  var fontFamily = (typeof term.getOption === 'function' && term.getOption('fontFamily')) || 'Consolas, Monaco, monospace';
+  // Same source as the terminal's own fontFamily option, so the measuring span
+  // and the grid can never disagree about which face is in use — a disagreement
+  // here is a wrong column count, not a cosmetic difference.
+  var fontFamily = (typeof term.getOption === 'function' && term.getOption('fontFamily')) || termcpMonoFontFamily();
   var measure = document.createElement('span');
   measure.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;white-space:pre;font:' + fontSize + 'px ' + fontFamily;
   measure.textContent = 'M';

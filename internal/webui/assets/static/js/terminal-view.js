@@ -78,7 +78,12 @@ function createChannelTab(win, sessionId, opt) {
   var term = new Terminal({
     cursorBlink: true,
     fontSize: 13,
-    fontFamily: 'Consolas, Monaco, monospace',
+    /* xterm styles its own grid from this option (it injects a stylesheet
+       carrying the string), so it cannot inherit --font-mono from the page.
+       Ask util.js for the same list the rest of the UI uses: one stack, one
+       source, and the CJK faces it contains are what keep a bare Linux box
+       from falling through to a glyph-less generic monospace. */
+    fontFamily: termcpMonoFontFamily(),
     /* Let the terminal canvas participate in the glass surface. Without this,
        xterm paints an opaque rectangle over the window's backdrop-filter. */
     allowTransparency: true,

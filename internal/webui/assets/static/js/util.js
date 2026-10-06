@@ -8,6 +8,38 @@ function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/* The monospace stack, for the one consumer that cannot read CSS: xterm takes
+   fontFamily as a JS option and injects it into its own stylesheet, so the
+   terminal grid was styled by a JS string while the rest of the chrome was
+   styled by --font-mono in tokens.css. Two lists, one of them latin-only, and
+   the terminal obeyed the latin-only one: on a machine with no Consolas or
+   Monaco the grid fell through to generic `monospace` (DejaVu Sans Mono, no CJK
+   at all) and every Chinese character came from the last-resort fallback — the
+   wide-glyph report in issue #77.
+
+   So CSS owns the list and this reads it, with a copy of the same list as the
+   fallback for the case where the variable is missing (stylesheet not loaded
+   yet, or a deployment that ships the JS without tokens.css).
+   TestTerminalFontStackMatchesCSS compares the two copies entry by entry,
+   because a silent drift here is invisible until someone opens the UI on a
+   bare Linux box — which is exactly how the original bug survived. */
+var TERMCP_MONO_FALLBACK =
+  '"Sarasa Mono SC", "Sarasa Fixed SC", "Sarasa Term SC", "Sarasa Mono TC", "Sarasa Fixed TC", "Sarasa Term TC", "Sarasa Mono J", "Sarasa Mono K", "Noto Sans Mono CJK SC", "Noto Sans Mono CJK TC", "Noto Sans Mono CJK JP", "Noto Sans Mono CJK KR", "Source Han Mono SC", "Source Han Mono TC", "Source Han Mono J", "Source Han Mono K", "WenQuanYi Zen Hei Mono", "WenQuanYi Micro Hei Mono", "JetBrains Mono", SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Cascadia Mono", "Roboto Mono", "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono", "Droid Sans Mono", ui-monospace, NSimSun, "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Heiti SC", "STHeiti", "Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Meiryo", "MS Gothic", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Source Han Sans SC", "Source Han Sans TC", "Noto Sans SC", "Noto Sans TC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "AR PL UMing CN", "Droid Sans Fallback", "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", monospace';
+
+/* The stack, preferring the stylesheet so tokens.css stays the single source.
+   Whitespace is collapsed: getPropertyValue returns the declaration as written,
+   and tokens.css wraps this list across lines. */
+function termcpMonoFontFamily() {
+  var v = '';
+  try {
+    if (typeof getComputedStyle === 'function' && document.documentElement) {
+      v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono') || '';
+    }
+  } catch (e) {}
+  v = String(v).replace(/\s+/g, ' ').trim();
+  return v || TERMCP_MONO_FALLBACK;
+}
+
 var SVG_COPY_12 = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg>';
 /* Approval lock glyphs. Closed = gated, open = ungated: the shape carries the
    state, so the switch reads correctly without colour. */

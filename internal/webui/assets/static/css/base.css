@@ -110,9 +110,11 @@
   /* The language the page is currently rendered in. */
   .lang-opt.active { background: var(--accent); color: var(--text-on-accent); font-weight: 600; }
   /* Traditional glyph shapes are chosen by the system locale, which can hand
-     back Simplified forms on a Simplified-first machine; naming the TC faces
-     covers macOS (PingFang TC) and Windows (Microsoft JhengHei). */
-  body.lang-hant { font-family: Inter, Geist, ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+     back Simplified forms on a Simplified-first machine; the TC faces in this
+     stack cover macOS (PingFang TC) and Windows (Microsoft JhengHei). It is the
+     same list as --font-sans with the TC faces moved in front, kept in
+     tokens.css so both stacks cannot drift apart. */
+  body.lang-hant { font-family: var(--font-sans-hant); }
   .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
   /* Build version beside the wordmark, filled in from GET /api/version. Left
      margin, not a space, so a failed fetch leaves no gap after the wordmark. */

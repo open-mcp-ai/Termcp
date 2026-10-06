@@ -8,6 +8,18 @@
 
 ### 修复
 
+- **终端字体栈补上 CJK 覆盖，并改为不内嵌字体（#77）**：终端字体栈此前是写死的 `'Consolas, Monaco, monospace'`，整条列表**不含任何汉字字体**。在装了 Consolas/Monaco 的机器上看不出问题，到 Kali 这类最小化 Linux 上整条栈落到 `monospace`（Debian 系 = DejaVu Sans Mono，同样无汉字），于是每个汉字都由浏览器最后的兜底字体（通常是点阵 Unifont）绘制——issue 里说的「终端变成超宽字体」不是字体丑，是字体不存在。更隐蔽的是同一界面里并存两套字体标准：xterm 不吃 CSS，它把 `fontFamily` 当 JS 选项接收并注入自己的样式表，所以只有终端格子走那串硬编码字符串，页面其余部分走 CSS 变量（本来是对的）；`ui-socket.js` 量列宽时又抄了同一串，连列宽都按错误字体算。
+
+  曾评估过内嵌字体，实测后放弃：CJK 全集 woff2 约 9–10 MB，对单二进制分发不划算；子集到 GB2312 一级（3755 字）能压到 608 KB，但**该子集实测不含 ASCII、制表符、方块元素、盲文、箭头中的任何一个**（`fontTools` 逐码位清点：ASCII 0/95、制表符 0/128、盲文 0/256），只能当汉字补充层而无法独立支撑终端，且生僻字仍有缺口。改为**由 CSS 持有唯一的字体栈**：`tokens.css` 的 `--font-mono`，`util.js` 新增 `termcpMonoFontFamily()` 读取它（JS 保留等值常量作兜底，供变量读不到时使用），`terminal-view.js`（建 Terminal）与 `ui-socket.js`（量列宽）都改用同一来源。栈的排序由实测确定（`scripts/fontlab.py` 在 headless Chrome 里跑真实 xterm.js，量 cellW 与汉字 padding；方法与各平台矩阵见 `docs/design/font-stack.md`）：
+  - **CJK 等宽面排最前**：它们被设计成拉丁 0.5em、汉字 1em，即**汉字恰好 2 倍拉丁**，是唯一能让 xterm 不必拉伸汉字的做法；Debian 系 `fonts-noto-cjk` 自带 `Noto Sans Mono CJK SC`，所以 Kali 装完这个包即命中。
+  - **比例式 CJK 面垫底**：它们自带拉丁字形且推进是比例值，排在前面会接管拉丁文本，实测把 cellW 从 7.15px 抬到 13.2px（+85%），而 xterm 正是用拉丁 `W` 定 cellW、再按 `letterSpacing = cells*cellWidth - glyphWidth` 纠正**每一个**字形，于是全屏间距都被它决定。
+  - **`NSimSun` 单列在比例式组之前**：比例式组一旦排在通用 `monospace` 前，Windows 的简体汉字就改由 `Microsoft YaHei`（推进 13.0px）绘制，而 `Consolas` 的格子要求 14.3px，于是每个汉字被撑开 1.3px（旧栈为 0.3px）——这是本次修复自己引入的回归，由 `scripts/fontlab.py` 量出。`NSimSun` 是 SimSun 家族的等宽面（`fontTools` 直读：汉字/拉丁 = 2.000），实测把它放在比例式组前即回到 14.0px 且 96 个测试字宽度均匀；不能用 `SimSun`（同样 2:1，但在栈中不让位），也不宜用 `MS Gothic`（实测 96 字中 40 个落到 13.0px，是逐字回退导致的宽度混杂）。
+  - **`ui-monospace` 只作后期兜底**：实测它在 Windows/Chromium 上解析到的是比例式字体（W=11.41 / M=10.56 / i=3.58，并非等宽），排在 `Consolas` 前会让 cellW 从 7.15 涨到 7.61~11.4；它真正的用处是 iOS/WebKit 这类不暴露具名 Apple 字体的环境。
+
+  新增 `internal/webui/font_stack_test.go` 锁定这套约束：`--font-mono` 与 `util.js` 的兜底常量**逐名比对**（xterm 读不了 CSS 变量，这份拷贝本身就是原缺陷的缩小版，静默漂移在开发机上完全不可见；比较前剥离注释、折叠空白，即浏览器对声明本就施加的归一）；比例式 CJK 面是否垫底、`monospace` 是否收尾、是否存在 CJK 等宽面，用结构性断言检查；并扫描 `static/js` 与 `static/css` 下的**全部**脚本与样式（由 `fs.Glob` 取文件列表而非手写清单，否则新增一个表面就能绕过它），禁止再出现只含拉丁的短字体栈（`ui-monospace, monospace` 这种，每写一次就多一个静默丢弃 CJK 的表面）。另确认随仓库分发的 xterm 构建**只声明、不消费** `rescaleOverlappingGlyphs`，设了是静默无效，故未启用。
+
+  顺带把界面字体也收回一处：`--font-sans` 补齐各平台中文面（新增 JP/KR 与 Emoji 兜底），繁体栈 `--font-sans-hant` 从 `base.css` 的行内短列表（只有 `PingFang TC`/`Microsoft JhengHei` 两个中文名）改为 tokens.css 里的一份变量，与应用栈**同名单、仅换序**。初版实现已经漂移过——Hant 侧漏了 `Source Han Sans SC`、两个文泉驿和 JP/KR 名字，即“只是重排”变成了静默掉覆盖，因此新增 `TestHantSansStackIsSansReordered` 逐名对齐两份列表（只允许 Hant 侧多一个无 SC 对位的 `PingFang HK`）。壳内文件面板的两处行内 `ui-monospace, monospace` 也改为 `var(--font-mono)`。
+
 - **定位符在所有接受 id 的 MCP 工具上真正生效，且不再泄漏到内部索引（#73 后续）**：文档一直承诺「MCP 工具在任何 id / profile 位置上接受定位符」，但每个 handler 各自解析 id，所以只在有人记得接线的地方成立。之前解析集中的是「语法」（`internal/locator`，MCP 与 REST 共用），而「解析后的查找」是各写一份，实测有六处不一致：
   - **`shell_close` 直接拒收定位符**（报 `shell_not_found`），尽管同一个定位符在 `shell_resize` / `shell_reader_register` 上都能用。
   - **`session_terminate` 更糟：它“成功”了但什么也没做**。它用定位符解析出会话，却把**原始参数**传给 `Manager.Terminate`——那里找不到 id 就静默 no-op，于是工具回 `{"success":true}` 而会话仍在跑。假成功比报错危险：调用方以为资源已经关了。（`session_delete` 则因把定位符当存储路径名校验而被拒。）

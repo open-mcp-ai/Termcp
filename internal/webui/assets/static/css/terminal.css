@@ -111,7 +111,7 @@
     font-size: 11px;
     color: var(--term-fg-muted);
     font-weight: 500;
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -127,7 +127,98 @@
   --shadow-modal: rgba(0, 0, 0, .5);
   --live-glow: rgba(var(--cyan-rgb), .45);
 
-  /* Typography: a modern stack, monospace for ids and ports. */
-  --font-sans: Inter, Geist, ui-sans-serif, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Typography. No webfont is loaded: these are names of fonts already on the
+     machine, and the browser falls back per glyph. The order is intentional and
+     is the whole fix for the wide-glyph report on a bare Linux box:
+
+     1. CJK mono faces come first. When installed, one face supplies Latin and
+        Han at a terminal-friendly 1:2 ratio, so xterm does not have to stretch
+        Han glyphs to fill two cells.
+     2. Known OS mono faces come next. They preserve the native terminal look:
+        SF Mono/Menlo on Apple, Consolas/Cascadia Mono on Windows, Roboto Mono
+        on Android, and DejaVu/Liberation/Ubuntu Mono on Linux.
+     3. ui-monospace is a late generic fallback. On Windows Chromium resolves
+        it to a proportional face, so it must not precede Consolas/Cascadia.
+     4. NSimSun supplies Simplified Han from a grid-safe face on Windows. It has
+        to sit before the proportional block, which would otherwise answer for
+        Han first with its 13px advance against a 14.3px cell.
+     5. Proportional CJK faces come after every grid-safe face. They provide Han
+        coverage but must not claim Latin first and change xterm's cell width.
+
+     Splitting these groups is not cosmetic: a proportional face placed early
+     answers for Latin too, and xterm's DOM renderer derives cellWidth from Latin
+     W, then corrects every wide glyph with
+     letterSpacing = cells*cellWidth - glyphWidth. The stack cannot create a
+     glyph: a machine with no CJK font still needs one installed (see
+     docs/design/font-stack.md for the one-line package commands). */
+  --font-mono:
+    /* CJK mono: Sarasa / Noto Sans Mono CJK / Source Han Mono / WenQuanYi. */
+    "Sarasa Mono SC", "Sarasa Fixed SC", "Sarasa Term SC",
+    "Sarasa Mono TC", "Sarasa Fixed TC", "Sarasa Term TC",
+    "Sarasa Mono J", "Sarasa Mono K",
+    "Noto Sans Mono CJK SC", "Noto Sans Mono CJK TC", "Noto Sans Mono CJK JP", "Noto Sans Mono CJK KR",
+    "Source Han Mono SC", "Source Han Mono TC", "Source Han Mono J", "Source Han Mono K",
+    "WenQuanYi Zen Hei Mono", "WenQuanYi Micro Hei Mono",
+    /* Native / installed Latin mono faces. Consolas stays before Cascadia Mono
+       because that is Windows' established face and measures more tightly with
+       the usual Windows CJK fallback. */
+    "JetBrains Mono", SFMono-Regular, "SF Mono", Menlo, Monaco,
+    Consolas, "Cascadia Mono", "Roboto Mono",
+    "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono", "Droid Sans Mono",
+    /* Generic mono is useful on iOS/WebKit when no named Apple face is exposed,
+       but is deliberately after named Windows/Linux faces. */
+    ui-monospace,
+    /* Windows Simplified Han that is grid-safe: NSimSun is the monospaced face of
+       the SimSun family (Han advance exactly 2x its Latin advance), so it supplies
+       Han at 14px against a 14.3px target where Microsoft YaHei supplies 13px and
+       leaves every Han cell 1.3px loose. It has to sit before the proportional
+       block below, which would otherwise answer for Simplified Han first. Must be
+       NSimSun, not SimSun: SimSun is present but does not win here. */
+    NSimSun,
+    /* Proportional CJK coverage: last among named faces so it cannot claim
+       Latin and determine the terminal cell width. */
+    "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Heiti SC", "STHeiti",
+    "Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Meiryo", "MS Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo",
+    "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR",
+    "Source Han Sans SC", "Source Han Sans TC", "Noto Sans SC", "Noto Sans TC",
+    "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "AR PL UMing CN", "Droid Sans Fallback",
+    "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji",
+    monospace;
+
+  /* Chrome UI. Width is not a constraint here, so the only rule is that a
+     proportional CJK face must stay behind the Latin ones - otherwise it claims
+     Latin text and renders it with its own (non-monospaced) proportions. Unlike
+     --font-mono this list does not need CJK *mono* faces, but it does need Han
+     coverage on every platform, hence the SC/TC/JP/KR runs below. */
+  --font-sans:
+    Inter, Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", "DejaVu Sans", "Liberation Sans", "Ubuntu",
+    "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+    "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR",
+    "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji",
+    sans-serif;
+
+  /* Traditional-Chinese chrome (body.lang-hant): the same list as --font-sans
+     with the TC faces moved ahead of the SC ones, because a font name is what
+     selects the glyph forms and a Simplified-first machine (any Windows, most
+     Linux) would otherwise render Traditional text with Simplified shapes.
+     TestHantSansStackIsSansReordered pins the "same list" half of that: the two
+     stacks must name the same faces, or one of them silently loses coverage.
+     PingFang HK rides with the TC block (Hong Kong is Traditional, and it is an
+     extra Apple name for the same role) and Source Han Sans TC for the same
+     reason Source Han Sans SC is in --font-sans. */
+  --font-sans-hant:
+    Inter, Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", "DejaVu Sans", "Liberation Sans", "Ubuntu",
+    "PingFang TC", "PingFang HK", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC",
+    "Source Han Sans TC",
+    "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "Noto Color Emoji",
+    "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 }
