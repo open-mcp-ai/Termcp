@@ -130,7 +130,7 @@ func (s *Server) RegisterSSHConfigWriteTools() {
 	for _, opt := range extra {
 		opt(&t)
 	}
-	t.Description = "SSH connection profiles: action=list (names only, never secrets), create, edit (patch; omitted fields keep stored values incl. secrets), copy (server-side, secrets never reach the agent), delete. create requires host+user and password or private_key."
+	t.Description = "SSH connection profiles: action=list (names only, never secrets), create, edit (patch; omitted fields keep stored values incl. secrets), copy (server-side, secrets never reach the agent), delete. create requires host+user and password or private_key." + sshConfigImportFormat
 	s.mcpServer.DeleteTools("ssh_config")
 	s.mcpServer.AddTool(t, withLogging("ssh_config", s.handleSSHConfigOps))
 }

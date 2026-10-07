@@ -462,6 +462,25 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 
 **注意**：password/private_key/key_passphrase/proxy 凭据**写入后不可读取**；不要在聊天中回显。write actions 未启用时调用返回错误提示启动 flag。
 
+**导入/导出格式（批量）**：Agent 常被要求「把这些主机整理成能导入的文件」，而**文件格式不是本工具的参数形状**：参数里是平的 `jump_host`，文件里是嵌套的 `[connections.jump]`。两者写成一样的拼法**能正常解析、却会静默丢掉 bastion**，要到真的拨号时才看得出来——因此 `ssh_config` 的描述（只读与 write-enabled 两种列表都在）直接给出了这份格式，Agent 可按它生成文本，再交给 Web UI 的批量导入或 `POST /api/connections/batch`：
+
+```toml
+[[connections]]
+name = "host-one"                 # 字母/数字/_/-，最长 64
+kind = "remote"                   # 必填
+host = "host-one.example"         # 必填
+user = "tester"                   # 必填
+password = "placeholder"        # 与 private_key 二选一
+
+[connections.jump]                # bastion（ProxyJump）——不是 jump_host = "..."
+host = "bastion.example"
+user = "jumper"
+password = "placeholder2"
+# [connections.jump.jump]         # 更深一跳
+```
+
+可选字段：`port` / `key_passphrase` / `trust_unknown_host` / `known_hosts` / `dial_timeout_seconds` / `proxy` / `description` / `default_shell` / `default_mode` / `default_approval`。导出（`GET /api/connections/batch`）产生的是同一形状，导出的文件可直接导回；`internal` 是保留名，已存在的名字导入时变为 `name-2` 而不是被覆写。
+
 ---
 
 ## 端口转发：forward（统一入口）

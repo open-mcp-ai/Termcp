@@ -4,6 +4,14 @@
 
 ### 修复
 
+- **`ssh_config` 的模型可见描述给出导入/导出文件格式，并指出嵌套 bastion 这个坑（#81）**：Agent 经常被要求把用户粘进来的一串主机整理成「能导入的文件」，但文件格式此前只存在于 Web UI 与 `docs/api.md`，MCP 侧一个字也没有——`ssh_config` 的描述只说 `action=list names, or (if enabled) create/edit/copy/delete`。
+
+  写这段格式时实测出一个真实的坑：**文件格式不是本工具的参数形状**。参数里 bastion 是平的 `jump_host`/`jump_user`/…，而文件里必须是嵌套的 `[connections.jump]`。把参数拼法写进文件**解析不报错、但 bastion 被静默丢弃**（`ent.Jump == nil`，导出的文件里也没有它）——直到真的拨号才发现连不上。描述里因此明写了 `[connections.jump]` 与 `[connections.jump.jump]`，并说明平的 `jump_host` 是本工具的参数、不是文件字段。
+
+  格式规格写在 `sshConfigImportFormat` 一处，同时拼进**两种** `ssh_config` 描述：只读列表的那份，以及 `RegisterSSHConfigWriteTools` 在 `--mcp-manage-ssh-configs` 下**整段替换**的那份。后者是首次实现时差点漏掉的一半——它不走 `compactToolDescriptions`，而是直接赋值，所以在唯一允许 Agent 写 profile 的部署下，模型看到的描述里原本不会有这段格式。回归测试对两种列表都断言，正是它把这一半拓住了。
+
+  测试不只匹配文案：`TestSSHConfigDescriptionAdvertisesTheFormatTheStoreAccepts` 把描述里宣传的形状（含嵌套 bastion）丢给真实的 `sshconfig.Store` 导入，再导出、再导回，逐项确认 bastion 存活——一份与解析器漂移了的描述仍然能通过纯字符串断言。`docs/mcp-tools.md` 同步补上完整 TOML 示例与可选字段清单。
+
 - **告诉 Agent「等人在终端里输入」时用 `shell_notify` 挂监听，而不是空转轮询（#82）**：命令跑到一半停下来等人（`sudo` 密码、交互式安装器、任何必须由人在终端里回答的提示）时，Agent 此前只有一条路：反复 `shell_output` 轮询。工具面里没有任何一处说明还有别的做法——`shell_notify` 的描述只说它“管理通知规则”，规则 9 只说它“能反向唤醒”，而 `notify_user` 的描述里写了「问完要 WAIT」却没写「wait 的时候靠什么被叫醒」。于是这几句话合起来反而在鼓励轮询：一条看起来能收通知、但没人说什么时候该用它的工具，不会被用。
 
   现在三处都写明了这个用法：`shell_notify` 的模型可见描述（`toolopts.go` 的紧凑文案，即真正发给模型的那份）与长描述都补上「人停在提示符前（sudo/密码、交互式安装器）时，先 `notify_user`，再在这里注册 `event=output`，然后停止轮询——人的下一次输出会唤醒你；人答完后 `unregister`（shell/会话关闭也会自动级联清理）」；initialize instructions 的规则 9 尾随一句「Human at a prompt: notify_user, then register event=output」；`docs/mcp-tools.md` 新增「典型用法二（等人输入）」的完整四步。选 `output` 而非 `silence` 是刻意的：人去碰提示符时会产生输出（密码回显被关掉也仍有换行），而 `silence` 描述的是「没人说话」，正好把等人的场景排除在外。

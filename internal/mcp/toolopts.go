@@ -7,6 +7,23 @@ import mcpgo "github.com/mark3labs/mcp-go/mcp"
 // specific information and cost roughly 80 bytes per definition.
 var annotationNone = mcpgo.WithToolAnnotation(mcpgo.ToolAnnotation{})
 
+// sshConfigImportFormat is the import/export file shape, stated identically in
+// both ssh_config descriptions (the default listing and the write-enabled one,
+// which RegisterSSHConfigWriteTools installs): they are two different strings
+// built in two files, and a format spec duplicated by hand would drift the
+// moment one of them is edited. Both variants reach the model in different
+// deployments, and neither is privileged -- the default one is what a
+// read-only instance shows, the other what an operator with
+// --mcp-manage-ssh-configs shows -- so the spec has to be in both.
+//
+// It exists because the agent is often the one asked to *produce* the text (a
+// user pastes in a list of hosts and wants it as an importable file), and the
+// file format is not the tool's argument shape: a bastion is a nested table,
+// while jump_host is an argument of this very tool. Writing the argument spelling
+// into a file parses without error and silently drops the bastion, which is the
+// failure worth documenting here rather than leaving to be discovered.
+const sshConfigImportFormat = " IMPORT/EXPORT FORMAT (Web UI batch import; HTTP GET/POST /api/connections/batch): TOML, one [[connections]] table per profile with name (letters/digits/_/-, max 64) and kind=\"remote\", plus host, user, and password or private_key. Optional: port, key_passphrase, trust_unknown_host, known_hosts, dial_timeout_seconds, proxy, description, default_shell, default_mode, default_approval. A bastion is NESTED: [connections.jump] ([connections.jump.jump] for a deeper hop). The flat jump_host keys are arguments of this tool, NOT file fields -- a file using them parses cleanly and silently drops the bastion. Export emits this shape, so it re-imports unchanged; \"internal\" is reserved, an existing name becomes name-2, credentials are write-only."
+
 // Compact descriptions keep the wire representation useful without repeating
 // the same lifecycle and ID guidance in every tool. The original descriptions
 // remain next to registrations as source documentation; only the description
@@ -40,7 +57,7 @@ var compactToolDescriptions = map[string]string{
 	"file_fs":                 "Path/filesystem ops: truncate, realpath, or statvfs.",
 	"file_getwd":              "Get the SFTP working directory for a session.",
 	"message":                 "Transcript span index for a shell: status, time, and byte offsets. Read the bytes with shell_output(offset, max_bytes).",
-	"ssh_config":              "SSH profiles: action=list names, or (if enabled) create/edit/copy/delete.",
+	"ssh_config":              "SSH profiles: action=list names, or (if enabled) create/edit/copy/delete." + sshConfigImportFormat,
 	"shell_notify":            "Manage event notifications (wake-up) for a shell: register/unregister/list rules. USE IT TO WAIT ON A HUMAN AT A PROMPT (sudo/password, an interactive installer, anything they must answer in the terminal): after notify_user (see that tool), register event=output HERE and stop polling shell_output in a loop — their next output wakes you. unregister once they have answered; closing the shell or session clears the rule too.",
 	"notify_user":             "Notify the human user via the termcp Web UI: toast on every open page + browser system notification; session_id highlights that session's card. CALL IT BEFORE ASKING THE HUMAN FOR ANYTHING (password/sudo/MFA/passphrase, confirmation, approval, a decision, or any interactive input) and the moment a long task ends or fails: the human may not be watching, so an unannounced question stalls the work until they happen to look. Once you have asked, WAIT: never poll, guess or fake a human answer. Blocking asks: level=warn or error, duration_seconds=0 (sticky), the affected session_id. Repeat the same message in your reply; delivered=0 means no Web UI page was open.",
 }

@@ -98,7 +98,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 	), withLogging("shell_detect", s.handleDetectShell))
 
 	mcpServer.AddTool(s.newTool("ssh_config",
-		mcpgo.WithDescription("SSH connection profiles: action=list returns usable profile names for session_start (never secrets or hostnames)."),
+		mcpgo.WithDescription("SSH connection profiles: action=list returns usable profile names for session_start (never secrets or hostnames)."+sshConfigImportFormat),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list")),
 	), withLogging("ssh_config", s.handleSSHConfigOps))
 
