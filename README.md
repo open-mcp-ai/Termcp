@@ -62,10 +62,6 @@ Lightweight AI-native secure terminal: visual multi-surface, MCP + SKILLS + API
 - **Fine-grained session control** — file management, port forwarding, multi-terminal multiplexing, terminal read/write access.
 - **Dependency-free install** — a single ~10 MB file, multi-platform, with npx integration.
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/1e6ab86a-fca9-49e7-a94d-8f0962b6e2d1" width="860" alt="Termcp Web UI">
-</p>
-
 ## Install
 
 ### 1 · One command per agent
