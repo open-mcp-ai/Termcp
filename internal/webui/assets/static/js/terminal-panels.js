@@ -102,7 +102,10 @@ function _initShellWindowUI(win, connLabel, sessionId) {
   if (fwAddBtn) {
     fwAddBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      openForwardModal(sessionId, connLabel || 'internal');
+      /* No profile is passed: the server labels the forward from the session it
+         is created on (handleCreateForward reads the session's own name), and
+         this window's connLabel cannot know the server's answer anyway. */
+      openForwardModal(sessionId);
     });
   }
   var fwRefreshBtn = win.querySelector('.shell-fw-refresh-btn');

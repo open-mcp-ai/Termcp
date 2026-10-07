@@ -248,8 +248,11 @@ func TestNoUnreachableUI(t *testing.T) {
 		// createForward rejects every request with noSession (the v0.2.2
 		// regression: the assignment vanished with the deleted tools panel,
 		// leaving _fwdSessionId null at runtime — invisible to the compiler,
-		// to the HTML, and to every other test).
-		"_fwdSessionId = sessionId;",
+		// to the HTML, and to every other test). It now normalises the argument
+		// to '' and binds it before the no-session early return, so the dialog
+		// cannot keep a previous session on the path that reports none
+		// (TestForwardDialogRebindsItsSessionOnEveryOpen pins that ordering).
+		"_fwdSessionId = sessionId || '';",
 	} {
 		if !strings.Contains(fm, want) {
 			t.Errorf("forward-modal.js lost %q; the forward modal needs it", want)

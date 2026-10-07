@@ -278,9 +278,17 @@ function openConnModal(edit, name, kind) {
   // built-in connection is addressed), and the form hides those two controls
   // for it below.
   editingConnName = edit ? name : '';
-  _connDirty = false;
   connEntries = null; // refresh import dropdown options
-  document.getElementById('modal-conn-err').style.display = 'none';
+  /* The dialog is ONE singleton element reused by every open, so anything it
+     carries that the next open does not overwrite is residue the user reads as
+     belonging to the profile now on screen. The generation counter is bumped
+     here and read by every asynchronous writer, so a slow request started for
+     this open cannot paint over a later one. */
+  var seq = bumpConnModalSeq();
+  var errEl = document.getElementById('modal-conn-err');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+  resetConnTestResult();
   var isInternal = edit && kind === 'internal';
 	var temporaryEl = document.getElementById('conn-temporary');
 	var current = (window._lastConnections || []).find(function(c) { return c.name === name; });
@@ -309,17 +317,28 @@ function openConnModal(edit, name, kind) {
   // hides them too — but it keeps 默认 Shell / 默认审核, which are its own settings.
   var remoteExtra = document.getElementById('conn-f-remote-extra');
   if (remoteExtra) remoteExtra.style.display = isInternal ? 'none' : '';
-  // Start in form view
+  // Start in form view — and put the toggle's icon pair back with it, since the
+  // icon is what tells the user which view they are looking at and it is written
+  // by _connToggleView. A dialog reopened after a TOML session would otherwise
+  // show the TOML glyph over a form.
   document.getElementById('conn-form-view').style.display = '';
   document.getElementById('conn-config-view').style.display = 'none';
+  var iconForm = document.getElementById('conn-icon-form');
+  var iconToml = document.getElementById('conn-icon-toml');
+  if (iconForm) iconForm.style.display = '';
+  if (iconToml) iconToml.style.display = 'none';
   if (edit) {
     fetch('/api/connections/' + encodeURIComponent(name)).then(function (r) {
       if (!r.ok) throw new Error(r.statusText);
       return r.text();
     }).then(function (t) {
+      /* The profile the user is looking at now is the newer open's; a slow read
+         of the previous one must not repaint the form under it. */
+      if (connModalSeq() !== seq) return;
       document.getElementById('conn-config').value = t;
       _connTOMLToForm(t);
     }).catch(function (err) {
+      if (connModalSeq() !== seq) return;
       document.getElementById('modal-conn-err').textContent = String(err.message || err);
       document.getElementById('modal-conn-err').style.display = 'block';
     });
@@ -331,18 +350,51 @@ function openConnModal(edit, name, kind) {
   showModal('modal-conn');
 }
 
-document.getElementById('conn-f-auth').onchange = _connAuthChange;
-document.getElementById('conn-toggle-view').onclick = function () { _connDirty = true; _connToggleView(); };
-// Track unsaved edits inside the connection editor so leaving the page first asks.
-var _connModalEl = document.getElementById('modal-conn');
-if (_connModalEl) {
-  _connModalEl.addEventListener('input', function () { _connDirty = true; });
-  _connModalEl.addEventListener('change', function () { _connDirty = true; });
+/** The connection dialog's open generation.
+ *
+ *  One singleton element serves every open, which makes it the wrong home for
+ *  state that outlives an open — and it also means a request started for one
+ *  open can land while a later one is on screen. The counter is the single
+ *  answer to both: openConnModal bumps it, every asynchronous writer records the
+ *  value it started under and drops its result once the dialog has moved on. */
+function bumpConnModalSeq() {
+  var el = document.getElementById('modal-conn');
+  if (!el) return 0;
+  el._termcpOpenSeq = (el._termcpOpenSeq || 0) + 1;
+  return el._termcpOpenSeq;
 }
+function connModalSeq() {
+  var el = document.getElementById('modal-conn');
+  return el ? (el._termcpOpenSeq || 0) : 0;
+}
+
+/** Put the Test readout back to "nothing has been tested".
+ *
+ *  It is the one field in the dialog the user cannot clear by editing: the
+ *  verdict stands until the next Test. Left across opens it reads as a result
+ *  for the profile now on screen — "✓ Connected in 12 ms" under a host that was
+ *  never dialled. The button is reset with it, because a verdict is reachable
+ *  only through that button: one stuck disabled on "Testing…" would leave the
+ *  dialog looking permanently busy. */
+function resetConnTestResult() {
+  var out = document.getElementById('conn-test-result');
+  if (out) {
+    out.style.display = 'none';
+    out.textContent = '';
+    out.style.color = '';
+  }
+  var btn = document.getElementById('conn-test');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = t('common.test');
+  }
+}
+
+document.getElementById('conn-f-auth').onchange = _connAuthChange;
+document.getElementById('conn-toggle-view').onclick = _connToggleView;
 
 // ---- jump chain events ----
 document.getElementById('conn-add-jump').onclick = function () {
-  _connDirty = true;
   jumpCards.push(_newJumpCard());
   jumpEditingIdx = jumpCards.length - 1;
   jumpEditingNew = true;
@@ -395,7 +447,6 @@ _jumpsBox.addEventListener('click', function (e) {
   var idx = card ? parseInt(card.getAttribute('data-idx'), 10) : NaN;
   if (isNaN(idx)) return;
   if (e.target.classList.contains('jump-rm')) {
-    _connDirty = true;
     jumpCards.splice(idx, 1);
     if (jumpEditingIdx === idx) { jumpEditingIdx = -1; jumpEditingNew = false; }
     else if (jumpEditingIdx > idx) { jumpEditingIdx -= 1; }
@@ -403,13 +454,11 @@ _jumpsBox.addEventListener('click', function (e) {
     return;
   }
   if (e.target.classList.contains('jump-save')) {
-    _connDirty = true;
     jumpEditingIdx = -1; jumpEditingNew = false;
     renderJumps();
     return;
   }
   if (e.target.classList.contains('jump-cancel')) {
-    _connDirty = true;
     if (jumpEditingNew && jumpEditingIdx === idx) {
       jumpCards.splice(idx, 1);
     }
@@ -453,12 +502,18 @@ document.querySelectorAll('.psw-eye').forEach(function(btn) {
   btn.onclick = function() { _toggleEye(this); };
 });
 
-document.getElementById('modal-conn-close').onclick = function () { _connDirty = false; hideModal('modal-conn'); };
+document.getElementById('modal-conn-close').onclick = function () {
+  /* Closing invalidates in-flight work for this open: a verdict that lands after
+     the user has left belongs to nothing on screen. */
+  bumpConnModalSeq();
+  hideModal('modal-conn');
+};
 document.getElementById('conn-test').onclick = function () {
   var err = document.getElementById('modal-conn-err');
   var out = document.getElementById('conn-test-result');
   err.style.display = 'none';
   out.style.display = 'none';
+  var seq = connModalSeq();
   var btn = this;
   var body = _connGetBody();
   btn.disabled = true;
@@ -469,6 +524,10 @@ document.getElementById('conn-test').onclick = function () {
       return r.json();
     })
     .then(function (j) {
+      /* A dial can take seconds, and the user can reopen the dialog (or a
+         different profile) inside that window. The verdict is about the body
+         that was submitted, so it is dropped once the dialog has moved on. */
+      if (connModalSeq() !== seq) return;
       out.style.display = 'block';
       if (j.ok) {
         out.textContent = t('test.ok', { ms: j.duration_ms || 0 });
@@ -479,11 +538,13 @@ document.getElementById('conn-test').onclick = function () {
       }
     })
     .catch(function (e) {
+      if (connModalSeq() !== seq) return;
       out.style.display = 'block';
       out.textContent = t('test.failed', { msg: String(e.message || e) });
       out.style.color = '#cf222e';
     })
     .finally(function () {
+      if (connModalSeq() !== seq) return;
       btn.disabled = false;
       btn.textContent = t('common.test');
     });
@@ -517,7 +578,6 @@ document.getElementById('conn-save').onclick = function () {
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
-      _connDirty = false;
       hideModal('modal-conn');
       loadConnections();
     })
@@ -540,7 +600,6 @@ function doDeleteConnection(name) {
   fetch('/api/connections/' + encodeURIComponent(name), { method: 'DELETE' })
     .then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
-      _connDirty = false;
       hideModal('modal-conn');
       loadConnections();
     })
@@ -566,10 +625,16 @@ document.getElementById('conn-duplicate').onclick = function () {
 
 document.getElementById('conn-import-open').onclick = function (e) {
   e.stopPropagation();
+  /* The dialog is a singleton and an import can take a while, so a second open
+     must not inherit the previous run's readout or its half-finished button. */
+  var btn = document.getElementById('conn-import-run');
+  if (btn) btn.disabled = false;
   document.getElementById('conn-import-file').value = '';
   document.getElementById('conn-import-temporary').checked = false;
   document.getElementById('conn-import-err').style.display = 'none';
+  document.getElementById('conn-import-err').textContent = '';
   document.getElementById('conn-import-result').style.display = 'none';
+  document.getElementById('conn-import-result').textContent = '';
   showModal('modal-conn-import');
 };
 document.getElementById('conn-import-close').onclick = function () { hideModal('modal-conn-import'); };
@@ -838,11 +903,14 @@ function toggleNodeOpenMenu() {
    dialog outlives the click that opened it, so a pointer position captured here
    would only ever be a stale coordinate from behind a modal backdrop. */
 function openStartModal(connName) {
-  startConnName = connName;
   document.getElementById('modal-start-err').style.display = 'none';
-  document.getElementById('start-ssh-config').value = connName;
+  /* The dialog outlives the click that opened it and carries its target in a
+     hidden field, so leaving it out here (or leaving the previous profile's name
+     in it) launches a session against whatever the last open was aimed at. */
+  var targetEl = document.getElementById('start-ssh-config');
+  if (targetEl) targetEl.value = connName || '';
   var startNameEl = document.getElementById('start-name');
-  if (startNameEl) startNameEl.value = connName;
+  if (startNameEl) startNameEl.value = connName || '';
   document.getElementById('start-title').textContent = t('modal.start.titleConnect', { name: connName });
   document.getElementById('start-cmd').value = '';
   document.getElementById('start-mode').value = 'pty';
@@ -858,7 +926,7 @@ document.getElementById('start-run').onclick = function () {
   // connection progress (spinner). On failure the dialog reopens with the
   // error so inputs stay editable for a retry.
   hideModal('modal-start');
-  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, null, {
+  startSessionAndOpenShell(document.getElementById('start-ssh-config').value, null, {
     command: cmd,
     mode: document.getElementById('start-mode').value,
     name: sname || undefined

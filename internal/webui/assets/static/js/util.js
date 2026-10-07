@@ -1,7 +1,5 @@
 var shellWindowCount = 0;
-var startConnName = '';
 var editingConnName = '';
-var _connDirty = false; // unsaved edits in the connection editor
 window._pendingTerminalWatch = Object.create(null);
 
 function escapeHtml(s) {

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### 修复
+
+- **连接对话框不再把上一次的状态留给下一个 profile，并清掉三处只写不读的对话框状态（#83）**：六个 modal 都是同一个常驻 DOM 元素，每次打开只切一个 class——于是凡是「下一次打开不会重写」的字段都成了残渣。最坏的是测试判定：`#conn-test-result` 的结论从不清理，在一个从未拨号的主机下面写着「✓ Connected in 12 ms」，用户读到的当然是当前这个 profile 的答案。「Test」按钮可能停在上一次的 `disabled` + 「Testing…」上，重开对话框像是永远在忙；form/TOML 的**图标**不跟视图复位，重开后图标和视图互相说谎；`#modal-conn-err` 只清 `display` 不清文本；`#modal-conn-import` 继承上一次导入的读数与半途禁用的按钮。
+
+  更难看见的一半是慢响应：profile 的 GET 与 Test 都是无上限的拨号，旧代码没有任何守卫，于是「打开 A → 慢请求在飞 → 打开 B → A 的响应落地」会让 **A 的表单画在 B 的名字下面**。`openConnModal` 现在推进一个代数计数器（`#modal-conn._termcpOpenSeq`），profile 读取的成功/失败两条臂与 Test 的三条臂都比对该代数，关闭对话框也推进一代——属于某次打开的结果不会再画到另一次打开上。
+
+  另外三处状态只有写入者、没有读者，其读者早已被删掉：`_connDirty`（第 12 个写入者还在，唯一的读取者在 5089e71 把离开页守卫收窄到「有终端窗口打开时」时被删除）、`_fwdSshCfg` 与其 hidden 字段 `#fw-ssh-config-modal`（服务端自己从 session 推导 `ssh_config`，这值只被写进一个没人读的 input）、`startConnName`（与 `#start-ssh-config` 重复，且两处写入，落败的那个只可能和赢家不一致）。
+
+  顺带修掉两个同类缺陷：转发对话框的「没有会话」路径在重绑 `_fwdSessionId` 之前就返回，于是一个写着「没有会话」的对话框上按「Create」，会把转发建到**上一次打开的那个会话**上；启动对话框的目标存在 hidden 字段里，现在一律从入参写入，不再可能沿用上一个 profile。
+
+  `internal/webui/modal_state_test.go` 用 node 跑**真实的** `openConnModal`（沿用 `host_attribution_test.go` 已有的切片边界）而不是做字符串匹配，并覆盖残留清理、慢响应丢弃、只写不读状态与两个对话框的重绑顺序；把修复 stash 掉后这些测试全部失败。
+
 ## v0.2.6 — 2026-10-07
 
 ### 本版要点

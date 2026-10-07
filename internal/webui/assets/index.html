@@ -197,7 +197,6 @@
       </div>
       <div class="modal-body">
         <p id="modal-forward-err" class="err" style="display:none"></p>
-        <input type="hidden" id="fw-ssh-config-modal" value="">
         <label for="fw-direction" data-i18n="modal.forward.direction">Direction</label>
         <select id="fw-direction">
           <option value="local" data-i18n="modal.forward.dir.local">Local (ssh -L)</option>
@@ -244,8 +243,8 @@
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <label for="conn-name" style="margin:0;flex:1;font-size:0.85rem;font-weight:600" data-i18n="modal.conn.name">name</label>
           <button type="button" class="btn" id="conn-toggle-view" style="font-size:0.78rem;padding:2px 6px" title="Toggle between form and TOML" data-i18n-title="modal.conn.toggleView">
-            <svg class="toggle-icon-form" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5"/><path d="M4.5 5h5M4.5 7.5h3M4.5 10h2"/></svg>
-            <svg class="toggle-icon-toml" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="display:none"><path d="M5 3.5L2 7l3 3.5M9 10.5l3-3.5-3-3.5"/></svg>
+            <svg id="conn-icon-form" class="toggle-icon-form" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5"/><path d="M4.5 5h5M4.5 7.5h3M4.5 10h2"/></svg>
+            <svg id="conn-icon-toml" class="toggle-icon-toml" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="display:none"><path d="M5 3.5L2 7l3 3.5M9 10.5l3-3.5-3-3.5"/></svg>
           </button>
         </div>
         <input type="text" id="conn-name" placeholder="my-server" autocomplete="off" style="margin-bottom:8px;width:100%">

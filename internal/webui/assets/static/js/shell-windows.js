@@ -866,9 +866,8 @@ function focusSessionWindow(connLabel, sessionId, pos, opts) {
 }
 
 
-// Session + ssh profile the shared forward modal is currently bound to, set by
+// Session the shared forward modal is currently bound to, set by
 // openForwardModal and read by createForward.
-var _fwdSshCfg = '';
 var _fwdSessionId = '';
 
 /* Language switch: three idempotent redraws of state this module already holds
