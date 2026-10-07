@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -81,6 +82,11 @@ func remoteClientConfig(r *RemoteSSH) (*ssh.ClientConfig, error) {
 // bastions (ProxyJump). The bastion's *ssh.Client.Dial opens a direct-tcpip
 // channel to the next hop; the SSH handshake to each hop runs over that channel.
 //
+// ctx cancels the dial of every hop. Only the root hop's TCP connect honours it
+// natively; a later hop's connection comes from the bastion's channel open, which
+// cannot be interrupted — but the caller's cancel is checked between hops, so the
+// chain stops as soon as a hop boundary is reached instead of dialing on.
+//
 // Returns the final target client plus all intermediate bastion clients (closers)
 // that must stay alive for the life of the session. On error, everything opened
 // is cleaned up.
@@ -89,7 +95,7 @@ func remoteClientConfig(r *RemoteSSH) (*ssh.ClientConfig, error) {
 // r.Proxy (socks5) only applies at the chain root (the deepest hop, dialed directly);
 // non-root hops get their connection from the parent bastion's Dial, so their
 // Proxy is ignored.
-func buildChainClient(r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
+func buildChainClient(ctx context.Context, r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
 	addr := remoteDialAddr(r)
 	cfg, err := remoteClientConfig(r)
 	if err != nil {
@@ -97,19 +103,18 @@ func buildChainClient(r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
 	}
 
 	if r.Jump == nil {
-		conn, err := sshclient.DialConn(addr, r.Proxy, cfg.Timeout)
+		conn, err := sshclient.DialConn(ctx, addr, r.Proxy, cfg.Timeout)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 		}
-		c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+		client, err := sshclient.Handshake(ctx, conn, addr, cfg)
 		if err != nil {
-			conn.Close()
 			return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
 		}
-		return ssh.NewClient(c, chans, reqs), nil, nil
+		return client, nil, nil
 	}
 
-	bastion, subClosers, err := buildChainClient(r.Jump)
+	bastion, subClosers, err := buildChainClient(ctx, r.Jump)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -119,13 +124,12 @@ func buildChainClient(r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
 		sshclient.DrainClosers(subClosers)
 		return nil, nil, fmt.Errorf("bastion dial %s: %w", addr, err)
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	client, err := sshclient.Handshake(ctx, conn, addr, cfg)
 	if err != nil {
-		conn.Close()
 		bastion.Close()
 		sshclient.DrainClosers(subClosers)
 		return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 	closers := append(subClosers, io.Closer(bastion))
-	return ssh.NewClient(c, chans, reqs), closers, nil
+	return client, closers, nil
 }

@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -36,6 +37,46 @@ func closeIfCloser(r io.Reader) {
 	}
 }
 
+// watchCancel closes conn as soon as ctx is done, so a dial that the caller has
+// given up on stops occupying a socket (and, on the other side, a slot). It
+// returns a stop function that must be called once the connection is no longer
+// cancellable, otherwise the watcher outlives its purpose holding a reference.
+//
+// Closing the conn rather than merely returning early is what makes the cancel
+// reach the transport: the SSH handshake is blocked in a read on this net.Conn,
+// and none of the x/crypto calls below take a context, so a closed socket is the
+// only signal that gets through. The resulting error is the caller's "context
+// canceled" to translate; this function never reports one itself.
+func watchCancel(ctx context.Context, conn net.Conn) func() {
+	if ctx == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Unblocks whatever read/write is in flight; the pending error is what
+			// the dial then reports.
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+// canceledErr converts the transport error a canceled dial produced into a
+// context error, so callers can recognise a user-initiated cancel rather than
+// reading it as a network fault of the target host.
+func canceledErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
 // DrainClosers closes closers in reverse order, ignoring errors. Used on error
 // paths and session teardown for bastion chains.
 func DrainClosers(closers []io.Closer) {
@@ -64,22 +105,45 @@ func setTCPKeepAlive(conn net.Conn) {
 	})
 }
 
-// StartWithConfig dials addr with the given SSH client config and starts a command.
-// If proxy is non-nil and enabled, the SSH connection is tunneled through a SOCKS5 proxy.
-func StartWithConfig(addr string, config *ssh.ClientConfig, proxy *Proxy, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
-	if config == nil {
-		return nil, fmt.Errorf("nil ssh ClientConfig")
-	}
-	conn, err := DialConn(addr, proxy, config.Timeout)
-	if err != nil {
-		return nil, fmt.Errorf("ssh dial: %w", err)
-	}
+// Handshake completes the SSH handshake over an already-open conn, returning a
+// client ready to open channels. ctx, when non-nil, aborts the handshake by
+// closing conn — the handshake has no context of its own, so a closed socket is
+// the only signal that gets through. On success the connection is owned by the
+// returned client and ctx is no longer consulted.
+//
+// Exported for chain builders, which own their net.Conn (a bastion's
+// direct-tcpip channel) and so cannot hand it to StartWithConfig.
+func Handshake(ctx context.Context, conn net.Conn, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
+	stop := watchCancel(ctx, conn)
+	defer stop()
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		conn.Close()
+		return nil, canceledErr(ctx, err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// StartWithConfig dials addr with the given SSH client config and starts a command.
+// If proxy is non-nil and enabled, the SSH connection is tunneled through a SOCKS5 proxy.
+//
+// ctx, when non-nil, cancels the dial: the TCP connect honours it natively, and a
+// watcher closes the socket during the SSH handshake, which takes no context of
+// its own. Cancellation is dropped once the transport is established — the caller
+// owns the connection from then on, and its request context (an HTTP handler's,
+// say) is canceled as soon as the response is written.
+func StartWithConfig(ctx context.Context, addr string, config *ssh.ClientConfig, proxy *Proxy, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
+	if config == nil {
+		return nil, fmt.Errorf("nil ssh ClientConfig")
+	}
+	conn, err := DialConn(ctx, addr, proxy, config.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("ssh dial: %w", err)
+	}
+	client, err := Handshake(ctx, conn, addr, config)
+	if err != nil {
 		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
-	client := ssh.NewClient(c, chans, reqs)
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -92,15 +156,25 @@ func StartWithConfig(addr string, config *ssh.ClientConfig, proxy *Proxy, comman
 
 // DialConn opens the underlying TCP connection to addr, optionally via a SOCKS5 proxy.
 // Exported so chain builders in other packages can reuse the direct/proxy dial path.
-func DialConn(addr string, proxy *Proxy, timeout time.Duration) (net.Conn, error) {
+// ctx, when non-nil, aborts the connect (and the proxy handshake) with ctx's error.
+func DialConn(ctx context.Context, addr string, proxy *Proxy, timeout time.Duration) (net.Conn, error) {
 	if timeout <= 0 {
 		timeout = defaultDialTimeout
 	}
 	if proxy != nil && proxy.Enabled() {
-		return dialProxy(proxy, addr, timeout)
+		return dialProxy(ctx, proxy, addr, timeout)
 	}
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	var conn net.Conn
+	var err error
+	if ctx != nil {
+		conn, err = (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, timeout)
+	}
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		// Annotate with target and timeout so a bare "i/o timeout" / "connectex ..."
 		// failure tells the user how long it waited and to where.
 		return nil, fmt.Errorf("connect %s (timeout %s): %w", addr, timeout, err)
@@ -111,16 +185,15 @@ func DialConn(addr string, proxy *Proxy, timeout time.Duration) (net.Conn, error
 
 // StartWithConn creates an SSH client over an existing net.Conn (e.g. net.Pipe)
 // and starts a command. Used for in-process connections without TCP.
-func StartWithConn(conn net.Conn, config *ssh.ClientConfig, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
+// ctx, when non-nil, cancels the handshake by closing conn.
+func StartWithConn(ctx context.Context, conn net.Conn, config *ssh.ClientConfig, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
 	if config == nil {
 		return nil, fmt.Errorf("nil ssh ClientConfig")
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, "inmem", config)
+	client, err := Handshake(ctx, conn, "inmem", config)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
-	client := ssh.NewClient(c, chans, reqs)
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -149,10 +222,15 @@ func StartWithClient(client *ssh.Client, command string, args []string, pty bool
 // intermediates are closed when the ExecSession closes. Used for ProxyJump/via
 // chains where the underlying *ssh.Client was established over a bastion's
 // direct-tcpip channel.
-func StartWithChain(client *ssh.Client, closers []io.Closer, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
+// ctx, when non-nil, cancels the channel open and the command start.
+func StartWithChain(ctx context.Context, client *ssh.Client, closers []io.Closer, command string, args []string, pty bool, rows, cols int) (*ExecSession, error) {
 	if client == nil {
 		DrainClosers(closers)
 		return nil, fmt.Errorf("nil ssh Client")
+	}
+	if ctx != nil && ctx.Err() != nil {
+		DrainClosers(closers)
+		return nil, ctx.Err()
 	}
 	session, err := client.NewSession()
 	if err != nil {

@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -78,6 +80,13 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 			attrs = append(attrs, "remote_addr", remoteDialAddr(cfg.Remote), "dial_timeout_s", cfg.Remote.DialTimeoutSeconds)
 		} else {
 			attrs = append(attrs, "endpoint", "internal")
+		}
+		// A cancel is the caller withdrawing its request, not a fault of the target.
+		// Logging it at error level would report every closed pending window as a
+		// failed connection attempt to a host that was never given a chance.
+		if errors.Is(err, context.Canceled) {
+			slog.Debug("session create canceled", attrs...)
+			return nil, err
 		}
 		slog.Error("session create failed", attrs...)
 		return nil, err

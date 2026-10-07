@@ -95,6 +95,10 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Remote:       remote,
 		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
 		Approval:     sshconfig.EffectiveApproval(ent),
+		// The browser cancels this fetch when the user closes the pending window,
+		// so the dial has to stop with it: otherwise the connect completes into a
+		// session no window is showing.
+		Ctx: r.Context(),
 	})
 	if err != nil {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)

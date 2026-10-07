@@ -303,7 +303,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, session.TestConnection(remote))
+	writeJSON(w, http.StatusOK, session.TestConnection(r.Context(), remote))
 }
 
 func (h *Handler) resolveSSH(name string) (cfgName string, ent *sshconfig.Entry, remote *session.RemoteSSH, err error) {

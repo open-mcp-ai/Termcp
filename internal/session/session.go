@@ -50,6 +50,12 @@ type Config struct {
 	// make "every write to this host is reviewed" the default rather than a
 	// switch someone has to remember after launching.
 	Approval bool
+	// Ctx, when non-nil, cancels the dial: a browser that closed its pending
+	// window (or an agent whose request was aborted) stops the connect it started
+	// instead of having a session it can no longer reach appear in the list. It
+	// applies to establishing the transport only — a created session outlives the
+	// request that asked for it, so the caller's request context must NOT be kept.
+	Ctx context.Context
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -132,6 +138,15 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	execSession, sshEndpointPublic, err := dialTransport(internal, cfg, usePty)
 	if err != nil {
 		return nil, err
+	}
+	// The dial can also finish in the same instant the caller gives up. Dropping
+	// the transport here rather than registering it keeps the promise the cancel
+	// makes: after a cancelled request, no session exists to be listed. Without
+	// this the race is small but real -- a fast host completes the dial just as
+	// the window closes, and the session appears with nobody attached to it.
+	if cfg.Ctx != nil && cfg.Ctx.Err() != nil {
+		_ = execSession.Close()
+		return nil, cfg.Ctx.Err()
 	}
 
 	buf := buffer.New(1024 * 1024)
@@ -224,6 +239,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
 func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
+	ctx := cfg.Ctx
 	if !isRemote(cfg) {
 		if internal == nil {
 			return nil, "", errors.New("internal ssh server is not configured")
@@ -239,7 +255,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 			internal.RevokeClientConfig(minted.User)
 			return nil, "", err
 		}
-		es, err := sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		es, err := sshclient.StartWithConn(ctx, conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
 			// A failed handshake consumes nothing, so the one-time credential is
 			// still pending; revoke it to keep the map bounded by live sessions.
@@ -258,11 +274,11 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 		return nil, "", fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
 	}
 	if r.Jump != nil {
-		client, closers, err := buildChainClient(r)
+		client, closers, err := buildChainClient(ctx, r)
 		if err != nil {
 			return nil, "", err
 		}
-		es, err := sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		es, err := sshclient.StartWithChain(ctx, client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
 			return nil, "", err
 		}
@@ -273,7 +289,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 	if err != nil {
 		return nil, "", err
 	}
-	es, err := sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+	es, err := sshclient.StartWithConfig(ctx, dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 	if err != nil {
 		return nil, "", err
 	}
