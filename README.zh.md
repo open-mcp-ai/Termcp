@@ -62,10 +62,6 @@
 - **细粒度会话控制** —— 文件管理、端口转发、多终端复用、读写终端窗口。
 - **安装无依赖** —— 10m 左右单文件，多平台兼容，支持 npx 集成。
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/1e6ab86a-fca9-49e7-a94d-8f0962b6e2d1" width="860" alt="Termcp Web UI">
-</p>
-
 ## 安装
 
 ### 1 · 一行命令接上你的 Agent
