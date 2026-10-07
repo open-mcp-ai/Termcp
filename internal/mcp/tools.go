@@ -120,7 +120,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 	), withLogging("shell_reader_unregister", s.handleUnregisterReader))
 
 	mcpServer.AddTool(s.newTool("shell_notify",
-		mcpgo.WithDescription("Manage event notifications (reverse wake-up signal) for a shell channel: action=register sets a rule on channel resource or sampling; action=unregister removes by rule_id; action=list returns active rules."),
+		mcpgo.WithDescription("Manage event notifications (reverse wake-up signal) for a shell channel: action=register sets a rule on channel resource or sampling; action=unregister removes by rule_id; action=list returns active rules.\n\nUse it to WAIT on a human instead of polling: when the command you started now needs a person at the terminal (a sudo/password prompt, an interactive installer, any prompt they must answer), call notify_user so they know it is their turn, then register event=output on that shell and stop calling shell_output in a loop — their next keystroke echo wakes you. Unregister when they have answered; closing the shell or deleting the session clears the rule as well."),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("register", "unregister", "list")),
 		mcpgo.WithString("shell_id", mcpgo.Description("Target shell_id (required for register; optional filter for list)")),
 		mcpgo.WithString("channel", mcpgo.Description("Delivery channel (required for register): resource (MCP notifications/resources/updated) or sampling (MCP sampling/createMessage)"), mcpgo.Enum("resource", "sampling")),

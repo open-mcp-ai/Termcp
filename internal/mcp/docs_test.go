@@ -695,3 +695,64 @@ func listResourcesRaw(t *testing.T, s *Server, ctx context.Context) json.RawMess
 	t.Helper()
 	return callMCPCtx(t, s, ctx, "resources/list", nil)
 }
+
+// shellNotifyDescription returns the shell_notify tool description as the model
+// receives it, failing if the tool is missing from the listing.
+func shellNotifyDescription(t *testing.T, s *Server, ctx context.Context) string {
+	t.Helper()
+	for _, tool := range listTools(t, s, ctx) {
+		if tool.Name == "shell_notify" {
+			return tool.Description
+		}
+	}
+	t.Fatal("shell_notify missing from tools/list")
+	return ""
+}
+
+// Issue #82: the agent held a terminal at a sudo prompt and had no rule telling
+// it that shell_notify is how it waits for the human, so it polled shell_output
+// in a loop instead. The tool description is where the rule has to live — it is
+// what the model reads when it considers the tool — and the payload is asserted
+// through tools/list because compactToolDescriptions replaces the long-form text
+// in tools.go before it reaches the wire, so checking either source file alone
+// would pass while the model saw nothing.
+func TestShellNotifyDescriptionTeachesWaitingOnAHuman(t *testing.T) {
+	desc := shellNotifyDescription(t, docsTestServer(t), originContext("http://127.0.0.1:18765"))
+	for _, want := range []string{
+		// The situation: a prompt the human, not the agent, has to answer.
+		"sudo/password",
+		// The order notify_user and shell_notify stand in: tell the human it is
+		// their turn first, then arm the wake-up. Selecting the wrong event is the
+		// same trap the silence event sets (it fires on nobody speaking, which is
+		// exactly the state the agent is in while it waits).
+		"notify_user",
+		"event=output",
+		// Without this the agent still has a reason to keep polling.
+		"stop polling",
+		// The rule must not become permanent: the wake-up is one task's, not the
+		// shell's.
+		"unregister",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("shell_notify model-facing description misses %q:\n%s", want, desc)
+		}
+	}
+}
+
+// The initialize instructions carry the same rule in one line, because a model
+// that never opens the shell_notify description still has to know that waiting
+// on a human is a supported move rather than a hang. Rule 5 states the asking
+// half (notify_user first); this asserts the answering half is next to it.
+func TestInstructionsPairWaitingOnAHumanWithNotifyUser(t *testing.T) {
+	for _, want := range []string{"Human at a prompt", "notify_user", "event=output"} {
+		if !strings.Contains(mcpServerInstructions, want) {
+			t.Errorf("initialize instructions no longer tell the agent how to wait on a human: missing %q", want)
+		}
+	}
+	// Both halves must be in rule 5's neighbourhood: the waking rule is only
+	// correct when it follows the notification, and an agent reading one without
+	// the other would either poll or stay silent.
+	if strings.Index(mcpServerInstructions, "Human at a prompt") < strings.Index(mcpServerInstructions, "HARD BOUNDARY") {
+		t.Error("the wait-on-a-human rule moved above the notify_user boundary it depends on")
+	}
+}

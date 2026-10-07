@@ -28,4 +28,4 @@ const mcpServerInstructions = `termcp agent rules:
 6) review_pending=true: held, nothing ran, no id to poll - do NOT resubmit, reword or retry it. notify_user (rule 5), then WAIT (not a stall): staged text queues when its ending shell_key arrives, and shell_output later shows whether it ran.
 7) Other keys use JSON \u001b escapes in shell_input. Repeating traceback: session_terminate, retry with PYTHON_BASIC_REPL=1. Silent hang: session_info.
 8) forward(action=local/remote/dynamic) = ssh -L/-R/-D, all take session_id. ssh_config(action=list) only returns names; never expose credentials.
-9) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken. shell_notify wakes the Agent, notify_user the human.`
+9) shell_notify(action=register, shell_id, channel="resource"|"sampling", event="output"|"exit"|"silence") = async wake-up (no payload); poll shell_output when woken. shell_notify wakes the Agent, notify_user the human. Human at a prompt: notify_user, then register event=output.`

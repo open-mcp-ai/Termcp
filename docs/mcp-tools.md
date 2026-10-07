@@ -355,6 +355,23 @@ ssh_config(action=list)
 
 > 进程还活但只是“输出停了”，用 `event="silence", silence_seconds=10`；需要持续跟踪输出变化用 `event="output"`。
 
+**典型用法二（等人输入）**：命令跑到一半停下等人（`sudo` 密码、交互式安装器、任何必须由人在终端里回答的提示）时，不要让 Agent 轮询 `shell_output`——人可能几分钟才回来，轮询既费上下文也费时间：
+
+```jsonc
+// 1) 先告诉人“轮到你了”（warn/error + duration_seconds=0 不自动消失）
+{ "message": "deploy 在等 sudo 密码", "level": "warn", "duration_seconds": 0, "session_id": "<session_id>" }
+
+// 2) 在同一个 shell 上登记输出唤醒（不是 exit——进程还没退出）
+{ "action": "register", "shell_id": "<shell_id>", "channel": "sampling", "event": "output" }
+
+// 3) Agent 就此停手，等人敲键盘；人一敲，终端的输出/回显唤醒 Agent，再去 shell_output 读
+
+// 4) 人答完了，摘掉规则（不摘也会在 shell/会话关闭时自动级联清理）
+{ "action": "unregister", "rule_id": "notif_..." }
+```
+
+> 为什么 `output` 而不是 `silence`：人在 sudo 提示符下敲密码时会产生输出（回显被关掉也会走换行），`event="output"` 因此能被人的操作直接触发；`silence` 描述的是“没人说话”，正好把等人的情形排除在外。
+
 ### notify_user
 
 向**人类用户**（而非 AI Agent）推送浏览器通知：在 Termcp Web UI 的**每个已打开页面**弹出彩色 toast，并尝试触发**浏览器系统通知**（需浏览器授权，页面在后台也能收到）；指定 `session_id` 时，该 session 的卡片会**高亮**（脉冲描边，滚到可视区；若其终端窗口已打开，窗口头部也会闪烁）。与 `shell_notify` 正相反 —— 后者是通知 AI Agent，本工具是 Agent 通知人。

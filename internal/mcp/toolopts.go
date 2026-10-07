@@ -41,7 +41,7 @@ var compactToolDescriptions = map[string]string{
 	"file_getwd":              "Get the SFTP working directory for a session.",
 	"message":                 "Transcript span index for a shell: status, time, and byte offsets. Read the bytes with shell_output(offset, max_bytes).",
 	"ssh_config":              "SSH profiles: action=list names, or (if enabled) create/edit/copy/delete.",
-	"shell_notify":            "Manage event notifications (wake-up) for a shell: register/unregister/list rules.",
+	"shell_notify":            "Manage event notifications (wake-up) for a shell: register/unregister/list rules. USE IT TO WAIT ON A HUMAN AT A PROMPT (sudo/password, an interactive installer, anything they must answer in the terminal): after notify_user (see that tool), register event=output HERE and stop polling shell_output in a loop — their next output wakes you. unregister once they have answered; closing the shell or session clears the rule too.",
 	"notify_user":             "Notify the human user via the termcp Web UI: toast on every open page + browser system notification; session_id highlights that session's card. CALL IT BEFORE ASKING THE HUMAN FOR ANYTHING (password/sudo/MFA/passphrase, confirmation, approval, a decision, or any interactive input) and the moment a long task ends or fails: the human may not be watching, so an unannounced question stalls the work until they happen to look. Once you have asked, WAIT: never poll, guess or fake a human answer. Blocking asks: level=warn or error, duration_seconds=0 (sticky), the affected session_id. Repeat the same message in your reply; delivered=0 means no Web UI page was open.",
 }
 

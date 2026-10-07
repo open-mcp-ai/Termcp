@@ -4,6 +4,12 @@
 
 ### 修复
 
+- **告诉 Agent「等人在终端里输入」时用 `shell_notify` 挂监听，而不是空转轮询（#82）**：命令跑到一半停下来等人（`sudo` 密码、交互式安装器、任何必须由人在终端里回答的提示）时，Agent 此前只有一条路：反复 `shell_output` 轮询。工具面里没有任何一处说明还有别的做法——`shell_notify` 的描述只说它“管理通知规则”，规则 9 只说它“能反向唤醒”，而 `notify_user` 的描述里写了「问完要 WAIT」却没写「wait 的时候靠什么被叫醒」。于是这几句话合起来反而在鼓励轮询：一条看起来能收通知、但没人说什么时候该用它的工具，不会被用。
+
+  现在三处都写明了这个用法：`shell_notify` 的模型可见描述（`toolopts.go` 的紧凑文案，即真正发给模型的那份）与长描述都补上「人停在提示符前（sudo/密码、交互式安装器）时，先 `notify_user`，再在这里注册 `event=output`，然后停止轮询——人的下一次输出会唤醒你；人答完后 `unregister`（shell/会话关闭也会自动级联清理）」；initialize instructions 的规则 9 尾随一句「Human at a prompt: notify_user, then register event=output」；`docs/mcp-tools.md` 新增「典型用法二（等人输入）」的完整四步。选 `output` 而非 `silence` 是刻意的：人去碰提示符时会产生输出（密码回显被关掉也仍有换行），而 `silence` 描述的是「没人说话」，正好把等人的场景排除在外。
+
+  两条回归测试按真实线上载荷断言：`TestShellNotifyDescriptionTeachesWaitingOnAHuman` 走 `tools/list` 拿描述，而不是读 `tools.go`——因为 `compactToolDescriptions` 会在发给模型前把长文案换掉，只查源文件会在模型实际什么也没收到的情况下通过；`TestInstructionsPairWaitingOnAHumanWithNotifyUser` 除了断言规则 9 在，还断言它排在规则 5 的 `HARD BOUNDARY` 之后——只读到「挂监听」而没读到「先通知人」的 Agent，要么继续轮询，要么默默等着。两句都实测过：把文案改回去时对应测试失败。instructions 的 2400 B 预算只剩 78 B，因此规则 9 只加了一句。
+
 - **连接对话框不再把上一次的状态留给下一个 profile，并清掉三处只写不读的对话框状态（#83）**：六个 modal 都是同一个常驻 DOM 元素，每次打开只切一个 class——于是凡是「下一次打开不会重写」的字段都成了残渣。最坏的是测试判定：`#conn-test-result` 的结论从不清理，在一个从未拨号的主机下面写着「✓ Connected in 12 ms」，用户读到的当然是当前这个 profile 的答案。「Test」按钮可能停在上一次的 `disabled` + 「Testing…」上，重开对话框像是永远在忙；form/TOML 的**图标**不跟视图复位，重开后图标和视图互相说谎；`#modal-conn-err` 只清 `display` 不清文本；`#modal-conn-import` 继承上一次导入的读数与半途禁用的按钮。
 
   更难看见的一半是慢响应：profile 的 GET 与 Test 都是无上限的拨号，旧代码没有任何守卫，于是「打开 A → 慢请求在飞 → 打开 B → A 的响应落地」会让 **A 的表单画在 B 的名字下面**。`openConnModal` 现在推进一个代数计数器（`#modal-conn._termcpOpenSeq`），profile 读取的成功/失败两条臂与 Test 的三条臂都比对该代数，关闭对话框也推进一代——属于某次打开的结果不会再画到另一次打开上。
