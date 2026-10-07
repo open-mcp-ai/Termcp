@@ -1,6 +1,7 @@
 package sshserver
 
 import (
+	"fmt"
 	"io"
 	"runtime"
 	"strings"
@@ -419,6 +420,61 @@ func TestServer_PtySession(t *testing.T) {
 
 	stdin.Write([]byte(testShellInput("exit")))
 	session.Wait()
+}
+
+// ptyExitCommand returns a command line that exits with the given status, and
+// the status it should report.
+func ptyExitCommand(code int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("cmd.exe /c exit %d", code)
+	}
+	return fmt.Sprintf("sh -c 'exit %d'", code)
+}
+
+// A PTY session must report the child's real exit code. This is the half of the
+// Windows reap guard that fails loudly (see waitChild in server_windows.go): the
+// fix waits on its own handle to the process instead of calling exec.Cmd.Wait,
+// which works because ConPTY never closes the process handle it spawns with. If
+// a future x/conpty starts closing it, waitChild falls back to 127 and this test
+// fails instead of the exit code silently rotting.
+//
+// It also covers the pre-fix double reap, where the library's own goroutine and
+// the handler both called Wait on the same exec.Cmd: the loser saw a nil state,
+// so the session reported the 127 fallback rather than the child's code.
+func TestServer_PtyExitCode(t *testing.T) {
+	const want = 42
+
+	srv := New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	config := mintCfg(t, srv)
+	client := dialServer(t, srv, config)
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Start(ptyExitCommand(want)); err != nil {
+		t.Fatal(err)
+	}
+
+	err = session.Wait()
+	exitErr, ok := err.(*ssh.ExitError)
+	if !ok {
+		t.Fatalf("expected an *ssh.ExitError, got %v", err)
+	}
+	if got := exitErr.ExitStatus(); got != want {
+		t.Fatalf("pty session reported exit code %d, want %d", got, want)
+	}
 }
 
 func TestServer_PtyEnviron(t *testing.T) {

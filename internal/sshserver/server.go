@@ -86,10 +86,12 @@ func takePTY(sess ssh.Session) (*sessionPTY, bool) {
 // to the same PTY. It must never discard windows: an earlier discard-only
 // consumer (removed in a664a5d) dropped roughly half of all resizes. When both
 // consumers are alive they race for each window, but both apply what they get,
-// so no window can be lost.
+// so no window can be lost. Applying is platform-routed (see applyWindow):
+// Windows must not reach conpty's Resize, whose geometry cache is unlocked and
+// which the library's consumer calls concurrently.
 func drainWindowChanges(pty ssh.Pty, winch <-chan ssh.Window) {
 	for win := range winch {
-		_ = pty.Resize(win.Width, win.Height)
+		_ = applyWindow(pty, win)
 	}
 }
 
@@ -291,24 +293,22 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// session, and on Windows a held PTY that later teardowns then fail on. So the
 	// wait is raced against the session context, which the library cancels when the
 	// connection goes away, and the child is killed if the connection lost.
-	waitDone := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(waitDone)
-	}()
+	//
+	// How the wait is performed is platform-specific, and on Windows it matters:
+	// waitChild owns that difference (see server_windows.go). The exit code
+	// travels back over the channel, so it needs no shared field.
+	waitDone := make(chan int, 1)
+	go func() { waitDone <- waitChild(cmd, hasPty) }()
+	var exitCode int
 	select {
-	case <-waitDone:
+	case exitCode = <-waitDone:
 	case <-sess.Context().Done():
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		<-waitDone
+		exitCode = <-waitDone
 	}
 
-	exitCode := 127
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
 	sess.Exit(exitCode)
 }
 
