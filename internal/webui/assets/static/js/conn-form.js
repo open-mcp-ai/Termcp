@@ -291,11 +291,16 @@ function openConnModal(edit, name, kind) {
   document.getElementById('conn-duplicate').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   var nameEl = document.getElementById('conn-name');
   nameEl.value = edit ? name : '';
-  // The name is the profile's identity and the id used in `/api/connections/{name}`.
-  // For internal it is also the only way to address the built-in connection, so
-  // it is pinned; the host/user/auth fields below are hidden since the loopback
-  // dial ignores them.
-  nameEl.readOnly = !!edit;
+  // Only the internal profile is pinned. Its name is the sole way to address the
+  // built-in loopback connection, so renaming it would orphan every caller that
+  // says ssh_config="internal"; the host/user/auth fields below are hidden for it
+  // too, since the loopback dial ignores them. Every other profile CAN be
+  // renamed — the name is the id used in `/api/connections/{name}`, and the save
+  // handler below passes the old one as ?from= so the store moves the profile and
+  // the sessions already holding it follow (see handler_conn.go and
+  // TestRenamingAProfileFollowsLiveSessions). Left as isInternal, not !!edit:
+  // pinning every edit is what removed renaming from the dialog.
+  nameEl.readOnly = isInternal;
   var loopbackOnly = document.getElementById('conn-f-loopback-only');
   if (loopbackOnly) loopbackOnly.style.display = isInternal ? '' : 'none';
   var remoteFields = document.getElementById('conn-f-remote-fields');

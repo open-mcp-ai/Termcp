@@ -7,7 +7,7 @@ SSH 连接
   └── Session（会话容器）
         ├── Shell[]（终端 channel，0..N 个，平等，无根/子区分）
         ├── Forward[]（端口转发 tunnel，0..N 个）
-        └── File（SFTP 客户端，Session 级别复用）
+        └── File（SFTP 客户端，**当前按次操作创建，未复用**）
 ```
 
 ## Session
@@ -56,7 +56,7 @@ SSH 连接
 
 ## File（SFTP）
 
-**定义**：SSH 连接上的 SFTP 客户端。Session 级别复用——首次文件操作时打开，后续操作共用，Session 终止时关闭。属于 Session 持有的持久资源。
+**定义**：SSH 连接上的 SFTP 客户端。**设计目标是 Session 级别复用**（首次文件操作时打开，后续操作共用，Session 终止时关闭），但**当前实现尚未复用**：见下方「当前状态」。
 
 **当前状态**：每次文件操作临时 `sftp.NewClient` + `defer Close`，不复用。
 

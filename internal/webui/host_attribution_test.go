@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -166,5 +169,107 @@ func TestRenamingAProfileFollowsLiveSessions(t *testing.T) {
 	}
 	if got := sess.Info().Name; got != "custom-session" {
 		t.Fatalf("session display name changed during profile rename: %q", got)
+	}
+}
+
+// TestConnectionDialogPinsOnlyTheInternalName runs the real openConnModal under
+// node and asserts which profiles come up renameable.
+//
+// The name field is the profile's id in `/api/connections/{name}`, and the save
+// handler passes the old one as ?from= so a rename moves the stored profile and
+// the sessions holding it (the test above covers that half). Only the internal
+// loopback profile must be pinned: its name is the sole way to address the
+// built-in connection, so renaming it would orphan every `ssh_config="internal"`.
+//
+// That pin had been written as `readOnly = !!edit`, which silently removed
+// renaming from the dialog for EVERY profile - the field was still populated, so
+// the only symptom was a text input that refused to accept typing. A comment
+// arguing the internal case sat right above it, which is why the wider condition
+// read as intentional. Both halves are pinned here: the internal profile is
+// pinned, and every other profile (and a new one) is not.
+func TestConnectionDialogPinsOnlyTheInternalName(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot exercise the connection dialog")
+	}
+	body := readAssetLF(t, "static/js/conn-form.js")
+	// openConnModal runs from its declaration to the next top-level statement; the
+	// slice is checked by the test itself, which fails if it holds no readOnly.
+	modal := between(t, body, "function openConnModal(", "\ndocument.getElementById('conn-f-auth').onchange")
+
+	script := `
+const fs = require('fs');
+const vm = require('vm');
+
+// The dialog touches a handful of elements; a map of them is enough to run it.
+// readOnly is the property under test, so the stubs record exactly that.
+function makeEl(id) {
+  return { id: id, style: {}, classList: { add() {}, remove() {} },
+           addEventListener() {}, value: '', textContent: '', checked: false };
+}
+
+const modal = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = {
+  document: {
+    _els: {},
+    getElementById(id) {
+      if (!this._els[id]) this._els[id] = makeEl(id);
+      return this._els[id];
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  },
+  t: k => k,
+  window: {},
+  fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('') }),
+  URLSearchParams: function () {},
+  console: console,
+};
+vm.createContext(sandbox);
+vm.runInContext('var editingConnName = \'\'; var connEntries = null;\n' +
+  'var _connDirty = false; var _connTemplateRemote = \'\';\n' +
+  'function _connTOMLToForm() {} function _connTemplateFor() { return \'\'; }\n' +
+  'function _connShowView() {} function loadConnections() {}\n' +
+  'function resetConnPasswordVisibility() {} function showModal() {}\n' +
+  modal, sandbox);
+
+let bad = 0;
+function check(name, got, want) {
+  if (got !== want) { console.log('FAIL ' + name + ': got ' + got + ' want ' + want); bad++; }
+  else console.log('PASS ' + name);
+}
+
+// openConnModal(edit, name, kind); the name field is documents' conn-name.
+function nameReadOnly(edit, name, kind) {
+  vm.runInContext('openConnModal(' + edit + ', ' + JSON.stringify(name) + ', ' + JSON.stringify(kind) + ')', sandbox);
+  return sandbox.document.getElementById('conn-name').readOnly;
+}
+
+// The internal profile is the one that must stay pinned.
+check('internal profile is pinned', nameReadOnly(true, 'internal', 'internal'), true);
+
+// Everything else is renameable - this is what the !!edit form broke.
+check('remote profile is renameable', nameReadOnly(true, 'prod', 'remote'), false);
+check('remote profile with no kind is renameable', nameReadOnly(true, 'prod', undefined), false);
+check('new profile is editable', nameReadOnly(false, '', undefined), false);
+
+console.log(bad === 0 ? 'CONN DIALOG OK' : bad + ' dialog failure(s)');
+process.exit(bad === 0 ? 0 : 1);
+`
+	tmp := t.TempDir()
+	modalPath := filepath.Join(tmp, "modal.js")
+	if err := os.WriteFile(modalPath, []byte(modal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(tmp, "modal_test.js")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, scriptPath, modalPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("connection dialog probe failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "CONN DIALOG OK") {
+		t.Fatalf("connection dialog probe did not pass:\n%s", out)
 	}
 }
