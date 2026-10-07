@@ -103,7 +103,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 	), withLogging("ssh_config", s.handleSSHConfigOps))
 
 	mcpServer.AddTool(s.newTool("message",
-		mcpgo.WithDescription("A session's transcript index: action=list returns the spans of the shell's byte log (status, time, start, end) in order. The bytes themselves are read with shell_output(offset=start, max_bytes=end-start)."),
+		mcpgo.WithDescription("A session's transcript index: action=list returns the spans of the shell's byte log (status, time, start, end) in order. The bytes themselves are read with shell_output(offset=start, max_bytes=end-start).\n\nstatus is the one field worth reading: it says who produced the span. o = output from the shell, a = input an AI agent wrote through MCP, i = input written at the terminal (the human, through the Web UI), q = an approval was requested at this point, A = an approved input was released and written. An i or q span is the evidence that a human has operated this terminal, which is otherwise invisible in the byte stream (the agent's and the human's keystrokes produce the same echo). Input spans are zero-length marks: start == end, because the bytes live in the terminal's echo rather than being written twice. Both `a` and `i` mark the point where a line was submitted, not where typing started."),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list")),
 		mcpgo.WithString("session_id", mcpgo.Required()),
 	), withLogging("message", s.handleMessageOps))

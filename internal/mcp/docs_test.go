@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/webui"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // callMCP dispatches one JSON-RPC request through the MCP server's message
@@ -754,5 +755,110 @@ func TestInstructionsPairWaitingOnAHumanWithNotifyUser(t *testing.T) {
 	// the other would either poll or stay silent.
 	if strings.Index(mcpServerInstructions, "Human at a prompt") < strings.Index(mcpServerInstructions, "HARD BOUNDARY") {
 		t.Error("the wait-on-a-human rule moved above the notify_user boundary it depends on")
+	}
+}
+
+// messageDescription returns the message tool description as the model receives
+// it, failing if the tool is missing from the listing.
+func messageDescription(t *testing.T, s *Server, ctx context.Context) string {
+	t.Helper()
+	for _, tool := range listTools(t, s, ctx) {
+		if tool.Name == "message" {
+			return tool.Description
+		}
+	}
+	t.Fatal("message missing from tools/list")
+	return ""
+}
+
+// Issue #87: the agent can only tell whether a human has touched the terminal by
+// reading the timeline index, and every span it gets back carries a one-letter
+// status. The letters are terse by design (they are written to log.jsonl for
+// every status change), so a description that shows the fields without decoding
+// them leaves the agent holding data it cannot interpret -- `i` versus `a` is
+// precisely the question the issue asks, and nothing on the wire explained it.
+//
+// The decoding is checked against the live handlers, not only against the prose:
+// the assertions below drive an AI input and a human input through the real
+// paths and require the documented letters to be what comes back. A description
+// that drifted from the statuses the server emits would still satisfy a string
+// match, and that drift is the whole risk here.
+func TestMessageDescriptionDecodesTheStatusLetters(t *testing.T) {
+	desc := messageDescription(t, docsTestServer(t), originContext("http://127.0.0.1:18765"))
+	for _, want := range []string{
+		"o output",   // the shell's own bytes
+		"a AI input", // the agent's own writes
+		"i human input",
+		// The reading the issue is about: which spans prove a person operated
+		// the terminal, given that both sources echo identically.
+		"i/q = human operated",
+		// Zero-length marks: an agent that expects bytes here would read the
+		// wrong span for the input it is looking for.
+		"Bytes via shell_output",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("message model-facing description misses %q:\n%s", want, desc)
+		}
+	}
+
+	// The letters the description names must be the letters the handlers record.
+	s, _, _, _ := newTestServerWithHistory(t)
+	sid, shellID := startTestSession(t, s)
+
+	// An agent's line, through the MCP path.
+	if _, err := s.handleSendInput(context.Background(), makeRequest(map[string]any{
+		"shell_id": shellID, "text": "echo ai-was-here",
+	})); err != nil {
+		t.Fatalf("handleSendInput: %v", err)
+	}
+	if _, err := s.handlePressKey(context.Background(), makeRequest(map[string]any{
+		"shell_id": shellID, "key": "enter",
+	})); err != nil {
+		t.Fatalf("handlePressKey: %v", err)
+	}
+
+	// A human's line, through the same call the browser's WebSocket makes.
+	sess := s.sessMgr.Get(sid)
+	if sess == nil {
+		t.Fatal("session vanished")
+	}
+	shell := sess.GetChildShell(shellID)
+	if shell == nil {
+		t.Fatal("shell vanished")
+	}
+	if err := shell.SendTerminalBytes([]byte("echo human-was-here"), true); err != nil {
+		t.Fatalf("the human input path failed: %v", err)
+	}
+
+	res, err := s.handleMessageOps(context.Background(), makeRequest(map[string]any{
+		"action": "list", "session_id": sid, "shell_id": shellID,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("message(list) failed: %v %+v", err, res)
+	}
+	spans, _ := parseResult(t, res)["spans"].([]any)
+	seen := map[string]bool{}
+	for _, raw := range spans {
+		span, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		status, _ := span["status"].(string)
+		seen[status] = true
+		// Input spans are marks, not byte ranges: the description promises this,
+		// and a reader paging with offset=start would loop forever otherwise.
+		if status == string(api.LogAIInput) || status == string(api.LogAPIInput) {
+			start := getFloat64(span, "start", -1)
+			end := getFloat64(span, "end", -1)
+			if start != end {
+				t.Errorf("input span %q is not a zero-length mark: start=%v end=%v", status, start, end)
+			}
+		}
+	}
+	if !seen[string(api.LogAIInput)] {
+		t.Errorf("no %q span was recorded for the agent's input; spans: %v", api.LogAIInput, seen)
+	}
+	if !seen[string(api.LogAPIInput)] {
+		t.Errorf("no %q span was recorded for the human's input, so the description's claim is unverifiable; spans: %v", api.LogAPIInput, seen)
 	}
 }

@@ -4,6 +4,12 @@
 
 ### 修复
 
+- **`message` 的描述解释 `status` 五个字母的含义，Agent 因此能判断「人是否操作过终端」（#87）**：`message(action=list)` 返回的每个区段都带一个单字母 `status`，而这个字母**只写不解释**：`toolopts.go` 里模型看到的那份描述只说「status, time, and byte offsets」，`docs/mcp-tools.md` 只列了 `o`/`a`/`i` 三个（`q`、`A` 两个从 4b2e400 起就在日志里，文档从未提过）。`i`（人的输入）与 `a`（AI 的输入）正是「人是否碰过这个终端」的答案，而**两者在字节日志里长得完全一样**（终端回显不区分来源）——描述不说，Agent 就拿着一堆读不懂的数据。
+
+  现在模型可见描述列出全部五个取值（`o` 输出 / `a` AI 输入 / `i` 人输入 / `q` 请求审批 / `A` 审批通过并写入），并直说 **`i` 或 `q` 即「人操作过」的证据**；长描述额外说明为什么这值得读（回显不分来源）、以及输入区段是**零长度标记**（`start == end`，字节在回显里、不重复写入）。`docs/mcp-tools.md` 补齐五个取值与两处细节：`q` 后面不一定有字节（审批被拒/超时就不产生输入），标记的是**提交那一行**的时刻而不是开始打字。
+
+  回归测试不是文字匹配：它把一段 AI 输入（走 `shell_input`/`shell_key`）与一段人的输入（走浏览器 WebSocket 同一条 `SendTerminalBytes` 路径）打进同一条日志，再用真实的 `message(action=list)` 读回来，断言描述里命名的两个字母确实是服务端写下的那两个（并把 `a`/`i` 区段断言为零长度）——一份与 handler 漂移了的描述仍然能通过纯字符串断言，而漂移正是这里唯一的风险。
+
 - **`ssh_config` 的模型可见描述给出导入/导出文件格式，并指出嵌套 bastion 这个坑（#81）**：Agent 经常被要求把用户粘进来的一串主机整理成「能导入的文件」，但文件格式此前只存在于 Web UI 与 `docs/api.md`，MCP 侧一个字也没有——`ssh_config` 的描述只说 `action=list names, or (if enabled) create/edit/copy/delete`。
 
   写这段格式时实测出一个真实的坑：**文件格式不是本工具的参数形状**。参数里 bastion 是平的 `jump_host`/`jump_user`/…，而文件里必须是嵌套的 `[connections.jump]`。把参数拼法写进文件**解析不报错、但 bastion 被静默丢弃**（`ent.Jump == nil`，导出的文件里也没有它）——直到真的拨号才发现连不上。描述里因此明写了 `[connections.jump]` 与 `[connections.jump.jump]`，并说明平的 `jump_host` 是本工具的参数、不是文件字段。

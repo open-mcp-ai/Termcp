@@ -414,9 +414,9 @@ ssh_config(action=list)
 | `shell_id` | string | 否 | 指定 shell 通道；省略则用会话的 primary shell |
 
 - `action="list"`：返回 `{ "spans": [{ status, time, start, end }], "total_bytes": N, "session_id": "..." }`
-- `status`：`"o"` = 输出，`"a"` = AI 输入（MCP），`"i"` = 接口输入（浏览器）
+- `status` = **这段字节是谁产生的**，共 5 个取值：`"o"` 输出（shell 自己打印的）、`"a"` AI 输入（MCP）、`"i"` 终端输入（人，经 Web UI）、`"q"` 此处请求了一次审批、`"A"` 审批通过并写入。**Agent 与人的敲键回显完全一样**，字节日志里分不出人是否操作过；`i` / `q` 区段就是「人碰过这个终端」的证据（`q` 后面不一定有字节：审批被拒/超时就不产生任何输入）。
 - `start`/`end`：该区段在 `log.bin` 中的字节区间；取内容用 `shell_output(shell_id, offset=start, max_bytes=end-start)`
-- 输入是**零长度标记**（`start == end`）：按键已由终端回显进输出流，不重复写入
+- 输入是**零长度标记**（`start == end`）：按键已由终端回显进输出流，不重复写入；且标记的是**提交那一行**（按 enter / ctrl+c / ctrl+d / ctrl+z）的时刻，不是开始打字的时刻
 
 ### session_delete（彻底删除会话）
 
