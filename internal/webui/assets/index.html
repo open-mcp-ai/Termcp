@@ -9,6 +9,10 @@
   <link rel="stylesheet" href="static/css/app.css">
 </head>
 <body>
+  <!-- Drop-in Blackwall artwork: replace icons/blackwall.svg without touching the
+       page layer. The fixed layer never participates in layout or input, and
+       stays below the app surfaces while translucent plates let it show through. -->
+  <div class="page-backdrop" aria-hidden="true"></div>
   <header class="app-header">
     <h1>termcp<span class="app-version" id="app-version" title="termcp -version"></span></h1>
     <nav class="app-header-nav" aria-label="Docs" data-i18n-aria="nav.docs">
@@ -29,7 +33,14 @@
           <button type="button" class="lang-opt" data-lang="zh-Hant" onclick="chooseLang('zh-Hant')">繁中</button>
         </span>
       </span>
-      <a href="/api.html" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title">API / MCP / SKILLS</a>
+      <a href="/api.html" class="api-nav-link" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title" aria-label="MCP, HTTP API and Agent skill integration docs" data-i18n-aria="nav.api.title">
+        <svg class="api-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.25 2.5h3.1c1.13 0 2.05.92 2.05 2.05v8.2c-.5-.62-1.22-.98-2.05-.98h-3.1z"/>
+          <path d="M13.75 2.5h-3.1c-1.13 0-2.05.92-2.05 2.05v8.2c.5-.62 1.22-.98 2.05-.98h3.1z"/>
+          <path d="M8 4.55v8.2"/>
+        </svg>
+        <span class="api-nav-label">API / MCP / SKILLS</span>
+      </a>
     </nav>
   </header>
   <div class="dock">
@@ -42,31 +53,139 @@
          to read. -->
     <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
     <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
-    <div class="section-header entries-section-header" id="sec-entries" aria-expanded="true" role="button" tabindex="0">
-      <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span data-i18n="sec.entries">Host</span>
+    <!-- The host drawer: closed by default, fixed when open, and out of the flow
+         entirely (display: contents on its wrapper), so it is a sibling of the
+         layout frame rather than a child of it — a fixed element inside a
+         grid/backdrop context would resolve against that ancestor instead of the
+         viewport. -->
+    <div class="workspace-frame">
+      <!-- NetHub is the page's control layer: the access nodes Termcp can dial
+           are a persistent left column, not a drawer. Collapsing it leaves a rail
+           of status dots rather than nothing, so "which machines can I reach" is
+           never a question the page stops answering. Below 800px the same element
+           is the fixed drawer it always was; the sidebar and the rail are the two
+           desktop states of one node, switched by .nethub-collapsed on the frame. -->
+      <aside class="nethub" id="nethub">
+        <button type="button" class="nethub-btn" id="open-host-drawer" title="NetHub" data-i18n-title="nav.nethub" aria-label="NetHub" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="true" onclick="event.stopPropagation()">
+          <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
+          <span class="nethub-label" data-i18n="nav.nethub">NetHub</span>
+          <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
+        </button>
+        <div class="nethub-rail" id="nethub-rail" role="list" aria-label="NetHub" data-i18n-aria="nav.nethub"></div>
+        <div class="nethub-body" id="sec-entries-body">
+        <div class="drawer-toolbar" role="toolbar">
+          <!-- One row, two states. Collapsed: the list-checks key spans the
+               toolbar and a card click connects. Pressed: it squares off at the
+               row's left edge — the ticked count rides its face — the dashed
+               invert key sits right of it, and card clicks tick instead. The
+               dropdown carries export (a download: the file leaves the server)
+               and delete. Pressing the switch again restores and clears. -->
+          <button type="button" class="nethub-select-toggle" id="nethub-select-toggle" aria-pressed="false" title="Batch select" data-i18n-title="nethub.batch.selectTitle" aria-label="Batch select" data-i18n-aria="nethub.batch.select" onclick="event.stopPropagation()">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1"/><path d="M3.1 4.1l1.1 1.1 2.2-2.4"/><path d="M9.5 4h5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 12h5"/></svg>
+            <span class="nethub-toggle-count" id="nethub-toggle-count" hidden>0</span>
+          </button>
+          <button type="button" class="nethub-batch-icon" id="nethub-sel-invert" title="Invert selection" data-i18n-title="nethub.batch.invert" aria-label="Invert selection" data-i18n-aria="nethub.batch.invert" onclick="event.stopPropagation()">
+            <svg class="ic-hollow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
+            <svg class="ic-solid" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
+          </button>
+          <div class="nethub-open-split" id="nethub-open-split">
+            <!-- The plate is an inner box on purpose: it carries the shared
+                 clip-path, and a clip cuts DESCENDANTS too. With the menu
+                 inside the clipped element it was sliced off the moment it
+                 opened, so the menu is a sibling of this plate below. -->
+            <div class="nethub-open-plate">
+              <button type="button" id="nethub-batch-open" title="Open a session for each selected host" data-i18n-title="nethub.batch.openTitle" aria-label="Open selected hosts" data-i18n-aria="nethub.batch.openTitle">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5.14v13.72c0 .8.88 1.29 1.56.86l10.8-6.86a1.03 1.03 0 000-1.72L9.56 4.28A1.03 1.03 0 008 5.14z" fill="currentColor"/></svg>
+              </button>
+              <button type="button" id="nethub-open-caret" aria-haspopup="menu" aria-expanded="false" title="More actions" data-i18n-title="nethub.batch.more" aria-label="More actions" data-i18n-aria="nethub.batch.more">
+                <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
+              </button>
+            </div>
+            <!-- Anchored to the split itself (top: 100%), so it follows the key
+                 wherever the row puts it — no hardcoded offset to drift. -->
+            <div class="nethub-open-menu" id="nethub-open-menu" role="menu" aria-label="Batch actions" data-i18n-aria="nethub.batch.menuAria" hidden>
+              <button type="button" class="nethub-menu-item" id="nethub-menu-export" role="menuitem" title="Export Config" data-i18n-title="conn.batch.export">
+                <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+                <span data-i18n="conn.batch.export">Export Config</span>
+              </button>
+              <button type="button" class="nethub-menu-item nethub-menu-danger" id="nethub-menu-delete" role="menuitem" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected hosts" data-i18n-aria="nethub.batch.deleteTitle">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
+                <span data-i18n="common.delete">Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
+          <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
+        </button>
+        <div id="conn-grid" class="conn-grid"></div>
+        <!-- The column's two fixed bottom actions share one row: creating and
+             importing are the two ways a profile enters the list, so they read
+             as a pair rather than as an add button with a stranger beside it. -->
+        <div class="drawer-add-row">
+          <div class="drawer-add drawer-add-grow" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span class="drawer-add-label" data-i18n="nethub.add">Add access</span>
+          </div>
+          <button type="button" class="drawer-add drawer-import" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import">
+            <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+          </button>
+        </div>
+      </div>
+      </aside>
+      <!-- Sessions and the archive are one column, so the two plates share both
+           edges at every width: as separate flex items the archive would start
+           at the row's left edge while sessions started after NetHub. This column
+           is the only part of the row that flexes, which is what gives the plates
+           their width as the sidebar collapses. -->
+      <div class="workspace-main">
+      <div class="workspace-panel workspace-sessions">
+        <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
+          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
+          <span data-i18n="sec.sessions">Sessions</span>
+          <span id="session-batch-count" class="batch-count" style="display:none"></span>
+          <span style="flex:1"></span>
+          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="session-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="session-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
+            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
+          </button>
+        </div>
+        <div class="section-body" id="sec-sessions-body">
+          <div id="session-grid" class="conn-grid"></div>
+        </div>
+      </div>
+      <!-- The archive is a second plate under the sessions one, not another
+           section: it holds the same cards, for sessions that are over. Its
+           header mirrors the sessions header's placement so the two read as a
+           pair, and the actions live here rather than in a shared toolbar
+           because each plate acts on its own selection. -->
+      <div class="workspace-panel workspace-sessions workspace-archive">
+        <div class="section-header" id="sec-archive-header" role="button" tabindex="0" aria-expanded="true">
+          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
+          <span data-i18n="sec.archive">Archive</span>
+          <span id="archive-batch-count" class="batch-count" style="display:none"></span>
+          <span style="flex:1"></span>
+          <!-- Selection and deletion are one region's actions, and the trash
+               only appears once that region has something selected: an
+               always-present disabled button reads as "broken", while the
+               checkbox beside it is the control that reveals it. -->
+          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="archive-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected archived sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="archive-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
+            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
+          </button>
+        </div>
+        <div class="section-body" id="sec-archive-body">
+          <div id="archive-grid" class="conn-grid"></div>
+        </div>
+      </div>
+      </div>
     </div>
-    <div class="section-body" id="sec-entries-body">
-      <div id="conn-grid" class="conn-grid"></div>
-    </div>
-    <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
-      <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-      <span data-i18n="sec.sessions">Sessions</span>
-      <span id="session-batch-count" class="batch-count" style="display:none"></span>
-      <span style="flex:1"></span>
-      <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="batch-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-        <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
-        <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
-      </button>
-      <button type="button" class="icon-btn icon-btn-sm icon-btn-danger" id="batch-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" disabled onclick="event.stopPropagation()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-      </button>
-      <button type="button" class="icon-btn icon-btn-sm" id="btn-clear-dead" title="Clear dead sessions" data-i18n-title="section.batch.clearDead" aria-label="Clear all dead sessions" data-i18n-aria="section.batch.clearDeadAria" onclick="event.stopPropagation()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4 12 12"/><path d="M12 12l-6 6 4 1 1 4 6-6z"/><path d="M14 10l-2-2"/></svg>
-      </button>
-    </div>
-    <div class="section-body" id="sec-sessions-body">
-      <div id="session-grid" class="conn-grid"></div>
     </div>
 
 
@@ -74,7 +193,7 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-forward-title" data-i18n="modal.forward.title">New Forwarding</h2>
-        <button type="button" id="modal-forward-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-forward-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-forward-err" class="err" style="display:none"></p>
@@ -85,7 +204,7 @@
           <option value="remote" data-i18n="modal.forward.dir.remote">Remote (ssh -R)</option>
           <option value="dynamic" data-i18n="modal.forward.dir.dynamic">SOCKS5 (ssh -D)</option>
         </select>
-        <p style="font-size:0.7rem;color:#656d76;margin:-8px 0 8px 0">
+        <p class="conn-field-hint">
           <span id="fw-dir-hint-local" data-i18n="modal.forward.dirHint.local">local listen → remote target</span>
           <span id="fw-dir-hint-remote" style="display:none" data-i18n="modal.forward.dirHint.remote">remote listen → local target</span>
           <span id="fw-dir-hint-dynamic" style="display:none" data-i18n="modal.forward.dirHint.dynamic">SOCKS5 → any target</span>
@@ -118,7 +237,7 @@
     <div class="modal">
       <div class="modal-h">
         <h2 id="modal-conn-title" data-i18n="modal.conn.titleAdd">Add Host</h2>
-        <button type="button" id="modal-conn-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-conn-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
         <p id="modal-conn-err" class="err" style="display:none"></p>
@@ -130,6 +249,7 @@
           </button>
         </div>
         <input type="text" id="conn-name" placeholder="my-server" autocomplete="off" style="margin-bottom:8px;width:100%">
+        <div class="conn-field conn-field-check" id="conn-temporary-wrap"><label class="conn-check" for="conn-temporary"><input type="checkbox" id="conn-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.temporary.hint">Removed when termcp stops; never saved to a config file.</div></div>
         <!-- Form view -->
         <form id="conn-form-view" autocomplete="off" onsubmit="return false">
           <div id="conn-f-loopback-only" style="display:none" class="conn-field conn-check-hint" data-i18n="modal.conn.loopbackOnly">Built-in loopback connection: it dials this machine over termcp's own SSH server, so host, credentials and jumps do not apply. Only the settings below are used.</div>
@@ -170,6 +290,23 @@
     </div>
   </div>
 
+  <div id="modal-conn-import" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:440px">
+      <div class="modal-h">
+        <h2 data-i18n="conn.batch.import">Import Config</h2>
+        <button type="button" class="btn" id="conn-import-close" data-i18n="common.close">Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="conn-import-err" class="err" style="display:none"></p>
+        <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,application/toml,text/plain"></div>
+        <div class="conn-field conn-field-check"><label class="conn-check" for="conn-import-temporary"><input type="checkbox" id="conn-import-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.batch.temporaryHint">Applies to every host in this file. Temporary hosts disappear when termcp stops.</div></div>
+        <p class="conn-check-hint" data-i18n="conn.batch.collisionHint">Conflicting host names are renamed automatically. Invalid files import no hosts.</p>
+        <p id="conn-import-result" role="status" class="form-ok" style="display:none"></p>
+        <div class="modal-actions"><button type="button" class="btn btn-primary" id="conn-import-run" data-i18n="conn.batch.import">Import Config</button></div>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-start" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
@@ -202,10 +339,10 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-cmd-title" data-i18n="channel.cmd.titlePty">Run command</h2>
-        <button type="button" id="modal-cmd-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-cmd-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
-        <p id="modal-cmd-err" class="err" style="display:none;margin:0 0 8px;color:#cf222e;font-size:0.8rem"></p>
+        <p id="modal-cmd-err" class="err" style="display:none"></p>
         <label for="modal-cmd-input" data-i18n="channel.cmd.label">Command</label>
         <input type="text" id="modal-cmd-input" autocomplete="off" spellcheck="false">
         <div class="modal-actions">
@@ -220,10 +357,10 @@
     <div class="modal" style="max-width:420px">
       <div class="modal-h">
         <h2 id="modal-confirm-title" data-i18n="common.confirm">Confirm</h2>
-        <button type="button" id="modal-confirm-close" style="width:28px;height:28px;padding:0;border:none;background:transparent;color:#57606a;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+        <button type="button" id="modal-confirm-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
       </div>
       <div class="modal-body">
-        <p id="modal-confirm-msg" style="margin:0 0 4px;color:#1f2328;font-size:0.9rem;word-break:break-word"></p>
+        <p id="modal-confirm-msg" class="modal-msg"></p>
         <div class="modal-actions">
           <button type="button" class="btn" id="modal-confirm-cancel" data-i18n="common.cancel">Cancel</button>
           <button type="button" class="btn btn-danger" id="modal-confirm-ok" data-i18n="common.delete">Delete</button>
@@ -243,6 +380,10 @@
   <script src="static/js/ui-socket.js"></script>
   <script src="static/js/timeline.js"></script>
   <script src="static/js/terminal-view.js"></script>
+  <script src="static/js/terminal-panels.js"></script>
+  <script src="static/js/terminal-templates.js"></script>
+  <script src="static/js/terminal-window.js"></script>
+  <script src="static/js/terminal-switcher.js"></script>
   <script src="static/js/dialogs.js"></script>
   <script src="static/js/conn-form.js"></script>
 </body>

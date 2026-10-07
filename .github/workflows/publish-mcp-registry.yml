@@ -19,6 +19,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check release metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python3 scripts/release_metadata.py check --expected "$GITHUB_REF_NAME"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -47,14 +55,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_name }}
-
-      - name: Sync version into server.json
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          jq --arg v "$VERSION" \
-            '.version = $v | .packages[0].identifier = "ghcr.io/open-mcp-ai/termcp:" + $v' \
-            server.json > server.tmp && mv server.tmp server.json
 
       - name: Install mcp-publisher
         run: |

@@ -282,16 +282,25 @@ function openConnModal(edit, name, kind) {
   connEntries = null; // refresh import dropdown options
   document.getElementById('modal-conn-err').style.display = 'none';
   var isInternal = edit && kind === 'internal';
+	var temporaryEl = document.getElementById('conn-temporary');
+	var current = (window._lastConnections || []).find(function(c) { return c.name === name; });
+	temporaryEl.checked = !!(edit && current && current.temporary);
+	document.getElementById('conn-temporary-wrap').style.display = isInternal ? 'none' : '';
   document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   document.getElementById('conn-duplicate').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   var nameEl = document.getElementById('conn-name');
   nameEl.value = edit ? name : '';
-  // The name is the profile's identity and the id used in `/api/connections/{name}`.
-  // For internal it is also the only way to address the built-in connection, so
-  // it is pinned; the host/user/auth fields below are hidden since the loopback
-  // dial ignores them.
-  nameEl.readOnly = !!edit;
+  // Only the internal profile is pinned. Its name is the sole way to address the
+  // built-in loopback connection, so renaming it would orphan every caller that
+  // says ssh_config="internal"; the host/user/auth fields below are hidden for it
+  // too, since the loopback dial ignores them. Every other profile CAN be
+  // renamed — the name is the id used in `/api/connections/{name}`, and the save
+  // handler below passes the old one as ?from= so the store moves the profile and
+  // the sessions already holding it follow (see handler_conn.go and
+  // TestRenamingAProfileFollowsLiveSessions). Left as isInternal, not !!edit:
+  // pinning every edit is what removed renaming from the dialog.
+  nameEl.readOnly = isInternal;
   var loopbackOnly = document.getElementById('conn-f-loopback-only');
   if (loopbackOnly) loopbackOnly.style.display = isInternal ? '' : 'none';
   var remoteFields = document.getElementById('conn-f-remote-fields');
@@ -501,9 +510,10 @@ document.getElementById('conn-save').onclick = function () {
     }
   }
   var url = '/api/connections/' + encodeURIComponent(name);
-  if (editingConnName && editingConnName !== name) {
-    url += '?from=' + encodeURIComponent(editingConnName);
-  }
+  var params = new URLSearchParams();
+  params.set('temporary', document.getElementById('conn-temporary').checked ? 'true' : 'false');
+  if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
+  url += '?' + params.toString();
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
@@ -554,46 +564,149 @@ document.getElementById('conn-duplicate').onclick = function () {
   try { nameEl.focus(); } catch (e) {}
 };
 
-function openStartModal(connName, clickEvent) {
-  startConnName = connName;
-  document.getElementById('modal-start-err').style.display = 'none';
-  document.getElementById('start-ssh-config').value = connName;
-  var startNameEl = document.getElementById('start-name');
-  if (startNameEl) startNameEl.value = connName;
-  document.getElementById('start-title').textContent = t('modal.start.titleConnect', { name: connName });
-  document.getElementById('start-cmd').value = '';
-  document.getElementById('start-mode').value = 'pty';
-  showModal('modal-start');
-  window._startClickEvt = clickEvent;
-}
-document.getElementById('modal-start-close').onclick = function () { hideModal('modal-start'); };
-document.getElementById('start-run').onclick = function () {
-  var err = document.getElementById('modal-start-err');
-  err.style.display = 'none';
-  var cmd = document.getElementById('start-cmd').value.trim();
-  var sname = document.getElementById('start-name').value.trim();
-  // Close immediately on submit: the pending terminal window already shows
-  // connection progress (spinner). On failure the dialog reopens with the
-  // error so inputs stay editable for a retry.
-  hideModal('modal-start');
-  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, window._startClickEvt, {
-    command: cmd,
-    mode: document.getElementById('start-mode').value,
-    name: sname || undefined
-  })
-    .catch(function (e) {
-      err.textContent = String(e.message || e);
-      err.style.display = 'block';
-      showModal('modal-start');
-    });
+document.getElementById('conn-import-open').onclick = function (e) {
+  e.stopPropagation();
+  document.getElementById('conn-import-file').value = '';
+  document.getElementById('conn-import-temporary').checked = false;
+  document.getElementById('conn-import-err').style.display = 'none';
+  document.getElementById('conn-import-result').style.display = 'none';
+  showModal('modal-conn-import');
 };
+document.getElementById('conn-import-close').onclick = function () { hideModal('modal-conn-import'); };
+document.getElementById('conn-import-run').onclick = function () {
+  var file = document.getElementById('conn-import-file').files[0];
+  var err = document.getElementById('conn-import-err');
+  err.style.display = 'none';
+  document.getElementById('conn-import-result').style.display = 'none';
+  if (!file) { err.textContent = t('conn.batch.selectFile'); err.style.display = 'block'; return; }
+  var btn = this;
+  btn.disabled = true;
+  var temporary = document.getElementById('conn-import-temporary').checked;
+  // The file is opaque to the UI; the backend parses and validates its TOML.
+  fetch('/api/connections/batch?temporary=' + temporary, {
+    method: 'POST', headers: { 'Content-Type': 'application/toml' }, body: file
+  }).then(function (r) {
+    if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
+    return r.json();
+  }).then(function (result) {
+    loadConnections();
+    if (result.renamed && result.renamed.length) {
+      var lines = [t('conn.batch.imported', { count: result.imported })];
+      result.renamed.forEach(function (entry) {
+        lines.push(t('conn.batch.renamed', { from: entry.from, to: entry.to }));
+      });
+      var output = document.getElementById('conn-import-result');
+      output.textContent = lines.join('\n');
+      output.style.display = 'block';
+      document.getElementById('conn-import-file').value = '';
+    } else {
+      hideModal('modal-conn-import');
+      showCopyToast(t('conn.batch.imported', { count: result.imported }));
+    }
+  }).catch(function (e) {
+    err.textContent = String(e.message || e);
+    err.style.display = 'block';
+  }).finally(function () { btn.disabled = false; });
+};
+/* The TOML download shared by the batch bar's export. The backend composes the
+   document either way (names filter or all), so the browser stays a pipe for
+   opaque bytes. */
+function downloadConnectionsToml(names) {
+  var path = '/api/connections/batch';
+  if (names && names.length) path += '?names=' + names.map(encodeURIComponent).join(',');
+  return fetch(path).then(function (r) {
+    if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
+    return r.blob();
+  }).then(function (blob) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'termcp-connections.toml';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+}
 
-// Session lifecycle batch helpers. One request for every id (comma-separated
-// path), so N deletes are not N round trips and one stuck session cannot stall
-// the rest — the server reports per-id outcomes. Ids reported as
-// session_not_found count as cleared here: another client already got there.
-function deleteSessionsBatch(ids) {
-  var path = '/api/sessions/' + ids.map(encodeURIComponent).join(',');
+/* ---- NetHub selection actions ---------------------------------------------
+ * The toolbar's switch (nethub-select-toggle) re-aims the node cards: off, a
+ * card click connects; on, it ticks the card and the batch bar appears. With a
+ * selection, three actions exist — open a session per host, export exactly the
+ * selected profiles (the same TOML shape as export-all, so it imports back),
+ * and a comma-batch delete with per-name results. The selection state itself
+ * lives in dialogs.js; this block binds the controls and does the work. */
+
+function selectedNodeNames() {
+  if (!nodeSelectModeOn()) return [];
+  var names = selectableNodeNames().filter(function (n) { return _nodeSelIds.has(n); });
+  // Name order, which is the order the grid shows them in.
+  names.sort(function (a, b) { return a.localeCompare(b); });
+  return names;
+}
+
+function openSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  /* In drawer mode the windows open under the panel, so the panel leaves the
+     way a single card click's does — staying up would cover exactly what just
+     launched. */
+  if (netHubIsDrawer()) setNetHubCollapsed(true, false);
+  var settled = 0;
+  var failed = [];
+  names.forEach(function (name, i) {
+    /* Staggered, not simultaneous: each dial opens a window, and a bunch that
+       lands in the same instant piles into one unusable heap. 150ms is a
+       cascade, not a queue. */
+    setTimeout(function () {
+      startSessionAndOpenShell(name, null)
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          console.error(err);
+          failed.push(name);
+        })
+        .finally(function () {
+          settled++;
+          if (settled !== names.length) return;
+          // The ticks are spent: clear the selection, keep the mode on so
+          // another batch can be picked without reaching for the switch.
+          _nodeSelIds.clear();
+          renderConnGrid(window._lastConnections || [], connBannerText());
+          if (failed.length) showCopyToast(t('nethub.batch.openFailed', { count: failed.length, msg: failed[0] }));
+        });
+    }, i * 150);
+  });
+}
+
+/* The built-in profile rides along in any selection (open works for it), but
+   export and delete have nothing to do with it — the server refuses both, so
+   the buttons refuse first and say why instead of shipping a request that can
+   only partly succeed. */
+function selectionHasInternal(names) {
+  for (var i = 0; i < names.length; i++) {
+    if (String(names[i]).toLowerCase() === 'internal') return true;
+  }
+  return false;
+}
+
+function exportSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  if (selectionHasInternal(names)) {
+    showCopyToast(t('nethub.batch.exportInternal'));
+    return;
+  }
+  downloadConnectionsToml(names).catch(function (e) {
+    showCopyToast(t('conn.batch.exportFailed', { msg: String(e.message || e) }));
+  });
+}
+
+// One request for every id (comma-separated path, like the session routes):
+// the server reports per-id outcomes, and <resource>_not_found counts as
+// cleared here — another client already got there. Sessions and connections
+// share the shape, so they share the helper; only the resource segment differs.
+function deleteResourcesBatch(resource, ids) {
+  var path = '/api/' + resource + '/' + ids.map(encodeURIComponent).join(',');
   return fetch(path, { method: 'DELETE' }).then(function (r) {
     if (r.ok && r.status !== 204) {
       return r.json().then(function (j) { return (j && j.results) || []; });
@@ -605,6 +718,158 @@ function deleteSessionsBatch(ids) {
   });
 }
 
+function deleteSelectedNodes() {
+  var names = selectedNodeNames();
+  if (!names.length) return;
+  if (selectionHasInternal(names)) {
+    showCopyToast(t('nethub.batch.deleteInternal'));
+    return;
+  }
+  // Deleting a profile never closes the sessions dialed from it — a session
+  // owns its already-open connection — so the dialog says so when the
+  // selection carries any.
+  var withSessions = 0;
+  names.forEach(function (n) { if (runningSessionsForNode(n).length > 0) withSessions++; });
+  var message = tCount('nethub.batch.deleteMsg.one', 'nethub.batch.deleteMsg.other', { count: names.length });
+  if (withSessions > 0) message += ' ' + t('nethub.batch.deleteSessionsHint', { count: withSessions });
+  confirmDialog({
+    title: t('nethub.batch.deleteTitle'),
+    message: message,
+    okText: t('batch.del.ok', { count: names.length }),
+    danger: true
+  }).then(function (ok) {
+    if (!ok) return;
+    deleteResourcesBatch('connections', names).then(function (results) {
+      var failed = [];
+      (results || []).forEach(function (r) {
+        if (r.ok || r.code === 'connection_not_found') {
+          _nodeSelIds.delete(r.id);
+        } else {
+          failed.push(r.id + ': ' + (r.error || r.code || 'failed'));
+        }
+      });
+      // loadConnections refetches, re-renders, prunes the selection and syncs
+      // the batch bar — one refresh path, the same one every other editor
+      // action already uses.
+      loadConnections();
+      if (failed.length) showCopyToast(t('toast.delete.failed', { msg: failed.join('; ') }));
+    }).catch(function (err) {
+      showCopyToast(t('toast.delete.failed', { msg: String(err.message || err) }));
+    });
+  });
+}
+
+// The play split-key's dropdown, as plain functions: the NetHub wiring's
+// Escape handler folds it before it folds the selection mode, so the state has
+// to be reachable from there.
+function nodeOpenMenuIsOpen() {
+  var menu = document.getElementById('nethub-open-menu');
+  return !!(menu && !menu.hidden);
+}
+
+function closeNodeOpenMenu() {
+  var wasOpen = nodeOpenMenuIsOpen();
+  var menu = document.getElementById('nethub-open-menu');
+  var caret = document.getElementById('nethub-open-caret');
+  if (menu) menu.hidden = true;
+  if (caret) caret.setAttribute('aria-expanded', 'false');
+  return wasOpen;
+}
+
+function toggleNodeOpenMenu() {
+  var menu = document.getElementById('nethub-open-menu');
+  if (!menu) return;
+  menu.hidden = !menu.hidden;
+  var caret = document.getElementById('nethub-open-caret');
+  if (caret) caret.setAttribute('aria-expanded', String(!menu.hidden));
+}
+
+// The toolbar's wiring. dialogs.js owns the selection state; this block only
+// binds the controls, the same split the drawer's collapse uses (see the
+// NetHub wiring below).
+(function () {
+  var toggle = document.getElementById('nethub-select-toggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', function (e) {
+    e.stopPropagation();
+    setNodeSelectMode(!nodeSelectModeOn());
+  });
+  var invert = document.getElementById('nethub-sel-invert');
+  if (invert) invert.addEventListener('click', function (e) {
+    e.stopPropagation();
+    selectableNodeNames().forEach(function (n) {
+      if (_nodeSelIds.has(n)) _nodeSelIds.delete(n);
+      else _nodeSelIds.add(n);
+    });
+    renderConnGrid(window._lastConnections || [], connBannerText());
+  });
+  // The play split-key: the wide half opens every ticked host, the caret
+  // unfolds export and delete. Any click outside the menu folds it; Escape
+  // folds it here first, before the mode-exit handler below folds the mode.
+  var caret = document.getElementById('nethub-open-caret');
+  if (caret) caret.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleNodeOpenMenu();
+  });
+  document.addEventListener('click', function (e) {
+    if (!nodeOpenMenuIsOpen()) return;
+    if (e.target.closest('#nethub-open-menu') || e.target.closest('#nethub-open-caret')) return;
+    closeNodeOpenMenu();
+  });
+  var menuEl = document.getElementById('nethub-open-menu');
+  if (menuEl) menuEl.addEventListener('click', function (e) { e.stopPropagation(); });
+  var menuExport = document.getElementById('nethub-menu-export');
+  if (menuExport) menuExport.addEventListener('click', function () {
+    closeNodeOpenMenu();
+    exportSelectedNodes();
+  });
+  var menuDelete = document.getElementById('nethub-menu-delete');
+  if (menuDelete) menuDelete.addEventListener('click', function () {
+    closeNodeOpenMenu();
+    deleteSelectedNodes();
+  });
+  var openBtn = document.getElementById('nethub-batch-open');
+  if (openBtn) openBtn.addEventListener('click', function (e) { e.stopPropagation(); openSelectedNodes(); });
+})();
+
+/* The host list's launch-options dialog. Its entry point is a host card, so the
+   window it starts is centred like the card's own click — see dialogs.js. The
+   dialog outlives the click that opened it, so a pointer position captured here
+   would only ever be a stale coordinate from behind a modal backdrop. */
+function openStartModal(connName) {
+  startConnName = connName;
+  document.getElementById('modal-start-err').style.display = 'none';
+  document.getElementById('start-ssh-config').value = connName;
+  var startNameEl = document.getElementById('start-name');
+  if (startNameEl) startNameEl.value = connName;
+  document.getElementById('start-title').textContent = t('modal.start.titleConnect', { name: connName });
+  document.getElementById('start-cmd').value = '';
+  document.getElementById('start-mode').value = 'pty';
+  showModal('modal-start');
+}
+document.getElementById('modal-start-close').onclick = function () { hideModal('modal-start'); };
+document.getElementById('start-run').onclick = function () {
+  var err = document.getElementById('modal-start-err');
+  err.style.display = 'none';
+  var cmd = document.getElementById('start-cmd').value.trim();
+  var sname = document.getElementById('start-name').value.trim();
+  // Close immediately on submit: the pending terminal window already shows
+  // connection progress (spinner). On failure the dialog reopens with the
+  // error so inputs stay editable for a retry.
+  hideModal('modal-start');
+  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, null, {
+    command: cmd,
+    mode: document.getElementById('start-mode').value,
+    name: sname || undefined
+  })
+    .catch(function (e) {
+      err.textContent = String(e.message || e);
+      err.style.display = 'block';
+      showModal('modal-start');
+    });
+};
+
 // Closes the terminal windows and drops the selection of every id that is gone,
 // then hands (clearedCount, failedEntries) to onDone. failedEntries carry
 // {id, error} for the failure toast.
@@ -614,7 +879,7 @@ function settleSessionDeletes(results, banner, onDone) {
     if (r.ok || r.code === 'session_not_found') {
       var w = getShellWindowBySid(r.id);
       if (w) closeShellWindow(w);
-      _selectedSessionIds.delete(r.id);
+      _sessionRegions.forEach(function (region) { region.ids.delete(r.id); });
     } else {
       failed.push(r);
     }
@@ -627,81 +892,97 @@ function sessionFailuresText(failed) {
   return failed.map(function (r) { return r.id + (r.error ? ': ' + r.error : ''); }).join('; ');
 }
 
-// Session selection toolbar actions
-document.getElementById('btn-clear-dead').onclick = function (e) {
-  e.stopPropagation();
-  var dead = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id && s.status !== 'running'; });
-  if (!dead.length) { showCopyToast(t('toast.dead.none')); return; }
+/** Delete one plate's selected sessions after confirming.
+ *
+ *  Both plates share this: the only difference is which ids they own, and the
+ *  wording of the dialog is the same operation either way. Taking the ids from
+ *  the caller (rather than from a global selection) is what keeps the two
+ *  regions independent.
+ */
+function deleteSelectedInRegion(region) {
+  var snapshot = window._lastSessionsSnapshot || [];
+  var targets = sessionsForRegion(region, snapshot).filter(function (s) { return region.ids.has(s.id); });
+  if (!targets.length) {
+    showCopyToast(t('toast.sessions.none'));
+    return;
+  }
+  var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
   confirmDialog({
-    title: t('section.batch.clearDead'),
-    message: tCount('clear.dead.msg.one', 'clear.dead.msg.other', { count: dead.length }),
-    okText: t('clear.dead.ok', { count: dead.length }),
+    title: t('batch.del.dialog'),
+    message: msg,
+    okText: t('batch.del.ok', { count: targets.length }),
     danger: true
   }).then(function (ok) {
     if (!ok) return;
     var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, tCount('banner.clearing.one', 'banner.clearing.other', { count: dead.length }));
-    return deleteSessionsBatch(dead.map(function (s) { return s.id; })).then(function (results) {
+    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
+    return deleteResourcesBatch('sessions', targets.map(function (s) { return s.id; })).then(function (results) {
       settleSessionDeletes(results, banner, function (cleared, failed) {
-        if (failed.length) showCopyToast(t('toast.clear.failed', { msg: sessionFailuresText(failed) }));
-        else showCopyToast(tCount('toast.dead.cleared.one', 'toast.dead.cleared.other', { count: cleared }));
+        if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
+        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
         loadForwards();
         startUIWebSocket();
-        renderSessionGrid(window._lastSessionsSnapshot || [], '');
+        renderSessionGrid('');
       });
     }).catch(function (err) {
-      if (banner) setLoadBanner(banner, t('toast.clear.failed', { msg: String(err.message || err) }));
-      renderSessionGrid(window._lastSessionsSnapshot || [], '');
+      if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
+      renderSessionGrid('');
     });
   });
-};
+}
 
-// Select-all / clear-selection button
-var btnSelAll = document.getElementById('batch-sel-all');
-if (btnSelAll) {
-  btnSelAll.onclick = function (e) {
-    e.stopPropagation();
-    var snapshot = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id; });
-    var allSelected = snapshot.length > 0 && snapshot.every(function (s) { return _selectedSessionIds.has(s.id); });
-    if (allSelected) snapshot.forEach(function (s) { _selectedSessionIds.delete(s.id); });
-    else snapshot.forEach(function (s) { _selectedSessionIds.add(s.id); });
-    renderSessionGrid(window._lastSessionsSnapshot || [], '');
-  };
-}
-var btnBatchDel = document.getElementById('batch-del-btn');
-if (btnBatchDel) {
-  btnBatchDel.onclick = function () {
-    var snapshot = window._lastSessionsSnapshot || [];
-    var targets = snapshot.filter(function (s) { return s && s.id && _selectedSessionIds.has(s.id); });
-    if (!targets.length) {
-      showCopyToast(t('toast.sessions.none'));
-      return;
+// Each plate's trash and select-all act on that plate's own selection.
+_sessionRegions.forEach(function (region) {
+  var delBtn = document.getElementById(region.delId);
+  if (delBtn) {
+    delBtn.onclick = function (e) {
+      e.stopPropagation();
+      deleteSelectedInRegion(region);
+    };
+  }
+  var selAllBtn = document.getElementById(region.selAllId);
+  if (selAllBtn) {
+    selAllBtn.onclick = function (e) {
+      e.stopPropagation();
+      var members = sessionsForRegion(region, window._lastSessionsSnapshot || []);
+      var allSelected = members.length > 0 && members.every(function (s) { return region.ids.has(s.id); });
+      if (allSelected) members.forEach(function (s) { region.ids.delete(s.id); });
+      else members.forEach(function (s) { region.ids.add(s.id); });
+      renderSessionGrid('');
+    };
+  }
+});
+
+// Collapse/expand each section with localStorage persistence. The archive is a
+// plate rather than a section header, so only its header id differs; its body is
+// the same .section-body and it shares this one implementation.
+['entries', 'sessions', 'archive'].forEach(function (key) {
+  var header = document.getElementById(key === 'archive' ? 'sec-archive-header' : 'sec-' + key);
+  var body = document.getElementById('sec-' + key + '-body');
+  if (!header || !body) return;
+  var stored = localStorage.getItem('termcp.section.' + key);
+  var collapsed = stored
+    ? stored === 'collapsed'
+    : header.getAttribute('aria-expanded') !== 'true';
+  header.setAttribute('aria-expanded', String(!collapsed));
+  body.classList.toggle('collapsed', collapsed);
+  header.addEventListener('click', function (e) {
+    if (e.target.closest('.icon-btn')) return;
+    var collapsed = header.getAttribute('aria-expanded') === 'false';
+    header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
+    if (collapsed) {
+      body.classList.remove('collapsed');
+      localStorage.setItem('termcp.section.' + key, 'expanded');
+    } else {
+      body.classList.add('collapsed');
+      localStorage.setItem('termcp.section.' + key, 'collapsed');
     }
-    var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
-    confirmDialog({
-      title: t('batch.del.dialog'),
-      message: msg,
-      okText: t('batch.del.ok', { count: targets.length }),
-      danger: true
-    }).then(function (ok) {
-      if (!ok) return;
-      var banner = document.getElementById('session-load-banner');
-      if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-      return deleteSessionsBatch(targets.map(function (s) { return s.id; })).then(function (results) {
-        settleSessionDeletes(results, banner, function (cleared, failed) {
-          if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
-          else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
-          loadForwards();
-          startUIWebSocket();
-          renderSessionGrid(window._lastSessionsSnapshot || [], '');
-        });
-      }).catch(function (err) {
-        if (banner) setLoadBanner(banner, t('toast.delete.failed', { msg: String(err.message || err) }));
-        renderSessionGrid(window._lastSessionsSnapshot || [], '');
-      });
-    });
-  };
-}
+  });
+  header.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
+  });
+});
+
 function reasonLabel(r) {
   if (!r) return '';
   switch (String(r)) {
@@ -728,103 +1009,86 @@ fetch('/api/version')
   })
   .catch(function () {});
 
-// Section collapse/expand with localStorage persistence
-['entries', 'sessions'].forEach(function (key) {
-  var header = document.getElementById('sec-' + key);
-  var body = document.getElementById('sec-' + key + '-body');
-  if (!header || !body) return;
-  var stored = localStorage.getItem('termcp.section.' + key);
-  var collapsed = stored
-    ? stored === 'collapsed'
-    : header.getAttribute('aria-expanded') !== 'true';
-  header.setAttribute('aria-expanded', String(!collapsed));
-  body.classList.toggle('collapsed', collapsed);
-  header.addEventListener('click', function (e) {
-    if (e.target.closest('.icon-btn')) return;
-    var collapsed = header.getAttribute('aria-expanded') === 'false';
-    header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
-    if (collapsed) {
-      body.classList.remove('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'expanded');
-    } else {
-      body.classList.add('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'collapsed');
-    }
-  });
-  header.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
-  });
-});
-
-// ---- Entries drawer (touch devices) ----
-// On touch devices the connection list becomes a left slide-in drawer instead of
-// an expanded section: 22 entries expanded are ~2000px tall, which pushes the
-// user's own sessions off-screen. The section header itself is the trigger (there
-// is no separate hamburger), so the same row that expands in place on desktop
-// opens the drawer on touch. Picking a connection closes it again.
+// ---- NetHub wiring -------------------------------------------------------
+// The resource sidebar is a layout column on desktop and the same left overlay
+// it always was on a phone; both states are one boolean in dialogs.js
+// (setNetHubCollapsed), so this block only binds the controls. Nothing here
+// decides a width, and no click opens a modal: collapsing is a layout state.
 (function () {
-  var header = document.getElementById('sec-entries');
+  var trigger = document.getElementById('open-host-drawer');
   var body = document.getElementById('sec-entries-body');
-  if (!header || !body) return;
+  var add = document.getElementById('conn-add');
+  if (!trigger || !body) return;
 
   var scrim = document.createElement('div');
   scrim.className = 'drawer-scrim';
   scrim.setAttribute('aria-hidden', 'true');
   document.body.appendChild(scrim);
+  /* The scrim is created here, after dialogs.js applied the initial state at
+     load (it cannot exist before this expression runs). Re-apply that state so
+     a narrow first paint with a stored desktop preference shows the overlay
+     AND its scrim together — otherwise the body opens behind a scrim that
+     never learns it is open. */
+  setNetHubCollapsed(currentNetHubCollapsed(), false);
 
-  function isOpen() { return body.classList.contains('drawer-open'); }
-
-  function setOpen(open) {
-    body.classList.toggle('drawer-open', open);
-    scrim.classList.toggle('drawer-open', open);
-    header.setAttribute('aria-expanded', String(open));
-    /* Prevent the page behind from scrolling under the drawer. */
-    document.body.style.overflow = open ? 'hidden' : '';
-  }
-
-  /* In drawer mode the section header toggles the drawer instead of the inline
-     collapse, so swallow the click before the shared collapse handler sees it.
-     Capture phase: the collapse listener is on the same element. */
-  header.addEventListener('click', function (e) {
-    if (!isMobileViewport()) return;        // desktop keeps the inline collapse
-    if (e.target.closest('button')) return;
+  /* The header button and the rail's expand key run the same toggle, so the
+     control is one decision with two doors. Capture phase keeps a click from
+     leaking into a shared section listener. */
+  trigger.addEventListener('click', function (e) {
     e.stopImmediatePropagation();
     e.preventDefault();
-    setOpen(!isOpen());
+    toggleNetHub();
   }, true);
-  header.addEventListener('keydown', function (e) {
-    if (!isMobileViewport()) return;
+  trigger.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.stopImmediatePropagation();
     e.preventDefault();
-    setOpen(!isOpen());
+    toggleNetHub();
   }, true);
 
-  scrim.addEventListener('click', function () { setOpen(false); });
+  /* The scrim and Escape belong to the overlay state only; on desktop neither
+     element is in the layout, so they cannot close a sidebar the user wants. */
+  scrim.addEventListener('click', function () { setNetHubCollapsed(true, false); });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && isOpen()) setOpen(false);
+    if (e.key !== 'Escape') return;
+    /* Escape folds the innermost layer first: the open dropdown, then the
+       selection mode, then the drawer. Leaving the mode is the smaller undo,
+       and closing the panel would also take the batch keys out of sight while
+       their selection is still being picked. */
+    if (closeNodeOpenMenu()) return;
+    if (nodeSelectModeOn()) { setNodeSelectMode(false); return; }
+    if (netHubIsDrawer() && !netHubCollapsed()) setNetHubCollapsed(true, false);
   });
-  /* Picking a connection from the drawer should reveal what it opened rather
-     than leave the drawer covering the page. */
+  /* Choosing a node from the overlay should reveal what it opened rather than
+     leave the panel covering the page it just put a window on. A tick is not a
+     choice of a window: in selection mode the panel stays up so several hosts
+     can be ticked in one look. */
   body.addEventListener('click', function (e) {
-    if (e.target.closest('.conn-tile')) setOpen(false);
+    if (!e.target.closest('.conn-tile') || !netHubIsDrawer()) return;
+    if (nodeSelectModeOn()) return;
+    setNetHubCollapsed(true, false);
   });
-  window.addEventListener('resize', function () {
-    if (isOpen() && !isMobileViewport()) setOpen(false);
-  });
+  if (add) {
+    add.setAttribute('aria-label', t('conn.aria.add'));
+    add.title = t('conn.aria.add');
+    add.addEventListener('click', function () { openConnModal(false, ''); });
+    add.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openConnModal(false, ''); }
+    });
+  }
 
-  /* On touch the drawer starts closed, so the chevron must show the collapsed
-     state — the shared collapse logic above seeds aria-expanded from
-     localStorage (default "true"), which would otherwise leave the icon saying
-     "expanded" next to a closed drawer. */
-  if (isMobileViewport()) header.setAttribute('aria-expanded', 'false');
-
-  /* The terminal header's switcher button opens this drawer too, so a full-screen
-     terminal can switch connection without going home first. Desktop has no
-     drawer (entries expand in place), so the call is a no-op there. */
+  /* The terminal header's switcher button opens the panel too, so a full-screen
+     terminal can reach another node without going home first. */
   window.termcpToggleEntriesDrawer = function (forceOpen) {
-    if (!isMobileViewport()) return false;
-    setOpen(forceOpen === undefined ? !isOpen() : !!forceOpen);
+    setNetHubCollapsed(forceOpen === undefined ? !netHubCollapsed() : !forceOpen, false);
     return true;
+  };
+
+  /* A node's state is read from the session list and the pending windows, so the
+     cards have to be repainted when either changes. The session frame is the
+     shared wake signal for both (see ui-socket.js), and this is the hook that
+     keeps a card from claiming "offline" under a running session. */
+  window.renderNodeStates = function () {
+    renderConnGrid(window._lastConnections || [], connBannerText());
   };
 })();

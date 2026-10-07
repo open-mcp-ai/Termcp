@@ -31,8 +31,15 @@ func parseResourceURL(raw string) (*parsedResourceURL, error) { return locator.P
 // syntax rather than as a bare id.
 func looksLikeResourceLocator(s string) bool { return locator.LooksLike(s) }
 
-// shellFromIndex resolves a 1-based creation-order channel on a session (0 =
-// the primary shell) — the same numbering the Web UI and termcp:// locators use.
+// shellFromIndex resolves a live channel by its channel index on a session (0 =
+// the primary shell) — the number termcp://#<session>:N and the Web UI's shell-N
+// tab label carry, assigned when the channel was created and never renumbered.
+// The index is resolved through session.ShellByIndex, so MCP, the REST resolver
+// and the Web UI cannot disagree about which channel N names.
+//
+// Read-only paths that must also serve DEAD/restart-restored sessions resolve
+// through Session.SnapshotShellByIndex (see resolveOutputSource and the REST
+// /api/resolve handler) — this function is the live half.
 func (s *Server) shellFromIndex(sess *session.Session, index int) (*session.ChildShell, error) {
 	if cs, ok := sess.ShellByIndex(index); ok {
 		return cs, nil
@@ -41,13 +48,20 @@ func (s *Server) shellFromIndex(sess *session.Session, index int) (*session.Chil
 		// No primary shell left: callers report the plain "has no shell" error.
 		return nil, nil
 	}
-	return nil, fmt.Errorf("shell index %d out of range (session %q has %d shell(s))", index, sess.ID, len(sess.ListChildShells()))
+	return nil, session.ShellIndexOutOfRangeError(sess.ID, index, sess.LiveShellCount())
 }
 
 // sessionFromParsed resolves the session named by a parsed resource URL.
 // Only live sessions resolve: closed (DEAD) sessions have no transport, so
 // they are not addressable by locator — callers get a hint to read output
 // via shell_output instead.
+//
+// This is deliberately NOT the same helper as requireSession, which serves the id
+// arguments of tools that must work on a DEAD session too (session_info,
+// session_terminate, session_delete, shell_output). The difference is the status
+// check, not the parsing: use requireSession for an argument a caller may point at
+// any registered session, and this one only where the operation needs a live
+// transport.
 func (s *Server) sessionFromParsed(p *parsedResourceURL) (*session.Session, error) {
 	if p.Kind != resourceURLSession && p.Kind != resourceURLShell {
 		return nil, fmt.Errorf("resource URL does not name a session")

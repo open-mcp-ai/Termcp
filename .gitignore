@@ -36,3 +36,6 @@ templates/
 
 # ZCode agent runtime
 .zcode/
+
+# Agent scratch space (local tooling, not part of the project)
+/.pi-tools/

@@ -1,0 +1,103 @@
+  /* ---- Approval mode --------------------------------------------------
+     The queue row is what a decision is made against: the command, then two
+     buttons. Nothing here is editable — the AI wrote the command, and a human's
+     choice is to accept it or refuse it. */
+  .approval-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 10px; }
+  .approval-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--font-mono); font-size: 0.72rem;
+    padding: 2px 6px; border-radius: 4px;
+    background: var(--cyan-surface); border: 1px solid var(--cyan-border); color: var(--cyan-deep);
+  }
+
+  .approval-item { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .approval-item-done { opacity: .6; }
+  .approval-item-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 0.72rem; color: var(--text-muted); }
+  .approval-src {
+    text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
+    padding: 1px 5px; border-radius: 3px; background: var(--bg-card-hover); color: var(--text-secondary);
+  }
+  .approval-sid { font-family: var(--font-mono); }
+  /* The kind chip says what the row will do (file write, port forward, …). It is
+     distinct from .approval-src (who submitted it) because a reviewer needs both
+     answers to a row: who, and what. */
+  .approval-kind {
+    text-transform: uppercase; font-weight: 600; letter-spacing: .03em;
+    padding: 1px 5px; border-radius: 3px;
+    background: var(--warning-surface); color: var(--warning-deep);
+  }
+  /* An operation's summary is prose, not a command: it keeps the command box's
+     shape (so rows line up) without inviting the reader to parse it as input. */
+  .approval-code-op { font-style: italic; color: var(--text-secondary); }
+  /* The command on the left, the decision stacked on the right. The actions
+     are a column rather than a row: two buttons stacked are ~2×22px tall,
+     which the command box can fill with text instead of leaving empty space
+     beside a single button line. */
+  .approval-row { display: flex; align-items: flex-start; gap: 10px; }
+  .approval-main { flex: 1 1 auto; min-width: 0; }
+  .approval-code {
+    display: block; font-family: var(--font-mono); font-size: 0.8rem;
+    padding: 6px 8px; border-radius: 6px; background: var(--bg-subtle); border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    /* Read-only by construction: a textarea-sized box that is not an input, so
+       there is nothing to edit and nothing to resize.
+       Exactly two lines are visible and a longer command scrolls inside the box.
+       The height is arithmetic, not a magic number: `border-box` means the
+       padding (6px×2) and border (1px×2) come OUT of the declared height, so a
+       plain `2.6em` showed ONE line — measured. 3em is two lines of the 1.5
+       line-height set below, then the 14px of padding+border are added back. */
+    line-height: 1.5; height: calc(3em + 14px); overflow: auto;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  /* The decision column: Accept over Reject. No top offset — the buttons start
+     level with the command's first line, and the column's own height is what
+     the command box matches. */
+  .approval-row .approval-actions { flex: 0 0 auto; flex-direction: column; }
+  .approval-actions { display: flex; gap: 6px; }
+  .approval-actions .btn { padding: 4px 12px; font-size: 0.78rem; }
+  .approval-state { font-size: 0.78rem; color: var(--text-muted); text-transform: capitalize; flex: 0 0 auto; }
+  /* Touch: the approver decides from a phone, so the buttons need real height,
+     and they go back side by side — a narrow screen has no room to waste on a
+     stacked pair, and 40px is a comfortable thumb target either way. */
+  @media (pointer: coarse) and (hover: none) {
+    .approval-row { flex-direction: column; align-items: stretch; gap: 6px; }
+    .approval-row .approval-actions { flex-direction: row; }
+    .approval-row .approval-actions .btn { min-height: 40px; flex: 1; }
+    .approval-chip { font-size: 0.78rem; padding: 4px 8px; }
+  }
+  .err { color: var(--danger); font-size: 0.85rem; margin: 0 0 8px; }
+  .conn-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .conn-field label { font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); }
+  .conn-field input, .conn-field select, .conn-field textarea { font-size: 0.85rem; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--bg-input); color: var(--text-primary); }
+  .conn-field select { background: var(--bg-input); }
+  /* The checkbox row is a label and a box on one line, not a stacked field: the
+     generic `.conn-field input` rule above would give the checkbox a text
+     box's padding and border, and the label must sit BESIDE the box rather than
+     over it, since clicking either toggles it. */
+  .conn-field.conn-field-check { gap: 3px; }
+  .conn-field.conn-field-check label.conn-check {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.82rem; font-weight: 500; color: var(--text-primary); cursor: pointer;
+  }
+  .conn-field.conn-field-check input[type="checkbox"] {
+    width: 14px; height: 14px; margin: 0; padding: 0; flex: 0 0 auto;
+    border-radius: 3px; accent-color: var(--warning); cursor: pointer;
+  }
+  .conn-check-hint { font-size: 0.68rem; line-height: 1.35; color: var(--text-muted); }
+  .conn-row { display: flex; gap: 8px; }
+  .conn-row > .conn-field { flex: 1; }
+  .jump-chain { margin-top: 6px; }
+  .jump-arrow { text-align:center; color:var(--text-faint); font-size:0.7rem; margin:2px 0; letter-spacing:1px; }
+  .jump-card { border:1px solid var(--border-subtle); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--bg-elevated); }
+  .jump-card-h { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-size:0.8rem; font-weight:600; color:var(--text-secondary); }
+  .jump-card .conn-field { margin-bottom:6px; }
+  .jump-card-actions { display:flex; gap:4px; }
+  .jump-summary { display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; }
+  .jump-summary:hover { background:var(--bg-card-hover); }
+  .jump-summary-idx { font-size:0.7rem; font-weight:700; color:var(--text-faint); min-width:14px; }
+  .jump-summary-info { flex:1; font-size:0.82rem; color:var(--text-primary); word-break:break-all; }
+  .jump-summary-info em { font-style:normal; font-size:0.68rem; color:var(--text-faint); margin-left:4px; padding:1px 5px; border:1px solid var(--border-subtle); border-radius:3px; }
+  .psw-wrap { position: relative; margin-bottom: 12px; }
+  .psw-wrap .psw-input { width: 100%; padding: 4px 28px 4px 8px; margin-bottom: 0; box-sizing: border-box; }
+  .psw-eye { position: absolute; right: 2px; top: 0; bottom: 0; width: 26px; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+

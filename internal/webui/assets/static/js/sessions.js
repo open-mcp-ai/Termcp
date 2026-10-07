@@ -1,57 +1,106 @@
-var _selectedSessionIds = new Set();
+/** The two plates, each with the selection set and the DOM ids it owns. `dead`
+ *  splits the snapshot: the sessions plate renders the running half, the archive
+ *  the other. One table holds both plates whole — card markup, actions, pruning
+ *  and the selection sets themselves all come from here. */
+var _sessionRegions = [
+  { dead: false, ids: new Set(), gridId: 'session-grid', countId: 'session-batch-count', selAllId: 'session-sel-all', delId: 'session-del-btn' },
+  { dead: true, ids: new Set(), gridId: 'archive-grid', countId: 'archive-batch-count', selAllId: 'archive-sel-all', delId: 'archive-del-btn' }
+];
 
-function updateSessionBatchBar() {
-  var countEl = document.getElementById('session-batch-count');
-  var delBtn = document.getElementById('batch-del-btn');
-  var selAllBtn = document.getElementById('batch-sel-all');
-  var snapshot = (window._lastSessionsSnapshot || []).filter(function (s) { return s && s.id; });
-  var count = _selectedSessionIds.size;
-  var total = snapshot.length;
-  var allSelected = total > 0 && count >= total;
-  if (selAllBtn) {
-    selAllBtn.classList.toggle('all-checked', allSelected);
-    selAllBtn.title = allSelected ? t('section.batch.clearSelection') : t('section.batch.selectAll');
-    selAllBtn.disabled = total === 0;
-  }
-  if (countEl) {
-    if (count > 0) {
-      countEl.style.display = '';
-      countEl.textContent = t('batch.count.selected', { count: count });
-    } else {
-      countEl.style.display = 'none';
-      countEl.textContent = '';
-    }
-  }
-  if (delBtn) {
-    delBtn.disabled = count === 0;
-    delBtn.title = count > 0
-      ? tCount('batch.del.title.one', 'batch.del.title.other', { count: count })
-      : t('section.batch.deleteSelected');
-  }
+/** A session is over once it stops running; the registry retains it for the
+ *  archive rather than dropping it. */
+function isDeadSession(s) { return !(s && s.status === 'running'); }
+
+/** Sessions belonging to a region, from the last snapshot, so a region only ever
+ *  sees the half it renders. */
+function sessionsForRegion(region, snapshot) {
+  return (snapshot || []).filter(function (s) { return s && s.id && isDeadSession(s) === region.dead; });
 }
 
-function renderSessionGrid(sessions, bannerMsg) {
-  var grid = document.getElementById('session-grid');
-  if (!grid) return;
+/** Drop from both plates' selections every id that is absent from `present`
+ *  (a map keyed by session id). One pass, because a session that leaves the
+ *  registry must leave both sets: it is gone from both plates. */
+function pruneSessionSelections(present) {
+  if (!present) return;
+  _sessionRegions.forEach(function (region) {
+    region.ids.forEach(function (id) { if (!present[id]) region.ids.delete(id); });
+  });
+}
+
+/** Show a region's trash only once it has a selection, and report whether its
+ *  checkbox is fully checked. */
+function updateSessionBatchBar() {
+  var snapshot = window._lastSessionsSnapshot || [];
+  _sessionRegions.forEach(function (region) {
+    var countEl = document.getElementById(region.countId);
+    var delBtn = document.getElementById(region.delId);
+    var selAllBtn = document.getElementById(region.selAllId);
+    var members = sessionsForRegion(region, snapshot);
+    var selected = members.filter(function (s) { return region.ids.has(s.id); });
+    var count = selected.length;
+    var allSelected = members.length > 0 && count >= members.length;
+    if (selAllBtn) {
+      selAllBtn.classList.toggle('all-checked', allSelected);
+      selAllBtn.title = allSelected ? t('section.batch.clearSelection') : t('section.batch.selectAll');
+      selAllBtn.disabled = members.length === 0;
+    }
+    if (countEl) {
+      if (count > 0) {
+        countEl.style.display = '';
+        countEl.textContent = t('batch.count.selected', { count: count });
+      } else {
+        countEl.style.display = 'none';
+        countEl.textContent = '';
+      }
+    }
+    if (delBtn) {
+      // Hidden, not disabled: the trash IS the "something is selected" signal,
+      // so it must be absent rather than greyed out.
+      delBtn.hidden = count === 0;
+      delBtn.title = count > 0
+        ? tCount('batch.del.title.one', 'batch.del.title.other', { count: count })
+        : t('section.batch.deleteSelected');
+    }
+  });
+}
+
+// The list lives in window._lastSessionsSnapshot, written by
+// applySessionsSnapshot and read by every pass below; the banner message is the
+// only thing a caller varies.
+function renderSessionGrid(bannerMsg) {
   setLoadBanner(document.getElementById('session-load-banner'), bannerMsg);
+  var all = (window._lastSessionsSnapshot || []).slice();
+  // One renderer for both plates: the split is which half each region owns, so
+  // the card markup, rename, copy, lock and delete paths cannot drift apart.
+  _sessionRegions.forEach(function (region) { renderTileGrid(region, all); });
+  var present = {};
+  all.forEach(function (s) { if (s && s.id) present[s.id] = true; });
+  pruneSessionSelections(present);
+  updateSessionBatchBar();
+}
+
+/** Render one region's tiles, from the half of the snapshot that region owns.
+ *  The card itself is identical in both, so a session keeps its look when it
+ *  moves from running to over. */
+function renderTileGrid(region, all) {
+  var grid = document.getElementById(region.gridId);
+  if (!grid) return;
+  var selectedIds = region.ids;
   grid.innerHTML = '';
-  // Unified grid: running + DEAD sessions now both come from /api/sessions
-  // (the registry retains exited sessions). DEAD tiles open the same terminal
-  // window in read-only mode — no separate history window.
-  var all = (sessions || []).slice();
-  if (all.length === 0) {
-    _selectedSessionIds.clear();
-    updateSessionBatchBar();
-    var empty = document.createElement('div');
-    empty.style.cssText = 'padding:8px 4px;font-size:0.85rem;color:#656d76';
-    empty.textContent = t('session.empty');
-    grid.appendChild(empty);
-    return;
-  }
-  all.forEach(function (s) {
-    var dead = !(s.status === 'running');
+  // Unified card: DEAD sessions are the same tile as running ones (the registry
+  // retains them); a DEAD tile opens its terminal window in read-only mode.
+  var rows = all.filter(function (s) { return isDeadSession(s) === region.dead; });
+  /* A rowless plate says why it is rowless instead of being a blank strip. It
+     only appears once a snapshot has arrived: before the first frame every plate
+     is trivially empty, and "no live sessions" would be a claim about a list the
+     page has not read yet. */
+  if (rows.length === 0 && window._lastSessionsSnapshot) grid.appendChild(sessionPlateEmpty(region));
+  rows.forEach(function (s) {
     var sid = s.id || '';
-    var isSelected = _selectedSessionIds.has(sid);
+    // This plate renders one kind of session, so the card's DEAD state follows
+    // from which plate built it — the same reason the card markup is shared.
+    var dead = region.dead;
+    var isSelected = selectedIds.has(sid);
     var tile = document.createElement('div');
     var tileClass = 'conn-tile sess-tile' + (dead ? ' archived' : '') + (isSelected ? ' batch-selected' : '');
     tile.className = tileClass;
@@ -108,7 +157,7 @@ function renderSessionGrid(sessions, bannerMsg) {
       '</div>' +
       reviewBadgeHtml(sid) +
       '</div>' +
-      '<div class="sess-fwd-info" style="display:none;font-size:0.62rem;color:#656d76;margin-top:2px;text-align:center"></div>';
+      '<div class="sess-fwd-info" style="display:none"></div>';
 
     tile.title = (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
 
@@ -151,8 +200,8 @@ function renderSessionGrid(sessions, bannerMsg) {
       checkbox.addEventListener('click', function (e) {
         // Do NOT preventDefault() here: that would revert the checkbox toggle.
         e.stopPropagation();
-        if (checkbox.checked) _selectedSessionIds.add(sid);
-        else _selectedSessionIds.delete(sid);
+        if (checkbox.checked) selectedIds.add(sid);
+        else selectedIds.delete(sid);
         tile.classList.toggle('batch-selected', checkbox.checked);
         updateSessionBatchBar();
       });
@@ -214,7 +263,9 @@ function renderSessionGrid(sessions, bannerMsg) {
     tile.onclick = function (e) {
       if (e.target.closest('.sess-x') || e.target.closest('.sess-checkbox') || e.target.closest('.sess-entry-line') || e.target.closest('.sess-sid-line') || e.target.closest('.sess-status-ic')) return;
       clearSessNotified(sid); // opening the session acknowledges its notification highlight
-      focusSessionWindow(s.name || '', s.id, e, dead ? { readOnly: true } : null);
+      /* The card names the position, so a click on the session grid still opens
+         the terminal at the pointer; a keyboard activation has none and centres. */
+      focusSessionWindow(s.name || '', s.id, windowPositionFromClick(e), dead ? { readOnly: true } : null);
     };
     if (!dead) {
       var fwdInfo = tile.querySelector('.sess-fwd-info');
@@ -227,11 +278,16 @@ function renderSessionGrid(sessions, bannerMsg) {
     grid.appendChild(tile);
   });
   applyI18n(grid);
-  var liveIds = new Set(all.map(function(s) { return s.id; }));
-  _selectedSessionIds.forEach(function(id) {
-    if (!liveIds.has(id)) _selectedSessionIds.delete(id);
-  });
-  updateSessionBatchBar();
+}
+
+/** A plate with no rows reads as a terminal that printed nothing. The sentence
+ *  is the catalog's (one per plate), and the node replaces what would otherwise
+ *  be an empty grid — the plate would still be there, saying nothing about why. */
+function sessionPlateEmpty(region) {
+  var el = document.createElement('div');
+  el.className = 'sess-plate-empty';
+  el.textContent = region.dead ? t('plate.archive.empty') : t('plate.sessions.empty');
+  return el;
 }
 
 /** reviewBadgeHtml builds a session card's pending-review badge from the counts
@@ -282,6 +338,9 @@ function lockWindowReadonly(win) {
  *  sits inside the existing .shell-window-title flex row. */
 function setWindowDeadBadge(win) {
   if (!win) return;
+  /* The header lamp tracks the same transition: a window that just became
+     read-only must not keep claiming a live link. */
+  if (typeof setWindowLinkState === 'function') setWindowLinkState(win, 'is-dead');
   if (win._deadBadgeAdded) return;
   var title = win.querySelector('.shell-window-title');
   if (!title) return;
@@ -375,7 +434,7 @@ function setSessionApproval(sessionID, enabled) {
 
 function applySessionsSnapshot(sessions) {
   window._lastSessionsSnapshot = sessions;
-  renderSessionGrid(sessions, '');
+  renderSessionGrid('');
   loadForwards();
   // Reconcile open ordinary shell windows with the retained registry:
   //  - running parent → leave live
@@ -415,9 +474,7 @@ function pruneDeadSessionUIState(liveMap) {
   if (_uiNotifHighlights) {
     Object.keys(_uiNotifHighlights).forEach(function(id) { if (!liveMap[id]) delete _uiNotifHighlights[id]; });
   }
-  if (_selectedSessionIds && _selectedSessionIds.size) {
-    _selectedSessionIds.forEach(function(id) { if (!liveMap[id]) _selectedSessionIds.delete(id); });
-  }
+  pruneSessionSelections(liveMap);
   if (window._shellLastActive) {
     Object.keys(window._shellLastActive).forEach(function(id) { if (!liveMap[id]) delete window._shellLastActive[id]; });
   }
@@ -432,7 +489,7 @@ function pruneDeadSessionUIState(liveMap) {
 function releaseSessionUIState(sid) {
   if (!sid) return;
   if (_uiNotifHighlights) delete _uiNotifHighlights[sid];
-  if (_selectedSessionIds) _selectedSessionIds.delete(sid);
+  _sessionRegions.forEach(function (region) { region.ids.delete(sid); });
   if (window._shellLastActive) delete window._shellLastActive[sid];
   if (window._pendingTerminalWatch) delete window._pendingTerminalWatch[sid];
 }
@@ -465,7 +522,7 @@ function syncWindowTabs(win, shells) {
     // prune on refresh (all snapshot shells report exited) and never send input.
     (shells || []).forEach(function(s) {
       var sid = s.shell_id || s.id;
-      if (!existing[sid]) createChannelTab(win, sid);
+      if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0 });
     });
     return;
   }
@@ -477,14 +534,14 @@ function syncWindowTabs(win, shells) {
   // sweep away.
   exited.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid]) createChannelTab(win, sid, null, true);
+    if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
   });
   // Primary shell tab is created on explicit open (session create / restore).
   // Sync only adds additional shells so closing a tab does not recreate it on
   // the next refresh.
   running.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid);
+    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid, { index: s.index || 0 });
   });
   // Prune tabs for shells the server no longer lists at all — closed elsewhere
   // (MCP shell_close, another window). A shell that merely exited stays listed
@@ -499,5 +556,5 @@ function syncWindowTabs(win, shells) {
 }
 
 /* Language switch: re-render the tiles from the snapshot in memory (no request). */
-onLangChange(function () { renderSessionGrid(window._lastSessionsSnapshot || [], ''); });
+onLangChange(function () { renderSessionGrid(''); });
 

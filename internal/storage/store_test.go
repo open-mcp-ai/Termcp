@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -572,5 +574,339 @@ func TestMarks_WindowIndexDiesWithTheShell(t *testing.T) {
 	}
 	if closer != 0 {
 		t.Errorf("closer = %d, want 0: the only mark is the last one", closer)
+	}
+}
+
+// An offset is only useful if it is where the bytes actually landed, and that
+// holds only if the seek that learns the offset and the write that consumes it
+// are one indivisible step. They are now performed by one goroutine; if that ever
+// regresses into "find the offset, then write" as two separately synchronized
+// steps, two concurrent appends are handed the same offset and the second one
+// overwrites the first. Nothing about the resulting file looks wrong - it is the
+// size it should be - so the loss is only visible through the offsets.
+//
+// This is why the test reads back at the returned offsets instead of counting
+// bytes: counting would pass even while offsets were being handed out twice.
+func TestAppendLog_ConcurrentOffsetsMatchWhereBytesLanded(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	// Each writer appends a payload it can recognise, so a byte found at the wrong
+	// offset is identifiable as "written by someone else" rather than just "wrong".
+	const writers, perWriter, chunk = 8, 40, 64
+
+	var wg sync.WaitGroup
+	offsets := make([][]int64, writers)
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			payload := bytes.Repeat([]byte{byte('A' + w)}, chunk)
+			for i := 0; i < perWriter; i++ {
+				off, err := st.AppendLog(sess, shell, payload)
+				if err != nil {
+					t.Errorf("writer %d: %v", w, err)
+					return
+				}
+				offsets[w] = append(offsets[w], off)
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	total, err := st.LogSize(sess, shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = writers * perWriter * chunk
+	if total != want {
+		t.Fatalf("log is %d bytes, want %d: an append overwrote another", total, want)
+	}
+
+	// Every offset must be distinct, aligned, and hold that writer's own bytes.
+	seen := make(map[int64]int)
+	for w := 0; w < writers; w++ {
+		for _, off := range offsets[w] {
+			if other, dup := seen[off]; dup {
+				t.Fatalf("offset %d was handed to writer %d and writer %d", off, other, w)
+			}
+			seen[off] = w
+
+			if off%chunk != 0 {
+				t.Errorf("writer %d got misaligned offset %d", w, off)
+			}
+			got, err := st.ReadLog(sess, shell, off, chunk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := bytes.Repeat([]byte{byte('A' + w)}, chunk)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("writer %d: bytes at its offset %d belong to another writer", w, off)
+			}
+		}
+	}
+	if len(seen) != writers*perWriter {
+		t.Fatalf("saw %d distinct offsets, want %d", len(seen), writers*perWriter)
+	}
+}
+
+// A shell's handle cache is replaced by an owner goroutine, so the operations that
+// used to be three separately locked helpers must still be safe against each
+// other. A close that ran concurrently with an append used to be serialized by the
+// handle mutex; it now queues behind the append on the owner's channel, and the
+// append that follows a close must still succeed because Close releases handles
+// rather than retiring the store.
+func TestAppendLog_CloseAndDeleteRaceAppends(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := st.AppendLog(sess, shell, bytes.Repeat([]byte("x"), 128)); err != nil {
+				// Close/DeleteShell concurrent with an append must not surface an
+				// error from a handle that was closed underneath it.
+				t.Errorf("append %d: %v", i, err)
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}
+	// The handle cache must be rebuilt on demand, not latched shut.
+	if _, err := st.AppendLog(sess, shell, []byte("after close")); err != nil {
+		t.Fatalf("append after Close: %v", err)
+	}
+
+	close(stop)
+	<-done
+}
+
+// Deleting a shell closes its cached handle through the owner, so a later append
+// must reopen rather than write through a closed file descriptor.
+func TestAppendLog_DeleteShellThenAppendReopens(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	if _, err := st.AppendLog(sess, shell, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteShell(sess, shell); err != nil {
+		t.Fatal(err)
+	}
+	off, err := st.AppendLog(sess, shell, []byte("second"))
+	if err != nil {
+		t.Fatalf("append after DeleteShell: %v", err)
+	}
+	if off != 0 {
+		t.Fatalf("recreated log should start at 0, got %d", off)
+	}
+	got, err := st.ReadLog(sess, shell, 0, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "second" {
+		t.Fatalf("got %q, want %q", got, "second")
+	}
+}
+
+// Closing a session is a delete, and a delete has to stay deleted. A writer that had
+// not yet noticed (the transcript loop can be draining when the delete lands) used to
+// have its next append recreate the session directory through MkdirAll - without the
+// manifest LoadSessions needs, so the directory was invisible to the loader and could
+// never be cleaned up. Refusing the append keeps the delete final and tells the writer
+// to stop, which is what it does on any append error.
+func TestDeleteSession_LateAppendDoesNotResurrectTheDirectory(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(st.sessionDir(sess)); !os.IsNotExist(err) {
+		t.Fatalf("session dir still present after delete: %v", err)
+	}
+
+	if _, err := st.AppendLog(sess, shell, []byte("late")); err == nil {
+		t.Error("late append succeeded; expected refusal")
+	}
+	if _, err := os.Stat(st.sessionDir(sess)); err == nil {
+		t.Error("ORPHAN: late append recreated the deleted session directory")
+	}
+}
+
+// The other half of the rule above, and the reason it cannot simply refuse whenever
+// the directory is missing: a session starts its output pipes in New, before Create
+// persists it, so the first bytes of a session's life arrive before its directory
+// exists. Those bytes must be written. Refusing them would drop real output to fix a
+// delete-path bug.
+func TestAppendLog_BeforeFirstPersistIsAllowed(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	off, err := st.AppendLog(sess, shell, []byte("first bytes"))
+	if err != nil {
+		t.Fatalf("first append to an unpersisted session must be accepted: %v", err)
+	}
+	if off != 0 {
+		t.Errorf("offset = %d, want 0", off)
+	}
+	if err := st.AppendMark(sess, shell, api.LogMark{Status: api.LogOutput, Time: 1, Offset: 0}); err != nil {
+		t.Fatalf("mark on an unpersisted session must be accepted: %v", err)
+	}
+}
+
+// An id reused after a delete must be writable again.
+func TestDeleteSession_ReusedIDIsWritableAgain(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("late")); err == nil {
+		t.Error("append after delete should be refused")
+	}
+	// A new session claiming the same id.
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("fresh")); err != nil {
+		t.Fatalf("append after re-creating the session id must be accepted: %v", err)
+	}
+}
+
+// writeManifest skips a write whose encoded bytes match the last one it wrote, which
+// is what makes a whole-table sweep cost only the sessions that changed. The check is
+// on the observable consequence rather than the cache: an unchanged manifest is not
+// rewritten, so its mtime does not move. A rewrite of identical bytes would need a
+// new temp file and rename, so a stable mtime means no write happened.
+func TestSaveSession_UnchangedManifestIsNotRewritten(t *testing.T) {
+	st := newStore(t)
+	sess := api.Session{ID: "s1", Name: "n", Status: api.SessionRunning, CreatedAt: 1, UpdatedAt: 2}
+	if err := st.SaveSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.sessionDir(sess.ID), "manifest.json")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same content, repeatedly.
+	for i := 0; i < 5; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if err := st.SaveSession(sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("manifest was rewritten despite identical content (mtime %v -> %v)",
+			before.ModTime(), after.ModTime())
+	}
+
+	// A real change must still be written.
+	sess.Name = "renamed"
+	if err := st.SaveSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.ModTime().Equal(before.ModTime()) {
+		t.Error("a changed manifest was NOT written")
+	}
+	got, err := st.readManifest(st.sessionDir(sess.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "renamed" {
+		t.Errorf("on-disk name = %q, want renamed", got.Name)
+	}
+}
+
+// The dangerous case: a manifest is removed from disk while its content hash is
+// still cached. Skipping the next write would leave a directory with no manifest,
+// which LoadSessions then ignores forever.
+func TestSaveSession_DeletedManifestIsRewrittenNotSkipped(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+	session := api.Session{ID: sess, Name: "n", Status: api.SessionRunning, CreatedAt: 1}
+	sh := api.Session{ID: shell, Status: api.SessionRunning, CreatedAt: 1}
+
+	if err := st.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the whole session (drops hashes), then reuse the id with identical
+	// content: the write must happen.
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(st.sessionDir(sess), "manifest.json")); err != nil {
+		t.Fatalf("ORPHAN: manifest not written after delete+recreate: %v", err)
+	}
+	loaded, err := st.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != sess {
+		t.Errorf("LoadSessions saw %d sessions, want the recreated one", len(loaded))
+	}
+}
+
+// DeleteShell removes one shell's manifest while the session hash stays cached;
+// the shell's own hash must go too.
+func TestSaveShell_DeletedManifestIsRewritten(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "s1", "sh1"
+	if err := st.SaveSession(api.Session{ID: sess}); err != nil {
+		t.Fatal(err)
+	}
+	sh := api.Session{ID: shell, Status: api.SessionRunning, CreatedAt: 1}
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteShell(sess, shell); err != nil {
+		t.Fatal(err)
+	}
+	// Same shell content again.
+	if err := st.SaveShell(sess, sh); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.shellDir(sess, shell), "manifest.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("ORPHAN: shell manifest not rewritten after delete: %v", err)
 	}
 }

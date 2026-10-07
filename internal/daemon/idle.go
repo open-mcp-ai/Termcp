@@ -41,11 +41,16 @@ type IdleWatcher struct {
 // on its own.
 func NewIdleWatcher(timeout time.Duration, fire func()) *IdleWatcher {
 	w := &IdleWatcher{timeout: timeout, fire: fire}
-	if timeout > 0 {
-		w.gen++
-		gen := w.gen
-		w.timer = time.AfterFunc(timeout, func() { w.expire(gen) })
+	if timeout <= 0 {
+		return w
 	}
+	// Arm under the mutex expire() takes: a live timer can run expire before this
+	// function returns, and expire writes the same two fields set here.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.gen++
+	gen := w.gen
+	w.timer = time.AfterFunc(timeout, func() { w.expire(gen) })
 	return w
 }
 

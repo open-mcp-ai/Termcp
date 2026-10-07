@@ -1,13 +1,6 @@
 package sshserver
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/subtle"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,147 +10,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/pkg/sftp"
-	sshstd "golang.org/x/crypto/ssh"
 )
-
-// inMemListener is a net.Listener backed by duplex channel pairs for in-process SSH connections.
-type inMemListener struct {
-	conns     chan net.Conn
-	done      chan struct{}
-	closeOnce sync.Once
-}
-
-func newInMemListener() *inMemListener {
-	return &inMemListener{
-		conns: make(chan net.Conn),
-		done:  make(chan struct{}),
-	}
-}
-
-func (l *inMemListener) Accept() (net.Conn, error) {
-	select {
-	case conn := <-l.conns:
-		return conn, nil
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *inMemListener) Close() error {
-	l.closeOnce.Do(func() { close(l.done) })
-	return nil
-}
-
-func (l *inMemListener) Addr() net.Addr { return inMemAddr{} }
-
-// Dial creates a full-duplex in-memory connection pair (using io.Pipe pairs to avoid
-// net.Pipe's synchronous write deadlock during SSH version exchange), enqueues the
-// server side, and returns the client side.
-func (l *inMemListener) Dial() (net.Conn, error) {
-	server, client := duplexPipe()
-	select {
-	case l.conns <- server:
-		return client, nil
-	case <-l.done:
-		server.Close()
-		client.Close()
-		return nil, net.ErrClosed
-	}
-}
-
-// duplexConn is a full-duplex net.Conn backed by buffered byte channels.
-// Buffered channels prevent the write-then-read deadlock that occurs during SSH
-// version exchange when both sides write before either reads (net.Pipe / io.Pipe
-// are synchronous and block writes until the other side reads).
-type duplexConn struct {
-	writeMu   sync.Mutex // serializes close(writeCh) and sends to writeCh
-	readCh    <-chan []byte
-	writeCh   chan []byte // bidirectional; nil after Close (peer reader gets io.EOF via close)
-	closeCh   chan struct{}
-	closeOnce sync.Once
-	readBuf   []byte
-}
-
-func (c *duplexConn) Read(b []byte) (int, error) {
-	if len(c.readBuf) > 0 {
-		n := copy(b, c.readBuf)
-		c.readBuf = c.readBuf[n:]
-		return n, nil
-	}
-	select {
-	case data, ok := <-c.readCh:
-		if !ok {
-			return 0, io.EOF
-		}
-		n := copy(b, data)
-		if n < len(data) {
-			c.readBuf = data[n:]
-		}
-		return n, nil
-	case <-c.closeCh:
-		return 0, net.ErrClosed
-	}
-}
-
-func (c *duplexConn) Write(b []byte) (int, error) {
-	data := make([]byte, len(b))
-	copy(data, b)
-	// Hold writeMu across the send so Close cannot close writeCh mid-send
-	// (that would be a data race and a "send on closed channel" panic).
-	// Close closes closeCh before taking writeMu, so a blocked send here is
-	// always released instead of deadlocking the two.
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	wch := c.writeCh
-	if wch == nil {
-		return 0, net.ErrClosed
-	}
-	select {
-	case wch <- data:
-		return len(b), nil
-	case <-c.closeCh:
-		return 0, net.ErrClosed
-	}
-}
-
-func (c *duplexConn) Close() error {
-	c.closeOnce.Do(func() {
-		close(c.closeCh) // unblock local reads/writes
-		c.writeMu.Lock()
-		close(c.writeCh) // unblock peer's reader (writeCh is always non-nil inside closeOnce)
-		c.writeCh = nil
-		c.writeMu.Unlock()
-	})
-	return nil
-}
-func (c *duplexConn) LocalAddr() net.Addr              { return inMemAddr{} }
-func (c *duplexConn) RemoteAddr() net.Addr             { return inMemAddr{} }
-func (c *duplexConn) SetDeadline(time.Time) error      { return nil }
-func (c *duplexConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *duplexConn) SetWriteDeadline(time.Time) error { return nil }
-
-// duplexPipe creates a pair of connected duplexConns using buffered channels.
-// The buffered channels (cap 16) allow the SSH version exchange to complete
-// without blocking: each side writes ~15-30 bytes which fits in the buffer.
-func duplexPipe() (net.Conn, net.Conn) {
-	const bufCap = 16
-	a2b := make(chan []byte, bufCap)
-	b2a := make(chan []byte, bufCap)
-
-	a := &duplexConn{readCh: b2a, writeCh: a2b, closeCh: make(chan struct{})}
-	b := &duplexConn{readCh: a2b, writeCh: b2a, closeCh: make(chan struct{})}
-	return a, b
-}
-
-type inMemAddr struct{}
-
-func (inMemAddr) Network() string { return "inmem" }
-func (inMemAddr) String() string  { return "inmem" }
 
 // Server wraps an internal SSH server.
 type Server struct {
@@ -229,10 +86,12 @@ func takePTY(sess ssh.Session) (*sessionPTY, bool) {
 // to the same PTY. It must never discard windows: an earlier discard-only
 // consumer (removed in a664a5d) dropped roughly half of all resizes. When both
 // consumers are alive they race for each window, but both apply what they get,
-// so no window can be lost.
+// so no window can be lost. Applying is platform-routed (see applyWindow):
+// Windows must not reach conpty's Resize, whose geometry cache is unlocked and
+// which the library's consumer calls concurrently.
 func drainWindowChanges(pty ssh.Pty, winch <-chan ssh.Window) {
 	for win := range winch {
-		_ = pty.Resize(win.Width, win.Height)
+		_ = applyWindow(pty, win)
 	}
 }
 
@@ -300,71 +159,6 @@ func New() *Server {
 	}
 	s.server = srv
 	return s
-}
-
-func (s *Server) passwordOK(user, password string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	expPass, ok := s.pending[user]
-	if !ok {
-		return false
-	}
-	if len(password) != len(expPass) {
-		return false
-	}
-	if subtle.ConstantTimeCompare([]byte(password), []byte(expPass)) != 1 {
-		return false
-	}
-	delete(s.pending, user)
-	return true
-}
-
-func (s *Server) mintCreds() (user, pass string, err error) {
-	userRand := make([]byte, 10)
-	if _, err := rand.Read(userRand); err != nil {
-		return "", "", err
-	}
-	passRand := make([]byte, 32)
-	if _, err := rand.Read(passRand); err != nil {
-		return "", "", err
-	}
-	user = "t" + hex.EncodeToString(userRand)
-	pass = base64.RawURLEncoding.EncodeToString(passRand)
-	return user, pass, nil
-}
-
-// MintClientConfig registers a new one-time username/password and returns a dial config.
-// The entry is removed on the first successful SSH password authentication (single use).
-// Call only after Start().
-func (s *Server) MintClientConfig() (*sshstd.ClientConfig, error) {
-	user, pass, err := s.mintCreds()
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	s.pending[user] = pass
-	s.mu.Unlock()
-	return &sshstd.ClientConfig{
-		User:            user,
-		Auth:            []sshstd.AuthMethod{sshstd.Password(pass)},
-		HostKeyCallback: sshstd.InsecureIgnoreHostKey(),
-		Timeout:         15 * time.Second,
-	}, nil
-}
-
-// RevokeClientConfig drops a pending one-time credential minted by
-// MintClientConfig. Call it when the returned config will never complete a
-// successful authentication (dial refused, handshake error), otherwise the
-// entry would stay in the pending map for the lifetime of the process — a
-// memory leak on every failed session start. Revoking a credential that was
-// already consumed is a no-op.
-func (s *Server) RevokeClientConfig(user string) {
-	if user == "" {
-		return
-	}
-	s.mu.Lock()
-	delete(s.pending, user)
-	s.mu.Unlock()
 }
 
 // Dial creates a new in-memory connection to this server. The returned net.Conn
@@ -444,80 +238,51 @@ func (s *Server) handleSession(sess ssh.Session) {
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 
-	// Forward signals from client to local process. Started after cmd.Start() so
-	// cmd.Process is already set — reading it here before Start() would race with
-	// the concurrent write in Start().
+	// Forward signals from client to local process.
+	//
+	// The channel is registered once and never unregistered. The library reads the
+	// slot it lives in from two places — the request loop, under the session lock,
+	// and a replay goroutine it starts when a signal arrived before a channel was
+	// registered — and that replay goroutine reads it WITHOUT the lock
+	// (charmbracelet/ssh session.go, Signals). So the sess.Signals(nil) this code
+	// used to do at teardown had no ordering against the read at all, which is the
+	// pair the detector reported. Buffering is routine, not exotic: a client can
+	// send its signal between exec being accepted and this line.
+	//
+	// Since the slot is never rewritten, something must keep reading the channel or
+	// the request loop blocks sending into it while holding the session lock. So the
+	// forwarder starts here, before the child exists, and drains until the
+	// connection is gone — the only moment the library stops sending. It receives
+	// the process through an atomic because Start writes that field concurrently.
 	sigCh := make(chan ssh.Signal, 8)
 	sess.Signals(sigCh)
+
+	var sigProc atomic.Pointer[os.Process]
+	go func() {
+		for {
+			select {
+			case sig := <-sigCh:
+				if proc := sigProc.Load(); proc != nil {
+					if osSig := sshSignalToOSSig(sig); osSig != nil {
+						_ = proc.Signal(osSig)
+					}
+				}
+			case <-sess.Context().Done():
+				return
+			}
+		}
+	}()
 
 	// The PTY info comes from stashPTY rather than sess.Pty(): the request loop
 	// writes sess.pty.Window for every window-change without holding the session
 	// lock, so reading that struct here would race it. Window changes are applied
 	// by drainWindowChanges plus the library's own drain goroutine.
 	ps, hasPty := takePTY(sess)
-	var started bool
-	if hasPty {
-		setPtySysProcAttr(cmd)
-		cmd.Env = append(os.Environ(), "TERM="+ps.pty.Term)
-		// Serialized with the library's PTY teardown: see sessionPTY.
-		ps.mu.Lock()
-		startErr := ps.pty.Start(cmd)
-		ps.mu.Unlock()
-		if startErr != nil {
-			io.WriteString(sess, startErr.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		started = true
-	} else {
-		// Pipe mode (no TTY). Use StdinPipe so exec.Cmd does not spawn a stdin
-		// copy goroutine that cmd.Wait() would block on forever. We copy the SSH
-		// stream to the process stdin in our own goroutine, which unblocks only on
-		// client EOF — independent of cmd.Wait(). Without this, any non-interactive
-		// command (echo, ls, …) deadlocks: cmd.Wait() waits for the stdin copy to
-		// finish, which waits on sess.Read(), which never returns because the
-		// channel only closes after sess.Exit() below (which never runs).
-		in, err := cmd.StdinPipe()
-		if err != nil {
-			io.WriteString(sess, err.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		cmd.Stdout = sess
-		cmd.Stderr = sess.Stderr()
-		if err := cmd.Start(); err != nil {
-			_ = in.Close()
-			io.WriteString(sess, err.Error()+"\n")
-			sess.Exit(1)
-			return
-		}
-		started = true
-		go func() {
-			_, _ = io.Copy(in, sess)
-			in.Close()
-		}()
+	if !startProcess(cmd, sess, ps, hasPty) {
+		return
 	}
 
-	// Forward signals from client to local process. Now that cmd.Start() has
-	// populated cmd.Process (and pty.Start calls it too), reading it here cannot
-	// race with the Start() write.
-	sigDone := make(chan struct{})
-	if started {
-		go func() {
-			for {
-				select {
-				case sig := <-sigCh:
-					if cmd.Process != nil {
-						if osSig := sshSignalToOSSig(sig); osSig != nil {
-							cmd.Process.Signal(osSig)
-						}
-					}
-				case <-sigDone:
-					return
-				}
-			}
-		}()
-	}
+	sigProc.Store(cmd.Process)
 
 	// Wait for the child, but never let a dead connection leave it running.
 	//
@@ -528,45 +293,72 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// session, and on Windows a held PTY that later teardowns then fail on. So the
 	// wait is raced against the session context, which the library cancels when the
 	// connection goes away, and the child is killed if the connection lost.
-	waitDone := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(waitDone)
-	}()
+	//
+	// How the wait is performed is platform-specific, and on Windows it matters:
+	// waitChild owns that difference (see server_windows.go). The exit code
+	// travels back over the channel, so it needs no shared field.
+	waitDone := make(chan int, 1)
+	go func() { waitDone <- waitChild(cmd, hasPty) }()
+	var exitCode int
 	select {
-	case <-waitDone:
+	case exitCode = <-waitDone:
 	case <-sess.Context().Done():
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		<-waitDone
+		exitCode = <-waitDone
 	}
 
-	// Detach and stop the forwarder. sess.Signals(nil) makes the library buffer
-	// (bounded) any late signal instead of sending into a channel nobody reads,
-	// which would block its request loop while holding the session lock. It takes
-	// the same lock the sender uses, so no send can be in flight when we return.
-	// Closing sigCh instead would panic: the library sends on it without knowing
-	// the handler is gone.
-	sess.Signals(nil)
-	close(sigDone)
-
-	exitCode := 127
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
 	sess.Exit(exitCode)
 }
 
-func generateHostKeyPEM() ([]byte, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+// startProcess launches cmd on the session and reports whether it started. On
+// failure it has already written the reason to the client and ended the session
+// with exit code 1, so the caller's only job is to return.
+//
+// The two modes are genuinely different, which is why they live together here
+// rather than in the caller: with a PTY the process owns the terminal, and
+// without one the SSH stream has to be wired up by hand.
+func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) bool {
+	if hasPty {
+		setPtySysProcAttr(cmd)
+		cmd.Env = append(os.Environ(), "TERM="+ps.pty.Term)
+		// Serialized with the library's PTY teardown: see sessionPTY.
+		ps.mu.Lock()
+		startErr := ps.pty.Start(cmd)
+		ps.mu.Unlock()
+		if startErr != nil {
+			io.WriteString(sess, startErr.Error()+"\n")
+			sess.Exit(1)
+			return false
+		}
+		return true
+	}
+
+	// Pipe mode (no TTY). Use StdinPipe so exec.Cmd does not spawn a stdin copy
+	// goroutine that cmd.Wait() would block on forever. We copy the SSH stream to
+	// the process stdin in our own goroutine, which unblocks only on client EOF -
+	// independent of cmd.Wait(). Without this, any non-interactive command (echo,
+	// ls, ...) deadlocks: cmd.Wait() waits for the stdin copy to finish, which
+	// waits on sess.Read(), which never returns because the channel only closes
+	// after sess.Exit() below (which never runs).
+	in, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, err
+		io.WriteString(sess, err.Error()+"\n")
+		sess.Exit(1)
+		return false
 	}
-	b := x509.MarshalPKCS1PrivateKey(key)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: b,
+	cmd.Stdout = sess
+	cmd.Stderr = sess.Stderr()
+	if err := cmd.Start(); err != nil {
+		_ = in.Close()
+		io.WriteString(sess, err.Error()+"\n")
+		sess.Exit(1)
+		return false
 	}
-	return pem.EncodeToMemory(block), nil
+	go func() {
+		_, _ = io.Copy(in, sess)
+		in.Close()
+	}()
+	return true
 }

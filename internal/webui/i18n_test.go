@@ -221,7 +221,7 @@ func TestPlaceholdersMatchAcrossLanguages(t *testing.T) {
 func TestCoreKeysTranslated(t *testing.T) {
 	cat := loadCatalogs(t)
 	core := []string{
-		"sec.entries", "sec.sessions",
+		"sec.sessions",
 		"session.delete.title", "session.delete.message", "session.status.running",
 		"modal.forward.title", "modal.conn.titleAdd", "modal.start.title",
 		"common.cancel", "common.delete", "common.close", "common.confirm",
@@ -270,7 +270,7 @@ func TestLanguageSelectorIsWired(t *testing.T) {
 	// colour, which means its reference lives in the stylesheet rather than in
 	// index.html; check it there and check that the file is really served, since
 	// the markup no longer points at it.
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	if !strings.Contains(css, "icons/language.svg") {
 		t.Error("app.css no longer masks the language glyph in; the icon would not render")
 	}

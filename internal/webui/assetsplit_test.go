@@ -177,8 +177,11 @@ func TestCSSIsExtractedAndServable(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /static/css/app.css = %d, want 200", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), ".app-header") {
-		t.Error("app.css does not contain the app's own rules; the extraction looks wrong")
+	if !strings.Contains(rr.Body.String(), "@import url(\"base.css\")") {
+		t.Error("app.css does not contain the CSS chunk manifest")
+	}
+	if css := readAppCSS(t); !strings.Contains(css, ".app-header") {
+		t.Error("the imported CSS chunks do not contain the app's own rules; the extraction looks wrong")
 	}
 }
 
@@ -388,10 +391,7 @@ process.exit(bad ? 1 : 0);
 // so the shell was created on the server while no tab ever appeared: the window
 // looked like the press did nothing.
 func TestChannelTabInsertAnchorIsWrapped(t *testing.T) {
-	tv, err := readAsset("static/js/terminal-view.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tv := readTerminalJS(t)
 	if !strings.Contains(tv, "tabsBar.insertBefore(tab, addAnchor)") {
 		t.Error("terminal-view.js must insert the channel tab before the add-anchor, not the raw \"+\" button")
 	}
@@ -409,10 +409,7 @@ func TestChannelTabInsertAnchorIsWrapped(t *testing.T) {
 // and the menu appeared at the bottom of the window even when the empty-state
 // caret was pressed.
 func TestChannelAddMenuUsesPressedAnchor(t *testing.T) {
-	tv, err := readAsset("static/js/terminal-view.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tv := readTerminalJS(t)
 	if !strings.Contains(tv, "function openChannelAddMenu(win, anchorEl)") {
 		t.Error("openChannelAddMenu must take the pressed button as its anchor")
 	}

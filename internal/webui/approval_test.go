@@ -67,7 +67,7 @@ func TestApprovalUIIsWired(t *testing.T) {
 		}
 	}
 
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	// Review mode must NOT block the operator's keyboard. Blocking it locked the
 	// human out of the session they were watching: they could not interrupt a
 	// running command, which is not what "review the AI" means. The gate lives on
@@ -109,7 +109,7 @@ func TestApprovalUIIsWired(t *testing.T) {
 // lock. Two entrances to one switch is exactly where a rule gets lost, so this
 // pins the shared call rather than the click.
 func TestReviewToggleUsesTheSharedApprovalWritePath(t *testing.T) {
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	if !strings.Contains(tv, "function applyReviewToggle(") {
 		t.Fatal("terminal-view.js has no review switch; the terminal cannot enter review mode")
 	}
@@ -138,7 +138,7 @@ func TestReviewToggleUsesTheSharedApprovalWritePath(t *testing.T) {
 // while the server dropped every keystroke, so typing looked broken and the
 // reason was invisible.
 func TestApprovalStateIsReadFromTheServerNotOnlyTheSnapshot(t *testing.T) {
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	// The call site, not just the definition: a helper that is never invoked is
 	// exactly the bug this test exists for.
 	if !strings.Contains(tv, "  refreshApprovalState(win, sessionId);") {
@@ -179,7 +179,7 @@ func TestApprovalStateIsReadFromTheServerNotOnlyTheSnapshot(t *testing.T) {
 // session card uses) rather than as a labelled pill: words were the widest thing
 // on the row for a one-bit state.
 func TestReviewLockLeadsTheTabStripAndSurvivesEveryTab(t *testing.T) {
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 
 	locks := strings.Count(tv, "SHELL_REVIEW_LOCK_HTML")
 	// One definition plus one use per window template.
@@ -252,8 +252,8 @@ func TestReviewLockLeadsTheTabStripAndSurvivesEveryTab(t *testing.T) {
 // means "there is a decision waiting, right here".
 func TestApprovalCountLivesOnTheLockAndNotOnThePaneTabs(t *testing.T) {
 	js := readAssetLF(t, "static/js/approval.js")
-	tv := readAssetLF(t, "static/js/terminal-view.js")
-	css := readAssetLF(t, "static/css/app.css")
+	tv := readTerminalJS(t)
+	css := readAppCSS(t)
 
 	// The lock carries the count element, and the panel it opens is the queue.
 	lock := between(t, tv, "var SHELL_REVIEW_LOCK_HTML =", ";")
@@ -310,8 +310,8 @@ func TestApprovalCountLivesOnTheLockAndNotOnThePaneTabs(t *testing.T) {
 // control underneath it; the whole corner is now the target, so nothing is
 // covered and no space has to be reserved for an icon.
 func TestWindowResizesFromFourCornersWithoutAGlyph(t *testing.T) {
-	js := readAssetLF(t, "static/js/terminal-view.js")
-	css := readAssetLF(t, "static/css/app.css")
+	js := readTerminalJS(t)
+	css := readAppCSS(t)
 
 	for _, corner := range []string{"nw", "ne", "sw", "se"} {
 		if !strings.Contains(js, `data-corner="`+corner+`"`) {
@@ -379,8 +379,8 @@ func TestWindowResizesFromFourCornersWithoutAGlyph(t *testing.T) {
 // and the footer's review button 13px, so a 6px strip never overlaps them and no
 // stacking is needed at all.
 func TestResizeGripsAreEdgeStripsNotCornerBlocks(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
-	js := readAssetLF(t, "static/js/terminal-view.js")
+	css := readAppCSS(t)
+	js := readTerminalJS(t)
 
 	// The grips belong to the window (siblings of its content), so the window's
 	// own corner starts a resize. Inside .shell-terminal-wrap they miss it.
@@ -440,7 +440,7 @@ func TestResizeGripsAreEdgeStripsNotCornerBlocks(t *testing.T) {
 // carry the same table (CSS for hover, ui-socket.js while dragging), so a drift
 // between them makes the pointer change direction mid-drag.
 func TestResizeCursorMatchesItsDiagonal(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	js := readAssetLF(t, "static/js/ui-socket.js")
 
 	// nw/se run ↘↖ (nwse-resize); ne/sw run ↗↙ (nesw-resize).
@@ -485,8 +485,8 @@ func TestResizeCursorMatchesItsDiagonal(t *testing.T) {
 // on every open. The terminal scrolled under the cursor each time a human
 // checked the queue — the worst possible place to move the screen.
 func TestReviewPanelFloatsAndDoesNotReflowTheTerminal(t *testing.T) {
-	js := readAssetLF(t, "static/js/terminal-view.js")
-	css := readAssetLF(t, "static/css/app.css")
+	js := readTerminalJS(t)
+	css := readAppCSS(t)
 
 	if !strings.Contains(js, "SHELL_REVIEW_SHEET_HTML") {
 		t.Fatal("expected a shared review panel markup constant")
@@ -536,8 +536,8 @@ func TestReviewPanelFloatsAndDoesNotReflowTheTerminal(t *testing.T) {
 // is the same control the rest of the app uses for a mode, and its state is
 // legible without opening anything (the footer button carries it too).
 func TestReviewModeIsASmallSwitchNotABigButton(t *testing.T) {
-	js := readAssetLF(t, "static/js/terminal-view.js")
-	css := readAssetLF(t, "static/css/app.css")
+	js := readTerminalJS(t)
+	css := readAppCSS(t)
 
 	sheet := between(t, js, "var SHELL_REVIEW_SHEET_HTML =", "function openShellWindow")
 	// A checkbox with role=switch: keyboard and screen-reader behaviour come for
@@ -616,7 +616,7 @@ func TestApprovalRowIsReadOnlyCommandPlusTwoButtonsBesideIt(t *testing.T) {
 		t.Error("the row must carry the actions, side by side with the command")
 	}
 
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	eq := regexp.MustCompile(`(?m)^\s*\.approval-row \{([^}]*)}`).FindStringSubmatch(css)
 	if eq == nil {
@@ -788,7 +788,7 @@ func TestNotificationClickOpensItsSession(t *testing.T) {
 // snapshot is already pushed over the WebSocket, so reading it keeps the menu
 // live without a second source of truth.
 func TestMobileSwitcherListsSessionsNotOpenWindows(t *testing.T) {
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	menu := between(t, tv, "function openSessionSwitchMenu(anchorBtn) {", "function setupMobileSessionSwitcher(win)")
 
 	if strings.Contains(menu, "liveSessionWindows()") {
@@ -825,7 +825,7 @@ func TestMobileSwitcherListsSessionsNotOpenWindows(t *testing.T) {
 // the first, so the element renders empty. That is exactly how the review sheet
 // shipped as an empty div while every test passed.
 func TestSharedMarkupConstantsAreWellFormed(t *testing.T) {
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readTerminalJS(t)
 	for _, name := range []string{"SHELL_REVIEW_LOCK_HTML", "SHELL_REVIEW_SHEET_HTML", "SHELL_RESIZE_HANDLES_HTML", "SHELL_WINDOW_PANELS_HTML"} {
 		body := between(t, tv, "var "+name+" =", ";")
 		// Drop the declaration itself: only the expression lines are checked.
@@ -915,8 +915,8 @@ func readGoSource(t *testing.T, name string) string {
 // window collapsing leaves a header bar over the page with the terminal gone,
 // which is a state with no way back that a phone user hits by accident.
 func TestPhoneHeaderScrollsTheStripAndDropsCollapse(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
-	js := readAssetLF(t, "static/js/terminal-view.js")
+	css := readAppCSS(t)
+	js := readTerminalJS(t)
 
 	touch := between(t, css, "@media (pointer: coarse) and (hover: none) {", "  .shell-header-controls {")
 	if !strings.Contains(touch, ".shell-window-header-btns button.shell-window-collapse-btn { display: none; }") {

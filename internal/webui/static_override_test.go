@@ -153,6 +153,64 @@ func TestAssetsOverrideWinsAndFallsBackPerFile(t *testing.T) {
 	}
 }
 
+// TestAssetsCSSChunksResolveThroughTheOverride pins the interaction between the
+// per-file override and the split stylesheet. app.css is now a manifest that
+// @imports the chunks in static/css/, and the browser fetches those chunks as
+// separate requests — so every one of them is resolved through the override
+// individually. A one-file override of app.css therefore does NOT restyle the
+// UI: the manifest is replaced but each chunk still falls back to the embed.
+//
+// That is the operator-facing contract: restyling through --assets means
+// overriding the whole static/css/ directory. This test fails the moment the
+// two mechanisms stop agreeing (a manifest that inlines the chunks, a chunk
+// that stops being requested, or an import URL that no longer resolves).
+func TestAssetsCSSChunksResolveThroughTheOverride(t *testing.T) {
+	dir := t.TempDir()
+	const manifest = "/* operator manifest */\n@import url(\"tokens.css\");\n"
+	const tokens = ":root { --bg-canvas: rebeccapurple; }\n"
+	writeAssetFile(t, dir, "static/css/app.css", manifest)
+	writeAssetFile(t, dir, "static/css/tokens.css", tokens)
+	setAssetsDir(t, dir)
+
+	h := embeddedStaticServer()
+
+	// The overridden manifest and the overridden chunk both come from disk.
+	if code, body := serveAsset(t, h, "/static/css/app.css"); code != http.StatusOK || body != manifest {
+		t.Errorf("GET app.css = %d, %q; want 200 with the external manifest", code, body)
+	}
+	if code, body := serveAsset(t, h, "/static/css/tokens.css"); code != http.StatusOK || body != tokens {
+		t.Errorf("GET tokens.css = %d, %q; want 200 with the external chunk", code, body)
+	}
+
+	// A chunk the directory does not carry is still served from the embed, so a
+	// partial override degrades to a mixed stylesheet instead of a blank page.
+	embedBase, err := fs.ReadFile(embeddedOnlyFS(t), "static/css/base.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := serveAsset(t, h, "/static/css/base.css"); code != http.StatusOK || body != string(embedBase) {
+		t.Errorf("GET base.css = %d, %d bytes; want 200 with the embedded chunk", code, len(body))
+	}
+
+	// Every chunk the embedded manifest imports must resolve over HTTP: the
+	// browser fetches each one, and a missing URL is a 404 the Go build cannot
+	// catch. Read the import list from the embed, not from the override above.
+	embedManifest, err := fs.ReadFile(embeddedOnlyFS(t), "static/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := cssImportRe.FindAllStringSubmatch(string(embedManifest), -1)
+	if len(chunks) < 2 {
+		t.Fatalf("embedded app.css imports %d chunk(s); the manifest looks reverted", len(chunks))
+	}
+	for _, m := range chunks {
+		path := "/static/css/" + m[1]
+		if code, _ := serveAsset(t, h, path); code != http.StatusOK {
+			t.Errorf("the manifest imports %s but GET %s = %d; the page would lose that chunk's rules", m[1], path, code)
+		}
+	}
+}
+
 // TestAssetsMissingEverywhereStays404 keeps the fallback honest: falling back to
 // the embed must not invent a 200 for a path that exists in neither place.
 func TestAssetsMissingEverywhereStays404(t *testing.T) {

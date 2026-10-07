@@ -1,0 +1,31 @@
+# Line endings: normalize to LF in the repository and in every working tree.
+#
+# The repository is developed on Windows and CI runs on Linux and macOS, so a
+# file's ending depended on whoever last saved it: one tracked file (webui/ws.go)
+# was committed as CRLF and two design docs had a mixed file, which made gofmt
+# report them dirty on every machine and turned any edit into a whole-file
+# rewrite. Declaring the policy here makes the checkout identical everywhere and
+# keeps a future contribution from reintroducing the drift.
+#
+# No tracked file is binary (checked: `git ls-files` holds only Go, Markdown,
+# JS/CSS/HTML/SVG, YAML, Makefile, LICENSE and Dockerfile), so every file can be
+# treated as text.
+* text=auto eol=lf
+
+# Explicitly text so a future `* text=auto` change cannot silently make these
+# binary, which would disable diffs for the files that most need reviewing.
+*.go    text
+*.md    text
+*.js    text
+*.css   text
+*.html  text
+*.svg   text
+*.yml   text
+*.json  text
+*.mod   text
+*.sum   text
+
+Makefile    text
+Dockerfile  text
+LICENSE     text
+.gitignore  text

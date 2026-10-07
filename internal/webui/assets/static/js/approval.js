@@ -112,6 +112,7 @@ function applyApprovalCounts() {
     badge.hidden = !n;
     badge.textContent = tCount('review.badge.one', 'review.badge.other', { count: n });
   });
+  if (typeof blackwallPaint === 'function') blackwallPaint();
 }
 
 /** clearApprovalCount drops one session's count. Turning review off cancels

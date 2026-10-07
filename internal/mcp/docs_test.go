@@ -310,6 +310,88 @@ func notifyDescription(t *testing.T, s *Server, ctx context.Context) string {
 	return ""
 }
 
+// TestNotifyUserDescriptionRequiresProactiveHumanAlert keeps the behavioral rule in
+// the compact, model-facing description. The longer registration text is replaced
+// by compactToolDescriptions before tools/list is sent, so testing tools.go alone
+// would miss a regression that silently removes the instruction from the model.
+func TestNotifyUserDescriptionRequiresProactiveHumanAlert(t *testing.T) {
+	desc := notifyDescription(t, docsTestServer(t), originContext("http://127.0.0.1:18765"))
+	for _, want := range []string{
+		"CALL IT BEFORE ASKING THE HUMAN FOR ANYTHING",
+		"password/sudo/MFA/passphrase",
+		"confirmation, approval",
+		"duration_seconds=0",
+		"long task ends or fails",
+		"delivered=0",
+		// The asking half of the rule is stating the ask; the other half is not
+		// inventing the answer while it is missing. A held review request relies on
+		// this one too: the review replies only forbid retrying a REVIEWED call.
+		"Once you have asked, WAIT",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("notify_user model-facing description misses %q:\n%s", want, desc)
+		}
+	}
+	if !strings.Contains(mcpServerInstructions, "before any password/sudo/passphrase/MFA") ||
+		!strings.Contains(mcpServerInstructions, "notify_user FIRST") ||
+		!strings.Contains(mcpServerInstructions, "HARD BOUNDARY") {
+		t.Errorf("initialize instructions no longer require notify_user before human input:\n%s", mcpServerInstructions)
+	}
+}
+
+// Review mode's rule belongs in the initialize instructions: the reply it
+// describes (review_pending) answers a call the model just made, so the rule has
+// to be in context before that call. The tool RESULT repeats the operational half
+// on purpose, but the tool LISTING must not: notify_user's description is sent on
+// every tools/list and is not where a held call is explained.
+func TestInstructionsCarryReviewPendingRule(t *testing.T) {
+	for _, want := range []string{"review_pending", "no id to poll", "resubmit"} {
+		if !strings.Contains(mcpServerInstructions, want) {
+			t.Errorf("instructions no longer explain review mode %q:\n%s", want, mcpServerInstructions)
+		}
+	}
+
+	desc := notifyDescription(t, docsTestServer(t), originContext("http://127.0.0.1:18765"))
+	for _, gone := range []string{"review_pending", "resubmit"} {
+		if strings.Contains(desc, gone) {
+			t.Errorf("the notify_user description repeats the review-mode rule %q; it belongs in the instructions and the tool result", gone)
+		}
+	}
+}
+
+// The rule reaches the model in three places, each doing one job: the initialize
+// instructions state it as a rule, and the two tool results restate it for the
+// moment it is met. The two replies are NOT duplicates of each other though --
+// they need opposite next steps, so they share the retry rule (reviewWaitTail)
+// and differ everywhere else: staged text still needs its ending key, queued or
+// held work must not be retried and is checked later via shell_output.
+func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
+	held := toolResultText(reviewPendingResult(false))
+	if !strings.Contains(held, "ending key") {
+		t.Errorf("the staged reply must ask for the ending key:\n%s", held)
+	}
+	// The retry rule belongs to the queued case only: a model that read it after
+	// staging text would abandon a command line it still has to finish.
+	if strings.Contains(held, reviewWaitTail) {
+		t.Errorf("the staged reply must not forbid the ending key it just asked for:\n%s", held)
+	}
+
+	queued := toolResultText(reviewPendingResult(true))
+	if !strings.Contains(queued, "no id to poll") || !strings.Contains(queued, "WAIT") {
+		t.Errorf("the queued reply must forbid a retry loop:\n%s", queued)
+	}
+	// A held operation shares the queued wording, so one constant keeps the two
+	// paths from forbidding the same retry loop in two different ways.
+	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts")); !strings.Contains(op, reviewWaitTail) {
+		t.Errorf("a held operation must carry the same retry rule as a held command line:\n%s", op)
+	}
+	// The two replies differ: a model that reads "do not retry" after staging
+	// text would abandon a command line it still has to finish.
+	if held == queued {
+		t.Error("staged and queued replies must differ; they need opposite next steps")
+	}
+}
+
 // The tool listing is the one channel guaranteed to reach the model: a client
 // that drops it cannot call any tool. So the instance address rides on the
 // description of the tool that exists to reach the human -- unlike the

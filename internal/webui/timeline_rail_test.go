@@ -1,6 +1,9 @@
 package webui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,7 +20,7 @@ import (
 // twelve pixels wide on a dark background, two statuses with one colour are one
 // status as far as the reader is concerned.
 func TestRailDistinctCues(t *testing.T) {
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 
 	// A status colour is declared on a bare status rule (`.term-rail-output {
 	// background: … }`) and nowhere else: the compound rules a cell also carries
@@ -187,6 +190,94 @@ func TestRailCallsTheRealTerminalGeometry(t *testing.T) {
 	}
 	if !strings.Contains(js, "xterm-viewport") {
 		t.Error("the scroll listener is no longer on the viewport element")
+	}
+}
+
+// TestRailCoverageUsesAbsoluteTotalRows exercises the client's stale-tail guard.
+//
+// `spans.length` is the requested count, while `total_rows` is an absolute row
+// number. During a streaming command the response can therefore contain 121 array
+// slots while the log only has 1427 rows and the viewport already reaches row 1431.
+// Treating the array length as the extent says the response covers the viewport and
+// leaves the newest rows without cells. The JS path is run, not only searched, so a
+// later refactor cannot silently reintroduce the off-by-top arithmetic.
+func TestRailCoverageUsesAbsoluteTotalRows(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot execute rail coverage helper")
+	}
+	js := readAssetLF(t, "static/js/timeline.js")
+	path := filepath.Join(t.TempDir(), "timeline.js")
+	if err := os.WriteFile(path, []byte(js), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const probe = `
+const fs = require('fs'), vm = require('vm');
+vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
+const body = { cols: 80, top: 1354, spans: Array(121).fill(null), total_rows: 1427 };
+const staleTail = railCoversWindow({ lastBody: body }, { top: 1406, rows: 25 }, 80);
+if (staleTail) throw new Error('a 121-slot response was treated as covering rows past absolute total_rows');
+body.total_rows = 1450;
+const covered = railCoversWindow({ lastBody: body }, { top: 1406, rows: 25 }, 80);
+if (!covered) throw new Error('a viewport inside absolute total_rows was rejected');
+console.log('ok');
+`
+	cmd := exec.Command(node, "-e", probe, path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rail coverage probe failed: %v\n%s", err, out)
+	}
+}
+
+// TestRailReservesAColumnBeforeTheScrollbar pins the non-overlap contract. The
+// terminal keeps its full viewport box, and therefore its scrollbar at the far
+// right; fitShellTerminal gives the text grid fewer columns, while the rail is
+// placed in the newly free column immediately before that scrollbar.
+//
+// The two halves have to agree. A rail placed beside a grid that still uses the
+// full width paints over the last columns, and a grid narrowed without a rail
+// leaves a gutter of dead space — so both the CSS variables and the fit arithmetic
+// are pinned here.
+func TestRailReservesAColumnBeforeTheScrollbar(t *testing.T) {
+	css := readAppCSS(t)
+	// The two variables are read as a set and from the rule that owns them: a bare
+	// substring search would also match the coarse-pointer override, so a desktop
+	// width change could pass while the media query silently stopped being the
+	// override. Each variable is asserted in the declaration block it belongs to.
+	body := between(t, css, "\n  .shell-channel-body {", "\n  }")
+	for _, want := range []string{"--term-rail-w: 14px", "--term-rail-gap: 10px"} {
+		if !strings.Contains(body, want) {
+			t.Errorf(".shell-channel-body misses %q; the rail column would not be reserved beside the scrollbar: %s", want, body)
+		}
+	}
+	coarse := between(t, css, "@media (pointer: coarse) and (hover: none) {\n  .shell-channel-body", "\n}")
+	if !strings.Contains(coarse, "--term-rail-w: 22px") {
+		t.Errorf("the coarse-pointer override no longer widens the reserved column; the strip would be a target over the text: %s", coarse)
+	}
+	// The strip itself sits in that column, immediately left of the scrollbar's
+	// gutter — not at `right: 16px`, which was the overlay that covered the text.
+	rail := between(t, css, "\n.term-rail {", "\n}")
+	for _, want := range []string{"right: var(--term-rail-gap, 10px)", "width: var(--term-rail-w, 14px)"} {
+		if !strings.Contains(rail, want) {
+			t.Errorf(".term-rail misses %q; the strip would not sit in the reserved column: %s", want, rail)
+		}
+	}
+	// The terminal instance must keep the body's full box. Insetting it before the
+	// rail is the tempting mistake: it drags the scrollbar left with it, so the
+	// scrollbar no longer sits at the far right where a reader reaches for it.
+	inst := between(t, css, "\n  .shell-channel-instance {", "\n  }")
+	if !strings.Contains(inst, "inset: 0;") {
+		t.Errorf("the terminal instance no longer fills the channel body; the scrollbar would move: %s", inst)
+	}
+
+	js := readAssetLF(t, "static/js/ui-socket.js")
+	for _, want := range []string{
+		"getPropertyValue('--term-rail-w')",
+		"getPropertyValue('--term-rail-gap')",
+		"Math.floor((w - reserve) / charWidth)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("ui-socket.js misses %q; xterm would still paint text beneath the rail", want)
+		}
 	}
 }
 

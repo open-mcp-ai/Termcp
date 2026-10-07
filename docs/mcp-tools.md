@@ -75,9 +75,12 @@ Termcp 的 31 个工具按"热路径 / 低频面"分成两类。MCP 标准的 `d
 | session（会话） | `termcp://#[会话id]`（**短形式，复制按钮统一输出此形式**） | `termcp://#ctf-1` |
 | shell（频道） | `termcp://#[会话id]:[序号]` | `termcp://#ctf-1:2` |
 
-- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是频道在该会话里的顺序，从 1 起，与频道标签 `shell-1`/`shell-2` 一致；无序号 = 首个 shell。
+- `[会话id]` 就是会话卡片上的等宽小字（不带 `session-` 前缀）；`[序号]` 是**频道在会话内的编号**：从 1 起、在频道创建时由服务端分配、**终生不变且不复用**——关掉靠前的频道不会让后面的编号前移，因此已复制的定位符始终指向同一个频道，而编号已被关闭的频道会解析失败（不会滑到邻居身上）。它与频道标签 `shell-1`/`shell-2` 一致；无序号 = 首个 shell。
 - **REST 侧也能解析**：`GET /api/resolve?url=termcp://...` 返回 `kind=entry|session|shell` 与对应 `ssh_config` / `session_id` / `shell_id`（纯 curl 的 agent 用；语法解析器与 MCP 共用 `internal/locator`）。
-- **MCP 工具直接接受定位符**：`session_start(ssh_config="termcp://mac")`、`session_terminate(session_id="termcp://#ctf-1")`、`shell_input(shell_id="termcp://#ctf-1:2", ...)` 等都无需先解析成裸 id，一次调用直达。
+- **MCP 工具在所有 id / profile 参数位置都接受定位符**（`session_id` / `shell_id` / `ssh_config` 三者一致）：`session_start(ssh_config="termcp://mac")`、`session_terminate(session_id="termcp://#ctf-1")`、`shell_input(shell_id="termcp://#ctf-1:2")` 等都无需先解析成裸 id，一次调用直达。另外 `session_id` 也接受**裸 shell id**（shell 属于哪个会话是确定的），`shell_id` 也接受**裸 session id**（= 首个频道）。
+- **返回的 id 总是解析后的真实 id**，不会把传入的定位符原样回显。这很重要：forward 的 `session_id`、通知规则的 `shell_id` 会被服务端作为内部索引使用（会话 DEAD 时级联关闭/清理都按真实 id 匹配），回显定位符会让这些资源无法被级联回收、通知 URI 也会变成一个不存在的名字。
+- **裸名字不是定位符**：没有 scheme、也没有 `#` 的 `session-<id>` 保持作为 profile 名/裸 id 理解——profile 名与会话 id 共用同一命名空间，`session-foo` 这样的 profile 必须继续可用。只有显式的会话写法（`#<id>`、`termcp://#<id>`、`termcp://<entry>#<id>`）才按会话解析，并在此剥掉 `session-` 前缀（`#session-foo` = 会话 `foo`）。
+- **HTTP 侧**：路径/查询参数只接受裸 id，定位符先用 `GET /api/resolve` 换成 id（定位符里的 `#`/`:` 本来也无法安全地放进 URL 路径）；写操作的 JSON body 里的 `ssh_config` 字段接受 entry 定位符。
 - 兼容旧形式 `termcp://[entry名]#[会话id]`：entry 前缀被忽略（会话名与 entry 名无关），以会话 id 为准。
 - **已关闭（DEAD）会话**：写操作工具（`shell_input` / `shell_key` / `shell_resize` 等）不接受定位到已关闭会话，会返回带提示的错误——已关闭会话是只读的，用 `shell_output`（`tail_lines` / `offset` 翻页）读取。定位符解析失败（如 `termcp://#sid:0`）返回 `invalid_argument` 并附具体原因。
 - 通知通道专用格式：`shell_notify` 的 `channel="resource"` 广播的资源 uri 固定为 `termcp://shells/<shell_id>`（仅作事件载体，不是可用定位符）。
@@ -154,7 +157,7 @@ ssh_config(action=list)
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |
 | `ssh_config` | string | **是** | — | profile 名称：`"internal"` = 本机 loopback，其他 = `ssh_configs/<name>/` 下的远端连接（可用 `ssh_config(action=list)` 查询） |
 
-**返回**：`{ session_id, shell_id, pid, ssh_config }`
+**返回**：`{ session_id, shell_id, ssh_config, index }`（`index` = 主 shell 的频道编号，恒为 1）
 
 ### shell_open
 
@@ -169,7 +172,7 @@ ssh_config(action=list)
 | `rows` | number | 否 | `24` | PTY 行数 |
 | `cols` | number | 否 | `80` | PTY 列数 |
 
-**返回**：`{ shell_id, session_id, name }`
+**返回**：`{ shell_id, session_id, name, index }`（`index` = 该频道的编号，即 `termcp://#<会话id>:<index>` 里的 N）
 
 ### shell_list
 
@@ -366,12 +369,16 @@ ssh_config(action=list)
 
 **返回**：`{ ok, delivered, title, level, session_id? }` —— `delivered` 是实际收到通知的已打开页面数（WebSocket 标签页）；为 `0` 表示当前没有页面打开，通知未展示（附 `hint` 说明）。
 
-**什么时候用**：由 Agent 自行判断 —— 只要“人应该被提醒”就用，例如会话在等人（凭据、确认、MFA、交互式提问）、长任务结束、任务失败、需要人做决定。不限于固定场景清单。阻塞类提醒建议 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片）；同时要在回复里说同一件事，因为 `delivered=0` 说明没有页面打开、通知未展示。
+**什么时候用**：**凡是要向人要东西，先通知再问** —— 密码/sudo/passphrase/MFA、确认、批准、选项、任何交互式输入，以及长任务结束、任务失败、需要人做决定。这不是一份固定清单，而是一条硬性顺序：人可能没盯着这个对话，一句没预告的提问会一直卡在那里，直到他碰巧看到。阻塞类提醒用 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片），并在回复里说同一件事——`delivered=0` 说明没有页面打开、通知并未展示。
 
 **典型用法**：
 
 ```jsonc
+// 长任务结束
 { "message": "构建已完成，耗时 2m31s", "level": "success", "session_id": "<session_id>" }
+
+// 会话在等人输密码 / 做确认：先通知，再发问
+{ "message": "需要 sudo 密码才能继续安装依赖", "level": "warn", "duration_seconds": 0, "session_id": "<session_id>" }
 ```
 
 > 想通知 Agent 自己，用 `shell_notify`（MCP 信令通道）；想让页面上的用户看到提醒，用 `notify_user`（浏览器界面）。

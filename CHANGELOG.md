@@ -1,5 +1,170 @@
 # Changelog
 
+## v0.2.6 — 2026-10-07
+
+### 本版要点
+
+- **Web UI 变成工作台**：访问列表从「点开才有的浮层」变成常驻的 **NetHub** 侧栏（宽屏展开、中屏收成状态灯轨道、窄屏仍是左侧抽屉），会话拆成「运行中」与「已归档」两块板，节点卡回答「这是哪台机器、能不能连上、上面有几个会话」。
+- **批量操作**：NetHub 一个开关进入选择态，一次级联开窗多台主机、按选择集导出配置、逗号分隔批量删除。
+- **连接配置可整体搬运**：TOML 批量导入/导出（`/api/connections/batch`），并新增**临时主机**（只存内存、进程退出即消失）。
+- **定位符（`termcp://`）在所有接受 id 的 MCP 工具上真正生效**，同时修掉一个审批绕过——同一个写操作，用定位符写法可以跳过人工审阅。
+- **频道编号终生不变**：关掉靠前的频道不会让后面的编号前移，复制过的 `termcp://#<会话>:N` 永远指向同一个频道。
+- **时间轴轨道（rail）与真实终端对齐**：清屏、滚动缓冲上限、行号坐标系全部按 xterm 的实际行为重做；大日志重放从 7.2s 降到 0.19s。
+- **终端字体支持中文**：字体栈补上 CJK，Kali 这类最小化系统不再把汉字画成超宽点阵（#77）。
+- **Agent 侧更稳**：工具 handler 里的 panic 不再杀掉整个进程；`notify_user` 的模型可见描述写明「问人之前先通知人」。
+- **会话内核与存储更省**：每个日志一个写者 goroutine；manifest 未变则不重写（100 会话一次 persist 从 1380ms 降到 13.8ms）；shell 的退出状态落盘。
+
+### 新功能
+
+- **NetHub：常驻的资源侧栏，而不是一个要点的按钮**：访问列表原先只是布局轨道里的一个按钮，点开才覆盖出来——宽屏上一组常年要用的机器每次都要点一下才能看见，关着的时候又什么都不回答。现在它是页面的控制层：工作区旁边的 `<aside>` 列，收起时不消失而是缩成一条**状态灯轨道**。宽屏默认展开、中屏默认停在轨道、800px 以下仍是左侧抽屉；桌面两种形态由同一个布尔值（`setNetHubCollapsed`）驱动同一个长度变量（`--nethub-w`），所以收起是让工作区重新排布而不是把它盖住，手动选择沿用既有的 localStorage 记忆。
+
+  节点卡回答的是「这是哪台机器、我能不能连上」：身份、Termcp 拨号的协议、运行状态、地址元数据、以及它上面有几个活会话。服务端没有 per-host 健康字段，所以状态**由页面已经收到的证据推导**——正在拨号的窗口是「连接中」，有 running 会话是「在线」，一个会话都没有意味着 Termcp 目前没有活的通路；逐帧探测每个已存主机不是选项。轨道保留同一个答案：每个节点一盏灯、有窗口打开的节点带标记、外加一个展开键；点一盏灯会直接揭示它命名的那张卡，而不是展开成一个显示不了它的列表。
+
+  会话卡片的归属改为按 **SSH profile**（`ssh_config` 字段，非机密的标签）判定，而不是显示名——显示名是用户可改的，重命名过会话的灯不该灭（`api.Session` 新增该字段，`docs/api.md` 同步）。
+
+- **运行中 / 已归档两块板**：「还在跑什么」和「我跑过什么」是两个不同的问题，却挤在同一个列表里。现在会话板只列 running，下面一块归档板承接其余；两块板各有自己的选择集、计数和垃圾桶（垃圾桶是隐藏而不是禁用——它本身就是「有东西被选中」的信号），选择与删除按区域独立，批量删除路径共用，因此两块板不会各自漂移；已经离开服务端注册表的选择集会被清理一次，两块板一起。
+
+  会话板的「+」新建卡片改为**空态读数**：没有活会话时，网格原先是「一张虚线创建卡 + 一行空文案」，同一个问题两个答案，其中一个还是通往 NetHub 那扇门的第二个入口。现在无行的板会说清为什么无行，并且在收到服务端第一份快照之前不表态——在那之前每块板都是平凡为空的。
+
+  工作区的框架改成**三轨网格**（NetHub 宽、内容、同样的宽），只有中间那轨伸缩。此前 NetHub 键作为 flex 兄弟会和两块板抢宽度，标签最长的那个翻译决定它挤扁它们还是换行；镜像的两端也正是让两块板在 dock 上居中的原因，并且保留量与实际贴靠都读同一个 `--dock-pad-x`，跨断点跟着走。800px 以下网格堆成一列并丢掉尾部保留轨，而不是留一行空的。
+
+- **NetHub 批量选择：一个开关，一行之内对节点做全部批量操作**：工具栏原「导入/导出」两个全局按钮重构为一个批量选择开关（列表勾选图标）。收起时点击节点卡直接连接（与从前一致）；开关激活后缩为行内最左侧——选中任意节点后**开关的脸直接变成选中数**——播放键在其右侧展开：播放键主体为「打开所选主机」（逐个 150ms 级联开窗，避免同瞬窗口糊成一堆），其下拉菜单携带「导出配置」（只导出选中节点，与全量导出同 TOML 格式、可导回）与「删除」（逗号分隔批量 `DELETE /api/connections/{names}`，逐名返回结果，一条失败不影响其余）；反选键紧随开关右侧：镂空勾图标，有选中后变实心勾，空选时反选即全选。
+
+  工具栏这三个键（开关、反选、播放分键）**与面板是同一块板**：切角、折角与角落描边全部来自 `theme.css` 唯一那条 `clip-path: polygon(...)` 规则，本文件不为它们另写多边形。它们只声明“画在什么底色上”（描边是 background-image 层，透明的键会让描边压在下层内容上）。此前这三个键被一条**同特异性、源码更晚**的规则重新钉成“关闭折角、7px 切角”，而单个类选择器打不过源码顺序，于是多边形整个消失、只剩直角描边——看上去就像样式被删了。现在那条覆盖规则已删除，键回到 `--cut: 14px` + 折角 + 底板填充。为此 `notch_geometry_test.go` 新增 `effectiveKnob()`：不再只问“选择器在不在规则里”，而是**按级联解析**每个键最终拿到的 `--cut/--notch-left/--notch-run`，这正是原先漏掉回归的盲区。
+
+  下拉菜单挂在分键的**兄弟层**上而非其内部：多边形是 `clip-path`，而 clip 会连同**后代**一起裁掉，菜单本该出现在按键下方、正好被裁没。现在板在内层 `.nethub-open-plate`（承载多边形），菜单是它的兄弟，不再被裁。菜单锚定 `right: 0`——触发它的是右端的箭头，原先 `left: 0` 让它跑到整条键的远端下方，看起来像“弹到别处去了”；`min-width: 100%` 让菜单至少与按键同宽，菜单项恢复正常高度。（`.nethub-open-split button { height: 100% }` 曾连菜单项一起命中，按特异性把每项压成文字高度；该规则现已限定到 `.nethub-open-plate`。）
+
+  未选中任何节点时播放键与菜单项处于禁用态；再次按下开关或按 Esc 退出并清空选中（有下拉先收下拉），**退出时会按选择集逐卡同步 `batch-selected`**——此前只清空集合、不摘类名，关掉再开会让旧卡片带着残留类重新点亮而计数为 0。选择不使用复选框，进入选择模式也不改变任何卡片的外观（编辑/快启/复制按钮原位保留）——点过的卡片点亮 accent 描边、左侧扫描条与节点名；选择只重新着色，绝不改动底板的多边形形状（切角几何仍由 theme 统一声明，选中态用 `background-color` 而非 shorthand，避免重置角落描边层）。选中状态存于模块级 `_nodeSelIds` 并在每次重画时重新套用，因此**切换开关不重建网格**（只翻类名与换 tooltip），会话帧触发的重画、语言切换也都不丢选中。内置回环节点同样可选（「打开」对它有效），但选中含它时点导出/删除立即报错——前端直接 toast，接口同名限制：`GET /api/connections/batch?names=` 含 `internal` 返回 400，批量删除对它逐名报 `reserved_profile`（新增 `sshconfig.ErrReserved` 哨兵，`IsInternalName` 一并导出，前端不再重复判断与复述文案）。底部「新增接入」由独占一行改为与导入键同行（导入改上传图标、仅图标，行宽让给新增）。新增测试覆盖导出按名过滤（含 internal 拒绝）、批量删除逐名结果，以及四项结构性回归测试按新决策更新（切角面板组、底行动作、抽屉侧入口的中置开窗）。
+
+  嵌入式静态资源现在带 `Cache-Control: no-cache`：embed 里的文件没有修改时间，`http.FileServer` 既不发 `Last-Modified` 也不发 `ETag`，浏览器于是**启发式缓存**上一版二进制的样式表，用旧规则渲染新标记，直到硬刷新——这正是本轮改样式时反复看到的假象。
+
+- **批量导入/导出连接配置，以及只活在内存里的临时主机**：`GET /api/connections/batch` 把远端 profile 导成一个 TOML 文件（**含**临时主机、**不含**内置 `internal`；文件里有凭据，按机密处理），`?names=a,b` 只导指定几个，其中已经不存在的名字跳过而不是让整份文件失败。`POST /api/connections/batch?temporary=false` 导入同一格式（请求体上限 16 MiB）；重名、大小写不同的重名与保留名 `internal` 会拿到 `-2`/`-3`… 后缀，**既有 profile 永不被覆盖**；任何一个 profile 非法都在写入前拒绝整批。Web UI 把文件原样交给这个端点，解析与校验都在服务端。
+
+  `temporary: true` 标记一个只保存在进程内存里的远端 profile：它照常出现在 REST / MCP / Web UI 里，直到 termcp 退出；**从不写入** `ssh_configs/`。`PUT /api/connections/{name}?temporary=true|false` 可显式指定，省略时既有 profile 保持当前存储模式、新建的持久化；内置 `internal` 不能是临时的。批量导入/导出与临时主机共用同一套 store，因此临时 profile 的改名、导出、删除与普通 profile 走同一条路径。
+
+- **Blackwall 动态背景与玻璃材质 token 分层**：页面底下铺一层可替换的 Blackwall 图层，表面透过它取色——板、表头、会话卡改用 glass token，且**由板这一个元素做模糊**，所以调整玻璃就是整体一起调，22 个会话的列表也只付一次 filter 而不是 22 次（画布颜色移到 `html`，否则 `body` 自己的背景会盖掉负 z-index 的图层）。`icons/blackwall.svg` 是这套槽位围绕的占位文件：替换该文件就是全部接入流程。随后背景换成成品自包含插画，只用一个 opacity 动画让它呼吸，`prefers-reduced-motion` 下关闭该装饰。
+
+  Blackwall 的反应**从页面已经画出来的东西推导**，不新增状态源：它读频道 chip、待审计数与窗口的连线标记——断线压过工作、排队等人压过 Agent 活动、Agent 正在写的一行压过普通打字——因此新增一个写入者也不会让背景与它描述的页面不一致。扰动是叠在最前台终端上的一块合成层，绝不是给插画加 filter，所以流式会话不为它付任何代价。
+
+  颜色 token 拆成两层：调色板拥有每一个色值字面量并携带该色的 RGB 通道（半透明用途只取色相、只加自己的 alpha），语义 token（`--accent`、`--success`、`--warning`、`--danger` 与 rail 的各状态）命名含义并指向调色板而不是重述数字。去掉重复字面量顺带修好了「一个粉色三种拼法、一个藏青两种、一个 rail 边框漂到与它框住的格子不同的色相」。
+
+  这套皮肤**把时间轴轨道的配色也换掉了**，v0.2.4 那套（人=蓝 `#35b8ff`、AI=橙 `#ff9d2e`）不再是当前值：现在人=**黄**（`--yellow`）、AI=**粉**（`--pink`）、输出仍为绿（`--green-bright`）、审批徽章为紫（`--purple`）。四个状态由 `theme.css` 的 `--term-rail-*` 直读调色板（刻意不经 `--danger` 这类名字无关的页面状态，名字会往读者脑子里塞错词），`timeline.js` 只负责给出状态码。**升级后看到颜色变化属预期**；要改回旧配色就改这四个变量，`--assets` 可以直接覆盖。
+
+- **窗口的连线状态与放置语义**：每个窗口的身份旁多一个点——拨号中是「连接中」，有会话是「在线」，只读是「已结束」；被抬起的窗口带 `.win-active`，所以「哪个窗口在最前」从窗口自身就能读出来，而不是只能看内联 z-index；已经开着窗口的会话在卡片上也会标出来。放置不再从事件里取值：主机条目是在钉在左缘的面板里点的，在那里抓到的坐标会把新窗口落在左墙下面板底下（那个「保证窗口在屏幕内」的 clamp 恰好把它钉在那里）。调用方现在传 `{x, y}` 或 `null`，`null` 表示居中，所以猜出来的坐标不可能把这个角落问题带回来。拖拽中的窗口仍然不受限，**松手时**才被夹回容器，因此标题栏与关闭键永远够得到；平铺面板不受影响。
+
+### 改进
+
+- **定位符相关实现收敛到一处（#73 的根因）**：这一轮修复暴露出同一条规则被复制在多个包/多个 handler 里，任何一份漂移都会让「同一个字符串」在两个入口得到不同结论（#73 与审批绕过都是这个成因）。现在只有一个解析入口：`requireSession` 统一接受**裸 id / session 定位符 / shell 定位符 / 裸 shell id**（shell 属于哪个容器是确定的），`requireShell` 统一接受**裸 id / session id / 定位符**；每个 handler 一律对**解析后的真实 id** 行事，而不是对传参行事。审批闸门也改为走同一条解析（否则闸门与它保护的操作会对同一个字符串给出不同结论）。所有响应中的 `session_id` / `shell_id` 与由它们拼出的 URL 都改为用解析后的值（`shell_open` / `shell_list` / `message` / `file_stat` / `file_urls` 之前会把定位符原样回显，而调用方通常会把这些字段贴回下一次调用）。`shell_notify` 的 `list` 过滤、`notify_user` 的卡片高亮同样先解析。`forward` 创建动作补上 nil 检查，与 `list`/`close` 行为一致。修复后用探针验证：上述八个场景全部转为正确行为，且新增回归测试大多在旧代码上会失败。`session.PrimaryShellIndex()`、`session.ShellIndexOutOfRangeError()`、`api.LessShellCreationOrder()`、`session.IsInternalPrimaryShell()` 分别取代 MCP 与 Web UI 各自的私有实现，同一个定位符不会再因入口不同而收到不同解释。
+
+- **频道编号由服务端分配，终生不变、不复用**：`termcp://#<会话id>:N` 里的 `N` 曾有两套算法——复制时用频道创建当时的序号，解析时却把「当前存活列表里的下标」当序号，于是只要关掉靠前的频道，剩下的频道就整体前移（关到只剩一个时它变成 `:1`），先前复制的 `:2` 被解析成别的频道。现在编号在频道成功创建时由服务端分配（`ChildShell.Index` / `api.Session.Index`），终生不变、不复用：关掉靠前的频道不会让后面的编号前移，编号已关闭的频道解析为 `shell_not_found` / `404`，不会滑到邻居身上。`/api/sessions/{id}/shells`、`session_start` 与 `shell_open` 的返回都带上 `index`，Web UI 的标签与复制按钮直接用这个服务端值（不再自行编号，拿不到编号时禁用复制而不是瞎猜）。已关闭（DEAD）/ 重启恢复的会话按持久化快照里的同一编号解析；早于该字段的旧 manifest 在恢复时按创建顺序回填，因此重启不改变定位符的含义。MCP 的 `shell_output`、REST 的 `/api/resolve` 与 Web UI 现在共用 `session.ShellByIndex` / `SnapshotShellByIndex` 同一套查找。
+
+- **`notify_user` 提示 Agent「要问人之前先通知人」**：此前模型实际收到的 `notify_user` 描述只有一句功能说明（`compactToolDescriptions` 会覆盖注册处的长描述），关于「何时该用」的指引根本没有到达模型。现在两条**保证送达模型**的通道都写上了这条硬性顺序：需要密码/sudo/passphrase/MFA、确认、批准、选项或任何交互式输入时，**先 `notify_user` 再发问**；长任务结束或失败同样要通知。阻塞类用 `level=warn`/`error` + `duration_seconds=0`（不自动消失）+ `session_id`（高亮对应卡片）。理由是它真的会卡住：人可能没盯着这个对话，一句没预告的提问会一直等下去，直到他碰巧看到。`initialize` 的规则 5/9 同步收紧，措辞压缩过以守在既有 token 预算内（instructions 2349/2400 B、工具描述 2741/4000 B），并新增回归测试直接断言**模型面向的那份描述**含该指引（只测 `tools.go` 会漏掉被 compact 覆盖的情形）。描述同时补上另一半：**问完就等**，不要轮询、猜答案或伪造人的回答。
+
+- **审阅模式的规则只声明一次**：审阅模式拦截调用有两个点，各自拼了一份回复（`reviewPendingResult` 与 `reviewPendingOperationResult`），同样的 JSON 形状、同样的「没有可轮询的 id：不要重提、不要改写、不要重试——等着」句子写了两遍，于是同一条规则有两种措辞，模型会按弱的那份行事。现在形状与等待语只在一处（`reviewPendingReply` / `reviewWaitTail`），两个调用方只差「实际发生了什么」那一句：暂存的文本还需要它的结束键，已入队/被挂起的工作不可重试、用 `shell_output` 读回。两句必须不同——模型在暂存文本后读到「不要重试」会放弃一条它还必须写完的命令行。
+
+- **终端字体栈补上 CJK 覆盖，并改为不内嵌字体（#77）**：终端字体栈此前是写死的 `'Consolas, Monaco, monospace'`，整条列表**不含任何汉字字体**。在装了 Consolas/Monaco 的机器上看不出问题，到 Kali 这类最小化 Linux 上整条栈落到 `monospace`（Debian 系 = DejaVu Sans Mono，同样无汉字），于是每个汉字都由浏览器最后的兜底字体（通常是点阵 Unifont）绘制——issue 里说的「终端变成超宽字体」不是字体丑，是字体不存在。更隐蔽的是同一界面里并存两套字体标准：xterm 不吃 CSS，它把 `fontFamily` 当 JS 选项接收并注入自己的样式表，所以只有终端格子走那串硬编码字符串，页面其余部分走 CSS 变量（本来是对的）；`ui-socket.js` 量列宽时又抄了同一串，连列宽都按错误字体算。
+
+  曾评估过内嵌字体，实测后放弃：CJK 全集 woff2 约 9–10 MB，对单二进制分发不划算；子集到 GB2312 一级（3755 字）能压到 608 KB，但**该子集实测不含 ASCII、制表符、方块元素、盲文、箭头中的任何一个**（`fontTools` 逐码位清点：ASCII 0/95、制表符 0/128、盲文 0/256），只能当汉字补充层而无法独立支撑终端，且生僻字仍有缺口。改为**由 CSS 持有唯一的字体栈**：`tokens.css` 的 `--font-mono`，`util.js` 新增 `termcpMonoFontFamily()` 读取它（JS 保留等值常量作兜底，供变量读不到时使用），`terminal-view.js`（建 Terminal）与 `ui-socket.js`（量列宽）都改用同一来源。栈的排序由实测确定（`scripts/fontlab.py` 在 headless Chrome 里跑真实 xterm.js，量 cellW 与汉字 padding；方法与各平台矩阵见 `docs/design/font-stack.md`）：
+  - **CJK 等宽面排最前**：它们被设计成拉丁 0.5em、汉字 1em，即**汉字恰好 2 倍拉丁**，是唯一能让 xterm 不必拉伸汉字的做法；Debian 系 `fonts-noto-cjk` 自带 `Noto Sans Mono CJK SC`，所以 Kali 装完这个包即命中。
+  - **比例式 CJK 面垫底**：它们自带拉丁字形且推进是比例值，排在前面会接管拉丁文本，实测把 cellW 从 7.15px 抬到 13.2px（+85%），而 xterm 正是用拉丁 `W` 定 cellW、再按 `letterSpacing = cells*cellWidth - glyphWidth` 纠正**每一个**字形，于是全屏间距都被它决定。
+  - **`NSimSun` 单列在比例式组之前**：比例式组一旦排在通用 `monospace` 前，Windows 的简体汉字就改由 `Microsoft YaHei`（推进 13.0px）绘制，而 `Consolas` 的格子要求 14.3px，于是每个汉字被撑开 1.3px（旧栈为 0.3px）——这是本次修复自己引入的回归，由 `scripts/fontlab.py` 量出。`NSimSun` 是 SimSun 家族的等宽面（`fontTools` 直读：汉字/拉丁 = 2.000），实测把它放在比例式组前即回到 14.0px 且 96 个测试字宽度均匀；不能用 `SimSun`（同样 2:1，但在栈中不让位），也不宜用 `MS Gothic`（实测 96 字中 40 个落到 13.0px，是逐字回退导致的宽度混杂）。
+  - **`ui-monospace` 只作后期兜底**：实测它在 Windows/Chromium 上解析到的是比例式字体（W=11.41 / M=10.56 / i=3.58，并非等宽），排在 `Consolas` 前会让 cellW 从 7.15 涨到 7.61~11.4；它真正的用处是 iOS/WebKit 这类不暴露具名 Apple 字体的环境。
+
+  新增 `internal/webui/font_stack_test.go` 锁定这套约束：`--font-mono` 与 `util.js` 的兜底常量**逐名比对**（xterm 读不了 CSS 变量，这份拷贝本身就是原缺陷的缩小版，静默漂移在开发机上完全不可见；比较前剥离注释、折叠空白，即浏览器对声明本就施加的归一）；比例式 CJK 面是否垫底、`monospace` 是否收尾、是否存在 CJK 等宽面，用结构性断言检查；并扫描 `static/js` 与 `static/css` 下的**全部**脚本与样式（由 `fs.Glob` 取文件列表而非手写清单，否则新增一个表面就能绕过它），禁止再出现只含拉丁的短字体栈（`ui-monospace, monospace` 这种，每写一次就多一个静默丢弃 CJK 的表面）。另确认随仓库分发的 xterm 构建**只声明、不消费** `rescaleOverlappingGlyphs`，设了是静默无效，故未启用。
+
+  顺带把界面字体也收回一处：`--font-sans` 补齐各平台中文面（新增 JP/KR 与 Emoji 兜底），繁体栈 `--font-sans-hant` 从 `base.css` 的行内短列表（只有 `PingFang TC`/`Microsoft JhengHei` 两个中文名）改为 tokens.css 里的一份变量，与应用栈**同名单、仅换序**。初版实现已经漂移过——Hant 侧漏了 `Source Han Sans SC`、两个文泉驿和 JP/KR 名字，即“只是重排”变成了静默掉覆盖，因此新增 `TestHantSansStackIsSansReordered` 逐名对齐两份列表（只允许 Hant 侧多一个无 SC 对位的 `PingFang HK`）。壳内文件面板的两处行内 `ui-monospace, monospace` 也改为 `var(--font-mono)`。
+
+- **前端资源按域拆成可缓存的分块**：两个携带 Web UI 大部分字节的文件还是整块的，改一行就要重发整个文件：`static/js/terminal-view.js`（98462 B / 1861 行）拆成 5 个模块（终端视图、面板、模板、窗口、会话切换器），`static/css/app.css`（147096 B / 2742 行）变成一个 8 行 manifest + 7 个 `@import` 分块（tokens / base / approval / terminal / timeline / workspace / theme），`index.html` 相应多 4 个 `<script src>`。
+
+  两次拆分都按「搬移」核对而不是按「重写」：把 5 个模块按 `index.html` 的顺序拼接后与旧文件 diff，只剩顺带修掉的重复；CSS 分块按 token 流与旧 `app.css` 比较，差异恰好只有被删掉的那一条规则——没有规则被新增、改写或重排，级联由 manifest 的导入顺序保持。拆分让残留的重复显形并一并清掉：刷新转圈那块代码被复制了三遍（转发、通知、文件浏览器的 Load 键），现在是一个 `spinIconOnce()`；文件的下载/改名/删除动作存在两份（右键菜单与详情页按钮），且改名提示文案已经漂移，现在是一个 `fileMenuAction(action, path, name)`。同时删掉死代码：`terminal.css` 里为已不存在的会话菜单审阅行准备的 `.shell-switch-review` 规则（`approval_test.go` 断言它不许回来），以及每次打开菜单都写、但无人读的 `_ctxIsDir`。
+
+  测试读取拆分后的结构时不再各自维护一份文件清单：`readTerminalJS` 从 `index.html` 推导模块顺序，`readAppCSS` 展开 manifest——手写清单会让「重排」通过测试而浏览器在模板被使用前就失败。CSS 拆分与 `--assets` 的交互也写进契约：`app.css` 现在是 manifest，所以只覆盖它一个文件会得到「既不旧也不新」的样式，通过覆盖目录换肤意味着覆盖整个 `static/css` 目录（两份 README 的 `--assets` 行同步说明），`TestAssetsCSSChunksResolveThroughTheOverride` 断言每个被导入的分块都能通过 HTTP 解析。
+
+- **存储与持久化路径：写得更少，但不变的东西不写**：`persist()` 曾在每次变更时重写每个会话及其每个 shell 的 manifest（各自一次 fsync），九个调用点里有八个只改一个会话。现在 `persistOne(id)` 只写那一个会话及其 shell；`persist()` 留给真正动整张表的两个（`MarkAllDead`、`RestoreDead`）与启动时的扫描。每次 manifest 的 fsync 约 6.8ms（占总耗时 7.0ms），因此 100 个会话时一次 persist 从 **1380ms 降到 13.8ms**，10 个会话从 138ms 降到 14.3ms，且不再随会话数增长。`Delete` 根本不需要 persist——它把会话从注册表移除再删目录，被描述的对象已不存在，原来的循环只会重写无关会话。
+
+  另外，`writeManifest` 现在对编码后的字节取哈希，与上次为同一路径写下的字节相同时**跳过写入**（manifest 是传入值的纯函数、不含自身时间戳、无人读它的 mtime，检查过）；写成功后**才**记哈希，所以失败的写会被重试而不是被记成已完成。两条删除路径都会丢弃缓存条目——否则「磁盘上删掉、哈希还在」会让它跳过回写，留下一个没有 manifest 的目录，而 `LoadSessions` 永远跳过那种目录。fsync 本身**刻意保留**：它占剩余开销约 97%，但去掉它 rename 的持久性就没有保证，而这里丢掉一次 rename 不是「值过期」，正是那个不可恢复的孤儿目录；这个代码库也没有文件锁或单实例保证，store 不能假设自己是唯一碰数据目录的进程。`atomicWriteFile` 补上文档注释并记下评估过的替代方案（批处理 fsync 无帮助：20 个文件批处理 226ms vs 逐个 196ms；并行 sync 有效但典型操作只写一个 manifest，不适用），`Store` 的两个磁盘缓存（`deleted`、`manifestHash`）在字段声明处写明「每条删除路径都必须使其失效」这条不变量。
+
+  shell 的退出状态此前**从不落盘**：退出路径上没有任何地方写 manifest（watcher 只把最终状态留在内存，`notifyExit` 唯一注册的 hook 只更新通知规则），所以已经退出的 shell 在磁盘上仍写着 running，重启会把它当作活 shell 复活。`notifyExit` 现在持久化其所属会话（从 shell 反查，且只在所有者仍存在时——并发关闭的 shell 已经没有会话可描述）并通知列表变更，因此退出状态与退出码都能挺过重启。`session.go` 里说退出 watcher 会做「最终日志写入与 persist()」的注释描述的是一次已经不存在的 persist()，这正是缺口没被发现的原因，注释一并订正。
+
+  写回已删除会话被明确拒绝：关闭会话就是删除，而尚未察觉的写入者（转录循环可能正排在 drain 中间）的下一次 append 会因为它创建所需路径而**重建**会话目录，留下一个有日志、没有 manifest 的目录，`LoadSessions` 从 manifest 推导会话列表，于是永远跳过它、也没人清理。难点是「已删除」不等于「还不存在」：会话在 `New` 里就启动了输出管道，早于 `Create` 落盘，所以一个会话生命最初的字节合法地早于它的目录。因此这个事实被显式记住（一个 deleted 集合，由 `SaveSession` 清除，使复用 id 可再写），而不是从目录缺失推断。
+
+- **每份日志一个写者 goroutine，替掉「生命周期短于它所保护的数据」的锁**：转录路径上曾有两把这种形状的锁（一个 map 里的 mutex）。message 那一半是**真实缺陷**：一次 append 是两次 store 调用（追加字节、记录字节起点），必须不可分离，而那个 per-session mutex 住在 map 里，`ForgetSession` 会删掉条目——在删除前载入 mutex 的 append 与删除后载入的 append 持有**两把不同的 mutex**，两半于是可以交错，mark 可能被写在「另一次写入的字节落盘之前读到的偏移」上。删条目这件事无法靠加锁变安全：任何「序列化访问的东西可以被移除并重建」的设计都有两个它同时存在的窗口。改为所有权即消除该窗口——每个会话一个写者 goroutine，每次 append 都是对它的请求，两半由同一个 goroutine 执行，mark 的偏移天然正确；记住状态的 map 也归它所有，它的锁一并消失。不变量写作「条目存在当且仅当其写者正在运行」：创建用 `LoadOrStore`（只在没有条目、也就是没有写者在跑的地方创建），写者自己的 goroutine 作为最后一件事移除自己的条目，因此包外没有任何地方需要给「删除」和「停止」排序。
+
+  storage 那一半是**一致性、没有复现出缺陷**：`logsMu` 保护按需打开、在删除 shell 或关闭时关掉的 per-shell 句柄，同样的推理适用，但旧代码通过了全部三个新测试（含 close/delete 与 append 竞争的 40 次重复），所以这一半立足的是形状论证而不是失败复现；纳入它是为了让「一份日志一个写者」在整个包里一致。代价是实测的，不是估计：message 每次 4 KiB append 从 9.5µs 变 14.5µs（+5µs，281 vs 432 MB/s），storage 约从 295 MB/s 变 340 MB/s（约快 20%）外加每个 Store 一个常驻 goroutine；两条路径都远未到上限（交互式 shell 约 0.05 MB/s），所以这个代价被记录而不是被当作否决理由。偏移会**静默**出错（丢一次 append 仍留下一个大小看似合理的文件），因此并发测试把每个返回的偏移读回来核对其中确是那个写者自己的字节，而不是数字节数。
+
+  同一轮里 `buffer` 的等待从 `sync.Cond` 改为通道：一次等待读曾要两个 goroutine（调用者，外加一个只为让定时器或 context 能调 `Cond.Broadcast` 而启动的帮手，因为 `sync.Cond` 只能无超时等待），现在只要调用者自己一个，select 在截止时间、context 与写者每次变更都会关闭的唤醒通道上。实测每次 4 KiB 等待的 goroutine 从 2 降到 1、分配从 5 次 410 B 降到 3 次 248 B；空等的墙钟时间不变（那就是超时本身加调度噪声），**截止精度也没有改进**（两者对 5/50/200ms 都平均超时约 375µs），所以这里只声称「等待的代价更低」而不是「超时更准」。唤醒通道在锁仍持有的时候读、释放锁之后再处理，因此变更不可能落在等待者的检查与等待之间；被无关变更唤醒的等待者会重新检查再等，与 `Cond` 需要的循环相同。
+
+- **`session_start` 与 `POST /api/sessions` 不再固定 sleep 100ms**：那 100ms 读起来像「给 shell 一点时间稳定下来」，但它不可能在做这件事，也没在做别的事——sleep 之后被读的任何东西在 sleep 期间都不会变（响应由 `sess.ID`、`PrimaryShellID`、profile 名与 `sess.PID` 构成，前三个在 `Create` 返回时就固定了，第四个恒为 0）。实测首个输出在 `Create` 之后约 240ms 才到，所以这 100ms 即便在它被加入时也从不保证输出就绪；而真正要紧的输入**完全不需要等待**：`Create` 返回后立刻发输入会被接受并回显，往返约 225ms 是它自己的。因此它只是给两种入口的每次会话创建都加了 100ms 延迟。让移除安全的性质现在是一条测试（`TestSession_InputWorksImmediatelyAfterCreate`）：`Create` 返回的那一刻就发输入并要求进程收到它——这是防止「稳定延迟」被重新引入的锁。该测试随后又修了两次平台问题：unix 分支原用 `/bin/cat`，它只是把行回显成 `hello`，而断言等的是 `GOT_hello`，于是测试等满五秒后失败在「立即输入从未到达进程」上——正是它存在要反驳的那件事；现在两个分支都用一个**会应答**而非仅回显的命令（POSIX 的 read 循环打印 `GOT_`，PowerShell 同理），并且注释写明为什么必须应答而不能回显。
+
+- **`api.Session.PID` 被移除**：它从未被赋值过，所以每条会话记录、每个 `session_start` 响应和每张 Web UI 会话卡自该字段引入起就一直报告 `"pid": 0`；`docs/api.md` 的示例写着 12345，让这件事看起来像「一个真实的值出了问题」而不是「一个装不下值的字段」。根因不可修：进程跑在 SSH 连接的另一端，而 SSH 不会把它的号码报回来，这里任何值都只能是常量，所以诚实的修法是删掉字段而不是塞进一个编出来的数。守护进程自己的 `InstanceInfo.PID` 是另一个字段、持有真实的 `os.Getpid()`，两者容易混淆，因此改动只限会话路径；每处剩余位置都注明了字段为何不存在、以及怎样拿到真正的 pid（问 shell 要 `$$`），避免它作为疏忽被重新引入。
+
+- **测试与 CI 只有一条命令，并补上「检测器看不见的竞态」**：`make test` 与 CI 曾在作用域与参数上都不同（`./...` 无超时 vs `./internal/...` 120s），且两边都没开竞态检测。现在两者逐字节相同——`go test ./... -count=1 -shuffle=on -race -timeout 240s`——所以 CI 失败可以用它打印的 shuffle 种子在本地复现，且 CI 覆盖整棵树（含根包的测试）。三个 CI job 都开了 `-race`（`CGO_ENABLED=1`，三个 runner 镜像都自带 gcc，windows-latest 是 15.2.0），纯 API 构建那一步也开。本地 `make test` 每个 target 只探测一次工具链，在缺 cgo/C 编译器时降级为无 race 并打印提示，`RACE=0/1` 可强制任一边；探测是一个递归变量，从不展开它的 target（build、dist…）不付任何代价。新增 `make test-stress` 覆盖 `-race` 看不到的竞态——文件系统/生命周期竞态，碰撞发生在磁盘上而不是内存里：`-cpu=1,2,4` 把 goroutine 挤到一个调度器上、按满载 CI runner 的样子把拆卸与后台写入者交错，`-count` 重复、`-shuffle` 重排。它正是复现出 session 包 TempDir 竞态（本机 30 次里 28 次）的那个工具，而普通 `-count=15` 从未抓到过。对应的生命周期清理模式（`t.Cleanup(m.Delete(id))` 要注册在 `t.TempDir` 之前）记入 `docs/agents/testing.md` 与 AGENTS.md。
+
+- **行尾统一为 LF，并把策略写进仓库**：开发在 Windows、CI 在 Linux 与 macOS，一个文件的行尾取决于最后保存它的人。`.gitattributes` 现在声明 `* text=auto eol=lf` 并对在用扩展名显式标注 `text`，所以任何机器上的检出都一样，未来的提交也无法重新引入漂移。一个以 CRLF 提交的文件（`internal/webui/ws.go`）与两个混合行尾的设计文档被归一；另外四处与行尾无关但同样只有一行的 gofmt 问题（文件末尾缺换行、`_ ,`、字段错位、行尾空行）一并修掉，因为它们是同一类问题且否则会一直脏着。整棵树现在 gofmt 干净。没有一行 Go 逻辑改变。
+
+- **代码按行为拆分，而不是按大小切**：十个文件承载了仓库大部分生产代码（`handlers.go` 1710 行、`session.go` 1518、`handler.go` 1466、`shellrail.go` 830、`store.go` 749、`bridge.go` 653、`server.go` 637、`manager.go` 628、`forward.go` 546），根目录的 `main.go` 965 行同时装着 serve 路径、daemon CLI、stdio 桥与 auth-hash 生成器。现在最大的文件 420 行。两次拆分都是**纯搬移**（没有声明被新增、删除、改名或修改，方法保持接收者、标识符保持可见性、包边界未变），并且是按行为切分，所以读者落到一个主题上而不是许多主题的切片。搬移经过机械核对而不是目测：每个原文件按声明区间重建后逐字节比对（9/9 与 8/8 完全一致，这正是区间平铺整个文件的证明），随后用 AST 审计把每个声明与当前包对照（internal 各包 374 个、根目录 27 个、其余包 216 个），没有丢失、没有改变、没有凭空多出。
+
+  另有八个 104–367 行的函数各自装着两件以上不相关的事，按代码里本来就有的接缝切开：`ws.go`（连接 vs 终端输出流，输出侧移入 `wswatch.go`）、`handleDownloadFile`（问的是哪个字节窗口 / 从 termcp 主机流式发送 / 经 SFTP 流式发送，各自成函数，handler 21 行）、MCP 的 `New()`（组装服务器 vs 内联声明全部 31 个工具，表移入 `registerTools`，231 行逐字节一致、31 个 `AddTool` 顺序与名字不变，`New` 89 行）、`handleEditSSHConfig`（两段 `if v := getString(...)` 之间的四条语句，`applyEntryEdits` / `applyJumpEdits` 各接一段）、`handleReadOutput`（尾窗 / 定位字节区间 / 活游标三种读共用一个结果形状，改为 `parseReadParams` + `readOutputWindow`；这一处**不是**纯搬移且不作此声称）、根目录 `main()`（读命令行 vs 构建运行时并服务到停止，`runServer(cfg, idleTimeoutArg, idleTimeout, isDaemonChild)` 接后半，四个参数由 `.pi-tools/freevars` 走 AST 得出而非猜的）、`session.New`（141 行里 53 行在回答「这个会话跑在哪里」——进程自己的 loopback sshd 还是真实远端，`dialTransport` 回答它并报告选中的端点；这次搬移把两条 revoke 路径放在一起，因为 internal 拨号会铸造一次性凭据，拨号失败与握手失败都必须撤销它，否则服务端的 pending map 会为每次失败尝试留下一个死条目直到进程结束）、`sshserver.handleSession`（会话的一生 vs 启动进程这一步，`startProcess` 报告是否启动成功）。
+
+- **`shell_detect` / `shell` 等低频工具面与文档同步**：`docs/api.md` 新增 `/api/connections/batch` 两节、`temporary` 语义、`index` 字段、会话记录新增 `ssh_config` 且不再有 `pid`，以及定位符在两个面上的差异（MCP 处处接受、HTTP 路径/查询参数只接受裸 id、写操作的 `ssh_config` body 字段接受 entry 定位符）——这个差异是刻意的，定位符含 `#` 与 `:` 本来也无法安全地放进 URL 路径。`docs/api.md` 在 `internal/webui/assets` 里的副本由 `TestSyncedDocsMatchSource` 保证与源文件一致。
+
+### 修复
+
+- **连接编辑对话框里，除内置 `internal` 外的 profile 又能改名了**：名字输入框对所有编辑场景都被设成只读，于是「编辑主机」打开后名字填着却不接受输入，看起来像被禁掉而不是改名功能没了。后端一直支持：保存时用旧名作 `?from=` 调 `PUT /api/connections/{name}`，store 改名并让持有该 profile 的会话跟着走。只读条件是 `!!edit`，而它上方的注释只为内置 `internal` 辩护（那个名字是寻址内置回环连接的唯一方式，改了就没人再找得到），需求是「锁 internal」却写成「锁所有编辑」。现在锁的只是 `internal`，其余 profile 与新建都可编辑。新增回归测试在 node 里跑真实的 `openConnModal` 断言四种场景的最终 `readOnly`（不是字符串匹配），并经变异测试确认两个方向都会失败。
+
+- **审批模式可被定位符绕过（最严重）**：审批闸门（`gateOperation`）用**原始参数**查会话，查不到就「不拦截」，而 handler 随后自己把同一个参数解析成功并执行操作。结果：同一个受审批保护的写操作，用裸 id 写会被挂起等人工批准，**换成定位符就直接执行了**（探针实测：`file_write` 裸 id → 进审核队列、文件未创建；`termcp://#<sid>` → 文件立刻创建、队列为空）。`file_write` / `file_delete` / `file_rename` / `file_mkdir` / `file_perm` / `file_link` / `file_fs` 与 `forward` 八个写操作全中。闸门与它保护的操作现在走同一条解析，八个场景全部转为正确行为。
+
+- **定位符在若干 MCP 工具上「成功」了但什么也没做，或直接拒收**：
+  - **`shell_close` 直接拒收定位符**（报 `shell_not_found`），尽管同一个定位符在 `shell_resize` / `shell_reader_register` 上都能用。
+  - **`session_terminate` 更糟：它“成功”了但什么也没做**。它用定位符解析出会话，却把**原始参数**传给 `Manager.Terminate`——那里找不到 id 就静默 no-op，于是工具回 `{"success":true}` 而会话仍在跑。假成功比报错危险：调用方以为资源已经关了。（`session_delete` 则因把定位符当存储路径名校验而被拒。）
+  - **forward 把定位符当 `session_id` 存进注册表**（`internal/forward`），而会话 DEAD 时的级联回收是按真实 id 匹配的——这个本地监听端口会活过它所属的会话，成为一个没人能再关掉的死端点（实测复现：terminate 后 `forward(list)` 仍在）。
+  - **`shell_notify` 同病**：规则把定位符存成 `ShellID`，于是（a）退出 watcher 按真实 shell id 的级联清理找不到它，定时器为已不存在的 shell 继续跑；（b）`channel="resource"` 广播的 uri 变成 `termcp://shells/termcp://#<sid>:2`，这个名字不对应任何东西。
+  - **`message(action=list)` 静默返回空转录**：marks 用原始参数去读日志，定位符指向一个不存在的日志文件，于是“没有输出”与“读错了位置”无法区分。
+  - **`forward` 的三个创建动作在无 forward manager 的部署（`-tags no_webui` 纯 API 构建）里会 panic**（nil 解引用），而同一工具的 `list`/`close` 都做了 nil 检查。
+  - **`file_stat` / `file_urls` 把定位符回显进 `session_id` 与 URL**：`download_url` / `upload_url` 直接用原始参数拼路径，得到 `/api/sessions/termcp://#<sid>/files/download` —— 一个含 `#` 和 `://`、指向不了任何会话的 URL。
+
+- **HTTP 的 `ssh_config` 字段也接受 entry 定位符**：`POST /api/sessions` 的 `ssh_config` 之前会直接送去 profile 存储校验名字，于是从连接卡片复制的 `termcp://rock64` 在 MCP 的 `session_start` 能用、在 curl 里却报 `invalid ssh config name`。它是 JSON body 字段（不是 URL 路径），`#` 与 `:` 在这里没有歧义，所以现在与 MCP 一致：接受 `termcp://<entry>`，解析成 profile 名；传入 session/shell 定位符仍报错并提示改用 entry。
+
+- **读取路径不再继承写路径的状态检查**：`message(action=list)` 显式给 `shell_id` 时会在已关闭（DEAD）会话上报错，而只给 `session_id` 时却能正常读——同一个读操作因为写法不同而两种结果，原因是它复用了写路径的 `requireShell`（后者必须拒绝已死会话，避免写进已关闭的 transport）。marks 存在 `log.bin` 里，本来就活过 transport，现在读路径用自己的解析（不检查会话状态），两种写法一致可用。**裸 session id 读取保留为“频道 1”语义并写明**：`shell_output(shell_id=<裸会话id>)` 仍按 `PrimaryShell()` 判断走活缓冲区还是持久化日志，与 `:N` 路径改用的 `HasLiveShells()` 不同。这是有意保留而非遗漏：裸 id 问的是“1 号频道”，若因为它恰好不在世而改答另一个活着的频道，就是在回答另一个问题。
+
+- **裸 `session-<id>` 被误判为定位符（#73 后续）**：`LooksLike` 声称 `session-abc123` 是定位符，但 `Parse` 把它当成 **entry 名**（`KindEntry`）——也就是说一个 profile 名会被拿去当会话 id 使。而 profile 名与会话 id 共用同一命名空间：ssh_config 名字允许 `session-` 前缀，所以 `session-foo` 可以是一个正当的 profile。现在约定收紧为：**裸名字（无 scheme、无 `#`）不是定位符**，保持原来的意义；只有显式会话写法（`#<id>`、`termcp://#<id>`、`termcp://<entry>#<id>`）才按会话解析，`session-` 前缀在这些位置剥掉。新增 `TestLooksLikeAgreesWithParse` 把 `LooksLike` 与 `Parse` 的类型判定逐个对齐锁定，并显式覆盖 `session-foo` 作为 profile 的正当性。
+
+- **`shell_output(offset=0, max_bytes=0)` 会把进程打挂**：`ByteRange` 收的是绝对偏移、报告的是绝对总长，但它返回的窗口取自 `master`，是相对的；压缩正是分开这两者的东西（丢掉 `master` 的前缀会把它加进 `baseOffset`，于是绝对总长涨过 `len(master)` 而 `master` 变短）。夹取用的是绝对总长，所以「从绝对总长推出的窗口」——正是调用方读「一直到流末尾」时会做的事——向切片表达式要了比 `master` 更多的字节，边界检查直接 panic（`slice bounds out of range [:12582912] with capacity 3211264`）。这条路径**有文档可循**：`shell_output` 的 `max_bytes` 文档写着「0 = 不限」，handler 把它变成 `max = int(total - offset)`，于是对已经压缩过的会话调一次「从头读全部」就会杀掉进程——而且没有任何东西接住它，因为 MCP 服务器当时不是用 `WithRecovery` 建的：每个会话、每个浏览器标签页一起消失。同一个「量级错位」还有更安静的第二形态：当相对起点夹到 0、而 n 仍装得进 `cap(master)` 时，切片表达式靠容量而非长度成立——不 panic，调用方拿到 n 个它以为是终端输出的零字节。静默损坏比崩溃更糟，所以两种都有测试覆盖而不只是显眼的那一种。
+
+- **工具 handler 里的 panic 不再杀掉进程**：mcp-go 在它自己的 goroutine 上派发工具调用（streamable-HTTP 与 SSE 服务器把每个请求交给各自的 goroutine），所以没有任何 HTTP handler 的 recover 能接住它，它上面的东西也都不会跑 defer：每个会话、每个浏览器标签页与守护进程的 HTTP 监听一起死掉。已核实而不是假设——去掉这层中间件会让一个调用 panic 工具的测试中止测试二进制。中间件是手写的而不是用 `mcpserver.WithRecovery()`，因为两者对「客户端该看到什么」意见不同：`WithRecovery` 返回普通 Go error，mcp-go 把它变成 JSON-RPC 协议错误（-32603）并把 panic 值当作消息——那会跳出这里其他失败都遵守的 `error_code` 契约，于是按该字段分支的客户端无事可分，而 panic 值通常是点名内部文件的运行时消息。所以两个受众拿到不同的东西，这正是该改动的意义：**客户端**收到 `{"error_code":"internal_error"}` 作为一次普通失败的工具结果（消息说明这是 termcp 自己的故障，因为对己方的 bug 说「参数非法」会把 agent 送去纠正输入；panic 值刻意排除，它点名内部实现）；**运维**在 Error 级别拿到 panic 值、`debug.Stack()` 与工具名。只恢复不记日志等于把一次响亮的崩溃换成一次安静的错误回答，所以那行日志是契约的一部分而不是点缀。两半都通过真实的 streamable-HTTP handler 端到端断言。这层中间件在所有工具中间件的最外层，所以日志包装器内部的 panic 也覆盖到——这是刻意的顺序而不是注册的偶然。它是安全网而不是任何具体 bug 的修复：被恢复的 panic 仍然是 bug，那行日志才是让它可被找到的东西。
+
+- **整个页面不再能上下滚动**：NetHub 侧栏把自身高度上限写成 `calc(100dvh - 134px)`，而那 134 是「上下占用」的手算值——顶栏 57、dock 上内边距 16、间距 8、触发键 50、dock 下内边距 16，**实际合计 147**。少了 4px，于是侧栏恒定高出 13px，文档自己长出滚动条。它是**常数错、不是内容错**，所以很难看出：节点 30 个与 60 个溢出量都是同样的 13px，侧栏为空时也照样滚（均在 headless Chrome 中实测）。改为 147 后，700/900/1000/1400px 视口与 0/6/30/60 节点组合下页面滚动量全为 0，折叠态同样为 0。同时删掉 `.dock` 上那句`min-height: calc(100% - 52px)`：它把一个猜的顶栏高度从一个本就解析为 `auto` 的百分比里减掉，**从未生效**，只是看着像把 dock 压在视口内。新增 `TestNetHubSidebarKeepsThePageFromScrolling`：把 147 的每一项分别钉到拥有它的规则上（顶栏 padding、dock padding、触发键高度、面板间距），并要求面板与折叠轨**共用同一个常数**——两个数字正是当初 134 与 147 并存的原因；已验证把 147 改回 134 会让该测试失败。
+
+- **rail 与终端文本错位**：行↔字节映射的服务端模型有若干处与真实终端不符，累积起来让格子落到离文本很远的地方。
+  - **`height` 不再被 `count` 抬高**：`/rail` 曾用 `if height < count { height = count }` 把模型的屏幕高度补到请求的窗口大小。客户端为了「滚动落在余量内只重绘、不请求」会一次要屏幕两侧各一屏的余量，于是模型以为自己有 121 行屏幕，`ESC[H`／`ESC[2J`／`ESC[K` 这些「相对屏幕」的序列全部按错误的屏幕原点执行，`clear` 更是从错误的位置擦掉一整屏。现在 `height` 就是终端高度（仅省略时回落到 `count`），窗口大小不再影响布局。
+  - **`ESC[3J` 现在会裁剪并重编号**：这是 `clear` 实际发出的「擦除已保存行」，xterm 收到后把滚动缓冲整段丢掉、只留一屏，并让幸存行的编号整体下移。模型此前完全忽略它，于是它继续描述一个终端已经没有的缓冲——实测某个真实会话：模型 122 行、xterm 25 行，每个格子偏了约四屏。等价地，退出全屏程序后的行号也一并归位。
+  - **缓冲上限是 `scrollback + height` 而不是 `scrollback`**：xterm 的行缓冲按「配置的 scrollback 加上当前屏幕」来定容（`getCorrectBufferLength`），模型少留一屏就会让长会话靠后阶段的每个行号固定偏掉一个屏幕高。
+  - **行号就是终端自己的行号**：模型去掉了内部的行号偏移，`rows` 的下标即 `viewportY` 坐标系里的行号，与 `/rail` 的 `top`／`total_rows` 契约一致，裁剪时整段前移而不是留下漂移。
+  - **窗口外的 clear 不再让已答的窗口过期**：端点曾「光标越过请求窗口就停止重放」，但行不是光标离开就算定稿的——更靠后的 `ESC[H` 会改写已「越过」的行，`ESC[3J` 更是把整个滚动缓冲丢掉并重编号。于是窗口之后出现一次 `clear` 时，返回的 25 行全部指向已经擦掉的文本（实测）。现在一律重放到日志末尾，按最终编号回答窗口。这个「优化」本来也几乎不省：流式输出时视口就在日志底部，`top+count` 已在末尾，循环照样读到底；它唯一省下的就是视口停留在滚动历史里的情形，而那正是它答错的情形。
+  - **行裁剪改为摊销 O(1)，大日志不再卡住 rail**：`trimFront` 原用 `append(rows[:0], rows[drop:]...)` 整段搬移——在 10 万行容量下每滚掉一行就 memmove 1.6 MB，20 MB 日志实测重放要 **7.2 秒**（纯拷贝，不是解析），这段时间里 rail 要么不响应、要么一直显示上一次的格子。现在改为切片前移，由 Go 的扩容来摊销那次拷贝：同一条 20 MB 日志从 7.2s 降到 **0.19s**，60 MB 约 0.59s。
+  - **超过一个读取块的日志只被回放了第一块**：`OutputByteRange` 的第二个返回值是日志的**总长度**（那是为了区分「空流」与「被截断」），而读取循环把它当作「本块结束位置」赋给了游标，于是读完第一个 256 KiB 块后游标直接跳到日志末尾——任何大于 `shellRailReadChunk` 的日志都只按开头那一块推导，后面已经滚过去的行全都描述错，最新输出没有格子。现在按实际读到的字节数推进。
+  - 校验方式是把同一条日志分别喂给 Node 里的 xterm.js 与本模型，逐字节比对光标所在行：400 个合成会话、323053 次比对、行文本 9636 行全部一致（真实 `log.bin` 亦逐字节一致）。另有 `TestRowLayoutAgreesWithXterm` 作为常驻差分测试：76 个用例（含生成会话）、19335 次字节位置比对，严格要求每个字节所在行与最终光标一致，行文本则只对「未被回车/光标寻址/退格改写的行」要求完全相等。
+
+- **rail 比真实输出「短一截」**（流式输出时反复出现）：客户端判断「手上这份布局是否已覆盖屏幕」时用了 `spans.length`，而 `spans` 是按请求的 `count` 补齐的数组（末尾不足的行是 `null`），它表示**要了多少行**，不是布局真的有多少行。流式输出时取回一份「当时还没写到这里」的布局后，这个判断会认为窗口已覆盖，于是**不再重新请求**，最新几行永远没有格子——实测每秒采样都短 1–5 行，直到屏幕滚出那个假覆盖范围才补上，然后再次发生。现在覆盖判断同时受 `total_rows`（绝对行号）约束，超出布局真实范围就不再算覆盖，会重新取。
+
+- **rail 改为「并排」而不是覆盖终端**：轨道此前绝对定位在终端右缘之上，压住最后几列文本，还占着滚动条的 gutter（想拖滚动条会点到轨道）。现在 `--term-rail-w`（桌面 14px、触屏 22px）在 `.shell-channel-body` 上预留成独立一列，终端盒（含滚动条）仍占满整个 body，`fitShellTerminal` 按 `--term-rail-w + --term-rail-gap` 少算相应的列数，因此顺序是「文本 → rail → 滚动条」：滚动条留在它原本最右侧的位置，文本在它之前结束，中间是 rail。悬停标签与详情卡改从轨道左侧展开，回到终端上方，回到底部的按钮同样避开这一列。预留是无条件的：若随标记有无而出现／消失，终端宽度会跟着变，PTY 与整份行映射每次都要重排。
+
+- **输入标记只在提交一行时写入**：v0.2.3 里 `WriteStdin` 成功就记一条零长度标记，于是「开始打字」这个时刻本身成了区段起点——从那一刻起的所有字节（包括别的命令正在输出的内容）都被算进这段输入，后面的输出区段被吃短（实测：输入 `sdfaf` 加 5 个退格，产生一条 27 字节的 `i` 区段，把提示符和回显都圈了进去）。现在只有回车（或 ctrl+c/d/z）才写标记：一行 = 一条标记，未提交的按键只用于通道状态，不进日志。密码仍然不进日志——终端不回显就没有字节可存。
+
+- **两个数据竞争与一个 fixture 抖动（`make test -race` 抓到）**：
+  - **`internal/daemon`**：`NewIdleWatcher` 在未持锁的情况下用 `time.AfterFunc` 武装倒计时，而回调的 `expire()` 会取 `w.mu` 并写同一组 `w.timer`／`w.gen` 字段。`AfterFunc` 返回的那一刻定时器就是活的，所以一个很短的超时可以在构造函数发布它所读的状态之前跑进 `expire`——对同一个字两次无序写，`-race` 无论它们执行得多远都会报告。这正是 `idle_test.go` 里 200ms watcher 失败的原因。现在倒计时在 `expire()` 所取的锁下武装，因此定时器只有在它的状态完整之后才可达。
+  - **`internal/sshserver`**：`handleSession` 结尾的 `sess.Signals(nil)` 与库从两处读取同一槽位的读没有顺序——请求循环（持会话锁）与它在「信号在 channel 注册之前到达」时启动的重放 goroutine，而那个重放 goroutine **不持锁**读取该槽位。这是常规而非罕见路径：客户端可以在 exec 被接受与 `sess.Signals(sigCh)` 之间发信号，请求循环把它缓冲下来，注册时重放。这就是 `TestRace_ConcurrentTerminate` 报出的那一对。现在槽位只写一次、永不重写；由于之后没有别的东西会读这个 channel，转发器在子进程存在之前就启动——因此请求循环不可能在持会话锁时阻塞在向它发送上——并一直排空到 `sess.Context()` 被取消，那是库停止发送的唯一时刻。进程通过 `atomic.Pointer` 而不是直接读 `cmd.Process` 拿到它，后者会与 `Start` 里的写竞争。
+  - **`internal/mcp`**：`TestShellNotify_RegisterListUnregister` 也间歇失败，但在 HEAD 上同样失败，所以不是上面两个修复造成的。`startTestSession` 跑的是一个 `echo` shell、立刻退出，而 `OnExit` 会级联清掉正在退出的 shell 的规则，于是规则可能在注册与注销之间被扫掉，测试就失败在一个与它要测的东西无关的 `rule_not_found` 上。fixture 改用 `testShellIdleArgs()`——它本来就是为这个隐患记录在案的：改后 12 次 0 失败，改前 10 次里 4 次失败。
+  - 两个竞态各有一条刻意制造碰撞的回归测试，且各自在修复被回退时于 `-race` 下失败：一纳秒的倒计时把回调落进构造窗口内，而在 exec 之前发信号会留下被缓冲的信号，于是注册 channel 时启动重放。
+
+- **Windows PTY 生命周期上与库抢跑（两个只在 Windows 出现的数据竞争）**：两者都由 `make test`（`-race`）发现，且在 macOS/Linux 上不可见，因为写入者在 charmbracelet/ssh 的 Windows 构建里（`pty_windows.go`），并且只通过 ConPTY 触及 conpty 未加锁的几何缓存。
+  1. `cmd.ProcessState` 每个 PTY 会话被写两次。`pty.Start` 在 Windows 上不通过 `exec.Cmd` 管理子进程；库自己的 start goroutine 会回收 `cmd.Process` 并写 `cmd.ProcessState`，而 `handleSession` 同时在调 `cmd.Wait()`——同一个字段两个未同步的写者。竞态中输的那一方读到 nil 状态，所以它必须回落到 127 而不是子进程的退出码。该机制被直接确认（对已完成的 `cmd.Wait` 再取一次 Process/Wait 会返回 nil 状态，而库是无条件赋值的），但没有端到端观测到：`exec.Cmd.Wait` 自己的「Wait was already called」保护挡住了常见交错，只剩这一侧先赢、库随后写 nil 的窄窗口。
+  2. `conpty.ConPty.size` 同时被两个窗口变更消费者写：库的 winch 排空与 `drainWindowChanges`（它是有意并行跑的，见 `3f3ed5a`）。两者都调 `Pty.Resize`，后者把新的几何缓存进那个未加锁的字段。
+
+  现在 Wait 与应用按平台分流，Unix 保持既有行为，Windows 路径不再触碰库拥有的状态：`waitChild` 在 Unix 上用 `cmd.Wait()`，在 Windows 的 PTY 上等它自己对同一进程的句柄（`os.FindProcess(pid).Wait`），不读任何库拥有的字段，退出码经 channel 传回，因此不需要共享字段——这件事能成立依赖一个上游怪癖：x/conpty 从不关闭 `Spawn` 返回的进程句柄（只关线程句柄），所以内核进程对象与 pid 活得比库的回收更久；这个依赖就地写明，回落路径现在会记日志而不是静默报告 127，`TestServer_PtyExitCode` 是这道护栏响亮的那一半（模拟那个句柄被关闭时验证它以「reported exit code 127, want 42」失败）。`applyWindow` 在 Unix 上保留 `pty.Resize`（一个 ioctl，没有共享 Go 状态），Windows 上直接对 PTY 句柄调 `ResizePseudoConsole`，绕过几何缓存——那个缓存是给 `ConPty.Size` 用的，而没有任何东西调它，句柄在分配时就固定且这个 Win32 调用是线程安全的。两个消费者都保留：丢掉我们自己那个会重新引入 `3f3ed5a` 修掉的 macOS resize 丢失。Windows 上此前没有回归覆盖，现在补上：`TestServer_PtyExitCode` 断言 PTY 会话报告子进程的真实退出码；`TestSession_PtyResizeReachesChild` 不再跳过 Windows（原先用 `stty`），改为通过 PowerShell 的控制台 API 读几何，并把数字包在标记里，使被回显的命令行不会被误当作答案——把 Windows 的 resize 重新路由回 `Pty.Resize` 会让 `-race` 经这条测试报出 `conpty_windows.go:159`。
+
+- **退出 watcher 与 `t.TempDir` 清理抢跑（CI 上出现过两次）**：四个保留 DEAD 的生命周期测试把一个仍然活着的写入者交给了 `t.TempDir` 的 `RemoveAll`。`Terminate` 有意不等 per-shell 的退出 watcher（在那里 join 会让自然退出路径自死锁，因为正是 watcher 自己驱动 DEAD 转换），所以 watcher 的最后一次 manifest 落盘（`notifyExit` → `persistOne` → `SaveShell`，一次写入 shell 目录的 `atomicWriteFile`）会在 `Terminate` 返回后几毫秒才落地。紧接着结束的测试随后在清理阶段失败：一个 `.tmp-*`（或已改名的 manifest）出现在 `RemoveAll` 的目录列举与 rmdir 之间，于是以「directory not empty」中止。没有内存被触碰，所以 `-race` 看不见它；它两次上到 CI（runs 37486929684、37336490236），并在本机 `GOMAXPROCS=1 -count=30` 下 30 次复现 28 次。`Delete` 就是 join 点：`finalize` 在 `DeleteSession` 移除目录之前等 `watchWG`，而 store 的 deleted 集合此后拒绝任何掉队的 append。因此紧接 `Create` 之后、按 LIFO 早于 `t.TempDir` 注册 `t.Cleanup(m.Delete(id))`；对重启形状的测试要通过**第一个** manager 删除（它拥有带 watcher 的会话对象，恢复出来的副本没有）。
+
 ## v0.2.5 — 2026-10-01
 
 ### 新功能
@@ -30,6 +195,8 @@
 - **`--assets`：外置静态资源目录**（默认 `~/.termcp/assets`，可用 `$TERMCP_ASSETS_DIR` 覆盖）：目录里存在的文件覆盖内嵌副本，目录里没有的文件回落到内嵌，目录不存在等于什么都没发生。Web UI 与 MCP 文档资源经同一个组合 FS 解析，因此改一处样式不必重新编译。路径存在但是文件（不是目录）时启动即报错，而不是带着一个永远不生效的覆盖继续跑。
 
 ### 改进
+
+- **定位符相关的重复实现收敛到一处**：这一轮修复暴露出同一条规则被复制在多个包/多个 handler 里，任何一份漂移都会让「同一个字符串」在两个入口得到不同结论（#73 与审批绕过都是这个成因）。因此顺手收敛：`session.PrimaryShellIndex()` 取代 MCP 与 Web UI 各自私有的 `primaryIndex` / `primaryShellIndex`；`session.ShellIndexOutOfRangeError()` 统一四处「序号越界」文案（MCP 活会话、MCP DEAD 会话、MCP 读路径、REST `/api/resolve`），同一个定位符不会再因入口不同而收到不同解释；`api.LessShellCreationOrder()` 成为唯一的创建序比较器（`storage` 排序持久化快照、`session` 排序内存快照与位置回退共用），避免 tie-break 不同导致同一个 N 解析到不同频道；`session.IsInternalPrimaryShell()` 收拢「内部主 shell 的关闭是无操作」这条策略（MCP `shell_close` 与 Web UI `DELETE /api/shells/{id}` 共用），避免一个入口删掉另一个入口拒绝删的东西。行为不变，仅收敛实现。
 
 - **`docs/api.md` 记录时间轴与新的 WS 帧**：新增 `/rail` 一节——查询参数、`spans`/`marks`/`total_rows`、模型能精确到什么、备用屏为什么什么都不画；`marks` 一节写明窗口参数与两种取数的成本差；WS 帧表补上 `shell_activity`，`terminal` 帧不再携带日志字节区间——能记录的映射都会在重载或缩放时过时，行映射由 `/rail` 推导。
 

@@ -3,6 +3,7 @@ package buffer
 import (
 	"context"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -550,5 +551,279 @@ func TestBuffer_UndrainedReaderPinsCompactionUntilUnregistered(t *testing.T) {
 	}
 	if after := b.Len(); after <= pinned {
 		t.Fatalf("stream length must keep growing across compaction: before=%d after=%d", pinned, after)
+	}
+}
+
+// ByteRange numbers its argument in the ABSOLUTE stream (baseOffset + position),
+// which is the numbering every caller uses: an offset from shell_output, from a
+// log file, or from a previous read all mean the same thing. Compaction drops a
+// prefix of master and absorbs it into baseOffset, so after compaction the
+// absolute total is much larger than the retained slice. These two tests cover
+// the two ways that mismatch used to escape: a panic, and a window of NUL bytes.
+
+// TestBuffer_ByteRangeClampsAgainstRetainedBytes is the panic case. A caller
+// asks for a window derived from the absolute total - which is exactly what
+// shell_output does for offset=0 with max_bytes=0 ("no limit", a documented
+// value) - and the retained slice is far shorter. Clamping the window against
+// the absolute total instead of the retained length asked the slice expression
+// for more bytes than it had.
+func TestBuffer_ByteRangeClampsAgainstRetainedBytes(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := []byte(strings.Repeat("0123456789", 100)) // 1000 bytes
+	if err := b.Write(chunk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(chunk[:100]); err != nil {
+		t.Fatal(err)
+	}
+
+	base := b.BaseOffset()
+	if base == 0 {
+		t.Fatal("compaction did not happen; the test no longer exercises a dropped prefix")
+	}
+	total := b.Len()
+	if total <= int64(len(b.master)) {
+		t.Fatalf("expected the absolute total (%d) to exceed the retained bytes (%d)", total, len(b.master))
+	}
+
+	// The documented shape: offset 0 with no byte limit.
+	out, got := b.ByteRange(0, int(total))
+
+	if got != total {
+		t.Errorf("total = %d, want %d: the absolute stream length must not change", got, total)
+	}
+	// start 0 is before the earliest retained byte, so it clamps forward to base:
+	// the caller gets the retained suffix and can tell it was shortened by
+	// comparing its request against BaseOffset.
+	if len(out) != len(b.master) {
+		t.Errorf("returned %d bytes, want the %d retained", len(out), len(b.master))
+	}
+	if want := strings.Repeat("0123456789", 10); string(out) != want {
+		t.Errorf("returned %q, want the retained suffix %q", out, want)
+	}
+}
+
+// TestBuffer_ByteRangeNeverReturnsUnwrittenBytes is the silent case. When the
+// requested window happens to fit in the slice's CAPACITY but not its LENGTH,
+// a Go slice expression succeeds and the copy returns zeroed bytes: no panic,
+// just a screen of NULs that the caller believes is terminal output. The
+// returned window must never contain a byte that was not written.
+func TestBuffer_ByteRangeNeverReturnsUnwrittenBytes(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only 'A's are ever written, so any other byte in a result is fabricated.
+	chunk := []byte(strings.Repeat("A", 1000))
+	if err := b.Write(chunk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(chunk[:100]); err != nil {
+		t.Fatal(err)
+	}
+	if b.BaseOffset() == 0 {
+		t.Fatal("compaction did not happen")
+	}
+
+	// Ask for the whole absolute stream, which starts before the retained bytes.
+	out, _ := b.ByteRange(0, int(b.Len()))
+	for i, c := range out {
+		if c != 'A' {
+			t.Fatalf("byte %d of the window is %q; only 'A' was ever written", i, c)
+		}
+	}
+}
+
+// TestBuffer_ByteRangeWindowInsideRetainedData pins that the clamp still returns
+// exactly the requested window when it lies entirely within the retained bytes,
+// so the fix cannot be "return less than asked" for the normal case.
+func TestBuffer_ByteRangeWindowInsideRetainedData(t *testing.T) {
+	b := New(0)
+	b.compactThreshold = 64
+	b.compactMinAdvance = 32
+
+	r, err := b.NewReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write([]byte(strings.Repeat("Z", 200))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Read(context.Background(), r, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write([]byte("abcdefghij")); err != nil {
+		t.Fatal(err)
+	}
+	base := b.BaseOffset()
+	if base == 0 {
+		t.Fatal("compaction did not happen")
+	}
+
+	// A window wholly inside the retained region, addressed absolutely.
+	out, total := b.ByteRange(base+2, 4)
+	if total != b.Len() {
+		t.Errorf("total = %d, want %d", total, b.Len())
+	}
+	if string(out) != "cdef" {
+		t.Errorf("got %q, want cdef (absolute offset %d, 4 bytes)", out, base+2)
+	}
+}
+
+// A waiter must not cost a goroutine beyond the one the caller already has. The
+// old wait used sync.Cond, which cannot wait with a deadline, so each waiting read
+// started a helper goroutine for a timer to broadcast through - two goroutines per
+// waiter instead of one. This pins the count: with 24 simultaneous waiters the
+// delta must stay near 24, not near 48.
+func TestBuffer_WaitCostsNoExtraGoroutine(t *testing.T) {
+	const waiters = 24
+	const slack = 8
+
+	for attempt := 0; attempt < 3; attempt++ {
+		b := New(1 << 20)
+		ids := make([]int, waiters)
+		for i := range ids {
+			id, err := b.NewReader()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids[i] = id
+		}
+
+		base := runtime.NumGoroutine()
+		blocked := make(chan struct{}, waiters)
+		release := make(chan struct{})
+		for _, id := range ids {
+			go func(id int) {
+				blocked <- struct{}{}
+				_, _ = b.Read(context.Background(), id, 5*time.Second, 0)
+				<-release
+			}(id)
+		}
+		for i := 0; i < waiters; i++ {
+			<-blocked
+		}
+
+		// Sample the maximum over a window rather than breaking at the first
+		// reading that reaches `waiters`: the goroutines that have signalled are
+		// not necessarily inside Read yet, so an early break would measure the
+		// moment before any helper goroutine exists and pass for the wrong reason.
+		peak := 0
+		deadline := time.Now().Add(300 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if d := runtime.NumGoroutine() - base; d > peak {
+				peak = d
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+
+		close(release)
+		b.Close()
+		time.Sleep(50 * time.Millisecond)
+
+		if peak <= waiters+slack {
+			return // good: one goroutine per waiter
+		}
+		if attempt == 2 {
+			t.Fatalf("waiting cost %d goroutines for %d waiters (want <= %d): "+
+				"a helper goroutine is being started per wait", peak, waiters, waiters+slack)
+		}
+	}
+}
+
+// timeout <= 0 means "do not wait": a read with no wait budget returns immediately
+// with whatever is available, even when a cancellable context is also supplied.
+func TestBuffer_ZeroTimeoutNeverWaits(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	data, err := b.Read(ctx, r, 0, 0)
+	el := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("got %q", data)
+	}
+	if el > 20*time.Millisecond {
+		t.Fatalf("timeout=0 waited %v", el)
+	}
+}
+
+// A waiter must end when the thing it is waiting on is removed, not when its
+// timeout expires. Unregister closes no data and writes no bytes, so it needs its
+// own wake; without one the reader would sit until the deadline and then report
+// ErrReader only by accident, having waited out a timeout for a reader that no
+// longer exists.
+func TestBuffer_UnregisterWakesPromptly(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	start := time.Now()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := b.Read(context.Background(), r, 10*time.Second, 0)
+		errCh <- err
+	}()
+	time.Sleep(80 * time.Millisecond)
+	b.Unregister(r)
+	select {
+	case err := <-errCh:
+		if err != ErrReader {
+			t.Fatalf("want ErrReader, got %v", err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("took %v", el)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Unregister did not wake the waiter")
+	}
+}
+
+// A write must end a wait with data, not merely end it: the waiter re-checks the
+// buffer after every wake, so data written just before the wake is delivered on the
+// same call.
+func TestBuffer_WriteWakesWithData(t *testing.T) {
+	b := New(1024)
+	r, _ := b.NewReader()
+	defer b.Close()
+	type res struct {
+		s   string
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		d, err := b.Read(context.Background(), r, 10*time.Second, 0)
+		ch <- res{string(d), err}
+	}()
+	time.Sleep(80 * time.Millisecond)
+	_ = b.Write([]byte("woken"))
+	select {
+	case got := <-ch:
+		if got.err != nil || got.s != "woken" {
+			t.Fatalf("got %q err=%v", got.s, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Write did not wake the waiter")
 	}
 }

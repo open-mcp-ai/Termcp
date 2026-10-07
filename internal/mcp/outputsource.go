@@ -75,8 +75,8 @@ func (o *outputSource) ByteRange(start int64, max int) ([]byte, int64, error) {
 // Every valid session lives in the registry; there is no hidden archive.
 func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolResult) {
 	// A termcp:// locator names a session (optionally one of its shell
-	// channels by 1-based creation index); it never names a raw shell id, so
-	// a locator always lands in a session-scoped branch below.
+	// channels by channel index); it never names a raw shell id, so a locator
+	// always lands in a session-scoped branch below.
 	shellIdx := 0
 	if looksLikeResourceLocator(id) {
 		p, perr := parseResourceURL(id)
@@ -95,7 +95,11 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 		if sess == nil {
 			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("session %q not found", id))
 		}
-		if sess.PrimaryShell() != nil {
+		// The live map answers first whenever it holds any shell. Keying this on the
+		// primary shell instead would drop a session whose first channel was closed
+		// into the snapshot branch, resolving :N from a different set than the one
+		// the Web UI is showing.
+		if sess.HasLiveShells() {
 			cs, err := s.shellFromIndex(sess, shellIdx)
 			if err != nil {
 				return nil, toolError(CodeShellNotFound, "%s", err.Error())
@@ -106,23 +110,43 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 			info := cs.Info()
 			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 		}
-		// DEAD / restored session without live shells: resolve by snapshot order.
+		// DEAD / restored session without live shells: resolve by the channel index
+		// retained in the snapshot, which is the same number the live session gave
+		// that channel before it went away.
 		shells := sess.SnapshotShells()
-		if idx := shellIdx - 1; idx >= 0 && idx < len(shells) {
-			return &outputSource{sessID: sess.ID, shellID: shells[idx].ID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
+		if sh, ok := sess.SnapshotShellByIndex(shellIdx); ok {
+			return &outputSource{sessID: sess.ID, shellID: sh.ID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil
 		}
-		return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("shell index %d out of range (session %q has %d shell(s))", shellIdx, sess.ID, len(shells)))
+		return nil, toolError(CodeShellNotFound, "%s", session.ShellIndexOutOfRangeError(sess.ID, shellIdx, len(shells)).Error())
 	}
 
 	if cs := s.sessMgr.GetChildShell(id); cs != nil {
 		info := cs.Info()
-		sessID := id
-		if parent := s.sessMgr.GetByShellID(id); parent != nil {
-			sessID = parent.ID
+		// The shell already knows its parent, so asking the manager would be a second
+		// full scan of every session to learn what cs.ParentSessionID returns directly.
+		// GetByShellID would find this same session, because the only way
+		// GetChildShell(id) can return cs is from that session's own shell map.
+		sessID := cs.ParentSessionID()
+		if sessID == "" {
+			// Not reachable for a shell found through a session's shell map (both the
+			// root and every child are stored with their parent already set), but the
+			// value is reported as the session id rather than empty if it ever is.
+			sessID = id
 		}
 		return &outputSource{live: cs, sessID: sessID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
 	}
 	if sess := s.sessMgr.Get(id); sess != nil {
+		// A bare session id means the primary CHANNEL (index 1) wherever it now
+		// lives: the live map while it is there, else its retained log. Keying on
+		// PrimaryShell() is therefore about which channel, not about live vs DEAD —
+		// the distinction the :N path draws with HasLiveShells().
+		//
+		// The one case that reads oddly is a running session whose primary channel
+		// was manually closed (possible on a remote endpoint; the internal primary
+		// refuses to close): the id then answers from the persisted log while other
+		// live channels exist. That is deliberate rather than overlooked — a bare
+		// id asks for channel 1, and picking some other channel because it happens
+		// to be alive would answer a different question than the one asked.
 		if cs := sess.PrimaryShell(); cs != nil {
 			info := cs.Info()
 			return &outputSource{live: cs, sessID: sess.ID, shellID: cs.ID, status: info.Status, created: info.CreatedAt}, nil
@@ -130,9 +154,16 @@ func (s *Server) resolveOutputSource(id string) (*outputSource, *mcpgo.CallToolR
 		// Restored DEAD session: no live shell objects, so the persisted log of
 		// this session's first shell serves as the stream. The shell id must be
 		// resolved here — a log belongs to a shell, so an empty id would address a
-		// shell that does not exist and read back nothing.
+		// shell that does not exist and read back nothing. Channel index 1 is the
+		// primary channel by definition, so this is the same shell the live path
+		// would have picked. The fallback covers a snapshot with no index 1 at all
+		// (a partially numbered one, which backfillShellIndexes deliberately leaves
+		// untouched rather than renumber and risk a duplicate): the first shell in
+		// creation order is then the only sensible answer.
 		shellID := ""
-		if shells := sess.SnapshotShells(); len(shells) > 0 {
+		if sh, ok := sess.SnapshotShellByIndex(1); ok {
+			shellID = sh.ID
+		} else if shells := sess.SnapshotShells(); len(shells) > 0 {
 			shellID = shells[0].ID
 		}
 		return &outputSource{sessID: sess.ID, shellID: shellID, msgMgr: s.msgMgr, status: sess.Info().Status}, nil

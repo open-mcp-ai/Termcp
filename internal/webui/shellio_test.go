@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -254,6 +255,63 @@ func readAsset(p string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// readTerminalJS reads the terminal-view module family the way the browser
+// does: every file, in index.html load order, concatenated. The big module was
+// split by responsibility; a declaration that moved out of terminal-view.js is
+// still present (and still parsed) on the page, so assertions on the source of
+// the old single file must read the whole family.
+//
+// The order is read from index.html rather than repeated here. A second copy
+// would let a reorder that breaks the page at runtime (a template used before
+// the module that declares it is evaluated) keep passing these tests, because
+// the concatenation would still hold the old, working order.
+func readTerminalJS(t *testing.T) string {
+	t.Helper()
+	index, err := readAsset("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	found := 0
+	for _, m := range moduleScriptRe.FindAllStringSubmatch(index, -1) {
+		if !strings.Contains(m[1], "/terminal-") {
+			continue
+		}
+		sb.WriteString(readAssetLF(t, m[1]))
+		found++
+	}
+	if found == 0 {
+		t.Fatal("index.html loads no terminal-* modules; the family split was reverted?")
+	}
+	return sb.String()
+}
+
+// cssImportRe matches one @import line of the stylesheet manifest, capturing
+// the chunk file name. Shared so the CSS helpers and the override tests agree
+// on what a manifest entry looks like.
+var cssImportRe = regexp.MustCompile(`@import url\("([^"]+)"\)`)
+
+// readAppCSS reads the stylesheet the way the browser does: app.css is now a
+// manifest of @import chunks, so the effective CSS is the chunks in cascade
+// order. Assertions on styles must read the concatenation, or a rule that
+// moved into a chunk reads as missing.
+func readAppCSS(t *testing.T) string {
+	t.Helper()
+	manifest, err := readAsset("static/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	for _, line := range strings.Split(manifest, "\n") {
+		m := cssImportRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		sb.WriteString(readAssetLF(t, "static/css/"+m[1]))
+	}
+	return sb.String()
 }
 
 // TestSyncedDocsMatchSource keeps the served copies of the repository docs in

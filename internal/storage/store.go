@@ -1,13 +1,10 @@
 package storage
 
 import (
-	"bufio"
-	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +17,11 @@ import (
 
 var (
 	ErrInvalidID = errors.New("storage: invalid ID")
-	validIDRe    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	// ErrSessionGone reports that a write was refused because the session it would
+	// belong to no longer exists on disk. It is not a transient failure: the caller
+	// is writing into a deleted session and should stop.
+	ErrSessionGone = errors.New("storage: session no longer exists")
+	validIDRe      = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
 func validateID(id string) error {
@@ -44,138 +45,110 @@ type Store struct {
 	dataDir string
 	mu      sync.RWMutex
 
-	// logs caches one open append handle per shell. Output arrives in bursts,
-	// so keeping the file open turns "one open+seek+write per 4096 bytes" into
-	// a single write; see the cost measurements in the design doc.
-	logsMu sync.Mutex
-	logs   map[string]*os.File
+	// logSink owns every open append handle and performs every append; see
+	// logsink.go. It replaces a mutex plus a handle map: a lock guarding handles
+	// that are opened on first append and closed on delete has a lifetime shorter
+	// than the files it protects, and deletion is exactly where that breaks.
+	// Ownership by one goroutine removes the window instead of narrowing it.
+	logSink *logSink
 
 	// markIdx caches one sparse index per shell (see markIndex). It is memory the
 	// files do not have to carry: the index is rebuilt from log.jsonl on demand and
 	// dropped with the shell's directory.
 	idxMu   sync.Mutex
 	markIdx map[string]*markIndex
+
+	// deleted remembers sessions whose directory was removed, so a late append is
+	// refused instead of recreating it. Guarded by mu, and cleared by SaveSession:
+	// a session id can legitimately be reused after a delete, and the new session's
+	// appends must be accepted.
+	deleted map[string]bool
+
+	// manifestHash remembers the bytes last written to each manifest, keyed by the
+	// manifest's path, so a write whose content is unchanged can be skipped. See
+	// writeManifest for why skipping is safe and what must invalidate it. Guarded by
+	// mu, like the other maps on this struct.
+	//
+	// Both maps above are caches of what is on disk, and each carries an obligation
+	// that is not visible from the map itself, so it is stated once here:
+	//
+	//	deleted       Every removal path must add to it (DeleteSession), and every
+	//	              creation path must clear it (SaveSession).
+	//	manifestHash  Every path that removes a manifest file must delete its entry
+	//	              (DeleteShell, DeleteSession).
+	//
+	// Missing either obligation does not produce a wrong value - it produces a
+	// directory with no manifest, which LoadSessions skips forever. That is the one
+	// failure this store cannot recover from on its own, so the invariants are worth
+	// keeping in one place rather than spread across the call sites that uphold them.
+	manifestHash map[string][32]byte
 }
 
 // New creates a Store rooted at dataDir.
 func New(dataDir string) *Store {
-	return &Store{
-		dataDir: dataDir,
-		logs:    make(map[string]*os.File),
-		markIdx: make(map[string]*markIndex),
+	s := &Store{
+		dataDir:      dataDir,
+		markIdx:      make(map[string]*markIndex),
+		deleted:      make(map[string]bool),
+		manifestHash: make(map[string][32]byte),
 	}
-}
-
-// markIndexStride is how many marks pass between two entries of a shell's sparse
-// index. log.jsonl is a sequence of JSON lines, so a byte offset cannot be looked
-// up in it without knowing where the lines around that offset begin; one entry
-// every 64 marks is enough to land within a stride of any offset, while costing
-// one entry per 64 marks in memory. Nothing is written to disk for it: the file
-// stays the only copy of the index.
-const markIndexStride = 64
-
-// markRef is one entry of that index: the byte position a mark's line starts at
-// in log.jsonl and the log offset its span begins on.
-//
-// The pair is what makes a seek possible — the position is where to read, the
-// offset is what to compare against the requested window. A line's length is not
-// recorded because it is never needed: reading forward from a position finds the
-// next line's end.
-type markRef struct {
-	Offset int64
-	Pos    int64
-}
-
-// markIndex is a shell's sparse index plus how far into log.jsonl it reaches.
-//
-// It is built by reading the file once, in order, and extended by reading only
-// what has been appended since, so a shell that streams for hours pays one line's
-// parse per mark ever written however many windows are read out of it. A file
-// that shrank is read again from its start rather than mixing two generations of
-// one path.
-//
-// mu guards both fields and is held only for the duration of a refresh, which
-// reads the appended bytes and nothing else.
-type markIndex struct {
-	mu    sync.Mutex
-	refs  []markRef
-	size  int64 // bytes of log.jsonl already consumed
-	count int64 // marks scanned so far; the stride's counter
-}
-
-// refresh brings the index up to the file's current length. A missing file is an
-// empty index rather than an error: the mark index is advisory, and a shell that
-// has written no marks yet is not a failure.
-func (i *markIndex) refresh(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			i.reset()
-			return nil
-		}
-		return err
-	}
-	defer f.Close()
-
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	// A smaller file is a different file (truncated or replaced): its positions and
-	// offsets have nothing to do with the ones already indexed.
-	if st.Size() < i.size {
-		i.reset()
-	}
-	if grew := st.Size() - i.size; grew > 0 {
-		chunk := make([]byte, grew)
-		if _, err := f.ReadAt(chunk, i.size); err != nil && err != io.EOF {
-			return err
-		}
-		i.consume(chunk)
-	}
-	return nil
-}
-
-// consume indexes the whole lines at the head of chunk, leaving a torn trailing
-// line for the next call: half a mark must never be counted as one, or every
-// entry after it would name the wrong line.
-func (i *markIndex) consume(chunk []byte) {
-	last := bytes.LastIndexByte(chunk, '\n')
-	if last < 0 {
-		return
-	}
-	chunk = chunk[:last+1]
-	pos := i.size
-	for len(chunk) > 0 {
-		nl := bytes.IndexByte(chunk, '\n')
-		line := chunk[:nl]
-		chunk = chunk[nl+1:]
-		// A malformed line is skipped without counting it, exactly as a read skips
-		// it: the index and the read must agree on which lines are marks.
-		if len(line) > 0 {
-			var m api.LogMark
-			if json.Unmarshal(line, &m) == nil {
-				if i.count%markIndexStride == 0 {
-					i.refs = append(i.refs, markRef{Offset: m.Offset, Pos: pos})
-				}
-				i.count++
-			}
-		}
-		pos += int64(nl + 1)
-	}
-	i.size = pos
-}
-
-func (i *markIndex) reset() {
-	i.refs = nil
-	i.size = 0
-	i.count = 0
+	// One owner goroutine per Store, started here rather than on first append so
+	// that "who may write a log" has one answer from construction onward.
+	s.logSink = newLogSink(s)
+	return s
 }
 
 func (s *Store) initDir(path string) error {
 	return os.MkdirAll(path, 0700)
 }
 
+// initLogDir creates a shell's log directory, but refuses once the session's
+// directory has been deleted.
+//
+// The distinction matters because a session directory is the session: it holds the
+// manifest that LoadSessions reads, so a directory with logs but no manifest is
+// invisible to the loader and can never be cleaned up. AppendLog used to create
+// whatever was missing, which meant an append arriving after DeleteSession
+// recreated the directory it had just removed - the session stayed deleted in
+// memory and on disk, but a shell directory with no manifest remained under
+// sessions/, orphaned for good.
+//
+// "Deleted" is not the same as "not there yet", and the difference is load-bearing.
+// A session starts its output pipes in New, before Create persists it, so the first
+// bytes of a session's life legitimately arrive before its directory exists; those
+// must be written. Only a session that has been through DeleteSession must not come
+// back, so the fact is remembered explicitly rather than inferred from the absence
+// of a directory. Deleting also drops the cached handle, so this state is consulted
+// on the append after a delete, not on every append.
+func (s *Store) initLogDir(sessionID, shellID string) error {
+	s.mu.RLock()
+	deleted := s.deleted[sessionID]
+	s.mu.RUnlock()
+	if deleted {
+		return fmt.Errorf("%w: session %q was deleted", ErrSessionGone, sessionID)
+	}
+	return os.MkdirAll(s.shellDir(sessionID, shellID), 0700)
+}
+
+// atomicWriteFile writes a file by writing a sibling temp file, flushing it, then
+// renaming it over the target. The rename is what makes the write atomic: a reader
+// sees either the old file or the new one, never a half-written one, and a crash
+// midway leaves only a .tmp-* file behind.
+//
+// The fsync is deliberate and should not be dropped as an optimisation. It costs
+// about 5ms - the bulk of the ~7ms a manifest write takes, measured - but it is
+// what makes the rename survive a crash. Without it a rename can be lost, and
+// losing this one is not merely a stale value: a session directory whose
+// manifest never appears is invisible to LoadSessions and can never be cleaned up,
+// which is the same unrecoverable orphan that a late append used to create (see
+// initLogDir). There is no file lock or single-instance guarantee in this codebase
+// either, so this cannot be dismissed as "the process is the only writer".
+//
+// Measured, for whoever is tempted: batching several fsyncs into one call does not
+// help (the kernel does not coalesce them - 20 files took 226ms batched against
+// 196ms one-at-a-time), and the only variant that did help was syncing files in
+// parallel, which is not applicable here because the skip in writeManifest means a
+// typical operation writes a single manifest and has nothing to parallelise.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".tmp-*")
@@ -237,6 +210,9 @@ func (s *Store) SaveSession(sess api.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A session that exists on disk is not deleted, whatever happened before this.
+	delete(s.deleted, sess.ID)
+
 	dir := s.sessionDir(sess.ID)
 	if err := s.initDir(dir); err != nil {
 		return err
@@ -273,11 +249,13 @@ func (s *Store) DeleteShell(sessionID, shellID string) error {
 	if err := validateID(shellID); err != nil {
 		return err
 	}
-	s.closeLog(sessionID, shellID)
+	s.logSink.closeShell(sessionID, shellID)
 	s.dropMarkIndex(sessionID, shellID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Drop the manifest's cached hash with the file it describes; see writeManifest.
+	delete(s.manifestHash, filepath.Join(s.shellDir(sessionID, shellID), "manifest.json"))
 	return os.RemoveAll(s.shellDir(sessionID, shellID))
 }
 
@@ -287,11 +265,25 @@ func (s *Store) DeleteSession(sessionID string) error {
 	if err := validateID(sessionID); err != nil {
 		return err
 	}
-	s.closeSessionLogs(sessionID)
+	s.logSink.closeSession(sessionID)
 	s.dropSessionMarkIndex(sessionID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Record the deletion before removing the directory, so an append that arrives
+	// during the removal is refused rather than racing to recreate it.
+	if s.deleted == nil {
+		s.deleted = make(map[string]bool)
+	}
+	s.deleted[sessionID] = true
+	// Drop every cached hash under this session, so a session id that is reused
+	// after the delete is written rather than skipped; see writeManifest.
+	prefix := s.sessionDir(sessionID) + string(filepath.Separator)
+	for path := range s.manifestHash {
+		if strings.HasPrefix(path, prefix) {
+			delete(s.manifestHash, path)
+		}
+	}
 	return os.RemoveAll(s.sessionDir(sessionID))
 }
 
@@ -354,12 +346,44 @@ func (s *Store) loadShellsLocked(sessionID string) []api.Session {
 	return shells
 }
 
+// writeManifest writes a manifest, unless the exact bytes are already on disk.
+//
+// Caller holds s.mu, which is what makes the cache below single-writer.
+//
+// Skipping is worth doing because the cost is dominated by the fsync inside
+// atomicWriteFile: measured 6.8ms of 7.0ms per manifest. persist() rewrites a
+// session whose state did not change (a whole-table sweep writes every session,
+// and most of them are unchanged), so those writes bought nothing and cost an
+// fsync each.
+//
+// Correctness of the skip rests on the manifest being a pure function of the value
+// passed in - it carries no timestamp of its own and nothing reads its mtime - so
+// identical bytes mean the file already says what this call would make it say.
+// The hash is of the encoded bytes rather than the value, so any field change at
+// all is a miss.
+//
+// Invalidation is the part that must not be missed: a manifest deleted from disk
+// while its hash is still cached would be skipped on the way back, leaving a
+// directory with no manifest - exactly the orphan this store refuses to create
+// (LoadSessions would skip it forever). Both removal paths drop the entry, so the
+// cache only ever claims a file that this process wrote and did not delete.
 func (s *Store) writeManifest(dir string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(dir, "manifest.json"), data, 0644)
+	path := filepath.Join(dir, "manifest.json")
+	sum := sha256.Sum256(data)
+	if prev, ok := s.manifestHash[path]; ok && prev == sum {
+		return nil
+	}
+	if err := atomicWriteFile(path, data, 0644); err != nil {
+		return err
+	}
+	// Recorded only after a successful write, so a failed write is retried rather
+	// than remembered as done.
+	s.manifestHash[path] = sum
+	return nil
 }
 
 func (s *Store) readManifest(dir string) (*api.Session, error) {
@@ -379,347 +403,17 @@ func (s *Store) readManifest(dir string) (*api.Session, error) {
 
 // --- byte log --------------------------------------------------------------
 
-// AppendLog appends raw bytes to a shell's log.bin and returns the offset the
-// data was written at.
-//
-// The returned offset is the file position, which is what makes an offset
-// meaningful without any bookkeeping: it is a fact about the file, not a sum of
-// lengths that can drift out of agreement with the bytes.
-//
-// The append happens through a cached handle so a burst of small writes does not
-// pay an open() per write. Callers must AppendMark *after* this returns so a
-// crash can only ever leave a trailing span with no mark (attributed to the
-// previous status), never a mark pointing past the end of the data.
-func (s *Store) AppendLog(sessionID, shellID string, data []byte) (int64, error) {
-	if err := validateID(sessionID); err != nil {
-		return 0, err
-	}
-	if err := validateID(shellID); err != nil {
-		return 0, err
-	}
-	if len(data) == 0 {
-		return s.LogSize(sessionID, shellID)
-	}
-
-	f, err := s.logHandle(sessionID, shellID)
-	if err != nil {
-		return 0, err
-	}
-
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-
-	off, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := f.Write(data); err != nil {
-		return off, err
-	}
-	return off, nil
-}
-
-// AppendMark appends one status transition to a shell's log.jsonl.
-//
-// Append this after the corresponding AppendLog: the mark then always points at
-// a byte that exists. The reverse order would produce marks pointing past EOF,
-// which cannot be repaired.
-func (s *Store) AppendMark(sessionID, shellID string, mark api.LogMark) error {
-	if err := validateID(sessionID); err != nil {
-		return err
-	}
-	if err := validateID(shellID); err != nil {
-		return err
-	}
-	dir := s.shellDir(sessionID, shellID)
-	if err := s.initDir(dir); err != nil {
-		return err
-	}
-	line, err := json.Marshal(mark)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-
-	// Marks are a handful of bytes per status change, so open/append/close keeps
-	// their durability story simple and never holds a second handle open.
-	f, err := os.OpenFile(filepath.Join(dir, "log.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(line)
-	return err
-}
-
-// LogSize returns the current size of a shell's log.bin, i.e. the offset just
-// past the last byte ever written.
-func (s *Store) LogSize(sessionID, shellID string) (int64, error) {
-	st, err := os.Stat(s.LogPath(sessionID, shellID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return st.Size(), nil
-}
-
-// ReadLog reads at most max bytes of a shell's log.bin starting at offset.
-//
-// This is a positional read: it never consults log.jsonl and never accumulates
-// lengths, so a window is exactly the file's bytes at that position.
-func (s *Store) ReadLog(sessionID, shellID string, offset int64, max int) ([]byte, error) {
-	if offset < 0 {
-		offset = 0
-	}
-	if max <= 0 {
-		return nil, nil
-	}
-	f, err := os.Open(s.LogPath(sessionID, shellID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	buf := make([]byte, max)
-	n, err := f.ReadAt(buf, offset)
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	return buf[:n], nil
-}
-
-// ReadMarks reads a shell's status marks in file order.
-//
-// This is the whole index, for a caller that reasons over all of it (the MCP
-// message list). A reader that only needs one screen's worth of a long log asks
-// for a window through ReadMarksWindow instead.
-func (s *Store) ReadMarks(sessionID, shellID string) ([]api.LogMark, error) {
-	marks, _, err := s.readMarksWindow(sessionID, shellID, math.MinInt64, math.MaxInt64)
-	return marks, err
-}
-
-// ReadMarksWindow reads a shell's status marks restricted to the byte window
-// [start, end).
-//
-// A span's end is derived from the next mark, so the marks a window needs are
-// more than the ones that start inside it: the returned slice is the part of the
-// index that decides those bytes, in file order. It begins with the span the
-// window starts inside — without it the first rows on screen have no status — and
-// ends with the first mark at or after end, whose offset is returned separately as
-// `closer`. The closer is not itself a span of the window: it is the boundary the
-// last real span ends at, and a caller that wanted it as a span too would have to
-// invent an end for it (the next mark's offset, or total_bytes) that this read
-// cannot know.
-//
-// The point of the window is cost: the index is read through a sparse in-memory
-// seek table (markIndex), so a request reads the marks the window contains plus
-// at most one stride, no matter how long log.jsonl has grown. Callers that want
-// everything pass ReadMarks, which is this with an unbounded window.
-func (s *Store) ReadMarksWindow(sessionID, shellID string, start, end int64) (marks []api.LogMark, closer int64, err error) {
-	// An id that names no shell is an empty answer, not an error: the mark index is
-	// advisory (an empty or damaged one does not change what bytes exist), and a
-	// session with no shells yet asks about exactly this.
-	if validateID(sessionID) != nil || validateID(shellID) != nil {
-		return nil, 0, nil
-	}
-	return s.readMarksWindow(sessionID, shellID, start, end)
-}
-
-// readMarksWindow is the windowed read without the id check, so the full read can
-// share it: one scan path is what keeps a window and a full read from disagreeing
-// about a span.
-func (s *Store) readMarksWindow(sessionID, shellID string, start, end int64) ([]api.LogMark, int64, error) {
-	refs, err := s.markCursors(sessionID, shellID)
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(refs) == 0 {
-		return nil, 0, nil
-	}
-	f, err := os.Open(s.MarkPath(sessionID, shellID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, 0, nil
-		}
-		return nil, 0, err
-	}
-	defer f.Close()
-
-	// Starting at the last entry at or before the window is what bounds the scan:
-	// a stride's worth of marks behind it, the marks the window contains, and the
-	// one that closes them.
-	at := refs[seekRef(refs, start)]
-	if _, err := f.Seek(at.Pos, io.SeekStart); err != nil {
-		return nil, 0, err
-	}
-
-	var out []api.LogMark
-	var closer int64
-	var below []api.LogMark // the marks at or before the window, newest offset group
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var m api.LogMark
-		if err := json.Unmarshal(line, &m); err != nil {
-			// One malformed line (a torn append) must not discard the index.
-			continue
-		}
-		if m.Offset <= start {
-			// Below the window. Only the newest offset group is kept, because a later
-			// mark below the window means the window starts inside that one instead.
-			// The group, not just the last mark: marks may share an offset (a submitted
-			// line and the review decision about it are both zero-length at the same
-			// byte), and dropping the rest of the group would drop the row's status.
-			if len(below) > 0 && below[len(below)-1].Offset != m.Offset {
-				below = below[:0]
-			}
-			below = append(below, m)
-			continue
-		}
-		if m.Offset >= end {
-			// At or past the window's end: this mark is the boundary the span before it
-			// ends at, and nothing after it can touch the window. It is reported as the
-			// boundary rather than returned as a span, because its own span does not
-			// overlap the window and its end would have to be invented.
-			closer = m.Offset
-			break
-		}
-		out = append(out, m)
-	}
-	if err := sc.Err(); err != nil {
-		return nil, 0, err
-	}
-	if len(below) > 0 {
-		out = append(below, out...)
-	}
-	return out, closer, nil
-}
-
-// seekRef is the index entry to start reading from for a window starting at
-// start: the last entry at or before it, or the first entry when the window
-// starts before every mark. The entries are in file order, so their offsets rise.
-func seekRef(refs []markRef, start int64) int {
-	i := sort.Search(len(refs), func(k int) bool { return refs[k].Offset > start })
-	if i == 0 {
-		return 0
-	}
-	return i - 1
-}
-
-// markCursors returns a snapshot of a shell's sparse index, extended to the
-// file's current length.
-//
-// The returned slice is a view of entries that are only ever appended to or
-// replaced wholesale: a refresh that runs while a read is scanning cannot change
-// the entries that read already holds.
-func (s *Store) markCursors(sessionID, shellID string) ([]markRef, error) {
-	key := sessionID + "\x00" + shellID
-	s.idxMu.Lock()
-	idx := s.markIdx[key]
-	if idx == nil {
-		idx = &markIndex{}
-		s.markIdx[key] = idx
-	}
-	s.idxMu.Unlock()
-
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	if err := idx.refresh(s.MarkPath(sessionID, shellID)); err != nil {
-		return nil, err
-	}
-	return idx.refs, nil
-}
-
-// dropMarkIndex forgets one shell's index. Called when the shell's files are
-// removed: an index that outlived its file would answer a later shell that
-// reused the id from positions in a log that no longer exists.
-func (s *Store) dropMarkIndex(sessionID, shellID string) {
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	delete(s.markIdx, sessionID+"\x00"+shellID)
-}
-
-// dropSessionMarkIndex forgets every shell index under one session, for the same
-// reason as dropMarkIndex. The separator in the key is what keeps a session id
-// from matching a longer one that starts with it.
-func (s *Store) dropSessionMarkIndex(sessionID string) {
-	prefix := sessionID + "\x00"
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	for k := range s.markIdx {
-		if strings.HasPrefix(k, prefix) {
-			delete(s.markIdx, k)
-		}
-	}
-}
-
-// logHandle returns the cached append handle for a shell, opening it if needed.
-func (s *Store) logHandle(sessionID, shellID string) (*os.File, error) {
-	key := sessionID + "\x00" + shellID
-
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	if f, ok := s.logs[key]; ok {
-		return f, nil
-	}
-
-	dir := s.shellDir(sessionID, shellID)
-	if err := s.initDir(dir); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "log.bin"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, err
-	}
-	s.logs[key] = f
-	return f, nil
-}
-
-func (s *Store) closeLog(sessionID, shellID string) {
-	key := sessionID + "\x00" + shellID
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	if f, ok := s.logs[key]; ok {
-		f.Close()
-		delete(s.logs, key)
-	}
-}
-
-// closeSessionLogs closes every cached handle belonging to a session.
-func (s *Store) closeSessionLogs(sessionID string) {
-	prefix := sessionID + "\x00"
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	for k, f := range s.logs {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			f.Close()
-			delete(s.logs, k)
-		}
-	}
-}
-
 // Close releases every cached log handle. Call on shutdown so buffered writes
 // are not lost.
+//
+// It closes the handles by asking the owner goroutine to, so a Close cannot race
+// an append onto a just-closed file. The goroutine itself is left running: appends
+// after Close used to reopen a handle and still do, which keeps Close meaning
+// "release the handles" rather than "retire this store". The cost is one goroutine
+// per Store for the life of the process, which is what the previous design spent a
+// mutex to avoid and is worth it for having no shared handle map at all.
 func (s *Store) Close() error {
-	s.logsMu.Lock()
-	defer s.logsMu.Unlock()
-	var firstErr error
-	for k, f := range s.logs {
-		if err := f.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		delete(s.logs, k)
-	}
-	return firstErr
+	return s.logSink.closeAll()
 }
 
 // HasPersistedHistory reports whether a session has a manifest on disk, i.e.

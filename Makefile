@@ -1,4 +1,4 @@
-.PHONY: build build-api build-debug test clean dist sync-assets
+.PHONY: build build-api build-debug test test-stress clean dist sync-assets prepare-release check-release
 
 # Plain `make` must keep meaning "build the release binary" (GNU make otherwise
 # picks the first target in the file as the default goal).
@@ -45,9 +45,49 @@ build-debug:
 	mkdir -p dist
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -gcflags "all=-N -l" -ldflags "$(LDFLAGS_VERSION)" -o dist/$(BIN) .
 
-# 运行全部单元测试（-count=1 跳过测试结果缓存，保证每次都真实执行）
+# Run the unit tests. Flags are byte-for-byte what .github/workflows/test.yml's
+# Test step runs (change the two together); -shuffle=on reorders every run and
+# prints its seed, so a failure replays with: go test -shuffle=<seed>.
+# Why these flags and what the stress target is for: docs/agents/testing.md.
+#
+# -race needs cgo and a C toolchain (all three CI runners ship gcc; some Windows
+# dev boxes do not). RACE=auto (default) probes the toolchain once per target
+# and runs without it when missing; RACE=0 forces it off, RACE=1 forces it on
+# (e.g. after `scoop install mingw`). The probe is a recursive variable, so
+# targets that never expand it (build, dist, ...) pay nothing.
+RACE ?= auto
+race_probe = CGO_ENABLED=1 go test -race -count=1 -run '^$$' ./internal/clock/ >/dev/null 2>&1
+race_flag = $(if $(filter 1,$(RACE)),-race,$(if $(filter 0,$(RACE)),,$(shell $(race_probe) && echo -race)))
+
+# Shared degraded-mode notice for both test targets; $(1) is the target name.
+define race_notice
+@if [ "$(RACE)" = "auto" ] && [ -z "$(race_flag)" ]; then \
+	echo "$(1): -race unavailable (needs cgo + a C compiler); running without it - CI still enables it"; \
+fi
+endef
+
 test:
-	go test -count=1 ./...
+	$(call race_notice,make test)
+	go test ./... -count=1 -shuffle=on $(race_flag) -timeout 240s
+
+# Scheduling perturbation for the races -race cannot see (filesystem/lifecycle:
+# -cpu=1 interleaves teardown with background writers the way a loaded CI runner
+# does). Defaults to ~6 rounds of the whole tree; scope a single package with
+#   make test-stress STRESS_PKGS=./internal/session/
+STRESS_PKGS ?= ./...
+STRESS_COUNT ?= 2
+STRESS_CPU ?= 1,2,4
+
+test-stress:
+	$(call race_notice,make test-stress)
+	go test $(STRESS_PKGS) -count=$(STRESS_COUNT) -cpu=$(STRESS_CPU) -shuffle=on $(race_flag) -timeout 900s
+
+# 发布 PR：将 Unreleased 归档到指定版本，并同步 server.json。
+prepare-release:
+	python3 scripts/release_metadata.py prepare "$(RELEASE_VERSION)"
+
+check-release:
+	python3 scripts/release_metadata.py check $(if $(RELEASE_VERSION),--expected "$(RELEASE_VERSION)")
 
 # 清理构建文件
 clean:

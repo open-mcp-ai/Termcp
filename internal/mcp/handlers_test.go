@@ -118,6 +118,19 @@ func testShellEchoArgs(s string) []any {
 	return testShellArgs("-c", "echo "+s)
 }
 
+// testShellIdleArgs runs a shell that stays alive and prints nothing. Use it to
+// register a notification rule and then drive the dispatch by hand: a shell that
+// exits instead (testShellEchoArgs) makes OnExit cascade-clear the rule, so the
+// hand-driven OnOutput can land on a rule that no longer exists and the test then
+// waits out its full timeout. Printing nothing also keeps the shell's own output
+// hook from racing the dispatch under test.
+func testShellIdleArgs() []any {
+	if runtime.GOOS == "windows" {
+		return testShellArgs("-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 60")
+	}
+	return testShellArgs("-c", "sleep 60")
+}
+
 func testReadOutputUntil(t *testing.T, s *Server, shellID, marker string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1097,5 +1110,57 @@ func TestDeadSessionOperationsNoPanic(t *testing.T) {
 	}
 	if !fwdRes.IsError {
 		t.Fatal("expected error result on dead session forward")
+	}
+}
+
+// shell_output's payload carries both ids, and callers use session_id to address
+// the session again (terminate, list shells). The live-shell branch answered it by
+// scanning every session for the one owning the shell; it must keep reporting the
+// owning session - not the shell's own id - because a caller that fed the shell id
+// back as a session_id would address a session that does not exist.
+func TestHandleReadOutput_ReportsOwningSessionID(t *testing.T) {
+	s, _, sessMgr, _ := newTestServerWithHistory(t)
+
+	startRes, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
+		"command":    testShell(),
+		"args":       testInteractiveShellArgs(),
+		"mode":       "pty",
+		"ssh_config": "internal",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("start session: %v", err)
+	}
+	started := parseResult(t, startRes)
+	sessID := started["session_id"].(string)
+	shellID := started["shell_id"].(string)
+	t.Cleanup(func() {
+		_, _ = s.handleTerminateSession(context.Background(),
+			makeRequest(map[string]any{"session_id": sessID, "force": true}))
+	})
+
+	// Sanity: in the internal loopback the shell id differs from the session id,
+	// otherwise this test would pass without distinguishing the two.
+	if shellID == sessID {
+		t.Skip("shell id equals session id in this environment; cannot distinguish")
+	}
+
+	res, err := s.handleReadOutput(context.Background(), makeRequest(map[string]any{
+		"shell_id":   shellID,
+		"tail_lines": 5,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read output: %v", err)
+	}
+	got := parseResult(t, res)
+	if got["session_id"] != sessID {
+		t.Errorf("session_id in payload = %v, want %q (the owning session, not the shell id %q)",
+			got["session_id"], sessID, shellID)
+	}
+	if got["shell_id"] != shellID {
+		t.Errorf("shell_id = %v, want %q", got["shell_id"], shellID)
+	}
+	// The reported id must actually resolve back to the session.
+	if owner := sessMgr.Get(got["session_id"].(string)); owner == nil {
+		t.Errorf("reported session_id %q does not resolve to a session", got["session_id"])
 	}
 }

@@ -253,13 +253,13 @@ func TestShellMarksBodyShape(t *testing.T) {
 func TestShellTimelineRailIsWired(t *testing.T) {
 	index := readAssetLF(t, "index.html")
 	jsAt := strings.Index(index, "static/js/timeline.js")
-	callerAt := strings.Index(index, "static/js/terminal-view.js")
+	callerAt := strings.Index(index, "static/js/terminal-window.js")
 	if jsAt == -1 || callerAt == -1 || jsAt > callerAt {
-		t.Error("index.html must load timeline.js before terminal-view.js, which calls into it")
+		t.Error("index.html must load timeline.js before terminal-window.js, which calls into it")
 	}
-	tv := readAssetLF(t, "static/js/terminal-view.js")
+	tv := readAssetLF(t, "static/js/terminal-panels.js")
 	if !strings.Contains(tv, "initShellTimeline(win);") {
-		t.Error("terminal-view.js no longer mounts the timeline rail")
+		t.Error("terminal-panels.js no longer mounts the timeline rail")
 	}
 	tl, err := readAsset("static/js/timeline.js")
 	if err != nil {
@@ -309,7 +309,7 @@ func TestShellTimelineRailIsWired(t *testing.T) {
 	if !strings.Contains(tl, "buffer.active") {
 		t.Error("timeline.js no longer reads the xterm buffer; the viewport window cannot be computed without it")
 	}
-	css := readAssetLF(t, "static/css/app.css")
+	css := readAppCSS(t)
 	for _, want := range []string{".term-rail {", ".term-rail-cell {", ".term-rail-pop {", ".term-rail-output", ".term-rail-input", ".term-rail-agent"} {
 		if !strings.Contains(css, want) {
 			t.Errorf("app.css misses %q", want)

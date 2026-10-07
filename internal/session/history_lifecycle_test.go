@@ -1,6 +1,11 @@
 package session
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +30,10 @@ func TestManager_TerminateKeepsSessionDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// The shell's exit watcher persists its final manifest AFTER Terminate
+	// returns. Delete joins that watcher and purges the session directory, so
+	// t.TempDir's RemoveAll cannot race a late writer ("directory not empty").
+	t.Cleanup(func() { _ = m.Delete(id) })
 
 	m.Terminate(id, true, 0)
 
@@ -86,6 +95,9 @@ func TestManager_RestoreDeadAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// m1 owns the session whose exit watcher outlives Terminate; Delete joins it
+	// before t.TempDir's RemoveAll (see TestManager_TerminateKeepsSessionDead).
+	t.Cleanup(func() { _ = m1.Delete(id) })
 
 	// Write a mark so the session has something persisted on disk, then DEAD the
 	// session (which persists the manifest via onDead → manager.persist).
@@ -143,6 +155,9 @@ func TestManager_OutputReadsResolveEmptyShellID(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := s.ID
+	// Delete joins the exit watcher that outlives Terminate, as in
+	// TestManager_TerminateKeepsSessionDead.
+	t.Cleanup(func() { _ = m.Delete(id) })
 
 	// Bytes must exist for the read to be meaningful.
 	payload := []byte("hello byte log\n")
@@ -200,4 +215,191 @@ func TestManager_OutputReadsResolveEmptyShellID(t *testing.T) {
 	if len(marks) == 0 {
 		t.Fatal("Marks with empty shellID returned no marks for a session that has output")
 	}
+}
+
+// "Which session owns this shell?" is answered two ways: the shell carries its
+// parent, and the manager can scan every session's shell map. The output path now
+// uses the former (the latter was a second full scan of the table to learn what the
+// shell object already held), so the two must agree - the id decides which
+// transcript gets read.
+func TestChildShell_ParentSessionIDMatchesManagerLookup(t *testing.T) {
+	srv := startTestServer(t)
+	store := storage.New(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	m := NewManager(message.NewManager(store), store, srv)
+
+	command, args := testSleepCommand("60")
+	s, err := m.Create(testConfig(command, args, api.ModePipe, "parent-lookup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Delete(s.ID) })
+
+	// The root shell, the case the output path hits for a fresh session.
+	root := s.PrimaryShell()
+	if root == nil {
+		t.Fatal("session has no primary shell")
+	}
+	if got := root.ParentSessionID(); got != s.ID {
+		t.Errorf("root.ParentSessionID() = %q, want %q", got, s.ID)
+	}
+	if owner := m.GetByShellID(root.ID); owner == nil || owner.ID != s.ID {
+		t.Errorf("GetByShellID(%q) = %v, want %q", root.ID, owner, s.ID)
+	}
+	// And through the manager-level lookup the output path starts from.
+	if cs := m.GetChildShell(root.ID); cs == nil {
+		t.Fatalf("GetChildShell(%q) = nil; the output path would not find the shell", root.ID)
+	} else if cs.ParentSessionID() != s.ID {
+		t.Errorf("GetChildShell().ParentSessionID() = %q, want %q", cs.ParentSessionID(), s.ID)
+	}
+}
+
+// waitFor polls cond until it holds or the timeout passes, reporting whether it
+// held. Polling is required wherever the thing awaited is an asynchronous effect
+// of the thing observed.
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cond()
+}
+
+func shellManifestStatus(t *testing.T, dataDir, sessionID string) api.SessionStatus {
+	t.Helper()
+	base := filepath.Join(dataDir, "sessions", sessionID)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatalf("read session dir: %v", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(base, e.Name(), "manifest.json"))
+		if err != nil {
+			continue
+		}
+		var sh api.Session
+		if err := json.Unmarshal(data, &sh); err != nil {
+			continue
+		}
+		return sh.Status
+	}
+	return ""
+}
+
+func TestManager_ShellExitStatusIsPersisted(t *testing.T) {
+	srv := startTestServer(t)
+	dir := t.TempDir()
+	store := storage.New(dir)
+	t.Cleanup(func() { _ = store.Close() })
+	m := NewManager(message.NewManager(store), store, srv)
+
+	var command string
+	var args []string
+	if runtime.GOOS == "windows" {
+		command = "powershell.exe"
+		args = []string{"-NoProfile", "-Command", "Write-Output bye"}
+	} else {
+		command = "/bin/sh"
+		args = []string{"-c", "echo bye"}
+	}
+	s, err := m.Create(testConfig(command, args, api.ModePipe, "exit-persist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID
+	t.Cleanup(func() { _ = m.Delete(id) })
+
+	// Wait for the shell to exit in memory first: that is the event whose
+	// persistence is under test, and it is set before the write happens.
+	waitFor(t, 10*time.Second, func() bool {
+		shells := s.SnapshotShells()
+		return len(shells) > 0 && shells[0].Status == api.SessionExited
+	}, "shell to exit in memory")
+
+	// Then wait for the disk to catch up. Polling the disk rather than reading it
+	// once is what makes this a test of persistence instead of a test of timing:
+	// the write is asynchronous to the in-memory status change, so a single read
+	// races it (and did - this passed alone and failed under full-package load,
+	// where the gap between the two is wider).
+	inMemory := s.SnapshotShells()[0].Status
+	var onDisk api.SessionStatus
+	persisted := waitFor(t, 5*time.Second, func() bool {
+		onDisk = shellManifestStatus(t, dir, id)
+		return onDisk == api.SessionExited
+	}, "shell exit status to reach disk")
+
+	t.Logf("in-memory shell status = %s", inMemory)
+	t.Logf("on-disk  shell status = %s (persisted=%v)", onDisk, persisted)
+
+	if !persisted {
+		t.Errorf("SHELL EXIT NOT PERSISTED: memory=%s disk=%s after 5s", inMemory, onDisk)
+	}
+}
+
+// A session is usable the moment Create returns. The handlers used to sleep 100ms
+// after Create before answering session_start, which suggested the session needed
+// time to settle; it does not, and the sleep could not have helped even if it did.
+// First output takes ~240ms to arrive on this machine (measured), so no fixed sleep
+// shorter than that could guarantee output was ready, while input sent immediately
+// after Create is accepted and echoed. The sleep therefore only added latency to
+// every session creation, and this test is what keeps it from coming back: it fails
+// if a future change makes input require a settling period.
+func TestSession_InputWorksImmediatelyAfterCreate(t *testing.T) {
+	srv := startTestServer(t)
+	store := storage.New(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+	m := NewManager(message.NewManager(store), store, srv)
+
+	// The process must *answer* the input, not merely echo it back: the read
+	// below looks for a string the shell had to produce after receiving the
+	// line, so a transport that lost the write cannot look like a success. Both
+	// branches echo a line back under a marker of its own, which is what makes
+	// the assertion below the same one on every OS.
+	//
+	// `/bin/cat` was here and it could never pass: the assertion looks for
+	// "GOT_hello", which only the PowerShell branch prints, so on unix the test
+	// waited out its five seconds and then failed for the one reason the test is
+	// named after — input that had in fact arrived perfectly well.
+	var command string
+	var args []string
+	wantOutput := "hello"
+	if runtime.GOOS == "windows" {
+		command = "powershell.exe"
+		args = []string{"-NoProfile", "-Command", "$input | ForEach-Object { Write-Output ('GOT_' + $_) }"}
+		wantOutput = "GOT_hello"
+	} else {
+		command = "/bin/sh"
+		args = []string{"-c", `while IFS= read -r line; do printf 'GOT_%s\n' "$line"; done`}
+	}
+	s, err := m.Create(testConfig(command, args, api.ModePipe, "immediate-input"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Delete(s.ID) })
+
+	cs := s.PrimaryShell()
+	if cs == nil {
+		t.Fatal("session has no primary shell")
+	}
+	// No sleep: send as soon as Create has returned.
+	if err := cs.SendTerminalBytes([]byte("hello"), true); err != nil {
+		t.Fatalf("input immediately after Create was rejected: %v", err)
+	}
+
+	// And it must actually reach the process, not merely be accepted.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if out, _ := s.ReadOutput(nil, 0, false, 0, 0); strings.Contains(out, wantOutput) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("input sent immediately after Create never reached the process")
 }

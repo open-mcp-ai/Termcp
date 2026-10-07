@@ -94,12 +94,12 @@ core/            纯逻辑，零 DOM：transport（REST/WS）、会话状态管�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **0** | 输出字节偏移坐标系 + 字节安全存储（见 `docs/design/session-storage.md`） | ✅ 已完成 |
-| 1 | 模块拆分 + Go 侧哈希缓存（`window.Termcp` 命名空间、多 js/css、immutable） | ✅ 拆分已完成（`c87c157`，index.html 252 KB → 21 KB，8 个模块 + `app.css`）；**Go 侧哈希缓存/immutable 未做** |
+| 1 | 模块拆分 + Go 侧哈希缓存（`window.Termcp` 命名空间、多 js/css、immutable） | ✅ 拆分已完成（`c87c157`，index.html 252 KB → 21 KB，8 个模块 + `app.css`）；终端域二次拆分：`terminal-view.js` → `terminal-{view,panels,templates,window,switcher}.js`，`app.css` → manifest + 7 个 `@import` 分块（`tokens`/`base`/`approval`/`terminal`/`timeline`/`workspace`/`theme`）；**Go 侧哈希缓存/immutable 未做** |
 | 2 | 数据层/core 抽取（transport、会话状态） | 部分完成：transport 在 `ui-socket.js`、会话状态在 `sessions.js`；未抽成独立 core 层 |
 | 3 | PC 外壳迁入 layout-pc.js（保真，行为不变） | 未做（按功能域拆分，未按 PC/手机外壳分文件） |
 | 4 | 手机外壳 layout-mobile.js（全屏层、左侧抽屉、底部 shell tab、会话切换器） | ✅ 已完成（行为层面；代码未单独成 layout-mobile.js） |
 | 5 | 历史按需加载 + 3-xterm 轮换（PC/手机统一） | 待定（用户明确后置） |
-| 6 | 测试与回归（见 §五） | 部分完成：`assetsplit_test.go`、`session_switch_test.go` 覆盖拆分不变量与触屏交互；6 视口实测通过 |
+| 6 | 测试与回归（见 §五） | 部分完成：`assetsplit_test.go`、`session_switch_test.go` 覆盖拆分不变量与触屏交互；6 视口实测通过。拆分后的测试读取器从 `index.html` 推导加载顺序（`readTerminalJS`）并展开 CSS manifest（`readAppCSS`），不再各自硬编码一份文件清单 |
 | 7 | SDK 提取（宿主注入 xterm） | 最后 |
 | 8 | 文档（README 兼容矩阵、移动端截图） | 部分完成：新增 `docs/design/mobile-terminal.md`；**README 兼容矩阵与移动端截图未做** |
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -96,15 +97,17 @@ func (h *Handler) resolveSessionOrShell(w http.ResponseWriter, p *locator.Parsed
 			http.Error(w, fmt.Sprintf("session %q is closed (status %s); shell channels are read-only — use GET /api/shells/{id}/output-range or shell_output", p.SessionID, info.Status), http.StatusConflict)
 			return
 		}
-		// Shell channel: 1-based creation order, matching the Web UI tabs
-		// (shell-1, shell-2, …). No index = the primary (first) shell.
+		// Shell channel: the channel index assigned at creation — the N of
+		// termcp://#<session>:N and the shell-N tab label. It is not a position in
+		// the current list, so closing an earlier channel does not renumber the
+		// others. No index = the primary (first) shell.
 		idx := p.Index
 		if idx == 0 {
 			idx = 1
 		}
 		cs, ok := sess.ShellByIndex(idx)
 		if !ok {
-			http.Error(w, fmt.Sprintf("shell index %d out of range (session %q has %d shell(s))", idx, sess.ID, len(sess.ListChildShells())), http.StatusNotFound)
+			http.Error(w, session.ShellIndexOutOfRangeError(sess.ID, idx, sess.LiveShellCount()).Error(), http.StatusNotFound)
 			return
 		}
 		info = cs.Info()

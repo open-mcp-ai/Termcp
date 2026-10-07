@@ -162,13 +162,21 @@ and remembering to flip the switch after each launch is the step that gets
 forgotten. Set it in the connection editor's checkbox or as
 `default_approval = true` in the profile's TOML.
 
+`temporary: true` marks a remote profile held only in process memory. It remains
+available to REST, MCP, and the Web UI until termcp exits. It is never written
+under `ssh_configs/`.
+
 ### `GET /api/connections/{name}`
 
 Returns the raw TOML of one connection profile.
 
 ### `PUT /api/connections/{name}`
 
-Creates or updates a connection profile. Body is TOML.
+Creates or updates a connection profile. Body is TOML. Add
+`?temporary=true` to keep a remote profile only in memory, or
+`?temporary=false` to persist it. When omitted, an existing profile keeps its
+current storage mode; a new profile is persisted. The built-in `internal`
+profile cannot be temporary.
 
 ```
 Response: 204 No Content
@@ -176,11 +184,60 @@ Response: 204 No Content
 
 ### `DELETE /api/connections/{name}`
 
-Deletes a connection profile.
+Deletes a connection profile. Running sessions are untouched: a session owns
+its already-open connection, so only future dials lose the profile.
 
 ```
 Response: 204 No Content
 ```
+
+`{name}` may be a comma-separated batch (`a,b,c`) — profile names cannot
+contain a comma, so the split is unambiguous. Every entry is deleted
+independently and the response is `200` with a per-name `results` array instead
+of `204`; one bad entry does not stop the rest. The codes mirror the session
+routes: `reserved_profile` names the built-in `internal` profile, and
+`connection_not_found` means the profile was already gone (treat as cleared).
+
+### `GET /api/connections/batch`
+
+Downloads all remote profiles as one TOML file, including temporary profiles.
+The built-in `internal` profile is excluded. The file contains credentials, so
+handle it as a secret.
+
+`?names=a,b` filters the download to exactly those profiles; a name that no
+longer resolves is skipped rather than failing the file. Naming `internal` in
+`names` is refused with `400` — export of the built-in profile does not exist.
+
+### `POST /api/connections/batch?temporary=false`
+
+Imports a TOML file. Send its bytes as the request body (`Content-Type:
+application/toml`). Set `temporary=true` to keep **all** imported profiles only
+in memory. The upload limit is 16 MiB. Existing names, case-insensitive
+duplicates, and the reserved `internal` name receive a unique `-2`, `-3`, …
+suffix; existing profiles are never overwritten. Invalid profiles reject the
+whole import before any profile is added. The format is the same for import and
+export:
+
+```toml
+[[connections]]
+name = "host-one"
+kind = "remote"
+host = "host-one.example"
+user = "tester"
+password = "placeholder"
+
+[[connections]]
+name = "host-two"
+kind = "remote"
+host = "host-two.example"
+user = "tester"
+password = "placeholder"
+```
+
+Response: `201 { "imported": 2, "renamed": [{ "from": "host-one", "to": "host-one-2" }] }`
+when a name is changed; `renamed` is omitted when no names change. The Web UI
+passes the file to this endpoint unchanged; parsing and validation happen on
+the server.
 
 ### `POST /api/connections/test`
 
@@ -207,14 +264,45 @@ into a chat, an issue, or a script. MCP tools accept locators anywhere an id or
 profile name is expected; over plain HTTP, resolve them first with
 `GET /api/resolve`.
 
+The two surfaces expose locators differently, and the difference is deliberate:
+
+- **MCP** — every tool that takes `session_id`, `shell_id` or `ssh_config`
+  accepts a locator for it. A `session_id` argument also accepts a shell id (a
+  shell names its container), and a `shell_id` argument also accepts a session id
+  (the primary channel). Responses always carry the **resolved** ids, never the
+  locator that was passed in, so the values can be pasted straight back into the
+  next call.
+- **HTTP** — path and query parameters are plain ids; a locator is turned into
+  ids by `GET /api/resolve` first. This is not a convenience gap: a locator
+  contains `#` and `:` and cannot survive a URL path, so accepting one there
+  would only work for the encodings that happen to be unambiguous. Write tools
+  named in an `ssh_config` body field do accept an entry locator
+  (`termcp://<entry>`), because that field is a JSON body value rather than a
+  path segment.
+
+Both surfaces resolve through the same code (`internal/locator` for syntax,
+`internal/session` for shell lookup), so a locator cannot mean one thing in a
+chat and another in curl.
+
 | Locator | Names | Resolves to |
 |---------|-------|-------------|
 | `termcp://<entry>` | a connection profile (ssh_config), e.g. `termcp://rock64` | `ssh_config` name |
 | `termcp://#<session>` | a session | `session_id` |
 | `termcp://#<session>:<N>` | shell channel N of that session | `session_id` + `shell_id` |
 
-The shell index is 1-based creation order, matching the `shell-1`/`shell-2` tabs;
-without `:N` the primary (first) shell is meant. The long form
+A bare name with no scheme and no `#` (including `session-<id>`) is **not** a
+locator: connection profile names and session ids share that namespace, so a
+profile may legitimately be called `session-foo` and must keep resolving. Only an
+explicit session address is recognised as one — `#<id>`, `termcp://#<id>`, or
+`termcp://<entry>#<id>` — and the `session-` prefix is stripped there (so
+`#session-foo` means session `foo`).
+
+The shell index is the channel's number inside its session: 1-based, assigned
+when the channel is created, and **never renumbered or reused** — closing an
+earlier channel does not change it, so a locator you copied keeps naming the same
+channel (and a number whose channel is gone resolves to nothing rather than to a
+neighbour). It matches the `shell-1`/`shell-2` tab labels; without `:N` the
+primary (first) shell is meant. The long form
 `termcp://<entry>#<session>` is accepted for back-compat, but the entry prefix is
 ignored — session ids are unique, profile names are not. `termcp://shells/<id>`
 is a notification broadcast URI, not a locator.
@@ -242,6 +330,11 @@ Response 200 (closed / DEAD session — read-only):
 Response 200 (shell channel):
 { "kind": "shell", "session_id": "abc123", "shell_id": "def456", "index": 2, "name": "shell-2", "status": "running" }
 ```
+
+`index` is the channel's number inside the session and is the same value the
+locator carries. It is stable for the channel's whole life, so resolving a copied
+`termcp://#<session>:2` after other channels were closed still returns the same
+`shell_id`; a locator for a closed channel is a `404`, never a different shell.
 
 Then use the ids with the ordinary endpoints: an `entry` becomes
 `POST /api/sessions` with that `ssh_config`; a `session_id` drives output,
@@ -271,10 +364,17 @@ Response 200:
 {
   "sessions": [
     { "id": "abc123", "name": "pi", "status": "running",
-      "pid": 12345, "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
+      "rows": 24, "cols": 80, "ssh_endpoint": "remote", "created_at": 1758499200123 }
   ]
 }
 ```
+
+A session record also carries `ssh_config` (the profile it was created from), a
+non-secret label added for host attribution. It is separate from `name` because
+the display name is user-editable: the NetHub reads it to decide which host a
+session belongs to, so a renamed session keeps its lamp.
+
+Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 
 ### `POST /api/sessions`
 
@@ -294,8 +394,16 @@ Request:
 }
 
 Response 200:
-{ "session_id": "abc123", "shell_id": "def456", "pid": 12345, "ssh_config": "pi" }
+{ "session_id": "abc123", "shell_id": "def456", "ssh_config": "pi", "index": 1 }
 ```
+
+`index` is the first shell's channel number (always 1) — returned with the ids so
+a client labels and copies the primary tab from server data rather than assuming
+a number of its own. See section 5 for the locator meaning of `index`.
+
+No `pid` is returned: the process lives on the remote side and SSH does not report its
+number, so the field could only ever have been a constant. To get the real one, ask the
+shell itself (`echo $$`).
 
 ### `GET /api/sessions/{id}`
 
@@ -368,11 +476,19 @@ Lists a session's shells.
 Response 200:
 {
   "shells": [
-    { "id": "abc123", "name": "pi", "status": "running", ... },
-    { "id": "def456", "name": "shell-2", "status": "running", ... }
+    { "id": "abc123", "index": 1, "name": "pi", "status": "running", ... },
+    { "id": "def456", "index": 2, "name": "shell-2", "status": "running", ... }
   ]
 }
 ```
+
+`index` is the channel number the `termcp://#<session>:N` locator resolves, and it
+is per-channel stable: closing one channel leaves the others' numbers untouched, so
+a copied locator keeps meaning what it meant. Numbers are not reused, so a locator
+for a closed channel never points at a different shell. An
+`exited` (DEAD) session's snapshot carries the same numbers, and a session restored
+from a manifest written before the field existed has them backfilled from creation
+order — the numbering does not change across a restart.
 
 ### `POST /api/sessions/{id}/shells`
 
@@ -396,8 +512,13 @@ Request:
 { "command": "", "name": "shell-2", "mode": "pty", "rows": 24, "cols": 80 }
 
 Response 200:
-{ "shell_id": "def456", "session_id": "abc123", "name": "shell-2" }
+{ "shell_id": "def456", "session_id": "abc123", "name": "shell-2", "index": 2 }
 ```
+
+`index` is this channel's number in the session (the N of
+`termcp://#<session>:N`). It is assigned by the server, so a client labels and
+copies the tab from it rather than from a counter of its own — a counter would
+disagree with the resolver as soon as an earlier channel was closed.
 
 ### `DELETE /api/shells/{id}`
 
@@ -596,7 +717,7 @@ Response 200:
 | `cols` | **Required.** The terminal's width in columns. Half the input to the layout, and a wrong one puts every cell on the wrong row, so it is a parameter rather than a default |
 | `top` | First row wanted, in the terminal's own numbering (`viewportY`). Default `0`; at most 100000 |
 | `count` | How many rows to answer for. Default `0`; at most 2048 |
-| `height` | The terminal's height in rows, which the layout needs to know where the top of the screen is when a program addresses the cursor. Defaults to `count` |
+| `height` | The terminal's height in rows, which the layout needs to know where the top of the screen is when a program addresses the cursor and where the terminal buffer trims. This is the screen height, **not** `count`: the client may ask for a larger window with margin rows. Defaults to `count` when omitted, for a caller that asks for exactly one screen; when supplied it is never raised to match `count` |
 
 `top`, `count` and `height` are read leniently: a value outside its range falls
 back to the default rather than failing the request. `cols` is the one parameter
@@ -606,7 +727,23 @@ that is required and validated.
 |-------|---------|
 | `spans[i]` | Row `top+i`'s byte range `[start, end)`, or `null` for a row holding no bytes |
 | `marks` | The marks covering the byte window those rows hold — the same shape as `GET /api/shells/{id}/marks`, so the client needs no second request and there is one definition of a span |
-| `total_rows` | Rows the layout has, so the client can tell how far the rail extends |
+| `total_rows` | Rows the layout has, so the client can tell how far the rail extends. This is an **absolute row number** (the terminal's own numbering), not a length counted from `top`; a client deciding whether a response already covers the viewport has to bound it by this as well as by `spans.length`, which is only the requested `count` |
+
+The row number is the terminal's own buffer number (`viewportY`). The model keeps the
+same retention rules as xterm: the line buffer holds `scrollback + height` rows, and
+`CSI 3 J` — the erase-saved-lines sequence a shell's `clear` sends — trims the
+scrollback and renumbers the surviving screen rows. Both matter after a clear:
+without them every later cell would be indexed in the pre-clear scrollback's
+numbering and would sit far from the text it describes.
+
+The whole log is replayed before the window is answered, never just the part up to
+`top + count`. Rows are not settled when the cursor leaves them: a cursor-addressing
+sequence further down rewrites rows that were already passed, and `CSI 3 J`
+renumbers the entire buffer, so stopping at the window answers in a numbering the
+rest of the log has not finished deciding. The cost is bounded by the trim being
+amortized constant — a 20 MB log replays in roughly 0.2s — and a client watching a
+live shell has its viewport at the end of the log, where the loop ran to the end
+anyway.
 
 The mapping is **derived from the log and the width per request**, never
 recorded: a reloaded channel delivers its whole transcript in one write, and a

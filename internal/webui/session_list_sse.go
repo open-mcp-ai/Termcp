@@ -52,4 +52,3 @@ func (h *Handler) sessionHub() *sessionListHub {
 	}
 	return h.sessHub
 }
-

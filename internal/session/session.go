@@ -1,22 +1,16 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/buffer"
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -34,35 +28,20 @@ import (
 // The manager-assigned callbacks and the per-shell closed flag are atomics and
 // need no lock (see field docs below).
 
-// RemoteSSH selects a user-supplied SSH server instead of the built-in internal one.
-// Jump, when non-nil, is a bastion (ProxyJump): the SSH connection to this host
-// is tunneled through a direct-tcpip channel opened on the bastion's client.
-// Jump chains recursively (Jump.Jump) for multi-hop.
-type RemoteSSH struct {
-	Host               string
-	Port               int
-	User               string
-	Password           string
-	PrivateKey         string
-	KeyPassphrase      string
-	TrustUnknownHost   bool
-	KnownHosts         string
-	DialTimeoutSeconds int
-	Proxy              *sshclient.Proxy
-	Jump               *RemoteSSH
-}
-
 // Config holds parameters for creating a new Session.
 type Config struct {
 	Command string
 	Args    []string
 	// Mode applies to the first shell only. Mode is per shell channel; a session
 	// is a connection container and owns no mode of its own.
-	Mode   api.SessionMode
-	Name   string
-	Rows   int
-	Cols   int
-	Remote *RemoteSSH
+	Mode api.SessionMode
+	Name string
+	// SSHConfig is the profile name that established this session. It is kept
+	// separately from Name because the display name is user-editable.
+	SSHConfig string
+	Rows      int
+	Cols      int
+	Remote    *RemoteSSH
 	// DefaultShell is the profile's default_shell, kept so shells opened later on
 	// this connection resolve their shell the same way the first one did: the
 	// caller's command, then this, then the server's own login shell.
@@ -101,6 +80,7 @@ type Session struct {
 	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
 	defaultShell   string // profile default_shell, applied to shells opened later
 	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
+	nextShellIndex int    // guarded by shellStateMu; monotonically assigns channel indexes
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
@@ -127,11 +107,21 @@ type Session struct {
 	watchWG sync.WaitGroup
 }
 
+// newResourceID mints one resource id. Session and shell ids are the same kind
+// of value — a short opaque token that names an object in a URL and on disk — so
+// they come from one place rather than two copies of the same expression. The
+// 12-hex-character form keeps ids short enough to read out of a URL while
+// staying collision-free in practice; storage.validateID accepts it (lowercase
+// hex is within [a-zA-Z0-9_-]).
+func newResourceID() string {
+	return uuid.New().String()[:12]
+}
+
 // New creates and starts a new Session.
 // internal must be the built-in sshserver.Server (after Start) when cfg.Remote is nil; it may be nil for remote-only callers.
 func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Session, error) {
-	sessionID := uuid.New().String()[:12]
-	shellID := uuid.New().String()[:12]
+	sessionID := newResourceID()
+	shellID := newResourceID()
 	name := cfg.Name
 	if name == "" {
 		name = fmt.Sprintf("session-%s", sessionID)
@@ -139,61 +129,9 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	usePty := cfg.Mode == api.ModePTY
 
-	var execSession *sshclient.ExecSession
-	var sshEndpointPublic string // "internal" | "remote" for MCP / JSON (no host or credentials)
-
-	if isRemote(cfg) {
-		r := cfg.Remote
-		port := r.Port
-		if port == 0 {
-			port = 22
-		}
-		if port < 1 || port > 65535 {
-			return nil, fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
-		}
-		sshEndpointPublic = "remote"
-
-		var err error
-		if r.Jump != nil {
-			client, closers, derr := buildChainClient(r)
-			if derr != nil {
-				return nil, derr
-			}
-			execSession, err = sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		} else {
-			dialAddr := remoteDialAddr(r)
-			clientCfg, cerr := remoteClientConfig(r)
-			if cerr != nil {
-				return nil, cerr
-			}
-			execSession, err = sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		}
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		if internal == nil {
-			return nil, errors.New("internal ssh server is not configured")
-		}
-		minted, err := internal.MintClientConfig()
-		if err != nil {
-			return nil, err
-		}
-		conn, err := internal.Dial()
-		if err != nil {
-			// The credential was never used: drop it instead of leaving a dead
-			// entry in the server's pending map for the process lifetime.
-			internal.RevokeClientConfig(minted.User)
-			return nil, err
-		}
-		sshEndpointPublic = "internal"
-		execSession, err = sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-		if err != nil {
-			// A failed handshake consumes nothing, so the one-time credential is
-			// still pending; revoke it to keep the map bounded by live sessions.
-			internal.RevokeClientConfig(minted.User)
-			return nil, err
-		}
+	execSession, sshEndpointPublic, err := dialTransport(internal, cfg, usePty)
+	if err != nil {
+		return nil, err
 	}
 
 	buf := buffer.New(1024 * 1024)
@@ -213,6 +151,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	// First shell is a peer in shells map; its id is never equal to session id.
 	root := &ChildShell{
 		ID:          shellID,
+		Index:       1,
 		Name:        name,
 		execSession: execSession,
 		buf:         buf,
@@ -229,6 +168,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		Session: api.Session{
 			ID:          sessionID,
 			Name:        name,
+			SSHConfig:   cfg.SSHConfig,
 			Command:     cfg.Command,
 			Args:        cfg.Args,
 			Status:      api.SessionRunning,
@@ -245,6 +185,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		readerID:       rid,
 		msgMgr:         msgMgr,
 		primaryShellID: shellID,
+		nextShellIndex: 1,
 		scope:          newResourceScope(),
 	}
 
@@ -271,121 +212,72 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	return s, nil
 }
 
-// isRemote reports whether cfg selects a user-supplied SSH server instead of
-// the built-in internal one. Single source of truth used by New and the
-// create-failure logger in Manager.Create.
-func isRemote(cfg Config) bool {
-	return cfg.Remote != nil && strings.TrimSpace(cfg.Remote.Host) != ""
-}
+// dialTransport establishes the transport a session runs on and reports which
+// kind it is ("internal" or "remote", the two values published to MCP and the
+// JSON API - never a host or a credential).
+//
+// It is the branch that decides between the process's own loopback sshd and a
+// real remote target, which are the two ways a session can exist; separating it
+// keeps the session constructor about assembling a Session rather than about
+// dialing. The internal branch revokes its one-time credential on every failure
+// path: the credential is minted before the dial, and leaving it pending would
+// grow the server's map by one dead entry per failed attempt for the life of the
+// process.
+func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
+	if !isRemote(cfg) {
+		if internal == nil {
+			return nil, "", errors.New("internal ssh server is not configured")
+		}
+		minted, err := internal.MintClientConfig()
+		if err != nil {
+			return nil, "", err
+		}
+		conn, err := internal.Dial()
+		if err != nil {
+			// The credential was never used: drop it instead of leaving a dead
+			// entry in the server's pending map for the process lifetime.
+			internal.RevokeClientConfig(minted.User)
+			return nil, "", err
+		}
+		es, err := sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		if err != nil {
+			// A failed handshake consumes nothing, so the one-time credential is
+			// still pending; revoke it to keep the map bounded by live sessions.
+			internal.RevokeClientConfig(minted.User)
+			return nil, "", err
+		}
+		return es, "internal", nil
+	}
 
-// remoteDialAddr returns host:port for a remote, defaulting port 22.
-func remoteDialAddr(r *RemoteSSH) string {
+	r := cfg.Remote
 	port := r.Port
 	if port == 0 {
 		port = 22
 	}
-	return net.JoinHostPort(strings.TrimSpace(r.Host), strconv.Itoa(port))
-}
-
-// remoteDialTimeout clamps DialTimeoutSeconds to [30, 120] seconds.
-func remoteDialTimeout(r *RemoteSSH) time.Duration {
-	toSec := r.DialTimeoutSeconds
-	if toSec <= 0 {
-		toSec = 30
+	if port < 1 || port > 65535 {
+		return nil, "", fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
 	}
-	if toSec > 120 {
-		toSec = 120
-	}
-	return time.Duration(toSec) * time.Second
-}
-
-// remoteClientConfig builds the per-hop SSH client config.
-func remoteClientConfig(r *RemoteSSH) (*ssh.ClientConfig, error) {
-	return sshclient.BuildClientConfig(sshclient.DialAuth{
-		User:              strings.TrimSpace(r.User),
-		Password:          r.Password,
-		PrivateKey:        r.PrivateKey,
-		KeyPassphrase:     r.KeyPassphrase,
-		TrustUnknownHost:  r.TrustUnknownHost,
-		KnownHostsContent: r.KnownHosts,
-		DialTimeout:       remoteDialTimeout(r),
-	})
-}
-
-// buildChainClient establishes the SSH client for r, recursing through r.Jump
-// bastions (ProxyJump). The bastion's *ssh.Client.Dial opens a direct-tcpip
-// channel to the next hop; the SSH handshake to each hop runs over that channel.
-//
-// Returns the final target client plus all intermediate bastion clients (closers)
-// that must stay alive for the life of the session. On error, everything opened
-// is cleaned up.
-//
-// Per-hop host-key verification happens locally at termcp; bastions only relay TCP.
-// r.Proxy (socks5) only applies at the chain root (the deepest hop, dialed directly);
-// non-root hops get their connection from the parent bastion's Dial, so their
-// Proxy is ignored.
-func buildChainClient(r *RemoteSSH) (*ssh.Client, []io.Closer, error) {
-	addr := remoteDialAddr(r)
-	cfg, err := remoteClientConfig(r)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if r.Jump == nil {
-		conn, err := sshclient.DialConn(addr, r.Proxy, cfg.Timeout)
+	if r.Jump != nil {
+		client, closers, err := buildChainClient(r)
 		if err != nil {
-			return nil, nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+			return nil, "", err
 		}
-		c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+		es, err := sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
-			conn.Close()
-			return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
+			return nil, "", err
 		}
-		return ssh.NewClient(c, chans, reqs), nil, nil
+		return es, "remote", nil
 	}
-
-	bastion, subClosers, err := buildChainClient(r.Jump)
+	dialAddr := remoteDialAddr(r)
+	clientCfg, err := remoteClientConfig(r)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
-	conn, err := bastion.Dial("tcp", addr)
+	es, err := sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 	if err != nil {
-		bastion.Close()
-		sshclient.DrainClosers(subClosers)
-		return nil, nil, fmt.Errorf("bastion dial %s: %w", addr, err)
+		return nil, "", err
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
-	if err != nil {
-		conn.Close()
-		bastion.Close()
-		sshclient.DrainClosers(subClosers)
-		return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
-	}
-	closers := append(subClosers, io.Closer(bastion))
-	return ssh.NewClient(c, chans, reqs), closers, nil
-}
-
-// InputSource identifies who produced a keystroke sequence, which decides the
-// status recorded for those bytes in the shell's log.
-//
-// The distinction is the reason the log carries a status at all: a transcript
-// that cannot say "the agent typed this" versus "the human typed this" cannot be
-// replayed or audited meaningfully.
-type InputSource int
-
-const (
-	// InputFromAPI is a human typing through the HTTP/WebSocket API.
-	InputFromAPI InputSource = iota
-	// InputFromAI is an AI agent driving the shell through MCP.
-	InputFromAI
-)
-
-// logStatus maps an input source onto the status stored in log.jsonl.
-func (s InputSource) logStatus() api.LogStatus {
-	if s == InputFromAI {
-		return api.LogAIInput
-	}
-	return api.LogAPIInput
+	return es, "remote", nil
 }
 
 // PrimaryShellID returns the first shell created with this session.
@@ -396,82 +288,6 @@ func (s *Session) PrimaryShellID() string {
 // PrimaryShell returns the first shell if still registered.
 func (s *Session) PrimaryShell() *ChildShell {
 	return s.GetChildShell(s.primaryShellID)
-}
-
-// appendEnter returns data with the line ending appropriate for the shell family.
-func appendEnter(data []byte, crlf bool) []byte {
-	if crlf {
-		return append(append([]byte(nil), data...), '\r', '\n')
-	}
-	return append(append([]byte(nil), data...), '\n')
-}
-
-func (s *Session) readOutput(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, persist bool, maxBytes int) (string, error) {
-	data, err := s.buf.ReadLimited(ctx, readerID, timeout, maxBytes, maxLines)
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-	output := string(data)
-	if stripAnsi {
-		output = ansi.Strip(output)
-		output = ansi.Compact(output)
-	}
-	// Output is recorded at the write source (pipeToBuffer), not here, so it is
-	// recorded exactly once regardless of which reader consumes it.
-	return output, nil
-}
-
-// ReadOutput reads new output using the default reader.
-// maxBytes limits the returned output in bytes; 0 means no limit.
-func (s *Session) ReadOutput(ctx context.Context, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
-	return s.readOutput(ctx, s.readerID, timeout, stripAnsi, maxLines, true, maxBytes)
-}
-
-// ReadOutputForReader reads new output for a specific reader ID.
-// maxBytes limits the returned output in bytes; 0 means no limit.
-func (s *Session) ReadOutputForReader(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
-	return s.readOutput(ctx, readerID, timeout, stripAnsi, maxLines, true, maxBytes)
-}
-
-// ReadTerminalStream reads PTY output for a reader without appending to the byte log (high-frequency UI streaming).
-// If maxBytes > 0, each call returns at most that many raw bytes (for WebSocket/SSE chunking); 0 means one full drain to end of buffer.
-func (s *Session) ReadTerminalStream(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
-	cs := s.PrimaryShell()
-	if cs == nil {
-		return "", fmt.Errorf("session shell has exited")
-	}
-	return cs.ReadTerminalStream(ctx, readerID, timeout, stripAnsi, maxLines, maxBytes)
-}
-
-// OutputByteRange returns a copy of retained raw output bytes [start, start+max) and total retained length.
-func (s *Session) OutputByteRange(start int64, max int) ([]byte, int64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.buf == nil {
-		return nil, 0, fmt.Errorf("output buffer unavailable")
-	}
-	data, total := s.buf.ByteRange(start, max)
-	return data, total, nil
-}
-
-// OutputBaseOffset is the absolute offset of the earliest retained byte.
-func (s *Session) OutputBaseOffset() int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.buf == nil {
-		return 0
-	}
-	return s.buf.BaseOffset()
-}
-
-// BufferLen returns retained raw output length in bytes (for tail slicing).
-func (s *Session) BufferLen() int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.buf == nil {
-		return 0
-	}
-	return s.buf.Len()
 }
 
 // Terminate ends the remote process/transport and marks the session DEAD
@@ -714,34 +530,6 @@ func (s *Session) Info() api.Session {
 	return cp
 }
 
-// DefaultOutputReaderID is the first ring-buffer reader created with the session.
-// MCP read_output defaults to this ID. The Web UI loads older bytes via GET /output-range and streams new output with RegisterReader().
-func (s *Session) DefaultOutputReaderID() int {
-	return s.readerID
-}
-
-// RegisterReaderSeededFromDefault registers a new output reader seeded from the default reader
-// (atomic under buffer lock) so the web stream does not compete with MCP read_output on reader 0.
-func (s *Session) RegisterReaderSeededFromDefault() (int, error) {
-	return s.buf.NewReaderSeededFrom(s.readerID)
-}
-
-// RegisterReaderFromBufferStart registers a reader at the start of the retained transcript
-// so Web UI / SSE clients replay full in-memory scrollback after reconnect.
-func (s *Session) RegisterReaderFromBufferStart() (int, error) {
-	return s.buf.NewReaderFromStart()
-}
-
-// RegisterReader creates a new independent reader and returns its ID.
-func (s *Session) RegisterReader() (int, error) {
-	return s.buf.NewReader()
-}
-
-// UnregisterReader removes a reader by ID.
-func (s *Session) UnregisterReader(id int) {
-	s.buf.Unregister(id)
-}
-
 // HasMoreOutput returns whether the given reader has unread data.
 // SSHClient returns the underlying SSH client. All sessions (including internal/loopback)
 // use SSH transport, so this never returns nil for a running session.
@@ -752,767 +540,4 @@ func (s *Session) SSHClient() *ssh.Client {
 		return nil
 	}
 	return s.execSession.SSHClient()
-}
-
-func (s *Session) HasMoreOutput(readerID int) bool {
-	return s.buf.HasMore(readerID)
-}
-
-// ReaderCursor returns the reader's current byte position in the retained buffer.
-func (s *Session) ReaderCursor(readerID int) int64 {
-	if s.buf == nil {
-		return -1
-	}
-	return s.buf.Cursor(readerID)
-}
-
-func (s *Session) IsBufferClosed() bool {
-	return s.buf.IsClosed()
-}
-
-// ChildShell is a lightweight shell channel sharing the parent Session's SSH connection.
-//
-// It is the only terminal the API surface addresses: a session is a connection
-// container, and every read or write of terminal bytes goes to one of its shell
-// channels. The dead TerminalShell interface used to suggest a *Session could
-// stand in for one; nothing ever did that, and widening it back would reopen a
-// second write path around the approval gate.
-type ChildShell struct {
-	ID          string
-	Name        string
-	parent      *Session // nil if not yet attached to a session
-	execSession *sshclient.ExecSession
-	buf         *buffer.Buffer
-	done        chan struct{}
-	closeOnce   sync.Once
-	cleanupOnce sync.Once // guards explicit removal from the parent shell map
-	mu          sync.RWMutex
-	stdinMu     sync.Mutex
-	Status      api.SessionStatus
-	CreatedAt   int64 // Unix ms
-	ExitCode    *int
-	Rows        int
-	Cols        int
-	// enterCRLF selects the byte sequence for pipe-mode enter.
-	// It reflects the target shell family (unix vs cmd/powershell), not the
-	// termcp host OS, so cross-OS SSH sessions send the right line ending.
-	enterCRLF bool
-	mode      api.SessionMode // pty or pipe; affects press_key("enter")
-	// pipeWG tracks this shell's stdout/stderr reader goroutines so the final
-	// bytes can be drained into the buffer before it is sealed. See drainPipes.
-	pipeWG sync.WaitGroup
-	// deliberateClose is set by TerminateShell/CloseChildShell so the exit
-	// watcher does not treat an intentional channel close as SSH disconnect.
-	deliberateClose bool
-	// closed marks a shell the user explicitly closed (CloseChildShell). A
-	// closed shell is a DELETE, not a DEAD transition: it is removed from the
-	// live map AND the per-shell history snapshot. Atomic so the exit watcher
-	// and TerminateShell can check it without extra locking; see
-	// CloseChildShell and the watcher's store-then-recheck in startReaders.
-	closed atomic.Bool
-}
-
-// ParentSessionID returns the parent Session ID for this child shell.
-func (cs *ChildShell) ParentSessionID() string {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-	if cs.parent != nil {
-		return cs.parent.ID
-	}
-	return ""
-}
-
-// Info returns a snapshot of the child shell's public metadata.
-func (cs *ChildShell) Info() api.Session {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-	s := api.Session{
-		ID:        cs.ID,
-		Name:      cs.Name,
-		Mode:      cs.mode,
-		Status:    cs.Status,
-		Rows:      cs.Rows,
-		Cols:      cs.Cols,
-		CreatedAt: cs.CreatedAt,
-		UpdatedAt: clock.Now(),
-	}
-	if cs.ExitCode != nil {
-		v := *cs.ExitCode
-		s.ExitCode = &v
-	}
-	return s
-}
-
-// resolveShellCommand applies the connection's default_shell when the caller
-// sends no command of its own. It is the second step of the shell priority
-// chain (caller → profile → server-side detection); an explicit command of any
-// kind, including args-only, wins outright.
-func (s *Session) resolveShellCommand(command string, args []string) (string, []string) {
-	if strings.TrimSpace(command) == "" && len(args) == 0 && s.defaultShell != "" {
-		if f := strings.Fields(s.defaultShell); len(f) > 0 {
-			return f[0], f[1:]
-		}
-	}
-	return command, args
-}
-
-// Done returns a channel that closes when the child shell process exits.
-func (cs *ChildShell) Done() <-chan struct{} {
-	return cs.done
-}
-
-// SendTerminalBytes writes raw keystrokes to the child shell's stdin.
-// pressEnter is kept for WebUI NL flag; MCP should use PressKey instead.
-func (cs *ChildShell) SendTerminalBytes(data []byte, pressEnter bool) error {
-	return cs.SendTerminalBytesFrom(data, pressEnter, InputFromAPI)
-}
-
-// SendTerminalBytesFrom writes raw keystrokes and records the bytes in the
-// shell's log with the status of the given source.
-//
-// The bytes are logged whether or not the remote terminal echoes them: the log
-// records what was sent, which is the only way to explain a transcript where the
-// screen does not show the input (password prompts, full-screen programs).
-func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src InputSource) error {
-	cs.mu.RLock()
-	running := cs.Status == api.SessionRunning
-	cs.mu.RUnlock()
-	if !running {
-		return fmt.Errorf("process has %s, cannot send input", cs.Status)
-	}
-	var toWrite []byte
-	if pressEnter {
-		toWrite = appendEnter(data, cs.enterCRLF)
-	} else {
-		toWrite = data
-	}
-	// Whether this input submits the line. Reported rather than inferred from the
-	// output: the terminal's byte stream does not delimit lines (a redraw emits a
-	// line break and a cursor-move sequence without ending anything), so a
-	// consumer watching newlines sees a line end when the terminal only repainted.
-	// The input side knows the truth — the user pressed enter.
-	submit := submitsLine(toWrite)
-	// Record the input *before* the bytes go out, and only when it submits the
-	// line: the status display is live feedback that must not wait on the write,
-	// and a keystroke that leaves the line open is not a span of the transcript.
-	// See logInput for why a partial line writes nothing.
-	cs.logInput(src, submit)
-	cs.stdinMu.Lock()
-	_, err := cs.execSession.WriteStdin(toWrite)
-	cs.stdinMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// logInput records that input happened, and reports it to the live status
-// display.
-//
-// **Only a submitted line is recorded in the log.** A keystroke that leaves the
-// line open changes nothing: the prefix of a line is not a span of the
-// transcript, and its echo is not the shell's output either — the terminal is
-// merely repeating what was typed. Marking the moment typing started would put an
-// input bar on the timeline for a command the operator is still composing, and
-// would capture the bytes in between: output from a command still running would
-// be relabelled as part of the input, shortening the output span that follows.
-// Waiting for the enter key makes one line exactly one mark, which is also what
-// keeps the log from fragmenting: the echo of a long line arrives as dozens of
-// separate reads, every one of them carries output status, so they extend the
-// output span already open instead of cutting it into strips.
-//
-// The line's bytes reach log.bin through that echo, so nothing is written here:
-// adding the bytes too would duplicate every keystroke on replay. `log.bin` stays
-// byte-for-byte equal to what the screen showed.
-//
-// The live status display is told about *every* input event, not only submitted
-// ones: whether a line was submitted is exactly what the tab's chip needs in order
-// to stay steady while someone types. That event is reported before the write,
-// since it must not be hostage to the write succeeding, and it is the only way
-// the browser can learn that an agent — whose keystrokes never touch the page — is
-// driving.
-func (cs *ChildShell) logInput(src InputSource, submit bool) {
-	p := cs.parent
-	if p == nil {
-		return
-	}
-	if fn := p.onInput.Load(); fn != nil {
-		(*fn)(cs.ID, src, submit)
-	}
-	// A partial line is not a transcript span: report it to the chip and stop.
-	if !submit {
-		return
-	}
-	if p.msgMgr == nil {
-		return
-	}
-	_ = p.msgMgr.AppendMarkOnly(p.ID, cs.ID, src.logStatus())
-}
-
-// submitsLine reports whether a write ends the line being typed, which is what
-// the channel status chip needs and what the byte stream cannot tell it.
-//
-// It looks at the *last* byte rather than at "contains a line ending": a paste
-// of several lines arrives as one write whose final byte is the only one that
-// ends the line, and counting an interior newline as a submit would report a
-// half-typed command as submitted.
-//
-// Besides the line endings themselves, the control characters that abandon a
-// line count as ending it: ctrl+c aborts the command, ctrl+d sends EOF, ctrl+z
-// suspends it. They matter beyond elegance — a chip that only ever left "typing"
-// on an enter would sit on "typing" for the rest of the session after an
-// interrupt, which is a common thing to do to a running command.
-func submitsLine(payload []byte) bool {
-	if len(payload) == 0 {
-		return false
-	}
-	switch payload[len(payload)-1] {
-	case '\r', '\n', 0x03, 0x04, 0x1a:
-		return true
-	}
-	return false
-}
-
-// PressKey writes a named key sequence (enter, ctrl+c, arrows, …) repeat times.
-func (cs *ChildShell) PressKey(key string, repeat int) error {
-	return cs.PressKeyFrom(key, repeat, InputFromAPI)
-}
-
-// PressKeyFrom writes a named key sequence and records it with the status of the
-// given source.
-func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) error {
-	if repeat < 1 {
-		repeat = 1
-	}
-	if repeat > 20 {
-		return fmt.Errorf("repeat must be between 1 and 20, got %d", repeat)
-	}
-	seq, err := KeyBytes(key, cs.mode == api.ModePTY, cs.enterCRLF)
-	if err != nil {
-		return err
-	}
-	cs.mu.RLock()
-	running := cs.Status == api.SessionRunning
-	cs.mu.RUnlock()
-	if !running {
-		return fmt.Errorf("process has %s, cannot send input", cs.Status)
-	}
-	payload := bytes.Repeat(seq, repeat)
-	// A named key submits a line too (enter, and the ctrl sequences a line editor
-	// treats as one), so the signal comes from the bytes actually sent rather than
-	// from the key's name: the name is a label, the sequence is what the terminal
-	// receives.
-	submit := submitsLine(payload)
-	cs.logInput(src, submit)
-	cs.stdinMu.Lock()
-	_, err = cs.execSession.WriteStdin(payload)
-	cs.stdinMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// ResizePty adjusts the child shell's terminal dimensions. Only a pty shell has
-// a terminal: a pipe shell has no TTY, so this reports an error instead of
-// forwarding a meaningless window-change to the transport.
-func (cs *ChildShell) ResizePty(rows, cols int) error {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if cs.mode != api.ModePTY {
-		return fmt.Errorf("PTY resize only available in pty mode (shell mode %q)", cs.mode)
-	}
-	if cs.Status != api.SessionRunning {
-		return fmt.Errorf("process not running")
-	}
-	if err := cs.execSession.ResizePty(rows, cols); err != nil {
-		return err
-	}
-	cs.Rows = rows
-	cs.Cols = cols
-	return nil
-}
-
-// RegisterReader creates a new output reader for this child shell.
-func (cs *ChildShell) RegisterReader() (int, error) {
-	return cs.buf.NewReader()
-}
-
-// RegisterReaderFromBufferStart creates a reader seeded at the start of the retained transcript.
-func (cs *ChildShell) RegisterReaderFromBufferStart() (int, error) {
-	return cs.buf.NewReaderFromStart()
-}
-
-// UnregisterReader removes a reader by ID.
-func (cs *ChildShell) UnregisterReader(id int) {
-	cs.buf.Unregister(id)
-}
-
-// ReadTerminalStream reads PTY output for a reader without appending to the byte log.
-func (cs *ChildShell) ReadTerminalStream(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, maxBytes int) (string, error) {
-	data, err := cs.buf.ReadLimited(ctx, readerID, timeout, maxBytes, maxLines)
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-	output := string(data)
-	if stripAnsi {
-		output = ansi.Strip(output)
-		output = ansi.Compact(output)
-	}
-	return output, nil
-}
-
-// HasMoreOutput returns whether the given reader has unread data.
-func (cs *ChildShell) HasMoreOutput(readerID int) bool {
-	return cs.buf.HasMore(readerID)
-}
-
-// ReaderCursor returns the reader's current byte position in the retained buffer.
-func (cs *ChildShell) ReaderCursor(readerID int) int64 {
-	if cs.buf == nil {
-		return -1
-	}
-	return cs.buf.Cursor(readerID)
-}
-
-func (cs *ChildShell) IsBufferClosed() bool {
-	return cs.buf.IsClosed()
-}
-
-// OutputByteRange returns a copy of retained raw output bytes [start, start+max) and total retained length.
-func (cs *ChildShell) OutputByteRange(start int64, max int) ([]byte, int64, error) {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-	if cs.buf == nil {
-		return nil, 0, fmt.Errorf("output buffer unavailable")
-	}
-	data, total := cs.buf.ByteRange(start, max)
-	return data, total, nil
-}
-
-// OutputBaseOffset is the absolute offset of the earliest retained byte.
-func (cs *ChildShell) OutputBaseOffset() int64 {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-	if cs.buf == nil {
-		return 0
-	}
-	return cs.buf.BaseOffset()
-}
-
-// BufferLen returns retained raw output length in bytes.
-func (cs *ChildShell) BufferLen() int64 {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-	if cs.buf == nil {
-		return 0
-	}
-	return cs.buf.Len()
-}
-
-// TerminateShell closes the child shell's exec session channel without touching the
-// shared SSH client (CloseSessionOnly). The client lifetime is managed by the parent Session.
-func (cs *ChildShell) TerminateShell() {
-	cs.mu.Lock()
-	if cs.Status != api.SessionRunning {
-		cs.mu.Unlock()
-		return // already terminated
-	}
-	cs.deliberateClose = true
-	cs.mu.Unlock()
-
-	cs.execSession.CloseSessionOnly()
-	select {
-	case <-cs.execSession.Done():
-	case <-time.After(2 * time.Second):
-	}
-	cs.mu.Lock()
-	cs.Status = api.SessionExited
-	code := -1
-	cs.ExitCode = &code
-	cs.mu.Unlock()
-	cs.mu.RLock()
-	parent := cs.parent
-	cs.mu.RUnlock()
-	if parent != nil {
-		cs.retainHistory(parent)
-	}
-	// Flush output already handed to the process before sealing the buffer,
-	// otherwise the tail of the transcript is dropped.
-	cs.drainPipes()
-	cs.buf.Close()
-	// Ensure Done() channel is closed for any waiters (closeOnce prevents races with the exit watcher goroutine).
-	cs.closeOnce.Do(func() { close(cs.done) })
-}
-
-// pipeDrainGrace bounds how long a shell waits for the transport to hand over
-// the bytes still buffered after the process reported exit. The normal path
-// finishes in microseconds (the channel EOF follows exit-status immediately);
-// the grace only covers a peer that never closes its channel.
-const pipeDrainGrace = 2 * time.Second
-
-// pipeToBuffer pipes child shell output into the buffer.
-//
-// The loop runs until the reader reports an error (normally io.EOF once the
-// channel is closed after the process exits). It must NOT stop on cs.done: the
-// SSH session reports exit-status as soon as the process is gone, while the
-// trailing stdout may still be sitting unread in the channel buffer — bailing
-// out on cs.done truncated the tail of fast commands.
-func (cs *ChildShell) pipeToBuffer(r io.Reader) {
-	p := cs.parent
-	if p != nil {
-		p.doneWG.Add(1)
-	}
-	cs.pipeWG.Add(1)
-	go func() {
-		if p != nil {
-			defer p.doneWG.Done()
-		}
-		defer cs.pipeWG.Done()
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			if n > 0 {
-				chunk := buf[:n]
-				// With a log attached, the log is written FIRST and the offset it
-				// returns is the one the memory buffer is told to expect: a byte's
-				// position is established by the durable log and the buffer only caches
-				// it. If the two ever disagree, WriteAt reports it here instead of
-				// letting every later read silently address the wrong byte.
-				//
-				// Order also matters for crash safety: a crash between the two writes
-				// leaves a byte in the log that no reader saw, which is harmless. The
-				// reverse would leave a reader positioned past the end of the durable
-				// data.
-				var werr error
-				if p != nil && p.msgMgr != nil {
-					off, lerr := p.msgMgr.AppendOutput(p.ID, cs.ID, chunk)
-					if lerr != nil {
-						// A failed append means the durable log did not take these bytes.
-						// Keeping them only in memory would create exactly the drift this
-						// design removes, so stop the transcript rather than serve a stream
-						// that cannot be replayed.
-						slog.Error("failed to append output to log; stopping transcript",
-							"session_id", p.ID, "shell_id", cs.ID, "err", lerr)
-						return
-					}
-					werr = cs.buf.WriteAt(chunk, off)
-				} else {
-					// No persistence configured: the buffer is the only record, so it
-					// numbers its own bytes.
-					werr = cs.buf.Write(chunk)
-				}
-				// A closed buffer means the shell was already sealed; nothing more can be
-				// recorded, so stop rather than spin on a dead transcript.
-				if werr != nil {
-					slog.Error("output buffer rejected write; stopping transcript",
-						"session_id", cs.ID, "err", werr)
-					return
-				}
-				if p != nil {
-					if fn := p.onOutput.Load(); fn != nil {
-						(*fn)(cs.ID)
-					}
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-}
-
-// drainPipes waits for this shell's output pipe goroutines to consume the bytes
-// buffered in the transport, so the transcript is complete before the buffer is
-// sealed for readers. Callers must run it before cs.buf.Close().
-//
-// The wait stays bounded: a transport that never reports EOF gets its read side
-// closed (which ends the stream as soon as the peer answers, and unblocks a
-// reader stuck on a dead transport when the mux tears down).
-func (cs *ChildShell) drainPipes() {
-	drained := make(chan struct{})
-	go func() {
-		cs.pipeWG.Wait()
-		close(drained)
-	}()
-	select {
-	case <-drained:
-		return
-	case <-time.After(pipeDrainGrace):
-	}
-	slog.Debug("output pipe still open after process exit; closing readers", "child_shell_id", cs.ID)
-	if cs.execSession != nil {
-		cs.execSession.CloseReaders()
-	}
-	select {
-	case <-drained:
-	case <-time.After(pipeDrainGrace):
-		slog.Debug("output pipe did not drain; sealing buffer anyway", "child_shell_id", cs.ID)
-	}
-}
-
-// retainHistory keeps the shell's final metadata for the retained per-shell
-// tabs, unless the shell was explicitly closed — closed shells are deleted,
-// never retained.
-func (cs *ChildShell) retainHistory(p *Session) {
-	if cs.closed.Load() {
-		return
-	}
-	p.shellHistory.Store(cs.ID, cs.Info())
-}
-
-// notifyChildChange invokes the on-child-change UI callback. The callback is
-// assigned by Manager.Create after New returns, possibly while root-shell exit
-// watchers are already running; it is an atomic pointer, so reads never race
-// the assignment (a watcher firing in the assignment window just sees nil).
-func (s *Session) notifyChildChange() {
-	if fn := s.onChildChange.Load(); fn != nil {
-		(*fn)()
-	}
-}
-
-// removeChildShell deletes a shell from the parent's map and triggers UI notification.
-func (s *Session) removeChildShell(id string) {
-	if fn := s.onShellClose.Load(); fn != nil {
-		(*fn)(id)
-	}
-	s.shells.Delete(id)
-	s.notifyChildChange()
-}
-
-// startChildReaders starts the stdout/stderr pipe goroutines and exit watcher for a child shell.
-func (cs *ChildShell) startReaders() {
-	cs.pipeToBuffer(cs.execSession.Stdout)
-	cs.pipeToBuffer(cs.execSession.Stderr)
-
-	if p := cs.parent; p != nil {
-		p.watchWG.Add(1)
-	}
-	go func() {
-		if p := cs.parent; p != nil {
-			defer p.watchWG.Done()
-		}
-		<-cs.execSession.Done()
-		cs.closeOnce.Do(func() { close(cs.done) })
-		cs.mu.Lock()
-		cs.Status = api.SessionExited
-		code := cs.execSession.ExitCode()
-		cs.ExitCode = &code
-		cs.mu.Unlock()
-		// Retain this shell's final metadata for the retained per-shell tabs —
-		// unless the user explicitly closed it. Store-then-recheck: a manual close
-		// racing this store re-deletes the entry below, so a closed shell can
-		// never survive in the retained snapshot (no lock needed: CloseChildShell
-		// always sets closed before its purge).
-		if p := cs.parent; p != nil {
-			cs.retainHistory(p)
-			if cs.closed.Load() {
-				p.shellHistory.Delete(cs.ID)
-			}
-		}
-		// Drain the output still buffered in the transport (exit-status can
-		// arrive ahead of the last stdout bytes) before sealing the buffer.
-		cs.drainPipes()
-		cs.buf.Close()
-		// Keep the exited ChildShell in the parent map until explicit close/Delete.
-		// This preserves its closed buffer so shell_output and WebUI can drain
-		// final output after a fast pipe command has already exited.
-		cs.mu.RLock()
-		deliberate := cs.deliberateClose
-		reparent := cs.parent
-		// Snapshot the exit code under the lock: a concurrent
-		// CloseChildShell/TerminateShell writes cs.ExitCode while the watcher runs.
-		var exitCode *int
-		if cs.ExitCode != nil {
-			v := *cs.ExitCode
-			exitCode = &v
-		}
-		cs.mu.RUnlock()
-		if reparent != nil {
-			if fn := reparent.onShellExit.Load(); fn != nil {
-				(*fn)(cs.ID, exitCode)
-			}
-			reparent.notifyChildChange()
-		}
-		// If the shell ended due to SSH disconnect (not deliberate close and not
-		// clean process exit), tear down the session. exitOnce ensures once.
-		if reparent != nil && !deliberate && cs.execSession.Aborted() {
-			slog.Debug("session DEAD via transport abort", "session_id", reparent.ID, "child_shell_id", cs.ID)
-			reparent.markDeadWithMessage("❌ SSH connection lost — network disconnected")
-		}
-		// A shell ending — cleanly or not — never ends the container. The session
-		// owns the SSH transport, and that transport is what carries forwards, SFTP
-		// and new shell channels; a run-to-exit pipe command finishing (or every
-		// shell being closed) must leave all of those working. Only an aborted
-		// transport, session_terminate, or manager shutdown flips a session DEAD.
-		slog.Debug("child shell exited", "child_shell_id", cs.ID, "exit_code", code)
-	}()
-}
-
-// CreateChildShell opens a new SSH session channel on the parent's existing SSH connection.
-func (s *Session) CreateChildShell(command string, args []string, pty bool, rows, cols int, name string) (*ChildShell, error) {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
-
-	s.mu.RLock()
-	running := s.Status == api.SessionRunning
-	s.mu.RUnlock()
-	if s.closing || !running {
-		return nil, fmt.Errorf("session has exited")
-	}
-
-	sshClient := s.SSHClient()
-	if sshClient == nil {
-		return nil, fmt.Errorf("sub-shell multiplexing requires an SSH connection; internal loopback sessions do not support multiple channels")
-	}
-	id := uuid.New().String()[:12]
-	if name == "" {
-		name = fmt.Sprintf("shell-%s", id)
-	}
-
-	// Shell resolution: the caller's command, else the profile's default_shell.
-	// When both are empty the transport decides — a pty shell asks the server for
-	// its login shell (see sshclient.startSession); a pipe shell has no such
-	// request and is refused there rather than guessed from the client's PATH.
-	command, args = s.resolveShellCommand(command, args)
-
-	execSession, err := sshclient.StartWithClient(sshClient, command, args, pty, rows, cols)
-	if err != nil {
-		return nil, fmt.Errorf("create child shell: %w", err)
-	}
-
-	buf := buffer.New(1024 * 1024)
-	buf.NewReader() // default reader 0 for MCP read_output
-
-	mode := api.ModePipe
-	if pty {
-		mode = api.ModePTY
-	}
-	cs := &ChildShell{
-		ID:          id,
-		Name:        name,
-		parent:      s,
-		execSession: execSession,
-		buf:         buf,
-		done:        make(chan struct{}),
-		Status:      api.SessionRunning,
-		CreatedAt:   clock.Now(),
-		Rows:        rows,
-		Cols:        cols,
-		enterCRLF:   s.enterCRLF,
-		mode:        mode,
-	}
-
-	s.shells.Store(id, cs)
-	s.shellHistory.Store(id, cs.Info())
-	cs.startReaders()
-	s.notifyChildChange()
-
-	slog.Debug("child shell created", "parent_id", s.ID, "child_shell_id", id)
-	return cs, nil
-}
-
-// CloseChildShell terminates and removes a child shell from the parent.
-// Manual close is a DELETE, not a DEAD transition: the shell is dropped from
-// the live map, the per-shell history snapshot, and any persisted restore, so
-// it never reappears as a dead/"end" tab. Closing a shell — even the last one —
-// leaves the container running: the session owns the SSH transport, so forwards,
-// SFTP and new shells keep working with zero live shells.
-func (s *Session) CloseChildShell(id string) error {
-	v, ok := s.shells.Load(id)
-	if !ok {
-		return fmt.Errorf("child shell %q not found", id)
-	}
-	cs := v.(*ChildShell)
-
-	// Mark closed first: TerminateShell and the exit watcher never retain a
-	// closed shell, and the watcher's store-then-recheck (startReaders) deletes
-	// any entry that raced the purge below. No lock needed between this store,
-	// the purge, and the watcher: closed is an atomic bool, and the purge is
-	// ordered after it (program order + atomic release/acquire).
-	cs.closed.Store(true)
-	cs.TerminateShell()
-	cs.cleanupOnce.Do(func() {
-		s.shellHistory.Delete(id)
-		s.removeChildShell(id)
-	})
-	slog.Debug("child shell closed", "parent_id", s.ID, "child_shell_id", id)
-	return nil
-}
-
-// GetChildShell returns a child shell by ID, or nil if not found.
-func (s *Session) GetChildShell(id string) *ChildShell {
-	v, _ := s.shells.Load(id)
-	if v == nil {
-		return nil
-	}
-	return v.(*ChildShell)
-}
-
-// ListChildShells returns public metadata for all shells of this session.
-func (s *Session) ListChildShells() []api.Session {
-	type entry struct {
-		info      api.Session
-		createdAt int64
-	}
-	var entries []entry
-	s.shells.Range(func(_, v any) bool {
-		cs := v.(*ChildShell)
-		entries = append(entries, entry{info: cs.Info(), createdAt: cs.CreatedAt})
-		return true
-	})
-	sort.Slice(entries, func(i, j int) bool { return entries[i].createdAt < entries[j].createdAt })
-	out := make([]api.Session, len(entries))
-	for i, e := range entries {
-		out[i] = e.info
-	}
-	return out
-}
-
-// ShellByIndex resolves a shell channel by its 1-based creation order — the
-// numbering the Web UI shows as shell-1/shell-2 tabs and that termcp://
-// locators use (see internal/locator). index <= 0 means the primary (first)
-// shell. ok is false when the session has no such shell (including a session
-// whose primary shell has already exited).
-func (s *Session) ShellByIndex(index int) (*ChildShell, bool) {
-	if index <= 0 {
-		cs := s.PrimaryShell()
-		return cs, cs != nil
-	}
-	all := s.ListChildShells()
-	if idx := index - 1; idx >= 0 && idx < len(all) {
-		cs := s.GetChildShell(all[idx].ID)
-		return cs, cs != nil
-	}
-	return nil, false
-}
-
-// SnapshotShells returns the last-known per-shell metadata (still populated for
-// shells dropped from the live map on exit), sorted by creation time. This is
-// what gets persisted and what a DEAD session renders into its tabs.
-func (s *Session) SnapshotShells() []api.Session {
-	var out []api.Session
-	s.shellHistory.Range(func(_, v any) bool {
-		out = append(out, v.(api.Session))
-		return true
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
-	return out
-}
-
-// ShellsForView returns shell metadata for session rendering. Running sessions
-// report only their live channel children: naturally exited shells stay in the
-// live map for output draining, and deliberately closed shells are deleted, so
-// there is never a snapshot fallback here — a closed shell can never reappear
-// as a dead/"end" tab in a live session. DEAD/restored sessions fall back to
-// the retained shell snapshot (natural exits / transport aborts only) so their
-// tabs survive transport teardown or a restart.
-func (s *Session) ShellsForView() []api.Session {
-	s.mu.RLock()
-	status := s.Status
-	s.mu.RUnlock()
-	if status == api.SessionRunning {
-		return s.ListChildShells()
-	}
-	return s.SnapshotShells()
 }

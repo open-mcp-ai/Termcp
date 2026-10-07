@@ -1,21 +1,15 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,7 +25,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/logansi"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
-	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -86,59 +79,6 @@ func printVersion(w io.Writer) {
 		fmt.Fprintf(w, " built %s", date)
 	}
 	fmt.Fprintln(w)
-}
-
-func bindHostIsAll(bind string) bool {
-	switch strings.TrimSpace(bind) {
-	case "", "0.0.0.0", "::", "[::]":
-		return true
-	default:
-		return false
-	}
-}
-
-// nonLoopbackUnicastIPv4s lists unique IPv4 addresses on up, non-loopback interfaces.
-func nonLoopbackUnicastIPv4s() []string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	seen := make(map[string]bool)
-	var out []string
-	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := ifi.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			var ip net.IP
-			switch v := a.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			default:
-				continue
-			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			v4 := ip.To4()
-			if v4 == nil {
-				continue
-			}
-			s := v4.String()
-			if !seen[s] {
-				seen[s] = true
-				out = append(out, s)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 func logHTTPMain(base string, port int, lanIPv4 []string) {
@@ -337,7 +277,19 @@ func main() {
 		runDaemonFront(cfg, ensure, bridging, idleTimeoutArg, idleTimeout, target)
 		return
 	}
+	runServer(cfg, idleTimeoutArg, idleTimeout, isDaemonChild)
+}
 
+// runServer is the serving half of the command: it builds the runtime - auth,
+// logging, the internal sshd, the storage and managers, the MCP server and the
+// Web UI - wires the parts that have to know about each other, and then serves
+// until a signal or a daemon idle countdown asks it to stop.
+//
+// It is separate from main because the two halves have different failure models.
+// main only classifies the command line and prints to stderr; from here on the
+// flags are already accepted, so messages go through slog and a startup failure
+// exits the process - there is nothing sensible left to fall back to.
+func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Duration, isDaemonChild bool) {
 	var verifier *auth.Verifier
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
 		v, err := auth.NewVerifier(cfg.AuthToken, cfg.AuthHash)
@@ -514,438 +466,6 @@ func main() {
 		slog.Error("failed to start MCP server", "err", err)
 		os.Exit(1)
 	}
-}
-
-// runDaemonBrief is the bare subcommand's output: the actions only, with a
-// pointer at the detailed help behind `termcp daemon --help`. It explains and
-// exits; it never starts or stops anything.
-func runDaemonBrief(w io.Writer) {
-	daemonHelpHeader(w)
-	fmt.Fprintln(w, "  termcp daemon status   report the instance answering at --host/--port")
-	fmt.Fprintln(w, "  termcp daemon start    make sure one is running there")
-	fmt.Fprintln(w, "  termcp daemon stop     stop the instance gracefully over HTTP")
-	fmt.Fprintln(w, "  termcp daemon stdio    ensure an instance there, then bridge stdin/stdout MCP to it")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run `termcp daemon --help` for the parameters and details.")
-}
-
-// daemonHelpHeader is the opening shared by the brief index and the detailed
-// help: the title, and the line that pins where the action goes.
-func daemonHelpHeader(w io.Writer) {
-	fmt.Fprintln(w, "termcp daemon - manage the instance answering at --host/--port")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Actions (the action goes right after the subcommand, before its flags):")
-}
-
-// runDaemonHelp is the detailed help behind `termcp daemon --help` (and the
-// help word): the actions and the parameters that influence them. Like the
-// brief form it only explains, it never starts or stops anything by itself.
-func runDaemonHelp(w io.Writer) {
-	daemonHelpHeader(w)
-	fmt.Fprintln(w, "  termcp daemon status   report the instance answering at --host/--port")
-	fmt.Fprintln(w, "  termcp daemon start    make sure one is running there: reuse whatever answers")
-	fmt.Fprintln(w, "                         (even an instance started manually), else launch a")
-	fmt.Fprintln(w, "                         detached one and wait until it serves")
-	fmt.Fprintln(w, "  termcp daemon stop     stop the instance gracefully over HTTP")
-	fmt.Fprintln(w, "  termcp daemon stdio    ensure an instance like start does, then keep this")
-	fmt.Fprintln(w, "                         process on as the stdio bridge to it")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Every action goes through the endpoint itself, so an instance is found")
-	fmt.Fprintln(w, "wherever it listens, no matter which data dir or platform started it. Only")
-	fmt.Fprintln(w, "instances started as daemons (termcp daemon start, termcp daemon stdio) accept")
-	fmt.Fprintln(w, "the stop; a manually started one is reported as running and must be stopped")
-	fmt.Fprintln(w, "where it was started.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Actions other than stdio are non-blocking: they run, report, and exit. stdio")
-	fmt.Fprintln(w, "turns the process into the bridge and blocks; a running bridge counts as a")
-	fmt.Fprintln(w, "connection, so the instance it fronts stays up for as long as the bridge lives.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Parameters that influence these commands:")
-	fmt.Fprintln(w, "  --host, --port          the endpoint itself (http://127.0.0.1:18765 by")
-	fmt.Fprintln(w, "                          default): where an instance listens and where every")
-	fmt.Fprintln(w, "                          action and the bridge address it. A wildcard bind")
-	fmt.Fprintln(w, "                          such as 0.0.0.0 or :: is reached through loopback.")
-	fmt.Fprintln(w, "  --auth-token, --auth-hash")
-	fmt.Fprintln(w, "                          credential presented to the endpoint, matching what")
-	fmt.Fprintln(w, "                          the instance expects ($TERMCP_AUTH_TOKEN /")
-	fmt.Fprintln(w, "                          $TERMCP_AUTH_HASH); a hash-configured instance also")
-	fmt.Fprintln(w, "                          accepts the hash string itself.")
-	fmt.Fprintln(w, "  --idle-timeout          (start, stdio) how long the launched instance may sit")
-	fmt.Fprintln(w, "                          idle before exiting on its own: 30s by default for")
-	fmt.Fprintln(w, "                          stdio, none for start; 0 disables.")
-	fmt.Fprintln(w, "  --data-dir              (start, stdio) where the launched instance keeps its")
-	fmt.Fprintln(w, "                          data; its log is written to <data-dir>/termcp.log.")
-	fmt.Fprintln(w, "  --assets, --log-level, --no-internal, --mcp-manage-ssh-configs,")
-	fmt.Fprintln(w, "  --mcp-defer-tools, --disable-auth")
-	fmt.Fprintln(w, "                          (start, stdio) inherited by the launched instance, so")
-	fmt.Fprintln(w, "                          it serves what `termcp` with the same flags would.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "The stdio bridge is a standalone command: a stdio-to-HTTP MCP bridge between")
-	fmt.Fprintln(w, "this process's stdin/stdout and the termcp HTTP MCP endpoint at --host/--port")
-	fmt.Fprintln(w, "(http://127.0.0.1:18765/stream by default; an instance must be answering")
-	fmt.Fprintln(w, "there). It blocks until its input closes. The daemon subcommand's stdio")
-	fmt.Fprintln(w, "action is the combined form that first makes sure an instance does:")
-	fmt.Fprintln(w, "  termcp stdio                 standalone: relay stdin/stdout to the endpoint")
-	fmt.Fprintln(w, "  termcp daemon stdio          combined: ensure an instance first, then relay")
-	fmt.Fprintln(w, "The endpoint is the word right after stdio (or after the daemon action);")
-	fmt.Fprintln(w, "without one the default above is bridged. A path form targets the same")
-	fmt.Fprintln(w, "instance and picks the transport - /sse or /stream (bare words work too);")
-	fmt.Fprintln(w, "a full http(s) URL targets any MCP HTTP endpoint, one whose path ends in")
-	fmt.Fprintln(w, "/sse speaking the SSE transport:")
-	fmt.Fprintln(w, "  termcp stdio /sse            the same instance, over the SSE transport")
-	fmt.Fprintln(w, "  termcp stdio <http(s) URL>   any endpoint, e.g. a remote instance")
-	fmt.Fprintln(w, "  termcp daemon stdio sse      combined, the same instance, over SSE")
-	fmt.Fprintln(w, "Only an endpoint on the --host/--port instance combines with the daemon")
-	fmt.Fprintln(w, "action. The bridge presents the same --auth-token / --auth-hash credential.")
-}
-
-// runDaemonManagement implements the daemon stop and status actions; both
-// address the configured endpoint over HTTP only.
-func runDaemonManagement(cfg *config.Config, stop bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	url := daemon.BaseURL(cfg.Host, cfg.Port)
-	if stop {
-		res, err := daemon.StopEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
-			os.Exit(1)
-		}
-		switch {
-		case res.Stopped:
-			fmt.Printf("termcp daemon stopped (pid %d)\n", res.PID)
-		case res.NotDaemon:
-			fmt.Println("termcp daemon: not running")
-			fmt.Printf("  note:    a manually started instance answers at %s; stop it where it was started\n", url)
-		default:
-			fmt.Println("termcp daemon: not running")
-		}
-		return
-	}
-	rep := daemon.InspectEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
-	switch {
-	case rep.Info.Daemon:
-		fmt.Println("termcp daemon: running")
-		fmt.Printf("  pid:     %d\n", rep.Info.PID)
-		fmt.Printf("  url:     %s\n", url)
-		if rep.Info.Version != "" {
-			fmt.Printf("  version: %s\n", rep.Info.Version)
-		}
-		if rep.Info.Log != "" {
-			fmt.Printf("  log:     %s\n", rep.Info.Log)
-		}
-	case rep.Unauthorized:
-		fmt.Println("termcp daemon: running")
-		fmt.Printf("  url:     %s\n", url)
-		fmt.Println("  note:    authentication is required for details (pass --auth-token or --auth-hash)")
-	case rep.Termcp:
-		// A manually started instance serves the endpoint but has no
-		// background lifecycle to report.
-		fmt.Println("termcp daemon: running (manually started instance — not a background daemon)")
-		if rep.Info.PID > 0 {
-			fmt.Printf("  pid:     %d\n", rep.Info.PID)
-		}
-		fmt.Printf("  url:     %s\n", url)
-		if rep.Info.Version != "" {
-			fmt.Printf("  version: %s\n", rep.Info.Version)
-		}
-	default:
-		fmt.Println("termcp daemon: not running")
-	}
-}
-
-// termcp's two MCP HTTP endpoints, and where the stdio bridge lands by default.
-const (
-	mcpStreamPath = "/stream" // streamable HTTP, POST/GET/DELETE on one path
-	mcpSSEPath    = "/sse"    // SSE transport: GET event stream, JSON-RPC to the endpoint event's URL
-)
-
-// bridgeTarget is the resolved stdio-form destination.
-type bridgeTarget struct {
-	URL string // full endpoint URL the bridge speaks to
-	SSE bool   // the endpoint speaks the SSE transport
-}
-
-// resolveBridgeTarget turns the stdio form's optional value into the endpoint
-// the bridge dials. Empty means the default endpoint of the instance at origin.
-// Path forms — /sse, /stream, or the bare words — address that same instance;
-// a full http(s) URL addresses any endpoint, and one whose path ends in /sse
-// selects the SSE transport.
-func resolveBridgeTarget(origin, raw string) (bridgeTarget, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return bridgeTarget{URL: origin + mcpStreamPath}, nil
-	}
-	if !strings.Contains(raw, "://") {
-		path := raw
-		if !strings.HasPrefix(path, "/") {
-			path = "/" + path
-		}
-		switch path {
-		case mcpStreamPath:
-			return bridgeTarget{URL: origin + mcpStreamPath}, nil
-		case mcpSSEPath:
-			return bridgeTarget{URL: origin + mcpSSEPath, SSE: true}, nil
-		}
-		return bridgeTarget{}, fmt.Errorf("invalid endpoint %q for stdio: expected an http(s) URL, or /sse or /stream for the instance at --host/--port", raw)
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return bridgeTarget{}, fmt.Errorf("invalid endpoint %q for stdio: expected an http(s) URL, or /sse or /stream for the instance at --host/--port", raw)
-	}
-	return bridgeTarget{URL: u.String(), SSE: strings.HasSuffix(strings.TrimRight(u.Path, "/"), mcpSSEPath)}, nil
-}
-
-// targetOnLocalInstance reports whether a bridge target addresses the instance
-// at --host/--port — the one `daemon stdio` can ensure, and the one the
-// friendly "start one first" preflight speaks about. Loopback spellings of the
-// same address count as the same instance.
-func targetOnLocalInstance(cfg *config.Config, target string) bool {
-	u, err := url.Parse(target)
-	if err != nil {
-		return false
-	}
-	if u.Port() != strconv.Itoa(cfg.Port) {
-		return false
-	}
-	want := strings.ToLower(daemon.ConnectHost(cfg.Host))
-	got := strings.ToLower(u.Hostname())
-	if got == want {
-		return true
-	}
-	return loopbackHosts[got] && loopbackHosts[want]
-}
-
-// loopbackHosts lists the spellings of "this machine" that address the same
-// instance when comparing bridge targets.
-var loopbackHosts = map[string]bool{"127.0.0.1": true, "localhost": true, "::1": true}
-
-// runDaemonFront implements `daemon start`, `daemon stdio` and the stdio
-// subcommand: ensure the background instance if asked, then optionally relay
-// stdio to it. In the bridge forms all status lines go to stderr, because
-// stdout carries MCP messages only.
-func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg string, idleTimeout time.Duration, target bridgeTarget) {
-	out := io.Writer(os.Stdout)
-	if stdio {
-		out = os.Stderr
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	if ensureDaemon {
-		// The two launcher actions differ in lifecycle: the stdio action's
-		// instance belongs to the bridge session and gets the default countdown
-		// (the bridge keeps it alive while attached), while a `daemon start`
-		// instance is meant to run until stopped — or until an explicit
-		// --idle-timeout says otherwise.
-		spawnIdle := idleTimeoutArg
-		if spawnIdle == "" {
-			spawnIdle = "0"
-			if stdio {
-				spawnIdle = daemon.DefaultIdleTimeout.String()
-			}
-		}
-		res, err := daemon.Ensure(ctx, cfg, spawnIdle)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
-			os.Exit(1)
-		}
-		verb := "already running"
-		if res.Spawned {
-			verb = "started"
-		}
-		if res.Info.PID > 0 {
-			fmt.Fprintf(out, "termcp daemon %s (pid %d)\n", verb, res.Info.PID)
-		} else {
-			fmt.Fprintf(out, "termcp daemon %s\n", verb)
-		}
-		fmt.Fprintf(out, "  url:  %s\n", daemon.BaseURL(cfg.Host, cfg.Port))
-		switch {
-		case res.Spawned:
-			fmt.Fprintf(out, "  log:  %s\n", daemon.LogPath(cfg.DataDir))
-			fmt.Fprintf(out, "  %s\n", daemonIdleHint(stdio, idleTimeoutArg, idleTimeout))
-		case res.Unauthorized:
-			if stdio {
-				// The bridge would 401 on every message; say why before it starts.
-				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
-				os.Exit(1)
-			}
-			fmt.Fprintln(out, "  note: authentication is required for details (pass --auth-token or --auth-hash)")
-		case !res.Info.Daemon && res.Info.PID > 0:
-			fmt.Fprintln(out, "  note: the instance was started manually, so it has no idle countdown; stop it where it was started")
-		case res.Info.Log != "":
-			fmt.Fprintf(out, "  log:  %s\n", res.Info.Log)
-		}
-	}
-
-	if stdio {
-		// The instance's *actual* countdown decides how often the bridge must
-		// ping to count as activity. Ask it (GET /api/daemon reports the
-		// effective value) instead of assuming the default: a pre-existing
-		// instance started with --idle-timeout 6s would otherwise die under a
-		// bridge that pings every 10s. A manually started instance reports 0 (no
-		// countdown), which needs no pings at all.
-		keepAlive := bridgeKeepAlive(ensureDaemon, idleTimeoutArg, idleTimeout)
-		if targetOnLocalInstance(cfg, target.URL) {
-			rep := daemon.InspectEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
-			if !ensureDaemon {
-				// The bridge never starts anything on its own: say so plainly when
-				// nothing answers, instead of failing mid-handshake. A custom
-				// remote endpoint is the bridge's own failure to report.
-				if !rep.Termcp {
-					fmt.Fprintf(os.Stderr, "stdio bridge: no Termcp instance answers at %s; start one first: termcp daemon start\n", daemon.BaseURL(cfg.Host, cfg.Port))
-					os.Exit(1)
-				}
-			}
-			if rep.Unauthorized {
-				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
-				os.Exit(1)
-			}
-			if rep.Termcp {
-				keepAlive = keepAliveFor(rep.Info.IdleTimeout())
-			}
-		}
-		if err := stdioBridge(ctx, cfg, target, keepAlive); err != nil && !errors.Is(err, context.Canceled) {
-			fmt.Fprintf(os.Stderr, "stdio bridge: %v\n", err)
-			os.Exit(1)
-		}
-	}
-}
-
-// keepAliveFor is the ping interval at which a streamable bridge counts as a
-// live connection against a countdown of the given length. A third of the
-// countdown leaves room for a slow round trip; 250ms is the floor so a very
-// short countdown still gets a usable interval. A disabled countdown (0) needs
-// no pings.
-func keepAliveFor(idle time.Duration) time.Duration {
-	if idle <= 0 {
-		return 0
-	}
-	if iv := idle / 3; iv >= 250*time.Millisecond {
-		return iv
-	}
-	return 250 * time.Millisecond
-}
-
-// daemonIdleHint describes how the instance will end. The default depends on
-// the launcher: the stdio action's instance counts down once the bridge goes
-// away, while a `daemon start` instance runs until stopped.
-func daemonIdleHint(stdio bool, idleTimeoutArg string, idleTimeout time.Duration) string {
-	switch {
-	case idleTimeoutArg != "" && idleTimeout == 0:
-		return "idle auto-exit disabled (--idle-timeout 0)"
-	case idleTimeoutArg != "":
-		return fmt.Sprintf("exits after %s with no connections", idleTimeout)
-	case stdio:
-		return fmt.Sprintf("exits after %s with no connections (--idle-timeout adjusts this, 0 disables)", daemon.DefaultIdleTimeout)
-	default:
-		return "no idle auto-exit: runs until stopped (--idle-timeout adds a countdown)"
-	}
-}
-
-// bridgeAuthHint is the one wording for "the endpoint wants a credential this
-// invocation does not hold": both pre-bridge checks — the instance that was just
-// ensured and the one that was already there — must say the same thing.
-func bridgeAuthHint(cfg *config.Config) string {
-	return fmt.Sprintf("stdio bridge: the instance at %s requires authentication: pass its token with --auth-token, or its hash with --auth-hash", daemon.BaseURL(cfg.Host, cfg.Port))
-}
-
-// splitStdioEndpoint pulls the bridge's optional endpoint value — the word
-// right after `stdio` (the subcommand or the daemon action), as in `termcp
-// daemon stdio sse` — out of rest. Anything flag-shaped (or absent) leaves
-// the default endpoint.
-func splitStdioEndpoint(rest []string) (endpoint string, out []string) {
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
-		return rest[0], rest[1:]
-	}
-	return "", rest
-}
-
-// stdioBridge relays the process's stdio MCP stream to the target endpoint,
-// presenting whichever credential the configuration holds (see
-// daemon.Credential).
-func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, keepAlive time.Duration) error {
-	return mcpbridge.Run(ctx, mcpbridge.Config{
-		URL:       target.URL,
-		SSE:       target.SSE,
-		Token:     daemon.Credential(cfg),
-		KeepAlive: keepAlive,
-		In:        os.Stdin,
-		Out:       os.Stdout,
-		Err:       os.Stderr,
-	})
-}
-
-// bridgeKeepAlive is the ping interval to assume when the instance's actual
-// countdown is unknown: the effective --idle-timeout when this invocation
-// started the instance, the default otherwise. runDaemonFront prefers the
-// value the instance itself reports (see daemon.InstanceInfo.IdleTimeoutMS) and
-// only falls back here for an endpoint it could not probe — a remote one, or a
-// build predating the field.
-func bridgeKeepAlive(ensureDaemon bool, idleTimeoutArg string, idleTimeout time.Duration) time.Duration {
-	timeout := daemon.DefaultIdleTimeout
-	if ensureDaemon && idleTimeoutArg != "" {
-		timeout = idleTimeout
-	}
-	return keepAliveFor(timeout)
-}
-
-func ensureWritableDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	probe := filepath.Join(dir, ".write-probe")
-	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	f.Close()
-	return os.Remove(probe)
-}
-
-func runGenAuthHash(args []string) error {
-	var token string
-	switch len(args) {
-	case 0:
-		t, err := readTokenFromStdin()
-		if err != nil {
-			return err
-		}
-		token = t
-	case 1:
-		token = args[0]
-	default:
-		return errors.New("too many arguments: expected at most one token")
-	}
-	if token == "" {
-		return errors.New("token must not be empty")
-	}
-	hash, err := auth.Hash(token)
-	if err != nil {
-		return err
-	}
-	fmt.Println(hash)
-	return nil
-}
-
-func readTokenFromStdin() (string, error) {
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Fprint(os.Stderr, "Token: ")
-		b, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr)
-		if err != nil {
-			return "", fmt.Errorf("read token: %w", err)
-		}
-		return string(b), nil
-	}
-	b, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return "", fmt.Errorf("read token from stdin: %w", err)
-	}
-	return strings.TrimRight(string(b), "\r\n"), nil
 }
 
 func buildLogHandler(cfg *config.Config) slog.Handler {
