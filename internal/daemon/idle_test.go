@@ -119,6 +119,25 @@ func TestIdleWatcherDisabled(t *testing.T) {
 	}
 }
 
+// Arming a timer starts it, so the callback can run expire() before
+// NewIdleWatcher has finished setting up the two fields expire() writes (timer,
+// gen). This drives the collision on purpose: a one-nanosecond countdown
+// guarantees the callback lands inside the construction window.
+func TestIdleWatcherConstructionArmsUnderLock(t *testing.T) {
+	for range 25 {
+		fired := make(chan struct{})
+		watcher := NewIdleWatcher(time.Nanosecond, func() { close(fired) })
+		if watcher.timeout != time.Nanosecond {
+			t.Fatalf("watcher recorded timeout %v", watcher.timeout)
+		}
+		select {
+		case <-fired:
+		case <-time.After(3 * time.Second):
+			t.Fatal("countdown never fired")
+		}
+	}
+}
+
 // The daemon probe is exempt: a status query reports on idleness, so it must
 // never count as activity. Probing every 50ms against a 200ms timeout must
 // still let the countdown (armed when the watcher was created) fire.

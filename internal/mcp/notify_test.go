@@ -12,11 +12,14 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// startTestSession starts a session whose shell stays alive and prints nothing,
+// so a rule registered here survives until the test unregisters it. See
+// testShellIdleArgs for why an exiting or chatty shell would not do.
 func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {
 	t.Helper()
 	res, err := s.handleStartSession(context.Background(), makeRequest(map[string]any{
 		"command":    testShell(),
-		"args":       testShellEchoArgs("notify_ok"),
+		"args":       testShellIdleArgs(),
 		"mode":       "pipe",
 		"ssh_config": "internal",
 	}))

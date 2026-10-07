@@ -314,6 +314,39 @@ func TestServer_SignalInterrupt(t *testing.T) {
 	}
 }
 
+// A signal that arrives before the session handler registers its channel is
+// buffered by the library and replayed from a goroutine that reads the slot
+// WITHOUT the session lock, so teardown must never write that slot again. The
+// order here makes the collision deterministic: signalling before exec leaves the
+// signals buffered, and registering the channel starts the replay.
+func TestServer_BufferedSignalReplayDoesNotRaceTeardown(t *testing.T) {
+	srv := New()
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	config := mintCfg(t, srv)
+	client := dialServer(t, srv, config)
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for range 8 {
+		if err := session.Signal(ssh.SIGTERM); err != nil {
+			t.Fatalf("signal before exec: %v", err)
+		}
+	}
+	if err := session.Start(testShellEchoCommand("buffered-signal")); err != nil {
+		t.Fatal(err)
+	}
+	_ = session.Wait() // let the handler reach the teardown that used to write the slot
+}
+
 func TestServer_ProcessStateNil(t *testing.T) {
 	srv := New()
 	if err := srv.Start(); err != nil {

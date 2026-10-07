@@ -236,11 +236,40 @@ func (s *Server) handleSession(sess ssh.Session) {
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 
-	// Forward signals from client to local process. Started after cmd.Start() so
-	// cmd.Process is already set — reading it here before Start() would race with
-	// the concurrent write in Start().
+	// Forward signals from client to local process.
+	//
+	// The channel is registered once and never unregistered. The library reads the
+	// slot it lives in from two places — the request loop, under the session lock,
+	// and a replay goroutine it starts when a signal arrived before a channel was
+	// registered — and that replay goroutine reads it WITHOUT the lock
+	// (charmbracelet/ssh session.go, Signals). So the sess.Signals(nil) this code
+	// used to do at teardown had no ordering against the read at all, which is the
+	// pair the detector reported. Buffering is routine, not exotic: a client can
+	// send its signal between exec being accepted and this line.
+	//
+	// Since the slot is never rewritten, something must keep reading the channel or
+	// the request loop blocks sending into it while holding the session lock. So the
+	// forwarder starts here, before the child exists, and drains until the
+	// connection is gone — the only moment the library stops sending. It receives
+	// the process through an atomic because Start writes that field concurrently.
 	sigCh := make(chan ssh.Signal, 8)
 	sess.Signals(sigCh)
+
+	var sigProc atomic.Pointer[os.Process]
+	go func() {
+		for {
+			select {
+			case sig := <-sigCh:
+				if proc := sigProc.Load(); proc != nil {
+					if osSig := sshSignalToOSSig(sig); osSig != nil {
+						_ = proc.Signal(osSig)
+					}
+				}
+			case <-sess.Context().Done():
+				return
+			}
+		}
+	}()
 
 	// The PTY info comes from stashPTY rather than sess.Pty(): the request loop
 	// writes sess.pty.Window for every window-change without holding the session
@@ -251,24 +280,7 @@ func (s *Server) handleSession(sess ssh.Session) {
 		return
 	}
 
-	// Forward signals from client to local process. Now that cmd.Start() has
-	// populated cmd.Process (and pty.Start calls it too), reading it here cannot
-	// race with the Start() write.
-	sigDone := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case sig := <-sigCh:
-				if cmd.Process != nil {
-					if osSig := sshSignalToOSSig(sig); osSig != nil {
-						cmd.Process.Signal(osSig)
-					}
-				}
-			case <-sigDone:
-				return
-			}
-		}
-	}()
+	sigProc.Store(cmd.Process)
 
 	// Wait for the child, but never let a dead connection leave it running.
 	//
@@ -292,15 +304,6 @@ func (s *Server) handleSession(sess ssh.Session) {
 		}
 		<-waitDone
 	}
-
-	// Detach and stop the forwarder. sess.Signals(nil) makes the library buffer
-	// (bounded) any late signal instead of sending into a channel nobody reads,
-	// which would block its request loop while holding the session lock. It takes
-	// the same lock the sender uses, so no send can be in flight when we return.
-	// Closing sigCh instead would panic: the library sends on it without knowing
-	// the handler is gone.
-	sess.Signals(nil)
-	close(sigDone)
 
 	exitCode := 127
 	if cmd.ProcessState != nil {
