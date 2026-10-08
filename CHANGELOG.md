@@ -4,7 +4,7 @@
 
 ### 修复
 
-- **Windows 上「shell 已退出」的状态会永久丢失：磁盘永远停在 running，重启后已结束的 shell 变回活会话**。这是从一条随机失败的测试（`TestManager_ShellExitStatusIsPersisted`）里查出来的真实数据损失，不是测试报错了事：同一台机器上磁盘追平内存通常只要 ~10ms，但偶尔**永远不追平**。内存说 exited、磁盘说 running，而且失败的目录里 `updated_at == created_at` —— 说明那份 shell manifest 自创建后再没被重写过一次。
+- **Windows 上「shell 已退出」的状态会永久丢失：磁盘永远停在 running，重启后已结束的 shell 变回活会话（#92）**。这是从一条随机失败的测试（`TestManager_ShellExitStatusIsPersisted`）里查出来的真实数据损失，不是测试报错了事：同一台机器上磁盘追平内存通常只要 ~10ms，但偶尔**永远不追平**。内存说 exited、磁盘说 running，而且失败的目录里 `updated_at == created_at` —— 说明那份 shell manifest 自创建后再没被重写过一次。
 
   根因是 Windows 与 POSIX 在「改写一个正被读的文件」上的行为差异。manifest 用「写临时文件再 rename 覆盖」发布，这在 POSIX 上即使别人正开着旧文件也能成功，而 Windows 会直接失败：`rename ... manifest.json: Access is denied`。而 manifest 正是这个形状——目标文件总是存在，且从进程外读它是正常操作（它们是磁盘上的普通 JSON，本项目的测试就靠轮询它来等待写入）。实测在热读下 **431 次 rename 失败 178 次（41%）**，不是什么罕见竞态。真正把「一次失败」变成「永久丢失」的是调用方：`persistOne` 把存储层的错误 `_ =` 丢掉了，于是那次写入没了就是没了，没有任何重试、没有日志。
 
