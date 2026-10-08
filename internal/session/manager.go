@@ -342,11 +342,22 @@ func (m *Manager) persistOne(id string) {
 		return
 	}
 	sess := s.Info()
+	// A manifest that fails to write is state the caller believes is durable, so it
+	// is logged rather than discarded. This is not hypothetical: on Windows the
+	// rename can be refused while a reader holds the old manifest open, and when
+	// that happened here the shell's exit status stayed "running" on disk forever
+	// even though the session's own manifest was rewritten - the restart then
+	// resurrected a finished shell as a live one. (The store now retries that one
+	// transient failure; this log is what makes any remaining failure visible.)
 	for _, sh := range s.SnapshotShells() {
-		_ = m.store.SaveShell(id, sh)
+		if err := m.store.SaveShell(id, sh); err != nil {
+			slog.Error("shell manifest write failed", "session_id", id, "shell_id", sh.ID, "status", sh.Status, "err", err)
+		}
 	}
 	sess.Shells = nil
-	_ = m.store.SaveSession(sess)
+	if err := m.store.SaveSession(sess); err != nil {
+		slog.Error("session manifest write failed", "session_id", id, "err", err)
+	}
 }
 
 // persist writes every session's manifest. Use persistOne for a single session;
