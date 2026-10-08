@@ -32,7 +32,7 @@ function createForward(body) {
   });
 }
 function deleteForward(forwardId) {
-  return fetch('/api/forwards/' + encodeURIComponent(forwardId), { method: 'DELETE' })
+  return fetch(apiPath('/api/forwards/') + encodeURIComponent(forwardId), { method: 'DELETE' })
     .then(function (r) {
       if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
       return r.json();

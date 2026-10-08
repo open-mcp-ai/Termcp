@@ -725,7 +725,7 @@ setNetHubCollapsed(currentNetHubCollapsed(), false);
 
 
 function loadForwards() {
-  return fetch('/api/forwards')
+  return fetch(apiPath('/api/forwards'))
     .then(function (r) { return r.json(); })
     .then(function (j) {
       window._lastForwards = j.forwards || [];
@@ -737,7 +737,7 @@ function loadForwards() {
 
 // Active shell notification rules (registered by the MCP shell_notify tool).
 function loadNotifications() {
-  return fetch('/api/notifications')
+  return fetch(apiPath('/api/notifications'))
     .then(function (r) { return r.json(); })
     .then(function (j) {
       window._lastNotifications = j.notifications || [];
@@ -747,14 +747,14 @@ function loadNotifications() {
 }
 
 function deleteNotification(ruleId) {
-  return fetch('/api/notifications/' + encodeURIComponent(ruleId), { method: 'DELETE' })
+  return fetch(apiPath('/api/notifications/') + encodeURIComponent(ruleId), { method: 'DELETE' })
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 
 
 
 function loadConnections() {
-  return fetch('/api/connections')
+  return fetch(apiPath('/api/connections'))
     .then(function (r) {
       return r.text().then(function (t) {
         if (!r.ok) {

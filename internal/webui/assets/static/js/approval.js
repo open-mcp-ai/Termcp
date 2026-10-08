@@ -55,7 +55,7 @@ function keepApprovalCounts(approvals) {
 /** refreshApprovalCounts re-reads the queue when no panel is open to do it.
  *  Called when a push arrives, so a request is visible without any navigation. */
 function refreshApprovalCounts() {
-  fetch('/api/approvals')
+  fetch(apiPath('/api/approvals'))
     .then(function (r) { return r.json(); })
     .then(function (j) { keepApprovalCounts(j.approvals || []); })
     .catch(function () {});
@@ -134,7 +134,7 @@ function loadReviewQueue(win) {
   if (!sheet) return;
   var list = sheet.querySelector('.shell-review-list');
   if (!list) return;
-  fetch('/api/approvals')
+  fetch(apiPath('/api/approvals'))
     .then(function (r) { return r.json(); })
     .then(function (j) {
       var all = j.approvals || [];
@@ -235,7 +235,7 @@ function renderApprovalItem(it) {
 function decideApproval(win, id, approve) {
   var sheet = win && win.querySelector('.shell-review-sheet');
   if (sheet) sheet.querySelectorAll('.approval-actions button').forEach(function (b) { b.disabled = true; });
-  fetch('/api/approvals/' + encodeURIComponent(id) + (approve ? '/approve' : '/reject'), {
+  fetch(apiPath('/api/approvals/') + encodeURIComponent(id) + (approve ? '/approve' : '/reject'), {
     method: 'POST'
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });

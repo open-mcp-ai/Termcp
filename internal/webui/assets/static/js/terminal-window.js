@@ -400,7 +400,7 @@ function startSessionAndOpenShell(connName, pos, opt) {
   };
   if (opt.name) body.name = opt.name;
   else if (connName) body.name = connName;
-  return fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal })
+  return fetch(apiPath('/api/sessions'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
       return r.json();

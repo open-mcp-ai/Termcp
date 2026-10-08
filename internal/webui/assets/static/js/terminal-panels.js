@@ -210,7 +210,7 @@ function _initShellWindowUI(win, connLabel, sessionId) {
     if (!fileListing) return;
     fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">' + escapeHtml(t('common.loading')) + '</div>';
     if (fileCtxMenu) fileCtxMenu.style.display = 'none';
-    fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path))
+    fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path))
       .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function(data) { renderShellFileList(data, path); })
       .catch(function(e) { fileListing.innerHTML = '<div style="padding:8px;color:#f85149">' + escapeHtml(t('file.loadFailed', { msg: String(e.message||e) })) + '</div>'; });
@@ -232,10 +232,10 @@ function _initShellWindowUI(win, connLabel, sessionId) {
     if (!name) name = base.split('/').pop() || '';
 
     if (action === 'download') {
-      window.open('/api/sessions/' + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
+      window.open(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
     } else if (action === 'delete') {
       if (!confirm(t('file.deleteConfirm', { path: path }))) return;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { alert(t('toast.delete.failed', { msg: e.message })); });
@@ -244,7 +244,7 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       if (!newName || newName === name) return;
       var parts = base.split('/'); parts.pop();
       var to = (parts.join('/') || '') + '/' + newName;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { alert(t('toast.rename.failed', { msg: e.message })); });
@@ -360,7 +360,7 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       var file = this.files && this.files[0];
       if (!file) return;
       var path = (filePathInput.value.trim().replace(/\/+$/, '') || '') + '/' + file.name;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files/upload?path=' + encodeURIComponent(path), {method:'POST',body:file})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files/upload?path=' + encodeURIComponent(path), {method:'POST',body:file})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { console.error(e); });
