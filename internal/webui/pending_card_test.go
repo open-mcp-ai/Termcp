@@ -297,3 +297,95 @@ func TestAPendingWindowRepaintsTheSessionPlate(t *testing.T) {
 		t.Error("the card is identified by the profile it dials; the window must record it")
 	}
 }
+
+// TestBatchStopKeyIsHiddenWithoutASelection pins the CSS that makes the stop key
+// behave like the trash key.
+//
+// This shipped broken once: the button carried `hidden`, and it was still on
+// screen. A `hidden` attribute is only the UA's `[hidden] { display: none }`,
+// which any `display` declaration on a matching class outranks — and `.icon-btn`
+// sets `display: inline-flex`. The trash key had been rescued by a rule naming
+// `.batch-trash` alone, so a second key with the same attribute needed the same
+// rescue and did not get it.
+//
+// The assertion is on the RULE, not on the markup: the markup already had
+// `hidden`, and that is precisely what did not work.
+func TestBatchStopKeyIsHiddenWithoutASelection(t *testing.T) {
+	css := readAppCSS(t)
+	index := readAssetLF(t, "index.html")
+
+	// Both keys carry the attribute, so both need a rule that wins over .icon-btn.
+	for _, key := range []string{"batch-trash", "batch-stop"} {
+		if !strings.Contains(index, key) {
+			continue // a key that does not exist needs no rule
+		}
+		if !strings.Contains(css, "."+key+"[hidden]") {
+			t.Errorf("the %s key carries `hidden` but no CSS rule hides it; `.icon-btn` sets "+
+				"`display: inline-flex`, which outranks the UA's [hidden] rule, so the key "+
+				"would stay on screen with nothing selected", key)
+		}
+	}
+
+	// The selector list has to sit after .icon-btn in the cascade or equal
+	// specificity would let the base rule win; theme.css loads after base.css.
+	rule := between(t, css, ".batch-trash[hidden]", "\n")
+	if !strings.Contains(rule, "display: none") {
+		t.Errorf("the hidden rule must set display: none; got %q", rule)
+	}
+
+	// And the batch bar must actually toggle it, on the same terms as the trash.
+	sessions := readAssetLF(t, "static/js/sessions.js")
+	bar := between(t, sessions, "function updateSessionBatchBar() {", "\n  });\n}")
+	if !strings.Contains(bar, "stopBtn.hidden = count === 0") {
+		t.Errorf("the stop key must be hidden exactly when nothing is selected, like the trash key:\n%s", bar)
+	}
+	if !strings.Contains(bar, "delBtn.hidden = count === 0") {
+		t.Error("the trash key's own rule changed; the two keys are meant to appear together")
+	}
+}
+
+// TestConnectingCardWritesItsStatusWordAsPlainText pins the two classes the
+// connecting card adds, and the reason each exists.
+//
+// A class used in markup but declared nowhere is dead weight that silently
+// renders as whatever it inherited — the failure is invisible in review and in a
+// screenshot. The sid slot is the case that matters: it inherits the id's hover
+// underline and `cursor: pointer`, which promise a copy the connecting card
+// cannot offer (it has no id yet), so the plain-text branch has to override both.
+func TestConnectingCardWritesItsStatusWordAsPlainText(t *testing.T) {
+	sessions := readAssetLF(t, "static/js/sessions.js")
+	css := readAppCSS(t)
+
+	// Both classes the pending card introduces are used…
+	for _, cls := range []string{"sess-status-ic is-connecting", "sess-sid-line is-pending"} {
+		if !strings.Contains(sessions, `class="`+cls+`"`) {
+			t.Errorf("the connecting card no longer emits %q; a rename would leave its styles orphaned", cls)
+		}
+	}
+	// …and declared.
+	conn := between(t, css, ".conn-tile.sess-tile .sess-status-ic.is-connecting {", "}")
+	if conn == "" {
+		t.Fatal("the connecting lamp has no rule; it would render as the 7px live dot")
+	}
+	// It must override the dot's shape, or the spinner draws inside a 7px circle.
+	for _, want := range []string{"width:", "height:", "animation:"} {
+		if !strings.Contains(conn, want) {
+			t.Errorf("the connecting lamp should override %q from the base lamp rule; got %q", want, conn)
+		}
+	}
+	pending := between(t, css, ".sess-sid-line.is-pending {", "}")
+	if !strings.Contains(pending, "cursor: default") {
+		t.Errorf("the status word is not clickable and must not keep the id's pointer cursor: %q", pending)
+	}
+	if !strings.Contains(css, ".sess-sid-line.is-pending:hover { color: var(--text-muted); text-decoration: none; }") {
+		t.Error("the status word must drop the id's hover underline; that affordance promises a copy that cannot happen")
+	}
+
+	// The reduced-motion escape hatch lives with the other ones in theme.css. If
+	// it were opened in base.css, `between()` would find it first and
+	// TestBackdropIsAFixedDropInLayer would read the wrong block — that is a real
+	// coupling, not a style preference.
+	if !strings.Contains(css, ".conn-tile.sess-tile .sess-status-ic.is-connecting { animation: none; opacity: 1; transform: none; }") {
+		t.Error("the connecting lamp's animation must be disabled under prefers-reduced-motion, in theme.css's existing block")
+	}
+}

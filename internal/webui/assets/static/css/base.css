@@ -437,6 +437,16 @@
   }
   .sess-sid-line:hover { color: var(--accent); text-decoration: underline dotted; }
   .sess-sid-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* A connecting card has no session id to copy, so it puts the status word in
+     this slot. That word is not a control, and the id's own affordances would
+     lie about it: the hover underline and the pointer promise a copy that is not
+     there. Only the interactive branch carries them. */
+  .sess-sid-line.is-pending {
+    cursor: default;
+    user-select: text;
+    text-transform: none;
+  }
+  .sess-sid-line.is-pending:hover { color: var(--text-muted); text-decoration: none; }
   .sess-copy-btn {
     flex-shrink: 0;
     width: 22px;

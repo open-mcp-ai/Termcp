@@ -38,7 +38,11 @@
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
 .sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
-.batch-trash[hidden] { display: none; }
+/* The batch action keys are revealed by a selection, not disabled. A `hidden`
+   attribute alone would NOT hide them: `.icon-btn` sets `display: inline-flex`,
+   which outranks the UA's `[hidden] { display: none }` on specificity. Each key
+   that carries the attribute therefore needs its own rule here. */
+.batch-trash[hidden], .batch-stop[hidden] { display: none; }
 .sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
 
 /* ---- Live session lamp ------------------------------------------------ */

@@ -19,7 +19,9 @@
 
   验证分三层。**行为层**：一个自包含探针驱动**真实的观察器接线**（stub 掉 MutationObserver 但执行真代码），断言容器变更确实调用重绘、并断言在 `sessions.js` 尚未加载时不会抛错（该文件先加载，所以守卫是必需的）；另有 12 项断言用真实 helper 覆盖合成卡片的生成、已完成的拨号会离开列表、按 profile 精确取消、`cancelAll` 计数。**接线层**：三条测试分别钉住「容器观察器必须重绘列表」「停止走 /terminate 而非 DELETE」「删除只把真实 id 发给服务端、拨号中的走取消」「全选读的是合成列表而非原始快照」「归档栏不得出现停止键（那里所有东西都已经停了）」。**反事实**：逐条撤掉修复——观察器不重绘、停止改回 DELETE、全选只读快照、停止不取消拨号、删除把合成 id 发给服务端、渲染不回合成列表、归档也长出停止键 —— **全部被抓**；其中「观察器不重绘」正是用户实际看到的现象（卡片不出现），第一版测试因为自己调用渲染函数而放过了它。
 
-  新样式（连接中扫描条与暂停键）加在 `base.css` / `theme.css`；减少动效的处理按仓库惯例放在 `theme.css` 已有的 `prefers-reduced-motion` 块里（在 `base.css` 新开一个块会插到该文件之前，把 `TestBackdropIsAFixedDropInLayer` 读到的文本换掉）。
+  新样式（连接中扫描条与暂停键）加在 `base.css` / `theme.css`；减少动效的处理按仓库惯例放在 `theme.css` 已有的 `prefers-reduced-motion` 块里（在 `base.css` 新开一个块会插到该文件之前，把 `TestBackdropIsAFixedDropInLayer` 读到的文本换掉）
+
+  停止键与垃圾桶键一样**只在有选择时出现**。这里踩到一个不显眼的坑：按钮上写了 `hidden` 属性，但 `hidden` 只是 UA 的 `[hidden] { display: none }`，任何匹配类的 `display` 声明都能压过它 —— 而 `.icon-btn` 正是 `display: inline-flex`。垃圾桶键此前被一条**只写了 `.batch-trash`** 的规则救回来，同样的属性配到第二个键上就没人救，于是它在常规状态下一直可见。规则已扩到两个键，并补了测试钉住「带 `hidden` 的键必须有规则能压过 `.icon-btn`」（断言的是规则本身，因为 markup 里那个 `hidden` 恰恰是不起作用的东西）。顺带修掉一个死类名：连接中卡片的 sid 槽继承了真实 id 的 hover 下划线与 `cursor: pointer`，那是在承诺一个它给不出的复制动作，现在只保留在可交互那一支。
 
 ### 修复
 
