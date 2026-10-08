@@ -29,18 +29,18 @@ const sshConfigImportFormat = " IMPORT/EXPORT FORMAT (Web UI batch import; HTTP 
 // remain next to registrations as source documentation; only the description
 // advertised to MCP clients is reduced.
 var compactToolDescriptions = map[string]string{
-	"session_start":           "Start a session; returns session_id + shell_id. ssh_config REQUIRED (\"internal\" = host loopback, or profile name). DEFAULT: omit command/args to drive an interactive shell (multi-step/stateful work). command/args only for REPL/TUI, daemons, or single atomic scripts — never for sequential steps.",
+	"session_start":           "Start a session; returns session_id + shell_id. ssh_config REQUIRED (\"internal\" = host loopback, or profile name). DEFAULT: omit command/args for a multi-step/stateful interactive shell. command/args = one run-and-exit program: set on_exit=\"close\" so its session archives itself; never split steps across starts.",
 	"shell_open":              "Open another shell channel on a session; returns shell_id.",
 	"shell_list":              "List shell channels for a session.",
 	"shell_close":             "Close one shell channel; use session_terminate for the whole session.",
 	"shell_input":             "Write text to shell stdin without executing; use shell_key(enter) to run it.",
 	"shell_key":               "Send a named key to a shell.",
 	"shell_output":            "Read output of a live or closed shell; empty read != no output (poll with timeout<=3). Unified cursor (offset/tail_lines/reader_id).",
-	"session_list":            "List live sessions.",
-	"session_info":            "Get detailed information for a session.",
+	"session_list":            "List sessions.",
+	"session_info":            "Session details + its shells.",
 	"session_terminate":       "Close a session (DEAD): stops shells and forwards; entry stays in the registry and readable.",
-	"session_delete":          "Permanently delete a session and its on-disk byte logs.",
-	"shell_resize":            "Resize a shell PTY.",
+	"session_delete":          "Delete a session and its on-disk byte logs.",
+	"shell_resize":            "Resize shell PTY.",
 	"shell_detect":            "Detect an interactive shell on the termcp host.",
 	"shell_reader_register":   "Register an output reader starting at the current buffer end.",
 	"shell_reader_unregister": "Release an output reader.",

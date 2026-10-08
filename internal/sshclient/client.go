@@ -260,6 +260,15 @@ func (es *ExecSession) Done() <-chan struct{} {
 	return es.done
 }
 
+// WaitTransport blocks until the underlying SSH connection shuts down and
+// returns the error that caused it. Done() reports one channel's process; this
+// reports the connection itself, which is the only signal left when a session
+// has no live shell to notice the loss (x/crypto's mux broadcasts to every
+// waiter, so it is safe to call alongside a shell's own wait).
+func (es *ExecSession) WaitTransport() error {
+	return es.client.Wait()
+}
+
 // ExitCode returns the process exit code after Done is closed.
 func (es *ExecSession) ExitCode() int {
 	return es.exitCode

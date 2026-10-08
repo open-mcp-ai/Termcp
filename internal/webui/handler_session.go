@@ -32,6 +32,7 @@ type startSessionBody struct {
 	Rows            int      `json:"rows"`
 	Cols            int      `json:"cols"`
 	SSHConfig       string   `json:"ssh_config"`
+	OnExit          string   `json:"on_exit"`
 	ParentSessionID string   `json:"parent_session_id"`
 }
 
@@ -83,6 +84,11 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cols out of range", http.StatusBadRequest)
 		return
 	}
+	onExit := strings.TrimSpace(strings.ToLower(body.OnExit))
+	if onExit != "" && onExit != string(session.OnExitKeep) && onExit != string(session.OnExitClose) {
+		http.Error(w, "on_exit must be keep or close", http.StatusBadRequest)
+		return
+	}
 
 	sess, err := h.Sessions.Create(session.Config{
 		Command:      cmd,
@@ -95,6 +101,7 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Remote:       remote,
 		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
 		Approval:     sshconfig.EffectiveApproval(ent),
+		OnExit:       session.OnExitPolicy(onExit),
 		// The browser cancels this fetch when the user closes the pending window,
 		// so the dial has to stop with it: otherwise the connect completes into a
 		// session no window is showing.

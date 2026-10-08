@@ -15,6 +15,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 		mcpgo.WithString("command", mcpgo.Description("Executable line; empty with no args = login shell / profile default_shell")),
 		mcpgo.WithArray("args", mcpgo.Description("Argv after command"), mcpgo.WithStringItems()),
 		mcpgo.WithString("mode", mcpgo.Description("Mode of the primary shell only (per-shell setting): \"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented). Other shells pick their own mode in shell_open."), mcpgo.DefaultString("pty")),
+		mcpgo.WithString("on_exit", mcpgo.Description("What happens to the session when its last shell ends by itself: \"keep\" (default) leaves it running for reuse (forwards, SFTP, more shells); \"close\" terminates it, so a run-and-exit command's session archives itself instead of piling up in the running list. Its output stays readable either way."), mcpgo.DefaultString("keep"), mcpgo.Enum("keep", "close")),
 		mcpgo.WithString("name"),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),

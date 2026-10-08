@@ -55,6 +55,7 @@ func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolR
 		Remote:       remote,
 		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
 		Approval:     sshconfig.EffectiveApproval(ent),
+		OnExit:       session.OnExitPolicy(strings.TrimSpace(strings.ToLower(getString(args, "on_exit", "")))),
 		// An aborted MCP call cancels this context, and the dial stops with it
 		// rather than registering a session whose caller has already gone away.
 		Ctx: ctx,

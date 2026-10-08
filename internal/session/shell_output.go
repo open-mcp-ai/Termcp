@@ -378,15 +378,23 @@ func (cs *ChildShell) startReaders() {
 		}
 		// If the shell ended due to SSH disconnect (not deliberate close and not
 		// clean process exit), tear down the session. exitOnce ensures once.
+		// The session-level transport watcher reports the same loss from the
+		// connection's own point of view; markDead is idempotent, so both firing is
+		// harmless and the one that sees it first records the message.
 		if reparent != nil && !deliberate && cs.execSession.Aborted() {
 			slog.Debug("session DEAD via transport abort", "session_id", reparent.ID, "child_shell_id", cs.ID)
-			reparent.markDeadWithMessage("❌ SSH connection lost — network disconnected")
+			reparent.markDeadWithMessage(transportLostMessage)
 		}
 		// A shell ending — cleanly or not — never ends the container. The session
 		// owns the SSH transport, and that transport is what carries forwards, SFTP
 		// and new shell channels; a run-to-exit pipe command finishing (or every
 		// shell being closed) must leave all of those working. Only an aborted
-		// transport, session_terminate, or manager shutdown flips a session DEAD.
+		// transport, session_terminate, or manager shutdown flips a session DEAD --
+		// unless the session was created as one-shot, which is the one case where
+		// the caller said its work ends with this program.
+		if reparent != nil {
+			reparent.closeIfLastShellEnded()
+		}
 		slog.Debug("child shell exited", "child_shell_id", cs.ID, "exit_code", code)
 	}()
 }

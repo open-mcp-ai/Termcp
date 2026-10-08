@@ -152,6 +152,7 @@ ssh_config(action=list)
 | `command` | string | 否 | — | 可执行文件；空 = 按**命令优先级链**解析：profile 的 `default_shell` → （仅 pty）目标机自己的登录 shell。`pipe` + 空命令且 profile 无 `default_shell` 会被拒绝：pipe 通道没有登录 shell 可申请，客户端也不会拿本机 PATH 去猜目标机的 shell |
 | `args` | string[] | 否 | `[]` | 命令行参数，仅 `command` 非空时有效 |
 | `mode` | string | 否 | `"pty"` | **首个 shell** 的模式：`"pty"` 或 `"pipe"`。模式属于 shell，不属于会话；后续 shell 的 mode 由 `shell_open` 决定 |
+| `on_exit` | string | 否 | `"keep"` | 最后一个 shell **自行结束**（`exit`、一次性命令跑完）时会话怎么处理：`"keep"` 保留为运行会话（可继续复用连接：转发/SFTP/新开 shell）；`"close"` 关闭会话并进归档。一次性命令用 `"close"`，否则它会一直留在运行列表里。两种取值下输出都仍可用 `shell_output` 读取 |
 | `name` | string | 否 | ssh_config | 会话显示名称 |
 | `rows` | number | 否 | `24` | 初始 PTY 行数（1–1000） |
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |

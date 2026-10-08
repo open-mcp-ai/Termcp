@@ -4,6 +4,22 @@
 
 ### 修复
 
+- **SSH 断了但会话没有活着的 shell 时，会话永远停在「运行中」，从不进归档（#89）**：会话是连接容器，shell 只是容器里的一个终端 —— 敲 `exit` 结束的是终端，不是那条 SSH 连接（连接还能开新 shell、做转发和 SFTP），所以容器保持运行是刻意的。但检测「连接死了」的那套等待**全部挂在某个 shell 的 watcher 上**（`shell.go`、`shell_output.go` 各一处 `<-execSession.Done()`），容器一旦没有活终端就无人守望：远端 sshd 消失、网络断开都不会被察觉，卡片继续亮着 running。实测 25 秒不变，且此时连新开 shell 都返回 `new session: EOF` —— 卡片显示的状态是假的。
+
+  现在会话自己盯住传输层：`sshclient` 暴露 `WaitTransport()`（包装 `ssh.Conn.Wait()`），`Session` 在创建时起一个独立守夜人，连接关闭即 `markDead`。**这不是新增 channel，也不占 fd** —— `Wait()` 挂的是 x/crypto mux 的条件变量（`sync.Cond`，断开时 `Broadcast`），所以多个观察者可共存（每个 shell 自己的 watcher 照旧工作），阻塞期间零资源、零网络开销。实测守夜人阻塞时仍可正常新开 shell 并执行命令，5 个并发等待者全部被唤醒。
+
+  `markDead` 幂等，所以 shell watcher 与守夜人谁先看见都只记一次；故意关闭（Terminate/Disconnect/Delete）先置 `closing`，不会被误报成网络掉线。回归测试先让 shell 自己退出（容器必须仍为 running，锁住容器契约），再杀掉服务器，断言会话转为 DEAD——**在干净 HEAD 上同一测试会卡满 20 秒并以「session still \"running\" ... never move to the archive」失败**。
+
+- **`session_start` 新增 `on_exit`：一次性命令跑完可以自动归档，不再在会话列表里堆积（#90）**：Agent 常为了跑一条命令就开一个会话，而 `mode=pipe` 的命令毫秒级退出后，容器仍按上面的容器契约留在「运行会话」里 —— 与「有人正在用」的会话长得完全一样，于是一次性会话越堆越多。
+
+  新参数 `on_exit` 三档语义（实际两档，见下）：`"keep"`（默认）= 现状，最后一个 shell 自行结束后容器继续运行、连接可复用；`"close"` = 最后一个 shell 自行结束时 terminate，会话转入归档。**两种取值下输出都仍可用 `shell_output` 读取** —— 归档不等于丢弃，这正是当初开这个会话的目的。
+
+  触发点是 shell 退出 watcher 里的 `closeIfLastShellEnded()`：在 `shellStateMu` 下检查是否还有 `running` 的 shell，因此与「正在新开 shell」互斥——要么新通道先落地（会话保留），要么它看到 `closing` 而被拒绝，不可能往一个正要关闭的会话里加通道。
+
+  参数校验拒绝拼错的值（`on_exit="clsoe"` 报错而不是静默按默认处理）；`normalizeOnExit` 把任何未知值收敛为 keep，所以一个手误不会静默掐断用户的连接。回归测试三条：`close` 归档且输出仍可读、默认 `keep` 必须保持运行（反向保护，防止把不想要的会话也自动关掉）、非法值被拒绝——三条各自退回修复后都确实失败。另有一条 wire 守卫断言 `on_exit` 真的出现在模型看到的 `session_start` 描述与参数 enum 里：模型看不见的参数等于没有（**为它腾空间把 4 条未被任何测试引用的描述无损压缩了 29 B，工具描述余量从 4 B 回到 18 B**）。
+
+  实测也覆盖了远端路径（真实 TCP sshd）：`on_exit="close"` 在 remote 会话上同样正确归档。探针顺带确认了一个既有行为：`Terminate` 对 remote 会话只关 channel（`CloseSessionOnly`），共享 SSH client 由 `Disconnect` 显式关闭——这与 `on_exit` 无关，`session_terminate` 一直如此。
+
 - **关闭「连接中」占位窗口现在真的会中断拨号（#79）**：占位窗口上的关闭键一直写着「关闭（取消连接）」，但取消的只是浏览器那个 fetch——服务端从未看到中止，照旧把 dial 拨完。**迟到的拨号成功后会注册一个无人持有的会话**：页面上的占位窗口已经没了，它却真实存在（占着远端 shell、出现在会话列表里、Agent 通过 `list_sessions` 也能看到）。一个「取消」如果留下活会话，比不取消更糟——用户已经被告知它停了。
 
   现在请求上下文一路传到拨号：`DialConn` 用 `DialContext`，而握手阶段（x/crypto 不吃 context）由 `watchCancel` 在 ctx 结束时关掉 socket，把阻塞中的读唤醒——只有关闭 socket 这个信号能穿进去，所以取消才会立即生效而不用等拨号自己的 30 秒超时。同一个 `Config.Ctx` 也让「测试连接」按钮与 MCP 的 `session_start` 在调用方收手时停下来。拨号刚好在取消同一瞬间完成这种竞态也被堵上：`session.New` 在注册前重查 ctx，取消后不会留下任何会话。
