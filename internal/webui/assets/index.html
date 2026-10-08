@@ -371,6 +371,28 @@
     </div>
   </div>
 
+  <!-- Closing a running session asks what to do with it, because the icon
+       cannot express the difference between the two outcomes: archiving keeps the
+       transcript in the archive plate, deleting erases it. Archive is listed
+       last and takes focus, so the destructive answer is never the default. -->
+  <div id="modal-close-session" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:460px">
+      <div class="modal-h">
+        <h2 id="modal-close-title" data-i18n="session.close.title">Close session</h2>
+        <button type="button" id="modal-close-x" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p id="modal-close-msg" class="modal-msg"></p>
+        <p class="modal-hint" data-i18n="session.close.hint">Archive disconnects the session and keeps its output readable. Delete erases the transcript for good.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="modal-close-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="modal-close-delete" data-i18n="common.delete">Delete</button>
+          <button type="button" class="btn btn-primary" id="modal-close-archive" data-i18n="session.close.archive">Archive</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="static/xterm/xterm.js"></script>
   <script src="static/js/i18n-catalog.js"></script>
   <script src="static/js/i18n.js"></script>

@@ -848,8 +848,19 @@ function collapseShellWindow(win) {
   }
 }
 
-/** "x" button: delete the session — same as the session tile's x. A pending
- *  window has no session yet, so it just cancels the connect. */
+/** "x" button: close the session.
+ *
+ *  A running session is NOT destroyed by this key. It asks what to do with it,
+ *  because the two outcomes are very different and the icon cannot express the
+ *  difference: archiving disconnects the session and keeps its output readable
+ *  in the archive (recoverable — its transcript is still there), while deleting
+ *  erases the on-disk directory for good. The key used to delete outright, which
+ *  made one misclick on a live terminal unrecoverable and gave the archive no way
+ *  to grow other than the batch bar.
+ *
+ *  The dialog offers the same vocabulary the batch bar already uses for the same
+ *  two actions (Stop/Archive vs Delete), and for an already-archived session it
+ *  keeps the plain delete confirmation: there is nothing left to archive. */
 function bindShellWindowCloseButton(win, closeBtn) {
   if (!closeBtn || closeBtn._termcpCloseBound) return;
   closeBtn._termcpCloseBound = true;
@@ -858,22 +869,129 @@ function bindShellWindowCloseButton(win, closeBtn) {
     e.preventDefault(); e.stopPropagation();
     var sid = win && win._sid;
     if (!sid || win._placeholder) { closeShellWindow(win); return; }
-    confirmDialog({
+    askCloseSession(sid, win);
+  });
+}
+
+/** Close one session, asking first when it is still running.
+ *
+ *  Returns a Promise resolving to 'archived' | 'deleted' | 'cancelled' so the
+ *  caller (and a test) can see which path ran. All three outcomes route through
+ *  endpoints the app already used: POST /terminate is the archive move the batch
+ *  bar calls, DELETE is the permanent removal the session tile calls. */
+function askCloseSession(sid, win) {
+  var name = stripSessionPrefix(sid);
+  var live = !isSessionDeadInWindows(sid);
+  if (!live) {
+    return confirmDialog({
       title: t('session.delete.title'),
-      message: t('session.delete.message', { name: stripSessionPrefix(sid) }),
+      message: t('session.delete.message', { name: name }),
       okText: t('common.delete'),
       danger: true
     }).then(function (ok) {
-      if (!ok) return;
-      fetch(apiPath('/api/sessions/') + encodeURIComponent(sid), { method: 'DELETE' })
-        .then(function (r) {
-          if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
-          var w = getShellWindowBySid(sid) || win;
-          if (w) closeShellWindow(w);
-        })
-        .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
+      if (!ok) return 'cancelled';
+      return deleteSessionById(sid, win).then(function () { return 'deleted'; });
     });
+  }
+  return archiveOrDeleteDialog(name).then(function (choice) {
+    if (choice === 'archive') {
+      return archiveSessionById(sid).then(function () { return 'archived'; });
+    }
+    if (choice === 'delete') {
+      return deleteSessionById(sid, win).then(function () { return 'deleted'; });
+    }
+    return 'cancelled';
   });
+}
+
+/** Whether a session id belongs to an archived (not running) session, read from
+ *  the last snapshot. Absent from the snapshot means "unknown": treat it as live,
+ *  because asking before disconnecting a running session is the safe mistake while
+ *  silently deleting one is not recoverable. */
+function isSessionDeadInWindows(sid) {
+  var snap = window._lastSessionsSnapshot || [];
+  for (var i = 0; i < snap.length; i++) {
+    if (snap[i] && snap[i].id === sid) return isDeadSession(snap[i]);
+  }
+  return false;
+}
+
+/** The archive-or-delete dialog for a running session. Resolves to 'archive',
+ *  'delete' or 'cancelled' (Escape, the close key, or a backdrop click all read
+ *  as cancelled: the safe answer is always "do nothing"). */
+function archiveOrDeleteDialog(name) {
+  var root = document.getElementById('modal-close-session');
+  var msg = document.getElementById('modal-close-msg');
+  if (msg) msg.textContent = t('session.close.message', { name: name });
+  var archiveBtn = document.getElementById('modal-close-archive');
+  var deleteBtn = document.getElementById('modal-close-delete');
+  var cancelBtn = document.getElementById('modal-close-cancel');
+  var closeBtn = document.getElementById('modal-close-x');
+  return new Promise(function (resolve) {
+    var settled = false;
+    function wire(btn, value) {
+      if (!btn) return null;
+      var fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', function (e) { e.preventDefault(); done(value); });
+      return fresh;
+    }
+    function done(v) {
+      if (settled) return;
+      settled = true;
+      hideModal('modal-close-session');
+      document.removeEventListener('keydown', onKey, true);
+      resolve(v);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); done('cancelled'); }
+    }
+    // Re-wired on every open, like confirmDialog: the modal is a singleton, so a
+    // previous open's listeners would otherwise fire for this one's answer.
+    var a = wire(archiveBtn, 'archive');
+    wire(deleteBtn, 'delete');
+    wire(cancelBtn, 'cancelled');
+    wire(closeBtn, 'cancelled');
+    root.onclick = function (e) { if (e.target === root) done('cancelled'); };
+    document.addEventListener('keydown', onKey, true);
+    showModal('modal-close-session');
+    // Archive is the recommended action, so it takes focus: Enter on a session
+    // the user meant to put away must not delete it.
+    try { if (a) a.focus(); } catch (e) {}
+  });
+}
+
+/** Disconnect a session but keep it in the registry, so its output stays
+ *  readable in the archive plate. Same endpoint (and same meaning) as the batch
+ *  bar's stop key; the window is deliberately NOT closed here — the server's next
+ *  sessions frame locks it read-only, which is what keeps the transcript on
+ *  screen instead of yanking it away from the reader. */
+function archiveSessionById(sid) {
+  var banner = document.getElementById('session-load-banner');
+  if (banner) setLoadBanner(banner, t('banner.stopping.one', { count: 1 }));
+  return fetch(apiPath('/api/sessions/') + encodeURIComponent(sid) + '/terminate', { method: 'POST' })
+    .then(function (r) {
+      if (banner) setLoadBanner(banner, '');
+      if (!r.ok && r.status !== 204) {
+        return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
+      }
+      showCopyToast(t('session.close.archived', { name: stripSessionPrefix(sid) }));
+    })
+    .catch(function (err) {
+      if (banner) setLoadBanner(banner, '');
+      showCopyToast(t('toast.stop.failed', { msg: String(err.message || err) }));
+    });
+}
+
+/** Erase a session and its on-disk transcript, then drop its window. */
+function deleteSessionById(sid, win) {
+  return fetch(apiPath('/api/sessions/') + encodeURIComponent(sid), { method: 'DELETE' })
+    .then(function (r) {
+      if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
+      var w = getShellWindowBySid(sid) || win;
+      if (w) closeShellWindow(w);
+    })
+    .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
 }
 
 function getShellWindowBySid(sessionId) {

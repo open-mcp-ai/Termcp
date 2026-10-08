@@ -610,6 +610,10 @@
   }
   .modal-x:hover { color: var(--text-bright); background: var(--accent-surface); }
   .modal-msg { margin: 0 0 4px; color: var(--text-primary); font-size: .9rem; word-break: break-word; }
+  /* The second line of a dialog that offers two different outcomes: it explains
+     what each key does, so the choice is made on meaning rather than on which
+     word looks safer. Muted, because the question above it is the message. */
+  .modal-hint { margin: 0 0 4px; color: var(--text-muted); font-size: .8rem; line-height: 1.5; word-break: break-word; }
   .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
