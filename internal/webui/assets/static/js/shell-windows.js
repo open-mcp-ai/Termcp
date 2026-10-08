@@ -884,12 +884,33 @@ function getShellWindowBySid(sessionId) {
   return null;
 }
 
+/** The window owning a channel id, or null. */
 function findShellWindowByChannelSid(sessionId) {
   var wins = allShellWins();
   for (var i = 0; i < wins.length; i++) {
     if (wins[i]._channels && wins[i]._channels[sessionId]) return wins[i];
   }
   return null;
+}
+
+/** The window a terminal frame belongs to: a channel of one window, or a window
+ *  whose own id IS the channel. One pass over the windows instead of the two
+ *  lookups this used to be.
+ *
+ * The distinction matters because this runs on the output path, where a busy
+ * command delivers frames thousands of times a second: each of those lookups
+ * scanned every window, so the pair cost two full DOM scans per frame (measured
+ * as the largest single block of script time while output streamed). Both answers
+ * come from the same array, so asking it once is the same work minus the scan. */
+function shellWindowForFrame(id) {
+  var wins = allShellWins();
+  var bySid = null;
+  for (var i = 0; i < wins.length; i++) {
+    var w = wins[i];
+    if (w._channels && w._channels[id]) return w;
+    if (!bySid && w._sid === id) bySid = w;
+  }
+  return bySid;
 }
 
 /** The one entry point for "the user picked this session". Every trigger routes

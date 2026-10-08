@@ -147,8 +147,9 @@ function connectUIWebSocket() {
         loadNotifications();
       }
       else if (j.type === 'terminal') {
-        var win = getShellWindowBySid(j.id);
-        if (!win) win = findShellWindowByChannelSid(j.id);
+        /* One window lookup per frame, not two: this branch runs once per output
+           frame, and each lookup was a full DOM scan. */
+        var win = shellWindowForFrame(j.id);
         if (win) {
           var ch = win._channels && win._channels[j.id];
           var tm = ch ? ch.term : win._term;
@@ -159,9 +160,11 @@ function connectUIWebSocket() {
             shellStatusOnBytes(win, j.id, j.d);
             var bytes = textToBytes(j.d);
             tm.write(bytes, function () {
-              requestAnimationFrame(function () {
-                shellTermScrollToBottomIfStuck(tm, true);
-              });
+              /* One scroll check per frame, not one per write: a burst arrives as
+                 several writes in the same task, and the check reads layout
+                 (clientHeight/scrollHeight) — doing it per write forced a reflow
+                 per chunk while output streamed. */
+              shellTermScrollToBottomSoon(tm);
             });
           }
         }
@@ -942,6 +945,23 @@ function shellTermScrollToBottomIfStuck(term, flush) {
   if (!term) return;
   if (!xtermViewportNearBottom(term, 64)) return;
   shellTermScrollToBottom(term, flush);
+}
+
+/** The sticky-tail check, coalesced to at most one run per animation frame per
+ *  terminal.
+ *
+ * `xtermViewportNearBottom` reads scrollHeight/clientHeight/scrollTop, so
+ *  calling it once per write forces a layout flush per chunk — and a burst of
+ *  output arrives as several writes inside one task. The frame is the right
+ *  granularity anyway: the user sees at most one painted scroll position per
+ *  frame, so checking more often than that can only cost work. */
+function shellTermScrollToBottomSoon(term) {
+  if (!term) return;
+  if (term._stbSoonRaf) return;
+  term._stbSoonRaf = requestAnimationFrame(function () {
+    term._stbSoonRaf = 0;
+    shellTermScrollToBottomIfStuck(term, true);
+  });
 }
 
 /** Scroll to buffer bottom using xterm APIs only (do not set viewport scrollTop — it desyncs from the renderer). */
