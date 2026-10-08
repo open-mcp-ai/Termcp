@@ -38,7 +38,11 @@ func TestLostTransportArchivesSessionWithNoLiveShell(t *testing.T) {
 	_ = sh.SendTerminalBytes([]byte(testShellInput("exit")), false)
 	if !waitFor(t, 10*time.Second, func() bool {
 		cur := s.GetChildShell(s.PrimaryShellID())
-		return cur != nil && cur.Status != api.SessionRunning
+		// Info() (which takes the shell's lock) rather than the raw field: the exit
+		// watcher writes Status under cs.mu, so reading it unlocked here is a data
+		// race the detector reports -- and this poll runs concurrently with exactly
+		// that write.
+		return cur != nil && cur.Info().Status != api.SessionRunning
 	}, "the shell to exit") {
 		t.Fatal("shell never exited after `exit`")
 	}
