@@ -65,6 +65,12 @@ const sandbox = {
   },
   t: k => k,
   window: {},
+  /* The real util.js helpers live in a separate asset this sandbox does not load,
+     and openConnModal resolves its request URL through apiPath. Identity stubs
+     keep this probe focused on the dialog's own state: the mount-prefix behaviour
+     has its own test, which loads util.js for real. */
+  apiPath: p => p,
+  uiBasePath: () => '',
   /* A dial that never settles, so the probe controls exactly when a response
      lands relative to the next open. */
   fetch: () => new Promise(() => {}),

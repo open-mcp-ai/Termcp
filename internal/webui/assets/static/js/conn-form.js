@@ -1000,7 +1000,9 @@ function disconnectSelectedInRegion(region) {
     }
     var banner = document.getElementById('session-load-banner');
     if (banner) setLoadBanner(banner, tCount('banner.stopping.one', 'banner.stopping.other', { count: liveIds.length }));
-    var path = '/api/sessions/' + liveIds.map(encodeURIComponent).join(',') + '/terminate';
+    // apiPath, not a bare literal: the page can be mounted under a reverse-proxy
+    // sub-path, and a root-absolute URL would resolve against the parent site.
+    var path = apiPath('/api/sessions/' + liveIds.map(encodeURIComponent).join(',') + '/terminate');
     fetch(path, { method: 'POST' }).then(function (r) {
       if (r.ok && r.status !== 204) {
         return r.json().then(function (j) { return (j && j.results) || []; });
