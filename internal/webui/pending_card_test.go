@@ -176,6 +176,19 @@ func TestBatchActionsReachTheRightEndpointForEachSelectionKind(t *testing.T) {
 	if !strings.Contains(stop, "method: 'POST'") {
 		t.Errorf("the subscribe/terminate endpoint is a POST:\n%s", stop)
 	}
+	// The URL must be built from the real ids, never from the raw targets. A dial
+	// carries a synthetic `pending:` id that no endpoint can resolve, so a stop
+	// that joined `targets` would hand the server an id it can only report as
+	// missing — and because the client treats session_not_found as success, the
+	// stray id would leave no visible trace. This is the same partition the delete
+	// branch asserts below, for the same reason; the two actions differ only in the
+	// endpoint they reach.
+	if !strings.Contains(stop, `liveIds.map(encodeURIComponent).join(',')`) {
+		t.Errorf("the batch stop URL must be built from liveIds; a synthetic pending id cannot be resolved by the server:\n%s", stop)
+	}
+	if !strings.Contains(stop, "!s._pending") {
+		t.Errorf("stop must partition the selection into dials and real sessions:\n%s", stop)
+	}
 
 	// Delete cancels dials instead of sending their synthetic ids to the server,
 	// because a dial has no session for DELETE to remove.
