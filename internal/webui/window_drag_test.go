@@ -37,11 +37,25 @@ const start = src.indexOf('function clampShellWindowIntoContainer');
 if (start < 0) throw new Error('clampShellWindowIntoContainer not found');
 const end = src.indexOf('\n}\n', start) + 3;
 
+// The clamp's floor is the page header's lower edge, so the real measuring
+// function is part of this test rather than stubbed: if it ever started
+// returning a constant, the clamp would pin windows under the header again and
+// no geometry case below would notice.
+const hStart = src.indexOf('function appHeaderBottom(');
+if (hStart < 0) throw new Error('appHeaderBottom not found');
+const hEnd = src.indexOf('\n}\n', hStart) + 3;
+
 const sandbox = {};
 vm.createContext(sandbox);
-// isTiledWin lives in the same module; panes are laid out by the grid and must
-// never be repositioned by a drag clamp.
-vm.runInContext('function isTiledWin(w){return !!(w && w._tiled);}\n' + src.slice(start, end), sandbox);
+// A header whose depth the test drives. Its bottom is read on every measurement,
+// exactly as a live getBoundingClientRect would report a wrapped nav.
+sandbox.DOM = { headerBottom: 0 };
+vm.runInContext('function isTiledWin(w){return !!(w && w._tiled);}\n' +
+  'var document = { querySelector: function (sel) {\n' +
+  '  if (sel !== ".app-header") return null;\n' +
+  '  return { getBoundingClientRect: function () { return { bottom: DOM.headerBottom }; } };\n' +
+  '} };\n' +
+  src.slice(hStart, hEnd) + src.slice(start, end), sandbox);
 
 const host = { x: 0, y: 0, w: 1000, h: 800 };
 function mkWin(rect) {
@@ -93,6 +107,40 @@ if (tiled.style.left !== undefined || tiled.style.top !== undefined) {
   bad++;
 }
 
+// The page header is chrome the user needs (the wordmark, the docs and language
+// links). A window released over it must settle BELOW it, even though that is
+// further down than the cosmetic margin — the container's top is the viewport
+// top, so nothing but the measured header edge stops the window there.
+sandbox.DOM.headerBottom = 60;
+const belowHeader = [
+  ['released over the header',       { x: 100, y: -90, w: 400, h: 300 }, 100,  60],
+  ['released into the header band',  { x: 100, y:  20, w: 400, h: 300 }, 100,  60],
+  ['clear of the header is untouched', { x: 100, y: 200, w: 400, h: 300 }, 100, 200],
+  ['taller than the space below',    { x: -500, y: -500, w: 1400, h: 1200 }, 0, 60],
+];
+for (const [name, rect, wantL, wantT] of belowHeader) {
+  const win = mkWin(rect);
+  sandbox.win = win;
+  vm.runInContext('clampShellWindowIntoContainer(win)', sandbox);
+  const gotL = win.style.left === undefined ? rect.x : parseFloat(win.style.left);
+  const gotT = win.style.top === undefined ? rect.y : parseFloat(win.style.top);
+  if (gotL !== wantL || gotT !== wantT) {
+    console.log('FAIL ' + name + ': left=' + gotL + ' top=' + gotT + ' want ' + wantL + ',' + wantT);
+    bad++;
+  }
+}
+
+// A header that has grown (a wrapped nav, a longer label) moves the floor with
+// it: a constant here would leave the tallest header states uncovered.
+sandbox.DOM.headerBottom = 120;
+const grown = mkWin({ x: 100, y: -90, w: 400, h: 300 });
+sandbox.grown = grown;
+vm.runInContext('clampShellWindowIntoContainer(grown)', sandbox);
+if (parseFloat(grown.style.top) !== 120) {
+  console.log('FAIL a wrapped header did not raise the floor: top=' + grown.style.top);
+  bad++;
+}
+
 console.log(bad === 0 ? 'CLAMP OK' : bad + ' clamp failure(s)');
 process.exit(bad === 0 ? 0 : 1);
 `
@@ -111,5 +159,45 @@ process.exit(bad === 0 ? 0 : 1);
 	}
 	if !strings.Contains(got, "CLAMP OK") {
 		t.Fatalf("harness did not run to completion:\n%s", got)
+	}
+}
+
+// TestTiledWorkspaceAndDragShareTheHeaderFloor pins the wiring the two node
+// harnesses cannot see: which variable names the header floor, and whether the
+// height behind it is measured rather than assumed.
+//
+// The clamp above proves the JS floor moves with the header; the stylesheet's
+// inset for the tiled layer is a separate declaration that a copy-paste or a
+// rename can leave behind at 0 — and then the tiled grid covers the header again
+// while every geometry test still passes. Both sides must name the SAME property,
+// and the publisher must read the live header box, since the header's height
+// depends on whether its nav wraps.
+func TestTiledWorkspaceAndDragShareTheHeaderFloor(t *testing.T) {
+	css := readAppCSS(t)
+	js := readAssetLF(t, "static/js/shell-windows.js")
+
+	ws := cssRule(t, css, ".pane-workspace")
+	if !strings.Contains(ws, "inset: var(--app-header-h, 0px)") {
+		t.Errorf("the tiled workspace must start below the measured header; got %q", ws)
+	}
+
+	publish := between(t, js, "function syncAppHeaderDepth()", "\n}\n")
+	if !strings.Contains(publish, "setProperty('--app-header-h'") {
+		t.Errorf("syncAppHeaderDepth no longer publishes --app-header-h; the CSS fallback would pin the workspace to the viewport top: %q", publish)
+	}
+	if !strings.Contains(publish, "appHeaderBottom()") {
+		t.Errorf("the published height must come from the measured header, not a constant: %q", publish)
+	}
+
+	measure := between(t, js, "function appHeaderBottom()", "\n}\n")
+	if !strings.Contains(measure, ".app-header") || !strings.Contains(measure, "getBoundingClientRect") {
+		t.Errorf("appHeaderBottom must measure the live header box; a hardcoded height breaks on a wrapped nav: %q", measure)
+	}
+
+	// The published value has to survive the header changing size after first
+	// paint (a wrap, a language switch, a late web font), which is why an observer
+	// on the header exists rather than a one-shot call.
+	if !strings.Contains(js, "new ResizeObserver(syncAppHeaderDepth)") {
+		t.Error("nothing republishes --app-header-h when the header changes size; the tiled floor would go stale")
 	}
 }

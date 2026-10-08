@@ -518,6 +518,18 @@ updateTileToggleButton();
 refreshSessionTabbar();
 if (sessionTabbarEl()) setupSessionTabbarDrag(sessionTabbarEl());
 
+/* Publish the header's depth before any window can open the tiled workspace, then
+   republish whenever the header itself changes size — a viewport resize that wraps
+   its nav, a language switch that rewrites the labels, or a web font landing after
+   first paint. A resize listener would miss the last two, which is why the observer
+   watches the header and not the window. */
+syncAppHeaderDepth();
+(function () {
+  if (typeof ResizeObserver === 'undefined') return;
+  var header = document.querySelector('.app-header');
+  if (header) new ResizeObserver(syncAppHeaderDepth).observe(header);
+})();
+
 /** Toggle maximize: floating window fills the viewport; a pane fills the grid. */
 function toggleShellWindowMax(win) {
   if (!win || !win.classList.contains('shell-window')) return;
@@ -636,10 +648,18 @@ function applyWindowViewportMode(win) {
  *  it there). Callers pass a position only when the click is a real target.
  *
  *  On mobile the window fills the viewport and CSS owns its geometry (see
- *  applyWindowViewportMode); the cascade steps aside for the same reason. */
+ *  applyWindowViewportMode); the cascade steps aside for the same reason.
+ *
+ *  Both placements stop below the page header (see appHeaderBottom): a window
+ *  whose title bar lands in the header band hides the wordmark and the page's own
+ *  controls, and a click that names a point up there still has to resolve to a
+ *  reachable window. */
 function positionShellWindowFromClick(win, pos) {
   if (isMobileViewport()) { applyWindowViewportMode(win); return; }
   var MARGIN = 8;
+  /* The header is page chrome, so it outranks the cosmetic margin: the window's
+     leading edge goes below the header even when that is further down than 8px. */
+  var FLOOR = Math.max(MARGIN, appHeaderBottom());
   var winW = Math.min(640, window.innerWidth - MARGIN * 2);
   var winH = Math.min(480, window.innerHeight - MARGIN * 2);
   win.style.width = winW + 'px';
@@ -653,12 +673,12 @@ function positionShellWindowFromClick(win, pos) {
     var centreL = Math.round((window.innerWidth - winW) / 2) + off * 24;
     var centreT = Math.round((window.innerHeight - winH) / 2) + off * 24;
     win.style.left = Math.max(MARGIN, Math.min(centreL, window.innerWidth - winW - MARGIN)) + 'px';
-    win.style.top = Math.max(MARGIN, Math.min(centreT, window.innerHeight - winH - MARGIN)) + 'px';
+    win.style.top = Math.max(FLOOR, Math.min(centreT, window.innerHeight - winH - MARGIN)) + 'px';
     return;
   }
   var th = 21;
   win.style.left = Math.max(MARGIN, Math.min(pos.x - winW / 2, window.innerWidth - winW - MARGIN)) + 'px';
-  win.style.top = Math.max(MARGIN, Math.min(pos.y - th, window.innerHeight - winH - MARGIN)) + 'px';
+  win.style.top = Math.max(FLOOR, Math.min(pos.y - th, window.innerHeight - winH - MARGIN)) + 'px';
 }
 
 /** The pointer position a click event names, or null when there is none (a
@@ -667,6 +687,27 @@ function positionShellWindowFromClick(win, pos) {
 function windowPositionFromClick(ev) {
   if (!ev || typeof ev.clientX !== 'number') return null;
   return { x: ev.clientX, y: ev.clientY };
+}
+
+/** The y coordinate a floating window may not rise above: the page header's lower
+ *  edge. Measured rather than restated as a constant because the header is not a
+ *  fixed height — its nav wraps at narrow widths and a language switch rewrites
+ *  the labels inside it. Returns 0 (the viewport top, i.e. the old behaviour) when
+ *  the page has no header at all, which is also what an unmeasured page gets. */
+function appHeaderBottom() {
+  var el = document.querySelector('.app-header');
+  if (!el) return 0;
+  var r = el.getBoundingClientRect();
+  return isFinite(r.bottom) ? Math.max(0, r.bottom) : 0;
+}
+
+/** Publish that edge for the stylesheet, which cannot measure: .pane-workspace
+ *  insets its own top by this variable, so the tiled grid stops below the header
+ *  and the header — the way back to the page — stays readable and clickable in
+ *  tile mode. Kept as a variable rather than a duplicated constant so the CSS
+ *  floor and the drag floor cannot drift apart. */
+function syncAppHeaderDepth() {
+  document.documentElement.style.setProperty('--app-header-h', appHeaderBottom() + 'px');
 }
 
 /** Pull a floating window back inside the windows container after a drag.
@@ -679,9 +720,12 @@ function windowPositionFromClick(ev) {
  *  position once the drag is over.
  *
  *  Bounded by the container, not the viewport: the container is what windows are
- *  positioned against, so if it ever gains an inset this stays correct. When the
- *  window is larger than the container on an axis the leading edge wins, which
- *  keeps the title and its close button on screen. */
+ *  positioned against, so if it ever gains an inset this stays correct. The
+ *  leading edge is the page header's lower edge, never the viewport top — a window
+ *  released over the header would cover the page's own chrome, and the header is
+ *  the only way back to it. When the window is larger than the remaining area on
+ *  an axis the leading edge wins, which keeps the title and its close button
+ *  reachable. */
 function clampShellWindowIntoContainer(win) {
   if (!win || isTiledWin(win)) return;
   var host = win.parentNode;
@@ -690,10 +734,13 @@ function clampShellWindowIntoContainer(win) {
   var areaW = host.clientWidth || box.width;
   var areaH = host.clientHeight || box.height;
   var r = win.getBoundingClientRect();
+  /* The leading edge is the container's own top, or the header's lower edge when
+     that is further down; the trailing edge still counts from the container. */
+  var floor = Math.max(box.top, appHeaderBottom());
   var maxLeft = Math.max(box.left, box.left + areaW - r.width);
-  var maxTop = Math.max(box.top, box.top + areaH - r.height);
+  var maxTop = Math.max(floor, box.top + areaH - r.height);
   var left = Math.min(Math.max(box.left, r.left), maxLeft);
-  var top = Math.min(Math.max(box.top, r.top), maxTop);
+  var top = Math.min(Math.max(floor, r.top), maxTop);
   if (left !== r.left) win.style.left = left + 'px';
   if (top !== r.top) win.style.top = top + 'px';
 }

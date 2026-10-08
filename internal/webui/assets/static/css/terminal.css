@@ -29,7 +29,12 @@
   .session-tab .session-tab-review[hidden] { display: none; }
   .session-tab.has-review { border-color: var(--term-danger); }
   /* ---- pane workspace (tiled mode) ---- */
-  .pane-workspace { position: fixed; inset: 0; z-index: 10000; background: var(--term-pane-72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
+  /* The tiled layer starts below the page header, not at the viewport top: the
+     header is page chrome (the wordmark, the docs/language links) and a full grid
+     of terminals covering it hides the page the terminals belong to. The height is
+     measured and republished by shell-windows.js (the nav wraps) rather than
+     hardcoded here; an unmeasured page falls back to the old full-viewport inset. */
+  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 0 0; z-index: 10000; background: var(--term-pane-72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
   .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
   .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
