@@ -1,6 +1,6 @@
 function uiWebSocketURL() {
   var s = location.protocol === 'https:' ? 'wss' : 'ws';
-  return s + '://' + location.host + '/api/ui/ws';
+  return s + '://' + location.host + apiPath('/api/ui/ws');
 }
 
 function wsUiSend(obj) {
@@ -870,7 +870,7 @@ var SHELL_HISTORY_DISPLAY_CAP = 32 * 1024 * 1024;
 
 function fetchShellOutputRange(shellId, qs) {
   // Path id is shell_id (channel id used by tabs/WS watch).
-  return fetch('/api/shells/' + encodeURIComponent(shellId) + '/output-range?' + qs).then(function (r) {
+  return fetch(apiPath('/api/shells/') + encodeURIComponent(shellId) + '/output-range?' + qs).then(function (r) {
     if (!r.ok) throw new Error('output-range ' + r.status);
     return r.json();
   });

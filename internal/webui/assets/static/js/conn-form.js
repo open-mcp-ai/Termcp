@@ -168,7 +168,7 @@ function _populateJumpImports() {
     });
   }
   if (connEntries) { fill(); return; }
-  fetch('/api/connections').then(function(r){ return r.json(); }).then(function(j) {
+  fetch(apiPath('/api/connections')).then(function(r){ return r.json(); }).then(function(j) {
     connEntries = j.connections || [];
     fill();
   }).catch(function(){});
@@ -328,7 +328,7 @@ function openConnModal(edit, name, kind) {
   if (iconForm) iconForm.style.display = '';
   if (iconToml) iconToml.style.display = 'none';
   if (edit) {
-    fetch('/api/connections/' + encodeURIComponent(name)).then(function (r) {
+    fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
       if (!r.ok) throw new Error(r.statusText);
       return r.text();
     }).then(function (t) {
@@ -425,7 +425,7 @@ _jumpsBox.addEventListener('change', function (e) {
   var card = e.target.closest('.jump-card');
   var idx = card ? parseInt(card.getAttribute('data-idx'), 10) : NaN;
   if (isNaN(idx)) return;
-  fetch('/api/connections/' + encodeURIComponent(name)).then(function (r) {
+  fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
     if (!r.ok) throw new Error(r.statusText);
     return r.text();
   }).then(function (t) {
@@ -518,7 +518,7 @@ document.getElementById('conn-test').onclick = function () {
   var body = _connGetBody();
   btn.disabled = true;
   btn.textContent = t('test.testing');
-  fetch('/api/connections/test', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
+  fetch(apiPath('/api/connections/test'), { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
       return r.json();
@@ -570,7 +570,7 @@ document.getElementById('conn-save').onclick = function () {
       return;
     }
   }
-  var url = '/api/connections/' + encodeURIComponent(name);
+  var url = apiPath('/api/connections/') + encodeURIComponent(name);
   var params = new URLSearchParams();
   params.set('temporary', document.getElementById('conn-temporary').checked ? 'true' : 'false');
   if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
@@ -597,7 +597,7 @@ document.getElementById('conn-delete').onclick = function () {
   });
 };
 function doDeleteConnection(name) {
-  fetch('/api/connections/' + encodeURIComponent(name), { method: 'DELETE' })
+  fetch(apiPath('/api/connections/') + encodeURIComponent(name), { method: 'DELETE' })
     .then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
       hideModal('modal-conn');
@@ -648,7 +648,7 @@ document.getElementById('conn-import-run').onclick = function () {
   btn.disabled = true;
   var temporary = document.getElementById('conn-import-temporary').checked;
   // The file is opaque to the UI; the backend parses and validates its TOML.
-  fetch('/api/connections/batch?temporary=' + temporary, {
+  fetch(apiPath('/api/connections/batch?temporary=') + temporary, {
     method: 'POST', headers: { 'Content-Type': 'application/toml' }, body: file
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
@@ -677,7 +677,7 @@ document.getElementById('conn-import-run').onclick = function () {
    document either way (names filter or all), so the browser stays a pipe for
    opaque bytes. */
 function downloadConnectionsToml(names) {
-  var path = '/api/connections/batch';
+  var path = apiPath('/api/connections/batch');
   if (names && names.length) path += '?names=' + names.map(encodeURIComponent).join(',');
   return fetch(path).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
@@ -771,7 +771,7 @@ function exportSelectedNodes() {
 // cleared here — another client already got there. Sessions and connections
 // share the shape, so they share the helper; only the resource segment differs.
 function deleteResourcesBatch(resource, ids) {
-  var path = '/api/' + resource + '/' + ids.map(encodeURIComponent).join(',');
+  var path = apiPath('/api/') + resource + '/' + ids.map(encodeURIComponent).join(',');
   return fetch(path, { method: 'DELETE' }).then(function (r) {
     if (r.ok && r.status !== 204) {
       return r.json().then(function (j) { return (j && j.results) || []; });
@@ -1168,7 +1168,7 @@ startUIWebSocket();
 
 // The header labels the build (the string `termcp -version` prints first). The
 // page is static, so the number is fetched once; a failure just leaves it blank.
-fetch('/api/version')
+fetch(apiPath('/api/version'))
   .then(function (r) { return r.ok ? r.json() : null; })
   .then(function (j) {
     var el = document.getElementById('app-version');

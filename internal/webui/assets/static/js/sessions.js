@@ -341,7 +341,7 @@ function renderTileGrid(region, all) {
         }
         confirmDialog(delConf).then(function (ok) {
           if (!ok) return;
-          fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
+          fetch(apiPath('/api/sessions/') + encodeURIComponent(s.id), { method: 'DELETE' })
             .then(function (r) {
               if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
               var w = getShellWindowBySid(s.id);
@@ -397,7 +397,7 @@ function renderTileGrid(region, all) {
       if (input === null) return;
       var newName = input.trim();
       if (!newName || (cur && newName === cur)) { showCopyToast(t('session.toast.unchanged')); return; }
-      fetch('/api/sessions/' + encodeURIComponent(sid), {
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sid), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName })

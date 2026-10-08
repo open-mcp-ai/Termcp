@@ -865,7 +865,7 @@ function bindShellWindowCloseButton(win, closeBtn) {
       danger: true
     }).then(function (ok) {
       if (!ok) return;
-      fetch('/api/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sid), { method: 'DELETE' })
         .then(function (r) {
           if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
           var w = getShellWindowBySid(sid) || win;

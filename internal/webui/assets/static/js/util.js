@@ -376,9 +376,49 @@ function setLoadBanner(bannerEl, msg) {
   bannerEl.appendChild(x);
 }
 
+/**
+ * Deployment path prefix, derived once from this document's own URL.
+ *
+ * termcp is often reached behind a reverse proxy mounted on a sub-path
+ * (`https://host/termcp/`), where every root-absolute URL the page emits
+ * (`/api/...`, `/static/...`, `/icons/...`) would escape the mount and hit the
+ * parent site instead. Deriving the prefix from `location.pathname` keeps the
+ * page working both at the root (prefix = "") and under any mount, with no
+ * server-side configuration and no URL rewriting in the proxy.
+ *
+ * The document is always `<prefix>/` or `<prefix>/index.html`, so the prefix is
+ * everything before the trailing `index.html`, or before the final path segment.
+ * Normalized to "" (root) or "/sub/path" (no trailing slash).
+ */
+function uiBasePath() {
+  var p = location.pathname || '/';
+  if (p.slice(-11) === '/index.html') p = p.slice(0, -11);
+  else {
+    var i = p.lastIndexOf('/');
+    p = i < 0 ? '' : p.slice(0, i);
+  }
+  return p === '/' ? '' : p;
+}
+
+/**
+ * Resolve a termcp-root-absolute path against the deployment prefix:
+ * apiPath('/api/version') -> '/api/version' at the root,
+ *                            '/termcp/api/version' under a /termcp mount.
+ * Idempotent for values that are already prefixed.
+ */
+function apiPath(path) {
+  var p = String(path == null ? '' : path);
+  if (!p) return uiBasePath();
+  if (p.charAt(0) !== '/') return p;
+  var base = uiBasePath();
+  if (!base) return p;
+  if (p === base || p.indexOf(base + '/') === 0) return p;
+  return base + p;
+}
+
 /** /api/sessions/{id}{suffix} — session-scoped REST (shells/forwards/files). Terminal I/O uses WebSocket. */
 function sessionAPI(sessionId, suffix) {
-  return '/api/sessions/' + encodeURIComponent(sessionId) + suffix;
+  return apiPath('/api/sessions/' + encodeURIComponent(sessionId) + suffix);
 }
 
 /** SSE reconnect: backoff from prev to next cap (seconds) */

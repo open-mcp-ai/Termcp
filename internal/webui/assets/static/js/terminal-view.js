@@ -278,7 +278,7 @@ function closeChannelTab(win, sessionId) {
   // DEAD tabs are read-only views; closing one must not release the persisted
   // shell or session. Live tabs retain the existing close-shell behavior.
   if (!win._readOnly) {
-    fetch('/api/shells/' + encodeURIComponent(sessionId), { method: 'DELETE' }).catch(function() {});
+    fetch(apiPath('/api/shells/') + encodeURIComponent(sessionId), { method: 'DELETE' }).catch(function() {});
   }
 
   // Dispose xterm
@@ -447,7 +447,7 @@ function createChannel(win, mode, command) {
     body.command = argv[0];
     if (argv.length > 1) body.args = argv.slice(1);
   }
-  return fetch('/api/sessions/' + encodeURIComponent(win._parentSid) + '/shells', {
+  return fetch(apiPath('/api/sessions/') + encodeURIComponent(win._parentSid) + '/shells', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

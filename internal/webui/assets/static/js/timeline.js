@@ -103,7 +103,7 @@ function railFetch(win, sid) {
   }
   var seq = ++st.fetchSeq;
   var want = railFetchWindow(vis);
-  var url = '/api/shells/' + encodeURIComponent(sid) + '/rail?cols=' + Math.max(2, Number(term.cols) || 80) +
+  var url = apiPath('/api/shells/') + encodeURIComponent(sid) + '/rail?cols=' + Math.max(2, Number(term.cols) || 80) +
     '&height=' + Math.max(1, vis.rows) +
     '&top=' + want.top + '&count=' + want.count;
   fetch(url).then(function (r) {
