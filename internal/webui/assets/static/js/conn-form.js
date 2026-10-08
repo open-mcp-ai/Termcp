@@ -960,6 +960,80 @@ function sessionFailuresText(failed) {
   return failed.map(function (r) { return r.id + (r.error ? ': ' + r.error : ''); }).join('; ');
 }
 
+/** Stop one plate's selected work.
+ *
+ *  Two kinds of selection are possible and they end differently:
+ *
+ *    - a dial in progress has no session yet, so the only thing that can stop it
+ *      is aborting the request that made it (see cancelPendingConn);
+ *    - a running session is ended with POST /terminate, which leaves it in the
+ *      registry as a DEAD entry so its output stays readable — disconnecting is
+ *      not deleting, and the two are separate actions on purpose.
+ *
+ *  Both happen in one gesture: the user selected "what is running" and expects
+ *  all of it to stop, not the half the server happens to know about.
+ */
+function disconnectSelectedInRegion(region) {
+  var targets = sessionsForRegion(region, sessionsWithPending()).filter(function (s) { return region.ids.has(s.id); });
+  if (!targets.length) {
+    showCopyToast(t('toast.sessions.none'));
+    return;
+  }
+  var pendingTargets = targets.filter(function (s) { return s._pending; });
+  var liveIds = targets.filter(function (s) { return !s._pending; }).map(function (s) { return s.id; });
+  var msg = tCount('batch.disconnect.msg.one', 'batch.disconnect.msg.other', { count: targets.length });
+  if (pendingTargets.length) msg += ' ' + tCount('batch.disconnect.pendingHint.one', 'batch.disconnect.pendingHint.other', { count: pendingTargets.length });
+  confirmDialog({
+    title: t('batch.disconnect.dialog'),
+    message: msg,
+    okText: t('batch.disconnect.ok', { count: targets.length })
+  }).then(function (ok) {
+    if (!ok) return;
+    // Dials first: they are cancelled locally and instantly, so the cards that
+    // are not waiting on any round trip disappear before the request below.
+    cancelAllPendingConns();
+    if (!liveIds.length) {
+      _sessionRegions.forEach(function (r) { pendingTargets.forEach(function (s) { r.ids.delete(s.id); }); });
+      showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: pendingTargets.length }));
+      renderSessionGrid('');
+      return;
+    }
+    var banner = document.getElementById('session-load-banner');
+    if (banner) setLoadBanner(banner, tCount('banner.stopping.one', 'banner.stopping.other', { count: liveIds.length }));
+    var path = '/api/sessions/' + liveIds.map(encodeURIComponent).join(',') + '/terminate';
+    fetch(path, { method: 'POST' }).then(function (r) {
+      if (r.ok && r.status !== 204) {
+        return r.json().then(function (j) { return (j && j.results) || []; });
+      }
+      if (r.status === 204 || r.status === 404) {
+        return liveIds.map(function (id) { return { id: id, ok: true }; });
+      }
+      return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
+    }).then(function (results) {
+      var failed = [];
+      (results || []).forEach(function (r) {
+        if (r.ok || r.code === 'session_not_found') {
+          // The session stays in the registry as a DEAD entry, so its window is
+          // NOT closed here: the server's next frame locks it read-only, which is
+          // what makes the output still reachable. Dropping the selection is all
+          // this side has to do.
+          _sessionRegions.forEach(function (rg) { rg.ids.delete(r.id); });
+        } else {
+          failed.push(r);
+        }
+      });
+      if (banner) setLoadBanner(banner, '');
+      var stopped = (results || []).length - failed.length + pendingTargets.length;
+      if (failed.length) showCopyToast(t('toast.stop.failed', { msg: sessionFailuresText(failed) }));
+      else showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: stopped }));
+      renderSessionGrid('');
+    }).catch(function (err) {
+      if (banner) setLoadBanner(banner, t('toast.stop.failed', { msg: String(err.message || err) }));
+      renderSessionGrid('');
+    });
+  });
+}
+
 /** Delete one plate's selected sessions after confirming.
  *
  *  Both plates share this: the only difference is which ids they own, and the
@@ -968,13 +1042,20 @@ function sessionFailuresText(failed) {
  *  regions independent.
  */
 function deleteSelectedInRegion(region) {
-  var snapshot = window._lastSessionsSnapshot || [];
+  var snapshot = sessionsWithPending();
   var targets = sessionsForRegion(region, snapshot).filter(function (s) { return region.ids.has(s.id); });
   if (!targets.length) {
     showCopyToast(t('toast.sessions.none'));
     return;
   }
+  /* A dial in progress cannot be deleted — there is no session directory yet, and
+     DELETE would 404 on a synthetic id. Cancelling is the whole effect the user
+     is asking for there, and it is the same thing the disconnect action does;
+     so the delete path handles it the same way instead of failing on it. */
+  var pendingTargets = targets.filter(function (s) { return s._pending; });
+  var liveIds = targets.filter(function (s) { return !s._pending; }).map(function (s) { return s.id; });
   var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
+  if (pendingTargets.length) msg += ' ' + tCount('batch.disconnect.pendingHint.one', 'batch.disconnect.pendingHint.other', { count: pendingTargets.length });
   confirmDialog({
     title: t('batch.del.dialog'),
     message: msg,
@@ -982,12 +1063,19 @@ function deleteSelectedInRegion(region) {
     danger: true
   }).then(function (ok) {
     if (!ok) return;
+    cancelAllPendingConns();
+    _sessionRegions.forEach(function (r) { pendingTargets.forEach(function (s) { r.ids.delete(s.id); }); });
+    if (!liveIds.length) {
+      showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: pendingTargets.length }));
+      renderSessionGrid('');
+      return;
+    }
     var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-    return deleteResourcesBatch('sessions', targets.map(function (s) { return s.id; })).then(function (results) {
+    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: liveIds.length }));
+    return deleteResourcesBatch('sessions', liveIds).then(function (results) {
       settleSessionDeletes(results, banner, function (cleared, failed) {
         if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
-        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
+        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared + pendingTargets.length }));
         loadForwards();
         startUIWebSocket();
         renderSessionGrid('');
@@ -999,7 +1087,7 @@ function deleteSelectedInRegion(region) {
   });
 }
 
-// Each plate's trash and select-all act on that plate's own selection.
+// Each plate's trash, stop key and select-all act on that plate's own selection.
 _sessionRegions.forEach(function (region) {
   var delBtn = document.getElementById(region.delId);
   if (delBtn) {
@@ -1008,11 +1096,22 @@ _sessionRegions.forEach(function (region) {
       deleteSelectedInRegion(region);
     };
   }
+  var stopBtn = document.getElementById(region.stopId);
+  if (stopBtn) {
+    stopBtn.onclick = function (e) {
+      e.stopPropagation();
+      disconnectSelectedInRegion(region);
+    };
+  }
   var selAllBtn = document.getElementById(region.selAllId);
   if (selAllBtn) {
     selAllBtn.onclick = function (e) {
       e.stopPropagation();
-      var members = sessionsForRegion(region, window._lastSessionsSnapshot || []);
+      /* Membership comes from the composed list, so select-all reaches the dials
+         still in progress as well as the sessions the server knows about — which
+         is what makes "select everything that is running, then stop it" one
+         gesture instead of two. */
+      var members = sessionsForRegion(region, sessionsWithPending());
       var allSelected = members.length > 0 && members.every(function (s) { return region.ids.has(s.id); });
       if (allSelected) members.forEach(function (s) { region.ids.delete(s.id); });
       else members.forEach(function (s) { region.ids.add(s.id); });

@@ -53,6 +53,9 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .conn-tile.sess-tile .sess-status-ic.is-live { animation: none; opacity: 1; }
+  /* The connecting bar is decoration too: at rest it stays at its readable value,
+     so the "still dialling" state is legible without it. */
+  .conn-tile.sess-tile .sess-status-ic.is-connecting { animation: none; opacity: 1; transform: none; }
   .conn-tile.entry-card:hover, .conn-tile.entry-card:active { transform: none; }
   /* A breathing backdrop is decoration: at rest it simply stays at its brighter
      value, so nothing about the page's contrast changes. */

@@ -114,10 +114,20 @@ function refreshSessionTabbar() {
 }
 
 // Keep the tab bar in sync as shell windows are opened/closed anywhere.
+//
+// The session plate is repainted from the same signal, and that is not cosmetic:
+// a dial in progress exists as a placeholder window and nothing else, so the
+// window appearing or disappearing is the ONLY event that can add or remove its
+// connecting card. Watching the container is what makes the card show up when
+// the dial starts and clear when it ends — without this the plate is only
+// repainted by session frames, which a still-connecting dial never produces.
 (function () {
   var c = shellWindowsEl();
   if (!c || typeof MutationObserver === 'undefined') return;
-  new MutationObserver(function () { refreshSessionTabbar(); }).observe(c, { childList: true });
+  new MutationObserver(function () {
+    refreshSessionTabbar();
+    if (typeof renderSessionGrid === 'function') renderSessionGrid('');
+  }).observe(c, { childList: true });
 })();
 
 // Fixed action cluster at the right end of the session tab bar (Chrome-style):

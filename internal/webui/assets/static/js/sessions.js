@@ -3,13 +3,96 @@
  *  the other. One table holds both plates whole — card markup, actions, pruning
  *  and the selection sets themselves all come from here. */
 var _sessionRegions = [
-  { dead: false, ids: new Set(), gridId: 'session-grid', countId: 'session-batch-count', selAllId: 'session-sel-all', delId: 'session-del-btn' },
-  { dead: true, ids: new Set(), gridId: 'archive-grid', countId: 'archive-batch-count', selAllId: 'archive-sel-all', delId: 'archive-del-btn' }
+  { dead: false, ids: new Set(), gridId: 'session-grid', countId: 'session-batch-count', selAllId: 'session-sel-all', delId: 'session-del-btn', stopId: 'session-stop-btn' },
+  { dead: true, ids: new Set(), gridId: 'archive-grid', countId: 'archive-batch-count', selAllId: 'archive-sel-all', delId: 'archive-del-btn', stopId: 'archive-stop-btn' }
 ];
 
 /** A session is over once it stops running; the registry retains it for the
  *  archive rather than dropping it. */
 function isDeadSession(s) { return !(s && s.status === 'running'); }
+
+/* ---- sessions still being dialled ----
+ *
+ * A connect that is still in progress has no session yet: the server registers
+ * one only when the dial succeeds, so it is absent from every snapshot and the
+ * Sessions plate cannot show it. The only place a dial exists before that is the
+ * placeholder window that was opened for it, and that window IS the dial — it
+ * holds the AbortController whose abort is the only thing that can stop the
+ * handshake server-side (see startSessionAndOpenShell).
+ *
+ * These synthesise a card for each placeholder so the connecting work is visible
+ * in the plate and therefore selectable by the same select-all and batch actions
+ * as everything else. The card carries a prefixed id rather than a real session
+ * id: it must never be mistaken for something the server can look up, because
+ * `terminate` and `DELETE` would both 404 on it — cancelling the dial means
+ * aborting the request that made it, not calling an endpoint.
+ */
+var PENDING_ID_PREFIX = 'pending:';
+
+/** The synthetic card id for a dial in progress, keyed by the profile it dials.
+ *  One placeholder per profile exists at a time (startSessionAndOpenShell
+ *  refuses a duplicate), so the profile name is a stable identity for the card:
+ *  the same value across re-renders, which is what lets a selection survive
+ *  the frequent session frames that repaint this grid. */
+function pendingCardId(connName) { return PENDING_ID_PREFIX + (connName || ''); }
+
+/** Is this card id one of the synthesised connecting cards? */
+function isPendingCardId(id) {
+  return typeof id === 'string' && id.indexOf(PENDING_ID_PREFIX) === 0;
+}
+
+/** Every dial in progress, as snapshot-shaped records so the plate renders them
+ *  through the same card markup as a real session. `status` is 'running'
+ *  because the connect IS in progress — the card belongs to the live plate, and
+ *  it is what makes it land in a select-all. */
+function pendingSessionRecords() {
+  if (typeof allShellWins !== 'function') return [];
+  var out = [];
+  allShellWins().forEach(function (w) {
+    if (!w || !w._placeholder) return;
+    var conn = w._pendingConnName || '';
+    out.push({
+      id: pendingCardId(conn),
+      name: conn || t('tab.connecting'),
+      status: 'running',
+      _pending: true,
+      _pendingConn: conn
+    });
+  });
+  return out;
+}
+
+/** The list every plate reads: the server's snapshot plus the dials the server
+ *  cannot know about yet. One place composes them, so the running plate, both
+ *  regions' membership, and pruning all see the same list. */
+function sessionsWithPending() {
+  return (window._lastSessionsSnapshot || []).concat(pendingSessionRecords());
+}
+
+/** Stop a dial in progress. This is the batch form of the placeholder window's
+ *  own close button: aborting the request is what makes the server's context
+ *  end and the handshake stop (Manager.Create rechecks the context before it
+ *  registers anything, so an aborted dial never leaves a session behind).
+ *
+ *  Returns true when a placeholder was found and cancelled. */
+function cancelPendingConn(connName) {
+  if (typeof getPendingShellWindowForConn !== 'function') return false;
+  var win = getPendingShellWindowForConn(connName);
+  if (!win) return false;
+  closeShellWindow(win);
+  return true;
+}
+
+/** Cancel every dial currently in progress, returning how many were stopped.
+ *  Used by both batch actions: a connecting card has no session to terminate or
+ *  delete, so whichever action is chosen, cancelling is the whole effect. */
+function cancelAllPendingConns() {
+  var cancelled = 0;
+  pendingSessionRecords().forEach(function (p) {
+    if (cancelPendingConn(p._pendingConn)) cancelled++;
+  });
+  return cancelled;
+}
 
 /** Sessions belonging to a region, from the last snapshot, so a region only ever
  *  sees the half it renders. */
@@ -19,7 +102,12 @@ function sessionsForRegion(region, snapshot) {
 
 /** Drop from both plates' selections every id that is absent from `present`
  *  (a map keyed by session id). One pass, because a session that leaves the
- *  registry must leave both sets: it is gone from both plates. */
+ *  registry must leave both sets: it is gone from both plates.
+ *
+ *  `present` must come from the composed list (sessionsWithPending), not the raw
+ *  snapshot: a dial in progress is absent from the server's snapshot by
+ *  definition, so pruning against that alone would clear its tick on the next
+ *  repaint — the selection would not survive the frame that renders the card. */
 function pruneSessionSelections(present) {
   if (!present) return;
   _sessionRegions.forEach(function (region) {
@@ -30,7 +118,7 @@ function pruneSessionSelections(present) {
 /** Show a region's trash only once it has a selection, and report whether its
  *  checkbox is fully checked. */
 function updateSessionBatchBar() {
-  var snapshot = window._lastSessionsSnapshot || [];
+  var snapshot = sessionsWithPending();
   _sessionRegions.forEach(function (region) {
     var countEl = document.getElementById(region.countId);
     var delBtn = document.getElementById(region.delId);
@@ -61,6 +149,17 @@ function updateSessionBatchBar() {
         ? tCount('batch.del.title.one', 'batch.del.title.other', { count: count })
         : t('section.batch.deleteSelected');
     }
+    /* Stopping is offered for the live plate only: an archived session has
+       already stopped, and cancelling a dial is the same action, so the archive
+       (which never holds a pending card) has no use for this key. It appears on
+       the same terms as the trash — with a selection. */
+    var stopBtn = region.stopId ? document.getElementById(region.stopId) : null;
+    if (stopBtn) {
+      stopBtn.hidden = count === 0;
+      stopBtn.title = count > 0
+        ? tCount('batch.disconnect.title.one', 'batch.disconnect.title.other', { count: count })
+        : t('section.batch.disconnectSelected');
+    }
   });
 }
 
@@ -69,7 +168,11 @@ function updateSessionBatchBar() {
 // only thing a caller varies.
 function renderSessionGrid(bannerMsg) {
   setLoadBanner(document.getElementById('session-load-banner'), bannerMsg);
-  var all = (window._lastSessionsSnapshot || []).slice();
+  // `all` carries the dials in progress as well: a connecting card has to be
+  // rendered by the same pass (and be selectable by the same controls) as a
+  // real session, or select-all would reach only the sessions the server
+  // already knows about.
+  var all = sessionsWithPending();
   // One renderer for both plates: the split is which half each region owns, so
   // the card markup, rename, copy, lock and delete paths cannot drift apart.
   _sessionRegions.forEach(function (region) { renderTileGrid(region, all); });
@@ -109,24 +212,39 @@ function renderTileGrid(region, all) {
     if (sid && _uiNotifHighlights && _uiNotifHighlights[sid]) {
       tile.classList.add('sess-notified');
     }
+    // A dial in progress: the card shows the profile it is dialling and a
+    // spinner instead of the live/dead lamp. Everything else on the card is
+    // suppressed below rather than branched here, so the two kinds of card
+    // cannot drift apart in structure.
+    var pending = !!s._pending;
     var nm = String((s.name || '').trim());
-    var entryLine = nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s);
+    var entryLine = pending
+      ? (nm || t('tab.connecting'))
+      : (nm && nm.indexOf('session-') !== 0 ? nm : displaySessionShort(s));
     /* Status lamp at the left of the id: green while the session is up, red once
-       it is over. The reason still travels in the tooltip. */
-    var statusText = dead
-      ? t('session.status.dead', { reason: reasonLabel(s.reason) })
-      : t('session.status.running');
-    var statusIc =
-      '<span class="sess-status-ic ' + (dead ? 'is-dead' : 'is-live') + '" title="' +
-      escapeHtml(statusText) + '" role="img" aria-label="' +
-      escapeHtml(statusText) + '"></span>';
+       it is over. The reason still travels in the tooltip. A connecting card has
+       neither state yet, so it gets the spinner the pending window already uses
+       and says what it is doing in the same tooltip slot. */
+    var statusText = pending
+      ? t('session.status.connecting')
+      : (dead
+          ? t('session.status.dead', { reason: reasonLabel(s.reason) })
+          : t('session.status.running'));
+    var statusIc = pending
+      ? '<span class="sess-status-ic is-connecting" title="' +
+        escapeHtml(statusText) + '" role="img" aria-label="' +
+        escapeHtml(statusText) + '"></span>'
+      :
+        '<span class="sess-status-ic ' + (dead ? 'is-dead' : 'is-live') + '" title="' +
+        escapeHtml(statusText) + '" role="img" aria-label="' +
+        escapeHtml(statusText) + '"></span>';
 
     /* Approval lock: a state indicator that is also the switch. It sits in the
        meta row with the lamp and the id, which is already the line that reads
        "what state is this session in". Only live sessions can be gated — a DEAD
        session has no input to gate. */
     var gated = !!s.approval_mode;
-    var lockHtml = !dead
+    var lockHtml = (!dead && !pending)
       ? '<button type="button" class="sess-lock' + (gated ? ' is-on' : '') + '" ' +
           'title="' + escapeHtml(gated ? t('review.disableTip') : t('review.enableTip')) + '" ' +
           'aria-pressed="' + (gated ? 'true' : 'false') + '" ' +
@@ -135,31 +253,62 @@ function renderTileGrid(region, all) {
         '</button>'
       : '';
 
-    var actionCornerHtml =
-      '<button type="button" class="sess-x" title="Delete session" data-i18n-title="session.delete.title" aria-label="Delete session" data-i18n-aria="session.delete.title">' +
+    // The corner key cancels the dial rather than deleting a session: there is
+    // nothing on the server to delete yet, and the abort is what stops the
+    // handshake.
+    var actionCornerHtml = pending
+      ? '<button type="button" class="sess-x" title="' + escapeHtml(t('session.cancelDial.title')) + '" ' +
+        'aria-label="' + escapeHtml(t('session.cancelDial.title')) + '">' +
         '<svg viewBox="0 0 12 12" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
-      '</button>';
+        '</button>'
+      :
+        '<button type="button" class="sess-x" title="Delete session" data-i18n-title="session.delete.title" aria-label="Delete session" data-i18n-aria="session.delete.title">' +
+        '<svg viewBox="0 0 12 12" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>' +
+        '</button>';
 
+    /* The name line is the rename control, and the sid line copies the session
+       URL. Neither exists for a dial in progress: there is no session to rename
+       and no id to address yet, so a connecting card keeps both elements but
+       leaves them inert (no role, no tab stop, and the sid slot carries the
+       status word in place of an id that does not exist). The elements are kept
+       rather than dropped so the two cards stay the same shape — the CSS grid
+       that places them then needs no second variant. */
+    var nameRowHtml =
+      '<div class="sess-name-row">' +
+      '<input type="checkbox" class="sess-checkbox" title="Select session" data-i18n-title="session.aria.select" aria-label="Select session" data-i18n-aria="session.aria.select"' + (isSelected ? ' checked' : '') + '>' +
+      (pending
+        ? '<div class="sess-entry-line">' + escapeHtml(entryLine) + '</div>'
+        : '<div class="sess-entry-line" role="button" tabindex="0" title="Rename session" data-i18n-title="session.aria.rename" aria-label="Rename session" data-i18n-aria="session.aria.rename">' + escapeHtml(entryLine) + '</div>') +
+      '</div>';
+    /* The lamp sits in the meta row, immediately before the sid: that row is the
+       line that reads "what state is this session in". A connecting card swaps
+       the lamp for the spinner and the id for the status word, but keeps both
+       slots in this one row, so the row reads the same way on either card. The
+       sid span is written out in both branches rather than hoisted into a
+       variable, because the row's own markup is what a test pins. */
     tile.innerHTML =
       '<div class="conn-tile-stack">' +
       actionCornerHtml +
       '<div class="icon-wrap" title="' + escapeHtml(dead ? t('session.openHistory') : t('session.openTerminal')) + '"><span class="sess-terminal-ic">' + terminalIconImgHtml() + '</span></div>' +
       '</div>' +
       '<div class="sess-tile-body">' +
-      '<div class="sess-name-row">' +
-      '<input type="checkbox" class="sess-checkbox" title="Select session" data-i18n-title="session.aria.select" aria-label="Select session" data-i18n-aria="session.aria.select"' + (isSelected ? ' checked' : '') + '>' +
-      '<div class="sess-entry-line" role="button" tabindex="0" title="Rename session" data-i18n-title="session.aria.rename" aria-label="Rename session" data-i18n-aria="session.aria.rename">' + escapeHtml(entryLine) + '</div>' +
-      '</div>' +
+      nameRowHtml +
       '<div class="sess-meta-row">' +
       statusIc +
       lockHtml +
-      '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" data-i18n-title="session.aria.copyUrl" aria-label="Copy session URL" data-i18n-aria="session.aria.copyUrl">' + escapeHtml(sid) + '</span>' +
+      (pending
+        ? '<span class="sess-sid-line is-pending">' + escapeHtml(statusText) + '</span>'
+        : '<span class="sess-sid-line" role="button" tabindex="0" title="Copy session URL" data-i18n-title="session.aria.copyUrl" aria-label="Copy session URL" data-i18n-aria="session.aria.copyUrl">' + escapeHtml(sid) + '</span>') +
       '</div>' +
       reviewBadgeHtml(sid) +
       '</div>' +
       '<div class="sess-fwd-info" style="display:none"></div>';
 
-    tile.title = (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
+    /* A pending card's tooltip says what it is doing; the real card's names what
+       opening it will do. */
+    tile.title = pending
+      ? statusText + ' · ' + escapeHtml(s._pendingConn || '')
+      : (dead ? t('session.openHistory.tip') : t('session.openTerminal')) + ' · ' + sid;
 
     var lockBtn = tile.querySelector('.sess-lock');
     if (lockBtn) {
@@ -181,6 +330,15 @@ function renderTileGrid(region, all) {
       sx.onclick = function (e) {
         e.preventDefault();
         e.stopPropagation();
+        /* Cancelling a dial needs no confirmation: the user is undoing their own
+           click, nothing is destroyed, and the abort is immediate on purpose.
+           Confirming would put a dialog between the user and the one gesture
+           whose whole point is "stop now". */
+        if (pending) {
+          cancelPendingConn(s._pendingConn);
+          renderSessionGrid('');
+          return;
+        }
         confirmDialog(delConf).then(function (ok) {
           if (!ok) return;
           fetch('/api/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' })
@@ -228,6 +386,11 @@ function renderTileGrid(region, all) {
     var doRename = function (e) {
       e.preventDefault();
       e.stopPropagation();
+      /* A connecting card renders its name as plain text (no role/tabindex), so
+         this handler is unreachable for it — the guard is here because the name
+         element is found by class on both kinds of card, and renaming a
+         synthetic id would PATCH an endpoint that cannot resolve it. */
+      if (pending || !nameEl.hasAttribute('role')) return;
       var cur = String((s.name || '').trim());
       if (cur.indexOf('session-') === 0) cur = '';
       var input = prompt(t('session.prompt.rename'), cur);
@@ -262,12 +425,20 @@ function renderTileGrid(region, all) {
 
     tile.onclick = function (e) {
       if (e.target.closest('.sess-x') || e.target.closest('.sess-checkbox') || e.target.closest('.sess-entry-line') || e.target.closest('.sess-sid-line') || e.target.closest('.sess-status-ic')) return;
+      /* A connecting card has no session to open. Its click raises the pending
+         window instead, which is the one actionable thing that exists for a dial
+         in progress and the same thing the connection list does for it. */
+      if (pending) {
+        var pw = typeof getPendingShellWindowForConn === 'function' ? getPendingShellWindowForConn(s._pendingConn) : null;
+        if (pw) bringShellWindowToFront(pw);
+        return;
+      }
       clearSessNotified(sid); // opening the session acknowledges its notification highlight
       /* The card names the position, so a click on the session grid still opens
          the terminal at the pointer; a keyboard activation has none and centres. */
       focusSessionWindow(s.name || '', s.id, windowPositionFromClick(e), dead ? { readOnly: true } : null);
     };
-    if (!dead) {
+    if (!dead && !pending) {
       var fwdInfo = tile.querySelector('.sess-fwd-info');
       var fwds = (window._lastForwards || []).filter(function(f) { return f.ssh_config === s.name; });
       if (fwds.length > 0) {
