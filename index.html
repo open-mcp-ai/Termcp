@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TermCP - 让 AI 进入你的诸多终端 | Let AI into your terminals</title>
+  
+  <!-- SEO & Metadata -->
+  <meta name="description" content="TermCP: 轻量 AI Native 安全终端控制面，可视化多界面，MCP+SKILLS+API，支持人机平等共驾、细粒度会话控制与零依赖极速部署。">
+  <meta name="keywords" content="TermCP, AI terminal, AI native, MCP, Model Context Protocol, MCP server, Claude Code, Codex, Gemini CLI, terminal control plane, human-in-the-loop, SSH-MCP, 终端MCP,人机共驾, AI终端, 运维自动化, 渗透测试, 安全终端, 端口转发, 终端复用, docker sandbox, open-mcp-ai">
+  <meta name="author" content="open-mcp-ai">
+  <meta name="theme-color" content="#6EE2FF">
+
+  <!-- Open Graph / Social Media -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="TermCP - 让 AI 进入你的诸多终端">
+  <meta property="og:description" content="轻量 AI Native 安全终端，可视化多界面，MCP+SKILLS+API，人机平等共驾。">
+  <meta property="og:url" content="https://termcp.org">
+
+  <style>
+    /* Palette mirrors termcp's built-in cyberpunk theme (themes/cyberpunk
+       tokens.css): near-black navy plates, cyan chrome, and the transcript mark
+       hues — green output, yellow human input, pink AI input. */
+    :root {
+      --bg: #05080f;
+      --bg-subtle: #080d17;
+      --card-bg: #0b1220;
+      --panel-bg: #080d17;
+      --bg-input: #070c16;
+      --accent: #6EE2FF;
+      --accent-rgb: 110, 226, 255;
+      --accent-glow: rgba(110, 226, 255, 0.25);
+      --accent-dim: rgba(110, 226, 255, 0.13);
+      --accent-ring: rgba(110, 226, 255, 0.26);
+      --green: #52e3a4;
+      --yellow: #fcee0a;
+      --pink: #ff3d6e;
+      --purple: #c08bff;
+      --border: rgba(110, 226, 255, 0.14);
+      --border-bright: rgba(110, 226, 255, 0.3);
+      --border-focus: rgba(110, 226, 255, 0.62);
+      --text: #dff3ff;
+      --text-bright: #eafcff;
+      --text-muted: #8fb4cc;
+      --text-faint: #5f8199;
+      --mono: 'Sarasa Mono SC', 'Noto Sans Mono CJK SC', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, Menlo, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Ambient Cyber Background */
+    .bg-grid {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image: 
+        linear-gradient(to right, rgba(110, 226, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(110, 226, 255, 0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Header Nav */
+    header {
+      padding: 24px 0;
+      border-bottom: 1px solid var(--border);
+      background: rgba(9, 11, 14, 0.85);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-decoration: none;
+    }
+    .brand-logo {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-logo span { color: var(--accent); }
+    
+    .meta-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      font-family: var(--mono);
+      transition: all 0.2s ease;
+    }
+    .github-link:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 12px var(--accent-dim);
+    }
+    .github-link svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+    .star-count {
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .version-tag {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 4px 8px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      color: var(--accent);
+      border-radius: 6px;
+    }
+
+    .lang-select-wrap select {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+      font-family: var(--sans);
+      transition: border-color 0.2s;
+    }
+    .lang-select-wrap select:hover { border-color: var(--accent); }
+
+    /* Hero */
+    .hero {
+      padding: 72px 0 48px;
+      text-align: center;
+    }
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 14px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      border-radius: 100px;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 24px;
+      letter-spacing: 0.5px;
+    }
+    .hero h1 {
+      font-size: 44px;
+      font-weight: 800;
+      line-height: 1.25;
+      margin-bottom: 16px;
+      letter-spacing: -0.5px;
+    }
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p.lead {
+      font-size: 19px;
+      color: var(--text-muted);
+      max-width: 700px;
+      margin: 0 auto 36px;
+    }
+
+    /* Quick Install Box */
+    .command-box {
+      max-width: 760px;
+      margin: 0 auto 64px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+      text-align: left;
+    }
+    .cmd-tabs {
+      display: flex;
+      background: var(--panel-bg);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .cmd-tab {
+      padding: 10px 18px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--mono);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+    }
+    .cmd-tab:hover { color: var(--text); }
+    .cmd-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(var(--accent-rgb), 0.05);
+    }
+    .cmd-body {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--text);
+    }
+    .cmd-text {
+      overflow-x: auto;
+      white-space: nowrap;
+      user-select: all;
+    }
+    .cmd-text span.prompt { color: var(--accent); margin-right: 8px; }
+    .copy-btn {
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      color: var(--accent);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: var(--mono);
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover {
+      background: var(--accent);
+      color: #000;
+      box-shadow: 0 0 14px var(--accent-glow);
+    }
+
+    /* Terminal Preview UI — the theme's floating window. Each transcript line
+       carries the mark termcp's rail uses for it: a = AI input (pink),
+       i = human input (yellow), o = shell output (green). */
+    .terminal-window {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      position: relative;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                  0 24px 64px rgba(0, 0, 0, 0.56),
+                  0 0 40px rgba(var(--accent-rgb), 0.06);
+      overflow: hidden;
+      margin-bottom: 80px;
+    }
+    .term-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      background: rgba(160, 205, 255, 0.07);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+    .term-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .shell-link-state {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.42);
+    }
+    .term-name { color: var(--text); font-weight: 700; letter-spacing: 0.06em; }
+    .term-header-right { display: flex; align-items: center; gap: 8px; }
+    .term-status {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--green);
+      background: rgba(82, 227, 164, 0.13);
+      border: 1px solid rgba(82, 227, 164, 0.45);
+      padding: 3px 8px;
+    }
+    .term-screen {
+      padding: 18px 20px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.75;
+      /* Tall enough for the whole scripted run (16 lines × 1.75em + padding), so
+         the desktop view shows the story end to end instead of scrolling its
+         first act off the top. Phones cap it lower and scroll, as a terminal
+         does. */
+      max-height: 410px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
+    .tl { white-space: pre-wrap; word-break: break-word; color: var(--text-muted);
+          border-left: 2px solid transparent; padding-left: 10px; }
+    .tl-ai { color: var(--text-bright); border-left-color: var(--pink); }
+    .tl-human { color: var(--yellow); border-left-color: var(--yellow); }
+    .tl-review { color: var(--purple); border-left-color: var(--purple); }
+    .mk { display: inline-block; width: 16px; font-weight: 700; }
+    .mk-a { color: var(--pink); }
+    .mk-o { color: var(--green); }
+    .mk-i { color: var(--yellow); }
+    .mk-q { color: var(--purple); }
+    /* An agent line that is a tool call, not a keystroke: the product's point is
+       that the agent drives MCP tools, so the call is shown as the call. */
+    .tl .tool { color: var(--accent); }
+
+    /* Review gate: the agent's write is held until a human decides. Nothing here
+       is editable — the AI wrote the command, the human accepts or refuses. */
+    .gate {
+      margin: 10px 0 4px 26px;
+      border: 1px solid rgba(var(--purple-rgb, 192, 139, 255), 0.45);
+      background: rgba(192, 139, 255, 0.07);
+      padding: 10px 12px;
+    }
+    .gate-h {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--purple);
+      margin-bottom: 8px;
+    }
+    .gate-cmd {
+      display: block;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text-bright);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .gate-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .gate-actions button {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      padding: 6px 14px;
+      cursor: pointer;
+      border: 1px solid var(--border-bright);
+      background: var(--card-bg);
+      color: var(--accent);
+      transition: all 0.16s ease;
+    }
+    .gate-actions .gate-accept { border-color: rgba(82, 227, 164, 0.5); color: var(--green); }
+    .gate-actions .gate-accept:hover { background: var(--green); color: #04121a; }
+    .gate-actions .gate-reject { border-color: rgba(255, 61, 110, 0.5); color: var(--pink); }
+    .gate-actions .gate-reject:hover { background: var(--pink); color: #04121a; }
+
+    /* notify_user: the toast the human gets when the agent hands the prompt back. */
+    .term-toast {
+      position: absolute;
+      top: 52px;
+      right: 12px;
+      max-width: 300px;
+      background: rgba(8, 14, 24, 0.96);
+      border: 1px solid var(--border-bright);
+      border-left: 3px solid var(--yellow);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      padding: 10px 12px;
+      font-size: 12.5px;
+      color: var(--text);
+      z-index: 3;
+    }
+    .term-toast b {
+      display: block;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--yellow);
+      margin-bottom: 4px;
+    }
+    .review-lock {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      cursor: pointer;
+      border: 1px solid rgba(192, 139, 255, 0.5);
+      background: rgba(192, 139, 255, 0.12);
+      color: var(--purple);
+    }
+    .review-lock[aria-pressed="false"] {
+      border-color: var(--border);
+      background: transparent;
+      color: var(--text-faint);
+    }
+    .term-hint {
+      padding: 6px 14px 8px;
+      background: var(--bg-input);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+    .term-hint.armed { color: var(--yellow); }
+
+    /* The tasks a visitor can hand to the agent. This is the product's headline
+       capability — the AI operates the terminal for you — so it is a first-class
+       row, not a footnote. */
+    .term-tasks {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+    .tasks-label {
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .task-chip {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      padding: 4px 10px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border-bright);
+      color: var(--accent);
+      transition: all 0.16s ease;
+    }
+    .task-chip:hover { background: var(--accent-dim); border-color: var(--accent); }
+    .task-chip:disabled { opacity: 0.4; cursor: default; }
+
+    /* Two ways to be on this terminal: ask, or type. The modes are the whole
+       "human and AI, equal, on one shell" claim in one control. */
+    .term-modes { display: flex; gap: 0; flex: 0 0 auto; }
+    .mode-btn {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 8px 12px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-faint);
+      transition: all 0.16s ease;
+    }
+    .mode-btn + .mode-btn { border-left: none; }
+    .mode-btn.active { background: var(--accent-dim); border-color: var(--accent-border, var(--border-bright)); color: var(--accent); }
+    .term-send:hover { background: var(--accent); color: #04121a; box-shadow: 0 0 14px var(--accent-glow); }
+
+    .term-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 8px 20px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .lg-a { color: var(--pink); }
+    .lg-i { color: var(--yellow); }
+    .lg-o { color: var(--green); }
+    .lg-q { color: var(--purple); }
+    .term-replay {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-faint);
+    }
+    .term-replay:hover { border-color: var(--accent-border, var(--border-bright)); color: var(--accent); }
+    .term-input-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--bg-input);
+      border-top: 1px solid var(--border);
+    }
+    .ti-prompt {
+      flex: 0 0 auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: var(--yellow);
+    }
+    #term-input {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    }
+    #term-input::placeholder { color: var(--text-faint); }
+    #term-input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+    .term-send {
+      flex: 0 0 auto;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.4);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .term-send:hover { background: var(--accent); color: #04121a; box-shadow: 0 0 14px var(--accent-glow); }
+
+    /* The theme squares its controls; plates stay softly rounded. */
+    .github-link, .version-tag, .lang-select-wrap select, .hero-pill,
+    .cmd-tab, .copy-btn, .term-status, .term-send, .review-lock, .term-replay { border-radius: 0; }
+    .command-box, .card { border-radius: 10px; }
+    a:focus-visible, button:focus-visible, select:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px var(--accent-ring);
+    }
+
+    /* Features Grid */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 24px;
+      margin-bottom: 96px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      transition: all 0.25s ease;
+      position: relative;
+    }
+    .card:hover {
+      border-color: rgba(var(--accent-rgb), 0.5);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 20px var(--accent-dim);
+    }
+    .card-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .card-icon svg { width: 22px; height: 22px; }
+    .card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+    .card p {
+      font-size: 14.5px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+      font-size: 13.5px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 30px; }
+      .hero p.lead { font-size: 16px; }
+      .cmd-body { flex-direction: column; align-items: flex-start; }
+      .copy-btn { width: 100%; text-align: center; }
+      /* The input keeps the whole second row: the mode keys and the send key move
+         to their own rows rather than squeezing the field to 141px. */
+      .term-input-bar { flex-wrap: wrap; }
+      .term-modes { order: 1; width: 100%; }
+      .mode-btn { flex: 1; text-align: center; }
+      #term-input { order: 2; flex: 1 1 100%; }
+      .term-send { order: 3; width: 100%; text-align: center; }
+      .term-tasks { gap: 6px; }
+      .task-chip { flex: 1 1 100%; text-align: left; }
+      .term-screen { max-height: 330px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .card:hover { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+
+  <header>
+    <div class="container nav-wrap">
+      <div class="brand">
+        <div class="brand-logo">TERM<span>CP</span></div>
+        <div class="meta-badges">
+          <a class="github-link" href="https://github.com/open-mcp-ai/termcp" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+            <span class="star-count" id="star-count">★ 44</span>
+          </a>
+          <span class="version-tag" id="version-tag">v0.1.0</span>
+        </div>
+      </div>
+
+      <div class="lang-select-wrap">
+        <select id="lang-select">
+          <option value="auto">🌐 Auto / 自动</option>
+          <option value="zh-CN">简体中文</option>
+          <option value="zh-TW">繁體中文</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="hero-pill" data-i18n="hero_pill">AI NATIVE CONTROL PLANE · MCP + SKILLS + API</div>
+      <h1 class="highlight" data-i18n="hero_title">让 AI 进入你的诸多终端</h1>
+      <p class="lead" data-i18n="hero_desc">AI 替你敲命令，你随时接手 —— 人和 AI 共写同一条终端。MCP + SKILLS + API，单文件零依赖。</p>
+
+      <div class="command-box">
+        <div class="cmd-tabs" id="cmd-tabs">
+          <button class="cmd-tab active" data-cmd="claude">Claude Code</button>
+          <button class="cmd-tab" data-cmd="codex">Codex</button>
+          <button class="cmd-tab" data-cmd="gemini">Gemini CLI</button>
+          <button class="cmd-tab" data-cmd="docker">Docker</button>
+          <button class="cmd-tab" data-cmd="npm">NPM</button>
+          <button class="cmd-tab" data-cmd="go">Go Install</button>
+        </div>
+        <div class="cmd-body">
+          <div class="cmd-text">
+            <span class="prompt">$</span><span id="cmd-display">claude mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio</span>
+          </div>
+          <button class="copy-btn" id="copy-btn" data-i18n="copy_btn">复制命令</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Terminal UI: one shell written by both sides. The mark before each
+         line is termcp's own transcript rail (a/i/o), so the preview says who
+         typed what instead of showing one undifferentiated log. -->
+    <div class="terminal-window">
+      <div class="term-header">
+        <div class="term-title">
+          <span class="shell-link-state"></span>
+          <span class="term-name">TERMCP</span>
+          <span data-i18n="term_title">nethub // 会话 #node-edge-01 [pts/3]</span>
+        </div>
+        <div class="term-header-right">
+          <button type="button" class="review-lock" id="review-lock" aria-pressed="true"
+                  data-i18n="review_lock" data-i18n-title="review_lock_title"
+                  title="打开时，AI 的每次写入都要你先接受或拒绝">审阅模式 ON</button>
+          <span class="term-status" data-i18n="term_status">实时 · MCP 已连接</span>
+        </div>
+      </div>
+
+      <div class="term-toast" id="term-toast" hidden>
+        <b data-i18n="toast_title">notify_user · termcp</b>
+        <span id="term-toast-body"></span>
+      </div>
+
+      <div class="term-screen" id="term-screen"></div>
+
+      <div class="term-legend">
+        <span class="lg-a" data-i18n="legend_a">a · AI 调用 MCP</span>
+        <span class="lg-i" data-i18n="legend_i">i · 人工指令</span>
+        <span class="lg-o" data-i18n="legend_o">o · 终端输出</span>
+        <span class="lg-q" data-i18n="legend_q">q/A · 审阅决定</span>
+        <span style="flex:1"></span>
+        <button type="button" class="term-replay" id="term-replay" data-i18n="replay">重播</button>      </div>
+
+      <div class="term-tasks" id="term-tasks">
+        <span class="tasks-label" data-i18n="task_title">把活交给 AI：</span>
+        <button type="button" class="task-chip" data-task="disk" data-i18n="task_disk">检查磁盘还剩多少</button>
+        <button type="button" class="task-chip" data-task="port" data-i18n="task_port">把 3000 端口改成 8080</button>
+        <button type="button" class="task-chip" data-task="who" data-i18n="task_who">看看谁登录着</button>
+      </div>
+
+      <!-- The human's own key onto the same shell. In AI mode your sentence is
+           what the agent acts on; in human mode it goes straight to the terminal
+           and the agent reads it back. -->
+      <form class="term-input-bar" id="term-form">
+        <div class="term-modes" role="group">
+          <button type="button" class="mode-btn active" id="mode-ai" data-i18n="mode_ai">让 AI 执行</button>
+          <button type="button" class="mode-btn" id="mode-human" data-i18n="mode_human">我自己敲</button>
+        </div>
+        <input id="term-input" type="text" autocomplete="off" spellcheck="false"
+               data-i18n-placeholder="input_placeholder"
+               placeholder="说要做什么，AI 替你操作终端…">
+        <button class="term-send" type="submit" data-i18n="input_send">发送</button>
+      </form>
+      <div class="term-hint" id="term-hint" data-i18n="input_hint">AI 模式：用一句话交给它，它自己决定跑哪些命令。</div>
+    </div>
+
+    <!-- Core Features -->
+    <section class="features">
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+        </div>
+        <h3 data-i18n="feat1_title">人机平等共驾</h3>
+        <p data-i18n="feat1_desc">双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换、深度协作，告别黑盒盲操。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+        </div>
+        <h3 data-i18n="feat2_title">细粒度会话控制</h3>
+        <p data-i18n="feat2_desc">内置文件管理、安全端口转发、多终端多会话复用，提供按需读写终端窗口的完备上下文控制能力。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        </div>
+        <h3 data-i18n="feat3_title">安装无依赖</h3>
+        <p data-i18n="feat3_desc">10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>TERMCP · Open Source Project by <a href="https://github.com/open-mcp-ai" target="_blank">open-mcp-ai</a></p>
+    </div>
+  </footer>
+
+  <script>
+    // Commands Dictionary
+    const commands = {
+      claude: "claude mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio",
+      codex: "codex mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio",
+      gemini: "gemini-cli mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio",
+      docker: "docker run -d --name termcp -p 8080:8080 openmcp/termcp:latest",
+      npm: "npx -y @open-mcp-ai/termcp daemon stdio",
+      go: "go install github.com/open-mcp-ai/termcp@latest"
+    };
+
+    // Tab switcher
+    const tabs = document.querySelectorAll('.cmd-tab');
+    const display = document.getElementById('cmd-display');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const key = tab.getAttribute('data-cmd');
+        display.textContent = commands[key] || '';
+      });
+    });
+
+    // Copy Button
+    const copyBtn = document.getElementById('copy-btn');
+    copyBtn.addEventListener('click', () => {
+      const text = display.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = '✓ ' + (currentLang === 'en' ? 'Copied' : (currentLang === 'zh-TW' ? '已複製' : '已复制'));
+        setTimeout(() => copyBtn.textContent = orig, 1800);
+      });
+    });
+
+    /* ---- The demo: an agent driving termcp over MCP on one shell ----------
+       Every line is a real tool or a real mark from the product:
+         a = an MCP call the agent made (the point of the page)
+         o = shell output
+         i = the human's keystrokes
+         q/A = a review decision (no bytes of its own)
+       Nothing here calls a model or a server; the transcript is scripted. */
+    const termScreen = document.getElementById('term-screen');
+    const termForm = document.getElementById('term-form');
+    const termInput = document.getElementById('term-input');
+    const termHint = document.getElementById('term-hint');
+    const toast = document.getElementById('term-toast');
+    const toastBody = document.getElementById('term-toast-body');
+    const reviewLock = document.getElementById('review-lock');
+
+    let reviewOn = true;      // review mode: the agent's writes are held
+    let waiting = false;      // the agent is stopped, waiting on the human
+    let mode = 'ai';          // 'ai' = hand the task over; 'human' = type it yourself
+    let queue = [];           // the running task's remaining steps
+    let lastTask = 'port';    // what the replay key re-runs
+    let auto = false;         // true while playing the whole task without waiting
+
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+
+    function line(mark, text, cls) {
+      const p = el('p', 'tl' + (cls ? ' ' + cls : ''));
+      p.appendChild(el('span', 'mk mk-' + mark, mark));
+      p.appendChild(document.createTextNode(text));
+      termScreen.appendChild(p);
+      termScreen.scrollTop = termScreen.scrollHeight;
+      return p;
+    }
+
+    const t = (key) => (i18nData[currentLang] || i18nData.en)[key] || i18nData.en[key] || key;
+
+    /* The tasks a visitor hands to the agent. `say` is the human's sentence in
+       plain words; the steps are what the agent then decides to do with the
+       terminal — that gap IS the product. Code lines stay untranslated. */
+    const TASKS = {
+      port: {
+        say: 'say_port',
+        steps: [
+          { mark: 'a', code: 'session_start(ssh_config="internal", name="edge-01")' },
+          { mark: 'o', code: '→ session_id sess_7f3a · shell_id sh_01 · pty 80x24' },
+          { mark: 'a', code: 'shell_input("nginx -T | grep -n proxy_pass") + shell_key("enter")' },
+          { mark: 'o', code: '14:    proxy_pass http://127.0.0.1:3000;' },
+          { mark: 'a', code: 'shell_input("sed -i s/:3000/:8080/ /etc/nginx/conf.d/proxy.conf")' },
+          { gate: true },
+          { mark: 'o', key: 'd_written' },
+          { mark: 'a', code: 'shell_input("sudo nginx -s reload") + shell_key("enter")' },
+          { mark: 'o', code: '[sudo] password for ops:' },
+          { mark: 'a', code: 'notify_user(level="warn", duration_seconds=0) + shell_notify(event="output")' },
+          { toast: true },
+          { human: true },
+          { mark: 'o', code: 'nginx: configuration file test is successful · reloaded' },
+          { mark: 'a', code: 'forward(action="local", local_port=8080, remote_port=3000)' },
+          { mark: 'o', code: '127.0.0.1:8080 → 127.0.0.1:3000 · tunnel up' }
+        ]
+      },
+      disk: {
+        say: 'say_disk',
+        steps: [
+          { mark: 'a', code: 'session_start(ssh_config="internal")' },
+          { mark: 'a', code: 'shell_input("df -h /") + shell_key("enter")' },
+          { mark: 'o', code: 'Filesystem      Size  Used Avail Use% Mounted on' },
+          { mark: 'o', code: '/dev/vda1        40G   31G  7.2G  82% /' },
+          { mark: 'a', code: 'shell_input("du -xh --max-depth=1 /var | sort -h | tail -3") + shell_key("enter")' },
+          { mark: 'o', code: '2.1G    /var/lib/docker' },
+          { mark: 'o', code: '3.4G    /var/log' },
+          { mark: 'a', code: 'notify_user(level="warn", duration_seconds=0, session_id="sess_7f3a")' },
+          { toast: true },
+          { mark: 'o', key: 'd_disk' }
+        ]
+      },
+      who: {
+        say: 'say_who',
+        steps: [
+          { mark: 'a', code: 'session_start(ssh_config="internal")' },
+          { mark: 'a', code: 'shell_input("who -a") + shell_key("enter")' },
+          { mark: 'o', code: 'ops      pts/0        2026-10-09 09:12   (10.0.3.7)' },
+          { mark: 'a', code: 'shell_list(session_id="sess_7f3a")' },
+          { mark: 'o', code: '→ 2 shells · sh_01 pty running · sh_02 pipe running' },
+          { mark: 'o', key: 'd_who' }
+        ]
+      }
+    };
+
+    /* A canned shell for when the human takes the keyboard. Small on purpose:
+       the point is that the line lands on the terminal the agent reads. */
+    const FAKE = {
+      pwd: '/srv/app',
+      whoami: 'ops',
+      'uname -a': 'Linux edge-01 6.6.0 x86_64 GNU/Linux',
+      'cat /etc/hostname': 'edge-01',
+      'nginx -t': 'configuration file /etc/nginx/nginx.conf test is successful',
+      'df -h /': '/dev/vda1  40G  31G  7.2G  82% /'
+    };
+
+    const GATE_CMD = 'sed -i s/:3000/:8080/ /etc/nginx/conf.d/proxy.conf';
+
+    const sendLabel = () => t(mode === 'ai' ? 'input_send_ai' : 'input_send_human');
+    const placeholder = () => t(mode === 'ai' ? 'input_placeholder_ai' : 'input_placeholder_human');
+
+    function setHint(text) {
+      termHint.textContent = text;
+      termHint.classList.toggle('armed', waiting);
+    }
+
+    function defaultHint() {
+      if (waiting) setHint(t('input_hint_wait'));
+      else setHint(t(mode === 'ai' ? 'input_hint' : 'input_hint_human'));
+    }
+
+    function setMode(next) {
+      mode = next;
+      document.getElementById('mode-ai').classList.toggle('active', mode === 'ai');
+      document.getElementById('mode-human').classList.toggle('active', mode === 'human');
+      termInput.placeholder = placeholder();
+      document.querySelectorAll('.term-send').forEach(b => { b.textContent = sendLabel(); });
+      defaultHint();
+    }
+
+    function showToast(msg) {
+      toastBody.textContent = msg;
+      toast.hidden = false;
+    }
+
+    function clearGate() {
+      const g = document.getElementById('gate');
+      if (g) g.remove();
+    }
+
+    /* The review gate: nothing here is editable — the AI wrote the command, the
+       human accepts or refuses it. Accept and Reject both resolve this step. */
+    function renderGate() {
+      const box = el('div', 'gate');
+      box.id = 'gate';
+      box.appendChild(el('div', 'gate-h', t('gate_h')));
+      box.appendChild(el('code', 'gate-cmd', GATE_CMD));
+      const actions = el('div', 'gate-actions');
+      const accept = el('button', 'gate-accept', t('gate_accept'));
+      accept.type = 'button';
+      const reject = el('button', 'gate-reject', t('gate_reject'));
+      reject.type = 'button';
+      accept.addEventListener('click', () => decide(true));
+      reject.addEventListener('click', () => decide(false));
+      actions.appendChild(accept);
+      actions.appendChild(reject);
+      box.appendChild(actions);
+      termScreen.appendChild(box);
+      termScreen.scrollTop = termScreen.scrollHeight;
+    }
+
+    function decide(accepted) {
+      clearGate();
+      line('q', 'A  ' + (accepted ? t('gate_accepted') : t('gate_rejected')), 'tl-review');
+      /* Rejected: the write never happened, so drop the step that only exists
+         because the file was changed. */
+      if (!accepted) queue = queue.filter(s => s.key !== 'd_written');
+      pump();
+    }
+
+    /* Drain the running task until it needs a human: a review decision, a secret,
+       or the end. Everything the agent does on its own happens here.
+
+       `auto` is the autoplay used on load: the page has to show a finished run,
+       not a transcript parked at a gate, or the visitor reads it as unfinished.
+       The human's two moments are still written down — the decision and the
+       secret — so the transcript is the same story, just already told. */
+    function pump() {
+      for (;;) {
+        const step = queue.shift();
+        if (!step) { waiting = false; defaultHint(); return; }
+        if (step.gate) {
+          if (auto) {
+            line('q', 'A  ' + t('gate_accepted'), 'tl-review');
+            continue;
+          }
+          if (!reviewOn) continue;              // review off: the write just lands
+          renderGate();
+          return;
+        }
+        if (step.toast) { showToast(t('toast_body')); continue; }
+        if (step.human) {
+          if (auto) {
+            line('i', '$ ********', 'tl-human');
+            line('o', t('d_sudo_ok'), null);
+            continue;
+          }
+          waiting = true;
+          defaultHint();
+          return;
+        }
+        const text = step.code !== undefined ? step.code : t(step.key);
+        if (step.mark === 'a') {
+          const p = line('a', '', 'tl-ai');
+          p.appendChild(el('span', 'tool', text));
+        } else {
+          line(step.mark, text, null);
+        }
+      }
+    }
+
+    /* Hand a task over: the human says it in plain words, the agent works out
+       the commands. This is the headline capability. */
+    function runTask(id, opts) {
+      const task = TASKS[id];
+      if (!task) return;
+      lastTask = id;
+      auto = !!(opts && opts.auto);
+      termScreen.textContent = '';
+      toast.hidden = true;
+      clearGate();
+      waiting = false;
+      line('i', '$ ' + t(task.say), 'tl-human');
+      queue = task.steps.slice();
+      defaultHint();
+      pump();
+    }
+
+    document.querySelectorAll('.task-chip').forEach(chip => {
+      /* Clicked by a visitor: the gate stays visible, because watching the agent
+         get held is the product. Only the initial render and the replay key run
+         the whole thing through, so the page never sits parked at a gate. */
+      chip.addEventListener('click', () => runTask(chip.getAttribute('data-task')));
+    });
+    document.getElementById('mode-ai').addEventListener('click', () => setMode('ai'));
+    document.getElementById('mode-human').addEventListener('click', () => setMode('human'));
+
+    reviewLock.addEventListener('click', () => {
+      reviewOn = !reviewOn;
+      reviewLock.setAttribute('aria-pressed', String(reviewOn));
+      reviewLock.textContent = reviewOn ? t('review_on') : t('review_off');
+    });
+
+    termForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = termInput.value.trim();
+      if (!text) return;
+      termInput.value = '';
+
+      /* The agent is stopped at a prompt it must not answer: the secret is the
+         human's, and the product keeps it out of the model's context. */
+      if (waiting) {
+        line('i', '$ ********', 'tl-human');
+        waiting = false;
+        toast.hidden = true;
+        defaultHint();
+        line('o', t('d_sudo_ok'), null);
+        pump();
+        return;
+      }
+
+      if (mode === 'ai') {
+        /* Same thing the task chips do, but with the visitor's own words. */
+        line('i', '$ ' + text, 'tl-human');
+        queue = [
+          { mark: 'a', code: 'session_start(ssh_config="internal")' },
+          { mark: 'a', code: 'shell_input(' + JSON.stringify(text) + ') + shell_key("enter")' },
+          { mark: 'o', code: FAKE[text] !== undefined ? FAKE[text] : 'bash: ' + text + ': command not found' },
+          { mark: 'a', code: 'shell_output(tail_lines=20)' },
+          { mark: 'o', key: 'd_read' }
+        ];
+        pump();
+        return;
+      }
+
+      /* Human mode: your line goes to the shell yourself — and the agent, which
+         is on the same shell, reads it back. That is the co-driving claim. */
+      line('i', '$ ' + text, 'tl-human');
+      line('o', FAKE[text] !== undefined ? FAKE[text] : 'bash: ' + text + ': command not found', null);
+      const p = line('a', '', 'tl-ai');
+      p.appendChild(el('span', 'tool', 'shell_output(tail_lines=1)'));
+      line('o', t('agent_sees'), null);
+    });
+
+    // i18n Dictionary
+    const i18nData = {
+      'zh-CN': {
+        auto_label: '🌐 自动',
+        hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
+        hero_title: '让 AI 进入你的诸多终端',
+        hero_desc: 'AI 替你敲命令，你随时接手 —— 人和 AI 共写同一条终端。MCP + SKILLS + API，单文件零依赖。',
+        copy_btn: '复制命令',
+        term_title: 'nethub // 会话 #node-edge-01 [pts/3]',
+        term_status: '实时 · MCP 已连接',
+        legend_a: 'a · AI 调用 MCP',
+        legend_i: 'i · 人工指令',
+        legend_o: 'o · 终端输出',
+        legend_q: 'q/A · 审阅决定',
+        review_lock: '审阅模式 ON',
+        review_on: '审阅模式 ON',
+        review_off: '审阅模式 OFF',
+        review_lock_title: '打开时，AI 的每次写入都要你先接受或拒绝',
+        input_prompt: 'you@pts/3:~$',
+        input_placeholder: '输入指令，和 AI 写同一条终端…',
+        input_send: '写入终端',
+        replay: '重播',
+        input_hint: '直连模式：你敲的每一行直接进终端，和 AI 共用同一条 shell。',
+        input_hint_wait: 'AI 已停手，正在等你。密码留在这条 shell 里，不进模型上下文。',        gate_h: '审阅门 · AI 的写入已挂起',
+        gate_accept: '接受 Accept',
+        gate_reject: '拒绝 Reject',
+        gate_accepted: '已接受 · 命令已发送到 shell',
+        gate_rejected: '已拒绝 · 一个字节都没有写进去',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'deploy 在等 sudo 密码',
+        d_daemon: '# TermCP daemon 已启动 · stdio bridge 就绪 · 31 个工具',
+        d_read: '读回字节区间 [0, 4096) · 标记：o 输出 / i 人工 / a AI',
+        d_written: '写入完成 · 代理目标已从 :3000 改为 :8080',
+        task_title: '把活交给 AI：',
+        task_disk: '检查磁盘还剩多少',
+        task_port: '把 3000 端口改成 8080',
+        task_who: '看看谁登录着',
+        mode_ai: '让 AI 执行',
+        mode_human: '我自己敲',
+        input_send_ai: '交给 AI',
+        input_send_human: '写入终端',
+        input_placeholder_ai: '说要做什么，AI 替你操作终端…',
+        input_placeholder_human: '直接敲命令，AI 在同一条 shell 上看着…',
+        input_hint: 'AI 模式：用一句话交给它，它自己决定跑哪些命令。',
+        input_hint_human: '人工模式：你敲的每一行直接进终端，AI 读得到、也接得下去。',
+        agent_sees: 'AI 读回了你刚才那行 —— 它和你共用同一条 shell。',
+        say_port: '帮我把 nginx 的 3000 端口改成 8080',
+        say_disk: '这台机器磁盘还够用吗',
+        say_who: '现在有谁登录着',
+        d_sudo_ok: '密码通过 · nginx 已重载',
+        d_disk: '结论：/ 用了 82%，/var/log 占了 3.4G —— 已通知你。',
+        d_who: '结论：一个 ops 会话，同一连接上开了 2 个 shell 通道。',
+        feat1_title: '人机平等共驾',
+        feat1_desc: '双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换、深度协作，告别黑盒盲操。',
+        feat2_title: '细粒度会话控制',
+        feat2_desc: '内置文件管理、安全端口转发、多终端多会话复用，提供按需读写终端窗口的完备上下文控制能力。',
+        feat3_title: '安装无依赖',
+        feat3_desc: '10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。'
+      },
+      'zh-TW': {
+        auto_label: '🌐 自動',
+        hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
+        hero_title: '讓 AI 進入你的諸多終端',
+        hero_desc: '輕量 AI Native 安全終端，視覺化多介面，MCP+SKILLS+API',
+        copy_btn: '複製指令',
+        term_title: 'nethub // 工作階段 #node-edge-01 [pts/3]',
+        term_status: '即時 · MCP 已連線',
+        legend_a: 'a · AI 呼叫 MCP',
+        legend_i: 'i · 人工指令',
+        legend_o: 'o · 終端輸出',
+        legend_q: 'q/A · 審閱決定',
+        review_lock: '審閱模式 ON',
+        review_on: '審閱模式 ON',
+        review_off: '審閱模式 OFF',
+        review_lock_title: '開啟時，AI 的每次寫入都要你先接受或拒絕',
+        input_prompt: 'you@pts/3:~$',
+        input_placeholder: '輸入指令，和 AI 寫同一條終端…',
+        input_send: '寫入終端',
+        replay: '重播',
+        input_hint: '直連模式：你敲的每一行直接進終端，和 AI 共用同一條 shell。',
+        input_hint_wait: 'AI 已停手，正在等你。密碼留在這條 shell 裡，不進模型上下文。',
+        gate_h: '審閱門 · AI 的寫入已掛起',
+        gate_accept: '接受 Accept',
+        gate_reject: '拒絕 Reject',
+        gate_accepted: '已接受 · 指令已送到 shell',
+        gate_rejected: '已拒絕 · 一個位元組都沒有寫進去',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'deploy 在等 sudo 密碼',
+        d_daemon: '# TermCP daemon 已啟動 · stdio bridge 就緒 · 31 個工具',
+        d_read: '讀回位元組區間 [0, 4096) · 標記：o 輸出 / i 人工 / a AI',
+        d_written: '寫入完成 · 代理目標已從 :3000 改為 :8080',
+        task_title: '把活交給 AI：',
+        task_disk: '檢查磁碟還剩多少',
+        task_port: '把 3000 埠改成 8080',
+        task_who: '看看誰登入著',
+        mode_ai: '讓 AI 執行',
+        mode_human: '我自己敲',
+        input_send_ai: '交給 AI',
+        input_send_human: '寫入終端',
+        input_placeholder_ai: '說要做什麼，AI 替你操作終端…',
+        input_placeholder_human: '直接敲指令，AI 在同一條 shell 上看著…',
+        input_hint: 'AI 模式：用一句話交給它，它自己決定跑哪些指令。',
+        input_hint_human: '人工模式：你敲的每一行直接進終端，AI 讀得到、也接得下去。',
+        agent_sees: 'AI 讀回了你剛才那行 —— 它和你共用同一條 shell。',
+        say_port: '幫我把 nginx 的 3000 埠改成 8080',
+        say_disk: '這台機器磁碟還夠用嗎',
+        say_who: '現在有誰登入著',
+        d_sudo_ok: '密碼通過 · nginx 已重載',
+        d_disk: '結論：/ 用了 82%，/var/log 佔了 3.4G —— 已通知你。',
+        d_who: '結論：一個 ops 工作階段，同一連線上開了 2 個 shell 通道。',
+        feat1_title: '人機平等共駕',
+        feat1_desc: '雙方寫同一條終端，每一屏都即時看得見。無縫接管、即時切換、深度協作，告別黑盒盲操。',
+        feat2_title: '細粒度工作階段控制',
+        feat2_desc: '內建檔案管理、安全連接埠轉發、多終端多工作階段複用，提供按需讀寫終端視窗的完備上下文控制能力。',
+        feat3_title: '安裝無相依性',
+        feat3_desc: '10MB 左右單一檔案綠色發行，多平台相容，支援 npx 一鍵免安裝整合或容器極速啟動。'
+      },
+      'en': {
+        auto_label: '🌐 Auto',
+        hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
+        hero_title: 'Let AI into your terminals.',
+        hero_desc: 'Lightweight AI-native secure terminal, visual multi-interface, MCP + SKILLS + API.',
+        copy_btn: 'Copy Command',
+        term_title: 'nethub // session #node-edge-01 [pts/3]',
+        term_status: 'LIVE · MCP CONNECTED',
+        legend_a: 'a · AI calls an MCP tool',
+        legend_i: 'i · human input',
+        legend_o: 'o · shell output',
+        legend_q: 'q/A · review decision',
+        review_lock: 'REVIEW ON',
+        review_on: 'REVIEW ON',
+        review_off: 'REVIEW OFF',
+        review_lock_title: 'While on, every AI write waits for you to Accept or Reject it',
+        input_prompt: 'you@pts/3:~$',
+        input_placeholder: 'Type a command — write on the same terminal the agent uses…',
+        input_send: 'Write to terminal',
+        replay: 'Replay',
+        input_hint: 'Direct: every line you type goes to the shell the agent is reading.',
+        input_hint_wait: 'The agent stopped and is waiting on you. The secret stays in this shell, out of the model\u2019s context.',
+        gate_h: 'Review gate · the AI write is held',
+        gate_accept: 'Accept',
+        gate_reject: 'Reject',
+        gate_accepted: 'Accepted · the command reached the shell',
+        gate_rejected: 'Rejected · not one byte was written',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'deploy is waiting for a sudo password',
+        d_daemon: '# TermCP daemon up · stdio bridge ready · 31 tools',
+        d_read: 'read back bytes [0, 4096) · marks: o output / i human / a AI',
+        d_written: 'written · the proxy target moved from :3000 to :8080',
+        task_title: 'Hand it to the agent:',
+        task_disk: 'How much disk is left',
+        task_port: 'Move port 3000 to 8080',
+        task_who: 'Who is logged in',
+        mode_ai: 'Let the AI run it',
+        mode_human: 'I will type it',
+        input_send_ai: 'Hand to AI',
+        input_send_human: 'Write to terminal',
+        input_placeholder_ai: 'Say what you want done — the agent operates the terminal…',
+        input_placeholder_human: 'Type a command; the agent is reading the same shell…',
+        input_hint: 'AI mode: say it in one sentence, and the agent decides which commands to run.',
+        input_hint_human: 'Human mode: every line goes straight to the shell — the agent reads it and can pick up from there.',
+        agent_sees: 'The agent read back what you just typed — it shares this shell with you.',
+        say_port: 'Move nginx off port 3000 to 8080',
+        say_disk: 'Is there enough disk left on this box',
+        say_who: 'Who is logged in right now',
+        d_sudo_ok: 'password accepted · nginx reloaded',
+        d_disk: 'Finding: / is 82% full, /var/log holds 3.4G — the human has been notified.',
+        d_who: 'Finding: one ops session, 2 shell channels on a single connection.',
+        feat1_title: 'Human-AI Co-pilot',
+        feat1_desc: 'Both human and AI write on the same terminal with real-time visual sync. Seamless takeover, instant switching, and true collaboration.',
+        feat2_title: 'Fine-grained Control',
+        feat2_desc: 'Built-in file management, port forwarding, multi-terminal multiplexing, and full read/write window context orchestration.',
+        feat3_title: 'Zero Dependencies',
+        feat3_desc: 'Lightweight ~10MB single binary, cross-platform compatible, with instant npx integration or zero-config container launch.'
+      }
+    };
+
+    let currentLang = 'zh-CN';
+    const langSelect = document.getElementById('lang-select');
+
+    function applyLang(lang) {
+      currentLang = lang;
+      const dict = i18nData[lang] || i18nData['en'];
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (dict[key]) el.textContent = dict[key];
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (dict[key]) el.placeholder = dict[key];
+      });
+      document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        if (dict[key]) el.title = dict[key];
+      });
+      // The transcript's own wording lives in the catalog, so a language change
+      // re-renders it; the MCP call lines are code and survive verbatim.
+      if (termScreen) runTask(lastTask, { auto: true });
+      reviewLock.textContent = reviewOn ? dict.review_on : dict.review_off;
+      setMode(mode);
+      // update select auto option text
+      const autoOpt = langSelect.querySelector('option[value="auto"]');
+      if (autoOpt) autoOpt.textContent = dict.auto_label;
+    }
+
+    function detectLang() {
+      const saved = localStorage.getItem('termcp_lang');
+      if (saved && saved !== 'auto') {
+        langSelect.value = saved;
+        applyLang(saved);
+        return;
+      }
+      langSelect.value = 'auto';
+      const navLang = (navigator.language || 'zh-CN').toLowerCase();
+      if (navLang.startsWith('zh-tw') || navLang.startsWith('zh-hk')) {
+        applyLang('zh-TW');
+      } else if (navLang.startsWith('zh')) {
+        applyLang('zh-CN');
+      } else {
+        applyLang('en');
+      }
+    }
+
+    langSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      localStorage.setItem('termcp_lang', val);
+      if (val === 'auto') {
+        detectLang();
+      } else {
+        applyLang(val);
+      }
+    });
+
+    // Auto fetch GitHub stars & release
+    async function fetchGitHubMeta() {
+      try {
+        const repoRes = await fetch('https://api.github.com/repos/open-mcp-ai/termcp');
+        if (repoRes.ok) {
+          const data = await repoRes.json();
+          if (data.stargazers_count !== undefined) {
+            document.getElementById('star-count').textContent = '★ ' + data.stargazers_count;
+          }
+        }
+        const relRes = await fetch('https://api.github.com/repos/open-mcp-ai/termcp/releases/latest');
+        if (relRes.ok) {
+          const relData = await relRes.json();
+          if (relData.tag_name) {
+            document.getElementById('version-tag').textContent = relData.tag_name;
+          }
+        }
+      } catch (err) {
+        // Fallback gracefully to default
+      }
+    }
+
+    document.getElementById('term-replay').addEventListener('click', () => runTask(lastTask, { auto: true }));
+
+    detectLang();
+    fetchGitHubMeta();
+  </script>
+</body>
+</html>
