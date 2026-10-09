@@ -11,7 +11,14 @@ var _themeChoice = (function () {
     var stored = localStorage.getItem('termcp.theme');
     if (validThemeChoice(stored)) return stored;
   } catch (e) {}
-  return _themeActive;
+  /* Nothing stored means 'auto', NOT the id data-theme carries: boot has already
+     resolved the choice into a concrete theme, so returning _themeActive here
+     would read the resolved answer back as if the user had picked it by hand.
+     That turns the default into a pin — the trigger says "Light" instead of
+     "Auto", and the scheme listener below steps aside as if the OS had been
+     overridden. theme-boot.js states the same default once, where it is needed
+     before the first paint; this is the other half of that one decision. */
+  return 'auto';
 })();
 var _themeCallbacks = [];
 var _themePending = null;
