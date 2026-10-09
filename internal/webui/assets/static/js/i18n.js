@@ -170,13 +170,17 @@ var _langMenuOpen = false;
 function langMenuEl() { return document.getElementById('lang-menu'); }
 function langBtnEl() { return document.getElementById('lang-btn'); }
 
-/** Open or close the menu, keeping the trigger's aria state in step. */
+/** Open or close the menu, keeping the trigger's aria state in step. The body
+ *  class is what carries `.app-header` above the terminal layers: the header is
+ *  this menu's stacking context, so the menu's own z-index cannot lift it out on
+ *  its own (see the rule in base.css). */
 function setLangMenuOpen(open) {
   var menu = langMenuEl(), btn = langBtnEl();
   if (!menu || !btn) return;
   _langMenuOpen = !!open;
   menu.classList.toggle('hidden', !_langMenuOpen);
   btn.setAttribute('aria-expanded', _langMenuOpen ? 'true' : 'false');
+  if (document.body) document.body.classList.toggle('header-lang-open', _langMenuOpen);
 }
 
 function toggleLangMenu() { setLangMenuOpen(!_langMenuOpen); }

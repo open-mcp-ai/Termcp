@@ -42,6 +42,20 @@
      language switch stay reachable in a long session list. blur() is what keeps
      the bar readable over scrolling cards without painting a solid slab. */
   .app-header { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-header); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  /* The two header dropdowns (language, theme) are CHILDREN of this header, so
+     their own z-index (100 and 500) only ranks them against each other: the
+     header is a stacking context, and everything inside it — the menus included —
+     sorts in the root context at the header's 200. That is below every terminal
+     surface (10000 tiled workspace, 10001+ windows, 20000 tab bar, 21000
+     full-screen), and the menu opens downwards INTO exactly that band, so an open
+     menu was painted under whatever terminal it hung over. Raising the header is
+     the only lever that carries the menu with it, because the menu cannot outrank
+     its own stacking context. 22000 clears the whole content layer while staying
+     below the entries drawer (24000) and the modals (24500) — the ladder
+     docs/design/mobile-terminal.md records. One class per menu: whichever closes
+     must not drop the raise while the other is still open. */
+  body.header-lang-open .app-header,
+  body.header-theme-open .app-header { z-index: 22000; }
   /* The nav wraps instead of squeezing: with the language switch in it, a phone
      width cannot hold the control and the API link side by side, and without
      this the browser breaks the link's label across two lines inside its

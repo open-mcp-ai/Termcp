@@ -385,7 +385,15 @@ function initThemeControls() {
   syncThemeControl();
   setThemeTerminalConfig({});
   restoreThemeResources(_themeActive);
-  picker.addEventListener('toggle', function () { if (picker.open) loadThemeChoices(); });
+  /* The <details> toggle covers both directions, so the body class mirrors the
+     open state rather than being added on the way in and forgotten on the way
+     out. It is what carries .app-header over the terminal layers: this menu is a
+     child of the header, so its own z-index cannot outrank the header's own
+     stacking context (see the rule in base.css). */
+  picker.addEventListener('toggle', function () {
+    if (document.body) document.body.classList.toggle('header-theme-open', picker.open);
+    if (picker.open) loadThemeChoices();
+  });
   document.addEventListener('click', function (e) { if (!picker.contains(e.target)) picker.open = false; });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && picker.open) { picker.open = false; picker.querySelector('summary').focus(); }
