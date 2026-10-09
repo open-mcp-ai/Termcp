@@ -66,7 +66,7 @@ const callbacks = {};
 const styles = {};
 const labelAttrs = { 'data-i18n': 'nav.nethub', 'data-i18n-title': 'nav.nethub', 'data-i18n-aria': 'nav.nethub' };
 const label = { textContent: '', getAttribute: k => labelAttrs[k], setAttribute: (k, v) => labelAttrs[k] = v };
-const root = { getAttribute: k => attrs[k], setAttribute: (k, v) => attrs[k] = v, classList: { remove() {} },
+const root = { getAttribute: k => attrs[k], setAttribute: (k, v) => attrs[k] = v, classList: { add() {}, remove() {}, toggle() {} },
  style: { setProperty: (k, v) => styles[k] = v, removeProperty: k => delete styles[k] } };
 function cssValue(k) {
  const base = {
