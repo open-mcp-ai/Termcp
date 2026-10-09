@@ -1,4 +1,18 @@
-function openForwardModal(sessionId, sshConfig) {
+/* The add-forward form.
+ *
+ * The ssh profile the new forward will be labelled with is NOT a parameter any
+ * more: the server derives it from the session it creates the forward on
+ * (handleCreateForward reads the session's own name/endpoint), so a value
+ * collected here was only ever echoed into a hidden field nobody read — state
+ * that outlives the dialog with no effect on what it does. The session id is
+ * the one thing the modal has to remember.
+ *
+ * That id is rebound on EVERY open, including the one that opens the dialog just
+ * to report that it has no session: leaving the previous session bound there let
+ * "Create" on a dialog saying "no session" post a forward to the session the
+ * user opened the modal from last time. */
+function openForwardModal(sessionId) {
+  _fwdSessionId = sessionId || '';
   var err = document.getElementById('modal-forward-err');
   if (err) { err.style.display = 'none'; err.textContent = ''; }
   if (!sessionId) {
@@ -6,10 +20,6 @@ function openForwardModal(sessionId, sshConfig) {
     showModal('modal-forward');
     return;
   }
-  _fwdSessionId = sessionId;
-  _fwdSshCfg = sshConfig || 'internal';
-  var cfgEl = document.getElementById('fw-ssh-config-modal');
-  if (cfgEl) cfgEl.value = _fwdSshCfg;
   document.getElementById('fw-remote-host').value = '';
   document.getElementById('fw-remote-port').value = '';
   document.getElementById('fw-local-host').value = '127.0.0.1';
@@ -32,7 +42,7 @@ function createForward(body) {
   });
 }
 function deleteForward(forwardId) {
-  return fetch('/api/forwards/' + encodeURIComponent(forwardId), { method: 'DELETE' })
+  return fetch(apiPath('/api/forwards/') + encodeURIComponent(forwardId), { method: 'DELETE' })
     .then(function (r) {
       if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
       return r.json();

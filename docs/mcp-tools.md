@@ -152,6 +152,7 @@ ssh_config(action=list)
 | `command` | string | 否 | — | 可执行文件；空 = 按**命令优先级链**解析：profile 的 `default_shell` → （仅 pty）目标机自己的登录 shell。`pipe` + 空命令且 profile 无 `default_shell` 会被拒绝：pipe 通道没有登录 shell 可申请，客户端也不会拿本机 PATH 去猜目标机的 shell |
 | `args` | string[] | 否 | `[]` | 命令行参数，仅 `command` 非空时有效 |
 | `mode` | string | 否 | `"pty"` | **首个 shell** 的模式：`"pty"` 或 `"pipe"`。模式属于 shell，不属于会话；后续 shell 的 mode 由 `shell_open` 决定 |
+| `on_exit` | string | 否 | `"keep"` | 最后一个 shell **自行结束**（`exit`、一次性命令跑完）时会话怎么处理：`"keep"` 保留为运行会话（可继续复用连接：转发/SFTP/新开 shell）；`"close"` 关闭会话并进归档。一次性命令用 `"close"`，否则它会一直留在运行列表里。两种取值下输出都仍可用 `shell_output` 读取 |
 | `name` | string | 否 | ssh_config | 会话显示名称 |
 | `rows` | number | 否 | `24` | 初始 PTY 行数（1–1000） |
 | `cols` | number | 否 | `80` | 初始 PTY 列数（1–1000） |
@@ -355,6 +356,23 @@ ssh_config(action=list)
 
 > 进程还活但只是“输出停了”，用 `event="silence", silence_seconds=10`；需要持续跟踪输出变化用 `event="output"`。
 
+**典型用法二（等人输入）**：命令跑到一半停下等人（`sudo` 密码、交互式安装器、任何必须由人在终端里回答的提示）时，不要让 Agent 轮询 `shell_output`——人可能几分钟才回来，轮询既费上下文也费时间：
+
+```jsonc
+// 1) 先告诉人“轮到你了”（warn/error + duration_seconds=0 不自动消失）
+{ "message": "deploy 在等 sudo 密码", "level": "warn", "duration_seconds": 0, "session_id": "<session_id>" }
+
+// 2) 在同一个 shell 上登记输出唤醒（不是 exit——进程还没退出）
+{ "action": "register", "shell_id": "<shell_id>", "channel": "sampling", "event": "output" }
+
+// 3) Agent 就此停手，等人敲键盘；人一敲，终端的输出/回显唤醒 Agent，再去 shell_output 读
+
+// 4) 人答完了，摘掉规则（不摘也会在 shell/会话关闭时自动级联清理）
+{ "action": "unregister", "rule_id": "notif_..." }
+```
+
+> 为什么 `output` 而不是 `silence`：人在 sudo 提示符下敲密码时会产生输出（回显被关掉也会走换行），`event="output"` 因此能被人的操作直接触发；`silence` 描述的是“没人说话”，正好把等人的情形排除在外。
+
 ### notify_user
 
 向**人类用户**（而非 AI Agent）推送浏览器通知：在 Termcp Web UI 的**每个已打开页面**弹出彩色 toast，并尝试触发**浏览器系统通知**（需浏览器授权，页面在后台也能收到）；指定 `session_id` 时，该 session 的卡片会**高亮**（脉冲描边，滚到可视区；若其终端窗口已打开，窗口头部也会闪烁）。与 `shell_notify` 正相反 —— 后者是通知 AI Agent，本工具是 Agent 通知人。
@@ -397,9 +415,9 @@ ssh_config(action=list)
 | `shell_id` | string | 否 | 指定 shell 通道；省略则用会话的 primary shell |
 
 - `action="list"`：返回 `{ "spans": [{ status, time, start, end }], "total_bytes": N, "session_id": "..." }`
-- `status`：`"o"` = 输出，`"a"` = AI 输入（MCP），`"i"` = 接口输入（浏览器）
+- `status` = **这段字节是谁产生的**，共 5 个取值：`"o"` 输出（shell 自己打印的）、`"a"` AI 输入（MCP）、`"i"` 终端输入（人，经 Web UI）、`"q"` 此处请求了一次审批、`"A"` 审批通过并写入。**Agent 与人的敲键回显完全一样**，字节日志里分不出人是否操作过；`i` / `q` 区段就是「人碰过这个终端」的证据（`q` 后面不一定有字节：审批被拒/超时就不产生任何输入）。
 - `start`/`end`：该区段在 `log.bin` 中的字节区间；取内容用 `shell_output(shell_id, offset=start, max_bytes=end-start)`
-- 输入是**零长度标记**（`start == end`）：按键已由终端回显进输出流，不重复写入
+- 输入是**零长度标记**（`start == end`）：按键已由终端回显进输出流，不重复写入；且标记的是**提交那一行**（按 enter / ctrl+c / ctrl+d / ctrl+z）的时刻，不是开始打字的时刻
 
 ### session_delete（彻底删除会话）
 
@@ -444,6 +462,25 @@ SSH 连接 profile 管理。默认只暴露 `action=list`；write actions 需启
 | `source_name` / `target_name` | string | 条件 | copy：源与目标（目标须不存在） |
 
 **注意**：password/private_key/key_passphrase/proxy 凭据**写入后不可读取**；不要在聊天中回显。write actions 未启用时调用返回错误提示启动 flag。
+
+**导入/导出格式（批量）**：Agent 常被要求「把这些主机整理成能导入的文件」，而**文件格式不是本工具的参数形状**：参数里是平的 `jump_host`，文件里是嵌套的 `[connections.jump]`。两者写成一样的拼法**能正常解析、却会静默丢掉 bastion**，要到真的拨号时才看得出来——因此 `ssh_config` 的描述（只读与 write-enabled 两种列表都在）直接给出了这份格式，Agent 可按它生成文本，再交给 Web UI 的批量导入或 `POST /api/connections/batch`：
+
+```toml
+[[connections]]
+name = "host-one"                 # 字母/数字/_/-，最长 64
+kind = "remote"                   # 必填
+host = "host-one.example"         # 必填
+user = "tester"                   # 必填
+password = "placeholder"        # 与 private_key 二选一
+
+[connections.jump]                # bastion（ProxyJump）——不是 jump_host = "..."
+host = "bastion.example"
+user = "jumper"
+password = "placeholder2"
+# [connections.jump.jump]         # 更深一跳
+```
+
+可选字段：`port` / `key_passphrase` / `trust_unknown_host` / `known_hosts` / `dial_timeout_seconds` / `proxy` / `description` / `default_shell` / `default_mode` / `default_approval`。导出（`GET /api/connections/batch`）产生的是同一形状，导出的文件可直接导回；`internal` 是保留名，已存在的名字导入时变为 `name-2` 而不是被覆写。
 
 ---
 

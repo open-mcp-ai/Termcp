@@ -383,8 +383,10 @@ Creates a new SSH connection and session (including its first shell).
 ```
 Request:
 {
-  "ssh_config": "pi",    // profile name, defaults to "internal" (host loopback);
-                         // MCP's session_start requires it explicitly
+  "ssh_config": "pi",    // profile name; REQUIRED — an omitted or blank value is
+                         // refused (400), never defaulted. Name "internal" to get
+                         // the host loopback explicitly, the same as MCP's
+                         // session_start
   "command": "",         // command; empty = login shell
   "args": [],
   "mode": "pty",         // "pty" | "pipe" — mode of the FIRST shell only
@@ -400,6 +402,13 @@ Response 200:
 `index` is the first shell's channel number (always 1) — returned with the ids so
 a client labels and copies the primary tab from server data rather than assuming
 a number of its own. See section 5 for the locator meaning of `index`.
+
+An omitted or blank `ssh_config` is refused with `400` (`ssh_config is required`),
+exactly as MCP's `session_start` refuses it. It is not defaulted to any profile:
+a misspelled name fails loudly, and a missing one must too, because the only
+plausible default is the host loopback — the machine holding every stored
+credential. Ask for it by name (`"ssh_config": "internal"`) when that is what
+you want. `--no-internal` additionally refuses that profile outright.
 
 No `pid` is returned: the process lives on the remote side and SSH does not report its
 number, so the field could only ever have been a constant. To get the real one, ask the

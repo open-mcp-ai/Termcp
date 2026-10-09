@@ -16,7 +16,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	command := getString(args, "command", "")
 	toolArgs := getStringSlice(args, "args")
@@ -55,6 +55,10 @@ func (s *Server) handleStartSession(_ context.Context, request mcpgo.CallToolReq
 		Remote:       remote,
 		DefaultShell: sshconfig.EffectiveDefaultShell(ent),
 		Approval:     sshconfig.EffectiveApproval(ent),
+		OnExit:       session.OnExitPolicy(strings.TrimSpace(strings.ToLower(getString(args, "on_exit", "")))),
+		// An aborted MCP call cancels this context, and the dial stops with it
+		// rather than registering a session whose caller has already gone away.
+		Ctx: ctx,
 	})
 	if err != nil {
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil

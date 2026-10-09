@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -69,16 +70,30 @@ func (p *Proxy) Enabled() bool {
 }
 
 // dialProxy opens a net.Conn to targetAddr (host:port) through a SOCKS5 proxy.
-func dialProxy(p *Proxy, targetAddr string, timeout time.Duration) (net.Conn, error) {
+// ctx, when non-nil, aborts the proxy connect and the SOCKS5 negotiation; the
+// negotiation runs on the same socket with a deadline, so closing it is again the
+// only way to interrupt the reads (socks5Handshake takes no context).
+func dialProxy(ctx context.Context, p *Proxy, targetAddr string, timeout time.Duration) (net.Conn, error) {
 	proxyAddr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
-	conn, err := net.DialTimeout("tcp", proxyAddr, timeout)
+	var conn net.Conn
+	var err error
+	if ctx != nil {
+		conn, err = (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", proxyAddr)
+	} else {
+		conn, err = net.DialTimeout("tcp", proxyAddr, timeout)
+	}
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("proxy dial %s: %w", proxyAddr, err)
 	}
 	setTCPKeepAlive(conn)
+	stop := watchCancel(ctx, conn)
+	defer stop()
 	if err := socks5Handshake(conn, p, targetAddr, timeout); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("socks5: %w", err)
+		return nil, fmt.Errorf("socks5: %w", canceledErr(ctx, err))
 	}
 	return conn, nil
 }

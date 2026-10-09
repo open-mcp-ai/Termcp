@@ -29,6 +29,9 @@ func validateStartParams(args map[string]any) (*mcpgo.CallToolResult, error) {
 	if cols < 1 || cols > 1000 {
 		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("cols must be between 1 and 1000, got %d", cols)), nil
 	}
+	if p := strings.TrimSpace(strings.ToLower(getString(args, "on_exit", ""))); p != "" && p != string(session.OnExitKeep) && p != string(session.OnExitClose) {
+		return toolError(CodeInvalidArgument, "%s", fmt.Sprintf("on_exit must be 'keep' or 'close', got %q", p)), nil
+	}
 	return nil, nil
 }
 

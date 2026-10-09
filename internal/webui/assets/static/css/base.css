@@ -166,6 +166,40 @@
     cursor: help;
   }
 
+  /* A session card whose connection is still being dialled. It has no session
+     state to report yet, so in place of the live/dead dot it carries a small
+     sweeping bar — the same "work in progress" read as the pending window's
+     spinner, but sized for a lamp slot so the card's meta row keeps its height
+     and alignment instead of being pushed around by a taller element.
+
+     The colour comes from the accent token pair the terminal's own pending
+     spinner uses, so a re-skin moves both; a literal here would be a second
+     palette the theme cannot reach. */
+  .conn-tile.sess-tile .sess-status-ic.is-connecting {
+    width: 18px;
+    height: 6px;
+    border-radius: 1px;
+    border: 1px solid var(--border-subtle);
+    border-left-color: var(--accent);
+    border-right-color: var(--accent);
+    position: relative;
+    animation: sessConnectingSweep 1.6s ease-in-out infinite;
+  }
+  .conn-tile.sess-tile .sess-status-ic.is-connecting::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    right: 3px;
+    top: 2px;
+    height: 1px;
+    background: var(--accent);
+    opacity: .8;
+  }
+  @keyframes sessConnectingSweep {
+    0%, 100% { opacity: .5; transform: scaleX(.7); }
+    50% { opacity: 1; transform: scaleX(1); }
+  }
+
   /* Approval lock on a session card. It is a state indicator and the switch in
      one: the glyph carries the state (closed = gated), and the colour only
      reinforces it, so the control still reads if colour is unavailable. */
@@ -403,6 +437,16 @@
   }
   .sess-sid-line:hover { color: var(--accent); text-decoration: underline dotted; }
   .sess-sid-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* A connecting card has no session id to copy, so it puts the status word in
+     this slot. That word is not a control, and the id's own affordances would
+     lie about it: the hover underline and the pointer promise a copy that is not
+     there. Only the interactive branch carries them. */
+  .sess-sid-line.is-pending {
+    cursor: default;
+    user-select: text;
+    text-transform: none;
+  }
+  .sess-sid-line.is-pending:hover { color: var(--text-muted); text-decoration: none; }
   .sess-copy-btn {
     flex-shrink: 0;
     width: 22px;
@@ -566,6 +610,10 @@
   }
   .modal-x:hover { color: var(--text-bright); background: var(--accent-surface); }
   .modal-msg { margin: 0 0 4px; color: var(--text-primary); font-size: .9rem; word-break: break-word; }
+  /* The second line of a dialog that offers two different outcomes: it explains
+     what each key does, so the choice is made on meaning rather than on which
+     word looks safer. Muted, because the question above it is the message. */
+  .modal-hint { margin: 0 0 4px; color: var(--text-muted); font-size: .8rem; line-height: 1.5; word-break: break-word; }
   .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }

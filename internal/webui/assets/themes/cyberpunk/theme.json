@@ -1,0 +1,14 @@
+{
+  "terminal": {
+    "fontFamily": "var(--font-mono)",
+    "fontSize": 13,
+    "fontWeight": "normal",
+    "fontWeightBold": "bold",
+    "lineHeight": 1,
+    "letterSpacing": 0,
+    "transparent": true,
+    "window": {
+      "blur": 28
+    }
+  }
+}

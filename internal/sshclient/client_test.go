@@ -1,6 +1,9 @@
 package sshclient
 
 import (
+	"context"
+	"errors"
+	"net"
 	"runtime"
 	"strings"
 	"testing"
@@ -70,7 +73,7 @@ func dialAndStart(t *testing.T, srv *sshserver.Server, command string, args []st
 	if err != nil {
 		t.Fatal(err)
 	}
-	es, err := StartWithConn(conn, cfg, command, args, pty, rows, cols)
+	es, err := StartWithConn(nil, conn, cfg, command, args, pty, rows, cols)
 	if err != nil {
 		conn.Close()
 		t.Fatal(err)
@@ -266,7 +269,7 @@ func TestStart_PipeModeEmptyCommandRefused(t *testing.T) {
 	}
 	defer conn.Close()
 
-	es, err := StartWithConn(conn, cfg, "", nil, false, 24, 80)
+	es, err := StartWithConn(nil, conn, cfg, "", nil, false, 24, 80)
 	if err == nil {
 		es.Close()
 		t.Fatal("expected an error for an empty pipe command")
@@ -303,5 +306,57 @@ func TestStart_PtyModeEmptyCommandUsesServerShell(t *testing.T) {
 	}
 	if !strings.Contains(out, "server_shell_ok") {
 		t.Fatalf("pty shell with no command should run the server's login shell, got %q", out)
+	}
+}
+
+// A canceled dial must come back with the context's error, promptly, and with
+// nothing left running — not with a transport error from a socket that was torn
+// down from under the handshake, and not after the target's own timeout.
+//
+// The server here accepts the TCP connection and then says nothing: the client
+// is past net.Dial and parked in the handshake, which takes no context of its
+// own. Cancellation therefore has to reach the socket itself, which is the
+// property this pins (see watchCancel). A dialer that only checked ctx before
+// starting would hang here until the test's own patience ran out.
+func TestStartWithConfigCancelDuringHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	// Accept and keep the socket open without ever starting the SSH handshake.
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // held until the listener closes
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	cfg := &ssh.ClientConfig{
+		User:            "nobody",
+		Auth:            []ssh.AuthMethod{ssh.Password("x")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second, // long: only the cancel can end this in time
+	}
+	start := time.Now()
+	es, err := StartWithConfig(ctx, ln.Addr().String(), cfg, nil, "", nil, false, 24, 80)
+	if err == nil {
+		es.Close()
+		t.Fatal("a dial canceled mid-handshake succeeded")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error is %v; a canceled dial must report context.Canceled so callers can tell a user's cancel from a network fault", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancel took %v; the socket was not closed, so the handshake ran to its own timeout", elapsed)
 	}
 }

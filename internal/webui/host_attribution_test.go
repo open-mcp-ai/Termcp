@@ -224,6 +224,12 @@ const sandbox = {
   fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('') }),
   URLSearchParams: function () {},
   console: console,
+  // The real util.js helpers live in a separate asset the sandbox does not load.
+  // Identity stubs keep this probe focused on the readOnly attributes: the dialog
+  // only ever concatenates their results. Path-prefix behaviour is covered by its
+  // own tests, which load util.js for real.
+  apiPath: p => p,
+  uiBasePath: () => '',
 };
 vm.createContext(sandbox);
 vm.runInContext('var editingConnName = \'\'; var connEntries = null;\n' +

@@ -1,0 +1,226 @@
+/* ---- Touch / single-column layout ----------------------------------------
+   Kept at the end of the file on purpose: this overrides the entry card's
+   min/max-width declared above, and a media query earlier in the file loses to
+   it at equal specificity.
+
+   Only entry cards fill the row on a phone: with one entry per row, letting it
+   size itself to 188-300px reads as ragged. Session tiles stay the compact
+   128px cards they are on desktop and wrap several per row — stretching those
+   to full width turns each into a mostly-empty band. */
+@media (pointer: coarse) and (hover: none) {
+  .conn-grid { gap: 10px; }
+  /* Only entries are list rows that fill the row. Session tiles stay the
+     compact cards they are on desktop and wrap several per row — stretching
+     them to full width turns each one into a mostly-empty band. */
+  .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+  /* Touch: a 30px-tall trigger and 32px menu rows are below the 34px target.
+     Only the vertical padding grows; the horizontal stays tight on purpose. */
+  .lang-btn { padding: 9px 8px; }
+  .lang-opt { padding: 10px 10px; }
+}
+
+/* --- terminal timeline rail (timeline.js) --------------------------------
+   A status index along the right side of the terminal: one cell per terminal row,
+   coloured by what that row holds. The order left to right is text, rail,
+   scrollbar — the strip takes the room out of the terminal's own width rather than
+   sitting on top of it, and the scrollbar stays exactly where it was, at the far
+   right where a reader reaches for it.
+
+   Two halves make that work, and both are needed:
+
+     - `right: var(--term-rail-gap)` places the strip just left of the scrollbar's
+       gutter, and `width: var(--term-rail-w)` gives it the reserved column.
+     - `fitShellTerminal` (ui-socket.js) subtracts the same width when it computes
+       the column count, so the text stops before the strip instead of running under
+       it. The strip is inside the terminal's box; what keeps it off the text is that
+       the terminal was fitted to fewer columns.
+
+   The strip is aligned to the text lines by measurement, not by its own box: the
+   module reads `.xterm-screen` and sets top/height in pixels, because the channel
+   body and the terminal's screen box are not the same box. When nothing has been
+   measured yet (a hidden window) it falls back to the rule below, and the cells —
+   percentages of the strip — still tile correctly in whatever box it gets.
+
+   `hidden` is the only visibility switch: the module hides the rail when a shell
+   has no marks or no row/byte anchors, and the UA rule for [hidden] is enough
+   because no display is set here (setting one would outrank it and leave an empty
+   strip on screen). */
+.term-rail {
+  position: absolute;
+  top: 0;
+  right: var(--term-rail-gap, 10px);
+  bottom: 0;
+  width: var(--term-rail-w, 14px);
+  z-index: 5;
+}
+.term-rail[hidden] { display: none; }
+
+/* One row of the terminal. Buttons rather than divs so a tap is a real
+   activation (keyboard and assistive tech get the same target as a finger) and so
+   the label can appear on focus as well as hover.
+
+   A cell is exactly one row tall and is positioned by row index (the module sets
+   top/height in percentages of the strip), so the strip and the text stay in
+   step. Cells tile flush — no radius, no background clip and no gap between
+   neighbours: a run of rows with one status has to read as one continuous band,
+   and a rounded, inset cell turns a five-row run into five beads that a reader
+   counts instead of reading. What separates one status from the next is its hue,
+   not a gap. The width inset (left/right) stays: the strip is wider than the band
+   so a finger has a target, and the band keeps clear of the terminal's edge.
+
+   A cause frame (see below) is the one border a cell may carry, and it is drawn
+   on the left and right edges only, so it outlines a stretch of output without
+   breaking the vertical continuity of the run. */
+.term-rail-cell {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--term-success-3);
+  cursor: pointer;
+  opacity: .9;
+}
+.term-rail-cell:hover,
+.term-rail-cell:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--term-fg-white-2);
+  outline-offset: 1px;
+  z-index: 2;
+}
+
+.term-rail-output { background: var(--term-rail-output); }  /* o — bright green: shell output */
+.term-rail-input  { background: var(--term-rail-input); }  /* i — yellow: the human's input */
+.term-rail-agent  { background: var(--term-rail-agent); }  /* a — pink: an AI agent's input */
+.term-rail-review { background: var(--term-rail-review); }  /* q/A — violet: a review decision */
+
+/* Which input produced an output row.
+
+   An output belongs to the input that produced it: the log records an input as a
+   zero-length mark and the output that follows starts at the same offset, so an
+   output's cause is the nearest preceding i/a mark. timeline.js adds one of these
+   classes to a cell whose row carries input-caused output.
+
+   The cause is drawn as a frame around the run of rows the command produced, in
+   the same colour as the input mark that caused them, while the body keeps the
+   plain output colour: "there is output here" is never diluted by who produced
+   it, and a reader can see at a glance which command a stretch of output belongs
+   to. Only the first and last row of a run carry the horizontal edges
+   (.term-rail-cause-top / -bottom, set by the module): a cap between two rows of
+   one command's output would cut the band back into the beads that the flush
+   tiling exists to prevent.
+
+   The colour lives in a variable so `--assets` can restyle it without the module
+   knowing the value. box-sizing is border-box globally, so the frame draws
+   inside the cell's own box and cannot push its neighbour, and it is one pixel:
+   the band is only 8px wide, so a heavier frame would leave the output colour as
+   the smaller part of the cell. */
+.term-rail-cause-input,
+.term-rail-cause-agent {
+  border-left-width: 1px;
+  border-right-width: 1px;
+  border-left-style: solid;
+  border-right-style: solid;
+  border-color: var(--rail-cause, currentColor);
+}
+.term-rail-cause-top { border-top-width: 1px; border-top-style: solid; }
+.term-rail-cause-bottom { border-bottom-width: 1px; border-bottom-style: solid; }
+.term-rail-cause-input { --rail-cause: var(--term-rail-input); }  /* i — the human typed it */
+.term-rail-cause-agent { --rail-cause: var(--term-rail-agent); }  /* a — an agent sent it */
+
+/* The label. A node inside the rail, not a native title: a tooltip is not
+   reachable on touch, and the time of a row is exactly what a phone user taps
+   to see. It opens to the *left* of the strip — over the terminal, which is the
+   only room there is beside a right-hand column — and `right: 100%` keeps it
+   clear of the cells themselves. translateY centres it on the cell. */
+.term-rail-pop {
+  position: absolute;
+  right: 100%;
+  margin-right: 4px;
+  top: 0;
+  transform: translateY(-50%);
+  padding: 3px 7px;
+  border: 1px solid var(--term-border-3);
+  border-radius: 4px;
+  background: var(--term-deep);
+  color: var(--term-fg-soft);
+  font-size: 0.7rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px var(--term-black-4);
+}
+.term-rail-pop[hidden] { display: none; }
+
+/* A finger needs a wider target than a mouse. The reserved column grows with the
+   strip, and fitShellTerminal reads the same variable, so the terminal gives up the
+   extra columns rather than the strip covering them: a target drawn over the text is
+   one the reader has to aim through. */
+@media (pointer: coarse) and (hover: none) {
+  .shell-channel-body { --term-rail-w: 22px; }
+  .term-rail-cell { left: 4px; right: 4px; }
+  .term-rail-pop { font-size: 0.72rem; padding: 5px 9px; }
+}
+
+/* The detail card: what a tap or click opens. Bigger than the hover label and
+   anchored to the cell, because a finger has no hover to fall back on and a
+   phone has nowhere to read a one-line tooltip from. It is a sibling of the
+   cells (not a child) so a rebuilding repaint never tears it down mid-read. */
+.term-rail-card {
+  position: absolute;
+  right: 100%;
+  margin-right: 4px;
+  z-index: 6;
+  min-width: 190px;
+  padding: 7px 9px;
+  border: 1px solid var(--term-border-3);
+  border-radius: 6px;
+  background: var(--term-deep);
+  color: var(--term-fg-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  box-shadow: 0 4px 14px var(--term-black-5);
+  pointer-events: none;
+}
+.term-rail-card[hidden] { display: none; }
+.term-rail-card-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+/* The status swatch repeats the cell's own colour, so the card says which row it
+   belongs to even when several are open on a busy rail. */
+.term-rail-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+/* A review decision shares the row it decided about, so it appears as a badge
+   instead of colouring the row: the verdict is readable without outranking the
+   row's own status. */
+.term-rail-card-badge {
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--purple-surface);
+  color: var(--purple);
+  font-size: 0.66rem;
+  font-weight: 500;
+}
+.term-rail-card-row {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  color: var(--term-fg-muted);
+}
+.term-rail-card-row b {
+  color: var(--term-fg-mid);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}

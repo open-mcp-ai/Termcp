@@ -1,0 +1,100 @@
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); background: var(--bg-subtle); color: var(--text-primary); }
+    .app-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card);
+      box-shadow: 0 1px 0 rgba(27,31,36,.04);
+    }
+    /* Home link back to the Web UI. flex-shrink:0 keeps it whole while the title gives way. */
+    .app-header-back {
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; width: 30px; height: 30px; border-radius: 6px;
+      color: var(--text-secondary); text-decoration: none;
+    }
+    .app-header-back:hover { background: var(--accent-surface); color: var(--accent); }
+    .app-header-back svg { display: block; }
+    /* min-width:0 is what actually lets a flex item shrink below its content
+       width; without it the title keeps its intrinsic width and the header
+       overflows instead. */
+    .app-header h1 {
+      margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-bright);
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
+    h2 { margin: 28px 0 10px; font-size: 1.15rem; color: var(--text-bright); border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; }
+    h3 { margin: 0 0 8px; font-size: 1rem; color: var(--text-bright); }
+    h4 { margin: 14px 0 6px; font-size: 0.88rem; color: var(--text-secondary); font-weight: 600; }
+    p, li { font-size: 0.9rem; line-height: 1.55; color: var(--text-primary); }
+    .lead { color: var(--text-secondary); margin-top: 0; }
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px;
+      padding: 16px 18px; margin: 12px 0 16px; box-shadow: 0 1px 0 rgba(27,31,36,.04);
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .meta {
+      display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; font-size: 0.82rem; color: var(--text-secondary);
+    }
+    .meta span {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 8px; border-radius: 999px; background: var(--bg-subtle); border: 1px solid var(--border-subtle);
+    }
+    .meta code { font-family: var(--font-mono); color: var(--text-bright); }
+    .ep {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin: 8px 0 10px; padding: 8px 10px; border-radius: 8px;
+      background: var(--bg-subtle); border: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 0.82rem; word-break: break-all;
+    }
+    .ep code { flex: 1; min-width: 0; color: var(--text-bright); }
+    .copy-btn {
+      flex-shrink: 0; font: inherit; font-size: 0.75rem; padding: 4px 10px;
+      border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-primary); cursor: pointer;
+    }
+    .copy-btn:hover { background: var(--bg-card-hover); }
+    .copy-btn.ok { background: var(--success-surface); border-color: var(--success-border); color: var(--success); }
+    a.copy-btn { text-decoration: none; display: inline-flex; align-items: center; }
+    .block { position: relative; margin: 8px 0 0; }
+    .block pre {
+      margin: 0; padding: 12px 14px; padding-right: 72px; border-radius: 8px; overflow: auto;
+      background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-subtle);
+      font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.45;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .block .copy-btn {
+      position: absolute; top: 8px; right: 8px; background: var(--bg-card-hover); color: var(--text-secondary); border-color: var(--border-subtle);
+    }
+    .block .copy-btn:hover { background: var(--border-subtle); color: var(--text-primary); }
+    .block .copy-btn.ok { background: var(--success-surface); border-color: var(--success-border); color: var(--success); }
+    .muted { color: var(--text-muted); font-size: 0.82rem; margin: 6px 0 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+    th { background: var(--bg-subtle); color: var(--text-secondary); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    code.inline {
+      font-family: var(--font-mono);
+      font-size: 0.84em; background: var(--bg-subtle); padding: 1px 5px; border-radius: 4px;
+    }
+    .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+    .toc a {
+      font-size: 0.8rem; color: var(--accent); text-decoration: none; padding: 4px 10px;
+      border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-card);
+    }
+    .toc a:hover { background: var(--accent-surface); }
+    .note {
+      margin: 10px 0 0; padding: 10px 12px; border-radius: 8px;
+      background: var(--warning-surface); border: 1px solid var(--warning-border); color: var(--text-primary); font-size: 0.85rem;
+    }
+    #toast {
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      background: var(--toast-bg); color: var(--text-primary); padding: 8px 14px; border-radius: 8px;
+      font-size: 0.82rem; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 100;
+    }
+    #toast.show { opacity: 1; }
+
+.docs-page .app-header { position: static; }
+.docs-page .theme-switch { margin-left: auto; }
+.docs-page .wrap { max-width: 860px; }
+.docs-page .card { clip-path: none; }
+.docs-page .app-header h1 { font-family: var(--font-sans); text-transform: none; letter-spacing: -.02em; }

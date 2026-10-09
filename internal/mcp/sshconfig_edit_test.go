@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -205,5 +206,109 @@ func TestEditSSHConfigRejectsAMissingName(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("an edit with no name was accepted")
+	}
+}
+
+// Issue #81: the agent is the one asked to turn a pasted list of hosts into an
+// importable file, and the file format is not the argument shape of this tool --
+// a bastion is a nested table here while jump_host is an argument. Nothing in the
+// tool surface said so, and a file written with the argument spelling parses
+// cleanly and silently drops the bastion, so the mistake is invisible until the
+// connection is dialled.
+//
+// The test drives the format the description advertises through the real store
+// instead of matching the prose: a description that drifted away from what the
+// parser accepts would still satisfy a string assertion. Every profile written
+// here is the one the hint tells the model to produce, and the jump case is
+// asserted by presence because a dropped bastion is the specific silent failure
+// the hint exists to prevent.
+func TestSSHConfigDescriptionAdvertisesTheFormatTheStoreAccepts(t *testing.T) {
+	// What the model is told, in both listings: the read-only one and the
+	// write-enabled one RegisterSSHConfigWriteTools installs, which REPLACES the
+	// description rather than extending it. Only the second is on the wire when
+	// -mcp-manage-ssh-configs is set, which is exactly the deployment where an
+	// agent is allowed to write profiles at all.
+	for _, tc := range []struct {
+		name string
+		w    bool
+	}{
+		{"read-only listing", false},
+		{"write-enabled listing", true},
+	} {
+		s := newTestServer(t)
+		if tc.w {
+			s.RegisterSSHConfigWriteTools()
+		}
+		desc := ""
+		for _, tool := range listTools(t, s, context.Background()) {
+			if tool.Name == "ssh_config" {
+				desc = tool.Description
+			}
+		}
+		if desc == "" {
+			t.Fatalf("%s: ssh_config missing from tools/list", tc.name)
+		}
+		for _, want := range []string{
+			"[[connections]]",
+			`kind="remote"`,
+			"password or private_key",
+			// The trap: the nested spelling the parser reads, and the flat one it
+			// ignores.
+			"[connections.jump]",
+			"jump_host",
+			// The two import rules an agent-generated file depends on.
+			"internal\" is reserved",
+			"name-2",
+		} {
+			if !strings.Contains(desc, want) {
+				t.Errorf("%s: ssh_config description misses %q:\n%s", tc.name, want, desc)
+			}
+		}
+	}
+
+	// The advertised shape must be the shape the store accepts, including the
+	// nested bastion, and it must survive an export/import round trip.
+	dir := t.TempDir()
+	store := sshconfig.NewStore(dir)
+	doc := []byte(`
+[[connections]]
+name = "host-one"
+kind = "remote"
+host = "host-one.example"
+user = "tester"
+password = "placeholder"
+
+[connections.jump]
+host = "bastion.example"
+user = "jumper"
+password = "placeholder2"
+`)
+	if _, err := store.ImportBatch(doc, false); err != nil {
+		t.Fatalf("the format the description advertises was rejected: %v", err)
+	}
+	entry, err := store.Load("host-one")
+	if err != nil {
+		t.Fatalf("loading the imported profile: %v", err)
+	}
+	if entry.Jump == nil || entry.Jump.Host != "bastion.example" {
+		t.Fatalf("the nested bastion was dropped: %+v", entry.Jump)
+	}
+
+	// Export must emit something that imports back, or "export emits this shape"
+	// in the description is false.
+	exported, err := store.ExportBatch(nil)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	second := sshconfig.NewStore(t.TempDir())
+	if _, err := second.ImportBatch(exported, false); err != nil {
+		t.Fatalf("an exported file did not import back: %v\n%s", err, exported)
+	}
+	again, err := second.Load("host-one")
+	if err != nil {
+		t.Fatalf("loading the re-imported profile: %v", err)
+	}
+	if again.Jump == nil || again.Jump.Host != "bastion.example" {
+		t.Errorf("the round trip lost the bastion: %+v", again.Jump)
 	}
 }

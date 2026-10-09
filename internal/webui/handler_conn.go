@@ -27,6 +27,12 @@ type connectionSummary struct {
 	Temporary       bool `json:"temporary"`
 }
 
+// errSSHConfigRequired is what an omitted ssh_config resolves to, on every
+// surface that starts a session. It exists as a named error (rather than an
+// fmt.Errorf at the return site) so a caller — the handler writing the status
+// code, a test — can recognise the condition without matching the string.
+var errSSHConfigRequired = errors.New("ssh_config is required")
+
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
 	if h.SSH == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"connections": []connectionSummary{}})
@@ -303,7 +309,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, session.TestConnection(remote))
+	writeJSON(w, http.StatusOK, session.TestConnection(r.Context(), remote))
 }
 
 func (h *Handler) resolveSSH(name string) (cfgName string, ent *sshconfig.Entry, remote *session.RemoteSSH, err error) {
@@ -326,10 +332,19 @@ func (h *Handler) resolveSSH(name string) (cfgName string, ent *sshconfig.Entry,
 		name = p.Entry
 	}
 	if name == "" {
-		if h.NoInternal {
-			return "", nil, nil, fmt.Errorf("ssh_config is required when internal profile is disabled")
-		}
-		name = "internal"
+		/* Deliberately NOT a fallback to the loopback profile.
+
+		   Resolving an empty ssh_config to "internal" handed a caller that forgot the
+		   field — or a client that dropped it — a live shell on the host Termcp runs
+		   on, while a misspelled profile failed loudly. An empty value is the one
+		   case where the caller cannot tell it asked for nothing, and the only one
+		   that lands on the machine holding every stored credential. MCP's
+		   session_start has always refused it (errMissingSSHConfig); the two
+		   surfaces answer the same way now. Do not reintroduce a default here.
+
+		   NoInternal is irrelevant to this: the answer to a missing field is "say
+		   which host", not "here is one". */
+		return "", nil, nil, errSSHConfigRequired
 	}
 	ent, err = h.SSH.Load(name)
 	if err != nil {

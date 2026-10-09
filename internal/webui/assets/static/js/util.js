@@ -1,7 +1,5 @@
 var shellWindowCount = 0;
-var startConnName = '';
 var editingConnName = '';
-var _connDirty = false; // unsaved edits in the connection editor
 window._pendingTerminalWatch = Object.create(null);
 
 function escapeHtml(s) {
@@ -33,14 +31,88 @@ function termcpMonoFontFamily() {
   var v = '';
   try {
     if (typeof getComputedStyle === 'function' && document.documentElement) {
-      v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono') || '';
+      var css = getComputedStyle(document.documentElement);
+      v = css.getPropertyValue('--terminal-font-family') || css.getPropertyValue('--font-mono') || '';
+      // A packaged web font may still be downloading. Start with the installed
+      // stack so xterm measures a real face; the terminal module loads and
+      // reapplies the requested face once it is ready.
+      if (document.fonts && typeof document.fonts.check === 'function') {
+        var size = parseFloat(css.getPropertyValue('--terminal-font-size')) || 13;
+        var weight = css.getPropertyValue('--terminal-font-weight').trim() || 'normal';
+        if (!document.fonts.check(weight + ' ' + size + 'px ' + v, 'M中')) v = TERMCP_MONO_FALLBACK;
+      }
     }
   } catch (e) {}
   v = String(v).replace(/\s+/g, ' ').trim();
   return v || TERMCP_MONO_FALLBACK;
 }
 
+/* ---- Glass affordability (the "is this page allowed to be translucent" probe) ----
+
+   Every backdrop-filter in this UI is a compositor effect. With a GPU that is
+   free; with a CPU rasterizer — no GPU at all (Device Manager shows no driver, a
+   remote desktop session, hardware acceleration switched off) — every blur is
+   repainted on the CPU, and it is repainted for every frame anything moves.
+   Measured on this page at 1440x900 while a terminal streamed: 17 ms/frame with a
+   GPU, 63 ms/frame without one at 1x, 200 ms/frame at 2x. The main thread sat idle
+   in all three runs, which is why this reads as "卡" that no profiler explains.
+
+   Two independent signals say no. The OS preference is the official one (Windows:
+   Settings > Personalization > Colors > Transparency effects, which Edge maps to
+   prefers-reduced-transparency). The renderer string is the second, because a
+   remote session has no GPU whatever the preference says — and asking the browser
+   beats guessing from the user agent, which does not carry this at all.
+   The decision lands as one class on <html>; the stylesheet that consumes it is
+   the noglass.css chunk, last in app.css's manifest so a plain selector can win
+   over the other chunks' backdrop-filter without !important. */
+
+/**
+ * termcpGlassSignals reports what the glass decision is made from: whether the OS
+ * asks for less transparency, and whether the compositor is a CPU rasterizer.
+ */
+function termcpGlassSignals() {
+  var sig = { reduceTransparency: false, software: false };
+  try {
+    sig.reduceTransparency = !!(window.matchMedia && window.matchMedia('(prefers-reduced-transparency: reduce)').matches);
+  } catch (e) {}
+  try {
+    var c = document.createElement('canvas');
+    var gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (gl) {
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      var name = String((dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || '');
+      /* The rasterizers that mean "no GPU": Windows' Basic Render Driver (what a
+         machine with no display driver, or a session on one, reports), ANGLE's
+         software backend, SwiftShader, and Mesa's llvmpipe/softpipe. Matching the
+         NAME and not the vendor keeps this one check; an unrecognised renderer
+         keeps the glass, because the failure that matters is a slow page, not a
+         missing decoration. */
+      sig.software = /basic render driver|swiftshader|llvmpipe|softpipe/i.test(name);
+    }
+  } catch (e) {}
+  return sig;
+}
+
+/**
+ * termcpSyncGlassMode applies the decision to <html> as one class and returns it.
+ * Called at boot, and again if the OS preference flips while the page is open.
+ */
+function termcpSyncGlassMode() {
+  if (!document.documentElement) return false;
+  var sig = termcpGlassSignals();
+  var opaque = sig.reduceTransparency || sig.software;
+  document.documentElement.classList.toggle('no-glass', opaque);
+  return opaque;
+}
+
+termcpSyncGlassMode();
+try {
+  var _glassMQ = window.matchMedia && window.matchMedia('(prefers-reduced-transparency: reduce)');
+  if (_glassMQ && _glassMQ.addEventListener) _glassMQ.addEventListener('change', termcpSyncGlassMode);
+} catch (e) {}
+
 var SVG_COPY_12 = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="currentColor"><path d="M5 2.5V2a1 1 0 011-1h6a1 1 0 011 1v8a1 1 0 01-1 1h-1v.5a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h1zm1 .5H4v8h6v-8H6zm-1-1V2h6v8h-1V3.5a1 1 0 00-1-1H5z"/></svg>';
+
 /* Approval lock glyphs. Closed = gated, open = ungated: the shape carries the
    state, so the switch reads correctly without colour. */
 var SVG_LOCK_CLOSED = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></svg>';
@@ -53,7 +125,7 @@ var SVG_CONN_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" 
 var TERMINAL_ICON_SRC = 'icons/terminal-shell.svg';
 
 function terminalIconImgHtml() {
-  return '<img class="terminal-shell-icon" src="' + TERMINAL_ICON_SRC + '" width="16" height="16" alt="" draggable="false">';
+  return '<img class="terminal-shell-icon" data-theme-asset="icons/terminal-shell.svg" src="' + themeAssetURL(TERMINAL_ICON_SRC) + '" width="16" height="16" alt="" draggable="false">';
 }
 
 function copyTextToClipboard(text) {
@@ -378,9 +450,49 @@ function setLoadBanner(bannerEl, msg) {
   bannerEl.appendChild(x);
 }
 
+/**
+ * Deployment path prefix, derived once from this document's own URL.
+ *
+ * termcp is often reached behind a reverse proxy mounted on a sub-path
+ * (`https://host/termcp/`), where every root-absolute URL the page emits
+ * (`/api/...`, `/static/...`, `/icons/...`) would escape the mount and hit the
+ * parent site instead. Deriving the prefix from `location.pathname` keeps the
+ * page working both at the root (prefix = "") and under any mount, with no
+ * server-side configuration and no URL rewriting in the proxy.
+ *
+ * The document is always `<prefix>/` or `<prefix>/index.html`, so the prefix is
+ * everything before the trailing `index.html`, or before the final path segment.
+ * Normalized to "" (root) or "/sub/path" (no trailing slash).
+ */
+function uiBasePath() {
+  var p = location.pathname || '/';
+  if (p.slice(-11) === '/index.html') p = p.slice(0, -11);
+  else {
+    var i = p.lastIndexOf('/');
+    p = i < 0 ? '' : p.slice(0, i);
+  }
+  return p === '/' ? '' : p;
+}
+
+/**
+ * Resolve a termcp-root-absolute path against the deployment prefix:
+ * apiPath('/api/version') -> '/api/version' at the root,
+ *                            '/termcp/api/version' under a /termcp mount.
+ * Idempotent for values that are already prefixed.
+ */
+function apiPath(path) {
+  var p = String(path == null ? '' : path);
+  if (!p) return uiBasePath();
+  if (p.charAt(0) !== '/') return p;
+  var base = uiBasePath();
+  if (!base) return p;
+  if (p === base || p.indexOf(base + '/') === 0) return p;
+  return base + p;
+}
+
 /** /api/sessions/{id}{suffix} — session-scoped REST (shells/forwards/files). Terminal I/O uses WebSocket. */
 function sessionAPI(sessionId, suffix) {
-  return '/api/sessions/' + encodeURIComponent(sessionId) + suffix;
+  return apiPath('/api/sessions/' + encodeURIComponent(sessionId) + suffix);
 }
 
 /** SSE reconnect: backoff from prev to next cap (seconds) */

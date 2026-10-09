@@ -118,10 +118,10 @@ func (cs *ChildShell) SendTerminalBytes(data []byte, pressEnter bool) error {
 // screen does not show the input (password prompts, full-screen programs).
 func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src InputSource) error {
 	cs.mu.RLock()
-	running := cs.Status == api.SessionRunning
+	status := cs.Status
 	cs.mu.RUnlock()
-	if !running {
-		return fmt.Errorf("process has %s, cannot send input", cs.Status)
+	if status != api.SessionRunning {
+		return fmt.Errorf("process has %s, cannot send input", status)
 	}
 	var toWrite []byte
 	if pressEnter {
@@ -168,10 +168,10 @@ func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) erro
 		return err
 	}
 	cs.mu.RLock()
-	running := cs.Status == api.SessionRunning
+	status := cs.Status
 	cs.mu.RUnlock()
-	if !running {
-		return fmt.Errorf("process has %s, cannot send input", cs.Status)
+	if status != api.SessionRunning {
+		return fmt.Errorf("process has %s, cannot send input", status)
 	}
 	payload := bytes.Repeat(seq, repeat)
 	// A named key submits a line too (enter, and the ctrl sequences a line editor

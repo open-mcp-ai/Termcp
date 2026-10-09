@@ -35,6 +35,19 @@ func TestTerminalWindowPlacementCentresForTheHostDrawer(t *testing.T) {
 	}
 	placement := body[start : start+end+2]
 
+	// The placement's floor is the page header's lower edge, measured by this
+	// function. Sliced in rather than stubbed so a constant floor (the regression
+	// this guards) fails here instead of passing through a hand-written stub.
+	hStart := strings.Index(body, "function appHeaderBottom(")
+	if hStart < 0 {
+		t.Fatal("shell-windows.js no longer defines appHeaderBottom; the header floor is untested now")
+	}
+	hEnd := strings.Index(body[hStart:], "\n}\n")
+	if hEnd < 0 {
+		t.Fatal("could not delimit appHeaderBottom")
+	}
+	headerBottom := body[hStart : hStart+hEnd+2]
+
 	script := `
 const fs = require('fs');
 const vm = require('vm');
@@ -42,10 +55,16 @@ const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const sandbox = {};
 vm.createContext(sandbox);
-// The only globals the placement reads: the cascade counter, the viewport, and
-// the two mobile helpers it delegates the touch layout to (a full-screen window
-// is the stylesheet's job — the placement only has to keep its hands off it).
+// The only globals the placement reads: the cascade counter, the viewport, the
+// measured header depth, and the two mobile helpers it delegates the touch layout
+// to (a full-screen window is the stylesheet's job — the placement only has to
+// keep its hands off it).
 vm.runInContext('var shellWindowCount = 0; var window = { innerWidth: 1440, innerHeight: 900 };\n' +
+  'var DOM = { headerBottom: 0 };\n' +
+  'var document = { querySelector: function (sel) {\n' +
+  '  if (sel !== ".app-header") return null;\n' +
+  '  return { getBoundingClientRect: function () { return { bottom: DOM.headerBottom }; } };\n' +
+  '} };\n' +
   'function isMobileViewport() { return false; }\n' +
   'function applyWindowViewportMode(win) { win._fullscreen = true; }\n' + src, sandbox);
 
@@ -87,6 +106,26 @@ sandbox.shellWindowCount = 3;
 sandbox.arg = '{ x: 1000, y: 500 }';
 check('pointer placement honoured', 1000 - W / 2, Math.min(500 - 21, 900 - H - 8));
 
+// A click inside the page header must not place the window over the header. The
+// header is where the page's own controls live, and a window whose title bar sits
+// there covers them; the floor is the measured header depth, not the 8px margin.
+sandbox.DOM.headerBottom = 60;
+const headerCases = [
+  ['clicked inside the header',      '{ x: 1000, y: 20 }', 1000 - W / 2, 60],
+  ['clicked just under the header',  '{ x: 1000, y: 90 }', 1000 - W / 2, 69],
+  ['centred with a header',          'null',              CENTRE_L + 48, CENTRE_T + 48],
+];
+for (const [name, arg, wantL, wantT] of headerCases) {
+  sandbox.arg = arg;
+  check(name, wantL, wantT);
+}
+// A header that grew (a wrapped nav) moves the floor with it; a constant would
+// leave the tallest header states uncovered.
+sandbox.DOM.headerBottom = 120;
+sandbox.arg = '{ x: 1000, y: 20 }';
+check('a wrapped header raises the floor', 1000 - W / 2, 120);
+sandbox.DOM.headerBottom = 0;
+
 // A touch device is the other way a drawer click can end: the window is
 // full-screen and CSS owns it, so the placement must not write inline geometry
 // (an inline width beats the media query).
@@ -108,7 +147,7 @@ process.exit(bad === 0 ? 0 : 1);
 `
 	tmp := t.TempDir()
 	placementPath := filepath.Join(tmp, "placement.js")
-	if err := os.WriteFile(placementPath, []byte(placement), 0o600); err != nil {
+	if err := os.WriteFile(placementPath, []byte(placement+"\n"+headerBottom), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	scriptPath := filepath.Join(tmp, "placement_test.js")

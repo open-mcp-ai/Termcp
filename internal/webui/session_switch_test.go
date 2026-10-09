@@ -573,7 +573,7 @@ func TestNetHubCardsKeepNodeAndSessionHierarchy(t *testing.T) {
 // under the scrim, and node cards share the host-card rail and corner instead of
 // being excluded from them.
 func TestNetHubRegressionFixes(t *testing.T) {
-	css := readAppCSS(t)
+	css := readThemeCSS(t, "cyberpunk")
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
 	ui := readAssetLF(t, "static/js/ui-socket.js")
 
@@ -696,7 +696,7 @@ func TestNetHubSidebarKeepsThePageFromScrolling(t *testing.T) {
 // card would only add work: a 22-session list would pay 22 filters for the same
 // pixels.
 func TestWorkspaceSurfacesAreTranslucent(t *testing.T) {
-	css := readAppCSS(t)
+	css := readThemeCSS(t, "cyberpunk")
 
 	plate := between(t, css, ".workspace-sessions {", "}")
 	if !strings.Contains(plate, "background-color: var(--glass-plate)") {
@@ -744,7 +744,7 @@ func TestWorkspaceSurfacesAreTranslucent(t *testing.T) {
 // by replacing one file, with the stylesheet pointing at it through a variable
 // rather than growing an effect of its own.
 func TestBackdropIsAFixedDropInLayer(t *testing.T) {
-	css := readAppCSS(t)
+	css := readThemeCSS(t, "cyberpunk")
 	index := readAssetLF(t, "index.html")
 
 	if !strings.Contains(index, `class="page-backdrop"`) {
@@ -834,7 +834,7 @@ func TestBackdropIsAFixedDropInLayer(t *testing.T) {
 // only correct way to give it the corner is to name it in the shared rules — a
 // clip-path of its own would be a second shape waiting to drift.
 func TestAddControlCarriesThePlateCorner(t *testing.T) {
-	css := readAppCSS(t)
+	css := readThemeCSS(t, "cyberpunk")
 	notchRule := ruleContaining(t, css, "--notch-run:")
 	strokeRule := ruleContaining(t, css, "background-position:")
 	for _, rule := range []struct{ name, body string }{{"corner", notchRule}, {"edge strokes", strokeRule}} {
@@ -926,7 +926,7 @@ func TestAddControlIsTheDrawersBottomAction(t *testing.T) {
 // tile's open handler must ignore clicks that land on it.
 func TestSessionTileNameRenamesAndCheckboxSitsOnItsRow(t *testing.T) {
 	sessions := readAssetLF(t, "static/js/sessions.js")
-	css := readAppCSS(t)
+	css := readThemeCSS(t, "cyberpunk")
 
 	// The checkbox is inside the name row, not the icon stack.
 	if !strings.Contains(sessions, `'<div class="sess-name-row">' +`) {

@@ -17,6 +17,7 @@
  * user English.
  */
 var _termcpLang;
+var _termcpThemeCatalog = {};
 var _langReappliers = [];
 var I18N_LANGS = ['en', 'zh-Hans', 'zh-Hant'];
 var I18N_AUTO = 'auto';
@@ -55,9 +56,25 @@ function resolveLang(stored) {
 
 /** One catalog entry, or undefined when the language or the key is absent. */
 function i18nLookup(lang, key) {
+  var theme = _termcpThemeCatalog[lang];
+  if (theme && Object.prototype.hasOwnProperty.call(theme, key) && typeof theme[key] === 'string') return theme[key];
   var cat = (typeof I18N_CATALOG !== 'undefined' && I18N_CATALOG) ? I18N_CATALOG[lang] : null;
   if (!cat || !key) return undefined;
-  return cat[key];
+  return Object.prototype.hasOwnProperty.call(cat, key) ? cat[key] : undefined;
+}
+
+/* Theme copy shares the same static and dynamic redraws as a language change.
+   It changes neither the language preference nor any session state. */
+function setI18nThemeCatalog(catalog) {
+  _termcpThemeCatalog = catalog || {};
+  refreshI18nText();
+}
+
+function refreshI18nText() {
+  applyI18n(document);
+  _langReappliers.forEach(function (fn) {
+    try { fn(); } catch (e) { console.error(e); }
+  });
 }
 
 /** Replace {name} placeholders; a placeholder with no param is left verbatim. */
@@ -200,10 +217,7 @@ function termcpApplyLang(value) {
   _termcpLang = resolveLang(choice);
   document.documentElement.setAttribute('lang', _termcpLang);
   if (document.body) document.body.classList.toggle('lang-hant', _termcpLang === 'zh-Hant');
-  applyI18n(document);
-  _langReappliers.forEach(function (fn) {
-    try { fn(); } catch (e) { console.error(e); }
-  });
+  refreshI18nText();
   syncLangChoice(choice);
 }
 

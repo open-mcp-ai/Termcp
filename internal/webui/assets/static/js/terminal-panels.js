@@ -102,7 +102,10 @@ function _initShellWindowUI(win, connLabel, sessionId) {
   if (fwAddBtn) {
     fwAddBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      openForwardModal(sessionId, connLabel || 'internal');
+      /* No profile is passed: the server labels the forward from the session it
+         is created on (handleCreateForward reads the session's own name), and
+         this window's connLabel cannot know the server's answer anyway. */
+      openForwardModal(sessionId);
     });
   }
   var fwRefreshBtn = win.querySelector('.shell-fw-refresh-btn');
@@ -121,14 +124,14 @@ function _initShellWindowUI(win, connLabel, sessionId) {
     if (!listEl) return;
     var cfg = connLabel || 'internal';
     var fwds = (window._lastForwards || []).filter(function(f) { return forwardMatchesConfig(f, cfg); });
-    if (!fwds.length) { listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center">' + escapeHtml(t('fw.empty')) + '</div>'; return; }
+    if (!fwds.length) { listEl.innerHTML = '<div style="padding:16px;color:var(--term-fg-muted);text-align:center">' + escapeHtml(t('fw.empty')) + '</div>'; return; }
     listEl.innerHTML = fwds.map(function(f){
       var dirLabel = f.direction;
-      var dirColor = dirLabel === 'local' ? '#3fb950' : (dirLabel === 'dynamic' ? '#58a6ff' : '#d29922');
-      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #21262d;transition:background .1s" onmouseover="this.style.background=\'#161b22\'" onmouseout="this.style.background=\'\'">' +
+      var dirColor = dirLabel === 'local' ? 'var(--term-success)' : (dirLabel === 'dynamic' ? 'var(--term-accent)' : 'var(--term-warning)');
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--term-border-2);transition:background .1s" onmouseover="this.style.background=\'var(--term-hover)\'" onmouseout="this.style.background=\'\'">' +
         '<span style="font-size:0.65rem;font-weight:600;text-transform:uppercase;padding:1px 5px;border-radius:3px;color:' + dirColor + ';border:1px solid ' + dirColor + ';flex-shrink:0;min-width:42px;text-align:center">' + escapeHtml(dirLabel) + '</span>' +
-        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem"><span style="color:#8b949e">' + escapeHtml(f.listen_addr) + '</span> <span style="color:#484f58">→</span> <span style="color:#c9d1d9">' + escapeHtml(f.target_addr) + '</span></span>' +
-        '<button class="shell-fw-del-btn" data-fwid="' + escapeHtml(f.forward_id) + '" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:#484f58;cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'#f85149\';this.style.color=\'#f85149\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'#484f58\'">✕</button>' +
+        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem"><span style="color:var(--term-fg-muted)">' + escapeHtml(f.listen_addr) + '</span> <span style="color:var(--term-border-4)">→</span> <span style="color:var(--term-fg-mid)">' + escapeHtml(f.target_addr) + '</span></span>' +
+        '<button class="shell-fw-del-btn" data-fwid="' + escapeHtml(f.forward_id) + '" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--term-border-4);cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'var(--term-danger)\';this.style.color=\'var(--term-danger)\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'var(--term-border-4)\'">✕</button>' +
         '</div>';
     }).join('');
     listEl.querySelectorAll('.shell-fw-del-btn').forEach(function(btn) {
@@ -152,22 +155,22 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       // toasts that appear in the corner. Those are two different things, and an
       // empty panel beside a toast that just popped reads as a bug — so the empty
       // state says which thing is empty.
-      listEl.innerHTML = '<div style="padding:16px;color:#8b949e;text-align:center;line-height:1.6">'
+      listEl.innerHTML = '<div style="padding:16px;color:var(--term-fg-muted);text-align:center;line-height:1.6">'
         + escapeHtml(t('ntf.empty'))
-        + '<div style="margin-top:6px;font-size:0.72rem;color:#6e7681">'
+        + '<div style="margin-top:6px;font-size:0.72rem;color:var(--term-fg-faint)">'
         + escapeHtml(t('ntf.emptyHint'))
         + '</div></div>';
       return;
     }
     listEl.innerHTML = rules.map(function(n){
-      var evColor = n.event === 'exit' ? '#f85149' : (n.event === 'silence' ? '#d29922' : '#3fb950');
+      var evColor = n.event === 'exit' ? 'var(--term-danger)' : (n.event === 'silence' ? 'var(--term-warning)' : 'var(--term-success)');
       var extra = (n.event === 'silence' && n.silence_seconds) ? ' ' + n.silence_seconds + 's' : '';
       var chLabel = n.channel === 'sampling' ? t('ntf.channel.sampling') : t('ntf.channel.resource');
       var unregisterTip = t('ntf.unregister');
-      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #21262d" onmouseover="this.style.background=\'#161b22\'" onmouseout="this.style.background=\'\'">' +
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--term-border-2)" onmouseover="this.style.background=\'var(--term-hover)\'" onmouseout="this.style.background=\'\'">' +
         '<span style="font-size:0.65rem;font-weight:600;text-transform:uppercase;padding:1px 5px;border-radius:3px;color:' + evColor + ';border:1px solid ' + evColor + ';flex-shrink:0;min-width:56px;text-align:center">' + escapeHtml(n.event) + escapeHtml(extra) + '</span>' +
-        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem"><span style="color:#8b949e">' + escapeHtml(chLabel) + '</span> <span style="color:#484f58">·</span> <span style="color:#c9d1d9">' + escapeHtml(n.shell_id) + '</span></span>' +
-        '<button class="shell-ntf-del-btn" data-ntfid="' + escapeHtml(n.rule_id) + '" title="' + unregisterTip + '" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:#484f58;cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'#f85149\';this.style.color=\'#f85149\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'#484f58\'">✕</button>' +
+        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem"><span style="color:var(--term-fg-muted)">' + escapeHtml(chLabel) + '</span> <span style="color:var(--term-border-4)">·</span> <span style="color:var(--term-fg-mid)">' + escapeHtml(n.shell_id) + '</span></span>' +
+        '<button class="shell-ntf-del-btn" data-ntfid="' + escapeHtml(n.rule_id) + '" title="' + unregisterTip + '" style="padding:2px 6px;font-size:0.68rem;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--term-border-4);cursor:pointer;flex-shrink:0" onmouseover="this.style.borderColor=\'var(--term-danger)\';this.style.color=\'var(--term-danger)\'" onmouseout="this.style.borderColor=\'transparent\';this.style.color=\'var(--term-border-4)\'">✕</button>' +
         '</div>';
     }).join('');
     listEl.querySelectorAll('.shell-ntf-del-btn').forEach(function(btn) {
@@ -208,12 +211,12 @@ function _initShellWindowUI(win, connLabel, sessionId) {
   function shellFileBrowse() {
     var path = filePathInput.value.trim() || '/';
     if (!fileListing) return;
-    fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">' + escapeHtml(t('common.loading')) + '</div>';
+    fileListing.innerHTML = '<div style="padding:8px;color:var(--term-fg-muted)">' + escapeHtml(t('common.loading')) + '</div>';
     if (fileCtxMenu) fileCtxMenu.style.display = 'none';
-    fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path))
+    fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path))
       .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function(data) { renderShellFileList(data, path); })
-      .catch(function(e) { fileListing.innerHTML = '<div style="padding:8px;color:#f85149">' + escapeHtml(t('file.loadFailed', { msg: String(e.message||e) })) + '</div>'; });
+      .catch(function(e) { fileListing.innerHTML = '<div style="padding:8px;color:var(--term-danger)">' + escapeHtml(t('file.loadFailed', { msg: String(e.message||e) })) + '</div>'; });
   }
 
   // The path the context menu was opened on. One variable for the whole window:
@@ -232,10 +235,10 @@ function _initShellWindowUI(win, connLabel, sessionId) {
     if (!name) name = base.split('/').pop() || '';
 
     if (action === 'download') {
-      window.open('/api/sessions/' + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
+      window.open(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files/download?path=' + encodeURIComponent(path), '_blank');
     } else if (action === 'delete') {
       if (!confirm(t('file.deleteConfirm', { path: path }))) return;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?path=' + encodeURIComponent(path), {method:'DELETE'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { alert(t('toast.delete.failed', { msg: e.message })); });
@@ -244,7 +247,7 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       if (!newName || newName === name) return;
       var parts = base.split('/'); parts.pop();
       var to = (parts.join('/') || '') + '/' + newName;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files?from=' + encodeURIComponent(path) + '&to=' + encodeURIComponent(to), {method:'PUT'})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { alert(t('toast.rename.failed', { msg: e.message })); });
@@ -298,8 +301,8 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       var nm = data.name || currentPath;
       var detailHtml = '<div class="shell-file-detail" data-file-path="' + escapeHtml(currentPath) + '">';
       detailHtml += '<div style="font-size:0.85rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px"><span>📄</span><span style="word-break:break-all">' + escapeHtml(nm) + '</span></div>';
-      detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">' + escapeHtml(t('file.size', { size: formatSize(data.size||0) })) + '</div>';
-      if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:#8b949e;margin-bottom:2px">' + escapeHtml(t('file.modified', { time: fmtTime(data.mod_time) })) + '</div>';
+      detailHtml += '<div style="font-size:0.75rem;color:var(--term-fg-muted);margin-bottom:2px">' + escapeHtml(t('file.size', { size: formatSize(data.size||0) })) + '</div>';
+      if (data.mod_time) detailHtml += '<div style="font-size:0.75rem;color:var(--term-fg-muted);margin-bottom:2px">' + escapeHtml(t('file.modified', { time: fmtTime(data.mod_time) })) + '</div>';
       detailHtml += '<div class="shell-file-detail-actions">';
       detailHtml += '<button class="sf-dl" data-file-action="download" data-file-path="' + escapeHtml(currentPath) + '">' + escapeHtml(t('common.download')) + '</button>';
       detailHtml += '<button data-file-action="rename" data-file-path="' + escapeHtml(currentPath) + '" data-file-name="' + escapeHtml(nm) + '">' + escapeHtml(t('common.rename')) + '</button>';
@@ -309,14 +312,14 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       return;
     }
     var children = data.children || [];
-    if (!children.length) { fileListing.innerHTML = '<div style="padding:8px;color:#8b949e">' + escapeHtml(t('file.empty')) + '</div>'; return; }
+    if (!children.length) { fileListing.innerHTML = '<div style="padding:8px;color:var(--term-fg-muted)">' + escapeHtml(t('file.empty')) + '</div>'; return; }
     var basePath = currentPath.replace(/\/+$/, '');
     fileListing.innerHTML = children.map(function(c) {
       var icon = c.is_dir ? '📁' : '📄';
       var fullPath = basePath + '/' + c.name;
-      return '<div class="shell-file-row" data-path="' + escapeHtml(fullPath) + '" data-isdir="' + (c.is_dir?'1':'0') + '" data-name="' + escapeHtml(c.name) + '" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;border-bottom:1px solid #30363d;white-space:nowrap">' +
+      return '<div class="shell-file-row" data-path="' + escapeHtml(fullPath) + '" data-isdir="' + (c.is_dir?'1':'0') + '" data-name="' + escapeHtml(c.name) + '" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;border-bottom:1px solid var(--term-border);white-space:nowrap">' +
         '<span style="flex-shrink:0">' + icon + '</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(c.name) + '</span>' +
-        (!c.is_dir ? '<span style="flex-shrink:0;color:#8b949e;font-size:0.7rem;margin-right:2px">' + formatSize(c.size||0) + '</span>' : '') +
+        (!c.is_dir ? '<span style="flex-shrink:0;color:var(--term-fg-muted);font-size:0.7rem;margin-right:2px">' + formatSize(c.size||0) + '</span>' : '') +
         '<button class="shell-file-menu-btn" title="' + escapeHtml(t('file.menu')) + '" style="flex-shrink:0">&vellip;</button>' +
         '</div>';
     }).join('');
@@ -360,7 +363,7 @@ function _initShellWindowUI(win, connLabel, sessionId) {
       var file = this.files && this.files[0];
       if (!file) return;
       var path = (filePathInput.value.trim().replace(/\/+$/, '') || '') + '/' + file.name;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/files/upload?path=' + encodeURIComponent(path), {method:'POST',body:file})
+      fetch(apiPath('/api/sessions/') + encodeURIComponent(sessionId) + '/files/upload?path=' + encodeURIComponent(path), {method:'POST',body:file})
         .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function() { shellFileBrowse(); })
         .catch(function(e) { console.error(e); });

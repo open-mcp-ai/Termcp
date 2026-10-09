@@ -1,0 +1,486 @@
+/* ---- Workspace layout: NetHub resource sidebar -------------------------
+   NetHub is the page's control layer, so it is a layout column rather than a
+   page-level overlay: the central workspace is the row's only flexible track,
+   which is what gives the terminal its room back when the sidebar collapses.
+   The collapse is a change of ONE length (--nethub-w) plus the body's own
+   max-height, so the workspace reflows instead of being covered.
+
+   The same element becomes a narrow rail of status lamps when collapsed, and
+   the drawer the small screens have always used below 800px. Those are the two
+   places its body leaves normal flow; desktop never overlays. */
+.workspace-frame {
+  display: grid;
+  grid-template-columns: var(--nethub-w) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  --nethub-w: 276px;
+  transition: grid-template-columns .24s ease;
+}
+.workspace-panel { min-width: 0; }
+.workspace-main {
+  width: min(100%, 85rem); margin-inline: auto; min-inline-size: 0;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.nethub {
+  position: sticky; top: 68px; z-index: 20;
+  min-width: 0; min-height: 0; align-self: start;
+  display: flex; flex-direction: column;
+  color: var(--text-secondary);
+}
+.nethub-btn {
+  width: 100%; height: 50px; flex: 0 0 50px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--glass-plate-strong); color: var(--accent); cursor: pointer;
+  font: inherit; font-family: var(--font-mono); font-size: .72rem;
+  font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+.nethub-btn:hover { background: var(--bg-card-hover); border-color: var(--accent-border); color: var(--accent-hover); }
+.nethub-btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.nethub-icon { display: block; width: 34px; height: 34px; flex: 0 0 34px; }
+.nethub-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nethub-caret { display: inline-flex; margin-left: auto; flex: 0 0 auto; opacity: .7; transition: transform .2s ease; }
+/* Collapsed: the header key keeps only the glyph, and the caret turns to point
+   the way the panel will move. Alignment is centred so the icon sits on the
+   rail's axis instead of the plate's left edge. */
+.workspace-frame.nethub-collapsed .nethub-btn { padding-inline: 0; justify-content: center; }
+.workspace-frame.nethub-collapsed .nethub-label,
+.workspace-frame.nethub-collapsed .nethub-caret { display: none; }
+/* The resource column: a plate of its own, translucent like the session plates
+   so the Blackwall still reads through the control layer. */
+.nethub-body {
+  display: flex; flex-direction: column; min-width: 0; min-height: 220px;
+  /* The panel may not grow past the viewport, and this ceiling is the whole
+     reason the page itself never scrolls.
+
+     The number is the chrome above and below the panel: header 57, the dock's top
+     padding 16, the gap 8, the trigger 50, the dock's bottom padding 16. It used
+     to read 134, four short of that sum, so the panel was permanently 13px too
+     tall and the WHOLE PAGE scrolled however few nodes the list held. That it was
+     a constant error and not a content one is what made it hard to see: 30 nodes
+     and 60 nodes overflowed by exactly the same 13px, with an empty list too.
+     test/session_switch asserts the arithmetic that keeps this honest. */
+  max-height: calc(100dvh - 147px);
+  margin-top: 8px; padding: 10px 0 12px;
+  overflow: hidden; opacity: 1; visibility: visible;
+  border: 1px solid var(--accent-border); background: var(--bg-subtle);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 12px 32px var(--shadow-card);
+  transition: opacity .16s ease, max-height .24s ease, transform .24s ease;
+}
+.nethub-rail { display: none; }
+/* The desktop pair of states. Both run through one length change, and the body
+   keeps a minimum height so collapsing never re-triggers a layout pass on the
+   terminal: it stays where the flow put it and only its width changes. */
+@media (min-width: 800px) {
+  .workspace-frame.nethub-collapsed { --nethub-w: 56px; }
+  .nethub-rail {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    min-width: 0; max-height: 0; padding: 0; overflow: hidden;
+    opacity: 0; pointer-events: none;
+    transition: max-height .24s ease, opacity .16s ease, padding .24s ease;
+  }
+  .workspace-frame.nethub-collapsed .nethub-body {
+    max-height: 0; min-height: 0; margin-top: 0; padding-block: 0;
+    opacity: 0; visibility: hidden; transform: translateX(-6px); pointer-events: none;
+  }
+  .workspace-frame.nethub-collapsed .nethub-rail {
+    /* Same ceiling as the body it replaces: the rail takes the panel's place in
+       the column, so it must not be allowed to grow past it either. */
+    max-height: calc(100dvh - 147px);
+    padding: 10px 0 12px; opacity: 1; pointer-events: auto;
+  }
+}
+/* The rail: NetHub's glyph, the expand key, and one status lamp per access
+   node. The lamps are the point — a collapsed sidebar still answers "which
+   machines can I reach", which a fully hidden panel cannot. */
+.nethub-rail-expand, .nethub-rail-item {
+  position: relative; width: 42px; height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--glass-plate); color: var(--accent); cursor: pointer;
+  font: inherit;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.nethub-rail-expand:hover, .nethub-rail-item:hover,
+.nethub-rail-expand:focus-visible, .nethub-rail-item:focus-visible {
+  border-color: var(--accent-border); background: var(--accent-surface); color: var(--accent-hover);
+}
+.nethub-rail-expand:focus-visible, .nethub-rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-rail-expand svg { display: block; }
+.nethub-rail-status {
+  position: absolute; left: 6px; top: 6px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--text-faint); box-shadow: 0 0 0 1px var(--bg-subtle);
+}
+.nethub-rail-status.is-online { background: var(--success-dark); box-shadow: 0 0 7px var(--live-glow); }
+.nethub-rail-status.is-connecting { background: var(--warning); animation: nethubStatusPulse 1.5s ease-in-out infinite; }
+.nethub-rail-status.is-offline { background: var(--danger); }
+.nethub-rail-active {
+  position: absolute; right: 6px; bottom: 6px; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--live-glow);
+}
+/* The rail's overflow key: the remainder of a long node list, as text. The
+   lamp strip is a status readout, not a second list, so past the cap this is
+   what the last row says. */
+.nethub-rail-glyph { font: 700 .68rem var(--font-mono); color: var(--text-muted); line-height: 1; }
+@keyframes nethubStatusPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+/* The node row: a resource, not a host card. The status lamp leads the row. */
+.conn-tile.node-card .entry-card-inner { gap: 9px; align-items: flex-start; }
+.node-lamp {
+  flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
+  background: var(--text-faint); box-shadow: 0 0 0 1px var(--bg-subtle);
+}
+.node-lamp.is-online { background: var(--success-dark); box-shadow: 0 0 7px var(--live-glow); }
+.node-lamp.is-connecting { background: var(--warning); animation: nethubStatusPulse 1.5s ease-in-out infinite; }
+.node-lamp.is-offline { background: var(--danger); }
+.conn-tile.node-card .conn-nm { font-size: .82rem; word-break: break-word; }
+.node-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.node-proto { color: var(--accent); }
+.node-meta .node-sep { color: var(--text-faint); }
+.node-status { color: var(--text-muted); }
+.node-status.is-online { color: var(--success-dark); }
+.node-status.is-connecting { color: var(--warning); }
+.node-status.is-offline { color: var(--danger); }
+.node-addr { margin-top: 3px; font: 400 .66rem var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.conn-tile.node-card .node-sess { margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; color: var(--text-secondary); }
+.conn-tile.node-card.node-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+
+/* Selection mode leaves the cards alone: no markers, no quieted buttons — the
+   row looks exactly as it does while connecting. The one thing selection may
+   paint is a card the user actually ticked, and only while it stays ticked. */
+.nethub-selecting .conn-tile.node-card.batch-selected {
+  border-color: var(--accent);
+  /* background-color, never the shorthand: the plate's corner strokes are
+     background-image layers declared at the end of the cascade, and a
+     background shorthand here would reset them. A solid tint under those
+     layers is the locked look; the plate's own shape stays untouched. */
+  background-color: var(--accent-surface-soft);
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 16px var(--accent-ring);
+}
+.nethub-selecting .conn-tile.node-card.batch-selected .conn-nm { color: var(--accent); }
+
+.workspace-sessions {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px; background-color: var(--glass-plate);
+  /* The plate is the one element that blurs: every card inside it composites over
+     this already-blurred backdrop, so a translucent tile needs no filter of its
+     own and the cost stays one blur per plate instead of one per session. */
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: inset 0 1px 0 var(--glow-white-04);
+}
+.workspace-archive { width: 100%; }
+.workspace-archive .section-header { border-radius: 12px 12px 0 0; }
+.workspace-sessions .section-header {
+  margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
+  border-radius: 12px 12px 0 0; background-color: var(--glass-plate-strong);
+  font-size: .78rem; font-weight: 600; letter-spacing: .02em;
+  text-transform: none; color: var(--text-secondary);
+}
+.workspace-sessions .section-header:hover { background-color: var(--bg-card-hover); }
+.workspace-sessions .section-body { padding: 8px 16px; min-height: 180px; }
+.workspace-sessions .conn-grid { gap: 12px; }
+
+/* The resource list is the only scrolling region, and it GROWS ONLY WHEN IT
+   OVERFLOWS. `flex: 0 1 auto` is the whole rule: the list is as tall as its
+   nodes and no taller, so a short list leaves the add control right under the
+   last one, while a long list gives up the height it cannot fit (`min-height: 0`
+   is what lets it shrink) and scrolls with the add control against the bottom
+   edge. `1 1 auto` would be wrong: it stretches the list to the column's full
+   height and pins a lone "add" bar to the bottom of an empty sidebar. */
+#sec-entries-body > #conn-grid {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  align-content: flex-start; padding: 0 10px;
+}
+/* The add control is its own component, not a node card: it is the column's
+   bottom action, so it carries no card rail and no hover lift — only the "empty
+   slot you can fill" dashed edge that marks it as an affordance. */
+/* The column's two fixed bottom actions share one row: creating and importing
+   are the two ways a profile enters the list, so they read as a pair. The add
+   control takes the row's width — it is the primary door — and the import key
+   is a square icon beside it: the file dialog it opens explains the arrow. */
+.drawer-add-row {
+  flex: 0 0 auto; display: flex; gap: 8px; margin: 10px 10px 0;
+}
+.drawer-add-row .drawer-add-grow { flex: 1 1 0; min-width: 0; margin: 0; }
+.drawer-add-row .drawer-import { flex: 0 0 44px; margin: 0; }
+.drawer-add {
+  flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 10px 0;
+  padding: 0; display: flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px dashed var(--border-strong); border-radius: 0;
+  background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+  user-select: none; font: inherit;
+}
+.drawer-add svg { display: block; }
+.drawer-add:hover, .drawer-add:focus-visible {
+  background: var(--accent-surface); border-color: var(--accent); color: var(--accent);
+}
+.drawer-add:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.drawer-add-label { font: 600 .66rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+
+/* The narrow header controls the panel for small screens only: the close key and
+   the scrim exist to dismiss an overlay, and an overlay is what the panel becomes
+   below 800px. Above it they are not part of the layout at all. */
+.drawer-toolbar {
+  flex: 0 0 auto;
+  /* No `gap`: each companion key carries its own margin-left, so the row's
+     spacing travels with the key. A container `gap` is not interpolable and is
+     not part of any key's box, so it cannot leave or arrive gradually. */
+  display: flex; padding: 0 10px 10px;
+  border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
+}
+/* One row, two states. The keys wear the SAME plate as the panels — the cut
+   corner and the fold come from theme.css's single shape rule, so nothing here
+   restates the polygon; all this file does is set the fill the outline sits on
+   (the plate's strokes are background layers, so a transparent key would draw
+   them over whatever is behind it). Collapsed: the list-checks glyph alone
+   spans the toolbar and a card click connects. Pressed: its face becomes the
+   ticked count, and the play split plus the invert check join the row while
+   card clicks tick. Pressing the switch again restores and clears. */
+.drawer-toolbar { position: relative; }
+.nethub-select-toggle {
+  position: relative;
+  /* flex-basis carries the toggle animation: full-width (basis 0%, grow 1)
+     collapses to a 34px square (basis 34px, grow 0) and back over 0.2s. Basis
+     and grow are both interpolable, so the key visibly slides shut towards its
+     left edge — the row's first item stays pinned there — and slides open again.
+     This only reads as a slide because the companion keys release their length
+     over the same 0.2s (see below); if they claimed it in one frame the switch
+     would be crushed before this transition had run a single step. */
+  flex: 1 1 0%; height: 34px; padding: 0 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary); cursor: pointer;
+  transition: color .14s ease, flex-basis .2s ease, flex-grow .2s ease;
+}
+.nethub-select-toggle:hover { color: var(--accent-hover); }
+.nethub-select-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-select-toggle[aria-pressed="true"] {
+  flex: 0 0 34px; padding: 0;
+  color: var(--accent);
+}
+.nethub-select-toggle svg { display: block; }
+.nethub-select-toggle .nethub-toggle-count[hidden] { display: none; }
+/* With targets locked the switch's face IS the count — one glyph, the digit —
+   and the list icon only returns when the selection is spent. The digit pops
+   in as the key settles shut. */
+.nethub-toggle-count { font: 700 .88rem var(--font-mono); color: inherit; line-height: 1; animation: nethubCountIn .18s ease; }
+@keyframes nethubCountIn { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+/* The invert check: hollow while nothing is ticked, solid once something is —
+   the key shows the state it would flip. Hover and focus tint the glyph, and
+   there is deliberately no fill to light up.
+
+   The companion keys HOLD A LENGTH IN BOTH STATES and animate it, rather than
+   being switched on with `display: none`. That is what makes the switch's own
+   slide visible: `display` is not interpolable, so a flip makes the companions
+   claim their 181px in the first frame, and the switch — which only gets the
+   space they leave — is crushed from 283px to 90px before its transition has run
+   a single step. 78% of its travel was then a teleport and the remaining 56px
+   covered the whole 0.2s, which is why the row read as "no animation". Releasing
+   the length over the same 0.2s keeps every frame carrying the row.
+
+   `visibility` (delayed on the way out) is what actually removes them once the
+   length is gone: an opacity-0 key is still a Tab stop. `.nethub-open-split`
+   gets no `overflow` on purpose — its dropdown hangs below the box and a clip
+   would slice it off. */
+.nethub-batch-icon {
+  flex: 0 0 0px; width: 0; height: 34px; margin-left: 0; padding: 0;
+  overflow: hidden;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elevated);
+  color: var(--text-muted); cursor: pointer;
+  transition: color .14s ease, flex-basis .2s ease, width .2s ease,
+              margin-left .2s ease, opacity .2s ease, visibility 0s linear .2s;
+}
+.nethub-selecting .nethub-batch-icon {
+  flex: 0 0 34px; width: 34px; margin-left: 6px;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transition: color .14s ease, flex-basis .2s ease, width .2s ease,
+              margin-left .2s ease, opacity .2s ease, visibility 0s;
+}
+/* The disabled look belongs to the EXPANDED key only. Unscoped, `:disabled`
+   (0,2,0) also beats the collapsed rule (0,1,0) and pins opacity at .45 in both
+   states, so the fade has equal endpoints and never runs — the keys would pop in
+   wearing a .45 ghost. Scoping it under the pressed state keeps the dimming
+   where the key is visible and lets the collapsed state own its own opacity. */
+.nethub-batch-icon:disabled { pointer-events: none; }
+.nethub-selecting .nethub-batch-icon:disabled { opacity: .45; }
+.nethub-batch-icon:hover { color: var(--accent-hover); }
+.nethub-batch-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nethub-batch-icon svg { display: block; }
+#nethub-sel-invert .ic-solid { display: none; }
+#nethub-sel-invert.all-checked .ic-hollow { display: none; }
+#nethub-sel-invert.all-checked .ic-solid { display: block; color: var(--accent); }
+/* The play split-key: the wide half opens every ticked host, the narrow half
+   unfolds export and delete. A hairline divides the halves; hover is a colour
+   change, for the key has no fill to light up. The SPLIT is only the row slot
+   and the dropdown's positioning parent; the plated box is the inner
+   .nethub-open-plate, because the plate's clip would otherwise slice off the
+   menu — a clip cuts descendants, and the menu hangs below the key. */
+.nethub-open-split {
+  position: relative;
+  /* `1 1 0%` rather than `1 1 auto`: both basis values are then zero lengths, so
+     the growth out of the collapsed row slot is interpolable. */
+  flex: 0 0 0px; min-width: 0; height: 34px; margin-left: 0;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: flex-basis .2s ease, flex-grow .2s ease, margin-left .2s ease,
+              opacity .2s ease, visibility 0s linear .2s;
+}
+.nethub-selecting .nethub-open-split {
+  flex: 1 1 0%; margin-left: 6px;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transition: flex-basis .2s ease, flex-grow .2s ease, margin-left .2s ease,
+              opacity .2s ease, visibility 0s;
+}
+/* Same as the invert key above: unscoped, `.is-disabled` pins opacity at .45 in
+   both states and the split key stops fading. */
+.nethub-open-split.is-disabled { pointer-events: none; }
+.nethub-selecting .nethub-open-split.is-disabled { opacity: .45; }
+/* The plate: the shared corner from theme.css, and the fill its strokes read
+   against. Nothing here restates the polygon. */
+.nethub-open-plate {
+  display: flex; height: 100%;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elevated);
+}
+/* Scoped to the PLATE, not the split: a bare `.nethub-open-split button` also
+   matches the dropdown's items, which are descendants of that wrapper. Its
+   `height: 100%` then beat `.nethub-menu-item`'s own height on specificity and
+   squashed every item to the height of its text — the menu looked like a strip
+   of unclickable labels. The plate holds exactly the two half-keys. */
+.nethub-open-plate button {
+  height: 100%; border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color .14s ease;
+}
+.nethub-open-plate button:hover { color: var(--accent-hover); }
+#nethub-batch-open { flex: 1 1 auto; min-width: 0; padding: 0 10px; gap: 8px; }
+#nethub-open-caret { flex: 0 0 22px; border-left: 1px solid var(--border-subtle); }
+.nethub-open-plate button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* There is deliberately no nethubKeyIn keyframe here. The companions fade in as
+   the switch shuts and fade out as it opens again, but that motion is a
+   `transition` on the rules above — the keyframe it replaced was attached to the
+   pressed selector, so it ran on expansion and vanished on collapse, and it could
+   not be reversed the way a transition is. */
+/* The dropdown: export and delete. It is anchored to the split key's RIGHT
+   edge (right: 0), because the trigger is the caret at that end — anchoring
+   left put it under the far end of the key, which reads as "the menu opened
+   somewhere else". min-width: 100% makes it at least as wide as the key it
+   drops from, so the items are the key's width instead of a squat box. */
+.nethub-open-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  min-width: 100%;
+  display: flex; flex-direction: column; padding: 4px;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--bg-elevated); box-shadow: 0 10px 28px var(--shadow-card);
+}
+.nethub-open-menu[hidden] { display: none; }
+.nethub-menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  height: 32px; padding: 0 12px;
+  border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  font: 600 .68rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+  text-align: left; white-space: nowrap;
+}
+.nethub-menu-item:hover { background: var(--accent-surface); color: var(--accent); }
+.nethub-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.nethub-menu-item:disabled { pointer-events: none; opacity: .45; }
+.nethub-menu-item svg { display: block; flex: 0 0 auto; }
+.nethub-menu-item.nethub-menu-danger { color: var(--danger); }
+.nethub-menu-item.nethub-menu-danger:hover { background: var(--danger-surface); color: var(--danger); }
+.drawer-close {
+  display: none; align-items: center; justify-content: center;
+  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background: var(--bg-elevated); color: var(--accent);
+  cursor: pointer; z-index: 2; touch-action: manipulation;
+}
+.drawer-close:hover, .drawer-close:active { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
+.drawer-close svg { display: block; }
+.drawer-scrim {
+  display: none; position: fixed; inset: 0; z-index: 23900;
+  background: var(--overlay-scrim); backdrop-filter: blur(3px);
+  opacity: 0; pointer-events: none; transition: opacity .22s ease;
+}
+.drawer-scrim.drawer-open { opacity: 1; pointer-events: auto; }
+/* The panel is a flex column, and the shared collapse rule must not take that
+   away: this body has no section header of its own, so `display: block` would
+   only unpick the fixed toolbar above the scrolling list. */
+#sec-entries-body.collapsed { display: flex; }
+
+/* Wide screen: the dock's own gutter, and the sidebar takes its room from the
+   flexible track — no dead gutter, no permanently overlaid column. */
+@media (min-width: 1024px) {
+  .dock { width: 100%; margin: 0 auto; padding: 16px 20px; }
+}
+
+/* Narrow: the panel leaves the flow and becomes the drawer it always was. The
+   sidebar and the rail are desktop states; below 800px the compact trigger sits
+   above the sessions and opens this overlay, scrim and all. */
+@media (max-width: 799px) {
+  .workspace-frame { display: block; }
+  /* z-index: auto is load-bearing, not tidying: the base rule gives .nethub
+     z-index: 20 for its sticky column, and a positioned ancestor with a
+     z-index creates a stacking context. The drawer inside it is position:fixed
+     at z-index 24000, but it would then paint at the ANCESTOR's 20 — under the
+     scrim, which is a sibling at 23900. That is the frosted pane over an open
+     drawer. Resetting the ancestor lets the fixed child reach the root context. */
+  .nethub { position: relative; top: auto; z-index: auto; margin-bottom: 10px; }
+  .nethub-btn { width: min(100%, 276px); }
+  .nethub-caret { display: none; }
+  #sec-entries-body {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 24000;
+    display: flex; flex-direction: column;
+    width: min(86vw, 360px); padding: 12px; overflow: hidden;
+    min-height: 0; max-height: none; margin-top: 0;
+    overscroll-behavior: contain; background: var(--bg-subtle);
+    border: 0; border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
+    box-shadow: 12px 0 44px rgba(0, 0, 0, .62), inset -1px 0 0 rgba(var(--cyan-rgb), .1);
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transform: translateX(-100%); transition: transform .22s ease; will-change: transform;
+  }
+  #sec-entries-body.drawer-open { transform: translateX(0); }
+  #sec-entries-body > #conn-grid { padding: 0; }
+  .drawer-add-row { margin-inline: 0; }
+  .drawer-toolbar { padding-right: 42px; }
+  .drawer-close { display: inline-flex; }
+  .drawer-scrim { display: block; }
+  .workspace-main { width: 100%; }
+}
+
+/* Narrow header: the docs link collapses to its glyph.
+
+   The full label is 193px of a 462px header row (measured), which is what pushes
+   the nav onto a second row on a phone. The glyph is 16px, so the link still
+   identifies itself while giving the language switch its room back. 768px is the
+   same "narrow" breakpoint the terminal windows use, so the page has one
+   definition of narrow rather than two. Only the visible label goes: the link
+   keeps its title and aria-label, so the tooltip and the screen-reader name are
+   unchanged at every width. */
+@media (max-width: 768px) {
+  .api-nav-label { display: none; }
+  .api-nav-link { width: 32px; height: 32px; padding: 0; justify-content: center; }
+  /* Keep the language trigger as a single glyph on narrow screens too. The
+     current label still exists for i18n updates and screen-reader context, but
+     it no longer consumes the header's scarce horizontal space. */
+  .lang-current, .lang-caret { display: none; }
+  .lang-btn { width: 32px; height: 32px; padding: 0; justify-content: center; }
+}
+
+/* Narrow screens keep compact session cards and comfortable drawer targets. */
+@media (pointer: coarse) and (hover: none) {
+  .dock { padding: 12px 0; }
+  #sec-entries-body { width: min(88vw, 340px); }
+  .drawer-close { width: 36px; height: 36px; }
+  .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
+}

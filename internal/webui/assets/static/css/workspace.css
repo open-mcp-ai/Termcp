@@ -282,8 +282,8 @@
 .nethub-batch-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .nethub-batch-icon svg { display: block; }
 #nethub-sel-invert .ic-solid { display: none; }
-.has-selection #nethub-sel-invert .ic-hollow { display: none; }
-.has-selection #nethub-sel-invert .ic-solid { display: block; color: var(--accent); }
+#nethub-sel-invert.all-checked .ic-hollow { display: none; }
+#nethub-sel-invert.all-checked .ic-solid { display: block; color: var(--accent); }
 /* The play split-key: the wide half opens every ticked host, the narrow half
    unfolds export and delete. A hairline divides the halves; hover is a colour
    change, for the key has no fill to light up. The SPLIT is only the row slot
@@ -435,4 +435,3 @@
   .drawer-close { width: 36px; height: 36px; }
   .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
 }
-

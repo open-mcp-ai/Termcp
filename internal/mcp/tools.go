@@ -15,6 +15,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 		mcpgo.WithString("command", mcpgo.Description("Executable line; empty with no args = login shell / profile default_shell")),
 		mcpgo.WithArray("args", mcpgo.Description("Argv after command"), mcpgo.WithStringItems()),
 		mcpgo.WithString("mode", mcpgo.Description("Mode of the primary shell only (per-shell setting): \"pty\" (default, interactive TUI) or \"pipe\" (no TTY, line-oriented). Other shells pick their own mode in shell_open."), mcpgo.DefaultString("pty")),
+		mcpgo.WithString("on_exit", mcpgo.Description("What happens to the session when its last shell ends by itself: \"keep\" (default) leaves it running for reuse (forwards, SFTP, more shells); \"close\" terminates it, so a run-and-exit command's session archives itself instead of piling up in the running list. Its output stays readable either way."), mcpgo.DefaultString("keep"), mcpgo.Enum("keep", "close")),
 		mcpgo.WithString("name"),
 		mcpgo.WithNumber("rows", mcpgo.DefaultNumber(24)),
 		mcpgo.WithNumber("cols", mcpgo.DefaultNumber(80)),
@@ -98,12 +99,12 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 	), withLogging("shell_detect", s.handleDetectShell))
 
 	mcpServer.AddTool(s.newTool("ssh_config",
-		mcpgo.WithDescription("SSH connection profiles: action=list returns usable profile names for session_start (never secrets or hostnames)."),
+		mcpgo.WithDescription("SSH connection profiles: action=list returns usable profile names for session_start (never secrets or hostnames)."+sshConfigImportFormat),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list")),
 	), withLogging("ssh_config", s.handleSSHConfigOps))
 
 	mcpServer.AddTool(s.newTool("message",
-		mcpgo.WithDescription("A session's transcript index: action=list returns the spans of the shell's byte log (status, time, start, end) in order. The bytes themselves are read with shell_output(offset=start, max_bytes=end-start)."),
+		mcpgo.WithDescription("A session's transcript index: action=list returns the spans of the shell's byte log (status, time, start, end) in order. The bytes themselves are read with shell_output(offset=start, max_bytes=end-start).\n\nstatus is the one field worth reading: it says who produced the span. o = output from the shell, a = input an AI agent wrote through MCP, i = input written at the terminal (the human, through the Web UI), q = an approval was requested at this point, A = an approved input was released and written. An i or q span is the evidence that a human has operated this terminal, which is otherwise invisible in the byte stream (the agent's and the human's keystrokes produce the same echo). Input spans are zero-length marks: start == end, because the bytes live in the terminal's echo rather than being written twice. Both `a` and `i` mark the point where a line was submitted, not where typing started."),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("list")),
 		mcpgo.WithString("session_id", mcpgo.Required()),
 	), withLogging("message", s.handleMessageOps))
@@ -120,7 +121,7 @@ func registerTools(mcpServer *mcpserver.MCPServer, s *Server) {
 	), withLogging("shell_reader_unregister", s.handleUnregisterReader))
 
 	mcpServer.AddTool(s.newTool("shell_notify",
-		mcpgo.WithDescription("Manage event notifications (reverse wake-up signal) for a shell channel: action=register sets a rule on channel resource or sampling; action=unregister removes by rule_id; action=list returns active rules."),
+		mcpgo.WithDescription("Manage event notifications (reverse wake-up signal) for a shell channel: action=register sets a rule on channel resource or sampling; action=unregister removes by rule_id; action=list returns active rules.\n\nUse it to WAIT on a human instead of polling: when the command you started now needs a person at the terminal (a sudo/password prompt, an interactive installer, any prompt they must answer), call notify_user so they know it is their turn, then register event=output on that shell and stop calling shell_output in a loop — their next keystroke echo wakes you. Unregister when they have answered; closing the shell or deleting the session clears the rule as well."),
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("register", "unregister", "list")),
 		mcpgo.WithString("shell_id", mcpgo.Description("Target shell_id (required for register; optional filter for list)")),
 		mcpgo.WithString("channel", mcpgo.Description("Delivery channel (required for register): resource (MCP notifications/resources/updated) or sampling (MCP sampling/createMessage)"), mcpgo.Enum("resource", "sampling")),

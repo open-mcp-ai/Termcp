@@ -1,0 +1,60 @@
+/* Glass affordability — the one place the Web UI decides it may be translucent.
+
+   Glass is a compositor effect, and when the compositor is a CPU rasterizer (no
+   GPU: remote desktop, a VM, hardware acceleration switched off) every blur is
+   repainted on the CPU instead. Measured on this Web UI, streaming output at
+   1440x900: 17ms/frame with a GPU against 63ms/frame without one at 1x, and
+   200ms/frame at 2x — a page that reads as 卡 while the main thread sits idle,
+   because the cost is paint, not script. With the blur off the same software run
+   is back to 17ms.
+
+   `html.no-glass` is set at boot by termcpSyncGlassMode() in util.js, which
+   answers "is glass affordable here?" from two independent signals — the OS
+   preference (Windows: Settings > Personalization > Colors > Transparency
+   effects, which Edge maps to prefers-reduced-transparency) and the renderer
+   string, because a remote desktop session reports a software rasterizer
+   whatever that preference says. Both entrances set this one class, so the
+   values below exist once.
+
+   This chunk is LAST in the manifest on purpose: the blur declarations live in
+   the other chunks, they all have the same specificity as the rule below, and a
+   custom property is resolved on the element that declares it — so the only way
+   to switch the glass off without writing !important on nine declarations is to
+   come after them. */
+html.no-glass .page-backdrop { animation: none; opacity: 1; }
+html.no-glass *,
+html.no-glass *::before,
+html.no-glass *::after { backdrop-filter: none; -webkit-backdrop-filter: none; }
+html.no-glass {
+  /* Opaque means "a surface" here, not "the glass tint". --bg-card is already
+     the terminal's own backing (--term-bg is defined as it), so the terminal
+     needs no override: it keeps its exact resting colour and only loses the
+     see-through. Every value is derived from theme tokens rather than spelled
+     out, so a light/dark theme switch keeps working with the glass off. */
+  --glass-plate: var(--bg-card);
+  --glass-plate-strong: var(--bg-elevated);
+  --glass-tile: var(--bg-card);
+  --glass-archived: var(--bg-subtle);
+  --bg-header: var(--bg-canvas);
+}
+/* --overlay-modal is deliberately NOT re-pointed. The modal scrim is alpha
+   blending, not a backdrop-filter, so it costs nothing to keep translucent, and
+   its value is a per-theme design choice (light: a soft grey, cyberpunk: a
+   near-opaque black) that a hardcoded colour would overwrite — the one token
+   here that is not derivable from the palette. Cyberpunk's own blur on
+   .modal-backdrop is already removed by the wildcard rule above. */
+/* The terminal's glass tokens live on :root (theme.css), so the single rule above
+   is enough to make them opaque — a custom property is resolved on the element
+   that declares it, and html.no-glass IS that element. Should a chunk ever
+   re-declare one of these on a descendant, the value there would shadow this
+   override (an inherited declaration loses to the descendant's own, and
+   !important on :root does not win either — verified in Edge: the window
+   reported backdrop-filter: none and still painted its rgba(126,176,232,.08)
+   frost). TestGlassDegradeNeedsNoImportant walks the chunks for declaration
+   sites and fails if this rule stops covering them. */
+html.no-glass {
+  --term-glass-frost: var(--bg-card);
+  --term-glass-tint: transparent;
+  --term-glass-surface: var(--term-surface);
+  --term-pane-72: var(--bg-canvas);
+}

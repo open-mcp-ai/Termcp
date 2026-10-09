@@ -28,6 +28,24 @@ import (
 // The manager-assigned callbacks and the per-shell closed flag are atomics and
 // need no lock (see field docs below).
 
+// OnExitPolicy decides what a session does when its last shell channel ends by
+// itself (the user typing `exit`, or a run-to-exit pipe command finishing).
+//
+// It exists because the container contract and the one-shot use case pull in
+// opposite directions: the SSH connection outliving its shells is what keeps
+// forwards/SFTP/new channels usable, but an agent that started a session only to
+// run one command has nothing left to reuse and leaves a "running" tile behind.
+// The policy is per session, so both behaviours coexist.
+type OnExitPolicy string
+
+const (
+	// OnExitKeep (default) leaves the container running after its last shell ends.
+	OnExitKeep OnExitPolicy = "keep"
+	// OnExitClose terminates the container once its last shell ends: the session
+	// goes DEAD and moves to the archive, and its output stays readable.
+	OnExitClose OnExitPolicy = "close"
+)
+
 // Config holds parameters for creating a new Session.
 type Config struct {
 	Command string
@@ -50,6 +68,21 @@ type Config struct {
 	// make "every write to this host is reviewed" the default rather than a
 	// switch someone has to remember after launching.
 	Approval bool
+	// OnExit decides what happens to the container when its last shell channel
+	// ends by itself. "" or "keep" (the default) leaves it running: an interactive
+	// shell the user typed `exit` in, or a pipe command that finished, says
+	// nothing about the SSH connection, which still carries forwards, SFTP and
+	// new channels. "close" terminates the container when that last shell exits,
+	// which is what a one-shot command wants -- it was started to run one program,
+	// and leaving the session "running" in the list forever is the cost of
+	// treating it like a reusable connection.
+	OnExit OnExitPolicy
+	// Ctx, when non-nil, cancels the dial: a browser that closed its pending
+	// window (or an agent whose request was aborted) stops the connect it started
+	// instead of having a session it can no longer reach appear in the list. It
+	// applies to establishing the transport only — a created session outlives the
+	// request that asked for it, so the caller's request context must NOT be kept.
+	Ctx context.Context
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -77,10 +110,11 @@ type Session struct {
 	onInput        atomic.Pointer[func(shellID string, src InputSource, submit bool)] // invoked when a shell receives input
 	onShellExit    atomic.Pointer[func(shellID string, exitCode *int)]
 	onShellClose   atomic.Pointer[func(shellID string)]
-	enterCRLF      bool   // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
-	defaultShell   string // profile default_shell, applied to shells opened later
-	primaryShellID string // first shell id (≠ session id); addressed by session-level helpers
-	nextShellIndex int    // guarded by shellStateMu; monotonically assigns channel indexes
+	enterCRLF      bool         // line-ending for pipe-mode enter (\r\n for cmd/powershell, \n for unix)
+	defaultShell   string       // profile default_shell, applied to shells opened later
+	onExit         OnExitPolicy // what to do when the last shell ends by itself
+	primaryShellID string       // first shell id (≠ session id); addressed by session-level helpers
+	nextShellIndex int          // guarded by shellStateMu; monotonically assigns channel indexes
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
@@ -133,6 +167,15 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	if err != nil {
 		return nil, err
 	}
+	// The dial can also finish in the same instant the caller gives up. Dropping
+	// the transport here rather than registering it keeps the promise the cancel
+	// makes: after a cancelled request, no session exists to be listed. Without
+	// this the race is small but real -- a fast host completes the dial just as
+	// the window closes, and the session appears with nobody attached to it.
+	if cfg.Ctx != nil && cfg.Ctx.Err() != nil {
+		_ = execSession.Close()
+		return nil, cfg.Ctx.Err()
+	}
 
 	buf := buffer.New(1024 * 1024)
 	rid, _ := buf.NewReader()
@@ -180,6 +223,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		},
 		enterCRLF:      enterCRLF,
 		defaultShell:   cfg.DefaultShell,
+		onExit:         normalizeOnExit(cfg.OnExit),
 		execSession:    execSession,
 		buf:            buf,
 		readerID:       rid,
@@ -206,10 +250,52 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	s.shells.Store(root.ID, root)
 	s.shellHistory.Store(root.ID, root.Info())
 	root.startReaders()
+	// Watch the transport itself, not just its channels. A shell's exit watcher
+	// only reports a lost connection while that shell is alive; once every shell
+	// has ended (a user typing `exit`, a run-to-exit command finishing) nothing
+	// else observes the connection, and a session whose SSH peer went away kept
+	// reporting "running" forever -- listed as a live session, refusing to move to
+	// the archive, while every operation on it failed with "new session: EOF".
+	//
+	// This is the only signal that survives having no shells, and it does not
+	// duplicate the per-shell path: markDead is idempotent, so whichever watcher
+	// notices first wins and the message is recorded once.
+	s.watchTransport(execSession)
 
 	slog.Debug("session started", "session_id", sessionID, "shell_id", shellID, "command", cfg.Command, "ssh_endpoint", sshEndpointPublic)
 
 	return s, nil
+}
+
+// watchTransport marks the session DEAD when its SSH connection shuts down.
+//
+// It exists because connection loss is otherwise only noticed by a running
+// shell's watcher. A shell ending — cleanly or not — never ends the container
+// (the transport still carries forwards, SFTP and new channels), so the
+// session legitimately has states with no live shell to watch anything; in
+// those states an SSH peer that disappears used to go unnoticed and the session
+// stayed "running" for the life of the process.
+//
+// WaitTransport blocks until the connection is down, so this goroutine costs
+// nothing while the transport lives. finalize() closes the transport before
+// waiting on watchWG, which is what releases it.
+func (s *Session) watchTransport(es *sshclient.ExecSession) {
+	if es == nil {
+		return // restored placeholder with no live transport
+	}
+	s.watchWG.Add(1)
+	go func() {
+		defer s.watchWG.Done()
+		if err := es.WaitTransport(); err != nil {
+			slog.Debug("session transport closed", "session_id", s.ID, "err", err)
+		} else {
+			slog.Debug("session transport closed", "session_id", s.ID)
+		}
+		// A deliberate close (Terminate, Disconnect, Delete) sets closing before it
+		// touches the transport, so markDeadWithMessage drops this notification
+		// instead of reporting an intentional teardown as a network loss.
+		s.markDeadWithMessage(transportLostMessage)
+	}()
 }
 
 // dialTransport establishes the transport a session runs on and reports which
@@ -224,6 +310,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
 func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
+	ctx := cfg.Ctx
 	if !isRemote(cfg) {
 		if internal == nil {
 			return nil, "", errors.New("internal ssh server is not configured")
@@ -239,7 +326,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 			internal.RevokeClientConfig(minted.User)
 			return nil, "", err
 		}
-		es, err := sshclient.StartWithConn(conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		es, err := sshclient.StartWithConn(ctx, conn, minted, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
 			// A failed handshake consumes nothing, so the one-time credential is
 			// still pending; revoke it to keep the map bounded by live sessions.
@@ -258,11 +345,11 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 		return nil, "", fmt.Errorf("ssh_port must be between 1 and 65535, got %d", port)
 	}
 	if r.Jump != nil {
-		client, closers, err := buildChainClient(r)
+		client, closers, err := buildChainClient(ctx, r)
 		if err != nil {
 			return nil, "", err
 		}
-		es, err := sshclient.StartWithChain(client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+		es, err := sshclient.StartWithChain(ctx, client, closers, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 		if err != nil {
 			return nil, "", err
 		}
@@ -273,7 +360,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 	if err != nil {
 		return nil, "", err
 	}
-	es, err := sshclient.StartWithConfig(dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+	es, err := sshclient.StartWithConfig(ctx, dialAddr, clientCfg, r.Proxy, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
 	if err != nil {
 		return nil, "", err
 	}
@@ -324,6 +411,61 @@ func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 		}
 		s.markDead()
 	})
+}
+
+// transportLostMessage is the system message recorded when a session's SSH
+// connection dies under it (network loss, remote sshd gone). The per-shell
+// watcher and the session-level transport watcher report the same event, so the
+// text lives here rather than at either call site.
+const transportLostMessage = "❌ SSH connection lost — network disconnected"
+
+// normalizeOnExit maps anything that is not the explicit "close" to the default
+// behaviour. An unknown value must not silently end a user's connection: the
+// safe reading of a typo is "keep it alive".
+func normalizeOnExit(p OnExitPolicy) OnExitPolicy {
+	if p == OnExitClose {
+		return OnExitClose
+	}
+	return OnExitKeep
+}
+
+// closeIfLastShellEnded implements Config.OnExit for the one-shot case: when a
+// shell ends by itself and it was the last live channel, a session configured
+// with OnExitClose is terminated, moving it to the archive with its output still
+// readable.
+//
+// It is called by the exit watcher, after the shell has left Running. "Last" is
+// decided by the live map, and the transition is guarded by the same
+// shellStateMu that registration uses, so a shell being opened concurrently
+// either lands before the check (and the session stays) or finds the session
+// already closing (and is refused) -- a new channel can never be added to a
+// session that this call is about to close.
+func (s *Session) closeIfLastShellEnded() {
+	if s.onExit != OnExitClose {
+		return
+	}
+	s.shellStateMu.Lock()
+	live := false
+	s.shells.Range(func(_, v any) bool {
+		cs := v.(*ChildShell)
+		cs.mu.RLock()
+		running := cs.Status == api.SessionRunning
+		cs.mu.RUnlock()
+		if running {
+			live = true
+			return false
+		}
+		return true
+	})
+	closing := s.closing
+	s.shellStateMu.Unlock()
+	// A live channel (or a session already going down) means this was not the
+	// end of the session's work; another shell will report its own exit.
+	if live || closing {
+		return
+	}
+	slog.Debug("one-shot session closing after its last shell exited", "session_id", s.ID)
+	s.Terminate(true, 0)
 }
 
 // markDead transitions a Running session to exited (DEAD) in place, retaining

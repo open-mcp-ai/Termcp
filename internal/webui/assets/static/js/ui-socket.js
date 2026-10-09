@@ -1,6 +1,6 @@
 function uiWebSocketURL() {
   var s = location.protocol === 'https:' ? 'wss' : 'ws';
-  return s + '://' + location.host + '/api/ui/ws';
+  return s + '://' + location.host + apiPath('/api/ui/ws');
 }
 
 function wsUiSend(obj) {
@@ -147,8 +147,9 @@ function connectUIWebSocket() {
         loadNotifications();
       }
       else if (j.type === 'terminal') {
-        var win = getShellWindowBySid(j.id);
-        if (!win) win = findShellWindowByChannelSid(j.id);
+        /* One window lookup per frame, not two: this branch runs once per output
+           frame, and each lookup was a full DOM scan. */
+        var win = shellWindowForFrame(j.id);
         if (win) {
           var ch = win._channels && win._channels[j.id];
           var tm = ch ? ch.term : win._term;
@@ -159,9 +160,11 @@ function connectUIWebSocket() {
             shellStatusOnBytes(win, j.id, j.d);
             var bytes = textToBytes(j.d);
             tm.write(bytes, function () {
-              requestAnimationFrame(function () {
-                shellTermScrollToBottomIfStuck(tm, true);
-              });
+              /* One scroll check per frame, not one per write: a burst arrives as
+                 several writes in the same task, and the check reads layout
+                 (clientHeight/scrollHeight) — doing it per write forced a reflow
+                 per chunk while output streamed. */
+              shellTermScrollToBottomSoon(tm);
             });
           }
         }
@@ -774,17 +777,18 @@ function fitShellTerminal(term, container, win, syncRemote) {
   if (vp && vp.clientWidth > 0) w = vp.clientWidth;
   var h = container.clientHeight;
   if (w <= 0 || h <= 0) return false;
-  var fontSize = (typeof term.getOption === 'function' && term.getOption('fontSize')) || 13;
+  var options = term.options || {};
+  var fontSize = options.fontSize || (typeof term.getOption === 'function' && term.getOption('fontSize')) || 13;
   // Same source as the terminal's own fontFamily option, so the measuring span
   // and the grid can never disagree about which face is in use — a disagreement
   // here is a wrong column count, not a cosmetic difference.
-  var fontFamily = (typeof term.getOption === 'function' && term.getOption('fontFamily')) || termcpMonoFontFamily();
+  var fontFamily = options.fontFamily || (typeof term.getOption === 'function' && term.getOption('fontFamily')) || termcpMonoFontFamily();
   var measure = document.createElement('span');
-  measure.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;white-space:pre;font:' + fontSize + 'px ' + fontFamily;
+  measure.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;white-space:pre;font:' + (options.fontWeight || 'normal') + ' ' + fontSize + 'px ' + fontFamily;
   measure.textContent = 'M';
   document.body.appendChild(measure);
-  var charWidth = measure.offsetWidth || 8;
-  var lineHeight = Math.ceil(fontSize * 1.35) || 16;
+  var charWidth = (measure.offsetWidth || 8) + (options.letterSpacing || 0);
+  var lineHeight = Math.ceil(fontSize * 1.35 * (options.lineHeight || 1)) || 16;
   document.body.removeChild(measure);
   var screenEl = term.element && term.element.querySelector('.xterm-screen');
   var prevCols = term.cols;
@@ -870,7 +874,7 @@ var SHELL_HISTORY_DISPLAY_CAP = 32 * 1024 * 1024;
 
 function fetchShellOutputRange(shellId, qs) {
   // Path id is shell_id (channel id used by tabs/WS watch).
-  return fetch('/api/shells/' + encodeURIComponent(shellId) + '/output-range?' + qs).then(function (r) {
+  return fetch(apiPath('/api/shells/') + encodeURIComponent(shellId) + '/output-range?' + qs).then(function (r) {
     if (!r.ok) throw new Error('output-range ' + r.status);
     return r.json();
   });
@@ -942,6 +946,23 @@ function shellTermScrollToBottomIfStuck(term, flush) {
   if (!term) return;
   if (!xtermViewportNearBottom(term, 64)) return;
   shellTermScrollToBottom(term, flush);
+}
+
+/** The sticky-tail check, coalesced to at most one run per animation frame per
+ *  terminal.
+ *
+ * `xtermViewportNearBottom` reads scrollHeight/clientHeight/scrollTop, so
+ *  calling it once per write forces a layout flush per chunk — and a burst of
+ *  output arrives as several writes inside one task. The frame is the right
+ *  granularity anyway: the user sees at most one painted scroll position per
+ *  frame, so checking more often than that can only cost work. */
+function shellTermScrollToBottomSoon(term) {
+  if (!term) return;
+  if (term._stbSoonRaf) return;
+  term._stbSoonRaf = requestAnimationFrame(function () {
+    term._stbSoonRaf = 0;
+    shellTermScrollToBottomIfStuck(term, true);
+  });
 }
 
 /** Scroll to buffer bottom using xterm APIs only (do not set viewport scrollTop — it desyncs from the renderer). */

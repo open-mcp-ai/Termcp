@@ -114,10 +114,20 @@ function refreshSessionTabbar() {
 }
 
 // Keep the tab bar in sync as shell windows are opened/closed anywhere.
+//
+// The session plate is repainted from the same signal, and that is not cosmetic:
+// a dial in progress exists as a placeholder window and nothing else, so the
+// window appearing or disappearing is the ONLY event that can add or remove its
+// connecting card. Watching the container is what makes the card show up when
+// the dial starts and clear when it ends — without this the plate is only
+// repainted by session frames, which a still-connecting dial never produces.
 (function () {
   var c = shellWindowsEl();
   if (!c || typeof MutationObserver === 'undefined') return;
-  new MutationObserver(function () { refreshSessionTabbar(); }).observe(c, { childList: true });
+  new MutationObserver(function () {
+    refreshSessionTabbar();
+    if (typeof renderSessionGrid === 'function') renderSessionGrid('');
+  }).observe(c, { childList: true });
 })();
 
 // Fixed action cluster at the right end of the session tab bar (Chrome-style):
@@ -518,6 +528,18 @@ updateTileToggleButton();
 refreshSessionTabbar();
 if (sessionTabbarEl()) setupSessionTabbarDrag(sessionTabbarEl());
 
+/* Publish the header's depth before any window can open the tiled workspace, then
+   republish whenever the header itself changes size — a viewport resize that wraps
+   its nav, a language switch that rewrites the labels, or a web font landing after
+   first paint. A resize listener would miss the last two, which is why the observer
+   watches the header and not the window. */
+syncAppHeaderDepth();
+(function () {
+  if (typeof ResizeObserver === 'undefined') return;
+  var header = document.querySelector('.app-header');
+  if (header) new ResizeObserver(syncAppHeaderDepth).observe(header);
+})();
+
 /** Toggle maximize: floating window fills the viewport; a pane fills the grid. */
 function toggleShellWindowMax(win) {
   if (!win || !win.classList.contains('shell-window')) return;
@@ -636,10 +658,18 @@ function applyWindowViewportMode(win) {
  *  it there). Callers pass a position only when the click is a real target.
  *
  *  On mobile the window fills the viewport and CSS owns its geometry (see
- *  applyWindowViewportMode); the cascade steps aside for the same reason. */
+ *  applyWindowViewportMode); the cascade steps aside for the same reason.
+ *
+ *  Both placements stop below the page header (see appHeaderBottom): a window
+ *  whose title bar lands in the header band hides the wordmark and the page's own
+ *  controls, and a click that names a point up there still has to resolve to a
+ *  reachable window. */
 function positionShellWindowFromClick(win, pos) {
   if (isMobileViewport()) { applyWindowViewportMode(win); return; }
   var MARGIN = 8;
+  /* The header is page chrome, so it outranks the cosmetic margin: the window's
+     leading edge goes below the header even when that is further down than 8px. */
+  var FLOOR = Math.max(MARGIN, appHeaderBottom());
   var winW = Math.min(640, window.innerWidth - MARGIN * 2);
   var winH = Math.min(480, window.innerHeight - MARGIN * 2);
   win.style.width = winW + 'px';
@@ -653,12 +683,12 @@ function positionShellWindowFromClick(win, pos) {
     var centreL = Math.round((window.innerWidth - winW) / 2) + off * 24;
     var centreT = Math.round((window.innerHeight - winH) / 2) + off * 24;
     win.style.left = Math.max(MARGIN, Math.min(centreL, window.innerWidth - winW - MARGIN)) + 'px';
-    win.style.top = Math.max(MARGIN, Math.min(centreT, window.innerHeight - winH - MARGIN)) + 'px';
+    win.style.top = Math.max(FLOOR, Math.min(centreT, window.innerHeight - winH - MARGIN)) + 'px';
     return;
   }
   var th = 21;
   win.style.left = Math.max(MARGIN, Math.min(pos.x - winW / 2, window.innerWidth - winW - MARGIN)) + 'px';
-  win.style.top = Math.max(MARGIN, Math.min(pos.y - th, window.innerHeight - winH - MARGIN)) + 'px';
+  win.style.top = Math.max(FLOOR, Math.min(pos.y - th, window.innerHeight - winH - MARGIN)) + 'px';
 }
 
 /** The pointer position a click event names, or null when there is none (a
@@ -667,6 +697,27 @@ function positionShellWindowFromClick(win, pos) {
 function windowPositionFromClick(ev) {
   if (!ev || typeof ev.clientX !== 'number') return null;
   return { x: ev.clientX, y: ev.clientY };
+}
+
+/** The y coordinate a floating window may not rise above: the page header's lower
+ *  edge. Measured rather than restated as a constant because the header is not a
+ *  fixed height — its nav wraps at narrow widths and a language switch rewrites
+ *  the labels inside it. Returns 0 (the viewport top, i.e. the old behaviour) when
+ *  the page has no header at all, which is also what an unmeasured page gets. */
+function appHeaderBottom() {
+  var el = document.querySelector('.app-header');
+  if (!el) return 0;
+  var r = el.getBoundingClientRect();
+  return isFinite(r.bottom) ? Math.max(0, r.bottom) : 0;
+}
+
+/** Publish that edge for the stylesheet, which cannot measure: .pane-workspace
+ *  insets its own top by this variable, so the tiled grid stops below the header
+ *  and the header — the way back to the page — stays readable and clickable in
+ *  tile mode. Kept as a variable rather than a duplicated constant so the CSS
+ *  floor and the drag floor cannot drift apart. */
+function syncAppHeaderDepth() {
+  document.documentElement.style.setProperty('--app-header-h', appHeaderBottom() + 'px');
 }
 
 /** Pull a floating window back inside the windows container after a drag.
@@ -679,9 +730,12 @@ function windowPositionFromClick(ev) {
  *  position once the drag is over.
  *
  *  Bounded by the container, not the viewport: the container is what windows are
- *  positioned against, so if it ever gains an inset this stays correct. When the
- *  window is larger than the container on an axis the leading edge wins, which
- *  keeps the title and its close button on screen. */
+ *  positioned against, so if it ever gains an inset this stays correct. The
+ *  leading edge is the page header's lower edge, never the viewport top — a window
+ *  released over the header would cover the page's own chrome, and the header is
+ *  the only way back to it. When the window is larger than the remaining area on
+ *  an axis the leading edge wins, which keeps the title and its close button
+ *  reachable. */
 function clampShellWindowIntoContainer(win) {
   if (!win || isTiledWin(win)) return;
   var host = win.parentNode;
@@ -690,10 +744,13 @@ function clampShellWindowIntoContainer(win) {
   var areaW = host.clientWidth || box.width;
   var areaH = host.clientHeight || box.height;
   var r = win.getBoundingClientRect();
+  /* The leading edge is the container's own top, or the header's lower edge when
+     that is further down; the trailing edge still counts from the container. */
+  var floor = Math.max(box.top, appHeaderBottom());
   var maxLeft = Math.max(box.left, box.left + areaW - r.width);
-  var maxTop = Math.max(box.top, box.top + areaH - r.height);
+  var maxTop = Math.max(floor, box.top + areaH - r.height);
   var left = Math.min(Math.max(box.left, r.left), maxLeft);
-  var top = Math.min(Math.max(box.top, r.top), maxTop);
+  var top = Math.min(Math.max(floor, r.top), maxTop);
   if (left !== r.left) win.style.left = left + 'px';
   if (top !== r.top) win.style.top = top + 'px';
 }
@@ -791,8 +848,19 @@ function collapseShellWindow(win) {
   }
 }
 
-/** "x" button: delete the session — same as the session tile's x. A pending
- *  window has no session yet, so it just cancels the connect. */
+/** "x" button: close the session.
+ *
+ *  A running session is NOT destroyed by this key. It asks what to do with it,
+ *  because the two outcomes are very different and the icon cannot express the
+ *  difference: archiving disconnects the session and keeps its output readable
+ *  in the archive (recoverable — its transcript is still there), while deleting
+ *  erases the on-disk directory for good. The key used to delete outright, which
+ *  made one misclick on a live terminal unrecoverable and gave the archive no way
+ *  to grow other than the batch bar.
+ *
+ *  The dialog offers the same vocabulary the batch bar already uses for the same
+ *  two actions (Stop/Archive vs Delete), and for an already-archived session it
+ *  keeps the plain delete confirmation: there is nothing left to archive. */
 function bindShellWindowCloseButton(win, closeBtn) {
   if (!closeBtn || closeBtn._termcpCloseBound) return;
   closeBtn._termcpCloseBound = true;
@@ -801,22 +869,129 @@ function bindShellWindowCloseButton(win, closeBtn) {
     e.preventDefault(); e.stopPropagation();
     var sid = win && win._sid;
     if (!sid || win._placeholder) { closeShellWindow(win); return; }
-    confirmDialog({
+    askCloseSession(sid, win);
+  });
+}
+
+/** Close one session, asking first when it is still running.
+ *
+ *  Returns a Promise resolving to 'archived' | 'deleted' | 'cancelled' so the
+ *  caller (and a test) can see which path ran. All three outcomes route through
+ *  endpoints the app already used: POST /terminate is the archive move the batch
+ *  bar calls, DELETE is the permanent removal the session tile calls. */
+function askCloseSession(sid, win) {
+  var name = stripSessionPrefix(sid);
+  var live = !isSessionDeadInWindows(sid);
+  if (!live) {
+    return confirmDialog({
       title: t('session.delete.title'),
-      message: t('session.delete.message', { name: stripSessionPrefix(sid) }),
+      message: t('session.delete.message', { name: name }),
       okText: t('common.delete'),
       danger: true
     }).then(function (ok) {
-      if (!ok) return;
-      fetch('/api/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })
-        .then(function (r) {
-          if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
-          var w = getShellWindowBySid(sid) || win;
-          if (w) closeShellWindow(w);
-        })
-        .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
+      if (!ok) return 'cancelled';
+      return deleteSessionById(sid, win).then(function () { return 'deleted'; });
     });
+  }
+  return archiveOrDeleteDialog(name).then(function (choice) {
+    if (choice === 'archive') {
+      return archiveSessionById(sid).then(function () { return 'archived'; });
+    }
+    if (choice === 'delete') {
+      return deleteSessionById(sid, win).then(function () { return 'deleted'; });
+    }
+    return 'cancelled';
   });
+}
+
+/** Whether a session id belongs to an archived (not running) session, read from
+ *  the last snapshot. Absent from the snapshot means "unknown": treat it as live,
+ *  because asking before disconnecting a running session is the safe mistake while
+ *  silently deleting one is not recoverable. */
+function isSessionDeadInWindows(sid) {
+  var snap = window._lastSessionsSnapshot || [];
+  for (var i = 0; i < snap.length; i++) {
+    if (snap[i] && snap[i].id === sid) return isDeadSession(snap[i]);
+  }
+  return false;
+}
+
+/** The archive-or-delete dialog for a running session. Resolves to 'archive',
+ *  'delete' or 'cancelled' (Escape, the close key, or a backdrop click all read
+ *  as cancelled: the safe answer is always "do nothing"). */
+function archiveOrDeleteDialog(name) {
+  var root = document.getElementById('modal-close-session');
+  var msg = document.getElementById('modal-close-msg');
+  if (msg) msg.textContent = t('session.close.message', { name: name });
+  var archiveBtn = document.getElementById('modal-close-archive');
+  var deleteBtn = document.getElementById('modal-close-delete');
+  var cancelBtn = document.getElementById('modal-close-cancel');
+  var closeBtn = document.getElementById('modal-close-x');
+  return new Promise(function (resolve) {
+    var settled = false;
+    function wire(btn, value) {
+      if (!btn) return null;
+      var fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', function (e) { e.preventDefault(); done(value); });
+      return fresh;
+    }
+    function done(v) {
+      if (settled) return;
+      settled = true;
+      hideModal('modal-close-session');
+      document.removeEventListener('keydown', onKey, true);
+      resolve(v);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); done('cancelled'); }
+    }
+    // Re-wired on every open, like confirmDialog: the modal is a singleton, so a
+    // previous open's listeners would otherwise fire for this one's answer.
+    var a = wire(archiveBtn, 'archive');
+    wire(deleteBtn, 'delete');
+    wire(cancelBtn, 'cancelled');
+    wire(closeBtn, 'cancelled');
+    root.onclick = function (e) { if (e.target === root) done('cancelled'); };
+    document.addEventListener('keydown', onKey, true);
+    showModal('modal-close-session');
+    // Archive is the recommended action, so it takes focus: Enter on a session
+    // the user meant to put away must not delete it.
+    try { if (a) a.focus(); } catch (e) {}
+  });
+}
+
+/** Disconnect a session but keep it in the registry, so its output stays
+ *  readable in the archive plate. Same endpoint (and same meaning) as the batch
+ *  bar's stop key; the window is deliberately NOT closed here — the server's next
+ *  sessions frame locks it read-only, which is what keeps the transcript on
+ *  screen instead of yanking it away from the reader. */
+function archiveSessionById(sid) {
+  var banner = document.getElementById('session-load-banner');
+  if (banner) setLoadBanner(banner, t('banner.stopping.one', { count: 1 }));
+  return fetch(apiPath('/api/sessions/') + encodeURIComponent(sid) + '/terminate', { method: 'POST' })
+    .then(function (r) {
+      if (banner) setLoadBanner(banner, '');
+      if (!r.ok && r.status !== 204) {
+        return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
+      }
+      showCopyToast(t('session.close.archived', { name: stripSessionPrefix(sid) }));
+    })
+    .catch(function (err) {
+      if (banner) setLoadBanner(banner, '');
+      showCopyToast(t('toast.stop.failed', { msg: String(err.message || err) }));
+    });
+}
+
+/** Erase a session and its on-disk transcript, then drop its window. */
+function deleteSessionById(sid, win) {
+  return fetch(apiPath('/api/sessions/') + encodeURIComponent(sid), { method: 'DELETE' })
+    .then(function (r) {
+      if (!r.ok && r.status !== 204) return r.json().then(function (er) { throw new Error((er && er.error) || 'HTTP ' + r.status); });
+      var w = getShellWindowBySid(sid) || win;
+      if (w) closeShellWindow(w);
+    })
+    .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
 }
 
 function getShellWindowBySid(sessionId) {
@@ -827,12 +1002,33 @@ function getShellWindowBySid(sessionId) {
   return null;
 }
 
+/** The window owning a channel id, or null. */
 function findShellWindowByChannelSid(sessionId) {
   var wins = allShellWins();
   for (var i = 0; i < wins.length; i++) {
     if (wins[i]._channels && wins[i]._channels[sessionId]) return wins[i];
   }
   return null;
+}
+
+/** The window a terminal frame belongs to: a channel of one window, or a window
+ *  whose own id IS the channel. One pass over the windows instead of the two
+ *  lookups this used to be.
+ *
+ * The distinction matters because this runs on the output path, where a busy
+ * command delivers frames thousands of times a second: each of those lookups
+ * scanned every window, so the pair cost two full DOM scans per frame (measured
+ * as the largest single block of script time while output streamed). Both answers
+ * come from the same array, so asking it once is the same work minus the scan. */
+function shellWindowForFrame(id) {
+  var wins = allShellWins();
+  var bySid = null;
+  for (var i = 0; i < wins.length; i++) {
+    var w = wins[i];
+    if (w._channels && w._channels[id]) return w;
+    if (!bySid && w._sid === id) bySid = w;
+  }
+  return bySid;
 }
 
 /** The one entry point for "the user picked this session". Every trigger routes
@@ -866,9 +1062,8 @@ function focusSessionWindow(connLabel, sessionId, pos, opts) {
 }
 
 
-// Session + ssh profile the shared forward modal is currently bound to, set by
+// Session the shared forward modal is currently bound to, set by
 // openForwardModal and read by createForward.
-var _fwdSshCfg = '';
 var _fwdSessionId = '';
 
 /* Language switch: three idempotent redraws of state this module already holds

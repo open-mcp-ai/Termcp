@@ -29,7 +29,16 @@ func embeddedStaticServer() http.Handler {
 // lives in memory and is cheap to resend, so every load simply refetches.
 func noCacheForEmbeddedAssets(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
+		cacheControl := "no-cache"
+		if strings.HasPrefix(r.URL.Path, "/themes/") {
+			// Theme imports must refresh even when an editor saves twice in one
+			// second: Last-Modified cannot distinguish those disk versions.
+			cacheControl = "no-store"
+			r = r.Clone(r.Context())
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
+		}
+		w.Header().Set("Cache-Control", cacheControl)
 		next.ServeHTTP(w, r)
 	})
 }

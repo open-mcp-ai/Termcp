@@ -20,6 +20,42 @@ const wsSendBuf = 1024
 // terminalOutputChunkBytes caps raw PTY bytes per stream read so full-scrollback replay stays under WS/SSE message limits.
 const terminalOutputChunkBytes = 256 * 1024
 
+// terminalFlushBytes bounds one terminal frame: PTY output is accumulated into a
+// single frame until this many bytes, or until the reader has caught up with the
+// producer (see runWatch — that second condition is what keeps batching free of
+// added latency).
+//
+// A busy command writes a few KiB at a time, so one frame per read meant
+// thousands of tiny frames per second (measured: 11.7k frames/s at 55 bytes
+// average) and the browser paid its per-message cost — a JSON parse, a DOM scan
+// for the channel, a TextEncoder allocation and an xterm write — for each one.
+// That is what made the page stutter while output streamed; every client-side
+// fix only reduced a constant while the frame rate stayed the same.
+//
+// The bound is deliberately far above an interactive echo (a keystroke is a few
+// bytes, so it flushes on the caught-up condition instead) and below the WS
+// message limits the read side already enforces.
+const terminalFlushBytes = 32 * 1024
+
+// terminalFlushMinGap bounds how long a batch may be held once the reader has
+// caught up with the producer. It is what coalesces a producer that never leaves
+// a backlog — a shell printing a loop line by line, a prompt redrawing itself —
+// where the caught-up test alone sees nothing to merge and would ship one frame
+// per write (measured on such a shell: 100k frames/s at 13 bytes each).
+//
+// Two milliseconds is chosen to be invisible (the fastest screen repaints every
+// 16 ms, so a batch shipped within 4 ms of its first byte cannot be seen as late)
+// while still merging a burst of writes into one frame. It is a ceiling on hold
+// time, not a cadence: bytes ship the moment the reader is caught up AND this
+// gap has elapsed, so a quiet echo leaves after its own write with no waiting
+// beyond this bound.
+const terminalFlushMinGap = 4 * time.Millisecond
+
+// terminalOutputIdleWait is how long an output pump with no backlog sleeps before
+// re-checking its buffer. It is the read timeout this pump has always used: a
+// quiet channel costs four wakes a second either way.
+const terminalOutputIdleWait = 250 * time.Millisecond
+
 var uiUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,

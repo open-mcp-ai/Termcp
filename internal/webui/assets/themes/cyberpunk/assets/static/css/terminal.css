@@ -1,0 +1,844 @@
+  /* Floating terminal: dark theme; main page stays light */
+  .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
+  .shell-windows-container > * { pointer-events: auto; }
+  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: var(--term-panel-94); border: 1px solid var(--term-border); border-radius: 0; padding: 4px; box-shadow: 0 4px 16px var(--term-black-35), inset 0 1px 0 var(--term-white-08); max-width: 92vw; pointer-events: auto; }
+  /* Left grip: the bar is draggable, but only from here so clicks on tabs and
+     the action cluster keep working. Kept wide enough to grab comfortably. */
+  .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 0; cursor: move; touch-action: none; }
+  .session-tabbar.dragging { cursor: move; user-select: none; }
+  .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; max-width: calc(92vw - 170px); }
+  .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--term-border-2); flex-shrink: 0; }
+  .session-tabbar.hidden { display: none; }
+  .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: var(--term-fg); background: var(--term-surface); border: 1px solid var(--term-border-2); border-radius: 0; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
+  .session-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  .session-tab:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tab.active { color: var(--term-fg-white); background: var(--term-bg); border-color: var(--term-accent); box-shadow: inset 0 -2px 0 var(--term-accent); }
+  .session-tab .session-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--font-mono); }
+  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 0; background: var(--term-border-2); color: var(--term-fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .session-tab.active .session-tab-num { background: var(--term-accent); color: var(--term-bg); }
+  .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: var(--term-fg-soft); cursor: pointer; padding: 0; flex-shrink: 0; }
+  .session-tab .session-tab-close:hover { background: var(--term-danger); color: var(--term-fg-white); }
+  /* Pending-review count on a session tab. A minimized window shows nothing but
+     its tab, so this is the only place its queue can be seen. */
+  .session-tab .session-tab-review {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 15px; height: 15px; padding: 0 4px; flex-shrink: 0;
+    border-radius: 8px; background: var(--term-danger); color: var(--term-fg-white);
+    font-size: 10px; font-weight: 600; line-height: 15px;
+  }
+  .session-tab .session-tab-review[hidden] { display: none; }
+  .session-tab.has-review { border-color: var(--term-danger); }
+  /* ---- pane workspace (tiled mode) ---- */
+  /* The tiled layer starts below the page header, not at the viewport top: the
+     header is page chrome (the wordmark, the docs/language links) and a full grid
+     of terminals covering it hides the page the terminals belong to. The height is
+     measured and republished by shell-windows.js (the nav wraps) rather than
+     hardcoded here; an unmeasured page falls back to the old full-viewport inset. */
+  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 0 0; z-index: 10000; background: var(--term-pane-72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
+  .pane-workspace.open { display: flex; }
+  .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
+  .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
+  .pane-grid > .shell-window .shell-window-resize-handle { display: none; }
+  .pane-grid > .shell-window .shell-window-header { cursor: default; }
+  .pane-grid > .shell-window.pane-active { outline: 2px solid var(--term-accent); outline-offset: -2px; }
+  .pane-grid > .shell-window.pane-maxed { grid-column: 1 / -1; grid-row: 1 / -1; }
+  .shell-window.win-hidden { display: none !important; }
+  /* Minimized: hidden but alive. Separate from .win-hidden, which is the tab
+     bar's global show/hide-all flag. */
+  .shell-window.win-minimized { display: none !important; }
+  .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
+  .session-tabbar-toggle:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-toggle:focus-visible, .session-tabbar-tile:focus-visible, .session-tabbar-select:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
+  .session-tabbar-tile:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-tile.active { background: var(--term-accent); border-color: var(--term-accent); color: var(--term-bg); }
+  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
+  .session-tabbar-select:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tabbar-select option { color: var(--term-fg); }
+  .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: 10001; }
+  .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid var(--term-border); background: var(--term-surface); cursor: move; user-select: none; flex-shrink: 0; z-index: 2; min-height: 34px; flex-wrap: nowrap; }
+  .shell-window-title-cluster { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 8px; }
+  .shell-window-title {
+    margin: 0;
+    font-size: 13px;
+    color: var(--term-fg-bright);
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .shell-window-title .sw-conn { color: var(--term-fg); flex-shrink: 0; }
+  .shell-window-title .shell-dead-badge {
+    flex-shrink: 0;
+    align-self: center;
+    margin-left: 2px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--term-danger-16);
+    color: var(--term-danger-soft);
+    border: 1px solid var(--term-danger-soft-5);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-weight: 600;
+    line-height: 1.3;
+    vertical-align: middle;
+  }
+  .shell-title-id-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+  .shell-sid-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+  }
+  .shell-header-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    align-self: center;
+    width: 18px;
+    height: 18px;
+    color: var(--term-fg-muted);
+    margin-left: 6px;
+    margin-right: 2px;
+    line-height: 0;
+  }
+  .shell-sid-copy .sid {
+    font-size: 11px;
+    color: var(--term-fg-muted);
+    font-weight: 500;
+    font-family: var(--font-mono);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .title-copy-btn {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin-left: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--term-fg-faint-4);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .title-copy-btn:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
+  .title-copy-btn svg { display: block; }
+  .shell-window-header-btns { display: flex; gap: 0; flex-shrink: 0; margin-left: auto; align-self: center; }
+  .shell-window-header-btns button { width: 26px; height: 26px; padding: 0; border: none; background: transparent; color: var(--term-fg-faint-4); cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+  .shell-window-collapse-btn { position: relative; margin-right: 2px; }
+  .shell-window-collapse-btn .ic-u, .shell-window-collapse-btn .ic-d { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+  .shell-window-header-btns button:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
+  .shell-window-header-btns button:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; color: var(--term-fg-bright); }
+  /* position: relative so the review panel anchors here and not to the terminal
+     wrapper: that wrapper is display:none while the Files or Forwardings tab is
+     open, and an approval for a file write arrives exactly there. */
+  .shell-window-content { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: transparent; position: relative; }
+  .shell-terminal-wrap { flex: 1; min-height: 100px; min-width: 0; padding: 6px 6px 0; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+  .shell-pending {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    color: var(--term-fg-muted);
+    font-size: 14px;
+    min-height: 160px;
+    text-align: center;
+    padding: 16px;
+  }
+  .shell-pending-spinner {
+    width: 34px;
+    height: 12px;
+    border: 1px solid var(--term-border-4);
+    border-left-color: var(--term-accent);
+    border-right-color: var(--term-accent);
+    border-radius: 0;
+    position: relative;
+    animation: shell-pending-scan 1.8s ease-in-out infinite;
+  }
+  .shell-pending-spinner::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    top: 4px;
+    height: 1px;
+    background: var(--term-accent);
+    opacity: .75;
+  }
+  @keyframes shell-pending-scan {
+    0%, 100% { opacity: .45; transform: scaleX(.72); }
+    50% { opacity: 1; transform: scaleX(1); }
+  }
+  .shell-terminal-wrap .xterm { height: 100%; min-height: 0; }
+  /* xterm appends .xterm-screen after .xterm-viewport (siblings). The screen layer stacks on top
+     of the viewport and otherwise blocks the native scrollbar. Inset the screen so the gutter
+     receives pointer events (scrollbar drag / track click). */
+  .shell-terminal-wrap .xterm .xterm-screen {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 14px;
+    width: auto;
+  }
+  /* Glass chrome and a translucent terminal.
+
+     The page behind a floating terminal is near-black and mostly flat, so a
+     *darker* tint over it reads as nothing at all — blurring black leaves black.
+     The frost lifts the surface instead: a cool translucent white that catches
+     ambient light, plus a bright top hairline. Those are the cues the eye reads
+     as glass on a dark UI. The xterm theme and viewport must both stay fully
+     transparent; either one being opaque turns the terminal into a flat plate. */
+  .shell-window {
+    background: var(--term-glass-frost);
+    backdrop-filter: blur(28px) saturate(150%);
+    -webkit-backdrop-filter: blur(28px) saturate(150%);
+    border: 1px solid var(--term-glass-border);
+    /* The bright inner hairline along the top edge is the main "glass" cue. */
+    box-shadow: inset 0 1px 0 var(--term-glass-edge),
+                0 0 0 1px rgba(var(--cyan-rgb), .12),
+                0 22px 60px var(--term-glass-shadow);
+    transition: border-color .16s ease, box-shadow .16s ease;
+  }
+/* Keep the title glassy. The bottom bar has no plate of its own: its tabs and
+   content show the terminal surface through them. This is intentionally after
+   the base footer rule and after the terminal palette block, so it wins over
+   the footer's historical opaque panel background. */
+.shell-window-header { background: var(--term-glass-surface); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.shell-terminal-wrap { background: var(--term-glass-tint); box-shadow: inset 0 1px 0 var(--term-glass-edge); }
+.shell-window-footer, .shell-window-footer .shell-channel-tabs { background: transparent; }
+  .shell-terminal-wrap .xterm,
+  .shell-terminal-wrap .xterm .xterm-viewport,
+  .shell-terminal-wrap .xterm .xterm-screen {
+    background: transparent !important;
+  }
+  .shell-terminal-wrap .xterm .xterm-viewport {
+    background-color: transparent !important;
+    scrollbar-color: var(--term-border-4) transparent;
+  }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+    background: var(--term-border-4);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--term-fg-faint); background-clip: content-box; }
+  /* Floating "back to latest output" button (offset upward so it never covers the
+     bottom-right resize grip, and leftward so it clears the rail's reserved column
+     — the button belongs to the terminal's own box, and the rail occupies its right
+     edge). It is a child of .shell-channel-body, whose box ends at the footer, so
+     clearing the grip needs its height plus a gap — not the footer's too. */
+  .shell-term-scroll-fab {
+    position: absolute; right: calc(var(--term-rail-gap, 10px) + var(--term-rail-w, 14px) + 8px); bottom: 36px; z-index: 15;
+    width: 30px; height: 30px; padding: 0;
+    border: 1px solid var(--term-white-18); border-radius: 50%;
+    background: var(--term-fab-92); color: var(--term-fg-dim);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none;
+    transition: opacity .15s, background .15s, transform .1s;
+    box-shadow: 0 2px 10px var(--term-black-4);
+  }
+  .shell-term-scroll-fab.visible { opacity: 1; pointer-events: auto; }
+  .shell-term-scroll-fab:hover { background: var(--term-fab-hover-96); color: var(--term-fg-white); }
+  .shell-term-scroll-fab:active { transform: scale(.94); }
+  .shell-term-scroll-fab svg { width: 16px; height: 16px; display: block; }
+  .shell-window.shell-window-collapsed .shell-window-content,
+  .shell-window.shell-window-collapsed .shell-window-resize-handle { display: none; }
+  .shell-window.shell-window-collapsed { height: auto; min-height: 0; }
+  /* Four corner grips, no drawn glyph: the corner itself is the target.
+
+     Each grip is a thin strip along the window's vertical edge — 6px thick and
+     44px long from the corner — not a 30x30 block. A block that size overlaps
+     the controls that live in the header and footer rows, and those rows are
+     full-width, so stacking them above the grip buried it completely: measured
+     in a real browser, 0% of the north grips were reachable and the south ones
+     were down to a 4-6px sliver.
+
+     A 6px strip sits in the rows' own edge padding, where nothing interactive
+     lives — the header's close button is 9px in from the window edge and the
+     footer's review button 13px — so the strip and the controls never overlap
+     and no z-index is needed at all. It is also a longer target than the old
+     corner block (44px along the edge) and still includes the exact corner, so
+     a diagonal drag from the corner resizes both axes. */
+  .shell-window { --shell-resize-grip: 6px; --shell-resize-len: 44px; }
+  .shell-window-resize-handle {
+    position: absolute; z-index: 33; touch-action: none;
+    width: var(--shell-resize-grip); height: var(--shell-resize-len);
+  }
+  /* One rule per corner, stating all three properties. Grouping them by axis
+     ("the north pair", "the south pair") is what put the wrong cursor on the
+     left: the cursor follows the DIAGONAL, not the axis, so nw shares
+     nwse-resize with se, and ne shares nesw-resize with sw. Per-corner rules
+     make that pairing readable and impossible to mis-group. */
+  .shell-window-resize-handle[data-corner="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+  .shell-window-resize-handle[data-corner="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+  .shell-window-resize-handle[data-corner="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
+  .shell-window-resize-handle[data-corner="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
+  .shell-window.shell-window-resizing { user-select: none !important; }
+  .shell-window.shell-window-resizing .shell-window-content { pointer-events: none !important; }
+  /* The strip holds the review lock and the pane tabs, and it is the one part of
+     the header that may be longer than the space left for it. So it takes the
+     leftover width, shrinks to it, and scrolls horizontally instead of pushing
+     the session name out of the row: the name is clipped by its own overflow, but
+     the tabs stay reachable at any width. The scrollbar is hidden because the row
+     is only 34px tall and a bar would eat the glyphs it exists to reach. */
+  .shell-tab-bar { display: flex; align-items: flex-end; gap: 0; flex: 0 1 auto; min-width: 0; padding-left: 8px; align-self: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .shell-tab-bar::-webkit-scrollbar { display: none; }
+  .shell-tab-btn { width: 28px; height: 100%; padding: 0 4px; border: 1px solid transparent; border-radius: 4px 4px 0 0; background: transparent; color: var(--term-fg-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color .12s, background .12s, border-color .12s; position: relative; bottom: -1px; }
+  .shell-tab-btn:hover { color: var(--term-fg-bright); background: var(--term-white-04); }
+  .shell-tab-btn.active { color: var(--term-fg-soft); background: var(--term-bg); border-color: var(--term-border); border-bottom-color: var(--term-bg); }
+  /* Shell channel tabs (bottom of terminal area, one tab per multiplexed shell) */
+  /* Terminal footer: tabs on the left, review controls on the right. The row
+     owns the border, but deliberately no plate: it sits on the terminal's own
+     surface so the terminal reads as one continuous pane down to the bottom
+     edge. The title bar above keeps the glass plate instead. */
+  .shell-window-footer {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    order: 10;
+    background: transparent;
+    border-top: 1px solid var(--term-border);
+    min-height: 30px;
+    max-height: 30px;
+  }
+  .shell-channel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+    background: transparent;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--term-border-4) transparent;
+  }
+  /* Review, in the terminal's title bar: one icon-only lock beside the session
+     title.
+
+     It replaced a labelled pill ("Review: off"). The title bar is the most
+     crowded row on the window — on a phone it already holds the drawer and
+     session glyphs, four pane tabs, collapse, minimize and close — and a pill
+     with words in it was the widest of them for a one-bit state. The lock is the
+     same glyph the session card uses, so the shape alone carries the meaning.
+
+     Its width matches the header's other buttons (26px) so the row's rhythm is
+     unbroken, and it is aligned by the flex parent rather than by its own
+     margins: the title wraps to several lines, so a self-aligned control drifts.
+     No border or background until hover, like the header's other glyphs. */
+  .shell-review-lock {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
+    align-self: center;
+    border: none; border-radius: 4px;
+    background: transparent; color: var(--term-fg-muted); cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .shell-review-lock:hover { color: var(--term-fg-bright); background: var(--term-white-08); }
+  .shell-review-lock[aria-expanded="true"] { color: var(--term-fg-soft); background: var(--term-white-08); }
+  .shell-review-lock-icon { display: flex; align-items: center; justify-content: center; line-height: 0; }
+  /* Gated: amber, matching the session card's lock so the two read as one state.
+     The open lock (the default) is neutral: review off is the ordinary case and
+     must not look like a warning. */
+  .shell-review-lock.is-on { color: var(--term-warning); }
+  .shell-review-lock.is-on:hover { color: var(--term-warning-bright); background: var(--term-warning-16); }
+  .shell-review-lock[disabled] { opacity: .5; cursor: default; }
+  /* The count, on the control that opens the queue the count refers to.
+     It hangs off the corner so the lock keeps its 26px and the header row does not
+     reflow when a request arrives. */
+  .shell-review-lock { position: relative; }
+  .shell-review-count {
+    position: absolute; top: -1px; right: -1px;
+    min-width: 14px; height: 14px; padding: 0 3px;
+    border-radius: 7px; background: var(--term-danger); color: var(--term-fg-white);
+    font-size: 9px; font-weight: 600; line-height: 14px; text-align: center;
+    pointer-events: none;
+  }
+  .shell-review-count[hidden] { display: none; }
+
+  /* Review panel: a floating card over the window, not a flex sibling.
+     Taking height from the terminal reflowed the PTY on every open — and a
+     queue that gets checked often is the worst place to move the screen you are
+     reading. Capped and scrollable so it never covers the whole view either.
+
+     A child of .shell-window-content, which is positioned: it must outlive the
+     terminal wrapper. That wrapper is display:none while the Files or
+     Forwardings tab is open, so a panel inside it disappeared exactly when a file
+     write or a forward was the thing waiting.
+
+     Anchored to the TOP-right, under the title bar the lock lives in. */
+  .shell-review-sheet {
+    /* Above the corner grips (30) and the control rows (31/32): the panel is an
+       interactive surface the user opened, and a resize affordance must not sit
+       on top of its buttons. The grip under it is unusable until it is closed. */
+    position: absolute; right: 8px; top: 8px; z-index: 40;
+    width: min(420px, calc(100% - 16px));
+    max-height: min(60%, 340px);
+    display: flex; flex-direction: column;
+    background: var(--term-panel);
+    border: 1px solid var(--term-border-2); border-radius: 8px;
+    box-shadow: 0 8px 28px var(--term-black-5);
+    overflow: hidden;
+  }
+  .shell-review-sheet[hidden] { display: none; }
+  .shell-review-sheet-h {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 6px 5px 8px; flex-shrink: 0;
+    border-bottom: 1px solid var(--term-border);
+  }
+  .shell-review-sheet-title { font-size: 0.72rem; font-weight: 600; color: var(--term-fg-mid); letter-spacing: .02em; }
+  /* The panel's switch: a small track + knob, not a full-size button. The mode
+     is one bit, so the control for it is one switch; its label reads the state.
+     Hidden checkbox + styled track is the standard shape, and it keeps keyboard
+     and screen-reader behaviour without re-implementing either. */
+  .shell-review-switch {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.66rem; color: var(--term-fg-muted); cursor: pointer; user-select: none;
+  }
+  .shell-review-toggle {
+    position: absolute; opacity: 0; width: 0; height: 0; margin: 0;
+  }
+  .shell-review-switch-track {
+    position: relative; flex-shrink: 0;
+    width: 26px; height: 14px; border-radius: 8px;
+    background: var(--term-border-2); border: 1px solid var(--term-border-5);
+    transition: background .14s, border-color .14s;
+  }
+  .shell-review-switch-track::after {
+    content: ''; position: absolute; top: 1px; left: 1px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--term-fg-muted); transition: transform .14s, background .14s;
+  }
+  .shell-review-switch:hover .shell-review-switch-track { border-color: var(--term-fg-faint); }
+  .shell-review-toggle:checked + .shell-review-switch-track {
+    background: var(--term-warning-22); border-color: var(--term-warning);
+  }
+  .shell-review-toggle:checked + .shell-review-switch-track::after {
+    transform: translateX(12px); background: var(--term-warning-bright);
+  }
+  .shell-review-toggle:focus-visible + .shell-review-switch-track { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  .shell-review-toggle:checked ~ .shell-review-switch-text { color: var(--term-warning-bright); }
+  .shell-review-toggle[disabled] + .shell-review-switch-track { opacity: .5; }
+  .shell-review-sheet-close {
+    margin-left: auto; width: 22px; height: 22px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px; background: transparent; color: var(--term-fg-muted); cursor: pointer;
+  }
+  .shell-review-sheet-close:hover { background: var(--term-hover-3); color: var(--term-fg-soft); }
+  .shell-review-sheet-b { padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .shell-review-hint { font-size: 0.66rem; color: var(--term-fg-faint); line-height: 1.35; }
+  .shell-review-queue-h {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.68rem; color: var(--term-fg-muted);
+  }
+  .shell-review-refresh {
+    width: 20px; height: 20px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 4px; background: transparent; color: var(--term-fg-muted); cursor: pointer;
+  }
+  .shell-review-refresh:hover { background: var(--term-hover-3); color: var(--term-fg-soft); }
+  .shell-review-list { display: flex; flex-direction: column; gap: 6px; }
+  /* Queue rows are compact: this panel is a card over a terminal, not a page. */
+  .shell-review-list .approval-item { margin: 0; padding: 6px 8px; background: var(--term-bg); border-color: var(--term-border-2); }
+  .shell-review-list .approval-item-head { font-size: 0.62rem; }
+  .shell-review-list .approval-code { font-size: 0.72rem; }
+  .shell-review-list .approval-row { gap: 6px; }
+  .shell-review-list .approval-actions { gap: 5px; }
+  .shell-review-list .approval-actions .btn { font-size: 0.68rem; padding: 3px 8px; }
+  .shell-review-empty { font-size: 0.68rem; color: var(--term-fg-faint); padding: 2px 0 4px; }
+  .shell-channel-tabs::-webkit-scrollbar { height: 3px; }
+  .shell-channel-tabs::-webkit-scrollbar-track { background: transparent; }
+  .shell-channel-tabs::-webkit-scrollbar-thumb { background: var(--term-border-4); border-radius: 2px; }
+  .shell-channel-tab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    min-width: 50px;
+    max-width: 140px;
+    height: 24px;
+    border-right: 1px solid var(--term-border);
+    background: var(--term-surface);
+    color: var(--term-fg-faint-3);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    flex-shrink: 0;
+    user-select: none;
+    transition: background .1s, color .1s;
+  }
+  .shell-channel-tab:hover { background: var(--term-hover); color: var(--term-fg); }
+  .shell-channel-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; z-index: 1; }
+  .shell-channel-tab.active { background: var(--term-bg); color: var(--term-fg-soft-2); border-top: 2px solid var(--term-accent); }
+  .shell-channel-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  /* What the channel is doing: typing / ai / running / done / ended. The hues
+     are the rail's (blue = a person, orange = an agent, green = output, red =
+     ended), so the two views of a channel name the same actor in the same
+     colour. Done is deliberately the quiet one — it is an end state that stays
+     on the tab, and a saturated chip sitting permanently on every finished tab
+     would read as an alarm. */
+  .shell-channel-tab-state {
+    flex-shrink: 0;
+    padding: 0 4px;
+    border-radius: 8px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    font-weight: 600;
+    line-height: 1.4;
+    background: var(--term-neutral-16);
+    color: var(--term-fg-muted);
+    border: 1px solid var(--term-neutral-4);
+  }
+  .shell-state-typing { background: var(--cyan-surface); color: var(--cyan); border-color: var(--cyan-border); }
+  .shell-state-ai     { background: var(--orange-surface); color: var(--orange); border-color: var(--orange-border); }
+  .shell-state-running{ background: var(--term-success-16); color: var(--term-success-bright); border-color: var(--term-success-5); }
+  .shell-state-done   { background: var(--term-neutral-16); color: var(--term-fg-muted); border-color: var(--term-neutral-4); }
+  .shell-state-ended  { background: var(--term-danger-16); color: var(--term-danger-soft); border-color: var(--term-danger-soft-5); }
+  .shell-channel-tab-close {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    /* Was --term-border-hover-2 (#666): 2.4:1 on the tab's own plate, i.e. a
+       close control you have to hunt for. --term-fg-faint-4 (#aaa) clears AA at
+       4.2:1 on the terminal background and 5.9:1 on the tab plate. */
+    color: var(--term-fg-faint-4);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity .1s, color .1s, background .1s;
+  }
+  .shell-channel-tab:hover .shell-channel-tab-close,
+  .shell-channel-tab.active .shell-channel-tab-close { opacity: 1; }
+  .shell-channel-tab-close:hover { color: var(--term-fg-white); background: var(--term-danger-6); }
+  .shell-channel-tab-copy {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--term-fg-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity .1s, color .1s, background .1s;
+  }
+  .shell-channel-tab:hover .shell-channel-tab-copy,
+  .shell-channel-tab.active .shell-channel-tab-copy { opacity: 1; }
+  .shell-channel-tab-copy:hover { color: var(--term-fg-soft); background: var(--term-white-1); }
+  .shell-channel-tab-copy svg { display: block; }
+  .shell-channel-tab-add {
+    flex-shrink: 0;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-left: 1px solid var(--term-border);
+    background: transparent;
+    color: var(--term-fg-faint-2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: color .1s, background .1s;
+  }
+  .shell-channel-tab-add:hover { color: var(--term-fg-white); background: var(--term-white-06); }
+  .shell-channel-tab-add:active { background: var(--term-white-1); }
+  /* Split control: two buttons that read as one. The label half is the common
+     action, the caret half reveals the choices that need a decision. */
+  .shell-split { display: inline-flex; align-items: stretch; }
+  .shell-split > :first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .shell-split > :last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; }
+  .shell-channel-add-caret {
+    flex-shrink: 0;
+    width: 16px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--term-fg-faint-2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+    transition: color .1s, background .1s;
+  }
+  .shell-channel-add-caret:hover { color: var(--term-fg-white); background: var(--term-white-06); }
+  .shell-channel-add-caret.active { color: var(--term-fg-white); background: var(--term-white-12); }
+  .shell-channel-add-menu { min-width: 180px; }
+  .shell-channel-add-item { min-height: 32px; font-size: 0.78rem; }
+  /* Channel body fills most of the terminal area.
+
+     Two variables describe the rail's column, both consumed by the stylesheet
+     below and by fitShellTerminal (ui-socket.js): `--term-rail-w` is how wide the
+     strip is and `--term-rail-gap` how far it sits from the body's right edge.
+     They live here rather than on the strip because the *terminal* has to know
+     them: the rail occupies the terminal's right side without covering it, and the
+     only way to do that is for the fitted column count to leave the room.
+
+     The reservation is unconditional. A column that appeared and vanished with the
+     marks would reflow the PTY (and every row of the derived layout) every time a
+     full-screen program opened or a shell had nothing to colour. */
+  .shell-channel-body {
+    --term-rail-w: 14px;
+    /* The scrollbar's width: the strip sits immediately left of it, so the
+       scrollbar stays exactly where it was — at the far right, where a reader
+       expects to grab it — and the strip is between it and the text. */
+    --term-rail-gap: 10px;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  /* The terminal keeps its whole box, scrollbar included. Only the number of
+     columns changes (fitShellTerminal reserves the strip's column), which is what
+     leaves the text clear of the strip without moving anything else. */
+  .shell-channel-instance {
+    position: absolute;
+    inset: 0;
+    display: none;
+  }
+  .shell-channel-instance.active { display: block; }
+  .shell-channel-instance .xterm { height: 100%; }
+  /* Empty state when no shells */
+  .shell-channel-empty {
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--term-fg-muted);
+    font-size: 12px;
+    min-height: 100px;
+  }
+  .shell-channel-empty.show { display: flex; }
+  .shell-channel-empty button {
+    padding: 4px 12px;
+    border: 1px solid var(--term-border-4);
+    border-radius: 4px;
+    background: var(--term-surface);
+    color: var(--term-fg);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .shell-channel-empty button:hover { background: var(--term-hover-2); border-color: var(--term-border-hover-2); }
+  .shell-channel-empty .shell-channel-empty-add { border-radius: 4px 0 0 4px; }
+  .shell-channel-empty .shell-channel-empty-caret {
+    padding: 4px 8px;
+    border-radius: 0 4px 4px 0;
+    font-size: 10px;
+  }
+  .shell-channel-empty .shell-channel-empty-caret.active { background: var(--term-hover-2); border-color: var(--term-border-hover-2); }
+
+  /* Narrow screens rail the window to the viewport width; short screens rail the
+     height. Both are checked separately: a phone in landscape is ~844px wide
+     (over the 768px breakpoint) but only ~390px tall, so a width-only query
+     would leave it with a full-height window hanging off the bottom. */
+  @media (max-width: 768px) {
+    .shell-window { width: calc(100vw - 16px); max-width: calc(100vw - 16px); min-width: 0; max-height: calc(100dvh - 16px); }
+  }
+  @media (max-height: 520px) {
+    .shell-window { max-height: calc(100dvh - 16px); }
+  }
+
+  /* Mobile full-screen terminal (RFC: no pages, one full-screen layer).
+     JS adds .win-fullscreen and clears the inline geometry it would otherwise
+     set — inline width beats a media query, so the rule below only works
+     because the element carries no inline width/height/left/top on mobile.
+     min-width/min-height are reset too: they are 320x240 for floating windows
+     and would overflow a 320px-wide device once padding and borders are added. */
+  .shell-window.win-fullscreen {
+    left: 0; top: 0;
+    width: 100vw; height: 100dvh;
+    min-width: 0; min-height: 0;
+    max-width: none; max-height: none;
+    border: none; border-radius: 0;
+    box-shadow: none;
+    /* Above the session tab bar (20000): when the terminal is the screen,
+       nothing in the page layer may float over it. Modals (24500), toasts and
+       notifications are not page content and may still do so. */
+    z-index: 21000;
+  }
+  /* The resize grip and drag cursor are meaningless when the window is the
+     screen: there is nothing to drag or resize it against. */
+  .shell-window.win-fullscreen .shell-window-resize-handle { display: none; }
+  .shell-window.win-fullscreen .shell-window-header { cursor: default; }
+  /* iOS home indicator / notch: the bottom tab strip must stay above the
+     safe area, and the header below the status bar. env() is 0 unless the
+     viewport meta opts in with viewport-fit=cover. */
+  .shell-window.win-fullscreen .shell-window-header {
+    padding-top: env(safe-area-inset-top, 0px);
+    min-height: calc(34px + env(safe-area-inset-top, 0px));
+  }
+  .shell-window.win-fullscreen .shell-channel-tabs {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    min-height: calc(28px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Touch targets: the 26px header buttons are below the ~32px comfortable
+     minimum and sit next to the drag area, so they get a little more room. */
+  .shell-window.win-fullscreen .shell-window-header-btns button { width: 34px; height: 34px; }
+
+  /* Mobile: the shell-window title bar already carries per-window controls, and
+     the floating tab bar competes with the terminal for the top of a phone
+     screen. Hidden on touch devices in any orientation — a width query would
+     miss a phone in landscape (~844px wide). It stays visible in tile mode,
+     which has no other way back to float (see sessionTabbarEl users). */
+  @media (pointer: coarse) and (hover: none) {
+    .session-tabbar { display: none; }
+    body.tile-mode .session-tabbar { display: flex; }
+    /* Maximize is meaningless on a phone: the window already fills the screen,
+       and the toggle is a no-op there (see toggleShellWindowMax). Matched to the
+       specificity of the base rule (.shell-window-header-btns button, 0,1,1) —
+       a bare class loses to it despite coming later in the file. */
+    .shell-window-header-btns button.shell-window-max-btn { display: none; }
+    /* Collapse is meaningless here for the same reason maximize is: the window is
+       already the screen, so collapsing it leaves a header bar floating over the
+       page with the terminal gone — a state with no way back that a phone user
+       reaches by accident. Matched to the base rule's specificity for the same
+       reason as the rule above. */
+    .shell-window-header-btns button.shell-window-collapse-btn { display: none; }
+    /* The session name keeps a floor rather than being squeezed to zero. It is
+       clipped by its own overflow, so this is a sliver of text, not a reflow — and
+       what it buys is that the tab strip scrolls instead of the name vanishing.
+       Measured: with the name's floor and collapse gone, 320px holds the drawer,
+       the session glyph, this sliver, the lock, the tabs and the two remaining
+       window buttons without scrolling at all. */
+    .shell-window-title-cluster { min-width: 44px; }
+  }
+
+  /* Control group at the left of the terminal header. Order matches the DOM:
+     hamburger (connections drawer) then monitor (session menu) — outer scope
+     first, the same way desktop apps order a sidebar toggle ahead of the thing
+     it scopes. gap owns the spacing so each control keeps its own margins out
+     of it. */
+  .shell-header-controls {
+    display: flex; align-items: center; gap: 2px;
+    flex-shrink: 0;
+    /* The group replaced the icon's own 6px margin, which is zeroed below;
+       without this the controls sit flush against the window edge. */
+    margin-left: 6px;
+  }
+  /* Inside the control group the gap owns the spacing, so the glyph's own
+     margins would double it up. Outside the group (no group yet) they still
+     position it against the header edge. */
+  .shell-header-controls .shell-header-icon { margin-left: 0; margin-right: 0; }
+  /* The monitor glyph doubles as the session menu on touch devices. On desktop
+     it stays a plain icon (the tab bar owns switching), so the affordance is
+     added only where the interaction exists. */
+  .shell-header-icon-btn.active { color: var(--term-fg-white); }
+  @media (pointer: coarse) and (hover: none) {
+    /* A tap target, not just an 18px glyph. */
+    .shell-header-icon-btn {
+      cursor: pointer;
+      width: 32px; height: 32px; margin-left: 2px; margin-right: 0;
+      border-radius: 6px;
+    }
+    .shell-header-icon-btn.active { color: var(--term-fg-white); background: var(--term-border-2); }
+  }
+
+  /* Drawer button in the terminal header: opens the entries drawer. Same touch
+     rationale as above — desktop expands entries in place. */
+  .shell-window-drawer-btn {
+    display: none;
+    flex-shrink: 0; align-items: center; justify-content: center;
+    width: 30px; height: 30px; padding: 0;
+    border: 1px solid var(--term-border-2); border-radius: 6px;
+    background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer;
+  }
+  .shell-window-drawer-btn:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  @media (pointer: coarse) and (hover: none) {
+    .shell-window-drawer-btn { display: inline-flex; }
+  }
+  .shell-window-switch-menu {
+    position: fixed; z-index: 30001;
+    min-width: 200px; max-width: calc(100vw - 16px);
+    max-height: 60dvh; overflow-y: auto;
+    padding: 4px; border: 1px solid var(--term-border-4); border-radius: 8px;
+    background: var(--term-panel); box-shadow: 0 6px 24px var(--term-black-5);
+  }
+  .shell-switch-item {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    min-height: 40px; padding: 0 10px;
+    border: none; border-radius: 6px; background: transparent;
+    color: var(--term-fg-mid); font: inherit; font-size: 0.82rem; text-align: left;
+    cursor: pointer; white-space: nowrap;
+  }
+  .shell-switch-item:hover, .shell-switch-item:active { background: var(--term-border-3); color: var(--term-fg-white); }
+  .shell-switch-item.current { background: var(--term-current); color: var(--term-fg-white); }
+  /* A dead session is listed too: it is still readable, and hiding it from the
+     switcher would make the list disagree with the session tiles. */
+  .shell-switch-item.dead { color: var(--term-fg-muted); }
+  .shell-switch-item.dead .shell-switch-label::after { content: ' · dead'; color: var(--term-fg-faint); }
+  .shell-switch-empty { padding: 10px 12px; color: var(--term-fg-muted); font-size: 0.78rem; }
+  .shell-switch-num { flex-shrink: 0; color: var(--term-fg-muted); font-size: 0.72rem; min-width: 12px; }
+  .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  /* File context menu (dark, matches shell-window) */
+  .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
+  .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:var(--term-fg); white-space:nowrap; }
+  .file-ctx-item:hover { background:var(--term-current); color:var(--term-fg-white); }
+  .file-ctx-item.file-ctx-danger { color:var(--term-danger-2); }
+  .file-ctx-item.file-ctx-danger:hover { background:var(--term-danger-deep); color:var(--term-danger-soft-2); }
+  /* File row menu button */
+  .shell-file-menu-btn { flex-shrink:0; width:22px; height:22px; padding:0; border:none; border-radius:4px; background:transparent; color:var(--term-fg-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .12s; font-size:1rem; line-height:1; }
+  .shell-file-row:hover .shell-file-menu-btn { opacity:1; }
+  .shell-file-menu-btn:focus { opacity:1; background:var(--term-border-3); color:var(--term-fg-soft); }
+  .shell-file-menu-btn:active { background:var(--term-border-4); }
+  /* File detail panel inside listing */
+  .shell-file-detail { padding:12px; border-bottom:1px solid var(--term-border-3); }
+  .shell-file-detail-actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .shell-file-detail-actions button { font-size:0.75rem; padding:4px 12px; border-radius:4px; border:1px solid var(--term-border-4); background:var(--term-surface); color:var(--term-fg); cursor:pointer; }
+  .shell-file-detail-actions button:hover { background:var(--term-hover-2); border-color:var(--term-border-hover-2); color:var(--term-fg-white); }
+  .shell-file-detail-actions .sf-dl { border-color:var(--term-success); color:var(--term-success); }
+  .shell-file-detail-actions .sf-dl:hover { background:var(--term-success-deep); }
+  .shell-file-detail-actions .sf-del { border-color:var(--term-danger-2); color:var(--term-danger-2); }
+  .shell-file-detail-actions .sf-del:hover { background:var(--term-danger-deep-2); }

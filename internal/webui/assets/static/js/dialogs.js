@@ -432,7 +432,7 @@ function refreshNodeCardTitles() {
 /** Sync the toolbar to the current selection: the switch's face becomes the
  *  ticked count (the list icon returns when the selection is spent), the play
  *  split answers disabled while nothing is ticked (its dropdown items with it),
- *  and the invert key only needs a list. */
+ *  and the select-all key reports whether the entire list is ticked. */
 function updateNodeBatchBar() {
   var names = selectableNodeNames();
   var count = 0;
@@ -452,10 +452,16 @@ function updateNodeBatchBar() {
     countEl.hidden = !showCount;
     countEl.textContent = String(count);
   }
-  var invert = document.getElementById('nethub-sel-invert');
-  if (invert) invert.disabled = names.length === 0;
-  // The invert key's glyph follows the selection: hollow when empty, solid
-  // once something is ticked (see the .has-selection rules in workspace.css).
+  // Keep the control's legacy DOM id for external styles.
+  var selAll = document.getElementById('nethub-sel-invert');
+  var allSelected = names.length > 0 && count === names.length;
+  if (selAll) {
+    selAll.disabled = names.length === 0;
+    selAll.classList.toggle('all-checked', allSelected);
+    var label = allSelected ? t('section.batch.clearSelection') : t('section.batch.selectAll');
+    selAll.title = label;
+    selAll.setAttribute('aria-label', label);
+  }
   var body = document.getElementById('sec-entries-body');
   if (body) body.classList.toggle('has-selection', count > 0);
   var split = document.getElementById('nethub-open-split');
@@ -725,7 +731,7 @@ setNetHubCollapsed(currentNetHubCollapsed(), false);
 
 
 function loadForwards() {
-  return fetch('/api/forwards')
+  return fetch(apiPath('/api/forwards'))
     .then(function (r) { return r.json(); })
     .then(function (j) {
       window._lastForwards = j.forwards || [];
@@ -737,7 +743,7 @@ function loadForwards() {
 
 // Active shell notification rules (registered by the MCP shell_notify tool).
 function loadNotifications() {
-  return fetch('/api/notifications')
+  return fetch(apiPath('/api/notifications'))
     .then(function (r) { return r.json(); })
     .then(function (j) {
       window._lastNotifications = j.notifications || [];
@@ -747,14 +753,14 @@ function loadNotifications() {
 }
 
 function deleteNotification(ruleId) {
-  return fetch('/api/notifications/' + encodeURIComponent(ruleId), { method: 'DELETE' })
+  return fetch(apiPath('/api/notifications/') + encodeURIComponent(ruleId), { method: 'DELETE' })
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 
 
 
 function loadConnections() {
-  return fetch('/api/connections')
+  return fetch(apiPath('/api/connections'))
     .then(function (r) {
       return r.text().then(function (t) {
         if (!r.ok) {

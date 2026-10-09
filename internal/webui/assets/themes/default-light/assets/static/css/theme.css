@@ -1,0 +1,321 @@
+/* ---- Ghost buttons ---------------------------------------------------- */
+.btn { transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease; }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible, .icon-btn:focus-visible, .lang-btn:focus-visible {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
+.btn-danger:hover {
+  background: linear-gradient(180deg, var(--danger-hover), var(--danger));
+  border-color: var(--danger-hover); color: var(--text-on-accent);
+}
+.btn-primary:hover { box-shadow: 0 0 0 3px var(--success-surface); }
+
+/* ---- Cards: hairline in, glow on hover -------------------------------- */
+.conn-tile.entry-card {
+  border-radius: 10px;
+  transition: background .16s ease, box-shadow .2s ease, transform .2s ease, border-color .16s ease;
+}
+.conn-tile.entry-card:hover {
+  transform: translateY(-2px); border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 10px 26px var(--shadow-card-hover);
+}
+.conn-tile.entry-card:active { transform: translateY(0) scale(.99); }
+.conn-tile.sess-tile {
+  padding: 10px 8px 8px;
+  background-color: var(--glass-tile);
+  border-radius: 10px; transition: background .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:hover {
+  background-color: var(--bg-card-hover);
+  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 8px 20px var(--shadow-card);
+}
+/* Archived cards keep their dimmer read while staying translucent: the fill
+   changes, not the plate's, so one archived card never darkens its neighbours. */
+.conn-tile.sess-tile.archived { background-color: var(--glass-archived); }
+.conn-tile.sess-tile.batch-selected {
+  background: var(--accent-surface-soft);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.sess-terminal-ic { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.batch-trash[hidden], .batch-stop[hidden] { display: none; }
+.sess-terminal-ic img.terminal-shell-icon { filter: invert(1) opacity(.82); }
+
+/* ---- Live session lamp ------------------------------------------------ */
+.conn-tile.sess-tile .sess-status-ic.is-live {
+  background: var(--success-dark); box-shadow: 0 0 6px var(--live-glow);
+  animation: sessLivePulse 2.8s ease-in-out infinite;
+}
+.conn-tile.sess-tile .sess-status-ic.is-dead { background: var(--danger); }
+@keyframes sessLivePulse {
+  0%, 100% { box-shadow: 0 0 4px var(--live-glow); opacity: .85; }
+  50% { box-shadow: 0 0 9px var(--live-glow); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conn-tile.sess-tile .sess-status-ic.is-live { animation: none; opacity: 1; }
+  .conn-tile.sess-tile .sess-status-ic.is-connecting { animation: none; opacity: 1; transform: none; }
+  .conn-tile.entry-card:hover, .conn-tile.entry-card:active { transform: none; }
+  /* A breathing backdrop is decoration: at rest it simply stays at its brighter
+     value, so nothing about the page's contrast changes. */
+  .page-backdrop { animation: none; opacity: 1; }
+}
+
+/* ---- Inputs and overlays ---------------------------------------------- */
+.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
+.conn-field input:focus, .conn-field select:focus, .conn-field textarea:focus {
+  outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.modal-body input, .modal-body textarea, .modal-body select,
+.conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
+.modal { background: var(--bg-elevated); }
+.modal-h { background: var(--bg-card); }
+.modal-h h2 { color: var(--text-bright); font-weight: 600; }
+
+/* No native scrollbars anywhere on the page layer: an OS-grey track in a neon
+   panel reads as a rendering bug. Scrolling still works (wheel, trackpad, touch,
+   keyboard); what disappears is the bar itself. The drawer's host list replaced
+   #sec-entries-body in this list when the drawer itself stopped scrolling. */
+.workspace-sessions .section-body, #conn-grid, .modal, .modal-body,
+.modal-body textarea, #ui-notify-stack, .lang-menu {
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.workspace-sessions .section-body::-webkit-scrollbar, #conn-grid::-webkit-scrollbar,
+.modal::-webkit-scrollbar, .modal-body::-webkit-scrollbar, .modal-body textarea::-webkit-scrollbar,
+#ui-notify-stack::-webkit-scrollbar, .lang-menu::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* The .drawer-* selectors below keep their historic names: they are the body,
+   toolbar, close key and add action of #sec-entries-body, which on desktop is
+   NetHub's column rather than a page-level drawer. */
+
+/* Inside the drawer the entries are list rows, one per line, at every viewport —
+   the same shape a phone gets. The drawer is a fixed 360-420px slab whatever the
+   screen is, so the wide-screen card sizing (188-300px, wrapping two per row)
+   would pack the drawer with ragged half-width cards and no reading order.
+
+   Scoped to #conn-grid: the session grid keeps its compact wrapping cards. */
+#conn-grid .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+
+/* The terminal's own chrome tokens. Surfaces, hairlines and greys are the
+   terminal's own (a floating window needs its own depth ramp), but every HUE the
+   two share is the page's, taken by reference — so the terminal and the page
+   cannot drift apart, and restyling the page restyles the terminal. Naming the
+   page token instead of repeating its hex is the point: a literal here is a
+   second palette waiting to go stale. */
+:root {
+  --term-accent: var(--accent);
+  --term-bg: var(--bg-card);
+  --term-black-35: var(--accent-surface-soft);
+  --term-black-4: var(--accent-surface-soft);
+  --term-black-5: var(--accent-surface-soft);
+  --term-border: var(--border-subtle);
+  --term-border-2: var(--border-subtle);
+  --term-border-3: var(--border-subtle);
+  --term-border-4: var(--border-subtle);
+  --term-border-5: var(--border-subtle);
+  --term-border-hover: var(--border-strong);
+  --term-border-hover-2: var(--border-strong);
+  --term-current: var(--accent-surface);
+  --term-danger: var(--danger);
+  --term-danger-16: var(--danger-surface);
+  --term-danger-2: var(--danger);
+  --term-danger-6: var(--danger-strong-surface);
+  --term-danger-deep: var(--danger-surface);
+  --term-danger-deep-2: var(--danger-surface);
+  --term-danger-soft: var(--danger-soft);
+  --term-danger-soft-2: var(--danger-soft);
+  --term-danger-soft-5: var(--danger-border);
+  --term-deep: var(--bg-canvas);
+  --term-fab-92: var(--bg-elevated);
+  --term-fab-hover-96: var(--bg-elevated);
+  --term-fg: var(--text-primary);
+  --term-fg-bright: var(--text-primary);
+  --term-fg-dim: var(--text-secondary);
+  --term-fg-faint: var(--text-muted);
+  --term-fg-faint-2: var(--text-muted);
+  --term-fg-faint-3: var(--text-muted);
+  --term-fg-faint-4: var(--text-muted);
+  --term-fg-mid: var(--text-secondary);
+  --term-fg-muted: var(--text-muted);
+  --term-fg-soft: var(--text-primary);
+  --term-fg-soft-2: var(--text-primary);
+  --term-fg-white: var(--text-primary);
+  --term-fg-white-2: var(--text-primary);
+  --term-hover: var(--bg-card-hover);
+  --term-hover-2: var(--bg-card-hover);
+  --term-hover-3: var(--bg-card-hover);
+  --term-neutral-16: var(--accent-surface);
+  --term-neutral-4: var(--accent-surface);
+  --term-pane-72: var(--bg-elevated);
+  --term-panel: var(--bg-elevated);
+  --term-panel-94: var(--bg-elevated);
+  --term-success: var(--success);
+  --term-success-16: var(--success-surface);
+  --term-success-3: var(--success);
+  --term-success-5: var(--success-border);
+  --term-success-bright: var(--success-bright);
+  --term-success-deep: var(--success-deep);
+  --term-success-soft: var(--success-hover);
+  --term-surface: var(--bg-elevated);
+  --term-warning: var(--warning);
+  --term-warning-16: var(--warning-surface);
+  --term-warning-22: var(--warning-surface-strong);
+  --term-warning-bright: var(--warning-bright);
+  --term-white-04: var(--accent-surface-soft);
+  --term-white-06: var(--accent-surface-soft);
+  --term-white-08: var(--accent-surface-soft);
+  --term-white-1: var(--accent-surface-soft);
+  --term-white-12: var(--accent-surface-soft);
+  --term-white-18: var(--accent-surface-soft);
+  --term-white-2: var(--accent-surface-soft);
+  /* The rail's four states: who wrote a row. Named for that state and reading
+     the palette directly — never through an unrelated page state such as
+     --danger, whose name would put the wrong word in a reader's head. */
+  --term-rail-output: var(--green-bright);
+  --term-rail-input: var(--yellow);
+  --term-rail-agent: var(--pink);
+  --term-rail-review: var(--purple);
+  /* Glass chrome and a translucent terminal.
+
+     The page behind a floating terminal is near-black and mostly flat, so a
+     *darker* tint over it reads as nothing at all — blurring black leaves black.
+     The frost therefore lifts the surface instead of darkening it: a cool
+     translucent white that catches ambient light, plus a bright top hairline.
+     Those two are what the eye reads as glass on a dark UI. */
+  /* Opacity knobs: xterm itself is 0 alpha. The terminal body stacks frost and
+     tint, so effective coverage is 1 - (1 - frost) * (1 - tint) ≈ 11.7% here.
+     Lower both numbers for more see-through; raise them only if text loses
+     contrast. */
+  --term-glass-frost: var(--bg-card);
+  --term-glass-tint: var(--bg-card);
+  --term-glass-surface: var(--bg-card);
+  --term-glass-edge: var(--border-subtle);
+  --term-glass-border: var(--border-subtle);
+  --term-glass-shadow: var(--shadow-card);
+}
+
+/* ---- Product console refinement -----------------------------------------
+   Small, state-first adjustments only. The existing Blackwall, floating windows
+   and notched plates remain the visual system; this layer gives them a quieter
+   depth ramp and makes the current state legible before the detail is read. */
+
+/* A floating window is a surface in the workspace, not a red alarm frame. The
+   active window gets a cool lift and a restrained edge; approval remains the only
+   persistent urgent cue. The :not() is load-bearing: a full-screen window sets
+   border: none and box-shadow: none, and this rule has the same specificity but
+   comes later, so without it a phone terminal would grow a cyan frame. */
+.shell-window.win-active:not(.win-fullscreen) {
+  border-color: rgba(var(--cyan-rgb), .42);
+  box-shadow: inset 0 1px 0 var(--term-glass-edge),
+              0 0 0 1px rgba(var(--cyan-rgb), .08),
+              0 24px 64px var(--term-glass-shadow);
+}
+/* The notify pulse stays: it is how a session that needs attention is found. The
+   hairline is added under it as the resting mark, so a window stays recognisable
+   once the three pulses are over. */
+.shell-window.shell-window-notified .shell-window-header::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 1px; background: var(--term-accent); opacity: .8;
+}
+.shell-window-header { position: relative; }
+.shell-window-title .sw-conn { font-family: var(--font-mono); letter-spacing: .015em; }
+.shell-window-title .shell-dead-badge { border-radius: 0; letter-spacing: .1em; }
+.shell-window-title .shell-dead-badge::before { content: '— '; opacity: .55; }
+
+/* State markers live beside the identity, so connecting/live/dead is visible
+   without turning the title into a large status pill. */
+.shell-link-state {
+  width: 6px; height: 6px; flex: 0 0 auto; align-self: center;
+  border-radius: 50%; background: var(--term-fg-faint-2);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+}
+.shell-link-state.is-connecting { background: var(--term-warning); animation: shellStatePulse 1.8s ease-in-out infinite; }
+.shell-link-state.is-live { background: var(--term-accent); box-shadow: 0 0 7px rgba(var(--cyan-rgb), .42); }
+.shell-link-state.is-dead { background: var(--term-danger); }
+@keyframes shellStatePulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* The channel footer is an instrument strip: mono labels and one accent edge on
+   the active tab (the base rule already draws its top border, so this layer adds
+   no second line — two hairlines one pixel apart read as a mistake). */
+.shell-channel-tab { letter-spacing: .02em; }
+.shell-channel-tab.active { font-weight: 600; }
+
+/* The window controls are chrome, not content: crisp corners, quiet until they
+   are hovered or reached by keyboard. Squaring them is not styling for its own
+   sake — every other control on the page (.btn, .icon-btn, the drawer, the
+   inputs) is square, so a 4px radius here was the odd one out. The header
+   cluster, the title's copy key and the channel tab keys are all covered; the
+   14px close keys keep their shape because a hover target that small reads as a
+   dot rather than a button once its corners are cut. */
+.shell-window-header-btns button, .title-copy-btn, .shell-channel-tab-add,
+.shell-channel-add-caret, .shell-tab-btn { border-radius: 0; }
+.shell-window-header-btns button:hover { background: rgba(var(--cyan-rgb), .1); }
+
+/* Product connecting readout: a state line, not a generic spinner. The state word
+   is tracked out and accented; the connection NAME is left exactly as it is — a
+   name is an identity, and text-transform would rewrite it on screen. */
+.shell-pending { gap: 10px; font-family: var(--font-mono); font-size: 12px; }
+.shell-pending [data-i18n] { color: var(--term-accent); font-size: 9px; text-transform: uppercase; letter-spacing: .16em; }
+.shell-pending strong { color: var(--term-fg-soft); font-weight: 600; }
+
+/* Focus is an interaction state, not a glow effect. Cover the controls that
+   are created dynamically, including icon-only actions in the session HUD. */
+.shell-tab-btn:focus-visible, .shell-channel-tab-add:focus-visible,
+.shell-channel-add-caret:focus-visible, .shell-channel-tab-copy:focus-visible,
+.shell-channel-tab-close:focus-visible, .shell-review-lock:focus-visible,
+.shell-window-min-btn:focus-visible, .close-btn:focus-visible,
+.shell-header-icon-btn:focus-visible {
+  outline: 2px solid var(--term-accent); outline-offset: -2px;
+}
+
+/* The grid card is a record with a state rail. It stays rectangular and
+   translucent, and the rail is the only signal: the plate is already bordered,
+   so a second ring would compete with the selection state. */
+.conn-tile.sess-tile::before {
+  content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 2px;
+  background: var(--border-subtle); transition: background .16s ease, box-shadow .16s ease;
+}
+.conn-tile.sess-tile:not(.archived):hover::before { background: var(--accent); box-shadow: 0 0 8px var(--accent-ring); }
+.conn-tile.sess-tile.has-open-window::before { background: var(--accent); }
+.conn-tile.sess-tile.has-open-window .sess-terminal-ic { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-surface); }
+.conn-tile.sess-tile.archived::before { background: var(--danger-border); }
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-link-state.is-connecting, .shell-pending-spinner { animation: none; }
+  body.bw-session-active::after, body.bw-ai-active::after, body.bw-review-pending::after, body.bw-error::after { transition: none; }
+  .nethub-select-toggle { transition: none; }
+  .nethub-toggle-count, .nethub-selecting .nethub-batch-icon, .nethub-selecting .nethub-open-split { animation: none; }
+}
+
+/* An empty plate reads as a terminal that printed nothing, not as a dashboard
+   placeholder. The sentence itself comes from the catalog (sessions.js writes
+   it), so no copy is baked into the stylesheet. */
+.sess-plate-empty {
+  width: 100%; padding: 26px 8px; text-align: center;
+  color: var(--text-muted); font: 600 .7rem/1.6 var(--font-mono);
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.sess-plate-empty::before, .sess-plate-empty::after { color: var(--accent); opacity: .5; }
+.sess-plate-empty::before { content: '› '; }
+.sess-plate-empty::after { content: ' ‹'; }
+
+/* Rounded, quiet desktop surfaces; layout and breakpoints stay shared. */
+.page-backdrop { display: none; }
+.app-header { box-shadow: 0 1px 3px var(--shadow-soft); }
+.app-header h1 { font-weight: 650; letter-spacing: -.025em; }
+.workspace-sessions, #sec-entries-body, .modal { border-radius: 12px; box-shadow: 0 4px 18px var(--shadow-card); }
+.workspace-sessions .section-header { border-bottom: 1px solid var(--border-subtle); font-weight: 600; }
+.conn-tile.entry-card { border-radius: 9px; }
+.conn-tile.entry-card:hover { transform: none; }
+.conn-tile.sess-tile, .sess-terminal-ic { border-radius: 9px; }
+.conn-tile.sess-tile .sess-status-ic.is-live { box-shadow: none; animation: none; }
+.sess-terminal-ic img.terminal-shell-icon { filter: var(--theme-icon-filter); }
+.btn, .icon-btn, .lang-btn, .theme-btn { border-radius: 7px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: none; }
+.modal-body input, .modal-body select, .modal-body textarea { border-radius: 7px; }
+.shell-window-header-btns button, .title-copy-btn, .shell-channel-tab-add, .shell-channel-add-caret, .shell-tab-btn { border-radius: 5px; }
+.shell-window-title .sw-conn { font-family: var(--font-sans); }
+.shell-window-title .shell-dead-badge { border-radius: 4px; letter-spacing: .02em; }
+.shell-link-state.is-live { box-shadow: none; }
+.shell-window.win-active:not(.win-fullscreen) { border-color: var(--border-focus); box-shadow: 0 12px 38px var(--term-glass-shadow); }
+.sess-plate-empty { font: 400 .8rem/1.6 var(--font-sans); letter-spacing: 0; text-transform: none; }
+.sess-plate-empty::before, .sess-plate-empty::after { content: none; }

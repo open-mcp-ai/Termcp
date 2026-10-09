@@ -1,0 +1,63 @@
+/* Runtime terminal settings layer. Each theme can override the CSS defaults. */
+:root {
+  --terminal-transparent: false;
+  --terminal-font-size: 13;
+  --terminal-font-weight: normal;
+  --terminal-font-weight-bold: bold;
+  --terminal-line-height: 1;
+  --terminal-letter-spacing: 0;
+  --terminal-background-opacity: 1;
+}
+.shell-window {
+  background: var(--terminal-window-background, var(--terminal-background, var(--term-glass-frost)));
+  border-color: var(--terminal-border-color, var(--term-glass-border));
+  backdrop-filter: blur(var(--terminal-window-blur, 28px)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--terminal-window-blur, 28px)) saturate(150%);
+}
+.shell-window-header { background: var(--terminal-header-background, var(--term-glass-surface)); }
+.shell-window.win-active:not(.win-fullscreen) { border-color: var(--terminal-border-color, rgba(var(--cyan-rgb), .42)); }
+html[data-terminal-window-foreground="true"] .shell-window {
+  --term-fg: var(--terminal-window-foreground);
+  --term-fg-bright: var(--terminal-window-foreground);
+  --term-fg-soft: var(--terminal-window-foreground);
+  --term-fg-soft-2: var(--terminal-window-foreground);
+  --term-fg-white: var(--terminal-window-foreground);
+  --term-fg-white-2: var(--terminal-window-foreground);
+  --term-fg-dim: color-mix(in srgb, var(--terminal-window-foreground) 85%, transparent);
+  --term-fg-mid: color-mix(in srgb, var(--terminal-window-foreground) 85%, transparent);
+  --term-fg-muted: color-mix(in srgb, var(--terminal-window-foreground) 75%, transparent);
+  --term-fg-faint: color-mix(in srgb, var(--terminal-window-foreground) 65%, transparent);
+  --term-fg-faint-2: var(--term-fg-faint);
+  --term-fg-faint-3: var(--term-fg-faint);
+  --term-fg-faint-4: var(--term-fg-faint);
+}
+.shell-terminal-wrap {
+  background: var(--terminal-body-background, var(--term-glass-tint));
+}
+html[data-terminal-transparent="true"] .shell-window {
+  background: color-mix(in srgb, var(--terminal-window-background, var(--terminal-background, var(--term-glass-frost))) calc(var(--terminal-background-opacity) * 100%), transparent);
+}
+html[data-terminal-transparent="false"] .shell-window {
+  /* A solid base also prevents an alpha color in JSON from exposing the page. */
+  background: linear-gradient(var(--terminal-window-background, var(--terminal-background, var(--bg-card))), var(--terminal-window-background, var(--terminal-background, var(--bg-card)))), var(--bg-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-terminal-transparent="false"] .shell-window-header {
+  background: linear-gradient(var(--terminal-header-background, var(--terminal-background, var(--bg-card))), var(--terminal-header-background, var(--terminal-background, var(--bg-card)))), var(--bg-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-terminal-transparent="false"] .shell-terminal-wrap {
+  background: var(--terminal-background, var(--bg-card));
+}
+html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm,
+html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm .xterm-screen,
+html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm .xterm-viewport {
+  background: var(--terminal-background, var(--xterm-background, var(--bg-card))) !important;
+}
+html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm,
+html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm .xterm-screen,
+html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm .xterm-viewport {
+  background: transparent !important;
+}

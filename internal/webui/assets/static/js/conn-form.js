@@ -168,7 +168,7 @@ function _populateJumpImports() {
     });
   }
   if (connEntries) { fill(); return; }
-  fetch('/api/connections').then(function(r){ return r.json(); }).then(function(j) {
+  fetch(apiPath('/api/connections')).then(function(r){ return r.json(); }).then(function(j) {
     connEntries = j.connections || [];
     fill();
   }).catch(function(){});
@@ -278,9 +278,17 @@ function openConnModal(edit, name, kind) {
   // built-in connection is addressed), and the form hides those two controls
   // for it below.
   editingConnName = edit ? name : '';
-  _connDirty = false;
   connEntries = null; // refresh import dropdown options
-  document.getElementById('modal-conn-err').style.display = 'none';
+  /* The dialog is ONE singleton element reused by every open, so anything it
+     carries that the next open does not overwrite is residue the user reads as
+     belonging to the profile now on screen. The generation counter is bumped
+     here and read by every asynchronous writer, so a slow request started for
+     this open cannot paint over a later one. */
+  var seq = bumpConnModalSeq();
+  var errEl = document.getElementById('modal-conn-err');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+  resetConnTestResult();
   var isInternal = edit && kind === 'internal';
 	var temporaryEl = document.getElementById('conn-temporary');
 	var current = (window._lastConnections || []).find(function(c) { return c.name === name; });
@@ -309,17 +317,28 @@ function openConnModal(edit, name, kind) {
   // hides them too — but it keeps 默认 Shell / 默认审核, which are its own settings.
   var remoteExtra = document.getElementById('conn-f-remote-extra');
   if (remoteExtra) remoteExtra.style.display = isInternal ? 'none' : '';
-  // Start in form view
+  // Start in form view — and put the toggle's icon pair back with it, since the
+  // icon is what tells the user which view they are looking at and it is written
+  // by _connToggleView. A dialog reopened after a TOML session would otherwise
+  // show the TOML glyph over a form.
   document.getElementById('conn-form-view').style.display = '';
   document.getElementById('conn-config-view').style.display = 'none';
+  var iconForm = document.getElementById('conn-icon-form');
+  var iconToml = document.getElementById('conn-icon-toml');
+  if (iconForm) iconForm.style.display = '';
+  if (iconToml) iconToml.style.display = 'none';
   if (edit) {
-    fetch('/api/connections/' + encodeURIComponent(name)).then(function (r) {
+    fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
       if (!r.ok) throw new Error(r.statusText);
       return r.text();
     }).then(function (t) {
+      /* The profile the user is looking at now is the newer open's; a slow read
+         of the previous one must not repaint the form under it. */
+      if (connModalSeq() !== seq) return;
       document.getElementById('conn-config').value = t;
       _connTOMLToForm(t);
     }).catch(function (err) {
+      if (connModalSeq() !== seq) return;
       document.getElementById('modal-conn-err').textContent = String(err.message || err);
       document.getElementById('modal-conn-err').style.display = 'block';
     });
@@ -331,18 +350,51 @@ function openConnModal(edit, name, kind) {
   showModal('modal-conn');
 }
 
-document.getElementById('conn-f-auth').onchange = _connAuthChange;
-document.getElementById('conn-toggle-view').onclick = function () { _connDirty = true; _connToggleView(); };
-// Track unsaved edits inside the connection editor so leaving the page first asks.
-var _connModalEl = document.getElementById('modal-conn');
-if (_connModalEl) {
-  _connModalEl.addEventListener('input', function () { _connDirty = true; });
-  _connModalEl.addEventListener('change', function () { _connDirty = true; });
+/** The connection dialog's open generation.
+ *
+ *  One singleton element serves every open, which makes it the wrong home for
+ *  state that outlives an open — and it also means a request started for one
+ *  open can land while a later one is on screen. The counter is the single
+ *  answer to both: openConnModal bumps it, every asynchronous writer records the
+ *  value it started under and drops its result once the dialog has moved on. */
+function bumpConnModalSeq() {
+  var el = document.getElementById('modal-conn');
+  if (!el) return 0;
+  el._termcpOpenSeq = (el._termcpOpenSeq || 0) + 1;
+  return el._termcpOpenSeq;
 }
+function connModalSeq() {
+  var el = document.getElementById('modal-conn');
+  return el ? (el._termcpOpenSeq || 0) : 0;
+}
+
+/** Put the Test readout back to "nothing has been tested".
+ *
+ *  It is the one field in the dialog the user cannot clear by editing: the
+ *  verdict stands until the next Test. Left across opens it reads as a result
+ *  for the profile now on screen — "✓ Connected in 12 ms" under a host that was
+ *  never dialled. The button is reset with it, because a verdict is reachable
+ *  only through that button: one stuck disabled on "Testing…" would leave the
+ *  dialog looking permanently busy. */
+function resetConnTestResult() {
+  var out = document.getElementById('conn-test-result');
+  if (out) {
+    out.style.display = 'none';
+    out.textContent = '';
+    out.style.color = '';
+  }
+  var btn = document.getElementById('conn-test');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = t('common.test');
+  }
+}
+
+document.getElementById('conn-f-auth').onchange = _connAuthChange;
+document.getElementById('conn-toggle-view').onclick = _connToggleView;
 
 // ---- jump chain events ----
 document.getElementById('conn-add-jump').onclick = function () {
-  _connDirty = true;
   jumpCards.push(_newJumpCard());
   jumpEditingIdx = jumpCards.length - 1;
   jumpEditingNew = true;
@@ -373,7 +425,7 @@ _jumpsBox.addEventListener('change', function (e) {
   var card = e.target.closest('.jump-card');
   var idx = card ? parseInt(card.getAttribute('data-idx'), 10) : NaN;
   if (isNaN(idx)) return;
-  fetch('/api/connections/' + encodeURIComponent(name)).then(function (r) {
+  fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
     if (!r.ok) throw new Error(r.statusText);
     return r.text();
   }).then(function (t) {
@@ -395,7 +447,6 @@ _jumpsBox.addEventListener('click', function (e) {
   var idx = card ? parseInt(card.getAttribute('data-idx'), 10) : NaN;
   if (isNaN(idx)) return;
   if (e.target.classList.contains('jump-rm')) {
-    _connDirty = true;
     jumpCards.splice(idx, 1);
     if (jumpEditingIdx === idx) { jumpEditingIdx = -1; jumpEditingNew = false; }
     else if (jumpEditingIdx > idx) { jumpEditingIdx -= 1; }
@@ -403,13 +454,11 @@ _jumpsBox.addEventListener('click', function (e) {
     return;
   }
   if (e.target.classList.contains('jump-save')) {
-    _connDirty = true;
     jumpEditingIdx = -1; jumpEditingNew = false;
     renderJumps();
     return;
   }
   if (e.target.classList.contains('jump-cancel')) {
-    _connDirty = true;
     if (jumpEditingNew && jumpEditingIdx === idx) {
       jumpCards.splice(idx, 1);
     }
@@ -453,37 +502,49 @@ document.querySelectorAll('.psw-eye').forEach(function(btn) {
   btn.onclick = function() { _toggleEye(this); };
 });
 
-document.getElementById('modal-conn-close').onclick = function () { _connDirty = false; hideModal('modal-conn'); };
+document.getElementById('modal-conn-close').onclick = function () {
+  /* Closing invalidates in-flight work for this open: a verdict that lands after
+     the user has left belongs to nothing on screen. */
+  bumpConnModalSeq();
+  hideModal('modal-conn');
+};
 document.getElementById('conn-test').onclick = function () {
   var err = document.getElementById('modal-conn-err');
   var out = document.getElementById('conn-test-result');
   err.style.display = 'none';
   out.style.display = 'none';
+  var seq = connModalSeq();
   var btn = this;
   var body = _connGetBody();
   btn.disabled = true;
   btn.textContent = t('test.testing');
-  fetch('/api/connections/test', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
+  fetch(apiPath('/api/connections/test'), { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
       return r.json();
     })
     .then(function (j) {
+      /* A dial can take seconds, and the user can reopen the dialog (or a
+         different profile) inside that window. The verdict is about the body
+         that was submitted, so it is dropped once the dialog has moved on. */
+      if (connModalSeq() !== seq) return;
       out.style.display = 'block';
       if (j.ok) {
         out.textContent = t('test.ok', { ms: j.duration_ms || 0 });
-        out.style.color = '#1a7f37';
+        out.style.color = 'var(--success)';
       } else {
         out.textContent = t('test.failed', { msg: j.error || t('test.connectionFailed') });
-        out.style.color = '#cf222e';
+        out.style.color = 'var(--danger)';
       }
     })
     .catch(function (e) {
+      if (connModalSeq() !== seq) return;
       out.style.display = 'block';
       out.textContent = t('test.failed', { msg: String(e.message || e) });
-      out.style.color = '#cf222e';
+      out.style.color = 'var(--danger)';
     })
     .finally(function () {
+      if (connModalSeq() !== seq) return;
       btn.disabled = false;
       btn.textContent = t('common.test');
     });
@@ -509,7 +570,7 @@ document.getElementById('conn-save').onclick = function () {
       return;
     }
   }
-  var url = '/api/connections/' + encodeURIComponent(name);
+  var url = apiPath('/api/connections/') + encodeURIComponent(name);
   var params = new URLSearchParams();
   params.set('temporary', document.getElementById('conn-temporary').checked ? 'true' : 'false');
   if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
@@ -517,7 +578,6 @@ document.getElementById('conn-save').onclick = function () {
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
-      _connDirty = false;
       hideModal('modal-conn');
       loadConnections();
     })
@@ -537,10 +597,9 @@ document.getElementById('conn-delete').onclick = function () {
   });
 };
 function doDeleteConnection(name) {
-  fetch('/api/connections/' + encodeURIComponent(name), { method: 'DELETE' })
+  fetch(apiPath('/api/connections/') + encodeURIComponent(name), { method: 'DELETE' })
     .then(function (r) {
     if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
-      _connDirty = false;
       hideModal('modal-conn');
       loadConnections();
     })
@@ -566,10 +625,16 @@ document.getElementById('conn-duplicate').onclick = function () {
 
 document.getElementById('conn-import-open').onclick = function (e) {
   e.stopPropagation();
+  /* The dialog is a singleton and an import can take a while, so a second open
+     must not inherit the previous run's readout or its half-finished button. */
+  var btn = document.getElementById('conn-import-run');
+  if (btn) btn.disabled = false;
   document.getElementById('conn-import-file').value = '';
   document.getElementById('conn-import-temporary').checked = false;
   document.getElementById('conn-import-err').style.display = 'none';
+  document.getElementById('conn-import-err').textContent = '';
   document.getElementById('conn-import-result').style.display = 'none';
+  document.getElementById('conn-import-result').textContent = '';
   showModal('modal-conn-import');
 };
 document.getElementById('conn-import-close').onclick = function () { hideModal('modal-conn-import'); };
@@ -583,7 +648,7 @@ document.getElementById('conn-import-run').onclick = function () {
   btn.disabled = true;
   var temporary = document.getElementById('conn-import-temporary').checked;
   // The file is opaque to the UI; the backend parses and validates its TOML.
-  fetch('/api/connections/batch?temporary=' + temporary, {
+  fetch(apiPath('/api/connections/batch?temporary=') + temporary, {
     method: 'POST', headers: { 'Content-Type': 'application/toml' }, body: file
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
@@ -612,7 +677,7 @@ document.getElementById('conn-import-run').onclick = function () {
    document either way (names filter or all), so the browser stays a pipe for
    opaque bytes. */
 function downloadConnectionsToml(names) {
-  var path = '/api/connections/batch';
+  var path = apiPath('/api/connections/batch');
   if (names && names.length) path += '?names=' + names.map(encodeURIComponent).join(',');
   return fetch(path).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
@@ -706,7 +771,7 @@ function exportSelectedNodes() {
 // cleared here — another client already got there. Sessions and connections
 // share the shape, so they share the helper; only the resource segment differs.
 function deleteResourcesBatch(resource, ids) {
-  var path = '/api/' + resource + '/' + ids.map(encodeURIComponent).join(',');
+  var path = apiPath('/api/') + resource + '/' + ids.map(encodeURIComponent).join(',');
   return fetch(path, { method: 'DELETE' }).then(function (r) {
     if (r.ok && r.status !== 204) {
       return r.json().then(function (j) { return (j && j.results) || []; });
@@ -794,11 +859,13 @@ function toggleNodeOpenMenu() {
     e.stopPropagation();
     setNodeSelectMode(!nodeSelectModeOn());
   });
-  var invert = document.getElementById('nethub-sel-invert');
-  if (invert) invert.addEventListener('click', function (e) {
+  var selAll = document.getElementById('nethub-sel-invert');
+  if (selAll) selAll.addEventListener('click', function (e) {
     e.stopPropagation();
-    selectableNodeNames().forEach(function (n) {
-      if (_nodeSelIds.has(n)) _nodeSelIds.delete(n);
+    var names = selectableNodeNames();
+    var allSelected = names.length > 0 && names.every(function (n) { return _nodeSelIds.has(n); });
+    names.forEach(function (n) {
+      if (allSelected) _nodeSelIds.delete(n);
       else _nodeSelIds.add(n);
     });
     renderConnGrid(window._lastConnections || [], connBannerText());
@@ -838,11 +905,14 @@ function toggleNodeOpenMenu() {
    dialog outlives the click that opened it, so a pointer position captured here
    would only ever be a stale coordinate from behind a modal backdrop. */
 function openStartModal(connName) {
-  startConnName = connName;
   document.getElementById('modal-start-err').style.display = 'none';
-  document.getElementById('start-ssh-config').value = connName;
+  /* The dialog outlives the click that opened it and carries its target in a
+     hidden field, so leaving it out here (or leaving the previous profile's name
+     in it) launches a session against whatever the last open was aimed at. */
+  var targetEl = document.getElementById('start-ssh-config');
+  if (targetEl) targetEl.value = connName || '';
   var startNameEl = document.getElementById('start-name');
-  if (startNameEl) startNameEl.value = connName;
+  if (startNameEl) startNameEl.value = connName || '';
   document.getElementById('start-title').textContent = t('modal.start.titleConnect', { name: connName });
   document.getElementById('start-cmd').value = '';
   document.getElementById('start-mode').value = 'pty';
@@ -858,7 +928,7 @@ document.getElementById('start-run').onclick = function () {
   // connection progress (spinner). On failure the dialog reopens with the
   // error so inputs stay editable for a retry.
   hideModal('modal-start');
-  startSessionAndOpenShell(document.getElementById('start-ssh-config').value || startConnName, null, {
+  startSessionAndOpenShell(document.getElementById('start-ssh-config').value, null, {
     command: cmd,
     mode: document.getElementById('start-mode').value,
     name: sname || undefined
@@ -892,6 +962,82 @@ function sessionFailuresText(failed) {
   return failed.map(function (r) { return r.id + (r.error ? ': ' + r.error : ''); }).join('; ');
 }
 
+/** Stop one plate's selected work.
+ *
+ *  Two kinds of selection are possible and they end differently:
+ *
+ *    - a dial in progress has no session yet, so the only thing that can stop it
+ *      is aborting the request that made it (see cancelPendingConn);
+ *    - a running session is ended with POST /terminate, which leaves it in the
+ *      registry as a DEAD entry so its output stays readable — disconnecting is
+ *      not deleting, and the two are separate actions on purpose.
+ *
+ *  Both happen in one gesture: the user selected "what is running" and expects
+ *  all of it to stop, not the half the server happens to know about.
+ */
+function disconnectSelectedInRegion(region) {
+  var targets = sessionsForRegion(region, sessionsWithPending()).filter(function (s) { return region.ids.has(s.id); });
+  if (!targets.length) {
+    showCopyToast(t('toast.sessions.none'));
+    return;
+  }
+  var pendingTargets = targets.filter(function (s) { return s._pending; });
+  var liveIds = targets.filter(function (s) { return !s._pending; }).map(function (s) { return s.id; });
+  var msg = tCount('batch.disconnect.msg.one', 'batch.disconnect.msg.other', { count: targets.length });
+  if (pendingTargets.length) msg += ' ' + tCount('batch.disconnect.pendingHint.one', 'batch.disconnect.pendingHint.other', { count: pendingTargets.length });
+  confirmDialog({
+    title: t('batch.disconnect.dialog'),
+    message: msg,
+    okText: t('batch.disconnect.ok', { count: targets.length })
+  }).then(function (ok) {
+    if (!ok) return;
+    // Dials first: they are cancelled locally and instantly, so the cards that
+    // are not waiting on any round trip disappear before the request below.
+    cancelAllPendingConns();
+    if (!liveIds.length) {
+      _sessionRegions.forEach(function (r) { pendingTargets.forEach(function (s) { r.ids.delete(s.id); }); });
+      showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: pendingTargets.length }));
+      renderSessionGrid('');
+      return;
+    }
+    var banner = document.getElementById('session-load-banner');
+    if (banner) setLoadBanner(banner, tCount('banner.stopping.one', 'banner.stopping.other', { count: liveIds.length }));
+    // apiPath, not a bare literal: the page can be mounted under a reverse-proxy
+    // sub-path, and a root-absolute URL would resolve against the parent site.
+    var path = apiPath('/api/sessions/' + liveIds.map(encodeURIComponent).join(',') + '/terminate');
+    fetch(path, { method: 'POST' }).then(function (r) {
+      if (r.ok && r.status !== 204) {
+        return r.json().then(function (j) { return (j && j.results) || []; });
+      }
+      if (r.status === 204 || r.status === 404) {
+        return liveIds.map(function (id) { return { id: id, ok: true }; });
+      }
+      return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
+    }).then(function (results) {
+      var failed = [];
+      (results || []).forEach(function (r) {
+        if (r.ok || r.code === 'session_not_found') {
+          // The session stays in the registry as a DEAD entry, so its window is
+          // NOT closed here: the server's next frame locks it read-only, which is
+          // what makes the output still reachable. Dropping the selection is all
+          // this side has to do.
+          _sessionRegions.forEach(function (rg) { rg.ids.delete(r.id); });
+        } else {
+          failed.push(r);
+        }
+      });
+      if (banner) setLoadBanner(banner, '');
+      var stopped = (results || []).length - failed.length + pendingTargets.length;
+      if (failed.length) showCopyToast(t('toast.stop.failed', { msg: sessionFailuresText(failed) }));
+      else showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: stopped }));
+      renderSessionGrid('');
+    }).catch(function (err) {
+      if (banner) setLoadBanner(banner, t('toast.stop.failed', { msg: String(err.message || err) }));
+      renderSessionGrid('');
+    });
+  });
+}
+
 /** Delete one plate's selected sessions after confirming.
  *
  *  Both plates share this: the only difference is which ids they own, and the
@@ -900,13 +1046,20 @@ function sessionFailuresText(failed) {
  *  regions independent.
  */
 function deleteSelectedInRegion(region) {
-  var snapshot = window._lastSessionsSnapshot || [];
+  var snapshot = sessionsWithPending();
   var targets = sessionsForRegion(region, snapshot).filter(function (s) { return region.ids.has(s.id); });
   if (!targets.length) {
     showCopyToast(t('toast.sessions.none'));
     return;
   }
+  /* A dial in progress cannot be deleted — there is no session directory yet, and
+     DELETE would 404 on a synthetic id. Cancelling is the whole effect the user
+     is asking for there, and it is the same thing the disconnect action does;
+     so the delete path handles it the same way instead of failing on it. */
+  var pendingTargets = targets.filter(function (s) { return s._pending; });
+  var liveIds = targets.filter(function (s) { return !s._pending; }).map(function (s) { return s.id; });
   var msg = tCount('batch.del.msg.one', 'batch.del.msg.other', { count: targets.length });
+  if (pendingTargets.length) msg += ' ' + tCount('batch.disconnect.pendingHint.one', 'batch.disconnect.pendingHint.other', { count: pendingTargets.length });
   confirmDialog({
     title: t('batch.del.dialog'),
     message: msg,
@@ -914,12 +1067,19 @@ function deleteSelectedInRegion(region) {
     danger: true
   }).then(function (ok) {
     if (!ok) return;
+    cancelAllPendingConns();
+    _sessionRegions.forEach(function (r) { pendingTargets.forEach(function (s) { r.ids.delete(s.id); }); });
+    if (!liveIds.length) {
+      showCopyToast(tCount('toast.session.stopped.one', 'toast.session.stopped.other', { count: pendingTargets.length }));
+      renderSessionGrid('');
+      return;
+    }
     var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: targets.length }));
-    return deleteResourcesBatch('sessions', targets.map(function (s) { return s.id; })).then(function (results) {
+    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: liveIds.length }));
+    return deleteResourcesBatch('sessions', liveIds).then(function (results) {
       settleSessionDeletes(results, banner, function (cleared, failed) {
         if (failed.length) showCopyToast(t('toast.delete.failed', { msg: sessionFailuresText(failed) }));
-        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared }));
+        else showCopyToast(tCount('toast.session.deleted.one', 'toast.session.deleted.other', { count: cleared + pendingTargets.length }));
         loadForwards();
         startUIWebSocket();
         renderSessionGrid('');
@@ -931,7 +1091,7 @@ function deleteSelectedInRegion(region) {
   });
 }
 
-// Each plate's trash and select-all act on that plate's own selection.
+// Each plate's trash, stop key and select-all act on that plate's own selection.
 _sessionRegions.forEach(function (region) {
   var delBtn = document.getElementById(region.delId);
   if (delBtn) {
@@ -940,11 +1100,22 @@ _sessionRegions.forEach(function (region) {
       deleteSelectedInRegion(region);
     };
   }
+  var stopBtn = document.getElementById(region.stopId);
+  if (stopBtn) {
+    stopBtn.onclick = function (e) {
+      e.stopPropagation();
+      disconnectSelectedInRegion(region);
+    };
+  }
   var selAllBtn = document.getElementById(region.selAllId);
   if (selAllBtn) {
     selAllBtn.onclick = function (e) {
       e.stopPropagation();
-      var members = sessionsForRegion(region, window._lastSessionsSnapshot || []);
+      /* Membership comes from the composed list, so select-all reaches the dials
+         still in progress as well as the sessions the server knows about — which
+         is what makes "select everything that is running, then stop it" one
+         gesture instead of two. */
+      var members = sessionsForRegion(region, sessionsWithPending());
       var allSelected = members.length > 0 && members.every(function (s) { return region.ids.has(s.id); });
       if (allSelected) members.forEach(function (s) { region.ids.delete(s.id); });
       else members.forEach(function (s) { region.ids.add(s.id); });
@@ -1001,7 +1172,7 @@ startUIWebSocket();
 
 // The header labels the build (the string `termcp -version` prints first). The
 // page is static, so the number is fetched once; a failure just leaves it blank.
-fetch('/api/version')
+fetch(apiPath('/api/version'))
   .then(function (r) { return r.ok ? r.json() : null; })
   .then(function (j) {
     var el = document.getElementById('app-version');

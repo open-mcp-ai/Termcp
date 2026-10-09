@@ -80,6 +80,15 @@ func DefaultAssetsDir() (string, error) {
 	return filepath.Join(home, ".termcp", "assets"), nil
 }
 
+// DefaultThemesDir is an application resource directory, independent of DataDir.
+func DefaultThemesDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".termcp", "themes"), nil
+}
+
 // ApplyEnv fills unset auth fields from the corresponding environment
 // variables. The caller should invoke this after parsing flags: a non-empty
 // flag value therefore wins over the environment.

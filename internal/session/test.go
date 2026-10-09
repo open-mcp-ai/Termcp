@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -28,12 +29,12 @@ func logTestFailure(r *RemoteSSH, err error) {
 // jumps, target host), verifies that an exec session channel can be opened on
 // the target, then closes everything. It is used by the Web UI "test
 // connection" feature and never leaves a connection open on success.
-func TestConnection(r *RemoteSSH) *TestResult {
+func TestConnection(ctx context.Context, r *RemoteSSH) *TestResult {
 	start := time.Now()
 	res := &TestResult{}
 	defer func() { res.DurationMS = time.Since(start).Milliseconds() }()
 
-	client, closers, err := buildChainClient(r)
+	client, closers, err := buildChainClient(ctx, r)
 	if err != nil {
 		// Describe the error (with a hint) for the Web UI caller.
 		logTestFailure(r, err)
