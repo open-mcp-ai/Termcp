@@ -243,6 +243,32 @@
       padding: 1px 6px;
     }
 
+    /* The sentence the whole page is built on: the agent is a second user on the
+       shell, not a replacement for it. Sits under the install box, on a plate of
+       its own, so it reads as the frame around everything below rather than
+       another line of body copy. */
+    .hero-manifesto {
+      max-width: 820px;
+      margin: 26px auto 16px;
+      padding: 14px 20px;
+      background: linear-gradient(90deg, var(--accent-dim), transparent 74%), var(--card-bg);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--accent);
+      font-size: 16.5px;
+      line-height: 1.75;
+      color: var(--text-bright);
+      text-align: left;
+    }
+    /* The three mechanisms, named in one line — review, custody, persistence —
+       and where the product sits. Mono, because it is a claim, not prose. */
+    .hero-claim {
+      max-width: 820px;
+      margin: 0 auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
     /* The two targets, stated before anything else: local shell, remote SSH. */
     .targets {
       display: flex;
@@ -897,6 +923,8 @@
     @media (max-width: 640px) {
       .hero h1 { font-size: 30px; }
       .hero p.lead { font-size: 16px; }
+      .hero-manifesto { font-size: 15px; padding: 12px 14px; text-align: left; }
+      .hero-claim { font-size: 12px; }
       .sec-title { font-size: 23px; }
       .section { margin-bottom: 64px; }
       .cmd-body { flex-direction: column; align-items: flex-start; }
@@ -987,6 +1015,12 @@
           <button class="copy-btn" id="copy-btn" data-i18n="copy_btn">复制命令</button>
         </div>
       </div>
+
+      <!-- Below the install box: the reader has just seen how to run it, so the
+           two sentences that say what it is land here, as the frame around the
+           whole page rather than an interruption to the pitch. -->
+      <p class="hero-manifesto" data-i18n="hero_manifesto">重新定义人，AI 与终端的交互范式：不是让 AI 取代终端，而是让 AI 成为终端里的另一个“用户”。</p>
+      <p class="hero-claim" data-i18n="hero_claim">命令审阅，密码代托管，持久终端交互，AI 运维领域的下一个基础设施级工具。</p>
     </section>
 
     <!-- The real console. Two files, one per language: the picker swaps them so
@@ -1545,6 +1579,8 @@ $ <span class="k">npx -y @open-mcp-ai/termcp</span>
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: '让 AI 进入你的诸多终端',
         hero_desc: '本地 shell 与 SSH 远程主机，同一个控制面。AI 替你敲命令，你随时接手。',
+        hero_manifesto: '重新定义人，AI 与终端的交互范式：不是让 AI 取代终端，而是让 AI 成为终端里的另一个“用户”。',
+        hero_claim: '命令审阅，密码代托管，持久终端交互，AI 运维领域的下一个基础设施级工具。',
         target_local_tag: 'LOCAL',
         target_local_desc: '本机 shell · 零配置',
         target_ssh_tag: 'SSH',
@@ -1642,6 +1678,8 @@ $ <span class="k">npx -y @open-mcp-ai/termcp</span>
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: '讓 AI 進入你的諸多終端',
         hero_desc: '本機 shell 與 SSH 遠端主機，同一個控制面。AI 替你敲指令，你隨時接手。',
+        hero_manifesto: '重新定義人，AI 與終端的互動範式：不是讓 AI 取代終端，而是讓 AI 成為終端裡的另一個「使用者」。',
+        hero_claim: '指令審閱，密碼代託管，持久終端互動，AI 維運領域的下一個基礎設施級工具。',
         target_local_tag: 'LOCAL',
         target_local_desc: '本機 shell · 零設定',
         target_ssh_tag: 'SSH',
@@ -1739,6 +1777,8 @@ $ <span class="k">npx -y @open-mcp-ai/termcp</span>
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: 'Let AI into your terminals.',
         hero_desc: 'Local shells and remote SSH hosts behind one control plane. The agent types the commands; you take over any time.',
+        hero_manifesto: 'A new paradigm for humans, AI and terminals: not AI replacing the terminal, but AI becoming another user inside it.',
+        hero_claim: 'Command review, password custody, persistent terminal interaction \u2014 the next infrastructure-grade tool for AI operations.',
         target_local_tag: 'LOCAL',
         target_local_desc: 'local shell · zero config',
         target_ssh_tag: 'SSH',
