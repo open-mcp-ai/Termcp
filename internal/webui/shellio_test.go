@@ -314,6 +314,19 @@ func readAppCSS(t *testing.T) string {
 	return sb.String()
 }
 
+// readThemeCSS expands the chosen theme's manifest through the same file
+// fallback as the browser. Appearance tests name their theme explicitly.
+func readThemeCSS(t *testing.T, id string) string {
+	t.Helper()
+	prefix := "themes/" + id + "/assets/static/css/"
+	manifest := readAssetLF(t, prefix+"app.css")
+	var sb strings.Builder
+	for _, m := range cssImportRe.FindAllStringSubmatch(manifest, -1) {
+		sb.WriteString(readAssetLF(t, prefix+m[1]))
+	}
+	return sb.String()
+}
+
 // TestSyncedDocsMatchSource keeps the served copies of the repository docs in
 // sync with docs/. Line endings are normalized so a CRLF checkout does not
 // produce false failures; content drift still fails.

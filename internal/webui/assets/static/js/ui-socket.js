@@ -777,17 +777,18 @@ function fitShellTerminal(term, container, win, syncRemote) {
   if (vp && vp.clientWidth > 0) w = vp.clientWidth;
   var h = container.clientHeight;
   if (w <= 0 || h <= 0) return false;
-  var fontSize = (typeof term.getOption === 'function' && term.getOption('fontSize')) || 13;
+  var options = term.options || {};
+  var fontSize = options.fontSize || (typeof term.getOption === 'function' && term.getOption('fontSize')) || 13;
   // Same source as the terminal's own fontFamily option, so the measuring span
   // and the grid can never disagree about which face is in use — a disagreement
   // here is a wrong column count, not a cosmetic difference.
-  var fontFamily = (typeof term.getOption === 'function' && term.getOption('fontFamily')) || termcpMonoFontFamily();
+  var fontFamily = options.fontFamily || (typeof term.getOption === 'function' && term.getOption('fontFamily')) || termcpMonoFontFamily();
   var measure = document.createElement('span');
-  measure.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;white-space:pre;font:' + fontSize + 'px ' + fontFamily;
+  measure.style.cssText = 'position:absolute;visibility:hidden;top:0;left:0;white-space:pre;font:' + (options.fontWeight || 'normal') + ' ' + fontSize + 'px ' + fontFamily;
   measure.textContent = 'M';
   document.body.appendChild(measure);
-  var charWidth = measure.offsetWidth || 8;
-  var lineHeight = Math.ceil(fontSize * 1.35) || 16;
+  var charWidth = (measure.offsetWidth || 8) + (options.letterSpacing || 0);
+  var lineHeight = Math.ceil(fontSize * 1.35 * (options.lineHeight || 1)) || 16;
   document.body.removeChild(measure);
   var screenEl = term.element && term.element.querySelector('.xterm-screen');
   var prevCols = term.cols;

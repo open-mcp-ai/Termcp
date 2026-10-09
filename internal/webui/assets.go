@@ -12,6 +12,7 @@ import (
 var (
 	assetsDirMu sync.RWMutex
 	assetsDir   string
+	themesDir   string
 )
 
 // SetAssetsDir points the static asset surface at an external directory whose
@@ -27,6 +28,14 @@ func SetAssetsDir(dir string) {
 	assetsDir = dir
 }
 
+// SetThemesDir configures application resources independently of the data dir.
+// Only the path is captured; theme files and directory entries are read on demand.
+func SetThemesDir(dir string) {
+	assetsDirMu.Lock()
+	defer assetsDirMu.Unlock()
+	themesDir = dir
+}
+
 // Assets returns the asset FS rooted at the assets directory. Besides the
 // browser UI it holds the agent-facing documents (api.md, skills.md) that the
 // static server publishes
@@ -38,13 +47,19 @@ func Assets() fs.FS {
 	}
 	assetsDirMu.RLock()
 	dir := assetsDir
+	themeDir := themesDir
 	assetsDirMu.RUnlock()
-	if dir == "" {
-		return root
+	var base fs.FS = root
+	var external fs.FS
+	if dir != "" {
+		external = os.DirFS(dir)
+		base = overrideFS{external: external, embedded: root}
 	}
-	// A relative dir is resolved against the process working directory by
-	// os.DirFS, which never changes after startup.
-	return overrideFS{external: os.DirFS(dir), embedded: root}
+	var themes fs.FS
+	if themeDir != "" {
+		themes = os.DirFS(themeDir)
+	}
+	return themeFS{base: base, externalAssets: external, externalThemes: themes, embedded: root}
 }
 
 // overrideFS composes an external directory with the embedded assets, file by

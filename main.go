@@ -267,6 +267,12 @@ func main() {
 	// Must run before any consumer reads Assets(): the MCP docs FS and the Web UI
 	// static server both resolve through it.
 	webui.SetAssetsDir(cfg.AssetsDir)
+	if uiThemesDir, err := config.DefaultThemesDir(); err == nil {
+		webui.SetThemesDir(uiThemesDir)
+	} else {
+		fmt.Fprintf(os.Stderr, "cannot resolve themes dir: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)

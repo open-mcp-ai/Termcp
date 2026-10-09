@@ -26,6 +26,90 @@ termcp <subcommand> [action] [flags]
 | `--gen-auth-hash` | *(动作)* | 生成 `--auth-hash` 用的加盐 SHA-256 哈希后退出（token 从参数取，或在终端下无回显地从 stdin 读）。 |
 | `--version` | *(动作)* | 打印版本、commit 与构建日期后退出。`make build`/release 构建经 `-ldflags` 注入版本（HEAD 正好带 tag 时为该 tag，否则 `dev-<commit>`，脏工作区再缀 `-dirty`）；裸 `go build` 或 `go install module@vX.Y.Z` 回落到 Go 工具链嵌入的模块版本（release tag，或检出的伪版本）。`dev` 表示二进制里没有任何版本信息——`go run`、`-buildvcs=false`、解包出来的 tarball——不代表源码未打 tag。 |
 
+## Web UI 主题
+
+在 Web UI 右上角的主题菜单中选择 `default-light`、`default-dark` 或
+`cyberpunk`。切换即时生效，终端连接和输出保留；选择保存在浏览器中，文档页
+使用同一选择。默认使用 `default-light`，`cyberpunk` 保留原 dev 外观。
+
+自定义主题放在 `~/.termcp/themes/<主题名>/`，该目录不随 `--data-dir` 改变。
+每个主题必须有 `theme.css`，可以携带 `assets/` 下的 CSS、图片、字体等文件：
+
+```text
+~/.termcp/themes/soft-blue/
+  theme.css
+  theme.json                # 可选：终端字体、配色及窗口样式
+  strings.json              # 可选：替换界面文案
+  assets/
+    static/css/tokens.css
+    icons/custom.svg
+```
+
+一个最小的 `theme.css` 示例：
+
+```css
+@import "./assets/static/css/app.css";
+
+:root {
+  --accent: #627eac;
+  --accent-hover: #536d97;
+  --accent-ring: rgba(98, 126, 172, 0.18);
+}
+```
+
+缺少的资源按文件回落到内嵌副本。重新打开主题菜单即可发现新增目录，无需
+编辑索引、重启服务或增加接口；修改当前主题后再次选择它即可应用。
+
+主题可以通过 `strings.json` 替换界面文案，支持 `en`、`zh-Hans`、`zh-Hant`。
+例如，将连接列表标题替换为“我的主机”：
+
+```json
+{
+  "zh-Hans": {
+    "nav.nethub": "我的主机",
+    "nethub.add": "添加主机"
+  }
+}
+```
+
+使用 `internal/webui/assets/static/js/i18n-catalog.js` 中已有的键，并保留
+`{count}` 等占位符。未覆盖的文案使用当前语言的默认内容；切换主题会同时
+更新文案和样式，切换语言后仍使用主题的对应翻译。
+
+主题的 `theme.json` 可以配置终端外观。例如：
+
+```json
+{
+  "terminal": {
+    "fontFamily": "JetBrains Mono, var(--font-mono)",
+    "fontSize": 14,
+    "lineHeight": 1.2,
+    "letterSpacing": 0,
+    "background": "#f7f8fa",
+    "foreground": "#292e36",
+    "cursor": "#4470b2",
+    "selectionBackground": "rgba(68, 112, 178, 0.22)",
+    "transparent": false,
+    "opacity": 1
+  }
+}
+```
+
+默认浅色、深色主题的终端均不透明。需要半透明背景时设置
+`"transparent": true`，并设置 `opacity`（如 `0.85`）；透明度只作用于背景，
+文字保持不透明。也可通过 `colors` 设置 16 色 ANSI 配色，通过 `window`
+设置窗口背景、文字、标题栏、边框和模糊效果。字体可使用主题携带的字体文件，
+在 CSS 中用 `@font-face` 声明即可。
+
+修改后重新选择主题即可即时应用，字号、字体及行距变化会重新计算终端网格，
+保留连接和历史。省略或无效的配置使用该主题的 CSS 默认值。完整字段说明见
+[`design/themes.md`](./design/themes.md#terminal-settings)。
+
+`--assets` / `$TERMCP_ASSETS_DIR` 的原有覆盖仍然有效，并优先于主题自己的
+资源。例如外置 `static/css/tokens.css` 会覆盖所有主题对应的文件。也可以在
+外置资源目录的 `themes/<主题名>/` 下提供主题包。主题实现与优先级详见
+[`design/themes.md`](./design/themes.md)。
+
 ## 子命令
 
 | 命令 | 作用 |

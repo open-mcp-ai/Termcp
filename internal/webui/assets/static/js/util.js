@@ -31,7 +31,16 @@ function termcpMonoFontFamily() {
   var v = '';
   try {
     if (typeof getComputedStyle === 'function' && document.documentElement) {
-      v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono') || '';
+      var css = getComputedStyle(document.documentElement);
+      v = css.getPropertyValue('--terminal-font-family') || css.getPropertyValue('--font-mono') || '';
+      // A packaged web font may still be downloading. Start with the installed
+      // stack so xterm measures a real face; the terminal module loads and
+      // reapplies the requested face once it is ready.
+      if (document.fonts && typeof document.fonts.check === 'function') {
+        var size = parseFloat(css.getPropertyValue('--terminal-font-size')) || 13;
+        var weight = css.getPropertyValue('--terminal-font-weight').trim() || 'normal';
+        if (!document.fonts.check(weight + ' ' + size + 'px ' + v, 'M中')) v = TERMCP_MONO_FALLBACK;
+      }
     }
   } catch (e) {}
   v = String(v).replace(/\s+/g, ' ').trim();
@@ -51,7 +60,7 @@ var SVG_CONN_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" 
 var TERMINAL_ICON_SRC = 'icons/terminal-shell.svg';
 
 function terminalIconImgHtml() {
-  return '<img class="terminal-shell-icon" src="' + TERMINAL_ICON_SRC + '" width="16" height="16" alt="" draggable="false">';
+  return '<img class="terminal-shell-icon" data-theme-asset="icons/terminal-shell.svg" src="' + themeAssetURL(TERMINAL_ICON_SRC) + '" width="16" height="16" alt="" draggable="false">';
 }
 
 function copyTextToClipboard(text) {

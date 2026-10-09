@@ -531,17 +531,17 @@ document.getElementById('conn-test').onclick = function () {
       out.style.display = 'block';
       if (j.ok) {
         out.textContent = t('test.ok', { ms: j.duration_ms || 0 });
-        out.style.color = '#1a7f37';
+        out.style.color = 'var(--success)';
       } else {
         out.textContent = t('test.failed', { msg: j.error || t('test.connectionFailed') });
-        out.style.color = '#cf222e';
+        out.style.color = 'var(--danger)';
       }
     })
     .catch(function (e) {
       if (connModalSeq() !== seq) return;
       out.style.display = 'block';
       out.textContent = t('test.failed', { msg: String(e.message || e) });
-      out.style.color = '#cf222e';
+      out.style.color = 'var(--danger)';
     })
     .finally(function () {
       if (connModalSeq() !== seq) return;
@@ -859,11 +859,13 @@ function toggleNodeOpenMenu() {
     e.stopPropagation();
     setNodeSelectMode(!nodeSelectModeOn());
   });
-  var invert = document.getElementById('nethub-sel-invert');
-  if (invert) invert.addEventListener('click', function (e) {
+  var selAll = document.getElementById('nethub-sel-invert');
+  if (selAll) selAll.addEventListener('click', function (e) {
     e.stopPropagation();
-    selectableNodeNames().forEach(function (n) {
-      if (_nodeSelIds.has(n)) _nodeSelIds.delete(n);
+    var names = selectableNodeNames();
+    var allSelected = names.length > 0 && names.every(function (n) { return _nodeSelIds.has(n); });
+    names.forEach(function (n) {
+      if (allSelected) _nodeSelIds.delete(n);
       else _nodeSelIds.add(n);
     });
     renderConnGrid(window._lastConnections || [], connBannerText());

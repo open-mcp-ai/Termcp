@@ -1,0 +1,211 @@
+/* Soft neutral surfaces, inspired by desktop macOS chrome. */
+:root {
+  color-scheme: dark;
+  --bg-canvas: #24262b;
+  --bg-subtle: #292c32;
+  --bg-card: #30333a;
+  --bg-card-hover: #373b43;
+  --bg-elevated: #34373f;
+  --bg-input: #272a30;
+  --glass-plate: #30333a;
+  --glass-plate-strong: #30333a;
+  --glass-tile: #30333a;
+  --glass-archived: #292c32;
+  --glass-blur: 0px;
+  --blackwall-image: none;
+  --text-primary: #e4e6eb;
+  --text-secondary: #b9bec8;
+  --text-muted: #9ba3b0;
+  --text-faint: #798392;
+  --text-bright: #f3f4f6;
+  --text-on-accent: #ffffff;
+  --cyan-rgb: 130, 168, 224;
+  --cyan: rgb(var(--cyan-rgb));
+  --cyan-hover: #a4c2ec;
+  --cyan-deep: #344c6c;
+  --cyan-surface: rgba(var(--cyan-rgb), .14);
+  --cyan-border: rgba(var(--cyan-rgb), .5);
+  --green-rgb: 131, 183, 154;
+  --green: rgb(var(--green-rgb));
+  --green-hover: #a4cdb6;
+  --green-dark: var(--green);
+  --green-deep: #314c3d;
+  --green-bright: #a4cdb6;
+  --yellow-rgb: 211, 183, 128;
+  --yellow: rgb(var(--yellow-rgb));
+  --yellow-bright: #dec697;
+  --yellow-deep: #594b33;
+  --pink-rgb: 211, 145, 151;
+  --pink: rgb(var(--pink-rgb));
+  --pink-hover: #e0a8ad;
+  --pink-soft: #e0a8ad;
+  --purple-rgb: 180, 161, 210;
+  --purple: rgb(var(--purple-rgb));
+  --purple-surface: rgba(var(--purple-rgb), .18);
+  --orange-rgb: 213, 169, 126;
+  --orange: rgb(var(--orange-rgb));
+  --orange-surface: rgba(var(--orange-rgb), .16);
+  --orange-border: rgba(var(--orange-rgb), .5);
+  --border-subtle: #434750;
+  --border-strong: #565d69;
+  --border-focus: var(--accent);
+  --accent: var(--cyan);
+  --accent-hover: var(--cyan-hover);
+  --accent-surface: rgba(var(--cyan-rgb), .13);
+  --accent-surface-soft: rgba(var(--cyan-rgb), .07);
+  --accent-border: rgba(var(--cyan-rgb), .4);
+  --accent-ring: rgba(var(--cyan-rgb), .26);
+  --success: var(--green);
+  --success-hover: var(--green-hover);
+  --success-dark: var(--green-dark);
+  --success-deep: var(--green-deep);
+  --success-bright: var(--green-bright);
+  --success-surface: rgba(var(--green-rgb), .13);
+  --success-border: rgba(var(--green-rgb), .45);
+  --warning: var(--yellow);
+  --warning-bright: var(--yellow-bright);
+  --warning-deep: var(--yellow-deep);
+  --warning-surface: rgba(var(--yellow-rgb), .11);
+  --warning-surface-strong: rgba(var(--yellow-rgb), .2);
+  --warning-border: rgba(var(--yellow-rgb), .45);
+  --danger: var(--pink);
+  --danger-hover: var(--pink-hover);
+  --danger-soft: var(--pink-soft);
+  --danger-surface: rgba(var(--pink-rgb), .14);
+  --danger-strong-surface: rgba(var(--pink-rgb), .55);
+  --danger-border: rgba(var(--pink-rgb), .42);
+  --bg-header: rgba(36, 38, 43, .94);
+  --overlay-scrim: rgba(0, 0, 0, .38);
+  --overlay-modal: rgba(0, 0, 0, .48);
+  --toast-bg: #34373f;
+  --glow-white-04: transparent;
+  --glow-white-10: transparent;
+  --surface-hover-soft: rgba(var(--cyan-rgb), .07);
+  --shadow-dropdown: rgba(0, 0, 0, .24);
+  --shadow-drawer: rgba(0, 0, 0, .24);
+  --shadow-soft: rgba(0, 0, 0, .24);
+  --shadow-card-soft: rgba(0, 0, 0, .24);
+  --shadow-card: rgba(0, 0, 0, .24);
+  --shadow-card-hover: rgba(0, 0, 0, .24);
+  --shadow-modal: rgba(0, 0, 0, .24);
+  --live-glow: transparent;
+  /* Typography. No webfont is loaded: these are names of fonts already on the
+     machine, and the browser falls back per glyph. The order is intentional and
+     is the whole fix for the wide-glyph report on a bare Linux box:
+
+     1. CJK mono faces come first. When installed, one face supplies Latin and
+        Han at a terminal-friendly 1:2 ratio, so xterm does not have to stretch
+        Han glyphs to fill two cells.
+     2. Known OS mono faces come next. They preserve the native terminal look:
+        SF Mono/Menlo on Apple, Consolas/Cascadia Mono on Windows, Roboto Mono
+        on Android, and DejaVu/Liberation/Ubuntu Mono on Linux.
+     3. ui-monospace is a late generic fallback. On Windows Chromium resolves
+        it to a proportional face, so it must not precede Consolas/Cascadia.
+     4. NSimSun supplies Simplified Han from a grid-safe face on Windows. It has
+        to sit before the proportional block, which would otherwise answer for
+        Han first with its 13px advance against a 14.3px cell.
+     5. Proportional CJK faces come after every grid-safe face. They provide Han
+        coverage but must not claim Latin first and change xterm's cell width.
+
+     Splitting these groups is not cosmetic: a proportional face placed early
+     answers for Latin too, and xterm's DOM renderer derives cellWidth from Latin
+     W, then corrects every wide glyph with
+     letterSpacing = cells*cellWidth - glyphWidth. The stack cannot create a
+     glyph: a machine with no CJK font still needs one installed (see
+     docs/design/font-stack.md for the one-line package commands). */
+  --font-mono:
+    /* CJK mono: Sarasa / Noto Sans Mono CJK / Source Han Mono / WenQuanYi. */
+    "Sarasa Mono SC", "Sarasa Fixed SC", "Sarasa Term SC",
+    "Sarasa Mono TC", "Sarasa Fixed TC", "Sarasa Term TC",
+    "Sarasa Mono J", "Sarasa Mono K",
+    "Noto Sans Mono CJK SC", "Noto Sans Mono CJK TC", "Noto Sans Mono CJK JP", "Noto Sans Mono CJK KR",
+    "Source Han Mono SC", "Source Han Mono TC", "Source Han Mono J", "Source Han Mono K",
+    "WenQuanYi Zen Hei Mono", "WenQuanYi Micro Hei Mono",
+    /* Native / installed Latin mono faces. Consolas stays before Cascadia Mono
+       because that is Windows' established face and measures more tightly with
+       the usual Windows CJK fallback. */
+    "JetBrains Mono", SFMono-Regular, "SF Mono", Menlo, Monaco,
+    Consolas, "Cascadia Mono", "Roboto Mono",
+    "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono", "Droid Sans Mono",
+    /* Generic mono is useful on iOS/WebKit when no named Apple face is exposed,
+       but is deliberately after named Windows/Linux faces. */
+    ui-monospace,
+    /* Windows Simplified Han that is grid-safe: NSimSun is the monospaced face of
+       the SimSun family (Han advance exactly 2x its Latin advance), so it supplies
+       Han at 14px against a 14.3px target where Microsoft YaHei supplies 13px and
+       leaves every Han cell 1.3px loose. It has to sit before the proportional
+       block below, which would otherwise answer for Simplified Han first. Must be
+       NSimSun, not SimSun: SimSun is present but does not win here. */
+    NSimSun,
+    /* Proportional CJK coverage: last among named faces so it cannot claim
+       Latin and determine the terminal cell width. */
+    "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Heiti SC", "STHeiti",
+    "Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Meiryo", "MS Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo",
+    "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR",
+    "Source Han Sans SC", "Source Han Sans TC", "Noto Sans SC", "Noto Sans TC",
+    "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "AR PL UMing CN", "Droid Sans Fallback",
+    "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji",
+    monospace;
+
+  /* Chrome UI. Width is not a constraint here, so the only rule is that a
+     proportional CJK face must stay behind the Latin ones - otherwise it claims
+     Latin text and renders it with its own (non-monospaced) proportions. Unlike
+     --font-mono this list does not need CJK *mono* faces, but it does need Han
+     coverage on every platform, hence the SC/TC/JP/KR runs below. */
+  --font-sans:
+    Inter, Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", "DejaVu Sans", "Liberation Sans", "Ubuntu",
+    "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+    "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR",
+    "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji",
+    sans-serif;
+
+  /* Traditional-Chinese chrome (body.lang-hant): the same list as --font-sans
+     with the TC faces moved ahead of the SC ones, because a font name is what
+     selects the glyph forms and a Simplified-first machine (any Windows, most
+     Linux) would otherwise render Traditional text with Simplified shapes.
+     TestHantSansStackIsSansReordered pins the "same list" half of that: the two
+     stacks must name the same faces, or one of them silently loses coverage.
+     PingFang HK rides with the TC block (Hong Kong is Traditional, and it is an
+     extra Apple name for the same role) and Source Han Sans TC for the same
+     reason Source Han Sans SC is in --font-sans. */
+  --font-sans-hant:
+    Inter, Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", "DejaVu Sans", "Liberation Sans", "Ubuntu",
+    "PingFang TC", "PingFang HK", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC",
+    "Source Han Sans TC",
+    "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "Noto Color Emoji",
+    "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+}
+
+:root {
+  --xterm-background: var(--bg-card);
+  --xterm-foreground: var(--text-primary);
+  --xterm-cursor: var(--accent);
+  --xterm-cursor-accent: var(--bg-card);
+  --xterm-selection: var(--accent-ring);
+  --theme-icon-filter: invert(1) opacity(.82);
+  --xterm-black: #30333a;
+  --xterm-red: var(--danger);
+  --xterm-green: var(--success);
+  --xterm-yellow: var(--warning);
+  --xterm-blue: var(--accent);
+  --xterm-magenta: var(--purple);
+  --xterm-cyan: #64a5ad;
+  --xterm-white: #ccd1da;
+  --xterm-bright-black: var(--text-faint);
+  --xterm-bright-red: var(--danger-hover);
+  --xterm-bright-green: var(--success-bright);
+  --xterm-bright-yellow: var(--warning-bright);
+  --xterm-bright-blue: var(--accent-hover);
+  --xterm-bright-magenta: var(--purple);
+  --xterm-bright-cyan: #8bbbc1;
+  --xterm-bright-white: var(--text-bright);
+}

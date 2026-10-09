@@ -1,0 +1,3 @@
+/* Dynamic panel markup reads inherited terminal tokens rather than a palette. */
+.shell-tab-panel .shell-fw-refresh-btn:hover, .shell-tab-panel .shell-ntf-refresh-btn:hover { color: var(--term-fg); border-color: var(--term-border-hover); }
+.shell-tab-panel .shell-fw-del-btn:hover, .shell-tab-panel .shell-ntf-del-btn:hover { color: var(--term-danger); border-color: var(--term-danger); }

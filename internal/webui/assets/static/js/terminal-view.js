@@ -75,9 +75,14 @@ function createChannelTab(win, sessionId, opt) {
   });
 
   // Create xterm
+  var appearance = termcpTerminalOptions();
   var term = new Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: appearance.fontSize,
+    fontWeight: appearance.fontWeight,
+    fontWeightBold: appearance.fontWeightBold,
+    lineHeight: appearance.lineHeight,
+    letterSpacing: appearance.letterSpacing,
     /* xterm styles its own grid from this option (it injects a stylesheet
        carrying the string), so it cannot inherit --font-mono from the page.
        Ask util.js for the same list the rest of the UI uses: one stack, one
@@ -86,19 +91,8 @@ function createChannelTab(win, sessionId, opt) {
     fontFamily: termcpMonoFontFamily(),
     /* Let the terminal canvas participate in the glass surface. Without this,
        xterm paints an opaque rectangle over the window's backdrop-filter. */
-    allowTransparency: true,
-    theme: {
-      /* xterm paints this literal into its canvas. Keep it fully transparent and
-         let the CSS chrome supply the tint: an alpha here would stack on top of
-         the window's own layers and end up effectively opaque. */
-      background: 'rgba(0, 0, 0, 0)',
-      foreground: '#d4d4d4',
-      /* Preserve the terminal's existing cursor and selection colours; the page's
-         cyan belongs to the chrome and status accents, not to input paint. */
-      cursor: '#6ee2ff',
-      cursorAccent: '#0b1220',
-      selectionBackground: 'rgba(110, 226, 255, 0.22)'
-    },
+    allowTransparency: appearance.allowTransparency,
+    theme: appearance.theme,
     scrollback: 100000
   });
   // Hide until first fit to prevent garbled flash.
@@ -741,4 +735,89 @@ function updateTermScrollButton(win) {
   fab.classList.toggle('visible', !xtermViewportNearBottom(term, 64));
 }
 
-/** Initialize shell window UI (header buttons, drag, resize, tab switching) — no xterm. */
+/** Read resolved CSS colors so both new and existing xterms use one palette. */
+function termcpXtermTheme() {
+  var css = getComputedStyle(document.documentElement);
+  var defaults = {
+    background: 'rgba(0, 0, 0, 0)', foreground: '#d4d4d4',
+    cursor: '#6ee2ff', cursorAccent: '#0b1220',
+    selectionBackground: 'rgba(110, 226, 255, .22)'
+  };
+  var properties = {
+    background: 'background', foreground: 'foreground', cursor: 'cursor',
+    cursorAccent: 'cursor-accent', selectionBackground: 'selection',
+    black: 'black', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue',
+    magenta: 'magenta', cyan: 'cyan', white: 'white', brightBlack: 'bright-black',
+    brightRed: 'bright-red', brightGreen: 'bright-green', brightYellow: 'bright-yellow',
+    brightBlue: 'bright-blue', brightMagenta: 'bright-magenta', brightCyan: 'bright-cyan', brightWhite: 'bright-white'
+  };
+  var colors = {};
+  Object.keys(properties).forEach(function (key) {
+    var value = css.getPropertyValue('--xterm-' + properties[key]).trim();
+    colors[key] = value || defaults[key];
+  });
+  // The wrap owns the tint in transparent mode, keeping one alpha layer behind
+  // the text. Opaque mode lets xterm paint the same solid surface as its window.
+  colors.background = _themeTerminal.transparent ? 'rgba(0, 0, 0, 0)' :
+    (css.getPropertyValue('--terminal-background').trim() || css.getPropertyValue('--xterm-background').trim() || css.getPropertyValue('--bg-card').trim() || '#ffffff');
+  return colors;
+}
+
+function termcpTerminalOptions() {
+  var css = getComputedStyle(document.documentElement);
+  function number(property, fallback) {
+    var value = parseFloat(css.getPropertyValue(property));
+    return isFinite(value) ? value : fallback;
+  }
+  function weight(property, fallback) {
+    var value = css.getPropertyValue(property).trim();
+    return value && isFinite(Number(value)) ? Number(value) : value || fallback;
+  }
+  var requestedFont = css.getPropertyValue('--terminal-font-family').trim() || css.getPropertyValue('--font-mono').trim();
+  var fontQuery = weight('--terminal-font-weight', 'normal') + ' ' + number('--terminal-font-size', 13) + 'px ' + requestedFont;
+  if (requestedFont && document.fonts && typeof document.fonts.check === 'function' && typeof document.fonts.load === 'function' &&
+      !document.fonts.check(fontQuery, 'M中')) {
+    var revision = _themeRevision;
+    var key = revision + ':' + fontQuery;
+    if (_terminalThemeFontRequest !== key) {
+      _terminalThemeFontRequest = key;
+      document.fonts.load(fontQuery, 'M中').then(function () {
+        if (revision === _themeRevision && _terminalThemeFontRequest === key) updateTerminalTheme();
+      }).catch(function () { /* Keep the installed fallback if a font cannot load. */ });
+    }
+  }
+  return {
+    fontFamily: termcpMonoFontFamily(),
+    fontSize: number('--terminal-font-size', 13),
+    fontWeight: weight('--terminal-font-weight', 'normal'),
+    fontWeightBold: weight('--terminal-font-weight-bold', 'bold'),
+    lineHeight: number('--terminal-line-height', 1),
+    letterSpacing: number('--terminal-letter-spacing', 0),
+    allowTransparency: !!_themeTerminal.transparent,
+    theme: termcpXtermTheme()
+  };
+}
+
+var _terminalThemeFontRequest = '';
+
+function updateTerminalTheme() {
+  var options = termcpTerminalOptions();
+  allShellWins().forEach(function (win) {
+    Object.keys(win._channels || {}).forEach(function (sid) {
+      var channel = win._channels[sid];
+      if (!channel.term) return;
+      var current = channel.term.options;
+      var metricsChanged = current.fontFamily !== options.fontFamily || current.fontSize !== options.fontSize ||
+        current.fontWeight !== options.fontWeight || current.fontWeightBold !== options.fontWeightBold ||
+        current.lineHeight !== options.lineHeight || current.letterSpacing !== options.letterSpacing;
+      Object.keys(options).forEach(function (key) { current[key] = options[key]; });
+      if (metricsChanged && channel.instEl && typeof fitShellTerminal === 'function') {
+        requestAnimationFrame(function () {
+          if (win._channels && win._channels[sid] === channel) fitShellTerminal(channel.term, channel.instEl, win, true);
+        });
+      }
+    });
+  });
+}
+
+onThemeChange(updateTerminalTheme);
