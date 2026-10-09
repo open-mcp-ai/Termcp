@@ -25,6 +25,18 @@
 
 ### 修复
 
+- **REST 建会话不写 `ssh_config` 会静默连上本机：现在和 MCP 一样直接拒绝**。这是审计「internal 被当成默认值」时挖出来的真实缺陷，不是风格问题。旧行为在 `resolveSSH` 里是一个兜底赋值：`if name == "" { name = "internal" }` —— 于是 `POST /api/sessions` 带 `{}` 或 `{"ssh_config":""}` **都能建出一个 termcp 宿主机上的 shell**，而 `ssh_config` 写错一个字母反而会老实地报 not found。也就是说：**唯一不会报错的那次调用，恰好落在存放着全部凭据的那台机器上**。
+
+  三个方向都证明这不该是默认：
+
+  - **两个 surface 本来就该一致**：MCP 的 `session_start` 从这个功能存在起就拒绝空值（`errMissingSSHConfig`，`invalid_argument`），`mcp/errors.go` 里那段注释把理由写得很清楚 ——「a forgotten ssh_config cannot silently open a shell on the wrong host」。同名的参数在两处行为不同，是个只会往危险方向暴露的缺口。
+  - **旧的错误文案自己承认了**：`ssh_config is required when internal profile is disabled` —— 这句话的意思是「没禁用时它就是可选的」，恰恰把「忘了写就连本机」合理化成了方便的默认值。
+  - **唯一防线是个启动 flag**：`--no-internal` 没有对应的环境变量，Docker 场景必须手打（文档里三处示范都带着它）。默认值应当倒向「报错」，而不是「给你一台机器」。
+
+  现在 `resolveSSH` 里的兜底换成具名错误 `errSSHConfigRequired`，`400` + `ssh_config is required`，与 MCP 的措辞逐字相同；**「缺失」与「写错」仍然可区分**（拼错的 profile 照旧报 not found 并带上名字）。**这条拒绝与 `--no-internal` 无关**：缺字段的答案是「说清是哪台」，不是「这里有一台」，把两者绑在一起正是旧文案那个错误读法的来源。显式写 `"ssh_config": "internal"` 依旧可用（本次收窄的是默认值，不是拿掉 loopback 能力），`--no-internal` 也保留自己的含义：该 profile 被关闭时显式点名同样拒绝。
+
+  测试 6 条：四种空写法（省略 / 空串 / 全空格 / 空 body）都必须 400 且**不留下会话**、显式 internal 仍 200、`termcp://` 空 locator 不得解析到 loopback、`--no-internal` 下措辞不变且不出现「no-internal」字样、未知 profile 不得被报成缺字段、以及一条**布线断言**（守卫必须留在 `resolveSSH` 这个所有建会话路由的汇聚点上，并且 `name = "internal"` 这个赋值不许再出现）。**5 条反事实全部被抓**，包括原样恢复那个 bug 本身、把拒绝重新绑回 `--no-internal`、把具名错误换成随手写的消息、改掉措辞让两个 surface 重新分叉。文档同步（`docs/api.md` 与其对外副本 `assets/api.md`，`TestSyncedDocsMatchSource` 把关）。
+
 - **Edge 里终端一跑输出就卡顿（#93）**：根因是实测出来的，不是猜的。用 CDP 驱动真实 Edge 复现报告里的操作（打开 internal → 点控制台 `+` → 跑流式输出）后拿到三个数：WebSocket **7454 帧/秒**、平均每帧 **55 字节**、页面主线程 **68% 忙**。CPU profile 的自耗时排行也指向同一个地方 —— 每帧都要重新扫 DOM 找一个窗口（`querySelectorAll` 两项合计 7.1%）、每次都新建 `TextEncoder`、每次写都重排一次滚动检查；`ws.onmessage` 的包含耗时占全部采样 **24.9%**。**两个缺陷叠加**：服务端每读到一段 PTY 就发一帧，前端又对每一帧做一遍与帧数成正比的重复推导。只修任一边都只能把常数减小，帧率本身不动。
 
   服务端改成**按突发合并**：输出累积成一帧，直到达到字节上限，或者**读端已经追上写端**。第二条是让合并零延迟的关键 —— 积压一清完立刻发，所以一次按键回显（一个 chunk，后面没有东西）不会等任何定时器，而流式命令永远追不上、于是几千次 PTY 写入被合并成几帧。第一版用的是「定时间隔刷」，实测把 echo 延迟从 14ms（中位）抬到 30ms —— 每个键都等满一个周期 —— 被自己的测量推翻；另外补了一条 min-gap 来约束「始终与读端齐平」的生产者（shell 逐行 echo 循环时不留积压，追平判据看不到任何可合并的东西，实测 100k 帧/秒）。前端不再逐帧重新推导：一次查找窗口（而不是两次全量扫描）、滚动粘尾检查合并到每帧至多一次（`clientHeight`/`scrollHeight` 是布局读取，按写入次数读等于强制每次重排）。
