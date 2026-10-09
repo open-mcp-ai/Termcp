@@ -21,10 +21,10 @@
     "plate.archive.empty": "Archive clear"
   },
   "zh-Hans": {
-    "nav.nethub": "连接中枢",
+    "nav.nethub": "网络接入仓",
     "nethub.add": "新增接入",
     "nethub.empty": "暂无接入节点",
-    "nethub.expand": "展开连接中枢",
+    "nethub.expand": "展开网络接入仓",
     "nethub.rail.more": "另有 {count} 个接入节点",
     "nethub.proto.loopback": "回环",
     "nethub.internal": "本机，经 Termcp 自带的 SSH 服务",
@@ -40,10 +40,10 @@
     "plate.archive.empty": "归档为空"
   },
   "zh-Hant": {
-    "nav.nethub": "連線中樞",
+    "nav.nethub": "網路接入倉",
     "nethub.add": "新增接入",
     "nethub.empty": "尚無接入節點",
-    "nethub.expand": "展開連線中樞",
+    "nethub.expand": "展開網路接入倉",
     "nethub.rail.more": "另有 {count} 個接入節點",
     "nethub.proto.loopback": "回環",
     "nethub.internal": "本機，經 Termcp 自帶的 SSH 服務",

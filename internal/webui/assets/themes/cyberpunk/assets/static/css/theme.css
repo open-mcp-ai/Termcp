@@ -566,8 +566,13 @@ body.bw-error::after { background: linear-gradient(90deg, transparent 0 42%, rgb
 @media (prefers-reduced-motion: reduce) {
   .shell-link-state.is-connecting, .shell-pending-spinner { animation: none; }
   body.bw-session-active::after, body.bw-ai-active::after, body.bw-review-pending::after, body.bw-error::after { transition: none; }
-  .nethub-select-toggle { transition: none; }
-  .nethub-toggle-count, .nethub-selecting .nethub-batch-icon, .nethub-selecting .nethub-open-split { animation: none; }
+  /* The NetHub toolbar's expand/collapse is deliberately NOT reduced. It is a
+     state change the user asked for — the switch IS the control that opens the
+     row — so removing it removes the only feedback that the press landed, and
+     the row just appears. The decorations above are the ones that go: a pulsing
+     dot and a breathing backdrop are motion nobody asked for, while this slide
+     is the answer to a click. */
+  .nethub-toggle-count { animation: none; }
 }
 
 /* An empty plate reads as a terminal that printed nothing, not as a dashboard

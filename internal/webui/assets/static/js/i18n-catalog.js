@@ -130,6 +130,7 @@ var I18N_CATALOG = {
     'theme.loadFailed': 'Theme could not be loaded',
     'theme.light': 'Light',
     'theme.dark': 'Dark',
+    'theme.auto': 'Auto',
     'theme.cyberpunk': 'Cyberpunk',
 
 
@@ -516,6 +517,7 @@ var I18N_CATALOG = {
     'theme.loadFailed': '主题加载失败',
     'theme.light': '浅色',
     'theme.dark': '深色',
+    'theme.auto': '自动',
     'theme.cyberpunk': '赛博朋克',
 
 
@@ -902,6 +904,7 @@ var I18N_CATALOG = {
     'theme.loadFailed': '主題載入失敗',
     'theme.light': '淺色',
     'theme.dark': '深色',
+    'theme.auto': '自動',
     'theme.cyberpunk': '賽博龐克',
 
 

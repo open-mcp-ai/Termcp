@@ -84,14 +84,26 @@ const head = {
 };
 function link() { return { remove() { const i = links.indexOf(this); if (i >= 0) links.splice(i, 1); } }; }
 const original = link(); original.id = 'termcp-theme'; head.appendChild(original);
+/* The trigger's own label (#theme-current). It is the one place the CHOICE is
+   visible to the user, so it is asserted rather than assumed. */
+const themeCurrent = { textContent: '' };
 const history = ['unchanged terminal output'];
 const term = { options: {}, buffer: history };
 const channels = { a: { term, streamDone: false }, b: { term: { options: {}, buffer: ['archived'] }, streamDone: true } };
 const win = { _channels: channels };
+/* The system's scheme, shared by every query object for that query the way a real
+   matchMedia is kept live by the browser: the engine may ask more than once (boot
+   resolution, then a flip), and a fresh object per call would freeze the answer at
+   creation. Keyed by query string, because other modules query other media
+   features (the glass probe asks about transparency) and one shared flag would
+   answer those too. */
+const mediaQueries = [];
+const mediaAnswers = {};
 const context = {
  console, Promise, setTimeout, clearTimeout, navigator: { languages: ['en'] },
+ window: { matchMedia: q => { const mq = { query: q, get matches() { return !!mediaAnswers[q]; }, listeners: [], addEventListener(n, fn) { this.listeners.push(fn); } }; mediaQueries.push(mq); return mq; } },
  document: { documentElement: root, head, createElement: link,
-  getElementById: id => links.find(el => el.id === id) || null,
+  getElementById: id => id === 'theme-current' ? themeCurrent : (links.find(el => el.id === id) || null),
   querySelectorAll: selector => selector.includes('data-i18n') ? [label] : [], addEventListener: (name, fn) => callbacks[name] = fn },
  localStorage: { getItem: k => storage[k], setItem: (k, v) => storage[k] = v },
  allShellWins: () => [win],
@@ -108,7 +120,7 @@ const context = {
  } }),
  DOMParser: class { parseFromString() { return { querySelectorAll: () => ['cyberpunk/', 'default-light/', 'default-dark/', 'custom%20theme/', '../', 'https://invalid/', 'not-a-folder'].map(href => ({ getAttribute: () => href })) }; } }
 };
-context.window = context;
+Object.assign(context.window, context);
 const fetchTheme = context.fetch;
 context.fetch = (...args) => { requests.push(args[0]); return fetchTheme(...args); };
 vm.createContext(context);
@@ -142,7 +154,7 @@ vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), context);
  assert.equal(labelAttrs['aria-label'], 'NetHub');
  assert.equal(dynamicLabel, 'Add access');
  context.termcpApplyLang('zh-Hans');
- assert.equal(label.textContent, '连接中枢');
+ assert.equal(label.textContent, '网络接入仓');
  assert.equal(links.length, 1);
  assert.equal(term.buffer, history);
  assert.equal(win._channels, channels);
@@ -154,7 +166,7 @@ vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), context);
  await assert.rejects(missing);
  assert.equal(links[0], active);
  assert.equal(attrs['data-theme'], 'cyberpunk');
- assert.equal(label.textContent, '连接中枢');
+ assert.equal(label.textContent, '网络接入仓');
  context.localStorage.setItem = () => { throw Error('storage blocked'); };
  const final = context.applyTheme('default-dark');
  links[1].onload();
@@ -285,6 +297,64 @@ vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), context);
  assert.equal(term.options.fontFamily, 'Baseline CJK Mono');
  assert.equal(term.options.fontSize, 13);
  assert.equal(term.buffer, history);
+ // ---- auto: the choice follows the OS, and a live flip is honoured ----
+ // Storage was blocked above to prove a failed write cannot break a switch; this
+ // section reads back what auto persists, so it needs the write working again.
+ context.localStorage.setItem = (k, v) => storage[k] = v;
+ // The menu offers auto even though no such folder exists on disk.
+ const choices = await context.discoverThemes();
+ assert.ok(choices.indexOf('auto') < 0, 'auto is not a theme folder and must not come from discovery');
+ // Picking auto loads the theme the SYSTEM asks for, and stores the word "auto"
+ // rather than the resolved id — storing the id would turn "follow the system"
+ // into "stay exactly as you are".
+ mediaAnswers['(prefers-color-scheme: dark)'] = true;
+ const autoDark = context.applyTheme('auto');
+ links[1].onload();
+ assert.equal(await autoDark, true);
+ assert.equal(attrs['data-theme'], 'default-dark');
+ assert.equal(new URL(links[0].href, 'https://app.example/').pathname, '/themes/default-dark/theme.css');
+ assert.equal(storage['termcp.theme'], 'auto');
+ // The trigger keeps saying Auto while the OS decides; naming the resolved theme
+ // there would read as if auto had been overridden by hand.
+ assert.equal(context.themeLabel('auto'), '自動');
+ // ...and the trigger shows that, not the theme the OS happened to resolve to:
+ // "Auto" is the choice, and naming the resolved theme there would read as if
+ // auto had been overridden by hand.
+ assert.equal(themeCurrent.textContent, '自動');
+ // The OS flips (a sunset switch, a scheduled dark mode): the page must follow
+ // without a reload. This is the half that a boot-time-only resolution misses.
+ // Every query is for the scheme preference, and the engine registered exactly
+ // one listener on the query it will keep consulting — resolving the choice may
+ // ask again, but only the listener is what makes a live flip work.
+ const scheme = mediaQueries.filter(mq => mq.query === '(prefers-color-scheme: dark)');
+ assert.ok(scheme.length >= 1, 'the engine must ask the system how it is themed');
+ const watched = scheme.filter(mq => mq.listeners.length > 0);
+ assert.equal(watched.length, 1);
+ assert.equal(watched[0].listeners.length, 1);
+ mediaAnswers['(prefers-color-scheme: dark)'] = false;
+ watched[0].listeners[0]();
+ await new Promise(resolve => setTimeout(resolve, 0));
+ links[1].onload();
+ await new Promise(resolve => setTimeout(resolve, 0));
+ assert.equal(attrs['data-theme'], 'default-light');
+ assert.equal(storage['termcp.theme'], 'auto');
+ // An explicit choice must NOT be overridden by the OS: the listener is a
+ // follow-the-system feature, not a second authority over the user's pick.
+ const pinned = context.applyTheme('cyberpunk');
+ links[1].onload();
+ assert.equal(await pinned, true);
+ mediaAnswers['(prefers-color-scheme: dark)'] = true;
+ watched[0].listeners[0]();
+ await new Promise(resolve => setTimeout(resolve, 0));
+ // A flip only does something by starting a stylesheet load, so "nothing was
+ // loaded" IS the assertion — waiting on a load event first would make this pass
+ // for the wrong reason (there is no new link to load). The pinned theme and the
+ // stored choice are checked too, so the intent survives a refactor that reaches
+ // the same effect another way.
+ assert.equal(links.length, 1, 'a pinned choice must not start a second stylesheet load when the OS flips');
+ assert.equal(attrs['data-theme'], 'cyberpunk');
+ assert.equal(storage['termcp.theme'], 'cyberpunk');
+
  // The same runtime works in the workbench and docs under a proxy mount.
  for (const page of ['https://app.example/', 'https://app.example/termcp/index.html', 'https://app.example/termcp/api.html']) {
   const prefix = new URL('.', page).pathname;

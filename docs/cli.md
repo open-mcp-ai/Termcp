@@ -30,7 +30,10 @@ termcp <subcommand> [action] [flags]
 
 在 Web UI 右上角的主题菜单中选择 `default-light`、`default-dark` 或
 `cyberpunk`。切换即时生效，终端连接和输出保留；选择保存在浏览器中，文档页
-使用同一选择。默认使用 `default-light`，`cyberpunk` 保留原 dev 外观。
+使用同一选择。默认是**自动**：跟随系统配色（`prefers-color-scheme`）在浅色与
+深色主题之间切换，系统配色变化时页面即时跟随，无需刷新；没有存过任何选择的
+浏览器首次打开就走这条路，所以深色系统的用户不会再先看到一页浅色。想固定
+下来就选具体主题，此后系统配色不再影响它。`cyberpunk` 保留原 dev 外观。
 
 自定义主题放在 `~/.termcp/themes/<主题名>/`，该目录不随 `--data-dir` 改变。
 每个主题必须有 `theme.css`，可以携带 `assets/` 下的 CSS、图片、字体等文件：

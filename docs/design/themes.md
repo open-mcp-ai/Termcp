@@ -13,7 +13,13 @@
 - The existing static file server discovers folders at request time. No new
   REST, MCP, WebSocket endpoint or dedicated HTTP route; no theme index file.
 - Selection happens in the Web UI, persists in `termcp.theme` browser storage,
-  and updates open terminals without reconnecting or reloading the page.
+  and updates open terminals without reconnecting or reloading the page. The
+  default choice is `auto`: it resolves through `prefers-color-scheme` to
+  `default-dark` or `default-light`, follows a change of that preference while
+  the page is open, and is stored as the word `auto` rather than as the theme it
+  resolved to, so it keeps following instead of freezing. `theme-boot.js`
+  resolves it in `<head>` (before the first paint, which is why the choice and
+  the resolved theme are separate values) and `theme.js` owns it afterwards.
 - Existing `--assets` and `TERMCP_ASSETS_DIR` retain their per-file overrides.
 
 ## Work plan

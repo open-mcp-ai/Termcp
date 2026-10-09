@@ -1,5 +1,18 @@
 /* Shared by the workbench and docs. All discovery uses the static file server. */
 var _themeActive = document.documentElement.getAttribute('data-theme') || 'default-light';
+/* The user's CHOICE, which is 'auto' when the theme should follow the system's
+   light/dark preference. It is deliberately not the same variable as
+   _themeActive: the active theme is a concrete id (what the stylesheet and
+   data-theme carry), while the choice can stay 'auto' and be re-resolved every
+   time the OS flips, instead of freezing whichever theme the system happened to
+   be in when it was picked. */
+var _themeChoice = (function () {
+  try {
+    var stored = localStorage.getItem('termcp.theme');
+    if (validThemeChoice(stored)) return stored;
+  } catch (e) {}
+  return _themeActive;
+})();
 var _themeCallbacks = [];
 var _themePending = null;
 var _themeRevision = 0;
@@ -12,6 +25,23 @@ function validThemeChoice(id) {
   return typeof id === 'string' && id.length > 0 && id.charAt(0) !== '.' && !/[\/\\:\x00-\x1f\x7f]/.test(id);
 }
 
+/* The system's own light/dark preference, in the same shape as lang.auto: what
+   the 'auto' choice resolves through. Kept as one small function so theme-boot.js
+   (which runs in <head>, before this file loads, and must resolve the choice
+   before the first paint) and this module cannot drift apart. */
+function termcpSystemTheme() {
+  try {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'default-dark' : 'default-light';
+  } catch (e) { return 'default-light'; }
+}
+
+/* The stored choice -> the theme id to actually load. Only 'auto' is special:
+   every other value is used as-is, so a theme that happens to be named "auto"
+   would be shadowed, which is why the menu lists it as the odd one out. */
+function resolveThemeChoice(choice) {
+  return choice === 'auto' ? termcpSystemTheme() : choice;
+}
+
 function themeText(key) {
   if (typeof t === 'function') {
     switch (key) {
@@ -21,12 +51,13 @@ function themeText(key) {
       case 'theme.loadFailed': return t('theme.loadFailed');
       case 'theme.light': return t('theme.light');
       case 'theme.dark': return t('theme.dark');
+      case 'theme.auto': return t('theme.auto');
       case 'theme.cyberpunk': return t('theme.cyberpunk');
     }
   }
   var overrides = _themeStrings.en;
   if (overrides && Object.prototype.hasOwnProperty.call(overrides, key)) return overrides[key];
-  var english = { 'theme.label': 'Theme', 'theme.loading': 'Loading themes…', 'theme.discoverFailed': 'Unable to load themes', 'theme.loadFailed': 'Theme could not be loaded', 'theme.light': 'Light', 'theme.dark': 'Dark', 'theme.cyberpunk': 'Cyberpunk' };
+  var english = { 'theme.label': 'Theme', 'theme.loading': 'Loading themes…', 'theme.discoverFailed': 'Unable to load themes', 'theme.loadFailed': 'Theme could not be loaded', 'theme.light': 'Light', 'theme.dark': 'Dark', 'theme.auto': 'Auto', 'theme.cyberpunk': 'Cyberpunk' };
   return english[key] || key;
 }
 
@@ -172,7 +203,7 @@ function restoreThemeResources(id) {
 }
 
 function themeLabel(id) {
-  var names = { 'default-light': 'theme.light', 'default-dark': 'theme.dark', 'cyberpunk': 'theme.cyberpunk' };
+  var names = { 'default-light': 'theme.light', 'default-dark': 'theme.dark', 'auto': 'theme.auto', 'cyberpunk': 'theme.cyberpunk' };
   return Object.prototype.hasOwnProperty.call(names, id) ? themeText(names[id]) : id;
 }
 
@@ -191,8 +222,9 @@ function onThemeChange(fn) {
   if (typeof fn === 'function') _themeCallbacks.push(fn);
 }
 
-function notifyThemeChange(id, catalog, terminal) {
+function notifyThemeChange(id, catalog, terminal, choice) {
   _themeActive = id;
+  if (choice) _themeChoice = choice;
   if (terminal) setThemeTerminalConfig(terminal);
   if (catalog) setThemeStrings(catalog);
   syncThemeAssets();
@@ -226,8 +258,11 @@ function discoverThemes() {
   });
 }
 
-function applyTheme(id) {
-  if (!validThemeChoice(id)) return Promise.reject(new Error('invalid theme'));
+function applyTheme(choice) {
+  if (!validThemeChoice(choice)) return Promise.reject(new Error('invalid theme'));
+  // The link, the resources and data-theme all use the RESOLVED id ('auto' is not
+  // a theme folder); only the stored choice keeps the word 'auto'.
+  var id = resolveThemeChoice(choice);
   var revision = ++_themeRevision;
   if (_themeInitialResources) { _themeInitialResources.cancel(); _themeInitialResources = null; }
   if (_themePending) _themePending.cancel();
@@ -271,8 +306,10 @@ function applyTheme(id) {
       next.id = 'termcp-theme';
       document.documentElement.setAttribute('data-theme', id);
       document.documentElement.classList.remove('theme-loading');
-      try { localStorage.setItem('termcp.theme', id); } catch (e) {}
-      notifyThemeChange(id, resources.strings, resources.terminal);
+      // The choice is what persists, not the resolved id: storing the resolved one
+      // would silently turn "follow the system" into "stay exactly as you are".
+      try { localStorage.setItem('termcp.theme', choice); } catch (e) {}
+      notifyThemeChange(id, resources.strings, resources.terminal, choice);
       resolve(true);
     }
     next.onload = function () {
@@ -293,10 +330,13 @@ function applyTheme(id) {
 
 function syncThemeControl() {
   var label = document.getElementById('theme-current');
-  if (label) label.textContent = themeLabel(_themeActive);
+  // The trigger names the CHOICE, so "Auto" stays visible while the OS decides;
+  // naming the resolved theme there would read as if auto had been overridden.
+  if (label) label.textContent = themeLabel(_themeChoice);
   document.querySelectorAll('[data-theme-choice]').forEach(function (button) {
-    button.textContent = themeLabel(button.getAttribute('data-theme-choice'));
-    button.setAttribute('aria-pressed', String(button.getAttribute('data-theme-choice') === _themeActive));
+    var choice = button.getAttribute('data-theme-choice');
+    button.textContent = themeLabel(choice);
+    button.setAttribute('aria-pressed', String(choice === _themeChoice));
   });
 }
 
@@ -310,7 +350,9 @@ function loadThemeChoices() {
     if (revision !== _themeMenuRevision) return;
     options.textContent = '';
     status.textContent = '';
-    ids.forEach(function (id) {
+    // 'auto' leads the list: it is the default a fresh browser starts on, and it
+    // is not a folder on disk, so discovery cannot produce it.
+    ['auto'].concat(ids).forEach(function (id) {
       var button = document.createElement('button');
       button.type = 'button';
       button.className = 'theme-option';
@@ -348,4 +390,25 @@ document.addEventListener('termcp:themechange', function (e) {
   notifyThemeChange(e.detail, {}, {});
   restoreThemeResources(e.detail);
 });
+
+/* Follow the OS while the choice is auto. Without this the page would pick the
+   right theme at boot and then sit on it through a sunset switch, which is the one
+   thing "follow the system" promises not to do — and it is why 'auto' is stored as
+   a choice rather than resolved once and forgotten.
+
+   This lives here, with the rest of the engine's wiring, rather than inside
+   initThemeControls: following the system is a property of the theme choice, not of
+   the picker widget, so a page that loads theme.js without the markup still honours
+   it. A concrete choice is left alone — the OS must never override what the user
+   picked by hand. */
+try {
+  var _themeSchemeMQ = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+  if (_themeSchemeMQ && _themeSchemeMQ.addEventListener) {
+    _themeSchemeMQ.addEventListener('change', function () {
+      if (_themeChoice !== 'auto') return;
+      applyTheme('auto').catch(function () {});
+    });
+  }
+} catch (themeSchemeError) {}
+
 initThemeControls();

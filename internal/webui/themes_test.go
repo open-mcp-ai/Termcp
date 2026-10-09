@@ -210,6 +210,28 @@ func TestBuiltInThemeCopyUsesCatalogKeysAndPlaceholders(t *testing.T) {
 					t.Errorf("%s/%s title = %q, want %q", id, lang, got, want)
 				}
 			}
+		} else {
+			// The cyberpunk skin renames the resource column outright: it is the
+			// access bay the whole theme is built around, so "Connections" is the
+			// wrong word for it.
+			for lang, want := range map[string]string{"en": "NetHub", "zh-Hans": "网络接入仓", "zh-Hant": "網路接入倉"} {
+				if got := catalog[lang]["nav.nethub"]; got != want {
+					t.Errorf("%s/%s title = %q, want %q", id, lang, got, want)
+				}
+			}
+		}
+		// The name lives in TWO keys — the label and the tooltip that expands it —
+		// and a rename that touches only one leaves the other naming a control that
+		// no longer exists. Asserted as containment (case-insensitive) rather than
+		// equality, because the tooltip is a sentence around the name.
+		for _, lang := range []string{"en", "zh-Hans", "zh-Hant"} {
+			name, tip := catalog[lang]["nav.nethub"], catalog[lang]["nethub.expand"]
+			if name == "" || tip == "" {
+				continue // absence is the other test's business
+			}
+			if !strings.Contains(strings.ToLower(tip), strings.ToLower(name)) {
+				t.Errorf("%s/%s: the expand tooltip %q does not name the column %q; renaming one of the two keys leaves the other stale", id, lang, tip, name)
+			}
 		}
 	}
 }
