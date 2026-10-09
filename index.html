@@ -4,17 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TermCP - 让 AI 进入你的诸多终端 | Let AI into your terminals</title>
-  
+
   <!-- SEO & Metadata -->
-  <meta name="description" content="TermCP: 轻量 AI Native 安全终端控制面，可视化多界面，MCP+SKILLS+API，支持人机平等共驾、细粒度会话控制与零依赖极速部署。">
-  <meta name="keywords" content="TermCP, AI terminal, AI native, MCP, Model Context Protocol, MCP server, Claude Code, Codex, Gemini CLI, terminal control plane, human-in-the-loop, SSH-MCP, 终端MCP,人机共驾, AI终端, 运维自动化, 渗透测试, 安全终端, 端口转发, 终端复用, docker sandbox, open-mcp-ai">
+  <meta name="description" content="TermCP：本地 shell 与 SSH 远程主机，同一个 AI 控制面。AI 创建会话、开关多个 shell、持续读写终端、创建端口转发与 SFTP 传输；密码与私钥由 TermCP 保管，不交给 AI。">
+  <meta name="keywords" content="TermCP, SSH MCP, 本地终端, 远程终端, 端口转发, SFTP, AI terminal, AI native, MCP, Model Context Protocol, MCP server, Claude Code, Codex, Gemini CLI, terminal control plane, human-in-the-loop, 终端MCP, 人机共驾, AI终端, 运维自动化, 渗透测试, 安全终端, 终端复用, session multiplexing, open-mcp-ai">
   <meta name="author" content="open-mcp-ai">
   <meta name="theme-color" content="#6EE2FF">
 
   <!-- Open Graph / Social Media -->
   <meta property="og:type" content="website">
   <meta property="og:title" content="TermCP - 让 AI 进入你的诸多终端">
-  <meta property="og:description" content="轻量 AI Native 安全终端，可视化多界面，MCP+SKILLS+API，人机平等共驾。">
+  <meta property="og:description" content="本地 shell 与 SSH 远程主机，同一个 AI 控制面。凭据留在 TermCP，不交给 AI。">
   <meta property="og:url" content="https://termcp.org">
 
   <style>
@@ -62,7 +62,7 @@
     .bg-grid {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background-image: 
+      background-image:
         linear-gradient(to right, rgba(110, 226, 255, 0.03) 1px, transparent 1px),
         linear-gradient(to bottom, rgba(110, 226, 255, 0.03) 1px, transparent 1px);
       background-size: 40px 40px;
@@ -105,12 +105,9 @@
       font-weight: 800;
       letter-spacing: 1.5px;
       color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 8px;
     }
     .brand-logo span { color: var(--accent); }
-    
+
     .meta-badges {
       display: flex;
       align-items: center;
@@ -121,7 +118,6 @@
       align-items: center;
       gap: 6px;
       padding: 5px 10px;
-      border-radius: 6px;
       background: var(--card-bg);
       border: 1px solid var(--border);
       color: var(--text);
@@ -134,15 +130,8 @@
       border-color: var(--accent);
       box-shadow: 0 0 12px var(--accent-dim);
     }
-    .github-link svg {
-      width: 16px;
-      height: 16px;
-      fill: currentColor;
-    }
-    .star-count {
-      color: var(--accent);
-      font-weight: 600;
-    }
+    .github-link svg { width: 16px; height: 16px; fill: currentColor; }
+    .star-count { color: var(--accent); font-weight: 600; }
     .version-tag {
       font-family: var(--mono);
       font-size: 12px;
@@ -150,15 +139,14 @@
       background: var(--accent-dim);
       border: 1px solid rgba(var(--accent-rgb), 0.3);
       color: var(--accent);
-      border-radius: 6px;
     }
 
+    .lang-select-wrap { position: relative; }
     .lang-select-wrap select {
       background: var(--card-bg);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 6px 12px;
-      border-radius: 6px;
       font-size: 13px;
       cursor: pointer;
       outline: none;
@@ -167,9 +155,52 @@
     }
     .lang-select-wrap select:hover { border-color: var(--accent); }
 
+    /* The globe: what the picker becomes on a phone. Same 3 items, one icon. */
+    .lang-icon-btn {
+      display: none;
+      width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      line-height: 1;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .lang-icon-btn:hover { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-dim); }
+    .lang-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 168px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-bright);
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.6);
+      padding: 4px;
+      z-index: 120;
+    }
+    .lang-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.14s, color 0.14s;
+    }
+    .lang-menu button:hover,
+    .lang-menu button[aria-selected="true"] { background: var(--accent-dim); color: var(--accent); }
+
     /* Hero */
     .hero {
-      padding: 72px 0 48px;
+      padding: 72px 0 40px;
       text-align: center;
     }
     .hero-pill {
@@ -179,7 +210,6 @@
       padding: 4px 14px;
       background: var(--accent-dim);
       border: 1px solid rgba(var(--accent-rgb), 0.3);
-      border-radius: 100px;
       font-family: var(--mono);
       font-size: 13px;
       color: var(--accent);
@@ -190,7 +220,7 @@
       font-size: 44px;
       font-weight: 800;
       line-height: 1.25;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
       letter-spacing: -0.5px;
     }
     .hero h1 .highlight {
@@ -199,19 +229,48 @@
       -webkit-text-fill-color: transparent;
     }
     .hero p.lead {
-      font-size: 19px;
+      font-size: 18px;
       color: var(--text-muted);
-      max-width: 700px;
-      margin: 0 auto 36px;
+      max-width: 780px;
+      margin: 0 auto 28px;
     }
+    .hero p.lead strong { color: var(--text-bright); font-weight: 600; }
+    .hero p.lead code {
+      font-family: var(--mono);
+      font-size: 15px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 6px;
+    }
+
+    /* The two targets, stated before anything else: local shell, remote SSH. */
+    .targets {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 40px;
+    }
+    .target-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 8px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: left;
+    }
+    .target-chip b { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
 
     /* Quick Install Box */
     .command-box {
-      max-width: 760px;
-      margin: 0 auto 64px;
+      max-width: 820px;
+      margin: 0 auto;
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 12px;
       box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
       overflow: hidden;
       text-align: left;
@@ -261,7 +320,6 @@
       border: 1px solid rgba(var(--accent-rgb), 0.3);
       color: var(--accent);
       padding: 6px 14px;
-      border-radius: 6px;
       font-size: 12px;
       font-family: var(--mono);
       cursor: pointer;
@@ -274,19 +332,114 @@
       box-shadow: 0 0 14px var(--accent-glow);
     }
 
-    /* Terminal Preview UI — the theme's floating window. Each transcript line
-       carries the mark termcp's rail uses for it: a = AI input (pink),
-       i = human input (yellow), o = shell output (green). */
+    /* Sections */
+    .section { margin-bottom: 88px; }
+    .sec-head { margin-bottom: 30px; }
+    .sec-kicker {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .sec-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      color: #fff;
+      line-height: 1.3;
+    }
+    .sec-sub {
+      margin-top: 12px;
+      font-size: 15.5px;
+      color: var(--text-muted);
+      max-width: 840px;
+    }
+    .sec-sub code, .cap p code, .card p code, .security p code {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 5px;
+      white-space: nowrap;
+    }
+
+    /* Product screenshot — one per language, swapped with the language picker */
+    .shot-frame { border: 1px solid var(--border-bright); background: var(--bg-subtle); }
+    /* display:block below would otherwise beat the UA rule for [hidden], and
+       both language screenshots would stack in the same frame. */
+    [hidden] { display: none !important; }
+    /* Fixed box, so the frame never changes height: the two screenshots differ by
+       0.8% in ratio, and the img is letterboxed inside instead of resizing it. */
+    .shot-link {
+      display: block;
+      aspect-ratio: 3807 / 1897;
+      line-height: 0;
+    }
+    .shot-img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      transition: filter 0.2s ease;
+    }
+    .shot-img:hover { filter: brightness(1.06); }
+    .shot-cap {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      color: var(--text-faint);
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--panel-bg);
+    }
+    .shot-hint { color: var(--accent); }
+
+    /* Capabilities: what the AI can actually do through Termcp */
+    .caps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 18px;
+    }
+    .cap {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 24px;
+      position: relative;
+      transition: border-color 0.22s ease, box-shadow 0.22s ease;
+    }
+    .cap:hover {
+      border-color: rgba(var(--accent-rgb), 0.45);
+      box-shadow: 0 0 22px var(--accent-dim);
+    }
+    .cap-num {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      color: var(--accent);
+      display: block;
+      margin-bottom: 12px;
+    }
+    .cap h3 {
+      font-size: 16.5px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .cap p { font-size: 14.5px; color: var(--text-muted); }
+
+    /* Terminal demo — the theme's floating window. Each transcript line carries
+       the mark termcp's rail uses for it: a = AI input (pink), i = human input
+       (yellow), o = shell output (green), q = a review decision (purple). */
     .terminal-window {
       background: var(--bg-subtle);
       border: 1px solid var(--border-bright);
-      border-radius: 10px;
       position: relative;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
                   0 24px 64px rgba(0, 0, 0, 0.56),
                   0 0 40px rgba(var(--accent-rgb), 0.06);
       overflow: hidden;
-      margin-bottom: 80px;
     }
     .term-header {
       display: flex;
@@ -328,16 +481,17 @@
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.75;
-      /* Tall enough for the whole scripted run (16 lines × 1.75em + padding), so
-         the desktop view shows the story end to end instead of scrolling its
-         first act off the top. Phones cap it lower and scroll, as a terminal
-         does. */
-      max-height: 410px;
+      max-height: 340px;
       overflow-y: auto;
       scrollbar-width: thin;
     }
-    .tl { white-space: pre-wrap; word-break: break-word; color: var(--text-muted);
-          border-left: 2px solid transparent; padding-left: 10px; }
+    .tl {
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-muted);
+      border-left: 2px solid transparent;
+      padding-left: 10px;
+    }
     .tl-ai { color: var(--text-bright); border-left-color: var(--pink); }
     .tl-human { color: var(--yellow); border-left-color: var(--yellow); }
     .tl-review { color: var(--purple); border-left-color: var(--purple); }
@@ -354,7 +508,7 @@
        is editable — the AI wrote the command, the human accepts or refuses. */
     .gate {
       margin: 10px 0 4px 26px;
-      border: 1px solid rgba(var(--purple-rgb, 192, 139, 255), 0.45);
+      border: 1px solid rgba(192, 139, 255, 0.45);
       background: rgba(192, 139, 255, 0.07);
       padding: 10px 12px;
     }
@@ -446,9 +600,7 @@
     }
     .term-hint.armed { color: var(--yellow); }
 
-    /* The tasks a visitor can hand to the agent. This is the product's headline
-       capability — the AI operates the terminal for you — so it is a first-class
-       row, not a footnote. */
+    /* The tasks a visitor can hand to the agent. */
     .term-tasks {
       display: flex;
       flex-wrap: wrap;
@@ -476,25 +628,6 @@
       transition: all 0.16s ease;
     }
     .task-chip:hover { background: var(--accent-dim); border-color: var(--accent); }
-    .task-chip:disabled { opacity: 0.4; cursor: default; }
-
-    /* Two ways to be on this terminal: ask, or type. The modes are the whole
-       "human and AI, equal, on one shell" claim in one control. */
-    .term-modes { display: flex; gap: 0; flex: 0 0 auto; }
-    .mode-btn {
-      font-family: var(--mono);
-      font-size: 11px;
-      letter-spacing: 0.06em;
-      padding: 8px 12px;
-      cursor: pointer;
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text-faint);
-      transition: all 0.16s ease;
-    }
-    .mode-btn + .mode-btn { border-left: none; }
-    .mode-btn.active { background: var(--accent-dim); border-color: var(--accent-border, var(--border-bright)); color: var(--accent); }
-    .term-send:hover { background: var(--accent); color: #04121a; box-shadow: 0 0 14px var(--accent-glow); }
 
     .term-legend {
       display: flex;
@@ -523,7 +656,10 @@
       border: 1px solid var(--border);
       color: var(--text-faint);
     }
-    .term-replay:hover { border-color: var(--accent-border, var(--border-bright)); color: var(--accent); }
+    .term-replay:hover { border-color: var(--border-bright); color: var(--accent); }
+
+    /* Two ways to be on this terminal: ask, or type. The modes are the whole
+       "human and AI, equal, on one shell" claim in one control. */
     .term-input-bar {
       display: flex;
       align-items: center;
@@ -532,13 +668,20 @@
       background: var(--bg-input);
       border-top: 1px solid var(--border);
     }
-    .ti-prompt {
-      flex: 0 0 auto;
+    .term-modes { display: flex; gap: 0; flex: 0 0 auto; }
+    .mode-btn {
       font-family: var(--mono);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      color: var(--yellow);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 8px 12px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-faint);
+      transition: all 0.16s ease;
     }
+    .mode-btn + .mode-btn { border-left: none; }
+    .mode-btn.active { background: var(--accent-dim); border-color: var(--border-bright); color: var(--accent); }
     #term-input {
       flex: 1;
       min-width: 0;
@@ -567,29 +710,49 @@
     }
     .term-send:hover { background: var(--accent); color: #04121a; box-shadow: 0 0 14px var(--accent-glow); }
 
-    /* The theme squares its controls; plates stay softly rounded. */
-    .github-link, .version-tag, .lang-select-wrap select, .hero-pill,
-    .cmd-tab, .copy-btn, .term-status, .term-send, .review-lock, .term-replay { border-radius: 0; }
-    .command-box, .card { border-radius: 10px; }
-    a:focus-visible, button:focus-visible, select:focus-visible {
-      outline: none;
-      box-shadow: 0 0 0 3px var(--accent-ring);
+    /* Security band: the credentials claim, given its own frame. */
+    .security {
+      border: 1px solid rgba(82, 227, 164, 0.32);
+      background: linear-gradient(180deg, rgba(82, 227, 164, 0.07), transparent 70%), var(--card-bg);
+      padding: 32px;
     }
+    .security .sec-title { font-size: 24px; }
+    .security-lede {
+      font-size: 17px;
+      color: var(--text-bright);
+      line-height: 1.7;
+      max-width: 820px;
+      margin-bottom: 22px;
+    }
+    .security-lede strong { color: var(--green); }
+    .security-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 18px;
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+    }
+    .security-grid h4 {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--green);
+      margin-bottom: 8px;
+    }
+    .security-grid p { font-size: 14.5px; color: var(--text-muted); }
 
-    /* Features Grid */
+    /* Feature cards */
     .features {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
       gap: 24px;
-      margin-bottom: 96px;
     }
     .card {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 12px;
       padding: 28px;
       transition: all 0.25s ease;
-      position: relative;
     }
     .card:hover {
       border-color: rgba(var(--accent-rgb), 0.5);
@@ -599,7 +762,6 @@
     .card-icon {
       width: 44px;
       height: 44px;
-      border-radius: 8px;
       background: var(--accent-dim);
       border: 1px solid rgba(var(--accent-rgb), 0.3);
       display: flex;
@@ -609,16 +771,17 @@
       margin-bottom: 20px;
     }
     .card-icon svg { width: 22px; height: 22px; }
-    .card h3 {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 12px;
-      color: #fff;
-    }
-    .card p {
-      font-size: 14.5px;
-      color: var(--text-muted);
-      line-height: 1.6;
+    .card h3 { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: #fff; }
+    .card p { font-size: 14.5px; color: var(--text-muted); line-height: 1.6; }
+
+    /* The theme squares its controls; plates stay softly rounded. */
+    .github-link, .version-tag, .lang-select-wrap select, .hero-pill, .target-chip,
+    .cmd-tab, .copy-btn, .term-status, .term-send, .review-lock, .term-replay { border-radius: 0; }
+    .command-box, .card, .cap, .shot-frame, .security, .terminal-window { border-radius: 10px; }
+    .section .shot-frame, .section .terminal-window { overflow: hidden; }
+    a:focus-visible, button:focus-visible, select:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px var(--accent-ring);
     }
 
     /* Footer */
@@ -636,10 +799,12 @@
     @media (max-width: 640px) {
       .hero h1 { font-size: 30px; }
       .hero p.lead { font-size: 16px; }
+      .sec-title { font-size: 23px; }
+      .section { margin-bottom: 64px; }
       .cmd-body { flex-direction: column; align-items: flex-start; }
       .copy-btn { width: 100%; text-align: center; }
       /* The input keeps the whole second row: the mode keys and the send key move
-         to their own rows rather than squeezing the field to 141px. */
+         to their own rows rather than squeezing the field. */
       .term-input-bar { flex-wrap: wrap; }
       .term-modes { order: 1; width: 100%; }
       .mode-btn { flex: 1; text-align: center; }
@@ -647,7 +812,11 @@
       .term-send { order: 3; width: 100%; text-align: center; }
       .term-tasks { gap: 6px; }
       .task-chip { flex: 1 1 100%; text-align: left; }
-      .term-screen { max-height: 330px; }
+      .term-screen { max-height: 300px; }
+      .security { padding: 24px 20px; }
+      /* Icon only from here down — no language names in the header. */
+      .lang-select-wrap select { display: none; }
+      .lang-icon-btn { display: inline-flex; }
     }
     @media (prefers-reduced-motion: reduce) {
       .card:hover { transform: none; }
@@ -664,19 +833,31 @@
         <div class="meta-badges">
           <a class="github-link" href="https://github.com/open-mcp-ai/termcp" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-            <span class="star-count" id="star-count">★ 44</span>
+            <span class="star-count" id="star-count">★ -</span>
           </a>
-          <span class="version-tag" id="version-tag">v0.1.0</span>
+          <span class="version-tag" id="version-tag" hidden></span>
         </div>
       </div>
 
+      <!-- Wide screens get the native picker; narrow ones collapse to a bare
+           globe, because on a phone the four names eat the whole header. Either
+           control drives the same <select>, so language state lives in one place. -->
       <div class="lang-select-wrap">
-        <select id="lang-select">
+        <select id="lang-select" aria-label="Language / 语言">
           <option value="auto">🌐 Auto / 自动</option>
           <option value="zh-CN">简体中文</option>
           <option value="zh-TW">繁體中文</option>
           <option value="en">English</option>
         </select>
+        <button type="button" class="lang-icon-btn" id="lang-icon-btn"
+                aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu"
+                aria-label="Language / 语言" title="Language / 语言">🌐</button>
+        <div class="lang-menu" id="lang-menu" role="listbox" aria-label="Language / 语言" hidden>
+          <button type="button" role="option" data-lang="auto">🌐 Auto / 自动</button>
+          <button type="button" role="option" data-lang="zh-CN">简体中文</button>
+          <button type="button" role="option" data-lang="zh-TW">繁體中文</button>
+          <button type="button" role="option" data-lang="en">English</button>
+        </div>
       </div>
     </div>
   </header>
@@ -685,7 +866,12 @@
     <section class="hero">
       <div class="hero-pill" data-i18n="hero_pill">AI NATIVE CONTROL PLANE · MCP + SKILLS + API</div>
       <h1 class="highlight" data-i18n="hero_title">让 AI 进入你的诸多终端</h1>
-      <p class="lead" data-i18n="hero_desc">AI 替你敲命令，你随时接手 —— 人和 AI 共写同一条终端。MCP + SKILLS + API，单文件零依赖。</p>
+      <p class="lead" data-i18n="hero_desc">本地 shell 与 SSH 远程主机，同一个控制面。AI 替你敲命令，你随时接手。</p>
+
+      <div class="targets">
+        <span class="target-chip">⌂ <b data-i18n="target_local_tag">LOCAL</b> <span data-i18n="target_local_desc">本机 shell · 零配置</span></span>
+        <span class="target-chip">⇄ <b data-i18n="target_ssh_tag">SSH</b> <span data-i18n="target_ssh_desc">远程主机 · 密码与私钥由 TermCP 保管</span></span>
+      </div>
 
       <div class="command-box">
         <div class="cmd-tabs" id="cmd-tabs">
@@ -705,93 +891,189 @@
       </div>
     </section>
 
-    <!-- Live Terminal UI: one shell written by both sides. The mark before each
-         line is termcp's own transcript rail (a/i/o), so the preview says who
-         typed what instead of showing one undifferentiated log. -->
-    <div class="terminal-window">
-      <div class="term-header">
-        <div class="term-title">
-          <span class="shell-link-state"></span>
-          <span class="term-name">TERMCP</span>
-          <span data-i18n="term_title">nethub // 会话 #node-edge-01 [pts/3]</span>
-        </div>
-        <div class="term-header-right">
-          <button type="button" class="review-lock" id="review-lock" aria-pressed="true"
-                  data-i18n="review_lock" data-i18n-title="review_lock_title"
-                  title="打开时，AI 的每次写入都要你先接受或拒绝">审阅模式 ON</button>
-          <span class="term-status" data-i18n="term_status">实时 · MCP 已连接</span>
-        </div>
+    <!-- The real console. Two files, one per language: the picker swaps them so
+         a Chinese reader and an English reader each see their own UI. -->
+    <section class="section" id="preview">
+      <div class="sec-head">
+        <div class="sec-kicker" data-i18n="shot_kicker">LIVE UI</div>
+        <h2 class="sec-title" data-i18n="shot_title">控制台：本地与 SSH 会话，都在这一屏</h2>
+        <p class="sec-sub" data-i18n="shot_sub">每一行按来源标色 —— 绿色是 shell 输出，黄色是你的输入，粉色是 AI 的调用。</p>
+      </div>
+      <figure class="shot-frame">
+        <a class="shot-link" id="shot-link" href="cn.jpg" target="_blank" rel="noopener">
+          <!-- Two files, one console: neither is referenced in markup, so only
+               the visitor's own language is ever downloaded (~700 KB), while the
+               width/height pair keeps the frame from shifting. -->
+          <img class="shot-img" id="shot-zh" width="3807" height="1897"
+               data-src="cn.jpg" decoding="async"
+               alt="TermCP 控制台：本地与 SSH 会话同屏，逐行标出人工输入、AI 输入与终端输出">
+          <img class="shot-img" id="shot-en" width="3825" height="1891"
+               data-src="en.jpg" decoding="async" hidden
+               alt="TermCP console: local and SSH sessions on one screen, every line marked human / AI / shell output">
+        </a>
+        <figcaption class="shot-cap">
+          <span data-i18n="shot_cap">打开 http://127.0.0.1:18765，所有会话都在这里。</span>
+          <span class="shot-hint" data-i18n="shot_zoom">点击查看原图 ↗</span>
+        </figcaption>
+      </figure>
+    </section>
+
+    <!-- What the agent can do, in the product's own words. -->
+    <section class="section" id="capabilities">
+      <div class="sec-head">
+        <div class="sec-kicker" data-i18n="caps_kicker">CAPABILITIES</div>
+        <h2 class="sec-title" data-i18n="caps_title">通过 Termcp，AI 可以：</h2>
+        <p class="sec-sub" data-i18n="caps_sub">目标既可以是本机 shell，也可以是任意 SSH 远程主机 —— 同一套会话模型，同一套工具。</p>
       </div>
 
-      <div class="term-toast" id="term-toast" hidden>
-        <b data-i18n="toast_title">notify_user · termcp</b>
-        <span id="term-toast-body"></span>
-      </div>
-
-      <div class="term-screen" id="term-screen"></div>
-
-      <div class="term-legend">
-        <span class="lg-a" data-i18n="legend_a">a · AI 调用 MCP</span>
-        <span class="lg-i" data-i18n="legend_i">i · 人工指令</span>
-        <span class="lg-o" data-i18n="legend_o">o · 终端输出</span>
-        <span class="lg-q" data-i18n="legend_q">q/A · 审阅决定</span>
-        <span style="flex:1"></span>
-        <button type="button" class="term-replay" id="term-replay" data-i18n="replay">重播</button>      </div>
-
-      <div class="term-tasks" id="term-tasks">
-        <span class="tasks-label" data-i18n="task_title">把活交给 AI：</span>
-        <button type="button" class="task-chip" data-task="disk" data-i18n="task_disk">检查磁盘还剩多少</button>
-        <button type="button" class="task-chip" data-task="port" data-i18n="task_port">把 3000 端口改成 8080</button>
-        <button type="button" class="task-chip" data-task="who" data-i18n="task_who">看看谁登录着</button>
-      </div>
-
-      <!-- The human's own key onto the same shell. In AI mode your sentence is
-           what the agent acts on; in human mode it goes straight to the terminal
-           and the agent reads it back. -->
-      <form class="term-input-bar" id="term-form">
-        <div class="term-modes" role="group">
-          <button type="button" class="mode-btn active" id="mode-ai" data-i18n="mode_ai">让 AI 执行</button>
-          <button type="button" class="mode-btn" id="mode-human" data-i18n="mode_human">我自己敲</button>
+      <div class="caps">
+        <div class="cap">
+          <span class="cap-num">01</span>
+          <h3 data-i18n="cap1_title">多会话 · 多 shell</h3>
+          <p data-i18n="cap1_desc">创建和管理多个会话，并在每个会话上动态开启和关闭多个 shell。</p>
         </div>
-        <input id="term-input" type="text" autocomplete="off" spellcheck="false"
-               data-i18n-placeholder="input_placeholder"
-               placeholder="说要做什么，AI 替你操作终端…">
-        <button class="term-send" type="submit" data-i18n="input_send">发送</button>
-      </form>
-      <div class="term-hint" id="term-hint" data-i18n="input_hint">AI 模式：用一句话交给它，它自己决定跑哪些命令。</div>
-    </div>
+
+        <div class="cap">
+          <span class="cap-num">02</span>
+          <h3 data-i18n="cap2_title">持续输入，按位置读输出</h3>
+          <p data-i18n="cap2_desc">持续输入、读取输出，按位置查看终端历史，甚至在终端关闭之后也能读取保存的历史。</p>
+        </div>
+
+        <div class="cap">
+          <span class="cap-num">03</span>
+          <h3 data-i18n="cap3_title">SSH 精细化控制</h3>
+          <p data-i18n="cap3_desc">包括连接实时创建端口转发，SFTP 文件管理，终端的实时读写，多路复用 shell。</p>
+        </div>
+
+        <div class="cap">
+          <span class="cap-num">04</span>
+          <h3 data-i18n="cap4_title">直接控制会话</h3>
+          <p data-i18n="cap4_desc">在此基础上，AI 可以直接控制会话，输入指令，读取输出。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Compact demo: the same story, playable. -->
+    <section class="section" id="demo">
+      <div class="sec-head">
+        <div class="sec-kicker" data-i18n="demo_kicker">TRY IT</div>
+        <h2 class="sec-title" data-i18n="demo_title">挑一件事，交给 AI</h2>
+        <p class="sec-sub" data-i18n="demo_sub">点一个任务：AI 通过 MCP 自己决定跑哪些命令；写文件、要凭据的时候，它会停下来等你。</p>
+      </div>
+
+      <div class="terminal-window">
+        <div class="term-header">
+          <div class="term-title">
+            <span class="shell-link-state"></span>
+            <span class="term-name">TERMCP</span>
+            <span data-i18n="term_title">nethub // 会话 #node-edge-01 [pts/3]</span>
+          </div>
+          <div class="term-header-right">
+            <button type="button" class="review-lock" id="review-lock" aria-pressed="true"
+                    data-i18n="review_lock" data-i18n-title="review_lock_title"
+                    title="打开时，AI 的每次写入都要你先接受或拒绝">审阅模式 ON</button>
+            <span class="term-status" data-i18n="term_status">实时 · MCP 已连接</span>
+          </div>
+        </div>
+
+        <div class="term-toast" id="term-toast" hidden>
+          <b data-i18n="toast_title">notify_user · termcp</b>
+          <span id="term-toast-body"></span>
+        </div>
+
+        <div class="term-screen" id="term-screen"></div>
+
+        <div class="term-legend">
+          <span class="lg-a" data-i18n="legend_a">a · AI 调用 MCP</span>
+          <span class="lg-i" data-i18n="legend_i">i · 人工指令</span>
+          <span class="lg-o" data-i18n="legend_o">o · 终端输出</span>
+          <span class="lg-q" data-i18n="legend_q">q/A · 审阅决定</span>
+          <span style="flex:1"></span>
+          <button type="button" class="term-replay" id="term-replay" data-i18n="replay">重播</button>
+        </div>
+
+        <div class="term-tasks" id="term-tasks">
+          <span class="tasks-label" data-i18n="task_title">把活交给 AI：</span>
+          <button type="button" class="task-chip" data-task="ssh" data-i18n="task_ssh">SSH 连上远程主机看日志</button>
+          <button type="button" class="task-chip" data-task="port" data-i18n="task_port">把 3000 端口改成 8080</button>
+          <button type="button" class="task-chip" data-task="disk" data-i18n="task_disk">检查磁盘还剩多少</button>
+        </div>
+
+        <!-- The human's own key onto the same shell. In AI mode your sentence is
+             what the agent acts on; in human mode it goes straight to the shell
+             and the agent reads it back. -->
+        <form class="term-input-bar" id="term-form">
+          <div class="term-modes" role="group">
+            <button type="button" class="mode-btn active" id="mode-ai" data-i18n="mode_ai">让 AI 执行</button>
+            <button type="button" class="mode-btn" id="mode-human" data-i18n="mode_human">我自己敲</button>
+          </div>
+          <input id="term-input" type="text" autocomplete="off" spellcheck="false"
+                 data-i18n-placeholder="input_placeholder_ai"
+                 placeholder="说要做什么，AI 替你操作终端…">
+          <button class="term-send" type="submit" data-i18n="input_send_ai">交给 AI</button>
+        </form>
+        <div class="term-hint" id="term-hint" data-i18n="input_hint">AI 模式：用一句话交给它，它自己决定跑哪些命令。</div>
+      </div>
+    </section>
+
+    <!-- The credentials claim, given its own frame because it is the one thing a
+         reader has to believe before handing an agent a shell. -->
+    <section class="section" id="security">
+      <div class="security">
+        <div class="sec-kicker" data-i18n="sec_kicker">SECURITY MODEL</div>
+        <h2 class="sec-title" data-i18n="sec_title">凭据归 TermCP，不归 AI</h2>
+        <p class="security-lede" data-i18n-html="sec_lede">Termcp 保管 SSH 登录所需的密码、私钥等认证信息。<strong>不会交给 AI，也不会泄漏。</strong></p>
+
+        <div class="security-grid">
+          <div>
+            <h4 data-i18n="sec1_title">凭据只存在服务端</h4>
+            <p data-i18n="sec1_desc">写进 ssh_config 的密码、私钥与口令只留在主机上，读接口只返回 profile 名，永不回读明文。</p>
+          </div>
+          <div>
+            <h4 data-i18n="sec2_title">密码不进模型上下文</h4>
+            <p data-i18n="sec2_desc">遇到 sudo 密码、MFA 或 [Y/n]，Termcp 把提示交回给人：你在浏览器里输入，它留在那条 shell 里。</p>
+          </div>
+          <div>
+            <h4 data-i18n="sec3_title">审阅模式兜底</h4>
+            <p data-i18n="sec3_desc">按会话开启的审批闸门：Agent 经 MCP 的每一次写入都等你接受或拒绝，才落到终端上。</p>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- Core Features -->
-    <section class="features">
-      <div class="card">
-        <div class="card-icon">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+    <section class="section">
+      <div class="features">
+        <div class="card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          </div>
+          <h3 data-i18n="feat_local_title">本地与远程，一个控制面</h3>
+          <p data-i18n="feat_local_desc">本机 shell 零配置直接开；远程走 SSH，密码、私钥、ProxyJump 跳板链都由 TermCP 打理。Agent 面对的是同一套工具。</p>
         </div>
-        <h3 data-i18n="feat1_title">人机平等共驾</h3>
-        <p data-i18n="feat1_desc">双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换、深度协作，告别黑盒盲操。</p>
-      </div>
 
-      <div class="card">
-        <div class="card-icon">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+        <div class="card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+          </div>
+          <h3 data-i18n="feat_shared_title">人机平等共驾</h3>
+          <p data-i18n="feat_shared_desc">双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换，告别黑盒盲操。</p>
         </div>
-        <h3 data-i18n="feat2_title">细粒度会话控制</h3>
-        <p data-i18n="feat2_desc">内置文件管理、安全端口转发、多终端多会话复用，提供按需读写终端窗口的完备上下文控制能力。</p>
-      </div>
 
-      <div class="card">
-        <div class="card-icon">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        <div class="card">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          </div>
+          <h3 data-i18n="feat_install_title">安装无依赖</h3>
+          <p data-i18n="feat_install_desc">10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。</p>
         </div>
-        <h3 data-i18n="feat3_title">安装无依赖</h3>
-        <p data-i18n="feat3_desc">10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。</p>
       </div>
     </section>
   </main>
 
   <footer>
     <div class="container">
-      <p>TERMCP · Open Source Project by <a href="https://github.com/open-mcp-ai" target="_blank">open-mcp-ai</a></p>
+      <p>TERMCP · Open Source Project by <a href="https://github.com/open-mcp-ai" target="_blank" rel="noopener">open-mcp-ai</a></p>
     </div>
   </footer>
 
@@ -813,8 +1095,7 @@
       tab.addEventListener('click', () => {
         tabs.forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        const key = tab.getAttribute('data-cmd');
-        display.textContent = commands[key] || '';
+        display.textContent = commands[tab.getAttribute('data-cmd')] || '';
       });
     });
 
@@ -823,13 +1104,12 @@
     copyBtn.addEventListener('click', () => {
       const text = display.textContent;
       navigator.clipboard.writeText(text).then(() => {
-        const orig = copyBtn.textContent;
-        copyBtn.textContent = '✓ ' + (currentLang === 'en' ? 'Copied' : (currentLang === 'zh-TW' ? '已複製' : '已复制'));
-        setTimeout(() => copyBtn.textContent = orig, 1800);
+        copyBtn.textContent = '✓ ' + t('copied');
+        setTimeout(() => { copyBtn.textContent = t('copy_btn'); }, 1800);
       });
     });
 
-    /* ---- The demo: an agent driving termcp over MCP on one shell ----------
+    /* ---- Demo: an agent driving termcp over MCP on one shell -------------
        Every line is a real tool or a real mark from the product:
          a = an MCP call the agent made (the point of the page)
          o = shell output
@@ -848,7 +1128,7 @@
     let waiting = false;      // the agent is stopped, waiting on the human
     let mode = 'ai';          // 'ai' = hand the task over; 'human' = type it yourself
     let queue = [];           // the running task's remaining steps
-    let lastTask = 'port';    // what the replay key re-runs
+    let lastTask = 'ssh';     // what the replay key re-runs
     let auto = false;         // true while playing the whole task without waiting
 
     function el(tag, cls, text) {
@@ -867,12 +1147,24 @@
       return p;
     }
 
-    const t = (key) => (i18nData[currentLang] || i18nData.en)[key] || i18nData.en[key] || key;
-
     /* The tasks a visitor hands to the agent. `say` is the human's sentence in
        plain words; the steps are what the agent then decides to do with the
        terminal — that gap IS the product. Code lines stay untranslated. */
     const TASKS = {
+      ssh: {
+        say: 'say_ssh',
+        steps: [
+          { mark: 'a', code: 'session_start(ssh_config="edge-web", name="web-01")' },
+          { mark: 'o', key: 'd_creds' },
+          { mark: 'o', code: '→ session_id sess_2b91 · shell_id sh_01 · pty 120x32' },
+          { mark: 'a', code: 'shell_input("tail -n 3 /var/log/nginx/error.log") + shell_key("enter")' },
+          { mark: 'o', code: '[error] connect() failed (111: Connection refused) while connecting to upstream, upstream: "http://127.0.0.1:3000"' },
+          { mark: 'a', code: 'sftp_list(remote_dir="/etc/nginx/conf.d")' },
+          { mark: 'o', code: 'proxy.conf   482 B   -rw-r--r--' },
+          { mark: 'a', code: 'forward(action="local", local_port=8080, remote_port=3000)' },
+          { mark: 'o', code: '127.0.0.1:8080 → web-01:3000 · tunnel up' }
+        ]
+      },
       port: {
         say: 'say_port',
         steps: [
@@ -900,23 +1192,11 @@
           { mark: 'a', code: 'shell_input("df -h /") + shell_key("enter")' },
           { mark: 'o', code: 'Filesystem      Size  Used Avail Use% Mounted on' },
           { mark: 'o', code: '/dev/vda1        40G   31G  7.2G  82% /' },
-          { mark: 'a', code: 'shell_input("du -xh --max-depth=1 /var | sort -h | tail -3") + shell_key("enter")' },
-          { mark: 'o', code: '2.1G    /var/lib/docker' },
-          { mark: 'o', code: '3.4G    /var/log' },
+          { mark: 'a', code: 'shell_list(session_id="sess_7f3a")' },
+          { mark: 'o', code: '→ 2 shells · sh_01 pty running · sh_02 pipe running' },
           { mark: 'a', code: 'notify_user(level="warn", duration_seconds=0, session_id="sess_7f3a")' },
           { toast: true },
           { mark: 'o', key: 'd_disk' }
-        ]
-      },
-      who: {
-        say: 'say_who',
-        steps: [
-          { mark: 'a', code: 'session_start(ssh_config="internal")' },
-          { mark: 'a', code: 'shell_input("who -a") + shell_key("enter")' },
-          { mark: 'o', code: 'ops      pts/0        2026-10-09 09:12   (10.0.3.7)' },
-          { mark: 'a', code: 'shell_list(session_id="sess_7f3a")' },
-          { mark: 'o', code: '→ 2 shells · sh_01 pty running · sh_02 pipe running' },
-          { mark: 'o', key: 'd_who' }
         ]
       }
     };
@@ -934,9 +1214,6 @@
 
     const GATE_CMD = 'sed -i s/:3000/:8080/ /etc/nginx/conf.d/proxy.conf';
 
-    const sendLabel = () => t(mode === 'ai' ? 'input_send_ai' : 'input_send_human');
-    const placeholder = () => t(mode === 'ai' ? 'input_placeholder_ai' : 'input_placeholder_human');
-
     function setHint(text) {
       termHint.textContent = text;
       termHint.classList.toggle('armed', waiting);
@@ -951,8 +1228,8 @@
       mode = next;
       document.getElementById('mode-ai').classList.toggle('active', mode === 'ai');
       document.getElementById('mode-human').classList.toggle('active', mode === 'human');
-      termInput.placeholder = placeholder();
-      document.querySelectorAll('.term-send').forEach(b => { b.textContent = sendLabel(); });
+      termInput.placeholder = t(mode === 'ai' ? 'input_placeholder_ai' : 'input_placeholder_human');
+      document.querySelector('.term-send').textContent = t(mode === 'ai' ? 'input_send_ai' : 'input_send_human');
       defaultHint();
     }
 
@@ -967,7 +1244,7 @@
     }
 
     /* The review gate: nothing here is editable — the AI wrote the command, the
-       human accepts or refuses it. Accept and Reject both resolve this step. */
+       human accepts or refuses it. Either way this step resolves. */
     function renderGate() {
       const box = el('div', 'gate');
       box.id = 'gate';
@@ -999,10 +1276,10 @@
     /* Drain the running task until it needs a human: a review decision, a secret,
        or the end. Everything the agent does on its own happens here.
 
-       `auto` is the autoplay used on load: the page has to show a finished run,
-       not a transcript parked at a gate, or the visitor reads it as unfinished.
-       The human's two moments are still written down — the decision and the
-       secret — so the transcript is the same story, just already told. */
+       `auto` is the autoplay used on load and on replay: the page shows a
+       finished run rather than a transcript parked at a gate. The human's two
+       moments are still written down — the decision and the secret — so the
+       transcript tells the same story, just already told. */
     function pump() {
       for (;;) {
         const step = queue.shift();
@@ -1066,7 +1343,7 @@
     reviewLock.addEventListener('click', () => {
       reviewOn = !reviewOn;
       reviewLock.setAttribute('aria-pressed', String(reviewOn));
-      reviewLock.textContent = reviewOn ? t('review_on') : t('review_off');
+      reviewLock.textContent = t(reviewOn ? 'review_on' : 'review_off');
     });
 
     termForm.addEventListener('submit', (e) => {
@@ -1116,8 +1393,32 @@
         auto_label: '🌐 自动',
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: '让 AI 进入你的诸多终端',
-        hero_desc: 'AI 替你敲命令，你随时接手 —— 人和 AI 共写同一条终端。MCP + SKILLS + API，单文件零依赖。',
+        hero_desc: '本地 shell 与 SSH 远程主机，同一个控制面。AI 替你敲命令，你随时接手。',
+        target_local_tag: 'LOCAL',
+        target_local_desc: '本机 shell · 零配置',
+        target_ssh_tag: 'SSH',
+        target_ssh_desc: '远程主机 · 密码与私钥由 TermCP 保管',
         copy_btn: '复制命令',
+        copied: '已复制',
+        shot_kicker: 'LIVE UI',
+        shot_title: '控制台：本地与 SSH 会话，都在这一屏',
+        shot_sub: '每一行按来源标色 —— 绿色是 shell 输出，黄色是你的输入，粉色是 AI 的调用。',
+        shot_cap: '打开 http://127.0.0.1:18765，所有会话都在这里。',
+        shot_zoom: '点击查看原图 ↗',
+        caps_kicker: 'CAPABILITIES',
+        caps_title: '通过 Termcp，AI 可以：',
+        caps_sub: '目标既可以是本机 shell，也可以是任意 SSH 远程主机 —— 同一套会话模型，同一套工具。',
+        cap1_title: '多会话 · 多 shell',
+        cap1_desc: '创建和管理多个会话，并在每个会话上动态开启和关闭多个 shell。',
+        cap2_title: '持续输入，按位置读输出',
+        cap2_desc: '持续输入、读取输出，按位置查看终端历史，甚至在终端关闭之后也能读取保存的历史。',
+        cap3_title: 'SSH 精细化控制',
+        cap3_desc: '包括连接实时创建端口转发，SFTP 文件管理，终端的实时读写，多路复用 shell。',
+        cap4_title: '直接控制会话',
+        cap4_desc: '在此基础上，AI 可以直接控制会话，输入指令，读取输出。',
+        demo_kicker: 'TRY IT',
+        demo_title: '挑一件事，交给 AI',
+        demo_sub: '点一个任务：AI 通过 MCP 自己决定跑哪些命令；写文件、要凭据的时候，它会停下来等你。',
         term_title: 'nethub // 会话 #node-edge-01 [pts/3]',
         term_status: '实时 · MCP 已连接',
         legend_a: 'a · AI 调用 MCP',
@@ -1128,25 +1429,11 @@
         review_on: '审阅模式 ON',
         review_off: '审阅模式 OFF',
         review_lock_title: '打开时，AI 的每次写入都要你先接受或拒绝',
-        input_prompt: 'you@pts/3:~$',
-        input_placeholder: '输入指令，和 AI 写同一条终端…',
-        input_send: '写入终端',
         replay: '重播',
-        input_hint: '直连模式：你敲的每一行直接进终端，和 AI 共用同一条 shell。',
-        input_hint_wait: 'AI 已停手，正在等你。密码留在这条 shell 里，不进模型上下文。',        gate_h: '审阅门 · AI 的写入已挂起',
-        gate_accept: '接受 Accept',
-        gate_reject: '拒绝 Reject',
-        gate_accepted: '已接受 · 命令已发送到 shell',
-        gate_rejected: '已拒绝 · 一个字节都没有写进去',
-        toast_title: 'notify_user · termcp',
-        toast_body: 'deploy 在等 sudo 密码',
-        d_daemon: '# TermCP daemon 已启动 · stdio bridge 就绪 · 31 个工具',
-        d_read: '读回字节区间 [0, 4096) · 标记：o 输出 / i 人工 / a AI',
-        d_written: '写入完成 · 代理目标已从 :3000 改为 :8080',
         task_title: '把活交给 AI：',
-        task_disk: '检查磁盘还剩多少',
+        task_ssh: 'SSH 连上远程主机看日志',
         task_port: '把 3000 端口改成 8080',
-        task_who: '看看谁登录着',
+        task_disk: '检查磁盘还剩多少',
         mode_ai: '让 AI 执行',
         mode_human: '我自己敲',
         input_send_ai: '交给 AI',
@@ -1155,26 +1442,69 @@
         input_placeholder_human: '直接敲命令，AI 在同一条 shell 上看着…',
         input_hint: 'AI 模式：用一句话交给它，它自己决定跑哪些命令。',
         input_hint_human: '人工模式：你敲的每一行直接进终端，AI 读得到、也接得下去。',
-        agent_sees: 'AI 读回了你刚才那行 —— 它和你共用同一条 shell。',
+        input_hint_wait: 'AI 已停手，正在等你。密码留在这条 shell 里，不进模型上下文。',
+        gate_h: '审阅门 · AI 的写入已挂起',
+        gate_accept: '接受 Accept',
+        gate_reject: '拒绝 Reject',
+        gate_accepted: '已接受 · 命令已发送到 shell',
+        gate_rejected: '已拒绝 · 一个字节都没有写进去',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'deploy 在等 sudo 密码',
+        say_ssh: '连上我们的 web 主机，看看 nginx 在报什么错',
         say_port: '帮我把 nginx 的 3000 端口改成 8080',
         say_disk: '这台机器磁盘还够用吗',
-        say_who: '现在有谁登录着',
+        d_creds: '凭据来自 TermCP 的 ssh_config（密码/私钥）· 未进入模型上下文',
+        d_read: '读回字节区间 [0, 4096) · 标记：o 输出 / i 人工 / a AI',
+        d_written: '写入完成 · 代理目标已从 :3000 改为 :8080',
         d_sudo_ok: '密码通过 · nginx 已重载',
         d_disk: '结论：/ 用了 82%，/var/log 占了 3.4G —— 已通知你。',
-        d_who: '结论：一个 ops 会话，同一连接上开了 2 个 shell 通道。',
-        feat1_title: '人机平等共驾',
-        feat1_desc: '双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换、深度协作，告别黑盒盲操。',
-        feat2_title: '细粒度会话控制',
-        feat2_desc: '内置文件管理、安全端口转发、多终端多会话复用，提供按需读写终端窗口的完备上下文控制能力。',
-        feat3_title: '安装无依赖',
-        feat3_desc: '10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。'
+        agent_sees: 'AI 读回了你刚才那行 —— 它和你共用同一条 shell。',
+        sec_kicker: 'SECURITY MODEL',
+        sec_title: '凭据归 TermCP，不归 AI',
+        sec_lede: 'Termcp 保管 SSH 登录所需的密码、私钥等认证信息。<strong>不会交给 AI，也不会泄漏。</strong>',
+        sec1_title: '凭据只存在服务端',
+        sec1_desc: '写进 ssh_config 的密码、私钥与口令只留在主机上，读接口只返回 profile 名，永不回读明文。',
+        sec2_title: '密码不进模型上下文',
+        sec2_desc: '遇到 sudo 密码、MFA 或 [Y/n]，Termcp 把提示交回给人：你在浏览器里输入，它留在那条 shell 里。',
+        sec3_title: '审阅模式兜底',
+        sec3_desc: '按会话开启的审批闸门：Agent 经 MCP 的每一次写入都等你接受或拒绝，才落到终端上。',
+        feat_local_title: '本地与远程，一个控制面',
+        feat_local_desc: '本机 shell 零配置直接开；远程走 SSH，密码、私钥、ProxyJump 跳板链都由 TermCP 打理。Agent 面对的是同一套工具。',
+        feat_shared_title: '人机平等共驾',
+        feat_shared_desc: '双方写同一条终端，每一屏都实时看得见。无缝接管、即时切换，告别黑盒盲操。',
+        feat_install_title: '安装无依赖',
+        feat_install_desc: '10MB 左右单文件绿色发布，多平台兼容，支持 npx 一键零安装集成或容器极速拉起。'
       },
       'zh-TW': {
         auto_label: '🌐 自動',
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: '讓 AI 進入你的諸多終端',
-        hero_desc: '輕量 AI Native 安全終端，視覺化多介面，MCP+SKILLS+API',
+        hero_desc: '本機 shell 與 SSH 遠端主機，同一個控制面。AI 替你敲指令，你隨時接手。',
+        target_local_tag: 'LOCAL',
+        target_local_desc: '本機 shell · 零設定',
+        target_ssh_tag: 'SSH',
+        target_ssh_desc: '遠端主機 · 密碼與私鑰由 TermCP 保管',
         copy_btn: '複製指令',
+        copied: '已複製',
+        shot_kicker: 'LIVE UI',
+        shot_title: '控制台：本機與 SSH 工作階段，都在這一屏',
+        shot_sub: '每一行按來源標色 —— 綠色是 shell 輸出，黃色是你的輸入，粉色是 AI 的呼叫。',
+        shot_cap: '打開 http://127.0.0.1:18765，所有工作階段都在這裡。',
+        shot_zoom: '點擊看原圖 ↗',
+        caps_kicker: 'CAPABILITIES',
+        caps_title: '透過 Termcp，AI 可以：',
+        caps_sub: '目標既可以是本機 shell，也可以是任意 SSH 遠端主機 —— 同一套工作階段模型，同一套工具。',
+        cap1_title: '多工作階段 · 多 shell',
+        cap1_desc: '建立與管理多個工作階段，並在每個工作階段上動態開啟與關閉多個 shell。',
+        cap2_title: '持續輸入，按位置讀輸出',
+        cap2_desc: '持續輸入、讀取輸出，按位置查看終端歷史，甚至在終端關閉之後也能讀取保存的歷史。',
+        cap3_title: 'SSH 精細化控制',
+        cap3_desc: '包含連線即時建立連接埠轉發，SFTP 檔案管理，終端的即時讀寫，多工 shell。',
+        cap4_title: '直接控制工作階段',
+        cap4_desc: '在此基礎上，AI 可以直接控制工作階段，輸入指令，讀取輸出。',
+        demo_kicker: 'TRY IT',
+        demo_title: '挑一件事，交給 AI',
+        demo_sub: '點一個任務：AI 透過 MCP 自己決定跑哪些指令；寫檔案、要憑據的時候，它會停下來等你。',
         term_title: 'nethub // 工作階段 #node-edge-01 [pts/3]',
         term_status: '即時 · MCP 已連線',
         legend_a: 'a · AI 呼叫 MCP',
@@ -1185,26 +1515,11 @@
         review_on: '審閱模式 ON',
         review_off: '審閱模式 OFF',
         review_lock_title: '開啟時，AI 的每次寫入都要你先接受或拒絕',
-        input_prompt: 'you@pts/3:~$',
-        input_placeholder: '輸入指令，和 AI 寫同一條終端…',
-        input_send: '寫入終端',
         replay: '重播',
-        input_hint: '直連模式：你敲的每一行直接進終端，和 AI 共用同一條 shell。',
-        input_hint_wait: 'AI 已停手，正在等你。密碼留在這條 shell 裡，不進模型上下文。',
-        gate_h: '審閱門 · AI 的寫入已掛起',
-        gate_accept: '接受 Accept',
-        gate_reject: '拒絕 Reject',
-        gate_accepted: '已接受 · 指令已送到 shell',
-        gate_rejected: '已拒絕 · 一個位元組都沒有寫進去',
-        toast_title: 'notify_user · termcp',
-        toast_body: 'deploy 在等 sudo 密碼',
-        d_daemon: '# TermCP daemon 已啟動 · stdio bridge 就緒 · 31 個工具',
-        d_read: '讀回位元組區間 [0, 4096) · 標記：o 輸出 / i 人工 / a AI',
-        d_written: '寫入完成 · 代理目標已從 :3000 改為 :8080',
         task_title: '把活交給 AI：',
-        task_disk: '檢查磁碟還剩多少',
+        task_ssh: 'SSH 連上遠端主機看日誌',
         task_port: '把 3000 埠改成 8080',
-        task_who: '看看誰登入著',
+        task_disk: '檢查磁碟還剩多少',
         mode_ai: '讓 AI 執行',
         mode_human: '我自己敲',
         input_send_ai: '交給 AI',
@@ -1213,26 +1528,69 @@
         input_placeholder_human: '直接敲指令，AI 在同一條 shell 上看著…',
         input_hint: 'AI 模式：用一句話交給它，它自己決定跑哪些指令。',
         input_hint_human: '人工模式：你敲的每一行直接進終端，AI 讀得到、也接得下去。',
-        agent_sees: 'AI 讀回了你剛才那行 —— 它和你共用同一條 shell。',
+        input_hint_wait: 'AI 已停手，正在等你。密碼留在這條 shell 裡，不進模型上下文。',
+        gate_h: '審閱門 · AI 的寫入已掛起',
+        gate_accept: '接受 Accept',
+        gate_reject: '拒絕 Reject',
+        gate_accepted: '已接受 · 指令已送到 shell',
+        gate_rejected: '已拒絕 · 一個位元組都沒有寫進去',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'deploy 在等 sudo 密碼',
+        say_ssh: '連上我們的 web 主機，看看 nginx 在報什麼錯',
         say_port: '幫我把 nginx 的 3000 埠改成 8080',
         say_disk: '這台機器磁碟還夠用嗎',
-        say_who: '現在有誰登入著',
+        d_creds: '憑據來自 TermCP 的 ssh_config（密碼/私鑰）· 未進入模型上下文',
+        d_read: '讀回位元組區間 [0, 4096) · 標記：o 輸出 / i 人工 / a AI',
+        d_written: '寫入完成 · 代理目標已從 :3000 改為 :8080',
         d_sudo_ok: '密碼通過 · nginx 已重載',
         d_disk: '結論：/ 用了 82%，/var/log 佔了 3.4G —— 已通知你。',
-        d_who: '結論：一個 ops 工作階段，同一連線上開了 2 個 shell 通道。',
-        feat1_title: '人機平等共駕',
-        feat1_desc: '雙方寫同一條終端，每一屏都即時看得見。無縫接管、即時切換、深度協作，告別黑盒盲操。',
-        feat2_title: '細粒度工作階段控制',
-        feat2_desc: '內建檔案管理、安全連接埠轉發、多終端多工作階段複用，提供按需讀寫終端視窗的完備上下文控制能力。',
-        feat3_title: '安裝無相依性',
-        feat3_desc: '10MB 左右單一檔案綠色發行，多平台相容，支援 npx 一鍵免安裝整合或容器極速啟動。'
+        agent_sees: 'AI 讀回了你剛才那行 —— 它和你共用同一條 shell。',
+        sec_kicker: 'SECURITY MODEL',
+        sec_title: '憑據歸 TermCP，不歸 AI',
+        sec_lede: 'Termcp 保管 SSH 登入所需的密碼、私鑰等認證資訊。<strong>不會交給 AI，也不會洩漏。</strong>',
+        sec1_title: '憑據只存在服務端',
+        sec1_desc: '寫進 ssh_config 的密碼、私鑰與口令只留在主機上，讀介面只回傳 profile 名，永不回讀明文。',
+        sec2_title: '密碼不進模型上下文',
+        sec2_desc: '遇到 sudo 密碼、MFA 或 [Y/n]，Termcp 把提示交回給人：你在瀏覽器裡輸入，它留在那條 shell 裡。',
+        sec3_title: '審閱模式兜底',
+        sec3_desc: '按工作階段開啟的審批閘門：Agent 經 MCP 的每一次寫入都等你接受或拒絕，才落到終端上。',
+        feat_local_title: '本機與遠端，一個控制面',
+        feat_local_desc: '本機 shell 零設定直接開；遠端走 SSH，密碼、私鑰、ProxyJump 跳板鏈都由 TermCP 打理。Agent 面對的是同一套工具。',
+        feat_shared_title: '人機平等共駕',
+        feat_shared_desc: '雙方寫同一條終端，每一屏都即時看得見。無縫接管、即時切換，告別黑盒盲操。',
+        feat_install_title: '安裝無相依性',
+        feat_install_desc: '10MB 左右單一檔案綠色發行，多平台相容，支援 npx 一鍵免安裝整合或容器極速啟動。'
       },
       'en': {
         auto_label: '🌐 Auto',
         hero_pill: 'AI NATIVE CONTROL PLANE · MCP + SKILLS + API',
         hero_title: 'Let AI into your terminals.',
-        hero_desc: 'Lightweight AI-native secure terminal, visual multi-interface, MCP + SKILLS + API.',
+        hero_desc: 'Local shells and remote SSH hosts behind one control plane. The agent types the commands; you take over any time.',
+        target_local_tag: 'LOCAL',
+        target_local_desc: 'local shell · zero config',
+        target_ssh_tag: 'SSH',
+        target_ssh_desc: 'remote hosts · keys and passwords held by TermCP',
         copy_btn: 'Copy Command',
+        copied: 'Copied',
+        shot_kicker: 'LIVE UI',
+        shot_title: 'The console: local and SSH sessions, one screen',
+        shot_sub: 'Every line is coloured by its source — green shell output, yellow your input, pink the agent\u2019s calls.',
+        shot_cap: 'Open http://127.0.0.1:18765 — every session appears there.',
+        shot_zoom: 'Click for full size ↗',
+        caps_kicker: 'CAPABILITIES',
+        caps_title: 'Through Termcp, an AI can:',
+        caps_sub: 'The target can be the local shell or any remote SSH host — same session model, same tools.',
+        cap1_title: 'Many sessions, many shells',
+        cap1_desc: 'Create and manage multiple sessions, and open or close several shells inside each one on the fly.',
+        cap2_title: 'Keep writing, read by position',
+        cap2_desc: 'Keep sending input and reading output, page through terminal history by position — saved history stays readable even after the terminal is closed.',
+        cap3_title: 'Fine-grained SSH control',
+        cap3_desc: 'Port forwards created live on the connection, SFTP file management, real-time terminal read/write, multiplexed shells.',
+        cap4_title: 'Direct session control',
+        cap4_desc: 'On top of all that, the AI controls the session directly: send input, read output.',
+        demo_kicker: 'TRY IT',
+        demo_title: 'Hand one job to the agent',
+        demo_sub: 'Pick a task: the agent decides over MCP which commands to run — and stops for you whenever it must write a file or needs a credential.',
         term_title: 'nethub // session #node-edge-01 [pts/3]',
         term_status: 'LIVE · MCP CONNECTED',
         legend_a: 'a · AI calls an MCP tool',
@@ -1243,26 +1601,11 @@
         review_on: 'REVIEW ON',
         review_off: 'REVIEW OFF',
         review_lock_title: 'While on, every AI write waits for you to Accept or Reject it',
-        input_prompt: 'you@pts/3:~$',
-        input_placeholder: 'Type a command — write on the same terminal the agent uses…',
-        input_send: 'Write to terminal',
         replay: 'Replay',
-        input_hint: 'Direct: every line you type goes to the shell the agent is reading.',
-        input_hint_wait: 'The agent stopped and is waiting on you. The secret stays in this shell, out of the model\u2019s context.',
-        gate_h: 'Review gate · the AI write is held',
-        gate_accept: 'Accept',
-        gate_reject: 'Reject',
-        gate_accepted: 'Accepted · the command reached the shell',
-        gate_rejected: 'Rejected · not one byte was written',
-        toast_title: 'notify_user · termcp',
-        toast_body: 'deploy is waiting for a sudo password',
-        d_daemon: '# TermCP daemon up · stdio bridge ready · 31 tools',
-        d_read: 'read back bytes [0, 4096) · marks: o output / i human / a AI',
-        d_written: 'written · the proxy target moved from :3000 to :8080',
         task_title: 'Hand it to the agent:',
-        task_disk: 'How much disk is left',
+        task_ssh: 'SSH into the web host, read the log',
         task_port: 'Move port 3000 to 8080',
-        task_who: 'Who is logged in',
+        task_disk: 'How much disk is left',
         mode_ai: 'Let the AI run it',
         mode_human: 'I will type it',
         input_send_ai: 'Hand to AI',
@@ -1271,48 +1614,100 @@
         input_placeholder_human: 'Type a command; the agent is reading the same shell…',
         input_hint: 'AI mode: say it in one sentence, and the agent decides which commands to run.',
         input_hint_human: 'Human mode: every line goes straight to the shell — the agent reads it and can pick up from there.',
-        agent_sees: 'The agent read back what you just typed — it shares this shell with you.',
+        input_hint_wait: 'The agent stopped and is waiting on you. The secret stays in this shell, out of the model\u2019s context.',
+        gate_h: 'Review gate · the AI write is held',
+        gate_accept: 'Accept',
+        gate_reject: 'Reject',
+        gate_accepted: 'Accepted · the command reached the shell',
+        gate_rejected: 'Rejected · not one byte was written',
+        toast_title: 'notify_user · termcp',
+        toast_body: 'the agent is waiting for a sudo password',
+        say_ssh: 'SSH into our web host and tell me what nginx is complaining about',
         say_port: 'Move nginx off port 3000 to 8080',
         say_disk: 'Is there enough disk left on this box',
-        say_who: 'Who is logged in right now',
+        d_creds: 'credentials come from TermCP\u2019s ssh_config (password / key) · never in the model\u2019s context',
+        d_read: 'read back bytes [0, 4096) · marks: o output / i human / a AI',
+        d_written: 'written · the proxy target moved from :3000 to :8080',
         d_sudo_ok: 'password accepted · nginx reloaded',
         d_disk: 'Finding: / is 82% full, /var/log holds 3.4G — the human has been notified.',
-        d_who: 'Finding: one ops session, 2 shell channels on a single connection.',
-        feat1_title: 'Human-AI Co-pilot',
-        feat1_desc: 'Both human and AI write on the same terminal with real-time visual sync. Seamless takeover, instant switching, and true collaboration.',
-        feat2_title: 'Fine-grained Control',
-        feat2_desc: 'Built-in file management, port forwarding, multi-terminal multiplexing, and full read/write window context orchestration.',
-        feat3_title: 'Zero Dependencies',
-        feat3_desc: 'Lightweight ~10MB single binary, cross-platform compatible, with instant npx integration or zero-config container launch.'
+        agent_sees: 'The agent read back what you just typed — it shares this shell with you.',
+        sec_kicker: 'SECURITY MODEL',
+        sec_title: 'Credentials belong to TermCP, not to the model',
+        sec_lede: 'Termcp holds the passwords, private keys and other credentials SSH login needs. <strong>They are never handed to the AI, and they never leak.</strong>',
+        sec1_title: 'Credentials stay server-side',
+        sec1_desc: 'Passwords, keys and passphrases written through ssh_config stay on the host; the read interface returns profile names, never plaintext.',
+        sec2_title: 'Secrets skip the model',
+        sec2_desc: 'At a sudo password, MFA or [Y/n] prompt, Termcp hands the prompt back to you: you type in the browser, and it stays in that shell.',
+        sec3_title: 'Review mode as the backstop',
+        sec3_desc: 'A per-session approval gate: every agent write over MCP waits for your accept or reject before it reaches the terminal.',
+        feat_local_title: 'Local and remote, one control plane',
+        feat_local_desc: 'Local shells open with zero config; remote hosts go over SSH with passwords, keys and ProxyJump chains handled by TermCP. The agent sees one set of tools.',
+        feat_shared_title: 'Human and agent, equal',
+        feat_shared_desc: 'Both write to the same terminal, and you see every screenful as it happens. Seamless takeover, instant switching, no black box.',
+        feat_install_title: 'Zero dependencies',
+        feat_install_desc: 'A single ~10MB static binary, cross-platform, with npx integration or a container up in seconds.'
       }
     };
 
     let currentLang = 'zh-CN';
     const langSelect = document.getElementById('lang-select');
+    const langMenu = document.getElementById('lang-menu');
+    const langBtn = document.getElementById('lang-icon-btn');
+
+    const t = (key) => {
+      const dict = i18nData[currentLang] || i18nData.en;
+      return dict[key] !== undefined ? dict[key] : (i18nData.en[key] !== undefined ? i18nData.en[key] : key);
+    };
+
+    /* The console exists twice — a Chinese UI and an English one. The picker
+       shows the matching file; the one that is not shown yet is kept in
+       data-src and only fetched the first time it is actually needed. */
+    function applyShot(lang) {
+      const zh = lang !== 'en';
+      const shown = document.getElementById(zh ? 'shot-zh' : 'shot-en');
+      const other = document.getElementById(zh ? 'shot-en' : 'shot-zh');
+      if (!shown.getAttribute('src')) shown.src = shown.dataset.src;
+      shown.hidden = false;
+      other.hidden = true;
+      document.getElementById('shot-link').href = zh ? 'cn.jpg' : 'en.jpg';
+    }
 
     function applyLang(lang) {
       currentLang = lang;
+      document.documentElement.lang = lang;
       const dict = i18nData[lang] || i18nData['en'];
-      document.querySelectorAll('[data-i18n]').forEach(el => {
-        const key = el.getAttribute('data-i18n');
-        if (dict[key]) el.textContent = dict[key];
+
+      document.querySelectorAll('[data-i18n]').forEach(node => {
+        const key = node.getAttribute('data-i18n');
+        if (dict[key] !== undefined) node.textContent = dict[key];
       });
-      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-        const key = el.getAttribute('data-i18n-placeholder');
-        if (dict[key]) el.placeholder = dict[key];
+      document.querySelectorAll('[data-i18n-html]').forEach(node => {
+        const key = node.getAttribute('data-i18n-html');
+        if (dict[key] !== undefined) node.innerHTML = dict[key];
       });
-      document.querySelectorAll('[data-i18n-title]').forEach(el => {
-        const key = el.getAttribute('data-i18n-title');
-        if (dict[key]) el.title = dict[key];
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(node => {
+        const key = node.getAttribute('data-i18n-placeholder');
+        if (dict[key] !== undefined) node.placeholder = dict[key];
       });
+      document.querySelectorAll('[data-i18n-title]').forEach(node => {
+        const key = node.getAttribute('data-i18n-title');
+        if (dict[key] !== undefined) node.title = dict[key];
+      });
+
+      copyBtn.textContent = dict.copy_btn;
+
       // The transcript's own wording lives in the catalog, so a language change
       // re-renders it; the MCP call lines are code and survive verbatim.
       if (termScreen) runTask(lastTask, { auto: true });
-      reviewLock.textContent = reviewOn ? dict.review_on : dict.review_off;
+      reviewLock.textContent = t(reviewOn ? 'review_on' : 'review_off');
       setMode(mode);
-      // update select auto option text
+      applyShot(lang);
+
       const autoOpt = langSelect.querySelector('option[value="auto"]');
       if (autoOpt) autoOpt.textContent = dict.auto_label;
+      const autoItem = langMenu.querySelector('[data-lang="auto"]');
+      if (autoItem) autoItem.textContent = dict.auto_label;
+      syncLangMenu();
     }
 
     function detectLang() {
@@ -1343,6 +1738,42 @@
       }
     });
 
+    /* Narrow screens collapse the picker to the globe. The menu writes through
+       to the <select> and fires its change event, so persistence, auto-detect
+       and the screenshot swap all keep running through that one path. */
+    function syncLangMenu() {
+      langMenu.querySelectorAll('[data-lang]').forEach(item => {
+        item.setAttribute('aria-selected', String(item.getAttribute('data-lang') === langSelect.value));
+      });
+    }
+
+    function closeLangMenu() {
+      langMenu.hidden = true;
+      langBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    langBtn.addEventListener('click', () => {
+      const opening = langMenu.hidden;
+      langMenu.hidden = !opening;
+      langBtn.setAttribute('aria-expanded', String(opening));
+      if (opening) syncLangMenu();
+    });
+
+    langMenu.addEventListener('click', (e) => {
+      const item = e.target.closest('button[data-lang]');
+      if (!item) return;
+      langSelect.value = item.getAttribute('data-lang');
+      langSelect.dispatchEvent(new Event('change'));
+      closeLangMenu();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.lang-select-wrap')) closeLangMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeLangMenu();
+    });
+
     // Auto fetch GitHub stars & release
     async function fetchGitHubMeta() {
       try {
@@ -1352,12 +1783,13 @@
           if (data.stargazers_count !== undefined) {
             document.getElementById('star-count').textContent = '★ ' + data.stargazers_count;
           }
-        }
-        const relRes = await fetch('https://api.github.com/repos/open-mcp-ai/termcp/releases/latest');
+        }        const relRes = await fetch('https://api.github.com/repos/open-mcp-ai/termcp/releases/latest');
         if (relRes.ok) {
           const relData = await relRes.json();
           if (relData.tag_name) {
-            document.getElementById('version-tag').textContent = relData.tag_name;
+            const tag = document.getElementById('version-tag');
+            tag.textContent = relData.tag_name;
+            tag.hidden = false;
           }
         }
       } catch (err) {
