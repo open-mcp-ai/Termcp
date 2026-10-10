@@ -34,7 +34,13 @@
      of terminals covering it hides the page the terminals belong to. The height is
      measured and republished by shell-windows.js (the nav wraps) rather than
      hardcoded here; an unmeasured page falls back to the old full-viewport inset. */
-  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 0 0; z-index: 10000; background: var(--term-pane-72); backdrop-filter: blur(2px); display: none; flex-direction: column; }
+  /* Deliberately NO backdrop-filter on this layer, even though the overlay could
+     take one: it is the ancestor of the tiled terminals, and a filter here makes
+     it THEIR backdrop root — a backdrop-filter element can only sample content
+     inside its own root, so every pane loses the page it is supposed to glass
+     over (Chromium still resolves the first pane, the rest paint flat). The 72%
+     plate below is the separation; the 2px blur across it showed nothing. */
+  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 0 0; z-index: 10000; background: var(--term-pane-72); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
   .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
   .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
