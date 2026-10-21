@@ -516,7 +516,7 @@ function topVisibleShellWindow() {
     var w = wins[i];
     if (w.classList.contains('win-minimized') || w.classList.contains('win-hidden')) continue;
     var z = parseInt(w.style.zIndex, 10);
-    if (isNaN(z)) z = w.classList.contains('pane-active') ? FULLSCREEN_Z : 10001;
+    if (isNaN(z)) z = w.classList.contains('pane-active') ? fullscreenRung() : windowRung();
     if (z >= bestZ) { bestZ = z; best = w; }
   }
   return best;
@@ -548,6 +548,7 @@ function disposeWinResources(win) {
 }
 
 function closeShellWindow(win) {
+  if (!win || win._windowless) return;
   // Remember active tab for reconnect.
   if (win._parentSid && win._activeChannelSid) {
     if (!window._shellLastActive) window._shellLastActive = {};

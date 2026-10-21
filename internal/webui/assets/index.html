@@ -50,13 +50,13 @@
         <summary class="clients-btn" data-i18n-title="clients.label" title="Connected clients"><span class="clients-icon" aria-hidden="true"></span><span class="clients-label" data-i18n="clients.label">Clients</span></summary>
         <div class="clients-panel"><div id="clients-body" role="list"></div><p id="clients-empty" class="clients-empty" data-i18n="clients.empty">Nothing connected yet.</p></div>
       </details>
-      <a href="api.html" class="api-nav-link" title="MCP, HTTP API and Agent skill integration docs" data-i18n-title="nav.api.title" aria-label="MCP, HTTP API and Agent skill integration docs" data-i18n-aria="nav.api.title">
+      <a href="api.html" class="api-nav-link" title="MCP and HTTP API reference" data-i18n-title="nav.api.title" aria-label="MCP and HTTP API reference" data-i18n-aria="nav.api.title">
         <svg class="api-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M2.25 2.5h3.1c1.13 0 2.05.92 2.05 2.05v8.2c-.5-.62-1.22-.98-2.05-.98h-3.1z"/>
           <path d="M13.75 2.5h-3.1c-1.13 0-2.05.92-2.05 2.05v8.2c.5-.62 1.22-.98 2.05-.98h3.1z"/>
           <path d="M8 4.55v8.2"/>
         </svg>
-        <span class="api-nav-label">API / MCP / SKILLS</span>
+        <span class="api-nav-label">MCP / API</span>
       </a>
     </nav>
   </header>
@@ -76,19 +76,19 @@
          grid/backdrop context would resolve against that ancestor instead of the
          viewport. -->
     <div class="workspace-frame ext-on">
-      <!-- NetHub is the page's control layer: the access nodes Termcp can dial
-           are a persistent left column, not a drawer. Collapsing it leaves a rail
-           of status dots rather than nothing, so "which machines can I reach" is
+      <!-- NetHub is the page's control layer: the machines Termcp can dial are
+           the page's left column, not a drawer. Collapsing it leaves a rail of
+           status lamps rather than nothing, so "which machines can I reach" is
            never a question the page stops answering. Below 800px the same element
            is the fixed drawer it always was; the sidebar and the rail are the two
            desktop states of one node, switched by .nethub-collapsed on the frame. -->
       <aside class="nethub" id="nethub">
-        <button type="button" class="nethub-btn" id="open-host-drawer" title="Connections" data-i18n-title="nav.nethub" aria-label="Connections" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="true" onclick="event.stopPropagation()">
+        <button type="button" class="nethub-btn" id="open-host-drawer" title="Hosts" data-i18n-title="nav.nethub" aria-label="Hosts" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="true" onclick="event.stopPropagation()">
           <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" data-theme-asset="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
-          <span class="nethub-label" data-i18n="nav.nethub">Connections</span>
+          <span class="nethub-label" data-i18n="nav.nethub">Hosts</span>
           <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
         </button>
-        <div class="nethub-rail" id="nethub-rail" role="list" aria-label="Connections" data-i18n-aria="nav.nethub"></div>
+        <div class="nethub-rail" id="nethub-rail" role="list" aria-label="Hosts" data-i18n-aria="nav.nethub"></div>
         <div class="nethub-body" id="sec-entries-body">
         <div class="drawer-toolbar" role="toolbar">
           <!-- One row, two states. Collapsed: the list-checks key spans the
@@ -132,8 +132,17 @@
             </div>
           </div>
         </div>
-        <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close hosts drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
-          <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
+        <!-- A CHEVRON ON THE OUTER EDGE, not an X in the corner.
+             *
+             * The X sat at the drawer's top inner corner, which on a phone is a
+             * spot the thumb reaches last — and it said "dismiss this", the same
+             * gesture as a dialog's close, for a panel that is only being put away.
+             * This drawer slides in from the LEFT, so the way back out is a left-
+             * pointing chevron on the left edge, outboard of the panel body: the
+             * shape and the side both say which way it goes, and it sits where a
+             * swipe would start. -->
+        <button type="button" class="drawer-close drawer-close-left" title="Collapse" data-i18n-title="common.collapse" aria-label="Collapse hosts drawer" data-i18n-aria="common.collapse" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
+          <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M7.6 2.2L3.8 6l3.8 3.8"/></svg>
         </button>
         <div id="conn-grid" class="conn-grid"></div>
         <!-- The column's two fixed bottom actions share one row: creating and
@@ -150,140 +159,323 @@
         </div>
       </div>
       </aside>
-      <!-- Sessions and the archive are one column, so the two plates share both
-           edges at every width: as separate flex items the archive would start
-           at the row's left edge while sessions started after NetHub. This column
-           is the only part of the row that flexes, which is what gives the plates
-           their width as the sidebar collapses. -->
-      <div class="workspace-main">
-      <div class="workspace-panel workspace-sessions">
-        <div class="section-header" id="sec-sessions" aria-expanded="true" role="button" tabindex="0">
-          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-          <span data-i18n="sec.sessions">Sessions</span>
-          <span id="session-batch-count" class="batch-count" style="display:none"></span>
-          <span style="flex:1"></span>
-          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="session-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
-          </button>
-          <button type="button" class="icon-btn icon-btn-sm batch-stop" id="session-stop-btn" title="Stop selected" data-i18n-title="section.batch.disconnectSelected" aria-label="Stop selected sessions and dials" data-i18n-aria="section.batch.disconnectSelectedAria" hidden onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/></svg>
-          </button>
-          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="session-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
-            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
-          </button>
-        </div>
-        <div class="section-body" id="sec-sessions-body">
-          <div id="session-grid" class="conn-grid"></div>
-        </div>
-      </div>
-      <!-- The archive is a second plate under the sessions one, not another
-           section: it holds the same cards, for sessions that are over. Its
-           header mirrors the sessions header's placement so the two read as a
-           pair, and the actions live here rather than in a shared toolbar
-           because each plate acts on its own selection. -->
-      <div class="workspace-panel workspace-sessions workspace-archive">
-        <div class="section-header" id="sec-archive-header" role="button" tabindex="0" aria-expanded="true">
-          <svg class="sec-chevron" viewBox="0 0 12 8" width="12" height="8"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-          <span data-i18n="sec.archive">Archive</span>
-          <span id="archive-batch-count" class="batch-count" style="display:none"></span>
-          <span style="flex:1"></span>
-          <!-- Selection and deletion are one region's actions, and the trash
-               only appears once that region has something selected: an
-               always-present disabled button reads as "broken", while the
-               checkbox beside it is the control that reveals it. -->
-          <button type="button" class="icon-btn icon-btn-sm batch-trash" id="archive-del-btn" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected archived sessions" data-i18n-aria="section.batch.deleteSelectedAria" hidden onclick="event.stopPropagation()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-          </button>
-          <button type="button" class="icon-btn icon-btn-sm batch-sel-all" id="archive-sel-all" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-            <svg class="ic-empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
-            <svg class="ic-checked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg>
-          </button>
-        </div>
-        <div class="section-body" id="sec-archive-body">
-          <div id="archive-grid" class="conn-grid"></div>
-        </div>
-      </div>
-      </div>
-      <!-- The extension column: the connections panel's other side, holding the
-           trimmed sessions Termcp keeps warm instead of the machines it dials.
-           It starts hidden and the frame's .ext-on class is what gives it a
-           grid track, so a Termcp with no extensions configured has the same
-           layout it had before this panel existed. The column collapses to a
-           rail of status lamps like NetHub does, and below 800px the same
-           element is the drawer the trigger opens. The cards are built by
-           extensions.js from the socket frame; nothing here is static but the
-           trigger's own label, and the column carries its own toolbar because
-           the panel reports AND authors: the New key and each card's edit and
-           delete write the same store the extension tool writes to. -->
-      <aside class="extpanel" id="extpanel">
-        <button type="button" class="extpanel-btn" id="extpanel-toggle" title="Extensions" data-i18n-title="nav.extensions" aria-label="Extensions" data-i18n-aria="nav.extensions" aria-controls="extpanel-body" aria-expanded="true" onclick="event.stopPropagation()">
-          <span class="extpanel-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="8" height="8" rx="1.5"/><path d="M4 14.5v1.5M14.5 4H16"/></svg></span>
-          <span class="extpanel-label" data-i18n="nav.extensions">Extensions</span>
-          <span class="extpanel-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
-        </button>
-        <div class="extpanel-rail" id="extpanel-rail" role="list" aria-label="Extensions" data-i18n-aria="nav.extensions"></div>
-        <div class="extpanel-body" id="extpanel-body">
-          <button type="button" class="drawer-close" title="Close" data-i18n-title="common.close" aria-label="Close extensions drawer" data-i18n-aria="common.close" onclick="event.stopPropagation(); window.termcpToggleExtensions && window.termcpToggleExtensions(false)">
-            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg>
-          </button>
-          <!-- The batch row, worn by the connections panel's other side: the same
-               keys, the same rules (workspace.css dresses both), and each column's
-               own ancestor class (.ext-selecting here, .nethub-selecting there) is
-               what reveals its keys — so one column entering select mode never
-               lights up the other's toolbar. Untoggled, a card click opens the
-               extension's status CARD; toggled, it ticks and the batch keys
-               appear: ▶ opens the CARDS of the selection — their status, side by
-               side, which is the one "open" an extension has (a host's ▶ dials the
-               session it names; an extension's session is already up) — then
-               export the selection as TOML, and delete it in one batch. -->
-          <div class="drawer-toolbar" role="toolbar">
-            <button type="button" class="nethub-select-toggle" id="ext-select-toggle" aria-pressed="false" title="Batch select" data-i18n-title="nethub.batch.selectTitle" aria-label="Batch select" data-i18n-aria="nethub.batch.select" onclick="event.stopPropagation()">
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1"/><path d="M3.1 4.1l1.1 1.1 2.2-2.4"/><path d="M9.5 4h5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 12h5"/></svg>
-              <span class="nethub-toggle-count" id="ext-toggle-count" hidden>0</span>
+      <!-- The centre stage, wearing the SESSIONS PLATE's body (a section header
+           over a .conn-grid) around the EXTENSION panel's own toolbar and keys.
+           That is the point of this layout: the plate is the frame a user already
+           learns for a list of cards, and the extensions keep every button they
+           had — the batch switch, select-all, the split key with its export and
+           delete menu, and the New / Import pair at the bottom. Only the outer
+           box changed, so nothing an operator knows how to press moved. -->
+      <div class="workspace-panel workspace-sessions workspace-exts" id="ext-plate">
+        <!-- The plate's own trigger, in the HOSTS column's shape (.nethub-btn):
+             glyph, label, caret. Point the caret and the plate folds away, which
+             is what every other foldable column on this page already does.
+
+             The batch keys ride the same bar, to the right of the fold trigger,
+             rather than a toolbar of their own underneath. They act on the cards
+             BELOW them, so on the bar they read as that list's own controls; as a
+             separate row they were a band of chrome between the title and the
+             thing it titles. The wrapper stops its clicks from reaching the fold
+             trigger, so ticking a card's batch switch never collapses the plate. -->
+        <div class="ext-head">
+          <!-- ONE bar, not a bar plus a cluster beside it. The title trigger and
+               the batch keys are the same row of the same box: the trigger is the
+               bar's leading cell, the keys follow it inside the border, and the
+               whole thing is 50px tall like every other column's trigger. Putting
+               the keys OUTSIDE the trigger's box is what looked wrong — they read
+               as a separate floating cluster that happened to be right-aligned,
+               rather than as controls of this column.
+
+               The wrapper carries .nethub-btn's dressing (border, height, focus
+               ring) and the trigger inside it is a bare button: a control cannot
+               be nested in a button, so the look moves up one level and the
+               behaviour stays on the real key. -->
+          <div class="nethub-btn ext-head-bar" role="group" aria-labelledby="ext-head-label">
+            <button type="button" class="ext-fold-btn" id="sec-exts" aria-expanded="true" aria-controls="sec-exts-body" title="Extensions" data-i18n-title="nav.extensions">
+              <!-- The plate's original glyph: two OVERLAPPING squares with registration marks
+                   at the outer corners. It says "a thing plugged into another thing",
+                   which is what an extension is, and what this column showed before
+                   the header was rebuilt. It was swapped for a 2x2 grid of equal
+                   squares during that rebuild — a shape that reads as "a grid of
+                   items", i.e. the LIST rather than what lives in it, and it had the
+                   further problem of being the densest possible mark at 22px. -->
+              <span class="nethub-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="8" height="8" rx="1.5"/><path d="M4 14.5v1.5M14.5 4H16"/></svg></span>
+              <span class="nethub-label" id="ext-head-label" data-i18n="nav.extensions">Extensions</span>
+              <!-- The cyberpunk capacity meter, between title and count: the theme
+                   renames this column 义体容量, so the number is a capacity and gets a
+                   long energy track across the free space before it. The base sheet
+                   hides it; only the cyberpunk theme lays it out — a theme may restyle
+                   a column, never owe it structure. -->
+              <span class="ext-capacity-track" id="ext-capacity-track" aria-hidden="true">
+                <span class="ext-capacity-fill"></span>
+              </span>
+              <!-- The count rides the header, the way the archive's does. It
+                   belongs HERE rather than on a line of its own above the cards:
+                   a separate readout said "Extensions:" directly under a header
+                   that already says "Extensions", which is the same word twice,
+                   one row apart. On the header it is the number that belongs to
+                   the title, and the column body is left to the cards.
+
+                   It is permanent, unlike the archive's: that one hides at zero
+                   because an empty archive says nothing, while "no extensions" is
+                   the state an author needs to see before creating the first one. -->
+              <span class="ext-count-badge" id="ext-count">0</span>
+              <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
             </button>
-            <button type="button" class="nethub-batch-icon" id="ext-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-              <svg class="ic-hollow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
-              <svg class="ic-solid" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
-            </button>
-            <div class="nethub-open-split" id="ext-open-split">
-              <div class="nethub-open-plate">
-                <button type="button" class="batch-open-main" id="ext-batch-open" title="Open the status of each selected extension" data-i18n-title="ext.batch.openTitle" aria-label="Open selected extensions" data-i18n-aria="ext.batch.openTitle">
-                  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5.14v13.72c0 .8.88 1.29 1.56.86l10.8-6.86a1.03 1.03 0 000-1.72L9.56 4.28A1.03 1.03 0 008 5.14z" fill="currentColor"/></svg>
-                </button>
-                <button type="button" class="batch-open-caret" id="ext-open-caret" aria-haspopup="menu" aria-expanded="false" title="More actions" data-i18n-title="nethub.batch.more" aria-label="More actions" data-i18n-aria="nethub.batch.more">
-                  <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
-                </button>
+            <div class="ext-head-actions" id="ext-head-actions" onclick="event.stopPropagation()">
+              <!-- FLAT keys on the header bar, right-aligned as ONE group.
+                   There is no "enter selection mode" here: every extension card is
+                   tickable all the time, so a switch that exists only to make cards
+                   clickable would be chrome standing between the user and the list.
+
+                   The order is fixed from the RIGHT, which is what keeps the bar
+                   still: invert is the rightmost key and never moves, so pressing
+                   it cannot shift anything the pointer is about to reach. The keys
+                   that answer a selection appear to its LEFT and grow leftwards —
+                   a bar that grew at its right end would slide its own controls
+                   out from under the cursor on every tick.
+
+                   Add is a split key (the hosts column's .nethub-open-split): the
+                   key itself creates one, its caret drops a menu whose item is the
+                   file import. Creating is the common case, so it is the face;
+                   importing a set is the other door, one click behind it. -->
+              <button type="button" class="ext-key ext-key-danger" id="ext-batch-delete" title="Delete selected" data-i18n-title="ext.batch.deleteTitle" aria-label="Delete selected extensions" data-i18n-aria="ext.batch.deleteAria" hidden>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
+                <span data-i18n="common.delete">Delete</span>
+              </button>
+              <button type="button" class="ext-key" id="ext-batch-export" title="Export selected" data-i18n-title="ext.batch.exportTitle" aria-label="Export selected extensions" data-i18n-aria="ext.batch.exportTitle" hidden>
+                <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+                <span data-i18n="ext.batch.export">Export</span>
+              </button>
+              <div class="nethub-open-split ext-add-split" id="ext-add-split">
+                <div class="nethub-open-plate">
+                  <button type="button" class="batch-open-main ext-key" id="ext-add" title="New extension" data-i18n-title="ext.add.title" aria-label="New extension" data-i18n-aria="ext.add.title">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                    <span data-i18n="ext.add.label">New</span>
+                  </button>
+                  <button type="button" class="batch-open-caret" id="ext-add-caret" aria-haspopup="menu" aria-expanded="false" title="More ways to add" data-i18n-title="ext.add.more" aria-label="More ways to add" data-i18n-aria="ext.add.more">
+                    <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
+                  </button>
+                </div>
+                <div class="nethub-open-menu" id="ext-add-menu" role="menu" aria-label="Add an extension" data-i18n-aria="ext.add.menuAria" hidden>
+                  <button type="button" class="nethub-menu-item" id="ext-menu-import" role="menuitem" title="Import extensions" data-i18n-title="ext.batch.import">
+                    <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+                    <span data-i18n="ext.batch.importLabel">Import from file</span>
+                  </button>
+                </div>
               </div>
-              <div class="nethub-open-menu" id="ext-open-menu" role="menu" aria-label="Batch actions" data-i18n-aria="nethub.batch.menuAria" hidden>
-                <button type="button" class="nethub-menu-item" id="ext-menu-export" role="menuitem" title="Export selected" data-i18n-title="ext.batch.exportTitle">
-                  <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-                  <span data-i18n="ext.batch.export">Export</span>
-                </button>
-                <button type="button" class="nethub-menu-item nethub-menu-danger" id="ext-menu-delete" role="menuitem" title="Delete selected" data-i18n-title="ext.batch.deleteTitle" aria-label="Delete selected extensions" data-i18n-aria="ext.batch.deleteAria">
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
-                  <span data-i18n="common.delete">Delete</span>
-                </button>
-              </div>
+              <!-- Rightmost and never moves: this is the key whose press changes
+                   the bar, so nothing to its right may shift either. -->
+              <button type="button" class="ext-key ext-key-icon" id="ext-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria">
+                <svg class="ic-hollow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
+                <svg class="ic-solid" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
+              </button>
             </div>
           </div>
+        </div>
+        <div class="section-body" id="sec-exts-body">
+          <!-- The plate's own inscription: two lines that sit UNDER the cards as a
+               watermark on the panel, so an otherwise empty surface is not a blank
+               rectangle.
+
+               It lives in the BODY, not in the empty state, and that is the whole
+               point: the empty placeholder used to come and go with the list, which
+               made the column one height while empty and another once a card arrived.
+               The paper here never changes — it is the surface the cards are laid on,
+               present at zero extensions and at fifty. The body's own `min-height`
+               (inherited from .workspace-sessions) is what holds the panel steady, so
+               the inscription cannot affect layout at all.
+
+               `aria-hidden`, because it is decoration: a reader who is told the column
+               has 0 extensions does not need a slogan, and a screen reader announcing
+               it before every list would be noise. The words are translated anyway so
+               that a sighted reader in any locale gets prose, not English. -->
+          <p class="ext-inscription" id="ext-inscription" aria-hidden="true">
+            <span class="ext-inscription-line" data-i18n="ext.inscription.a"></span>
+            <span class="ext-inscription-line" data-i18n="ext.inscription.b"></span>
+          </p>
           <div id="ext-grid" class="conn-grid"></div>
-          <!-- The column's two fixed bottom actions, the pair the connections
-               panel closes with: authoring one and importing a set are the two
-               ways an extension enters the list. -->
-          <div class="drawer-add-row">
-            <div class="drawer-add drawer-add-grow" id="ext-add" role="button" tabindex="0" title="New extension" data-i18n-title="ext.add.title" aria-label="New extension" data-i18n-aria="ext.add.title">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-              <span class="drawer-add-label" data-i18n="ext.add.label">New</span>
-            </div>
-            <button type="button" class="drawer-add drawer-import" id="ext-import-open" title="Import extensions" data-i18n-title="ext.batch.import" aria-label="Import extensions" data-i18n-aria="ext.batch.import">
-              <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+        </div>
+      </div>
+      <!-- The right column wears the EXTENSIONS PANEL's frame: a trigger key, a
+           body that folds away, and a rail of lamps while it is folded. What it
+           holds is the ARCHIVE — the sessions that are over. The frame is the
+           original one, because it is this page's vocabulary for "a column you
+           put away", and the archive is exactly that kind of column: read, not
+           driven, and consulted rather than worked in. Below 800px the same
+           element becomes the drawer its trigger opens. -->
+      <!-- The archive wears the HOSTS column's frame, key for key: the same
+           .nethub-btn trigger with its glyph, label and caret, the same .nethub-rail
+           while folded, the same .nethub-body plate. That is not decoration. The
+           page already teaches one shape for "a column you put away", and a second
+           one for the only other foldable column would make the reader learn the
+           same idea twice — and notice that the two do not quite match.
+           The only difference is what fills the rail: hosts show a lamp per
+           machine because each can be up or down, while every archived session is
+           in the same state (over), so this rail shows the COUNT instead. -->
+      <aside class="nethub extpanel" id="extpanel">
+        <!-- The header is MIRRORED, and that is what makes the two columns read
+             as one pair rather than as two copies. The hosts column sits on the
+             left edge, so its glyph and label hug that edge and its caret is the
+             inboard item at the right; this column sits on the right edge, so the
+             same order would put the caret against the screen's edge — the one
+             spot a disclosure control must not occupy. Instead the caret leads,
+             inboard, and the glyph and label follow it outwards, so the two
+             headers are reflections of each other across the page.
+
+             The DOM order carries the order in the desktop row; the narrow layout
+             re-mirrors it back (see the media block in workspace.css), because
+             there both triggers collapse to glyph-only keys that stack side by
+             side rather than facing each other across a column. -->
+        <!-- This is a BUTTON ROLE on a div, not a <button>, and that is what makes
+             the nested invert key work. A <button> swallows clicks on its
+             descendants: the browser dispatches the press to the button itself, so
+             a <button> or <span role=button> inside one never receives its own
+             click — pressing invert folded the whole column shut instead of
+             inverting, and no amount of stopPropagation could help because the
+             inner element was never the target. A div with role="button" leaves its
+             descendants clickable, so the invert key gets its own press and stops
+             it from reaching the trigger.
+             Everything else — the class, the ARIA, the Enter/Space handling — is
+             unchanged; `nethub-btn` was always a style, not an element. -->
+        <div class="nethub-btn" id="extpanel-toggle" role="button" tabindex="0" title="Archive" data-i18n-title="sec.archive" aria-label="Archive" data-i18n-aria="sec.archive" aria-controls="extpanel-body" aria-expanded="true">
+          <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
+          <!-- The count sits IMMEDIATELY after the caret, before the glyph, so DOM
+               order is visual order and the CSS does not have to reorder four
+               items to say so. It also puts the auto margin on a neighbour that
+               is always laid out: the badge is `hidden` (display: none) while the
+               archive is empty, and an auto margin on a display:none box moves
+               nothing — which is why the whole group used to stay pinned to the
+               LEFT of a 260px header with 173px of empty plate to its right. -->
+          <span class="archive-count-badge" id="extpanel-count" hidden>0</span>
+          <!-- The archive's glyph: a STACK OF LAYERS, narrowing upward.
+                 *
+                 * It was a lidded box — a storage crate, which says "a place things are
+                 * put" and nothing about what is inside. The archive holds sessions that
+                 * are OVER: finished, ordered by time, read downward. A stratified stack
+                 * reads as exactly that (accumulated layers, the newest on top), and it
+                 * is the shape the cyberpunk theme's own name for this column asks for:
+                 * 神舆 is a tower of stored minds in that setting, and the same three
+                 * strata read as a tower there without changing the drawing.
+                 *
+                 * Deliberately not a clock, a tombstone or a trash can: time is already
+                 * legible from the rows' own ages, nothing here is dead in a funerary
+                 * sense, and the column is not a bin — deleting is one key inside it. -->
+            <span class="nethub-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 12.8h9.6v2H3.2z"/><path d="M4.4 8.6h7.2v4.2H4.4z"/><path d="M5.6 4.4h4.8v4.2H5.6z"/><path d="M6.8 1.2h2.4v3.2H6.8z"/></svg></span>
+          <span class="nethub-label" data-i18n="sec.archive">Archive</span>
+        </div>
+        <div class="nethub-rail" id="extpanel-rail" role="list" aria-label="Archive" data-i18n-aria="sec.archive"></div>
+        <!-- Two classes, and both are load-bearing. `nethub-body` gives it the
+             hosts column's ceiling and column layout; `extpanel-body` is what the
+             NARROW rules select on to turn this element into a fixed drawer that
+             slides in from the right. It shipped with only the first, so below
+             800px the drawer rules never matched: the body stayed a static 2px
+             column inside the header row, and pressing the trigger opened nothing
+             visible while locking the page scroll behind it. -->
+        <div class="nethub-body extpanel-body" id="extpanel-body">
+          <!-- The archive's way out: a RIGHT-pointing chevron on the right edge,
+               because this drawer slides in from the right. Same reasoning as the
+               hosts drawer's — see the comment there. -->
+          <button type="button" class="drawer-close drawer-close-right" title="Collapse" data-i18n-title="common.collapse" aria-label="Collapse archive drawer" data-i18n-aria="common.collapse" onclick="event.stopPropagation(); window.termcpToggleArchive && window.termcpToggleArchive(false)">
+            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.4 2.2L8.2 6l-3.8 3.8"/></svg>
+          </button>
+          <!-- The archive's keys, FLAT: invert, export, delete — the three verbs
+               an archived session has. There is no selection-mode switch, and that
+               is a deliberate difference from the hosts column rather than an
+               inconsistency: the hosts switch exists to separate "click connects"
+               from "click ticks", and connecting is the thing you do there most.
+               Nothing in the archive connects. Its only direct action is opening a
+               transcript read-only, so the tick target is an explicit checkbox on
+               each row and a row click always opens. With no mode to enter there is
+               nothing for a switch to switch, and a giant key whose only job is to
+               make other things clickable would be chrome in front of a list that
+               is already clickable.
+               Export and delete appear only while something is ticked: an archive
+               is consulted rarely, and two dead keys parked on a rarely-used
+               toolbar are two keys that look broken. -->
+          <!-- The toolbar is ALWAYS THERE. Left to right: invert, then the two
+               verbs, then the count.
+               *
+               * It used to appear only once something was ticked — the two verbs
+               carried `hidden` and the component unhid them — which meant the row
+               was absent exactly when a reader was deciding what to do with the
+               ledger, and appeared under the pointer only after a tick. Worse, the
+               invert key it now leads with was parked inside the column's own
+               trigger, a second control surface for one list.
+               *
+               * The verbs are DISABLED rather than hidden when nothing is ticked,
+               which is the difference between "not now" and "not here": a key that
+               fades to a shadow still tells you it exists and what it acts on, and
+               the count beside it says why it is dim. -->
+          <div class="archive-keys" role="toolbar">
+            <button type="button" class="ext-key ext-key-icon" id="archive-sel-invert" title="Invert selection" data-i18n-title="section.batch.invert" aria-label="Invert selection" data-i18n-aria="section.batch.invert">
+              <svg class="ic-hollow" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
+              <svg class="ic-solid" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
+            </button>
+            <span class="archive-tick-count" id="archive-toggle-count">0</span>
+            <button type="button" class="ext-key ext-key-icon" id="archive-batch-export" title="Export transcripts" data-i18n-title="archive.batch.exportTitle" aria-label="Export selected transcripts" data-i18n-aria="archive.batch.exportTitle">
+              <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
+            </button>
+            <button type="button" class="ext-key ext-key-icon ext-key-danger" id="archive-batch-delete" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected archived sessions" data-i18n-aria="section.batch.deleteSelectedAria">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
             </button>
           </div>
+          <div id="archive-grid" class="conn-grid"></div>
         </div>
       </aside>
     </div>
+  </div>
 
+  <!-- The session dock: the list of sessions, pinned to the bottom of the
+       viewport. It holds ONE tab per RUNNING SESSION plus one per window that has
+       no session behind it (a dial in flight, an extension's status card), plus the
+       pane-layout keys. It used to list only the windows this page had opened,
+       which made every session an agent started over MCP — and every session whose
+       window was closed here — invisible on the page. Sessions that are over live in
+       the archive column on the right; a subsystem's own connection lives in the
+       extension column. Its height is published as --dock-h so the tiled overlay
+       insets itself by it instead of being covered. -->
+  <!-- The dock: TWO rows, and the split is what makes the batch keys possible.
+       One row could not hold a tab strip wide enough to be readable plus the
+       window controls plus the verbs that act on a selection — measured on a
+       390px phone, the tabs were down to 106px between them. Row 1 is the tabs,
+       at the bar's full width; row 2 is the keys.
+       The whole dock is published as --dock-h so the tiled overlay insets itself
+       by it instead of being covered. -->
+  <div class="sessdock" id="sessdock">
+    <div class="sessdock-bar" id="sessdock-bar">
+      <!-- Row 1: the list, and only the list. The bare-row note is built by
+           refreshSessionTabbar and sits INSIDE this row rather than beside it,
+           because at this width there is no beside. -->
+      <div class="sessdock-tabs" id="session-tabs-scroll" role="tablist"></div>
+      <!-- Row 2: three zones. The batch verbs at the LEFT end, the window
+           controls at the RIGHT, and empty space between. They used to share one
+           right-hand cluster, so unfolding the batch row pushed the window
+           controls sideways — a key that moves when you press its neighbour is the
+           one thing a batch control must not do.
+
+           There is no selection-mode switch here, for the same reason the archive
+           has none: every tab carries its own tick (the monitor glyph), so a tab
+           click still raises its window and the tick has its own target. A switch
+           whose only job is to make things clickable is chrome in front of a list
+           that is already clickable. -->
+      <div class="sessdock-batch" id="dock-batch">
+        <button type="button" class="ext-key ext-key-icon" id="dock-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria">
+          <svg class="ic-hollow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
+          <svg class="ic-solid" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
+        </button>
+        <!-- CLOSE, not delete. The page offers no way to erase a session: closing
+             stops and archives it, and erasing lives in the archive column, where
+             the record being destroyed is the thing on screen. Shown only once
+             something is ticked, like every other answer key on this page. -->
+        <button type="button" class="ext-key ext-key-icon ext-key-danger" id="dock-close-ticked" title="Stop and archive selected" data-i18n-title="dock.close.title" aria-label="Stop and archive selected" data-i18n-aria="dock.close.title" disabled>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <span class="archive-tick-count is-empty" id="dock-toggle-count">0</span>
+      </div>
+      <div class="sessdock-actions" id="session-tabbar-actions"></div>
+    </div>
+  </div>
 
   <div id="modal-forward" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:420px">
@@ -320,11 +512,6 @@
   </div>
   <div id="pane-workspace" class="pane-workspace" aria-hidden="true">
     <div class="pane-grid" id="pane-grid"></div>
-  </div>
-  <div id="session-tabbar" class="session-tabbar hidden" role="tablist" aria-label="Open sessions" data-i18n-aria="tabbar.openSessions">
-    <div class="session-tabbar-grip" id="session-tabbar-grip" title="Drag to move" data-i18n-title="tabbar.dragToMove" aria-hidden="true"></div>
-    <div class="session-tabs-scroll" id="session-tabs-scroll"></div>
-    <div class="session-tabbar-actions" id="session-tabbar-actions"></div>
   </div>
   <div id="shell-windows-container" class="shell-windows-container" aria-live="polite"></div>
 
@@ -464,10 +651,11 @@
     </div>
   </div>
 
-  <!-- Closing a running session asks what to do with it, because the icon
-       cannot express the difference between the two outcomes: archiving keeps the
-       transcript in the archive plate, deleting erases it. Archive is listed
-       last and takes focus, so the destructive answer is never the default. -->
+  <!-- Closing a running session STOPS AND ARCHIVES it. There is no delete here:
+       the page offers no way to erase a session directly any more, because
+       "delete" beside "stop" made the irreversible choice the one you reach for
+       when you meant the other. Erasing lives in the archive column, where the
+       transcript being destroyed is the thing on screen. -->
   <div id="modal-close-session" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:460px">
       <div class="modal-h">
@@ -476,11 +664,10 @@
       </div>
       <div class="modal-body">
         <p id="modal-close-msg" class="modal-msg"></p>
-        <p class="modal-hint" data-i18n="session.close.hint">Archive disconnects the session and keeps its output readable. Delete erases the transcript for good.</p>
+        <p class="modal-hint" data-i18n="session.close.hintArchives">The session stops and keeps its output readable in the archive column.</p>
         <div class="modal-actions">
           <button type="button" class="btn" id="modal-close-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn btn-danger" id="modal-close-delete" data-i18n="common.delete">Delete</button>
-          <button type="button" class="btn btn-primary" id="modal-close-archive" data-i18n="session.close.archive">Archive</button>
+          <button type="button" class="btn btn-primary" id="modal-close-archive" data-i18n="dock.close.ok">Stop</button>
         </div>
       </div>
     </div>
@@ -556,6 +743,7 @@
   <script src="static/js/dialogs.js"></script>
   <script src="static/js/conn-form.js"></script>
   <script src="static/js/extensions.js"></script>
+  <script src="static/js/archive-column.js"></script>
   <script src="static/js/update-notice.js"></script>
   <script src="static/js/clients.js"></script>
 </body>

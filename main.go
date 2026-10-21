@@ -373,7 +373,8 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 
 	mcpOpts := []mcpmod.Option{mcpmod.WithHTTPServer(mainSrv)}
 	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, versionString(), mcpOpts...)
-	// Same embedded docs the Web UI serves over HTTP become MCP resources/prompts.
+	// Same embedded docs the Web UI serves over HTTP feed the `learn-api` prompt.
+	// No MCP resources: the tool surface describes itself (see internal/mcp/docs.go).
 	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal
 	mcpSrv.ManageSSHConfigs = cfg.MCPManageSSHConfigs

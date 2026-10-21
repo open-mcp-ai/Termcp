@@ -51,7 +51,7 @@
   right: var(--term-rail-gap, 10px);
   bottom: 0;
   width: var(--term-rail-w, 14px);
-  z-index: 5;
+  z-index: var(--z-rail);
 }
 .term-rail[hidden] { display: none; }
 
@@ -88,7 +88,7 @@
   opacity: 1;
   outline: 2px solid var(--term-fg-white-2);
   outline-offset: 1px;
-  z-index: 2;
+  z-index: var(--z-rail-cell);
 }
 
 .term-rail-output { background: var(--term-rail-output); }  /* o — bright green: shell output */
@@ -172,7 +172,7 @@
   position: absolute;
   right: 100%;
   margin-right: 4px;
-  z-index: 6;
+  z-index: var(--z-rail-card);
   min-width: 190px;
   padding: 7px 9px;
   border: 1px solid var(--term-border-3);

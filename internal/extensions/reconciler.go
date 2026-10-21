@@ -1144,7 +1144,7 @@ func fingerprint(ext *Extension) string {
 	}
 	b.WriteByte('|')
 	for _, f := range ext.Forwards {
-		fmt.Fprintf(&b, "%s:%s:%d:%s:%d|", f.Kind, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
+		fmt.Fprintf(&b, "%s:%s:%s:%d:%s:%d|", f.Kind, f.BindHost, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
 	}
 	fmt.Fprintf(&b, "|%d|%d|%t", ext.Rows, ext.Cols, ext.IsEnabled())
 	return b.String()
@@ -1428,9 +1428,9 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 func (r *Reconciler) createForward(f ForwardDecl, sess *session.Session, sshCli *ssh.Client, info api.Session) (*forward.ForwardInfo, error) {
 	switch f.Kind {
 	case ForwardDynamic:
-		return r.forwardMgr.CreateDynamic(sess.ID, info.Name, f.LocalPort, sshCli, info.SSHEndpoint == "internal")
+		return r.forwardMgr.CreateDynamic(sess.ID, info.Name, f.BindHost, f.LocalPort, sshCli, info.SSHEndpoint == "internal")
 	case ForwardLocal:
-		return r.forwardMgr.CreateLocal(sess.ID, info.Name, f.RemoteHost, f.RemotePort, f.LocalPort, sshCli)
+		return r.forwardMgr.CreateLocal(sess.ID, info.Name, f.BindHost, f.RemoteHost, f.RemotePort, f.LocalPort, sshCli)
 	case ForwardRemote:
 		return r.forwardMgr.CreateRemote(sess.ID, info.Name, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort, sshCli)
 	}

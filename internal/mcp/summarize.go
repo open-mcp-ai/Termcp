@@ -135,10 +135,17 @@ func summarizeOperation(tool string, args map[string]any) string {
 			return fmt.Sprintf("open remote forward %s:%d -> %s:%d",
 				s("local_host"), int(n("local_port", 0)), s("remote_host"), int(n("remote_port", 0)))
 		case "dynamic":
-			return fmt.Sprintf("open SOCKS5 proxy on port %d", int(n("local_port", 0)))
+			// The proxy is unauthenticated and loopback-only by construction (see
+			// forward.CreateDynamic), so there is no address to report.
+			return fmt.Sprintf("open SOCKS5 proxy on port %d (this host only)", int(n("local_port", 0)))
 		default:
-			return fmt.Sprintf("open local forward :%d -> %s:%d",
-				int(n("local_port", 0)), s("remote_host"), int(n("remote_port", 0)))
+			// The listening address is part of what is being approved: with --bind-host
+			// the same flags either stay on this machine or publish the tunnel to the
+			// network, and a prompt that renders both as ":8080" hides the difference
+			// from whoever has to decide.
+			return fmt.Sprintf("open local forward %s:%d -> %s:%d%s",
+				bindHostLabel(s("bind_host")), int(n("local_port", 0)),
+				s("remote_host"), int(n("remote_port", 0)), exposedNote(s("bind_host")))
 		}
 
 	// Installing something is decided on its CONTENT, not its name: an approved
@@ -156,6 +163,28 @@ func summarizeOperation(tool string, args map[string]any) string {
 
 // summarizeExtension renders an extension template for a reviewer: what it runs
 // (or which endpoint it relays), what it may touch, and what it is for.
+// bindHostLabel renders the address a local forward will listen on. An empty
+// argument is not "unknown": it is the loopback default (forward.ResolveBindHost),
+// and spelling it out shows the reviewer what saying nothing actually means.
+func bindHostLabel(host string) string {
+	if strings.TrimSpace(host) == "" {
+		return "127.0.0.1"
+	}
+	return strings.TrimSpace(host)
+}
+
+// exposedNote says, in the same line, that a non-loopback bind is reachable from
+// the network. The interface list is deliberately absent: whether 0.0.0.0 is
+// actually exposed depends on the host's firewall, and a prompt that guesses
+// "exposed to 192.168.1.0/24" would be more wrong than silence.
+func exposedNote(host string) string {
+	switch strings.TrimSpace(host) {
+	case "", "127.0.0.1", "localhost", "::1", "[::1]":
+		return ""
+	}
+	return "  (reachable from the network, not just this machine)"
+}
+
 func summarizeExtension(action string, args map[string]any) string {
 	s := func(k string) string { return strings.TrimSpace(getString(args, k, "")) }
 	list := func(k string) string {

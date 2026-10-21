@@ -43,21 +43,18 @@ func (s *Client) StreamReadTo(w io.Writer, remotePath string, offset, length int
 }
 
 // StreamWriteFrom reads raw bytes from r and writes them to remotePath at the given
-// offset. offset=0 truncates the file; offset>0 writes at that position without
-// truncation. Uses io.Copy to stream without buffering in memory.
-func (s *Client) StreamWriteFrom(r io.Reader, remotePath string, offset int64) (int64, error) {
-	flag := os.O_RDWR | os.O_CREATE
-	if offset <= 0 {
-		flag |= os.O_TRUNC
-	}
+// offset. A nil offset truncates the file; a pointer to 0 overwrites from the first
+// byte without truncating. Uses io.Copy to stream without buffering in memory.
+func (s *Client) StreamWriteFrom(r io.Reader, remotePath string, offset *int64) (int64, error) {
+	flag, off := writeOpenFlags(offset)
 	f, err := s.client.OpenFile(remotePath, flag)
 	if err != nil {
 		return 0, fmt.Errorf("open remote file: %w", err)
 	}
 	defer f.Close()
 
-	if offset > 0 {
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+	if off > 0 {
+		if _, err := f.Seek(off, io.SeekStart); err != nil {
 			return 0, fmt.Errorf("seek: %w", err)
 		}
 	}
@@ -109,6 +106,15 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat remote file: %w", err)
+	}
+	// A DIRECTORY IS A CALLER MISTAKE, NOT A TRANSPORT FAULT, and it has to be
+	// caught HERE. Reading one through SFTP fails deep inside the reader and comes
+	// back as `sftp: "read /tmp/x: is a directory" (SSH_FX_FAILURE)` — an
+	// ErrSSHFxFailure indistinguishable from a genuine fault, complete with the
+	// protocol's own wording. Stat already knows the answer, so say it in terms the
+	// caller can act on.
+	if fi.IsDir() {
+		return nil, fmt.Errorf("%s: %w; use --action stat to list its contents", remotePath, ErrIsDirectory)
 	}
 	totalSize := fi.Size()
 
@@ -164,9 +170,11 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 	// Encode based on mode.
 	switch mode {
 	case "hex":
-		result.Data = fmt.Sprintf("%x", segment)
+		body := fmt.Sprintf("%x", segment)
+		result.Data = &body
 	case "text", "":
-		result.Data = encoding.EncodeText(segment)
+		body := encoding.EncodeText(segment)
+		result.Data = &body
 	default:
 		return nil, fmt.Errorf("unknown mode %q (use text, hex, or file)", mode)
 	}
@@ -175,14 +183,14 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 }
 
 // WriteFile writes data to a remote file, either inline or from a local file.
-func (s *Client) WriteFile(remotePath string, offset int64, data string, mode string, localPath string, localOffset, length int64) (int64, error) {
+func (s *Client) WriteFile(remotePath string, offset *int64, data string, mode string, localPath string, localOffset, length int64) (int64, error) {
 	if localPath != "" {
 		return s.writeFromLocal(remotePath, offset, localPath, localOffset, length)
 	}
 	return s.writeInline(remotePath, offset, data, mode)
 }
 
-func (s *Client) writeInline(remotePath string, offset int64, data string, mode string) (int64, error) {
+func (s *Client) writeInline(remotePath string, offset *int64, data string, mode string) (int64, error) {
 	var raw []byte
 	switch mode {
 	case "hex":
@@ -197,18 +205,19 @@ func (s *Client) writeInline(remotePath string, offset int64, data string, mode 
 		return 0, fmt.Errorf("unknown mode %q", mode)
 	}
 
-	flag := os.O_RDWR | os.O_CREATE
-	if offset <= 0 {
-		flag |= os.O_TRUNC
-	}
+	flag, off := writeOpenFlags(offset)
 	f, err := s.client.OpenFile(remotePath, flag)
 	if err != nil {
 		return 0, fmt.Errorf("open remote file: %w", err)
 	}
 	defer f.Close()
 
-	if offset > 0 {
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+	// SEEK ONLY WHEN NEEDED, BUT ALWAYS KNOW WHERE WE ARE. The file's own offset
+	// starts at 0, so writing at 0 needs no seek; writing anywhere else does. This
+	// is the half of the offset-0 bug that made it invisible: the flag was right
+	// and the position was right, so only the truncate decision was wrong.
+	if off > 0 {
+		if _, err := f.Seek(off, io.SeekStart); err != nil {
 			return 0, fmt.Errorf("seek: %w", err)
 		}
 	}
@@ -219,7 +228,7 @@ func (s *Client) writeInline(remotePath string, offset int64, data string, mode 
 	return int64(n), nil
 }
 
-func (s *Client) writeFromLocal(remotePath string, offset int64, localPath string, localOffset, length int64) (int64, error) {
+func (s *Client) writeFromLocal(remotePath string, offset *int64, localPath string, localOffset, length int64) (int64, error) {
 	localFile, err := os.Open(localPath)
 	if err != nil {
 		return 0, fmt.Errorf("open local file: %w", err)
@@ -237,18 +246,15 @@ func (s *Client) writeFromLocal(remotePath string, offset int64, localPath strin
 		return 0, fmt.Errorf("seek local: %w", err)
 	}
 
-	flag := os.O_RDWR | os.O_CREATE
-	if offset <= 0 {
-		flag |= os.O_TRUNC
-	}
+	flag, off := writeOpenFlags(offset)
 	remoteFile, err := s.client.OpenFile(remotePath, flag)
 	if err != nil {
 		return 0, fmt.Errorf("open remote file: %w", err)
 	}
 	defer remoteFile.Close()
 
-	if offset > 0 {
-		if _, err := remoteFile.Seek(offset, io.SeekStart); err != nil {
+	if off > 0 {
+		if _, err := remoteFile.Seek(off, io.SeekStart); err != nil {
 			return 0, fmt.Errorf("seek remote: %w", err)
 		}
 	}
@@ -258,4 +264,25 @@ func (s *Client) writeFromLocal(remotePath string, offset int64, localPath strin
 		return 0, fmt.Errorf("copy: %w", err)
 	}
 	return n, nil
+}
+
+// writeOpenFlags decides how a write opens its target.
+//
+// A POINTER, NOT A SENTINEL: nil means the caller did not specify an offset (the
+// file is truncated and rewritten from the start), while a pointer to 0 means
+// "overwrite from the first byte, preserving the rest". They used to share the
+// value 0 under `offset <= 0`, which made the destructive one the default.
+//
+// The returned offset is always non-negative: 0 for the truncate case, and
+// whatever the caller passed otherwise.
+func writeOpenFlags(offset *int64) (int, int64) {
+	flag := os.O_RDWR | os.O_CREATE
+	if offset == nil {
+		return flag | os.O_TRUNC, 0
+	}
+	off := *offset
+	if off < 0 {
+		off = 0
+	}
+	return flag, off
 }

@@ -15,6 +15,15 @@ import (
 // branch on it with errors.Is instead of matching the message.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalid marks a profile whose CONTENT is unusable — a missing host, no
+// credential, a port outside the range.
+//
+// It exists so the surface can answer 400 instead of 500. Those checks already
+// refuse the write, but they returned bare fmt.Errorf values, so nothing upstream
+// could tell "the caller wrote an incomplete profile" from "the write failed" and
+// every one of them surfaced as operation_failed.
+var ErrInvalid = errors.New("invalid ssh config")
+
 // ErrReserved reports that a name denotes the built-in internal profile, which
 // is virtual and cannot be deleted. It is a sentinel so a batch caller can turn
 // it into its own per-name code without re-testing the name or restating the

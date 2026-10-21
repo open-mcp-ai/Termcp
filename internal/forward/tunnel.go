@@ -16,24 +16,29 @@ import (
 // tunnel connections back via smux to termcp's remoteHost:remotePort.
 // LocalForwardSSH creates a local forward (ssh -L): termcp listens on a local port and
 // tunnels each connection through the SSH client's direct-tcpip channel to the remote target.
-// The ctx is monitored; when cancelled all active connections are closed.
+// bindHost is the local address to listen on; empty means loopback (see
+// ResolveBindHost), and a non-loopback address publishes the tunnel to whoever
+// can reach it. The ctx is monitored; when cancelled all active connections are closed.
 // Returns a local listener and a cancel function for lifecycle management.
-func LocalForwardSSH(ctx context.Context, client *ssh.Client, remoteHost string, remotePort int, localPort int) (*ForwardInfo, net.Listener, error) {
+func LocalForwardSSH(ctx context.Context, client *ssh.Client, bindHost string, remoteHost string, remotePort int, localPort int) (*ForwardInfo, net.Listener, error) {
 	// localPort 0 means "let the kernel pick": bind once and keep it. Probe-then-bind
 	// leaves a window for another process to take the port (see dynamicLocal).
-	localListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+	localListener, err := net.Listen("tcp", net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", localPort)))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	actualPort := localListener.Addr().(*net.TCPAddr).Port
 	target := net.JoinHostPort(remoteHost, fmt.Sprintf("%d", remotePort))
 
 	fwID := ForwardID(DirectionLocal)
 	fw := &ForwardInfo{
-		ForwardID:  fwID,
-		Direction:  DirectionLocal,
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
+		ForwardID: fwID,
+		Direction: DirectionLocal,
+		// The listener's own address, not the request: the kernel picks a port for
+		// localPort 0 and the caller has to be told which one it got. The requested
+		// host is kept because an explicit "0.0.0.0" must not be reported back as
+		// the wildcard the kernel expanded it to.
+		ListenAddr: net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", localListener.Addr().(*net.TCPAddr).Port)),
 		TargetAddr: target,
 		Status:     "active",
 		CreatedAt:  clock.Now(),
@@ -79,16 +84,20 @@ func LocalForwardSSH(ctx context.Context, client *ssh.Client, remoteHost string,
 // The ctx is monitored; when cancelled all active connections are closed.
 // Returns the local tunnel listener for lifecycle management.
 func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string, agentPort int, remoteHost string, remotePort int) (*ForwardInfo, net.Listener, error) {
-	listener, err := client.Listen("tcp", fmt.Sprintf("%s:%d", agentHost, agentPort))
+	listener, err := client.Listen("tcp", net.JoinHostPort(agentHost, fmt.Sprintf("%d", agentPort)))
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssh local forward: %w", err)
+		return nil, nil, fmt.Errorf("ssh remote forward: %w", err)
 	}
 
 	fwID := ForwardID(DirectionRemote)
 	fw := &ForwardInfo{
-		ForwardID:  fwID,
-		Direction:  DirectionRemote,
-		ListenAddr: fmt.Sprintf("%s:%d", agentHost, agentPort),
+		ForwardID: fwID,
+		Direction: DirectionRemote,
+		// The listener's address, not the request: the target's sshd answers with
+		// the port it actually bound, and for agentPort 0 that is the only place the
+		// chosen number appears. Reporting the request left ListenAddr as ":0" -- an
+		// address nothing can dial.
+		ListenAddr: listener.Addr().String(),
 		TargetAddr: fmt.Sprintf("%s:%d", remoteHost, remotePort),
 		Status:     "active",
 		CreatedAt:  clock.Now(),
@@ -128,12 +137,16 @@ func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string,
 }
 
 // DynamicForwardSSH starts a SOCKS5 proxy using an SSH client's dialer.
+// bindHost is the local address to listen on; empty means loopback. The SOCKS5
+// handshake performs no authentication (matching `ssh -D`), so a non-loopback
+// address here is an open proxy on that interface -- callers must refuse it
+// rather than pass it through.
 // The ctx is used to stop the SOCKS5 server and close active connections.
 // Returns a listener for lifecycle management.
-func DynamicForwardSSH(ctx context.Context, client *ssh.Client, localPort int) (*ForwardInfo, net.Listener, error) {
+func DynamicForwardSSH(ctx context.Context, client *ssh.Client, bindHost string, localPort int) (*ForwardInfo, net.Listener, error) {
 	// localPort 0 means "let the kernel pick": bind once and keep it. Probe-then-bind
 	// leaves a window for another process to take the port (see dynamicLocal).
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+	ln, err := net.Listen("tcp", net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", localPort)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -144,7 +157,7 @@ func DynamicForwardSSH(ctx context.Context, client *ssh.Client, localPort int) (
 	fw := &ForwardInfo{
 		ForwardID:  fwID,
 		Direction:  DirectionDynamic,
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
+		ListenAddr: net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", actualPort)),
 		TargetAddr: "SOCKS5",
 		Status:     "active",
 		CreatedAt:  clock.Now(),
@@ -158,7 +171,7 @@ func DynamicForwardSSH(ctx context.Context, client *ssh.Client, localPort int) (
 }
 
 // dynamicLocal starts a SOCKS5 proxy using net.Dial from termcp itself.
-func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig string, localPort int) (*ForwardInfo, error) {
+func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig, bindHost string, localPort int) (*ForwardInfo, error) {
 	// localPort 0 means "let the kernel pick": bind once and keep that listener.
 	//
 	// The obvious way -- Listen(":0"), read the port, Close, Listen(":N") -- is a
@@ -167,7 +180,7 @@ func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig string, localPort in
 	// ("bind: address already in use"). Holding the first listener removes the
 	// window instead of narrowing it, and on Linux the kernel also avoids
 	// handing out the same ephemeral port twice while it is held.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+	ln, err := net.Listen("tcp", net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", localPort)))
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +197,7 @@ func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig string, localPort in
 		SessionID:  sessionID,
 		Direction:  DirectionDynamic,
 		SSHConfig:  sshConfig,
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", actualPort),
+		ListenAddr: net.JoinHostPort(ResolveBindHost(bindHost), fmt.Sprintf("%d", actualPort)),
 		TargetAddr: "SOCKS5",
 		Status:     "active",
 		CreatedAt:  clock.Now(),

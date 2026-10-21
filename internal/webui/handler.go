@@ -216,6 +216,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// The row layout of that log for one terminal width, with the marks on it.
 	mux.HandleFunc("GET /api/shells/{id}/rail", h.handleShellRail)
 	mux.HandleFunc("DELETE /api/shells/{id}", h.handleCloseShell)
+	// Closing a channel is the ordinary act and KEEPS its record; DELETE above is the
+	// erase. Two verbs because they are two decisions: a tab's X should not destroy
+	// the transcript that the archive exists to show. Same capability gate as close —
+	// a caller allowed to stop a channel is allowed to stop it either way, and one that
+	// is not may do neither.
+	mux.HandleFunc("POST /api/shells/{id}/archive", h.handleArchiveShell)
 	// Terminal I/O over REST for scripts/CLI (the WebSocket stays the real-time path).
 	mux.HandleFunc("POST /api/shells/{id}/input", h.handleShellInput)
 	mux.HandleFunc("POST /api/shells/{id}/key", h.handleShellKey)

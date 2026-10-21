@@ -1,9 +1,9 @@
 {
   "en": {
-    "nav.nethub": "Connections",
+    "nav.nethub": "Hosts",
     "nethub.add": "Add host",
     "nethub.empty": "No hosts configured",
-    "nethub.expand": "Expand connections",
+    "nethub.expand": "Expand hosts",
     "nethub.rail.more": "{count} more hosts",
     "nethub.proto.loopback": "Local",
     "nethub.internal": "Local SSH connection",
@@ -18,10 +18,10 @@
     "plate.archive.empty": "No archived sessions"
   },
   "zh-Hans": {
-    "nav.nethub": "连接",
+    "nav.nethub": "主机",
     "nethub.add": "添加主机",
     "nethub.empty": "暂无主机",
-    "nethub.expand": "展开连接列表",
+    "nethub.expand": "展开主机列表",
     "nethub.rail.more": "另外 {count} 个主机",
     "nethub.proto.loopback": "本机",
     "nethub.internal": "本机 SSH 连接",
@@ -36,10 +36,10 @@
     "plate.archive.empty": "暂无已归档的会话"
   },
   "zh-Hant": {
-    "nav.nethub": "連線",
+    "nav.nethub": "主機",
     "nethub.add": "新增主機",
     "nethub.empty": "尚無主機",
-    "nethub.expand": "展開連線清單",
+    "nethub.expand": "展開主機清單",
     "nethub.rail.more": "另外 {count} 台主機",
     "nethub.proto.loopback": "本機",
     "nethub.internal": "本機 SSH 連線",

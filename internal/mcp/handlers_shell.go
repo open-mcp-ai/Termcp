@@ -451,12 +451,32 @@ type readParams = transcript.Params
 func parseReadParams(args map[string]any) (readParams, *mcpgo.CallToolResult) {
 	p := readParams{
 		StripAnsi: getBool(args, "strip_ansi", true),
-		Timeout:   getFloat64(args, "timeout", 3.0),
-		MaxLines:  int(getFloat64(args, "max_lines", 0)),
-		MaxBytes:  int(getFloat64(args, "max_bytes", 8192)),
-		ReaderID:  int(getFloat64(args, "reader_id", 0)),
-		Offset:    int64(getFloat64(args, "offset", -1)),
-		TailLines: int(getFloat64(args, "tail_lines", 0)),
+		// This surface's reply becomes JSON, and encoding/json replaces bytes it
+		// cannot decode with U+FFFD instead of reporting them. That substitution
+		// shifts every offset after it, so a caller paging the stream reads from the
+		// wrong byte while being told the read succeeded. Ask the shared reader to
+		// refuse such a window instead; it names the offending offset, and
+		// `mode=hex`/`mode=file` on file_read remain the byte-exact route.
+		//
+		// The Web UI (handler_shell.go) deliberately does NOT set this: it repaints
+		// raw bytes into a terminal, where non-UTF-8 output is normal and lossless.
+		RequireUTF8: true,
+		Timeout:     getFloat64(args, "timeout", 3.0),
+		MaxLines:    int(getFloat64(args, "max_lines", 0)),
+		MaxBytes:    int(getFloat64(args, "max_bytes", 8192)),
+		ReaderID:    int(getFloat64(args, "reader_id", 0)),
+		// A pointer for the same reason TailLines is one: 0 is a real byte position,
+		// so "no positional read" and "read from the first byte" cannot share it.
+		Offset: int64PtrFromArgs(args, "offset"),
+		// ABSENT AND ZERO ARE DIFFERENT REQUESTS, so this is a pointer: nil means
+		// the caller named no tail at all, 0 means they asked for zero lines.
+		//
+		// The field is an int in the wire format (a JSON number), and the old
+		// default of 0 made "--tail 0" indistinguishable from "no tail" — which
+		// scanTailWindow read as "no line limit" and answered with the ENTIRE
+		// buffer. The smallest possible request produced the largest possible
+		// answer.
+		TailLines: intPtrFromArgs(args, "tail_lines"),
 		FromLine:  int64(getFloat64(args, "from_line", 0)),
 		Stream:    getString(args, "stream", ""),
 	}
@@ -589,6 +609,20 @@ func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolR
 			if fromLine, toLine, lerr := s.sessMgr.LineSpanOfOffsets(sess.ID, shellID, m.Offset, end); lerr == nil {
 				span["from_line"] = fromLine
 				span["to_line"] = toLine
+				// A MARK RECORDS WHERE A COMMAND BEGAN, NOT WHERE ITS FIRST LINE
+				// BEGAN: the prompt that preceded the command belongs to the same
+				// line, so start and line_start differ by the prompt's width (37
+				// bytes in the case that surfaced this). Reporting only `start`
+				// next to a line number invited callers to read from it and land
+				// mid-line.
+				//
+				// line_start is the byte `read --from-line <from_line>` starts
+				// from, so a caller can go from this listing straight to the bytes.
+				if fromLine > 0 {
+					if ls, lserr := s.sessMgr.LineStartOffset(sess.ID, shellID, fromLine); lserr == nil {
+						span["line_start"] = ls
+					}
+				}
 			}
 		}
 		spans = append(spans, span)
@@ -704,4 +738,23 @@ func (s *Server) handleUnregisterReader(ctx context.Context, request mcpgo.CallT
 	}
 	shell.UnregisterReader(readerID)
 	return successResult(), nil
+}
+
+// intPtrFromArgs reads an optional integer argument, distinguishing "absent" (nil)
+// from "present and zero" (pointer to 0).
+func intPtrFromArgs(args map[string]any, key string) *int {
+	if _, ok := args[key]; !ok {
+		return nil
+	}
+	v := int(getFloat64(args, key, 0))
+	return &v
+}
+
+// int64PtrFromArgs is intPtrFromArgs for the 64-bit fields (byte offsets).
+func int64PtrFromArgs(args map[string]any, key string) *int64 {
+	if _, ok := args[key]; !ok {
+		return nil
+	}
+	v := int64(getFloat64(args, key, 0))
+	return &v
 }

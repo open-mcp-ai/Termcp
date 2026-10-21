@@ -164,6 +164,7 @@ func ParseForwardDecls(v any) ([]ForwardDecl, error) {
 		}
 		out = append(out, ForwardDecl{
 			Kind:       optString(m, "kind", ""),
+			BindHost:   optString(m, "bind_host", ""),
 			LocalHost:  optString(m, "local_host", ""),
 			LocalPort:  optInt(m, "local_port", 0),
 			RemoteHost: optString(m, "remote_host", ""),

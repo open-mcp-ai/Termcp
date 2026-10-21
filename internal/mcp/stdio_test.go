@@ -174,8 +174,10 @@ func TestStreamFilter_PipeSeparatesStderrCrossOS(t *testing.T) {
 	if out := m["output"].(string); out != "ERR-1\n" {
 		t.Fatalf("stream=e output = %q, want exactly the stderr line", out)
 	}
-	// ...and via the tail window, which filters the same raw bytes.
-	m = readStream(t, s, shellID, "e", map[string]any{"offset": -1.0, "tail_lines": 5.0})
+	// ...and via the tail window, which filters the same raw bytes. No offset is
+	// passed: absent is how a caller says "no positional read" now, since -1 was a
+	// sentinel that had to be sent as an invalid value.
+	m = readStream(t, s, shellID, "e", map[string]any{"tail_lines": 5.0})
 	if out := m["output"].(string); out != "ERR-1\n" {
 		t.Fatalf("stream=e tail output = %q, want exactly the stderr line", out)
 	}
@@ -244,6 +246,27 @@ func TestStreamFilter_PtyMergesStderr(t *testing.T) {
 	m := readStream(t, s, shellID, "e", map[string]any{"offset": 0.0})
 	if out := m["output"].(string); out != "" {
 		t.Fatalf("pty stream=e output = %q, want empty: a pty has no separate stderr", out)
+	}
+	// Wait for the transcript to stop growing before comparing snapshots.
+	//
+	// Each read below is an independent snapshot of the same window, and a pty
+	// echoes the command line before the command's own output arrives. Seeing the
+	// marker therefore does not mean the line is complete: the read above can land
+	// between "…PROBE" and its newline, and the next snapshot then differs by that
+	// newline — which is not the filter disagreeing with the unfiltered read, which
+	// is what this test is about.
+	var prev string
+	stableDeadline := time.Now().Add(5 * time.Second)
+	for {
+		cur := readStream(t, s, shellID, "", map[string]any{"offset": 0.0})["output"].(string)
+		if cur == prev {
+			break
+		}
+		if time.Now().After(stableDeadline) {
+			t.Fatalf("the pty transcript never settled, last: %q", cur)
+		}
+		prev = cur
+		time.Sleep(100 * time.Millisecond)
 	}
 	filtered := readStream(t, s, shellID, "o", map[string]any{"offset": 0.0})
 	all := readStream(t, s, shellID, "", map[string]any{"offset": 0.0})

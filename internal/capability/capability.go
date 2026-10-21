@@ -157,6 +157,21 @@ var table = []Capability{
 	{ID: "ext.update", Kind: approval.KindExtensionUpdate, Gate: GateReview},
 	{ID: "ext.delete", Gate: GateDevice},
 	{ID: "ext.retry", Gate: GateDevice},
+
+	// --- Frame channels: reaching a peer this process did not start ---
+	//
+	// GateReview, not GateDevice, and for the reason ext.create carries it: what
+	// the agent gains is not a command in a host it was already assigned, it is a
+	// NEW peer — an MCP server, a browser, an arbitrary socket — with whatever
+	// that peer can do. That is a change to the capability list, which is the one
+	// thing the review gate exists for.
+	//
+	// This row is the half of the fix that does not depend on issue #128: it makes
+	// the door nameable. Whether a given call is HELD is the hook layer's decision
+	// (the gate is read there), so nothing here queues anything yet.
+	{ID: "jrpc.open", Kind: approval.KindExtensionCreate, Gate: GateReview},
+	{ID: "mcp.open", Kind: approval.KindExtensionCreate, Gate: GateReview},
+	{ID: "cdp.open", Kind: approval.KindExtensionCreate, Gate: GateReview},
 }
 
 // byID indexes table. Built once at init so a lookup on the hot path — every
@@ -279,6 +294,19 @@ const (
 	ExtUpdate = "ext.update"
 	ExtDelete = "ext.delete"
 	ExtRetry  = "ext.retry"
+
+	// The frame-channel doors. They are one capability each rather than one per
+	// subcommand: `open` is what reaches a new peer, and a caller that may open
+	// has already been granted the reach the rest of the subcommands exercise.
+	//
+	// They are rows at all so a whitelist can NAME them. Before this, a session
+	// whose template listed nothing still reached `mcp open` — the directive's
+	// target is a URL, so the session-scoped guard found no session to ask and
+	// admitted the call. "The operation nobody registered cannot be reached by a
+	// restricted session" only holds for operations that HAVE a row.
+	JrpcOpen = "jrpc.open"
+	McpOpen  = "mcp.open"
+	CdpOpen  = "cdp.open"
 )
 
 // toolIDs is the tool name → capability id map. One line per tool; a tool

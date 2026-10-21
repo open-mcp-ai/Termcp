@@ -281,6 +281,37 @@ func (s *Store) SaveShell(sessionID string, sh api.Session) error {
 	return s.writeManifest(dir, sh)
 }
 
+// ShellIDs lists the shell directories that exist on disk for a session.
+//
+// It exists so a caller can RECONCILE rather than only append: SaveShell never
+// removed anything, so a shell dropped from the in-memory snapshot stayed on disk and
+// came back on the next restart. Listing what is actually there is what lets
+// persistOne notice the difference.
+//
+// A missing session directory is not an error — it means nothing was ever written —
+// so it answers an empty slice. Entries that are not directories are skipped: the
+// session directory also holds its own manifest.
+func (s *Store) ShellIDs(sessionID string) ([]string, error) {
+	if err := validateID(sessionID); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.sessionDir(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	return out, nil
+}
+
 // DeleteShell removes a shell's directory (manifest + logs).
 func (s *Store) DeleteShell(sessionID, shellID string) error {
 	if err := validateID(sessionID); err != nil {

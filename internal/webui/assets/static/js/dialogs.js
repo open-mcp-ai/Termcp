@@ -563,13 +563,19 @@ function setNetHubCollapsed(collapsed, persist) {
   if (!frame || !body) return;
   collapsed = !!collapsed;
   var drawer = netHubIsDrawer();
-  /* The extension drawer shares this scrim and this page; opening this one puts
-     it away. extensions.js loads after this file, so the guard is a typeof
+  /* The archive drawer shares this scrim and this page; opening this one puts it
+     away. archive-column.js loads after this file, so the guard is a typeof
      rather than a call — at load time the function is not there yet, and the
      cross-call only matters once a click can happen. The pair cannot recurse:
-     only an opening state calls across, and closing never does. */
-  if (drawer && !collapsed && typeof extensionsCollapsed === 'function' && !extensionsCollapsed()) {
-    setExtensionsCollapsed(true, false);
+     only an opening state calls across, and closing never does.
+
+     This used to name the EXTENSION column's functions, which went with the
+     swap: the folding column holds the archive now. The typeof guard meant the
+     stale names failed silently, so two drawers could sit open at once — the
+     one case the guard was written to make safe is the same one that hides a
+     rename, which is why the test pins the names this file actually calls. */
+  if (drawer && !collapsed && typeof archiveCollapsed === 'function' && !archiveCollapsed()) {
+    setArchiveCollapsed(true, false);
   }
   /* In the drawer scope the body is shown or hidden; above it the frame keeps
      the rail. Both are one boolean, so the sidebar and the overlay cannot

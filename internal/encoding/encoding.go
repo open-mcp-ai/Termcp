@@ -3,24 +3,56 @@ package encoding
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
-// EncodeText encodes a byte slice as text with \xHH escapes for non-printable bytes.
+// EncodeText encodes a byte slice as TEXT: valid UTF-8 passes through, and only
+// bytes that are neither printable ASCII, common whitespace, nor part of a valid
+// UTF-8 sequence are escaped as \xHH.
+//
+// THE ESCAPE RULE WAS ASCII-ONLY, and that made `file --action read --mode text`
+// unable to return any text that was not ASCII. A file holding 中文ok — written
+// correctly as eight UTF-8 bytes — read back as \xe4\xb8\xad\xe6\x96\x87ok, so
+// every caller had to decode escapes to see the bytes they had just written. The
+// asymmetry was the tell: write took the text at face value, read did not.
+//
+// Decoding runes rather than iterating bytes is what makes the difference: a rune
+// that DecodeRune accepts is by definition a complete, valid sequence, so emitting
+// it cannot corrupt the stream. Invalid bytes still escape, which is the property
+// DecodeText depends on for a lossless round trip.
 func EncodeText(data []byte) string {
 	var b strings.Builder
-	for _, c := range data {
+	for i := 0; i < len(data); {
+		c := data[i]
+		// Printable ASCII and the three whitespace escapes we spell out.
 		switch {
 		case c >= 0x20 && c <= 0x7E:
 			b.WriteByte(c)
+			i++
+			continue
 		case c == '\n':
 			b.WriteString("\\n")
+			i++
+			continue
 		case c == '\r':
 			b.WriteString("\\r")
+			i++
+			continue
 		case c == '\t':
 			b.WriteString("\\t")
-		default:
-			fmt.Fprintf(&b, "\\x%02x", c)
+			i++
+			continue
 		}
+		// A multi-byte UTF-8 sequence is DATA, not an escape. DecodeRune returns
+		// RuneError with size 1 for anything invalid, which falls through to the
+		// \xHH branch below and keeps DecodeText a faithful inverse.
+		if r, size := utf8.DecodeRune(data[i:]); r != utf8.RuneError && size > 1 {
+			b.Write(data[i : i+size])
+			i += size
+			continue
+		}
+		fmt.Fprintf(&b, "\\x%02x", c)
+		i++
 	}
 	return b.String()
 }

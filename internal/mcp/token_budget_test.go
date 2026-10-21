@@ -12,10 +12,18 @@ import (
 // for on every turn.
 //
 // Issue #117 replaced a 32-tool, ~24 KB surface with a single `term` entry, and
-// the guard is now a hard constraint rather than a budget with headroom: the
-// point of the redesign is that the surface stops growing with the capability
+// the point of that redesign is that the surface stops growing with the capability
 // count. If a directive table, a file format or a usage page ever migrates back
 // into the tool description, this fails.
+//
+// The two limits guard DIFFERENT costs and are not interchangeable. tools/list is
+// paid once per session (plus on every client that re-lists), so it has the looser
+// 2500 B. `instructions` is re-injected into every model turn by clients that honour
+// it, so it is held much tighter: at 1600 B it holds the four facts that must be in
+// context BEFORE the first call (one tool, handle shape, the human boundary, a held
+// reply) and nothing else. Anything a model can discover by acting — the command
+// space via `help`, a reply's shape via the reply — is excluded here and paid for
+// only when it is used.
 func TestTokenBudgetGuard(t *testing.T) {
 	s := New(nil, nil, nil, nil, "test")
 
@@ -41,8 +49,8 @@ func TestTokenBudgetGuard(t *testing.T) {
 	if len(b) >= 2500 {
 		t.Errorf("the %s schema serialises to %d B, over the 2500 B budget", tools[0].Name, len(b))
 	}
-	if n := len(mcpServerInstructions); n > 2600 {
-		t.Errorf("instructions %d B exceeds 2600 B budget", n)
+	if n := len(mcpServerInstructions); n > 1600 {
+		t.Errorf("instructions %d B exceeds 1600 B budget", n)
 	}
 
 	// The description must not enumerate directives (issue #117 33d): the

@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,17 +13,35 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
+// ErrIsDirectory reports that a read named a directory.
+//
+// A sentinel rather than a formatted string because the MCP layer classifies it: a
+// directory is what the caller asked for and cannot use, which is a 400, while an
+// SSH_FX_FAILURE from the same reader is a genuine fault and stays a 500.
+var ErrIsDirectory = errors.New("is a directory")
+
 // FileResult holds the result of a file_read operation.
 type FileResult struct {
-	Data      string `json:"data,omitempty"`
-	Mode      string `json:"mode"` // "text" | "hex" | "file"
-	Encoding  string `json:"encoding,omitempty"`
-	TotalSize int64  `json:"total_size"`
-	HasMore   bool   `json:"has_more,omitempty"`
-	Offset    int64  `json:"offset,omitempty"`
-	Length    int64  `json:"length,omitempty"`
-	BytesRead int64  `json:"bytes_read,omitempty"`
-	LocalPath string `json:"local_path,omitempty"`
+	// Data is a POINTER so "the inline body is empty" and "this read has no inline
+	// body" stay distinguishable.
+	//
+	// mode=file streams to a local path and never fills Data; mode=text/hex always
+	// does, even when the window is empty. A plain string with no omitempty made the
+	// first case report `data: ""` — a body that looks truncated rather than absent —
+	// while keeping omitempty made the second case drop the field on a zero-length
+	// read, which is the one read where seeing a zero matters.
+	//
+	// Length and BytesRead keep no omitempty for the same reason they always needed
+	// it: 0 is a fact about the window, not a missing value.
+	Data      *string `json:"data,omitempty"`
+	Mode      string  `json:"mode"` // "text" | "hex" | "file"
+	Encoding  string  `json:"encoding,omitempty"`
+	TotalSize int64   `json:"total_size"`
+	HasMore   bool    `json:"has_more,omitempty"`
+	Offset    int64   `json:"offset,omitempty"`
+	Length    int64   `json:"length"`
+	BytesRead int64   `json:"bytes_read"`
+	LocalPath string  `json:"local_path,omitempty"`
 }
 
 // FileStatResult holds the result of a file_stat operation.

@@ -14,7 +14,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/webui"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -44,6 +43,16 @@ func callMCPCtx(t *testing.T, s *Server, ctx context.Context, method string, par
 // dispatchMCP runs one already-built JSON-RPC request under ctx.
 func dispatchMCP(t *testing.T, s *Server, ctx context.Context, req map[string]any) json.RawMessage {
 	t.Helper()
+	res, err := dispatchMCPErr(t, s, ctx, req)
+	if err != "" {
+		t.Fatalf("%v failed: %s", req["method"], err)
+	}
+	return res
+}
+
+// dispatchMCPErr runs one request and returns the error message (or empty on success).
+func dispatchMCPErr(t *testing.T, s *Server, ctx context.Context, req map[string]any) (json.RawMessage, string) {
+	t.Helper()
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +73,9 @@ func dispatchMCP(t *testing.T, s *Server, ctx context.Context, req map[string]an
 		t.Fatalf("bad JSON-RPC envelope %s: %v", b, err)
 	}
 	if envelope.Error != nil {
-		t.Fatalf("%v failed: %s", req["method"], envelope.Error.Message)
+		return nil, envelope.Error.Message
 	}
-	return envelope.Result
+	return envelope.Result, ""
 }
 
 // docsTestServer returns a server wired with the shipped docs assets and a
@@ -81,76 +90,47 @@ func docsTestServer(t *testing.T) *Server {
 }
 
 // TestDocsAssetsExist guards against a documentation asset being renamed or
-// dropped: every registered resource must resolve to a non-empty file.
+// dropped: the HTTP-served reference must exist and be non-empty.
 func TestDocsAssetsExist(t *testing.T) {
-	assets := webui.Assets()
-	if len(docResources) == 0 {
-		t.Fatal("no doc resources registered")
+	b, err := fs.ReadFile(webui.Assets(), "api.md")
+	if err != nil {
+		t.Fatalf("api.md missing from embedded assets: %v (run `make sync-assets`)", err)
 	}
-	for _, doc := range docResources {
-		b, err := fs.ReadFile(assets, doc.path)
-		if err != nil {
-			t.Fatalf("doc %s missing from embedded assets: %v (run `make sync-assets`)", doc.path, err)
-		}
-		if len(b) == 0 {
-			t.Fatalf("doc %s is empty", doc.path)
-		}
-		if doc.name == "" || doc.description == "" {
-			t.Fatalf("doc %s needs a name and description", doc.path)
-		}
+	if len(b) == 0 {
+		t.Fatal("api.md is empty")
 	}
 }
 
-// TestResourcesListAndRead verifies the docs are discoverable and readable with
-// URIs that are the instance's real HTTP addresses (same strings work for curl).
-func TestResourcesListAndRead(t *testing.T) {
+// TestNoResourceCapability pins the decision that resources are gone.
+//
+// MCP used to publish api.md as a resource. With one tool whose argument is a
+// command line that describes itself, a client has nothing to list: it sends
+// `help`, it does not read the REST endpoint table. Claiming the capability while
+// listing nothing would be worse than not claiming it -- a client that branches on
+// the capability would be sent down a path with no content behind it.
+func TestNoResourceCapability(t *testing.T) {
 	s := docsTestServer(t)
 
-	var list struct {
-		Resources []struct {
-			URI         string `json:"uri"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			MIMEType    string `json:"mimeType"`
-		} `json:"resources"`
+	// The capability must not be advertised at initialize. Asserted on the
+	// protocol reply rather than on a server getter: what a client branches on is
+	// the JSON it received.
+	var init struct {
+		Capabilities map[string]json.RawMessage `json:"capabilities"`
 	}
-	if err := json.Unmarshal(callMCP(t, s, "resources/list", nil), &list); err != nil {
+	if err := json.Unmarshal(callMCP(t, s, "initialize", nil), &init); err != nil {
 		t.Fatal(err)
 	}
-	// api.md is the only served document now: the extension guide moved into
-	// `help ext`, where it cannot drift from the flags it describes.
-	want := map[string]bool{
-		"http://127.0.0.1:18765/api.md": false,
-	}
-	for _, r := range list.Resources {
-		if _, ok := want[r.URI]; ok {
-			want[r.URI] = true
-		}
-		if r.MIMEType != "text/markdown" {
-			t.Errorf("resource %s mimeType = %q, want text/markdown", r.URI, r.MIMEType)
-		}
-	}
-	for uri, seen := range want {
-		if !seen {
-			t.Errorf("resources/list misses %s", uri)
-		}
+	if _, ok := init.Capabilities["resources"]; ok {
+		t.Error("initialize advertises a resources capability but no resources are served")
 	}
 
-	var read struct {
-		Contents []struct {
-			URI      string `json:"uri"`
-			MIMEType string `json:"mimeType"`
-			Text     string `json:"text"`
-		} `json:"contents"`
+	// And a listing, if a client asks anyway, is refused by the protocol layer
+	// rather than answered with an empty list: an empty list says "this server has
+	// no docs", a refusal says "this server does not do resources".
+	_, errMsg := dispatchMCPErr(t, s, context.Background(), map[string]any{"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
+	if errMsg == "" {
+		t.Error("resources/list must be refused now that no resources are served")
 	}
-	result := callMCP(t, s, "resources/read", map[string]any{"uri": "http://127.0.0.1:18765/api.md"})
-	if err := json.Unmarshal(result, &read); err != nil {
-		t.Fatal(err)
-	}
-	if len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, "Termcp HTTP API") {
-		t.Fatalf("unexpected resources/read payload: %s", result)
-	}
-
 }
 
 // TestLearnAPIPrompt verifies the prompt exists and points at this instance's docs.
@@ -595,7 +575,7 @@ func TestStreamableTransportScopesByNamespaceHeader(t *testing.T) {
 	})
 
 	t.Run("a peer cannot drive the other's session", func(t *testing.T) {
-		res := bob.callTerm(t, "type "+aliceSid+" echo pwned")
+		res := bob.callTerm(t, "type "+aliceSid+":1 echo pwned")
 		if !res.IsError {
 			t.Fatal("bob wrote to alice's session")
 		}
@@ -723,11 +703,16 @@ func (c *mcpSession) startSession(t *testing.T) string {
 	if res.IsError {
 		t.Fatalf("pipe failed: %+v", res)
 	}
-	// The handle is <session> when the session's primary shell is the channel, so
-	// the reply's Handle header is the id these tests scope by.
+	// The reply's Handle is now always `<session>:<index>` — a handle names a
+	// channel, including the primary one, so that a channel handle and a session
+	// id have different shapes. These tests scope by SESSION id, so strip the
+	// index here once rather than at every use.
 	text := res.Content[0].(mcpgo.TextContent).Text
 	for _, line := range strings.Split(text, "\n") {
 		if h, ok := strings.CutPrefix(line, "Handle: "); ok {
+			if sid, _, found := strings.Cut(h, ":"); found {
+				return sid
+			}
 			return h
 		}
 	}
@@ -769,128 +754,14 @@ func (c *mcpSession) callTerm(t *testing.T, cmd string) *mcpgo.CallToolResult {
 	return c.callTool(termToolName, map[string]any{"cmd": cmd})
 }
 
-// The resource listing travels the same wire as the tool listing, so it must
-// name the same address. A transport that installed the origin hook for tools
-// only would leave resources pointing at the bind address.
-func TestStreamableTransportAdvertisesRequestHostInResources(t *testing.T) {
-	s := New(nil, nil, nil, nil, "test")
-	s.SetDocsFS(webui.Assets())
-	s.baseURL = "http://127.0.0.1:18765"
-	s.registerDocs()
-	ts := httptest.NewServer(s.StreamableHTTPHandler())
-	defer ts.Close()
-
-	post := func(id int, method, session string) (string, string) {
-		t.Helper()
-		body := `{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"method":"` + method + `","params":{}}`
-		r, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Accept", "application/json, text/event-stream")
-		r.Host = "termcp.lan.example:9000" // what the client dialed
-		if session != "" {
-			r.Header.Set("Mcp-Session-Id", session)
-		}
-		rr, err := ts.Client().Do(r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rr.Body.Close()
-		b, err := io.ReadAll(rr.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return rr.Header.Get("Mcp-Session-Id"), string(b)
-	}
-
-	session, _ := post(1, "initialize", "")
-	if session == "" {
-		t.Fatal("initialize returned no session id")
-	}
-	_, listing := post(2, "resources/list", session)
-	if !strings.Contains(listing, "http://termcp.lan.example:9000/api.md") {
-		t.Errorf("resources/list does not carry the address the client dialed:\n%s", listing)
-	}
-	if strings.Contains(listing, "127.0.0.1:18765") {
-		t.Errorf("resources/list names the bind address instead of the caller's:\n%s", listing)
-	}
-}
-
-// termcp:// is the locator scheme: termcp://<name> parses as an SSH entry, so an
-// "instance" resource under it would read as a host called `instance` and
-// collide with the namespace users paste into ssh_config args. The address is
-// published through the notify_user description instead — never as a locator.
-func TestNoLocatorShapedInstanceResource(t *testing.T) {
-	s := New(nil, nil, nil, nil, "test")
-	s.SetDocsFS(webui.Assets())
-	s.registerDocs()
-
-	var list struct {
-		Resources []struct {
-			URI string `json:"uri"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(callMCP(t, s, "resources/list", nil), &list); err != nil {
-		t.Fatal(err)
-	}
-	if len(list.Resources) == 0 {
-		t.Fatal("resources/list returned nothing; the guard would pass vacuously")
-	}
-	for _, r := range list.Resources {
-		if strings.HasPrefix(r.URI, locator.Scheme) && !strings.Contains(r.URI, "shells/") {
-			t.Errorf("resource %q lives in the locator namespace; it would parse as an SSH entry named %q", r.URI, strings.TrimPrefix(r.URI, locator.Scheme))
-		}
-	}
-}
-
-// One instance can be reached by several addresses at once, so every published
-// address must follow the request that asked for it: resources/list, the
-// resources/read reply and the learn-api prompt must name the same origin the
-// notify_user description does (see TestToolListingCarriesInstanceAddress).
-func TestResourcesFollowRequestOrigin(t *testing.T) {
+// The learn-api prompt names the address the client dialed, so a client that
+// reached the instance through a proxy or LAN name is given the address it can
+// actually open.
+func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 	const origin = "https://termcp.example.com"
 	s := docsTestServer(t)
 	ctx := originContext(origin)
 
-	var list struct {
-		Resources []struct {
-			URI  string `json:"uri"`
-			Name string `json:"name"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(listResourcesRaw(t, s, ctx), &list); err != nil {
-		t.Fatal(err)
-	}
-	if len(list.Resources) == 0 {
-		t.Fatal("resources/list returned nothing")
-	}
-	for _, r := range list.Resources {
-		if !strings.HasPrefix(r.URI, origin+"/") {
-			t.Errorf("resource %s lists as %q, want it under the caller's origin %s", r.Name, r.URI, origin)
-		}
-	}
-
-	// A client that reads the URI it was just handed must be routed to the
-	// right document -- mcp-go matches resource URIs by exact string.
-	var read struct {
-		Contents []struct {
-			URI  string `json:"uri"`
-			Text string `json:"text"`
-		} `json:"contents"`
-	}
-	if err := json.Unmarshal(callMCPCtx(t, s, ctx, "resources/read", map[string]any{"uri": origin + "/api.md"}), &read); err != nil {
-		t.Fatal(err)
-	}
-	if len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, "Termcp HTTP API") {
-		t.Fatalf("reading %s/api.md returned %s", origin, read.Contents)
-	}
-	if read.Contents[0].URI != origin+"/api.md" {
-		t.Errorf("resources/read echoed %q, want the address the caller used", read.Contents[0].URI)
-	}
-
-	// The learn-api prompt points at the same instance by the same address.
 	get := callMCPCtx(t, s, ctx, "prompts/get", map[string]any{"name": "learn-api"})
 	var got struct {
 		Messages []struct {
@@ -908,40 +779,12 @@ func TestResourcesFollowRequestOrigin(t *testing.T) {
 	text := got.Messages[0].Content.Text
 	for _, want := range []string{origin + "/api.md", "/api/term"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("learn-api prompt misses %s:\n%s", want, text)
+			t.Errorf("learn-api prompt misses %s: %s", want, text)
 		}
 	}
 	if strings.Contains(text, "127.0.0.1:18765") {
-		t.Errorf("learn-api prompt names the bind address instead of the caller's:\n%s", text)
+		t.Errorf("learn-api prompt names the bind address instead of the caller's: %s", text)
 	}
-}
-
-// With no request origin at all (an in-process call, HTTP/1.0 without Host) the
-// canonical startup address is still published, so the listing never goes blank.
-func TestResourcesFallBackToBindAddress(t *testing.T) {
-	s := docsTestServer(t)
-	var list struct {
-		Resources []struct {
-			URI string `json:"uri"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(listResourcesRaw(t, s, nil), &list); err != nil {
-		t.Fatal(err)
-	}
-	if len(list.Resources) == 0 {
-		t.Fatal("resources/list returned nothing")
-	}
-	for _, r := range list.Resources {
-		if !strings.HasPrefix(r.URI, "http://127.0.0.1:18765/") {
-			t.Errorf("resource URI %q does not fall back to the bind address", r.URI)
-		}
-	}
-}
-
-// listResourcesRaw dispatches resources/list under ctx and returns the result.
-func listResourcesRaw(t *testing.T, s *Server, ctx context.Context) json.RawMessage {
-	t.Helper()
-	return callMCPCtx(t, s, ctx, "resources/list", nil)
 }
 
 // shellNotifyDescription returns the shell_notify tool description as the model

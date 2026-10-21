@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -456,8 +455,12 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 	if f == nil {
 		t.Fatal("the approved write produced no readable file")
 	}
-	got := fmt.Sprintf("%v", f.Data)
-	if !strings.Contains(got, "approved-content") {
+	// Data is a *string (nil means "no inline body"), so deref rather than
+	// formatting the pointer: %v on a *string prints the address.
+	if f.Data == nil {
+		t.Fatal("the approved write produced a file with no inline body")
+	}
+	if got := *f.Data; !strings.Contains(got, "approved-content") {
 		t.Errorf("file content = %q, want it to contain %q", got, "approved-content")
 	}
 	_ = chk2.RemoveFile(target)

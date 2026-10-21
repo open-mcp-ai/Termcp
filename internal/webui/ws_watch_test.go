@@ -19,6 +19,11 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
+// readDeadline bounds one wait for a frame while watching, and is also the
+// yardstick for "did that timeout arrive when it should have": a quiet connection
+// reports one only after the full deadline, a dead one reports immediately.
+const readDeadline = 2 * time.Second
+
 // TestWatchAddActuallySubscribes drives the Web UI socket the way a browser tab
 // does and asks the only question that matters to a user: once a tab says it is
 // watching a channel, does that channel's output reach the tab?
@@ -99,8 +104,10 @@ func TestWatchAddActuallySubscribes(t *testing.T) {
 	// accumulate the payloads rather than requiring one frame to hold it all.
 	deadline := time.Now().Add(20 * time.Second)
 	var got strings.Builder
+	early := 0 // consecutive timeouts that arrived before their deadline
 	for time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		started := time.Now()
+		_ = conn.SetReadDeadline(started.Add(readDeadline))
 		var m map[string]any
 		if err := conn.ReadJSON(&m); err != nil {
 			// A read timeout means the channel is quiet, which is expected while
@@ -108,10 +115,32 @@ func TestWatchAddActuallySubscribes(t *testing.T) {
 			// treating every failure as "quiet" re-reads a dead connection. gorilla
 			// panics on that ("repeated read on failed websocket connection"), which
 			// turned a slow CI runner into a panic instead of a test failure.
-			if isTimeout(err) {
+			if !isTimeout(err) {
+				t.Fatalf("reading the watch channel: %v", err)
+			}
+			// isTimeout ALONE STILL SPINS ON A DEAD CONNECTION. Once the peer is
+			// gone gorilla caches the failure and every read returns at once, so the
+			// loop no longer waits out its two seconds — it retries thousands of times
+			// inside the same 20s budget and trips the same panic through the door that
+			// was left open.
+			//
+			// A healthy idle connection waits the WHOLE deadline before reporting a
+			// timeout, so a timeout that arrives early is not "quiet" — it is usually
+			// broken. But ONE early timeout is not proof: the deadline is armed per
+			// read, and the first read after the drain can surface a deadline left
+			// over from before it was reset (6.9µs on a loaded macOS runner, with the
+			// connection perfectly alive). Two in a row, each against a freshly armed
+			// deadline, cannot be a leftover — that is the cached failure.
+			if elapsed := time.Since(started); elapsed < readDeadline/2 {
+				early++
+				if early >= 2 {
+					t.Fatalf("the watch channel stopped answering (%d early timeouts, last after %v); got %q",
+						early, elapsed, got.String())
+				}
 				continue
 			}
-			t.Fatalf("reading the watch channel: %v", err)
+			early = 0
+			continue
 		}
 		if m["type"] != "terminal" {
 			continue

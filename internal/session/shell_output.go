@@ -336,10 +336,16 @@ func (cs *ChildShell) drainPipes() {
 }
 
 // retainHistory keeps the shell's final metadata for the retained per-shell
-// tabs, unless the shell was explicitly closed — closed shells are deleted,
-// never retained.
+// tabs. A CLOSED shell is deleted; an ARCHIVED one is kept.
+//
+// The distinction is the whole point of having two close paths. `closed` means the
+// erase (CloseChildShell / DELETE): the caller asked for the record to go, so nothing
+// is retained and the watcher below re-deletes anything that raced the purge.
+// `archived` means the ordinary tab close (ArchiveChildShell): the channel stops, its
+// tab goes, and the snapshot keeps the entry so the archive can still show the
+// channel and resolve its transcript.
 func (cs *ChildShell) retainHistory(p *Session) {
-	if cs.closed.Load() {
+	if cs.closed.Load() && !cs.archived.Load() {
 		return
 	}
 	p.shellHistory.Store(cs.ID, cs.Info())
@@ -381,7 +387,7 @@ func (cs *ChildShell) startReaders() {
 		// always sets closed before its purge).
 		if p := cs.parent.Load(); p != nil {
 			cs.retainHistory(p)
-			if cs.closed.Load() {
+			if cs.closed.Load() && !cs.archived.Load() {
 				p.shellHistory.Delete(cs.ID)
 			}
 		}

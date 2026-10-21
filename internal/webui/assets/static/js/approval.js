@@ -97,8 +97,8 @@ function applyApprovalCounts() {
   // The tab bar is the only signal a minimized window has: the terminal inside
   // it is display:none, so its pill cannot be seen.
   document.querySelectorAll('.session-tab').forEach(function (tab) {
-    var w = tab._win;
-    var n = (w && counts[w._parentSid]) || 0;
+    var sid = tab._entry ? tab._entry.sid : (tab._win && tab._win._parentSid);
+    var n = (sid && counts[sid]) || 0;
     var badge = tab.querySelector('.session-tab-review');
     if (!badge) return;
     badge.hidden = !n;

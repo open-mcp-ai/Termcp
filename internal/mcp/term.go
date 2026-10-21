@@ -61,18 +61,95 @@ type termArgs struct {
 	PipeTo          string
 	LearnMode       bool
 
-	// StructuredOnly sends the reply as its JSON projection only, dropping the
-	// rendered text one. The two carry the same bytes, so a reply that sends both
-	// bills its body twice; this is the switch that declines the second copy (see
-	// envelope.Reply.StructuredOnly).
-	StructuredOnly bool
+	// StructuredContent also sends the reply as the JSON projection, on top of the
+	// rendered text. It is off by default because the two carry the SAME bytes and
+	// the text is the copy a caller usually reads, so the JSON twin is a duplicate
+	// paid for on every call. See envelope.Reply.StructuredContent.
+	StructuredContent bool
+
+	// AllowEscapes permits unquoted control bytes and raw escape sequences in cmd.
+	//
+	// OFF by default, because a raw carriage return in a payload does not print a
+	// character — the terminal treats it as "submit this line", so one call can run
+	// two commands while answering 200 for one. The same is true of Ctrl-C, Ctrl-D
+	// and Ctrl-Z. A caller that genuinely needs those bytes has two honest ways to
+	// say so: this flag, or `vars` (which carries the value as data, never as syntax).
+	AllowEscapes bool
+
+	// Vars holds values substituted into cmd at AST parse time, by variable name.
+	//
+	// It is the channel for data that cannot be written into a command line: a
+	// newline, a quote, a semicolon, a carriage return. The value never appears in
+	// cmd, so nothing in cmd can mangle it, and the substitution quotes it before it
+	// reaches the shell.
+	//
+	// It is NAMED vars, not env, on purpose. `env` means process environment to every
+	// tool that has ever had one, and this is not that: a key here is used only if
+	// cmd mentions it, nothing is exported to the child, and a $NAME cmd refers to
+	// that vars does not define is a 400 rather than the empty string an environment
+	// lookup would give. A caller that read `env` as "set FOO=bar for the child"
+	// would be wrong in all three places.
+	Vars map[string]string
+
+	// Args holds positional values substituted into cmd as $1, $2, … (1-based).
+	//
+	// IT IS THE OPPOSITE CHANNEL TO VARS, and the difference is the whole reason it
+	// exists. A positional value that IS the whole payload of `run`/`type` is spliced
+	// in VERBATIM, because it is a command line: args=["pwd; whoami"] on
+	// `run h:1 $1` sends two commands to the terminal. Quoting it — which is what
+	// vars does, correctly, for data — produced `'pwd; whoami'`, and the shell
+	// answered "command not found: pwd; whoami".
+	//
+	// A positional reference anywhere else (beside other words, in a flag value, in a
+	// target) is substituted as ONE QUOTED WORD, so a value can never turn into
+	// syntax the caller did not write.
+	//
+	// $0 is refused rather than bound to the first element: the shell gives $0 a
+	// meaning (the program's own name) that an argument list does not have, so
+	// binding it would be a guess. ${N} is the unambiguous spelling for N ≥ 10.
+	Args []string
 }
 
-// handleTerm is the MCP entrance: a thin wrapper that hands the command line to
+// readCmd extracts the command line, distinguishing the three states a caller can
+// send.
+//
+// It EXISTS because the tool's one string parameter is where a silent failure was
+// most visible: a `cmd` that is not a string used to be read with a loose getter
+// that answered "" for anything it did not like, and "" is the GUIDE PAGE. So a
+// client whose bridge mangled the argument — issue #131 P0-3, where a call returned
+// the wake-up page instead of running — got a successful-looking reply that
+// described the whole protocol, and nothing anywhere said a command had been lost.
+//
+//	absent        -> "", nil   the documented empty call: the guide, which is legal
+//	null          -> "", nil   the same, since JSON null is how "no value" arrives
+//	string        -> it, nil
+//	anything else -> 400       the caller sent a command and it was not a string
+//
+// The distinction is the point: "I did not send a command yet" and "my command did
+// not survive the transport" are different facts, and only one of them is a request
+// for the guide.
+func readCmd(args map[string]any) (cmd string, present bool, derr *directive.Error) {
+	raw, ok := args["cmd"]
+	if !ok || raw == nil {
+		return "", false, nil
+	}
+	s, isString := raw.(string)
+	if !isString {
+		return "", false, &directive.Error{Msg: "cmd must be a string, got " + typeNameOf(raw) +
+			"; send the command line as a string, or omit cmd entirely to read the guide"}
+	}
+	return s, true, nil
+}
+
+// handleTerm is the MCP entrance: a thin wrapper that hands the call's arguments to
 // Term and re-renders the reply as a tool result.
+//
+// It does not read `cmd` itself. Reading it in two places is how the two entrances
+// drifted apart once already (issue #131 P0-3): each call site had its own copy of
+// "absent means the guide", and the loose getter they shared folded "not a string"
+// into it. Term is the one reader.
 func (s *Server) handleTerm(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	return toolResult(s.Term(ctx, getString(args, "cmd", ""), args)), nil
+	return toolResult(s.Term(ctx, "", request.GetArguments())), nil
 }
 
 // Term executes one term command line and returns the reply as plain data.
@@ -87,29 +164,100 @@ func (s *Server) handleTerm(ctx context.Context, request mcpgo.CallToolRequest) 
 //
 // The window parameters are read from args by their tool names, so a caller
 // arriving over HTTP sends the same object the tool's schema describes.
+//
+// `cmd` IS READ FROM args, not from the parameter, when args carries one. The
+// parameter stays because executeTerm is also reached directly and because a caller
+// holding a command string should not have to build a map to run it; args wins where
+// both are present, because args is the value a transport actually delivered.
+//
+// Reading it HERE, once, is what makes both entrances agree: a `cmd` that is not a
+// string is a 400 and an absent one is the guide, and neither surface gets to have
+// its own opinion about which is which (issue #131 P0-3).
 func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) envelope.Reply {
+	if fromArgs, present, derr := readCmd(args); derr != nil {
+		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
+	} else if present {
+		cmd = fromArgs
+	}
 	win, derr := parseTermArgs(args)
 	if derr != nil {
-		return envelope.Reply{Slots: []envelope.Slot{{
-			Code:    400,
-			Headers: map[string]string{"Error-Code": "invalid_argument"},
-			Body:    derr.Msg,
-		}}}
+		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	}
 	t := s.executeTerm(ctx, cmd, win)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredOnly: win.StructuredOnly}
+	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredContent: win.StructuredContent}
 }
 
 // executeTerm parses cmd and runs it, accumulating the reply.
 func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) termReply {
-	file, err := directive.Parse(cmd)
+	// Raw control bytes in the command text are refused unless the caller said
+	// otherwise. A carriage return is the case that matters: the shell parses
+	// `echo a\rNoSuch` as one command of four words, but the terminal treats the \r
+	// as "submit this line" — so one call runs two commands and answers 200 for one.
+	// The same is true of Ctrl-C, Ctrl-D, Ctrl-Z, NUL and ESC.
+	//
+	// The refusal names BOTH ways out, because either is a real choice: turn the
+	// gate off (`allow_escapes`), or pass the data so it never becomes syntax
+	// (`env`). Refusing without saying what to do instead is the half-measure that
+	// leaves a caller stuck.
+	//
+	// THE ARGUMENTS ARE SCANNED TOO, and that is not redundant: a value reaches the
+	// terminal through `args` or `vars` without appearing in cmd at all, so scanning
+	// cmd alone let `args: ["a\x03b"]` through. The observed result was worse than a
+	// missing check — the terminal read the byte as an ACTION, echoed `^C`, and the
+	// shell dropped into its `quote>` continuation prompt, with the reply still 200.
+	// Quoting does not help: a control byte inside single quotes is still a control
+	// byte to the terminal, which is why the gate has to look at the values.
+	if !win.AllowEscapes {
+		where, b, name, found := "", byte(0), "", false
+		if b, name, found = directive.DetectRawControl(cmd); found {
+			where = "cmd"
+		}
+		if !found {
+			for i, a := range win.Args {
+				if b, name, found = directive.DetectRawControl(a); found {
+					where = fmt.Sprintf("args[%d]", i)
+					break
+				}
+			}
+		}
+		if !found {
+			for k, v := range win.Vars {
+				if b, name, found = directive.DetectRawControl(v); found {
+					where = "vars[" + k + "]"
+					break
+				}
+			}
+		}
+		if found {
+			return termReply{win: win, slots: []envelope.Slot{{
+				Code: 400,
+				Headers: map[string]string{
+					"Error-Code": "raw_control_byte",
+				},
+				Body: fmt.Sprintf("%s contains an unquoted %s, which the terminal acts on instead of printing.\n"+
+					"Either pass the data through the `vars` argument (it is substituted as a quoted value, so it never becomes syntax:\n"+
+					"  vars: {\"NAME\": \"<value>\"}, cmd: \"run <handle> echo $NAME\"),\n"+
+					"or set allow_escapes: true if you really mean to send byte 0x%02x.", where, name, b),
+			}}}
+		}
+	}
+	file, err := directive.ParseWithSubst(cmd, directive.Subst{Named: win.Vars, Pos: win.Args})
 	if err != nil {
 		// A directive the caller invented (an alias) is unknown to the parser by
-		// definition, so it is resolved here before the error is reported.
-		if stmt, ok := aliases.expandError(err); ok {
+		// definition, so it is resolved here before the error is reported — with the
+		// SAME substitution table, because the alias's expansion is the caller's
+		// command line and may reference the same $1/$NAME values.
+		// resolved says a directive was actually produced; cycle says the chain
+		// never got there. Neither means the word is simply not a directive, and that
+		// case must keep falling through to the normal parse-error teaching below.
+		stmt, resolved, cycle := aliases.expandErrorCycle(err)
+		if resolved {
 			return s.runStatements(ctx, []directive.Statement{stmt}, win)
+		}
+		if len(cycle) > 0 {
+			return termReply{win: win, slots: []envelope.Slot{aliasCycleSlot(directive.Statement{Path: cmd}, cycle)}}
 		}
 		return termReply{win: win, slots: []envelope.Slot{s.parseErrorSlot(err)}}
 	}
@@ -126,12 +274,23 @@ func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) term
 //
 // An alias is expanded before dispatch and before Path is read, so the echo a
 // caller gets back is the command that actually ran.
+//
+// The reply accumulator is a LOCAL, threaded where it is needed. It used to also
+// live on the Server (s.currentReply) so a directive could consult learn_mode's
+// de-duplication without receiving it; that made two concurrent Term calls share
+// mutable state, which is a data race — and the field was redundant anyway, since
+// the learn_mode attach below already runs for every statement. Removing it is why
+// the MCP server is now safe for concurrent Term calls.
 func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement, win termArgs) termReply {
 	out := termReply{win: win, seenUsage: map[string]bool{}}
-	s.currentReply = &out
-	defer func() { s.currentReply = nil }()
 	for _, stmt := range stmts {
-		expanded := aliases.Expand(stmt)
+		expanded, cycle := aliases.Expand(stmt)
+		if cycle != nil {
+			// The chain came back to where it started, so there is no directive to
+			// dispatch. Saying "unknown directive" here would blame the wrong thing.
+			out.slots = append(out.slots, aliasCycleSlot(stmt, cycle))
+			continue
+		}
 		slots := s.runDirective(ctx, expanded, win)
 		// learn_mode is a property of the reply, so it is attached here rather
 		// than in each directive: generated replies (ps, help, detect, …) carry
@@ -195,11 +354,7 @@ func (s *Server) forwardSlotsToStdin(ctx context.Context, target string, slots [
 func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	derr, ok := err.(*directive.Error)
 	if !ok {
-		return envelope.Slot{
-			Code:    400,
-			Headers: map[string]string{"Error-Code": "invalid_argument"},
-			Body:    err.Error(),
-		}
+		return badRequestNoPath(err.Error())
 	}
 	headers := map[string]string{"Error-Code": errorCodeFor(derr)}
 	if derr.Usage != "" {
@@ -208,7 +363,15 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	if _, known := directive.Lookup(derr.Op); !known && derr.Op != "" {
 		// An unknown directive is exactly the caller who needs the table, so the
 		// whole listing rides along instead of a second round trip.
-		headers["Usage"] = directiveTable()
+		//
+		// EXCEPT WHEN THE CALLER WAS NOT WRITING DIRECTIVES. A `;` that ended a
+		// payload leaves an unknown "directive" that is really a shell command, and
+		// printing 25 directive names beside that teaches the wrong shape: the
+		// caller does not need a different directive, they need a different slot.
+		// The HINT below says which one, so the table would only compete with it.
+		if derr.AfterPayload == "" {
+			headers["Usage"] = directiveTable()
+		}
 	}
 	// PARSING PRECEDES EVERYTHING. The whole cmd is parsed before the first
 	// statement runs, so this failure means the batch did not run — not even the
@@ -225,6 +388,19 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	// there is nothing else that could have run, so saying so is noise on the most
 	// common error of all.
 	body := derr.Msg
+	if derr.AfterPayload != "" {
+		// The failing statement followed a directive whose payload goes to a
+		// terminal, so the most likely cause is a `;` the caller meant as SHELL
+		// sequencing. Naming the fix beats naming the directive table: the caller
+		// did not misspell a directive, they wrote a shell command line in a slot
+		// that holds one directive.
+		body += fmt.Sprintf("\nHINT: %q follows a `%s`, whose payload is ONE line. A `;` in cmd separates\n"+
+			"termcp statements, not shell commands — so if you meant several SHELL commands, pass\n"+
+			"them as args instead:\n"+
+			"  cmd: \"%s <handle> $1\"   args: [\"pwd; whoami\"]\n"+
+			"Or keep it in the payload with &&: %s <handle> pwd && whoami",
+			derr.Op, derr.AfterPayload, derr.AfterPayload, derr.AfterPayload)
+	}
 	if derr.Parsed > 0 {
 		body += fmt.Sprintf("\nnothing was executed, including the %d statement(s) before this one: a cmd is parsed in full before any of it runs", derr.Parsed)
 	}
@@ -247,12 +423,12 @@ func directiveTable() string {
 // errorCodeFor classifies a directive error.
 func errorCodeFor(derr *directive.Error) string {
 	if derr.Op == "" {
-		return "invalid_argument"
+		return CodeInvalidArgument
 	}
 	if _, known := directive.Lookup(derr.Op); !known {
 		return "unknown_directive"
 	}
-	return "invalid_argument"
+	return CodeInvalidArgument
 }
 
 // termReply accumulates the slots of one call and applies the total byte cap.
@@ -275,18 +451,20 @@ type termReply struct {
 // empty, and every field the caller needs is in structuredContent.
 func toolResult(reply envelope.Reply) *mcpgo.CallToolResult {
 	result := mcpgo.NewToolResultText(reply.Text())
-	if reply.StructuredOnly {
-		result.Content = nil
-	}
 	result.IsError = reply.IsError()
-	structured := reply.Structured()
-	if len(structured) == 1 {
-		result.StructuredContent = structured[0]
-	} else {
-		// structuredContent must be a JSON object. A batch is several slots, so
-		// it is wrapped rather than sent as a bare array, which clients reject
-		// against the object-shaped result schema.
-		result.StructuredContent = map[string]any{"slots": structured}
+	/* The JSON twin is built only when it was asked for. Structured() renders every
+	   slot a second time, and on a large reply that render is the cost the default
+	   exists to avoid — cheaper to skip than to build and drop. */
+	if reply.StructuredContent {
+		structured := reply.Structured()
+		if len(structured) == 1 {
+			result.StructuredContent = structured[0]
+		} else {
+			// structuredContent must be a JSON object. A batch is several slots, so
+			// it is wrapped rather than sent as a bare array, which clients reject
+			// against the object-shaped result schema.
+			result.StructuredContent = map[string]any{"slots": structured}
+		}
 	}
 	return result
 }
@@ -356,36 +534,34 @@ func (t *termReply) withUsage(stmt directive.Statement, headers map[string]strin
 	}
 }
 
-// atoiFlag reads a numeric flag, returning the fallback when absent or unusable.
-func atoiFlag(stmt directive.Statement, key string, fallback int) int {
-	raw, ok := stmt.Flags[key]
-	if !ok || raw == "" {
-		return fallback
+// atoiFlag reads an integer flag.
+//
+// `absent` is the value used when the flag is NOT given at all — a documented
+// default, not a rescue. A flag written WITHOUT a value is a different mistake and
+// is reported as one; a flag with a value that does not parse is reported as that.
+// The three cases used to be one, and `--repeat` silently meant `--repeat 1`.
+func atoiFlag(stmt directive.Statement, key string, absent int) (int, error) {
+	switch stmt.FlagState(key) {
+	case directive.FlagAbsent:
+		return absent, nil
+	case directive.FlagNoValue:
+		return 0, fmt.Errorf("needs a value")
 	}
-	n, err := strconv.Atoi(raw)
+	raw, _ := stmt.Flag(key)
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("expected an integer, got %q", raw)
 	}
-	return n
+	return n, nil
 }
 
 // boolFlag reports whether a valueless flag was given.
+//
+// A flag written as `--force=yes` is given too: the caller's intent is the same and
+// the value is refused elsewhere if it matters. What is NOT given is `--force` that
+// never appeared.
 func boolFlag(stmt directive.Statement, key string) bool {
-	_, ok := stmt.Flags[key]
-	return ok
-}
-
-// int64Flag reads a 64-bit numeric flag.
-func int64Flag(stmt directive.Statement, key string, fallback int64) int64 {
-	raw, ok := stmt.Flags[key]
-	if !ok || raw == "" {
-		return fallback
-	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return fallback
-	}
-	return n
+	return stmt.FlagState(key) != directive.FlagAbsent
 }
 
 // argsOf is the compact way to hand a directive onto an existing handler: the
@@ -457,7 +633,7 @@ func statusFor(code string) int {
 		return 403
 	case CodeSessionNotFound, CodeShellNotFound, CodeForwardNotFound,
 		CodeSSHConfigNotFound, CodeRuleNotFound, CodeHistoryNotFound,
-		CodeReaderNotRegistered:
+		CodeReaderNotRegistered, CodeFileNotFound:
 		return 404
 	case CodeConflict, CodeSessionNotRunning:
 		return 409

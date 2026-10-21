@@ -120,7 +120,8 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 		Direction  string `json:"direction"`
 		RemoteHost string `json:"remote_host"`
 		RemotePort int    `json:"remote_port"`
-		LocalHost  string `json:"local_host"`
+		BindHost   string `json:"bind_host"`  // -L/-D: what this host listens on
+		LocalHost  string `json:"local_host"` // -R: what the target listens on
 		LocalPort  int    `json:"local_port"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -195,9 +196,9 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 	var fwErr error
 	switch req.Direction {
 	case "dynamic":
-		fw, fwErr = h.ForwardMgr.CreateDynamic(sessionID, sshConfig, req.LocalPort, sshClient, isInternal)
+		fw, fwErr = h.ForwardMgr.CreateDynamic(sessionID, sshConfig, req.BindHost, req.LocalPort, sshClient, isInternal)
 	case "local":
-		fw, fwErr = h.ForwardMgr.CreateLocal(sessionID, sshConfig, req.RemoteHost, req.RemotePort, req.LocalPort, sshClient)
+		fw, fwErr = h.ForwardMgr.CreateLocal(sessionID, sshConfig, req.BindHost, req.RemoteHost, req.RemotePort, req.LocalPort, sshClient)
 	case "remote":
 		fw, fwErr = h.ForwardMgr.CreateRemote(sessionID, sshConfig, req.LocalHost, req.LocalPort, req.RemoteHost, req.RemotePort, sshClient)
 	}

@@ -60,6 +60,19 @@ func (m *Manager) LineCount(sessionID, shellID string) (int64, error) {
 	return m.msgMgr.LineCount(sessionID, m.resolveShellID(sessionID, shellID))
 }
 
+// LineStartOffset returns the byte offset where a 1-based line begins, which is
+// the position `read --from-line` starts from. Same shell resolution as LineCount.
+//
+// It is the counterpart of LineSpanOfOffsets and the reason spans can be addressed:
+// a mark records where a COMMAND began, not where its first output line began, so a
+// span shown with line numbers needs this to answer "which byte is line N".
+func (m *Manager) LineStartOffset(sessionID, shellID string, line int64) (int64, error) {
+	if m.msgMgr == nil {
+		return 0, nil
+	}
+	return m.msgMgr.LineStartOffset(sessionID, m.resolveShellID(sessionID, shellID), line)
+}
+
 // LineSpanOfOffsets maps a byte range onto line numbers (see message.Manager);
 // same shell resolution as LineCount.
 func (m *Manager) LineSpanOfOffsets(sessionID, shellID string, start, end int64) (int64, int64, error) {

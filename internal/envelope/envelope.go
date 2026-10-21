@@ -262,20 +262,17 @@ func (s Slot) Structured() map[string]any {
 type Reply struct {
 	Slots []Slot
 
-	// StructuredOnly drops the rendered text projection and keeps only the JSON
-	// one. It is set by the caller (term's structured_only argument) and travels
-	// with the reply because both projections are produced in one place, and the
-	// choice belongs to the value rather than to whichever transport renders it.
+	// StructuredContent also sends the reply as its JSON projection. It is OFF by
+	// default, and that default is the fix rather than a preference: the two
+	// projections carry the SAME bytes, so sending both bills every reply twice and
+	// shows a human the same answer in two dialects on every call. The text form is
+	// what a caller usually reads, so the JSON twin is the copy almost nobody
+	// consumes — it has to be asked for.
 	//
-	// Why a caller wants it: the two projections carry the SAME bytes, so a reply
-	// that sends both bills its body twice. That is a rounding error on `help`
-	// (+25% measured) and most of the reply on a large read (+57% on a 200-line
-	// tail) — which is exactly where the window parameters were supposed to stop
-	// the caller paying for output it did not ask for. Off by default because the
-	// text projection is what a model reads most comfortably: the overhead buys a
-	// status line and headers in the form a reader expects. A caller moving big
-	// payloads declines it.
-	StructuredOnly bool
+	// Set by the caller (term's structured_content argument) and travels with the
+	// reply because both projections are produced in one place, and the choice
+	// belongs to the value rather than to whichever transport renders it.
+	StructuredContent bool
 }
 
 // Text renders every slot, separated by one blank line between responses (an
@@ -286,9 +283,6 @@ type Reply struct {
 // which is the point: a client reading only structuredContent gets the same
 // answer for half the bytes.
 func (r Reply) Text() string {
-	if r.StructuredOnly {
-		return ""
-	}
 	parts := make([]string, 0, len(r.Slots))
 	for _, s := range r.Slots {
 		parts = append(parts, s.Text())

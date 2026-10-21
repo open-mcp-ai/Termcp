@@ -26,80 +26,6 @@ function _onSessionSwitchMenuKey(e) {
 
 /** Live sessions with an open terminal window. Minimized windows still count:
  *  they are alive, just hidden. Ended (read-only) views are left out. */
-function openSessionSwitchMenu(anchorBtn) {
-  var alreadyOpen = !!_sessionSwitchMenu;
-  closeSessionSwitchMenu();
-  if (alreadyOpen) return;   // second press toggles it shut
-
-  // The menu lists SESSIONS from the server snapshot, not open windows.
-  //
-  // Listing windows made the menu a view of this tab's client state: a session
-  // created from another terminal (or another device) existed on the server and
-  // in the tile grid, but had no window here, so it never appeared. The snapshot
-  // is already pushed over the WebSocket on every change, so reading it keeps
-  // the menu live without a second source of truth.
-  var sessions = (window._lastSessionsSnapshot || []).filter(function (s) {
-    return s && s.id;
-  });
-  var el = document.createElement('div');
-  el.className = 'shell-window-switch-menu';
-  el.setAttribute('role', 'menu');
-  var currentSid = anchorBtn._switchWin ? anchorBtn._switchWin._parentSid : null;
-  sessions.forEach(function (s) {
-    var item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'shell-switch-item';
-    item.setAttribute('role', 'menuitem');
-    var dead = s.status !== 'running';
-    if (dead) item.classList.add('dead');
-    if (s.id === currentSid) item.classList.add('current');
-    item.innerHTML =
-      '<span class="shell-switch-num"></span>' +
-      '<span class="shell-switch-label"></span>';
-    // The number is the window's open-order slot when it has one; a session with
-    // no window here has none, and an empty slot is honest about that.
-    var w = getShellWindowBySid(s.id);
-    item.querySelector('.shell-switch-num').textContent = w ? String(sessionTabNum(w) || '') : '';
-    item.querySelector('.shell-switch-label').textContent = s.name || stripSessionPrefix(s.id);
-    if (dead) item.title = 'Dead: read-only history';
-    item.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      closeSessionSwitchMenu();
-      // Same entrance the session tiles use, so a session with no window yet is
-      // opened rather than ignored. Centred: this menu is anchored to the window
-      // header, not to a point on the page the user aimed at.
-      focusSessionWindow(s.name || '', s.id, null, dead ? { readOnly: true } : null);
-    });
-    el.appendChild(item);
-  });
-  if (sessions.length === 0) {
-    var empty = document.createElement('div');
-    empty.className = 'shell-switch-empty';
-    empty.textContent = t('switch.empty');
-    el.appendChild(empty);
-  }
-  document.body.appendChild(el);
-  _sessionSwitchMenu = el;
-
-  /* Viewport coordinates: the menu's parent is <body>, so position:fixed means
-     the viewport and these numbers are the button's real position. */
-  var r = anchorBtn.getBoundingClientRect();
-  var maxLeft = Math.max(8, window.innerWidth - el.offsetWidth - 8);
-  el.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
-  var maxTop = Math.max(8, window.innerHeight - el.offsetHeight - 8);
-  el.style.top = Math.max(8, Math.min(r.bottom + 4, maxTop)) + 'px';
-  anchorBtn.classList.add('active');
-
-  /* Deferred: the click that opened the menu must not reach this listener, or
-     it closes on the same tick. */
-  setTimeout(function () {
-    document.addEventListener('click', _onSessionSwitchMenuDocClick, true);
-    document.addEventListener('keydown', _onSessionSwitchMenuKey);
-    window.addEventListener('resize', closeSessionSwitchMenu);
-  }, 0);
-}
-
 function setupMobileSessionSwitcher(win) {
   if (!win || win._termcpSwitcherBound) return;
   win._termcpSwitcherBound = true;
@@ -113,22 +39,41 @@ function setupMobileSessionSwitcher(win) {
   group.className = 'shell-header-controls';
 
   /* The monitor glyph moves into the group from its original spot in the
-     header: it is the control group's second item, after the hamburger. */
+     header: it is the control group's second item, after the hamburger.
+
+     It is the window's TICK, on every viewport, and that is a deliberate
+     replacement rather than a new duty. On desktop it was decoration: a monitor
+     drawing that did nothing when pressed. On mobile it opened a menu of the
+     server's sessions — a switch list reached through a picture of a monitor,
+     which is a hidden door, and every window carried its own copy of it. The dock
+     already lists this tab's windows and raising one is a click on its tab, so the
+     menu's remaining value (sessions with no window yet) is not worth a second
+     meaning for a glyph whose obvious reading is "pick this one".
+
+     So the glyph does the one thing its shape suggests: it ticks the window into
+     the dock's selection, exactly as the dock's own tick does. The two are the
+     same control seen from two places, which is why they drive the same
+     component. */
   var icon = header.querySelector('.shell-header-icon');
   if (icon) {
-    if (isMobileViewport()) {
-      icon.classList.add('shell-header-icon-btn');
-      icon.setAttribute('role', 'button');
-      icon.setAttribute('tabindex', '0');
-      icon.setAttribute('aria-haspopup', 'true');
-      icon.title = t('win.aria.activeSessions');
-    }
+    icon.classList.add('shell-header-icon-btn');
+    icon.setAttribute('role', 'button');
+    icon.setAttribute('tabindex', '0');
+    icon.title = t('win.aria.select');
+    icon.setAttribute('aria-label', t('win.aria.select'));
     icon._switchWin = win;
     var activate = function (e) {
-      if (!isMobileViewport()) return;      // desktop: plain icon, no action
       e.preventDefault();
       e.stopPropagation();
-      openSessionSwitchMenu(icon);
+      /* The tick lives in the dock's selection, and the dock is keyed by its tab
+         (see dockKeyForWindow: `win:<id>`, or `sess:<id>` for a session with no
+         window). A window whose id the dock has not drawn a tab for yet (a
+         placeholder mid-connect) simply has nowhere to record the tick, so the
+         press is a no-op rather than an error: the window becomes tickable the
+         moment the dock draws its tab. */
+      var key = (typeof dockKeyForWindow === 'function') ? dockKeyForWindow(win) : '';
+      if (!_dockBatch || !key) return;
+      _dockBatch.toggleSelection(key, win);
     };
     icon.addEventListener('click', activate);
     icon.addEventListener('keydown', function (e) {
@@ -137,26 +82,10 @@ function setupMobileSessionSwitcher(win) {
     });
     /* Don't let the header's drag handler treat this as a window drag. */
     icon.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-    /* A window can be created on desktop and then meet the touch breakpoint on a
-       rotate or a devtools resize. The listeners above are already attached (they
-       self-check at click time), so only the affordance and semantics need
-       adding here. */
-    win._syncSwitcherAffordance = function () {
-      if (isMobileViewport()) {
-        icon.classList.add('shell-header-icon-btn');
-        icon.setAttribute('role', 'button');
-        icon.setAttribute('tabindex', '0');
-        icon.setAttribute('aria-haspopup', 'true');
-        icon.title = t('win.aria.activeSessions');
-      } else {
-        closeSessionSwitchMenu();
-        icon.classList.remove('shell-header-icon-btn');
-        icon.removeAttribute('role');
-        icon.removeAttribute('tabindex');
-        icon.removeAttribute('aria-haspopup');
-        icon.removeAttribute('title');
-      }
-    };
+    /* The affordance no longer changes with the viewport — the glyph is a tick
+       everywhere — so nothing has to be re-applied on a rotate. The hook stays as
+       a no-op only if some caller still expects it; there is none, so it is gone
+       and `closeSessionSwitchMenu` no longer runs from here. */
     group.appendChild(icon);
   }
 
@@ -219,9 +148,10 @@ function reapplyWindowLanguage(win) {
   if (collapseBtn) {
     collapseBtn.title = win.classList.contains('shell-window-collapsed') ? t('win.expand') : t('win.collapse');
   }
-  if (win._syncSwitcherAffordance) {
-    try { win._syncSwitcherAffordance(); } catch (e) {}
-  }
+  /* No `_syncSwitcherAffordance` call: the header glyph used to change meaning at
+     the touch breakpoint (a switch menu on mobile, decoration on desktop), so a
+     rotate had to repaint its role and title. It is a tick everywhere now, and a
+     tick does not depend on the viewport. */
   if (win._refreshFwList) win._refreshFwList();
   if (win._refreshNtfList) win._refreshNtfList();
   if (win._shellFileBrowse) win._shellFileBrowse();

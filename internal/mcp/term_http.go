@@ -47,11 +47,9 @@ func (s *Server) TermHandler() http.Handler {
 			// gives float64, which is what parseTermArgs reads. An empty body is
 			// legal and means the same thing as an empty call: the guide.
 			if err := dec.Decode(&args); err != nil && err.Error() != "EOF" {
-				writeEnvelope(w, http.StatusBadRequest, envelope.Reply{Slots: []envelope.Slot{{
-					Code:    400,
-					Headers: map[string]string{"Error-Code": "invalid_argument"},
-					Body:    "request body must be a JSON object of term arguments: " + err.Error(),
-				}}})
+				writeEnvelope(w, http.StatusBadRequest, envelope.Reply{Slots: []envelope.Slot{
+					badRequestNoPath("request body must be a JSON object of term arguments: " + err.Error()),
+				}})
 				return
 			}
 		}
@@ -62,7 +60,7 @@ func (s *Server) TermHandler() http.Handler {
 		// claimed one the shared view — the one mistake that widens an isolation
 		// axis instead of refusing it.
 		ctx := withCallerSource(withRequestContext(r.Context(), r), "rest")
-		reply := s.Term(ctx, getString(args, "cmd", ""), args)
+		reply := s.Term(ctx, "", args)
 		writeEnvelope(w, replyStatus(reply), reply)
 	})
 }
@@ -124,9 +122,17 @@ func writeEnvelope(w http.ResponseWriter, status int, reply envelope.Reply) {
 // escapeHeader renders a multi-line rendering as a single header value.
 //
 // Newlines become literal "\n" so the value survives the header grammar, which is
-// the same reason the envelope renders them at all: the text is for a reader, and
-// a reader that cannot see the line structure is looking at an unreadable run of
+// the same reason the envelope renders them at all: the text is for a reader, and a
+// reader that cannot see the line structure is looking at an unreadable run of
 // header stamps.
+//
+// CARRIAGE RETURNS ARE ESCAPED, NOT DROPPED. The previous version fell through to
+// `default` for '\r' and appended nothing, so the same field rendered two different
+// strings depending on the projection: a Path holding a CR kept it in the JSON body
+// and silently lost it in X-Termcp-Text. A caller comparing the two — or reading
+// only the header — then had a path that does not exist, with nothing to indicate a
+// byte had been removed. Escaping keeps the two projections byte-identical, which is
+// the whole reason they are generated from one value.
 func escapeHeader(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
@@ -134,6 +140,7 @@ func escapeHeader(s string) string {
 		case '\n':
 			out = append(out, '\\', 'n')
 		case '\r':
+			out = append(out, '\\', 'r')
 		default:
 			out = append(out, s[i])
 		}

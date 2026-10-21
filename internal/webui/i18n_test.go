@@ -221,7 +221,10 @@ func TestPlaceholdersMatchAcrossLanguages(t *testing.T) {
 func TestCoreKeysTranslated(t *testing.T) {
 	cat := loadCatalogs(t)
 	core := []string{
-		"sec.sessions",
+		// The page's three column titles and the one destructive prompt every
+		// session card can raise: a page whose columns or prompts are untranslated
+		// is untranslated, whatever the rest of the catalog says.
+		"sec.archive", "nav.extensions", "nav.nethub",
 		"session.delete.title", "session.delete.message", "session.status.running",
 		"modal.forward.title", "modal.conn.titleAdd", "modal.start.title",
 		"common.cancel", "common.delete", "common.close", "common.confirm",

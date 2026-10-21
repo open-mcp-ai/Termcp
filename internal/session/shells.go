@@ -152,6 +152,49 @@ func (s *Session) CloseChildShell(id string) error {
 	return nil
 }
 
+// ArchiveChildShell stops a child shell and KEEPS its record.
+//
+// This is the tab's X. CloseChildShell is the erase: it drops the shell from the
+// live map and from shellHistory, so nothing addresses the transcript afterwards and
+// the archive cannot show the channel at all. That is the right primitive for "this
+// channel is spent, forget it" — but it was the ONLY one, so every ordinary close of
+// a channel destroyed a record the user had not asked to destroy.
+//
+// The difference is one flag and one preserved entry:
+//
+//   - the shell leaves the live map either way, because its tab must not come back;
+//   - `archived` is set, which makes retainHistory keep the snapshot entry instead of
+//     skipping it (a plain `closed` shell is still erased, exactly as before, so
+//     DELETE keeps its meaning — see CloseChildShell and the watcher's recheck);
+//   - the exit status is published first, so a snapshot reader can tell the channel
+//     ended rather than wondering whether it is still alive.
+//
+// Live sessions are unaffected: ShellsForView consults the snapshot only once a
+// session is no longer running, and a closed shell is not in the live map, so it can
+// never reappear as a tab.
+func (s *Session) ArchiveChildShell(id string) error {
+	v, ok := s.shells.Load(id)
+	if !ok {
+		return fmt.Errorf("child shell %q not found", id)
+	}
+	cs := v.(*ChildShell)
+	// Order matters: TerminateShell publishes the exit state and calls
+	// retainHistory, so `archived` has to be visible before it runs or the entry is
+	// skipped by the very check that is supposed to keep it.
+	cs.archived.Store(true)
+	cs.TerminateShell()
+	// TerminateShell retains through the parent it was constructed with. If that
+	// pointer is nil (a shell torn down before it was attached) the entry would be
+	// missing, so it is stored here as well — the store is idempotent and this is
+	// the call whose whole purpose is the record.
+	s.shellHistory.Store(cs.ID, cs.Info())
+	cs.cleanupOnce.Do(func() {
+		s.removeChildShell(id)
+	})
+	slog.Debug("child shell archived", "parent_id", s.ID, "child_shell_id", id)
+	return nil
+}
+
 // GetChildShell returns a child shell by ID, or nil if not found.
 func (s *Session) GetChildShell(id string) *ChildShell {
 	v, _ := s.shells.Load(id)

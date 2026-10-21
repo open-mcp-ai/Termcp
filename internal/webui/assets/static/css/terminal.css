@@ -1,21 +1,27 @@
   /* Floating terminal: dark theme; main page stays light */
-  .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
+  .shell-windows-container { position: fixed; inset: 0; pointer-events: none; z-index: var(--z-workspace); }
   .shell-windows-container > * { pointer-events: auto; }
-  .session-tabbar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; z-index: 20000; background: var(--term-panel-94); border: 1px solid var(--term-border); border-radius: 0; padding: 4px; box-shadow: 0 4px 16px var(--term-black-35), inset 0 1px 0 var(--term-white-08); max-width: 92vw; pointer-events: auto; }
-  /* Left grip: the bar is draggable, but only from here so clicks on tabs and
-     the action cluster keep working. Kept wide enough to grab comfortably. */
-  .session-tabbar-grip { flex-shrink: 0; align-self: stretch; width: 16px; margin: -4px 4px -4px -4px; border-radius: 0; cursor: move; touch-action: none; }
-  .session-tabbar.dragging { cursor: move; user-select: none; }
-  .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; max-width: calc(92vw - 170px); }
-  .session-tabbar-actions { display: flex; align-items: center; gap: 4px; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--term-border-2); flex-shrink: 0; }
-  .session-tabbar.hidden { display: none; }
+  /* The dock: pinned to the bottom of the viewport, and the ONE place the open
+     windows and the session plates both live. It replaces the floating tab bar
+     (which had to be draggable to stay out of the way) and the page-level plates:
+     the bar no longer floats, so the grip and its saved position are gone.
+
+     Geometry lives in workspace.css beside the rest of the layout; this file
+     only dresses what the dock contains. */
+  .session-tabs-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; min-width: 0; }
   .session-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; font-size: 12px; color: var(--term-fg); background: var(--term-surface); border: 1px solid var(--term-border-2); border-radius: 0; cursor: pointer; white-space: nowrap; flex: 0 1 auto; min-width: 48px; max-width: 200px; overflow: hidden; }
   .session-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
   .session-tab:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   .session-tab.active { color: var(--term-fg-white); background: var(--term-bg); border-color: var(--term-accent); box-shadow: inset 0 -2px 0 var(--term-accent); }
+  /* A tab for a session that has no window on this page (an agent's session, a
+     connect whose window was closed here). It is a real, running session and the
+     click opens it, so it must NOT look disabled — a dashed edge is the page's
+     established "not open here yet" mark, and it is the only difference: same
+     label shape, same tick, same close key. */
+  .session-tab.is-windowless { border-style: dashed; }
+  .session-tab.is-windowless .session-tab-label { color: var(--term-fg-muted); }
+  .session-tab.is-windowless:hover .session-tab-label { color: var(--term-fg-white); }
   .session-tab .session-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; font-family: var(--font-mono); }
-  .session-tab .session-tab-num { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 0; background: var(--term-border-2); color: var(--term-fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-  .session-tab.active .session-tab-num { background: var(--term-accent); color: var(--term-bg); }
   .session-tab .session-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 4px; background: transparent; color: var(--term-fg-soft); cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tab .session-tab-close:hover { background: var(--term-danger); color: var(--term-fg-white); }
   /* Pending-review count on a session tab. A minimized window shows nothing but
@@ -40,7 +46,11 @@
      inside its own root, so every pane loses the page it is supposed to glass
      over (Chromium still resolves the first pane, the rest paint flat). The 72%
      plate below is the separation; the 2px blur across it showed nothing. */
-  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 0 0; z-index: 10000; background: var(--term-pane-72); display: none; flex-direction: column; }
+  /* The overlay insets itself by BOTH measured depths, so it never covers the
+     header or the dock. The dock is where the pane-layout keys live, so covering
+     it would hide the only way out of tile mode — this inset is what makes
+     "push, never cover" true without a push/overlay rule to maintain. */
+  .pane-workspace { position: fixed; inset: var(--app-header-h, 0px) 0 var(--dock-h, 0px) 0; z-index: var(--z-workspace); background: var(--term-pane-72); display: none; flex-direction: column; }
   .pane-workspace.open { display: flex; }
   .pane-grid { flex: 1; display: grid; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; align-content: stretch; }
   .pane-grid > .shell-window { position: static !important; inset: auto; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; z-index: auto !important; box-shadow: none; }
@@ -54,6 +64,40 @@
   .shell-window.win-minimized { display: none !important; }
   .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tabbar-toggle:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  /* ---- Batch keys on the dock ------------------------------------------------
+     Two rows is what made room for these: the tabs keep row 1 to themselves, and
+     row 2 holds the batch verbs at its left end and the window controls at its
+     right. The verbs wear the shared .ext-key chip the extension plate and the
+     archive column use — a bar is a bar, and a key set of its own is how the three
+     drifted apart before. */
+  .sessdock .ext-key { height: 26px; font-size: .68rem; }
+  /* `hidden` has to beat the chip's own `display: inline-flex`, or the close key
+     stays on the bar with nothing to close. */
+  .sessdock .ext-key[hidden] { display: none; }
+  /* ---- The tick on a tab ----------------------------------------------------
+     A monitor glyph, always in the DOM and always visible: it is the tab's own
+     control, not a mode indicator. Pressing it ticks the tab for a batch close
+     while the rest of the tab keeps raising the window, which is what lets this bar
+     have no selection mode at all.
+     It is drawn as an outline that FILLS when ticked rather than swapping glyphs:
+     one shape whose state is its fill reads as the same control in both states,
+     where two shapes read as two controls. */
+  .session-tab-tick {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; width: 18px; height: 18px; padding: 0;
+    border: 1px solid transparent; border-radius: 0;
+    background: transparent; color: var(--term-fg-muted); cursor: pointer;
+  }
+  .session-tab-tick:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  .session-tab-tick:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+  /* Ticked: the glyph fills in the accent and the frame closes around it, so the
+     state is unmistakable at 12px without a second shape to learn. */
+  .session-tab.batch-selected .session-tab-tick {
+    color: var(--term-bg); background: var(--term-accent); border-color: var(--term-accent);
+  }
+  /* A ticked tab is armed, and its own name says so too. */
+  .session-tab.batch-selected { background: var(--term-surface-2, var(--term-surface)); }
+  .session-tab.batch-selected .session-tab-label { color: var(--term-accent); }
   .session-tabbar-toggle:focus-visible, .session-tabbar-tile:focus-visible, .session-tabbar-select:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
   .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
   .session-tabbar-tile:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
@@ -61,8 +105,8 @@
   .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
   .session-tabbar-select:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   .session-tabbar-select option { color: var(--term-fg); }
-  .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: 10001; }
-  .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid var(--term-border); background: var(--term-surface); cursor: move; user-select: none; flex-shrink: 0; z-index: 2; min-height: 34px; flex-wrap: nowrap; }
+  .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: var(--z-window); }
+  .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid var(--term-border); background: var(--term-surface); cursor: move; user-select: none; flex-shrink: 0; z-index: var(--z-win-header); min-height: 34px; flex-wrap: nowrap; }
   .shell-window-title-cluster { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 8px; }
   .shell-window-title {
     margin: 0;
@@ -255,7 +299,7 @@
      edge). It is a child of .shell-channel-body, whose box ends at the footer, so
      clearing the grip needs its height plus a gap — not the footer's too. */
   .shell-term-scroll-fab {
-    position: absolute; right: calc(var(--term-rail-gap, 10px) + var(--term-rail-w, 14px) + 8px); bottom: 36px; z-index: 15;
+    position: absolute; right: calc(var(--term-rail-gap, 10px) + var(--term-rail-w, 14px) + 8px); bottom: 36px; z-index: var(--z-win-fab);
     width: 30px; height: 30px; padding: 0;
     border: 1px solid var(--term-white-18); border-radius: 50%;
     background: var(--term-fab-92); color: var(--term-fg-dim);
@@ -288,7 +332,7 @@
      a diagonal drag from the corner resizes both axes. */
   .shell-window { --shell-resize-grip: 6px; --shell-resize-len: 44px; }
   .shell-window-resize-handle {
-    position: absolute; z-index: 33; touch-action: none;
+    position: absolute; z-index: var(--z-win-grip); touch-action: none;
     width: var(--shell-resize-grip); height: var(--shell-resize-len);
   }
   /* One rule per corner, stating all three properties. Grouping them by axis
@@ -398,7 +442,7 @@
     /* Above the corner grips (30) and the control rows (31/32): the panel is an
        interactive surface the user opened, and a resize affordance must not sit
        on top of its buttons. The grip under it is unusable until it is closed. */
-    position: absolute; right: 8px; top: 8px; z-index: 40;
+    position: absolute; right: 8px; top: 8px; z-index: var(--z-win-sheet);
     width: min(420px, calc(100% - 16px));
     max-height: min(60%, 340px);
     display: flex; flex-direction: column;
@@ -497,7 +541,7 @@
     transition: background .1s, color .1s;
   }
   .shell-channel-tab:hover { background: var(--term-hover); color: var(--term-fg); }
-  .shell-channel-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; z-index: 1; }
+  .shell-channel-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; z-index: var(--z-focus-lift); }
   .shell-channel-tab.active { background: var(--term-bg); color: var(--term-fg-soft-2); border-top: 2px solid var(--term-accent); }
   .shell-channel-tab-label {
     overflow: hidden;
@@ -708,10 +752,10 @@
     max-width: none; max-height: none;
     border: none; border-radius: 0;
     box-shadow: none;
-    /* Above the session tab bar (20000): when the terminal is the screen,
-       nothing in the page layer may float over it. Modals (24500), toasts and
-       notifications are not page content and may still do so. */
-    z-index: 21000;
+    /* Above the dock: when the terminal is the screen, nothing in the page
+       layer may float over it. Modals, toasts and notifications are not page
+       content and may still do so. */
+    z-index: var(--z-fullscreen);
   }
   /* The resize grip and drag cursor are meaningless when the window is the
      screen: there is nothing to drag or resize it against. */
@@ -734,13 +778,18 @@
   .shell-window.win-fullscreen .shell-window-header-btns button { width: 34px; height: 34px; }
 
   /* Mobile: the shell-window title bar already carries per-window controls, and
-     the floating tab bar competes with the terminal for the top of a phone
-     screen. Hidden on touch devices in any orientation — a width query would
-     miss a phone in landscape (~844px wide). It stays visible in tile mode,
-     which has no other way back to float (see sessionTabbarEl users). */
+     the dock competes with the terminal for the bottom of a phone screen.
+     Hidden on touch devices in any orientation — a width query would miss a
+     phone in landscape (~844px wide). It stays visible in tile mode, which has
+     no other way back to float (see sessionTabbarEl users).
+
+     The dock also holds the session plates on desktop; on a phone the page IS
+     the session list and the terminal is full-screen, so nothing is lost by
+     hiding it here. Making it work on touch is a separate change (the plates
+     would need a narrow form of their own). */
   @media (pointer: coarse) and (hover: none) {
-    .session-tabbar { display: none; }
-    body.tile-mode .session-tabbar { display: flex; }
+    .sessdock { display: none; }
+    body.tile-mode .sessdock { display: flex; }
     /* Maximize is meaningless on a phone: the window already fills the screen,
        and the toggle is a no-op there (see toggleShellWindowMax). Matched to the
        specificity of the base rule (.shell-window-header-btns button, 0,1,1) —
@@ -780,15 +829,52 @@
   /* The monitor glyph doubles as the session menu on touch devices. On desktop
      it stays a plain icon (the tab bar owns switching), so the affordance is
      added only where the interaction exists. */
-  .shell-header-icon-btn.active { color: var(--term-fg-white); }
+  /* The monitor glyph is a TICK for its window — the same control the dock's tab
+   * carries — so it has to look pressable on every pointer, not only on touch.
+   *
+   * It was a bare 18px icon with no cursor, no hover and no state: `cursor: pointer`
+   * and the `.active` paint both lived inside `@media (pointer: coarse)`, so on a
+   * desktop a press produced literally no feedback anywhere — the tick was recorded
+   * and the only way to see it was to find the dock and read a number. A control
+   * whose only evidence is elsewhere is a control that appears broken.
+   *
+   * The box is padded out of the glyph's 18px so the hit area is a real target
+   * without the cursor landing on a hairline, and `outline-offset` keeps the focus
+   * ring clear of the header's own border. */
+  .shell-header-icon-btn {
+    cursor: pointer;
+    width: 24px; height: 24px;
+    margin-left: 3px; margin-right: 0;
+    border-radius: 0;
+    transition: color .12s ease, background .12s ease;
+  }
+  /* HOVER is a tint; SELECTED is a filled frame. They were the same two greys
+   * (--term-border-1 against --term-border-2), which is a difference of one step in
+   * one surface ramp — so a ticked window looked like a hovered one, and the press
+   * that recorded the selection appeared to have done nothing.
+   *
+   * The ticked state is the dock tab's own: the glyph inverts to the panel colour on
+   * a solid accent fill, and the frame closes in accent around it. It is the same
+   * control as the tab's tick (both drive the same selection set), so it has to read
+   * the same way in both places, and a fill is unmistakable at 16px where a second
+   * shade of grey is not. */
+  .shell-header-icon-btn:hover { color: var(--term-fg-white); background: var(--term-border-1); }
+  .shell-header-icon-btn.active {
+    color: var(--term-bg);
+    background: var(--term-accent);
+    border-color: var(--term-accent);
+    box-shadow: 0 0 0 1px var(--term-accent), 0 0 7px var(--term-accent);
+  }
+  .shell-header-icon-btn.active:hover { color: var(--term-bg); background: var(--term-accent); }
+  .shell-header-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* A ticked window says so on its body too, matching the tab. */
+  .shell-window-header .shell-header-icon-btn.active + .shell-sid-copy .sid { color: var(--term-accent); }
   @media (pointer: coarse) and (hover: none) {
-    /* A tap target, not just an 18px glyph. */
+    /* A tap target, not just a glyph. */
     .shell-header-icon-btn {
-      cursor: pointer;
       width: 32px; height: 32px; margin-left: 2px; margin-right: 0;
       border-radius: 6px;
     }
-    .shell-header-icon-btn.active { color: var(--term-fg-white); background: var(--term-border-2); }
   }
 
   /* Drawer button in the terminal header: opens the entries drawer. Same touch
@@ -804,8 +890,14 @@
   @media (pointer: coarse) and (hover: none) {
     .shell-window-drawer-btn { display: inline-flex; }
   }
+  /* Menus anchored at the pointer, appended to <body> so no scrolling bar or
+     clipped panel can cut them. They are above any dialog (a menu opened from a
+     dialog must be visible over it) and below the toast and notify stacks: those
+     are messages the user did not ask for and must not be swallowed by a control
+     they did. It sat at 30001, which put it over both — an arithmetic answer to
+     "above the dock", when the ladder already had a rung for it. */
   .shell-window-switch-menu {
-    position: fixed; z-index: 30001;
+    position: fixed; z-index: var(--z-popover);
     min-width: 200px; max-width: calc(100vw - 16px);
     max-height: 60dvh; overflow-y: auto;
     padding: 4px; border: 1px solid var(--term-border-4); border-radius: 8px;
@@ -825,11 +917,12 @@
   .shell-switch-item.dead { color: var(--term-fg-muted); }
   .shell-switch-item.dead .shell-switch-label::after { content: ' · dead'; color: var(--term-fg-faint); }
   .shell-switch-empty { padding: 10px 12px; color: var(--term-fg-muted); font-size: 0.78rem; }
-  .shell-switch-num { flex-shrink: 0; color: var(--term-fg-muted); font-size: 0.72rem; min-width: 12px; }
   .shell-switch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-  /* File context menu (dark, matches shell-window) */
-  .shell-file-ctx-menu { display:none; position:fixed; z-index:30001; background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
+  /* File context menu (dark, matches shell-window). Same rung as the other
+     pointer-anchored menu above: both are menus, and two menus never need to
+     outrank each other. */
+  .shell-file-ctx-menu { display:none; position:fixed; z-index:var(--z-popover); background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
   .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:var(--term-fg); white-space:nowrap; }
   .file-ctx-item:hover { background:var(--term-current); color:var(--term-fg-white); }
   .file-ctx-item.file-ctx-danger { color:var(--term-danger-2); }

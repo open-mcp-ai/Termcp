@@ -355,9 +355,35 @@ func (m *Manager) persistOne(id string) {
 	// even though the session's own manifest was rewritten - the restart then
 	// resurrected a finished shell as a live one. (The store now retries that one
 	// transient failure; this log is what makes any remaining failure visible.)
+	// Write what the snapshot holds, and REMOVE what it no longer holds.
+	//
+	// Saving alone was not a sync: SaveShell writes one shell's manifest and never
+	// removes one, so a shell dropped from shellHistory stayed on disk forever. The
+	// in-memory view looked right while DELETE had actually left the record behind,
+	// and a restart would read the orphan back into the session. That is the same
+	// class of bug as the close paths themselves — the record outliving the decision
+	// to destroy it — so the reconcile belongs here, where "make disk match memory"
+	// is the stated job.
+	//
+	// `live` is the set the snapshot just produced; anything in the shell directory
+	// outside it is a removed channel. DeleteShell drops the manifest AND the logs,
+	// which is what DELETE means; an archived shell is still in the snapshot, so it is
+	// in `live` and survives untouched.
+	live := make(map[string]bool)
 	for _, sh := range s.SnapshotShells() {
+		live[sh.ID] = true
 		if err := m.store.SaveShell(id, sh); err != nil {
 			slog.Error("shell manifest write failed", "session_id", id, "shell_id", sh.ID, "status", sh.Status, "err", err)
+		}
+	}
+	if onDisk, err := m.store.ShellIDs(id); err == nil {
+		for _, shellID := range onDisk {
+			if live[shellID] {
+				continue
+			}
+			if err := m.store.DeleteShell(id, shellID); err != nil {
+				slog.Error("shell manifest delete failed", "session_id", id, "shell_id", shellID, "err", err)
+			}
 		}
 	}
 	sess.Shells = nil

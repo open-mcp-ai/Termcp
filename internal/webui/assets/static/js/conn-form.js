@@ -1025,34 +1025,50 @@ _sessionRegions.forEach(function (region) {
   }
 });
 
-// Collapse/expand each section with localStorage persistence. The archive is a
-// plate rather than a section header, so only its header id differs; its body is
-// the same .section-body and it shares this one implementation.
-['entries', 'sessions', 'archive'].forEach(function (key) {
-  var header = document.getElementById(key === 'archive' ? 'sec-archive-header' : 'sec-' + key);
+// Collapse/expand each section with localStorage persistence. Only the two
+// columns that ARE sections are listed: the archive is a folded column of its own
+// (archive-column.js owns that state), and the centre plate's header folds its
+// own body — so listing them here would give one region two owners.
+/* `foldTarget`, when given, is the element that carries the folded STATE class.
+ *
+ *  The centre plate needs one: its batch keys sit on the header bar rather than in
+ *  the body, so hiding only the body would leave a bar full of controls acting on
+ *  a list that is not on screen. The class goes on the plate, which contains both,
+ *  and CSS decides what each part does while folded. The hosts column keeps the
+ *  body as its target — its toolbar is inside the body, so hiding the body already
+ *  hides the keys. */
+[
+  { key: 'entries', foldTarget: null },
+  { key: 'exts', foldTarget: 'ext-plate' }
+].forEach(function (reg) {
+  var key = reg.key;
+  var header = document.getElementById('sec-' + key);
   var body = document.getElementById('sec-' + key + '-body');
   if (!header || !body) return;
+  var target = reg.foldTarget ? document.getElementById(reg.foldTarget) : body;
+  var expandAttr = header.getAttribute('aria-expanded');
   var stored = localStorage.getItem('termcp.section.' + key);
   var collapsed = stored
     ? stored === 'collapsed'
-    : header.getAttribute('aria-expanded') !== 'true';
+    : expandAttr !== null && expandAttr !== 'true';
   header.setAttribute('aria-expanded', String(!collapsed));
   body.classList.toggle('collapsed', collapsed);
+  if (target && target !== body) target.classList.toggle('is-folded', collapsed);
   header.addEventListener('click', function (e) {
     if (e.target.closest('.icon-btn')) return;
     var collapsed = header.getAttribute('aria-expanded') === 'false';
     header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
-    if (collapsed) {
-      body.classList.remove('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'expanded');
-    } else {
-      body.classList.add('collapsed');
-      localStorage.setItem('termcp.section.' + key, 'collapsed');
-    }
+    body.classList.toggle('collapsed', !collapsed);
+    if (target && target !== body) target.classList.toggle('is-folded', !collapsed);
+    localStorage.setItem('termcp.section.' + key, collapsed ? 'expanded' : 'collapsed');
   });
-  header.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
-  });
+  /* The extension trigger is a real <button>, so Enter and Space already click it;
+     the hosts trigger is a plain element and needs the shim. */
+  if (header.tagName !== 'BUTTON') {
+    header.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
+    });
+  }
 });
 
 function reasonLabel(r) {

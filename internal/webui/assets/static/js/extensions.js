@@ -119,11 +119,8 @@ function extRowByName(name) {
 
 function renderExtensionGrid(rows) {
   _extRows = rows || [];
-  var panel = document.getElementById('extpanel');
   var grid = document.getElementById('ext-grid');
-  var rail = document.getElementById('extpanel-rail');
-  var frame = document.querySelector('.workspace-frame');
-  if (!panel || !grid || !frame) return;
+  if (!grid) return;
   var list = _extRows.slice().sort(extRowOrder);
   /* The column is permanent in the markup (.ext-on is on the frame from the
      start), so an empty list is laid out exactly like a full one and the empty
@@ -138,14 +135,6 @@ function renderExtensionGrid(rows) {
       grid.appendChild(renderExtensionCard(ext));
     });
   }
-  /* The rail is the collapsed column's whole content, so it is repainted from
-     the same frame and keeps the same order as the cards beside it. */
-  if (rail) {
-    rail.innerHTML = '';
-    list.forEach(function (ext) {
-      rail.appendChild(renderExtensionRailItem(ext));
-    });
-  }
   /* Selection is derived from the set, never read back from the DOM, and it is
      pruned against what is still listed: a template that disappeared while the
      batch was being picked must not stay ticked, or the count lies and a delete
@@ -153,25 +142,51 @@ function renderExtensionGrid(rows) {
      an empty list would drop a tick made before the first frame. */
   _extBatch.syncCards(!!_extRows && _extRows.length > 0);
   _extBatch.update();
-  /* A repaint preserves the state the page is in rather than re-deriving it:
-     the stored preference says what the desktop sidebar should be, and reading
-     it here would reopen a drawer that arrived closed below the breakpoint. */
-  setExtensionsCollapsed(extensionsCollapsed(), false);
+  /* The count above the grid updates with the list: whether empty or populated,
+     the readout is permanent. */
+  paintExtensionStat();
   /* The cards are live: a frame that arrives while one is open is what it was
      opened to watch, so every open card repaints from the row that just changed. */
   extRepaintWindows();
 }
 
-/* The empty state is the panel's reason to exist when nothing is configured: it
-   says what an extension is, so an empty column is not a blank track. It carries
-   no key of its own — the column closes with New and Import, and a third
-   "create one" in the middle would be the same action twice. A socket frame that
-   arrives before the first paint renders it too. */
+/* The empty state carries NO copy any more, and that is deliberate.
+ *
+ * The panel's words are printed on the plate itself (see #ext-inscription in
+ * index.html): a watermark under the grid that is there at zero extensions and at
+ * fifty. Copy that lives in the empty state can only exist while the list is empty,
+ * which is what made the column one height before the first card and another after —
+ * and a slogan that appears and vanishes with the data reads as a rendering glitch
+ * rather than as the surface's own inscription.
+ *
+ * So this function is down to keeping the flow's shape: the grid keeps its place, and
+ * the inscription behind it never moves. Nothing is added, so nothing changes height.
+ */
 function renderExtensionEmpty() {
-  var row = document.createElement('div');
-  row.className = 'ext-empty';
-  row.innerHTML = '<p class="ext-empty-text">' + escapeHtml(t('ext.empty.text')) + '</p>';
-  return row;
+  var slot = document.createElement('div');
+  slot.className = 'ext-empty';
+  return slot;
+}
+
+/* The column's count, painted on the header trigger.
+ *
+ * It used to be a line of its own above the cards, labelled "Extensions:" — under a
+ * header that already said "Extensions", which is the same word twice, one row apart.
+ * On the header the number belongs to the title instead, and the body is left to the
+ * cards. The archive's own count rides its header the same way.
+ *
+ * It does NOT hide at zero, and that is the difference from the archive: an empty
+ * archive has nothing to say, while "no extensions yet" is exactly what an author
+ * needs to see before creating the first one.
+ *
+ * The capacity bar beside it is pure CSS: `html[data-theme="cyberpunk"]` lays it out
+ * and every other theme leaves it `display: none`. The theme also renames the column
+ * to 义体容量 through the catalog, so the same number reads as a capacity there — no
+ * branch here knows which theme is active.
+ */
+function paintExtensionStat() {
+  var badge = document.getElementById('ext-count');
+  if (badge) badge.textContent = String((_extRows || []).length);
 }
 
 function renderExtensionCard(ext) {
@@ -212,6 +227,12 @@ function renderExtensionCard(ext) {
   }
   tile.innerHTML =
     '<div class="entry-card-inner">' +
+    /* The tick target. A real checkbox, the same choice the archive's rows make and
+       for the same reason: the card body already means "open", so the tick needs an
+       element of its own rather than a mode that reinterprets the body. */
+    '<input type="checkbox" class="ext-card-tick" tabindex="-1"' + (selected ? ' checked' : '') +
+      ' title="' + escapeHtml(t('nethub.batch.selectOne', { name: name })) + '"' +
+      ' aria-label="' + escapeHtml(t('nethub.batch.selectOne', { name: name })) + '">' +
     '<span class="node-lamp ' + lamp + '" aria-hidden="true"></span>' +
     '<div class="entry-card-main">' +
     '<div class="conn-nm-row">' +
@@ -229,18 +250,27 @@ function renderExtensionCard(ext) {
     '</div>';
   var inner = tile.querySelector('.entry-card-inner');
   if (inner) {
-    inner.title = _extBatch.isOn() ? t('nethub.batch.selectOne', { name: name }) : t('ext.tip.status');
+    /* The card OPENS. It used to branch on the component's mode flag, which this
+       column always answers true to — it runs alwaysOn — so every click ticked and
+       the card could only ever be selected, never opened. That branch was written
+       when this plate had a selection MODE; when the mode went away the check became
+       a constant and the open path below it became dead code.
+     *
+     * So the tick has its own target, exactly as the archive's rows do: a checkbox
+     * on the card. Two targets, two meanings, no mode to consult. */
+    inner.title = t('ext.tip.status');
     inner.addEventListener('click', function (e) {
-      if (e.target.closest('.ext-retry-btn, .conn-edit-btn')) return;
-      /* In select mode a click ticks the card, the way the host cards behave:
-         clicking through to a dialog while the row is being picked for a batch
-         would lose the batch. */
-      if (_extBatch.isOn()) { _extBatch.toggleSelection(name, tile); return; }
+      if (e.target.closest('.ext-retry-btn, .conn-edit-btn, .ext-card-tick')) return;
       /* A status card is a readout, not a terminal the click is aiming at: it opens
          centred, in the cascade, wherever the pointer happened to be. */
       openExtensionWindow(name, null);
     });
   }
+  var tick = tile.querySelector('.ext-card-tick');
+  if (tick) tick.addEventListener('click', function (e) {
+    e.stopPropagation();
+    _extBatch.toggleSelection(name, tile);
+  });
   var btn = tile.querySelector('.ext-retry-btn');
   if (btn) {
     btn.addEventListener('click', function (e) {
@@ -279,42 +309,40 @@ function retryExtension(name, btn) {
     });
 }
 
-/* The collapsed column's row: a lamp and a name, and nothing else. The status
-   is the whole point — the rail exists so "which extensions are up" still has
-   an answer when the cards are put away — and the name is what the tooltip
-   holds, because a lamp alone will not say which machine it is. */
-function renderExtensionRailItem(ext) {
-  var btn = document.createElement('button');
-  var lamp = extLampClass(ext.status);
-  var name = ext.name || '';
-  btn.type = 'button';
-  btn.className = 'extpanel-rail-item';
-  btn.title = name + ' — ' + extStatusLabel(ext.status);
-  btn.setAttribute('aria-label', name + ', ' + extStatusLabel(ext.status));
-  btn.innerHTML = '<span class="extpanel-rail-lamp ' + lamp + '" aria-hidden="true"></span>';
-  btn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    setExtensionsCollapsed(false, true);
-  });
-  return btn;
-}
-
 /* ---- Batch selection ---
- * The extension column's instance of the shared component (batch-bar.js). Its
- * verb is "open the cards": a card here is a status window, so the batch is
- * simply several of them, where a host batch dials one session per host. */
+ * The extension plate keeps the SAME selection engine as the hosts column
+ * (batch-bar.js) but wears it differently: flat keys on the header bar instead of
+ * the hosts column's mode-switched row.
+ *
+ * The difference is not styling. A host card's click CONNECTS, so the column
+ * needs a switch that turns that click into a tick — hence the big list-checks
+ * key. An extension card's click opens a status window, which is not something a
+ * batch needs, so there is no mode to enter: every card is tickable, the keys
+ * that act on a selection simply appear when there is one, and `alwaysOn` tells
+ * the shared component to skip the switch and keep the mode on.
+ *
+ * The verbs the shared component calls are open / export / delete; only export
+ * and delete are surfaced as keys here. Opening several status windows at once
+ * was a key nobody reached for — the cards are opened one at a time, by clicking
+ * them.
+ */
 var _extBatch = createBatchBar({
-  bodyId: 'extpanel-body',
-  toggleId: 'ext-select-toggle',
-  countId: 'ext-toggle-count',
+  bodyId: 'sec-exts-body',
+  /* The keys live on the plate's HEADER bar, so the selecting class has to sit on
+     the plate that contains both the bar and the cards. */
+  selectingHostId: 'ext-plate',
+  alwaysOn: true,
+  /* No toggle, no split key, no menu: this column's controls are flat. */
+  toggleId: null,
+  countId: null,
   invertId: 'ext-sel-invert',
-  splitId: 'ext-open-split',
-  mainId: 'ext-batch-open',
-  caretId: 'ext-open-caret',
-  menuId: 'ext-open-menu',
-  exportId: 'ext-menu-export',
-  deleteId: 'ext-menu-delete',
-  actionIds: ['ext-menu-export', 'ext-menu-delete'],
+  splitId: null,
+  mainId: null,
+  caretId: null,
+  menuId: null,
+  exportId: 'ext-batch-export',
+  deleteId: 'ext-batch-delete',
+  actionIds: ['ext-batch-export', 'ext-batch-delete'],
   gridId: 'ext-grid',
   cardSelector: '.conn-tile[data-ext-name]',
   nameAttr: 'data-ext-name',
@@ -323,17 +351,44 @@ var _extBatch = createBatchBar({
   names: selectableExtensionNames,
   render: function () { renderExtensionGrid(_extRows || []); },
   tipFor: function () { return t('ext.tip.status'); },
-  onOpen: function (names) { openSelectedExtensions(names); },
   onExport: function (names) { exportSelectedExtensions(names); },
-  onDelete: function (names) { deleteSelectedExtensions(names); }
+  onDelete: function (names) { deleteSelectedExtensions(names); },
+  /* The flat bar's own dressing: the two action keys exist only while something
+     is ticked. The component paints them disabled in that state (an always-live
+     key that does nothing reads as broken), but this bar has no switch to sit a
+     disabled key beside, so they are hidden outright and the bar stays two keys
+     wide when idle. Hidden, not disabled, for the same reason the hosts column's
+     trash is: the ticked cards are already the signal that a batch exists. */
+  onUpdate: function (n) {
+    ['ext-batch-export', 'ext-batch-delete'].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.hidden = n === 0;
+    });
+    /* The card's checkbox is its visible state, and CSS cannot set `checked`, so it
+       is written here from the component's set — the same source the card's
+       .batch-selected class comes from. Painted on every update rather than at the
+       end of a render, because a rebuild happens when the LIST changes and a tick
+       happens when the SELECTION does: painting in the renderer left invert
+       showing a count over visibly clean boxes, which is the bug the archive had
+       for exactly the same reason. */
+    var grid = document.getElementById('ext-grid');
+    if (!grid) return;
+    grid.querySelectorAll('.ext-card').forEach(function (card) {
+      var box = card.querySelector('.ext-card-tick');
+      if (!box) return;
+      var key = card.getAttribute('data-ext-name');
+      box.checked = !!(key && _extBatch.has(key));
+    });
+  }
 });
 
 /* Open the ticked extensions: one card per extension, the way a host batch opens
-   one session per ticked host. A card is a window, so several coexist, drag and
-   tile together, and the batch is simply several of them. */
+   one session per ticked host. No key calls this any more — the flat bar has no
+   "open the selection" verb — but it is kept because it is the correct meaning of
+   that verb if the key ever returns, and because openExtensionWindow is what the
+   per-card click path uses. */
 function openSelectedExtensions(names) {
   if (!names || !names.length) return;
-  if (extIsDrawer()) setExtensionsCollapsed(true, false);
   names.forEach(function (name) { openExtensionWindow(name, null); });
   // The ticks are spent: clear the selection, keep the mode on for the next batch.
   _extBatch.clear();
@@ -394,166 +449,6 @@ function exportSelectedExtensions(names) {
     showCopyToast(t('conn.batch.exportFailed', { msg: String((e && e.message) || e) }));
   });
 }
-
-/* ---- Collapse state -------------------------------------------------------
- * The same three widths and one manual preference NetHub keeps, and for the
- * same reason: this is the connections panel's other side, so it answers the
- * same question the same way.
- *
- *   wide (>=1200px)   expanded by default
- *   medium (800-1199) collapsed (rail) by default
- *   narrow (<800px)   the panel is a drawer, and "collapsed" means closed
- *
- * The key is the panel's own; NetHub's preference does not decide this column,
- * and vice versa. Only a toggle above the drawer breakpoint writes it — below it
- * the panel is an overlay, and the overlay's open and close are the page's
- * business rather than the sidebar's preference. But the two drawers share one
- * scrim and one page, so opening one closes the other — two overlays at once is
- * two frosted panes over a page that cannot scroll behind either. */
-var EXT_STATE_KEY = 'termcp.extensions';
-
-function storedExtensionsCollapsed() {
-  var v = null;
-  try { v = localStorage.getItem(EXT_STATE_KEY); } catch (e) {}
-  if (v === 'collapsed') return true;
-  if (v === 'expanded') return false;
-  return null;
-}
-
-/* Mirrors the stylesheet's breakpoint. Below it the body is fixed and slides,
-   so the state means closed rather than railed — and the frame's collapsed
-   class is kept off it, or the third grid track would still be 56px of rail on
-   a page that no longer has grid columns at all. */
-function extIsDrawer() {
-  return (window.innerWidth || 0) < 800;
-}
-
-function extDefaultCollapsed() {
-  return (window.innerWidth || 0) < 1200;
-}
-
-function setExtensionsCollapsed(collapsed, persist) {
-  var frame = document.querySelector('.workspace-frame');
-  var body = document.getElementById('extpanel-body');
-  var trigger = document.getElementById('extpanel-toggle');
-  if (!frame || !body) return;
-  collapsed = !!collapsed;
-  var drawer = extIsDrawer();
-  /* The two drawers share one scrim and one page, so the one being opened puts
-     the other away. The call is guarded by "am I opening" rather than fired on
-     every state write, and closing never calls across, so the pair cannot
-     recurse into each other. */
-  if (drawer && !collapsed && !netHubCollapsed()) setNetHubCollapsed(true, false);
-  frame.classList.toggle('ext-collapsed', collapsed && !drawer);
-  body.classList.toggle('drawer-open', drawer && !collapsed);
-  /* The scrim and the page lock follow BOTH drawers (paintDrawerScrim in
-     dialogs.js), so collapsing this panel no longer drops the overlay the
-     connections drawer is still depending on. */
-  if (typeof paintDrawerScrim === 'function') paintDrawerScrim();
-  if (trigger) trigger.setAttribute('aria-expanded', String(!collapsed));
-  /* The drawer scope never writes the preference: below the breakpoint the
-     panel is an overlay, and dismissing an overlay is not a statement about how
-     the desktop sidebar should sit. Writing it here would rail a column the
-     wide screen later arrives at — the panel found collapsed for a decision
-     made about a different shape of the same page. The overlay's state lives in
-     the page, and the sidebar keeps its own. */
-  if (persist && !drawer) {
-    try { localStorage.setItem(EXT_STATE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch (e) {}
-  }
-}
-
-function extensionsCollapsed() {
-  var frame = document.querySelector('.workspace-frame');
-  var body = document.getElementById('extpanel-body');
-  if (extIsDrawer()) return !(body && body.classList.contains('drawer-open'));
-  return !!(frame && frame.classList.contains('ext-collapsed'));
-}
-
-function currentExtensionsCollapsed() {
-  var stored = storedExtensionsCollapsed();
-  return stored === null ? extDefaultCollapsed() : stored;
-}
-
-/* A drawer is an overlay over the page, and an overlay does not open itself.
-   "Expanded" was stored on a wide screen, where it means the sidebar is out;
-   carried below the breakpoint it means a drawer over a page that cannot scroll
-   behind it, with a scrim the user never asked for. The stored value still
-   decides the desktop sidebar — this is the state the panel arrives in, not a
-   rewrite of the preference. */
-function initialExtensionsCollapsed() {
-  return extIsDrawer() ? true : currentExtensionsCollapsed();
-}
-
-function toggleExtensions() {
-  setExtensionsCollapsed(!extensionsCollapsed(), true);
-}
-
-/* The drawer's close key and the drawer-close button both reach for this, so
-   the panel has one door from the inside as well as out. */
-window.termcpToggleExtensions = function (open) {
-  setExtensionsCollapsed(open === false, true);
-};
-
-/* A viewport change can move the page across a breakpoint in either direction,
-   and the stored preference is re-applied, never rewritten — a resize is not a
-   decision. Only a crossing is acted on: a resize that stays on one side of the
-   breakpoint changes the panel's geometry but not its state, and re-applying
-   would close a drawer the user is in the middle of using. Crossing into the
-   drawer scope starts closed, so an overlay never opens itself; crossing back
-   out keeps a drawer the user had open as the expanded column it becomes,
-   rather than re-deriving it from storage — a rotation into a width whose
-   default is the rail would otherwise put away a panel the user was reading. */
-var _extWasDrawer = extIsDrawer();
-var _extResizeTimer = 0;
-window.addEventListener('resize', function () {
-  if (_extResizeTimer) clearTimeout(_extResizeTimer);
-  _extResizeTimer = setTimeout(function () {
-    _extResizeTimer = 0;
-    var drawer = extIsDrawer();
-    if (drawer === _extWasDrawer) return;
-    var wasDrawer = _extWasDrawer;
-    _extWasDrawer = drawer;
-    if (drawer) {
-      setExtensionsCollapsed(initialExtensionsCollapsed(), false);
-      return;
-    }
-    var panel = document.getElementById('extpanel-body');
-    var wasOpen = wasDrawer && panel && panel.classList.contains('drawer-open');
-    setExtensionsCollapsed(wasOpen ? false : currentExtensionsCollapsed(), false);
-  }, 120);
-});
-
-(function () {
-  var trigger = document.getElementById('extpanel-toggle');
-  if (!trigger) return;
-  trigger.addEventListener('click', function (e) {
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    toggleExtensions();
-  }, true);
-  trigger.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    toggleExtensions();
-  }, true);
-
-  /* The scrim and Escape close the overlay only. On desktop the scrim is not in
-     the layout and the body is a column, so neither can put away a rail the
-     user chose — the same guard NetHub's own handlers carry. */
-  var scrim = document.querySelector('.drawer-scrim');
-  if (scrim) scrim.addEventListener('click', function () { setExtensionsCollapsed(true, false); });
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    if (!extIsDrawer()) return;
-    var body = document.getElementById('extpanel-body');
-    if (!body || !body.classList.contains('drawer-open')) return;
-    e.stopImmediatePropagation();
-    setExtensionsCollapsed(true, false);
-  }, true);
-})();
-
-setExtensionsCollapsed(initialExtensionsCollapsed(), false);
 
 /* The socket frame is the panel's usual painter, but it only carries the key
    when a reconciler is running — a Termcp started without one sends nothing,
@@ -638,6 +533,14 @@ function openExtensionWindow(name, pos) {
   win.innerHTML =
     '<div class="shell-window-header">' +
       '<div class="shell-window-title-cluster">' +
+        /* The plate's glyph, in the same slot a terminal window puts its monitor.
+           Without it this card carried no icon at all, so the dock fell back to the
+           monitor drawing and an extension window was indistinguishable from a
+           session window in the one list that holds both. `shell-header-icon` is the
+           hook terminal-switcher.js turns into the window's TICK; keeping the class
+           identical is what gives extension cards the same tick target as sessions
+           rather than a second mechanism. */
+        '<span class="shell-header-icon ext-window-icon"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="8" height="8" rx="1.5"/><path d="M4 14.5v1.5M14.5 4H16"/></svg></span>' +
         '<span class="shell-link-state"></span>' +
         '<h3 class="shell-window-title"><span class="sw-conn">' + escapeHtml(name) + '</span></h3>' +
       '</div>' +
@@ -1033,15 +936,58 @@ function deleteOneExtension(name, win) {
   });
 }
 
+/* ---- The add split key -------------------------------------------------------
+ * The hosts column's split key, used for the same reason: one key whose wide half
+ * runs the common verb and whose caret holds the rarer one. Here the face creates
+ * a blank extension and the menu imports a file — authoring one is what people do
+ * most, importing a set is the occasional door.
+ *
+ * The menu is a SIBLING of the plate, not a child of it, because the plate carries
+ * the shared clip-path and a clip cuts descendants too — the same trap the hosts
+ * column documents. Escape closes the menu first and does nothing else; the
+ * column has no mode to leave. */
+function closeExtAddMenu() {
+  var m = document.getElementById('ext-add-menu');
+  var c = document.getElementById('ext-add-caret');
+  if (m) m.hidden = true;
+  if (c) c.setAttribute('aria-expanded', 'false');
+}
+
+(function () {
+  var caret = document.getElementById('ext-add-caret');
+  var menu = document.getElementById('ext-add-menu');
+  if (!caret || !menu) return;
+  caret.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+    caret.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  menu.addEventListener('click', function (e) { e.stopPropagation(); });
+  document.addEventListener('click', function (e) {
+    if (menu.hidden) return;
+    if (e.target && e.target.closest &&
+        (e.target.closest('#ext-add-menu') || e.target.closest('#ext-add-caret'))) return;
+    closeExtAddMenu();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !menu.hidden) closeExtAddMenu();
+  });
+})();
+
 /* ---- Import ----------------------------------------------------------------
  * The dialog and the readout are the connection import's, over the extension
  * document: one file, no overwrites, and the names that had to move are listed
  * because that is the only thing the author has to be told about. */
 (function () {
-  var open = document.getElementById('ext-import-open');
+  /* Import lives in the add key's dropdown now: creating one and importing a set
+     are the two ways an extension enters the list, so they are one control with
+     two doors rather than two keys competing for the bar's width. */
+  var open = document.getElementById('ext-menu-import');
   if (!open) return;
   open.addEventListener('click', function (e) {
     e.stopPropagation();
+    closeExtAddMenu();
     var btn = document.getElementById('ext-import-run');
     if (btn) btn.disabled = false;
     var file = document.getElementById('ext-import-file');
@@ -1098,12 +1044,9 @@ function deleteOneExtension(name, win) {
 (function () {
   var add = document.getElementById('ext-add');
   if (add) {
+    /* A real <button> now (it is the wide half of a split key), so Enter and Space
+       already click it — a keydown shim here would fire the dialog twice. */
     add.addEventListener('click', function () { openExtensionDialog(null); });
-    add.addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      e.preventDefault();
-      openExtensionDialog(null);
-    });
   }
 
   var modal = extModalEl('modal-ext');

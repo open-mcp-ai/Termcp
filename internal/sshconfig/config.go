@@ -121,18 +121,18 @@ func validateDialSpec(d *DialSpec, label string) error {
 	d.Host = strings.TrimSpace(d.Host)
 	d.User = strings.TrimSpace(d.User)
 	if d.Host == "" {
-		return fmt.Errorf("%s must set \"host\"", label)
+		return fmt.Errorf("%s must set \"host\": %w", label, ErrInvalid)
 	}
 	if d.User == "" {
-		return fmt.Errorf("%s must set \"user\"", label)
+		return fmt.Errorf("%s must set \"user\": %w", label, ErrInvalid)
 	}
 	d.Password = strings.TrimSpace(d.Password)
 	d.PrivateKey = strings.TrimSpace(d.PrivateKey)
 	if d.Password == "" && d.PrivateKey == "" {
-		return fmt.Errorf("%s needs password or private_key", label)
+		return fmt.Errorf("%s needs password or private_key: %w", label, ErrInvalid)
 	}
 	if d.Port < 0 || d.Port > 65535 {
-		return fmt.Errorf("%s invalid port %d", label, d.Port)
+		return fmt.Errorf("%s invalid port %d: %w", label, d.Port, ErrInvalid)
 	}
 	if _, err := sshclient.ParseProxyURL(d.Proxy); err != nil {
 		return fmt.Errorf("%s: %w", label, err)
