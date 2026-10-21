@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/encoding"
 	"math"
 	"sort"
 	"strconv"
@@ -89,6 +90,12 @@ type termArgDecl struct {
 	// one rule.
 	Min any
 
+	// Sample is a LEGAL value for this argument, for the tests that check every
+	// published name still parses. An argString's sample cannot be one string for all of
+	// them — "ls" is a legal value for `cmd` and not a charset for `encoding` — so the
+	// legal value is declared beside the declaration instead of guessed in the test.
+	Sample string
+
 	// BoundNote is what a caller is told when it lands outside Min/Max, after the
 	// range itself.
 	//
@@ -106,6 +113,32 @@ type termArgDecl struct {
 // arguments in the same sequence.
 var termArgDecls = []termArgDecl{
 	{
+		// ONE SHELL LINE, NO DSL (issue #319). Handed verbatim to a shell with no parsing,
+		// placeholders or flags. `session` or `shell` says where; mutually exclusive.
+		Name:    "run",
+		Kind:    argString,
+		Desc:    "One shell line, run verbatim; pair with session or shell.",
+		DocNote: "Execute one shell line verbatim without DSL parsing, placeholders, or flags. Pair with `session` (one-shot pipe returning exit_code) or `shell` (existing interactive shell). Mutually exclusive with `cmd`",
+		Def:     "",
+		DefText: "",
+	},
+	{
+		Name:    "session",
+		Kind:    argString,
+		Desc:    "run target: session/use:<host>, one-shot pipe with exit_code.",
+		DocNote: "Target session id, channel (uses its session), or `use:<host>` for `run`: runs the line in a fresh pipe and returns `exit_code` + stdout. Mutually exclusive with `shell`",
+		Def:     "",
+		DefText: "",
+	},
+	{
+		Name:    "shell",
+		Kind:    argString,
+		Desc:    "run target: existing channel, keeps state, no exit_code.",
+		DocNote: "Existing channel for `run` (e.g. `6a29:1`): types the line into that interactive shell so `cd`/env state persists (no `exit_code`). Mutually exclusive with `session`",
+		Def:     "",
+		DefText: "",
+	},
+	{
 		Name:    "cmd",
 		Kind:    argString,
 		Desc:    "Shell-like DSL. Empty = help.",
@@ -114,9 +147,23 @@ var termArgDecls = []termArgDecl{
 		DefText: "",
 	},
 	{
+		// THE CHARSET A TERMINAL WRITES IN (issue #304). A terminal is not a UTF-8 device:
+		// a zh-CN Windows console writes GBK, and one byte outside UTF-8 made the whole
+		// reply a 400 that named nothing the caller could act on. `read --encoding` could
+		// already say so per statement; an agent calling the tool has no statement, so the
+		// default belongs here.
+		Name:    "encoding",
+		Kind:    argString,
+		Desc:    "Read charset (e.g. gbk); empty = UTF-8.",
+		DocNote: "The default charset for reads in this call, as `read --encoding` sets per statement. A byte that is not UTF-8 refuses the whole reply otherwise, which is the one thing a caller cannot work around from outside",
+		Def:     "",
+		DefText: "",
+		Sample:  "gbk",
+	},
+	{
 		Name:    "timeout",
 		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Seconds to wait for output (0 = don't wait); an upper bound, not a completion wait. Default %d; %d is the wait to stay under.", defaultTimeoutSeconds, maxWaitSeconds),
+		Desc:    fmt.Sprintf("Wait bound in seconds (0 = don't wait). Default %d.", defaultTimeoutSeconds),
 		DocNote: fmt.Sprintf("Seconds to look (default %d; a pipe returns as soon as its process exits). %d is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait", defaultTimeoutSeconds, maxWaitSeconds),
 		Def:     defaultTimeoutSeconds,
 		DefText: strconv.Itoa(defaultTimeoutSeconds),
@@ -136,7 +183,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name: "bytes_limit",
 		Kind: argNumber,
-		Desc: fmt.Sprintf("Bytes of the slice; 0 = channel only, else at least %d. Default %d; %d is the size to stay under.", minWindowBytes, defaultBytesLimit, windowBytesMax),
+		Desc: fmt.Sprintf("Slice bytes (0 = channel only, else >=%d). Default %d (under %d).", minWindowBytes, defaultBytesLimit, windowBytesMax),
 		DocNote: fmt.Sprintf("Bytes per slot (default %d; `0` = the channel only, no bytes, otherwise at least %d — a window narrower than one character cannot return one). %d is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.\n"+
 			"Two paths read `0` as \"name the object, consume nothing\" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).\n"+
 			"A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default %d rather than none; a `mcp recv` never reads with a window under %d, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`).", defaultBytesLimit, minWindowBytes, windowBytesMax, defaultBytesLimit, minRecvWindow),
@@ -156,7 +203,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "lines_limit",
 		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Lines of the slice; 0 = no limit. Default %d; %d is the size to stay under.", defaultLinesLimit, windowLinesMax),
+		Desc:    fmt.Sprintf("Slice lines (0 = unlimited). Default %d (stay under %d).", defaultLinesLimit, windowLinesMax),
 		DocNote: fmt.Sprintf("Lines per slot (default %d; `0` = no line limit). %d is the size to stay under, not a wall: a longer tail is allowed, and said so in the reply", defaultLinesLimit, windowLinesMax),
 		Def:     defaultLinesLimit,
 		DefText: strconv.Itoa(defaultLinesLimit),
@@ -168,7 +215,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "total_bytes_limit",
 		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Cap for the whole reply. Default %d; %d is the size to stay under.", defaultTotalBytesLimit, windowBytesMax),
+		Desc:    fmt.Sprintf("Reply byte cap. Default %d (under %d).", defaultTotalBytesLimit, windowBytesMax),
 		DocNote: fmt.Sprintf("Cap for the whole reply (default %d). %d is the size to stay under, not a wall — this is YOUR budget for one reply, so set it as high as you are willing to read", defaultTotalBytesLimit, windowBytesMax),
 		Def:     defaultTotalBytesLimit,
 		DefText: strconv.Itoa(defaultTotalBytesLimit),
@@ -181,7 +228,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_bytes_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold it.",
+		Desc:    "truncate or fold.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -190,7 +237,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_lines_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold it.",
+		Desc:    "truncate or fold.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -198,7 +245,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "learn_mode",
 		Kind:    argBool,
-		Desc:    "Add a 'usage' header line. Default: false.",
+		Desc:    "Add 'usage' header. Default: false.",
 		DocNote: "Attach each directive's usage line once per reply",
 		Def:     false,
 		DefText: "false",
@@ -213,7 +260,7 @@ var termArgDecls = []termArgDecl{
 		// bytes, creates no session, and records no audit span. It is a static health
 		// check for a caller or a benchmark harness, answering each statement's
 		// expanded form with Verdict: valid-syntax or invalid.
-		Desc:    "Preview: parse, expand, validate cmd, then stop before dispatch. No bytes sent. Default: false.",
+		Desc:    "Validate cmd without running. Default: false.",
 		DocNote: "Parse and validate `cmd` without executing. Substitutes `$1`/`$NAME` and expands aliases, then stops before dispatch: connects to nothing, creates no sessions, produces no audit spans, and bounds no wait. Each statement reports `Verdict: valid-syntax` or `invalid`. Secrets are never echoed in `Expanded:`. **Off by default**",
 		Def:     false,
 		DefText: "false",
@@ -259,7 +306,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "args",
 		Kind:    argStringArray,
-		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable and leave only the reference in cmd, which is parsed as DSL.",
+		Desc:    "Values for $1…; cmd holds only the reference.",
 		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",
@@ -267,7 +314,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "vars",
 		Kind:    argMap,
-		Desc:    "Named values for $NAME. Logged verbatim.",
+		Desc:    "Named $NAME values (logged).",
 		DocNote: "Named values for `$NAME` in `cmd`. The same mechanism as `args` under another spelling — the position decides the insertion, never which table named the value — so a `$NAME` that is the whole payload and a `$1` that is the whole payload behave identically. Every name must be referenced by cmd: an unused entry is refused before anything runs, and so is a `$NAME` this table does not define. **These values ARE recorded in the server log**, which is what makes the log a faithful record of the call: a value that must not be written down belongs in `secrets` instead",
 		Def:     nil,
 		DefText: "",
@@ -275,8 +322,8 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "secrets",
 		Kind:    argMap,
-		Desc:    "Named values for $NAME that are NEVER logged. Put credentials here.",
-		DocNote: "Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, while `vars` is logged verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed",
+		Desc:    "Named $NAME values; NEVER logged.",
+		DocNote: "Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, and a reply echoes the reference `$NAME` rather than the value — while `vars` is logged and echoed verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed",
 		Def:     nil,
 		DefText: "",
 	},
@@ -370,6 +417,15 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	collect(readNumberArg(args, "lines_limit", &linesLimit))
 	collect(readNumberArg(args, "total_bytes_limit", &totalLimit))
 	collect(readEnumArg(args, "on_bytes_overflow", &w.OnBytesOverflow))
+	if enc := getString(args, "encoding", ""); enc != "" {
+		// A CHARSET WE CANNOT DECODE IS REFUSED HERE, not three layers down: a name nothing
+		// recognises would otherwise reach the read and come back as a decode failure that
+		// says nothing about the argument that caused it.
+		if _, err := encoding.Decode(enc, nil); err != nil {
+			collect(&directive.Error{Msg: fmt.Sprintf("encoding %q is not a charset this build knows: %v", enc, err)})
+		}
+		w.Encoding = enc
+	}
 	collect(readEnumArg(args, "on_lines_overflow", &w.OnLinesOverflow))
 	collect(readBoolArg(args, "learn_mode", &w.LearnMode))
 	if len(problems) > 0 {

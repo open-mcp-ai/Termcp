@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"strings"
 	"sync"
 	"time"
@@ -55,12 +56,21 @@ import (
 // ponytail: an in-memory map with no eviction. A peer is opened inside one
 // conversation and closed with `close`; the leak would be one struct per opened
 // URL. Add a reaper when a long-lived instance is observed accumulating them.
-var (
-	jrpcChannelsMu sync.Mutex
-	jrpcChannels   = map[string]*jrpcHandle{}
-	peerSeqMu      sync.Mutex
-	peerSeq        = map[string]int{}
-)
+//
+// A sync.Map, NOT A MAP AND A MUTEX. Every operation here touches one key: a lookup
+// by address, one store on open, one delete on close, and a Range for the listing.
+// There is no invariant spanning two entries, so there is nothing for a lock to
+// protect — the mutex was three obligations (unlock on every return, don't hold it
+// across the dial) that the runtime now keeps for us.
+var jrpcChannels sync.Map // address string -> *jrpcHandle
+
+// peerSeq numbers the connections opened on one (session, kind), so a second
+// browser is `:2` and stays `:2`.
+//
+// ONE ATOMIC COUNTER PER KEY, in a sync.Map: the number is monotonic per key by
+// itself (nothing else to keep consistent), so an int64 with Add is the whole
+// implementation.
+var peerSeq sync.Map // peerSeqKey string -> *atomic.Uint64
 
 // peerKey renders a peer's address: `<session> <kind>:<index>`.
 //
@@ -81,10 +91,9 @@ func peerKey(sessionID, kind, index string) string {
 // ponytail: an in-memory counter beside the registry. It resets when the process
 // restarts, which is fine — so did every peer.
 func nextPeerIndex(sessionID, kind string) string {
-	peerSeqMu.Lock()
-	defer peerSeqMu.Unlock()
-	peerSeq[peerSeqKey(sessionID, kind)]++
-	return strconv.Itoa(peerSeq[peerSeqKey(sessionID, kind)])
+	key := peerSeqKey(sessionID, kind)
+	v, _ := peerSeq.LoadOrStore(key, new(atomic.Uint64))
+	return strconv.FormatUint(v.(*atomic.Uint64).Add(1), 10)
 }
 
 func peerSeqKey(sessionID, kind string) string { return sessionID + " " + kind }
@@ -219,9 +228,7 @@ func (s *Server) jrpcOpenWithHeaders(ctx context.Context, stmt directive.Stateme
 	if op == "cdp" {
 		h.cdp = newCDPState()
 	}
-	jrpcChannelsMu.Lock()
-	jrpcChannels[handle] = h
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Store(handle, h)
 
 	// "OPEN" REPORTS WHAT IT FOUND, NOT JUST THAT IT OPENED.
 	//
@@ -437,12 +444,14 @@ func (s *Server) jrpcChannel(ctx context.Context, stmt directive.Statement, win 
 		return badRequest(stmt, op+" "+sub+" needs a channel address (the one "+op+" open returned)")
 	}
 	handle := rest[0]
-	jrpcChannelsMu.Lock()
-	h, ok := jrpcChannels[handle]
-	if ok && sub == "close" {
-		delete(jrpcChannels, handle)
+	var h *jrpcHandle
+	var ok bool
+	if v, found := jrpcChannels.Load(handle); found {
+		h, ok = v.(*jrpcHandle), true
 	}
-	jrpcChannelsMu.Unlock()
+	if ok && sub == "close" {
+		jrpcChannels.Delete(handle)
+	}
 
 	if !ok {
 		if op == "mcp" && sub != "open" {
@@ -616,20 +625,48 @@ func parseJRPCFrame(stmt directive.Statement, rest []string) (map[string]any, *e
 	}
 	var frame map[string]any
 	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
-		return nil, ptrSlot(badRequest(stmt, "the frame is not JSON: "+err.Error()+"\n"+frameSpelling))
+		return nil, ptrSlot(badRequest(stmt, "the frame is not JSON: "+err.Error()+"\n"+frameSpelling+frameJSONHint(err)))
 	}
 	return frame, nil
 }
 
-// frameSpelling is the one sentence that turns "invalid character" into a fix.
+// frameSpelling is the paragraph that turns "invalid character" into a fix.
 //
-// A JSON body is full of double quotes, so the instinct is to wrap it in double
-// quotes and escape the ones inside — which is what a shell would need and this
-// layer does not do: quoting here groups the line into one word and is then
-// removed, one layer, with the bytes inside left alone. The escaped spelling
-// therefore arrives at the parser as backslashes and is refused for it.
+// TWO LAYERS ARE NAMED IN IT because the mistake is always one of them being confused
+// for the other: grouping (this line's, and only grouping) and escaping (JSON's, and
+// JSON has no `\'`). It also names the third way out — a frame in a file — because the
+// callers who need it are exactly the ones who hit the first two (#354).
 const frameSpelling = "A frame is passed bare or in single quotes — quoting here only groups the line, " +
-	"it does not escape: `call <peer> '{\"method\":\"tools/list\"}'`."
+	"it does not escape: `call <peer> '{\"method\":\"tools/list\"}'`.\n" +
+	"The bytes inside are JSON, so JSON's rules apply and only JSON's: a double quote in a string is " +
+	"written \\\", a backslash is written \\\\, and a single quote is written as itself or as \\u0027 — " +
+	"`\\'` is not a JSON escape, and inside single quotes the shell produces exactly that.\n" +
+	"A quote mark inside a single-quoted frame is spelled with the shell's splice, " +
+	"`call <peer> '{\"e\":\"it'\\''s\"}'`, and a frame too large or too quote-riddled for one line " +
+	"travels as a path: `call <peer> @/path/frame.json` reads the bytes from there, so no quoting " +
+	"layer touches them."
+
+// frameJSONHint adds the rule behind the two JSON mistakes a shell-minded caller makes.
+//
+// The generic sentence above already refuses the spelling; this says WHICH byte was wrong
+// and what it should have been, because "the frame is not JSON" sends the caller back to
+// the quoting layer that produced the bytes — which is how the same fix gets tried three
+// times in a row (#354).
+func frameJSONHint(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "escape"):
+		return "\nWHAT WENT WRONG: a JSON string is not a shell string. `\\'` is what a POSIX shell " +
+			"produces for a quote inside single quotes, and JSON rejects it; `'` needs no escape at " +
+			"all. Keep the shell splice so the backslash never reaches the parser, write \\u0027, or " +
+			"keep the frame in a file."
+	case strings.Contains(msg, "after object key:value pair"), strings.Contains(msg, "after top-level value"):
+		return "\nWHAT WENT WRONG: that position expects a comma or a closing brace, so a string was " +
+			"probably closed early. A double quote INSIDE a JSON string is `\\\"` (one backslash); " +
+			"`\\\\\"` ends the string and leaves a stray backslash behind."
+	}
+	return ""
+}
 
 // jrpcError renders a transport failure as a reply, never as a success shape.
 func jrpcError(stmt directive.Statement, err error) envelope.Slot {

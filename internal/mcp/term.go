@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term"
@@ -107,8 +108,12 @@ type termArgs struct {
 	// window to bound: how many bytes move is the caller's explicit `--bytes` /
 	// `--offset`. It used to truncate the copy to `bytes_limit` when one was named,
 	// which produced a corrupt destination that still reported 100% done.
-	BytesLimitSet   bool
-	BytesLimit      int
+	BytesLimitSet bool
+	BytesLimit    int
+	// Encoding is the charset the terminal writes in, as a DEFAULT for every read in this
+	// call (issue #304). A statement's own `--encoding` still wins: the caller who wrote it
+	// into a line meant that line.
+	Encoding        string
 	LinesLimit      int
 	TotalBytesLimit int
 	OnBytesOverflow string
@@ -253,6 +258,10 @@ func (s *Server) handleTerm(ctx context.Context, request mcp.CallToolRequest) (*
 // string is a 400 and an absent one is the guide, and neither surface gets to have
 // its own opinion about which is which (issue #131 P0-3).
 func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) envelope.Reply {
+	args, aliasHint, derr := normalizeCmdAlias(args)
+	if derr != nil {
+		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
+	}
 	if fromArgs, present, derr := readCmd(args); derr != nil {
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	} else if present {
@@ -262,7 +271,21 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	if derr != nil {
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	}
-	t := s.executeTerm(ctx, cmd, win)
+	// A CALL THAT ASKED TO BE WATCHED REPORTS WHILE IT RUNS (issue #327). The wrapper is
+	// a no-op for every call that sent no `_meta.progressToken`, which is all of them
+	// unless a client is drawing a progress bar — see progress.go.
+	//
+	// ONE SHELL LINE, NO DSL (issue #319) IS A BRANCH INSIDE THE SAME EXECUTION, after the
+	// window has been parsed: `run` is handed to a shell verbatim, but `timeout`,
+	// `bytes_limit`, `encoding` and the rest of the call's budget apply to it exactly as
+	// they do to every other statement — they are properties of the REPLY, not of the DSL.
+	t := withProgressReporting(ctx, time.Duration(win.TimeoutSeconds*float64(time.Second)),
+		func(ctx context.Context) termReply {
+			if slots, isShortcut := s.runShortcut(ctx, args, win); isShortcut {
+				return termReply{win: win, slots: slots}
+			}
+			return s.executeTerm(ctx, cmd, win)
+		})
 	// EVERY 2xx SLOT INHERITS THE CALLER'S WINDOW UNLESS IT SAYS IT ALREADY DID.
 	//
 	// `bytes_limit`/`lines_limit` are documented as an argument of the tool, not of one
@@ -278,9 +301,85 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	// deliberately is not (a streamed read with a cursor, a frame that must stay whole)
 	// says so once, at the place that decided it.
 	slots := applySlotWindows(t.slots, win)
+	// The alias taught on the way in: the caller sent a command under the name every
+	// other shell tool uses, and this one is the first reply it will read.
+	applyAliasHint(slots, aliasHint)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
+	slots = t.applyTotalCap(slots)
+	// A CANCELLED CALL MUST NOT READ AS AN ORDINARY EMPTY ONE (issue #327).
+	//
+	// The client sent notifications/cancelled, this call's ctx was cancelled, and every
+	// wait in here stops on ctx.Done — but it stops the same way its window expiring
+	// does, so the reply said "did not match within the window" and a caller reading it
+	// had no way to tell that IT had stopped the work. That is the one fact the caller
+	// already knows and the reply denied.
+	markCancelled(ctx, slots)
+	return envelope.Reply{Slots: slots, StructuredContent: win.StructuredContent, NoText: win.NoText}
+}
+
+// applyAliasHint hangs the `command`→`cmd` teaching on the first slot that has no
+// hint of its own.
+//
+// ONE SLOT, NOT ALL OF THEM: the alias belongs to the call, and a batch reply that
+// repeated it on every statement would spend the caller's context on a spelling
+// lesson. A slot that already carries a hint is left alone because that hint is
+// about THIS statement and is the one worth reading.
+func applyAliasHint(slots []envelope.Slot, hint string) {
+	if hint == "" {
+		return
+	}
+	for i := range slots {
+		if slots[i].Headers["Hint"] != "" {
+			continue
+		}
+		if slots[i].Headers == nil {
+			slots[i].Headers = map[string]string{}
+		}
+		slots[i].Headers["Hint"] = hint
+		return
+	}
+}
+
+// normalizeCmdAlias folds the `command` spelling onto the tool's own `cmd`.
+//
+// WHY AN ALIAS AND NOT A RENAME: `cmd` is the schema's name and stays it. But every
+// other shell-shaped tool a model has met (`run(command=…)`, `bash(command=…)`) spells
+// it out, so a caller that writes `command` is not making a mistake about the tool; it
+// is using the word the rest of its context uses. Refusing costs a whole round trip to
+// learn one spelling, so the value is read and the reply says where it went.
+//
+// BOTH PRESENT IS NOT A TIE TO BREAK SILENTLY. Two spellings that disagree are two
+// different commands, and picking one leaves the caller unable to tell which ran. It is
+// refused instead; equal values are unambiguous and pass.
+//
+// It returns the map to use, which is the caller's own when there is nothing to fold —
+// the common case allocates nothing, and a borrowed map is never mutated because the
+// fold happens in a copy.
+func normalizeCmdAlias(args map[string]any) (map[string]any, string, *directive.Error) {
+	raw, hasAlias := args["command"]
+	if !hasAlias || raw == nil {
+		return args, "", nil
+	}
+	alias, isString := raw.(string)
+	if !isString {
+		return args, "", &directive.Error{Msg: "command must be a string, got " + typeNameOf(raw) +
+			"; it is read as an alias for cmd, which takes the command line as a string"}
+	}
+	if rawCmd, hasCmd := args["cmd"]; hasCmd && rawCmd != nil {
+		own, ownIsString := rawCmd.(string)
+		if !ownIsString || own != alias {
+			return args, "", &directive.Error{Msg: "cmd and command are two different command lines, and only one can run; " +
+				"send the one you mean as cmd (command is read only as its alias, and only when cmd is absent)"}
+		}
+	}
+	folded := make(map[string]any, len(args))
+	for k, v := range args {
+		folded[k] = v
+	}
+	delete(folded, "command")
+	folded["cmd"] = alias
+	return folded, "cmd is the argument's name; `command` was accepted as its alias, and nothing else about the call changed", nil
 }
 
 // applySlotWindows caps every 2xx slot that has not already been shaped to the
@@ -696,3 +795,28 @@ func fmtBytes(n int) string { return fmt.Sprintf("%d B", n) }
 // between a tool surface that can grow and one that cannot — every directive this
 // text listed would be a line to edit the day the command space gains one.
 const termDescription = "Run one terminal line on this instance and read its result: a session's bytes, a file, a listing, a directive's own output. No cmd = bearings (what runs, what is installed, the syntax); ls ext = pinned capability (MCP servers, skills trees). Window parameters bound how much comes back, never what the command does."
+
+// markCancelled records on the reply that the client stopped this call.
+//
+// IT IS A HEADER, NOT A STATUS CHANGE. The statuses are still true — a 204 means
+// nothing was delivered, a 200 means bytes arrived before the cancel landed — and
+// rewriting them would throw away the work that did happen. What was missing is the
+// CAUSE, and Hint is the header this protocol already uses for "why this reply looks
+// the way it does" (see noContentSaying).
+func markCancelled(ctx context.Context, slots []envelope.Slot) {
+	if len(slots) == 0 || ctx == nil || ctx.Err() == nil {
+		return
+	}
+	why := "cancelled by the client: this call stopped where it was, so an empty or partial reply means " +
+		"\"stopped\", not \"nothing was there\". The peer's work may still be finishing on the far side."
+	for i := range slots {
+		if slots[i].Headers == nil {
+			slots[i].Headers = map[string]string{}
+		}
+		if prev := slots[i].Headers["Hint"]; prev != "" {
+			slots[i].Headers["Hint"] = why + " (" + prev + ")"
+			continue
+		}
+		slots[i].Headers["Hint"] = why
+	}
+}

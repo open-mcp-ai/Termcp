@@ -240,6 +240,36 @@ func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src In
 		return &processGoneError{status: "exited"}
 	default:
 	}
+	// THE EXIT IS PUBLISHED LATE, SO ASK THE PROCESS TOO.
+	//
+	// statusValue is written by the exit watcher AFTER it drains the last bytes and
+	// publishes the exit code (that ordering is deliberate — a reader that sees
+	// "exited" must find every byte). The cost is that there is a window in which the
+	// process is gone and the status still says running, and a write in that window
+	// reached the OS and came back as a bare `EOF`. Checking Done() costs nothing and
+	// covers the whole window, because Done() closes as the final step of the same
+	// watcher.
+	//
+	// It is a SELECT rather than a boolean so the closed-channel read is the only
+	// thing that can succeed here: a Done() that is open must not block.
+	//
+	// TWO CHANNELS, because they close at different moments. execSession.Done() fires
+	// the instant the process is gone; cs.done fires after the watcher has drained and
+	// sealed the transcript. The gap between them is exactly the window this check
+	// exists for, and only the earlier one covers it — querying cs.done alone left the
+	// bare `EOF` in place, because the write happened before the watcher finished.
+	if cs.execSession != nil {
+		select {
+		case <-cs.execSession.Done():
+			return fmt.Errorf("process has exited, cannot send input")
+		default:
+		}
+	}
+	select {
+	case <-cs.done:
+		return fmt.Errorf("process has exited, cannot send input")
+	default:
+	}
 	var toWrite []byte
 	if pressEnter {
 		toWrite = appendEnter(data, cs.enterCRLF)

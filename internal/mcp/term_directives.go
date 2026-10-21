@@ -138,7 +138,67 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 				}
 				return []envelope.Slot{s.mcpToolList(ctx, stmt, h, win, tool)}
 			}
+			// A WORD THE PEER DOES NOT HAVE IS REFUSED, not ignored. `get a1f3 mcp:1
+			// bogus` used to answer 200 with the generic description: the reply looked
+			// like success and said nothing about the word, so the caller read it as
+			// "that is the answer" and kept the spelling. The `call … tools` family in
+			// #356 is exactly this — 6 attempts, 6 failures, all from a word in the
+			// wrong layer.
+			if len(stmt.Args) > 0 {
+				words := peerSubcommands(stmt.Kind)
+				if len(words) == 0 {
+					return []envelope.Slot{badRequest(stmt, "`"+stmt.Target+" "+stmt.Kind+
+						"` takes nothing after the address: a raw frame channel has no subcommands. "+
+						"`read`/`call` take the frame itself.")}
+				}
+				// THE ADDRESS AS THE CALLER WROTE IT: `h.index` is the connection the
+				// lookup resolved, which is what `dash(index)` above is not — that one
+				// is the PAGE inside a browser peer, and it is empty here.
+				addr := stmt.Target + " " + stmt.Kind
+				if h.index != "" {
+					addr += ":" + h.index
+				}
+				// NOT badRequest: that helper appends the verb's generic example, and the
+				// generic `get` example reads a file. Two lines below a peer refusal, a
+				// file example is one more address to reconcile (the failure #356 counts).
+				return []envelope.Slot{{Code: 400, Headers: map[string]string{
+					"Path": stmt.Path, "Error-Code": CodeInvalidArgument},
+					Body: "`" + stmt.Args[0] + "` is not something `" + stmt.Target + " " + stmt.Kind +
+						":` answers. The words that follow the address are: " + strings.Join(words, ", ") +
+						", and each takes an optional name after it:\n" +
+						"  " + addr + " " + words[0] + "          the list\n" +
+						"  " + addr + " " + words[0] + " <name>   one entry's full detail"}}
+			}
 			return []envelope.Slot{s.cdpDescribe(stmt, h, index)}
+		}
+		// `get <channel> tools` IS THE STDIO SIBLING OF `get <session> mcp:1 tools`
+		// (issue #316). An extension channel that runs a stdio MCP server offers the same
+		// table, so the word has to mean the same thing on the address a caller actually
+		// holds — the handle `open ext` printed. On any other channel `tools` is not a
+		// word this address answers, and the ordinary channel description is the reply
+		// (that is the unchanged path below).
+		if stmt.Kind == "" && (stmt.Key == "tools" || (len(stmt.Args) > 0 && stmt.Args[0] == "tools")) &&
+			s.stdioMCPChannel(stmt.Target) != "" {
+			tool := ""
+			if stmt.Key == "tools" {
+				if len(stmt.Args) > 0 {
+					tool = stmt.Args[0]
+				}
+			} else if len(stmt.Args) > 1 {
+				tool = stmt.Args[1]
+			}
+			return []envelope.Slot{s.extStdioToolList(ctx, stmt, stmt.Target, win, tool)}
+		}
+		// `--offset`/`--length` ON `get` BELONG TO `--op sha256` ONLY: accepting them on
+		// `get <session>` or `--op stat` and dropping them would answer a different
+		// question than the one asked.
+		if stmt.Kind != "file" || func() string { op, _ := stmt.Flag("op"); return op }() != "sha256" {
+			for _, f := range []string{"offset", "length"} {
+				if stmt.FlagState(f) != directive.FlagAbsent {
+					return []envelope.Slot{badRequest(stmt, "`--"+f+"` on `get` only applies to `get <session> file <path> --op sha256`, "+
+						"where it bounds the byte range hashed. For reading a range of bytes use `read <session> file <path> --offset …`.")}
+				}
+			}
 		}
 		if stmt.Kind == "file" {
 			// --op names a SUB-ACTION; the sfTP layer groups those under an action
@@ -155,7 +215,7 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			action, ok := fileGroupForOp(op)
 			if !ok {
 				return []envelope.Slot{badRequest(stmt, "get --op does not know "+quoteOrDash(op)+
-					". It takes stat, realpath, readlink, getwd, urls, or one of: chmod, chown, chtimes, truncate, statvfs.")}
+					". It takes stat, realpath, readlink, getwd, urls, sha256, or one of: chmod, chown, chtimes, truncate, statvfs.")}
 			}
 			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, map[string]string{
 				"action": action, "op": op, "remote-path": stmt.Key,
@@ -240,6 +300,16 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		case stmt.Kind == "alias":
 			return []envelope.Slot{s.directiveAlias(ctx, aliasStatement(stmt, true), win)}
 		default:
+			// SEVERAL TARGETS IN ONE CALL (#339): a comma list of sessions, or
+			// `--dead` for every session that has ended. One slot per entry.
+			if slots, isBatch := s.rmBatch(ctx, stmt, win); isBatch {
+				return slots
+			}
+			if strings.TrimSpace(stmt.Target) == "" {
+				return []envelope.Slot{badRequest(stmt, "rm needs a target: `rm <session>[,<session>…]` erases "+
+					"those sessions, `rm --dead` erases every session that has ended, and "+
+					"`rm <session> file <path>` removes a file.")}
+			}
 			return []envelope.Slot{s.directiveRemove(ctx, stmt, win)}
 		}
 
@@ -310,6 +380,12 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			if isPeerHandle(stmt.Target) {
 				return s.peerChannel(ctx, stmt, win, "close", nil)
 			}
+			// SEVERAL TARGETS IN ONE CALL (#341): a comma list, `--index 1,2,3`, or
+			// `--all`. One slot per target, in the order they were written; a failing
+			// entry does not roll back the ones beside it.
+			if slots, isBatch := s.closeBatch(ctx, stmt, win); isBatch {
+				return slots
+			}
 			return []envelope.Slot{s.directiveClose(ctx, stmt, win)}
 		default:
 			return []envelope.Slot{badRequest(stmt, "close does not take a "+stmt.Kind+
@@ -344,6 +420,19 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 				return []envelope.Slot{badRequest(stmt, "`--wait` and `--grep` are different questions: a "+
 					"search answers from the bytes already on the stream and does not wait for more. "+
 					"`read <channel> --wait` first, then `--grep` over what arrived.")}
+			}
+		}
+		// `--name`, `--glob` AND `--context` BELONG TO A FILE SEARCH and name nothing on a
+		// stream: a channel has no file names to match and no lines-around that `--tail`
+		// does not already answer. Refused rather than accepted, because a flag that
+		// parses and changes nothing answers a different question than the one asked.
+		if stmt.Kind != "file" {
+			for _, f := range []string{"name", "glob", "context"} {
+				if stmt.FlagState(f) != directive.FlagAbsent {
+					return []envelope.Slot{badRequest(stmt, "`--"+f+"` searches FILES (`read <session> file <path> "+
+						"--grep RE --"+f+" …`), and a channel read has no file names or file lines to select. "+
+						"`--tail N` is the channel spelling for the lines around a match.")}
+				}
 			}
 		}
 		if stmt.Kind == "file" {
@@ -734,15 +823,19 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	// THE LOCK COVERS THE WRITES ONLY. The wait for output below must not hold it, or
 	// a slow command would park every later run on this channel for the length of its
 	// window -- the same reason recvReaders is per handle rather than global.
-	line := s.lineLock(stmt.Target)
-	line.Lock()
+	tok := s.lineToken(stmt.Target)
+	select {
+	case <-tok:
+	case <-ctx.Done():
+		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+			msg: "timed out waiting for a prior command line on this channel to finish submitting"})
+	}
+	defer func() { tok <- struct{}{} }()
 	_, inputFail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload))
 	if inputFail != nil {
-		line.Unlock()
 		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, inputFail, s))
 	}
 	keyRes, keyFail := s.callTool(ctx, "shell_key", argsOf("shell_id", stmt.Target, "key", "enter"))
-	line.Unlock()
 	if keyFail != nil {
 		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, keyFail, s))
 	}
@@ -789,6 +882,11 @@ func (s *Server) finishRun(ctx context.Context, stmt directive.Statement, win te
 			// A searched run is still a run: the caller needs the offset its input landed
 			// at as much here as anywhere (issue #194).
 			slot.Headers["Input-At"] = strconv.FormatInt(start, 10)
+			// AND SO IS ITS COMPLETION (issue #310 P3.1): a shell that reports its own
+			// exit must not be heard only on the spelling that did not search.
+			if end, ok := s.outputSizeFor(stmt.Target); ok {
+				s.noteShellCompletion(ctx, stmt, &slot, start, end)
+			}
 		}
 		// A searched run is evidence about completion as much as a plain one: what the
 		// next `run` may assume must not depend on which spelling this one used.
@@ -906,7 +1004,9 @@ func fileGroupForOp(op string) (string, bool) {
 		// and both live on `create … file`, where the node's key is the link and --target
 		// is what it points at.
 		return "link", true
-	case "truncate", "realpath", "statvfs":
+	case "truncate", "realpath", "statvfs", "sha256":
+		// sha256 is a READ of the bytes, grouped with the other byte-level facts about a
+		// path rather than with `read`, which returns content (#357 §1.4).
 		return "fs", true
 	}
 	return "", false

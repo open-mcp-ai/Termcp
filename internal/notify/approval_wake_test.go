@@ -16,7 +16,7 @@ func TestOnApprovalChangeWakesOutputRules(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
 
-	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil); err != nil {
+	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,10 +54,10 @@ func TestOnApprovalChangeDoesNotWakeExitOrSilenceRules(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
 
-	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventExit, 0, nil); err != nil {
+	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventExit, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventSilence, 1, nil); err != nil {
+	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventSilence, intPtr(1), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestOnApprovalChangeStopsAfterUnregister(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
 
-	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestOnApprovalChangeStopsAfterUnregister(t *testing.T) {
 func TestOnApprovalChangeConcurrent(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
-	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil); err != nil {
+	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
