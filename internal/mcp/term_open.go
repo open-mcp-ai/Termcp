@@ -47,7 +47,7 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 		return []envelope.Slot{slot}
 	}
 
-	argv := strings.TrimSpace(stmt.Flags["argv"])
+	argv, _ := stmt.Flag("argv")
 	args := argsOf("mode", mode)
 	if argv != "" {
 		cmd, argvParts, err := directive.SplitArgv(argv)
@@ -56,12 +56,10 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 			if op, ok := directive.Lookup(stmt.Op); ok {
 				usage = "\n" + op.Usage
 			}
-			return []envelope.Slot{{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-				Body: err.Error() + usage}}
+			return []envelope.Slot{badRequest(stmt, err.Error()+usage)}
 		}
 		if cmd == "" {
-			return []envelope.Slot{{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-				Body: "--argv needs a command, e.g. pipe internal --argv sleep 5"}}
+			return []envelope.Slot{badRequest(stmt, "--argv needs a command, e.g. pipe internal --argv sleep 5")}
 		}
 		args["command"] = cmd
 		if len(argvParts) > 0 {
@@ -72,13 +70,13 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 			args["args"] = list
 		}
 	}
-	if name, ok := stmt.Flags["name"]; ok {
+	if name, ok := stmt.Flag("name"); ok {
 		args["name"] = name
 	}
-	if onExit, ok := stmt.Flags["on-exit"]; ok {
+	if onExit, ok := stmt.Flag("on-exit"); ok {
 		args["on_exit"] = onExit
 	}
-	if size, ok := stmt.Flags["size"]; ok {
+	if size, ok := stmt.Flag("size"); ok {
 		rows, cols := parseSize(size)
 		if rows > 0 {
 			args["rows"] = float64(rows)
@@ -146,108 +144,4 @@ func parseSize(raw string) (rows, cols int) {
 	fmt.Sscanf(parts[0], "%d", &rows)
 	fmt.Sscanf(parts[1], "%d", &cols)
 	return rows, cols
-}
-
-// alias, and the command space.
-//
-// An alias is a name for a directive: it is expanded ONCE, at parse time, and the
-// reply's Path shows the expansion, so a caller reading the reply sees the command
-// that actually ran rather than the name it typed. Runtime aliases are a draft —
-// they live in this process and are gone at restart. Persisting one means writing
-// it into an extension's [alias] table, which is the distribution unit: install the
-// extension, get the command.
-
-// runtimeAliases is this process's alias table.
-//
-// ponytail: a plain map with one lock, because an alias table is written a handful
-// of times per session and read once per statement; upgrading to sharded storage
-// would be code that never runs in the hot path it was written for.
-type aliasTable struct {
-	m map[string]string
-}
-
-// aliases is the process-wide table, guarded by the server's own lifecycle: it is
-// only touched from directive handling, which is serialised per call.
-var aliases = &aliasTable{m: map[string]string{}}
-
-// Expand resolves a directive's first word through the alias table. The
-// expansion may itself name an alias, so resolution repeats until it reaches a
-// real directive (with a cycle guard).
-func (a *aliasTable) Expand(stmt directive.Statement) directive.Statement {
-	if _, ok := a.m[stmt.Op]; !ok {
-		return stmt
-	}
-	if resolved, ok := a.resolve(stmt.Op, strings.TrimSpace(stmt.Target+" "+stmt.Payload)); ok {
-		return resolved
-	}
-	return stmt
-}
-
-// expandError resolves a statement the parser could not parse against the alias
-// table: an alias is a directive the caller invented, so the parser is right to
-// refuse it and we are right to run it.
-func (a *aliasTable) expandError(err error) (directive.Statement, bool) {
-	derr, ok := err.(*directive.Error)
-	if !ok || derr.Op == "" {
-		return directive.Statement{}, false
-	}
-	return a.resolve(derr.Op, derr.Rest)
-}
-
-// resolve follows a name through the table until it lands on a directive the
-// parser knows, or fails (unknown name, unparseable expansion, or a cycle).
-func (a *aliasTable) resolve(name, rest string) (directive.Statement, bool) {
-	seen := map[string]bool{}
-	for {
-		expansion, ok := a.m[name]
-		if !ok || seen[name] {
-			return directive.Statement{}, false
-		}
-		seen[name] = true
-		f, err := directive.Parse(strings.TrimSpace(expansion + " " + rest))
-		if err == nil && len(f.Statements) == 1 {
-			stmt := f.Statements[0]
-			if _, next := a.m[stmt.Op]; !next {
-				return stmt, true
-			}
-			name, rest = stmt.Op, strings.TrimSpace(stmt.Target+" "+stmt.Payload)
-			continue
-		}
-		derr, ok := err.(*directive.Error)
-		if !ok || derr.Op == "" {
-			return directive.Statement{}, false
-		}
-		name, rest = derr.Op, derr.Rest
-	}
-}
-
-// directiveAlias manages the runtime table.
-func (s *Server) directiveAlias(_ context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
-	headers := map[string]string{"Path": stmt.Path}
-	// The payload is "<name> <expansion...>" verbatim, so the expansion is never
-	// re-quoted: what the caller writes is what the alias runs.
-	body := strings.TrimSpace(stmt.Payload)
-	if body == "" {
-		if len(aliases.m) == 0 {
-			return envelope.Slot{Code: 200, Headers: headers, Body: "(no aliases)\n"}
-		}
-		var b strings.Builder
-		for name, expansion := range aliases.m {
-			b.WriteString(name + " = " + expansion + "\n")
-		}
-		capped, code := capGenerated(b.String(), win)
-		return envelope.Slot{Code: code, Headers: headers, Body: capped}
-	}
-	name, expansion, _ := strings.Cut(body, " ")
-	name, expansion = strings.TrimSpace(name), strings.TrimSpace(expansion)
-	if expansion == "--off" {
-		delete(aliases.m, name)
-		return envelope.Slot{Code: 204, Headers: headers}
-	}
-	if expansion == "" {
-		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-			Body: "alias needs a directive to expand to: alias jira mcp open https://..."}
-	}
-	aliases.m[name] = expansion
-	return envelope.Slot{Code: 204, Headers: headers}
 }

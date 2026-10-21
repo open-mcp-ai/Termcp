@@ -44,10 +44,20 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 
 	mcpServer := mcpserver.NewMCPServer("termcp", version,
 		mcpserver.WithInstructions(mcpServerInstructions),
-		// Resources are read-only docs (resources/list + resources/read) and the
-		// list is fixed at startup, so no subscribe/listChanged: mcp-go v0.50 has
-		// no subscribe handler, and claiming it would break clients that try.
-		mcpserver.WithResourceCapabilities(false, false),
+		// Validate tool arguments against the published schema. The args table
+		// carries types, enums and bounds, so a client that sends `timeout: "abc"`
+		// or an unknown overflow policy is refused at the protocol layer, before any
+		// handler runs.
+		//
+		// This does NOT replace parseTermArgs' own checks, and the reason is the two
+		// entrances: mcp-go validates on the MCP transport, while POST /api/term calls
+		// Term directly and would bypass it. The parser is the one path both share,
+		// so it keeps the same rules; this layer exists so a client sees the refusal
+		// for the call it made, with its own schema in hand.
+		mcpserver.WithInputSchemaValidation(),
+		// Prompts are user-triggered playbooks (the `learn-api` one). Resources are
+		// NOT claimed: the tool surface is one command line that describes itself,
+		// so a client has nothing to list or read here (see docs.go).
 		mcpserver.WithPromptCapabilities(false),
 		// The address is NOT in the instructions (see mcpServerInstructions): it
 		// rides on the listing, which must reach the model or no tool can be called.
@@ -83,35 +93,6 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 			OnAfterListTools: []mcpserver.OnAfterListToolsFunc{
 				func(ctx context.Context, _ any, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
 					s.decorateTools(ctx, result)
-				},
-			},
-			OnAfterListResources: []mcpserver.OnAfterListResourcesFunc{
-				func(ctx context.Context, _ any, _ *mcpgo.ListResourcesRequest, result *mcpgo.ListResourcesResult) {
-					s.decorateResources(ctx, result)
-				},
-			},
-			// mcp-go routes resources by exact URI, so a read of the URI this
-			// instance just advertised must be mapped back to the registration
-			// before routing (see canonicalDocURI).
-			OnBeforeReadResource: []mcpserver.OnBeforeReadResourceFunc{
-				func(_ context.Context, _ any, request *mcpgo.ReadResourceRequest) {
-					request.Params.URI = s.canonicalDocURI(request.Params.URI)
-				},
-			},
-			OnAfterReadResource: []mcpserver.OnAfterReadResourceFunc{
-				func(ctx context.Context, _ any, request *mcpgo.ReadResourceRequest, result *mcpgo.ReadResourceResult) {
-					p := docPathOf(request.Params.URI)
-					if p == "" {
-						return
-					}
-					// ResourceContents is an interface; only the text variant is
-					// served here (see registerDocs).
-					for i, c := range result.Contents {
-						if tc, ok := c.(mcpgo.TextResourceContents); ok {
-							tc.URI = s.docURLFor(ctx, p)
-							result.Contents[i] = tc
-						}
-					}
 				},
 			},
 		}),

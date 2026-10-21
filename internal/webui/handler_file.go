@@ -304,14 +304,21 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve offset: Content-Range header takes priority, then ?offset= query param.
-	var offset int64
+	//
+	// A POINTER, because the header and the query param are both optional and 0 is a
+	// real position. With an int the two cases collapsed: `offset 0` truncated the
+	// file exactly as "no offset given" did, so a client resuming an upload from the
+	// first byte replaced the whole file instead of patching it.
+	var offset *int64
 	if cr := r.Header.Get("Content-Range"); cr != "" {
 		var start, end, total int64
 		if _, err := fmt.Sscanf(cr, "bytes %d-%d/%d", &start, &end, &total); err == nil {
-			offset = start
+			offset = &start
 		}
-	} else {
-		offset, _ = strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
+	} else if q := r.URL.Query().Get("offset"); q != "" {
+		if v, err := strconv.ParseInt(q, 10, 64); err == nil {
+			offset = &v
+		}
 	}
 
 	// Extract file content: parse multipart form if present, otherwise use raw body.
@@ -333,7 +340,7 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if sshClient == nil {
 		// Internal / local filesystem.
 		flag := os.O_RDWR | os.O_CREATE
-		if offset <= 0 {
+		if offset == nil {
 			flag |= os.O_TRUNC
 		}
 		f, err := os.OpenFile(path, flag, 0644)
@@ -342,8 +349,8 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer f.Close()
-		if offset > 0 {
-			f.Seek(offset, io.SeekStart)
+		if offset != nil && *offset > 0 {
+			f.Seek(*offset, io.SeekStart)
 		}
 		n, err := io.Copy(f, reader)
 		if err != nil {

@@ -101,12 +101,14 @@ func (fm *ForwardManager) put(fw *ForwardInfo, ln net.Listener, cancel context.C
 }
 
 // CreateLocal creates a local forward (ssh -L) and registers it under sessionID.
-func (fm *ForwardManager) CreateLocal(sessionID, sshConfig, remoteHost string, remotePort, localPort int, sshClient *ssh.Client) (*ForwardInfo, error) {
+// bindHost is the local address to listen on, empty for loopback (see
+// ResolveBindHost); a non-loopback address publishes the tunnel to the network.
+func (fm *ForwardManager) CreateLocal(sessionID, sshConfig, bindHost, remoteHost string, remotePort, localPort int, sshClient *ssh.Client) (*ForwardInfo, error) {
 	if sshClient == nil {
 		return nil, fmt.Errorf("no SSH client available for %q", sshConfig)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	fw, ln, err := LocalForwardSSH(ctx, sshClient, remoteHost, remotePort, localPort)
+	fw, ln, err := LocalForwardSSH(ctx, sshClient, bindHost, remoteHost, remotePort, localPort)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -137,15 +139,25 @@ func (fm *ForwardManager) CreateRemote(sessionID, sshConfig, localHost string, l
 // CreateDynamic creates a SOCKS5 dynamic forward under sessionID.
 // When localDial is true, connections are dialed from termcp itself (internal);
 // otherwise they go through sshClient (ssh -D).
-func (fm *ForwardManager) CreateDynamic(sessionID, sshConfig string, localPort int, sshClient *ssh.Client, localDial bool) (*ForwardInfo, error) {
+//
+// bindHost is refused unless it is loopback, and that refusal is deliberate: the
+// SOCKS5 handshake this server implements performs no authentication (RFC 1928
+// method 0, matching `ssh -D`), so a listener on any other interface is an open
+// proxy for every host that can reach it. A caller that wants to publish a
+// service should use a local forward, which carries one fixed target rather than
+// "dial anything".
+func (fm *ForwardManager) CreateDynamic(sessionID, sshConfig, bindHost string, localPort int, sshClient *ssh.Client, localDial bool) (*ForwardInfo, error) {
+	if !IsLoopbackHost(bindHost) {
+		return nil, fmt.Errorf("SOCKS5 proxy %q cannot bind a non-loopback address: it performs no authentication, so it would be an open proxy for anything that can reach this host (use a local forward to publish one service)", ResolveBindHost(bindHost))
+	}
 	if !localDial && sshClient == nil {
 		return nil, fmt.Errorf("no SSH client available for %q", sshConfig)
 	}
 	if localDial {
-		return fm.dynamicLocal(sessionID, sshConfig, localPort)
+		return fm.dynamicLocal(sessionID, sshConfig, bindHost, localPort)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	fw, ln, err := DynamicForwardSSH(ctx, sshClient, localPort)
+	fw, ln, err := DynamicForwardSSH(ctx, sshClient, bindHost, localPort)
 	if err != nil {
 		cancel()
 		return nil, err

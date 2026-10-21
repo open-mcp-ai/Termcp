@@ -3,6 +3,73 @@
 ## Unreleased
 
 
+## v0.2.8-rc.3 — 2026-10-21
+
+- **底部会话栏列出的是会话，不再是窗口**。它原来只遍历 `allShellWins()`，于是底栏只认识「这个页面自己打开过的窗口」：MCP 的 `pty` / `session_start`、`POST /api/sessions`、以及「窗口关了但会话还在跑」这三种会话全都不在栏里——服务端一直在广播完整的 snapshot，是前端把列表建在了 DOM 上。现在 `dockEntries()` 取「所有打开窗口 ∪ snapshot 里运行中的会话」，以会话为键（`sess:<id>`；占位窗口与扩展状态卡仍是 `win:<id>`），所以关掉窗口标签不会消失，勾选也跟着会话走。没有窗口的会话以虚线上边框绘制，点一下即开终端（`focusSessionWindow`）；中键仍只丢窗口、不动会话。归档会话留在右列，扩展自己的连接留在扩展列——与两张卡片的 `isHiddenSession` 同一条规则。关闭对话框的计数与动作现在用同一个谓词（`entries`），连接中的窗口不再被排除在「要停止几个会话」之外。
+
+- **测试里那些「说现在的行为是 X」的注释，全部对回了代码**。`index.html`、`workspace.css`、`shell-windows.js` 里四处注释还写着「dock 每个标签对应一个打开的窗口」「用户工作的会话就是打开的窗口」，正是它们让这次的问题在文档上看起来已经修好了。这类句子要么有测试顶着，要么不该存在。
+
+- **`between()` 失败时不再只说「找不到」**。`marker` 缺失时列出同类幸存行（改名的函数一眼可见），`terminator` 缺失时打印 marker 之后的前 40 行——最常见的成因是闭包缩进不是 `\n}\n`，看到的缩进就是修法。
+
+- **`dockCloseEntries` 换成行为探针**。原来那三条断言是 `strings.Contains(fn, "count: entries.length")` 之类：改名即崩，撒谎即过。现在在 node 里真跑一遍关闭流程，回头读对话框的措辞、destructive 标记、实际 POST 的 id 与真正被丢掉的窗口，覆盖四种条目（有窗口会话 / 无窗口会话 / 扩展状态卡 / 连接中窗口）。验证过它抓得住历史 bug：把 `_placeholder` 重新加回计数谓词，`danger` 断言立刻红。
+
+- **initialize instructions 从 2586 B 降到 1231 B**。它原来是 12 条规则，把命令空间、TERM/1 回复格式、窗口参数语义、close/rm 生命周期、fwd/profile 语法全写了一遍——而这些都是模型一动手就能发现的：指令表在 `help` 里，参数语义在每个参数的 schema `Desc` 里，回复格式在回复自带的 Header 里。真正不能靠“边做边学”的只有四件事：只有一个工具、句柄不可猜、越过人的边界是不可逆的、被 held 的调用不能重试。现在只留这四条，其余靠渐进展开。这不是单纯的“变短”：很多客户端把它注入**每一轮** system prompt，所以重点是每条规则都在每一轮重复付费；删掉的七条在它们真正被用到的时刻都有更详细的解释。同一条约束的反方向仍然被锁着：`TestTokenBudgetGuard` 把上限从 2600 B 收到 1600 B（此前的数字只是当时文件大小的快照，几乎没有余量），`docs_test.go` 则盯着四条硬边界不许被挤掉。
+
+- **不再提供 MCP resources**。工具的公开面只有一个 `term`，而它的参数是一条命令行；这条命令行能描述自己：空 `cmd` 返回引导，`help` 返回全部指令表，`help <directive>` 返回单条用法与坑。所以一个走 MCP 的客户端没有任何理由去读 REST 端点表——它发 `pty internal`，不调 `POST /api/sessions`。`api.md` 本身还在，还在 `GET /api.md` 上，因为它是**传输层**唯一的手写参考（端点、请求体、cursor 语义、认证），这部分 `help` 盖不到；直接写脚本的调用方 curl 那个 URL 即可。把同一批字节再经过 `resources/read` 发一遍没有多买到什么，却多一个 capability 声明和四个钩子要维护。现在初始化不再声答应 `resources`，`resources/list` 由协议层直接拒绕（而不是回一个空列表——“空列表”意思是这个服务器没有文档，“拒绕”意思是它不做 resources）；`learn-api` prompt 保留，因为一个还不知道 `cmd` 就是全部表面的 agent 不会想到去发它。
+
+- **`vars`：把无法写进命令行的数据当成数据送进去**。一个调用方要发一个带换行、引号、分号或回车的载荷，此前没有任何办法：写进 `cmd` 的每一个字符都会被 shell 重新解释，转义则是在赌哪一层先解码。`term` 现在接受 `vars` 字典，`cmd` 里的 `$FOO` / `${FOO}` 在 **AST 解析期**按变量名替换成 `vars["FOO"]`，替换值按 shell 字面量引用（单引号包裹，内含单引号按 `'\''` 转义；双引号内的展开按双引号上下文转义），所以值里的任何字节都到不了语法层。替换是**节点替换**而不是重新解析：参数展开节点的字节区间被换掉，`cmd` 其余字节原位不动，payload 仍然是调用方所写源码的切片。`vars` 里有而 `cmd` 里没用的键不算错；`cmd` 里用了而 `vars` 没定义的变量是 **400**，点名是哪个变量——留给 shell 展开就等于两个输入静默各说各话。叫 `vars` 而不是 `env` 是因为它不是进程环境：没有东西被导出给子进程，没被 `cmd` 提到的键被忽略，而没定义的 `$NAME` 是错误而不是空串——读过 `env` 就会以为那三处行为都反过来。
+
+- **裸控制字节默认拒绝，`allow_escapes` 是明确的放行**。`run h:1 echo a<CR>NoSuch` 在 shell 眼里是四个词的一条命令，在终端眼里 CR 是「回车提交」：一次调用跑了两条命令，却只为一条回 200。Ctrl-C / Ctrl-D / Ctrl-Z / NUL / ESC 同理。现在 `cmd` 里**引号外**的控制字节（C0，`\t` 与空格除外）默认回 400，错误里同时给出两条出路：`allow_escapes: true`，或者用 `vars` 把值当数据送。引号内的控制字节是调用方的字面量，照常放行。
+- **句柄只有一个形式，通道与容器不再有歧义（破坏性）**。通道句柄现在永远是 `<session>:<index>`（`pty internal` 也返回 `abc:1` 而不是裸 `abc`），而裸 session id 是容器。`run` / `type` / `key` / `read` / `resize` / `reader` / `watch` / `span` 这些操作**通道**的指令只接受通道形，传裸 session id 在**解析期**就回 400 并附 usage，不再回退到 primary shell。之前正是这个回退让 `close <session> --force` 变成静默 no-op（#132），也让 `run <session>` 在多通道会话上默默猜一个；`span <session>` 同样在读 primary 通道的记录。`shell_id` 退回内部实现：磁盘目录、SSH channel、日志、审阅队列仍按它索引，但它不再是调用方看得到的第二种写法。
+
+- **序号是稳定身份，不会漂移**。`nextShellIndex` 只增不减且在 `shellStateMu` 内递增，**关闭的通道序号永不复用**（`TestChannelIndexIsMonotonicAndNeverReused`），重启时从 manifest 的 `maxShellIndex` 续接（`TestChannelIndexSurvivesRestart`）。所以 `sid:N` 在整个会话生命周期内指向唯一一个通道：通道关闭后它指向一个 exited 通道，绝不会指向后来新建的那个。
+
+- **`close` 按意图路由，不再靠“能不能解析成 shell”猜（#132）**。带了 `--force` 或 `--grace`，或者目标是一个会话而不是它的某个通道，就走 `session_terminate`；其余走 `shell_close`。目标既不是会话也不是通道时是这个类别的第三处静默：以前也回 204，现在回 `session_not_found` 的 404。
+
+- **flag 值不再被静默改写（#131 P0-1）**。`--data` 这类取值走的是 `mvdan.cc/sh` 的字面量，而那个字面量不是调用方所写字节的副本：双引号里只有 `*syntax.Lit` 被拷贝，其余部分直接消失，于是 `--data "A`core`B"` 写成 `AB`、`--data "$HOME/x"` 写成 `/x`；单引号与双引号里的 CRLF 丢掉 CR；`$B` 被改写成 `${B}`、`$((1+2))` 被改成 `…`。现在按 part 取源码切片并递归，只去掉引号本身。payload 一直是整片切出来的，所以 `run` 从未受影响 —— 这也是为什么只有 flag 值需要修。顺带把 `help file` 写明：`--data` 会按 `--mode` 解码（`text` 下 `\n` 是换行），要二进制请用 `hex` 或 `--local-path`。
+
+- **`cmd` 不是字符串时是 400，不再退化成引导页（#131 P0-3）**。旧读取器对任何不合用的 `cmd` 都返回 `""`，而 `""` 正是引导页 —— 于是桥接层把参数弄坏的那次调用，回的是一个像成功一样的、描述整套协议的回复，没有任何地方说命令丢了。absent / null / 字符串以外的三态现在分开判定，两个入口（MCP 与 `POST /api/term`）读同一处。
+
+- **数字 flag 与窗口参数不再有「猜一个默认值」的兜底**。`flagNumber` 解析失败曾返回 0，而 0 在几乎所有落点都是合法值：`resize abc xyz` 变成 24x80 的一次真实 resize 并回 204，`--tail abc` 变成「没有 tail」，`--grace abc` 变成「没有 grace」，`--port abc` 变成端口 0。现在解析失败按 flag 名回 400，`resize` 的零/负尺寸同样拒绝。窗口参数（`timeout` / `*_limit` / 三个 `on_*_overflow`）同理：absent 取声明的默认值，写了但类型不对或越界是 400，边界只在 `termArgDecls` 声明一次并向 schema、解析器、`docs/api.md` 三处同时生效。
+
+- **flag 的三态（缺席 / 写了没值 / 显式空值）不再被压成两态**。`--remote-path` 没写值时，此前和 `--remote-path ''` 一样到达处理器，读者无法区分「调用方想要一个空值」和「值在引号或续行里掉了」，两种情况只能猜；`--data ''` 也因同一处被当成未设置，于是连空文件都写不出来。现在 `--name` 无值是 `flag_needs_value` 400 并点名该 flag，显式空值照常传递。
+
+- **`Server` 可以对并发的 `Term` 调用安全并发**。`s.currentReply` 是每次调用赋值的共享字段（用于 learn_mode 去重），两个调用会互相覆盖对方的记账；它同时也是多余的——`runStatements` 本来就为每条语句附加 usage。字段删掉后累计器是局部值。`alias` 表原本是一张裸 map，`alias x …` 与任何解析并发就是 map 读写竞态，现在有一把 RWMutex。
+
+- **`X-Termcp-Text` 不再静默丢掉 `\r`**。同一个字段在 JSON body 与这个 header 里曾渲染出两个不同的字符串（`Path` 里的 CR 在 body 里保留、在 header 里消失），读 header 的调用方拿到一个不存在的路径而没有任何提示。现在 `\r` 与 `\n` 一样转义，两个投影逐字节一致。
+
+- **`help type` 有了自己的说明**。`type` 有意不回车，于是 `type h make` 之后接 `run h test` 会在 shell 命令行上留下 `maketest` —— 两条指令看起来可以互换，实际不能。这一页现在明说这一点，并给出「type 配 key enter」或「直接用 run」的写法。
+
+- **本地转发可以绑定非回环地址（`--bind-host`）**。`-L` / `-D` 此前把监听地址写死成 `127.0.0.1`，而 `--local-host` 这个 flag 从语法到文档都说支持覆盖、实际没有任何一个 local/dynamic 调用点读它——设了也照旧只绑回环。现在监听地址有自己的名字（`bind_host`，`--bind-host`），与 `-R` 的 `local_host`（目标机器绑哪里）分开：`0.0.0.0` 或 `*` 表示发布到本机所有接口。默认仍是回环，因为转发承载的是一条已认证的隧道。扩展模板同理，`bind_host` 是新字段，写在 local/dynamic 声明上的旧 `local_host` 按原意生效而不是继续被忽略。
+
+- **`-D`（SOCKS5）拒绝非回环绑定**。这套 SOCKS5 握手不带认证（与 `ssh -D` 一致），绑到别的接口就等于给能连上它的人一个开放代理。要发布一个具体服务请用 `-L`：它承载一个固定目标，而不是「随便拨」。
+
+- **审阅提示会说出转发绑在哪**。此前 local 分支渲染成 `open local forward :8080 -> …`（冒号前是空的，因为地址恒为回环），把「只在本机」和「开给整个网段」显示成同一句话。现在地址一定出现，非回环还附一句「reachable from the network」。
+
+- **内置回环上的 `-R` 现在能用**。`charmbracelet/ssh` 自带 `ForwardedTCPHandler`，但默认不装进 `RequestHandlers`，且 `ReversePortForwardingCallback` 为 nil 时拒绝一切——两道门都没开，客户端拿到的是 `tcpip-forward request denied by peer`，而文档把这句解释成目标的 GatewayPorts 策略。现在装配好，绑定地址不做限制——能发这条请求的只有 termcp 自己（内置 sshd 只有 `Server.Dial` 这一个入口，生产代码仅一处调用），所以是否允许发布到网络由 `forward.open` 的审阅环节决定，那里看得见地址。顺带修掉 `-R` 把请求值当 `ListenAddr` 上报的 bug：目标 sshd 答复的真实端口此前被丢弃，`local_port 0` 时报告的是一个拨不通的 `:0`。
+
+- **内置回环握手快了一倍**。临时主机密钥从 RSA-2048 换成 ed25519（客户端必须验 KEX 签名，RSA 约 845µs、ed25519 约 59µs）：每连接 1.55ms → 0.72ms，进程启动的密钥生成 22.7ms → 0.6ms。密钥每次进程启动重新生成、从不用于校验任何东西，RSA 的长度在这里只买成本。
+
+- **`0` 和「没传」不再共用一个值**。窗口参数、`file` 的 `--offset`、`read` 的 `--tail`、`watch` 的 `--for`、profile 的端口和超时、HTTP 上传的 `?offset=` 全部改成可空整数：写入 `--offset 0` 此前触发 `O_TRUNC` 把文件清空，`--tail 0` 返回整个缓冲区，`watch --for 0` 静默退回 3 秒。现在 `null` 表示未指定、显式 `0` 就是零，两者在类型上分开。
+
+- **`file` 的三个破坏性行为与两个误报**。`truncate` 缺 `--size` 时按 0 执行，静默清空文件并返回 200 —— 现在必须显式给出，`--size 0` 仍是清空的写法。读目录返回 500 并带出 `sftp: "...is a directory"` 的协议原文，现在在 `Stat` 之后立即拒绝并建议改用 `stat`。`mode=file` 曾输出 `data: ""`，看起来像被截断的正文而不是「没有内联正文」，现在该字段缺席；`mode=text` 曾把每个非 ASCII 字符转义成 `\xe4\xb8\xad`，现在按 rune 解码，只转义非法字节。
+
+- **内部 profile 上的 `realpath` 在 Windows 上解不开符号链接**。SFTP 的线上形式是 POSIX 形状，`pkg/sftp` 于是把 `C:\dir\file` 规范化成 `/C:/dir/file`；`filepath.EvalSymlinks` 读不了这个形状——前导斜杠让它成为当前卷上的一个根路径，调用失败，链接被原样报回。也就是说这个指令在 Windows 上一直是它本该修掉的那个 bug 本身。现在解析前去掉盘符前缀的斜杠，解析后把线上形状放回去，回复格式在三个平台上一致。
+
+- **`profile` 和 `ext` 的位置参数形式从来没成功过**。两者的第一个词可以是 action，所以名字随写法在 `Args[0]` / `Args[1]` 之间移动，而代码只认后一种：`profile <name> --action edit`、`ext <name> --action update`、`ext <name> --action retry` 一律回 `name is required`。现在 action 词被消费掉，两种写法的名字都落在同一处。同一处还修好了 `profile --action copy`（指令层发 `--source`、处理器读 `source_name`，两个名字从未对齐，这个子命令一次都没成功过）和删除不存在的 profile 返回 200 的问题。
+
+- **`on_bytes_overflow` / `on_lines_overflow` 的 `fold` 从未生效**。判据是 `len(body) > limit`，而处理器此前已按同一限额截断过，这个比较为假是构造出来的 —— `fold` 与 `truncate` 行为完全相同。现在按处理器报告的「窗口在流结束前就用完」判定。
+
+- **`--for 0` 会被三层依次退回 3 秒**。监听规则的静默秒数用 `int` 承载，`nil` 与 `0` 不可分，于是唯一表达「不要等」的值被当成「你没说」。现在注册与派发两层都不再做默认值兜底，注册回复会回显规则实际采用的秒数。
+
+- **`cdp` / `jrpc` 的 `recv` 在空等一次之后永久失效**。读超时用的是 socket 上的读截止时间，而 `gorilla/websocket` 把首次读错误永久缓存在 `Conn.readErr` 里、全生命周期不清空：一次窗口过期之后，后面每次读取都直接返回那个缓存的超时、不碰 socket。症状是数据已经到达而对端仍被告知「窗口内没有数据帧」，且返回时间是 0.03ms 而不是等满窗口。现在 socket 由一条常驻协程读取且不设读截止时间，等待发生在 channel 上；写仍然保留截止时间，因为写错误只影响那一次写。
+
+- **`recv` 配不上 `send`**。`recv` 走的是「只看事件、跳过应答」的读取路径，而 `send` 的回答带 id，会被归进另一个只有 `Recv` 读的缓冲，于是这一对从来没有配上过。现在 `recv` 先取缓冲、再等 socket。
+
+- **进程内不再有互斥锁**。`jrpc` 的帧通道改为单槽信号量加 `atomic`，因为它的每个操作都会等待，而「持锁等待」正是 `Close` 拿不到锁、等待者释放不了锁的那个死锁——一次关闭要等到调用方窗口过期才生效。
+
+- **别名循环不再报「未知指令」**。`alias a b` 加 `alias b a` 之后执行 `a`，回的是 `unknown directive: a`，把人引向一个并不存在的拼写错误。现在回 `alias_cycle` 并打印整条链。同一处：`mcp send` 接受任意非 JSON 文本并回 202「sent」（`cdp send` 对同一个词回 400），现在发送前校验。
+
 ## v0.2.8-rc.2 — 2026-10-19
 
 ### 变更

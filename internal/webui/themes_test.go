@@ -205,7 +205,11 @@ func TestBuiltInThemeCopyUsesCatalogKeysAndPlaceholders(t *testing.T) {
 			}
 		}
 		if id != "cyberpunk" {
-			for lang, want := range map[string]string{"en": "Connections", "zh-Hans": "连接", "zh-Hant": "連線"} {
+			// The base vocabulary is "hosts": the cards already said "Add host" /
+			// "添加主机", and the panel title was the last place still calling them
+			// connections. A theme that restates the key must carry the new wording,
+			// because its copy wins over the shared catalog.
+			for lang, want := range map[string]string{"en": "Hosts", "zh-Hans": "主机", "zh-Hant": "主機"} {
 				if got := catalog[lang]["nav.nethub"]; got != want {
 					t.Errorf("%s/%s title = %q, want %q", id, lang, got, want)
 				}
@@ -231,6 +235,48 @@ func TestBuiltInThemeCopyUsesCatalogKeysAndPlaceholders(t *testing.T) {
 			}
 			if !strings.Contains(strings.ToLower(tip), strings.ToLower(name)) {
 				t.Errorf("%s/%s: the expand tooltip %q does not name the column %q; renaming one of the two keys leaves the other stale", id, lang, tip, name)
+			}
+		}
+	}
+}
+
+// In the cyberpunk theme the archive column is "Mikoshi" (神舆 / 神輿). Entering
+// it and leaving it speak the setting's own verbs ("进入神舆" / "离开神舆") rather
+// than generic open/close, and an empty archive is "守护你的灵魂" — the construct
+// repository, not a trash heap.
+func TestCyberpunkThemeMikoshiVocabulary(t *testing.T) {
+	f := testThemeFS(t, t.TempDir(), "")
+	data, err := fs.ReadFile(f, "themes/cyberpunk/strings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog map[string]map[string]string
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	wants := map[string]map[string]string{
+		"zh-Hans": {
+			"archive.expand":     "进入神舆",
+			"archive.fold":       "离开神舆",
+			"archive.empty.hint": "守护你的灵魂",
+		},
+		"zh-Hant": {
+			"archive.expand":     "進入神輿",
+			"archive.fold":       "離開神輿",
+			"archive.empty.hint": "守護你的靈魂",
+		},
+		"en": {
+			"archive.expand":     "Enter the Mikoshi",
+			"archive.fold":       "Leave the Mikoshi",
+			"archive.empty.hint": "Guarding your soul",
+		},
+	}
+	for lang, checks := range wants {
+		for key, want := range checks {
+			got := catalog[lang][key]
+			if got != want {
+				t.Errorf("cyberpunk %s[%q] = %q, want %q", lang, key, got, want)
 			}
 		}
 	}

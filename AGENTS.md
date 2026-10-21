@@ -57,9 +57,8 @@ shared absolute path; `t.TempDir()` is the default. See
 Working in this repo usually means driving Termcp itself. The reference is the
 running instance, not a file: `help` lists every directive, `help <directive>`
 teaches one, and an empty `term()` call returns the guide. The REST entrance
-`POST /api/term` speaks the same command language, and `resources/list` publishes
-`http://<origin>/api.md` for the transport-level reference. Three invariants are
-cheap to keep in mind without being told:
+`POST /api/term` speaks the same command language, and `GET /api.md` publishes
+the transport-level reference. Three invariants are cheap to keep in mind without being told:
 
 - **Turns are the scarce resource.** An MCP call costs 2–10 ms; an assistant
   turn costs 6–9 s — ~1000×. Minimise *turns*, not calls: whatever one turn can

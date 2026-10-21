@@ -24,8 +24,14 @@ import (
 // in the flow in both states (NOT `display: none`), zero length at rest, and the
 // length transitioned. This test pins that arrangement, and deliberately not
 // "does the switch have a transition" — the broken version had one.
+//
+// It reads the SHARED sheet, which is now the only copy there is: the fix used
+// to live in the cyberpunk theme's own copy of workspace.css (f6ba883) and the
+// default theme kept the broken arrangement for months. The copy is gone and the
+// shared sheet carries the fix, so this test can point at the one place the
+// arrangement is allowed to live.
 func TestNetHubSelectToggleSlideNeedsTheCompanionsToReleaseLengthGradually(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("assets", "themes", "cyberpunk", "assets", "static", "css", "workspace.css"))
+	src, err := os.ReadFile(filepath.Join("assets", "static", "css", "workspace.css"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,4 +290,50 @@ func balancedNethubBlock(s string) string {
 		}
 	}
 	return ""
+}
+
+// TestEveryPlateInTheTerminalHeaderCarriesTheCutCorner pins the shape list.
+//
+// The cyberpunk theme declares exactly ONE clip-path, on one shared selector list, and
+// that is deliberate: a per-component polygon is how the corner drifts, and the comment
+// above the rule says so. The failure mode is not a wrong polygon, it is a component
+// that simply is not IN the list — it stays a plain rectangle while every neighbour is
+// cut, and a selected one looks like "the fill arrived on a square box".
+//
+// The window header's tick was exactly that: it is the same control as the dock tab's
+// tick (both write the same selection set), it has the same accent fill when ticked,
+// and it was the one rectangle in the header. It is in the list now, with its own
+// smaller cut, because a 24px box cannot carry a 30px key's 7px notch.
+func TestEveryPlateInTheTerminalHeaderCarriesTheCutCorner(t *testing.T) {
+	theme, err := os.ReadFile(filepath.Join("assets", "themes", "cyberpunk", "assets", "static", "css", "theme.css"))
+	if err != nil {
+		t.Fatalf("read cyberpunk theme: %v", err)
+	}
+	css := strings.ReplaceAll(string(theme), "\r\n", "\n")
+
+	// The list itself: every plate-shaped thing that has to share the corner.
+	base := between(t, css, ".workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,", "{")
+	if base == "" {
+		t.Fatal("the shared plate selector list is gone")
+	}
+	for _, want := range []string{
+		".nethub-select-toggle",
+		".ext-key",
+		".session-tab-tick",
+		".shell-header-icon-btn", // the window header's tick
+	} {
+		if !strings.Contains(base, want) {
+			t.Errorf("%s is missing from the plate list: it will stay a rectangle while everything beside it is cut", want)
+		}
+	}
+	// And the small boxes carry their own knobs: a 24px tick cannot take a 30px key's
+	// cut, and a zero run would flatten the fold into a plain corner nick.
+	/* The tick's own knobs. Read off the whole file rather than a `between` slice:
+	   the class appears twice (once inside a comment describing the sizing rule), so
+	   a slice-based lookup keeps grabbing the wrong block. The three declarations plus
+	   the non-zero run together are the signature of a real knob rule. */
+	tickKnobs := ".shell-header-icon-btn {\n  --cut: 5px;\n  --notch-left: 50%;\n  --notch-run: 3px;\n}"
+	if !strings.Contains(css, tickKnobs) {
+		t.Error("the window header's tick has no knob rule at its own size: it would fall back to the shared defaults (a 14px cut) and the shape would be wrong at 24px")
+	}
 }

@@ -99,10 +99,14 @@ func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallTo
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if _, err := sshconfig.ParseAndValidate(body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		// A body that fails validation is the caller's argument, not a server
+		// fault: this used to answer 500 operation_failed for a profile missing its
+		// host or credential, which reads like an outage and invites a retry that
+		// cannot succeed.
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(name, body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -115,8 +119,22 @@ func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcpgo.CallTo
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
+	// CHECK IT EXISTS FIRST, because Store.Delete deliberately ignores a missing
+	// file and the reply must not inherit that.
+	//
+	// Delete is idempotent ON PURPOSE — an internal cleanup that runs twice should not
+	// fail — but a caller asking to delete `prod` needs to know whether `prod` was
+	// there. Answering 200 for a name that never existed makes a typo look like a
+	// successful removal, and it is the only delete in this system that behaves that
+	// way: `ext delete`, `rm <session>` and `fwd --action close` all answer 404.
+	//
+	// The check is Load, not List: Load is the same door every other read uses, so a
+	// profile that cannot be loaded is not reported as removed either.
+	if _, err := s.sshConfigs.Load(name); err != nil {
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
+	}
 	if err := s.sshConfigs.Delete(name); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -136,7 +154,7 @@ func (s *Server) handleCopySSHConfig(ctx context.Context, request mcpgo.CallTool
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(dst, data); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -165,10 +183,14 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	if _, err := sshconfig.ParseAndValidate(body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		// A body that fails validation is the caller's argument, not a server
+		// fault: this used to answer 500 operation_failed for a profile missing its
+		// host or credential, which reads like an outage and invites a retry that
+		// cannot succeed.
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	if err := s.sshConfigs.Save(name, body); err != nil {
-		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
 	return successResult(), nil
 }
@@ -249,11 +271,13 @@ func applyEntryEdits(existing *sshconfig.Entry, args map[string]any) {
 	if v := getString(args, "proxy", ""); v != "" {
 		existing.Proxy = strings.TrimSpace(v)
 	}
-	if v := getFloat64(args, "port", -1); v >= 0 {
-		existing.Port = int(v)
+	// Presence, not a sentinel: an edit updates only what the caller named.
+	// Matches the `if _, ok := args["trust_unknown_host"]` right below it.
+	if v := intPtrFromArgs(args, "port"); v != nil && *v > 0 {
+		existing.Port = *v
 	}
-	if v := getFloat64(args, "dial_timeout_seconds", -1); v >= 0 {
-		existing.DialTimeoutSeconds = int(v)
+	if v := intPtrFromArgs(args, "dial_timeout_seconds"); v != nil && *v >= 0 {
+		existing.DialTimeoutSeconds = *v
 	}
 	if _, ok := args["trust_unknown_host"]; ok {
 		t := getBool(args, "trust_unknown_host", false)
@@ -290,11 +314,11 @@ func applyJumpEdits(existing *sshconfig.Entry, args map[string]any) {
 		if v := getString(args, "jump_proxy", ""); v != "" {
 			existing.Jump.Proxy = strings.TrimSpace(v)
 		}
-		if v := getFloat64(args, "jump_port", -1); v >= 0 {
-			existing.Jump.Port = int(v)
+		if v := intPtrFromArgs(args, "jump_port"); v != nil && *v > 0 {
+			existing.Jump.Port = *v
 		}
-		if v := getFloat64(args, "jump_dial_timeout_seconds", -1); v >= 0 {
-			existing.Jump.DialTimeoutSeconds = int(v)
+		if v := intPtrFromArgs(args, "jump_dial_timeout_seconds"); v != nil && *v >= 0 {
+			existing.Jump.DialTimeoutSeconds = *v
 		}
 		if _, ok := args["jump_trust_unknown_host"]; ok {
 			t := getBool(args, "jump_trust_unknown_host", false)

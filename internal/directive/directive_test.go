@@ -78,6 +78,128 @@ func TestOnlyParseNeverEvaluate(t *testing.T) {
 	}
 }
 
+// TestFlagValueIsByteFaithful pins that a flag VALUE is the caller's own bytes with
+// only the quoting removed. This is issue #131's P0-1, and the same defect in one
+// place explains every silent rewrite in that report:
+//
+//	--data "A`core`B"    -> "AB"          (the subst vanished)
+//	--data "$HOME/x"     -> "/x"          (the expansion vanished)
+//	--data $B            -> "${B}"        (the parser rewrote it)
+//	--data "$((1+2))"    -> ""            (the value did not exist)
+//	--data "a\r\nb"      -> "a\nb"        (the CR was dropped)
+//
+// The mechanism is that syntax's per-node Value is a model of what a shell would
+// EXPAND, not a copy of what the caller wrote, and the old reader used it for
+// double-quoted content while inventing text (partText) for everything else. The
+// fix reads Pos()/End() slices, which are byte-faithful by construction.
+//
+// A payload was never affected — it is sliced whole — which is why `run` looked
+// fine while `--data` silently mangled all of the above.
+func TestFlagValueIsByteFaithful(t *testing.T) {
+	CR, LF, BS := "\r", "\n", "\\"
+	cases := []struct {
+		name string
+		word string // the flag's value exactly as written in the command
+		want string
+	}{
+		{"backtick substitution", `"A` + "`core`" + `B"`, "A`core`B"},
+		{"dollar-paren substitution", `"$(date)"`, "$(date)"},
+		{"parameter expansion", `"$HOME/x"`, "$HOME/x"},
+		{"bare parameter expansion", `$B`, "$B"},
+		{"arithmetic expansion", `"$((1+2))"`, "$((1+2))"},
+		{"single quotes protect everything", `'A` + "`core`" + `$B'`, "A`core`$B"},
+		{"quoted CRLF keeps its CR", `"a` + CR + LF + `b"`, "a" + CR + LF + "b"},
+		{"single-quoted CRLF keeps its CR", `'a` + CR + LF + `b'`, "a" + CR + LF + "b"},
+		{"quoted LF", `"a` + LF + `b"`, "a" + LF + "b"},
+		// A backslash is NOT decoded: `--data "a\nb"` writes the four bytes a, \, n, b,
+		// which is the documented way to put a newline in a --mode text payload, and it
+		// is what the old reader did too. Decoding escapes here would make the working
+		// channel in #131 stop working.
+		{"backslash escapes are NOT decoded", `"a` + BS + `nb"`, "a" + BS + "nb"},
+		{"escaped quote keeps its backslash", `"a` + BS + `"b"`, "a" + BS + `"b`},
+		{"adjacent quoted parts are joined", `"a"'b'`, "ab"},
+		{"mixed literal and quoted", `x"y"'z'`, "xyz"},
+		{"empty string is an explicit value", `""`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := Parse(`file h --action write --data ` + tc.word)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			got, ok := f.Statements[0].Flag("data")
+			if !ok {
+				t.Fatalf("--data was not given a value (word %q)", tc.word)
+			}
+			if got != tc.want {
+				t.Errorf("--data %s\n  value = %q\n  want  %q", tc.word, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFlagWithNoValueIsNotAnEmptyValue pins the three states the flag map carries.
+//
+// They used to be one: `--remote-path` with nothing after it and `--remote-path`
+// followed by an empty quoted value both arrived as (present, ""), so a reader
+// could not tell a caller who meant an empty string from one whose value had been
+// eaten by a quoting slip, and neither could be reported by name. `--data` with an
+// empty value writing an empty file is legitimate; `--remote-path` with no value at
+// all is always a mistake.
+func TestFlagWithNoValueIsNotAnEmptyValue(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   string
+		flag  string
+		state FlagValue
+		value string
+		has   bool
+	}{
+		{"file h --data ''", "data", FlagValueSet, "", true},
+		{`file h --data ""`, "data", FlagValueSet, "", true},
+		{"file h --data=", "data", FlagValueSet, "", true},
+		{"file h --data", "data", FlagNoValue, "", false},
+		{"file h --action read", "data", FlagAbsent, "", false},
+		// A valueless flag is SET: `--raw` needs no value and means the flag was
+		// written, which is the whole question it asks.
+		{"read h:1 --raw", "raw", FlagValueSet, "", true},
+	} {
+		f, err := Parse(tc.cmd)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.cmd, err)
+		}
+		st := f.Statements[0]
+		if got := st.FlagState(tc.flag); got != tc.state {
+			t.Errorf("%q: --%s state = %v, want %v", tc.cmd, tc.flag, got, tc.state)
+		}
+		if v, ok := st.Flag(tc.flag); ok != tc.has || (tc.has && v != tc.value) {
+			t.Errorf("%q: Flag(%q) = %q,%v; want %q,%v", tc.cmd, tc.flag, v, ok, tc.value, tc.has)
+		}
+	}
+}
+
+// TestSplitArgvIsByteFaithful extends the same guarantee to --argv, which a pipe or
+// an extension uses to start a program. Its words go through wordLiteral too, so an
+// argument containing a backtick or a quoted CRLF must arrive as typed.
+func TestSplitArgvIsByteFaithful(t *testing.T) {
+	CR, LF := "\r", "\n"
+	cmd, args, err := SplitArgv(`sh -c 'echo ` + "`id`" + `' 'a` + CR + LF + `b'`)
+	if err != nil {
+		t.Fatalf("SplitArgv: %v", err)
+	}
+	if cmd != "sh" {
+		t.Errorf("command = %q, want sh", cmd)
+	}
+	if len(args) != 3 || args[0] != "-c" {
+		t.Fatalf("args = %q, want [-c _ _]", args)
+	}
+	if want := "echo `id`"; args[1] != want {
+		t.Errorf("script = %q, want %q", args[1], want)
+	}
+	if want := "a" + CR + LF + "b"; args[2] != want {
+		t.Errorf("quoted CRLF = %q, want %q", args[2], want)
+	}
+}
+
 // TestHashIsNotATargetPrefix pins the correction that produced the current
 // syntax. `#` starts a comment in the shell grammar, so `run #a1f3:1 'x'` parses
 // to a single word. That must be an ERROR with a usage line, never a silent
@@ -165,8 +287,8 @@ func TestFlagsComeAfterTheTarget(t *testing.T) {
 	if len(st.Args) != 1 || st.Args[0] != "up" {
 		t.Errorf("args = %v, want [up]", st.Args)
 	}
-	if st.Flags["repeat"] != "3" {
-		t.Errorf("repeat = %q, want 3", st.Flags["repeat"])
+	if got, want := flagOf(t, st, "repeat"), "3"; got != want {
+		t.Errorf("repeat = %q, want %q", got, want)
 	}
 
 	if _, err := Parse(`key --repeat 3 a1f3:1 up`); err == nil {
@@ -185,10 +307,10 @@ func TestArgvTakesTheRestOfTheStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := f.Statements[0]
-	if got, want := st.Flags["argv"], `sh -c 'echo hi'`; got != want {
+	if got, want := flagOf(t, st, "argv"), `sh -c 'echo hi'`; got != want {
 		t.Errorf("argv = %q, want %q", got, want)
 	}
-	if got := st.Flags["name"]; got != "chat" {
+	if got := flagOf(t, st, "name"); got != "chat" {
 		t.Errorf("name = %q", got)
 	}
 	if st.Payload != "" {
@@ -266,15 +388,15 @@ func TestTargetOptionalFlagForms(t *testing.T) {
 	if st.Target != "" {
 		t.Errorf("target = %q, want empty for --off", st.Target)
 	}
-	if st.Flags["off"] != "notif_1" {
-		t.Errorf("off = %q", st.Flags["off"])
+	if got := flagOf(t, st, "off"); got != "notif_1" {
+		t.Errorf("off = %q", got)
 	}
 
 	f, err = Parse(`watch --list`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.Statements[0].Flags["list"]; !ok {
+	if !boolFlagSet(f.Statements[0], "list") {
 		t.Error("--list must be present")
 	}
 
@@ -282,8 +404,8 @@ func TestTargetOptionalFlagForms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Statements[0].Target != "a1f3:1" || f.Statements[0].Flags["event"] != "output" {
-		t.Errorf("target/event = %q/%q", f.Statements[0].Target, f.Statements[0].Flags["event"])
+	if got := flagOf(t, f.Statements[0], "event"); f.Statements[0].Target != "a1f3:1" || got != "output" {
+		t.Errorf("target/event = %q/%q", f.Statements[0].Target, got)
 	}
 }
 
@@ -293,24 +415,41 @@ func TestFlagWithValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flags := f.Statements[0].Flags
-	if flags["cursor"] != "1024" {
-		t.Errorf("cursor = %q", flags["cursor"])
+	st := f.Statements[0]
+	if got := flagOf(t, st, "cursor"); got != "1024" {
+		t.Errorf("cursor = %q", got)
 	}
-	if _, ok := flags["raw"]; !ok {
+	if !boolFlagSet(st, "raw") {
 		t.Error("a valueless flag must still be present: 'was it set' and 'what to' are two questions")
 	}
-	if flags["stream"] != "o" {
-		t.Errorf("stream = %q", flags["stream"])
+	if got := flagOf(t, st, "stream"); got != "o" {
+		t.Errorf("stream = %q", got)
 	}
 
 	f, err = Parse(`read a1f3:1 --cursor=2048`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Statements[0].Flags["cursor"]; got != "2048" {
+	if got := flagOf(t, f.Statements[0], "cursor"); got != "2048" {
 		t.Errorf("--cursor=2048 parsed as %q", got)
 	}
+}
+
+// flagOf returns a flag's value, failing the test when the flag was absent or
+// written without one. Nearly every flag in the grammar takes a value, so this is
+// the reading the tests want; the three-state distinction has its own test below.
+func flagOf(t *testing.T, st Statement, name string) string {
+	t.Helper()
+	v, ok := st.Flag(name)
+	if !ok {
+		t.Fatalf("flag --%s was not given a value (state %v)", name, st.FlagState(name))
+	}
+	return v
+}
+
+// boolFlagSet reports whether a valueless flag was WRITTEN at all.
+func boolFlagSet(st Statement, name string) bool {
+	return st.FlagState(name) != FlagAbsent
 }
 
 // TestUnknownDirectiveAndFlag pins the two failures learn_mode turns into a
@@ -437,6 +576,12 @@ func stripOptionals(s string) string {
 
 // fillUsageStubs replaces every <placeholder> with a dummy word and normalizes
 // spaces, so the line is something the parser can read.
+// fillUsageStubs replaces every <placeholder> with a value this grammar accepts.
+//
+// A `<handle>` becomes `x:1`, not `x`, and that is not cosmetic: a handle is a
+// CHANNEL (the session id plus a channel index), and a channel-only directive
+// refuses a bare session id at parse time. Filling it with `x` would make this test
+// assert that the documented shape does not parse — the opposite of its job.
 func fillUsageStubs(s string) string {
 	for {
 		start := strings.IndexByte(s, '<')
@@ -447,7 +592,11 @@ func fillUsageStubs(s string) string {
 		if end < 0 {
 			break
 		}
-		s = s[:start] + "x" + s[start+end+1:]
+		stub := "x"
+		if strings.Contains(s[start:start+end+1], "handle") {
+			stub = "x:1"
+		}
+		s = s[:start] + stub + s[start+end+1:]
 	}
 	return strings.Join(strings.Fields(s), " ")
 }
@@ -517,7 +666,7 @@ func TestTrailingSemicolonIsNotPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Statements[0].Flags["argv"]; got != `printf '[%s]' 'a'` {
+	if got := flagOf(t, f.Statements[0], "argv"); got != `printf '[%s]' 'a'` {
 		t.Errorf("argv = %q", got)
 	}
 }
@@ -543,10 +692,10 @@ func TestFwdTakesItsSessionAsTheTarget(t *testing.T) {
 	if st.Target != "a1f3" {
 		t.Errorf("Target = %q, want %q", st.Target, "a1f3")
 	}
-	if got := st.Flags["action"]; got != "dynamic" {
+	if got := flagOf(t, st, "action"); got != "dynamic" {
 		t.Errorf("action = %q, want %q", got, "dynamic")
 	}
-	if got := st.Flags["local-port"]; got != "11080" {
+	if got := flagOf(t, st, "local-port"); got != "11080" {
 		t.Errorf("local-port = %q, want %q", got, "11080")
 	}
 
@@ -555,7 +704,7 @@ func TestFwdTakesItsSessionAsTheTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Statements[0].Flags["session"]; got != "a1f3" {
+	if got := flagOf(t, f.Statements[0], "session"); got != "a1f3" {
 		t.Errorf("--session = %q, want %q", got, "a1f3")
 	}
 }
@@ -617,13 +766,13 @@ func TestExtArgsTakesTheRestOfTheLine(t *testing.T) {
 	}
 	st := f.Statements[0]
 	want := `/srv/mcp.js --stdio --label 'a,b'`
-	if got := st.Flags["args"]; got != want {
+	if got := flagOf(t, st, "args"); got != want {
 		t.Errorf("args = %q, want %q (the rest of the line, quoting intact)", got, want)
 	}
 	// The other flags still parsed: --args stops the scan, it does not swallow
 	// what came before it.
 	for k, want := range map[string]string{"kind": "mcp", "target": "internal", "mode": "pipe", "command": "node"} {
-		if got := st.Flags[k]; got != want {
+		if got := flagOf(t, st, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}

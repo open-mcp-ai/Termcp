@@ -613,10 +613,65 @@ function clearRetryTimer(id) {
   try { clearTimeout(id); } catch (e) {}
 }
 
-/* The stylesheet's z-index for .win-fullscreen. Full-screen windows all share
-   it, so ordering them against each other needs an inline value; this is the
-   value the frontmost one takes. */
-var FULLSCREEN_Z = 21000;
+/* ---- reading the z-index ladder (z-layers.css) ----------------------------
+
+   The page's layers are ranked in exactly one place, the stylesheet, so this is
+   the only way script may name one. Two things used to be literals here: the
+   full-screen rung, and the number a floating window's raise sequence starts at.
+   Both are stylesheet decisions (they sit between the dock and the drawers), and a
+   copy in JS cannot be kept in step with them — the copy is invisible to the CSS
+   rule it is supposed to agree with, so the two silently disagree the first time
+   either moves.
+
+   The fallbacks are the same values z-layers.css declares. They exist because a
+   window can be created before the stylesheet has applied (or a deployment can
+   ship the JS without it), and `null` from getComputedStyle would otherwise reach
+   `Number()` as NaN. TestZIndexLadderIsTheOnlySourceOfRanks fails if a fallback
+   here and the rung in the stylesheet drift apart. */
+function zRung(name, fallback) {
+  var v = '';
+  try {
+    if (typeof getComputedStyle === 'function' && document.documentElement) {
+      v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    }
+  } catch (e) {}
+  v = String(v || '').trim();
+  var n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/* The stylesheet's rung for .win-fullscreen. Full-screen windows all share it, so
+   ordering them against each other needs an inline value; this is the value the
+   frontmost one takes. Read through a getter rather than cached: a theme swap
+   rewrites the ladder, and a stale cache would rank new windows on the old one.
+   The tab bar and the "which window is on top" probe both read it through
+   fullscreenRung() below. */
+function fullscreenZ() { return zRung('--z-fullscreen', 21000); }
+
+/* A hard-coded constant for the full-screen rung used to live here, which was a
+   second copy of a stylesheet decision with no way to disagree out loud. The
+   answers come from the ladder now; these two keep the call sites readable. */
+function fullscreenRung() { return fullscreenZ(); }
+function windowRung() { return zRung('--z-window', 10001); }
+
+/* A floating window's raise sequence, kept inside its own band.
+
+   `low` is where the first window sits and `high` is the last value the sequence
+   may reach. The band is [--z-window, --z-dock), because the dock is a real
+   surface above the windows and a window that climbed past it would paint over
+   the tab bar listing it.
+
+   The sequence WRAPS rather than climbing: when it reaches `high` the floating
+   windows are renumbered from `low` in their current order, which preserves every
+   relative rank and costs one pass. Without the wrap the counter is a one-way
+   ratchet — ~10k raises to overrun the dock, which is not a realistic number of
+   user clicks but is a number the code should not depend on the user never
+   reaching. */
+function shellZBand() {
+  var low = zRung('--z-window', 10001);
+  var dock = zRung('--z-dock', 20000);
+  return { low: low, high: Math.max(low + 16, dock - 1) };
+}
 
 function bringShellWindowToFront(win) {
   if (!win || !win.classList.contains('shell-window')) return;
@@ -624,21 +679,37 @@ function bringShellWindowToFront(win) {
   if (win.classList.contains('win-fullscreen')) {
     /* Full-screen windows share the stylesheet's z-index, so ordering them needs
        an inline value. The top slot is handed over, never pushed higher: the
-       raised window takes FULLSCREEN_Z and every other one drops to
-       FULLSCREEN_Z - 1. So the ceiling never moves and cannot overrun the
-       drawer's 24000, whatever the window count or switching order. (A value
-       below the tab bar's 20000 would sink the terminal behind it, which is why
-       the shared floating sequence is not used here.) */
+       raised window takes the full-screen rung and every other one drops to one
+       below it. So the ceiling never moves and cannot overrun the drawer's rung,
+       whatever the window count or switching order. (A value below the dock's
+       rung would sink the terminal behind the tab bar, which is why the shared
+       floating sequence is not used here.) */
+    var fullZ = fullscreenZ();
     allShellWins().forEach(function (w) {
       if (w !== win && w.classList.contains('win-fullscreen')) {
-        w.style.zIndex = String(FULLSCREEN_Z - 1);
+        w.style.zIndex = String(fullZ - 1);
       }
     });
-    win.style.zIndex = String(FULLSCREEN_Z);
+    win.style.zIndex = String(fullZ);
     refreshSessionTabbar();
     return;
   }
-  if (!window._shellZSeq) window._shellZSeq = 10050;
+
+  var band = shellZBand();
+  if (!window._shellZSeq || window._shellZSeq < band.low || window._shellZSeq >= band.high) {
+    /* Renumber from the bottom of the band, in the order the windows currently
+       rank, so the raise below lands on top of all of them and every existing
+       relative order survives. Full-screen and tiled windows are not in this
+       sequence at all (they carry their own rung), so they are left untouched. */
+    var floating = allShellWins().filter(function (w) {
+      return !w.classList.contains('win-fullscreen') && !isTiledWin(w);
+    });
+    floating.sort(function (a, b) {
+      return (parseInt(a.style.zIndex, 10) || 0) - (parseInt(b.style.zIndex, 10) || 0);
+    });
+    window._shellZSeq = band.low;
+    floating.forEach(function (w) { w.style.zIndex = String(++window._shellZSeq); });
+  }
   window._shellZSeq += 1;
   win.style.zIndex = String(window._shellZSeq);
   refreshSessionTabbar();

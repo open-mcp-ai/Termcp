@@ -1,7 +1,7 @@
 package webui
 
 import (
-	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,28 +42,35 @@ func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
 		t.Error("the switcher menu must not be parented inside the window")
 	}
 	// Session-based entry points resolve the session first; the tab bar already
-	// owns its window (including a pending dial without a session id).
+	// owns its window (including a pending dial without a session id), and a tab for
+	// a session with no window opens one through the resolver.
 	for _, tc := range []struct {
 		name, body, want string
 	}{
 		{"session tile", sessions, "focusSessionWindow("},
 		{"switcher item", termView, "focusSessionWindow("},
-		{"session tab", between(t, shellWins, "function refreshSessionTabbar", "\n}\n"), "focusShellWindow(w)"},
 	} {
 		if !strings.Contains(tc.body, tc.want) {
 			t.Errorf("%s should call %s", tc.name, tc.want)
 		}
 	}
-	// …and it must reach that normaliser without a session lookup, because the tab
-	// owns its window. That is the whole reason a status card is safe here: its _sid
-	// is the extension's NAME, so resolving it as a session would dial a terminal
-	// named after the extension (and a pending dial has no id to resolve at all).
+	// …and a tab that OWNS its window must reach the normaliser without a session
+	// lookup, because a status card's _sid is the extension's NAME (resolving it as a
+	// session would dial a terminal named after the extension) and a pending dial has
+	// no id to resolve at all. A tab with no window is the opposite case and goes
+	// through the resolver — see TestAWindowlessTabOpensTheSessionItStandsFor.
 	tabBody := between(t, shellWins, "var order = [];", "order.forEach(function (t) { scroll.appendChild(t); });")
-	if !strings.Contains(tabBody, "focusShellWindow(w);") {
-		t.Error("clicking a tab must raise the window it owns, not resolve a session for it")
+	if !strings.Contains(tabBody, "focusShellWindow(cur.win);") {
+		t.Error("clicking a tab must raise the window it owns")
 	}
-	if strings.Contains(tabBody, "focusSessionWindow(") {
-		t.Error("the tab bar must not resolve a session: a status card's _sid is a name, and a dial has no id yet")
+	/* The resolver belongs to the ONE branch that has no window to raise. A lookup
+	   on the window path is the bug this pins: a status card's `_sid` is a name, and
+	   a dial has no id yet. */
+	if n := strings.Count(tabBody, "focusSessionWindow("); n != 1 {
+		t.Errorf("the tab click resolves a session %d time(s); exactly the window-less branch may", n)
+	}
+	if !strings.Contains(between(t, tabBody, "if (!cur || !cur.win) {", "focusShellWindow(cur.win);"), "focusSessionWindow(") {
+		t.Error("the resolver must sit inside the window-less branch")
 	}
 	if strings.Contains(sessions, "openOrFocusShellWindow(") {
 		t.Error("sessions.js should use focusSessionWindow, not the old alias")
@@ -81,32 +88,45 @@ func TestSessionSwitcherUsesOneDataSource(t *testing.T) {
 // The switch menu hangs off the monitor glyph in the terminal header, and only
 // on touch devices: on desktop the session tab bar already switches sessions, so
 // clicking the glyph must do nothing there.
-func TestSwitcherHangsOffTheHeaderIconOnTouchOnly(t *testing.T) {
+// TestTheHeaderGlyphTicksTheWindow pins what the monitor glyph does now.
+//
+// It used to be two things at once: decoration on desktop (a drawing that did
+// nothing when pressed) and, on touch, a menu of the server's sessions. Both were
+// wrong for the same reason — a monitor glyph reads as "this screen", so the one
+// action it suggests is picking it. The dock's tick already existed for that, so
+// the glyph drives the same component: two views of one control rather than a
+// second control with its own meaning.
+//
+// The mobile menu is gone with it. It listed sessions that had no window here, but
+// raising a window is a click on its dock tab, so the menu cost a hidden meaning on
+// a picture of a screen and bought a list the dock already shows.
+func TestTheHeaderGlyphTicksTheWindow(t *testing.T) {
 	termView := readTerminalJS(t)
 	setup := between(t, termView, "function setupMobileSessionSwitcher", "\n}\n")
 
 	if !strings.Contains(setup, ".shell-header-icon") {
-		t.Error("the switcher should bind to the existing header monitor glyph")
+		t.Error("the tick binds to the existing header monitor glyph")
 	}
-	// Every activation path must be gated on touch, or desktop gets a menu it did
-	// not ask for (and a tab bar it already has).
-	if strings.Count(setup, "isMobileViewport()") < 2 {
-		t.Error("both the affordance and the click handler must check isMobileViewport()")
+	// It drives the dock's selection, which is what makes the glyph and the dock's
+	// own tick the same control.
+	if !strings.Contains(setup, "_dockBatch.toggleSelection") {
+		t.Error("the glyph must tick through the shared batch component, not its own set")
 	}
-
-	// The old standalone hamburger must be gone.
-	css := readAppCSS(t)
-	if strings.Contains(css, ".shell-window-switch-btn") || strings.Contains(termView, "shell-window-switch-btn") {
-		t.Error("the standalone switch button should be replaced by the header glyph")
+	// No viewport gate: the glyph means one thing everywhere. A gate here would be
+	// the old bug — decoration on desktop, action on touch.
+	if strings.Contains(setup, "isMobileViewport()") {
+		t.Error("the glyph must not change meaning by viewport; it is a tick everywhere")
 	}
-
-	// And the freed-up slot opens the connections drawer instead.
-	if !strings.Contains(setup, "termcpToggleEntriesDrawer") {
-		t.Error("a header button should open the entries drawer")
+	// And no menu: the function that drew it is gone, so a leftover call would be a
+	// runtime error rather than a feature.
+	if strings.Contains(termView, "function openSessionSwitchMenu(") {
+		t.Error("the session-switch menu is gone; the dock lists the windows")
 	}
-	connForm := readAssetLF(t, "static/js/conn-form.js")
-	if !strings.Contains(connForm, "window.termcpToggleEntriesDrawer") {
-		t.Error("conn-form.js should expose the drawer toggle for the terminal header")
+	if strings.Contains(termView, "openSessionSwitchMenu(") {
+		t.Error("nothing may call openSessionSwitchMenu: the function no longer exists")
+	}
+	if !strings.Contains(termView, "win.aria.select") {
+		t.Error("the glyph needs an accessible name describing the tick")
 	}
 }
 
@@ -199,34 +219,58 @@ func TestMinimizedCSSCannotBeConfusedWithHidden(t *testing.T) {
 
 // Full-screen windows all share the stylesheet's z-index, so raising one needs an
 // inline value. It must be handed over rather than incremented: a counter
-// climbing past the drawer's 24000 would put terminals over the entries drawer.
+// climbing past the drawer's rung would put terminals over the entries drawer.
+//
+// Both numbers are now NAMED rungs from z-layers.css, and the JS reads them
+// through zRung() instead of restating them — a copy in JS cannot disagree with
+// the stylesheet out loud, so the two drift the first time either moves.
 func TestFullscreenZIndexIsHandedOverNotIncremented(t *testing.T) {
 	util := readAssetLF(t, "static/js/util.js")
 	body := between(t, util, "function bringShellWindowToFront", "\n}\n")
 
-	for _, want := range []string{"FULLSCREEN_Z", "win-fullscreen"} {
+	for _, want := range []string{"fullscreenZ()", "win-fullscreen"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("bringShellWindowToFront should reference %s", want)
 		}
 	}
-	if !strings.Contains(util, "var FULLSCREEN_Z =") {
-		t.Error("the full-screen z-index should be a single named constant")
+	// The rung comes from the ladder, not from a literal in this file.
+	if !strings.Contains(util, "function fullscreenZ() { return zRung('--z-fullscreen'") {
+		t.Error("the full-screen z-index must be read from the --z-fullscreen rung")
+	}
+	if strings.Contains(util, "var FULLSCREEN_Z =") {
+		t.Error("a JS copy of the full-screen rung is a second source for a stylesheet decision")
 	}
 	// No increment-and-store counter for the full-screen path.
 	if strings.Contains(body, "_shellFullZSeq") {
 		t.Error("the full-screen z-index must not be an incrementing counter")
 	}
 
-	// The constant has to sit between the tab bar and the drawer, or the
-	// terminal hides the drawer (or sinks behind the tab bar).
+	// The rung has to sit between the dock and the drawer, or the terminal hides
+	// the drawer (or sinks behind the dock). The dock is what the floating tab bar
+	// became: it is pinned to the viewport bottom, so the full-screen window must
+	// still paint over it. The VALUES live in z-layers.css; the rules that use
+	// them just name the rung.
 	css := readAppCSS(t)
 	full := between(t, css, ".shell-window.win-fullscreen {", "}")
-	if !strings.Contains(full, "z-index: 21000") {
-		t.Errorf("the stylesheet full-screen z-index should be 21000; got %q", strings.TrimSpace(full))
+	if !strings.Contains(full, "z-index: var(--z-fullscreen)") {
+		t.Errorf("the full-screen rule should use the full-screen rung; got %q", strings.TrimSpace(full))
 	}
-	tabbar := between(t, css, ".session-tabbar {", "}")
-	if !strings.Contains(tabbar, "z-index: 20000") {
-		t.Error("the tab bar should stay below the full-screen window")
+	// The dock's stacking is declared in workspace.css beside the rest of its
+	// geometry. Read that sheet rather than the bundle: terminal.css also carries
+	// a `.sessdock` rule (the mobile hide), and the bundle concatenates in
+	// manifest order, so a bare lookup would land on the wrong one.
+	workspaceCSS := readAssetLF(t, "static/css/workspace.css")
+	dock := between(t, workspaceCSS, ".sessdock {", "}")
+	if !strings.Contains(dock, "z-index: var(--z-dock)") {
+		t.Error("the dock should use the dock rung, below the full-screen window")
+	}
+	// And the order those rungs encode is what the paragraph above claims.
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	if rungValue(t, ladder, "--z-dock") >= rungValue(t, ladder, "--z-fullscreen") {
+		t.Error("the full-screen rung must be above the dock's")
+	}
+	if rungValue(t, ladder, "--z-fullscreen") >= rungValue(t, ladder, "--z-drawer") {
+		t.Error("the full-screen rung must stay below the drawer's, or a terminal hides the drawer")
 	}
 }
 
@@ -393,18 +437,146 @@ process.exit(bad === 0 ? 0 : 1);
 // It fails the test when either is absent: a missing terminator used to return
 // the whole remainder, which quietly widened the slice and made assertions test
 // code outside the function they named.
+//
+// Failure messages carry CONTEXT, because "marker not found" is the least useful
+// sentence a sliced-source test can print: it names a string the author already
+// knows, and nothing about the file it was looked for in. When the terminator is
+// missing the remainder is printed — the commonest cause is a function whose body
+// closes at a different indent than "\n}\n", and seeing the real shape is what
+// turns a hunt into a one-line fix.
 func between(t *testing.T, src, marker, end string) string {
 	t.Helper()
 	i := strings.Index(src, marker)
 	if i < 0 {
-		t.Fatalf("marker %q not found", marker)
+		t.Fatalf("marker %q not found; %s", marker, nearestInSource(src, marker))
 	}
 	rest := src[i:]
 	j := strings.Index(rest, end)
 	if j < 0 {
-		t.Fatalf("terminator %q not found after marker %q", end, marker)
+		t.Fatalf("terminator %q not found after marker %q; the slice runs to the end of %s. First 40 lines after the marker:\n%s",
+			end, marker, linesOf(src), headLines(rest, 40))
 	}
 	return rest[:j]
+}
+
+// nearestInSource describes why a marker was not found, in terms that shorten the
+// hunt: the lines that look like the one asked for.
+//
+// The first version reported the longest surviving common prefix — which for
+// `function gamma(` is "function ", a string every function in the file shares. That
+// is a fact about the language, not about the failure. The useful answer is the
+// candidates: when a function was renamed, seeing the declarations that DID survive
+// names the rename in one line, and when the whole block is gone the empty list
+// says so.
+func nearestInSource(src, want string) string {
+	keyword := leadingWord(want)
+	var candidates []string
+	if keyword != "" {
+		for _, line := range strings.Split(src, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || !containsWord(trimmed, keyword) {
+				continue
+			}
+			candidates = append(candidates, trimmed)
+			if len(candidates) == 5 {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return "nothing in the file starts the way it does (" + linesOf(src) + ")"
+	}
+	return "lines that do: " + strings.Join(candidates, " | ") +
+		" (" + linesOf(src) + "; the marker was renamed or removed)"
+}
+
+// leadingWord returns the first identifier-ish run of s (`function ` -> `function`,
+// `var order = [` -> `var`), which is what "the same kind of line" means here.
+func leadingWord(s string) string {
+	s = strings.TrimLeft(s, " \t\n")
+	for i, r := range s {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '_' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+// containsWord reports whether line contains word as a whole identifier, so a
+// marker starting with `var` does not list every line holding `variable`.
+func containsWord(line, word string) bool {
+	for from := 0; ; {
+		i := strings.Index(line[from:], word)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(word)
+		leftOK := start == 0 || !isIdentByte(line[start-1])
+		rightOK := end == len(line) || !isIdentByte(line[end])
+		if leftOK && rightOK {
+			return true
+		}
+		from = start + 1
+		if from >= len(line) {
+			return false
+		}
+	}
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// linesOf reports how much source was searched, so a slice failure cannot be
+// confused with an empty file.
+func linesOf(src string) string {
+	return strconv.Itoa(strings.Count(src, "\n")+1) + " lines"
+}
+
+// headLines returns the first n lines of s, or all of it.
+func headLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n") + "\n… (" + strconv.Itoa(len(lines)-n) + " more lines)"
+}
+
+// rungValue returns the integer value assigned to a named rung in z-layers.css.
+func rungValue(t *testing.T, ladder, name string) int {
+	t.Helper()
+	re := regexp.MustCompile(regexp.QuoteMeta(name) + `:\s*(-?\d+)`)
+	m := re.FindStringSubmatch(ladder)
+	if m == nil {
+		t.Fatalf("ladder declares no %s rung", name)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("%s has an unparsable value: %v", name, err)
+	}
+	return n
+}
+
+// rungValueOfRule looks up the rung named by sel's `z-index: var(--z-…)`
+// declaration in css, then resolves that rung against the ladder.
+//
+// Asserting a numeric z-index at the call site instead would re-create the second
+// copy the ladder exists to delete: the test would keep passing while the real
+// order lived somewhere else.
+func rungValueOfRule(t *testing.T, css, ladder, sel string) int {
+	t.Helper()
+	re := regexp.MustCompile(regexp.QuoteMeta(sel) + `\s*\{[^}]*z-index:\s*var\((--z-[a-z-]+)\)`)
+	m := re.FindStringSubmatch(css)
+	if m == nil {
+		// A dialog may inherit the base dialog rung through its class; fall back
+		// to .modal-backdrop when querying an undeclared modal id.
+		if strings.HasPrefix(sel, "#modal-") {
+			return rungValueOfRule(t, css, ladder, ".modal-backdrop")
+		}
+		t.Fatalf("%s declares no z-index rung via var(--z-…)", sel)
+	}
+	return rungValue(t, ladder, m[1])
 }
 
 // The load banner shows a dismiss button, so it has to be a flex row; and the
@@ -445,8 +617,8 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 	// the assertion would only ever see empty markup.
 	index := readAssetLF(t, "index.html")
 	for _, tc := range []struct{ name, banner, from, to string }{
-		{"connections", "conn-load-banner", `id="sec-entries-body"`, `id="sec-sessions"`},
-		{"sessions", "session-load-banner", `id="sec-sessions-body"`, `id="modal-forward"`},
+		{"connections", "conn-load-banner", `id="sec-entries-body"`, `id="ext-plate"`},
+		{"sessions", "session-load-banner", `id="sec-exts-body"`, `id="modal-forward"`},
 	} {
 		if !strings.Contains(index, `id="`+tc.banner+`"`) {
 			t.Fatalf("index.html should still contain the %s banner", tc.name)
@@ -471,22 +643,17 @@ func TestLoadBannerShowsDismissButtonInAFlexRow(t *testing.T) {
 // full-screen terminal's hamburger, so a modal below either one opens *behind*
 // it. Nothing errors when that happens — the class is removed and the dialog is
 // briefly in the DOM and invisible — so it is pinned here instead.
+//
+// Since every stacking declaration now names a rung (z-layers.css), this reads
+// the RUNG a rule uses and then looks its value up on the ladder. Asserting the
+// numbers here instead would re-create the second copy the ladder exists to
+// delete: the test would keep passing while the real order lived somewhere else.
 func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
 	css := readAppCSS(t)
+	ladder := readAssetLF(t, "static/css/z-layers.css")
 	z := func(sel string) int {
 		t.Helper()
-		// A selector can appear in several rules (e.g. .drawer-scrim is first
-		// declared as display:none), so take the declaration that sets z-index.
-		re := regexp.MustCompile(regexp.QuoteMeta(sel) + `\s*\{[^}]*z-index:\s*(\d+)`)
-		m := re.FindStringSubmatch(css)
-		if m == nil {
-			t.Fatalf("%s declares no z-index", sel)
-		}
-		n, err := strconv.Atoi(m[1])
-		if err != nil {
-			t.Fatalf("%s has an unparsable z-index: %v", sel, err)
-		}
-		return n
+		return rungValueOfRule(t, css, ladder, sel)
 	}
 
 	modal := z(".modal-backdrop")
@@ -494,18 +661,226 @@ func TestModalsOutrankEverySurfaceThatOpensThem(t *testing.T) {
 		"#sec-entries-body",            // the drawer
 		".drawer-scrim",                // its scrim
 		".shell-window.win-fullscreen", // the terminal that hosts the hamburger
-		".session-tabbar",              // the tab bar
+		".sessdock",                    // the dock, which replaced the tab bar
 	} {
 		if got := z(below); got >= modal {
-			t.Errorf("%s is z-index %d, at or above the modal's %d: a dialog opened from it renders behind it", below, got, modal)
+			t.Errorf("%s is at rung %d, at or above the modal's %d: a dialog opened from it renders behind it", below, got, modal)
 		}
 	}
 	// Toasts stay on top, and so does the notify stack: a server-pushed
-	// notify_user message must not be swallowed by a dialog. The modal was
-	// already below both at 20000, so this pins the existing precedence.
+	// notify_user message must not be swallowed by a dialog.
 	for _, above := range []string{"#ui-copy-toast", "#ui-notify-stack"} {
 		if got := z(above); got <= modal {
-			t.Errorf("%s is z-index %d, below the modal's %d", above, got, modal)
+			t.Errorf("%s is at rung %d, below the modal's %d", above, got, modal)
+		}
+	}
+}
+
+// A dialog raised FROM a dialog must outrank it.
+//
+// This is the "确认框在对话框下面" bug, and it is invisible in source review: the
+// confirm element exists, `hidden` is off, the backdrop is full-screen — and the
+// editor that raised it paints over it, so the user presses Delete and nothing
+// happens. At one shared rung the winner is DOM order, and every editor is
+// declared after the confirm dialogs.
+//
+// The second tier is not a bigger number for its own sake: it exists because
+// these dialogs are the ones reachable from INSIDE another dialog.
+func TestDialogsRaisedFromDialogsOutrankTheirParent(t *testing.T) {
+	css := readAppCSS(t)
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	base := rungValueOfRule(t, css, ladder, ".modal-backdrop")
+
+	// The editors: each of these can raise confirmDialog from one of its keys.
+	parents := []string{"#modal-conn", "#modal-ext", "#modal-start", "#modal-forward"}
+	// The second tier: confirm (ext/conn delete), cmd (channel prompt), and the
+	// close-session dialog (raised from a dock batch action).
+	children := []string{"#modal-confirm", "#modal-cmd", "#modal-close-session"}
+
+	for _, child := range children {
+		got := rungValueOfRule(t, css, ladder, child)
+		if got <= base {
+			t.Errorf("%s is at rung %d, not above the dialog rung %d: a confirm raised from an open dialog renders behind it", child, got, base)
+		}
+		// Still a dialog: below the menus, toasts and the notify stack.
+		if got >= rungValue(t, ladder, "--z-popover") {
+			t.Errorf("%s is at rung %d, at or above the popover rung: a menu opened from it would be cut off", child, got)
+		}
+	}
+	for _, parent := range parents {
+		// The editors inherit the base rung from .modal-backdrop and must not
+		// declare a rung of their own — a second declaration is how one dialog
+		// silently ends up in the confirm tier.
+		if m := regexp.MustCompile(regexp.QuoteMeta(parent) + `\s*\{[^}]*z-index:`).FindString(css); m != "" {
+			t.Errorf("%s declares its own z-index; the editors must inherit the base dialog rung", parent)
+		}
+	}
+}
+
+// A menu anchored to the pointer is appended to <body> and positioned wherever
+// the pointer was — which can be over the dock, a drawer, or a dialog. It has to
+// outrank all of them, and it sat at 60, i.e. underneath every content surface:
+// right-clicking a session tab opened a menu the dock painted over.
+func TestPointerMenusOutrankEverythingTheyOpenOver(t *testing.T) {
+	css := readAppCSS(t)
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	popover := rungValue(t, ladder, "--z-popover")
+
+	for _, menu := range []string{".sess-tab-menu", ".shell-window-switch-menu", ".shell-file-ctx-menu"} {
+		if got := rungValueOfRule(t, css, ladder, menu); got != popover {
+			t.Errorf("%s should sit on the popover rung %d; got %d", menu, popover, got)
+		}
+	}
+	// Above every surface a menu can be opened over, and below the stacks the
+	// user did not ask for.
+	for _, below := range []string{"--z-modal-top", "--z-drawer", "--z-dock"} {
+		if popover <= rungValue(t, ladder, below) {
+			t.Errorf("the popover rung must be above %s", below)
+		}
+	}
+	for _, above := range []string{"--z-toast"} {
+		if popover >= rungValue(t, ladder, above) {
+			t.Errorf("the popover rung must stay below %s: a message the user did not ask for may not be hidden by a menu", above)
+		}
+	}
+}
+
+// A menu belongs to the surface that owns it: it must beat its siblings inside
+// that surface, but it must NEVER reach for a page-level rung to do it. A header
+// menu at the popover rung would float over the terminals on a page whose header
+// is supposed to stay behind them.
+func TestInSurfaceMenusStayOnTheDropdownRung(t *testing.T) {
+	css := readAppCSS(t)
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	dropdown := rungValue(t, ladder, "--z-dropdown")
+
+	for _, menu := range []string{".lang-menu", ".theme-menu", ".clients-panel", ".nethub-open-menu"} {
+		if got := rungValueOfRule(t, css, ladder, menu); got != dropdown {
+			t.Errorf("%s is an in-surface menu and should use the dropdown rung %d; got %d", menu, dropdown, got)
+		}
+	}
+	// The dropdown rung ranks menus against SIBLINGS only, so it may not try to
+	// climb over the content band; the header is what carries it up when needed.
+	if dropdown >= rungValue(t, ladder, "--z-workspace") {
+		t.Error("the dropdown rung must stay below the content band: the header carries its menu up, not the menu itself")
+	}
+}
+
+// The ladder is the ONLY place a page layer may be written as a number.
+//
+// This is what keeps the next "one more rung" from arriving as a literal. It
+// walks every shipped stylesheet (excluding the vendored xterm sheet, whose
+// stacking is internal to that library) and fails on any numeric z-index outside
+// the ladder file. `z-index: auto` is allowed: it removes a stacking context
+// rather than ranking one, and one of those resets is load-bearing.
+func TestNoStylesheetRanksALayerWithALiteral(t *testing.T) {
+	// Reads the sheets directly instead of through the manifest: the point is to
+	// cover every file a page can load, including the ones no manifest imports.
+	files := []string{
+		"static/css/base.css", "static/css/approval.css", "static/css/terminal.css",
+		"static/css/timeline.css", "static/css/workspace.css", "static/css/theme.css",
+		"static/css/theme-controls.css", "static/css/panels.css",
+		"static/css/terminal-theme.css", "static/css/noglass.css", "static/css/docs.css",
+		"static/css/tokens.css",
+	}
+	themes, err := fs.Glob(Assets(), "themes/*/assets/static/css/*.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, themes...)
+
+	// A z-index declaration with a numeric value — including a negative one, and
+	// including the shorthand `inset: 0; z-index: 3` forms on one line.
+	literal := regexp.MustCompile(`z-index:\s*(-?\d+)`)
+	for _, path := range files {
+		body, err := readAsset(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		// Comments describe the ladder and may quote a number; rules may not. Rather
+		// than pattern-match comment syntax per line, strip every /* … */ run
+		// first — a prose line inside a block comment is otherwise indistinguishable
+		// from a declaration.
+		stripped := stripCSSComments(normalizeNL(body))
+		for i, line := range strings.Split(stripped, "\n") {
+			if m := literal.FindStringSubmatch(line); m != nil {
+				t.Errorf("%s:%d ranks a layer with the literal %s; name it in static/css/z-layers.css and use var(--z-…)",
+					path, i+1, m[1])
+			}
+		}
+	}
+}
+
+// Every rung the ladder declares is actually used, and every rung a stylesheet
+// names is actually declared: a typo in `var(--z-modal-tp)` renders as no
+// declaration at all, which silently drops the element to the flow layer, i.e.
+// under everything. That failure looks like "the dialog is behind the page".
+func TestEveryZIndexRungIsDeclaredAndUsed(t *testing.T) {
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	declared := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(-\-z-[a-z-]+):`).FindAllStringSubmatch(ladder, -1) {
+		declared[m[1]] = true
+	}
+	if len(declared) < 20 {
+		t.Fatalf("the ladder declares only %d rungs; it looks truncated", len(declared))
+	}
+
+	bundle := readAppCSS(t)
+	used := map[string]bool{}
+	for _, m := range regexp.MustCompile(`var\((--z-[a-z-]+)\)`).FindAllStringSubmatch(bundle, -1) {
+		used[m[1]] = true
+		if !declared[m[1]] {
+			t.Errorf("a stylesheet reads var(%s), which the ladder does not declare: the declaration is dropped and the element falls to the flow layer", m[1])
+		}
+	}
+	// The JS reads two rungs by name through zRung(); a rename there would be
+	// silently ignored too (zRung falls back to the literal).
+	util := readAssetLF(t, "static/js/util.js")
+	for _, m := range regexp.MustCompile(`zRung\('(--z-[a-z-]+)'`).FindAllStringSubmatch(util, -1) {
+		used[m[1]] = true
+		if !declared[m[1]] {
+			t.Errorf("util.js reads zRung(%s), which the ladder does not declare", m[1])
+		}
+	}
+
+	for rung := range declared {
+		if !used[rung] {
+			t.Errorf("the ladder declares %s but no rule uses it; a rung nothing reads is a number that will drift", rung)
+		}
+	}
+}
+
+// A JS fallback for a rung is a copy of that rung's value, and a copy is only
+// safe while it agrees. util.js states both numbers it may need before the
+// stylesheet has applied; this pins them to the ladder.
+func TestJSZIndexFallbacksMatchTheirRungs(t *testing.T) {
+	util := readAssetLF(t, "static/js/util.js")
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+
+	pairs := map[string]string{
+		"--z-fullscreen": "fullscreenZ",
+	}
+	_ = pairs
+	for _, tc := range []struct{ fn, rung string }{
+		{"function fullscreenZ() { return zRung('--z-fullscreen'", "--z-fullscreen"},
+		{"var low = zRung('--z-window'", "--z-window"},
+		{"var dock = zRung('--z-dock'", "--z-dock"},
+	} {
+		i := strings.Index(util, tc.fn)
+		if i < 0 {
+			t.Fatalf("util.js no longer reads %s", tc.rung)
+		}
+		seg := util[i:]
+		if end := strings.Index(seg, "\n"); end >= 0 {
+			seg = seg[:end]
+		}
+		m := regexp.MustCompile(`,\s*(-?\d+)\)`).FindStringSubmatch(seg)
+		if m == nil {
+			t.Fatalf("%s has no fallback literal: %q", tc.rung, seg)
+		}
+		want := strconv.Itoa(rungValue(t, ladder, tc.rung))
+		if m[1] != want {
+			t.Errorf("%s falls back to %s but the ladder says %s; the copy has drifted", tc.rung, m[1], want)
 		}
 	}
 }
@@ -532,11 +907,15 @@ func TestNetHubIsAResponsiveResourceSidebar(t *testing.T) {
 	frame := between(t, css, ".workspace-frame {", "}")
 	for _, want := range []string{
 		"display: grid",
-		"grid-template-columns: var(--nethub-w) minmax(0, 1fr)",
+		// The flexible track is the CENTRE, which the extension column occupies;
+		// the session rail takes the third. The order is the point of the layout
+		// rework (hosts · extensions · sessions), so it is pinned here.
+		"grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--ext-w)",
+		"--ext-w: 260px",
 		"transition: grid-template-columns",
 	} {
 		if !strings.Contains(frame, want) {
-			t.Errorf("desktop NetHub layout must contain %q; got %q", want, frame)
+			t.Errorf("desktop frame layout must contain %q; got %q", want, frame)
 		}
 	}
 	if strings.Contains(frame, "position: fixed") || strings.Contains(frame, "50vw") {
@@ -589,17 +968,46 @@ func TestNetHubIsAResponsiveResourceSidebar(t *testing.T) {
 	}
 }
 
-// The extension panel answers the same collapse question NetHub does, and the
-// drawer scope must not reach into the desktop preference from this side
-// either: closing the overlay on a narrow screen would otherwise rail the
-// column a wide screen later arrives at.
-func TestExtensionPanelKeepsTheDrawerScopeOutOfThePreference(t *testing.T) {
-	ext := readAssetLF(t, "static/js/extensions.js")
-	if !strings.Contains(ext, "if (persist && !drawer)") {
-		t.Error("the extension preference must only be written above the drawer breakpoint")
+// The folding column answers the same collapse question NetHub does, and the
+// drawer scope must not reach into the desktop preference from this side either:
+// closing the overlay on a narrow screen would otherwise rail the column a wide
+// screen later arrives at.
+//
+// The owner is archive-column.js: the right-hand column that folds holds the
+// archive, and extensions.js no longer owns a fold at all (the extension plate is
+// the page's main region). Pointing this at the old module was exactly the kind
+// of test that keeps passing while the behaviour has moved somewhere else.
+func TestFoldingColumnKeepsTheDrawerScopeOutOfThePreference(t *testing.T) {
+	arch := readAssetLF(t, "static/js/archive-column.js")
+	if !strings.Contains(arch, "if (persist && !drawer)") {
+		t.Error("the column's preference must only be written above the drawer breakpoint")
 	}
-	if !strings.Contains(ext, "var wasOpen = wasDrawer && panel && panel.classList.contains('drawer-open')") {
+	if !strings.Contains(arch, "var wasOpen = wasDrawer && panel && panel.classList.contains('drawer-open')") {
 		t.Error("crossing out of the drawer scope must keep an open drawer open as a column")
+	}
+	/* dialogs.js puts one drawer away when the other opens, through a typeof
+	   guard because it loads first. That guard is what made the swap's renames
+	   dangerous: pointing it at a function nobody defines any more fails
+	   silently, and two drawers then sit open over one another. So the names it
+	   calls are pinned to their definitions here. */
+	dialogs := readAssetLF(t, "static/js/dialogs.js")
+	if !strings.Contains(dialogs, "typeof archiveCollapsed === 'function'") {
+		t.Error("dialogs.js should guard its cross-drawer call: the other module loads after it")
+	}
+	for _, fn := range []string{"archiveCollapsed", "setArchiveCollapsed"} {
+		if !strings.Contains(dialogs, fn+"(") {
+			t.Errorf("opening the host drawer should put the archive drawer away: dialogs.js never calls %s", fn)
+		}
+		if !strings.Contains(arch, "function "+fn+"(") {
+			t.Errorf("dialogs.js calls %s, which archive-column.js does not define: the typeof guard hides it", fn)
+		}
+	}
+	// One owner only: a second module writing the same key would let the two
+	// disagree about which one the page is in.
+	for _, other := range []string{"static/js/extensions.js", "static/js/shell-windows.js", "static/js/dialogs.js"} {
+		if strings.Contains(readAssetLF(t, other), "ARCHIVE_STATE_KEY") {
+			t.Errorf("%s also writes the column's preference; archive-column.js is its one owner", other)
+		}
 	}
 }
 
@@ -664,7 +1072,7 @@ func TestNetHubRegressionFixes(t *testing.T) {
 		t.Error("the narrow breakpoint must remove .nethub's stacking context so the drawer can outrank the scrim")
 	}
 	if !strings.Contains(css, "#sec-entries-body {\n    position: fixed") ||
-		!strings.Contains(css, "z-index: 24000") || !strings.Contains(css, `#sec-entries-body.drawer-open {
+		!strings.Contains(css, "z-index: var(--z-drawer)") || !strings.Contains(css, `#sec-entries-body.drawer-open {
     transform: translateX(0); visibility: visible;`) {
 		t.Error("the narrow drawer must be fixed, high in the root stack, and open through its transform")
 	}
@@ -742,32 +1150,49 @@ func TestNetHubSidebarKeepsThePageFromScrolling(t *testing.T) {
 		t.Errorf("the gap above the panel changed; the chrome constant counts it: %q", body)
 	}
 
-	// Chrome = header 57 + dock top padding 16 + (panel gap 8 + trigger 50) + dock
-	// bottom padding 16. The panel itself sits below the trigger, so it reserves the
-	// header, both dock paddings and the trigger's own row.
-	const chrome = 147
+	// The ceiling is built from MEASURED lengths, not a hand-counted constant.
+	//
+	// It used to be `calc(100dvh - 147px)`, where 147 was a sum a human maintained
+	// by hand: header 57 + dock padding 32 + gap 8 + trigger 50. The header is 60px
+	// now, not 57, so the constant was three pixels short and the page scrolled by
+	// exactly three pixels — the same class of error as the 134 that preceded it,
+	// and invisible in the stylesheet because the arithmetic looked right.
+	//
+	// --app-header-h and --dock-h are published by shell-windows.js from the real
+	// boxes, so a font, a language or a wrapped nav cannot put the sum out of date.
+	const ceiling = "calc(100dvh - var(--app-header-h, 60px) - var(--dock-h, 44px) - 90px)"
 	for _, m := range []struct{ name, rule string }{
 		{"the panel", body},
-		{"the collapsed rail", between(t, css, ".workspace-frame.nethub-collapsed .nethub-rail {", "}")},
-		{"the extension column's plate", between(t, css, ".extpanel-body {", "}")},
-		{"the extension column's collapsed rail", between(t, css, ".workspace-frame.ext-collapsed .extpanel-rail {", "}")},
+		{"the collapsed rail", between(t, css, ".workspace-frame.nethub-collapsed #nethub .nethub-rail {", "}")},
+		/* The archive wears the hosts column's frame, so its body is a .nethub-body
+		   and inherits the ceiling above; it restates it on its own class anyway,
+		   because a column that relies on an invariant should say so where it
+		   lives rather than only in the rule it happens to inherit. */
+		{"the archive column's body", between(t, css, ".extpanel-body {", "}")},
 	} {
-		want := fmt.Sprintf("calc(100dvh - %dpx)", chrome)
-		if !strings.Contains(m.rule, want) {
+		if !strings.Contains(m.rule, ceiling) {
 			t.Errorf("%s must cap itself at %q so it cannot push the page past the viewport; got %q",
-				m.name, want, m.rule)
+				m.name, ceiling, m.rule)
 		}
 	}
 
-	// One constant, four consumers. A second literal is how 134 and 147 coexisted;
-	// the extension column is a third column of the same frame and pays the same
-	// chrome, so both of its states take the literal rather than numbers of their
-	// own.
-	if n := strings.Count(css, fmt.Sprintf("calc(100dvh - %dpx)", chrome)); n != 4 {
-		t.Errorf("expected the panel, both rails and the extension column to share ONE chrome constant; found %d uses", n)
+	/* One ceiling, every consumer — and FEWER consumers since the archive started
+	   wearing the hosts column's frame. It used to be five spellings: the panel,
+	   the rail, the archive's own panel, its own rail, and the folding body. The
+	   archive shares .nethub-body and .nethub-rail now, so three cover everything
+	   they used to: the shared body, the shared rail, and the archive's own body
+	   (which restates it deliberately). A second spelling is how 134 and 147
+	   coexisted, so the count is pinned rather than bounded — an extra copy is the
+	   failure this guards, and a missing one means a column lost its cap. */
+	if n := strings.Count(css, ceiling); n != 3 {
+		t.Errorf("expected the shared panel, the shared rail and the archive body to carry the ONE ceiling; found %d uses", n)
 	}
-	if strings.Contains(css, "100dvh - 134px") {
-		t.Error("134px is the old hand-count; the chrome is 147px (header 57 + dock padding 32 + gap 8 + trigger 50)")
+	// The hand-counted form is gone, and must not come back: it is what drifted.
+	for _, stale := range []string{"100dvh - 134px", "100dvh - 147px"} {
+		if strings.Contains(css, stale) {
+			t.Errorf("%q is a hand-counted chrome sum; the header and dock depths are measured "+
+				"(--app-header-h / --dock-h), so a literal here drifts the moment either box changes", stale)
+		}
 	}
 
 	// The dock's min-height used to subtract a guessed 52px header from a percentage
@@ -844,11 +1269,17 @@ func TestBackdropIsAFixedDropInLayer(t *testing.T) {
 			t.Errorf("the backdrop should be %q; got %q", want, rule)
 		}
 	}
-	// z-index: -1 is what puts it BEHIND the page. A positioned element at auto
+	// A NEGATIVE rung is what puts it BEHIND the page. A positioned element at auto
 	// paints with the z-index:0 layer, above static content, so dropping this one
-	// declaration puts the artwork on top of the app.
-	if !strings.Contains(rule, "z-index: -1") {
-		t.Errorf("the backdrop needs z-index: -1 to stay behind the page; got %q", rule)
+	// declaration puts the artwork on top of the app. The number lives in
+	// z-layers.css; what is pinned here is that the rule reads that rung and that
+	// the rung is negative.
+	if !strings.Contains(rule, "z-index: var(--z-behind)") {
+		t.Errorf("the backdrop needs the behind rung to stay behind the page; got %q", rule)
+	}
+	ladder := readAssetLF(t, "static/css/z-layers.css")
+	if rungValue(t, ladder, "--z-behind") >= 0 {
+		t.Error("--z-behind must be negative, or the artwork paints over the page's static content")
 	}
 
 	// The artwork lives on body's layer, not the root's: body must not paint its
@@ -981,7 +1412,7 @@ func TestAddControlIsTheDrawersBottomAction(t *testing.T) {
 	if strings.Contains(between(t, entries, `id="sec-entries-body"`, `id="conn-grid"`), `id="conn-add"`) {
 		t.Error("the add action must not sit between the drawer's header and its list")
 	}
-	if !strings.Contains(between(t, entries, `id="conn-grid"`, `id="sec-sessions"`), `id="conn-add"`) {
+	if !strings.Contains(between(t, entries, `id="conn-grid"`, `id="ext-plate"`), `id="conn-add"`) {
 		t.Error("the add action belongs to the entries drawer, after its scrolling host list")
 	}
 

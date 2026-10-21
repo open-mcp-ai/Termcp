@@ -18,10 +18,23 @@
  * before the first caller's own script (see index.html).
  */
 function createBatchBar(cfg) {
-  var state = { mode: false, ids: new Set() };
+  /* `alwaysOn` starts the column in select mode with no way out of it, because
+   * that column has no mode to be in: its keys are flat controls on the header
+   * bar, and a card click there ticks rather than opens. Everything downstream —
+   * the ticked set, the count, the invert key, the menu's disabled state — is the
+   * same code either way; only the switch that enters the mode is gone. */
+  var state = { mode: !!cfg.alwaysOn, ids: new Set() };
 
   function el(id) { return id ? document.getElementById(id) : null; }
   function body() { return el(cfg.bodyId); }
+  /* Where the selecting class goes.
+   *
+   * It used to be the body, because the toolbar lived inside it. A column whose
+   * controls sit in its HEADER (the extension plate puts the batch keys on the
+   * title bar, beside the fold trigger) needs the class on an ancestor that
+   * contains both, or the CSS that reveals the keys would never match. cfg names
+   * that host; every other column keeps the body and its current behaviour. */
+  function selectingHost() { return el(cfg.selectingHostId) || body(); }
   function names() { return (cfg.names() || []).filter(function (n) { return !!n; }); }
   function count() {
     var n = 0;
@@ -40,6 +53,21 @@ function createBatchBar(cfg) {
      Hiding the glyph is the step a copy is most likely to miss, and without it
      the two share a 34px square. */
   function paintToggle(n) {
+    /* The count is painted BEFORE the early return, and that is the whole bug this
+       structure exists to prevent. It used to sit after `if (!key) return`, so any
+       caller with no mode switch — the dock and the archive both run alwaysOn with
+       `toggleId: null` — never reached it. Their count element kept whatever the
+       markup shipped ("0") and stayed `hidden`, so ticking a tab updated the
+       selection and left the readout saying zero forever. A number that never
+       changes is worse than no number: it actively contradicts the list beside it.
+     *
+     * The count is not a property of the switch. It is the size of the selection,
+     * and every caller that wants to show one passes a countId. */
+    var countEl = el(cfg.countId);
+    if (countEl) {
+      countEl.hidden = !(state.mode && n > 0);
+      countEl.textContent = String(n);
+    }
     var key = el(cfg.toggleId);
     if (!key) return;
     var showCount = state.mode && n > 0;
@@ -49,23 +77,34 @@ function createBatchBar(cfg) {
     key.setAttribute('aria-label', showCount
       ? t('batch.count.selected', { count: n })
       : t(cfg.selectKey));
-    var countEl = el(cfg.countId);
-    if (countEl) {
-      countEl.hidden = !showCount;
-      countEl.textContent = String(n);
-    }
   }
 
-  /* The invert key reports whether the whole list is ticked — it shows the state
-     it would flip, and its label follows. */
+  /* The invert key flips EVERY row, and its face reports the state it would leave
+     behind when the list is uniform.
+   *
+   * It used to be select-all / clear-all: press it with nothing ticked and the whole
+   * list lit up, press it again and the list went dark. That is a toggle of one
+   * boolean dressed as a list operation — it cannot express "these four, not those
+   * two", which is the thing a partial selection is FOR. Inverting per row does:
+   * whatever is ticked becomes unticked and vice versa, so a hand-picked subset can
+   * be flipped in one press instead of being thrown away.
+   *
+   * The label still names the SHORTCUT, not the outcome, because "invert" has no
+   * colloquial face: when everything is already ticked it reads as the clear it
+   * would perform, and otherwise as the select-all it looks like. Anything partial
+   * is just "invert". */
   function paintInvert(n) {
     var invert = el(cfg.invertId);
     if (!invert) return;
     var all = names();
     var allSelected = all.length > 0 && n === all.length;
+    var noneSelected = n === 0;
     invert.disabled = all.length === 0;
     invert.classList.toggle('all-checked', allSelected);
-    var label = allSelected ? t('section.batch.clearSelection') : t('section.batch.selectAll');
+    var label;
+    if (allSelected) label = t('section.batch.clearSelection');
+    else if (noneSelected) label = t('section.batch.selectAll');
+    else label = t('section.batch.invert');
     invert.title = label;
     invert.setAttribute('aria-label', label);
   }
@@ -86,8 +125,14 @@ function createBatchBar(cfg) {
     paintToggle(n);
     paintInvert(n);
     paintActions(n);
-    var b = body();
-    if (b) b.classList.toggle('has-selection', n > 0);
+    var host = selectingHost();
+    if (host) host.classList.toggle('has-selection', n > 0);
+    /* The caller's own pass, for the parts of a column's dressing the component
+       cannot know: a flat bar hides its action keys outright (there is no switch
+       to sit a disabled one beside), while a mode-switched row keeps them visible
+       and disabled. Called LAST so the caller sees the painted state, not the one
+       it is about to replace. */
+    if (cfg.onUpdate) cfg.onUpdate(n);
   }
 
   /* Paint the ticked look from the set, which is the source of truth: this both
@@ -124,21 +169,35 @@ function createBatchBar(cfg) {
   function repaint() { if (cfg.render) cfg.render(); }
 
   function setMode(on) {
+    if (cfg.alwaysOn) on = true;   /* there is no off state to switch to */
     state.mode = !!on;
     if (!state.mode) state.ids.clear();
-    var b = body();
-    if (b) b.classList.toggle(cfg.selectingClass, state.mode);
+    var host = selectingHost();
+    if (host) host.classList.toggle(cfg.selectingClass, state.mode);
     if (!state.mode) closeMenu();
     syncCards();
     refreshTitles();
     update();
   }
 
+  /* Ticking is a change to the SET, and the card's class is derived from it.
+   *
+   * The optional `tile` used to be the only thing that painted: passing it wrote the
+   * class on that one element and skipping it wrote nothing, so a caller that ticked
+   * by name left the set and the view disagreeing. The window header's monitor glyph
+   * does exactly that — it knows the window, not which tab in the dock represents it
+   * — and ticking from there changed the count while every tab stayed unmarked.
+   *
+   * A tile is now only a hint for the immediate repaint; the authoritative pass comes
+   * from syncCards, which finds the cards by the configured selector. That keeps one
+   * writer for the class and makes ticking by name work, which is what a second view
+   * of the same control needs. */
   function toggleSelection(name, tile) {
     if (!name) return;
     if (state.ids.has(name)) state.ids.delete(name);
     else state.ids.add(name);
     if (tile) tile.classList.toggle('batch-selected', state.mode && state.ids.has(name));
+    syncCards();
     update();
   }
 
@@ -167,17 +226,30 @@ function createBatchBar(cfg) {
     if (key) key.addEventListener('click', function (e) { e.stopPropagation(); setMode(!state.mode); });
 
     var invert = el(cfg.invertId);
-    if (invert) invert.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var all = names();
-      var allSelected = all.length > 0 && count() === all.length;
-      all.forEach(function (name) {
-        if (allSelected) state.ids.delete(name);
-        else state.ids.add(name);
-      });
-      syncCards();
-      update();
-    });
+    if (invert) {
+      /* Invert flips each name INDEPENDENTLY. It was a select-all/clear-all toggle:
+         one boolean dressed as a list operation, which cannot express "these four,
+         not those two" — the only reason to pick a subset by hand.
+         stopPropagation matters more than usual now that this key may be nested
+         inside the column's own trigger: without it, inverting would also fold the
+         archive shut. */
+      var doInvert = function (e) {
+        e.stopPropagation();
+        names().forEach(function (name) {
+          if (state.ids.has(name)) state.ids.delete(name);
+          else state.ids.add(name);
+        });
+        syncCards();
+        update();
+      };
+      /* A real <button> in every caller, so the keyboard is already handled: the
+         browser turns Enter and Space into a click. It was a <span role="button">
+         while the archive nested it inside the column's trigger (a button inside a
+         button is invalid HTML), and that is gone — re-adding a `keydown` handler
+         here would make one press invert TWICE, once directly and once through the
+         synthesized click. */
+      invert.addEventListener('click', doInvert);
+    }
 
     var caret = el(cfg.caretId);
     if (caret) caret.addEventListener('click', function (e) {
@@ -221,7 +293,10 @@ function createBatchBar(cfg) {
       if (e.key !== 'Escape') return;
       if (!state.mode && !menuOpen()) return;
       var t = e.target;
-      var b = body();
+      /* Tested against the selecting host, not the body: a column whose keys live
+         in its header would otherwise ignore Escape typed while one of those keys
+         has focus, and the mode would only be escapable from inside the list. */
+      var b = selectingHost();
       var loose = !t || t === document || t === document.body || t === document.documentElement;
       if (b && t && !loose && !b.contains(t)) return;
       e.stopImmediatePropagation();
@@ -233,12 +308,19 @@ function createBatchBar(cfg) {
   update();
   return {
     isOn: function () { return state.mode; },
+    count: count,
     has: function (name) { return state.mode && state.ids.has(name); },
     setMode: setMode,
     toggleSelection: toggleSelection,
     selected: selected,
-    deselect: function (name) { state.ids.delete(name); },
-    clear: function () { state.ids.clear(); },
+    /* `deselect` and `clear` repaint what they changed. Leaving that to the caller
+       made the set and the DOM two things to keep in step by hand, and one of the
+       four call sites forgot: the selection was gone from the set while the cards
+       stayed ticked, so the bar read "nothing selected" over a list of six
+       ticked rows. A mutator that leaves its own view stale is a trap, not an
+       optimisation. */
+    deselect: function (name) { state.ids.delete(name); syncCards(); update(); },
+    clear: function () { state.ids.clear(); syncCards(); update(); },
     update: update,
     syncCards: syncCards,
     refreshTitles: refreshTitles,

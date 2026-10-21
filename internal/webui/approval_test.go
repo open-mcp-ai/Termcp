@@ -784,43 +784,31 @@ func TestNotificationClickOpensItsSession(t *testing.T) {
 	}
 }
 
-// The mobile header's session switcher must list sessions from the server
-// snapshot, not the windows this browser happens to have open.
+// The header glyph does not carry a session menu at all any more.
 //
-// Listing windows made it a view of local client state: a session created from
-// another terminal (or another device) was in the server list and in the tile
-// grid, but had no window here, so it never showed up in the switcher. The
-// snapshot is already pushed over the WebSocket, so reading it keeps the menu
-// live without a second source of truth.
-func TestMobileSwitcherListsSessionsNotOpenWindows(t *testing.T) {
+// It used to open one on touch: a list of the SERVER's sessions, deliberately
+// read from the pushed snapshot rather than from this tab's windows, so a session
+// created elsewhere still appeared. The reasoning was sound and the placement was
+// not — the list hid behind a picture of a monitor, every window carried its own
+// copy, and raising a window is a click on its dock tab, which the dock already
+// lists. What is left of the glyph is a tick, so this pins that no session list
+// creeps back onto it: the dock owns "which window", and the glyph owns "pick this
+// one".
+func TestTheHeaderGlyphCarriesNoSessionMenu(t *testing.T) {
 	tv := readTerminalJS(t)
-	menu := between(t, tv, "function openSessionSwitchMenu(anchorBtn) {", "function setupMobileSessionSwitcher(win)")
-
-	if strings.Contains(menu, "liveSessionWindows()") {
-		t.Error("the switcher must read sessions, not the windows open in this tab")
+	if strings.Contains(tv, "function openSessionSwitchMenu(") {
+		t.Fatal("the session-switch menu is gone; the dock is the list of windows")
 	}
-	if !strings.Contains(menu, "window._lastSessionsSnapshot") {
-		t.Fatal("the switcher must read the pushed session snapshot")
+	// The snapshot-driven list was the good half of that menu. It has no home on
+	// the glyph now, and a half-restored copy would be a second source of truth for
+	// "which session" — the thing the dock and the tile grid already answer.
+	setup := between(t, tv, "function setupMobileSessionSwitcher", "\n}\n")
+	if strings.Contains(setup, "_lastSessionsSnapshot") {
+		t.Error("the glyph must not read the session snapshot: it ticks, it does not list")
 	}
-	// The filter must keep every session, not only the ones with a window here.
-	// Checking for the snapshot string alone is not enough: a filter that then
-	// drops window-less sessions reintroduces the bug while the name is intact.
-	if regexp.MustCompile(`filter\(function \(s\) \{\s*return s && s\.id &&`).MatchString(menu) {
-		t.Error("the session filter must not require an open window; that hid sessions created elsewhere")
-	}
-	// Opening from the switcher has to work for a session with no window yet,
-	// which is the case the old code silently dropped.
-	if !strings.Contains(menu, "focusSessionWindow(") {
-		t.Error("selecting a session must open or focus it through focusSessionWindow")
-	}
-	// Dead sessions stay listed so the switcher agrees with the tile grid.
-	if !strings.Contains(menu, "readOnly") {
-		t.Error("a dead session must open read-only rather than be omitted")
-	}
-	// The helper that filtered to windows is gone; a leftover copy would invite
-	// the same bug back.
-	if strings.Contains(tv, "function liveSessionWindows()") {
-		t.Error("liveSessionWindows is obsolete and must not be reintroduced")
+	// And the glyph is still the tick, so removing the menu did not remove the control.
+	if !strings.Contains(setup, "_dockBatch.toggleSelection") {
+		t.Error("the glyph must still tick the window through the shared component")
 	}
 }
 

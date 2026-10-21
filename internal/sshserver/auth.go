@@ -1,8 +1,8 @@
 package sshserver
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
@@ -78,14 +78,29 @@ func (s *Server) RevokeClientConfig(user string) {
 	s.mu.Unlock()
 }
 
+// generateHostKeyPEM mints the ephemeral host key the in-process server presents.
+//
+// ed25519 rather than RSA-2048 because the key type is the largest single cost of
+// a loopback handshake. The client is obliged to verify the server's KEX signature
+// (x/crypto/ssh handshake.go), which is not skippable from this side: measured
+// ~845us for RSA-2048 against ~59us for ed25519, and end-to-end that is 1.55ms per
+// connection down to 0.72ms. Minting is ~23ms for RSA per process start and
+// microseconds for ed25519.
+//
+// The key is ephemeral, generated per process, and never verified against anything
+// -- clients authenticate with a one-time password, not against this key -- so RSA's
+// longer key adds cost here and no trust.
 func generateHostKeyPEM() ([]byte, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	b := x509.MarshalPKCS1PrivateKey(key)
+	b, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
 	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
+		Type:  "PRIVATE KEY",
 		Bytes: b,
 	}
 	return pem.EncodeToMemory(block), nil

@@ -21,12 +21,22 @@ func TestSessionTabbarStateTransitions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	/* The dock counts the sessions a plate would show, and that filter is
+	   isHiddenSession — sessions.js's rule, which loads AFTER shell-windows.js in
+	   the page. Spliced from the real module rather than restated here: a local
+	   copy would keep passing if the shipped rule changed, and the whole point of
+	   the count is that an extension's own connection is not a user session. */
+	sessions := readAssetLF(t, "static/js/sessions.js")
+	hidden := between(t, sessions, "function isHiddenSession(", "\n}\n")
+	if err := os.WriteFile(filepath.Join(dir, "hidden.js"), []byte(hidden+"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	script := `
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const dir = path.dirname(process.argv[1]);
-const sources = ['util.js', 'shell-windows.js'].map(name => fs.readFileSync(path.join(dir, name), 'utf8'));
+const sources = ['util.js', 'shell-windows.js', 'hidden.js'].map(name => fs.readFileSync(path.join(dir, name), 'utf8'));
 
 // Only the browser's DOM and rendering boundaries are simulated. All state
 // transitions, tab listeners, window lookup and z-order use the real modules.
@@ -34,6 +44,7 @@ function element(id = '', className = '') {
   const node = { id, className, children: [], parentNode: null, attrs: {}, listeners: {},
     style: { setProperty(k, v) { this[k] = v; } },
     setAttribute(k, v) { this.attrs[k] = String(v); },
+    removeAttribute(k) { delete this.attrs[k]; },
     getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; },
     addEventListener(k, fn) { this.listeners[k] = fn; },
     appendChild(child) {
@@ -45,6 +56,14 @@ function element(id = '', className = '') {
       this.children = this.children.filter(x => x !== child); child.parentNode = null;
     },
     remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+    insertBefore(child, ref) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i < 0) this.children.push(child); else this.children.splice(i, 0, child);
+      child.parentNode = this;
+      return child;
+    },
+    get firstChild() { return this.children[0] || null; },
     querySelectorAll(selector) {
       const out = [];
       const matches = child => selector.startsWith('.') && selector.slice(1).split('.').every(c => child.classList.contains(c));
@@ -69,20 +88,34 @@ function element(id = '', className = '') {
   };
   Object.defineProperty(node, 'innerHTML', { set(html) {
     node.children.slice().forEach(child => node.removeChild(child));
-    for (const match of html.matchAll(/class="([^"]+)"/g)) node.appendChild(element('', match[1]));
+    // Both attributes, because generated markup carries ids as well as classes
+    // (the dock's own count badge is created this way).
+    for (const tag of html.matchAll(/<[a-z]+\b([^>]*)>/g)) {
+      const cls = /class="([^"]+)"/.exec(tag[1]);
+      const id = /id="([^"]+)"/.exec(tag[1]);
+      node.appendChild(element(id ? id[1] : '', cls ? cls[1] : ''));
+    }
   } });
   return node;
 }
 
 function fixture() {
   const body = element(), ids = {};
-  for (const id of ['shell-windows-container', 'pane-workspace', 'pane-grid', 'session-tabbar',
-    'session-tabs-scroll', 'session-tabbar-actions', 'session-tabbar-grip']) ids[id] = element(id);
+  // The dock replaced the floating tab bar: same ids for the tab strip and the
+  // action cluster, but they now live in #sessdock, and the grip is gone (the
+  // dock is pinned, so there is nothing to drag).
+  for (const id of ['shell-windows-container', 'pane-workspace', 'pane-grid', 'sessdock',
+    'session-tabs-scroll', 'session-tabbar-actions']) ids[id] = element(id);
   body.appendChild(ids['shell-windows-container']);
   body.appendChild(ids['pane-workspace']);
   ids['pane-workspace'].appendChild(ids['pane-grid']);
-  body.appendChild(ids['session-tabbar']);
-  ['session-tabs-scroll', 'session-tabbar-actions', 'session-tabbar-grip'].forEach(id => ids['session-tabbar'].appendChild(ids[id]));
+  body.appendChild(ids['sessdock']);
+  // The dock is a band in the page: the workspace above it is what flexes, so
+  // the bar's note shares the row with the tabs rather than covering them.
+  const dockBar = element('sessdock-bar', 'sessdock-bar');
+  ids['sessdock-bar'] = dockBar;
+  ids['sessdock'].appendChild(dockBar);
+  ['session-tabs-scroll', 'session-tabbar-actions'].forEach(id => dockBar.appendChild(ids[id]));
   const document = {
     body, documentElement: element(),
     getElementById(id) {
@@ -100,6 +133,10 @@ function fixture() {
     localStorage: { getItem() { return null; }, setItem() {} },
     matchMedia() { return { matches: false }; }, addEventListener() {},
     requestAnimationFrame() { return 1; }, applyI18n() {}, onLangChange() {}, t: key => key,
+    /* tCount is i18n.js's; the note under test is built with it, so a stub that
+       keeps the key and the number makes the assertion readable without pulling
+       the whole catalog into the probe. */
+    tCount: (one, other, p) => (p.count === 1 ? one : other) + ':' + p.count,
     openShellWindow(label, sid, pos, opts) { openRequests.push({ label, sid, pos, opts }); },
     lockWindowReadonly(w) { w.readonlyApplied = true; }
   };
@@ -187,6 +224,50 @@ for (const mode of ['float', 'tile']) {
   eq(mode + ': unknown session opens with original options', f.openRequests,
     [{ label: 'fixture-new', sid: 'session-new', pos: null, opts: { readOnly: true } }]);
 }
+
+/* The empty row is a LABEL, never a key.
+ *
+ * The dock used to fold a session plate up from underneath, so the note could be
+ * the way back to it. That layer is gone, and the note stays a plain label: there
+ * is nothing behind the row to open, so dressing it as a button would promise a
+ * list the page does not have.
+ *
+ * What "empty" means changed with the dock's data source. It used to mean "no open
+ * windows"; now it means no ENTRY — no running session on the server and no window
+ * in this page. The two cases below pin the new meaning from both sides: a page
+ * whose only session belongs to a subsystem is empty (that session is the extension
+ * column's), and a page with a live session and no window is not. */
+{
+  const f = fixture();
+  f.ctx.window._lastSessionsSnapshot = [
+    { id: 's1', status: 'running', namespace: 'ext:hub' }
+  ];
+  f.ctx.refreshSessionTabbar();
+  const note = f.document.getElementById('sessdock-empty');
+  eq('a subsystem-only session: the note says so', note.getAttribute('data-i18n'), 'dock.empty');
+  eq('the note is not a key', note.getAttribute('role'), null);
+  eq('no badge is created for a layer that does not exist', f.document.getElementById('sessdock-count'), null);
+  // It sits in the bar, before the strip: the strip is a tablist and may hold
+  // nothing but tabs.
+  eq('the note is not inside the tablist', note.parentNode === f.ids['sessdock-bar'], true);
+  eq('the note precedes the strip', f.ids['sessdock-bar'].children.indexOf(note),
+    f.ids['sessdock-bar'].children.indexOf(f.ids['session-tabs-scroll']) - 1);
+
+  // A live session with no window here is NOT an empty dock: it is the whole point
+  // of listing sessions rather than windows.
+  f.ctx.window._lastSessionsSnapshot = [
+    { id: 's2', name: 'agent', status: 'running', created_at: 1 }
+  ];
+  f.ctx.refreshSessionTabbar();
+  eq('a live session with no window removes the note', f.document.getElementById('sessdock-empty'), null);
+  eq('a live session with no window is a tab', f.ids['session-tabs-scroll'].children.length, 1);
+
+  // One window: the note goes, and the tab is the row's whole content.
+  const f2 = fixture();
+  f2.win(1, 'session-one');
+  eq('a window removes the note', f2.document.getElementById('sessdock-empty'), null);
+}
+
 if (failures) process.exit(1);
 console.log('PASS session tab bar state transitions');
 `

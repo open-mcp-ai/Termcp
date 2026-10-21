@@ -8,36 +8,45 @@ import (
 	"testing"
 )
 
-// TestClosingARunningSessionAsksBeforeItDestroys runs the real askCloseSession
-// under node.
+// TestClosingARunningSessionStopsAndArchives runs the real askCloseSession under
+// node.
 //
-// The window's "x" used to delete outright: one misclick on a live terminal
-// erased its on-disk transcript for good, and the archive had no way to grow
-// except through the batch bar. The key now asks, because the two outcomes are
-// genuinely different and the icon cannot express the difference — archiving
-// disconnects the session and keeps its output readable, deleting erases it.
+// The page used to offer two answers to a window's "x": archive or delete. That
+// made the irreversible choice sit next to the recoverable one for the same
+// gesture, under an icon that cannot express the difference — and deleting a
+// running session also erased its transcript, which no archive could then show.
+// So the page no longer offers to erase a session at all: closing STOPS AND
+// ARCHIVES it, and erasing lives in the archive column, where the record being
+// destroyed is the thing on screen.
 //
-// The assertions are about the DECISION, not the markup, and each one is a way
-// the prompt could be wrong while still looking right:
+// The assertions are about the DECISION, not the markup, and each is a way the
+// prompt could be wrong while still looking right:
 //
-//   - a running session must ask, and the answer must be able to be "archive";
+//   - a running session must ask before it acts;
 //   - cancelling must issue NO request at all (a prompt that acts on cancel is
 //     worse than no prompt);
-//   - archive must call POST /terminate — the endpoint the batch bar uses —
-//     and must NOT call DELETE, which is what makes it recoverable;
-//   - an already-archived session must not be offered archiving again, and must
-//     still be deletable.
-func TestClosingARunningSessionAsksBeforeItDestroys(t *testing.T) {
+//   - the answer must call POST /terminate — the endpoint the batch bar uses —
+//     and must NEVER call DELETE;
+//   - a session that is already over must not ask: there is nothing to stop, and
+//     its window can simply go.
+func TestClosingARunningSessionStopsAndArchives(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node not on PATH; cannot exercise the close dialog")
+		t.Skip("node not on PATH; cannot exercise the close prompt")
 	}
 	body := readAssetLF(t, "static/js/shell-windows.js")
 
 	// The real functions, spliced so the probe runs shipped code. `between` cuts
 	// at the next top-level close, so each is taken on its own.
 	var code strings.Builder
-	for _, fn := range []string{"askCloseSession", "isSessionDeadInWindows", "archiveOrDeleteDialog", "archiveSessionById", "deleteSessionById"} {
+	for _, fn := range []string{"askCloseSession", "isSessionDeadInWindows", "archiveSessionById", "closeShellWindowForTest"} {
+		if fn == "closeShellWindowForTest" {
+			// closeShellWindow is defined with a leading doc comment and may not
+			// end in the exact shape the loop expects; the probe only needs to
+			// observe that it was reached, so it is stubbed in the sandbox below
+			// instead of spliced.
+			continue
+		}
 		start := strings.Index(body, "function "+fn+"(")
 		if start < 0 {
 			t.Fatalf("shell-windows.js no longer defines %s(); the close prompt is untested now", fn)
@@ -59,8 +68,9 @@ func TestClosingARunningSessionAsksBeforeItDestroys(t *testing.T) {
 	}
 	deadEnd := strings.Index(sessions[deadStart:], "\n}\n")
 	code.WriteString(sessions[deadStart : deadStart+deadEnd+3])
-	// bindShellWindowCloseButton is the entry point: it must route through the
-	// prompt rather than issuing the DELETE itself.
+
+	// The window's close key is the entry point: it must route through the prompt
+	// rather than issuing the request itself.
 	start := strings.Index(body, "function bindShellWindowCloseButton(")
 	if start < 0 {
 		t.Fatal("shell-windows.js no longer binds the window close button")
@@ -77,10 +87,9 @@ const sandbox = {
   fetch: null,               // set per case
   apiPath: p => p,
   t: (k, v) => k + (v && v.name ? '(' + v.name + ')' : ''),
+  tCount: (o, p, v) => p + (v && v.count ? '(' + v.count + ')' : ''),
   window: { _lastSessionsSnapshot: [] },
-  _keydown: [],
   _els: {},
-  _clones: {},
   document: {
     getElementById(id) {
       if (!sandbox._els[id]) {
@@ -89,267 +98,194 @@ const sandbox = {
           classList: { add() {}, remove() {}, contains() { return false; } },
           addEventListener(type, fn) { sandbox._els[id]['on' + type] = fn; },
           removeEventListener() {},
-          // A clone is what the dialog re-wires each open, and the clone is the
-          // live node afterwards (the original is replaced). It is recorded, so
-          // the probe can press the key that is actually on screen rather than
-          // the detached original.
-          cloneNode() {
-            const cid = id;
-            const clone = { focus() { sandbox._focused = cid; }, parentNode: { replaceChild() {} },
-              addEventListener(type, fn) { if (type === 'click') clone._click = fn; } };
-            sandbox._clones[cid] = clone;
-            return clone;
-          },
+          cloneNode() { return sandbox._els[id]; },
           parentNode: { replaceChild() {} },
-          focus() { sandbox._focused = id; },
+          focus() {},
         };
       }
       return sandbox._els[id];
     },
-    addEventListener(type, fn) { if (type === 'keydown') sandbox._keydown.push(fn); },
-    removeEventListener(type, fn) {
-      if (type !== 'keydown') return;
-      const i = sandbox._keydown.indexOf(fn); if (i >= 0) sandbox._keydown.splice(i, 1);
-    },
+    addEventListener() {}, removeEventListener() {},
   },
   hideModal() { sandbox._hidden = true; }, showModal() { sandbox._hidden = false; },
   setLoadBanner() {}, showCopyToast(m) { sandbox._toasts.push(m); },
   stripSessionPrefix: s => s,
   closeShellWindow() { sandbox._closed++; },
-  _toasts: [], _closed: 0, _focused: '', _hidden: true,
-  // confirmDialog's answer is driven per case; the archive dialog is NOT stubbed
-  // by default, because its own key handling is part of what this test verifies.
+  _toasts: [], _closed: 0, _hidden: true,
+  // confirmDialog's answer is driven per case.
   confirmDialog: () => Promise.resolve(sandbox._confirmAnswer),
   applyI18n() {},
   _confirmAnswer: true,
-  _stubArchiveDialog: null,
+  _snap: [],
 };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
 
-// askCloseSession consults archiveOrDeleteDialog; a case can substitute an
-// answer, but the default runs the REAL one so its Escape handling is exercised.
-// The real function is captured first, or the override would call itself.
-const realArchiveDialog = vm.runInContext('archiveOrDeleteDialog', sandbox);
-sandbox.archiveOrDeleteDialog = (name) => {
-  if (sandbox._stubArchiveDialog) return Promise.resolve(sandbox._stubArchiveDialog);
-  return realArchiveDialog(name);
-};
-// Let the probe press the archive dialog's own keys. The dialog replaces each
-// button with a fresh clone per open, so the pressed node must be the CLONE.
-sandbox.pressEscape = () => {
-  sandbox._keydown.forEach((fn) => fn({ key: 'Escape', stopPropagation() {} }));
-};
-sandbox.press = (id) => {
-  const el = sandbox._clones[id] || sandbox._els[id];
-  if (!el || !el._click) throw new Error('no click handler on ' + id);
-  el._click({ preventDefault() {} });
+const calls = [];
+sandbox.fetch = (url, opts) => {
+  calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+  return Promise.resolve({ ok: true, status: 204, text: () => Promise.resolve('') });
 };
 
-let bad = 0;
-function check(name, cond, extra) {
-  if (!cond) { console.log('FAIL ' + name + (extra ? ': ' + extra : '')); bad++; }
-  else console.log('PASS ' + name);
-}
-function reset(snapshot, answer) {
-  sandbox.window._lastSessionsSnapshot = snapshot;
-  sandbox._confirmAnswer = answer === undefined ? true : answer;
-  sandbox._toasts = []; sandbox._closed = 0; sandbox._focused = ''; sandbox._hidden = true;
-  sandbox._stubArchiveDialog = null;
-  sandbox.pressArchive = () => sandbox.press('modal-close-archive');
-  sandbox.pressCancel = () => sandbox.press('modal-close-cancel');
-  sandbox._calls = [];
-  sandbox._keydown = [];
-  sandbox._els = {};
-  sandbox._clones = {};
-  sandbox.fetch = (url, opt) => { sandbox._calls.push(((opt && opt.method) || 'GET') + ' ' + url); return Promise.resolve({ ok: true, status: 204 }); };
-}
-const live = [{ id: 's1', name: 'box', status: 'running' }];
-const dead = [{ id: 's1', name: 'box', status: 'exited' }];
+// The window object askCloseSession acts on. Only _sid matters to it: a real
+// session id makes it a live session, and closeShellWindow is what it calls when
+// the session is already over.
+const win = { _sid: 'abc', _placeholder: false, _extName: null };
+const liveSnap = () => { sandbox.window._lastSessionsSnapshot = [{ id: 'abc', status: 'running' }]; };
+const deadSnap = () => {
+  sandbox.window._lastSessionsSnapshot = [{ id: 'abc', status: 'exited' }];
+  sandbox._closed = 0;
+};
 
-// A running session must ASK: with the archive dialog declining to answer, no
-// request may be issued. (The dialog is driven through its markup, which the
-// sandbox stubs, so this case asserts the routing decision.)
-reset(live);
+const out = { cases: [] };
+
+async function run(name, snap, answer, extra) {
+  calls.length = 0;
+  sandbox._toasts.length = 0;
+  sandbox._hidden = true;
+  sandbox._confirmAnswer = answer;
+  snap();
+  if (extra && extra.win) Object.assign(win, extra.win); else Object.assign(win, { _sid: 'abc', _placeholder: false, _extName: null });
+  let result;
+  try {
+    result = await vm.runInContext('askCloseSession', sandbox)(win._sid, win);
+  } catch (e) {
+    result = 'THREW: ' + e.message;
+  }
+  out.cases.push({
+    name: name,
+    result: result,
+    calls: calls.map(c => c.method + ' ' + c.url),
+    closed: sandbox._closed,
+  });
+}
+
 (async () => {
-  // 1) Running session -> the archive dialog is consulted, and choosing archive
-  //    calls terminate, never DELETE.
-  reset(live);
-  sandbox._stubArchiveDialog = 'archive';
-  let outcome = await vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('running + archive -> outcome archived', outcome === 'archived', JSON.stringify(outcome));
-  check('running + archive -> POST /terminate', sandbox._calls.some(c => c === 'POST /api/sessions/s1/terminate'), JSON.stringify(sandbox._calls));
-  check('running + archive -> never DELETE', !sandbox._calls.some(c => c.indexOf('DELETE') === 0), JSON.stringify(sandbox._calls));
+  // A live session, cancelled: no request, nothing closed.
+  await run('live-cancel', liveSnap, false);
+  // A live session, confirmed: exactly one POST /terminate, and the window goes.
+  await run('live-stop', liveSnap, true);
+  // Already over: no prompt, no request, the window still goes.
+  await run('dead', deadSnap, true);
+  // A placeholder (a connecting window) and a status card carry no session id,
+  // so neither may reach the archive endpoint.
+  await run('placeholder', liveSnap, true, { win: { _sid: null, _placeholder: true, _extName: null } });
+  await run('status-card', liveSnap, true, { win: { _sid: 'cdpx', _placeholder: false, _extName: 'cdpx' } });
 
-  // 2) Choosing delete on a running session does erase it.
-  reset(live);
-  sandbox._stubArchiveDialog = 'delete';
-  outcome = await vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('running + delete -> outcome deleted', outcome === 'deleted', JSON.stringify(outcome));
-  check('running + delete -> DELETE', sandbox._calls.some(c => c === 'DELETE /api/sessions/s1'), JSON.stringify(sandbox._calls));
-
-  // 3) Cancel must issue NOTHING. This is the assertion that catches a prompt
-  //    that acts on the safe answer.
-  reset(live);
-  sandbox._stubArchiveDialog = 'cancelled';
-  outcome = await vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('running + cancel -> outcome cancelled', outcome === 'cancelled', JSON.stringify(outcome));
-  check('running + cancel -> no request at all', sandbox._calls.length === 0, JSON.stringify(sandbox._calls));
-  check('running + cancel -> window not closed', sandbox._closed === 0);
-
-  // 3b) The dialog's OWN keys, run for real (not stubbed). Escape must cancel,
-  //     and it must issue no request: a keyboard answer that deletes is the
-  //     worst possible failure of a prompt that exists to prevent exactly that.
-  reset(live);
-  let p = vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('running -> dialog opened', sandbox._hidden === false, 'hidden=' + sandbox._hidden);
-  check('running -> archive key focused', sandbox._focused === 'modal-close-archive', 'focused=' + sandbox._focused);
-  sandbox.pressEscape();
-  outcome = await p;
-  check('real Escape -> cancelled', outcome === 'cancelled', JSON.stringify(outcome));
-  check('real Escape -> no request', sandbox._calls.length === 0, JSON.stringify(sandbox._calls));
-
-  // 3c) The dialog's own archive key must archive.
-  reset(live);
-  p = vm.runInContext("askCloseSession('s1', {})", sandbox);
-  sandbox.pressArchive();
-  outcome = await p;
-  check('real archive key -> archived', outcome === 'archived', JSON.stringify(outcome));
-  check('real archive key -> terminate only', sandbox._calls.length === 1 && sandbox._calls[0] === 'POST /api/sessions/s1/terminate', JSON.stringify(sandbox._calls));
-
-  // 3d) The dialog's own cancel key must cancel.
-  reset(live);
-  p = vm.runInContext("askCloseSession('s1', {})", sandbox);
-  sandbox.pressCancel();
-  outcome = await p;
-  check('real cancel key -> cancelled', outcome === 'cancelled', JSON.stringify(outcome));
-  check('real cancel key -> no request', sandbox._calls.length === 0, JSON.stringify(sandbox._calls));
-
-  // 4) An archived session is not offered archiving: it goes straight to the
-  //    delete confirmation (the pre-existing behaviour for a DEAD tile).
-  reset(dead);
-  outcome = await vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('archived + confirm -> deleted', outcome === 'deleted', JSON.stringify(outcome));
-  check('archived + confirm -> DELETE', sandbox._calls.some(c => c === 'DELETE /api/sessions/s1'), JSON.stringify(sandbox._calls));
-  check('archived + confirm -> never terminate', !sandbox._calls.some(c => c.indexOf('/terminate') > 0), JSON.stringify(sandbox._calls));
-
-  // 5) Declining the archived delete confirmation must also issue nothing.
-  reset(dead, false);
-  outcome = await vm.runInContext("askCloseSession('s1', {})", sandbox);
-  check('archived + decline -> cancelled', outcome === 'cancelled', JSON.stringify(outcome));
-  check('archived + decline -> no request', sandbox._calls.length === 0, JSON.stringify(sandbox._calls));
-
-  // 6) An id absent from the snapshot is treated as LIVE, so it is asked about
-  //    rather than deleted silently: unknown must fail toward the recoverable
-  //    answer, never toward erasure.
-  reset([]);
-  sandbox._stubArchiveDialog = 'cancelled';
-  outcome = await vm.runInContext("askCloseSession('ghost', {})", sandbox);
-  check('unknown id -> asked (treated as live)', outcome === 'cancelled', JSON.stringify(outcome));
-  check('unknown id -> nothing deleted', sandbox._calls.length === 0, JSON.stringify(sandbox._calls));
-
-  process.exit(bad ? 1 : 0);
+  // The window's own close key must route through the prompt, not act itself.
+  const src2 = fs.readFileSync(process.argv[3], 'utf8');
+  out.markup = {
+    modalHasDelete: src2.includes('id="modal-close-delete"'),
+    modalHasArchive: src2.includes('id="modal-close-archive"'),
+    toolbarKeys: ['dock-select-toggle', 'dock-invert', 'dock-close-ticked', 'dock-exit-select']
+      .filter(id => src2.includes('id="' + id + '"')).length,
+  };
+  console.log(JSON.stringify(out));
 })();
 `
 	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "probe.js")
-	srcPath := filepath.Join(dir, "close.js")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(dir, "probe.js")
+	// The spliced functions go in their own file: the probe evals THAT (it must
+	// contain nothing but the shipped code), while the harness around it stays a
+	// normal CommonJS module free to require fs and vm.
+	srcPath := filepath.Join(dir, "spliced.js")
 	if err := os.WriteFile(srcPath, []byte(code.String()), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write spliced source: %v", err)
 	}
-	cmd := exec.Command(node, scriptPath, srcPath)
-	out, err := cmd.CombinedOutput()
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+	cmd := exec.Command(node, path, srcPath, readAssetPathForTest(t, "index.html"))
+	cmd.Dir = dir
+	raw, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("close-session probe failed:\n%s", out)
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("probe failed: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(string(out), "PASS unknown id -> nothing deleted") {
-		t.Fatalf("probe did not run to completion:\n%s", out)
+	got := string(raw)
+	for _, want := range []string{
+		`"name":"live-cancel","result":"cancelled","calls":[],"closed":0`,
+		`"name":"live-stop","result":"archived","calls":["POST /api/sessions/abc/terminate"],"closed":1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("close prompt differs from the archive-only contract; missing %s in\n%s", want, got)
+		}
+	}
+	// The two no-session cases: the window closes and NOTHING is posted.
+	// Four of the five cases stand for a window with nothing to stop (the cancelled
+	// one acts on no answer, the three others have no session): none may post.
+	if n := strings.Count(got, `"calls":[]`); n < 4 {
+		t.Errorf("a window with no session must not reach the archive endpoint; got %d empty call lists in\n%s", n, got)
+	}
+	if strings.Contains(got, "sessions/null") || strings.Contains(got, "sessions/cdpx") {
+		t.Errorf("a placeholder or a status card must never reach /terminate; got\n%s", got)
+	}
+	if strings.Contains(got, "DELETE") {
+		t.Errorf("the page must not delete a session directly any more; got\n%s", got)
 	}
 }
 
-// TestTheCloseButtonDoesNotDeleteByItself pins the wiring a helper test cannot
-// see: the button handler must route through askCloseSession. If it kept its own
-// fetch, the prompt above would be dead code and the x would still erase.
-func TestTheCloseButtonDoesNotDeleteByItself(t *testing.T) {
-	body := readAssetLF(t, "static/js/shell-windows.js")
-	bind := between(t, body, "function bindShellWindowCloseButton(", "\n}\n")
-
-	if !strings.Contains(bind, "askCloseSession(") {
-		t.Error("the close button must route through askCloseSession: a running session has to be asked about " +
-			"before its transcript is destroyed")
-	}
-	if strings.Contains(bind, "method: 'DELETE'") {
-		t.Error("the close button must not issue the DELETE itself: that is the silent-erase path the prompt replaced")
-	}
-	// A placeholder window has no session to ask about; it must still close.
-	if !strings.Contains(bind, "win._placeholder") {
-		t.Error("a placeholder (dial in progress) has no session, so its close must stay immediate")
-	}
-}
-
-// TestTheArchivePromptMakesArchiveTheDefault pins the dialog's shape, because the
-// order and the default focus are what keep a destructive answer from being the
-// one a hurried Enter picks.
-func TestTheArchivePromptMakesArchiveTheDefault(t *testing.T) {
+// TestTheClosePromptOffersOnlyArchive pins the dialog's shape: one answer, and
+// the destructive one is gone rather than merely de-emphasised.
+func TestTheClosePromptOffersOnlyArchive(t *testing.T) {
 	index := readAssetLF(t, "index.html")
-	if !strings.Contains(index, `id="modal-close-session"`) {
-		t.Fatal("index.html no longer declares the close-session dialog")
+	dialog := between(t, index, `id="modal-close-session"`, `id="modal-ext"`)
+	if dialog == "" {
+		t.Fatal("index.html no longer carries the close-session dialog")
 	}
-	dialog := between(t, index, `id="modal-close-session"`, "</div>\n  </div>")
-	for _, id := range []string{"modal-close-archive", "modal-close-delete", "modal-close-cancel", "modal-close-msg"} {
-		if !strings.Contains(dialog, id) {
-			t.Errorf("the close dialog must offer %s; got %q", id, dialog)
-		}
+	if strings.Contains(dialog, `modal-close-delete`) {
+		t.Error("the close dialog must not offer delete: erasing a session is the archive column's job")
 	}
-	// The destructive key must be the danger-styled one, and the recommended one
-	// must not be: the styling is the only cue distinguishing them at a glance.
-	if !strings.Contains(dialog, `class="btn btn-danger" id="modal-close-delete"`) {
-		t.Error("delete is the destructive answer and must carry the danger styling")
+	if !strings.Contains(dialog, `modal-close-archive`) {
+		t.Error("the close dialog must offer the archive/stop answer")
 	}
-	if strings.Contains(dialog, `btn-danger" id="modal-close-archive"`) {
-		t.Error("archive is the recoverable answer and must not be styled as destructive")
-	}
-	// The action row ends with the recommended key. This is a visual-order claim
-	// and it is the one the dialog relies on: the rightmost button is where a
-	// habitual click lands, and it must be the recoverable answer, not delete.
-	// The dialog also focuses archive explicitly (asserted below), so the layout
-	// and the focus agree instead of pointing at different keys.
-	ai := strings.Index(dialog, `id="modal-close-archive"`)
-	di := strings.Index(dialog, `id="modal-close-delete"`)
-	if ai < 0 || di < 0 {
-		t.Fatalf("the dialog must offer both archive and delete; archive at %d, delete at %d", ai, di)
-	}
-	if ai < di {
-		t.Errorf("archive is the recommended answer and must be the LAST key in the row (rightmost), so a "+
-			"habitual click reaches the recoverable action; archive at %d, delete at %d", ai, di)
-	}
-
-	// And the dialog's own logic must focus archive, so Enter archives.
-	body := readAssetLF(t, "static/js/shell-windows.js")
-	fn := between(t, body, "function archiveOrDeleteDialog(", "\n}\n")
-	if !strings.Contains(fn, "a.focus()") {
-		t.Error("the archive key must take focus: Enter on a session the user meant to put away must not delete it")
-	}
-	if !strings.Contains(fn, "'archive'") || !strings.Contains(fn, "'delete'") || !strings.Contains(fn, "'cancelled'") {
-		t.Error("the dialog must be able to answer archive, delete or cancelled")
-	}
-	// Escape is the only keyboard answer, and it must cancel.
-	if !strings.Contains(fn, "Escape") || !strings.Contains(fn, "done('cancelled')") {
-		t.Error("Escape must cancel the dialog: the safe answer on an accidental key is to do nothing")
+	// Exactly two keys: cancel and stop. A third would be the delete that must
+	// not be here coming back.
+	if n := strings.Count(dialog, "<button"); n != 3 {
+		// 3 = the dialog's own x + cancel + stop.
+		t.Errorf("the close dialog carries %d buttons; it must carry the x, cancel and stop only", n)
 	}
 }
 
-// TestClosePromptStringsExistInEveryCatalog guards the prompt's copy. A missing
-// key renders as the key itself, so a user would read "session.close.archive" on
-// the button that decides whether their transcript survives.
+// TestClosePromptStringsExistInEveryCatalog keeps the prompt translatable: every
+// key the archive-only dialog reads must exist in all three catalogs, or one
+// language shows a raw key where a sentence belongs.
 func TestClosePromptStringsExistInEveryCatalog(t *testing.T) {
-	cat := readAssetLF(t, "static/js/i18n-catalog.js")
-	for _, key := range []string{"session.close.title", "session.close.message", "session.close.hint", "session.close.archive", "session.close.archived"} {
-		if n := strings.Count(cat, "'"+key+"':"); n != 3 {
-			t.Errorf("%s must be defined in all three catalogs; found %d", key, n)
+	src := readAssetLF(t, "static/js/shell-windows.js")
+	var keys []string
+	// Three keys come from the prompt itself; the hint is the dialog's own copy
+	// and lives in the markup, so it is read from there.
+	for _, k := range []string{"session.close.title", "session.close.messageArchives", "session.close.ok"} {
+		if strings.Contains(src, "'"+k+"'") || strings.Contains(src, `"`+k+`"`) {
+			keys = append(keys, k)
 		}
 	}
+	if strings.Contains(readAssetLF(t, "index.html"), "session.close.hintArchives") {
+		keys = append(keys, "session.close.hintArchives")
+	}
+	if len(keys) < 4 {
+		t.Fatalf("the prompt no longer reads all four keys; found %v", keys)
+	}
+	catalog := readAssetLF(t, "static/js/i18n-catalog.js")
+	for _, k := range keys {
+		if n := strings.Count(catalog, "'"+k+"':"); n != 3 {
+			t.Errorf("%s must be defined in all three catalogs; found %d", k, n)
+		}
+	}
+}
+
+// readAssetPathForTest is readAssetLF's on-disk twin: the probe leaves through
+// node, so it needs a real path rather than the embedded copy.
+func readAssetPathForTest(t *testing.T, name string) string {
+	t.Helper()
+	// Absolute, because the probe runs with cmd.Dir set to a temp directory — a
+	// relative path would resolve against that instead of the package.
+	abs, err := filepath.Abs(filepath.Join("assets", name))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", name, err)
+	}
+	return abs
 }

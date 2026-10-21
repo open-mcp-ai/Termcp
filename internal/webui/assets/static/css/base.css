@@ -7,7 +7,17 @@
      exactly the moment it is the point of the page. */
   html { background: var(--bg-canvas); }
   html, body { margin: 0; min-height: 100%; font-family: var(--font-sans); color: var(--text-primary); }
-  body { letter-spacing: .005em; }
+  /* The page is a COLUMN: the header, the workspace row, and the dock. The dock
+     is the last row rather than a fixed layer, which is what makes it share the
+     viewport with the workspace instead of covering the bottom of it (see
+     .sessdock). `min-height: 100dvh` keeps the dock at the bottom on a short
+     page — a column that only reaches its content height would float the dock
+     up under the workspace. */
+  body { letter-spacing: .005em; display: flex; flex-direction: column; min-height: 100dvh; }
+  /* The workspace row takes every pixel the header and dock leave. `min-height: 0`
+     is what lets it shrink instead of pushing the dock off-screen, and it is the
+     reason the panels inside can cap themselves at 100dvh and still fit. */
+  .dock { flex: 1 1 auto; min-height: 0; }
   /* Blackwall: one fixed layer under the whole page. z-index: -1 is load-bearing
      rather than decoration: a positioned element at auto/0 paints with the
      in-flow, z-index:0 layer — above every static background and card — so the
@@ -27,7 +37,7 @@
      three, which reads as a static background. .45 -> 1 moves ~3.5 levels and
      ~45% of pixels, which is what actually reads as breathing. */
   .page-backdrop {
-    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    position: fixed; inset: 0; z-index: var(--z-behind); pointer-events: none;
     background: var(--blackwall-image) center / cover no-repeat;
     animation: blackwallBreathe 8s ease-in-out infinite;
   }
@@ -37,32 +47,31 @@
   }
   button, input, select, textarea { font-family: inherit; }
   /* Ports, ids, counts and clock values must not jitter as digits change width. */
-  :where(.sess-entry-line, .sess-sid-line, .sess-review, .batch-count, .app-version, .conn-temporary-mark, .session-tab-num) { font-variant-numeric: tabular-nums; }
+  :where(.sess-entry-line, .sess-sid-line, .sess-review, .batch-count, .app-version, .conn-temporary-mark) { font-variant-numeric: tabular-nums; }
   /* Sticky and translucent: the page scrolls under it, so the wordmark and the
      language switch stay reachable in a long session list. blur() is what keeps
      the bar readable over scrolling cards without painting a solid slab. */
-  .app-header { position: sticky; top: 0; z-index: 200; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-header); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .app-header { position: sticky; top: 0; z-index: var(--z-header); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-header); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   /* The two header dropdowns (language, theme) are CHILDREN of this header, so
-     their own z-index (100 and 500) only ranks them against each other: the
-     header is a stacking context, and everything inside it — the menus included —
-     sorts in the root context at the header's 200. That is below every terminal
-     surface (10000 tiled workspace, 10001+ windows, 20000 tab bar, 21000
-     full-screen), and the menu opens downwards INTO exactly that band, so an open
+     their own z-index only ranks them against each other: the header is a
+     stacking context, and everything inside it — the menus included — sorts in
+     the root context at the header's own rung. That is below every terminal
+     surface, and the menu opens downwards INTO exactly that band, so an open
      menu was painted under whatever terminal it hung over. Raising the header is
      the only lever that carries the menu with it, because the menu cannot outrank
-     its own stacking context. 22000 clears the whole content layer while staying
-     below the entries drawer (24000) and the modals (24500) — the ladder
-     docs/design/mobile-terminal.md records. One class per menu: whichever closes
-     must not drop the raise while the other is still open.
+     its own stacking context. --z-header-raised clears the whole content layer
+     while staying below the drawers and the modals — the ladder z-layers.css
+     records. One class per menu: whichever closes must not drop the raise while
+     the other is still open.
 
      On the docs page this is a no-op rather than a second rule: its header is
      static, so it is not a stacking context and the menu already sorts in the
      root one. */
   body.header-lang-open .app-header,
-  body.header-theme-open .app-header { z-index: 22000; }
+  body.header-theme-open .app-header { z-index: var(--z-header-raised); }
   /* A full-screen window IS the screen, so the page header is not there while one
      is up. display:none rather than another z-index rung: the header sits behind
-     the terminal at its own 200 anyway, and removing it outright is what keeps an
+     the terminal at its own rung anyway, and removing it outright is what keeps an
      open language/theme menu from reappearing over the terminal as a floating bar
      the user can neither use nor dismiss. The class is only ever set on touch,
      where every open window is full-screen, so on desktop the header behaves as
@@ -121,7 +130,7 @@
   .lang-current { min-width: 2.4em; text-align: left; }
   .lang-caret { width: 8px; height: 8px; flex-shrink: 0; opacity: .65; }
   .lang-menu {
-    position: absolute; top: calc(100% + 4px); right: 0; z-index: 100;
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: var(--z-dropdown);
     display: flex; flex-direction: column; min-width: 100%; padding: 3px;
     border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card);
     box-shadow: 0 8px 24px var(--shadow-dropdown);
@@ -409,7 +418,7 @@
     flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
     background: transparent; cursor: pointer; color: var(--text-secondary);
     position: relative;
-    z-index: 1;
+    z-index: var(--z-tile-control);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -419,7 +428,7 @@
   .conn-quick-btn {
     flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: none; border-radius: 0;
     background: transparent; cursor: pointer; color: var(--success-dark);
-    position: relative; z-index: 1;
+    position: relative; z-index: var(--z-tile-control);
     display: flex; align-items: center; justify-content: center;
   }
   .conn-quick-btn:hover { color: var(--success-deep); background: var(--success-surface); }
@@ -521,7 +530,7 @@
     align-items: center;
     justify-content: center;
     position: relative;
-    z-index: 1;
+    z-index: var(--z-tile-control);
   }
   .sess-copy-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-subtle); }
   .sess-terminal-ic {
@@ -566,7 +575,7 @@
     background: var(--toast-bg);
     border-radius: 6px;
     box-shadow: 0 4px 14px var(--shadow-soft);
-    z-index: 25000;
+    z-index: var(--z-toast);
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.2s ease;
@@ -582,7 +591,7 @@
     gap: 10px;
     width: min(340px, calc(100vw - 28px));
     max-height: calc(100dvh - 28px);
-    z-index: 26000;
+    z-index: var(--z-notify);
     pointer-events: none;
   }
   .ui-notify-card {
@@ -633,23 +642,35 @@
     50% { box-shadow: inset 0 0 0 2px var(--accent); }
   }
   .conn-tile .conn-tile-stack .sess-x {
-    position: absolute; right: -3px; top: 2px; z-index: 3; width: 25px; height: 25px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 4px;
+    position: absolute; right: -3px; top: 2px; z-index: var(--z-tile-corner); width: 25px; height: 25px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 4px;
     background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center;
     box-shadow: 0 1px 3px var(--shadow-soft); opacity: .95; transition: background .12s, color .12s, border-color .12s, opacity .12s;
   }
   .conn-tile .conn-tile-stack .sess-x:hover { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); opacity: 1; }
 
   /* Modals are a layer above page content, so they outrank every surface that
-     can open one: the entries drawer and its scrim (24000/23900), the
-     full-screen terminal (21000) and the session tab bar (20000). The
-     edit-connection dialog is reachable from all of them, so anything lower
-     would open a dialog underneath the surface that opened it.
+     can open one: the entries drawer and its scrim, the full-screen terminal and
+     the session dock. The edit-connection dialog is reachable from all of them,
+     so anything lower would open a dialog underneath the surface that opened it.
 
-     Still below the toasts (25000) and the notify stack (26000), which was
-     already the case when this sat at 20000: a server-pushed notify_user
+     Still below the toasts and the notify stack: a server-pushed notify_user
      message hidden behind a dialog is exactly the message the user was meant to
-     see, so a dialog must not be able to swallow it. */
-  .modal-backdrop { position: fixed; inset: 0; background: var(--overlay-modal); z-index: 24500; display: flex; align-items: center; justify-content: center; padding: 16px; }
+     see, so a dialog must not be able to swallow it.
+
+     TWO rungs, not one. A dialog is often opened FROM a dialog — the extension
+     editor's Delete raises confirmDialog, the connection editor raises the same
+     one — and at a single rung the winner is DOM order. The confirm is declared
+     before the editor, so the editor painted over it: the element was in the DOM
+     with `hidden` removed and the user saw nothing happen. So a dialog that can
+     only be opened from another dialog takes --z-modal-top and is above whichever
+     dialog raised it, whatever the markup order. */
+  .modal-backdrop { position: fixed; inset: 0; background: var(--overlay-modal); z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  /* The second tier: confirmation and prompt dialogs. These are the ones raised
+     from inside another dialog, so they must outrank it; they stay below the
+     popover rung, because a context menu opened from one of them is still a menu. */
+  #modal-confirm { z-index: var(--z-modal-top); }
+  #modal-cmd { z-index: var(--z-modal-top); }
+  #modal-close-session { z-index: var(--z-modal-top); }
   .modal-backdrop.hidden { display: none; }
   .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; max-width: 720px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 16px 48px var(--shadow-modal); }
   .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-elevated); }
@@ -689,7 +710,7 @@
   .clients-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .clients-icon { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-surface); }
   .clients-label { white-space: nowrap; }
-  .clients-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-card-hover); }
+  .clients-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--z-dropdown); width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-card-hover); }
   .clients-row { display: flex; gap: 8px; padding: 7px 8px; border-radius: 7px; }
   .clients-row + .clients-row { border-top: 1px solid var(--border-subtle); }
   .clients-badge { flex-shrink: 0; align-self: flex-start; padding: 1px 5px; border-radius: 4px; font-size: 0.62rem; font-weight: 700; letter-spacing: .04em; }

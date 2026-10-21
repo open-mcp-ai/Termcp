@@ -177,6 +177,32 @@ func New() *Server {
 		},
 	}
 	_ = srv.SetOption(ssh.AllocatePty())
+
+	// tcpip-forward (ssh -R): the library ships the handler but no server installs
+	// it by default, so without these two lines the request reaches a Server with
+	// no handler and is answered "denied by peer" -- which reads to a caller as the
+	// target's policy rather than as a feature that was never wired. The callback
+	// is what the handler consults before binding, so leaving it nil denies
+	// everything even with the handler present.
+	//
+	// The callback allows every address, and that is not a missing guard. The only
+	// way to reach this server is Server.Dial, which is called by exactly one place
+	// (session.dialClient) with a one-time credential this process minted -- so the
+	// peer asking the server to listen is termcp itself, and there is no trust
+	// boundary here to defend. Whether a bind address is acceptable is decided
+	// where the decision can be seen: the forward.open capability puts the request
+	// in the review queue, and the prompt names the address and says when it is
+	// reachable from the network. Refusing 0.0.0.0 here would move that decision
+	// into the transport, where nobody approving the operation could see it -- and
+	// silently, because the caller reads the refusal as the target's sshd policy.
+	fwdTCP := &ssh.ForwardedTCPHandler{}
+	srv.RequestHandlers = map[string]ssh.RequestHandler{
+		"tcpip-forward":        fwdTCP.HandleSSHRequest,
+		"cancel-tcpip-forward": fwdTCP.HandleSSHRequest,
+	}
+	srv.ReversePortForwardingCallback = func(_ ssh.Context, _ string, _ uint32) bool {
+		return true
+	}
 	// Wrap the allocator so the PTY it creates is closed under the same lock the
 	// session handler holds while forking the command onto it (see sessionPTY).
 	allocPty := srv.PtyHandler

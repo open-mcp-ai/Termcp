@@ -58,7 +58,7 @@ func TestNotifyManager_RegisterAndList(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
 
-	rule1, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule1, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatalf("Register error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestNotifyManager_RegisterAndList(t *testing.T) {
 		t.Fatal("expected non-empty rule ID")
 	}
 
-	rule2, err := mgr.Register("sess-1", "shell-2", notify.ChannelSampling, notify.EventExit, 0, nil)
+	rule2, err := mgr.Register("sess-1", "shell-2", notify.ChannelSampling, notify.EventExit, nil, nil)
 	if err != nil {
 		t.Fatalf("Register error: %v", err)
 	}
@@ -97,9 +97,9 @@ func TestNotifyManager_ClearShellAndSession(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender)
 
-	mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil)
-	mgr.Register("sess-1", "shell-2", notify.ChannelSampling, notify.EventExit, 0, nil)
-	mgr.Register("sess-2", "shell-3", notify.ChannelResource, notify.EventSilence, 2, nil)
+	mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil)
+	mgr.Register("sess-1", "shell-2", notify.ChannelSampling, notify.EventExit, nil, nil)
+	mgr.Register("sess-2", "shell-3", notify.ChannelResource, notify.EventSilence, intPtr(2), nil)
 
 	mgr.ClearShell("shell-1")
 	if len(mgr.List("shell-1")) != 0 {
@@ -122,12 +122,12 @@ func TestNotifyManager_ExitOneShotAndAutoCleanup(t *testing.T) {
 	sender := &mockSender{}
 	mgr := notify.NewManager(sender, notify.WithCooldown(10*time.Millisecond))
 
-	_, err := mgr.Register("sess-1", "shell-1", notify.ChannelSampling, notify.EventExit, 0, nil)
+	_, err := mgr.Register("sess-1", "shell-1", notify.ChannelSampling, notify.EventExit, nil, nil)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 	// Also register a silence rule on the same shell to test that OnExit clears ALL rules on that shell
-	_, err = mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventSilence, 5, nil)
+	_, err = mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventSilence, intPtr(5), nil)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestNotifyManager_OutputDualEdgeAndCooldown(t *testing.T) {
 		notify.WithTrailingDelay(60*time.Millisecond),
 	)
 
-	_, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil)
+	_, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestNotifyManager_SilenceOneShot(t *testing.T) {
 		notify.WithCooldown(10*time.Millisecond),
 	)
 
-	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelSampling, notify.EventSilence, 1, nil)
+	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelSampling, notify.EventSilence, intPtr(1), nil)
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestNotifyManager_OutputBurstCollapsesToOneLeadingAndOneTrailing(t *testing
 		notify.WithCooldown(50*time.Millisecond),
 		notify.WithTrailingDelay(80*time.Millisecond),
 	)
-	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil); err != nil {
+	if _, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil); err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
 
@@ -266,13 +266,13 @@ func TestNotifyManager_OutputBurstCollapsesToOneLeadingAndOneTrailing(t *testing
 
 func TestNotifyManager_SilenceSecondsOnlyForSilenceEvent(t *testing.T) {
 	mgr := notify.NewManager(&mockSender{})
-	if _, err := mgr.Register("s", "sh-out", notify.ChannelResource, notify.EventOutput, 9, nil); err != nil {
+	if _, err := mgr.Register("s", "sh-out", notify.ChannelResource, notify.EventOutput, intPtr(9), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Register("s", "sh-exit", notify.ChannelResource, notify.EventExit, 9, nil); err != nil {
+	if _, err := mgr.Register("s", "sh-exit", notify.ChannelResource, notify.EventExit, intPtr(9), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Register("s", "sh-sil", notify.ChannelResource, notify.EventSilence, 9, nil); err != nil {
+	if _, err := mgr.Register("s", "sh-sil", notify.ChannelResource, notify.EventSilence, intPtr(9), nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range mgr.List("") {
@@ -287,3 +287,6 @@ func TestNotifyManager_SilenceSecondsOnlyForSilenceEvent(t *testing.T) {
 		}
 	}
 }
+
+// intPtr names a value the API sends as an optional integer.
+func intPtr(v int) *int { return &v }

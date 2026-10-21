@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -43,15 +44,22 @@ type Server struct {
 	// connections tracks the MCP clients currently attached (see connections.go).
 	// It is fed by mcp-go's session hooks, which is the only place a client
 	// attaching or detaching is observable.
-	// currentReply is the reply being assembled by handleTerm, so a slot can
-	// consult the learn_mode de-duplication without threading the accumulator
-	// through every directive. It is set and cleared per call.
-	currentReply *termReply
-
 	connections *connRegistry
 	// connListener is called when that set changes, so the Web UI can refresh
 	// without polling. Set by main to the same broadcast the session list uses.
 	connListener func()
+
+	// recvCursors is where each channel's `mcp recv` has read up to.
+	//
+	// It has to live here, per handle, because a recv is a QUEUE CONSUMER: the
+	// caller reads one frame at a time out of a stream that keeps growing, and the
+	// position it has reached is the only thing that stops the next call from
+	// re-reading the first frame or skipping the ones in between. shell_output's
+	// own cursor cannot serve: with no reader_id it hands out a NEW reader at the
+	// current end of the stream, so a byte window that ended mid-frame made recv
+	// report 204 and then skip the frames behind it on the next call — silently.
+	recvCursorMu sync.Mutex
+	recvCursors  map[string]int64
 }
 
 // Option customizes a Server at construction time. Options keep New's signature

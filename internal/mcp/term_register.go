@@ -45,10 +45,21 @@ func termArgToolOptions() []mcpgo.ToolOption {
 			}
 			out = append(out, mcpgo.WithString(d.Name, opts...))
 		case argNumber:
-			out = append(out, mcpgo.WithNumber(d.Name,
+			// The declared bounds ride on the schema so a client can refuse a bad value
+			// BEFORE the call. parseTermArgs enforces the same numbers, because the REST
+			// entrance never reaches mcp-go's validator — one declaration, two
+			// enforcement points, no drift.
+			opts := []mcpgo.PropertyOption{
 				mcpgo.Description(d.Desc),
 				mcpgo.DefaultNumber(numDefault(d.Name)),
-			))
+			}
+			if v, ok := boundValue(d.Min); ok {
+				opts = append(opts, mcpgo.Min(v))
+			}
+			if v, ok := boundValue(d.Max); ok {
+				opts = append(opts, mcpgo.Max(v))
+			}
+			out = append(out, mcpgo.WithNumber(d.Name, opts...))
 		case argBool:
 			out = append(out, mcpgo.WithBoolean(d.Name,
 				mcpgo.Description(d.Desc),
@@ -66,6 +77,24 @@ func termArgToolOptions() []mcpgo.ToolOption {
 				opts = append(opts, mcpgo.Enum(d.Enum...))
 			}
 			out = append(out, mcpgo.WithString(d.Name, opts...))
+		case argMap:
+			// A dictionary of string→string. The schema says object with string
+			// values so a client can refuse `{"N": 3}` before the call; readEnvArg
+			// enforces the same rule for the REST entrance, which never reaches
+			// mcp-go's validator.
+			out = append(out, mcpgo.WithObject(d.Name,
+				mcpgo.Description(d.Desc),
+				mcpgo.AdditionalProperties(map[string]any{"type": "string"}),
+			))
+		case argStringArray:
+			// A list of strings. `items` is what lets a client refuse `[1, 2]` before
+			// the call; readArgsArg enforces the same rule for the REST entrance.
+			// minItems is NOT pinned to 1: an empty list is the same request as an
+			// omitted one, and refusing it would make two spellings of one call differ.
+			out = append(out, mcpgo.WithArray(d.Name,
+				mcpgo.Description(d.Desc),
+				mcpgo.Items(map[string]any{"type": "string"}),
+			))
 		}
 	}
 	return out

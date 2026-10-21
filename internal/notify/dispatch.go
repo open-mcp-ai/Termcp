@@ -58,10 +58,11 @@ func (m *Manager) OnOutput(shellID string) {
 
 		case EventSilence:
 			// Reset the silence timer (one-shot once output stays quiet long enough).
+			// The default was resolved when the rule was registered (Register takes a
+			// *int so it can tell "absent" from "0"), so this layer must NOT re-default:
+			// a second fallback here is what turned an honoured `--for 0` back into a
+			// three-second wait.
 			delay := time.Duration(rule.SilenceSec) * time.Second
-			if delay <= 0 {
-				delay = 3 * time.Second
-			}
 			if rule.timer == nil {
 				ruleCopy := rule
 				rule.timer = time.AfterFunc(delay, func() {

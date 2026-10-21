@@ -57,9 +57,13 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 			return toolError(CodeInvalidArgument, "%s", "event must be exit, silence, or output"), nil
 		}
 
-		silenceSec := int(getFloat64(args, "silence_seconds", 3))
-		if silenceSec <= 0 {
-			silenceSec = 3
+		// nil when the caller did not say, a pointer to the value they did say.
+		// `--for 0` used to be indistinguishable from omitting the flag, so the one
+		// request for "do not wait at all" silently became a three-second wait.
+		var silenceSec *int
+		if _, ok := args["silence_seconds"]; ok {
+			v := int(getFloat64(args, "silence_seconds", 0))
+			silenceSec = &v
 		}
 
 		sessionID := shell.ParentSessionID()
@@ -81,13 +85,21 @@ func (s *Server) handleShellNotifyOps(ctx context.Context, request mcpgo.CallToo
 		if sess := s.sessMgr.Get(sessionID); sess != nil {
 			sess.AttachCleanup(func() { s.notifyMgr.Unregister(rule.ID) })
 		}
-		return jsonResult(map[string]any{
+		out := map[string]any{
 			"ok":       true,
 			"rule_id":  rule.ID,
 			"shell_id": rule.ShellID,
 			"channel":  string(rule.Channel),
 			"event":    string(rule.Event),
-		}), nil
+		}
+		// Echo the wait the rule actually took, for silence rules. Without it the
+		// caller cannot tell "0 was honoured" from "0 was quietly replaced by the
+		// default", which is exactly the ambiguity the pointer above removed from the
+		// input side.
+		if rule.Event == notify.EventSilence {
+			out["silence_seconds"] = rule.SilenceSec
+		}
+		return jsonResult(out), nil
 
 	case "unregister":
 		ruleID := strings.TrimSpace(getString(args, "rule_id", ""))

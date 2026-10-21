@@ -277,20 +277,41 @@ func TestExtensionRetryDisabled(t *testing.T) {
 // it sees it, before the probe goroutine records why it is down, so a listing's
 // status settles before its reason does — waiting on the status alone would
 // catch the window between the two.
-func waitForExtensionFailure(t *testing.T, s *Server, name, stage string) map[string]any {
+// waitForExtensionFailure waits until the extension reports a failure at one of
+// the accepted stages.
+//
+// Two stages are legitimate here, and which one wins is a race the test must not
+// take sides on:
+//
+//   - "start": the process was seen to fail while it was being started, so the
+//     probe never reported it available.
+//   - "session": the process came up, was reported available, and then its
+//     channel was found dead on the next walk (reconciler.go: the
+//     StatusAvailable branch). On Windows the startup cost of powershell.exe
+//     alone can outlast the command, so "exit 3" is routinely observed this way
+//     instead.
+//
+// Both are the same user-visible fact — the extension is unavailable and its
+// last failure carries the process's exit line — and the retry path this test
+// then exercises is the same one either way.
+func waitForExtensionFailure(t *testing.T, s *Server, name string, stages ...string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
 	for {
 		got := callExtension(t, s, map[string]any{"action": "list"})
 		for _, raw := range got["extensions"].([]any) {
 			if e, ok := raw.(map[string]any); ok && e["name"] == name {
-				if f, _ := e["last_failure"].(map[string]any); f != nil && f["stage"] == stage {
-					return e
+				if f, _ := e["last_failure"].(map[string]any); f != nil {
+					for _, want := range stages {
+						if f["stage"] == want {
+							return e
+						}
+					}
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("extension %q never reported a %s-stage failure, last listing: %v", name, stage, got["extensions"])
+			t.Fatalf("extension %q never reported a %v-stage failure, last listing: %v", name, stages, got["extensions"])
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -309,13 +330,13 @@ func TestExtensionRetryBringsUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st := waitForExtensionFailure(t, s, "flaky", "start")
+	st := waitForExtensionFailure(t, s, "flaky", "start", "session")
 	failure, _ := st["last_failure"].(map[string]any)
 	if failure == nil {
 		t.Fatalf("a failing extension should list its last failure, got %v", st)
 	}
 	if failure["reason"] == "" {
-		t.Errorf("the start-stage failure should carry the process's exit line, got %v", failure)
+		t.Errorf("the failure should carry the process's exit line, got %v", failure)
 	}
 
 	// Fix the template through the tool and retry.

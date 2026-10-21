@@ -1,282 +1,29 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	neturl "net/url"
 	"strings"
-	"sync"
-	"sync/atomic"
-
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 )
 
-// The mcp directive: a JSON-RPC conversation.
+// The mcp directive's stdio form: an MCP server running ON a shell channel.
 //
-// Four transports live behind it, and the interesting one is `raw`: `mcp send` and
-// `mcp recv` assume nothing about the methods, so any line-oriented JSON-RPC peer
-// works — an MCP server, an LSP, a private RPC. The protocol decides what the
-// frames mean; this only moves them.
+// This is the half of `mcp` that is not a transport. A handle that names a shell
+// is a process the server already started (`pipe mac --argv npx -y …`), and
+// driving it is typing a frame at it and reading the answer back — no socket, no
+// HTTP, and nothing to open. The URL forms live in term_jrpc.go, where the three
+// frame-channel doors share one implementation.
 //
-// The channel forms use handles:
-//
-//	pipe mac --argv npx -y some-server     → a stdio peer on a pipe channel
-//	mcp open https://host/mcp              → streamable HTTP, NO shell channel spent
-//	mcp tools|send|recv|call|close <handle>
-//
-// `mcp open` rides HTTP directly. That matters: a caller with a limited shell
-// budget can hold a dozen HTTP endpoints without spending any of it, which is the
-// difference between relaying an endpoint and starting a process.
-
-// mcpChannels is the registry of opened HTTP endpoints, keyed by handle.
-//
-// ponytail: an in-memory map with no eviction. An endpoint is opened by an agent
-// inside one conversation; a leak would be one small session struct per opened
-// URL, and the alternative (a reaper) is machinery nobody asked for. Add eviction
-// when a long-lived instance actually accumulates them.
-var (
-	mcpChannelsMu sync.Mutex
-	mcpChannels   = map[string]*httpMCPChannel{}
-)
-
-// mcpHandleSeq mints handles monotonically: len(mcpChannels)+1 can reuse a
-// handle after a close and silently point two names at one channel.
-var mcpHandleSeq atomic.Int64
-
-// httpMCPChannel is one opened HTTP endpoint.
-type httpMCPChannel struct {
-	url         string
-	sse         bool
-	session     string // Mcp-Session-Id, once initialize answered
-	client      *http.Client
-	endpoint    string // SSE: the message URL discovered from the event stream
-	nextID      int
-	initialized bool
-}
-
-// mcpOpen connects an HTTP MCP endpoint and hands back a handle.
-//
-// It does not spend a shell channel: the transport is HTTP, so `ps` grows nothing.
-// The handle is an opaque short name; it is what the other subcommands take.
-func (s *Server) mcpOpen(ctx context.Context, stmt directive.Statement, url string) envelope.Slot {
-	u, err := neturl.Parse(url)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-			Body: "mcp open needs an http(s) URL, e.g. https://host/mcp"}
-	}
-	if strings.HasSuffix(url, "/sse") {
-		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-			Body: "the mcp directive speaks streamable HTTP; use the endpoint that serves POST /stream (the legacy /sse transport is not implemented)"}
-	}
-	ch := &httpMCPChannel{url: url, client: http.DefaultClient, nextID: 1}
-	handle := fmt.Sprintf("mcp%d", mcpHandleSeq.Add(1))
-	mcpChannelsMu.Lock()
-	mcpChannels[handle] = ch
-	mcpChannelsMu.Unlock()
-	return envelope.Slot{
-		Code:    200,
-		Headers: map[string]string{"Path": stmt.Path, "Handle": handle},
-		Body:    fmt.Sprintf("%s %s (no shell channel consumed)\n", handle, url),
-	}
-}
-
-// mcpChannel dispatches the subcommands that address an existing channel.
-func (s *Server) mcpChannel(ctx context.Context, stmt directive.Statement, sub string, rest []string) envelope.Slot {
-	if len(rest) == 0 {
-		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-			Body: "mcp " + sub + " needs a handle (a shell handle for stdio, or the one mcp open returned)"}
-	}
-	handle := rest[0]
-	mcpChannelsMu.Lock()
-	ch, ok := mcpChannels[handle]
-	if ok && sub == "close" {
-		delete(mcpChannels, handle)
-	}
-	mcpChannelsMu.Unlock()
-	if ok {
-		if sub == "close" {
-			return envelope.Slot{Code: 204, Headers: map[string]string{"Path": stmt.Path}}
-		}
-		return s.mcpHTTP(ctx, stmt, sub, ch, rest[1:])
-	}
-	// Not an opened endpoint: it is a shell handle, and the peer is the process on
-	// that channel.
-	return s.mcpStdio(ctx, stmt, sub, handle, rest[1:])
-}
-
-// mcpHTTP speaks to an opened endpoint.
-func (s *Server) mcpHTTP(ctx context.Context, stmt directive.Statement, sub string, ch *httpMCPChannel, rest []string) envelope.Slot {
-	headers := map[string]string{"Path": stmt.Path}
-	switch sub {
-	case "recv":
-		return envelope.Slot{Code: 204, Headers: headers,
-			Body: "an HTTP endpoint answers each send; there is nothing to receive. Use `mcp call`."}
-	case "send", "call", "tools":
-		var frame map[string]any
-		switch sub {
-		case "tools":
-			frame = map[string]any{"jsonrpc": "2.0", "id": ch.nextID, "method": "tools/list"}
-		default:
-			// rest is already everything AFTER the handle (mcpChannel sliced it),
-			// so the frame starts at rest[0]. Skipping one more dropped the frame's
-			// first word: `mcp call h {"jsonrpc":…}` reported "needs a frame" and
-			// only worked with a junk word in front of it.
-			payload := unquoteWord(strings.TrimSpace(strings.Join(rest, " ")))
-			if payload == "" {
-				return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-					Body: "mcp " + sub + " needs a JSON-RPC frame"}
-			}
-			if err := json.Unmarshal([]byte(payload), &frame); err != nil {
-				return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-					Body: "the frame is not JSON: " + err.Error()}
-			}
-		}
-		method, _ := frame["method"].(string)
-		if method != "initialize" {
-			if err := ch.ensureInitialized(ctx); err != nil {
-				return envelope.Slot{Code: 500, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed}, Body: err.Error()}
-			}
-		}
-		ch.nextID++
-		reply, err := ch.post(ctx, frame)
-		if err != nil {
-			return envelope.Slot{Code: 500, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed}, Body: err.Error()}
-		}
-		if method == "initialize" {
-			ch.initialized = true
-		}
-		return envelope.Slot{Code: 200, Headers: headers, Body: reply}
-	}
-	return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-		Body: "unknown mcp subcommand: " + sub}
-}
-
-// ensureInitialized performs the MCP initialize handshake for streamable HTTP.
-// It runs once per channel; the session id it captures is what every later
-// frame must carry, and its absence was the "Invalid session ID" failure.
-func (c *httpMCPChannel) ensureInitialized(ctx context.Context) error {
-	if c.initialized || c.sse {
-		return nil
-	}
-	id := c.nextID
-	init := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": mcpgo.LATEST_PROTOCOL_VERSION,
-			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "termcp", "version": "mcp-directive"},
-		},
-	}
-	c.nextID++
-	reply, err := c.post(ctx, init)
-	if err != nil {
-		return err
-	}
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(reply), &doc); err != nil {
-		return fmt.Errorf("initialize: %s", reply)
-	}
-	if e, ok := doc["error"]; ok {
-		return fmt.Errorf("initialize: %v", e)
-	}
-	note := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
-	if _, err := c.post(ctx, note); err != nil {
-		return err
-	}
-	c.initialized = true
-	return nil
-}
-
-// sseData extracts the JSON-RPC payload from a text/event-stream body: the
-// event whose data id matches wantID, or the first data event for a
-// notification. Server-sent responses are normal for streamable HTTP.
-func sseData(raw string, wantID any) string {
-	var data strings.Builder
-	var best string
-	flush := func() {
-		payload := strings.TrimSpace(data.String())
-		data.Reset()
-		if payload == "" {
-			return
-		}
-		var probe map[string]any
-		if json.Unmarshal([]byte(payload), &probe) != nil {
-			return
-		}
-		if wantID == nil {
-			if best == "" {
-				best = payload
-			}
-			return
-		}
-		if got, ok := probe["id"]; ok && fmt.Sprint(got) == fmt.Sprint(wantID) {
-			best = payload
-		}
-	}
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			flush()
-			continue
-		}
-		if payload, ok := strings.CutPrefix(line, "data:"); ok {
-			data.WriteString(strings.TrimSpace(payload))
-			data.WriteByte('\n')
-		}
-	}
-	flush()
-	if best != "" {
-		return best
-	}
-	return strings.TrimSpace(raw)
-}
-
-// post sends one frame and returns the reply body.
-func (c *httpMCPChannel) post(ctx context.Context, frame map[string]any) (string, error) {
-	body, err := json.Marshal(frame)
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	if c.session != "" {
-		req.Header.Set("Mcp-Session-Id", c.session)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-		c.session = sid
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode >= 400 {
-		return string(raw), fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(raw)))
-	}
-	text := strings.TrimSpace(string(raw))
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		text = sseData(text, frame["id"])
-	}
-	return text, nil
-}
+// Keeping this here is what lets `mcp` stay one directive after gaining a
+// registry: the handle decides which half runs, and a caller does not have to
+// know which kind it holds.
 
 // mcpStdio speaks to the process running on a shell channel.
 //
@@ -294,8 +41,17 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 		default:
 			payload := unquoteWord(strings.TrimSpace(strings.Join(rest, " ")))
 			if payload == "" {
-				return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-					Body: "mcp " + sub + " needs a JSON-RPC frame"}
+				return badRequest(stmt, "mcp "+sub+" needs a JSON-RPC frame")
+			}
+			// VALIDATE BEFORE WRITING, the same way the URL forms already do.
+			//
+			// A stdio peer reads one frame per line, so anything unparseable is either
+			// ignored or answered with a parse error — and the caller saw 202 "sent"
+			// either way, which says the frame landed when in fact it was never a frame.
+			// `cdp send 'not json'` already answered 400; the two used to disagree about
+			// what "sent" means.
+			if !json.Valid([]byte(payload)) {
+				return badRequest(stmt, "the frame is not JSON")
 			}
 			frame = payload
 		}
@@ -310,50 +66,169 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 	case "recv":
 		return s.mcpRecvFrame(ctx, stmt, handle)
 	case "close":
+		// The cursor has to go with the handle: handles are minted monotonically
+		// (jrpcHandleSeq), so a reopened channel never reuses this key and the map
+		// would grow by one entry per channel the process ever opened.
+		s.dropRecvCursor(handle)
 		return envelope.Slot{Code: 204, Headers: headers}
 	}
-	return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": "invalid_argument"},
-		Body: "unknown mcp subcommand: " + sub}
+	return badRequest(stmt, "unknown mcp subcommand: "+sub)
 }
 
-// mcpRecvFrame reads exactly one JSON-RPC frame.
+// mcpRecvFrame reads exactly one JSON-RPC frame and advances this handle's cursor
+// past it.
 //
 // The "exactly one" part is the contract: a frame is complete when the bytes parsed
 // as JSON, and a partial one must be held rather than acted on. The read is
 // therefore retried while the buffer does not yet parse — never a blocking read
 // that may return half a message.
 //
-// No offset is passed, deliberately. The read tool's offset defaults to -1, which
-// means "carry on from where the last read stopped"; passing the stream SIZE
-// instead (which is what the old code did) asks for bytes after the end, so recv
-// answered "no complete frame yet" for a frame that was sitting right there in the
-// channel. A recv is a consumer, not a snapshot: it must advance the same cursor
-// every other read advances, or the second call re-delivers the first frame.
+// The cursor is the whole point, and it is kept HERE rather than left to
+// shell_output. shell_output has two modes and neither is a queue consumer: with
+// an offset it is a stateless positional read, and without one it mints a NEW
+// reader at the current end of the stream. A recv that passed neither therefore
+// read from "now" on every call, so a first call that ended mid-frame reported
+// 204 — and the next call started at the new end, skipping the frames that had
+// been waiting behind it. Measured on three queued replies: recv delivered one and
+// silently dropped the other two.
+//
+// With an explicit offset read the position is unambiguous and stateless on the
+// server side, so the map below is the only state and it advances by exactly the
+// frame that was returned. Bytes between frames (the newlines a line-delimited
+// peer writes) are skipped by the trim in firstJSONValue, and the offset advances
+// over them too, so a resumed read starts at the next '{'.
 func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, handle string) envelope.Slot {
-	res, fail := s.callTool(ctx, "shell_output", argsOf(
-		"shell_id", handle, "max_bytes", float64(defaultBytesLimit), "timeout", float64(0)))
-	if fail != nil {
-		return s.slotFromFailure(ctx, stmt, fail)
+	from := s.recvCursor(handle)
+	// A whole frame has to fit the window, or a single large reply could never be
+	// delivered: the window is a cap on what one recv will consider, not a
+	// statement about how long a frame may be.
+	window := defaultBytesLimit
+	if window < minRecvWindow {
+		window = minRecvWindow
 	}
-	doc, ok := toolResultMap(res)
-	if !ok {
-		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: toolResultText(res)})
+	// POLL, BECAUSE THE READ ITSELF DOES NOT WAIT FOR AN OFFSETTED WINDOW.
+	//
+	// shell_output's timeout is honoured only by its live-cursor mode; the
+	// offset-addressed mode returns what is buffered right now, and nothing else. A
+	// recv that asked once therefore answered "no complete frame yet" while the peer's
+	// bytes were still in flight — and a caller had to guess how long to keep asking.
+	// The retry loop is here, with a bound, so one recv means one frame rather than
+	// one sample.
+	//
+	// The bound is the same window the directive exists inside: a caller that gets
+	// 204 after it has been told the frame is not coming yet, and the next recv
+	// resumes from the cursor this one left untouched.
+	deadline := time.Now().Add(recvPollBudget)
+	var doc map[string]any
+	var body string
+	for {
+		res, fail := s.callTool(ctx, "shell_output", argsOf(
+			"shell_id", handle, "offset", float64(from),
+			"max_bytes", float64(window), "timeout", float64(0), "strip_ansi", false))
+		if fail != nil {
+			return s.slotFromFailure(ctx, stmt, fail)
+		}
+		var ok bool
+		doc, ok = toolResultMap(res)
+		if !ok {
+			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: toolResultText(res)})
+		}
+		body = getString(doc, "output", "")
+		if _, complete := firstJSONValue(body); complete {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: ctx.Err().Error()})
+		case <-time.After(recvPollInterval):
+		}
 	}
-	body := getString(doc, "output", "")
+	// rawLen, not len(body): the window's byte span is what the next read's offset
+	// is measured in. len(body) counts the RENDERED string, which differs whenever
+	// the reply was ANSI-stripped or escaped, so advancing by it lands mid-frame.
+	// windowResult names this quantity raw_bytes for exactly this reason.
+	rawLen := int64(getFloatAny(doc, "raw_bytes", 0))
 	frame, complete := firstJSONValue(body)
+	total := int64(getFloatAny(doc, "total_bytes", 0))
 	if !complete {
+		// `has_more` says the channel holds bytes this window did not return, which
+		// means a frame is longer than the window rather than absent. Reporting 204
+		// there would be a lie the caller cannot act on; a 413 names the problem.
+		if getBool(doc, "has_more", false) && total > from {
+			return envelope.Slot{Code: 413, Headers: map[string]string{
+				"Path": stmt.Path, "Error-Code": "frame_too_large",
+				"Content-Range": envelope.UnsatisfiedRange(total),
+			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window", from, window)}
+		}
 		return envelope.Slot{Code: 204, Headers: map[string]string{
 			"Path":          stmt.Path,
-			"Content-Range": envelope.UnsatisfiedRange(int64(getFloatAny(doc, "total_bytes", 0))),
+			"Content-Range": envelope.ContentRange(from, from+rawLen-1, total),
 		}, Body: "no complete frame yet"}
 	}
-	start := int64(getFloatAny(doc, "start_offset", 0))
+	start := from + int64(strings.Index(body, frame))
 	end := start + int64(len(frame))
+	// Advance past the frame, and past the whitespace that separated it from the
+	// next one, so a resumed read starts on a value rather than on a newline.
+	next := end
+	for next < from+rawLen && int(next-from) < len(body) && strings.IndexByte(" \t\r\n", body[next-from]) >= 0 {
+		next++
+	}
+	s.setRecvCursor(handle, next)
 	return envelope.Slot{
 		Code:    200,
 		Headers: map[string]string{"Path": stmt.Path, "Content-Range": envelope.ContentRange(start, end-1, end)},
 		Body:    frame,
 	}
+}
+
+// How long one recv keeps asking, and how often.
+//
+// The pair is a compromise between the two callers that exist: an agent reading a
+// stdio MCP server's answer wants `mcp recv` to return the frame, not a 204 it has to
+// loop on, while the same call must still come back promptly when the answer really
+// has not been written. Two seconds is below the 6-9s an assistant turn costs and long enough
+// for a peer that has already been sent the request.
+const (
+	recvPollBudget   = 2 * time.Second
+	recvPollInterval = 25 * time.Millisecond
+)
+
+// minRecvWindow is the smallest window a recv will read with.
+//
+// defaultBytesLimit is the tool's default for a READ, where a caller usually wants
+// a screenful. A JSON-RPC frame is a different unit: an initialize result with
+// instructions is routinely larger than that, and a window smaller than one frame
+// makes it undeliverable. 1 MiB is far past any legitimate frame and still a bound.
+const minRecvWindow = 1 << 20
+
+// recvCursor and setRecvCursor keep one read position per channel.
+//
+// Keyed by handle without the server's own offset bookkeeping: two callers reading
+// the same channel is a race the protocol does not describe, and serialising here
+// means neither silently loses a frame to the other's window.
+func (s *Server) recvCursor(handle string) int64 {
+	s.recvCursorMu.Lock()
+	defer s.recvCursorMu.Unlock()
+	return s.recvCursors[handle]
+}
+
+// dropRecvCursor forgets a closed handle's read position.
+func (s *Server) dropRecvCursor(handle string) {
+	s.recvCursorMu.Lock()
+	defer s.recvCursorMu.Unlock()
+	delete(s.recvCursors, handle)
+}
+
+func (s *Server) setRecvCursor(handle string, at int64) {
+	s.recvCursorMu.Lock()
+	defer s.recvCursorMu.Unlock()
+	if s.recvCursors == nil {
+		s.recvCursors = make(map[string]int64)
+	}
+	s.recvCursors[handle] = at
 }
 
 // firstJSONValue returns the first complete JSON value in raw.
@@ -362,10 +237,22 @@ func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, han
 // may be pretty-printed, and a line-delimited peer may still emit a value with
 // embedded newlines inside a string.
 func firstJSONValue(raw string) (string, bool) {
-	trimmed := strings.TrimLeft(raw, " \t\r\n")
-	if trimmed == "" {
+	// SKIP THE NOISE BEFORE THE FRAME, and there is always some: a stdio peer's own
+	// startup output shares this stream. Measured on @modelcontextprotocol/
+	// server-everything it was 149 bytes of npm warning and a "Starting default
+	// (STDIO) server..." banner, and every recv on that channel reported "no complete
+	// frame yet" while a complete frame sat in the buffer — the decoder was being
+	// handed the warning, not the frame.
+	//
+	// A frame starts at a '{' or a '['. Nothing before the first one can be part of
+	// it: a JSON object's first byte must be '{' (a leading BOM or whitespace is not
+	// this protocol's problem, and whitespace is handled by the scan below). Scanning
+	// for those two bytes is what the line-delimited reality of a pipe channel needs.
+	start := strings.IndexAny(raw, "{[")
+	if start < 0 {
 		return "", false
 	}
+	trimmed := raw[start:]
 	dec := json.NewDecoder(strings.NewReader(trimmed))
 	var value json.RawMessage
 	if err := dec.Decode(&value); err != nil {

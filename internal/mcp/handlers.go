@@ -241,10 +241,14 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 		if sess.Info().Status != api.SessionRunning {
 			return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is read-only via shell_output", shellID, sess.Info().Status))
 		}
-		if cs := sess.PrimaryShell(); cs != nil {
-			return cs, nil
-		}
-		return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", shellID))
+		// A SESSION IS NOT A CHANNEL, and resolving it to the primary one is what
+		// made `close <session> --force` a silent no-op (#132) and `run <session>`
+		// an unstated guess. The caller must say which channel: `sid:1`. The error
+		// names the handle to use, because "which channel" is answerable in one
+		// line and leave the caller guessing otherwise.
+		return nil, toolError(CodeInvalidArgument, "%s",
+			fmt.Sprintf("Session '%s' is a container, not a channel. Name the channel explicitly, e.g. '%s:%d', which is what `ps` prints (see also `ps --shells`).",
+				shellID, shellID, sess.PrimaryShellIndex()))
 	}
 	// The locator branch runs BEFORE the short-handle branch, and must keep doing
 	// so: both spellings end in `:<N>`, and only this branch distinguishes a

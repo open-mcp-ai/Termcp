@@ -469,3 +469,56 @@ assert.strictEqual(els['clients-empty'].hidden, false,
 
 console.log('CLIENTS PANEL OK');
 `
+
+// TestTheViewerSocketProvesItsPeerIsAlive pins the liveness contract.
+//
+// The registry removes a tab when its socket's read loop returns, so a read loop
+// that never returns is a row that never leaves. That is exactly what happened:
+// writePump pinged every 45 seconds, but readPump had no pong handler and no read
+// deadline, so a browser that was closed, crashed, slept or changed networks left
+// a socket the kernel still believed in. ReadMessage blocked forever, the deferred
+// remove never ran, and the registry kept a row for a page that no longer existed.
+// The symptom is the one reported: "why does it say two web clients when I have one
+// page open?" — the ghost is one crashed tab, and the count climbs with every crash.
+//
+// All three parts are needed and each is checked, because any one of them alone
+// looks like a fix and is not:
+//   - a deadline, or nothing ever times out;
+//   - a PongHandler refreshing it, or a quiet-but-healthy tab is killed instead;
+//   - pings actually being sent, or no pong ever arrives to refresh anything.
+func TestTheViewerSocketProvesItsPeerIsAlive(t *testing.T) {
+	raw, err := os.ReadFile("ws.go")
+	if err != nil {
+		t.Fatalf("ws.go: %v", err)
+	}
+	ws := strings.ReplaceAll(string(raw), "\r\n", "\n")
+
+	if !strings.Contains(ws, "SetReadDeadline(") {
+		t.Fatal("ws.go sets no read deadline: a peer that vanishes without a FIN is never noticed, and its viewer row leaks")
+	}
+	if !strings.Contains(ws, "SetPongHandler(") {
+		t.Error("a read deadline with no pong handler kills every quiet tab: the deadline is only ever refreshed by inbound frames")
+	}
+	if !strings.Contains(ws, "SetPingHandler(") {
+		t.Error("the server must also answer a client's ping, or half the keep-alive is missing")
+	}
+	if !strings.Contains(ws, "websocket.PingMessage") {
+		t.Error("nothing pings: without a ping there is no pong, so the deadline would fire on a healthy connection")
+	}
+	// The deadline has to be refreshed on every reader of the socket: the pong, an
+	// inbound client frame, and the ping reply. Missing the last two would leave a
+	// tab that is actively typing one deadline behind.
+	body := between(t, ws, "func (c *uiWS) readPump() {", "\n}\n")
+	if body == "" {
+		t.Fatal("readPump is gone")
+	}
+	if n := strings.Count(body, "SetReadDeadline(time.Now().Add(wsReadIdle))"); n < 3 {
+		t.Errorf("the read deadline is refreshed in %d places, want 3 (setup, pong, inbound frame)", n)
+	}
+	// And the removal must still be deferred in the handler that adds it, so the row
+	// goes away however the loop ends.
+	handler := between(t, ws, "viewerID := c.h.viewerHub().add(", "c.readPump()")
+	if !strings.Contains(handler, "defer c.h.viewerHub().remove(viewerID)") {
+		t.Error("the viewer must be removed by a defer, or an abnormal loop exit leaks the row")
+	}
+}

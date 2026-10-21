@@ -29,6 +29,12 @@ func sshConfigErrCode(err error) string {
 	if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return CodeSSHConfigNotFound
 	}
+	// A profile the caller wrote badly is their argument, not a server fault: a
+	// missing host or credential answered 500 operation_failed, which reads like an
+	// outage and invites a retry that cannot succeed.
+	if errors.Is(err, sshconfig.ErrInvalid) {
+		return CodeInvalidArgument
+	}
 	return CodeOperationFailed
 }
 
@@ -52,11 +58,15 @@ const (
 	CodeReaderNotRegistered = "reader_not_registered"
 	CodeHistoryNotFound     = "history_not_found"
 	CodeForwardNotFound     = "forward_not_found"
-	CodeSSHConfigNotFound   = "ssh_config_not_found"
-	CodeRuleNotFound        = "rule_not_found"
-	CodeConflict            = "conflict"
-	CodeNotConfigured       = "not_configured"
-	CodeConnectionFailed    = "connection_failed"
+	// CodeFileNotFound is a filesystem path that does not exist. It is a 404 like the
+	// other not-found codes: the request named something that is not there, which is
+	// an ordinary answer rather than a server fault.
+	CodeFileNotFound      = "file_not_found"
+	CodeSSHConfigNotFound = "ssh_config_not_found"
+	CodeRuleNotFound      = "rule_not_found"
+	CodeConflict          = "conflict"
+	CodeNotConfigured     = "not_configured"
+	CodeConnectionFailed  = "connection_failed"
 	// CodeForbidden is what a restricted (extension) session returns when a tool
 	// or path is outside the whitelist its template defined. It is a policy
 	// refusal, not a missing object: the session exists and is running, the call

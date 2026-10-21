@@ -147,7 +147,14 @@ func NewManager(sender Sender, opts ...Option) *Manager {
 // Register adds a new notification rule for a shell. target is an opaque
 // delivery handle (for sampling: the MCP client session that registered it);
 // it may be nil.
-func (m *Manager) Register(sessionID, shellID string, channel Channel, event Event, silenceSec int, target any) (*Rule, error) {
+const (
+	// defaultSilenceSec is what an unspecified --for means.
+	defaultSilenceSec = 3
+	// maxSilenceSec caps the wait so a typo cannot park a timer for hours.
+	maxSilenceSec = 300
+)
+
+func (m *Manager) Register(sessionID, shellID string, channel Channel, event Event, silenceSec *int, target any) (*Rule, error) {
 	if shellID == "" {
 		return nil, fmt.Errorf("shell_id is required")
 	}
@@ -160,17 +167,29 @@ func (m *Manager) Register(sessionID, shellID string, channel Channel, event Eve
 	if event != EventExit && event != EventSilence && event != EventOutput {
 		return nil, fmt.Errorf("invalid event %q: must be exit, silence, or output", event)
 	}
+	// A POINTER, so "the caller said nothing" and "the caller said 0" stay apart.
+	//
+	// The parameter is an int in the API, where absent and zero look the same, and
+	// the old `<= 0` reading turned an explicit `--for 0` into the default 3 seconds
+	// — the one value that asks for the opposite of waiting. nil keeps the documented
+	// default; a pointer to 0 is honoured and clamped by the same upper bound.
+	secs := 0
 	if event == EventSilence {
-		if silenceSec <= 0 {
-			silenceSec = 3
-		}
-		if silenceSec > 300 {
-			silenceSec = 300
+		if silenceSec == nil {
+			secs = defaultSilenceSec
+		} else {
+			secs = *silenceSec
+			if secs < 0 {
+				secs = 0
+			}
+			if secs > maxSilenceSec {
+				secs = maxSilenceSec
+			}
 		}
 	} else {
 		// silence_seconds is meaningful only for the silence event; keep it out
 		// of the API projection for output/exit rules.
-		silenceSec = 0
+		secs = 0
 	}
 
 	m.mu.Lock()
@@ -182,7 +201,7 @@ func (m *Manager) Register(sessionID, shellID string, channel Channel, event Eve
 		ShellID:    shellID,
 		Channel:    channel,
 		Event:      event,
-		SilenceSec: silenceSec,
+		SilenceSec: secs,
 		CreatedAt:  clock.Now(),
 		Target:     target,
 	}

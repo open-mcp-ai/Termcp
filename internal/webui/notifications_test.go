@@ -20,11 +20,11 @@ func (nopSender) SendSamplingNotification(context.Context, string, any, notify.E
 func newNotifyTestMux(t *testing.T) (*http.ServeMux, *notify.Manager, string) {
 	t.Helper()
 	mgr := notify.NewManager(nopSender{})
-	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule, err := mgr.Register("sess-1", "shell-1", notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Register("sess-2", "shell-2", notify.ChannelSampling, notify.EventExit, 0, nil); err != nil {
+	if _, err := mgr.Register("sess-2", "shell-2", notify.ChannelSampling, notify.EventExit, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &Handler{NotifyMgr: mgr}

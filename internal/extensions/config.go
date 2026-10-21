@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
@@ -134,10 +135,15 @@ func (e *Extension) SetEnabled(v bool) {
 }
 
 // ForwardDecl is one port-forward the reconciler establishes on the extension's
-// session. Field meanings follow the forward MCP tool's arguments exactly.
+// session. Field meanings follow the forward MCP tool's arguments exactly, which
+// is why the listening address has two names: the side doing the listening is the
+// target for -R and this host for -L/-D, and one field cannot say both.
 type ForwardDecl struct {
-	Kind       string `toml:"kind"`
-	LocalHost  string `toml:"local_host,omitempty"`  // remote: what the target binds
+	Kind string `toml:"kind"`
+	// BindHost is what -L and -D listen on in this host; empty means loopback.
+	BindHost string `toml:"bind_host,omitempty"`
+	// LocalHost is what -R listens on in the TARGET host.
+	LocalHost  string `toml:"local_host,omitempty"`
 	LocalPort  int    `toml:"local_port,omitempty"`  // 0 = picked at runtime
 	RemoteHost string `toml:"remote_host,omitempty"` // local: where the target dials
 	RemotePort int    `toml:"remote_port,omitempty"`
@@ -184,6 +190,7 @@ func (e *Extension) Normalize() {
 // Normalize fills a forward's conventional defaults.
 func (f *ForwardDecl) Normalize() {
 	f.Kind = strings.TrimSpace(strings.ToLower(f.Kind))
+	f.BindHost = strings.TrimSpace(f.BindHost)
 	f.LocalHost = strings.TrimSpace(f.LocalHost)
 	f.RemoteHost = strings.TrimSpace(f.RemoteHost)
 	// -L reaches a host as seen from the target, where localhost is the usual
@@ -193,6 +200,13 @@ func (f *ForwardDecl) Normalize() {
 	}
 	if f.Kind == ForwardRemote && f.LocalHost == "" {
 		f.LocalHost = "0.0.0.0"
+	}
+	// A template that wrote local_host on a -L/-D declaration meant the address
+	// this host listens on -- the reading the field now has under its own name.
+	// Those declarations were accepted and ignored before, so honouring the
+	// intent here costs nothing and fixes them rather than keeping them broken.
+	if (f.Kind == ForwardLocal || f.Kind == ForwardDynamic) && f.BindHost == "" {
+		f.BindHost = f.LocalHost
 	}
 }
 
@@ -290,6 +304,13 @@ func (f *ForwardDecl) Validate() error {
 	// be left at 0 ("pick one"), so its range is checked once, after the kinds.
 	if !validPort(f.LocalPort, 0) {
 		return fmt.Errorf("local_port out of range (0-65535)")
+	}
+	// A SOCKS5 proxy this server runs performs no authentication, so a template
+	// asking for one on a public interface would publish an open proxy. Refuse it
+	// at save time, where the author can read the reason, rather than at every
+	// reconcile -- and point at the forward that does publish one service.
+	if f.Kind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
+		return fmt.Errorf("a dynamic (SOCKS5) forward binds loopback only: it performs no authentication, so %q would be an open proxy (use kind = \"local\" to publish one service)", forward.ResolveBindHost(f.BindHost))
 	}
 	return nil
 }

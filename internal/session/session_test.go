@@ -984,3 +984,102 @@ func TestResolveShellCommand_DefaultShellPriority(t *testing.T) {
 		t.Fatalf("without a default_shell the command must stay empty, got %q %v", cmd, args)
 	}
 }
+
+// TestArchiveChildShellKeepsTheRecordAndDeleteErasesIt pins the two close paths
+// apart, because they are the same act with opposite intentions.
+//
+// Closing a channel and erasing its record were one operation: the terminal tab's X
+// called CloseChildShell, which stopped the shell AND dropped it from shellHistory.
+// The transcript stayed on disk but nothing addressed it, so a closed channel was
+// invisible everywhere — no tab (correct), no archive entry (the bug), and "where did
+// that channel go?" had no answer in the UI.
+//
+// ArchiveChildShell is the ordinary close: the channel stops and its tab goes, but the
+// snapshot keeps the entry with an exit status, so the archive can still show it and
+// resolve its output. CloseChildShell keeps its original meaning — DELETE is still the
+// erase — and neither may drift into the other.
+func TestArchiveChildShellKeepsTheRecordAndDeleteErasesIt(t *testing.T) {
+	srv := startTestServer(t)
+	store := storage.New(t.TempDir())
+	m := NewManager(message.NewManager(store), store, srv)
+
+	s, err := m.Create(testConfig(testShell(), testInteractiveShellArgs(), api.ModePTY, "parent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Delete(s.ID)
+
+	archived, err := s.CreateChildShell(testShell(), testInteractiveShellArgs(), true, 24, 80, "kept")
+	if err != nil {
+		t.Fatal(err)
+	}
+	erased, err := s.CreateChildShell(testShell(), testInteractiveShellArgs(), true, 24, 80, "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	if found, err := m.ArchiveChildShell(archived.ID); err != nil || !found {
+		t.Fatalf("archive child shell: found=%v err=%v", found, err)
+	}
+	if found, err := m.CloseChildShell(erased.ID); err != nil || !found {
+		t.Fatalf("close child shell: found=%v err=%v", found, err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// Both are out of the live map: a stopped channel must not come back as a tab.
+	if s.GetChildShell(archived.ID) != nil {
+		t.Error("an archived shell is still in the live map; its tab would reappear")
+	}
+	if s.GetChildShell(erased.ID) != nil {
+		t.Error("a closed shell is still in the live map")
+	}
+
+	// The snapshot is what the archive reads. One of the two must be in it.
+	var kept, gone *api.Session
+	for _, sh := range s.SnapshotShells() {
+		sh := sh
+		switch sh.ID {
+		case archived.ID:
+			kept = &sh
+		case erased.ID:
+			gone = &sh
+		}
+	}
+	if kept == nil {
+		t.Fatal("the archived shell is missing from the snapshot: the archive would have nothing to show")
+	}
+	if gone != nil {
+		t.Error("the closed shell survived in the snapshot; DELETE no longer erases")
+	}
+	// It must carry an end state, not read as a live channel: the snapshot is also
+	// consulted for a running session's rendering, and a "running" archived shell
+	// would be offered as something to attach to.
+	if kept.Status == api.SessionRunning {
+		t.Errorf("the archived shell reads %q; it must carry an end state", kept.Status)
+	}
+
+	// And the record has to survive a restart: the manifest is written by the archive
+	// path for the same reason it is written by the close path.
+	loaded, err := store.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundKept, foundGone := false, false
+	for _, meta := range loaded {
+		for _, sh := range meta.Shells {
+			if sh.ID == archived.ID {
+				foundKept = true
+			}
+			if sh.ID == erased.ID {
+				foundGone = true
+			}
+		}
+	}
+	if !foundKept {
+		t.Error("the archived shell was not persisted: a restart would lose the record")
+	}
+	if foundGone {
+		t.Error("the erased shell was persisted")
+	}
+}

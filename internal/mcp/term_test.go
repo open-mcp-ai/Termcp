@@ -289,6 +289,30 @@ func TestTermRunStartsAtItsOwnOffset(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	termText(t, s, map[string]any{"cmd": "run " + h + " seq 1 500", "timeout": float64(2), "bytes_limit": float64(64)})
+
+	// LET seq FINISH PRODUCING before the next command.
+	//
+	// The 64-byte window deliberately leaves most of seq's output unread — that is the
+	// point of the test — but the WRITER is still going when this call returns. Sending
+	// the next command immediately made the two interleave differently on a CI runner
+	// than on a workstation, and the assertion below then saw "1\n2\n3" in the second
+	// body because seq was still writing it, not because run replayed anything.
+	//
+	// Waiting for the shell to go quiet (not for it to exit — it is a pty and stays
+	// up) is what separates "unread tail exists" from "output is still arriving".
+	shellID := shellIDFromHandle(t, s, h)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		before := s.sessMgr.GetChildShell(shellID).BufferLen()
+		time.Sleep(50 * time.Millisecond)
+		if s.sessMgr.GetChildShell(shellID).BufferLen() == before {
+			break // the producer stopped adding bytes
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("seq never stopped writing")
+		}
+	}
+
 	second := termText(t, s, map[string]any{"cmd": "run " + h + " echo SECOND", "timeout": float64(2)})
 	if !strings.Contains(second, "SECOND") {
 		t.Fatalf("the second command's output is missing:\n%s", second)
@@ -520,6 +544,154 @@ func TestMCPRecvDeliversTheFrameAndDoesNotRepeatIt(t *testing.T) {
 	}
 }
 
+// TestMCPRecvCursorIsDroppedOnClose pins that a closed handle does not keep a
+// read position.
+//
+// Handles are minted monotonically (jrpcHandleSeq), so close-and-reopen never
+// reuses a key: without the delete, the cursor map grows by one entry per channel
+// the process ever opened and nothing reclaims them. An unnoticed leak in a
+// long-lived instance is the worst kind, because the workaround is a restart.
+func TestMCPRecvCursorIsDroppedOnClose(t *testing.T) {
+	s := newTestServer(t)
+	h := openPipe(t, s, "cat")
+
+	// Give the handle a cursor by consuming one frame through recv.
+	if out := termText(t, s, map[string]any{"cmd": `mcp send ` + h + ` {"jsonrpc":"2.0","id":1,"method":"x"}`}); !strings.Contains(out, "202") {
+		t.Fatalf("mcp send: %s", out)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := termText(t, s, map[string]any{"cmd": "mcp recv " + h, "timeout": float64(0)}); strings.Contains(got, "200") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, ok := s.recvCursors[h]; !ok {
+		t.Fatalf("no cursor recorded for %s after a recv; the rest of this test proves nothing", h)
+	}
+
+	if out := termText(t, s, map[string]any{"cmd": "mcp close " + h}); !strings.Contains(out, "204") {
+		t.Fatalf("mcp close: %s", out)
+	}
+	if _, ok := s.recvCursors[h]; ok {
+		t.Errorf("handle %s still has a recv cursor after close; the map grows for the life of the process", h)
+	}
+}
+
+// TestMCPRecvCursorUsesRawByteSpan pins that the cursor advances by the RAW
+// window length, not by the length of the rendered string.
+//
+// windowResult reports raw_bytes alongside the text precisely for this: ANSI
+// stripping and escaping change a window's rendered length, so an offset derived
+// from the text lands somewhere other than where the next frame begins. The
+// steady-state symptom is the one this whole fix exists to remove — a frame that
+// is present but reported as absent, because the read resumed past it.
+func TestMCPRecvCursorUsesRawByteSpan(t *testing.T) {
+	s := newTestServer(t)
+	h := openPipe(t, s, "cat")
+
+	frame := `{"jsonrpc":"2.0","id":7,"method":"ping"}`
+	if out := termText(t, s, map[string]any{"cmd": "mcp send " + h + " " + frame}); !strings.Contains(out, "202") {
+		t.Fatalf("mcp send: %s", out)
+	}
+
+	var got string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got = termText(t, s, map[string]any{"cmd": "mcp recv " + h, "timeout": float64(0)})
+		if strings.Contains(got, `"id":7`) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !strings.Contains(got, `"id":7`) {
+		t.Fatalf("recv never delivered the frame: %s", got)
+	}
+
+	// The cursor must sit at or before the stream length, and the next recv must
+	// not re-deliver this frame.
+	next := termText(t, s, map[string]any{"cmd": "mcp recv " + h, "timeout": float64(0)})
+	if strings.Contains(next, `"id":7`) {
+		t.Errorf("the frame was delivered twice; the cursor did not advance past it: %s", next)
+	}
+}
+
+// TestMCPRecvDrainsEveryQueuedFrame pins that recv is a QUEUE, not a snapshot.
+//
+// A resident peer answers every request it has been given, so by the time the
+// caller reads, several complete frames are sitting on the channel at once. That
+// is the normal case for an MCP conversation: initialize, then initialized, then
+// tools/list are three lines written back to back, and the replies are waiting.
+//
+// The bug this pins: recv read a WINDOW (max_bytes) and reported 204 whenever the
+// window held no complete frame, even with frames queued behind it. It looked
+// exactly like a lost message — a caller that had written three requests was told
+// "no complete frame yet" while all three replies were in the channel. The
+// workaround was to abandon recv and page the raw stream by hand, which is the
+// behaviour this test makes unnecessary.
+func TestMCPRecvDrainsEveryQueuedFrame(t *testing.T) {
+	s := newTestServer(t)
+	h := openPipe(t, s, "cat")
+
+	frames := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"notifications/initialized"}`,
+	}
+	for _, f := range frames {
+		if out := termText(t, s, map[string]any{"cmd": "mcp send " + h + " " + f}); !strings.Contains(out, "202") {
+			t.Fatalf("mcp send did not accept %s:\n%s", f, out)
+		}
+	}
+
+	// Every queued frame must come out of recv, in order, with no 204 in between.
+	// The loop polls rather than sleeping a fixed time: the peer is a process, so
+	// how soon its writes land is not the test's to assume. A 204 is retried
+	// instead of ending the loop, because "not there YET" and "never" are exactly
+	// the two cases the old code could not tell apart.
+	want := []string{`"id":1`, `"id":2`, `"id":3`}
+	var seen []string
+	deadline := time.Now().Add(3 * time.Second)
+	for len(seen) < len(want) && time.Now().Before(deadline) {
+		got := termText(t, s, map[string]any{"cmd": "mcp recv " + h, "timeout": float64(0)})
+		if strings.Contains(got, "no complete frame yet") {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		for _, w := range want {
+			if strings.Contains(got, w) && !containsStr(seen, w) {
+				seen = append(seen, w)
+			}
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("recv delivered %d of %d queued frames (%v); frames were waiting while recv reported 204",
+			len(seen), len(want), seen)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("recv delivered frames out of order: got %v, want %v", seen, want)
+			break
+		}
+	}
+
+	// And it is a consumer, not a snapshot: with the queue drained, the next recv
+	// has nothing to give rather than replaying the three frames again.
+	after := termText(t, s, map[string]any{"cmd": "mcp recv " + h, "timeout": float64(0)})
+	if strings.Contains(after, `"jsonrpc"`) {
+		t.Errorf("recv re-delivered a frame after the queue drained:\n%s", after)
+	}
+}
+
+func containsStr(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // A batch target produces one slot per entry: N questions, N answers.
 func TestTermBatchProducesOneSlotPerTarget(t *testing.T) {
 	s := newTestServer(t)
@@ -535,13 +707,22 @@ func TestTermBatchProducesOneSlotPerTarget(t *testing.T) {
 }
 
 // The structured projection mirrors the text one, slot for slot, key for key.
+//
+// It is requested explicitly because it is off by default: the two projections
+// carry the same bytes, so the JSON twin is a duplicate a caller opts into. The
+// switch is about the WIRE, not about the value — the reply builds both either
+// way, which is what this test can therefore check on one call.
 func TestTermStructuredContentIsIsomorphic(t *testing.T) {
 	s := newTestServer(t)
 	h := openPipe(t, s, "sleep 5")
-	res := termCall(t, s, map[string]any{"cmd": "read " + h + "; read " + h, "timeout": float64(0)})
+	res := termCall(t, s, map[string]any{
+		"cmd":                "read " + h + "; read " + h,
+		"timeout":            float64(0),
+		"structured_content": true,
+	})
 
 	if res.StructuredContent == nil {
-		t.Fatal("no structuredContent")
+		t.Fatal("structured_content:true produced no structuredContent")
 	}
 	raw, err := json.Marshal(res.StructuredContent)
 	if err != nil {
@@ -807,15 +988,28 @@ func TestTermMCPStreamableHandshakeAndClose(t *testing.T) {
 	}
 }
 
+// A URL this layer cannot speak is refused with the schemes it CAN speak, not
+// with a dial failure three layers down.
+//
+// The second half used to assert the opposite — that `mcp open .../sse` was
+// refused as the legacy transport. That refusal is gone: the frame channel reads
+// whichever shape the endpoint answers with (a JSON body or one event on a
+// stream), so an endpoint carrying an /sse path is a URL like any other. What
+// was actually unsupported was the SHAPE, and the shape is now handled.
 func TestTermMcpOpenValidatesURL(t *testing.T) {
 	s := newTestServer(t)
 	res := termCall(t, s, map[string]any{"cmd": "mcp open not-a-url"})
-	if !res.IsError || !strings.Contains(toolResultText(res), "http(s) URL") {
-		t.Fatalf("mcp open accepted a non-URL:\n%s", toolResultText(res))
+	body := toolResultText(res)
+	if !res.IsError || !strings.Contains(body, "http(s)") || !strings.Contains(body, "ws(s)") {
+		t.Fatalf("mcp open refused a non-URL without naming what works:\n%s", body)
 	}
-	res = termCall(t, s, map[string]any{"cmd": "mcp open http://127.0.0.1:18765/sse"})
-	if !res.IsError || !strings.Contains(toolResultText(res), "streamable HTTP") {
-		t.Fatalf("mcp open accepted the unsupported SSE transport:\n%s", toolResultText(res))
+
+	// A URL with a scheme but no listener is a connection failure, which is a
+	// different reply from a refusal: the caller has to be able to tell a typo
+	// from a dead endpoint.
+	res = termCall(t, s, map[string]any{"cmd": "mcp open ftp://example.com"})
+	if !res.IsError || !strings.Contains(toolResultText(res), "unsupported scheme") {
+		t.Fatalf("an unknown scheme was not explained:\n%s", toolResultText(res))
 	}
 }
 

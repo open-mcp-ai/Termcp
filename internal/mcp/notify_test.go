@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -540,9 +541,17 @@ func shellIDOf(t *testing.T, s *Server, handle string) string {
 		}
 		t.Fatalf("handle %q: session has no primary shell", handle)
 	}
-	sh := sess.GetChildShell(idxPart)
-	if sh == nil {
-		t.Fatalf("handle %q: no shell %q", handle, idxPart)
+	// The `:N` in a handle is the channel INDEX, not a shell id. Resolving it with
+	// GetChildShell looks up a shell whose id happens to be "1", which never
+	// matches — the handle used to omit `:1` entirely, so this branch was reached
+	// only for secondary channels and the mistake stayed hidden.
+	idx, err := strconv.Atoi(idxPart)
+	if err != nil || idx < 1 {
+		t.Fatalf("handle %q: %q is not a channel index", handle, idxPart)
+	}
+	sh, err := s.shellFromIndex(sess, idx)
+	if err != nil || sh == nil {
+		t.Fatalf("handle %q: no channel %d (%v)", handle, idx, err)
 	}
 	return sh.ID
 }

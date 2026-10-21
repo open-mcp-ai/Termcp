@@ -10,6 +10,7 @@ import (
 func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	bindHost := getString(args, "bind_host", "")
 	remoteHost := getString(args, "remote_host", "localhost")
 	remotePort := int(getFloat64(args, "remote_port", 0))
 	localPort := int(getFloat64(args, "local_port", 0))
@@ -32,7 +33,7 @@ func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolR
 	// DEAD cascade matches on (forwardMgr.CloseBySession), so storing the argument
 	// verbatim would leave the listener alive when the session goes down if that
 	// argument was a locator.
-	fw, err := s.forwardMgr.CreateLocal(sess.ID, sess.Info().Name, remoteHost, remotePort, localPort, sshCli)
+	fw, err := s.forwardMgr.CreateLocal(sess.ID, sess.Info().Name, bindHost, remoteHost, remotePort, localPort, sshCli)
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
@@ -85,6 +86,7 @@ func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallTool
 func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	bindHost := getString(args, "bind_host", "")
 	localPort := int(getFloat64(args, "local_port", 0))
 
 	if sessionID == "" {
@@ -100,7 +102,7 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToo
 	}
 	info := sess.Info()
 	// sess.ID, not the argument — see handleLocalForward.
-	fw, err := s.forwardMgr.CreateDynamic(sess.ID, info.Name, localPort, sshCli, info.SSHEndpoint == "internal")
+	fw, err := s.forwardMgr.CreateDynamic(sess.ID, info.Name, bindHost, localPort, sshCli, info.SSHEndpoint == "internal")
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}

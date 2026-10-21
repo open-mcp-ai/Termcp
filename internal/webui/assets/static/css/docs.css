@@ -89,7 +89,7 @@
     #toast {
       position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
       background: var(--toast-bg); color: var(--text-primary); padding: 8px 14px; border-radius: 8px;
-      font-size: 0.82rem; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 100;
+      font-size: 0.82rem; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: var(--z-toast);
     }
     #toast.show { opacity: 1; }
 

@@ -75,6 +75,32 @@ func (m *Manager) CloseChildShell(id string) (bool, error) {
 	return true, err
 }
 
+// ArchiveChildShell stops a child shell by its ID and KEEPS its record, unlike
+// CloseChildShell which erases it. Returns found=false if no such shell is live.
+//
+// The parent and its SSH transport are unaffected: only the channel ends.
+func (m *Manager) ArchiveChildShell(id string) (bool, error) {
+	var parent *Session
+	m.sessions.Range(func(_, v any) bool {
+		s := v.(*Session)
+		if s.GetChildShell(id) != nil {
+			parent = s
+			return false
+		}
+		return true
+	})
+	if parent == nil {
+		return false, nil
+	}
+	err := parent.ArchiveChildShell(id)
+	// The snapshot now carries the archived shell, so it must be written out: a
+	// restart has to find the channel in the manifest, not just in memory. This is
+	// the one persist call whose job is to CREATE an entry rather than remove one.
+	m.persistOne(parent.ID)
+	m.notifyListChange()
+	return true, err
+}
+
 // resolveShellID fills in the session's primary shell when a caller passes an
 // empty shellID. Log files are addressed per shell, so an empty id would name a
 // path that does not exist and read back nothing; callers that only hold a

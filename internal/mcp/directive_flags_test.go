@@ -100,3 +100,45 @@ func TestDocumentedProfileActionsExist(t *testing.T) {
 		}
 	}
 }
+
+// TestBindHostReachesTheForwardManager closes the blind spot the scan above has.
+//
+// That test asks "does this flag's name appear in the package", which --local-host
+// passed for years while being read by exactly one handler: it was consumed by the
+// REMOTE branch, so the scan saw the name and every local/dynamic call still
+// ignored the address the caller set. A name in the source is not a value arriving
+// where it is used, so this asserts the wiring itself: both handlers that can bind
+// a local listener must pass bind_host on.
+func TestBindHostReachesTheForwardManager(t *testing.T) {
+	src := readPackageSource(t)
+	for _, call := range []struct {
+		name   string
+		marker string
+		arg    string
+	}{
+		// A local forward binds in this host: the address is the third argument.
+		{"CreateLocal", "CreateLocal(sess.ID, sess.Info().Name, ", "bindHost"},
+		// A dynamic forward binds in this host too, before the port.
+		{"CreateDynamic", "CreateDynamic(sess.ID, info.Name, ", "bindHost"},
+	} {
+		i := strings.Index(src, call.marker)
+		if i < 0 {
+			t.Errorf("handle%s no longer calls %s with the shape this test knows; "+
+				"update the marker so the bind_host argument stays checked", call.name, call.name)
+			continue
+		}
+		rest := src[i+len(call.marker):]
+		if !strings.HasPrefix(rest, call.arg) {
+			t.Errorf("%s is called without %s as its bind address: %q. The flag parses, "+
+				"the handler runs, and the address the caller set is dropped.",
+				call.name, call.arg, firstLine(rest))
+		}
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

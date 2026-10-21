@@ -42,7 +42,7 @@ MCP tool arguments, results, and error codes are described by the tool schemas f
 can open `/api.html` (Web UI **API / MCP**) for copy-ready MCP config and the HTTP
 API cheat sheet.
 
-## 2. Agent-facing documents (HTTP + MCP resources)
+## 2. Agent-facing documents (HTTP)
 
 The instance serves its own documentation on the same origin, so agents and scripts
 can learn the API without MCP and without version drift:
@@ -63,17 +63,15 @@ carries what a pinned, capability-trimmed session is and how to drive one.
 A written tutorial would be a second description of the protocol, and the one
 thing a second description reliably does is drift.
 
-MCP clients get the same bytes as resources: `resources/list` exposes these files
-and the `resources/read` URIs are exactly the `<origin>/…` HTTP addresses above (one
-URI, two access paths). The `learn-api` prompt primes an agent with these documents
-before it acts. Like the tool listing, these addresses follow the **request**: a
-client that reached the instance through a LAN IP, a proxy name or a tunnel is handed
-that address, and `resources/read` accepts the URI it was just given (the registration
-is matched by path, so any origin works).
+MCP clients do **not** get this file as an MCP resource: the server publishes one
+tool whose command line describes itself, so a model driving termcp over MCP has no
+reason to read the REST endpoint table — it sends `help`, not `GET /api/sessions`.
+The `learn-api` prompt is still published, and it points an agent at this URL when
+the task really is to script against REST.
 
 The instance's own address is published to agents, so one can tell a human where to look
 (watch live output, type a secret, approve a reviewed command) instead of naming a page
-they would have to find themselves. It rides on the `notify_user` tool description in
+they would have to find themselves. It rides on the `term` tool description in
 `tools/list` — the one channel guaranteed to reach the model, since a client that drops
 the tool listing cannot call any tool at all. It is deliberately **not** in the
 `initialize` instructions (optional in MCP, routinely discarded, and a per-request value
@@ -86,23 +84,13 @@ The origin is the one the **request** arrived on — the host the client dialed 
 `X-Forwarded-Proto` — so the client that dialed a LAN IP, a proxy name, or a tunnel host
 is told exactly the address it reached, and a human on that same path can open it. It is
 resolved per request, so one instance can serve several addresses at once, and every
-published address follows it: the `notify_user` description, the `resources/list` URIs,
-the `resources/read` reply and the `learn-api` prompt all name the caller's own address.
+published address follows it: the `term` tool description and the `learn-api` prompt
+both name the caller's own address.
 A proxy must
 keep `Host` (or set `X-Forwarded-Host`); one that rewrites it to an internal upstream
 name makes the published address unusable, since termcp has no self-origin override.
 The one fallback is a request that names no host at all (HTTP/1.0 without `Host`), which
 is handed the discovered bind address instead.
-
-Authentication does not apply to these read-only documents: they carry no data
-and no secrets, and a fresh client (an agent before MCP setup, a script) has to be
-able to fetch them before it can use the API, so `/api.md` stays public even when a
-token is configured. Everything else — Web UI, REST, MCP, WebSocket
-— still requires credentials.
-
-```bash
-curl -fsS "$BASE/api.md"                       # authoritative reference
-```
 
 ## 3. Authentication (optional, off by default)
 
@@ -977,16 +965,24 @@ Request:
   "direction": "local",      // "local" | "remote" | "dynamic"
   "remote_host": "localhost",
   "remote_port": 80,
-  "local_host": "0.0.0.0",   // required for remote mode
-  "local_port": 8080          // 0 = auto-assign
+  "bind_host":  "",          // local: what THIS host listens on (default 127.0.0.1)
+  "local_host": "0.0.0.0",   // remote: what the TARGET listens on
+  "local_port": 8080          // 0 = auto-assign (local/dynamic only)
 }
 ```
 
 | direction | Required fields |
 |-----------|-----------------|
-| `local` | `remote_host`, `remote_port` (1-65535) |
+| `local` | `remote_host`, `remote_port` (1-65535); `bind_host` optional |
 | `remote` | `local_host`, `local_port`, `remote_host`, `remote_port` (1-65535) |
-| `dynamic` | none |
+| `dynamic` | `local_port` optional; `bind_host` is refused unless loopback |
+
+`bind_host` and `local_host` name two different machines, which is why they are two
+fields: `local` and `dynamic` listen here, `remote` listens on the target. Setting
+`bind_host` to `0.0.0.0` (or `*`) publishes the tunnel to every interface, and the
+review prompt says so before the forward is created. A `dynamic` forward refuses any
+non-loopback `bind_host`: its SOCKS5 handshake performs no authentication, so it
+would be an open proxy for anything that can reach the port.
 
 Errors: `404` unknown session, `409` the session is closed (DEAD — a closed
 session is read-only and accepts no new forwards).
@@ -1797,7 +1793,7 @@ Response 200:
 ```
 
 <!-- BEGIN termdoc: args -->
-| `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error |
+| `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
 | `timeout` | Seconds to wait (default 2; a pipe returns as soon as its process exits) |
 | `bytes_limit` | Max bytes per slot (default 8192; `0` = the handle only, no bytes) |
 | `lines_limit` | Max lines per slot (default 200; `0` = no line limit) |
@@ -1807,7 +1803,10 @@ Response 200:
 | `on_lines_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `pipe_to` | A handle whose stdin receives this reply's bytes; they leave the body |
 | `learn_mode` | Attach each directive's usage line once per reply |
-| `structured_only` | Send only the JSON projection, dropping the rendered text. Both carry the same bytes, so this halves a large reply's cost (measured: −49%); a client that renders text sees none. Default `false` |
+| `structured_content` | Also send the JSON projection as `structuredContent`. **Off by default**: the two projections carry the same bytes, so the JSON copy is a duplicate a human sees on every call. Pass `true` for a client that reads structured content |
+| `allow_escapes` | Permit raw control bytes in cmd. Default: false. Pass `vars` for data (newlines/quotes) or `args` for command lines |
+| `args` | Positional values for `$1`, `$2`, … (1-based; `$0` is refused). A reference that is the WHOLE payload of `run`/`type` is sent to the terminal verbatim — that is how `pwd; whoami` gets to run as two commands — while a reference beside other words is substituted as one quoted word. `${10}` is the unambiguous form for ten or more |
+| `vars` | Dictionary substituted into `cmd` at parse time ($NAME replaced by one safely quoted word). Use `args` for values that must reach the terminal as shell syntax |
 <!-- END termdoc: args -->
 
 The window parameters are identical to the tool's, with the same names and the

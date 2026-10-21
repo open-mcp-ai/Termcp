@@ -362,11 +362,11 @@ func TestGuardResolvesIndirectResourceIDs(t *testing.T) {
 	// would normally make them are themselves gated, which is the point.
 	// localDial=true keeps the tunnel off the SSH transport, so the test needs no
 	// client — it is the same call the internal profile makes.
-	fw, err := s.forwardMgr.CreateDynamic(sid, "restricted", 0, nil, true)
+	fw, err := s.forwardMgr.CreateDynamic(sid, "restricted", "", 0, nil, true)
 	if err != nil {
 		t.Fatalf("CreateDynamic: %v", err)
 	}
-	rule, err := s.notifyMgr.Register(sid, shellID, notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule, err := s.notifyMgr.Register(sid, shellID, notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -390,11 +390,11 @@ func TestGuardResolvesIndirectResourceIDs(t *testing.T) {
 	// invisible to every caller that predates the whitelist.
 	plain := createTestSession(t, s, api.ModePipe)
 	plainShell := s.sessMgr.Get(plain).PrimaryShellID()
-	fw2, err := s.forwardMgr.CreateDynamic(plain, "plain", 0, nil, true)
+	fw2, err := s.forwardMgr.CreateDynamic(plain, "plain", "", 0, nil, true)
 	if err != nil {
 		t.Fatalf("CreateDynamic: %v", err)
 	}
-	rule2, err := s.notifyMgr.Register(plain, plainShell, notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule2, err := s.notifyMgr.Register(plain, plainShell, notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -636,3 +636,6 @@ func TestGuardGatesEveryHandleSpelling(t *testing.T) {
 		}
 	}
 }
+
+// intPtr names a value the API sends as an optional integer.
+func intPtr(v int) *int { return &v }

@@ -257,8 +257,24 @@
    The keys share the declaration too — the NetHub toolbar's switch, its play
    split and its invert key are plates like the panels, and this is the one
    clip-path in this file, not one per component, so the corner cannot drift. */
+/* The plate list also carries the extension plate's flat keys (.ext-key), the
+   dock's batch keys (.dock-key) and the drop-down menu's items (.nethub-menu-item).
+   All three are panels in miniature — a bordered, filled box that reads as a
+   fabricated plate — so leaving them out of this rule is what made them plain
+   rectangles while every neighbouring key had the cut corner; the menu items were
+   still rectangles for exactly that reason.
+ `--cut` is what makes a 30px key still
+   read as a plate: the key's own rule sets a smaller cut than the panels, so the
+   diagonal is one step of a small box rather than a notch on a big one. */
 .workspace-sessions, .modal, .conn-tile.entry-card, .drawer-add,
-.conn-load-banner, .jump-card.jump-summary, .nethub-select-toggle, .nethub-open-plate, .nethub-batch-icon, .icon-btn {
+.conn-load-banner, .jump-card.jump-summary, .nethub-select-toggle, .nethub-open-plate, .nethub-batch-icon, .icon-btn,
+.ext-key, .dock-key, .session-tab-tick, .nethub-menu-item,
+/* The window header's tick. It is the same control as the dock tab's tick — both
+   write the same selection — so it has to be the same shape. It was left out of this
+   list while every key beside it carried the cut corner, so a TICKED window was the
+   one rectangle in the header: the fill arrived (the accent) on a square box, which
+   is precisely the "selected but not styled" look. */
+.shell-header-icon-btn {
   --cut: 14px;
   --notch-left: 50%;
   --notch-run: 8px;
@@ -316,6 +332,78 @@
 }
 .workspace-sessions .section-header:hover { background-image: linear-gradient(90deg, var(--accent-surface), transparent 60%); }
 
+/* Cyberware capacity: the LONG HUD bar on the extensions header.
+ *
+ * The theme renames this column 义体容量 (nav.extensions), so the number against it is
+ * a capacity and gets a segmented energy track behind it. The bar fills the header's
+ * free space — between the title and the count — which is why it is `flex: 1 1 auto`
+ * here: a short bar floating in a wide header reads as decoration, while a track that
+ * spans the row reads as the gauge the number is reporting from.
+ *
+ * The base sheet hides the track; this is the only sheet that lays it out. Same rule
+ * as everywhere else in this theme: restyle a column, never owe it structure. */
+.ext-capacity-track {
+  display: block;
+  flex: 1 1 auto; height: 9px; min-width: 80px;
+  margin: 0 10px 0 6px;
+  background: rgba(0, 0, 0, .55);
+  border: 1px solid var(--accent-border);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, .8), 0 0 4px var(--accent-surface);
+  position: relative; overflow: hidden;
+}
+.ext-capacity-fill {
+  display: block; height: 100%;
+  /* Segmented, the way a capacity gauge is drawn: solid bars with gaps, not a smooth
+     fill. The pattern IS the look. */
+  background: repeating-linear-gradient(
+    90deg,
+    var(--accent) 0,
+    var(--accent) 7px,
+    transparent 7px,
+    transparent 10px
+  );
+  box-shadow: 0 0 8px var(--accent);
+}
+/* The count is the capacity's NUMBER, so it loses the badge box here: a bordered chip
+   on the end of a filled track is two shapes saying the same thing. Colour and weight
+   carry it instead. */
+.ext-head-bar .ext-count-badge {
+  border-color: transparent; background: none;
+  color: var(--accent); font-size: .72rem;
+  padding: 1px 0 1px 2px; min-width: 0;
+}
+.ext-head-bar .ext-count-badge::after {
+  content: '/∞';
+  margin-left: 2px;
+  opacity: .85;
+}
+
+/* The plate's inscription, in this theme's voice.
+ *
+ * The base sheet sets it as a quiet watermark; here it is a phosphor read-out burned
+ * into the plate: the accent colour, a soft bloom, and the upper line tracked out like
+ * a console banner. Kept faint enough to sit BEHIND the cards without competing with
+ * them — the empty state is a resting surface, not an event, so nothing pulses.
+ *
+ * The split is deliberate: the first line is a mono HUD string (uppercase, tracked),
+ * the second is the sentence a reader actually parses. That is how the rest of this
+ * theme labels its panels. */
+.ext-inscription {
+  color: var(--accent);
+  opacity: .32;
+  text-shadow: 0 0 10px var(--accent-surface);
+}
+.ext-inscription-line:first-child {
+  color: var(--accent);
+  opacity: .9;
+  letter-spacing: .18em;
+}
+.ext-inscription-line:last-child {
+  color: var(--accent);
+  opacity: .75;
+  letter-spacing: .06em;
+}
+
 /* Host cards: a hacker's target list. The left rail is the row's state, the
    label carries the name, and the host line is mono so addresses line up. */
 .conn-tile.entry-card {
@@ -370,6 +458,52 @@
    missing once — name them THERE, not here. */
 .btn { --cut: 7px; --notch-left: 0%; --notch-run: 0px; }
 .icon-btn { --cut: 6px; --notch-left: 0%; --notch-run: 0px; }
+/* A 26-30px key: the same plate, at one key's scale.
+ *
+ * The cut has to fit the box. A 14px corner on a 26px-tall key takes more than half
+ * the height and eats the glyph the key exists for; six pixels keeps the diagonal
+ * as ONE step of a small box, which is what still reads as a cut corner rather than
+ * as a rounded rectangle. That is the whole reason the knob is per-component.
+ *
+ * The fold stays off: `--notch-left` is a share of the key's HEIGHT, so a 50% fold
+ * on a 26px key puts a 13px step in the middle of its left edge and cuts into the
+ * label. The fold is a panel gesture — it needs interior to bite into.
+ *
+ * The zeros carry units for the same reason as above — a bare `0` makes the
+ * polygon's last two terms percentage-minus-number, which is invalid and drops the
+ * whole shape. */
+/* A KEY IS A PLATE IN MINIATURE — the same shape, not a softened version of it.
+ *
+ * These carried `--cut: 6px; --notch-left: 0%; --notch-run: 0px`, which zeroed the
+ * notch AND the run, leaving a 6px nick on a 30px key. On screen that reads as a
+ * plain rectangle with a chipped corner: the two declarations that make the shape
+ * read as FABRICATED — the concave step and the run that gives it a depth — were
+ * both off, so the keys stopped being recognisably the same family as the panels
+ * beside them. That is what "it is not using that style" means.
+ *
+ * The values are the panel's own, scaled to the box: a 30px key against a 240px
+ * panel puts the 14px cut at 7px here, and the notch and run keep the panel's
+ * proportions (50% of the edge, 8px). A cut that is a fixed fraction of the height
+ * is what keeps a key looking like a key at any height the bar is given. */
+.ext-key, .dock-key, .session-tab-tick {
+  --cut: 7px;
+  --notch-left: 50%;
+  --notch-run: 4px;
+}
+/* The window header's tick is a 24px box (32px on touch) — smaller than any key on
+   the bars, so its corner is cut one step finer. The notch is the same fraction of
+   the edge, which is what keeps it reading as the same family at a smaller size
+   rather than as a bigger chip that happens to be small. */
+.shell-header-icon-btn {
+  --cut: 5px;
+  --notch-left: 50%;
+  --notch-run: 3px;
+}
+/* A menu item is 32px tall and spans the menu's whole width, so its corner is cut
+   at the same one-step scale as a key but reads softer: the diagonal is measured
+   along the short edge, which here is the height. 8px keeps the step visible on a
+   wide row without biting into the label's left inset (12px of padding). */
+.nethub-menu-item { --cut: 8px; --notch-left: 0%; --notch-run: 0px; }
 
 .btn {
   font-family: var(--font-mono); font-size: .78rem; letter-spacing: .04em;
@@ -385,6 +519,14 @@
 .btn-danger { background: var(--danger-surface); border-color: var(--danger-border); color: var(--danger); }
 .btn-danger:hover { background: var(--danger); border-color: var(--danger); color: var(--text-on-accent); }
 .icon-btn { border-radius: 0; }
+/* The extension add key is a split: its .nethub-open-plate carries the corner,
+   and the wide half inside it must not carry a second one — two nested clipped
+   boxes show the inner corner floating inside the outer. The knobs go to zero
+   rather than overriding the property outright, because the shape is declared in
+   exactly one place and a second declaration is how copies drift apart. The
+   zeros keep their units: a bare `0` makes the polygon percentage-minus-number,
+   which is invalid and takes the shape down with it. */
+.ext-add-split .batch-open-main { --cut: 0px; --notch-left: 0%; --notch-run: 0px; }
 
 /* The header is a HUD strip: thin, cold, with a hairline that glows. */
 .app-header {
@@ -556,7 +698,7 @@
    keeps its slow breathing; these states only add a brief local disturbance and
    never turn the page into an esports HUD. */
 body::after {
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: var(--z-behind);
   opacity: 0; background: radial-gradient(circle at var(--bw-x, 50%) var(--bw-y, 50%), rgba(var(--cyan-rgb), .13), transparent 22%);
 }
 body.bw-session-active::after { opacity: .22; transition: opacity .35s ease; }
@@ -586,3 +728,23 @@ body.bw-error::after { background: linear-gradient(90deg, transparent 0 42%, rgb
 .sess-plate-empty::before, .sess-plate-empty::after { color: var(--accent); opacity: .5; }
 .sess-plate-empty::before { content: '› '; }
 .sess-plate-empty::after { content: ' ‹'; }
+
+/* ---- The extension column's key glows -------------------------------------
+   cyberpunk's neon vocabulary, and the ONLY thing this theme changes about the
+   workspace layout: the glyph of the column's trigger carries a cyan bloom, so
+   the key reads as powered rather than printed.
+
+   It lives here, not in workspace.css, because that file is no longer part of
+   this theme. It used to be a full 814-line copy of the shared sheet, kept in
+   step by hand; the copy drifted twice — the batch-select slide animation was
+   fixed in the copy only (f6ba883) and never reached the default theme, and
+   .extpanel-body lost a margin the shared sheet carries. So the copy is gone:
+   the theme ships no workspace.css at all and inherits the shared one through
+   themes.go's fallback, which means the layout is corrected once for every
+   theme instead of twice by whoever remembers.
+
+   Consequence to keep in mind when editing: a rule that belongs to LAYOUT
+   cannot live in this theme any more, because the shared sheet already owns it
+   and this file is where a skin goes. Want a structural change? It is a change
+   to static/css/workspace.css, for everybody. */
+.extpanel-btn { text-shadow: 0 0 10px rgba(var(--cyan-rgb), .35); }

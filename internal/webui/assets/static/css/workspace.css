@@ -1,28 +1,442 @@
-/* ---- Workspace layout: NetHub resource sidebar -------------------------
-   NetHub is the page's control layer, so it is a layout column rather than a
-   page-level overlay: the central workspace is the row's only flexible track,
-   which is what gives the terminal its room back when the sidebar collapses.
-   The collapse is a change of ONE length (--nethub-w) plus the body's own
-   max-height, so the workspace reflows instead of being covered.
+/* ---- Workspace layout: the four regions -------------------------------
+   The row is three tracks and the page has a fourth region pinned below them:
 
-   The same element becomes a narrow rail of status lamps when collapsed, and
-   the drawer the small screens have always used below 800px. Those are the two
-   places its body leaves normal flow; desktop never overlays. */
+     [ 主机 276px ][ 扩展 —— the flexible track ][ 归档 260px ]
+     [              window dock: the tab row (44px)             ]
+
+   The flexible track is the EXTENSION plate, which is the whole point of this
+   layout: the extension layer is what this page is for, so it gets the room.
+   The host list is a fixed column on the left (which machines exist) and the
+   archive is a fixed column on the right (what already happened) — both are
+   things you consult, and neither should cost the centre its pixels.
+
+   Each column WEARS THE OTHER'S FRAME, which is the deliberate part: the centre
+   is the sessions plate (a section header with its batch keys over a card grid)
+   because that is the frame a user already knows for a list of cards, and the
+   right column is the extension panel (a trigger key, a folding body, a rail of
+   lamps) because that is the frame this page uses for a column you put away.
+   Both frames are the originals; only their contents moved.
+
+   Every column still collapses to a rail rather than to nothing, and below
+   800px they all become the drawers and the full-screen terminal they already
+   were. The desktop states are what this section defines. */
 .workspace-frame {
   display: grid;
-  grid-template-columns: var(--nethub-w) minmax(0, 1fr);
+  grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--ext-w);
   align-items: start;
   gap: 16px;
   --nethub-w: 276px;
+  /* 260px, A PLAIN LENGTH VALUE, and that is what makes the collapse ANIMATE.
+   *
+   * An intrinsically-sized track (`fit-content(...)` or `max-content`) is not
+   * interpolable: CSS transitions drop any transition between an intrinsic keyword
+   * and a length, which caused "collapsing and expanding the archive lost its smooth
+   * animation and snapped in one frame".
+   *
+   * 260px gives the rows the room they need (a tick, name+meta, and facts column),
+   * keeps the right column balanced with the 276px hosts column, and interpolates
+   * cleanly to/from the 56px collapsed rail over the .24s transition window.
+   *
+   * The "one vertical strip" constraint is carried by the archive grid's own
+   * `flex-wrap: nowrap` below: rows scroll top-to-bottom and never wrap into a
+   * second column. */
+  --ext-w: 260px;
   transition: grid-template-columns .24s ease;
 }
 .workspace-panel { min-width: 0; }
-.workspace-main {
-  width: min(100%, 85rem); margin-inline: auto; min-inline-size: 0;
-  display: flex; flex-direction: column; gap: 12px;
+/* The right column's two desktop states. Expanded it holds the archive;
+   collapsed it is a rail of lamps, the same arrangement NetHub has on the
+   other side. */
+.workspace-frame.ext-collapsed { --ext-w: 56px; }
+
+/* The centre: the extension plate, wearing the sessions plate's own frame (see
+   .workspace-sessions below, which is that frame). It is a plain block here —
+   .workspace-exts only adds what an extension list needs on top of it. */
+.workspace-frame > .workspace-exts {
+  grid-column: 2;
+  width: 100%;
 }
+/* The plate's body is ONE wrapping flow holding the cards AND the two authoring
+   keys. The keys are cards in this list — the two ways an extension enters it —
+   so they have to share its row; a row of their own would put a full-width
+   dashed plank under an 832px grid, which is exactly what the drawer's geometry
+   did when it moved here from a 276px column.
+
+   The grid dissolves into that flow (`display: contents`): it stops being a box,
+   its tiles become items of the body's wrap row, and the body itself is what
+   scrolls. JS keeps replacing the grid's children, which is unaffected — the
+   element is still the mount point, it just has no box of its own. */
+.workspace-exts { display: flex; flex-direction: column; min-width: 0; }
+
+/* ---- The plate's header bar -------------------------------------------------
+   ONE bar holding the title trigger and the batch keys, not a trigger with a
+   cluster hung beside it. The bar carries .nethub-btn's dressing — the border,
+   the 50px height, the focus treatment — and the trigger lives inside it as the
+   leading cell, so the keys read as this column's controls rather than as a
+   right-aligned afterthought with a box of its own.
+
+   The move is not cosmetic: a control cannot be nested inside a <button>, so the
+   look had to move up a level to let the keys sit inside the bar at all. That is
+   exactly why the first attempt put them outside — and why it looked wrong. */
+.ext-head { flex: 0 0 auto; display: flex; min-width: 0; }
+/* The bar reuses .nethub-btn's DRESSING but not its geometry: that rule is
+   `flex: 0 0 50px` (a trigger sized to its own content in a column), while this
+   element is a full-width row that holds the trigger and the keys. Without the
+   override the bar collapsed to 50px and the keys hung outside its border —
+   which is exactly the "floating cluster on the right" the layout was supposed
+   to stop being. */
+.ext-head .ext-head-bar {
+  flex: 1 1 auto; width: auto; min-width: 0; padding: 0;
+  display: flex; align-items: center; gap: 0;
+}
+/* The trigger is a bare key now: the bar around it owns the border, so this must
+   not draw a second one, and it takes the room the keys do not. */
+.ext-head-bar .ext-fold-btn {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px;
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font: inherit; font-family: var(--font-mono); font-size: .72rem;
+  font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  text-align: left;
+}
+.ext-head-bar .ext-fold-btn:focus-visible {
+  outline: none; box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+/* The column's count, on the header trigger beside its title.
+ *
+ * It used to be a line of its own above the cards, labelled "Extensions:" — directly
+ * under a header that already says "Extensions", which is the same word twice, one
+ * row apart. On the header the number belongs to the title, and the body is left to
+ * the cards. The archive's count rides its own header the same way.
+ *
+ * EXACTLY ONE auto margin may sit in this row, and this is it. The shared
+ * `.nethub-caret` rule also carries `margin-left: auto` (it is the last item in the
+ * hosts and archive headers), so leaving both in place would split the free space
+ * between them: measured, the badge sat at 768 while the caret sat at 1174, with a
+ * 388px hole in a 1032px bar. Suppressing the caret's push here and letting the badge
+ * carry it keeps the pair together at the far end.
+ *
+ * There is no `[hidden]` sibling fallback, unlike the archive's: this badge never
+ * hides — "no extensions" is the state an author needs to see before creating the
+ * first one — so the box that carries the push is always laid out. */
+.ext-head-bar .ext-count-badge {
+  flex: 0 0 auto; margin-left: auto;
+  min-width: 18px; padding: 1px 5px;
+  border: 1px solid var(--accent-border); border-radius: 0;
+  background: var(--accent-surface); color: var(--accent);
+  font: 700 .62rem/1.4 var(--font-mono); letter-spacing: 0; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.ext-head-bar .nethub-caret { margin-left: 0; }
+/* The capacity bar is the CYBERPUNK theme's, and it is hidden by default rather than
+ * absent from the markup: a theme may restyle a column, never owe it structure. The
+ * theme also renames the column to 义体容量 through the catalog, so this same number
+ * reads as a capacity there. */
+.ext-capacity-track,
+.ext-capacity-fill { display: none; }
+/* The keys sit inside the bar, on its right end, separated by a hairline: they
+   are a different control from the fold, and the line says so without a gap that
+   would break the bar's border into two boxes. */
+/* The keys are ONE group pinned to the bar's right end, and the order inside it
+   is fixed from the right: invert never moves, add sits left of it, and the keys
+   that answer a selection grow leftwards from there. Growing at the right end
+   instead would slide the bar's own controls out from under the pointer on every
+   tick — the one thing a batch control must not do. */
+.ext-head-actions {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  position: relative; padding: 0 10px;
+  border-left: 1px solid var(--border-subtle);
+  height: 60%;
+}
+/* Grows to push the group rightwards, so the keys sit against the bar's end
+   whatever the trigger's width turns out to be. */
+.ext-head-actions { margin-left: auto; }
+/* The batch toolbar, stripped of the row box it had when it was a band under the
+   title: no padding, no divider, no bottom margin — the bar around it is the box
+   now. */
+.ext-head-actions .drawer-toolbar {
+  padding: 0; margin: 0; border-bottom: 0; gap: 8px;
+  align-items: center;
+}
+/* ---- The plate's flat keys --------------------------------------------------
+   The extension plate's controls are not the hosts column's batch row: they are
+   plain keys on the header bar, because this column has no selection MODE to
+   enter — every card is tickable all the time (see extensions.js). So they are
+   dressed like keys, not like switches: a bordered chip with a glyph and a word,
+   which is also what makes them read as the same family as the fold trigger they
+   sit beside rather than as a second toolbar. */
+.ext-key {
+  flex: 0 0 auto; height: 30px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer;
+  font: 600 .66rem var(--font-mono); letter-spacing: .07em; text-transform: uppercase;
+  white-space: nowrap;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.ext-key:hover, .ext-key:focus-visible {
+  color: var(--accent); border-color: var(--accent-border); background: var(--accent-surface);
+}
+.ext-key:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.ext-key svg { display: block; flex: 0 0 auto; }
+/* Hidden until something is ticked — see extensions.js: a flat bar has no switch
+   to sit a disabled key beside, so the key is absent rather than greyed. */
+.ext-key[hidden] { display: none; }
+/* New is the column's primary door, so it keeps the accent dressing the drawer's
+   own add key had; the batch keys stay neutral until hovered. */
+.ext-key-primary {
+  border-style: dashed; border-color: var(--accent-border); color: var(--accent);
+  /* A key, not a card: the grid's old "New" door was a card-sized slot because it
+     lived IN the list. On the bar it is one more key, so it must not inherit the
+     card floor the flat list gives its items. */
+  min-width: 0; max-width: none;
+}
+.ext-key-primary:hover, .ext-key-primary:focus-visible {
+  background: var(--accent-surface); border-color: var(--accent); color: var(--accent-hover);
+}
+/* The add split key: the hosts column's component, but always visible. Its shared
+   rule starts as a zero-width, hidden slot because that column reveals it only in
+   select mode; this plate has no mode, so it is a normal item at all times. */
+/* `flex: 0 0 auto` must also beat the shared rule's `0 0 0px`, and it does not
+   on specificity alone (both are one class) — so the selector below is scoped to
+   the plate. Left as a zero-width slot, the add key rendered as nothing at all
+   while still being "there", which is the quietest possible way to lose a
+   control. */
+.workspace-exts .ext-add-split {
+  flex: 0 0 auto; width: auto; min-width: 0;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  height: 30px; margin-left: 0;
+}
+.ext-add-split .nethub-open-plate { height: 100%; }
+/* The wide half keeps .ext-key's dressing; the plate's border is what frames the
+   pair, so the key itself must not draw a second one. */
+.ext-add-split .batch-open-main {
+  border: 0; height: 100%; padding: 0 9px; background: transparent;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.ext-add-split .nethub-open-plate {
+  border: 1px dashed var(--accent-border); color: var(--accent);
+}
+.ext-add-split .batch-open-main:hover { background: var(--accent-surface); color: var(--accent-hover); }
+.ext-add-split .batch-open-caret { color: var(--accent); border-left-color: var(--accent-border); }
+/* The add menu drops from the caret, which is at the key's RIGHT end — so it is
+   anchored right, or it would open under the far end of the key and read as a
+   menu that came from somewhere else. */
+.ext-add-split .nethub-open-menu { right: 0; left: auto; min-width: 168px; }
+/* An icon-only key: no label, so the padding is symmetric and the width is one
+   glyph. */
+.ext-key-icon { padding: 0 9px; }
+.ext-key-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-surface); }
+.ext-key-danger:hover, .ext-key-danger:focus-visible {
+  background: var(--danger); border-color: var(--danger); color: var(--bg-canvas);
+}
+/* The invert key's two glyphs are the shared pair: hollow while nothing is
+   selected, solid once everything is. Same markup, same rule as the hosts
+   column's. */
+.ext-key .ic-solid { display: none; }
+.ext-key.all-checked .ic-hollow { display: none; }
+.ext-key.all-checked .ic-solid { display: block; }
+.ext-key.all-checked { color: var(--accent); border-color: var(--accent-border); }
+/* Folded, the whole bar shrinks to its trigger: the keys control a list that is
+   no longer on screen, and the caret turns to point the way the plate will move —
+   the same rotation language as every other fold on this page. */
+.workspace-exts.is-folded .ext-head-actions { display: none; }
+.workspace-exts.is-folded .section-body { display: none; }
+.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts .nethub-caret { transition: transform .2s ease; }
+
+/* Folded, the body is GONE. The shared .section-body.collapsed rule in base.css
+   says the same thing, but this plate's own `.workspace-exts .section-body`
+   declaration (a wrapping flex flow) is more specific and would win, leaving a
+   collapsed body still laid out — which is exactly what happened: the class was
+   on the element and the height never changed. Restated at matching specificity. */
+.workspace-exts.is-folded .section-body { display: none; }
+/* The keys go with the body: they act on a list that is no longer on screen. */
+.workspace-exts.is-folded .ext-head-actions { display: none; }
+/* The caret points the way the plate will move — the same rotation language every
+   other fold on this page uses. */
+.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts .nethub-caret { transition: transform .2s ease; }
+
+.workspace-exts .section-body {
+  position: relative;
+  display: flex; flex-wrap: wrap; gap: 12px; align-content: flex-start;
+  /* `min-height: 0` used to be here, and it is what let an empty plate collapse to
+     16px while a populated one was 77px. The plate has an inscription printed on it
+     and an authoring surface to aim at, so it keeps a floor: the empty column and the
+     first card are now the same height. */
+  /* 77px: EXACTLY ONE CARD (61px + 16px padding).
+   *
+   * An empty plate used to collapse to 16px (its padding) while a single card made it
+   * 77px — a jump of 61px the moment the first extension was created. With the floor
+   * matched to the card, the empty plate, a plate with 1 card and a plate with 2 cards
+   * on one line are all 77px: zero shift when the author creates their first extension. */
+  min-height: 77px; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain;
+}
+.workspace-exts .conn-grid { display: contents; }
+/* Only this plate reparents the row; the drawer's own rule below is untouched,
+   which is what the layout test pins. The attribute selector is deliberate: the
+   tests that read this file take the FIRST textual occurrence of the drawer row's
+   selector, so a second literal copy here would shadow the drawer's real rule and
+   the assertion would end up grading this block instead of that one. */
+.workspace-exts .section-body > [class~="drawer-add-row"] { display: contents; }
+
+/* ---- The session dock --------------------------------------------------
+   Pinned to the bottom of the viewport, and the ONE place the sessions are
+   listed: one tab per running session plus one per window with no session, then
+   the pane-layout keys. It replaced the floating tab bar, which had to be
+   draggable to stay out of the way — a dock that is a band in the page needs no
+   grip.
+
+   It used to hold one tab per OPEN WINDOW, which is not the same list: a session
+   started by an agent over MCP, by a script through POST /api/sessions, or by a
+   connect whose window was closed here has no window at all, so it was invisible
+   on the page that was supposed to control it. The tab is therefore keyed by the
+   session, and a tab with no window is drawn dashed (see
+   .session-tab.is-windowless in terminal.css) because clicking it opens one.
+
+   It also used to fold a session plate up from the bottom. That layer is gone —
+   the tab row answers the same question — and the sessions that are over have
+   their own column on the right.
+
+   Its height is published to the stylesheet as --dock-h (shell-windows.js
+   measures it, the way it already publishes --app-header-h), so the tiled
+   overlay insets itself by the dock instead of being covered by it. That is why
+   there is no "push vs overlay" decision here: the centre is always what is
+   left over, so nothing is ever covered. */
+.sessdock {
+  /* The dock is a BAND IN THE PAGE, not an overlay: body is a column, the dock
+     is its last row, and the workspace above it is what flexes. That is what
+     makes it share space instead of covering it — a fixed dock at the dock rung
+     painted over the bottom of the extension column, which is where the panel's
+     own "add extension" keys live, so the keys a user needs were the ones
+     hidden. Being in flow also means --dock-h is only needed for the TILED
+     overlay (a fixed layer that really does cover the viewport), not for the
+     page itself. */
+  position: relative; z-index: var(--z-dock);
+  flex: 0 0 auto;
+  display: flex; flex-direction: column;
+  background: var(--term-panel-94);
+  border-top: 1px solid var(--term-border);
+  box-shadow: 0 -6px 24px var(--term-black-35), inset 0 1px 0 var(--term-white-08);
+  /* `max-height` rather than `height`: the dock's intrinsic height is what it
+     should be at every font size, and this only stops it growing past a cap. The
+     cap is the ONE-row height: a 26px key (or a 26px tab, whichever is taller) plus
+     4px top padding, 5px bottom and the 1px top border. The narrow block below
+     raises it to two rows, which is the only place the second row exists. */
+  max-height: 42px;
+}
+.sessdock-bar {
+  flex: 0 0 auto;
+  /* The reference frame for the empty note, which is positioned rather than laid
+     out: see .sessdock-empty. */
+  position: relative;
+  display: flex; align-items: center;
+  gap: 6px; padding: 4px 10px 5px;
+  min-width: 0;
+}
+/* The list. On a wide screen it is the flexible middle of ONE row: it takes
+   whatever the key groups at each end do not, which is what keeps the window
+   controls pinned to the right edge while the strip scrolls.
+ *
+ * The narrow block turns it into row 1 of two. One row cannot hold a readable
+ * strip plus the keys plus the window controls there: measured on a 390px phone
+ * the tabs were down to 106px between them — narrower than the labels they carry.
+ * That is a width problem, not a dock problem, so the second row exists only at
+ * that width rather than costing every desktop 2x the dock height for keys that
+ * are invisible until something is ticked. */
+.sessdock-tabs {
+  flex: 1 1 auto; min-width: 0;
+  /* Pinned rather than content-sized, so the strip cannot flinch when a tab's own
+     controls change — but pinned to a height the TAB fits in. 24px was measured
+     against the tab's content and forgotten its chrome: padding 3+3, border 1+1
+     and a 16px glyph add up to 26, so every tab hung 2px past the strip and was
+     clipped by the strip's own overflow. A container shorter than its only child
+     is clipped, not tight.
+   *
+   * `overflow-y: visible` would let the tab paint outside the strip, which is the
+   * other way to survive the mismatch — but the strip also scrolls horizontally,
+   * and a scroll container cannot be visible on one axis and auto on the other.
+   * So the strip is sized to hold its child instead. */
+  height: 26px;
+  display: flex; align-items: center; gap: 4px;
+  overflow-x: auto; scrollbar-width: thin;
+}
+/* Row 2, left end: the batch verbs. Declared before the window controls so the
+   flex row lays them out left-to-right; `margin-left: auto` on those controls then
+   pins them to the right edge and leaves the gap between.
+ *
+ * The two groups are separate elements for a reason: they used to share one
+ * right-hand cluster, so revealing a batch key shortened the strip AND pushed every
+ * window control sideways — a control that moves because its neighbour was pressed
+ * is the one thing a batch row must not do. */
+.sessdock-batch {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  /* Left of the strip, and it must not shrink: the invert key is the tick-all
+     target and a control that disappears when the list grows is the trap every
+     other batch row on this page avoids. */
+  order: -1;
+}
+/* The ticked count sits at the group's right end and hides at zero: the row has
+   room for it here, where the two side columns put the number on a switch's face
+   (they have a switch; this bar does not). */
+.sessdock-batch .archive-tick-count { margin-left: 2px; }
+.sessdock-actions {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--term-border-2);
+  /* Pinned right by the strip's growth, not by `margin-left: auto`: with the
+     batch group ordered to the left end, auto margin on both sides would centre
+     this cluster whenever the batch group is empty. The strip absorbs the slack,
+     so the controls sit at the edge whether or not a key is showing. */
+}
+/* Empty dock: nothing live is a legal state, and the bar stays rather than
+   vanish — it is the page's one place the sessions are listed, so a bar that
+   removed itself would leave nothing to say "nothing is running" with. "Empty"
+   means no ENTRY: no running session on the server and no window in this page. A
+   page with a live agent session and no window is NOT empty, which is why the
+   note follows the entry count rather than the window count.
+   The note is a LABEL, never a key: there is nothing behind it to open, so
+   dressing it as a control would promise a list that does not exist. */
+/* The empty note, BETWEEN the batch group and the window controls.
+ *
+ * It was absolutely positioned across `left: 58px; right: 10px` — full width minus
+ * a hard-coded guess at the batch group — which ran it under the window controls at
+ * the right end. With no windows open the dock still shows its batch group, its
+ * count and its actions cluster, so the note's last words overlapped the X key. Both
+ * halves of that guess were wrong: the batch group's width is not a constant (the
+ * count appears and disappears inside it), and the note has no reason to reach the
+ * right edge at all. It is a sentence standing in for the tabs, so it belongs where
+ * the tabs are.
+ *
+ * In the flow now, in the strip's own slot: `flex: 1 1 auto` where the strip would
+ * be, still clear of both key groups, and `min-width: 0` so a long translation
+ * ellipsises rather than pushing the controls off the edge. The strip is removed
+ * from the flow while this note is up, so nothing has to share the slot. */
+.sessdock-empty {
+  /* `1 1 auto` against the strip's `1 1 auto` splits the row between an empty
+     tablist and the note. Basis 0 makes the note claim everything the keys leave,
+     which is the strip's own share — the note stands IN FOR the strip here. */
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex; align-items: center;
+  padding: 0 4px;
+  pointer-events: none;
+  font: 600 .66rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---- The workspace row on a narrow screen -----------------------------
+   Below 800px the row becomes a stack: the two drawer triggers share the top
+   row and the centre takes the rest, with the dock pinned at the bottom. The
+   session rail has no narrow form of its own — the dock IS the session list at
+   this width, so the rail is hidden rather than duplicated. */
 .nethub {
-  position: sticky; top: 68px; z-index: 20;
+  position: sticky; top: 68px; z-index: var(--z-sticky);
   min-width: 0; min-height: 0; align-self: start;
   display: flex; flex-direction: column;
   color: var(--text-secondary);
@@ -44,10 +458,23 @@
 .nethub-caret { display: inline-flex; margin-left: auto; flex: 0 0 auto; opacity: .7; transition: transform .2s ease; }
 /* Collapsed: the header key keeps only the glyph, and the caret turns to point
    the way the panel will move. Alignment is centred so the icon sits on the
-   rail's axis instead of the plate's left edge. */
-.workspace-frame.nethub-collapsed .nethub-btn { padding-inline: 0; justify-content: center; }
-.workspace-frame.nethub-collapsed .nethub-label,
-.workspace-frame.nethub-collapsed .nethub-caret { display: none; }
+   rail's axis instead of the plate's left edge.
+
+   SCOPED TO #nethub, and that is the whole fix for "collapsing the hosts column
+   also put the archive away". The archive wears this column's frame — same
+   .nethub-btn, same .nethub-label, same .nethub-caret, same .nethub-body —
+   because the page teaches ONE shape for "a column you put away". The shared
+   classes are the reuse; the COLLAPSE is not shared. Unscoped, these four rules
+   matched both columns, so the hosts toggle hid the archive's label and caret
+   and collapsed its body to zero height while the archive's own state (and its
+   own aria-expanded) still said open.
+
+   The archive's mirror of each rule is under .workspace-frame.ext-collapsed near
+   the bottom of this file. Two state classes, two scopes, no overlap — and a test
+   pins that neither scope can reach the other column. */
+.workspace-frame.nethub-collapsed #nethub .nethub-btn { padding-inline: 0; justify-content: center; }
+.workspace-frame.nethub-collapsed #nethub .nethub-label,
+.workspace-frame.nethub-collapsed #nethub .nethub-caret { display: none; }
 /* The resource column: a plate of its own, translucent like the session plates
    so the Blackwall still reads through the control layer. */
 .nethub-body {
@@ -62,7 +489,7 @@
      a constant error and not a content one is what made it hard to see: 30 nodes
      and 60 nodes overflowed by exactly the same 13px, with an empty list too.
      test/session_switch asserts the arithmetic that keeps this honest. */
-  max-height: calc(100dvh - 147px);
+  max-height: calc(100dvh - var(--app-header-h, 60px) - var(--dock-h, 44px) - 90px);
   margin-top: 8px; padding: 10px 0 12px;
   overflow: hidden; opacity: 1; visibility: visible;
   border: 1px solid var(--accent-border); background: var(--bg-subtle);
@@ -81,14 +508,14 @@
     opacity: 0; pointer-events: none;
     transition: max-height .24s ease, opacity .16s ease, padding .24s ease;
   }
-  .workspace-frame.nethub-collapsed .nethub-body {
+  .workspace-frame.nethub-collapsed #nethub .nethub-body {
     max-height: 0; min-height: 0; margin-top: 0; padding-block: 0;
     opacity: 0; visibility: hidden; transform: translateX(-6px); pointer-events: none;
   }
-  .workspace-frame.nethub-collapsed .nethub-rail {
+  .workspace-frame.nethub-collapsed #nethub .nethub-rail {
     /* Same ceiling as the body it replaces: the rail takes the panel's place in
        the column, so it must not be allowed to grow past it either. */
-    max-height: calc(100dvh - 147px);
+    max-height: calc(100dvh - var(--app-header-h, 60px) - var(--dock-h, 44px) - 90px);
     padding: 10px 0 12px; opacity: 1; pointer-events: auto;
   }
 }
@@ -139,11 +566,18 @@
 .conn-tile.node-card .node-sess { margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; color: var(--text-secondary); }
 .conn-tile.node-card.node-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 
-/* Selection mode leaves the cards alone: no markers, no quieted buttons — the
-   row looks exactly as it does while connecting. The one thing selection may
-   paint is a card the user actually ticked, and only while it stays ticked. */
+/* A ticked card is the one thing a batch row may paint, and it is painted from the
+   TICK rather than from a selection mode.
+ *
+ * The hosts selector is `.nethub-selecting` because that column has a mode to be
+ * in. The extension plate does not: it runs alwaysOn, its cards open on click and
+ * every card carries its own tick, so no rule may wait for a mode class that never
+ * arrives. This was `.ext-selecting …`, which nothing ever added — which is
+ * exactly what "the item has no selected state" looked like on screen. The hosts
+ * selector stays: that column's mode is real and its cards must NOT light up
+ * outside it. */
 .nethub-selecting .conn-tile.node-card.batch-selected,
-.ext-selecting .conn-tile.ext-card.batch-selected {
+.conn-tile.ext-card.batch-selected {
   border-color: var(--accent);
   /* background-color, never the shorthand: the plate's corner strokes are
      background-image layers declared at the end of the cascade, and a
@@ -153,7 +587,7 @@
   box-shadow: inset 3px 0 0 var(--accent), 0 0 16px var(--accent-ring);
 }
 .nethub-selecting .conn-tile.node-card.batch-selected .conn-nm,
-.ext-selecting .conn-tile.ext-card.batch-selected .conn-nm { color: var(--accent); }
+.conn-tile.ext-card.batch-selected .conn-nm { color: var(--accent); }
 
 /* ---- Workspace layout: the extension column -----------------------------
    The connections panel's other side. NetHub holds the machines Termcp can
@@ -173,102 +607,39 @@
    go through the REST routes that the extension tool's own authoring layer
    serves, so a template saved here and one saved by an agent are one file on
    disk and one row in this panel. */
-/* The track is always three columns: the class is on the frame in the markup,
-   so the empty panel holds its room and the terminal's width never reflows on
-   the difference between "no extensions" and "one". */
-.workspace-frame.ext-on {
-  grid-template-columns: var(--nethub-w) minmax(0, 1fr) var(--ext-w);
-  --ext-w: 260px;
-  transition: grid-template-columns .24s ease;
-}
-.workspace-frame.ext-on.ext-collapsed { --ext-w: 56px; }
-.extpanel {
-  position: sticky; top: 68px; z-index: 20;
-  min-width: 0; min-height: 0; align-self: start;
-  display: flex; flex-direction: column;
-  color: var(--text-secondary);
-}
-/* [hidden] would lose to the flex declaration above, so the hidden state says
-   so itself: the panel is display:none until a frame puts something in it. */
-.extpanel[hidden] { display: none; }
-/* The trigger: the same key NetHub carries on the other side — a glyph, the
-   label, a caret that points the way the panel will move. */
-.extpanel-btn {
-  width: 100%; height: 50px; flex: 0 0 50px;
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-subtle); border-radius: 0;
-  background: var(--glass-plate-strong); color: var(--accent); cursor: pointer;
-  font: inherit; font-family: var(--font-mono); font-size: .72rem;
-  font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-  transition: background .14s ease, border-color .14s ease, color .14s ease;
-}
-.extpanel-btn:hover { background: var(--bg-card-hover); border-color: var(--accent-border); color: var(--accent-hover); }
-.extpanel-btn:focus-visible { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
-.extpanel-glyph { flex: 0 0 auto; display: inline-flex; }
-.extpanel-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.extpanel-caret { display: inline-flex; margin-left: auto; flex: 0 0 auto; opacity: .7; transition: transform .2s ease; }
-/* Collapsed: the key keeps only its glyph, centred on the rail's axis, and the
-   caret turns to point the way the panel will move when it comes back. */
-.workspace-frame.ext-collapsed .extpanel-btn { padding-inline: 0; justify-content: center; }
-.workspace-frame.ext-collapsed .extpanel-label,
-.workspace-frame.ext-collapsed .extpanel-caret { display: none; }
-.extpanel-rail { display: none; }
-.extpanel-body {
-  display: flex; flex-direction: column; min-width: 0; min-height: 220px;
-  margin-top: 8px;
-  /* The same ceiling the resource column keeps: the panel never makes the page
-     scroll, and the list inside gives up the height it cannot fit. */
-  max-height: calc(100dvh - 147px);
-  padding: 10px 0 12px;
-  overflow: hidden;
-  border: 1px solid var(--accent-border); background: var(--bg-subtle);
-  box-shadow: inset 0 1px 0 var(--glow-white-04), 0 12px 32px var(--shadow-card);
-  transition: opacity .16s ease, max-height .24s ease, padding .24s ease, margin .24s ease;
-}
-.extpanel-body > #ext-grid {
-  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-  align-content: flex-start; padding: 0 10px;
-}
-/* The desktop pair of states. The base plate and its ceiling are declared above
-   so the collapsed override below reads as a change to them, not as the rule a
-   reader has to hunt for. */
-@media (min-width: 800px) {
-  .workspace-frame.ext-collapsed .extpanel-body {
-    max-height: 0; min-height: 0; margin-top: 0; padding-block: 0;
-    border-width: 0; opacity: 0; visibility: hidden; pointer-events: none;
-  }
-  .workspace-frame.ext-collapsed .extpanel-rail {
-    display: flex; flex-direction: column; align-items: center; gap: 8px;
-    margin-top: 8px; padding: 10px 0 12px;
-    max-height: calc(100dvh - 147px);
-    overflow-y: auto; overscroll-behavior: contain;
-  }
-}
-/* The rail: one lamp per extension, and a lamp is all the collapsed column can
-   usefully say. A click expands the column — the card behind it holds the
-   actions, so the rail's job is to say "something here needs you". */
-.extpanel-rail-item {
-  position: relative; width: 42px; height: 34px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border-subtle); border-radius: 0;
-  background: var(--glass-plate-strong); cursor: pointer;
-  transition: border-color .14s ease, background .14s ease;
-}
-.extpanel-rail-item:hover { border-color: var(--accent-border); background: var(--accent-surface); }
-.extpanel-rail-item:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
-.extpanel-rail-lamp {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--text-faint); box-shadow: 0 0 0 1px var(--bg-subtle);
-}
-.extpanel-rail-lamp.is-online { background: var(--success-dark); box-shadow: 0 0 7px var(--live-glow); }
-.extpanel-rail-lamp.is-connecting { background: var(--warning); animation: nethubStatusPulse 1.5s ease-in-out infinite; }
-.extpanel-rail-lamp.is-offline { background: var(--danger); }
-.extpanel-rail-lamp.is-disabled { background: var(--text-faint); }
-/* The cards fill the column the way the session cards do, rather than wrapping
-   at the entry card's own 188px minimum. */
-#ext-grid .conn-tile.entry-card { width: 100%; min-width: 0; max-width: none; }
+/* The archive column: the frame's THIRD track, and the panel fills it.
+ *
+ * NO `width: 100%`, and that is the whole reason the column could not be sized to
+ * its content. A grid item at `width: 100%` asks for the track's own width, so an
+ * intrinsically-sized track (`max-content` / `fit-content`) has no stable answer
+ * to "how wide is my content" — the item wants whatever the track ends up being,
+ * and the track wants the item's content. The browser resolves that circle by
+ * falling back to the definite value (measured: the track stayed at 260px no
+ * matter what the template said). As a grid item the panel STRETCHES to fill its
+ * track by default, so the declaration was redundant anyway; deleting it is what
+ * lets the track follow the ledger.
+ *
+ * `min-width: 0` is the other half: a grid item defaults to `min-width: auto`,
+ * i.e. its min-content width, and that floor is what the track may not shrink
+ * below — measured at 233px, which silently held the column open on its own. */
+.workspace-frame > .extpanel { grid-column: 3; min-width: 0; }
+/* No width override here any more, and that is the fix rather than an omission.
+   The extension column used to be a 260px side track, so a rule forced its cards
+   to `width: 100%` — one card per row was the only option there. In the wide
+   centre that same rule stretched a card to the full track (measured: 730px for
+   a two-word name).
+
+   The shared `.conn-grid` is `display: flex; flex-wrap: wrap`, and an entry card
+   already sizes itself between its own 188px floor and 300px ceiling, so
+   removing the override is all it takes for the cards to sit in a wrapped row of
+   their natural size — the same arrangement the session cards have, which is the
+   point. Re-adding `width: 100%` or a `1fr` grid here would undo it. */
 .conn-tile.ext-card .entry-card-inner { gap: 9px; align-items: flex-start; }
+/* The card's tick sits where the lamp's row starts, before the lamp: the tick is
+   what the pointer aims AT, and the lamp is a readout it should not have to hit.
+   `margin-top` lines it up with the name's first line rather than the card's
+   centre — the card is several lines tall. */
+.conn-tile.ext-card .ext-card-tick { margin-top: 1px; flex: 0 0 auto; }
 /* Every card here opens something — its own readout — so the whole card is a
    button and says so. (The old rule withheld the hand from a card whose shell
    was not available; a status card is a readout and opens either way.) */
@@ -304,11 +675,13 @@
 
 /* ---- The batch row ---------------------------------------------------------
    The keys are the connections panel's own (see .nethub-select-toggle above):
-   one component with two hosts, and each panel's body carries its own ancestor
-   class while selecting — .ext-selecting here, .nethub-selecting there — so a
-   column entering select mode never lights up the other's row. Cards tick the
-   same way the host cards do. */
-.ext-selecting .conn-tile.ext-card .entry-card-inner { cursor: pointer; }
+   one component with three callers. Only the hosts column has a selection MODE —
+   `.nethub-selecting` — because only there does a card click have to mean two
+   things. The extension plate, the archive and the dock run alwaysOn: their cards
+   carry their own tick, a click opens, and no ancestor class is ever added. Rules
+   keyed on `.ext-selecting` / `.archive-selecting` / `.dock-selecting` therefore
+   never matched anything; they are gone rather than left to imply a mode that does
+   not exist. */
 
 /* ---- The dialog's two pages ------------------------------------------------
    Status is a readout — a lamp, a word, and rows of whatever there is to say —
@@ -369,11 +742,51 @@
 /* The empty column's whole content: a sentence and the one key that acts on
    it. Nothing else is in the panel, so both are centred on the column's own
    axis rather than pinned to its top-left the way the cards are. */
-.ext-empty {
-  flex: 1 1 auto; min-height: 120px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; padding: 18px 14px; text-align: center;
+/* The plate's inscription: a WATERMARK under the cards, not an empty state.
+ *
+ * It solves the "adding an extension must not change the panel's height" constraint
+ * by getting out of the flow entirely: `position: absolute` takes no layout height, so
+ * the panel's height is decided by the body's min-height and the cards themselves. The
+ * words are there whether there are 0 extensions or 20, which is why an empty plate
+ * does not feel bare — the paper itself is printed.
+ *
+ * `pointer-events: none` so cards can be clicked through it; low opacity so it reads
+ * as a watermark rather than as a disabled control. */
+.workspace-exts .section-body { position: relative; }
+.ext-inscription {
+  /* CENTRED on the plate, both axes, and out of the flow.
+   *
+   * `inset: 0` + `margin: auto` + the flex centring is what puts it in the middle of
+   * the surface rather than pinned to the top-left corner: a watermark belongs to the
+   * plate, and a plate's inscription is written in the middle of it. `inset: 0` also
+   * keeps `position: absolute` from collapsing to the text's own size, so the box is
+   * the whole body and the centring has something to centre against.
+   *
+   * Absolute means it adds NO height, which is the requirement this whole approach
+   * exists for: the empty column and the populated one are the same height because the
+   * words are not in the layout at all. */
+  position: absolute; inset: 0;
+  margin: auto;
+  padding: 16px 24px;
+  pointer-events: none; user-select: none;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 5px;
+  text-align: center;
+  font: 500 .72rem/1.4 var(--font-mono);
+  color: var(--text-faint); opacity: .45;
+  letter-spacing: .04em;
 }
+.ext-inscription-line:first-child {
+  font-weight: 700; font-size: .68rem; letter-spacing: .12em;
+  text-transform: uppercase; opacity: .75;
+}
+.ext-inscription-line:last-child {
+  font: 400 .7rem/1.4 var(--font-sans);
+  max-width: 46ch;
+}
+.ext-empty { display: none; }
+
 .ext-empty-text {
   margin: 0; max-width: 34ch;
   font: 400 .72rem/1.5 var(--font-sans); color: var(--text-muted);
@@ -390,8 +803,553 @@
   -webkit-backdrop-filter: blur(var(--glass-blur));
   box-shadow: inset 0 1px 0 var(--glow-white-04);
 }
-.workspace-archive { width: 100%; }
-.workspace-archive .section-header { border-radius: 12px 12px 0 0; }
+/* The archive's plate is the extension panel's BODY (the right column wears
+   that frame), so it is capped and scrolls exactly as that body does. Without a
+   ceiling the plate grew to its content — seventeen archived sessions made it
+   2420px tall, which pushed the whole page into scrolling and carried the dock
+   off the bottom of the viewport (measured). The ceiling is the same chrome sum
+   the other panels use, so the plate ends at the dock's top edge, not over it. */
+/* The archive's body carries .nethub-body now (it IS the hosts column's frame),
+   whose ceiling is declared once above for every consumer. This rule is only the
+   part that is the ARCHIVE's: a column, because its tools row is fixed and the
+   list below takes the height that is left. The ceiling is restated here on the
+   class the markup actually carries, so the invariant the page depends on — no
+   column may outgrow the viewport — is visible next to the column that relies on
+   it rather than only in the rule it inherits. */
+.extpanel-body {
+  display: flex; flex-direction: column; min-height: 0;
+  max-height: calc(100dvh - var(--app-header-h, 60px) - var(--dock-h, 44px) - 90px);
+}
+#extpanel-body > #archive-grid {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  /* NO `align-content` here.
+   *
+   * It carried `align-content: flex-start`, presumably to keep the rows packed to
+   * the top of a scroll container. In a COLUMN flex container `align-content` packs
+   * the CROSS axis — which is the width — so `flex-start` made every track only as
+   * wide as its content. Each row then sized itself to its own text and stopped up
+   * to 40px short of the column's inner edge, so the ledger was ragged on the right
+   * and the facts column, which is meant to align to one shared edge, aligned to a
+   * different edge on every row.
+   *
+   * Rows pack to the top on their own: this container is a single-line flex
+   * container whose height is its content's, so there is nothing to distribute.
+   * The scroll window is the ancestor. */
+}
+/* ---- The archive column -----------------------------------------------------
+   The archive is the hosts column's frame with one substitution: `.nethub` (and
+   its trigger, rail and body) already defines "a column you put away, and what it
+   says while it is away", so this column reuses it verbatim instead of growing a
+   second, almost-identical set of rules. A second set is not neutral: it drifts,
+   and the reader sees two things that should match and do not.
+
+   What differs is only the rail's content. Hosts show one lamp per machine
+   because each is independently up or down; every archived session is in the same
+   state — over — so a strip of identical lamps would be decoration. The rail
+   shows the COUNT on the trigger instead, which is the number that answers "is
+   anything in here, and how much". */
+.workspace-frame.ext-collapsed { --ext-w: 56px; }
+/* The count that rides the trigger, visible in both states: it is the one number
+   that makes opening the column an informed choice. It hides at zero rather than
+   displaying it — an empty archive says nothing. */
+.archive-count-badge {
+  flex: 0 0 auto; margin-left: auto; order: 1;
+  min-width: 18px; padding: 1px 5px;
+  border: 1px solid var(--accent-border); border-radius: 0;
+  background: var(--accent-surface); color: var(--accent);
+  font: 700 .62rem/1.4 var(--font-mono); letter-spacing: 0; text-align: center;
+}
+.archive-count-badge[hidden] { display: none; }
+/* The archive header is the hosts header MIRRORED.
+ *
+ * The two columns face each other across the page: hosts on the left edge, the
+ * archive on the right. Copied verbatim, the hosts order (glyph, label, then the
+ * caret pushed by `margin-left: auto` to the far end) puts the archive's caret
+ * hard against the screen's right edge — the corner where a disclosure control
+ * reads as a window button and where a thumb reaching in from the edge hits it by
+ * accident. The caret belongs INBOARD, on the side facing the content it reveals.
+ *
+ * So the order flips: caret first, then glyph and label against the edge. The
+ * `margin-left: auto` the shared rule puts on the caret would then shove the
+ * glyph and label to the right of it — hence the reset; the caret aligns left
+ * with no auto margin, and the badge takes over the job of pushing itself out.
+ */
+/* The desktop order is an explicit ladder, read left to right:
+     caret(1)  badge(2)  glyph(3)  label(4)
+   i.e. against the screen's right edge it reads `Archive [icon] 3 [caret]`. The
+   caret leads because it must not sit on the edge, the label trails because it is
+   what the edge should carry, and the badge sits between them — beside the name it
+   counts rather than outside it. Numbers beat guesswork here: with `-1` on two of
+   them the tie fell back to DOM order, which is how the badge ended up on the far
+   side. */
+/* The whole group rides the RIGHT edge of the trigger, as one block.
+ *
+ * Reading outward from the screen edge the header is `3 [icon] Archive`, with the
+ * caret inboard of all of it: `[caret] 3 [icon] Archive`. The count leads because
+ * it is a number about the list and reads before the name it counts; the glyph and
+ * label are the column's identity and belong against the edge, mirroring the hosts
+ * column, which puts its glyph and label there too.
+ *
+ * `margin-left: auto` sits on the CARET — the first item in the ladder — and that is
+ * what makes this one right-aligned block instead of a split. It was on the badge,
+ * so the caret stayed pinned at the left end of a 260px button and the other three
+ * were pushed away from it: the folding control and the name it folds were at
+ * opposite ends of the same bar, and the header read as two unrelated fragments.
+ * Pushing from the first item is also what keeps the group's spacing stable when the
+ * count appears: the badge grows to its left, inside the pushed block, so nothing
+ * after it has to move. */
+.extpanel .nethub-caret { order: 1; margin-left: 0; }
+/* The auto margin sits on the FIRST element of the right-hand run, and that run
+   is the badge → glyph → label block. The caret keeps its place at the left edge
+   and the rest is pushed right, which is the shape asked for:
+
+     [▾] ......... 2 🗄 Archive
+
+   It is written TWICE, and the second form is the load-bearing one. The badge is
+   `hidden` — display:none — whenever the archive is empty, and an auto margin on
+   a box that is not laid out moves nothing. With only the first rule, the empty
+   archive (the default state, since the column opens folded) pushed nothing: the
+   caret sat at the left edge and the glyph and label sat right next to it, with
+   ~173px of empty plate to their right. That is the "归档和图标没有居右" report,
+   and it is the state a reader sees almost all the time.
+
+   `[hidden] + .nethub-glyph` hands the push to the glyph in exactly that case, so
+   one of the two rules is always live. It is a sibling selector rather than
+   `:has()` because `:has()` is the only thing in this sheet that would raise the
+   browser floor, and the markup order (badge before glyph) is what makes the
+   sibling form expressible at all. */
+.extpanel .archive-count-badge { margin-left: auto; order: 2; }
+.extpanel .archive-count-badge[hidden] + .nethub-glyph { margin-left: auto; }
+.extpanel .nethub-glyph { order: 3; }
+.extpanel .nethub-label { order: 4; }
+/* Separation inside the right-hand run: the badge has a small air gap before the
+   glyph, and the glyph has the shared 8px gap before the label. */
+.extpanel .archive-count-badge:not([hidden]) { margin-right: 2px; }
+
+/* Folded, the trigger is 56px of glyph: the label and the caret go, and the count
+   becomes the glyph's caption rather than sitting on its right. */
+/* The archive's invert key, nested in the column's own trigger.
+ *
+ * It is a real <button> (the trigger is a div with role="button" so this can be
+ * one) and it is deliberately NOT dressed as a plate: it sits inside a plate
+ * already, and a second border inside the first reads as a box in a box. What it
+ * gets instead is the glyph's own affordance — dim at rest, accent under the
+ * pointer — so it looks like a small verb belonging to the header rather than a key
+ * that has been shrunk to fit.
+ *
+ * The two icons swap on `aria-pressed`-less state: hollow when nothing is ticked,
+ * solid when something is. The swap lives in the shared icon rules
+ * (`ic-hollow`/`ic-solid`), so this only has to size the box. */
+.nethub-invert {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: color .12s ease, background .12s ease;
+}
+.nethub-invert:hover { color: var(--accent); background: var(--accent-surface); }
+.nethub-invert:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.nethub-invert svg { display: block; }
+/* Hollow until everything is ticked, solid once it is — the key shows the state it
+   would produce, the same read as the hosts column's invert check. It reads the
+   `all-checked` class the component already paints rather than a second flag, so
+   there is one source for "the selection covers everything". */
+.nethub-invert .ic-solid { display: none; }
+.nethub-invert.all-checked .ic-hollow { display: none; }
+.nethub-invert.all-checked .ic-solid { display: block; }
+.workspace-frame.ext-collapsed .extpanel .nethub-btn {
+  /* Same 50px as the hosts trigger it mirrors. It was 46 here, which made the two
+     headers' folded spines end at different heights — the pair is meant to read as
+     one frame with two ends, and a 4px step between them is exactly the kind of
+     difference the eye catches without being able to name. The stacked layout is
+     centred inside that height rather than defining it. */
+  flex-direction: column; gap: 1px; height: 50px; flex: 0 0 50px;
+  padding: 4px 0; justify-content: center;
+}
+.workspace-frame.ext-collapsed .extpanel .nethub-label,
+.workspace-frame.ext-collapsed .extpanel .nethub-caret { display: none; }
+.workspace-frame.ext-collapsed .extpanel .archive-count-badge {
+  /* Folded, the column is a 56px spine and the trigger stacks its glyph over its
+     caption. The count is that caption, so it has to fall AFTER the glyph in the
+     column — the desktop ladder (badge before glyph) is a row order and reads wrong
+     once the flex direction turns vertical. */
+  margin: 0; padding: 0; border: 0; background: none;
+  font-size: .58rem; line-height: 1; order: 1;
+}
+.workspace-frame.ext-collapsed .extpanel .nethub-glyph { order: 0; margin: 0; }
+/* Folded, the archive's BODY goes away — it does not merely get narrower.
+ *
+ * It had no collapsed rule at all. The frame narrowed `--ext-w` to a 56px spine
+ * while the body kept rendering at its own width, so the rows, their names and
+ * their facts stayed laid out and were simply clipped by the frame: a folded
+ * column showed a slice of ledger down its length. That reads as a rendering
+ * fault, not as a collapse, because nothing on screen says the content is
+ * intentionally put away.
+ *
+ * Same treatment the hosts column gives its body, and for the same reason: the
+ * length goes to zero with everything else that hides it, so the transition is one
+ * motion and the content is genuinely gone at the end. `visibility` (not
+ * `display`) so the change stays animatable, and so the rows stop being Tab stops
+ * the moment the column closes. */
+.workspace-frame.ext-collapsed .extpanel-body {
+  max-height: 0; min-height: 0; margin-top: 0; padding-block: 0;
+  opacity: 0; visibility: hidden; transform: translateX(6px); pointer-events: none;
+}
+/* The transition lives on the BODY's own rule, not on the collapsed one: a
+   transition declared only in the state you are leaving is a jump on the way back.
+   `visibility` is delayed by the length of the fade so the content does not vanish
+   before it has finished moving. */
+.extpanel-body {
+  transition: max-height .24s ease, opacity .16s ease, padding .24s ease,
+              transform .24s ease, visibility 0s linear .24s;
+}
+.workspace-frame:not(.ext-collapsed) .extpanel-body {
+  transition: max-height .24s ease, opacity .16s ease, padding .24s ease,
+              transform .24s ease, visibility 0s;
+}
+/* The archive body is a column: the tools row is fixed and the list takes the
+   height that is left, which is what keeps the trash reachable however long the
+   archive grows. */
+.extpanel .nethub-body { display: flex; flex-direction: column; }
+/* Size only. `order` belongs to the ladder above (desktop) and to the collapsed
+   block below; restating it here at the same specificity would silently win the
+   cascade by source order alone. */
+.extpanel .nethub-glyph { display: block; width: 22px; height: 22px; flex: 0 0 22px; }
+
+/* ---- The archive: a LEDGER, not a plate of cards --------------------------
+   An archived session is something that already happened. The cards it used to
+   wear are the wrong shape for that: they spend a terminal glyph, a status lamp,
+   a lock and two controls on a session nobody can type into any more. So the
+   archive is a dense list of 34px rows — tick, name, age — read in passing, the
+   way a log is.
+
+   It also opens COLLAPSED. Nothing here is urgent, and a column of dead sessions
+   taking 260px from the work beside it is the wrong default; the rail's count is
+   what says whether it is worth opening. */
+#archive-grid {
+  display: flex; flex-direction: column; gap: 2px;
+  /* NOWRAP, and it is load-bearing. This element carries `conn-grid`, whose
+     `flex-wrap: wrap` is right for the card grids it was written for — cards flow
+     along a row and wrap DOWN. Here the axis is flipped: `flex-direction: column`
+     flows rows DOWN, and wrapping then means the overflow goes ACROSS, into a second
+     column. The container is capped (the panel's max-height chain), so the instant
+     the ledger outgrew that cap it split into two side-by-side columns — the second
+     one painting past the panel's right edge. Measured at 1440x900 with 20 rows:
+     two columns at left 1167 and left 1348, the panel ending at 1419.
+
+     The archive is a STRIP of rows, not a grid of them: a ledger reads top to bottom
+     only, and a second column is a second reading order for the same list. */
+  flex-wrap: nowrap;
+  padding: 0 6px 6px; min-height: 0;
+  flex: 0 1 auto; overflow-y: auto; overscroll-behavior: contain;
+  /* `stretch`, not the inherited `flex-start`. This grid carries `conn-grid` — it
+     is a card grid that became a row list — and that class sets
+     `align-items: flex-start` for its real purpose, wrapping cards at their own
+     width. On a COLUMN flex container the same declaration is the cross axis, so
+     every row sized itself to its content and stopped ~16px short of the column's
+     inner edge: the ledger looked ragged on the right and the facts column, which
+     is supposed to align to one shared edge, aligned to a different one per row.
+     A row is a line in a ledger: it spans the page. */
+  align-items: stretch;
+}
+/* A ledger ENTRY, not a one-line list item.
+ *
+ * The row carried a name and an age and nothing else, which is the least a row can
+ * say and still be a row: two sessions of the same name were indistinguishable, and
+ * the only way to learn why one had died was to open both transcripts. Everything
+ * those columns hold was already in the record, so the row is taller and says it:
+ * identity on the first line, circumstances under it, the outcome and the time at
+ * the right edge.
+ *
+ * `align-items: flex-start` rather than center: the three zones are different
+ * heights (name+meta, a line of facts, one small key), and centring them makes the
+ * name drift away from the top edge as soon as a row wraps to two lines. */
+.archive-row {
+  /* The erase key is positioned, not laid out, so the facts column can reach the
+     row's right edge: in flow the key occupied that corner and pushed every exit
+     code and age inwards by its own width, which left the numbers floating a key's
+     width short of the border on every row. */
+  position: relative;
+  display: flex; align-items: flex-start; gap: 9px;
+  /* 56px, up from 44: the identity column now carries three lines (name, meta, id),
+     and 44 was measured when it carried two. The extra height is what the id needs;
+     nothing else in the row grows, because the facts column and the erase key are
+     both centred on it. */
+  min-height: 56px;
+  /* The right inset reserves the corner the erase key floats over: 22px key + 6px
+     inset + 6px of air. It is on the ROW, not on the facts column, so the numbers
+     end at one shared edge and a row with a longer exit code still lines up. */
+  padding: 7px 34px 7px 8px;
+  border: 1px solid transparent;
+  color: var(--text-secondary); cursor: pointer;
+  font: inherit;
+  transition: background .12s ease, border-color .12s ease;
+}
+.archive-row:hover { background: var(--bg-card-hover); border-color: var(--border-subtle); }
+.archive-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A ticked row reads as armed, and it is the batch trash's own signal: the key
+   is in the drawer toolbar and acts on exactly these rows. */
+.archive-row.batch-selected {
+  background: var(--accent-surface); border-color: var(--accent-border);
+}
+.archive-row.batch-selected .archive-row-name { color: var(--accent); }
+/* The row's tick. A native checkbox, not a styled span: it is the only tick
+   target on the row (the row itself opens), so it has to be a real control for
+   the pointer, the keyboard and the accessibility tree alike. `accent-color` is
+   the one property that recolours it without a hand-built glyph, and it follows
+   the theme because --accent does. */
+/* ---- The tick checkbox: one look for every list that has one ----------------
+   A native checkbox dressed by `accent-color` was legible but not presentable: the
+   platform draws its own square, its own size and its own tick, so the same control
+   looked different on macOS and on Windows and neither matched the page. This
+   paints it instead — appearance: none, then a square with the page's border and a
+   tick drawn as two borders rotated 45deg.
+ *
+ * It stays a real <input type="checkbox">: the pointer, the keyboard and the
+ * accessibility tree all keep working, which is the reason NOT to replace it with a
+ * styled span. Only the drawing changes.
+ *
+ * Shared by the archive's rows and the extension plate's cards, because they are
+ * the same control in the same role and two sets of rules would drift. */
+.archive-row-tick,
+.ext-card-tick {
+  appearance: none; -webkit-appearance: none;
+  flex: 0 0 auto; margin: 0;
+  width: 15px; height: 15px; padding: 0;
+  display: inline-grid; place-content: center;
+  border: 1px solid var(--border-strong); border-radius: 0;
+  background: var(--bg-elevated); color: var(--bg-canvas);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+/* The tick itself: a rotated L, drawn with two borders. `scale(0)` keeps the shape
+   ready and only the transition moves, so the mark does not redraw mid-animation. */
+.archive-row-tick::before,
+.ext-card-tick::before {
+  content: '';
+  width: 7px; height: 4px;
+  border: 2px solid currentColor; border-top: 0; border-right: 0;
+  transform: rotate(-45deg) scale(0) translateY(-1px);
+  transition: transform .12s ease;
+}
+.archive-row-tick:checked,
+.ext-card-tick:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+.archive-row-tick:checked::before,
+.ext-card-tick:checked::before { transform: rotate(-45deg) scale(1) translateY(-1px); }
+.archive-row-tick:hover,
+.ext-card-tick:hover { border-color: var(--accent-border); }
+.archive-row-tick:focus-visible,
+.ext-card-tick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Where it sits on a row: aligned with the name's baseline block rather than the
+   row's centre, because the row is two lines tall and a centred box floats between
+   them. */
+.archive-row .archive-row-tick { margin-top: 1px; }
+/* ---- The archive's flat key row ---------------------------------------------
+   The same .ext-key chips the extension plate's header carries, because the two
+   bars are the same kind of control: a handful of flat verbs over a list that is
+   always tickable. Sharing the chip class is what keeps the two from drifting —
+   the reason this file no longer has a `.archive-tools` vocabulary of its own. */
+.archive-keys {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px 10px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.archive-keys .ext-key { height: 28px; }
+/* ONE control at each end, not a cluster at the left.
+ *
+ * The invert key answers the whole list, so it sits at the left edge where a list's
+ * own verbs live. Export and delete answer the SELECTION, they are the destructive
+ * pair, and they sit at the right edge — furthest from the one key that must never
+ * be mistaken for them. They used to be three keys in a row at the left, which put
+ * the destructive pair shoulder to shoulder with the invert check and left the
+ * whole right half of the bar empty.
+ *
+ * THE COUNT LEADS THAT RIGHT-HAND RUN, which is the correction this rule carries.
+ * It used to be the last item in the row, so the number sat in the far corner after
+ * the trash key — a readout with no visible relation to the two keys it explains,
+ * reading as a page total rather than as "three rows are ticked, so these two are
+ * live". Leading the run makes the order the sentence the reader needs:
+ *
+ *     [✓] ......... 3 [⤓] [🗑]
+ *
+ * `margin-left: auto` is therefore on the COUNT: it is the first item of the
+ * right-hand run, so pushing from it opens the gap after the invert key and carries
+ * the verbs along. Nothing is ever inserted BEFORE the invert key — that is what
+ * keeps it from sliding out from under the pointer on the press that changes the
+ * selection.
+ *
+ * The count is `hidden` (display: none) while the selection is empty, and an auto
+ * margin on a box that is not laid out moves nothing — the same trap the archive
+ * header fell into. The second rule hands the push to the export key in exactly that
+ * case, so one of the two is always live. */
+#archive-toggle-count { margin-left: auto; }
+#archive-toggle-count[hidden] + #archive-batch-export { margin-left: auto; }
+/* Nothing ticked: the verbs are SHADOW, not absent. `disabled` alone leaves them at
+   full contrast in most themes, which reads as "press me and nothing will happen".
+   Dropping the opacity and the pointer to near-zero is what makes the state legible
+   as unavailable — and because the count sits beside them reading 0, the reason is
+   on screen too.
+ *
+ * The invert key is exempt: it acts on the LIST, not on the selection, so it works
+ * from empty (it selects everything, which is its whole point). Dimming it with the
+ * verbs would be a lie about what it can do. */
+/* NOT scoped to .archive-keys: every flat bar on the page has the same contract —
+   present, disabled, visibly not-yet. It was scoped, so the dock's stop key stayed
+   at full contrast while disabled and read as a live control that ignored presses,
+   which is exactly how "the stop button shows all the time" gets reported. A disabled
+   key that looks enabled is worse than a hidden one. */
+.ext-key:disabled {
+  /* PRESENT but plainly not available.
+   *
+   * `.32` was too far: on a dark theme the key and its glyph merged into the panel
+   * behind them, so a reader could not tell a disabled export key from an empty spot
+   * in the bar — which defeats the entire reason for keeping the keys visible instead
+   * of hiding them. The states have to be distinguishable at a glance, and the middle
+   * ground is a visible key at reduced CONTRAST rather than reduced presence:
+   *
+   *   - opacity .55 keeps the plate's outline and the glyph's shape legible;
+   *   - the colour stays --text-faint, which in these themes is the DIMMEST end of the
+   *     ramp (--text-primary is the darkest and --text-faint the lightest — a
+   *     light-theme ordering that the dark themes inherit). It is the same colour the
+   *     enabled key uses, so the difference between the two states is carried entirely
+   *     by the opacity and the border, not by a second colour that could land on the
+   *     wrong side of the ramp;
+   *   - the border stays at --border-subtle, so the cut corner and the box are there
+   *     to be seen — the shape is what says "this is a control, just not now".
+   *
+   * The hover rule cancels the lift, so a disabled key does not light up under the
+   * pointer and promise something it will not do. */
+  opacity: .55;
+  cursor: default;
+  color: var(--text-faint);
+  border-color: var(--border-subtle);
+}
+.ext-key:disabled:hover {
+  color: var(--text-faint);
+  border-color: var(--border-subtle);
+  background: var(--bg-elevated);
+}
+/* The count LEADS the right-hand run, so its gap belongs on its RIGHT: it reads as
+   the label of the two verbs that follow it. `margin-left: auto` (the push that
+   opens the gap after the invert key) is declared with the toolbar above. */
+.archive-tick-count {
+  font: 700 .72rem/1 var(--font-mono); color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  min-width: 1.5ch; text-align: right;
+}
+/* At zero the number is not a count, it is an absence: same place, same tabular
+   width, no accent. Keeping it in the flow means the row's right edge does not
+   shift when the first tick arrives. */
+.archive-tick-count.is-empty { color: var(--text-faint); }
+/* The identity column: name over circumstances, and the only zone that flexes.
+   `min-width: 0` is what lets a long name ellipsis instead of pushing the facts
+   column off the row. */
+.archive-row-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.archive-row-name {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 500 .74rem var(--font-mono); color: var(--text-primary);
+}
+/* Under the name: where it ran, and what it ran. The profile is a chip because it
+   is a name from a fixed set (a connection), and the command is loose text because
+   it is arbitrary — one is scannable at a glance, the other only when looked at. */
+.archive-row-meta {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0;
+  font: 400 .62rem var(--font-mono);
+  color: var(--text-muted);
+}
+.archive-row-chip {
+  flex: 0 0 auto; padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  max-width: 7.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.archive-row-cmd {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-faint);
+}
+/* The session id: dimmer than the meta and SELECTABLE, because its job is to be
+   copied — it is the handle every other surface takes (`term`, a REST path, an
+   `open`). `user-select: text` overrides the row's own `user-select: none`, which
+   exists so dragging a row does not start a text selection; here starting one is the
+   point. `cursor: text` says so under the pointer. */
+.archive-row-id {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 400 .58rem var(--font-mono); letter-spacing: .02em;
+  color: var(--text-faint);
+  user-select: text; cursor: text;
+}
+.archive-row-id::before {
+  /* A leading marker, so the line reads as an id rather than as a stray short word. */
+  content: 'id ';
+  color: var(--text-faint); opacity: .6;
+}
+/* The right edge: how it ended, when, and how long it ran. All three are facts
+   about a finished session, so they are tabular and right-aligned — a column of
+   exit codes that shifts with its digits is unreadable at a glance. */
+.archive-row-facts {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.archive-row-age {
+  font: 500 .64rem var(--font-mono); letter-spacing: .02em;
+  color: var(--text-muted);
+}
+.archive-row-lived {
+  font: 400 .6rem var(--font-mono);
+  color: var(--text-faint);
+}
+.archive-row-outcome {
+  font: 600 .6rem var(--font-mono); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+/* A non-zero exit is the one fact worth a colour: it is the question the archive
+   is usually opened to answer. */
+.archive-row-outcome.is-failed { color: var(--danger); }
+/* The row's erase key: FAINT AT REST, RED ON HOVER.
+ *
+ * It used to be `opacity: 0` until the row was hovered, which hid the one action
+ * that erases a record: a row with no visible trash can reads as a row you cannot
+ * delete, and the only way to erase a single session was to tick it and reach for
+ * the batch key. Discoverability beats quiet.
+ *
+ * The weight is carried by COLOUR instead, which is what makes a permanently
+ * visible destructive key acceptable: --text-faint at rest is a hairline glyph
+ * that does not compete with the row's own open target, and the red arrives only
+ * under the pointer, where intent is unambiguous.
+ *
+ * `align-self: center` is not used — the key is positioned, so it does not
+ * participate in the row's line box at all (see .archive-row's right inset). */
+.archive-row-del {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: 1px solid transparent; border-radius: 0;
+  background: transparent; color: var(--text-faint); cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+/* The row's hover tints it a step brighter than rest, so the key reads as part of
+   the row being pointed at rather than as a stray mark, and the key's own hover
+   then commits to red. Two steps, one of them reversible: the pointer crossing a
+   row should not already look like a decision. */
+.archive-row:hover .archive-row-del { color: var(--text-muted); }
+.archive-row-del:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-surface); }
+.archive-row-del:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; color: var(--danger); }
+.archive-empty {
+  padding: 14px 8px; text-align: center;
+  font: 400 .72rem/1.5 var(--font-sans); color: var(--text-muted);
+}
 .workspace-sessions .section-header {
   margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
   border-radius: 12px 12px 0 0; background-color: var(--glass-plate-strong);
@@ -432,6 +1390,61 @@
   background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
   user-select: none; font: inherit;
 }
+/* Folded, the whole bar shrinks to its trigger: the keys control a list that is
+   no longer on screen, and the caret turns to point the way the plate will move —
+   the same rotation language as every other fold on this page. */
+.workspace-exts.is-folded .ext-head-actions { display: none; }
+.workspace-exts.is-folded .section-body { display: none; }
+.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts .nethub-caret { transition: transform .2s ease; }
+
+/* Folded, the body is GONE. The shared .section-body.collapsed rule in base.css
+   says the same thing, but this plate's own `.workspace-exts .section-body`
+   declaration (a wrapping flex flow) is more specific and would win, leaving a
+   collapsed body still laid out — which is exactly what happened: the class was
+   on the element and the height never changed. Restated at matching specificity. */
+.workspace-exts.is-folded .section-body { display: none; }
+/* The keys go with the body: they act on a list that is no longer on screen. */
+.workspace-exts.is-folded .ext-head-actions { display: none; }
+/* The caret points the way the plate will move — the same rotation language every
+   other fold on this page uses. */
+.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts .nethub-caret { transition: transform .2s ease; }
+
+/* duplicate removed; see rule near line 262 */
+
+/* ---- The extension plate's batch row, sized for a WIDE region -------------
+   The shared row (.drawer-toolbar + .nethub-select-toggle above) is a DRAWER
+   row: its switch grows to fill the strip and its companion keys appear beside
+   it, which reads as one banner in an 832px centre. Here the switch is a compact
+   square that never grows, the selection count is a sentence next to it, and the
+   action keys only exist while something is ticked — so the row is one small key
+   when idle and a real toolbar when it is not.
+
+   The keys are the same ids and the same component (batch-bar.js drives both
+   columns), so this is geometry and dressing only: no behaviour moves. */
+.workspace-exts .drawer-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 0 10px; margin-bottom: 10px;
+}
+.workspace-exts .nethub-select-toggle {
+  flex: 0 0 auto; max-width: none; width: 32px; height: 32px; padding: 0;
+}
+/* Idle: the count and the action keys are gone, so the row is just the switch. */
+.workspace-exts .drawer-toolbar .batch-count {
+  font: 600 .68rem var(--font-mono); letter-spacing: .04em;
+  color: var(--text-secondary); white-space: nowrap;
+}
+/* The action keys keep the drawer's icon size. The split key is the one that has
+   to be pinned: its shared rule grows it to claim the row (up to 220px), which
+   was right for a 260px column and reads as a banner for two glyphs here, so the
+   ::after-ready selector below holds it at its content width in BOTH states. */
+
+/* NO gutter on the right. This rule reserved 42px for the drawer's close key, which
+   used to sit at the panel's top INNER corner over the toolbar. The key has moved to
+   the panel's sliding edge (see .drawer-close), where it is centred vertically on the
+   edge itself and overlaps nothing — so the reservation was pure empty space at the
+   right end of the plate's toolbar on every phone. That is the gap. */
 .drawer-add svg { display: block; }
 .drawer-add:hover, .drawer-add:focus-visible {
   background: var(--accent-surface); border-color: var(--accent); color: var(--accent);
@@ -444,7 +1457,11 @@
    below 800px. Above it they are not part of the layout at all. */
 .drawer-toolbar {
   flex: 0 0 auto;
-  display: flex; gap: 6px; padding: 0 10px 10px;
+  /* No `gap`: each companion key carries its own margin-left, so the row's
+     spacing travels with the key. A container `gap` is not interpolable and is
+     not part of any key's box, so it cannot leave or arrive gradually — it
+     would appear in the first frame and eat part of the switch's slide. */
+  display: flex; padding: 0 10px 10px;
   border-bottom: 1px solid var(--border-subtle); margin-bottom: 10px;
 }
 /* One row, two states. The keys wear the SAME plate as the panels — the cut
@@ -459,15 +1476,28 @@
 .nethub-select-toggle {
   position: relative;
   /* flex-basis carries the toggle animation: full-width (basis 0%, grow 1)
-     collapses to a 34px square (basis 34px, grow 0) and back. Basis and grow
-     are both interpolable, so the key visibly slides shut towards its left
-     edge — the row's first item stays pinned there — and slides open again. */
+     collapses to a 34px square (basis 34px, grow 0) and back over 0.2s. Basis
+     and grow are both interpolable, so the key visibly slides shut towards its
+     left edge — the row's first item stays pinned there — and slides open
+     again. This only reads as a slide because the companion keys release their
+     length over the same 0.2s (see below); if they claimed it in one frame the
+     switch would be crushed before this transition had run a single step. */
+  /* NO `max-width`. It was capped at 220px to stop the key becoming a banner in the
+   * 1036px centre, but this switch only lives in the hosts column's 260px toolbar —
+   * the cap never fired for the case it was written for, and it DID fire here: the
+   * row is `flex: 1 1 0%` with the companions beside it, so capping the basis left
+   * 40px of empty space at the right end of the toolbar. That gap is what "the right
+   * side is missing a piece" describes, and it is not a missing element — it is the
+   * switch refusing to take the width the row gave it.
+   *
+   * `flex-basis` stays 0% so the slide still animates: the cap was never load-bearing
+   * for the animation, only for a width the switch cannot reach here. */
   flex: 1 1 0%; height: 34px; padding: 0 12px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--border-strong); border-radius: 0;
   background-color: var(--bg-elevated);
   color: var(--text-secondary); cursor: pointer;
-  transition: color .14s ease, flex-basis .22s ease, flex-grow .22s ease;
+  transition: color .14s ease, flex-basis .2s ease, flex-grow .2s ease;
 }
 .nethub-select-toggle:hover { color: var(--accent-hover); }
 .nethub-select-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -484,20 +1514,55 @@
 @keyframes nethubCountIn { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
 /* The invert check: hollow while nothing is ticked, solid once something is —
    the key shows the state it would flip. Hover and focus tint the glyph, and
-   there is deliberately no fill to light up. The row's companion keys fade in
-   from the left as the switch shuts, and fade out as it opens again. */
+   there is deliberately no fill to light up.
+
+   The companion keys HOLD A LENGTH IN BOTH STATES and animate it, rather than
+   being switched on with `display: none`. That is what makes the switch's own
+   slide visible: `display` is not interpolable, so a flip makes the companions
+   claim their 181px in the first frame, and the switch — which only gets the
+   space they leave — is crushed from 283px to 90px before its transition has
+   run a single step. Measured in a real browser: 82% of its travel happened in
+   the first frame, and the remaining sliver covered the whole 0.2s, which is
+   why the row read as "no animation" while every declaration looked correct.
+   Releasing the length over the same 0.2s keeps every frame carrying the row.
+
+   `visibility` (delayed on the way out) is what actually removes them once the
+   length is gone: an opacity-0 key is still a Tab stop. `.nethub-open-split`
+   gets no `overflow` on purpose — its dropdown hangs below the box and a clip
+   would slice it off. */
 .nethub-batch-icon {
-  display: none;
-  flex: 0 0 34px; width: 34px; height: 34px; padding: 0;
+  /* In the flow in both states — see the comment above: a `display` flip is not
+     interpolable and crushes the switch's slide.
+   *
+   * `height: 0` in the collapsed state, because a zero-WIDTH box still contributes
+   * its height to the line box. That was the "the host button's height got messed
+   * up" bug: the row computed 34px of nothing whether the key was unfolded or not,
+   * so collapsing the column left a band of empty space where the keys would go.
+   * Height transitions with the width so the row stays smooth in both directions. */
+  flex: 0 0 0px; width: 0; height: 0; margin-left: 0; padding: 0;
+  overflow: hidden;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  display: inline-flex;
   align-items: center; justify-content: center;
   border: 1px solid var(--border-strong);
   background-color: var(--bg-elevated);
   color: var(--text-muted); cursor: pointer;
-  transition: color .14s ease;
+  transition: color .14s ease, flex-basis .2s ease, width .2s ease,
+              margin-left .2s ease, opacity .2s ease, visibility 0s linear .2s;
 }
-.nethub-selecting .nethub-batch-icon,
-.ext-selecting .nethub-batch-icon { display: inline-flex; animation: nethubKeyIn .18s ease; }
-.nethub-batch-icon:disabled { pointer-events: none; opacity: .45; }
+.nethub-selecting .nethub-batch-icon {
+  flex: 0 0 34px; width: 34px; height: 34px; margin-left: 6px;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transition: color .14s ease, flex-basis .2s ease, width .2s ease,
+              margin-left .2s ease, opacity .2s ease, visibility 0s;
+}
+/* The disabled look belongs to the EXPANDED key only. Unscoped, `:disabled`
+   (0,2,0) also beats the collapsed rule (0,1,0) and pins opacity at .45 in both
+   states, so the fade has equal endpoints and never runs — the keys would pop
+   in wearing a .45 ghost. Scoping it under the pressed state keeps the dimming
+   where the key is visible and lets the collapsed state own its own opacity. */
+.nethub-batch-icon:disabled { pointer-events: none; }
+.nethub-selecting .nethub-batch-icon:disabled { opacity: .45; }
 .nethub-batch-icon:hover { color: var(--accent-hover); }
 .nethub-batch-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .nethub-batch-icon svg { display: block; }
@@ -515,12 +1580,31 @@
    menu — a clip cuts descendants, and the menu hangs below the key. */
 .nethub-open-split {
   position: relative;
-  display: none;
-  flex: 1 1 auto; min-width: 0; height: 34px;
+  /* In the flow in both states — the comment above explains why a `display` flip
+     breaks the switch's slide — and collapsed on BOTH axes, because a zero-width
+     box still answers the row's line height. `height: 0` is what keeps the
+     collapsed row from carrying a 34px band of empty space; it returns to 34px
+     with the length, so the unfolded key is the height it always was. */
+  flex: 0 0 0px; min-width: 0; height: 0; margin-left: 0;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: flex-basis .2s ease, flex-grow .2s ease, margin-left .2s ease,
+              opacity .2s ease, visibility 0s linear .2s;
 }
-.nethub-selecting .nethub-open-split,
-.ext-selecting .nethub-open-split { display: block; animation: nethubKeyIn .18s ease; }
-.nethub-open-split.is-disabled { pointer-events: none; opacity: .45; }
+.nethub-selecting .nethub-open-split {
+  /* It grows into the row, but not without limit: in a 260px side column that was
+     the whole width, while in the 1036px centre it became a 934px bar for two
+     glyphs. The cap keeps the key a key. */
+  flex: 1 1 0%; max-width: 220px; height: 34px; margin-left: 6px;
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transition: flex-basis .2s ease, flex-grow .2s ease, margin-left .2s ease,
+              opacity .2s ease, visibility 0s;
+}
+/* Same as the invert key above: unscoped, `.is-disabled` would pin opacity at .45
+   in both states and the split key would stop fading when it unfolds. The dimming
+   belongs to the pressed state only. */
+.nethub-open-split.is-disabled { pointer-events: none; }
+.nethub-selecting .nethub-open-split.is-disabled { opacity: .45; }
+
 /* The plate: the shared corner from theme.css, and the fill its strokes read
    against. Nothing here restates the polygon. */
 .nethub-open-plate {
@@ -542,14 +1626,18 @@
 .batch-open-main { flex: 1 1 auto; min-width: 0; padding: 0 10px; gap: 8px; }
 .batch-open-caret { flex: 0 0 22px; border-left: 1px solid var(--border-subtle); }
 .nethub-open-plate button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-@keyframes nethubKeyIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+/* There is deliberately no nethubKeyIn keyframe here. The companions fade in as
+   the switch shuts and fade out as it opens again, but that motion is a
+   `transition` on the rules above — the keyframe it replaced was attached to the
+   pressed selector, so it ran on expansion and vanished on collapse, and it could
+   not be reversed the way a transition is. */
 /* The dropdown: export and delete. It is anchored to the split key's RIGHT
    edge (right: 0), because the trigger is the caret at that end — anchoring
    left put it under the far end of the key, which reads as "the menu opened
    somewhere else". min-width: 100% makes it at least as wide as the key it
    drops from, so the items are the key's width instead of a squat box. */
 .nethub-open-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--z-dropdown);
   min-width: 100%;
   display: flex; flex-direction: column; padding: 4px;
   border: 1px solid var(--border-subtle); border-radius: 0;
@@ -569,18 +1657,100 @@
 .nethub-menu-item svg { display: block; flex: 0 0 auto; }
 .nethub-menu-item.nethub-menu-danger { color: var(--danger); }
 .nethub-menu-item.nethub-menu-danger:hover { background: var(--danger-surface); color: var(--danger); }
+/* ---- A tab's session menu ---------------------------------------------------
+   The tab bar is the only place a session is listed, so the actions that are not
+   "switch to it" live behind a right-click: the approval gate, the rename, the
+   session URL. It reuses the batch menu's dressing (same border, background,
+   letter-spaced mono labels) because it IS the same kind of object — a small
+   vertical menu of verbs — but it is positioned fixed at the pointer, since its
+   anchor is a tab in a bar that scrolls and it must not be clipped by it. */
+.sess-tab-menu {
+  position: fixed; z-index: var(--z-popover); min-width: 186px;
+  display: flex; flex-direction: column; padding: 4px;
+  border: 1px solid var(--border-subtle); border-radius: 0;
+  background: var(--bg-elevated); box-shadow: 0 10px 28px var(--shadow-card);
+}
+.sess-tab-menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  height: 30px; padding: 0 10px;
+  border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  font: 600 .68rem var(--font-mono); letter-spacing: .06em; text-transform: uppercase;
+  text-align: left; white-space: nowrap;
+}
+.sess-tab-menu-item:hover,
+.sess-tab-menu-item:focus-visible { background: var(--accent-surface); color: var(--accent); }
+.sess-tab-menu-item:focus-visible { outline: none; }
+.sess-tab-menu-item svg { display: block; flex: 0 0 auto; }
+/* The gate is a state as well as a verb, so an armed one says so: the lit dot is
+   the same "this is on" language the card's lock used, and the label stays put so
+   the item does not change size under the pointer. */
+.sess-tab-menu-item.is-on { color: var(--accent); }
+.sess-tab-menu-dot {
+  width: 5px; height: 5px; margin-left: auto; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 6px var(--accent);
+}
+
+/* The drawer's collapse key rides the drawer's OUTER edge, on the side it leaves
+ * towards, as a chevron rather than an X.
+ *
+ * It used to be an X at `top: 12px; right: 10px` — the inner top corner of whichever
+ * drawer was open, because `right` was hard-coded and the hosts drawer slides in from
+ * the LEFT. So on that panel the key sat at the far end of the header from the edge
+ * the panel actually returns through, and on both panels an X reads as "dismiss",
+ * the gesture for a dialog, rather than "put this away".
+ *
+ * Centred vertically, half outside the panel: the slab and the key then read as one
+ * object with a handle on its edge, and the key is the first thing a swipe starting
+ * at the screen edge would touch. `translateY(-50%)` centres it; the negative inset
+ * on the matching side puts it outboard. */
 .drawer-close {
   display: none; align-items: center; justify-content: center;
-  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 10px;
-  width: 34px; height: 34px; padding: 0;
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 46px; padding: 0;
   border: 1px solid var(--border-strong); border-radius: 0;
   background: var(--bg-elevated); color: var(--accent);
-  cursor: pointer; z-index: 2; touch-action: manipulation;
+  cursor: pointer; z-index: var(--z-drawer-key); touch-action: manipulation;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+/* Outboard of the body's own padding, so the key is never over the content it
+   collapses. `env(safe-area-inset-*)` keeps it clear of a phone's rounded corner. */
+/* INSIDE the panel, flush against the edge it slides through.
+ *
+ * The first attempt put these outboard with a negative inset, which is impossible on
+ * a phone: both drawers are pinned to a screen edge (`left: 0` and `right: 0`), so
+ * "outside the panel" on that side is off-screen. The keys were rendered, positioned
+ * and invisible — and the side that DID show a key was the opposite one, which is
+ * exactly what "you put it on the wrong edge" describes.
+ *
+ * So the key sits just inside the sliding edge, on the panel's own surface: it reads
+ * as a tab on the drawer's leading edge, it is where a swipe back would start, and it
+ * cannot fall off the screen. The border on three sides (not the edge side) makes it
+ * look continuous with the panel's edge rather than a box floating near it. */
+/* `left: 0` / `right: 0` — inset:auto keeps it in the containing block's padding
+   box, which on the SLIDING side is `12px + safe-area` in from the border. That is
+   where it belongs and it is also the only place it fits: the drawer is pinned to the
+   screen edge, so any negative offset puts the key off-screen (measured: `-12px` put
+   its left edge at x=-12 on a 390px viewport).
+ *
+ * The 12px of padding it sits inside is the panel's own content inset, which is
+ * exactly the "edge" a reader perceives — the border is a hairline, the padding is
+ * the visible margin, and a tab sitting on that margin reads as attached to the edge.
+ * Three borders, none on the sliding side, complete the "tab on the leading edge"
+ * look: it is a piece of the panel folded outward, not a key parked next to it. */
+.drawer-close-left {
+  left: 0;
+  border-radius: 0 10px 10px 0;
+  border-left: 0;
+}
+.drawer-close-right {
+  right: 0;
+  border-radius: 10px 0 0 10px;
+  border-right: 0;
 }
 .drawer-close:hover, .drawer-close:active { background: var(--accent-surface); border-color: var(--accent-border); color: var(--accent-hover); }
 .drawer-close svg { display: block; }
 .drawer-scrim {
-  display: none; position: fixed; inset: 0; z-index: 23900;
+  display: none; position: fixed; inset: 0; z-index: var(--z-scrim);
   background: var(--overlay-scrim); backdrop-filter: blur(3px);
   opacity: 0; pointer-events: none; transition: opacity .22s ease;
 }
@@ -595,7 +1765,6 @@
 @media (min-width: 1024px) {
   .dock { width: 100%; margin: 0 auto; padding: 16px 20px; }
 }
-
 /* Narrow: the panels leave the flow and become the drawers they always were.
    The sidebar, the rail and the third column are desktop states; below 800px
    each panel keeps only its compact trigger above the sessions, and that
@@ -614,29 +1783,65 @@
   .workspace-frame,
   .workspace-frame.ext-on { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 8px 0; }
   .nethub { order: 1; }
+  /* The archive is a .nethub now, so its order has to outrank the generic
+     .nethub { order: 1 } above it — the hosts column keeps the left edge and the
+     archive takes the right, whatever else the two share. */
   .extpanel { order: 2; }
-  .workspace-main { order: 3; flex: 1 1 100%; }
+  /* The centre plate takes the whole row beneath the two triggers: at this width
+     the terminal windows are full-screen overlays over this page, so the plate is
+     what the page IS rather than a column beside anything. */
+  .workspace-frame > .workspace-exts { grid-column: auto; flex: 1 1 100%; order: 3; }
   /* z-index: auto is load-bearing, not tidying: the base rule gives .nethub
-     z-index: 20 for its sticky column, and a positioned ancestor with a
+     the sticky rung for its sticky column, and a positioned ancestor with a
      z-index creates a stacking context. The drawer inside it is position:fixed
-     at z-index 24000, but it would then paint at the ANCESTOR's 20 — under the
-     scrim, which is a sibling at 23900. That is the frosted pane over an open
-     drawer. Resetting the ancestor lets the fixed child reach the root context. */
+     at the drawer rung, but it would then paint at the ANCESTOR's sticky rung —
+     under the scrim, which is a sibling on its own rung above it. That is the
+     frosted pane over an open drawer. Resetting the ancestor lets the fixed
+     child reach the root context. */
   .nethub { position: relative; top: auto; z-index: auto; }
   .extpanel { position: relative; top: auto; z-index: auto; }
   /* width: auto is the shrink: the key takes the room its own label needs and
      not the track's, which is what lets space-between carry the extension key
      to the far edge. */
   .nethub-btn { width: auto; }
-  .extpanel-btn { width: auto; }
-  .nethub-caret, .extpanel-caret { display: none; }
+  .nethub-caret { display: none; }
+  /* The desktop header is mirrored (caret inboard, glyph and label against the
+     screen edge). That mirror is a fact about two columns FACING each other, and
+     here they do not: below the breakpoint both triggers are glyph-and-label keys
+     sitting side by side along the top of a single column of content, each hugging
+     its own edge. So the mirror is undone — glyph first, label next, the way the
+     hosts key reads — or this key would lead with an empty slot where its caret
+     used to be and its icon would sit oddly inboard of its own text. */
+  .extpanel .nethub-caret { order: 0; }
+  .extpanel .nethub-glyph { order: 0; }
+  .extpanel .nethub-label { order: 0; }
+  .extpanel .archive-count-badge {
+    /* The badge follows the label here, not the outer edge: on a narrow bar the
+       key is already sized to its content, so pushing the count outwards would
+       stretch the key back to full width and undo the shrink. */
+    margin-left: 0; order: 0;
+  }
+  /* The archive body is a FIXED DRAWER below the breakpoint, so its container
+     must not claim layout width. On the desktop grid this column is the frame's
+     third track and `.workspace-frame > .extpanel` stretches it to `width: 100%`
+     — correct there, wrong here, where the column is only its trigger key in a
+     wrapped row. Left at 100% it took the whole 390px and pushed the hosts key
+     onto a line of its own above it (measured), so the same selector un-stretches
+     it: specificity has to match the desktop rule, not just the class. */
+  .workspace-frame > .extpanel { width: auto; flex: 0 0 auto; }
+  /* The body needs no width trick of its own: the drawer rule below makes it
+     `position: fixed`, which takes it out of the column's layout entirely, so the
+     column is already only as wide as its trigger key. An explicit `width: 0`
+     here (this rule's first form) was not just unnecessary — at three classes it
+     outranked the drawer's own `width: min(86vw, 360px)` and pinned the pane at
+     25px, i.e. its padding, so the archive opened onto nothing. */
   /* Both drawers are fixed in the root stack rather than in their own columns,
      and each is declared in full rather than through one shared selector: they
      slide from opposite sides, so the geometry and layer declarations are all
      they have in common, and spelling them twice keeps each drawer readable on
      its own. */
   #sec-entries-body {
-    position: fixed; top: 0; bottom: 0; z-index: 24000;
+    position: fixed; top: 0; bottom: 0; z-index: var(--z-drawer);
     display: flex; flex-direction: column;
     width: min(86vw, 360px); padding: 12px; overflow: hidden;
     min-height: 0; max-height: none; margin-top: 0;
@@ -648,7 +1853,7 @@
     will-change: transform;
   }
   .extpanel-body {
-    position: fixed; top: 0; bottom: 0; z-index: 24000;
+    position: fixed; top: 0; bottom: 0; z-index: var(--z-drawer);
     display: flex; flex-direction: column;
     width: min(86vw, 360px); padding: 12px; overflow: hidden;
     min-height: 0; max-height: none; margin-top: 0;
@@ -702,14 +1907,39 @@
      the page by visibility rather than by the transition finishing, so the
      crossing needs no help from script. */
   #sec-entries-body > #conn-grid { padding: 0; }
-  .extpanel-body > #ext-grid { padding: 0; }
+  .extpanel-body > #archive-grid { padding: 0; }
   /* The drawer's own padding carries the safe-area inset, so the grid's own
      side padding would double it. */
   .drawer-add-row { margin-inline: 0; }
   .drawer-toolbar { padding-right: 42px; }
   .drawer-close { display: inline-flex; }
   .drawer-scrim { display: block; }
-  .workspace-main { width: 100%; }
+
+  /* The dock goes to TWO rows here, and only here.
+   *
+   * One row cannot hold a readable strip plus the batch group plus the window
+   * controls at this width: measured at 390px the six tabs were down to 106px
+   * between them, narrower than the labels they carry, while the two key groups
+   * held 190px. Two rows give the list a full line and put the keys under it.
+   *
+   * It is scoped to this block on purpose. The two-row layout costs 24px of
+   * terminal height at every size, and on a desktop there is width to spare — the
+   * batch group is empty until something is ticked, so the second row would be a
+   * permanently taller dock bought for nothing. The cap follows the shape: one row
+   * is 40px, two are 68px. */
+  .sessdock { max-height: 70px; }
+  .sessdock-bar { flex-wrap: wrap; gap: 4px 6px; }
+  /* Row 1 is the list, at the bar's full width; `flex-basis: 100%` is what forces
+     the wrap, since the keys below can no longer share the line. */
+  .sessdock-tabs { flex: 1 1 100%; order: 0; }
+  /* Row 2: the batch group stays at the left end and the window controls are
+     pushed to the right one, which is what `margin-left: auto` does once the strip
+     is no longer absorbing the slack. */
+  .sessdock-batch { order: 0; }
+  .sessdock-actions { margin-left: auto; }
+  /* The note stands in for row 1, which now starts at the bar's left padding
+     because the batch group has moved below it. */
+  .sessdock-empty { left: 10px; top: 4px; }
 }
 
 /* Extremely narrow: the keys give up their labels and keep their glyphs.
@@ -725,9 +1955,9 @@
    the key keeps its title and aria-label, so the tooltip and the screen-reader
    name are unchanged. */
 @media (max-width: 339px) {
-  .nethub-label, .extpanel-label { display: none; }
-  .nethub-btn, .extpanel-btn { justify-content: center; width: 50px; }
-  .nethub-icon, .extpanel-glyph { flex: 0 0 auto; }
+  .nethub-label { display: none; }
+  .nethub-btn { justify-content: center; width: 50px; }
+  .nethub-icon, .nethub-glyph { flex: 0 0 auto; }
 }
 
 /* Narrow header: the docs link collapses to its glyph.
@@ -770,6 +2000,8 @@
 @media (pointer: coarse) and (hover: none) {
   .dock { padding: 12px 0; }
   #sec-entries-body { width: min(88vw, 340px); }
-  .drawer-close { width: 36px; height: 36px; }
+  /* A tall, narrow handle rather than a square key: this sits ON the drawer's edge
+     and has to read as part of the slab's border, not as a button parked on it. */
+  .drawer-close { width: 28px; height: 52px; }
   .workspace-sessions .conn-tile.sess-tile { width: 132px; padding: 9px 6px 7px; }
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,18 @@ func jsonMarshalIndent(m map[string]any) (string, error) {
 func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
 	if bad := s.refuseForeignTarget(ctx, stmt); bad != nil {
 		return []envelope.Slot{*bad}
+	}
+	// A CHANNEL DIRECTIVE TAKES A CHANNEL, and the check happens here as well as at
+	// parse time. Parse-time covers the ordinary path (the target word is visible in
+	// the statement); this one covers the paths the parser cannot see — an alias
+	// whose expansion supplies the target, and a target that reached dispatch by
+	// some route other than parseStatement. Two enforcement points, one rule, so a
+	// future entry cannot reintroduce the silent primaryShell fallback.
+	if op, ok := directive.Lookup(stmt.Op); ok && op.TargetKind == directive.TargetChannel {
+		if stmt.Target != "" && !directive.NamesAChannel(stmt.Target) {
+			return []envelope.Slot{badRequest(stmt,
+				directive.ChannelTargetProblem(op, stmt.Target)+"\n"+op.Usage)}
+		}
 	}
 	switch stmt.Op {
 	case "run":
@@ -84,8 +98,8 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		return []envelope.Slot{s.directiveProfile(ctx, stmt, win)}
 	case "ext":
 		return []envelope.Slot{s.directiveExtension(ctx, stmt, win)}
-	case "mcp":
-		return []envelope.Slot{s.directiveMCP(ctx, stmt, win)}
+	case "jrpc", "mcp", "cdp":
+		return []envelope.Slot{s.directiveJRPC(ctx, stmt, win)}
 	case "alias":
 		return []envelope.Slot{s.directiveAlias(ctx, stmt, win)}
 	case "help":
@@ -96,6 +110,45 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		Headers: map[string]string{"Error-Code": "unknown_directive"},
 		Body:    "unknown directive: " + stmt.Op,
 	}}
+}
+
+// noContent returns a 204 slot carrying the statement's Path header.
+func noContent(stmt directive.Statement) envelope.Slot {
+	return envelope.Slot{Code: 204, Headers: map[string]string{"Path": stmt.Path}}
+}
+
+// badRequest returns a 400 slot for an invalid argument or missing parameter.
+func badRequest(stmt directive.Statement, body string) envelope.Slot {
+	return envelope.Slot{
+		Code:    400,
+		Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeInvalidArgument},
+		Body:    body,
+	}
+}
+
+// badRequestNoPath is badRequest for the replies that predate a statement — the
+// argument screen at the entrance, and a directive error raised before a Path
+// exists. There is no Path header to attach, and inventing one would echo a
+// position the caller never wrote.
+func badRequestNoPath(body string) envelope.Slot {
+	return envelope.Slot{
+		Code:    400,
+		Headers: map[string]string{"Error-Code": CodeInvalidArgument},
+		Body:    body,
+	}
+}
+
+// ptrSlot is the address of a slot, for the helpers whose caller must return a
+// *envelope.Slot rather than a value.
+func ptrSlot(s envelope.Slot) *envelope.Slot { return &s }
+
+// notFoundSlot returns a 404 slot with the given error code.
+func notFoundSlot(stmt directive.Statement, code, body string) envelope.Slot {
+	return envelope.Slot{
+		Code:    404,
+		Headers: map[string]string{"Path": stmt.Path, "Error-Code": code},
+		Body:    body,
+	}
 }
 
 // refuseForeignTarget applies namespace isolation to every directive, including
@@ -180,11 +233,11 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	}
 
 	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload)); fail != nil {
-		return s.slotFromFailure(ctx, stmt, fail)
+		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))
 	}
 	keyRes, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", stmt.Target, "key", "enter"))
 	if fail != nil {
-		return s.slotFromFailure(ctx, stmt, fail)
+		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))
 	}
 	// A held command line: review mode staged the text and queued it on the enter.
 	// The reply is the review shape, not a read — there is nothing to read yet.
@@ -197,6 +250,50 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	}
 
 	return s.readSlotAfter(ctx, stmt, win, start)
+}
+
+// pipeClosedHint turns a bare write failure into something a caller can act on.
+//
+// A pipe channel's process can exit while the session and the channel still report
+// `running` — the status is updated when the exit is reaped, and the write can lose
+// that race. What reaches the caller then is the OS error on a closed stdin, `EOF`
+// or `process has exited, cannot send input`, which says nothing about the two facts
+// that matter: this channel was a one-shot program, and its output is still there.
+//
+// The hint is only added for a pipe channel: on a pty the same error means something
+// else (the shell died), and pointing at `read` would be wrong.
+func pipeClosedHint(handle string, f *toolFailure, s *Server) *toolFailure {
+	if f == nil {
+		return f
+	}
+	msg := strings.TrimSpace(f.msg)
+	closed := msg == "EOF" || strings.Contains(msg, "cannot send input") ||
+		strings.Contains(msg, "file already closed") || strings.Contains(msg, "broken pipe")
+	if !closed {
+		return f
+	}
+	// The channel may already be refused by requireShell (its process exited and the
+	// status caught up), which is the OTHER way this error arrives. Both roads lead to
+	// the same advice, so a bad resolution is checked for the mode instead of
+	// returning early: a pty whose shell died must NOT be told to `read` its exit
+	// code, because a pty has no exit code to read.
+	cs, bad := s.requireShell(handle)
+	if cs == nil {
+		return f
+	}
+	if bad != nil {
+		if cs.Info().Mode != api.ModePipe {
+			return f
+		}
+	} else if cs.Info().Mode != api.ModePipe {
+		return f
+	}
+	return &toolFailure{
+		code: CodeOperationFailed,
+		msg: msg + "\nThis is a PIPE channel: its process has finished, so there is no stdin left to write to " +
+			"and `run`/`type` cannot drive it. Its output is still readable — `read " + handle + "` returns it, " +
+			"including the exit code. For an interactive session use `pty` instead.",
+	}
 }
 
 // probeShell resolves a handle and reports why it cannot be used, so a `run`
@@ -222,7 +319,7 @@ func (s *Server) slotFromFailure(ctx context.Context, stmt directive.Statement, 
 func (s *Server) directiveType(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
 	res, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload))
 	if fail != nil {
-		return []envelope.Slot{s.slotFromFailure(ctx, stmt, fail)}
+		return []envelope.Slot{s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))}
 	}
 	if held := reviewPendingFrom(res); held != nil {
 		return []envelope.Slot{{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}}
@@ -235,11 +332,14 @@ func (s *Server) directiveType(ctx context.Context, stmt directive.Statement, wi
 // directiveKey presses a named key.
 func (s *Server) directiveKey(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
 	if len(stmt.Args) == 0 {
-		return []envelope.Slot{{Code: 400, Headers: map[string]string{"Error-Code": "invalid_argument", "Path": stmt.Path},
-			Body: "key needs a key name, e.g. `key a1f3:1 enter`"}}
+		return []envelope.Slot{badRequest(stmt, "key needs a key name, e.g. `key a1f3:1 enter`")}
 	}
 	args := argsOf("shell_id", stmt.Target, "key", stmt.Args[0])
-	if repeat := atoiFlag(stmt, "repeat", 1); repeat > 1 {
+	repeat, err := atoiFlag(stmt, "repeat", 1)
+	if err != nil {
+		return []envelope.Slot{numericFlagProblem(stmt, "repeat", err)}
+	}
+	if repeat > 1 {
 		args["repeat"] = float64(repeat)
 	}
 	res, fail := s.callTool(ctx, "shell_key", args)
@@ -285,16 +385,14 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 		}
 	}
 	args := argsOf("shell_id", stmt.Target)
-	if v, ok := stmt.Flags["cursor"]; ok {
-		args["offset"] = flagNumber(v)
+	if slot, bad := numericFlags(args, stmt,
+		[2]string{"cursor", "offset"},
+		[2]string{"from-line", "from_line"},
+		[2]string{"tail", "tail_lines"},
+	); bad {
+		return slot
 	}
-	if v, ok := stmt.Flags["from-line"]; ok {
-		args["from_line"] = flagNumber(v)
-	}
-	if v, ok := stmt.Flags["tail"]; ok {
-		args["tail_lines"] = flagNumber(v)
-	}
-	if v, ok := stmt.Flags["stream"]; ok {
+	if v, ok := stmt.Flag("stream"); ok {
 		args["stream"] = v
 	}
 	if boolFlag(stmt, "raw") {
@@ -433,19 +531,27 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 	body := getString(doc, "output", "")
 	headers := map[string]string{"Path": stmt.Path}
 
-	// The three axes, applied to what came back. The handler already truncated to
-	// bytes_limit/lines_limit, so a short body means the window ended; a body that
-	// reaches a limit while more exists is a partial read.
+	// THE HANDLER ALREADY APPLIED THE LIMITS, so this pass must decide from
+	// has_more, not from the body's size.
+	//
+	// It used to test `len(body) > win.BytesLimit` and `lines > win.LinesLimit`,
+	// which the handler had just made false: it returns at most bytes_limit bytes and
+	// lines_limit lines, so the comparison never held and the fold policy never ran.
+	// The observable result was that `on_lines_overflow: fold` and
+	// `on_bytes_overflow: fold` returned the truncated window anyway — the parameter
+	// was accepted, validated, and then ignored.
+	//
+	// has_more is the fact the handler DOES report: "the window ended before the
+	// stream did". That is exactly the condition the fold policy is about.
+	more := boolAny(doc, "has_more")
 	truncated := false
-	if win.BytesLimit > 0 && len(body) > win.BytesLimit {
-		body = foldOrTruncate(body, win.BytesLimit, win.OnBytesOverflow)
+	if more && win.BytesLimit > 0 && win.OnBytesOverflow == "fold" {
+		body = ""
 		truncated = true
 	}
-	if win.LinesLimit > 0 {
-		if lines := strings.Count(body, "\n"); lines > win.LinesLimit {
-			body = foldOrTruncateLines(body, win.LinesLimit, win.OnLinesOverflow)
-			truncated = true
-		}
+	if more && win.LinesLimit > 0 && win.OnLinesOverflow == "fold" {
+		body = ""
+		truncated = true
 	}
 
 	code := 200
@@ -486,8 +592,22 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 			}
 		}
 	}
-	s.addUsage(s.currentReply, stmt, headers)
 	return envelope.Slot{Code: code, Headers: headers, Body: body}
+}
+
+// addUsage adds the directive's usage line to one slot when learn_mode asked for
+// it.
+//
+// The de-duplication lives on the REPLY, not on the server: "the same directive
+// once" is a fact about one answer, so two calls in flight must not be able to see
+// each other's bookkeeping. That is why this takes the reply as an argument instead
+// of reading a field off the Server — a shared field made every Term call race with
+// every other, which is a bug this signature removes rather than locks around.
+func (s *Server) addUsage(t *termReply, stmt directive.Statement, headers map[string]string) {
+	if t == nil {
+		return
+	}
+	t.withUsage(stmt, headers)
 }
 
 // channelExitState reports a handle's terminal state.
@@ -529,27 +649,12 @@ func (s *Server) channelExitState(handle string) (status string, exit *int, clos
 		if info.Status == "exited" || info.Status == "error" {
 			return string(info.Status), info.ExitCode, true
 		}
-		// The handle named the session, so the primary channel is the object the
-		// caller means: a one-channel session is the ordinary case, and its exit is
-		// the session's.
-		if cs := sess.PrimaryShell(); cs != nil {
-			sinfo := cs.Info()
-			if sinfo.Status == "exited" || sinfo.Status == "error" {
-				return string(sinfo.Status), sinfo.ExitCode, true
-			}
-		}
+		// A session's exit is the session's; we do not look into its primary
+		// shell. Every channel that needs its exit reported passes a channel handle
+		// above (`sid:N`), which resolves on its own.
+		return "", nil, false
 	}
 	return "", nil, false
-}
-
-// currentReply is the reply currently being assembled, so a slot can consult the
-// learn_mode de-duplication. It is set per statement by runDirective's caller.
-func (s *Server) addUsage(t *termReply, stmt directive.Statement, headers map[string]string) {
-	// The de-duplication lives on the reply; a nil receiver means "no learn mode".
-	if t == nil || !t.win.LearnMode {
-		return
-	}
-	t.withUsage(stmt, headers)
 }
 
 // foldOrTruncate applies an overflow policy to a byte-truncated body.
@@ -664,17 +769,46 @@ func getFloatAny(m map[string]any, key string, def float64) float64 {
 	return def
 }
 
-// boolAny reads a boolean from a JSON document.
+// numericFlagProblem is the 400 for a numeric flag whose value does not parse.
+//
+// The flag name and the offending text are both in the message, because the caller
+// wrote a command line and needs to see WHICH word was wrong — "invalid argument"
+// on a fifty-flag directive is not actionable.
+func numericFlagProblem(stmt directive.Statement, flag string, err error) envelope.Slot {
+	return badRequest(stmt, "--"+flag+" "+err.Error())
+}
+
+// boolAny reports whether a document field is the literal true.
 func boolAny(m map[string]any, key string) bool {
 	v, _ := m[key].(bool)
 	return v
 }
 
-// flagNumber renders a numeric flag for the JSON arguments of a handler.
-func flagNumber(raw string) float64 {
-	var f float64
-	if _, err := fmt.Sscanf(raw, "%g", &f); err != nil {
-		return 0
+// flagNumber parses a numeric flag for a handler's JSON arguments.//
+// IT DOES NOT FALL BACK. The previous version returned 0 for anything it could not
+// parse, and 0 is a legal value nearly everywhere it lands: `resize abc xyz` became
+// rows=0/cols=0, `--tail abc` became "no tail", `--grace abc` became "no grace".
+// Each of those then flowed into a handler whose own default (24x80, the default
+// window, the default grace) turned the caller's typo into a DIFFERENT successful
+// operation, reported as 2xx. The fallback was not protecting anything — it was
+// deciding, silently, what the caller must have meant.
+//
+// So the failure is reported here, where the flag is still a flag and the message
+// can still name it. The caller of this function is expected to turn the error into
+// a 400 for the statement; see numericFlags.
+func flagNumber(raw string) (float64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, fmt.Errorf("expected a number, got an empty value")
 	}
-	return f
+	f, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, fmt.Errorf("expected a number, got %q", trimmed)
+	}
+	// NaN/Inf parse successfully but are never a meaningful port, size or offset,
+	// and passing one on would make every downstream comparison quietly false.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("expected a finite number, got %q", trimmed)
+	}
+	return f, nil
 }

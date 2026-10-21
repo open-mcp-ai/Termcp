@@ -234,21 +234,21 @@ func TestBatchActionsReachTheRightEndpointForEachSelectionKind(t *testing.T) {
 	// The prune is only correct if it was handed the composed list; that is the
 	// caller's job (renderSessionGrid), asserted above.
 
-	// The stop key exists in the markup and is wired for the live plate.
-	if !strings.Contains(index, `id="session-stop-btn"`) {
-		t.Error("index.html should carry the batch stop key in the sessions header")
+	// The page has ONE session region now, and it is the archive: the running
+	// half's plate left the dock, because the sessions a user works in are the
+	// open windows and the tab row is that list. So there is no stop key in the
+	// markup at all — stopping a session is the tab's own x, which asks first.
+	if strings.Contains(index, `id="session-stop-btn"`) || strings.Contains(index, `id="archive-stop-btn"`) {
+		t.Error("no plate carries a stop key any more: the tab row's x is where a session is stopped")
 	}
-	if !strings.Contains(sessions, "stopId: 'session-stop-btn'") {
-		t.Error("the sessions region should name its stop button so the batch bar can show it")
+	if strings.Contains(sessions, "stopId: 'session-stop-btn'") {
+		t.Error("the retired running plate must not still be registered as a session region")
 	}
-	// The archive deliberately has no stop key: everything there has already
-	// stopped, so the control would be a dead button.
-	if strings.Contains(index, `id="archive-stop-btn"`) {
-		t.Error("the archive plate should not carry a stop key")
-	}
-	if !strings.Contains(sessions, "var stopBtn = region.stopId ? document.getElementById(region.stopId) : null;") {
-		t.Error("the batch bar must look the stop key up per region; the archive has none")
-	}
+	/* The per-region stop lookup that used to live here is gone with the bespoke
+	   batch row: the archive's keys come from the shared component now, and the
+	   component's verbs are open/export/delete. The assertion above — that no plate
+	   carries a stop key — is the one that still means something, and it is what
+	   keeps the retired key retired. */
 }
 
 // TestAPendingWindowRepaintsTheSessionPlate pins the trigger that makes a
@@ -346,15 +346,11 @@ func TestBatchStopKeyIsHiddenWithoutASelection(t *testing.T) {
 		t.Errorf("the hidden rule must set display: none; got %q", rule)
 	}
 
-	// And the batch bar must actually toggle it, on the same terms as the trash.
-	sessions := readAssetLF(t, "static/js/sessions.js")
-	bar := between(t, sessions, "function updateSessionBatchBar() {", "\n  });\n}")
-	if !strings.Contains(bar, "stopBtn.hidden = count === 0") {
-		t.Errorf("the stop key must be hidden exactly when nothing is selected, like the trash key:\n%s", bar)
-	}
-	if !strings.Contains(bar, "delBtn.hidden = count === 0") {
-		t.Error("the trash key's own rule changed; the two keys are meant to appear together")
-	}
+	/* The stop and trash keys this test used to compare no longer exist: the
+	   archive's toolbar is the shared drawer-toolbar, whose delete lives in the
+	   split key's dropdown (see TestArchiveToolbarIsTheSharedOne). What is still
+	   worth pinning here is the rule that keeps a hidden batch key hidden — the
+	   cascade reason it used to be a bug. */
 }
 
 // TestConnectingCardWritesItsStatusWordAsPlainText pins the two classes the

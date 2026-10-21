@@ -269,10 +269,19 @@ function closeChannelTab(win, sessionId) {
   // Unsubscribe
   sendTerminalWatch(sessionId, false);
 
-  // DEAD tabs are read-only views; closing one must not release the persisted
-  // shell or session. Live tabs retain the existing close-shell behavior.
+  // A read-only view has no live channel to stop, so it must not touch the server at
+  // all — closing the tab only closes the view.
+  //
+  // For a live tab: POST .../archive, NOT DELETE. DELETE is the erase — it stops the
+  // channel and drops its record, so the transcript loses the one piece of metadata
+  // that addresses it and the archive cannot show the channel afterwards. Closing a
+  // tab is an ordinary act ("I am done with this channel"), not a request to destroy
+  // its history, and the X is the control a person presses without meaning anything
+  // by it beyond that. The record now survives, carries an exit status, and appears
+  // in the archive; erasure is still available on the archive's own key, where it is
+  // named and confirmed.
   if (!win._readOnly) {
-    fetch(apiPath('/api/shells/') + encodeURIComponent(sessionId), { method: 'DELETE' }).catch(function() {});
+    fetch(apiPath('/api/shells/') + encodeURIComponent(sessionId) + '/archive', { method: 'POST' }).catch(function() {});
   }
 
   // Dispose xterm

@@ -544,14 +544,21 @@ func TestShortHandleResolvesLikeTheLocator(t *testing.T) {
 	primary := m["shell_id"].(string)
 	second := startSubShell(t, s, sid)
 
+	// A BARE SESSION ID IS NOT A CHANNEL. This used to resolve to the primary
+	// channel, which is how `close <session> --force` became a silent no-op on the
+	// primary shell (#132) and how `run <session>` guessed which channel to use.
+	// The container and a channel now have different spellings, and this door
+	// refuses the container instead of guessing.
+	if _, bad := s.requireShell(sid); bad == nil {
+		t.Errorf("requireShell(%q) resolved a bare session id; a session is not a channel", sid)
+	}
+
 	for _, tc := range []struct {
 		handle string
 		want   string
 	}{
-		{sid, primary},        // bare session id → primary channel
 		{sid + ":1", primary}, // explicit primary
 		{sid + ":2", second},  // the second channel
-		{"termcp://#" + sid, primary},
 		{"termcp://#" + sid + ":1", primary},
 		{"termcp://#" + sid + ":2", second},
 	} {
@@ -628,10 +635,8 @@ func TestEveryHandleDoorAgrees(t *testing.T) {
 		want   string
 		sess   string
 	}{
-		{sid, primary, sid},
 		{sid + ":1", primary, sid},
 		{sid + ":2", second, sid},
-		{"termcp://#" + sid, primary, sid},
 		{"termcp://#" + sid + ":1", primary, sid},
 		{"termcp://#" + sid + ":2", second, sid},
 		{second, second, sid},

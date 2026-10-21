@@ -243,13 +243,42 @@ func (c *uiWS) readPump() {
 	}()
 
 	c.conn.SetReadLimit(1 << 20)
-	// 不要对 ReadMessage 设短超时：终端输出是服务端 Write、客户端收，不会作为本循环的 Read 数据；
-	// 用户长时间只看输出不按键，短 deadline 会误杀连接（SSE 时代无此问题）。
+	// The read deadline and the pong handler are a PAIR, and the deadline is
+	// meaningless without the handler. writePump pings every 45s, and the standard
+	// library's PongHandler is what refreshes the deadline — so with a deadline and
+	// no handler, a quiet but perfectly healthy tab would be killed; with a handler
+	// and no deadline (what this was), a tab that vanished without a FIN is never
+	// noticed at all.
+	//
+	// That second case is the bug behind "why does it say two web clients when I
+	// have one page open?": a browser that is closed, crashes, sleeps or changes
+	// networks leaves a socket the kernel still believes in. ReadMessage blocks
+	// forever, readPump never returns, `defer remove(viewerID)` never runs, and the
+	// registry keeps a row for a tab that no longer exists. One reconnection leaves
+	// one ghost, and the count climbs with every crash.
+	//
+	// 90s is two ping intervals: one lost pong is a hiccup, two in a row is a peer
+	// that is not answering. Terminal output is server→client only and never arrives
+	// through this loop, so nothing a user does — including watching output for an
+	// hour without touching the keyboard — refreshes the deadline. Only a pong or a
+	// real client message does, which is exactly the liveness question being asked.
+	const wsReadIdle = 90 * time.Second
+	_ = c.conn.SetReadDeadline(time.Now().Add(wsReadIdle))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(wsReadIdle))
+	})
+	// Any inbound frame is proof of life too: the page sends input, resizes and
+	// watch changes, and a client that is talking is not one to time out.
+	c.conn.SetPingHandler(func(data string) error {
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsReadIdle))
+		return c.conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
+	})
 	for {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
 			return
 		}
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsReadIdle))
 		var msg wsClientMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue

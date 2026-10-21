@@ -1,0 +1,95 @@
+/* z-index ladder — the one place this UI ranks its layers.
+
+   Every stacking declaration on the page reads a rung from here, so "what is on
+   top of what" is answered by reading one list instead of grepping for numbers
+   across nine stylesheets. The bugs this replaces were not hypothetical: four
+   surfaces had independently picked 20000, the session-tab menu sat at 60 (under
+   the dock it opens over), and every dialog shared one rung, so a confirm raised
+   from the connection editor rendered UNDER it — the `hidden` class was removed,
+   the element was in the DOM, and the user saw nothing happen.
+
+   Two scales, because there are two different questions.
+
+   SURFACES ask "which of two independent things is on top", and the answer has to
+   hold across the whole page. Those rungs are spaced in the hundreds so a surface
+   can be slotted between two of them without renumbering, and each states what it
+   is FOR rather than where it happens to sit.
+
+   PARTS ask "which of two boxes inside one surface is on top" — a corner key over
+   its card, a grip over a border, a readout over the row it describes. They never
+   compete with another surface, so they stay small. They are still named: a bare
+   `2` in a rule says nothing about what it is above, and the next person adding a
+   control cannot tell whether `3` is already taken.
+
+   Never write a literal in a rule. If a new box needs a rung, add it here with the
+   name of the thing it is, and say in one line what it must beat.
+
+   This is a SHARED chunk, imported by the shared manifest and by every theme
+   manifest. A theme ships its own tokens.css, so a ladder declared there would
+   exist four times and drift — exactly the failure this file exists to end. */
+:root {
+  /* ---- SURFACES ---------------------------------------------------------- */
+
+  /* Below the page. `--z-behind` is load-bearing rather than decorative: a
+     positioned element at auto/0 paints with the in-flow z-index:0 layer, i.e.
+     above every static background and card, so the artwork would sit ON the page
+     instead of behind it. */
+  --z-behind: -1;
+
+  /* Page chrome. Both sit BELOW the content band on purpose: the terminals and
+     the dock are what the page is for, and a header that outranked them would
+     cover the thing the user is working in. A header menu that needs to clear
+     the terminals does it by raising the header (--z-header-raised), because the
+     menu is the header's child and cannot outrank its own stacking context. */
+  --z-sticky: 20;           /* sticky columns and section headers in the page */
+  --z-dropdown: 30;         /* a menu column INSIDE a surface that holds one   */
+  --z-header: 200;          /* the page header                                 */
+
+  /* The content band. The dock, the floating windows and the tiled pane layer
+     are real surfaces with real order: the full-screen terminal has to clear the
+     dock, or a terminal on a phone renders behind the tab bar. */
+  --z-workspace: 10000;     /* tiled pane workspace + floating window container */
+  --z-window: 10001;        /* a floating window's starting rung               */
+  --z-dock: 20000;          /* session dock, pinned to the viewport bottom     */
+  --z-fullscreen: 21000;    /* the terminal that IS the screen (touch)         */
+  --z-header-raised: 22000; /* the page header while one of its menus is open  */
+
+  /* Above the content band. This is the half that decides whether a control the
+     user just pressed is visible, so the order here is the contract. */
+  --z-scrim: 23900;         /* drawer scrim, above every content surface       */
+  --z-drawer: 24000;        /* slide-in drawers (hosts, archive, extensions)   */
+  --z-modal: 24500;         /* a dialog opened from page content               */
+  --z-modal-top: 24600;     /* a dialog opened FROM a dialog (confirm/prompt)  */
+  --z-popover: 24800;       /* a menu at the pointer, over any dialog          */
+  --z-toast: 25000;         /* transient feedback (copy/copied)                */
+  --z-notify: 26000;        /* server-pushed notify_user stack, topmost        */
+
+  /* ---- PARTS -------------------------------------------------------------
+     The local scale. Ranks boxes that share one surface; nothing here may be
+     compared against a surface rung above, and no part may use a surface rung
+     to win a fight inside its own component. */
+
+  /* A card's own face. The keys sit over the hover wash and the corner stack,
+     which is what keeps them clickable on a tile that fills with content. */
+  --z-tile-control: 1;      /* an action key on the card's face                */
+  --z-tile-corner: 3;       /* the remove key on the card's corner stack       */
+
+  /* A terminal window is its own surface, and these are the layers inside it. */
+  --z-win-header: 2;        /* the title bar over the body it drags            */
+  --z-win-fab: 15;          /* "back to latest output", over the scrollback    */
+  --z-win-grip: 33;         /* the corner resize grips                         */
+  --z-win-sheet: 40;        /* the review sheet, over the grips and controls   */
+
+  /* The transcript rail along a terminal's edge: rows, then the readout a row
+     opens, which has to beat the rows beside it. */
+  --z-rail: 5;              /* the rail itself, over the terminal's gutter     */
+  --z-rail-cell: 2;         /* the row under the pointer, over its neighbours  */
+  --z-rail-card: 6;         /* the readout card, over the rail                 */
+
+  /* Lifting one control over its siblings long enough to draw a focus ring, so
+     the outline is not clipped by the next tab in the strip. */
+  --z-focus-lift: 1;
+
+  /* The drawer's own collapse key, over the panel it closes. */
+  --z-drawer-key: 2;
+}

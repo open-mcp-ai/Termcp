@@ -170,14 +170,14 @@ func TestRESTRespectsSessionRestriction(t *testing.T) {
 	// Closing a forward and removing a notification rule name their own ids, not a
 	// session, so both routes have to look the owner up. A caller showing up with
 	// only the resource id must meet the same whitelist as one naming the session.
-	fw, err := p.forwardMgr.CreateDynamic(sid, "restricted", 0, nil, true)
+	fw, err := p.forwardMgr.CreateDynamic(sid, "restricted", "", 0, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code := p.del(t, "/api/forwards/"+fw.ForwardID); code != http.StatusForbidden {
 		t.Errorf("REST forward close on a session that granted no forwards = %d, want 403", code)
 	}
-	rule, err := p.notifyMgr.Register(sid, p.shellID, notify.ChannelResource, notify.EventOutput, 0, nil)
+	rule, err := p.notifyMgr.Register(sid, p.shellID, notify.ChannelResource, notify.EventOutput, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
