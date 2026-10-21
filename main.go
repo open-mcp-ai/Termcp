@@ -33,6 +33,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
+	"github.com/open-mcp-ai/termcp/internal/vault"
 	"github.com/open-mcp-ai/termcp/internal/webui"
 )
 
@@ -102,6 +103,8 @@ func main() {
 	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable the profile write actions of the `profile` directive (create/edit/copy/delete) over MCP (off by default; passwords/keys are never exposed)")
 	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
 	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
+	flag.StringVar(&cfg.MCPAuthToken, "mcp-auth-token", cfg.MCPAuthToken, "MCP-only authentication token (or $TERMCP_MCP_AUTH_TOKEN): valid on /sse, /message, /stream; refused (403) on the management surface")
+	flag.StringVar(&cfg.MCPAuthHash, "mcp-auth-hash", cfg.MCPAuthHash, "Salted SHA-256 MCP token hash (or $TERMCP_MCP_AUTH_HASH)")
 	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
@@ -140,7 +143,13 @@ func main() {
 	if bridging {
 		endpoint, rest = splitStdioEndpoint(rest)
 	}
-	_ = flag.CommandLine.Parse(rest)
+	// The token/vault namespaces parse their own flags: their actions carry
+	// positionals and options the global set does not know. The raw args
+	// survive in rawRest.
+	rawRest := rest
+	if subName != "token" && subName != "vault" {
+		_ = flag.CommandLine.Parse(rest)
+	}
 
 	if showVersion {
 		printVersion(os.Stdout)
@@ -156,7 +165,7 @@ func main() {
 	}
 	cfg.ApplyEnv()
 
-	if args := flag.Args(); len(args) > 0 {
+	if args := flag.Args(); len(args) > 0 && subName != "token" && subName != "vault" {
 		if sub, ok := findSubcommand(args[0]); ok {
 			// A word that is both a subcommand and an action of the namespace
 			// already in play (`termcp daemon start stdio`) is a misplaced
@@ -243,6 +252,14 @@ func main() {
 		runDaemonManagement(cfg, daemonCmd == actionStop)
 		return
 	}
+	if subName == "vault" {
+		runVaultCLI(cfg, action, rawRest)
+		return
+	}
+	if subName == "token" {
+		runTokenCLI(cfg, action, rawRest)
+		return
+	}
 
 	// Fail fast when the data directory cannot be created or written.
 	if err := ensureWritableDir(cfg.DataDir); err != nil {
@@ -309,6 +326,22 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		}
 		verifier = v
 	}
+	// The scoped-token table lives next to the rest of the data dir; the
+	// middleware consults it for tcptok_… credentials (scoped-tokens.md PR 4).
+	tokenStore := auth.OpenTokenStore(cfg.DataDir)
+
+	// The MCP verifier splits the MCP transports onto their own credential
+	// (scoped-tokens.md PR 0): an agent holding it cannot drive the management
+	// surface. Absent, everything runs on the operator token as before.
+	var mcpVerifier *auth.Verifier
+	if cfg.MCPAuthToken != "" || cfg.MCPAuthHash != "" {
+		v, err := auth.NewVerifier(cfg.MCPAuthToken, cfg.MCPAuthHash)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid MCP auth config: %v\n", err)
+			os.Exit(2)
+		}
+		mcpVerifier = v
+	}
 
 	slog.SetDefault(slog.New(buildLogHandler(cfg)))
 	slog.Info("termcp server started", "version", versionString())
@@ -351,6 +384,26 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 
 	sshStore := sshconfig.NewStore(cfg.DataDir)
+	// The vault attaches unlocked-state-aware: its mere presence redirects
+	// profile writes into ciphertext, while reads fall back to plaintext for
+	// profiles not yet migrated. Unlock happens through the `termcp vault`
+	// CLI / unlock endpoints; nothing here auto-unlocks.
+	credVault := vault.New(cfg.DataDir)
+	sshStore.SetVault(credVault)
+	// Sidecar-injected (temporary) profiles die with the session they were
+	// bound to: the dead hook drops them, TTL sweeping in the store covers the
+	// never-used case (see internal/sshconfig temporaryProfile).
+	sessMgr.AddOnDeadHook(func(sessionID string) { sshStore.DropBoundTemporary(sessionID) })
+	// Auto-unlock from the OS keychain when the deployment set that up; a
+	// passphrase-only vault stays locked until POST /api/vault/unlock, and a
+	// locked vault fails only credential-consuming operations.
+	if credVault.Exists() {
+		if err := credVault.UnlockAuto(); err != nil {
+			slog.Info("vault present, auto-unlock unavailable; unlock with `termcp vault unlock` or POST /api/vault/unlock")
+		} else {
+			slog.Info("vault unlocked from the OS credential store")
+		}
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	mux := http.NewServeMux()
@@ -389,7 +442,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	// (it registers later, and ServeMux refuses overlaps rather than overriding),
 	// so no existing route can be shadowed by it.
 	mux.Handle("POST /api/term", mcpSrv.TermHandler())
-	webuiH := &webui.Handler{Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), Extensions: extReconciler, NoInternal: cfg.NoInternal, Version: versionString(), Daemon: isDaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	webuiH := &webui.Handler{Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, NotifyMgr: mcpSrv.NotifyManager(), Extensions: extReconciler, NoInternal: cfg.NoInternal, Version: versionString(), Daemon: isDaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339), Vault: credVault, Tokens: tokenStore}
 	// The effective countdown is published at GET /api/daemon so the stdio
 	// bridge can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
 	if isDaemonChild {
@@ -430,8 +483,8 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 			mcpSrv.NotifyManager().OnApprovalChange(req.ShellID, "approval "+string(req.State))
 		}
 	})
-	if verifier != nil {
-		mainSrv.Handler = auth.Middleware(verifier, mux)
+	if verifier != nil || mcpVerifier != nil {
+		mainSrv.Handler = auth.MiddlewareFull(verifier, mcpVerifier, tokenStore, mux)
 	}
 
 	host := strings.TrimSpace(cfg.Host)

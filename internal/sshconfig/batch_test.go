@@ -32,7 +32,7 @@ password = "placeholder"
 func TestBatchImportExportAndTemporaryLifetime(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	result, err := s.ImportBatch([]byte(batchFixture), true)
+	result, err := s.ImportBatch([]byte(batchFixture), true, 0)
 	if err != nil || result.Imported != 2 || len(result.Renamed) != 0 {
 		t.Fatalf("temporary import: result=%+v err=%v", result, err)
 	}
@@ -47,20 +47,20 @@ func TestBatchImportExportAndTemporaryLifetime(t *testing.T) {
 	if err != nil || !entry.DefaultApproval || entry.Jump == nil || entry.Jump.Host != "jump.example" {
 		t.Fatalf("temporary load lost fields: %+v %v", entry, err)
 	}
-	exported, err := s.ExportBatch(nil)
+	exported, err := s.ExportBatch(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(exported), "internal") {
+	if strings.Contains(string(exported.Document), "internal") {
 		t.Fatal("export included built-in internal profile")
 	}
 	restarted := NewStore(dir)
 	if _, err := restarted.Load("alpha"); !errors.Is(err, ErrNotFound) {
 		t.Fatal("temporary profile survived a new store")
 	}
-	result, err = restarted.ImportBatch(exported, false)
+	result, err = restarted.ImportBatch(exported.Document, false, 0)
 	if err != nil || result.Imported != 2 || len(result.Renamed) != 0 {
-		t.Fatalf("persistent import of export: result=%+v err=%v\n%s", result, err, exported)
+		t.Fatalf("persistent import of export: result=%+v err=%v\n%s", result, err, exported.Document)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ssh_configs", "alpha", "config.toml")); err != nil {
 		t.Fatal(err)
@@ -74,16 +74,16 @@ func TestBatchImportExportAndTemporaryLifetime(t *testing.T) {
 func TestBatchImportRejectsInvalidFileAndRenamesCollisions(t *testing.T) {
 	s := NewStore(t.TempDir())
 	bad := strings.Replace(batchFixture, `host = "beta.example"`, `host = ""`, 1)
-	if _, err := s.ImportBatch([]byte(bad), false); err == nil {
+	if _, err := s.ImportBatch([]byte(bad), false, 0); err == nil {
 		t.Fatal("invalid second profile was accepted")
 	}
 	if names, _ := s.List(); len(names) != 1 {
 		t.Fatalf("partial import after validation failure: %v", names)
 	}
-	if _, err := s.ImportBatch([]byte(batchFixture), false); err != nil {
+	if _, err := s.ImportBatch([]byte(batchFixture), false, 0); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.ImportBatch([]byte(batchFixture), true)
+	result, err := s.ImportBatch([]byte(batchFixture), true, 0)
 	if err != nil || len(result.Renamed) != 2 || result.Renamed[0] != (BatchRename{From: "alpha", To: "alpha-2"}) || result.Renamed[1] != (BatchRename{From: "beta", To: "beta-2"}) {
 		t.Fatalf("collisions were not renamed: result=%+v err=%v", result, err)
 	}
@@ -103,7 +103,7 @@ func TestBatchImportReservesSourceNamesAndTruncatesSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := strings.ReplaceAll(batchFixture, "name = \"beta\"", "name = \"alpha-2\"")
-	result, err := s.ImportBatch([]byte(file), false)
+	result, err := s.ImportBatch([]byte(file), false, 0)
 	if err != nil || len(result.Renamed) != 1 || result.Renamed[0].To != "alpha-3" {
 		t.Fatalf("reserved source name was taken: result=%+v err=%v", result, err)
 	}
@@ -113,7 +113,7 @@ func TestBatchImportReservesSourceNamesAndTruncatesSuffix(t *testing.T) {
 	longName := strings.Repeat("x", 64)
 	longFile := strings.ReplaceAll(batchFixture, "name = \"alpha\"", "name = \""+longName+"\"")
 	longFile = strings.ReplaceAll(longFile, "name = \"beta\"", "name = \""+longName+"\"")
-	result, err = s.ImportBatch([]byte(longFile), true)
+	result, err = s.ImportBatch([]byte(longFile), true, 0)
 	if err != nil || len(result.Renamed) != 1 || len(result.Renamed[0].To) > 64 || !strings.HasSuffix(result.Renamed[0].To, "-2") {
 		t.Fatalf("long duplicate was not shortened safely: result=%+v err=%v", result, err)
 	}

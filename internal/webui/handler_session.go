@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -112,6 +113,14 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, sshclient.DescribeDialError(err), http.StatusBadRequest)
 		return
 	}
+	// Same binding as the MCP session_start path: a temporary profile injected
+	// for this job is dropped when the session's transport dies.
+	if cfgName != "" && h.SSH != nil && h.SSH.IsTemporary(cfgName) {
+		if err := h.SSH.BindTemporary(cfgName, sess.ID); err != nil {
+			slog.Warn("temporary profile binding failed; profile lives until TTL or process exit",
+				"profile", cfgName, "session_id", sess.ID, "err", err)
+		}
+	}
 	// No pid here either - see the MCP session_start handler for why (the process
 	// is remote and SSH does not report its number).
 	//
@@ -176,7 +185,7 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	// A restriction refuses the batch wholesale when any entry is restricted, the
 	// same rule the MCP guard documents: a partial refusal would look like a
 	// partial success, and closing some of what was asked reads as done.
-	if h.restRefuseSessionIDs(w, id, capability.SessionTerminate) {
+	if h.restRefuseSessionIDs(w, r, id, capability.SessionTerminate) {
 		return
 	}
 	if strings.Contains(id, ",") {
@@ -205,7 +214,7 @@ func (h *Handler) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 // others. A single id is unchanged (204 or 404).
 func (h *Handler) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if h.restRefuseSessionIDs(w, id, capability.SessionDelete) {
+	if h.restRefuseSessionIDs(w, r, id, capability.SessionDelete) {
 		return
 	}
 	if strings.Contains(id, ",") {

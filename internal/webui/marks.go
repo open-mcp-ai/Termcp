@@ -51,7 +51,7 @@ type marksResponse struct {
 // for the last span.
 func (h *Handler) handleShellMarks(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sessionID, shellID, ok := h.marksTarget(w, id, capability.SessionMessage)
+	sessionID, shellID, ok := h.marksTarget(w, r, id, capability.SessionMessage)
 	if !ok {
 		http.Error(w, "shell not found: "+id, http.StatusNotFound)
 		return
@@ -150,20 +150,20 @@ func marksWindow(r *http.Request) (start, end int64, windowed, ok bool) {
 // them open would make the whitelist a matter of which transport a caller picked.
 // The tool argument is the MCP name the route mirrors, because the routes do not
 // all speak the same one.
-func (h *Handler) marksTarget(w http.ResponseWriter, id, tool string) (sessionID, shellID string, ok bool) {
+func (h *Handler) marksTarget(w http.ResponseWriter, r *http.Request, id, tool string) (sessionID, shellID string, ok bool) {
 	if id == "" {
 		return "", "", false
 	}
 	// Searches live child shells and retained DEAD/restored snapshots alike, which
 	// is what lets a closed session keep serving its own history.
 	if sess := h.Sessions.GetSessionByShellID(id); sess != nil {
-		if restRefuseTool(w, sess, tool) {
+		if restRefuseTool(w, r, sess, tool) {
 			return "", "", false
 		}
 		return sess.ID, id, true
 	}
 	if sess := h.Sessions.Get(id); sess != nil {
-		if restRefuseTool(w, sess, tool) {
+		if restRefuseTool(w, r, sess, tool) {
 			return "", "", false
 		}
 		return sess.ID, "", true

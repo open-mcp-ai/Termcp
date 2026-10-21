@@ -127,7 +127,7 @@ func (h *Handler) getShellForIO(w http.ResponseWriter, r *http.Request, tool str
 		http.Error(w, "shell is not running (status "+string(cs.Info().Status)+")", http.StatusConflict)
 		return nil
 	}
-	if restRefuseTool(w, h.Sessions.Get(cs.ParentSessionID()), tool) {
+	if restRefuseTool(w, r, h.Sessions.Get(cs.ParentSessionID()), tool) {
 		return nil
 	}
 	return cs

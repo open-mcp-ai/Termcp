@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/notify"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/internal/vault"
 )
 
 // embeddedStaticServer serves index.html, inline page script, and vendor/xterm at URL / and /vendor/... .
@@ -66,6 +68,12 @@ type Handler struct {
 	SSH        *sshconfig.Store
 	ForwardMgr *forward.ForwardManager
 	NotifyMgr  *notify.Manager // active shell notification rules (read-only listing + delete)
+	// Vault is the credential vault sharing the data dir with SSH; nil until
+	// main wires it. The /api/vault routes answer "no vault" when absent.
+	Vault *vault.Vault
+	// Tokens is the scoped-token table (scoped-tokens.md PR 4); nil until
+	// main wires it.
+	Tokens *auth.TokenStore
 	// Extensions drives the right-side panel: it lists the pinned,
 	// capability-trimmed sessions and reports whether each is up. nil in a build
 	// that does not run the reconciler, in which case the panel is simply empty.
@@ -169,6 +177,17 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
 	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
+
+	// Credential vault lifecycle: status is a read, unlock/lock change the
+	// in-memory key state of this process only.
+	mux.HandleFunc("GET /api/vault", h.handleVaultStatus)
+	mux.HandleFunc("POST /api/vault/unlock", h.handleVaultUnlock)
+	mux.HandleFunc("POST /api/vault/lock", h.handleVaultLock)
+
+	// Scoped-token management: operator-only by principal kind.
+	mux.HandleFunc("GET /api/tokens", h.handleListTokens)
+	mux.HandleFunc("POST /api/tokens", h.handleCreateToken)
+	mux.HandleFunc("DELETE /api/tokens/{id}", h.handleRevokeToken)
 
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes

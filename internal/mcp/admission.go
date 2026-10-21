@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"slices"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -44,6 +46,13 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
 		return bad, false
 	}
+	// A scoped token's whitelists (scoped-tokens.md PR 4): tools by capability
+	// id, sessions by resolved session id or profile name. The static
+	// credentials carry no scopes and never reach these checks.
+	sessionID := targetSessionID(request)
+	if bad := scopeAdmission(ctx, g, sessionID, s, request); bad != nil {
+		return bad, false
+	}
 	// Review holds the operation for a human. Whether THIS call is reviewable is
 	// the capability's own answer plus the call's action (see kindFor): a
 	// `forward --action list` and a `forward --action local` are one capability
@@ -59,8 +68,41 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	if g.Staged {
 		return nil, false
 	}
-	sessionID := targetSessionID(request)
 	return s.gateOperation(ctx, request, toolName, sessionID)
+}
+
+// scopeAdmission enforces a scoped token's restrictions. It answers a refusal
+// when the token's whitelists exclude this call, and force-enables the
+// session's review mode when the token demands approval.
+func scopeAdmission(ctx context.Context, g gate, sessionID string, s *Server, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+	p, ok := auth.PrincipalFromContext(ctx)
+	if !ok || p == nil || p.ScopeFree() && !p.ApprovalRequired {
+		return nil
+	}
+	if len(p.Tools) > 0 {
+		if !g.known || !slices.Contains(p.Tools, g.Capability.ID) {
+			return toolError(CodeForbidden, "this token's scope does not include %s", g.Capability.ID)
+		}
+	}
+	if len(p.Sessions) > 0 && sessionID != "" {
+		sess, bad := s.requireSession(sessionID)
+		if bad == nil && sess != nil {
+			if !slices.Contains(p.Sessions, sess.ID) && !slices.Contains(p.Sessions, sess.SSHConfig) {
+				return toolError(CodeForbidden, "this token's scope does not include session %s", sess.ID)
+			}
+		}
+	}
+	if p.ApprovalRequired && sessionID != "" {
+		// The token says every write waits for a human, whatever the session's
+		// own mode says: force review on (idempotent), after which the staged
+		// write path and gateOperation both engage on their own.
+		if sess, bad := s.requireSession(sessionID); bad == nil && sess != nil && !sess.ApprovalEnabled() {
+			if err := sess.EnableApprovalScoped(1, 0, nil); err != nil {
+				return toolError(CodeOperationFailed, "cannot engage review mode required by this token: %s", err.Error())
+			}
+		}
+	}
+	return nil
 }
 
 // admission answers the reachability and whitelist questions and returns a

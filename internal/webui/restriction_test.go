@@ -270,7 +270,7 @@ func TestRestRefusalBodyNamesTheArgument(t *testing.T) {
 	p := newRestProbe(t, []string{"file_read"}, []string{"~/skills/foo/"})
 
 	w := httptest.NewRecorder()
-	if restRefuseTool(w, nil, "file_write") {
+	if restRefuseTool(w, httptest.NewRequest(http.MethodGet, "/", nil), nil, "file_write") {
 		t.Error("a nil session is unrestricted and must pass")
 	}
 	if !restRefusePaths(w, p.sess, [2]string{"path", "/etc/passwd"}) {

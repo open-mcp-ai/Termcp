@@ -21,6 +21,13 @@ const (
 	EnvAuthHash  = "TERMCP_AUTH_HASH"
 )
 
+// EnvMCPAuthToken / EnvMCPAuthHash configure the MCP-surface credential from
+// the environment: the operator/agent token split (scoped-tokens.md PR 0).
+const (
+	EnvMCPAuthToken = "TERMCP_MCP_AUTH_TOKEN"
+	EnvMCPAuthHash  = "TERMCP_MCP_AUTH_HASH"
+)
+
 // EnvDisableAuth turns HTTP authentication off from the environment. It is the
 // explicit escape hatch for hosts where network reachability is already the
 // access control (loopback, container-internal only, trusted lab LAN).
@@ -37,6 +44,8 @@ type Config struct {
 	MCPManageSSHConfigs bool   // enable the profile write actions (create/edit/copy/delete) (default: false)
 	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
 	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
+	MCPAuthToken        string // plaintext MCP-surface token ($TERMCP_MCP_AUTH_TOKEN); mutually exclusive with MCPAuthHash
+	MCPAuthHash         string // salted SHA-256 MCP token hash ($TERMCP_MCP_AUTH_HASH)
 	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)
 }
 
@@ -98,6 +107,12 @@ func (c *Config) ApplyEnv() {
 	if c.AuthHash == "" {
 		c.AuthHash = strings.TrimSpace(os.Getenv(EnvAuthHash))
 	}
+	if c.MCPAuthToken == "" {
+		c.MCPAuthToken = strings.TrimSpace(os.Getenv(EnvMCPAuthToken))
+	}
+	if c.MCPAuthHash == "" {
+		c.MCPAuthHash = strings.TrimSpace(os.Getenv(EnvMCPAuthHash))
+	}
 	if !c.DisableAuth && envTruthy(os.Getenv(EnvDisableAuth)) {
 		c.DisableAuth = true
 	}
@@ -133,6 +148,9 @@ func (c *Config) Validate() error {
 	if c.AuthToken != "" && c.AuthHash != "" {
 		return fmt.Errorf("auth-token and auth-hash are mutually exclusive")
 	}
+	if c.MCPAuthToken != "" && c.MCPAuthHash != "" {
+		return fmt.Errorf("mcp-auth-token and mcp-auth-hash are mutually exclusive")
+	}
 	// Disabling auth is a deliberate operator decision, so it never silently
 	// wins: supplying credentials *and* asking for no auth is a configuration
 	// mistake and reported instead of guessed at.
@@ -142,9 +160,16 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --auth-token / $%s is also set; remove one of them", EnvDisableAuth, EnvAuthToken)
 		case c.AuthHash != "":
 			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --auth-hash / $%s is also set; remove one of them", EnvDisableAuth, EnvAuthHash)
+		case c.MCPAuthToken != "":
+			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --mcp-auth-token / $%s is also set; remove one of them", EnvDisableAuth, EnvMCPAuthToken)
+		case c.MCPAuthHash != "":
+			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --mcp-auth-hash / $%s is also set; remove one of them", EnvDisableAuth, EnvMCPAuthHash)
 		}
 		return nil
 	}
+	// The MCP token never counts as "auth is configured" here: it guards the
+	// MCP transports only, so it cannot protect the operator surface this
+	// check exists for.
 	if isNonLoopbackBind(c.Host) && c.AuthToken == "" && c.AuthHash == "" {
 		return fmt.Errorf("non-loopback host %q requires --auth-token, --auth-hash, TERMCP_AUTH_TOKEN, or TERMCP_AUTH_HASH (or pass --disable-auth / %s=1 to run open on purpose)", c.Host, EnvDisableAuth)
 	}

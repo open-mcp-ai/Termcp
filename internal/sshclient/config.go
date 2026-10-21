@@ -24,6 +24,12 @@ type DialAuth struct {
 	TrustUnknownHost  bool
 	KnownHostsContent string
 	DialTimeout       time.Duration
+	// Signers carries pre-built signers — the seam the vault design reserves
+	// for SSH CA short-lived certificates (credential-vault.md §六): a caller
+	// holding a certificate + ephemeral key pair supplies them here instead of
+	// a static key, and BuildClientConfig treats them as satisfied
+	// authentication. Nothing populates this field yet.
+	Signers []ssh.Signer
 }
 
 // BuildClientConfig builds an ssh.ClientConfig for dialing a user-supplied host.
@@ -37,7 +43,7 @@ func BuildClientConfig(auth DialAuth) (*ssh.ClientConfig, error) {
 	}
 	pw := auth.Password
 	keyPEM := strings.TrimSpace(auth.PrivateKey)
-	if pw == "" && keyPEM == "" {
+	if pw == "" && keyPEM == "" && len(auth.Signers) == 0 {
 		return nil, fmt.Errorf("provide ssh_password and/or ssh_private_key for remote SSH")
 	}
 
@@ -51,6 +57,9 @@ func BuildClientConfig(auth DialAuth) (*ssh.ClientConfig, error) {
 			return nil, fmt.Errorf("ssh private key: %w", err)
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
+	}
+	if len(auth.Signers) > 0 {
+		methods = append(methods, ssh.PublicKeys(auth.Signers...))
 	}
 
 	var hostKeyCallback ssh.HostKeyCallback

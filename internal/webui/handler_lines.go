@@ -47,7 +47,7 @@ func (h *Handler) handleShellLines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	sessionID, shellID, ok := h.marksTarget(w, id, capability.ShellOutput)
+	sessionID, shellID, ok := h.marksTarget(w, r, id, capability.ShellOutput)
 	if !ok {
 		http.Error(w, "shell not found: "+id, http.StatusNotFound)
 		return

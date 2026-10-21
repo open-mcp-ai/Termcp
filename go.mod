@@ -3,6 +3,7 @@ module github.com/open-mcp-ai/termcp
 go 1.25.9
 
 require (
+	filippo.io/age v1.3.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/ssh v0.0.0-20250826160808-ebfa259c7309
 	github.com/google/uuid v1.6.0
@@ -13,9 +14,11 @@ require (
 	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
+	mvdan.cc/sh/v3 v3.11.0
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/charmbracelet/x/conpty v0.1.0 // indirect
 	github.com/charmbracelet/x/errors v0.0.0-20240508181413-e8d8b6e2de86 // indirect
@@ -23,8 +26,8 @@ require (
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/kr/fs v0.1.0 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	mvdan.cc/sh/v3 v3.11.0 // indirect
 )

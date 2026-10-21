@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -69,6 +70,16 @@ func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolR
 	})
 	if err != nil {
 		return toolError(CodeConnectionFailed, "%s", sshclient.DescribeDialError(err)), nil
+	}
+
+	// A temporary profile injected for this job dies with it: bind at the
+	// first session created from the profile, and the manager's dead hook
+	// drops the profile (and its secrets) when the transport goes down.
+	if cfgName != "" && s.sshConfigs != nil && s.sshConfigs.IsTemporary(cfgName) {
+		if err := s.sshConfigs.BindTemporary(cfgName, sess.ID); err != nil {
+			slog.Warn("temporary profile binding failed; profile lives until TTL or process exit",
+				"profile", cfgName, "session_id", sess.ID, "err", err)
+		}
 	}
 
 	// No pid: the process runs on the remote, and SSH does not report its number

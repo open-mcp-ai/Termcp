@@ -8,11 +8,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/internal/vault"
 )
 
 type connectionSummary struct {
@@ -35,6 +38,9 @@ type connectionSummary struct {
 var errSSHConfigRequired = errors.New("ssh_config is required")
 
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
+	if restRefuseTool(w, r, nil, capability.ProfileList) {
+		return
+	}
 	if h.SSH == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"connections": []connectionSummary{}})
 		return
@@ -79,6 +85,9 @@ func summarizeConnection(name string, ent *sshconfig.Entry) connectionSummary {
 }
 
 func (h *Handler) handleGetConnection(w http.ResponseWriter, r *http.Request) {
+	if restRefuseTool(w, r, nil, capability.ProfileList) {
+		return
+	}
 	name := r.PathValue("name")
 	if h.SSH == nil {
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
@@ -88,6 +97,10 @@ func (h *Handler) handleGetConnection(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, vault.ErrLocked) {
+			http.Error(w, "the vault is locked: unlock it to edit a vaulted profile", http.StatusConflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -102,6 +115,10 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if h.SSH == nil {
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// PUT both creates and edits a profile; either capability admits the call.
+	if restRefuseToolAny(w, r, nil, capability.ProfileCreate, capability.ProfileEdit) {
 		return
 	}
 	if sshconfig.IsInternalName(name) {
@@ -153,6 +170,10 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.SSH.SaveWithOptions(name, body, temporary); err != nil {
+		if errors.Is(err, vault.ErrLocked) {
+			http.Error(w, "the vault is locked: unlock it before writing a vaulted profile", http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -164,6 +185,11 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleExportConnections(w http.ResponseWriter, r *http.Request) {
 	if h.SSH == nil {
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// Export is the read that carries credentials: a scoped token without
+	// profile.list gets no export, sealed or not.
+	if restRefuseTool(w, r, nil, capability.ProfileList) {
 		return
 	}
 	// names=a,b exports just those profiles; absent or empty exports all. An
@@ -183,10 +209,22 @@ func (h *Handler) handleExportConnections(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	data, err := h.SSH.ExportBatch(only)
+	sealed := r.Header.Get(EncryptHeader) != ""
+	res, err := h.SSH.ExportBatch(only, sealed)
 	if err != nil {
+		if errors.Is(err, vault.ErrLocked) {
+			http.Error(w, "the vault is locked: unlock it before exporting vaulted profiles", http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	data := res.Document
+	if len(res.SkippedVaulted) > 0 {
+		// Plaintext export withholds vaulted profiles (see ExportBatch). The
+		// header names them so the UI can warn instead of producing a file the
+		// operator believes is complete.
+		w.Header().Set("X-Termcp-Skipped-Vaulted", strings.Join(res.SkippedVaulted, ","))
 	}
 
 	/* An export leaves the machine, so it can be sealed with a password the
@@ -221,6 +259,13 @@ func (h *Handler) handleImportConnections(w http.ResponseWriter, r *http.Request
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Injection is profile creation: a scoped token needs profile.create in
+	// its tools whitelist — that is exactly the sidecar token's shape
+	// (`termcp token create --tools profile.create`), which can inject but
+	// cannot read or manage anything else.
+	if restRefuseTool(w, r, nil, capability.ProfileCreate) {
+		return
+	}
 	temporary := false
 	if raw := r.URL.Query().Get("temporary"); raw != "" {
 		var err error
@@ -229,6 +274,22 @@ func (h *Handler) handleImportConnections(w http.ResponseWriter, r *http.Request
 			http.Error(w, "temporary must be true or false", http.StatusBadRequest)
 			return
 		}
+	}
+	// ttl_seconds bounds how long an imported temporary profile lives in this
+	// process (the sidecar injection window); it is meaningless for a
+	// persistent import and rejected there rather than silently ignored.
+	var ttl time.Duration
+	if raw := r.URL.Query().Get("ttl_seconds"); raw != "" {
+		if !temporary {
+			http.Error(w, "ttl_seconds only applies with temporary=true", http.StatusBadRequest)
+			return
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 24*3600 {
+			http.Error(w, "ttl_seconds must be 1..86400", http.StatusBadRequest)
+			return
+		}
+		ttl = time.Duration(n) * time.Second
 	}
 	const maxUpload = 16 << 20
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxUpload+1))
@@ -256,7 +317,7 @@ func (h *Handler) handleImportConnections(w http.ResponseWriter, r *http.Request
 		}
 		body = plain
 	}
-	result, err := h.SSH.ImportBatch(body, temporary)
+	result, err := h.SSH.ImportBatch(body, temporary, ttl)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -300,6 +361,9 @@ func (h *Handler) handleDeleteConnection(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
 		return
 	}
+	if restRefuseTool(w, r, nil, capability.ProfileDelete) {
+		return
+	}
 	if strings.Contains(name, ",") {
 		results := make([]map[string]any, 0)
 		for _, part := range strings.Split(name, ",") {
@@ -331,6 +395,11 @@ func (h *Handler) handleDeleteConnection(w http.ResponseWriter, r *http.Request)
 func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	if h.SSH == nil {
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// Testing a connection spends the stored credential against the host: it
+	// is a read-side probe, so it follows the read capability.
+	if restRefuseTool(w, r, nil, capability.ProfileList) {
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))

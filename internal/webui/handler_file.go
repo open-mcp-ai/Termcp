@@ -27,7 +27,7 @@ import (
 // whitelist's vocabulary is the MCP tool surface's (file_read, file_write, …),
 // which is what an extension template's author writes, and deriving it here
 // would invent a second vocabulary the template does not speak.
-func (h *Handler) resolveFileSession(sessionID, tool string, paths [][2]string, w http.ResponseWriter) (*session.Session, *ssh.Client, bool) {
+func (h *Handler) resolveFileSession(sessionID, tool string, paths [][2]string, w http.ResponseWriter, r *http.Request) (*session.Session, *ssh.Client, bool) {
 	sess := h.Sessions.Get(sessionID)
 	if sess == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
@@ -35,7 +35,7 @@ func (h *Handler) resolveFileSession(sessionID, tool string, paths [][2]string, 
 	}
 	// The whitelist is checked before the liveness check: a refused call should
 	// read as refused, not as a transient state of the session.
-	if restRefuseTool(w, sess, tool) {
+	if restRefuseTool(w, r, sess, tool) {
 		return nil, nil, false
 	}
 	if restRefusePaths(w, sess, paths...) {
@@ -63,7 +63,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Debug("handleListFiles", "session", sid, "path", path)
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileStat, [][2]string{{"path", path}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileStat, [][2]string{{"path", path}}, w, r)
 	if !ok {
 		return
 	}
@@ -131,7 +131,7 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRead, [][2]string{{"path", path}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRead, [][2]string{{"path", path}}, w, r)
 	if !ok {
 		return
 	}
@@ -333,7 +333,7 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileWrite, [][2]string{{"path", path}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileWrite, [][2]string{{"path", path}}, w, r)
 	if !ok {
 		return
 	}
@@ -384,7 +384,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path required"})
 		return
 	}
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileDelete, [][2]string{{"path", path}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileDelete, [][2]string{{"path", path}}, w, r)
 	if !ok {
 		return
 	}
@@ -424,7 +424,7 @@ func (h *Handler) handleRenameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRename, [][2]string{{"from", from}, {"to", to}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRename, [][2]string{{"from", from}, {"to", to}}, w, r)
 	if !ok {
 		return
 	}
@@ -458,7 +458,7 @@ func (h *Handler) handleMakeDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileMkdir, [][2]string{{"path", path}}, w)
+	_, sshClient, ok := h.resolveFileSession(sid, capability.FileMkdir, [][2]string{{"path", path}}, w, r)
 	if !ok {
 		return
 	}

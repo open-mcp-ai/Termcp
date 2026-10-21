@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/vault"
 )
 
 // ErrNotFound reports that a named ssh config does not exist. Callers can
@@ -30,13 +33,41 @@ var ErrInvalid = errors.New("invalid ssh config")
 // message that Delete already carries.
 var ErrReserved = errors.New("reserved ssh config")
 
+// temporaryProfile is an in-memory-only profile (the sidecar injection
+// landing spot, design doc §六): it never touches disk, carries an optional
+// TTL, and can be bound to a session so that session's DEAD transition drops
+// it. Both bounds exist so a remote instance's plaintext window stays as
+// short as the job it was injected for.
+type temporaryProfile struct {
+	data      []byte
+	expiresAt time.Time // zero = lives until process exit
+	boundTo   string    // session id; empty = unbound
+}
+
 // Store manages dataDir/ssh_configs/<name>/config.toml for remote profiles.
 // The built-in "internal" profile is virtual: it is never written to disk.
+//
+// When the data directory holds a vault (SetVault with an initialized
+// vault.Vault), remote profiles live encrypted under vault/ssh_configs/
+// instead: Save seals, Load opens, and the plaintext path is only a read
+// fallback for not-yet-migrated profiles. The store never refuses plaintext
+// operation on a vault-less data directory — a deployment without a vault
+// behaves exactly as before.
 type Store struct {
 	dataDir   string
 	mu        sync.Mutex
-	temporary map[string][]byte // process-local profiles; guarded by mu
-	onChange  atomic.Value      // func(), set via SetOnChange, called after Save/Delete/Rename
+	temporary map[string]temporaryProfile // process-local profiles; guarded by mu
+	onChange  atomic.Value                // func(), set via SetOnChange, called after Save/Delete/Rename
+	vault     *vault.Vault                // nil until SetVault
+}
+
+// SetVault attaches the credential vault rooted at the same data directory.
+// Called once at wiring time (main.go); the vault's lock state is consulted
+// per operation, not cached.
+func (s *Store) SetVault(v *vault.Vault) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vault = v
 }
 
 // SetOnChange registers a callback fired after Save, Delete, or Rename succeeds.
@@ -109,13 +140,24 @@ func (s *Store) Load(name string) (*Entry, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	data, inMemory := s.temporary[name]
-	data = append([]byte(nil), data...)
+	s.sweepExpiredLocked(time.Now())
+	tp, inMemory := s.temporary[name]
+	vt := s.vault
 	s.mu.Unlock()
 	if inMemory {
-		return ParseAndValidate(data)
+		return ParseAndValidate(tp.data)
 	}
-	data, err = os.ReadFile(p)
+	if vt != nil && vt.Exists() && vt.Has(name) {
+		// A vaulted profile decrypts at load time; a locked vault fails the
+		// load with vault.ErrLocked, which session_start surfaces as unlock
+		// guidance rather than a dial error.
+		plain, err := vt.Decrypt(name)
+		if err != nil {
+			return nil, err
+		}
+		return ParseAndValidate(plain)
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("ssh config %q %w (use data-dir/ssh_configs/%s/config.toml)", name, ErrNotFound, name)
@@ -147,13 +189,20 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	data, inMemory := s.temporary[name]
-	data = append([]byte(nil), data...)
+	s.sweepExpiredLocked(time.Now())
+	tp, inMemory := s.temporary[name]
+	vt := s.vault
 	s.mu.Unlock()
 	if inMemory {
-		return data, nil
+		return append([]byte(nil), tp.data...), nil
 	}
-	data, err = os.ReadFile(p)
+	if vt != nil && vt.Exists() && vt.Has(name) {
+		// ReadRaw feeds the operator's own edit form, so a vaulted profile
+		// decrypts here when the vault is unlocked — the same trust the
+		// operator's keyboard already has. Locked vaults answer ErrLocked.
+		return vt.Decrypt(name)
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -163,14 +212,18 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	return data, nil
 }
 
-// List returns sorted config names: virtual "internal", temporary profiles, and profiles on disk.
+// List returns sorted config names: virtual "internal", temporary profiles,
+// vaulted profiles, and profiles on disk. Vaulted names are visible while
+// locked — the filename is the profile name by design.
 // Leftover ssh_configs/internal/ directories are ignored.
 func (s *Store) List() ([]string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sweepExpiredLocked(time.Now())
+	vt := s.vault
 	entries, err := os.ReadDir(s.root())
 	if err != nil {
 		if !os.IsNotExist(err) {
+			s.mu.Unlock()
 			return nil, err
 		}
 	}
@@ -179,6 +232,19 @@ func (s *Store) List() ([]string, error) {
 	for name := range s.temporary {
 		names = append(names, name)
 		seen[name] = true
+	}
+	s.mu.Unlock()
+	if vt != nil && vt.Exists() {
+		vaulted, err := vt.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range vaulted {
+			if !seen[name] {
+				names = append(names, name)
+				seen[name] = true
+			}
+		}
 	}
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
@@ -233,31 +299,61 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 	if err := ValidateName(name); err != nil {
 		return err
 	}
+	p := filepath.Join(s.root(), name, "config.toml")
+
+	// The mutex guards the temporary map and the collision check only; file
+	// I/O runs unlocked because both writers finish with an atomic rename, so
+	// a concurrent Save of the same name degrades to last-writer-wins instead
+	// of a corrupted file.
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := s.checkNameCollisionLocked(name, name); err != nil {
+		s.mu.Unlock()
 		return err
 	}
-	p := filepath.Join(s.root(), name, "config.toml")
+	vt := s.vault
+	useVault := vt != nil && vt.Exists()
 	if temporary {
+		if s.temporary == nil {
+			s.temporary = make(map[string]temporaryProfile)
+		}
+		s.temporary[name] = temporaryProfile{data: append([]byte(nil), data...)}
+	}
+	s.mu.Unlock()
+
+	if temporary {
+		// A temporary profile supersedes any disk or vaulted copy in Load
+		// order; removing those copies keeps that unambiguous.
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		_ = os.Remove(filepath.Dir(p))
-		if s.temporary == nil {
-			s.temporary = make(map[string][]byte)
+		if vt != nil {
+			_ = vt.Delete(name)
 		}
-		s.temporary[name] = append([]byte(nil), data...)
 		s.notifyChange()
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-		return err
+	if useVault {
+		// Sealing replaces the plaintext file: leaving the TOML next to the
+		// ciphertext would keep the secret one `cat` away from gone.
+		if err := vt.Encrypt(name, data); err != nil {
+			return err
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		_ = os.Remove(filepath.Dir(p))
+	} else {
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			return err
+		}
+		if err := writeFileAtomic(p, data); err != nil {
+			return err
+		}
 	}
-	if err := writeFileAtomic(p, data); err != nil {
-		return err
-	}
+	s.mu.Lock()
 	delete(s.temporary, name)
+	s.mu.Unlock()
 	s.notifyChange()
 	return nil
 }
@@ -266,8 +362,80 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 func (s *Store) IsTemporary(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweepExpiredLocked(time.Now())
 	_, ok := s.temporary[name]
 	return ok
+}
+
+// SaveTemporary stores a remote profile in memory only, with a TTL after
+// which it is swept on the next access (0 = lives until process exit). It
+// supersedes any disk or vaulted copy of the same name.
+func (s *Store) SaveTemporary(name string, data []byte, ttl time.Duration) error {
+	if err := s.SaveWithOptions(name, data, true); err != nil {
+		return err
+	}
+	if ttl > 0 {
+		s.mu.Lock()
+		if tp, ok := s.temporary[name]; ok {
+			tp.expiresAt = time.Now().Add(ttl)
+			s.temporary[name] = tp
+		}
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// BindTemporary ties a temporary profile to a session: when that session
+// turns DEAD, DropBoundTemporary removes the profile. Binding happens at the
+// first session created from the profile — the sidecar flow injects one
+// profile per intended session, so a shared profile dying with its first
+// session is the correct failure direction (its credentials were minted for
+// that job).
+func (s *Store) BindTemporary(name, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tp, ok := s.temporary[name]
+	if !ok {
+		return fmt.Errorf("temporary profile %q: %w", name, ErrNotFound)
+	}
+	tp.boundTo = sessionID
+	s.temporary[name] = tp
+	return nil
+}
+
+// DropBoundTemporary removes every temporary profile bound to sessionID. The
+// manager's dead hook calls it; the profiles' secrets stop existing in this
+// process the moment their job's transport dies.
+func (s *Store) DropBoundTemporary(sessionID string) {
+	s.mu.Lock()
+	dropped := false
+	for name, tp := range s.temporary {
+		if tp.boundTo == sessionID {
+			delete(s.temporary, name)
+			dropped = true
+		}
+	}
+	s.mu.Unlock()
+	if dropped {
+		s.notifyChange()
+	}
+}
+
+// sweepExpiredLocked drops TTL-expired temporary profiles. Callers hold mu.
+// The sweep is lazy (on access) rather than a janitor goroutine: an expired
+// profile matters only when something reads the store, and every read sweeps
+// first — no timer to leak, no lifecycle to plumb into shutdown.
+func (s *Store) sweepExpiredLocked(now time.Time) {
+	dropped := false
+	for name, tp := range s.temporary {
+		if !tp.expiresAt.IsZero() && !now.Before(tp.expiresAt) {
+			delete(s.temporary, name)
+			dropped = true
+		}
+	}
+	if dropped {
+		defer s.notifyChange()
+	}
 }
 
 func (s *Store) checkNameCollisionLocked(name, exclude string) error {
@@ -362,6 +530,30 @@ func (s *Store) Rename(oldName, newName string) error {
 		return nil
 	}
 
+	// A vaulted profile moves by re-sealing under the new name; the vault's
+	// ErrLocked passes straight through, since a rename is exactly where a
+	// caller learns the vault must be unlocked first.
+	if vt := s.vault; vt != nil && vt.Exists() && vt.Has(oldName) {
+		if vt.Has(newName) {
+			return fmt.Errorf("config already exists: %s", newName)
+		}
+		plain, err := vt.Decrypt(oldName)
+		if err != nil {
+			return err
+		}
+		if err := vt.Encrypt(newName, plain); err != nil {
+			return err
+		}
+		if err := vt.Delete(oldName); err != nil {
+			return err
+		}
+		// A stale plaintext copy under the old name must not survive the move.
+		_ = os.Remove(oldPath)
+		_ = os.Remove(filepath.Dir(oldPath))
+		s.notifyChange()
+		return nil
+	}
+
 	oldDir := filepath.Dir(oldPath)
 	newDir := filepath.Dir(newPath)
 	if st, err := os.Stat(oldPath); err != nil {
@@ -400,8 +592,12 @@ func (s *Store) Delete(name string) error {
 	}
 	dir := filepath.Dir(p)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	vt := s.vault
 	delete(s.temporary, name)
+	s.mu.Unlock()
+	if vt != nil && vt.Exists() {
+		_ = vt.Delete(name)
+	}
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
 	}

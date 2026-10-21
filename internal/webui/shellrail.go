@@ -107,7 +107,7 @@ const (
 // `ESC[H ESC[2J`, then erased a screenful-sized region from the wrong origin.
 func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sessionID, shellID, ok := h.marksTarget(w, id, capability.ShellOutput)
+	sessionID, shellID, ok := h.marksTarget(w, r, id, capability.ShellOutput)
 	if !ok {
 		http.Error(w, "shell not found: "+id, http.StatusNotFound)
 		return

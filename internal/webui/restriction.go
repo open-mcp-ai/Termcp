@@ -2,8 +2,10 @@ package webui
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -34,13 +36,23 @@ import (
 
 // restRefuseTool answers the request when sess's whitelist does not carry the
 // capability capID, and reports whether it did. A nil session (or an
-// unrestricted one) passes.
+// unrestricted one) passes. A scoped token's own tools whitelist (auth
+// principal) applies here too: the route's capability must be in it.
 //
 // capID is a capability id (capability.FileWrite, …), not a tool name: the
 // template's allow list and this check speak the same vocabulary, and the
 // refusal is rendered from the capability table rather than from a string a
 // handler happened to spell.
-func restRefuseTool(w http.ResponseWriter, sess *session.Session, capID string) bool {
+func restRefuseTool(w http.ResponseWriter, r *http.Request, sess *session.Session, capID string) bool {
+	if p, ok := auth.PrincipalFromContext(r.Context()); ok && p != nil && len(p.Tools) > 0 {
+		if !slices.Contains(p.Tools, capID) {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error_code": "forbidden",
+				"error":      "this token's scope does not include " + capID,
+			})
+			return true
+		}
+	}
 	if sess == nil || sess.Restriction().Allows(capID) {
 		return false
 	}
@@ -51,12 +63,52 @@ func restRefuseTool(w http.ResponseWriter, sess *session.Session, capID string) 
 	return true
 }
 
+// restRefuseToolAny is restRefuseTool for a route that maps to more than one
+// capability (PUT creates a new profile and edits an existing one): each gate
+// — the principal's tools whitelist, then the session's template — passes when
+// it allows ANY of the capabilities.
+func restRefuseToolAny(w http.ResponseWriter, r *http.Request, sess *session.Session, capIDs ...string) bool {
+	if p, ok := auth.PrincipalFromContext(r.Context()); ok && p != nil && len(p.Tools) > 0 {
+		allowed := false
+		for _, id := range capIDs {
+			if slices.Contains(p.Tools, id) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error_code": "forbidden",
+				"error":      "this token's scope does not include any of " + strings.Join(capIDs, ", "),
+			})
+			return true
+		}
+	}
+	if sess != nil {
+		allowed := false
+		for _, id := range capIDs {
+			if sess.Restriction().Allows(id) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error_code": "forbidden",
+				"error":      session.ForbiddenTool(capability.ToolForID(capIDs[0])),
+			})
+			return true
+		}
+	}
+	return false
+}
+
 // restRefuseSessionIDs answers a comma-separated session id list when ANY entry
 // is restricted, and reports whether it did. The list is resolved the way the
 // MCP guard resolves one — a raw id, or a termcp:// locator — so a caller cannot
 // walk around the refusal by spelling the id differently. Ids that resolve to
 // nothing are left to the handler's own not-found handling.
-func (h *Handler) restRefuseSessionIDs(w http.ResponseWriter, raw, capID string) bool {
+func (h *Handler) restRefuseSessionIDs(w http.ResponseWriter, r *http.Request, raw, capID string) bool {
 	for _, id := range strings.Split(raw, ",") {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -68,7 +120,7 @@ func (h *Handler) restRefuseSessionIDs(w http.ResponseWriter, raw, capID string)
 				sess = h.Sessions.Get(p.SessionID)
 			}
 		}
-		if restRefuseTool(w, sess, capID) {
+		if restRefuseTool(w, r, sess, capID) {
 			return true
 		}
 	}

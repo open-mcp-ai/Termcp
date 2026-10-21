@@ -20,6 +20,8 @@ termcp <subcommand> [action] [flags]
 | `--mcp-manage-ssh-configs` | `false` | 允许 MCP 工具创建/编辑/删除 SSH 配置（凭据永不暴露）。 |
 | `--auth-token` | *(未设)* | HTTP 认证的静态 token（或 `$TERMCP_AUTH_TOKEN`）。每个客户端——API、MCP、浏览器——都要出示。与 `--auth-hash` 互斥。 |
 | `--auth-hash` | *(未设)* | token 的加盐 SHA-256（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。哈希配置的实例也接受哈希串本身作为凭据——`termcp daemon` 管理与 `termcp stdio` 只拿到哈希也能用——因此把哈希当机密对待。与 `--auth-token` 互斥。 |
+| `--mcp-auth-token` | *(未设)* | 只管 MCP 面的 token（或 `$TERMCP_MCP_AUTH_TOKEN`）：在 `/sse`、`/message`、`/stream` 有效；拿它调 REST 管理面/Web UI/WS 一律 `403`。给 Agent 发这把而不发人面 token，它就碰不到配置导出、注入与实例管理。与 `--mcp-auth-hash` 互斥。 |
+| `--mcp-auth-hash` | *(未设)* | MCP token 的加盐 SHA-256（或 `$TERMCP_MCP_AUTH_HASH`），同样不保存明文。与 `--mcp-auth-token` 互斥。 |
 | `--disable-auth` | `false` | **刻意**关掉 HTTP 认证，包括非 loopback 绑定（或 `$TERMCP_DISABLE_AUTH_TOKEN=1`）。请配合 loopback 端口，只让本机调用者可达。与 `--auth-token`/`--auth-hash` 同时给出是错误，而不是某个参数静默胜出。 |
 | `--idle-timeout` | `30s / 不限` | 守护实例在无任何连接或请求时可自行退出前的时长，如 `10m`；`0` 关闭。默认：`termcp daemon stdio` 拉起的实例 30s，`termcp daemon start` 拉起的实例不限时。 |
 | `--namespace` | 空（实例所有者） | 仅 stdio 桥：声明调用方命名空间（字母/数字/`-_.`，最长 64），桥发的每个请求都带 `X-Termcp-Namespace`。实例侧于是只列出/接受这个命名空间里的会话，多个 bridge 接到同一实例时互不干扰。空 = 今天的全局视图。名字非法在启动时就被拒，不会留到第一条请求才失败。 |

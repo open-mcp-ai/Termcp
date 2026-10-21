@@ -92,3 +92,73 @@ docker compose up -d --build
 ```bash
 make build-api    # dist/termcp-api-<os>-<arch>
 ```
+
+## 零信任远程实例（sidecar 注入）
+
+适用场景：termcp 跑在一台**不可信**的远程主机/容器里供 Agent 调用，凭据不离开本地可信端（设计：`docs/design/credential-vault.md`）。远程实例不建 vault、不落凭据；本地 sidecar 经已认证的 REST 注入**内存临时 profile**，会话结束或 TTL 到期即自动清除。
+
+远程实例（零持久秘密）：
+
+```bash
+termcp --no-internal --host 0.0.0.0 --port 18765 --auth-token <长期随机串>
+```
+
+本地 sidecar（持 vault）：
+
+```bash
+# 1. 解锁本地 vault（keychain 用户免密）
+termcp vault unlock   # 或启动本地实例由 keychain 自动解锁
+
+# 2. 经本地实例取出目标 profile 的明文 TOML（本地 vault 解锁状态下，
+#    GET 单条配置返回解密后的原文），注入远程实例为临时 profile（TTL 10 分钟）
+#    明文只存在于 TLS 通道与远程实例内存
+curl -s 'http://127.0.0.1:18765/api/connections/prod' | \
+  curl -X POST 'https://remote:18765/api/connections/batch?temporary=true&ttl_seconds=600' \
+       -H 'Authorization: Bearer <远程 token>' --data-binary @-
+
+# 3. 引用注入的名字开会话（首个会话绑定该 profile；会话 DEAD 即清除）
+curl -X POST 'https://remote:18765/api/sessions' \
+     -H 'Authorization: Bearer <远程 token>' \
+     -H 'Content-Type: application/json' \
+     -d '{"ssh_config":"prod"}'
+```
+
+两条清除路径互为冗余：会话 DEAD（经绑定）与 TTL（经懒清扫）。注入用的明文取自本地实例的单条配置 GET——它要求本地 vault 处于解锁态，且只出现在管道里。注入面建议用 scoped token 收窄：`termcp token create --tools profile.create --ttl 24h` 签出的 token 只能注入、不能读取或管理；人面 token 继续单独保管。
+
+## 容器里的凭据 Vault
+
+容器内没有 OS keychain，vault 自动落到密码路径（`identity.age` + scrypt）。以下每一步都按真实容器实测过：
+
+```bash
+# 建库（在运行中的容器里执行一次；密码经 stdin 读入，不进进程参数）
+echo '<一个强密码>' | docker exec -i termcp termcp vault init
+
+# 解锁（REST，等价于宿主机上的 termcp vault unlock）
+curl -X POST http://localhost:18765/api/vault/unlock \
+  -H 'Authorization: Bearer <token>' -H 'Content-Type: application/json' \
+  -d '{"passphrase":"<同一个密码>"}'
+```
+
+三个运维事实，均与设计一致而非缺陷：
+
+- **重启后 vault 必然回锁**——容器没有 keychain 可记忆，重启即回到锁定态，需重新 `unlock`。锁定期间消耗凭据的操作一律 `409`，profile 列表仍可读。
+- **卷里只有密文**——`~/.termcp/vault/` 下 `identity.age`（scrypt 加密）与 `ssh_configs/*.age`（age 密文），凭据明文任何时刻不落卷。备份整个卷不会泄露凭据，但**丢了密码或 identity 文件就是丢了库**——两处都备份。
+- 想完全关掉 keychain 探测（纯容器 fleet），加 `-e TERMCP_VAULT_NO_KEYCHAIN=1`，行为不变、日志更静。
+
+## 多端同步（recipients）
+
+vault 的多端同步是"密文 + 公钥表"模型：同步内容天生可以走任何不可信通道（rsync、git、网盘），因为里面没有可读的东西。每台设备有自己的 identity（私钥不出设备），密文按 recipients 表封送给全部已授权设备。
+
+```bash
+# 新设备 B：建库，拿到它的公钥（init 输出里）
+termcp vault init --data-dir <B的数据目录>     # 输出 "this device's recipient: age1..."
+
+# 既有设备 A：把 B 加进 recipients，重封存量密文
+termcp vault recipients --data-dir <A的数据目录> add laptop age1...
+termcp vault reseal --data-dir <A的数据目录>
+
+# 同步（只带这两样；identity.age 永远不在其列）
+rsync -a <A>/vault/recipients.toml <A>/vault/ssh_configs/ <B>/vault/
+```
+
+之后 B 用自己的密码/keychain 解锁即可解密全部 profile。**撤销**一台设备：`recipients remove <名字>` + `reseal`——此后新密文它解不开（它手里已有的旧密文副本无法追溯收回，这是向前撤销语义）。 relay 协议（自动同步 + 冲突合并）是独立后续项，手动路径即上文。

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -21,13 +22,28 @@ type BatchImportResult struct {
 	Renamed  []BatchRename `json:"renamed,omitempty"`
 }
 
+// BatchExportResult carries the exported document plus the names withheld
+// from it, so the caller can warn instead of silently dropping profiles.
+type BatchExportResult struct {
+	Document []byte
+	// SkippedVaulted names the vaulted profiles a plaintext export refused to
+	// carry: exporting a vaulted profile as cleartext would defeat the vault.
+	// Sealed exports (sealed=true) include them, decrypted under the open
+	// vault into the password-protected envelope.
+	SkippedVaulted []string
+}
+
 // ExportBatch returns a TOML document containing remote profiles, including
 // temporary ones. An empty only exports every stored profile; otherwise exactly
 // the named ones are exported — a name that does not resolve is skipped rather
 // than failing the whole file, so a selection captured before a deletion still
 // downloads. The built-in internal profile is intentionally excluded in both
 // modes (the KindRemote filter below is what drops it).
-func (s *Store) ExportBatch(only []string) ([]byte, error) {
+//
+// Vaulted profiles follow sealed: false withholds them (listed in
+// SkippedVaulted); true decrypts them inline, so a sealed export with a locked
+// vault fails with vault.ErrLocked rather than dropping profiles quietly.
+func (s *Store) ExportBatch(only []string, sealed bool) (*BatchExportResult, error) {
 	names := only
 	if len(names) == 0 {
 		list, err := s.List()
@@ -36,9 +52,18 @@ func (s *Store) ExportBatch(only []string) ([]byte, error) {
 		}
 		names = list
 	}
+	s.mu.Lock()
+	vt := s.vault
+	s.mu.Unlock()
+	res := &BatchExportResult{}
 	profiles := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		if IsInternalName(name) {
+			continue
+		}
+		vaulted := vt != nil && vt.Exists() && vt.Has(name)
+		if vaulted && !sealed {
+			res.SkippedVaulted = append(res.SkippedVaulted, name)
 			continue
 		}
 		raw, err := s.ReadRaw(name)
@@ -62,14 +87,22 @@ func (s *Store) ExportBatch(only []string) ([]byte, error) {
 		profile["name"] = name
 		profiles = append(profiles, profile)
 	}
-	return toml.Marshal(struct {
+	doc, err := toml.Marshal(struct {
 		Connections []map[string]any `toml:"connections"`
 	}{Connections: profiles})
+	if err != nil {
+		return nil, err
+	}
+	res.Document = doc
+	return res, nil
 }
 
 // ImportBatch validates the entire TOML document, then assigns unique names
 // before creating profiles. Existing profiles are never overwritten.
-func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, error) {
+//
+// With temporary=true the profiles live in process memory only; ttl>0 sweeps
+// them after that span (the sidecar injection path, design doc §六).
+func (s *Store) ImportBatch(data []byte, temporary bool, ttl time.Duration) (*BatchImportResult, error) {
 	if len(data) > maxBatchSize {
 		return nil, fmt.Errorf("import file too large (max %d bytes)", maxBatchSize)
 	}
@@ -147,10 +180,14 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 	}
 	if temporary {
 		if s.temporary == nil {
-			s.temporary = make(map[string][]byte)
+			s.temporary = make(map[string]temporaryProfile)
+		}
+		var expiresAt time.Time
+		if ttl > 0 {
+			expiresAt = time.Now().Add(ttl)
 		}
 		for _, item := range items {
-			s.temporary[item.name] = append([]byte(nil), item.data...)
+			s.temporary[item.name] = temporaryProfile{data: append([]byte(nil), item.data...), expiresAt: expiresAt}
 		}
 	} else {
 		created := make([]string, 0, len(items))

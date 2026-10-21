@@ -263,7 +263,7 @@ host = "bastion.example"
 user = "jumper"
 password = "placeholder2"
 `)
-	if _, err := store.ImportBatch(doc, false); err != nil {
+	if _, err := store.ImportBatch(doc, false, 0); err != nil {
 		t.Fatalf("the format the description advertises was rejected: %v", err)
 	}
 	entry, err := store.Load("host-one")
@@ -276,13 +276,13 @@ password = "placeholder2"
 
 	// Export must emit something that imports back, or "export emits this shape"
 	// in the description is false.
-	exported, err := store.ExportBatch(nil)
+	exported, err := store.ExportBatch(nil, false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
 	second := sshconfig.NewStore(t.TempDir())
-	if _, err := second.ImportBatch(exported, false); err != nil {
-		t.Fatalf("an exported file did not import back: %v\n%s", err, exported)
+	if _, err := second.ImportBatch(exported.Document, false, 0); err != nil {
+		t.Fatalf("an exported file did not import back: %v\n%s", err, exported.Document)
 	}
 	again, err := second.Load("host-one")
 	if err != nil {

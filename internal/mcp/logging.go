@@ -8,6 +8,8 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/open-mcp-ai/termcp/internal/auth"
 )
 
 type toolHandler = func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
@@ -29,7 +31,7 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 			if bad, held := s.checkAdmission(ctx, name, request); bad != nil || held {
 				if bad != nil {
 					slog.DebugContext(ctx, "tool refused by session restriction",
-						append([]any{"tool", name}, restrictionAttrs(request)...)...)
+						append([]any{"tool", name}, append(restrictionAttrs(request), principalAttrs(ctx)...)...)...)
 				}
 				return bad, nil
 			}
@@ -37,6 +39,7 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 
 		start := time.Now()
 		baseAttrs := []any{"tool", name}
+		baseAttrs = append(baseAttrs, principalAttrs(ctx)...)
 		baseAttrs = appendSafeArgs(baseAttrs, request)
 
 		slog.DebugContext(ctx, "tool call start", baseAttrs...)
@@ -74,6 +77,17 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 		}
 		return result, err
 	}
+}
+
+// principalAttrs names the credential behind the call — the scoped token's id
+// (never the token itself) and its kind — so the audit log can answer "which
+// harness did that" per scoped-tokens.md §4.1.
+func principalAttrs(ctx context.Context) []any {
+	p, ok := auth.PrincipalFromContext(ctx)
+	if !ok || p == nil {
+		return nil
+	}
+	return []any{"principal_id", p.ID, "principal_kind", string(p.Kind)}
 }
 
 // restrictionAttrs names the target a refusal applied to, so the log line can

@@ -100,6 +100,36 @@ the WebSocket. One shared `internal/auth` middleware guards the whole mux. Missi
 wrong credentials return `401 Unauthorized` with `WWW-Authenticate: Basic` (browsers
 show their native login prompt).
 
+**Operator vs MCP token.** `--mcp-auth-token` / `--mcp-auth-hash` (or
+`TERMCP_MCP_AUTH_TOKEN` / `TERMCP_MCP_AUTH_HASH`) add a second credential that
+opens **only** the MCP transports (`/sse`, `/message`, `/stream`). Presented
+anywhere else — REST, Web UI, WebSocket — a valid MCP token is answered `403`
+(the credential is good, the door is wrong; random strings still get `401`).
+The operator token keeps opening everything. Hand agents the MCP token and they
+cannot reach profile export/injection or instance management. With only the
+operator token configured, behavior is exactly the legacy single-token one.
+
+**Scoped tokens.** For per-harness grants there is a token table with real
+scopes — mint with `termcp token create` or `POST /api/tokens`:
+
+```
+POST /api/tokens            {"kind":"agent","tools":["shell.output"],"sessions":["sess-id"],
+                             "approval_required":true,"ttl_seconds":3600}
+                  → 201 {"token":"tcptok_<id>.<secret>","record":{...}}   (the plaintext is in THIS response only)
+GET  /api/tokens            → 200 {"tokens":[{id,kind,tools,sessions,expires_at,revoked_at,...}]}  (never verifiers)
+DELETE /api/tokens/{id}     → 204  (revocation is effective on the very next request)
+```
+
+- `tools` whitelist **capability ids** (`shell.input`, `file.write`, …), enforced
+  identically on MCP and REST — a call outside it answers `403`.
+- `sessions` whitelist matches the session id or the profile name that created it.
+- `approval_required: true` forces the session into review mode on first use:
+  every write then waits for a human decision.
+- Expired/revoked/unknown tokens are plain `401`, indistinguishable from garbage.
+- Token management itself is operator-only: a scoped agent token gets `403`.
+- The middleware stores the verified principal on the request context; MCP call
+  logs carry `principal_id` + `principal_kind` for audit.
+
 A valid token is not the only gate. A session created by an **extension** carries a
 capability whitelist (`allow` / `paths`), and it is enforced on this surface too — a
 call outside it answers `403` with `{"error_code":"forbidden", ...}` instead of
@@ -175,8 +205,38 @@ forgotten. Set it in the connection editor's checkbox or as
 `default_approval = true` in the profile's TOML.
 
 `temporary: true` marks a remote profile held only in process memory. It remains
-available to REST, MCP, and the Web UI until termcp exits. It is never written
-under `ssh_configs/`.
+available to REST, MCP, and the Web UI until termcp exits, its TTL lapses, or
+the session it was bound to dies — whichever comes first. It is never written
+under `ssh_configs/`. TTL and binding are the sidecar-injection contract (see
+*Credential vault* below): an injected profile's plaintext window is bounded by
+the job it was minted for.
+
+### Credential vault
+
+When the data directory holds a vault (`termcp vault init`), every write to a
+remote profile is sealed with age (X25519 recipients) under
+`vault/ssh_configs/<name>.age` and any plaintext TOML of the same profile is
+scrubbed. Profiles migrated by `termcp vault migrate` behave the same.
+Reads of profiles not yet migrated fall back to plaintext.
+
+A **locked** vault fails every credential-consuming operation with `409` and an
+unlock hint: creating a session from a vaulted profile, editing or reading one,
+and sealed exports that include one. Listing profile names always works.
+
+```
+GET  /api/vault            → 200 {"initialized":true,"unlocked":false,"can_auto_unlock":true,"profiles":["prod"]}
+POST /api/vault/unlock     body {"passphrase":"…"} → 204; 401 wrong passphrase; 404 no vault
+POST /api/vault/lock       → 204; 404 no vault
+```
+
+Unlock is per-process: the CLI verbs `termcp vault unlock|lock` drive these
+endpoints on the running instance. A daemon whose OS keychain holds the vault
+identity unlocks itself at startup and never prompts.
+
+Vaulted profiles leave the machine only sealed: a **plaintext** export skips
+them and names them in the `X-Termcp-Skipped-Vaulted` response header; an
+export sealed with `X-Termcp-Password` decrypts them into the envelope
+(locked vault → `409`).
 
 ### `GET /api/connections/{name}`
 
@@ -242,10 +302,12 @@ fallback, invisible to the user).
 
 Imports a TOML file. Send its bytes as the request body (`Content-Type:
 application/toml`). Set `temporary=true` to keep **all** imported profiles only
-in memory. The upload limit is 16 MiB. Existing names, case-insensitive
-duplicates, and the reserved `internal` name receive a unique `-2`, `-3`, …
-suffix; existing profiles are never overwritten. Invalid profiles reject the
-whole import before any profile is added.
+in memory; add `ttl_seconds=N` (1..86400) to sweep them after N seconds — a
+temporary profile is also dropped when the session created from it turns DEAD.
+`ttl_seconds` without `temporary=true` is `400`. The upload limit is 16 MiB.
+Existing names, case-insensitive duplicates, and the reserved `internal` name
+receive a unique `-2`, `-3`, … suffix; existing profiles are never overwritten.
+Invalid profiles reject the whole import before any profile is added.
 
 An **encrypted** export imports the same way, with the password in
 `X-Termcp-Password`. Missing password → `401` naming the header; wrong password
