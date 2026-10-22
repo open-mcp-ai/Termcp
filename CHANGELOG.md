@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+
+## v0.2.8-rc.4 — 2026-10-22
+
+- **`get host <name>` 读回一个 host，口令只报有无不改值**。此前 host 能建、能改、能列、能删，就是读不回来：`ls host` 只有名字，改一个字段时无法知道其余字段当前是什么，于是「部分修改」只能靠猜，而猜错就是覆盖。现在 `get host <name>` 返回条目内容，密码与密钥口令替换为 `has_password` / `has_passphrase`——把口令放进回复等于写进 transcript 和日志，而调用方真正要问的是「有没有设置」。读取不是变更，所以不受 `--mcp-manage-ssh-configs` 限制：列表本来就开放，只藏字段不藏名字没有意义。`ls host <name>` 也不再静默丢掉名字返回全表，而是明说要读单个条目该用哪个动词。
+
+- **补上四处「表里写了、实际用不了」的能力**。`--jump-host` 一直存在，但校验要求每一跳自带凭据，而表里只有 host/user/port 三个跳板 flag，于是任何跳板配置都被拒；新增 `--jump-password` / `--jump-private-key` / `--jump-key-passphrase`。`--op truncate` 要求 `--size`，而 `write` 根本没有这个 flag，truncate 因此没有可用的写法。硬链接没有入口：`write --op link` 缺 target，handler 要的是 existing_path/new_path；现在 `create <session> file <新名> --op link --target <已有文件>`，与软链接 `--target` 同一句式。另外 `reader` 在进程已结束的通道上过去回 500 `buffer: closed`，把可预期的生命周期状态报成了内部故障；现在是 409，并说明它已产生的输出仍然可以用 `read` 读到。
+
 - **指令表面重写成「动词 + 资源树上的地址」（破坏性，无旧名保留）**。原来是三种互不相干的形状：`verb target`（`run`、`read`、`close`）、`noun verb`（`host`、`ext`、`mcp`、`cdp`、`jrpc`）、以及 `noun --action verb`（`file`、`fwd`）。最后一种是最刺眼的证据：`file` 是唯一不接受位置动作的指令，`file nosuch read` 回 `400 file needs --action …`，而同表的 `read nosuch` 是 404——同一个错误在两张表里有两种报法，因为「哪个词是动词」这件事从来没有定论。现在只有一种形状：**一个动词，加上它作用的那个节点**。资源树是 `host → session → { <index> = channel, file <path>, forward <id>, mcp|cdp|jrpc <url> }`，`ext` 在旁边独立成列。`connect <host>` 建一个 session，`open <session>` 给它加子节点（通道 / 文件 / 转发 / peer），其余动词作用在一个节点上。23 条指令收敛成 **19 个动词**：`connect open ls get close rm run input key resize span reader read write call create edit notify help`。
 
   几个由此消失的概念，而不是被重命名：
@@ -25,7 +32,7 @@
 
 - **`mcp` / `cdp` / `jrpc` 的连接改从 session 里穿过去（破坏性）**。`... open <url>` 变成 `... open <session> <url>`。此前这三个网关用的是 termcp 自己的网络栈：`http.DefaultClient` 与 `websocket.DefaultDialer`，于是同一个 URL 的含义取决于 termcp 恰好跑在哪台机器上——`cdp open http://localhost:9222` 连的是**进程所在机器**的调试端口，不是被控主机的。这不只是别扭：它等于给 termcp 加了一项目标主机的网络从未授予的能力（从本机打出任意出站连接），而走 session 则什么也没加——复用的就是 `-L` 那条已有隧道。现在 `internal/jrpc` 的 `Open` 必须拿到一个 `DialFunc`，`dialerForSession` 用 `sess.SSHClient().Dial` 实现它，HTTP transport 与 websocket dialer 都换成这一条。`<session>` 既接受 `ps` 打印的 id，也接受 host 名（`internal`、`prod`），后者解析到该 host 下**唯一**在跑的 session；有两三个同名目标时报错并列出 id 让你选，而不是替你在可能不同的跳板/代理之间猜一个。顺带修掉一处必然的失败：x/crypto 的 SSH channel 不实现 deadline（`ssh: tcpChan: deadline not supported`），而 gorilla 拨号时会设 deadline 并检查返回值，所以 websocket 过隧道一开始就必然失败；`deadlineFreeConn` 让三个 SetDeadline 静默成功，超时仍由 context 负责（channel 随 context 结束而拆掉）。
 
-- **`profile` 改名 `host`**。`profile` 是这个项目自己造的词，而它描述的东西——一台机器在哪、用什么用户和密钥连——调用方本来就有名字：host。`host` 现在是正式名，`profile` 作为别名保留（`Lookup` 的 `AlsoKnownAs`），所以老脚本照常工作。用法行、拒绝信息（`host needs --action …`）、审批摘要（`create host x`）一并改了。同时把全表 `Usage` 里的 `<handle>` 换成 `<channel>`：`handle` 这个词已经废除，通道就叫 channel，写成 `<session>:<index>`。
+- **`profile` 改名 `host`**。`profile` 是这个项目自己造的词，而它描述的东西——一台机器在哪、用什么用户和密钥连——调用方本来就有名字：host。`host` 现在是正式名，`profile` 不再接受——这是一次重写，留着旧拼法只会让「哪个词是对的」重新变成需要猜的事。用法行、拒绝信息（`host needs --action …`）、审批摘要（`create host x`）一并改了。同时把全表 `Usage` 里的 `<handle>` 换成 `<channel>`：`handle` 这个词已经废除，通道就叫 channel，写成 `<session>:<index>`。
 
 - **`ps` 带上 `learn_mode` 会展开「拿到地址之后能做什么」**。`learn_mode` 原本只给**当前**这条指令挂 usage，对 `ps` 几乎没用——刚跑完 `ps` 的调用方手里是一把地址，正想问这些地址能喂给谁，而列表本身只有 id 和状态，说不出 `close a1f3:1` 归档通道、`rm a1f3` 抹掉会话。现在 `ps learn_mode:true` 在列表后面接上 `info` / `close` / `rm` / `resize` / `read` / `span` 的用法行，一次调用换掉四次 `help` 往返。
 
