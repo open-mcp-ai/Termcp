@@ -1,0 +1,1419 @@
+    /* Palette follows the terminal language this page is drawn in: a CRT-black
+       plate, cyan chrome with magenta as the second voice, and the transcript
+       mark hues — green output, yellow human input, magenta AI input. The two
+       neon values are the same pair the EzJump terminal uses. */
+    :root {
+      --bg: #05060a;
+      --bg-subtle: #070a12;
+      --card-bg: #090e1a;
+      --panel-bg: #0b0714;
+      --bg-input: #060a12;
+      --accent: #00f0ff;
+      --accent-rgb: 0, 240, 255;
+      --accent-glow: rgba(0, 240, 255, 0.45);
+      --accent-dim: rgba(0, 240, 255, 0.08);
+      --accent-ring: rgba(0, 240, 255, 0.3);
+      --green: #52e3a4;
+      --yellow: #fcee0a;
+      --pink: #ff2bd6;
+      --purple: #c08bff;
+      --border: rgba(0, 240, 255, 0.22);
+      --border-bright: rgba(0, 240, 255, 0.5);
+      --border-focus: rgba(255, 43, 214, 0.7);
+      --text: #bdefff;
+      --text-bright: #eafcff;
+      --text-muted: #7fb6cc;
+      --text-faint: #4f7d94;
+      /* A terminal page is dark, and so are the controls the OS draws for it:
+         this is what turns the native <select> popup (the wide-screen language
+         picker) dark instead of the system's white, and the scrollbars with it. */
+      color-scheme: dark;
+      --mono: 'Sarasa Mono SC', 'Noto Sans Mono CJK SC', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', Menlo, monospace;
+      /* A terminal page reads in a terminal face — body copy included. */
+      --sans: var(--mono);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Ambient cyber background: two light sources — magenta up-left, cyan
+       down-right — over a grid whose two axes are tinted apart. */
+    .bg-grid {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        radial-gradient(circle at 15% 0%, rgba(255, 43, 214, 0.18), transparent 45%),
+        radial-gradient(circle at 85% 100%, rgba(0, 240, 255, 0.18), transparent 45%),
+        linear-gradient(to right, rgba(0, 240, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 43, 214, 0.05) 1px, transparent 1px);
+      background-size: auto, auto, 44px 44px, 44px 44px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Header Nav */
+    header {
+      padding: 24px 0;
+      border-bottom: 1px solid var(--border);
+      background: rgba(9, 11, 14, 0.85);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-decoration: none;
+    }
+    .brand-logo {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text);
+    }
+    .brand-logo span { color: var(--accent); }
+
+    .meta-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      font-family: var(--mono);
+      transition: all 0.2s ease;
+    }
+    .github-link:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 12px var(--accent-dim);
+    }
+    .github-link svg { width: 16px; height: 16px; fill: currentColor; }
+    .star-count { color: var(--accent); font-weight: 600; }
+    /* Same voice as the terminal's "replay · real calls" chip: green on a
+       faint green well, one step smaller than the control row it sits in. */
+    .version-tag {
+      font-family: var(--mono);
+      font-size: 9px;
+      line-height: 1.2;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 3px 11px;
+      background: rgba(82, 227, 164, 0.13);
+      border: 1px solid rgba(82, 227, 164, 0.45);
+      color: var(--green);
+    }
+
+    .lang-select-wrap { position: relative; }
+    .lang-select-wrap select {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+      font-family: var(--sans);
+      transition: border-color 0.2s;
+    }
+    .lang-select-wrap select:hover { border-color: var(--accent); }
+
+    /* The globe: what the picker becomes on a phone. Same 3 items, one icon. */
+    .lang-icon-btn {
+      display: none;
+      width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      line-height: 1;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .lang-icon-btn:hover { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-dim); }
+    .lang-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 168px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-bright);
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.6);
+      padding: 4px;
+      z-index: 120;
+    }
+    .lang-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.14s, color 0.14s;
+    }
+    .lang-menu button:hover,
+    .lang-menu button[aria-selected="true"] { background: var(--accent-dim); color: var(--accent); }
+
+    /* Hero */
+    .hero {
+      padding: 72px 0 40px;
+      text-align: center;
+    }
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 14px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 24px;
+      letter-spacing: 0.5px;
+    }
+    .hero h1 {
+      font-size: 44px;
+      font-weight: 800;
+      line-height: 1.25;
+      margin-bottom: 18px;
+      letter-spacing: -0.5px;
+    }
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p.lead {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 780px;
+      margin: 0 auto 28px;
+    }
+    .hero p.lead strong { color: var(--text-bright); font-weight: 600; }
+    /* The tagline under the lead: monospaced, spaced out and dimmer than the
+       lead, so it reads as an epigraph rather than another claim. */
+    .hero p.motto {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin: -16px auto 26px;
+    }
+
+    .hero p.lead code {
+      font-family: var(--mono);
+      font-size: 15px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 6px;
+    }
+
+    /* The sentence the whole page is built on: the agent is a second user on the
+       shell, not a replacement for it. Sits under the install box, on a plate of
+       its own, so it reads as the frame around everything below rather than
+       another line of body copy. */
+    .hero-manifesto {
+      max-width: 820px;
+      margin: 26px auto 16px;
+      padding: 14px 20px;
+      background: linear-gradient(90deg, var(--accent-dim), transparent 74%), var(--card-bg);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--accent);
+      font-size: 16.5px;
+      line-height: 1.75;
+      color: var(--text-bright);
+      text-align: left;
+    }
+    /* The skills site is the other half of the pitch: where an agent reads how
+       to drive termcp. Set off on its own line so it reads as a pointer rather
+       than part of the sentence above it. */
+    /* Two pointers for the agent: the skills site itself, and the SKILL.md
+       it should load. Inline, one line, both mono. */
+    .hero-manifesto .hero-links {
+      display: block;
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 13.5px;
+      color: var(--text-muted);
+    }
+    .hero-manifesto .hero-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .hero-manifesto .hero-links a:hover { text-decoration: underline; }
+    .hero-manifesto .hero-links .sep { color: var(--text-faint); }
+    /* The three mechanisms, named in one line — review, custody, persistence —
+       and where the product sits. Mono, because it is a claim, not prose. */
+    .hero-claim {
+      max-width: 820px;
+      margin: 0 auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+    /* The two targets, stated before anything else: local shell, remote SSH.
+       The MCP rows stack under them, tied tighter than the transport pair. */
+    .targets {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 40px;
+    }
+    .targets + .targets { margin-top: -26px; }
+    .target-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 8px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: left;
+    }
+    .target-chip b { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
+    /* Platform marks: monochrome, currentColor, so they inherit the chip's text
+       colour and stay legible in every theme. */
+    .target-chip svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+      opacity: 0.85;
+      flex-shrink: 0;
+      align-self: center;
+    }
+    .target-platforms {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+    }
+
+    /* Quick Install Box */
+    .command-box {
+      max-width: 820px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+      text-align: left;
+    }
+    .cmd-tabs {
+      display: flex;
+      background: var(--panel-bg);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .cmd-tab {
+      padding: 10px 18px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--mono);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+    }
+    .cmd-tab:hover { color: var(--text); }
+    .cmd-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(var(--accent-rgb), 0.05);
+    }
+    .cmd-body {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--text);
+    }
+    .cmd-note {
+      margin: 0;
+      padding: 0 20px 14px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: var(--text-faint);
+    }
+    .cmd-note b { color: var(--text-muted); font-weight: 600; }
+    .cmd-text {
+      min-width: 0;
+      /* Wrap on every width: the docker command is ~1460px of text, and a
+         sideways scrollbar in the install box reads as a broken layout. */
+      overflow-wrap: anywhere;
+      word-break: break-all;
+      /* NOT `user-select: all`: that snaps any selection inside the box to the
+         whole element, so dragging across half the command selected everything
+         and the caret would not stay put. Point selection at the copy button
+         instead — it copies the same text without fighting the pointer. */
+      user-select: text;
+    }
+    .cmd-text span.prompt { color: var(--accent); margin-right: 8px; }
+    /* The AI tab shows a SENTENCE, so it is quoted like one. Generated content
+       rather than text nodes: pseudo-elements are not part of textContent, so
+       the copy button hands over the sentence with no quotes around it. */
+    #cmd-display.quoted::before { content: '\201C'; color: var(--text-faint); }
+    #cmd-display.quoted::after  { content: '\201D'; color: var(--text-faint); }
+    .copy-btn {
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      color: var(--accent);
+      padding: 6px 14px;
+      font-size: 12px;
+      font-family: var(--mono);
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover {
+      background: var(--accent);
+      color: #000;
+      box-shadow: 0 0 14px var(--accent-glow);
+    }
+
+    /* Sections */
+    .section { margin-bottom: 88px; }
+    .sec-head { margin-bottom: 30px; }
+    .sec-kicker {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .sec-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      color: #fff;
+      line-height: 1.3;
+    }
+    .sec-sub {
+      margin-top: 12px;
+      font-size: 15.5px;
+      color: var(--text-muted);
+      max-width: 840px;
+    }
+    /* One small line under a section title, for a claim too short to be a
+       paragraph and too important to bury in one. */
+    .sec-note {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      letter-spacing: 0.02em;
+      color: var(--green);
+    }
+    .sec-note::before {
+      content: "▸";
+      margin-right: 6px;
+      opacity: 0.75;
+    }
+    .sec-sub code, .cap p code, .card p code, .security p code {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 5px;
+      white-space: nowrap;
+    }
+
+    /* Product screenshot — one per language, swapped with the language picker */
+    .shot-frame { border: 1px solid var(--border-bright); background: var(--bg-subtle); }
+    /* A plate directly under a section head, and a grid directly under a plate:
+       both were flush, which read as one broken block. */
+    .sec-head + .shot-frame { margin-bottom: 32px; }
+    .shot-frame + .caps { margin-top: 32px; }
+    .caps + .shot-frame { margin-top: 32px; }
+    /* A second head inside one section needs a bigger break than a paragraph:
+       the grid above is finished content, not a lead-in. */
+    .caps + .sec-head { margin-top: 56px; }
+    /* display:block below would otherwise beat the UA rule for [hidden], and
+       both language screenshots would stack in the same frame. */
+    [hidden] { display: none !important; }
+    /* Fixed box, so the frame never changes height: the language variants differ
+       by a fraction of a percent in ratio, and the img is letterboxed inside
+       instead of resizing it. The extension plate is wider than the console, so
+       it carries its own ratio rather than being letterboxed into the console's. */
+    .shot-link {
+      display: block;
+      aspect-ratio: 2400 / 1228;
+      line-height: 0;
+    }
+    .shot-frame.ext .shot-link { aspect-ratio: 2400 / 1093; }
+    .shot-img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      transition: filter 0.2s ease;
+    }
+    .shot-img:hover { filter: brightness(1.06); }
+    .shot-cap {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      color: var(--text-faint);
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--panel-bg);
+    }
+    .shot-hint { color: var(--accent); }
+    /* Below the whole screenshot frame: the one case where the target cannot
+       just "have SSH open" — a box with no sshd at all. Its own plate, so it
+       reads as a footnote to the section rather than to the image. */
+    .shot-relay {
+      margin-top: 14px;
+      padding: 11px 16px;
+      border: 1px solid rgba(82, 227, 164, 0.28);
+      background: rgba(82, 227, 164, 0.05);
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--text-muted);
+    }
+    .shot-relay b { color: var(--green); font-weight: 700; }
+    .shot-relay a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(var(--accent-rgb), 0.35);
+    }
+    .shot-relay a:hover { border-bottom-color: var(--accent); }
+    .shot-relay code {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 5px;
+    }
+
+    /* Capabilities: what the AI can actually do through Termcp */
+    .caps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 18px;
+    }
+    .cap {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 24px;
+      position: relative;
+      transition: border-color 0.22s ease, box-shadow 0.22s ease;
+    }
+    .cap:hover {
+      border-color: rgba(var(--accent-rgb), 0.45);
+      box-shadow: 0 0 22px var(--accent-dim);
+    }
+    .cap-num {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      color: var(--accent);
+      display: block;
+      margin-bottom: 12px;
+    }
+    .cap h3 {
+      font-size: 16.5px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .cap p { font-size: 14.5px; color: var(--text-muted); }
+
+    /* Terminal demo — the theme's floating window. Each transcript line carries
+       the mark termcp's rail uses for it: a = AI input (pink), i = human input
+       (yellow), o = shell output (green), q = a review decision (purple). */
+    .terminal-window {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-bright);
+      position: relative;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                  0 24px 64px rgba(0, 0, 0, 0.56),
+                  0 0 40px rgba(var(--accent-rgb), 0.06);
+      overflow: hidden;
+    }
+    .term-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      background: rgba(160, 205, 255, 0.07);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+    .term-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .shell-link-state {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.42);
+    }
+    .term-name { color: var(--text); font-weight: 700; letter-spacing: 0.06em; }
+    .term-header-right { display: flex; align-items: center; gap: 8px; }
+    .term-status {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--green);
+      background: rgba(82, 227, 164, 0.13);
+      border: 1px solid rgba(82, 227, 164, 0.45);
+      padding: 3px 8px;
+    }
+    .term-screen {
+      padding: 18px 20px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.75;
+      max-height: 340px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
+    .tl {
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-muted);
+      border-left: 2px solid transparent;
+      padding-left: 10px;
+    }
+    .tl-ai { color: var(--text-bright); border-left-color: var(--pink); }
+    .tl-human { color: var(--yellow); border-left-color: var(--yellow); }
+    .tl-review { color: var(--purple); border-left-color: var(--purple); }
+    .mk { display: inline-block; width: 16px; font-weight: 700; }
+    .mk-a { color: var(--pink); }
+    .mk-o { color: var(--green); }
+    .mk-i { color: var(--yellow); }
+    .mk-q { color: var(--purple); }
+    /* An agent line that is a tool call, not a keystroke: the product's point is
+       that the agent drives MCP tools, so the call is shown as the call. */
+    .tl .tool { color: var(--accent); }
+
+    /* Review gate: the agent's write is held until a human decides. Nothing here
+       is editable — the AI wrote the command, the human accepts or refuses. */
+    .gate {
+      margin: 10px 0 4px 26px;
+      border: 1px solid rgba(192, 139, 255, 0.45);
+      background: rgba(192, 139, 255, 0.07);
+      padding: 10px 12px;
+    }
+    .gate-h {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--purple);
+      margin-bottom: 8px;
+    }
+    .gate-cmd {
+      display: block;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text-bright);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .gate-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .gate-actions button {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      padding: 6px 14px;
+      cursor: pointer;
+      border: 1px solid var(--border-bright);
+      background: var(--card-bg);
+      color: var(--accent);
+      transition: all 0.16s ease;
+    }
+    .gate-actions .gate-accept { border-color: rgba(82, 227, 164, 0.5); color: var(--green); }
+    .gate-actions .gate-accept:hover { background: var(--green); color: #04121a; }
+    .gate-actions .gate-reject { border-color: rgba(255, 61, 110, 0.5); color: var(--pink); }
+    .gate-actions .gate-reject:hover { background: var(--pink); color: #04121a; }
+
+    /* notify: the toast the human gets when the agent hands the prompt back. */
+    .term-toast {
+      position: absolute;
+      top: 52px;
+      right: 12px;
+      max-width: 300px;
+      background: rgba(8, 14, 24, 0.96);
+      border: 1px solid var(--border-bright);
+      border-left: 3px solid var(--yellow);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      padding: 10px 12px;
+      font-size: 12.5px;
+      color: var(--text);
+      z-index: 3;
+    }
+    .term-toast b {
+      display: block;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--yellow);
+      margin-bottom: 4px;
+    }
+    .review-lock {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      cursor: pointer;
+      border: 1px solid rgba(192, 139, 255, 0.5);
+      background: rgba(192, 139, 255, 0.12);
+      color: var(--purple);
+    }
+    .review-lock[aria-pressed="false"] {
+      border-color: var(--border);
+      background: transparent;
+      color: var(--text-faint);
+    }
+    .term-hint {
+      padding: 6px 14px 8px;
+      background: var(--bg-input);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+    .term-hint.armed { color: var(--yellow); }
+
+    /* The tasks a visitor can hand to the agent. */
+    .term-tasks {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+    .tasks-label {
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .task-chip {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      padding: 4px 10px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border-bright);
+      color: var(--accent);
+      transition: all 0.16s ease;
+    }
+    .task-chip:hover { background: var(--accent-dim); border-color: var(--accent); }
+
+    .term-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 8px 20px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .lg-a { color: var(--pink); }
+    .lg-i { color: var(--yellow); }
+    .lg-o { color: var(--green); }
+    .lg-q { color: var(--purple); }
+    .term-replay {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-faint);
+    }
+    .term-replay:hover { border-color: var(--border-bright); color: var(--accent); }
+
+    /* Two ways to be on this terminal: ask, or type. The modes are the whole
+       "human and AI, equal, on one shell" claim in one control. */
+    .term-input-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--bg-input);
+      border-top: 1px solid var(--border);
+    }
+    .term-modes { display: flex; gap: 0; flex: 0 0 auto; }
+    .mode-btn {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 8px 12px;
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-faint);
+      transition: all 0.16s ease;
+    }
+    .mode-btn + .mode-btn { border-left: none; }
+    .mode-btn.active { background: var(--accent-dim); border-color: var(--border-bright); color: var(--accent); }
+    #term-input {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    }
+    #term-input::placeholder { color: var(--text-faint); }
+    #term-input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+    .term-send {
+      flex: 0 0 auto;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.4);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .term-send:hover { background: var(--accent); color: #04121a; box-shadow: 0 0 14px var(--accent-glow); }
+
+    /* Security band: the credentials claim, given its own frame. */
+    .security {
+      border: 1px solid rgba(82, 227, 164, 0.32);
+      background: linear-gradient(180deg, rgba(82, 227, 164, 0.07), transparent 70%), var(--card-bg);
+      padding: 32px;
+    }
+    .security .sec-title { font-size: 24px; }
+    .security-lede {
+      font-size: 17px;
+      color: var(--text-bright);
+      line-height: 1.7;
+      max-width: 820px;
+      margin-bottom: 22px;
+    }
+    .security-lede strong { color: var(--green); }
+    .security-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 18px;
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+    }
+    .security-grid h4 {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--green);
+      margin-bottom: 8px;
+    }
+    .security-grid p { font-size: 14.5px; color: var(--text-muted); }
+
+    /* Multi-host setup: one local instance, N SSH targets, nothing installed on
+       the far side. Deliberately plain — it is a recipe, not a pitch. */
+    .fleet {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      /* No row gap: the heading's own margin is the only space between the two
+         rows of column one, so the left column reads as one block. */
+      column-gap: 26px;
+      /* NOT `align-items: start`: the plate is the taller column, and a start
+         alignment keeps row two at its content height, so the plate overflows it
+         and the recipe has no slack to take up. Stretch lets the rows grow to the
+         plate and the recipe spread into the difference. */
+      align-items: stretch;
+    }
+    .fleet > .sec-head { grid-column: 1; grid-row: 1; margin-bottom: 26px; }
+    /* The plate is the taller column, so the recipe takes the slack: with
+       `space-between` its last line lands on the plate's caption line and the two
+       columns start and finish together, with no void left inside the code box. */
+    .fleet-steps {
+      grid-column: 1;
+      grid-row: 2;
+      align-self: stretch;
+    }
+    /* The claims sit tight under the heading; the note is the column's footer and
+       `margin-top: auto` pins it to the plate's bottom edge. Spreading all four
+       apart instead would leave three holes where the eye expects a list. */
+    .fleet-note { margin-top: auto; }
+    /* The plate spans both rows, so its top edge meets the heading and its bottom
+       meets the end of the recipe — the two columns start and finish together. */
+    .fleet-plate {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+      /* `align-items: start` on the grid would shrink the plate back to its
+         content, so the span has to be claimed explicitly: the plate fills both
+         rows and the code box flexes, which is what puts its bottom edge on the
+         recipe's last line. */
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+    }
+    .fleet-plate .fleet-code { flex: 1; }
+    .fleet-steps { display: flex; flex-direction: column; gap: 14px; }
+    .fleet-step { display: flex; gap: 12px; align-items: flex-start; }
+    .fleet-step .n {
+      flex: 0 0 auto;
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+    }
+    /* These are claims now, not sentences: one line each, so they carry their own
+       weight instead of sitting at fine-print size. */
+    .fleet-step p { font-size: 15.5px; color: var(--text); }
+    .fleet-step b { color: var(--text-bright); font-weight: 600; }
+    .fleet-note {
+      border-left: 2px solid rgba(82, 227, 164, 0.5);
+      padding: 10px 0 10px 14px;
+      margin-top: 4px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    .fleet-note b { color: var(--green); font-weight: 700; }
+    .fleet-code {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-bright);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.9;
+      /* THE FIRST LINE IS THE ALIGNMENT, not the border. The left column's step
+         text starts flush at the grid row, while a padded plate would put its
+         first line 18px lower and read as a block that sank. So the top padding
+         is thin and a 2px negative margin lifts the plate itself: the first line
+         of code now sits on the same line as step 1, and the border rides 2px
+         above it. */
+      padding: 0 18px 16px;
+      margin-top: -2px;
+      overflow-x: auto;
+      white-space: pre;
+      color: var(--text-muted);
+    }
+    .fleet-code .c { color: var(--text-faint); }
+    .fleet-code .h { color: var(--green); }
+    .fleet-code .a { color: var(--pink); }
+    .fleet-code .k { color: var(--accent); }
+    .fleet-cap {
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: var(--text-faint);
+    }
+
+    /* Feature cards */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 28px;
+      transition: all 0.25s ease;
+    }
+    .card:hover {
+      border-color: rgba(var(--accent-rgb), 0.5);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 20px var(--accent-dim);
+    }
+    .card-icon {
+      width: 44px;
+      height: 44px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .card-icon svg { width: 22px; height: 22px; }
+    .card h3 { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: #fff; }
+    .card p { font-size: 14.5px; color: var(--text-muted); line-height: 1.6; }
+
+    /* Nothing is rounded: plates and controls are cut, the way a terminal
+       frame is cut — top-left and bottom-right chamfered, everything else
+       square. Small controls take a shallower chamfer than full plates. */
+    .github-link, .version-tag, .lang-select-wrap select, .hero-pill, .target-chip,
+    .cmd-tab, .copy-btn, .term-status, .term-send, .review-lock, .term-replay,
+    .lang-icon-btn, .task-chip, .mode-btn, .gate-actions button, .fleet-step .n,
+    .card-icon, .donor {
+      border-radius: 0;
+      clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    }
+    .command-box, .card, .cap, .shot-frame, .security, .terminal-window, .shot-relay,
+    .hero-manifesto, .fleet-code, .gate, .term-toast {
+      border-radius: 0;
+      clip-path: polygon(0 14px, 14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
+    }
+    .section .shot-frame, .section .terminal-window { overflow: hidden; }
+    a:focus-visible, button:focus-visible, select:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px var(--accent-ring);
+    }
+
+    /* Donors: names only, so a wrapped row of chips rather than the card grid
+       the capability and feature sections use. The kind mark sits inline, ahead
+       of the name — an avatar and a name, not a name with a corner tag. It
+       carries the same i/a marks the transcript uses — yellow human, pink
+       agent — so a donor's kind reads the way it does on the terminal. */
+    .donors { display: flex; flex-wrap: wrap; gap: 10px; }
+    .donor {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      font-family: var(--mono);
+      font-size: 13.5px;
+      color: var(--text);
+      text-decoration: none;
+      transition: border-color 0.22s ease, box-shadow 0.22s ease;
+    }
+    .donor-kind {
+      flex: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: 1px solid currentColor;
+    }
+    .donor-kind svg {
+      display: block;
+      width: 13px;
+      height: 13px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .donor-name { white-space: nowrap; }
+    .donor[data-kind="human"] .donor-kind { color: var(--yellow); }
+    .donor[data-kind="agent"] .donor-kind { color: var(--pink); }
+    a.donor:hover {
+      border-color: rgba(var(--accent-rgb), 0.45);
+      box-shadow: 0 0 18px var(--accent-dim);
+      color: #fff;
+    }
+    .donors-empty { font-family: var(--mono); font-size: 13.5px; color: var(--text-faint); }
+
+    /* Under the credits: the community group code. The JPEG is re-encoded from
+       the QR payload alone, so no avatar or caption from the original ships. */
+    .join {
+      margin-top: 30px;
+      padding-top: 26px;
+      border-top: 1px solid var(--border);
+    }
+    .join-group { margin: 0; }
+    .join-title {
+      margin-bottom: 12px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+    .join-qr { margin: 0; text-align: center; width: fit-content; }
+    .join-qr a {
+      display: block;
+      padding: 6px;
+      background: #fff;
+      line-height: 0;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .join-qr a:hover { border-color: var(--border-bright); box-shadow: 0 0 16px var(--accent-dim); }
+    .join-qr img { display: block; width: 180px; height: 180px; }
+    .join-qr figcaption {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+    .join-num { color: var(--text-bright); }
+    @media (max-width: 640px) {
+      .join-qr img { width: 150px; height: 150px; }
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+      font-size: 13.5px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    /* Who this is built for, said out loud — quieter than the project line. */
+    .foot-thanks {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--text-faint);
+    }
+    /* Same quiet line as the thanks above it, but the links have to be findable:
+       this is the page's only pointer to llms.txt. */
+    .foot-agent {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text-faint);
+    }
+    .foot-agent b { color: var(--text-muted); font-weight: 600; }
+    .foot-agent a { color: var(--text-muted); border-bottom: 1px solid var(--border-bright); text-decoration: none; }
+    .foot-agent a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .foot-thanks b { color: var(--text-muted); font-weight: 600; }
+
+    /* The plate is 511px wide before anything scrolls (its longest line is the
+       three-way connect), so the two columns need 511 · 2 + the 26px gap — i.e.
+       about 1100px of viewport. Below that they fold into one, which gives the
+       plate the whole container and no sideways scrollbar. */
+    @media (max-width: 1100px) {
+      .fleet { grid-template-columns: minmax(0, 1fr); }
+      /* One column: the explicit placement has to go, or the plate stays in
+         column two and overflows the page. */
+      .fleet > .sec-head, .fleet-steps, .fleet-plate {
+        grid-column: 1;
+        grid-row: auto;
+      }
+      .fleet > .sec-head { margin-bottom: 22px; }
+    }
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 30px; }
+      .hero p.lead { font-size: 16px; }
+      .hero-manifesto { font-size: 15px; padding: 12px 14px; text-align: left; }
+      .hero-claim { font-size: 12px; }
+      .sec-title { font-size: 23px; }
+      .section { margin-bottom: 64px; }
+      .cmd-body { flex-direction: column; align-items: flex-start; }
+      .copy-btn { width: 100%; text-align: center; }
+      /* The input keeps the whole second row: the mode keys and the send key move
+         to their own rows rather than squeezing the field. */
+      .term-input-bar { flex-wrap: wrap; }
+      .term-modes { order: 1; width: 100%; }
+      .mode-btn { flex: 1; text-align: center; }
+      #term-input { order: 2; flex: 1 1 100%; }
+      .term-send { order: 3; width: 100%; text-align: center; }
+      .term-tasks { gap: 6px; }
+      .task-chip { flex: 1 1 100%; text-align: left; }
+      .term-screen { max-height: 300px; }
+      .security { padding: 24px 20px; }
+      /* Icon only from here down — no language names in the header. */
+      .lang-select-wrap select { display: none; }
+      .lang-icon-btn { display: inline-flex; }
+    }
+    /* ==================================================================
+       Terminal chrome — the shared look: neon plates, one sweep of light,
+       a glitch on the headline, and the scanline overlay that ties it to a
+       CRT. Palette and face come from :root; this block is only structure.
+       ================================================================== */
+
+    /* Scanlines: the whole viewport, above the content, never clickable. */
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.28) 3px,
+        rgba(0, 0, 0, 0) 4px
+      );
+    }
+
+    /* Plates: the magenta-tinted gradient body and the cyan halo that makes
+       a panel read as lit rather than filled. */
+    .command-box, .card, .cap, .hero-manifesto, .fleet-code, .terminal-window,
+    .shot-frame, .term-toast, .donor, .target-chip {
+      background: linear-gradient(165deg, rgba(9, 14, 26, 0.92), rgba(16, 4, 28, 0.92));
+      border-color: var(--accent-glow);
+      box-shadow: 0 0 22px rgba(0, 240, 255, 0.16), 0 0 60px rgba(255, 43, 214, 0.1),
+                  inset 0 0 28px rgba(0, 240, 255, 0.05);
+    }
+    .card:hover, .cap:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 26px rgba(0, 240, 255, 0.4), 0 0 70px rgba(255, 43, 214, 0.16),
+                  inset 0 0 28px rgba(0, 240, 255, 0.07);
+    }
+    /* A magenta spine down the cards, the way a terminal list item is marked. */
+    .card, .cap { border-left: 2px solid rgba(255, 43, 214, 0.45); }
+
+    /* One sweep of light across the plates that carry the page's argument:
+       the install box and the terminal itself. */
+    .command-box, .terminal-window { position: relative; }
+    .command-box::before, .terminal-window::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), var(--pink), transparent);
+      animation: sweep 3.2s linear infinite;
+      pointer-events: none;
+      z-index: 2;
+    }
+    @keyframes sweep {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* Controls: cyan outline, glow, chamfered corners; hovering fills them in
+       and flips the text to the page's black. */
+    .copy-btn, .term-send, .task-chip, .mode-btn, .term-replay, .lang-icon-btn,
+    .github-link, .lang-select-wrap select, .gate-actions button {
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      background: linear-gradient(180deg, rgba(0, 240, 255, 0.12), rgba(0, 240, 255, 0.02));
+      box-shadow: 0 0 14px rgba(0, 240, 255, 0.3), inset 0 0 12px rgba(0, 240, 255, 0.1);
+    }
+    .copy-btn:hover, .term-send:hover, .task-chip:hover, .term-replay:hover,
+    .lang-icon-btn:hover, .github-link:hover {
+      color: var(--bg);
+      background: var(--accent);
+      box-shadow: 0 0 26px rgba(0, 240, 255, 0.95);
+    }
+    /* The review gate keeps its own two voices: green to let through, magenta
+       to stop — the same pair the transcript uses for those decisions. */
+    .gate-actions .gate-accept { border-color: var(--green); color: var(--green); }
+    .gate-actions .gate-reject { border-color: var(--pink); color: var(--pink); }
+
+    /* Headline: solid bright text with a cyan halo, plus two offset copies in
+       magenta and cyan that tear across it. `data-text` is kept in sync with
+       the language by app.js. */
+    .hero h1 {
+      position: relative;
+      letter-spacing: 0.06em;
+      text-shadow: 0 0 8px rgba(0, 240, 255, 0.9), 0 0 24px rgba(0, 240, 255, 0.5);
+    }
+    .hero h1 .highlight {
+      background: none;
+      -webkit-text-fill-color: currentColor;
+      color: var(--text-bright);
+    }
+    .hero h1::before,
+    .hero h1::after {
+      content: attr(data-text);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .hero h1::before {
+      color: var(--pink);
+      text-shadow: 0 0 10px rgba(255, 43, 214, 0.9);
+      animation: glitch-a 3.4s infinite linear alternate-reverse;
+    }
+    .hero h1::after {
+      color: var(--accent);
+      text-shadow: 0 0 10px rgba(0, 240, 255, 0.9);
+      animation: glitch-b 2.8s infinite linear alternate-reverse;
+    }
+    @keyframes glitch-a {
+      0% { clip-path: inset(0 0 82% 0); transform: translate(-2px, -1px); }
+      20% { clip-path: inset(28% 0 44% 0); transform: translate(2px, 1px); }
+      40% { clip-path: inset(60% 0 12% 0); transform: translate(-3px, 0); }
+      60% { clip-path: inset(10% 0 74% 0); transform: translate(3px, 1px); }
+      80% { clip-path: inset(44% 0 36% 0); transform: translate(-2px, -1px); }
+      100% { clip-path: inset(70% 0 18% 0); transform: translate(2px, 0); }
+    }
+    @keyframes glitch-b {
+      0% { clip-path: inset(70% 0 12% 0); transform: translate(2px, 1px); }
+      25% { clip-path: inset(16% 0 66% 0); transform: translate(-3px, 0); }
+      50% { clip-path: inset(48% 0 34% 0); transform: translate(2px, -1px); }
+      75% { clip-path: inset(6% 0 84% 0); transform: translate(-2px, 1px); }
+      100% { clip-path: inset(36% 0 48% 0); transform: translate(3px, 0); }
+    }
+
+    /* Neon type: the kickers and section titles carry their own light. */
+    .sec-kicker { text-shadow: 0 0 10px rgba(0, 240, 255, 0.6); }
+    .sec-title { text-shadow: 0 0 10px rgba(0, 240, 255, 0.35), 0 0 30px rgba(0, 240, 255, 0.15); }
+    .hero-pill { letter-spacing: 0.18em; text-shadow: 0 0 10px rgba(0, 240, 255, 0.55); }
+
+    /* Fields: the cyan well and its magenta focus, as on the terminal's own
+       input line. */
+    #term-input, .lang-select-wrap select {
+      background: rgba(0, 240, 255, 0.06);
+      border: 1px solid rgba(0, 240, 255, 0.55);
+      box-shadow: inset 0 0 14px rgba(0, 240, 255, 0.12);
+    }
+    /* The language names are not chrome: keep their own case and spacing. */
+    .lang-select-wrap select { text-transform: none; letter-spacing: normal; }
+    /* Belt and braces for the native popup: Chromium and Firefox draw the list
+       from the option's own colours when they are set. */
+    .lang-select-wrap select option {
+      background-color: #090e1a;
+      color: var(--text);
+    }
+    /* The menu is a plate, not a field: opaque, so the page behind it never
+       shows through the options. */
+    .lang-menu {
+      background: linear-gradient(165deg, rgba(9, 14, 26, 0.98), rgba(16, 4, 28, 0.98));
+      border: 1px solid rgba(0, 240, 255, 0.55);
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.6), 0 0 22px rgba(0, 240, 255, 0.2);
+    }
+    #term-input:focus {
+      border-color: var(--pink);
+      box-shadow: 0 0 14px rgba(255, 43, 214, 0.55), inset 0 0 14px rgba(255, 43, 214, 0.18);
+    }
+
+    /* Links: magenta with a dashed underline and a glow, cyan on hover. Image
+       and chip links opt out — they are surfaces, not text. */
+    a {
+      color: var(--pink);
+      text-decoration: none;
+      border-bottom: 1px dashed rgba(255, 43, 214, 0.5);
+      text-shadow: 0 0 8px rgba(255, 43, 214, 0.45);
+    }
+    a:hover {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      text-shadow: 0 0 12px rgba(0, 240, 255, 0.8);
+    }
+    a.shot-link, a.github-link, a.donor, .join-qr a, .brand {
+      border-bottom: none;
+      text-shadow: none;
+    }
+    /* ...but a framed link is a box, not underlined text: the opt-out above has
+       to take away the dashed underline without taking the box's bottom edge
+       with it, so each frame gets its edge back here — after the opt-out, in
+       the colour the frame's own rule already chose. */
+    a.github-link { border-bottom: 1px solid var(--accent); }
+    a.donor { border-bottom: 1px solid var(--accent-glow); }
+    .join-qr a { border-bottom: 1px solid var(--border); }
+    .hero-manifesto .hero-links a,
+    .shot-relay a,
+    .foot-agent a,
+    footer a {
+      color: var(--pink);
+      border-bottom: 1px dashed rgba(255, 43, 214, 0.5);
+    }
+    .hero-manifesto .hero-links a:hover,
+    .shot-relay a:hover,
+    .foot-agent a:hover,
+    footer a:hover {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    /* One picker at every width. The native <select> stays in the page as the
+       single source of the current language, but it is never shown: its popup
+       and its selected row are drawn by the OS, so they can neither take this
+       palette nor the menu's selected colour. The globe button opens the same
+       list the phone already used, so both widths highlight identically. */
+    .lang-select-wrap select { display: none; }
+    .lang-icon-btn {
+      display: inline-flex;
+      width: auto;
+      min-width: 34px;
+      gap: 7px;
+      padding: 0 10px;
+    }
+    .lang-current {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      letter-spacing: 0.06em;
+    }
+    @media (max-width: 640px) {
+      /* Phone: the globe alone, as before. */
+      .lang-current { display: none; }
+      .lang-icon-btn { padding: 0; justify-content: center; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card:hover { transform: none; }
+      .command-box::before,
+      .terminal-window::before,
+      .hero h1::before,
+      .hero h1::after { animation: none; }
+      /* Without the tear, one offset copy is enough to keep the neon edge. */
+      .hero h1::after { display: none; }
+    }
