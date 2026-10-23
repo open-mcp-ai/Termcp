@@ -6,6 +6,38 @@ const tabs = document.querySelectorAll('.cmd-tab');
 const display = document.getElementById('cmd-display');
 const cmdPrompt = document.querySelector('.cmd-text .prompt');
 const cmdNote = document.getElementById('cmd-note');
+
+/* WHICH BINARY IS THIS MACHINE? Six files are published and the command names
+   one of them. Chromium answers `getHighEntropyValues` with a real
+   architecture; Safari and Firefox freeze the platform string, so they get the
+   OS and keep `<arch>` as a placeholder — a wrong guess here is a 404 the reader
+   has to debug, which is worse than a hole they can see. */
+let hostTarget = '<os>-<arch>';
+let hostFilled = false;
+const osFromUA = () => {
+  const ua = navigator.userAgent;
+  if (/Windows/i.test(ua)) return 'windows';
+  if (/Mac OS X|Macintosh/i.test(ua)) return 'darwin';
+  if (/Linux|X11|CrOS/i.test(ua)) return 'linux';
+  return '';
+};
+async function detectHost() {
+  let os = '', arch = '';
+  const d = navigator.userAgentData;
+  if (d && d.getHighEntropyValues) {
+    try {
+      const v = await d.getHighEntropyValues(['architecture', 'bitness', 'platform']);
+      os = { macOS: 'darwin', Windows: 'windows', Linux: 'linux', 'Chrome OS': 'linux' }[v.platform] || '';
+      arch = v.architecture === 'arm' ? 'arm64'
+           : (v.architecture === 'x86' && v.bitness === '64') ? 'amd64' : '';
+    } catch (err) { /* optional API; a refusal just leaves the placeholder */ }
+  }
+  if (!os) os = osFromUA();
+  if (!os) return;
+  hostFilled = !!arch;
+  hostTarget = os + '-' + (arch || '<arch>') + (os === 'windows' ? '.exe' : '');
+  renderCmd(activeCmd);
+}
 let activeCmd = 'ai';
 /* The exact bytes the copy button hands over. Kept apart from the rendered
    text so the quotes the AI tab draws can never travel with it. */
@@ -18,12 +50,24 @@ function renderCmd(key) {
   activeCmd = key;
   const isAI = key === 'ai';
   cmdPrompt.hidden = isAI;
-  currentCmdText = isAI ? t('cmd_ai') : (commands[key] || '');
+  if (isAI) {
+    currentCmdText = t('cmd_ai');
+  } else {
+    currentCmdText = (commands[key] || '').replace('{{target}}', hostTarget);
+    /* chmod is not a thing on Windows; the rest of the block is one file
+       either way, so dropping the line is the whole difference. */
+    if (key === 'binary' && hostTarget.indexOf('windows') === 0) {
+      currentCmdText = currentCmdText.split('\n').filter(l => l.indexOf('chmod') !== 0).join('\n');
+    }
+  }
   display.textContent = currentCmdText;
   display.classList.toggle('quoted', isAI);
   /* A tab may carry a caveat that belongs with its own command. */
-  const note = key === 'docker' ? t('cmd_note_docker') : '';
-  cmdNote.textContent = note;
+  const noteKey = { docker: 'cmd_note_docker', binary: hostFilled ? 'cmd_note_binary_ok' : 'cmd_note_binary' }[key];
+  /* innerHTML, not textContent: the followup line is marked up so it reads as
+     the next step rather than as a footnote. */
+  const note = noteKey ? t(noteKey).replace('{{target}}', hostTarget) : '';
+  cmdNote.innerHTML = note;
   cmdNote.hidden = !note;
 }
 tabs.forEach(tab => {
@@ -240,3 +284,4 @@ async function fetchGitHubMeta() {
 detectLang();
 fetchGitHubMeta();
 fetchDonors();
+detectHost();

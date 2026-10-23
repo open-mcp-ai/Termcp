@@ -398,6 +398,8 @@
       user-select: text;
     }
     .cmd-text span.prompt { color: var(--accent); margin-right: 8px; }
+    /* The Bin tab shows a two-line snippet, so the box has to keep the newlines. */
+    #cmd-display { white-space: pre-wrap; }
     /* The AI tab shows a SENTENCE, so it is quoted like one. Generated content
        rather than text nodes: pseudo-elements are not part of textContent, so
        the copy button hands over the sentence with no quotes around it. */
