@@ -137,7 +137,18 @@ func TestNoColumnOutgrowsTheViewport(t *testing.T) {
     }
     function startWhenSettled() {
       var warm = [];
-      var deadline = Date.now() + 4000;
+      // LONG ENOUGH FOR A SHARED CI RUNNER, which is several times slower than a
+      // developer's machine at exactly the thing this waits on: fonts loading and a
+      // first layout pass. At 4s the deadline expired mid-settle on windows-latest
+      // and the recording began on a page still moving (frame 772 at sample 0, 716 at
+      // the last), which the stillness assertion below then reported as oscillation —
+      // a true statement about the samples and a false one about the layout.
+      //
+      // Raising it does not weaken the test: the gate still has a deadline, and on
+      // timeout it still records, so a layout that never settles fails with its
+      // numbers just as before. What changed is only how long the environment is
+      // given to arrive.
+      var deadline = Date.now() + 20000;
       var t = setInterval(function () {
         if (typeof renderExtensionGrid === 'function') renderExtensionGrid(rows);
         warm.push(sample());
