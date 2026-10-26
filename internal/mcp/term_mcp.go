@@ -225,10 +225,16 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 				"Content-Range": envelope.UnsatisfiedRange(total),
 			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window", from, window)}, false
 		}
-		return envelope.Slot{Code: 204, Headers: map[string]string{
+		// THE EXPLANATION IS A HEADER, NOT A BODY (see noContentSaying). "no complete
+		// frame yet" is true of a slow peer and of a peer whose bytes will never parse,
+		// and only one of those is worth waiting on — so the quote of what was actually
+		// in front of the scan is the load-bearing half of this reply, and it has to
+		// reach the caller. A 204 body would have carried it while contradicting the
+		// status line above it; Hint carries it with the status line intact.
+		return noContentSaying(map[string]string{
 			"Path":          stmt.Path,
 			"Content-Range": envelope.ContentRange(from, from+rawLen-1, total),
-		}, Body: "no complete frame yet" + recvHint(win) + notAFrame(body)}, false
+		}, "no complete frame yet"+recvHint(win)+notAFrame(body)), false
 	}
 	start := from + int64(strings.Index(body, frame))
 	end := start + int64(len(frame))
@@ -492,6 +498,8 @@ func recvHint(win termArgs) string {
 
 // "no complete frame yet" is the same sentence for both, and only one of them is
 // worth waiting on. A caller that retries a banner retries for ever.
+// notAFrame is the tail of the Hint on a 204 recv: what the scan saw instead of a
+// frame. It is a header VALUE, so every branch below is one line by construction.
 func notAFrame(body string) string {
 	s := strings.TrimSpace(body)
 	if s == "" {

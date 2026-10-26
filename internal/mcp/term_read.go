@@ -33,6 +33,33 @@ func (s *Server) directiveRead(ctx context.Context, stmt directive.Statement, wi
 
 // directiveReadOne reads one channel.
 func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	// PEER FLAGS ON A CHANNEL READ ARE REFUSED, NOT IGNORED (issue #159).
+	//
+	// --since and --at are declared on the `read` verb, but their meaning belongs to
+	// a peer's frame log: --since pages forward through frames, --at slices ONE
+	// frame's bytes. A shell or pipe channel has neither, so on this path they name
+	// nothing — and the old code never looked, which made
+	//
+	//	read <channel> --since 10
+	//
+	// a confident answer about a different question: the default cursor read, with
+	// the cursor advanced past bytes the caller asked to filter. Accepting a
+	// parameter only to ignore it is the one path the project forbids.
+	//
+	// The check runs FIRST, before the window and before any tool call, because the
+	// refusal must consume nothing: a rejected call that already moved the cursor
+	// has answered by side effect.
+	for _, peerOnly := range []struct{ flag, where string }{
+		{"since", "`read <session> cdp|mcp|jrpc --since N` (the frames that arrived after N)"},
+		{"at", "`read <session> cdp|mcp|jrpc --at FRAME [--offset B] [--bytes N]` (one frame's bytes)"},
+		{"bytes", "`read <session> cdp|mcp|jrpc --at FRAME --bytes N` (how much of that one frame)"},
+	} {
+		if stmt.FlagState(peerOnly.flag) == directive.FlagAbsent {
+			continue
+		}
+		return badRequest(stmt, "`--"+peerOnly.flag+"` is for a peer's frame log, not a channel: use "+
+			peerOnly.where+". A channel is a byte stream; page it with `--cursor` / `--offset`.")
+	}
 	// bytes_limit 0 means "hand back the channel, consume nothing". readSlotAfter
 	// honours it; this path has to as well, or the one directive whose whole point
 	// is reading would be the one place the caller cannot decline to read.

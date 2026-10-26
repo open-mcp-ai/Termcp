@@ -79,6 +79,51 @@ func noContent(stmt directive.Statement) envelope.Slot {
 	return envelope.Slot{Code: 204, Headers: map[string]string{"Path": stmt.Path}}
 }
 
+// noContentSaying answers "this succeeded and delivered nothing, and here is why"
+// as a 204 whose reason rides in a HEADER, never in the body.
+//
+// HTTP SAYS A 204 HAS NO CONTENT, AND THIS FORMAT IS HTTP ON PURPOSE. The package
+// comment on internal/envelope states the reason: a model already has prior on HTTP. That
+// prior is the whole value of the format, so a 204 carrying a sentence does not merely
+// bend a rule — it teaches the caller that the one part of the reply it already
+// understands is a lie about itself, and the next 204 is then unreadable. Measured:
+// `read <channel> --frame` over bytes that are not a frame answered
+//
+//	TERM/1 204 No Content
+//	Content-Range: bytes …
+//
+//	no complete frame yet — the bytes in front are not a frame: "\x1b[?9001h…"
+//
+// with the body contradicting the status line above it.
+//
+// THE CODE STAYS 204 AT EVERY CALL SITE, and the reason is the same at each: the
+// statement ran, and nothing was delivered. The alternatives are worse, not louder —
+// a 206 claims a partial delivery that does not exist (and an empty 206 reads as
+// "folded", a different fact), a 200 with `(nothing)` in the body invents a content
+// vocabulary for silence, and 202 claims work in progress nobody started.
+//
+// THE EXPLANATION IS NOT DROPPED, because here silence is worse than an error: "no
+// complete frame yet" alone is the sentence a caller retries for ever, and a grep's
+// "0 lines scanned" is invisible. Hint is the header this package already uses for
+// "why this reply looks empty and what to do next" (see read's Waited/Hint pair in
+// term_read.go), it renders in the ordered header block both projections carry, and
+// it is one line by construction — a header cannot hold a newline, so every caller
+// passes a value it has already flattened.
+//
+// The map is the caller's and is modified in place: every call site builds it for this
+// reply alone.
+func noContentSaying(headers map[string]string, why string) envelope.Slot {
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	// A HEADER VALUE IS ONE LINE, ENFORCED HERE RATHER THAN TRUSTED. The why text is
+	// assembled from caller data (a grep pattern may hold a newline), and a raw newline
+	// would split the header block: the rest of the sentence would render below the
+	// blank line, where it reads as a body — the very thing this helper exists to avoid.
+	headers["Hint"] = strings.ReplaceAll(strings.ReplaceAll(why, "\r\n", " "), "\n", " ")
+	return envelope.Slot{Code: 204, Headers: headers}
+}
+
 // closedSlot answers a close with the object it closed, in a header.
 //
 // A CLOSE IS THE LAST THING A CALLER DOES WITH AN OBJECT, AND IT WAS THE ONLY REPLY

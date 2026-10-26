@@ -547,9 +547,13 @@ func (s *Server) cdpEvents(ctx context.Context, stmt directive.Statement, h *jrp
 		return re.MatchString(f.Data)
 	}, page)
 	if len(frames) == 0 {
-		return envelope.Slot{Code: 204, Headers: map[string]string{
+		// NOTHING AFTER `--since` IS A 204 THAT DID NOT DELIVER, and Latest is what tells a
+		// caller whether it fell behind or asked past the end. Both facts ride in the
+		// Hint header, because a 204 with a body contradicts its own status line (see
+		// noContentSaying).
+		return noContentSaying(map[string]string{
 			"Path": stmt.Path, "Latest": fmt.Sprint(stats.Seq),
-		}, Body: "no frames after " + fmt.Sprint(since) + " (latest is " + fmt.Sprint(stats.Seq) + ")"}
+		}, "no frames after "+fmt.Sprint(since)+" (latest is "+fmt.Sprint(stats.Seq)+")")
 	}
 	var b strings.Builder
 	for _, f := range frames {

@@ -164,16 +164,17 @@ func (s *Server) readGrepFrom(ctx context.Context, stmt directive.Statement, win
 	}
 
 	if hits == 0 {
-		return envelope.Slot{
-			Code: 204,
-			Headers: map[string]string{
-				"Path":          stmt.Path,
-				"Content-Range": envelope.UnsatisfiedRange(int64(getFloatAny(doc, "total_bytes", 0))),
-				"Grep":          pattern,
-				"Lines-Scanned": fmt.Sprint(scanned),
-			},
-			Body: "no line matched `" + pattern + "` in the " + fmt.Sprint(scanned) + " lines scanned",
-		}
+		// A GREP THAT MATCHED NOTHING DELIVERED NOTHING, so it is a 204 — and the count of
+		// lines scanned is the half that says whether that means "no" or "not here". It
+		// rides in the Hint header for the reason noContentSaying documents: a body under
+		// a 204 contradicts the status line, and a 206 with no bytes would claim a
+		// partial delivery that does not exist.
+		return noContentSaying(map[string]string{
+			"Path":          stmt.Path,
+			"Content-Range": envelope.UnsatisfiedRange(int64(getFloatAny(doc, "total_bytes", 0))),
+			"Grep":          pattern,
+			"Lines-Scanned": fmt.Sprint(scanned),
+		}, "no line matched `"+pattern+"` in the "+fmt.Sprint(scanned)+" lines scanned")
 	}
 
 	headers := map[string]string{

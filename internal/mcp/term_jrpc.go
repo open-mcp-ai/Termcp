@@ -475,12 +475,15 @@ func (s *Server) jrpcChannel(ctx context.Context, stmt directive.Statement, win 
 		if ok {
 			return s.frameReply(ctx, stmt, h, frame, win)
 		}
+		// A RECV THAT TOOK NOTHING DELIVERED NOTHING, so it is a 204 — and the two
+		// sentences below are not the same news: on HTTP there is nothing to wait for at
+		// all, on a socket the window was simply empty. Each rides in the Hint header,
+		// never the body, for the reason noContentSaying documents.
 		if h.ch.Transport() == jrpc.HTTP {
-			return envelope.Slot{Code: 204, Headers: headers,
-				Body: "no frame. On an HTTP channel every frame is an answer to a call, so there is " +
-					"nothing to wait for; a peer that pushes on its own needs a socket (cdp open ws://…)."}
+			return noContentSaying(headers, "no frame. On an HTTP channel every frame is an answer to a call, so there is "+
+				"nothing to wait for; a peer that pushes on its own needs a socket (cdp open ws://…).")
 		}
-		return envelope.Slot{Code: 204, Headers: headers, Body: "no frame within the window"}
+		return noContentSaying(headers, "no frame within the window")
 	case "call", "send":
 		// A TOOL NAME IS NOT A FRAME, and the two cannot be confused: a frame is a JSON
 		// object and starts with '{', a tool name never does (#159). The test peels the
