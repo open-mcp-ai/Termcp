@@ -285,7 +285,7 @@ claude mcp add --transport http termcp http://your-server:18765/stream --header 
 
 ## 工具面：一个入口
 
-`tools/list` 只有一个工具 `term`（约 2.0 KB），参数是 `cmd` 加九个窗口参数。与上下文预算相关的三件事因此都不再是问题：
+`tools/list` 只有一个工具 `term`（约 2.5 KB），参数是 `cmd` 加十二个窗口与替换参数。与上下文预算相关的三件事因此都不再是问题：
 
 - **不再需要 `defer_loading`。** 那个机制解决的是「工具太多，先别给 schema」；一个工具没有可延后加载的部分。`--mcp-defer-tools` 与分类表已删除。
 - **客户端不必理解任何标记。** 丢掉未知字段的网关（实测某些 Codex 链路会丢掉 `defer_loading`）只会丢掉一个不存在的字段，不会丢工具。

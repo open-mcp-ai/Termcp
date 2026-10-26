@@ -60,7 +60,7 @@ Lightweight AI-native secure terminal: visual multi-surface, MCP + SKILLS + API
 
 - **Human and agent, equal** — both write to the same terminal, and you see every screenful as it happens; take over, switch, collaborate.
 - **Fine-grained session control** — file management, port forwarding, multi-terminal multiplexing, terminal read/write access.
-- **Dependency-free install** — a single ~10 MB file, multi-platform, with npx integration.
+- **Dependency-free install** — a single ~16 MB file, multi-platform, with npx integration.
 
 ## Install
 
@@ -144,12 +144,13 @@ the secret in the browser, where it stays out of the model's context.
 | **Output** | Byte-cursor reads (tail / offset / live reader), paged from disk and replayable after a restart; per-line timeline of who wrote what. |
 | **Files** | SFTP browse, read, write, rename, delete, mkdir, permissions, links — plus HTTP URLs with Range resume. |
 | **Forwarding** | `-L` local, `-R` remote, `-D` SOCKS5, over ProxyJump bastion chains. |
+| **Browser & other protocols** | `open <session> cdp <url>` mounts Chrome DevTools through an existing session, so `:9222` is a port on the target: list tabs, call any protocol method, page a large answer back from the log. The same door mounts another MCP server (`mcp`) or a raw JSON-RPC socket (`jrpc`). |
 | **Notifications** | `notify_user` toasts the human with the instance URL, plays a short tone and raises a desktop notification. One-way by design: nothing in termcp wakes an agent, so a caller waits on the reply it already has. |
 | **SSH profiles** | A central TOML store with batch import/export, in-memory temporary hosts, connection testing, and edit/copy/rename. |
 | **Review mode** | Per-session approval gate: every agent write waits for a human decision. |
+| **Extensions** | A stored template for a session whose capabilities are trimmed to what you decided: an MCP server over a pipe channel, a read-only window onto remote files, an interactive terminal with instructions attached. One that declares no listener starts on demand (`open ext <name>`) and closes itself after `idle_timeout`. |
 | **Connected clients** | The header lists who is attached: MCP clients with the name they announced and their namespace, plus Web UI tabs with their address and what they are watching. |
 | **Update notice** | The header tells you when a newer release exists — only for real `vX.Y.Z` builds, never for a local `dev-<sha>`. |
-| **Discovery** | `shell_detect` finds the target's interactive shell instead of guessing from the local `PATH`. |
 | **One REST entrance** | `POST /api/term` speaks the same command language as the MCP tool, so an agent drives everything with plain `curl`. |
 
 ## Security Model
@@ -165,7 +166,7 @@ the secret in the browser, where it stays out of the model's context.
 | | |
 | --- | --- |
 | [`docs/cli.md`](./docs/cli.md) | Every flag and subcommand, capability gates, authentication. |
-| [`docs/clients.md`](./docs/clients.md) | All entrances end to end: MCP transports, the stdio bridge, Skill install, REST examples. |
+| [`docs/clients.md`](./docs/clients.md) | All four entrances end to end: MCP transports, the stdio bridge, authentication, REST examples, and the one-tool surface. |
 | [`docs/deploy.md`](./docs/deploy.md) | Docker, multi-stage builds, Compose, pure-API build. |
 | [`docs/api.md`](./docs/api.md) | REST endpoints, WebSocket frames, locator resolution. |
 | [`docs/architecture.md`](./docs/architecture.md) | Session kernel, entrances, storage. |
