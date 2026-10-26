@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=Let+AI+into+your+terminals" alt="Termcp tagline">
+    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=Terminus+MCP" alt="Termcp tagline">
   </a>
 </p>
 
@@ -44,25 +44,52 @@
 
 <p align="center">
   <a href="#install"><img src="https://img.shields.io/badge/Install-2786ff?style=flat-square" alt="Install"></a>
-  <a href="#preview"><img src="https://img.shields.io/badge/Preview-6E4AFF?style=flat-square" alt="Preview"></a>
-  <a href="#capabilities"><img src="https://img.shields.io/badge/Capabilities-6E4AFF?style=flat-square" alt="Capabilities"></a>
-  <a href="#security-model"><img src="https://img.shields.io/badge/Security-FF69B4?style=flat-square" alt="Security"></a>
   <a href="#docs"><img src="https://img.shields.io/badge/Docs-00ADD8?style=flat-square" alt="Docs"></a>
+  <a href="https://termcp.org" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/Website-termcp.org-6E4AFF?style=flat-square" alt="Website"></a>
 </p>
 
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=0:2786FF,100:FF69B4&height=3&section=header" width="100%" alt="divider">
 </p>
 
-## Let AI into your terminals
+## Termcp: the final MCP | Terminus MCP
 
-Lightweight AI-native secure terminal: visual multi-surface, MCP + SKILLS + API
+With Termcp:
 
-- **Human and agent, equal** — both write to the same terminal, and you see every screenful as it happens; take over, switch, collaborate.
-- **Fine-grained session control** — file management, port forwarding, multi-terminal multiplexing, terminal read/write access.
-- **Dependency-free install** — a single ~16 MB file, multi-platform, with npx integration.
+- **An AI can install and use any number of MCP servers**, dynamically, at run time.
+- **An AI can write its own MCP server and hot-load it.**
+- **An AI can use SSH to manage hosts, approved and collaborated on by a human.**
+- **An AI can install and call MCP servers across machines over nothing but SSH.**
+
+**Exactly one tool is exposed.** Built on the [**Termcp protocol**](./docs/protocol.md) (*Terminalization Model Context
+Protocol*): loading more MCP servers and skills does not grow the context.
+
+**A single dependency-free binary (10 MB+), cross-platform, with a WYSIWYG web UI** where a human
+and an AI share the same terminals and collaborate.
+
+<p align="center">
+  <a href="https://termcp.org" target="_blank" rel="noopener">
+    <img src="https://termcp.org/ext-en.jpg" width="860" alt="Termcp extensions panel: which MCPs are installed, which host each one runs on, and whether it is available">
+  </a>
+</p>
+<p align="center"><em>Install 80+ MCP servers and skills.</em></p>
+
+<p align="center">
+  <a href="https://termcp.org" target="_blank" rel="noopener">
+    <img src="https://termcp.org/en.jpg" width="860" alt="Termcp console: local and SSH sessions on one screen, every line marked human / AI / shell output">
+  </a>
+</p>
+<p align="center"><em>Host management.</em></p>
 
 ## Install
+
+### 0 · AI install
+
+```
+Install npx -y @open-mcp-ai/termcp daemon stdio as an MCP named termcp.
+```
+
+Copy this to the AI.
 
 ### 1 · One command per agent
 
@@ -71,9 +98,8 @@ Lightweight AI-native secure terminal: visual multi-surface, MCP + SKILLS + API
 | **Claude Code** | `claude mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio` |
 | **Codex** | `codex mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio` |
 | **Gemini CLI** | `gemini mcp add termcp npx -- -y @open-mcp-ai/termcp daemon stdio` |
-| **Crush** | add to `~/.config/crush/crushrc`: `mcp add termcp --command npx --args -y --args @open-mcp-ai/termcp --args daemon --args stdio` |
 
-### 2 · Or this config file
+### 2 · Config file
 
 ```json
 {
@@ -85,9 +111,6 @@ Lightweight AI-native secure terminal: visual multi-surface, MCP + SKILLS + API
   }
 }
 ```
-
-That command is the whole server: it starts the background instance on first use, relays MCP over
-stdin/stdout, and the instance exits on its own once idle. Ready to go as-is.
 
 <details>
 <summary><strong>Other install methods</strong> — npm / Go / Docker / prebuilt binary</summary>
@@ -123,44 +146,6 @@ LAN IP; from another container on the same network as `http://termcp:18765/strea
 
 </details>
 
-## Preview
-
-Open **<http://127.0.0.1:18765>** — every agent session appears here.
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/5e029794-a74a-47df-b518-a567deae71b9" width="860" alt="A human and an agent on the same session">
-</p>
-
-A shell's timeline marks each line by its source — green shell output, yellow your input, pink the agent's.
-At `sudo`, a password, MFA or `[Y/n]`, the agent calls `notify_user` to hand the prompt back to you; you type
-the secret in the browser, where it stays out of the model's context.
-
-## Capabilities
-
-| | |
-| --- | --- |
-| **Sessions** | Many long-lived SSH connections at once — to this host (`ssh_config="internal"`, zero config) or to any remote host; each session holds several shells, forwards and SFTP. |
-| **Terminals** | Full `pty` (ConPTY on Windows) and line-oriented `pipe` channels on one connection; arbitrary rows/cols; input, named keys, resize. |
-| **Output** | Byte-cursor reads (tail / offset / live reader), paged from disk and replayable after a restart; per-line timeline of who wrote what. |
-| **Files** | SFTP browse, read, write, rename, delete, mkdir, permissions, links — plus HTTP URLs with Range resume. |
-| **Forwarding** | `-L` local, `-R` remote, `-D` SOCKS5, over ProxyJump bastion chains. |
-| **Browser & other protocols** | `open <session> cdp <url>` mounts Chrome DevTools through an existing session, so `:9222` is a port on the target: list tabs, call any protocol method, page a large answer back from the log. The same door mounts another MCP server (`mcp`) or a raw JSON-RPC socket (`jrpc`). |
-| **Notifications** | `notify_user` toasts the human with the instance URL, plays a short tone and raises a desktop notification. One-way by design: nothing in termcp wakes an agent, so a caller waits on the reply it already has. |
-| **SSH profiles** | A central TOML store with batch import/export, in-memory temporary hosts, connection testing, and edit/copy/rename. |
-| **Review mode** | Per-session approval gate: every agent write waits for a human decision. |
-| **Extensions** | A stored template for a session whose capabilities are trimmed to what you decided: an MCP server over a pipe channel, a read-only window onto remote files, an interactive terminal with instructions attached. One that declares no listener starts on demand (`open ext <name>`) and closes itself after `idle_timeout`. |
-| **Connected clients** | The header lists who is attached: MCP clients with the name they announced and their namespace, plus Web UI tabs with their address and what they are watching. |
-| **Update notice** | The header tells you when a newer release exists — only for real `vX.Y.Z` builds, never for a local `dev-<sha>`. |
-| **One REST entrance** | `POST /api/term` speaks the same command language as the MCP tool, so an agent drives everything with plain `curl`. |
-
-## Security Model
-
-- **Credentials stay server-side.** Passwords, private keys and passphrases written through `ssh_config` are stored on the host only and never read back; the MCP read interface returns profile names. Profile write tools stay off unless `--mcp-manage-ssh-configs` is set, and `--no-internal` narrows agents to remote hosts.
-- **One token protects every surface.** `--auth-token`, or a salted `--auth-hash` so the server holds no plaintext — Web UI, REST, both MCP transports and the WebSocket. A non-loopback bind **requires** it.
-- **Basic auth is Base64.** Terminate TLS in a reverse proxy when serving beyond your own machine; the token is never logged and never placed in a URL.
-- **🚨 Do not put an agent on a production host unattended. If you must, turn review mode on.** Every write it makes over MCP then waits for a human decision. Review mode is a real gate, not a guarantee: a careless reviewer can still wave a destructive command through.
-- **What needs a live connection.** On a closed (DEAD) session, file and forward tools return `session_not_running`; output reading keeps working, and the session's port forwards close with it.
-
 ## Docs
 
 | | |
@@ -168,10 +153,21 @@ the secret in the browser, where it stays out of the model's context.
 | [`docs/cli.md`](./docs/cli.md) | Every flag and subcommand, capability gates, authentication. |
 | [`docs/clients.md`](./docs/clients.md) | All four entrances end to end: MCP transports, the stdio bridge, authentication, REST examples, and the one-tool surface. |
 | [`docs/deploy.md`](./docs/deploy.md) | Docker, multi-stage builds, Compose, pure-API build. |
+| [`docs/protocol.md`](./docs/protocol.md) | `TERM/1` specification: wire format, status codes, headers, the 19 directives, the three gates. |
+| [`docs/capabilities.md`](./docs/capabilities.md) | The full capability surface and the security model. |
 | [`docs/api.md`](./docs/api.md) | REST endpoints, WebSocket frames, locator resolution. |
+| [`docs/capabilities.md`](./docs/capabilities.md) | Full capability surface and the security model. |
 | [`docs/architecture.md`](./docs/architecture.md) | Session kernel, entrances, storage. |
 | [`docs/design/`](./docs/design) | Design records: Web UI, resource model, session storage, font stack, mobile terminal. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes. |
+
+## Benchmark
+
+Comming Soon
+
+## Functional security testing
+
+Comming Soon
 
 ## Star History
 
@@ -183,7 +179,8 @@ the secret in the browser, where it stays out of the model's context.
 
 ## License
 
-Released under the [MIT License](./LICENSE). You are free to use, modify, and distribute it, provided the copyright notice and permission notice are retained. Thanks to the [linux.do](https://linux.do/) community for the discussions and support.
+Released under the [MIT License](./LICENSE).
+Thanks to friends in the [linux.do](https://linux.do/) community for the discussions, feedback, and support.
 
 ---
 

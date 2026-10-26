@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/open-mcp-ai/termcp">
-    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=Let+AI+into+your+terminals" alt="Termcp tagline">
+    <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&pause=900&color=2786FF&center=true&vCenter=true&width=860&height=45&lines=Terminus+MCP" alt="Termcp tagline">
   </a>
 </p>
 
@@ -44,25 +44,51 @@
 
 <p align="center">
   <a href="#安装"><img src="https://img.shields.io/badge/安装-2786ff?style=flat-square" alt="安装"></a>
-  <a href="#预览"><img src="https://img.shields.io/badge/预览-6E4AFF?style=flat-square" alt="预览"></a>
-  <a href="#能力全景"><img src="https://img.shields.io/badge/能力-6E4AFF?style=flat-square" alt="能力"></a>
-  <a href="#安全模型"><img src="https://img.shields.io/badge/安全-FF69B4?style=flat-square" alt="安全"></a>
   <a href="#文档"><img src="https://img.shields.io/badge/文档-00ADD8?style=flat-square" alt="文档"></a>
+  <a href="https://termcp.org" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/官网-termcp.org-6E4AFF?style=flat-square" alt="官网"></a>
 </p>
 
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=rect&color=0:2786FF,100:FF69B4&height=3&section=header" width="100%" alt="divider">
 </p>
 
-## 让 AI 进入你的诸多终端
+## Termcp：最终的 MCP | Terminus MCP
 
-轻量 AI Native 安全终端，可视化多界面，MCP+SKILLS+API
+使用 Termcp：
 
-- **人机平等共驾** —— 双方写同一条终端，每一屏都实时看得见；接管、切换、协作。
-- **细粒度会话控制** —— 文件管理、端口转发、多终端复用、读写终端窗口。
-- **安装无依赖** —— 16m 左右单文件，多平台兼容，支持 npx 集成。
+- **AI 能动态安装、使用不限数量的 MCP。**
+- **AI 可以自行开发 MCP 并热装载。**
+- **AI 可以使用 SSH 管理主机，由人类审批，协作。**
+- **AI 可以仅基于 SSH 跨机器安装和调用 MCP。**
+
+**只暴露一个 tool。** 基于 [**Termcp 协议**](./docs/protocol.md)（Terminalization Model Context Protocol／终端化
+上下文协议）实现：装载多个 MCP 和 skills 不会导致上下文增加。
+
+**无依赖单文件（10M+）、跨平台，提供所见即所得的 WebUI**，人与 AI 共用终端、交互协作。
+
+<p align="center">
+  <a href="https://termcp.org" target="_blank" rel="noopener">
+    <img src="https://termcp.org/ext-cn.jpg" width="860" alt="Termcp 扩展面板：装了哪些 MCP、装在哪台机器上、现在能不能用">
+  </a>
+</p>
+<p align="center"><em>安装 80+ MCP server 与 skill。</em></p>
+
+<p align="center">
+  <a href="https://termcp.org" target="_blank" rel="noopener">
+    <img src="https://termcp.org/cn.jpg" width="860" alt="Termcp 控制台：本地与 SSH 会话同屏，逐行标出你的输入、AI 输入与终端输出">
+  </a>
+</p>
+<p align="center"><em>主机管理。</em></p>
 
 ## 安装
+
+### 0 · AI 安装
+
+```
+把 npx -y @open-mcp-ai/termcp daemon stdio 装成名为 termcp 的 MCP。
+```
+
+复制给 AI。
 
 ### 1 · 一行命令接上你的 Agent
 
@@ -71,9 +97,8 @@
 | **Claude Code** | `claude mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio` |
 | **Codex** | `codex mcp add termcp -- npx -y @open-mcp-ai/termcp daemon stdio` |
 | **Gemini CLI** | `gemini mcp add termcp npx -- -y @open-mcp-ai/termcp daemon stdio` |
-| **Crush** | 写进 `~/.config/crush/crushrc`：`mcp add termcp --command npx --args -y --args @open-mcp-ai/termcp --args daemon --args stdio` |
 
-### 2 · 或者这一个配置文件
+### 2 · 配置文件
 
 ```json
 {
@@ -85,8 +110,6 @@
   }
 }
 ```
-
-这条命令就是完整的服务端：首次使用时它自己拉起后台实例，把 MCP 经 stdin/stdout 转发过去，实例空闲后自行退出。开箱即用。
 
 <details>
 <summary><strong>其他安装方式</strong> —— npm / Go / Docker / 预编译二进制</summary>
@@ -117,42 +140,6 @@ npm 包装器会下载对应平台的预编译二进制（可用 `TERMCP_VERSION
 
 </details>
 
-## 预览
-
-打开 **<http://127.0.0.1:18765>** —— 所有 Agent 的会话都在这里。
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/622c5005-c293-46ef-a39f-e4c7863aac30" width="860" alt="webui">
-</p>
-
-每个 shell 的时间轴按来源标出每一行——绿色是 shell 输出、黄色是你的输入、粉色是 Agent 的。遇到 `sudo`、密码、MFA 或 `[Y/n]`，Agent 会调 `notify_user` 把提示交回给你；你在浏览器里输入密码，它留在模型上下文之外。
-
-## 能力全景
-
-| | |
-| --- | --- |
-| **会话** | 多条长驻 SSH 连接并存——连本机（`ssh_config="internal"`，零配置）或任意远程主机；每条会话持有多个 shell、转发与 SFTP。 |
-| **终端** | 一条连接上并存完整的 `pty`（Windows 用 ConPTY）与逐行的 `pipe` 通道；任意行列数；输入、命名按键、resize。 |
-| **输出** | 按字节游标读取（尾窗 / 偏移 / 实时读取器），从磁盘分页，重启后仍可回放；逐行时间轴标出每一行是谁写的。 |
-| **文件** | SFTP 浏览、读取、写入、改名、删除、建目录、权限、链接，外加支持 Range 断点续传的 HTTP 直链。 |
-| **转发** | `-L` 本地、`-R` 远程、`-D` SOCKS5，支持 ProxyJump 跳板链。 |
-| **浏览器与别的协议** | `open <session> cdp <url>` 把 Chrome DevTools 从已有会话里穿过去，于是 `:9222` 是**目标机**上的端口：列标签页、调任意协议方法、大答案从日志里翻页取回。同一扇门还能挂另一个 MCP server（`mcp`）或裸 JSON-RPC socket（`jrpc`）。 |
-| **通知** | `notify_user` 带着实例 URL 通知人，并弹出提示音与桌面通知。只有单向：termcp 不会去叫醒 Agent，等待由调用方手里那条回复承载。 |
-| **SSH 配置** | 中心化 TOML 存储，支持批量导入/导出、只存内存的临时主机、连接测试，以及编辑/复制/改名。 |
-| **审阅模式** | 按会话开启的审批闸门：Agent 的每一次写入都等人裁决。 |
-| **扩展** | 一份存下来的模板，其会话能力被裁到你决定的范围：管道通道上的 MCP server、远程文件的只读窗口、附带说明的交互式终端。不声明监听器的模板按需启动（`open ext <name>`），并在 `idle_timeout` 之后自行关闭。 |
-| **已连接的客户端** | 顶栏列出谁接在这里：MCP 客户端带着它自报的名字与命名空间，Web UI 标签页带着地址和它正在看什么。 |
-| **新版本提示** | 有新版本时顶栏会告诉你——只对真实的 `vX.Y.Z` 构建，本地 `dev-<sha>` 不提示。 |
-| **单一 REST 入口** | `POST /api/term` 与 MCP 工具说同一套指令，Agent 用纯 `curl` 即可驱动全部能力。 |
-
-## 安全模型
-
-- **凭据留在服务端。** 通过 `ssh_config` 写入的密码、私钥与口令只存在主机上，且不可读回；MCP 读接口只返回 profile 名。配置写工具默认关闭，除非设置 `--mcp-manage-ssh-configs`；`--no-internal` 把 Agent 限制在远程主机。
-- **单个 token 保护所有面。** `--auth-token`，或用加盐的 `--auth-hash`（服务端不保存明文）——覆盖 Web UI、REST、两种 MCP 传输与 WebSocket。非 loopback 绑定**必须**配置。
-- **Basic 认证是 Base64。** 把 Termcp 提供到自己机器之外时，请在前面用反向代理终止 TLS；token 从不进日志、也从不放进 URL。
-- **🚨 不要把 Agent 独自放在生产主机上。必须如此时，打开审阅模式。** 它经 MCP 的每一次写入都会等人裁决。审阅模式是一道真实的闸门，不是安全保证：粗心的审阅者仍可能放行一条破坏性命令。
-- **哪些操作需要活连接。** 在已关闭（DEAD）的会话上，文件与转发工具返回 `session_not_running`；输出读取照常可用，而该会话的端口转发会随它一起关闭。
-
 ## 文档
 
 | | |
@@ -160,10 +147,21 @@ npm 包装器会下载对应平台的预编译二进制（可用 `TERMCP_VERSION
 | [`docs/cli.md`](./docs/cli.md) | 全部 flag 与子命令、能力闸门、认证。 |
 | [`docs/clients.md`](./docs/clients.md) | 四个入口的完整接法：MCP 传输、stdio 桥、认证、REST 示例，以及单工具面。 |
 | [`docs/deploy.md`](./docs/deploy.md) | Docker、多阶段构建、Compose、纯 API 构建。 |
+| [`docs/protocol.md`](./docs/protocol.md) | `TERM/1` 规格：线格式、状态码、标头、19 条指令、三个闸门。 |
+| [`docs/capabilities.md`](./docs/capabilities.md) | 完整能力面与安全模型。 |
 | [`docs/api.md`](./docs/api.md) | REST 端点、WebSocket 帧、定位符解析。 |
+| [`docs/capabilities.md`](./docs/capabilities.md) | 完整能力面与安全模型。 |
 | [`docs/architecture.md`](./docs/architecture.md) | 会话内核、四个入口、存储。 |
 | [`docs/design/`](./docs/design) | 设计记录：Web UI、资源模型、会话存储、字体栈、移动端终端。 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本记录。 |
+
+## Benchmark
+
+Comming Soon
+
+## 功能安全性测试
+
+Comming Soon
 
 ## Star 趋势
 
@@ -175,7 +173,8 @@ npm 包装器会下载对应平台的预编译二进制（可用 `TERMCP_VERSION
 
 ## 许可证
 
-基于 [MIT License](./LICENSE) 发布。你可以自由使用、修改与分发，只需保留版权声明与许可声明。感谢 [linux.do](https://linux.do/) 社区的讨论与支持。
+基于 [MIT License](./LICENSE) 开源。
+感谢 [linux.do](https://linux.do/) 社区朋友们的讨论、建议与支持。
 
 ---
 
