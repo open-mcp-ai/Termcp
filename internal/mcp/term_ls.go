@@ -149,6 +149,12 @@ func (s *Server) lsTargetNames(target string) bool {
 			return true
 		}
 	}
+	// `ls web` NAMES A SESSION TOO (issue #320): the listing already narrowed by id and by
+	// profile name, and a session's own --name was the one spelling it refused — the same
+	// name `read web:1` had just accepted.
+	if sess, err := s.resolveSessionRef(target); sess != nil && err == nil {
+		return true
+	}
 	return false
 }
 
@@ -203,15 +209,15 @@ func (s *Server) listPeers(stmt directive.Statement) envelope.Slot {
 			"Path": stmt.Path, "Error-Code": CodeSessionNotRunning,
 		}, Body: "no running session named " + stmt.Target + ", so it holds no " + stmt.Kind + " connections."}
 	}
-	jrpcChannelsMu.Lock()
-	addrs := liveAddrsLocked(sess.ID, stmt.Kind)
+	addrs := liveAddrs(sess.ID, stmt.Kind)
 	handles := make([]*jrpcHandle, 0, len(addrs))
 	for _, addr := range addrs {
-		if h := jrpcChannels[addr]; h != nil {
-			handles = append(handles, h)
+		if v, ok := jrpcChannels.Load(addr); ok {
+			if h, _ := v.(*jrpcHandle); h != nil {
+				handles = append(handles, h)
+			}
 		}
 	}
-	jrpcChannelsMu.Unlock()
 
 	var b strings.Builder
 	if len(handles) == 0 {

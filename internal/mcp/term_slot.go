@@ -256,16 +256,16 @@ func pipeClosedHint(handle string, f *toolFailure, s *Server) *toolFailure {
 	// the same advice, so a bad resolution is checked for the mode instead of
 	// returning early: a pty whose shell died must NOT be told to `read` its exit
 	// code, because a pty has no exit code to read.
-	cs, bad := s.requireShell(handle)
-	if cs == nil {
+	cs, _ := s.requireShell(handle)
+	if cs == nil || cs.Info().Mode != api.ModePipe {
 		return f
 	}
-	if bad != nil {
-		if cs.Info().Mode != api.ModePipe {
-			return f
-		}
-	} else if cs.Info().Mode != api.ModePipe {
-		return f
+	// THE EXIT CODE IS THE REASON THE CALLER IS HERE (#303): "the pipe is closed" without
+	// it makes them go and find out why, when the answer was already known. A pipe whose
+	// process never reported one still gets the advice, just without the number.
+	exitNote := ""
+	if exit := cs.Info().ExitCode; exit != nil {
+		exitNote = fmt.Sprintf(" (exit code %d)", *exit)
 	}
 	// 409, NOT 500. The channel's process is over; nothing about the server broke and
 	// the caller's own line was fine. A 5xx here invites a retry of a write that can
@@ -274,7 +274,8 @@ func pipeClosedHint(handle string, f *toolFailure, s *Server) *toolFailure {
 		code: CodeSessionNotRunning,
 		msg: msg + "\nThis is a PIPE channel: its process has finished, so there is no stdin left to write to " +
 			"and `run`/`input` cannot drive it. Its output is still readable — `read " + handle + "` returns it, " +
-			"including the exit code. For an interactive session use `open <session>` instead (a pty).",
+			"including the exit code" + exitNote + ". Stderr is a separate stream: `read " + handle + " --stream e --tail 10` " +
+			"shows the failure. For an interactive session use `open <session>` instead (a pty).",
 	}
 }
 

@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -152,7 +155,9 @@ func (s *Server) handleExtensionCreate(ctx context.Context, request mcp.CallTool
 	// plus the `values` this installation fills in; a one-off is created by naming
 	// fields. Neither is a special case of the other, so both are accepted and the
 	// document wins when it is present.
-	if doc, ok := templateArg(args); ok {
+	if doc, ok, err := templateArgErr(args); err != nil {
+		return toolError(CodeInvalidArgument, "%s", err.Error()), nil
+	} else if ok {
 		return s.createExtensionFromTemplate(name, doc, valuesArg(args))
 	}
 	ext := extensions.Extension{}
@@ -176,7 +181,9 @@ func (s *Server) handleExtensionUpdate(ctx context.Context, request mcp.CallTool
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	if doc, ok := templateArg(args); ok {
+	if doc, ok, err := templateArgErr(args); err != nil {
+		return toolError(CodeInvalidArgument, "%s", err.Error()), nil
+	} else if ok {
 		if err := s.extensions.Store().SaveTemplate(name, []byte(doc)); err != nil {
 			return extensionSaveError(err), nil
 		}
@@ -279,17 +286,49 @@ func (s *Server) extensionAfterWrite(name string) (*mcp.CallToolResult, error) {
 }
 
 // templateArg reads a TOML template document from the arguments.
+// templateArg reads the template document a caller sent: either the TOML itself or
+// `@<path>`, which is the spelling the help text has always shown.
+//
+// THE `@` FORM WAS DOCUMENTED AND NOT IMPLEMENTED. `ext create k8s --template
+// @config.toml` reached the TOML parser with the literal "@config.toml" and came back
+// as a syntax error at line 1 — a documented spelling that cannot work is worse than
+// an undocumented one, because the reader trusts it. The path is read on the machine
+// running termcp, which is where the document is being shipped to.
 func templateArg(args map[string]any) (string, bool) {
-	v, ok := args["template"]
-	if !ok {
-		return "", false
+	doc, ok, _ := templateArgErr(args)
+	return doc, ok
+}
+
+// templateArgErr is templateArg for the callers that must report why a document could
+// not be read, rather than silently falling back to "author it from fields".
+func templateArgErr(args map[string]any) (doc string, ok bool, err error) {
+	v, present := args["template"]
+	if !present {
+		return "", false, nil
 	}
-	s, ok := v.(string)
-	if !ok {
-		return "", false
+	s, isString := v.(string)
+	if !isString {
+		return "", false, nil
 	}
 	s = strings.TrimSpace(s)
-	return s, s != ""
+	if s == "" {
+		return "", false, nil
+	}
+	if !strings.HasPrefix(s, "@") {
+		return s, true, nil
+	}
+	path := strings.TrimSpace(strings.TrimPrefix(s, "@"))
+	if path == "" {
+		return "", false, fmt.Errorf("template starts with @ but names no file: write --template @config.toml, or pass the TOML itself")
+	}
+	b, rerr := os.ReadFile(path)
+	if rerr != nil {
+		return "", false, fmt.Errorf("cannot read the template file %q: %w", path, rerr)
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return "", false, fmt.Errorf("the template file %q is empty, so there is nothing to install", path)
+	}
+	return string(b), true, nil
 }
 
 // valuesArg reads the hole values a caller is setting.
@@ -344,13 +383,28 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcp.CallToolReq
 	// slow to answer returns `probing` with what the caller should poll, rather
 	// than a failure it would have to guess was not one.
 	target := strings.TrimSpace(getString(args, "target", ""))
-	st, err := s.extensions.AcquireTarget(name, target, extensionUseBudget)
+	// --channel picks one of several declared channels (issue #331). With none, the
+	// default channel answers — the same call it has always been.
+	channel := strings.TrimSpace(getString(args, "channel", ""))
+	if channel != "" {
+		// A NAME THE TEMPLATE DOES NOT HAVE IS THE CALLER'S MISTAKE, not a runtime
+		// failure: answering 500 for it sent the reader looking at the extension. The
+		// legal names go in the message, because the caller's next move is to pick one.
+		if _, ok := ext.ChannelNamed(channel); !ok {
+			return toolError(CodeInvalidArgument, "extension %q has no channel %q; the channels are %s",
+				name, channel, strings.Join(ext.ChannelNames(), ", ")), nil
+		}
+	}
+	st, err := s.extensions.AcquireChannel(name, target, channel, extensionUseBudget)
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
 	entry := extensionConfigMap(ext)
 	if target != "" {
 		entry["target"] = target
+	}
+	if channel != "" {
+		entry["channel"] = channel
 	}
 	s.extensionRuntimeFields(entry, st, true)
 	if st.Status == extensions.StatusIdle {
@@ -480,6 +534,12 @@ func extensionConfigMap(ext *extensions.Extension) map[string]any {
 	if len(ext.Targets) > 0 {
 		entry["targets"] = ext.Targets
 	}
+	// CHANNELS APPEAR ONLY WHEN THE FILE USED THE V2 SPELLING (issue #331), so a
+	// template written before it prints exactly the shape it printed then — and one
+	// that has several channels says so, because "what runs" is no longer one field.
+	if len(ext.Channels) > 0 {
+		entry["channels"] = ext.Channels
+	}
 	return entry
 }
 
@@ -576,11 +636,32 @@ func (s *Server) extensionRuntimeFields(entry map[string]any, st extensions.Stat
 		entry["closed_at"] = st.ClosedAt
 		entry["closed_reason"] = st.ClosedReason
 	}
+	// A MULTI-CHANNEL TEMPLATE REPORTS ITS CHANNELS WITH THEIR HANDLES (issue #331).
+	// The template's own list said what the channels ARE; this says what they are
+	// DOING — name, host, handle, status — which is the question `ext get` is asked.
+	// The declaration is still in the file, and a channel that is declared but not
+	// running appears here with the reason rather than being dropped.
+	if len(st.Channels) > 0 {
+		entry["channels"] = st.Channels
+	}
 	if len(st.Forwards) > 0 {
 		entry["forwards"] = st.Forwards
 	}
 	if len(st.Targets) > 0 {
 		entry["targets_status"] = st.Targets
+	}
+	// RECONCILIATION FIELDS (issue #325): when was this last active, how many times
+	// has it recovered, and what does the transport say right now? Only on `get`
+	// (`withHistory == true`) for the full probe, because `list` stays one compact row
+	// per extension.
+	if st.LastActiveAt > 0 {
+		entry["last_active_at"] = st.LastActiveAt
+	}
+	if st.Restarts > 0 {
+		entry["restarts"] = st.Restarts
+	}
+	if withHistory && st.Liveness != nil {
+		entry["liveness"] = st.Liveness
 	}
 	if n := len(st.Failures); n > 0 {
 		switch {

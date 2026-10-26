@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,9 +24,8 @@ import (
 // goroutine polling every extension every five seconds to keep a line in a
 // listing fresh.
 func (r *Reconciler) reapEnded(name string, st *extState) {
-	st.mu.Lock()
-	empty, lazy := len(st.extra) == 0, st.lazy
-	st.mu.Unlock()
+	d := st.load()
+	empty, lazy := len(d.extra) == 0, d.lazy
 	if empty || !lazy {
 		return
 	}
@@ -230,6 +231,14 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		// A template with no shell is served by the connection alone: a read-only file
 		// window has no channel to hand out, and its instance is the session.
 		st.addExtra(sess.ID, shellID, label, fingerprint(ext))
+		// THE OTHER CHANNELS COME UP HERE TOO (issue #331). This branch returns, so
+		// putting them below would leave a resident template with its first channel
+		// running and the rest declared but never opened — a listing that quietly
+		// disagrees with the file.
+		if cerr := r.ensureSideChannels(ctx, ext, st); cerr != nil {
+			r.fail(st, "start", cerr.Error())
+			return sess.ID, shellID, "", "start", cerr
+		}
 		r.armIdle(name, st)
 		st.mark(StatusAvailable)
 		st.resetRetryBudget()
@@ -238,7 +247,7 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		return sess.ID, shellID, label, "", nil
 	}
 
-	shellID, err = r.ensureMemberShell(plan, st, sess)
+	shellID, err = r.ensureMemberShell(plan, st, sess, "")
 	if err != nil {
 		// The connection is up and shared; only this extension's process failed to
 		// start, so the retry is a channel open rather than a redial.
@@ -250,19 +259,44 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 	// reads the moment of the ASK as its last use and reaps it early.
 	st.touch()
 
-	if err := r.ensureForwards(ext, st); err != nil {
+	if err := r.ensureForwards(ctx, ext, st); err != nil {
 		// The session is up and usable; only the tunnel is missing, so the retry
 		// targets the forward alone instead of tearing the connection down.
 		r.fail(st, "forward", err.Error())
 		return sess.ID, shellID, "", "forward", err
 	}
+	// THE TEMPLATE'S OTHER CHANNELS (issue #331). Each is opened once per session —
+	// not once per caller — on the connection its own host names, so a card can hold an
+	// endpoint on the loopback connection and a worker on the far host at the same time.
+	// A channel that fails is recorded and named; the rest stay up, because they were
+	// never one process.
+	if err := r.ensureSideChannels(ctx, ext, st); err != nil {
+		r.fail(st, "start", err.Error())
+		return sess.ID, shellID, "", "start", err
+	}
 	if err := r.ensureExposes(ext, st); err != nil {
 		r.fail(st, "expose", err.Error())
 		return sess.ID, shellID, "", "expose", err
 	}
-	// Proven up: the budget is whole again, so a later failure starts the ladder over
-	// rather than resuming a count from before the extension was working.
-	st.resetRetryBudget()
+	// THE EXTENSION IS UP; A TUNNEL ON ANOTHER HOST MAY NOT BE (issue #330). The status
+	// says available — the endpoint or the channel answers — while the failure stays in
+	// `failures[]` naming the tunnel and its via host. Reporting the whole extension as
+	// down would take away a capability that works, which is the isolation this field
+	// exists for.
+	//
+	// THE BUDGET IS NOT RESET IN THAT CASE. Resetting it here would restart the ladder
+	// on every walk — the extension is "up", so every walk reaches this line — and an
+	// unreachable via host would then be dialled at the first backoff step for ever.
+	tunnelsDown := st.tunnelFailures() > 0
+	if tunnelsDown {
+		if wait, ok := st.scheduleBackoff(); ok {
+			r.armRetry(st, wait)
+		}
+	} else {
+		// Proven up: the budget is whole again, so a later failure starts the ladder over
+		// rather than resuming a count from before the extension was working.
+		st.resetRetryBudget()
+	}
 	st.mark(StatusAvailable)
 	slog.Debug("extension available", "name", name, "session_id", sess.ID, "shell_id", shellID)
 	r.notifyChange()
@@ -274,13 +308,15 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 // sees, so the first instance keeps the extension's own name and the rest count up
 // from there. The counter never goes back, for the reason it exists.
 func (st *extState) nextLabel(ext *Extension) string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.labels++
-	if st.labels == 1 {
+	n := 0
+	st.update(func(d *extStateData) {
+		d.labels++
+		n = d.labels
+	})
+	if n == 1 {
 		return ext.Name
 	}
-	return fmt.Sprintf("%s#%d", ext.Name, st.labels)
+	return fmt.Sprintf("%s#%d", ext.Name, n)
 }
 
 // instanceStatus renders a status for the instance just handed out: the
@@ -375,38 +411,43 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 // wherever a channel is opened, renewed or dropped, because those are the only
 // moments the answer changes.
 func (r *Reconciler) armIdle(name string, st *extState) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
-	limit := st.idleLimit
-	if limit <= 0 || len(st.extra) == 0 {
-		return
-	}
+	var ctx context.Context
 	var next time.Time
-	for _, ex := range st.extra {
-		if d := ex.lastUse.Add(limit); next.IsZero() || d.Before(next) {
-			next = d
+	st.update(func(d *extStateData) {
+		if d.timer != nil {
+			d.timer.Stop()
+			d.timer = nil
 		}
-	}
-	st.timer = time.AfterFunc(time.Until(next), func() {
-		if st.ctx != nil && st.ctx.Err() != nil {
+		limit := d.idleLimit
+		if limit <= 0 || len(d.extra) == 0 {
 			return
 		}
-		r.idleFired(name, st.host())
+		for _, ex := range d.extra {
+			if when := ex.lastUse.Add(limit); next.IsZero() || when.Before(next) {
+				next = when
+			}
+		}
+		if next.IsZero() {
+			return
+		}
+		ctx = d.ctx
+		d.timer = time.AfterFunc(time.Until(next), func() {
+			if ctx != nil && ctx.Err() != nil {
+				return
+			}
+			r.idleFired(name, st.host())
+		})
 	})
 }
 
 // stopIdle disarms the timer for a state that is going away.
 func (st *extState) stopIdle() {
-	st.mu.Lock()
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
-	st.mu.Unlock()
+	st.update(func(d *extStateData) {
+		if d.timer != nil {
+			d.timer.Stop()
+			d.timer = nil
+		}
+	})
 }
 
 // idleFired is the window running out. It closes what is due and re-arms for the
@@ -433,10 +474,7 @@ func (r *Reconciler) idleFired(name, target string) {
 // available, nothing up is idle ("nothing is running because nothing asked"), and
 // a recorded failure outranks both.
 func (r *Reconciler) settle(name string, st *extState) {
-	st.mu.Lock()
-	changed := st.settleLocked()
-	st.mu.Unlock()
-	if changed {
+	if st.settle() {
 		r.notifyChange()
 	}
 }
@@ -464,12 +502,11 @@ func (r *Reconciler) Touch(shellID, sessionID string) {
 	}
 	// The name comes along because renewing has to re-arm that extension's timer,
 	// and the timer goes back through the store by name.
-	r.mu.Lock()
-	pairs := make(map[string]*extState, len(r.states))
-	for name, st := range r.states {
-		pairs[name] = st
-	}
-	r.mu.Unlock()
+	var pairs []*extState
+	r.states.Range(func(_, v any) bool {
+		pairs = append(pairs, v.(*extState))
+		return true
+	})
 
 	// A CHANNEL ID NAMES ONE INSTANCE, and only that one is in use.
 	//
@@ -572,7 +609,12 @@ func (r *Reconciler) ReleaseTarget(name, target, shellID string) (int, error) {
 // anyInstanceOn reports whether one of this extension's instances runs on the
 // session, which is what "this call is about this extension" means for a lazy one.
 func (st *extState) anyInstanceOn(sessionID string) bool {
-	for _, ex := range st.extra {
+	return anyInstanceOn(st.load(), sessionID)
+}
+
+// anyInstanceOn answers the same question about one snapshot.
+func anyInstanceOn(d *extStateData, sessionID string) bool {
+	for _, ex := range d.extra {
 		if ex.sessionID == sessionID {
 			return true
 		}
@@ -581,9 +623,7 @@ func (st *extState) anyInstanceOn(sessionID string) bool {
 }
 
 func (st *extState) hasExtra(shellID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	for _, ex := range st.extra {
+	for _, ex := range st.load().extra {
 		if ex.shellID == shellID {
 			return true
 		}
@@ -598,21 +638,252 @@ func (r *Reconciler) ExplainClosed(sessionID, shellID string) (name, reason stri
 	if sessionID == "" && shellID == "" {
 		return "", "", time.Time{}, false
 	}
-	r.mu.Lock()
-	states := make([]*extState, 0, len(r.states))
-	for _, st := range r.states {
-		states = append(states, st)
-	}
-	r.mu.Unlock()
+	var states []*extState
+	r.states.Range(func(_, v any) bool {
+		states = append(states, v.(*extState))
+		return true
+	})
 	for _, st := range states {
-		st.mu.Lock()
-		match := (sessionID != "" && st.closedSessionID == sessionID) ||
-			(shellID != "" && st.closedShellID == shellID)
-		reason, at = st.closedReason, st.closedAt
-		st.mu.Unlock()
+		d := st.load()
+		match := (sessionID != "" && d.closedSessionID == sessionID) ||
+			(shellID != "" && d.closedShellID == shellID)
+		reason, at = d.closedReason, d.closedAt
 		if match {
 			return st.name(), reason, at, true
 		}
 	}
 	return "", "", time.Time{}, false
+}
+
+// ensureSideChannels opens the template's channels beyond the default one, each on
+// the connection its own host names (issue #331).
+//
+// IT IS PER SESSION, NOT PER CALLER. The default channel is what `open ext` hands out
+// copies of (issue #183); a worker declared once must run once, or a template with a
+// background process would grow a new copy for every caller. So these are opened the
+// first time the connection comes up and reused afterwards — and a channel that is
+// already running is not restarted, which is what keeps a tunnel retry from forking a
+// second worker.
+func (r *Reconciler) ensureSideChannels(ctx context.Context, ext *Extension, st *extState) error {
+	chs := ext.EffectiveChannels()
+	if len(chs) <= 1 {
+		// One channel is the default one, already running; none means the template has
+		// no process at all.
+		st.setSideRuns(nil)
+		return nil
+	}
+	defaultCh, _ := pickChannel(chs, "")
+	runs := make([]channelRun, 0, len(chs))
+	var failures []string
+	for _, ch := range chs {
+		if ch.Name == defaultCh.Name && ch.Default == defaultCh.Default {
+			continue
+		}
+		plan, err := r.resolveChannel(ext, chs, ch.Name)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %v", ch.Name, err))
+			continue
+		}
+		g := r.group(pickGroupKey(plan, ext), ext)
+		sess, err := r.ensureGroupSession(ctx, g, plan.config)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %s", ch.Name, sshclient.DescribeDialError(err)))
+			continue
+		}
+		shellID, err := r.ensureMemberShell(plan, st, sess, ch.Name)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %v", ch.Name, err))
+			continue
+		}
+		runs = append(runs, channelRun{
+			name:      ch.Name,
+			label:     plan.channel,
+			target:    ch.Host(strings.TrimSpace(ext.Target)),
+			sessionID: sess.ID,
+			shellID:   shellID,
+		})
+	}
+	// A channel the template no longer declares (or whose host changed) is closed
+	// rather than left running: an edit is what removed it, and a process nobody
+	// declared any more is a leak with a name.
+	for _, stale := range st.setSideRuns(runs) {
+		if sess := r.findSessionOfShell(stale); sess != nil {
+			_ = sess.CloseChildShell(stale)
+		}
+	}
+	if len(failures) > 0 {
+		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// findSessionOfShell returns the session that holds a shell, looking only at the
+// connections this extension is attached to.
+func (r *Reconciler) findSessionOfShell(shellID string) *session.Session {
+	if shellID == "" || r.sessMgr == nil {
+		return nil
+	}
+	for _, info := range r.sessMgr.ListAll() {
+		sess := r.sessMgr.Get(info.ID)
+		if sess == nil {
+			continue
+		}
+		if shell := sess.GetChildShell(shellID); shell != nil {
+			return sess
+		}
+	}
+	return nil
+}
+
+// AcquireChannel brings an extension up and returns the handles of ONE of its
+// channels (issue #331).
+//
+// THE DEFAULT CHANNEL IS THE INSTANCE MACHINERY; the others are not. `open ext` with
+// no --channel hands out a caller's own copy of the default channel (issue #183),
+// because that is the shape of "give me a process to drive". A named channel is
+// declared once and runs once, so the answer here is the channel that is already
+// running — forking a second worker per caller would run N processes where the file
+// declared one.
+func (r *Reconciler) AcquireChannel(name, target, channel string, wait time.Duration) (Status, error) {
+	ext, err := r.store.Load(name)
+	if err != nil {
+		return Status{}, err
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return r.AcquireTarget(name, target, wait)
+	}
+	chs := ext.EffectiveChannels()
+	ch, ok := pickChannelNamed(chs, channel)
+	if !ok {
+		return Status{}, fmt.Errorf("extension %q has no channel %q; the channels are %s",
+			name, channel, strings.Join(channelNameList(chs), ", "))
+	}
+	if def, hasDef := pickChannel(chs, ""); hasDef && def.Name == ch.Name {
+		return r.AcquireTarget(name, target, wait)
+	}
+	// Bringing the extension up opens every channel it declares, so this is the ask
+	// that makes the named one exist.
+	if _, err := r.AcquireTarget(name, target, wait); err != nil {
+		return Status{}, err
+	}
+	st := r.stateFor(name, targetHostOf(ext, target))
+	for _, run := range st.sideRunsSnapshot() {
+		if run.name != ch.Name {
+			continue
+		}
+		got, ok := r.Status(name)
+		if !ok {
+			return Status{}, fmt.Errorf("extension %q not found", name)
+		}
+		got.SessionID, got.ShellID = run.sessionID, run.shellID
+		if run.shellID == "" {
+			got.Status = StatusUnavailable
+			got.Failures = append(got.Failures, Failure{
+				At:     clock.Now(),
+				Stage:  "start",
+				Reason: fmt.Sprintf("channel %q is not running", ch.Name),
+			})
+		}
+		return got, nil
+	}
+	got, _ := r.Status(name)
+	got.Failures = append(got.Failures, Failure{
+		At:     clock.Now(),
+		Stage:  "start",
+		Reason: fmt.Sprintf("channel %q has not been opened: %s", ch.Name, channelReason(got)),
+	})
+	return got, nil
+}
+
+// pickChannelNamed resolves a channel by its exact name, without the empty-means-
+// default shortcut.
+func pickChannelNamed(chs []Channel, name string) (Channel, bool) {
+	for _, ch := range chs {
+		if ch.Name == name {
+			return ch, true
+		}
+	}
+	return Channel{}, false
+}
+
+// channelReason turns a status into a sentence a caller can act on.
+func channelReason(st Status) string {
+	if len(st.Failures) > 0 {
+		return st.Failures[len(st.Failures)-1].Reason
+	}
+	if st.Status == StatusProbing {
+		return "it is still coming up; ask again in a moment"
+	}
+	return "the extension is " + statusOrEmpty(st.Status)
+}
+
+func statusOrEmpty(s string) string {
+	if s == "" {
+		return "not started"
+	}
+	return s
+}
+
+// targetHostOf is the host a status read should use for an extension whose target was
+// not named: the single one it declares.
+func targetHostOf(ext *Extension, target string) string {
+	if t, ok := ext.TargetFor(target); ok {
+		return t.Host
+	}
+	return strings.TrimSpace(ext.Target)
+}
+
+// ExtensionOf names the extension a session or channel belongs to (issue #323).
+//
+// WHY THE REFUSAL NEEDS IT. A whitelist refusal says what this session may not do; a
+// caller that reads only that knows the wall and not the door. Naming the extension turns
+// the sentence into one action — `get ext <name>`, or `edit ext <name> --allow …` — and it
+// is the one fact the refusing layer does not have, because it holds a session and the
+// session holds a capability list, not a template.
+//
+// ONE SESSION MAY SERVE SEVERAL EXTENSIONS: a group shares a connection when the host and
+// the whitelist match (#331), so the answer is the FIRST extension attached to it in a
+// stable order. That is enough for a hint and honest about being a hint: the refusal tells
+// the caller which template to look at, and `get ext` is where the whole list is.
+func (r *Reconciler) ExtensionOf(sessionID, shellID string) (string, bool) {
+	if sessionID == "" && shellID == "" {
+		return "", false
+	}
+	states := make([]*extState, 0)
+	r.states.Range(func(_, v any) bool {
+		states = append(states, v.(*extState))
+		return true
+	})
+	sort.Slice(states, func(i, j int) bool { return states[i].name() < states[j].name() })
+	for _, st := range states {
+		name := st.name()
+		// ONE SNAPSHOT FOR THE WHOLE TEST: the row is a value now, so the four fields are
+		// read at one moment instead of under a lock the walk also takes.
+		d := st.load()
+		match := sessionID != "" && (d.sessionID == sessionID || d.closedSessionID == sessionID)
+		if !match && shellID != "" {
+			match = d.shellID == shellID || d.closedShellID == shellID
+		}
+		if !match && sessionID != "" {
+			for _, ex := range d.extra {
+				if ex.sessionID == sessionID {
+					match = true
+					break
+				}
+			}
+		}
+		if !match && shellID != "" {
+			for _, ex := range d.extra {
+				if ex.shellID == shellID {
+					match = true
+					break
+				}
+			}
+		}
+		if match {
+			return name, true
+		}
+	}
+	return "", false
 }
