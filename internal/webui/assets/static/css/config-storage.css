@@ -1,0 +1,246 @@
+.encryption-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: .8rem;
+}
+
+.encryption-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.encryption-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.config-storage-modal {
+  max-width: 680px;
+  width: min(680px, calc(100vw - 24px));
+}
+
+.config-storage-toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 2px 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.config-storage-toggle strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: .92rem;
+}
+
+.config-storage-toggle p {
+  max-width: 480px;
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
+.config-storage-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: .78rem;
+  cursor: pointer;
+}
+
+.config-storage-switch input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+}
+
+.config-storage-switch-track {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-input);
+  transition: background .16s ease, border-color .16s ease;
+}
+
+.config-storage-switch-track::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  content: "";
+  transition: transform .16s ease, background .16s ease;
+}
+
+.config-storage-switch input:checked + .config-storage-switch-track {
+  border-color: var(--accent);
+  background: var(--accent-surface);
+}
+
+.config-storage-switch input:checked + .config-storage-switch-track::after {
+  background: var(--accent);
+  transform: translateX(17px);
+}
+
+.config-storage-switch input:focus-visible + .config-storage-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.config-storage-switch input:disabled + .config-storage-switch-track {
+  opacity: .55;
+}
+
+.config-storage-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 8px;
+}
+
+.config-storage-toolbar strong {
+  color: var(--text-primary);
+  font-size: .85rem;
+}
+
+.config-storage-selected {
+  color: var(--text-muted);
+  font-size: .76rem;
+}
+
+.config-storage-select-all {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: .74rem;
+}
+
+.config-storage-hosts {
+  max-height: min(42vh, 340px);
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.config-storage-host {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.config-storage-host:last-child {
+  border-bottom: 0;
+}
+
+.config-storage-host:hover {
+  background: var(--bg-card-hover);
+}
+
+.config-storage-host input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.config-storage-host:has(input:disabled) {
+  cursor: default;
+  opacity: .64;
+}
+
+.config-storage-host-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: .79rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-storage-host-mode,
+.conn-storage-mark {
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.config-storage-host-mode[data-mode="encrypted"],
+.conn-storage-mark {
+  border-color: var(--accent-ring);
+  background: var(--accent-surface);
+  color: var(--accent);
+}
+
+.conn-storage-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.config-storage-host-mode[data-mode="temporary"] {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.config-storage-actions {
+  padding-top: 12px;
+}
+
+.config-storage-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 800px) {
+  .encryption-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .encryption-btn span {
+    display: none;
+  }
+
+  .config-storage-toggle {
+    gap: 12px;
+  }
+
+  .config-storage-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .config-storage-select-all {
+    margin-left: 0;
+  }
+}

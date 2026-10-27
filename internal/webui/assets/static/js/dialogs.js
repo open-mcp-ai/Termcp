@@ -379,6 +379,11 @@ function renderConnGrid(connections, bannerMsg) {
     var temporaryMark = c.temporary
       ? '<span class="conn-temporary-mark" data-i18n-title="conn.temporary.hint" title="Temporary host" data-i18n="conn.temporary.mark">TEMP</span>'
       : '';
+    var storageMark = c.storage === 'encrypted'
+      ? '<span class="conn-storage-mark" title="Encrypted at rest" data-i18n-title="storage.mode.encrypted">' +
+          '<svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.2 7V5.2a2.8 2.8 0 015.6 0V7"/></svg>ENC' +
+        '</span>'
+      : '';
     var addr = nodeAddress(c);
     /* The node's readout, in the order the column is meant to be read: what it is
        (name), how Termcp reaches it (protocol), at which address, and whether
@@ -396,6 +401,7 @@ function renderConnGrid(connections, bannerMsg) {
       '</span>' +
       quickBtn +
       temporaryMark +
+      storageMark +
       apprMark +
       editBtn +
       '</div>' +

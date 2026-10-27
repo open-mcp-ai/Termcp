@@ -165,6 +165,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
 	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
 
+	// Configuration-at-rest management. The page chooses whether new profiles
+	// are encrypted and explicitly converts selected existing hosts.
+	mux.HandleFunc("GET /api/config-storage", h.handleConfigStorageStatus)
+	mux.HandleFunc("PUT /api/config-storage", h.handleConfigStorageSetting)
+	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
+	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
+
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes
 	// write through the same store the MCP `extension` tool uses, so a template

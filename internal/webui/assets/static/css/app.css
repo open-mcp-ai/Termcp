@@ -3,6 +3,7 @@
 @import url("z-layers.css");
 @import url("base.css");
 @import url("approval.css");
+@import url("config-storage.css");
 @import url("terminal.css");
 @import url("timeline.css");
 @import url("workspace.css");

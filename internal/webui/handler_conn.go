@@ -24,8 +24,9 @@ type connectionSummary struct {
 	Port        int    `json:"port,omitempty"`
 	// DefaultApproval is the profile's review default for new sessions. It is
 	// served on the list so the card can show the flag without a second fetch.
-	DefaultApproval bool `json:"default_approval"`
-	Temporary       bool `json:"temporary"`
+	DefaultApproval bool   `json:"default_approval"`
+	Temporary       bool   `json:"temporary"`
+	Storage         string `json:"storage"`
 }
 
 // errSSHConfigRequired is what an omitted ssh_config resolves to, on every
@@ -55,6 +56,7 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		}
 		cs := summarizeConnection(n, ent)
 		cs.Temporary = h.SSH.IsTemporary(n)
+		cs.Storage, _ = h.SSH.StorageMode(n)
 		list = append(list, cs)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": list})
@@ -272,7 +274,7 @@ func (h *Handler) handleImportConnections(w http.ResponseWriter, r *http.Request
 // which is what makes the batch split safe.)
 func deleteOneConnection(store *sshconfig.Store, name string) (string, error) {
 	if _, readErr := store.ReadRaw(name); readErr != nil {
-		if errors.Is(readErr, os.ErrNotExist) {
+		if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, sshconfig.ErrNotFound) {
 			return "connection_not_found", readErr
 		}
 		return "operation_failed", readErr

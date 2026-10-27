@@ -33,6 +33,7 @@ type subcommand struct {
 // subcommands lists the namespaces in the order they are shown to the user.
 var subcommands = []subcommand{
 	{name: "daemon", summary: "manage the background instance", argHint: "<action>", actions: []string{actionStart, actionStop, actionStatus, actionStdio}},
+	{name: "config-storage", summary: "inspect encrypted connection-profile storage", argHint: "<action>", actions: []string{actionStatus}},
 	{name: "stdio", summary: "bridge stdin/stdout MCP to an instance already answering", argHint: "[endpoint]"},
 }
 
