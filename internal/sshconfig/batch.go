@@ -1,12 +1,14 @@
 package sshconfig
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 )
 
 const maxBatchSize = 16 << 20
@@ -43,7 +45,7 @@ func (s *Store) ExportBatch(only []string) ([]byte, error) {
 		}
 		raw, err := s.ReadRaw(name)
 		if err != nil {
-			if len(only) > 0 && os.IsNotExist(err) {
+			if len(only) > 0 && (os.IsNotExist(err) || errors.Is(err, ErrNotFound)) {
 				continue
 			}
 			return nil, fmt.Errorf("profile %q: %w", name, err)
@@ -121,20 +123,30 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	existing := make(map[string]bool, len(s.temporary)+1)
+	existing["internal"] = true
+	if s.encrypted != nil {
+		stored, err := s.encrypted.List()
+		if err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+		for _, name := range stored {
+			existing[strings.ToLower(name)] = true
+		}
+	}
 	dirs, err := os.ReadDir(s.root())
 	if err != nil && !os.IsNotExist(err) {
+		s.mu.Unlock()
 		return nil, err
-	}
-	existing := make(map[string]bool, len(dirs)+len(s.temporary))
-	existing["internal"] = true
-	for name := range s.temporary {
-		existing[strings.ToLower(name)] = true
 	}
 	for _, dir := range dirs {
 		if dir.IsDir() && !strings.HasPrefix(dir.Name(), ".") {
 			existing[strings.ToLower(dir.Name())] = true
 		}
+	}
+	for name := range s.temporary {
+		existing[strings.ToLower(name)] = true
 	}
 	result := &BatchImportResult{Imported: len(items)}
 	for i := range items {
@@ -152,11 +164,24 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 		for _, item := range items {
 			s.temporary[item.name] = append([]byte(nil), item.data...)
 		}
+	} else if s.encryptNew {
+		if s.encrypted == nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("configuration encryption is enabled but its keyring is unavailable")
+		}
+		importItems := make([]configstore.Item, 0, len(items))
+		for _, item := range items {
+			importItems = append(importItems, configstore.Item{Name: item.name, Data: item.data})
+		}
+		if err := s.encrypted.Import(importItems); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
 	} else {
 		created := make([]string, 0, len(items))
 		for _, item := range items {
 			p := filepath.Join(s.root(), item.name, "config.toml")
-			if err = os.MkdirAll(filepath.Dir(p), 0700); err == nil {
+			if err = os.MkdirAll(filepath.Dir(p), 0o700); err == nil {
 				created = append(created, p)
 				err = writeFileAtomic(p, item.data)
 			}
@@ -165,10 +190,12 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 					_ = os.Remove(path)
 					_ = os.Remove(filepath.Dir(path))
 				}
+				s.mu.Unlock()
 				return nil, err
 			}
 		}
 	}
+	s.mu.Unlock()
 	s.notifyChange()
 	return result, nil
 }

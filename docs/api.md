@@ -178,6 +178,14 @@ forgotten. Set it in the connection editor's checkbox or as
 available to REST, MCP, and the Web UI until termcp exits. It is never written
 under `ssh_configs/`.
 
+Persistent profiles may use either the per-name `config.toml` layout or the
+encrypted catalog and generation objects under `ssh_configs/`. Plaintext is the
+default. Enabling encryption affects only newly created profiles; existing hosts
+keep their mode until explicitly selected in the “Configuration encryption”
+page. This API still returns or accepts TOML after authorization and decryption,
+so clients do not handle DEKs or encrypted bytes. Each connection summary carries
+`storage`: `plaintext`, `encrypted`, `temporary`, or `builtin`.
+
 ### `GET /api/connections/{name}`
 
 Returns the raw TOML of one connection profile.
@@ -291,6 +299,36 @@ Response 200:
 { "ok": true, "duration_ms": 123 }
 { "ok": false, "duration_ms": 123, "error": "<failure reason + diagnostic hint>" }
 ```
+
+### Configuration at rest
+
+`GET /api/config-storage` returns whether a keyring is initialized, whether new
+profiles will be encrypted, and each listed host's `mode`:
+
+```json
+{
+  "initialized": true,
+  "encrypt_new": true,
+  "hosts": [
+    {"name": "internal", "mode": "builtin"},
+    {"name": "prod", "mode": "plaintext"},
+    {"name": "staging", "mode": "encrypted"}
+  ]
+}
+```
+
+`PUT /api/config-storage` with `{"encrypt_new":true}` enables encryption for
+newly created profiles. Enabling creates the local keyring but does not convert
+or move any existing `config.toml`. Sending `false` switches new profiles back
+to plaintext; already encrypted hosts remain readable and encrypted.
+
+`POST /api/config-storage/encrypt` and `POST
+/api/config-storage/restore` take `{"names":["prod","staging"]}` and report one
+result per requested host. Encryption commits all selected ciphertext objects
+and the catalog before removing their plaintext `config.toml` files. Restore
+writes an atomic plaintext file first, then removes the encrypted catalog entry.
+Temporary profiles cannot be converted. These routes use the instance's existing
+HTTP authentication.
 
 ---
 

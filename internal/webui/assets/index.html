@@ -12,8 +12,7 @@
 </head>
 <body>
   <!-- Drop-in Blackwall artwork: replace icons/blackwall.svg without touching the
-       page layer. The fixed layer never participates in layout or input, and
-       stays below the app surfaces while translucent plates let it show through. -->
+       page layer. It never participates in layout or input. -->
   <div class="page-backdrop" aria-hidden="true"></div>
   <header class="app-header">
     <h1>termcp<span class="app-version" id="app-version" title="termcp -version"></span></h1>
@@ -740,6 +739,7 @@
   <script src="static/js/terminal-window.js"></script>
   <script src="static/js/terminal-switcher.js"></script>
   <script src="static/js/dialogs.js"></script>
+  <script src="static/js/config-storage.js"></script>
   <script src="static/js/conn-form.js"></script>
   <script src="static/js/extensions.js"></script>
   <script src="static/js/archive-column.js"></script>

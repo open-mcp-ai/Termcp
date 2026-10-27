@@ -22,6 +22,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -128,6 +129,10 @@ func main() {
 	}
 	if subName == "stdio" && action == actionHelp {
 		usage()
+		return
+	}
+	if subName == "config-storage" && action == actionHelp {
+		runConfigStorageHelp(os.Stdout)
 		return
 	}
 	// Both bridge forms carry their optional endpoint as a plain word right
@@ -244,6 +249,10 @@ func main() {
 		}
 		cfg.DataDir = dir
 	}
+	if subName == "config-storage" && action == "" {
+		runConfigStorageBrief(os.Stdout)
+		return
+	}
 	// Management actions need nothing but the endpoint (status/stop) or a
 	// printer (help); dispatch before anything creates files, so a status
 	// query stays a pure HTTP probe.
@@ -264,6 +273,13 @@ func main() {
 	if err := ensureWritableDir(cfg.DataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "data dir %q is not writable: %v\n", cfg.DataDir, err)
 		os.Exit(1)
+	}
+	if subName == "config-storage" {
+		if err := runConfigStorageCommand(cfg, action); err != nil {
+			fmt.Fprintf(os.Stderr, "config-storage: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Assets precedence: --assets flag > $TERMCP_ASSETS_DIR > ~/.termcp/assets.
@@ -361,7 +377,18 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		slog.Warn("failed to restore previous DEAD sessions", "err", err)
 	}
 
-	sshStore := sshconfig.NewStore(cfg.DataDir)
+	sshStore, err := sshconfig.OpenConfiguredStore(
+		cfg.DataDir,
+		configstore.NewEnvProvider(""),
+		configstore.SystemProvider(),
+	)
+	if err != nil {
+		slog.Error("failed to open connection profiles", "err", err)
+		os.Exit(1)
+	}
+	if warning := sshStore.StartupWarning(); warning != "" {
+		slog.Warn(warning)
+	}
 
 	// The in-process MCP bridge is a command the internal SSH server serves itself,
 	// so an extension reaches an HTTP MCP server over its own channel with no second
@@ -486,6 +513,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 			// bytes are durable and no handle outlives the process.
 			if err := store.Close(); err != nil {
 				slog.Warn("closing output logs", "err", err)
+			}
+			if err := sshStore.Close(); err != nil {
+				slog.Warn("closing connection profiles", "err", err)
 			}
 		})
 	}

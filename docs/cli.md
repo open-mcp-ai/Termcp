@@ -123,8 +123,32 @@ termcp <subcommand> [action] [flags]
 | `daemon stdio` | 与 `start` 相同，然后留在前台当该实例的 stdio 桥（可选端点值紧跟动作：`termcp daemon stdio sse`）。它拉起的实例在没有桥连接时开始倒计时。 |
 | `daemon stop` | 请求后台实例优雅停机；只有守护实例接受——手动实例会被指回它被启动的地方。 |
 | `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。它是被动查询，它自己的请求不计入空闲倒计时，所以询问不会让它汇报的实例活着。 |
+| `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；已加密时在 ENV/系统凭据可解锁的前提下报告 catalog revision 与密文 profile 数。 |
 
 每个 daemon 动作都经 HTTP 找它的实例，**从不查进程表**——实例在哪里监听就能在哪里找到。
+
+## 主机配置加密
+
+新目录默认使用明文 `config.toml`。WebUI 页头的“配置加密”入口可以主动启用
+“新建配置加密”、选择具体主机加密，或把所选加密主机还原为明文。启用不会自动
+转换任何已有配置，也不会改变未选择主机的存储方式。会话正文和历史仍使用现有格式，
+不因这个开关加密。
+
+```bash
+# 容器/非交互环境：先用一个显式 32 字节 KEK，再在 WebUI 中启用
+export TERMCP_CONFIG_KEK="$(openssl rand -base64 32)"
+termcp config-storage status --data-dir ~/.termcp
+```
+
+没有设置 `TERMCP_CONFIG_KEK` 时，迁移使用操作系统凭据存储：macOS Keychain、
+Windows DPAPI 或 Linux Secret Service。命令不读取 argv 中的密码，也不把 Main
+Key、DEK 或明文配置写到日志。`status` 看到 `encrypted (locked)` 表示文件名与
+catalog 存在，但当前调用方没有可解锁的 Provider；它不会生成替代密钥或退回明文。
+页面的勾选操作是显式授权：加密所选主机时，只有该主机的明文 `config.toml` 会在
+密文 catalog 提交并被回读验证后删除；还原时先原子写入明文，再移除密文引用。
+
+`encryption-test` 分支的 `keys/master.key`、`config/hosts.enc` 不是兼容格式；
+迁移会拒绝该布局。保留旧目录，并在隔离副本中先用对应版本导出，再导入新实例。
 
 ## 权限边界
 
