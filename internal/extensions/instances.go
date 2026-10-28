@@ -335,17 +335,16 @@ func (r *Reconciler) sweepInstances(name string, ext *Extension, st *extState, l
 // promise, the walk because a promise kept only by a timer is one missed callback
 // away from a process nobody will ever close.
 func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int {
-	due := st.dueExtras(limit)
+	sess := r.sessionOfRecord(st)
+	reason := "idle for " + limit.Round(time.Second).String() + " with nothing asked of it"
+	due := st.takeDueExtras(limit, sessIDOf(sess), reason)
 	if len(due) == 0 {
 		return 0
 	}
-	sess := r.sessionOfRecord(st)
 	for _, shellID := range due {
 		if sess != nil {
 			_ = sess.CloseChildShell(shellID)
 		}
-		st.recordClosed(sessIDOf(sess), shellID,
-			"idle for "+limit.Round(time.Second).String()+" with nothing asked of it")
 		slog.Info("extension instance idled out", "name", name, "shell_id", shellID)
 	}
 	return len(due)

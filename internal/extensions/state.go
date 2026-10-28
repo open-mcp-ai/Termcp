@@ -327,10 +327,11 @@ func (st *extState) dropExtra(shellID string) bool {
 	return false
 }
 
-// dueExtras removes and returns the instances whose silence has run out. Taking
-// them out of the state is what keeps the walk from handing one out while it is
-// being closed.
-func (st *extState) dueExtras(limit time.Duration) []string {
+// takeDueExtras atomically removes instances whose silence has run out and
+// publishes the closure they represent. Removing first and recording the closure
+// in a second lock exposed a transient "zero instances but still available, no
+// closed handle" state to Status readers.
+func (st *extState) takeDueExtras(limit time.Duration, sessionID, reason string) []string {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := time.Now()
@@ -346,6 +347,19 @@ func (st *extState) dueExtras(limit time.Duration) []string {
 		kept = append(kept, ex)
 	}
 	st.extra = kept
+	if len(due) == 0 {
+		return nil
+	}
+	st.closedAt = now
+	st.closedSessionID, st.closedShellID, st.closedReason = sessionID, due[len(due)-1], reason
+	switch {
+	case len(st.failures) > 0 && st.shellID == "" && len(st.extra) == 0:
+		// A recorded failure outranks idle; keep its unavailable status.
+	case st.shellID != "" || len(st.extra) > 0:
+		st.status = StatusAvailable
+	default:
+		st.status = StatusIdle
+	}
 	return due
 }
 
