@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
 )
@@ -35,13 +36,18 @@ var ErrReserved = errors.New("reserved ssh config")
 // Store manages dataDir/ssh_configs/<name>/config.toml for remote profiles.
 // The built-in "internal" profile is virtual: it is never written to disk.
 type Store struct {
-	dataDir         string
-	encrypted       *configstore.Repository
-	encryptNew      bool
-	legacyArtifacts bool
-	mu              sync.Mutex
-	temporary       map[string][]byte // process-local profiles; guarded by mu
-	onChange        atomic.Value      // func(), set via SetOnChange, called after Save/Delete/Rename
+	dataDir             string
+	encrypted           *configstore.Repository
+	encryptNew          bool
+	legacyArtifacts     bool
+	mu                  sync.Mutex
+	temporary           map[string][]byte // process-local profiles; guarded by mu
+	temporaryIdentities map[string]string
+	identityByName      map[string]string
+	nameByIdentity      map[string]string
+	identityStamp       time.Time
+	identitiesLoaded    bool
+	onChange            atomic.Value // func(), set via SetOnChange, called after Save/Delete/Rename
 }
 
 // SetOnChange registers a callback fired after Save, Delete, or Rename succeeds.
@@ -104,14 +110,14 @@ func NewHybridStore(dataDir string, repo *configstore.Repository, encryptNew boo
 // OpenConfiguredStore opens an encrypted repository when one has been
 // initialized and otherwise preserves the legacy plaintext layout.
 func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*Store, error) {
-	repo, err := configstore.OpenRepository(dataDir, providers...)
+	repo, err := configstore.OpenRepositoryForRecovery(dataDir, providers...)
 	if errors.Is(err, configstore.ErrNotInitialized) {
-		encryptNew, settingsErr := configstore.LoadEncryptNew(dataDir)
-		if settingsErr != nil {
-			return nil, settingsErr
+		hasCatalog, catalogErr := configstore.HasManagedCatalog(dataDir)
+		if catalogErr != nil {
+			return nil, catalogErr
 		}
-		if encryptNew {
-			return nil, fmt.Errorf("%w: encryption is enabled for new profiles but config.keys is missing", configstore.ErrNotInitialized)
+		if hasCatalog {
+			return nil, fmt.Errorf("%w: encrypted catalog exists but config.keys is missing", configstore.ErrNotInitialized)
 		}
 		legacy, err := configstore.HasLegacyEncryptionArtifacts(dataDir)
 		if err != nil {
@@ -119,17 +125,16 @@ func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*St
 		}
 		store := NewStore(dataDir)
 		store.legacyArtifacts = legacy
+		if err := store.RefreshIdentities(); err != nil {
+			return nil, err
+		}
 		return store, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	dataDir = repo.DataDir()
-	encryptNew, err := configstore.LoadEncryptNew(dataDir)
-	if err != nil {
-		_ = repo.Close()
-		return nil, err
-	}
+	encryptNew := repo.EncryptNew()
 	store := NewHybridStore(dataDir, repo, encryptNew)
 	legacy, err := configstore.HasLegacyEncryptionArtifacts(dataDir)
 	if err != nil {
@@ -137,6 +142,13 @@ func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*St
 		return nil, err
 	}
 	store.legacyArtifacts = legacy
+	if err := store.RefreshIdentities(); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	if repo.Status().Locked {
+		return store, nil
+	}
 	names, err := store.List()
 	if err != nil {
 		_ = store.Close()
@@ -159,6 +171,9 @@ func (s *Store) StartupWarning() string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.encrypted != nil && s.encrypted.Status().Locked {
+		return "configuration key provider could not unlock the Main Key; open the Web UI and enter the encryption password"
+	}
 	if !s.legacyArtifacts {
 		return ""
 	}
@@ -305,6 +320,9 @@ func (s *Store) readPlaintextRaw(name string) ([]byte, error) {
 func (s *Store) List() ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refreshIdentitiesLocked(false); err != nil {
+		return nil, err
+	}
 	names := []string{"internal"}
 	seen := map[string]bool{"internal": true}
 	for name := range s.temporary {
@@ -390,6 +408,10 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 	}
 
 	s.mu.Lock()
+	if err := s.refreshIdentitiesLocked(false); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	encryptedName, encryptedExists, err := s.encryptedFoldLocked(name)
 	if err != nil {
 		s.mu.Unlock()
@@ -415,6 +437,14 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 		}
 	}
 	if temporary {
+		id := s.identityByName[strings.ToLower(name)]
+		if id == "" {
+			id, err = newProfileIdentity()
+			if err != nil {
+				s.mu.Unlock()
+				return err
+			}
+		}
 		if encryptedExists {
 			if s.encrypted == nil {
 				s.mu.Unlock()
@@ -431,10 +461,21 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 				return err
 			}
 		}
+		if encryptedExists || plaintextExists {
+			if err := removeProfileIdentity(filepath.Join(s.root(), name)); err != nil {
+				s.mu.Unlock()
+				return err
+			}
+		}
 		if s.temporary == nil {
 			s.temporary = make(map[string][]byte)
 		}
+		if s.temporaryIdentities == nil {
+			s.temporaryIdentities = make(map[string]string)
+		}
+		s.temporaryIdentities[name] = id
 		s.temporary[name] = append([]byte(nil), data...)
+		s.invalidateIdentitiesLocked()
 		s.mu.Unlock()
 		s.notifyChange()
 		return nil
@@ -448,11 +489,21 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 			s.mu.Unlock()
 			return err
 		}
+		expected := s.temporaryIdentities[name]
+		if IsInternalName(name) {
+			expected = InternalIdentity
+		}
+		if _, err := ensureProfileIdentity(filepath.Dir(path), expected); err != nil {
+			s.mu.Unlock()
+			return err
+		}
 		if err := writeFileAtomic(path, data); err != nil {
 			s.mu.Unlock()
 			return err
 		}
 		delete(s.temporary, name)
+		delete(s.temporaryIdentities, name)
+		s.invalidateIdentitiesLocked()
 		s.mu.Unlock()
 		s.notifyChange()
 		return nil
@@ -460,6 +511,14 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 	if s.encrypted == nil {
 		s.mu.Unlock()
 		return fmt.Errorf("configuration encryption is enabled but its keyring is unavailable")
+	}
+	expected := s.temporaryIdentities[name]
+	if IsInternalName(name) {
+		expected = InternalIdentity
+	}
+	if _, err := ensureProfileIdentity(filepath.Join(s.root(), name), expected); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	if err := s.encrypted.Save(name, data); err != nil {
 		s.mu.Unlock()
@@ -472,6 +531,8 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 		}
 	}
 	delete(s.temporary, name)
+	delete(s.temporaryIdentities, name)
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	s.notifyChange()
 	return nil
@@ -624,6 +685,10 @@ func (s *Store) renameHybrid(oldName, newName string) error {
 		return err
 	}
 	s.mu.Lock()
+	if err := s.refreshIdentitiesLocked(false); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	if data, ok := s.temporary[oldName]; ok {
 		if existing, err := s.repositoryNameConflictLocked(newName, oldName); err != nil {
 			s.mu.Unlock()
@@ -651,6 +716,11 @@ func (s *Store) renameHybrid(oldName, newName string) error {
 		}
 		s.temporary[newName] = data
 		delete(s.temporary, oldName)
+		if id := s.temporaryIdentities[oldName]; id != "" {
+			s.temporaryIdentities[newName] = id
+			delete(s.temporaryIdentities, oldName)
+		}
+		s.invalidateIdentitiesLocked()
 		s.mu.Unlock()
 		s.notifyChange()
 		return nil
@@ -685,13 +755,14 @@ func (s *Store) renameHybrid(oldName, newName string) error {
 			s.mu.Unlock()
 			return fmt.Errorf("configuration encryption is enabled but its keyring is unavailable")
 		}
-		if err := s.encrypted.Rename(encryptedName, newName); err != nil {
+		renameErr := s.encrypted.Rename(encryptedName, newName)
+		if renameErr != nil && !errors.Is(renameErr, configstore.ErrDurability) {
 			s.mu.Unlock()
-			return err
+			return renameErr
 		}
 		// A stale plaintext copy belongs to the same logical profile and must not
 		// become visible under the old name after the catalog rename.
-		if plaintextName, exists, err := s.plaintextFoldLocked(oldName); err != nil {
+		if plaintextName, exists, err := s.plaintextFoldLocked(newName); err != nil {
 			s.mu.Unlock()
 			return err
 		} else if exists {
@@ -700,9 +771,14 @@ func (s *Store) renameHybrid(oldName, newName string) error {
 				return err
 			}
 		}
+		if err := removeProfileIdentity(filepath.Join(s.root(), encryptedName)); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.invalidateIdentitiesLocked()
 		s.mu.Unlock()
 		s.notifyChange()
-		return nil
+		return renameErr
 	}
 	plaintextName, plaintextExists, err := s.plaintextFoldLocked(oldName)
 	if err != nil {
@@ -717,6 +793,7 @@ func (s *Store) renameHybrid(oldName, newName string) error {
 		s.mu.Unlock()
 		return err
 	}
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	s.notifyChange()
 	return nil
@@ -779,6 +856,7 @@ func (s *Store) Delete(name string) error {
 	}
 	s.mu.Lock()
 	delete(s.temporary, name)
+	delete(s.temporaryIdentities, name)
 	encryptedName, encryptedExists, err := s.encryptedFoldLocked(name)
 	if err == nil && encryptedExists {
 		if s.encrypted == nil {
@@ -794,6 +872,10 @@ func (s *Store) Delete(name string) error {
 	if err == nil && plaintextExists {
 		err = removePlaintextProfile(s.plaintextPath(plaintextName))
 	}
+	if err == nil {
+		err = removeProfileIdentity(filepath.Join(s.root(), name))
+	}
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	if err != nil {
 		return err

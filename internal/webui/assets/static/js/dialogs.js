@@ -161,6 +161,19 @@ function connBannerText() {
  *  another name — a live session under a red lamp. The old spellings are kept
  *  only as a fallback for records written before the field existed. */
 function sessionBelongsToNode(s, name, wins) {
+  var connections = window._lastConnections || [];
+  if (sessionBelongsToNode._connectionSnapshot !== connections) {
+    var identities = Object.create(null);
+    for (var i = 0; i < connections.length; i++) {
+      identities[connections[i].name] = connections[i].identity;
+    }
+    sessionBelongsToNode._connectionSnapshot = connections;
+    sessionBelongsToNode._identities = identities;
+  }
+  var identity = sessionBelongsToNode._identities[name];
+  if (identity || s.ssh_config_identity) {
+    return !!identity && identity === s.ssh_config_identity;
+  }
   if (s.ssh_config) return s.ssh_config === name;
   if (s.name === name) return true;
   for (var j = 0; j < wins.length; j++) {
@@ -679,7 +692,13 @@ function loadConnections() {
     .then(function (r) {
       return r.text().then(function (t) {
         if (!r.ok) {
-          throw new Error(t || ('HTTP ' + r.status));
+          var failure = new Error(t || ('HTTP ' + r.status));
+          try {
+            var body = JSON.parse(t);
+            failure.code = body.code;
+            failure.message = body.error || failure.message;
+          } catch (ignored) { /* Older errors are plain text. */ }
+          throw failure;
         }
         try {
           return JSON.parse(t);
@@ -694,6 +713,12 @@ function loadConnections() {
       renderConnGrid(window._lastConnections, '');
     })
     .catch(function (e) {
+      if (e && e.code === 'config_encryption_locked') {
+        window._lastConnections = [];
+        rememberConnBanner('storage.lockedBanner');
+        renderConnGrid([], t('storage.lockedBanner'));
+        return;
+      }
       console.error(e);
       window._lastConnections = [];
       var msg = (e && e.message) ? e.message : String(e);

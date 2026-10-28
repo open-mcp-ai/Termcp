@@ -72,7 +72,8 @@ type Session struct {
 	Cols       int    `json:"cols"`
 	// SSHConfig is the canonical, non-secret profile name used to create this session.
 	// It is separate from Name because callers may rename a session after it starts.
-	SSHConfig string `json:"ssh_config,omitempty"`
+	SSHConfig         string `json:"ssh_config,omitempty"`
+	SSHConfigIdentity string `json:"ssh_config_identity,omitempty"`
 	// DetectedShell is the shell family or binary detected for the target environment (e.g. "pwsh", "cmd", "bash") (issue #208.1).
 	DetectedShell string `json:"detected_shell,omitempty"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).

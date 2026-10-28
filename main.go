@@ -22,7 +22,6 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
-	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -379,8 +378,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 
 	sshStore, err := sshconfig.OpenConfiguredStore(
 		cfg.DataDir,
-		configstore.NewEnvProvider(""),
-		configstore.SystemProvider(),
+		configStorageProviders()...,
 	)
 	if err != nil {
 		slog.Error("failed to open connection profiles", "err", err)
@@ -389,6 +387,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	if warning := sshStore.StartupWarning(); warning != "" {
 		slog.Warn(warning)
 	}
+	sessMgr.SetSSHConfigResolver(sshStore.ResolveSessionReference)
 
 	// The in-process MCP bridge is a command the internal SSH server serves itself,
 	// so an extension reaches an HTTP MCP server over its own channel with no second

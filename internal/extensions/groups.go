@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
@@ -93,8 +94,17 @@ func groupKey(ext *Extension) string {
 		// which host its requests leave from (#233). It groups with other internal
 		// extensions carrying the same capability set.
 		target = "internal"
+	} else if ext.TargetIdentity != "" && !sshconfig.IsInternalName(ext.Target) {
+		target = ext.TargetIdentity
 	}
 	return target + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+}
+
+func namespaceTarget(ext *Extension) string {
+	if ext.TargetIdentity != "" && !sshconfig.IsInternalName(ext.Target) {
+		return ext.TargetIdentity
+	}
+	return ext.Target
 }
 
 // restrictionKey renders a whitelist pair as a comparable string. Entries are
@@ -142,7 +152,7 @@ func (r *Reconciler) group(key string, ext *Extension) *extGroup {
 	if g, ok := r.groups[key]; ok {
 		return g
 	}
-	g := &extGroup{key: key, target: ext.Target, namespace: ns.ForExtensions(ext.Target), created: time.Now()}
+	g := &extGroup{key: key, target: ext.Target, namespace: ns.ForExtensions(namespaceTarget(ext)), created: time.Now()}
 	r.groups[key] = g
 	return g
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -61,6 +62,9 @@ type Extension struct {
 	// non-conflicting local ports while sharing the parent extension's command,
 	// mode, and capabilities.
 	Targets []TargetDecl `toml:"targets,omitempty"`
+	// TargetIdentity binds the legacy single target to its stable profile
+	// identity. Multi-target templates carry one identity per TargetDecl.
+	TargetIdentity string `toml:"target_identity,omitempty"`
 	// Description is the author's one-line summary, shown wherever the extension is
 	// listed. It does NOT reach the model by itself: nothing about the set of
 	// installed extensions goes into the MCP instructions, because the tool surface
@@ -176,8 +180,9 @@ type ForwardDecl struct {
 // configuration that would otherwise conflict across targets (such as local
 // forward listen ports) hangs directly off this host entry.
 type TargetDecl struct {
-	Host     string        `toml:"host" json:"host"`
-	Forwards []ForwardDecl `toml:"forward,omitempty" json:"forwards,omitempty"`
+	Host           string        `toml:"host" json:"host"`
+	TargetIdentity string        `toml:"target_identity,omitempty" json:"target_identity,omitempty"`
+	Forwards       []ForwardDecl `toml:"forward,omitempty" json:"forwards,omitempty"`
 }
 
 // EffectiveTargets returns the target bindings of the extension. If Targets is
@@ -270,6 +275,7 @@ func (e *Extension) Normalize() {
 	e.Name = strings.TrimSpace(e.Name)
 	e.IdleTimeout = strings.TrimSpace(e.IdleTimeout)
 	e.Target = strings.TrimSpace(e.Target)
+	e.TargetIdentity = strings.TrimSpace(e.TargetIdentity)
 	e.Mode = strings.TrimSpace(e.Mode)
 	e.Command = strings.TrimSpace(e.Command)
 	e.URL = strings.TrimSpace(e.URL)
@@ -298,6 +304,7 @@ func (e *Extension) Normalize() {
 	}
 	for i := range e.Targets {
 		e.Targets[i].Host = strings.TrimSpace(e.Targets[i].Host)
+		e.Targets[i].TargetIdentity = strings.TrimSpace(e.Targets[i].TargetIdentity)
 		for j := range e.Targets[i].Forwards {
 			e.Targets[i].Forwards[j].Normalize()
 		}
@@ -341,6 +348,12 @@ func (e *Extension) Validate() error {
 	if e.Target == "" && len(e.Targets) == 0 {
 		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\"), or a [[targets]] list naming the hosts this extension runs on")
 	}
+	if e.TargetIdentity != "" && len(e.Targets) > 0 {
+		return fmt.Errorf("target_identity belongs to target; put it under each [[targets]] entry")
+	}
+	if err := validateTargetIdentity(e.TargetIdentity); err != nil {
+		return err
+	}
 	// ONE SPELLING, NOT TWO. A file carrying both `target` and `[[targets]]` would
 	// leave "which hosts does this run on" with two answers, and the runtime would
 	// have to pick one silently.
@@ -355,6 +368,9 @@ func (e *Extension) Validate() error {
 			}
 			if err := sshconfig.ValidateName(t.Host); err != nil {
 				return fmt.Errorf("targets #%d host: %w", i+1, err)
+			}
+			if err := validateTargetIdentity(t.TargetIdentity); err != nil {
+				return fmt.Errorf("targets #%d: %w", i+1, err)
 			}
 			// A HOST APPEARS ONCE. Two entries for one machine are two channels on one
 			// connection with no way to tell them apart, and the second one's forwards
@@ -454,6 +470,17 @@ func (e *Extension) Validate() error {
 	// the extension, not to an agent that reaches for a file later.
 	if _, err := session.NewRestriction(e.Allow, e.Paths); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateTargetIdentity(identity string) error {
+	if identity == "" {
+		return nil
+	}
+	id, err := uuid.Parse(identity)
+	if err != nil || id == uuid.Nil || id.String() != identity {
+		return fmt.Errorf("target_identity must be a canonical UUID")
 	}
 	return nil
 }

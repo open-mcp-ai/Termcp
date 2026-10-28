@@ -5,6 +5,11 @@
 ### 新增
 
 - **`term` 可以只要 JSON，不要文本（#231）**。回复有两种投影：渲染文本和它的 JSON 双胞胎。`structured_content` 加上后者，新增的 `content:false` 去掉前者，程序化调用方（机器人、CI）于是只为真正解析的那半付费。两者都拒绝是 400：一条要求「一个字节都别回」的命令是打错的请求，不是请求。REST 的 body 本来就是 JSON，所以那边 `content:false` 只去掉可选的 `X-Termcp-Text` 头。
+- **持久主机配置有稳定身份**。每个配置目录的 `identity` 旁车保存不随改名变化的 UUID；会话、扩展、标签和面板按身份关联，删除后同名新建不会再继承旧授权。旧目录首次加载时补建身份，配置正文保持原样，多目标扩展的身份映射单独保存。
+
+### 安全
+
+- **配置保险库可由用户密码派生 Main Key**。首次启用时输入并确认密码；未启用时不创建密钥环，已有明文配置不会自动迁移。系统凭据或 `TERMCP_CONFIG_KEK` 只提供可选自动解锁，都不可用时服务保持锁定，并允许从 Web UI 输入密码。
 
 ### 改进
 
@@ -13,6 +18,7 @@
 - **提示会教正确的做法，不只是说「不对」（#242）**。`--argv` 遇到 shell 语法时，报错不再只说「这是一条命令行」，而是给出能照抄的注入写法（`--argv sh -c $1` 加 args）。MCP instructions 补了两条选型事实：回复是类 HTTP 的信封（`TERM/1 <code>` + 状态头 + body），以及非交互任务该用 pipe（无回显、退出码可观察）、pty 只为 TUI 和交互提示存在（没有结束信号，读到的是采样）。
 - **`bytes_limit` 是 `term` 的统一合同，不再因指令而异（#209）**。生成式回包原来只在调用方写了 `generatedSlot` 的地方才按窗口切：`help <node>`、`ls task`、`cdp protocol` 等裸 slot 返回了整段正文不管多小；现在一个统一的出口守卫对所有 2xx 内容做同样的裁剪并附同样的事实头（`Truncated`, `Content-Range`），而 202 回执、204/206 已有自述的 slot、4xx/5xx 诊断不被窗口切——它们被切了就不再是一个能照着做事的答复。同时还了三个债：删掉从未被消费的 `on_time_overflow`（公布、校验、写进结构体，没人读）；把 `mcp recv` 的 1 MiB 接收下限写进 `bytes_limit` 的说明；把 `bytes_limit: 0` 在“通道/生成式/帧”三条路上的真实含义分别写明，而不是一句「the channel only」。新测试从三个不调用任何 helper 的裸 slot 出发，把出口守卫拿掉就会变红。
 - **SFTP 引擎按会话复用，不再每次文件操作重新握手（#244）**。文件操作原来每次 `sftp.NewClient` 一次、返回时关掉：SSH 开通道、请求 subsystem、SFTP INIT/VERSION，三个往返在发出第一个字节之前花掉。在 350ms RTT 的链路上量得引擎 526ms、894 字节上传 879ms——issue 报的 KB 级文件里，握手是墙钟时间的大头，且与传多少数据无关。现在一个会话一个引擎（`internal/sftpengine`），会话 DEAD 时随它回收；MCP 文件工具与 Web UI 文件面板共用同一个实例，所以一次预览和一次 `read … file` 不再各开一条 subsystem。借用主机的 transport 是请求级租约，仍然每次自开自关，否则下一个调用会拿到一条已释放的连接。交出去的是共享视图，`Close` 是空操作，所以十来个 handler 里现有的 `defer sftpCli.Close()` 不用改，也关不掉别人的引擎。**没修的部分**：写文件本身的五个请求（open/write/close/rename + 一次 stat）是一次原子写的价格；issue 怀疑的「按 chunk 一次往返」在 32 KiB 以下从未发生，894 字节一直就是一个 WRITE（已测）。大文件要算往返就得走上传 URL 或 scp，不是控制通道。
+- **加密配置支持密码轮换**。配置页用“当前密码、新密码、确认新密码”重封各主机与 catalog 的 EDK，配置正文密文不变；中断后可用新密码续跑，旧密码只在完整发布后失效。`termcp config-storage rotate-key` 仅保留给旧 provider-only 存储。
 
 
 ## v0.2.9-rc.1 — 2026-11-02
