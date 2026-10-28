@@ -1,0 +1,439 @@
+entry_kind,entry,file,line,function,target_expression,target_function,target_definition,arguments,coverage
+HTTP registration,GET /sse,main.go,395,runServer,mcpSrv.SSEHandler(),internal/mcp.(*Server).SSEHandler,internal/mcp/server.go:120,GET /sse,"registered source pattern, not inferred browser use"
+HTTP registration,POST /message,main.go,396,runServer,mcpSrv.MessageHandler(),internal/mcp.(*Server).MessageHandler,internal/mcp/server.go:125,POST /message,"registered source pattern, not inferred browser use"
+HTTP registration,/stream,main.go,397,runServer,mcpSrv.StreamableHTTPHandler(),internal/mcp.(*Server).StreamableHTTPHandler,internal/mcp/server.go:131,/stream,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/term,main.go,405,runServer,mcpSrv.TermHandler(),internal/mcp.(*Server).TermHandler,internal/mcp/term_http.go:41,POST /api/term,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/version,internal/webui/handler.go,147,Handler.Register,h.handleVersion,internal/webui.(*Handler).handleVersion,internal/webui/handler_session.go:19,GET /api/version,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/clients,internal/webui/handler.go,150,Handler.Register,h.handleListClients,internal/webui.(*Handler).handleListClients,internal/webui/viewers.go:175,GET /api/clients,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/activity,internal/webui/handler.go,153,Handler.Register,h.handleActivity,internal/webui.(*Handler).handleActivity,internal/webui/activity.go:91,GET /api/activity,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/daemon,internal/webui/handler.go,156,Handler.Register,h.handleDaemonInfo,internal/webui.(*Handler).handleDaemonInfo,internal/webui/daemon.go:17,GET /api/daemon,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/daemon/stop,internal/webui/handler.go,157,Handler.Register,h.handleDaemonStop,internal/webui.(*Handler).handleDaemonStop,internal/webui/daemon.go:31,POST /api/daemon/stop,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/connections,internal/webui/handler.go,160,Handler.Register,h.handleListConnections,internal/webui.(*Handler).handleListConnections,internal/webui/handler_conn.go:37,GET /api/connections,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/connections/batch,internal/webui/handler.go,161,Handler.Register,h.handleExportConnections,internal/webui.(*Handler).handleExportConnections,internal/webui/handler_conn.go:164,GET /api/connections/batch,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/connections/batch,internal/webui/handler.go,162,Handler.Register,h.handleImportConnections,internal/webui.(*Handler).handleImportConnections,internal/webui/handler_conn.go:219,POST /api/connections/batch,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/connections/{name},internal/webui/handler.go,163,Handler.Register,h.handleGetConnection,internal/webui.(*Handler).handleGetConnection,internal/webui/handler_conn.go:81,GET /api/connections/{name},"registered source pattern, not inferred browser use"
+HTTP registration,PUT /api/connections/{name},internal/webui/handler.go,164,Handler.Register,h.handlePutConnection,internal/webui.(*Handler).handlePutConnection,internal/webui/handler_conn.go:101,PUT /api/connections/{name},"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/connections/{name},internal/webui/handler.go,165,Handler.Register,h.handleDeleteConnection,internal/webui.(*Handler).handleDeleteConnection,internal/webui/handler_conn.go:297,DELETE /api/connections/{name},"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/connections/test,internal/webui/handler.go,166,Handler.Register,h.handleTestConnection,internal/webui.(*Handler).handleTestConnection,internal/webui/handler_conn.go:331,POST /api/connections/test,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/extensions,internal/webui/handler.go,174,Handler.Register,h.handleListExtensions,internal/webui.(*Handler).handleListExtensions,internal/webui/handler_extension.go:109,GET /api/extensions,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/extensions,internal/webui/handler.go,175,Handler.Register,h.handleCreateExtension,internal/webui.(*Handler).handleCreateExtension,internal/webui/handler_extension.go:265,POST /api/extensions,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/extensions/batch,internal/webui/handler.go,176,Handler.Register,h.handleExportExtensions,internal/webui.(*Handler).handleExportExtensions,internal/webui/handler_extension.go:422,GET /api/extensions/batch,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/extensions/batch,internal/webui/handler.go,177,Handler.Register,h.handleImportExtensions,internal/webui.(*Handler).handleImportExtensions,internal/webui/handler_extension.go:449,POST /api/extensions/batch,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/extensions/{name},internal/webui/handler.go,178,Handler.Register,h.handleGetExtension,internal/webui.(*Handler).handleGetExtension,internal/webui/handler_extension.go:121,GET /api/extensions/{name},"registered source pattern, not inferred browser use"
+HTTP registration,PUT /api/extensions/{name},internal/webui/handler.go,179,Handler.Register,h.handleUpdateExtension,internal/webui.(*Handler).handleUpdateExtension,internal/webui/handler_extension.go:329,PUT /api/extensions/{name},"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/extensions/{name},internal/webui/handler.go,180,Handler.Register,h.handleDeleteExtension,internal/webui.(*Handler).handleDeleteExtension,internal/webui/handler_extension.go:363,DELETE /api/extensions/{name},"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/extensions/{name}/retry,internal/webui/handler.go,181,Handler.Register,h.handleRetryExtension,internal/webui.(*Handler).handleRetryExtension,internal/webui/handler_extension.go:474,POST /api/extensions/{name}/retry,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions,internal/webui/handler.go,184,Handler.Register,h.handleListSessions,internal/webui.(*Handler).handleListSessions,internal/webui/handler_session.go:23,GET /api/sessions,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/resolve,internal/webui/handler.go,186,Handler.Register,h.handleResolve,internal/webui.(*Handler).handleResolve,internal/webui/resolve.go:33,GET /api/resolve,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions,internal/webui/handler.go,187,Handler.Register,h.handleCreateSession,internal/webui.(*Handler).handleCreateSession,internal/webui/handler_session.go:40,POST /api/sessions,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id},internal/webui/handler.go,188,Handler.Register,h.handleGetSession,internal/webui.(*Handler).handleGetSession,internal/webui/handler_session.go:130,GET /api/sessions/{id},"registered source pattern, not inferred browser use"
+HTTP registration,PATCH /api/sessions/{id},internal/webui/handler.go,189,Handler.Register,h.handleRenameSession,internal/webui.(*Handler).handleRenameSession,internal/webui/handler_session.go:232,PATCH /api/sessions/{id},"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/sessions/{id},internal/webui/handler.go,191,Handler.Register,h.handlePurgeSession,internal/webui.(*Handler).handlePurgeSession,internal/webui/handler_session.go:206,DELETE /api/sessions/{id},"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/approval,internal/webui/handler.go,194,Handler.Register,h.handleSessionApproval,internal/webui.(*Handler).handleSessionApproval,internal/webui/approval.go:50,GET /api/sessions/{id}/approval,"registered source pattern, not inferred browser use"
+HTTP registration,PATCH /api/sessions/{id}/approval,internal/webui/handler.go,195,Handler.Register,h.handleSessionApproval,internal/webui.(*Handler).handleSessionApproval,internal/webui/approval.go:50,PATCH /api/sessions/{id}/approval,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/approvals,internal/webui/handler.go,196,Handler.Register,h.handleApprovalList,internal/webui.(*Handler).handleApprovalList,internal/webui/approval.go:144,GET /api/approvals,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/approvals/{id}/approve,internal/webui/handler.go,197,Handler.Register,h.handleApprovalDecision,internal/webui.(*Handler).handleApprovalDecision,internal/webui/approval.go:173,POST /api/approvals/{id}/approve,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/approvals/{id}/reject,internal/webui/handler.go,198,Handler.Register,h.handleApprovalDecision,internal/webui.(*Handler).handleApprovalDecision,internal/webui/approval.go:173,POST /api/approvals/{id}/reject,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/ui/ws,internal/webui/handler.go,199,Handler.Register,h.handleWebUIWS,internal/webui.(*Handler).handleWebUIWS,internal/webui/ws.go:120,GET /api/ui/ws,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/output-range,internal/webui/handler.go,201,Handler.Register,h.handleSessionOutputRange,internal/webui.(*Handler).handleSessionOutputRange,internal/webui/handler_shell.go:87,GET /api/sessions/{id}/output-range,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/shells,internal/webui/handler.go,202,Handler.Register,h.handleCreateShell,internal/webui.(*Handler).handleCreateShell,internal/webui/handler_shell.go:18,POST /api/sessions/{id}/shells,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/shells,internal/webui/handler.go,203,Handler.Register,h.handleListShells,internal/webui.(*Handler).handleListShells,internal/webui/handler_shell.go:197,GET /api/sessions/{id}/shells,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/shells/{id}/output-range,internal/webui/handler.go,206,Handler.Register,h.handleShellOutputRange,internal/webui.(*Handler).handleShellOutputRange,internal/webui/handler_shell.go:81,GET /api/shells/{id}/output-range,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/shells/{id}/marks,internal/webui/handler.go,208,Handler.Register,h.handleShellMarks,internal/webui.(*Handler).handleShellMarks,internal/webui/marks.go:52,GET /api/shells/{id}/marks,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/shells/{id}/lines,internal/webui/handler.go,210,Handler.Register,h.handleShellLines,internal/webui.(*Handler).handleShellLines,internal/webui/handler_lines.go:44,GET /api/shells/{id}/lines,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/shells/{id}/rail,internal/webui/handler.go,212,Handler.Register,h.handleShellRail,internal/webui.(*Handler).handleShellRail,internal/webui/shellrail.go:108,GET /api/shells/{id}/rail,"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/shells/{id},internal/webui/handler.go,213,Handler.Register,h.handleCloseShell,internal/webui.(*Handler).handleCloseShell,internal/webui/handler_shell.go:215,DELETE /api/shells/{id},"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/shells/{id}/archive,internal/webui/handler.go,219,Handler.Register,h.handleArchiveShell,internal/webui.(*Handler).handleArchiveShell,internal/webui/handler_shell.go:256,POST /api/shells/{id}/archive,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/shells/{id}/input,internal/webui/handler.go,221,Handler.Register,h.handleShellInput,internal/webui.(*Handler).handleShellInput,internal/webui/shellio.go:33,POST /api/shells/{id}/input,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/shells/{id}/key,internal/webui/handler.go,222,Handler.Register,h.handleShellKey,internal/webui.(*Handler).handleShellKey,internal/webui/shellio.go:61,POST /api/shells/{id}/key,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/shells/{id}/resize,internal/webui/handler.go,223,Handler.Register,h.handleShellResize,internal/webui.(*Handler).handleShellResize,internal/webui/shellio.go:89,POST /api/shells/{id}/resize,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/forwards,internal/webui/handler.go,226,Handler.Register,h.handleListForwards,internal/webui.(*Handler).handleListForwards,internal/webui/handler_forward.go:14,GET /api/forwards,"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/forwards/{id},internal/webui/handler.go,227,Handler.Register,h.handleDeleteForward,internal/webui.(*Handler).handleDeleteForward,internal/webui/handler_forward.go:22,DELETE /api/forwards/{id},"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/forwards,internal/webui/handler.go,229,Handler.Register,h.handleListSessionForwards,internal/webui.(*Handler).handleListSessionForwards,internal/webui/handler_forward.go:161,GET /api/sessions/{id}/forwards,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/forwards,internal/webui/handler.go,230,Handler.Register,h.handleCreateForward,internal/webui.(*Handler).handleCreateForward,internal/webui/handler_forward.go:55,POST /api/sessions/{id}/forwards,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/files,internal/webui/handler.go,233,Handler.Register,h.handleListFiles,internal/webui.(*Handler).handleListFiles,internal/webui/handler_file.go:58,GET /api/sessions/{id}/files,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/files/download,internal/webui/handler.go,234,Handler.Register,h.handleDownloadFile,internal/webui.(*Handler).handleDownloadFile,internal/webui/handler_file.go:118,GET /api/sessions/{id}/files/download,"registered source pattern, not inferred browser use"
+HTTP registration,PUT /api/sessions/{id}/files,internal/webui/handler.go,235,Handler.Register,h.handleRenameFile,internal/webui.(*Handler).handleRenameFile,internal/webui/handler_file.go:414,PUT /api/sessions/{id}/files,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/files/upload,internal/webui/handler.go,236,Handler.Register,h.handleUploadFile,internal/webui.(*Handler).handleUploadFile,internal/webui/handler_file.go:298,POST /api/sessions/{id}/files/upload,"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/sessions/{id}/files,internal/webui/handler.go,237,Handler.Register,h.handleDeleteFile,internal/webui.(*Handler).handleDeleteFile,internal/webui/handler_file.go:380,DELETE /api/sessions/{id}/files,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/files/dir,internal/webui/handler.go,238,Handler.Register,h.handleMakeDir,internal/webui.(*Handler).handleMakeDir,internal/webui/handler_file.go:453,POST /api/sessions/{id}/files/dir,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/start,internal/webui/handler.go,241,Handler.Register,h.handleCreateSession,internal/webui.(*Handler).handleCreateSession,internal/webui/handler_session.go:40,POST /api/sessions/start,"registered source pattern, not inferred browser use"
+HTTP registration,GET /api/sessions/{id}/child-shells,internal/webui/handler.go,242,Handler.Register,h.redirectShells,internal/webui.(*Handler).redirectShells,internal/webui/handler_shell.go:75,GET /api/sessions/{id}/child-shells,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/terminate,internal/webui/handler.go,244,Handler.Register,h.handleDeleteSession,internal/webui.(*Handler).handleDeleteSession,internal/webui/handler_session.go:174,POST /api/sessions/{id}/terminate,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/disconnect,internal/webui/handler.go,245,Handler.Register,h.handleDeleteSession,internal/webui.(*Handler).handleDeleteSession,internal/webui/handler_session.go:174,POST /api/sessions/{id}/disconnect,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/close-shell,internal/webui/handler.go,247,Handler.Register,h.handleClosePrimaryShell,internal/webui.(*Handler).handleClosePrimaryShell,internal/webui/handler_shell.go:289,POST /api/sessions/{id}/close-shell,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/forwards,internal/webui/handler.go,248,Handler.Register,h.handleCreateForward,internal/webui.(*Handler).handleCreateForward,internal/webui/handler_forward.go:55,POST /api/forwards,"registered source pattern, not inferred browser use"
+HTTP registration,DELETE /api/sessions/{id}/files/delete,internal/webui/handler.go,249,Handler.Register,h.handleDeleteFile,internal/webui.(*Handler).handleDeleteFile,internal/webui/handler_file.go:380,DELETE /api/sessions/{id}/files/delete,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/files/rename,internal/webui/handler.go,250,Handler.Register,h.handleRenameFile,internal/webui.(*Handler).handleRenameFile,internal/webui/handler_file.go:414,POST /api/sessions/{id}/files/rename,"registered source pattern, not inferred browser use"
+HTTP registration,POST /api/sessions/{id}/files/mkdir,internal/webui/handler.go,251,Handler.Register,h.handleMakeDir,internal/webui.(*Handler).handleMakeDir,internal/webui/handler_file.go:453,POST /api/sessions/{id}/files/mkdir,"registered source pattern, not inferred browser use"
+HTTP registration,/,internal/webui/handler.go,254,Handler.Register,embeddedStaticServer(),internal/webui.embeddedStaticServer,internal/webui/handler.go:22,/,"registered source pattern, not inferred browser use"
+HTTP registration,/api.md,internal/webui/handler.go,262,Handler.Register,docs,,local docs handler variable; binding in source,/api.md,"registered source pattern, not inferred browser use"
+WS inbound message,watch_add,internal/webui/ws.go,289,internal/webui.(*uiWS).readPump,c.addWatch,internal/webui.(*uiWS).addWatch,internal/webui/wswatch.go:134,"[""id""]",message switch case and typed call
+WS inbound message,watch_remove,internal/webui/ws.go,293,internal/webui.(*uiWS).readPump,c.removeWatch,internal/webui.(*uiWS).removeWatch,internal/webui/wswatch.go:154,"[""id""]",message switch case and typed call
+WS inbound message,input,internal/webui/ws.go,296,internal/webui.(*uiWS).readPump,c.handleWSInput,internal/webui.(*uiWS).handleWSInput,internal/webui/ws.go:303,"[""&msg""]",message switch case and typed call
+WS inbound message,resize,internal/webui/ws.go,298,internal/webui.(*uiWS).readPump,c.handleWSResize,internal/webui.(*uiWS).handleWSResize,internal/webui/ws.go:341,"[""&msg""]",message switch case and typed call
+DSL directive,connect,internal/directive/directive.go,454,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveOpen
+internal/mcp.wantPTY","internal/mcp/term_directives.go:174
+internal/mcp/term_directives.go:174","s.directiveOpen(ctx, stmt, win, wantPTY(stmt))
+wantPTY(stmt)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,open,internal/directive/directive.go,466,ops declaration,runDirective switch,"internal/mcp.boolFlag
+internal/mcp.boolFlag
+internal/mcp.(*Server).directiveForward
+internal/mcp.withFlags
+internal/mcp.(*Server).peerOf
+internal/mcp.(*Server).cdpAttach
+internal/mcp.(*Server).openPeer
+internal/mcp.(*Server).directiveOpen
+internal/mcp.wantPTY","internal/mcp/term_directives.go:186
+internal/mcp/term_directives.go:188
+internal/mcp/term_directives.go:191
+internal/mcp/term_directives.go:191
+internal/mcp/term_directives.go:199
+internal/mcp/term_directives.go:203
+internal/mcp/term_directives.go:205
+internal/mcp/term_directives.go:207
+internal/mcp/term_directives.go:207","boolFlag(stmt, ""dynamic"")
+boolFlag(stmt, ""remote"")
+s.directiveForward(ctx, withFlags(stmt, map[string]string{
+	""action"": action,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": action,
+})
+s.peerOf(stmt)
+s.cdpAttach(ctx, stmt, h, target)
+s.openPeer(ctx, stmt, win, stmt.Kind)
+s.directiveOpen(ctx, stmt, win, wantPTY(stmt))
+wantPTY(stmt)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,ls,internal/directive/directive.go,475,ops declaration,runDirective switch,internal/mcp.(*Server).directiveLS,internal/mcp/term_directives.go:212,"s.directiveLS(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,get,internal/directive/directive.go,481,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveGetTask
+internal/mcp.(*Server).directiveHost
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveExtension
+internal/mcp.withFlags
+internal/mcp.isPeerKind
+internal/mcp.(*Server).peerOf
+internal/mcp.(*Server).cdpProtocol
+internal/mcp.(*Server).mcpToolList
+internal/mcp.(*Server).cdpDescribe
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.fileGroupForOp
+internal/mcp.badRequest
+internal/mcp.quoteOrDash
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveInfo","internal/mcp/term_directives.go:84
+internal/mcp/term_directives.go:90
+internal/mcp/term_directives.go:90
+internal/mcp/term_directives.go:99
+internal/mcp/term_directives.go:99
+internal/mcp/term_directives.go:108
+internal/mcp/term_directives.go:109
+internal/mcp/term_directives.go:127
+internal/mcp/term_directives.go:141
+internal/mcp/term_directives.go:143
+internal/mcp/term_directives.go:153
+internal/mcp/term_directives.go:153
+internal/mcp/term_directives.go:157
+internal/mcp/term_directives.go:159
+internal/mcp/term_directives.go:159
+internal/mcp/term_directives.go:162
+internal/mcp/term_directives.go:162
+internal/mcp/term_directives.go:166","s.directiveGetTask(ctx, stmt, win)
+s.directiveHost(ctx, withFlags(stmt, map[string]string{
+	""action"": ""get"", ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""get"", ""name"": stmt.Key,
+})
+s.directiveExtension(ctx, withFlags(stmt, map[string]string{
+	""action"": ""get"", ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""get"", ""name"": stmt.Key,
+})
+isPeerKind(stmt.Kind)
+s.peerOf(stmt)
+s.cdpProtocol(ctx, stmt, h, domain)
+s.mcpToolList(ctx, stmt, h, win, tool)
+s.cdpDescribe(stmt, h, index)
+s.directiveFile(ctx, withFlags(stmt, map[string]string{
+	""action"": ""stat"", ""remote-path"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""stat"", ""remote-path"": stmt.Key,
+})
+fileGroupForOp(op)
+badRequest(stmt, ""get --op does not know "" + quoteOrDash(op) +
+	"". It takes stat, realpath, readlink, getwd, urls, or one of: chmod, chown, chtimes, truncate, statvfs."")
+quoteOrDash(op)
+s.directiveFile(ctx, withFlags(stmt, map[string]string{
+	""action"": action, ""op"": op, ""remote-path"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": action, ""op"": op, ""remote-path"": stmt.Key,
+})
+s.directiveInfo(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,close,internal/directive/directive.go,486,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveCloseTask
+internal/mcp.(*Server).directiveForward
+internal/mcp.withFlags
+internal/mcp.(*Server).peerOf
+internal/mcp.(*Server).cdpDetach
+internal/mcp.(*Server).closePeer
+internal/mcp.badRequest
+internal/mcp.(*Server).directiveForward
+internal/mcp.withFlags
+internal/mcp.isPeerHandle
+internal/mcp.(*Server).peerChannel
+internal/mcp.(*Server).directiveClose
+internal/mcp.badRequest","internal/mcp/term_directives.go:248
+internal/mcp/term_directives.go:259
+internal/mcp/term_directives.go:259
+internal/mcp/term_directives.go:262
+internal/mcp/term_directives.go:267
+internal/mcp/term_directives.go:269
+internal/mcp/term_directives.go:284
+internal/mcp/term_directives.go:289
+internal/mcp/term_directives.go:289
+internal/mcp/term_directives.go:293
+internal/mcp/term_directives.go:294
+internal/mcp/term_directives.go:296
+internal/mcp/term_directives.go:298","s.directiveCloseTask(ctx, stmt)
+s.directiveForward(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+s.peerOf(stmt)
+s.cdpDetach(ctx, stmt, h, index)
+s.closePeer(stmt, h)
+badRequest(stmt, ""`--grace` is a session deadline; "" + fid +
+	"" is a forward, and closing a tunnel has nothing to wait for.\n"" +
+	""Close the tunnel and the connection separately: `close "" + stmt.Target + "" --forward-id "" + fid +
+	""`, then `close "" + stmt.Target + "" --grace N` if that is also wanted."")
+s.directiveForward(ctx, withFlags(stmt, map[string]string{
+	""action"": ""close"", ""forward-id"": fid,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""close"", ""forward-id"": fid,
+})
+isPeerHandle(stmt.Target)
+s.peerChannel(ctx, stmt, win, ""close"", nil)
+s.directiveClose(ctx, stmt, win)
+badRequest(stmt, ""close does not take a "" + stmt.Kind +
+	"". A peer is closed by its address: `close <session> cdp`."")",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,rm,internal/directive/directive.go,499,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveHost
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveExtension
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveAlias
+internal/mcp.aliasStatement
+internal/mcp.(*Server).directiveRemove","internal/mcp/term_directives.go:218
+internal/mcp/term_directives.go:218
+internal/mcp/term_directives.go:223
+internal/mcp/term_directives.go:223
+internal/mcp/term_directives.go:227
+internal/mcp/term_directives.go:227
+internal/mcp/term_directives.go:231
+internal/mcp/term_directives.go:231
+internal/mcp/term_directives.go:233","s.directiveFile(ctx, withFlags(stmt, map[string]string{
+	""action"":      ""delete"",
+	""remote-path"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"":      ""delete"",
+	""remote-path"": stmt.Key,
+})
+s.directiveHost(ctx, withFlags(stmt, map[string]string{
+	""action"": ""delete"", ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""delete"", ""name"": stmt.Key,
+})
+s.directiveExtension(ctx, withFlags(stmt, map[string]string{
+	""action"": ""delete"", ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": ""delete"", ""name"": stmt.Key,
+})
+s.directiveAlias(ctx, aliasStatement(stmt, true), win)
+aliasStatement(stmt, true)
+s.directiveRemove(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,run,internal/directive/directive.go,508,ops declaration,runDirective switch,internal/mcp.(*Server).directiveRun,internal/mcp/term_directives.go:68,"s.directiveRun(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,input,internal/directive/directive.go,513,ops declaration,runDirective switch,internal/mcp.(*Server).directiveType,internal/mcp/term_directives.go:70,"s.directiveType(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,key,internal/directive/directive.go,517,ops declaration,runDirective switch,internal/mcp.(*Server).directiveKey,internal/mcp/term_directives.go:72,"s.directiveKey(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,resize,internal/directive/directive.go,519,ops declaration,runDirective switch,internal/mcp.(*Server).directiveResize,internal/mcp/term_directives.go:74,"s.directiveResize(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,span,internal/directive/directive.go,521,ops declaration,runDirective switch,internal/mcp.(*Server).directiveSpan,internal/mcp/term_directives.go:76,"s.directiveSpan(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,reader,internal/directive/directive.go,524,ops declaration,runDirective switch,internal/mcp.(*Server).directiveReader,internal/mcp/term_directives.go:78,"s.directiveReader(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,read,internal/directive/directive.go,529,ops declaration,runDirective switch,"internal/mcp.(*Server).pipeCopy
+internal/mcp.badRequest
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.isPeerKind
+internal/mcp.(*Server).peerOf
+internal/mcp.badRequest
+internal/mcp.badRequest
+internal/mcp.badRequest
+internal/mcp.(*Server).pageFrame
+internal/mcp.parseSince
+internal/mcp.badRequest
+internal/mcp.(*Server).cdpEvents
+internal/mcp.(*Server).peerChannel
+internal/mcp.boolFlag
+internal/mcp.(*Server).peerChannel
+internal/mcp.(*Server).directiveRead","internal/mcp/term_directives.go:307
+internal/mcp/term_directives.go:313
+internal/mcp/term_directives.go:316
+internal/mcp/term_directives.go:316
+internal/mcp/term_directives.go:327
+internal/mcp/term_directives.go:328
+internal/mcp/term_directives.go:342
+internal/mcp/term_directives.go:348
+internal/mcp/term_directives.go:356
+internal/mcp/term_directives.go:362
+internal/mcp/term_directives.go:365
+internal/mcp/term_directives.go:367
+internal/mcp/term_directives.go:375
+internal/mcp/term_directives.go:377
+internal/mcp/term_directives.go:379
+internal/mcp/term_directives.go:380
+internal/mcp/term_directives.go:382","s.pipeCopy(ctx, stmt, win)
+badRequest(stmt, ""this is the right half of a `|`; it runs as part of the pipeline"")
+s.directiveFile(ctx, withFlags(stmt, map[string]string{
+	""action"":      ""read"",
+	""remote-path"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"":      ""read"",
+	""remote-path"": stmt.Key,
+})
+isPeerKind(stmt.Kind)
+s.peerOf(stmt)
+badRequest(stmt, ""--at takes a frame number (the number a receipt reported as Frame), got "" + strconv.Quote(at))
+badRequest(stmt, ""--offset takes a byte offset, got "" + strconv.Quote(raw))
+badRequest(stmt, ""--bytes takes a positive page size, got "" + strconv.Quote(raw))
+s.pageFrame(stmt, h, n, offset, limit)
+parseSince(since)
+badRequest(stmt, err.Error())
+s.cdpEvents(ctx, stmt, h, index, n, grep, win)
+s.peerChannel(ctx, stmt, win, ""read"", nil)
+boolFlag(stmt, ""frame"")
+s.peerChannel(ctx, stmt, win, ""read"", nil)
+s.directiveRead(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,write,internal/directive/directive.go,543,ops declaration,runDirective switch,"internal/mcp.fileGroupForOp
+internal/mcp.badRequest
+internal/mcp.quoteOrDash
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.badRequest","internal/mcp/term_directives.go:405
+internal/mcp/term_directives.go:407
+internal/mcp/term_directives.go:407
+internal/mcp/term_directives.go:421
+internal/mcp/term_directives.go:421
+internal/mcp/term_directives.go:423","fileGroupForOp(op)
+badRequest(stmt, ""write --op does not know "" + quoteOrDash(op))
+quoteOrDash(op)
+s.directiveFile(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+badRequest(stmt, ""write needs a kind: write <session> file <path>"")",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,call,internal/directive/directive.go,555,ops declaration,runDirective switch,internal/mcp.(*Server).peerChannel,internal/mcp/term_directives.go:433,"s.peerChannel(ctx, stmt, win, ""call"", nil)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,create,internal/directive/directive.go,564,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveHost
+internal/mcp.withFlags
+internal/mcp.boolFlag
+internal/mcp.firstFlagOtherThan
+internal/mcp.badRequest
+internal/mcp.(*Server).directiveExtension
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveAlias
+internal/mcp.aliasStatement
+internal/mcp.badRequest","internal/mcp/term_directives.go:469
+internal/mcp/term_directives.go:469
+internal/mcp/term_directives.go:476
+internal/mcp/term_directives.go:476
+internal/mcp/term_directives.go:478
+internal/mcp/term_directives.go:478
+internal/mcp/term_directives.go:495
+internal/mcp/term_directives.go:496
+internal/mcp/term_directives.go:497
+internal/mcp/term_directives.go:503
+internal/mcp/term_directives.go:503
+internal/mcp/term_directives.go:507
+internal/mcp/term_directives.go:507
+internal/mcp/term_directives.go:513","s.directiveFile(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+s.directiveFile(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+s.directiveHost(ctx, withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+})
+boolFlag(stmt, ""restart"")
+firstFlagOtherThan(stmt, ""restart"")
+badRequest(stmt, ""--restart rebuilds the session and changes no configuration, so it cannot be combined with --"" +
+	other + ""; send the edit and the rebuild as two calls"")
+s.directiveExtension(ctx, withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+})
+s.directiveAlias(ctx, aliasStatement(stmt, false), win)
+aliasStatement(stmt, false)
+badRequest(stmt, stmt.Op + "" needs a kind: "" + stmt.Op + "" host|ext|alias <name>"" + usage)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,edit,internal/directive/directive.go,576,ops declaration,runDirective switch,"internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveFile
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveHost
+internal/mcp.withFlags
+internal/mcp.boolFlag
+internal/mcp.firstFlagOtherThan
+internal/mcp.badRequest
+internal/mcp.(*Server).directiveExtension
+internal/mcp.withFlags
+internal/mcp.(*Server).directiveAlias
+internal/mcp.aliasStatement
+internal/mcp.badRequest","internal/mcp/term_directives.go:469
+internal/mcp/term_directives.go:469
+internal/mcp/term_directives.go:476
+internal/mcp/term_directives.go:476
+internal/mcp/term_directives.go:478
+internal/mcp/term_directives.go:478
+internal/mcp/term_directives.go:495
+internal/mcp/term_directives.go:496
+internal/mcp/term_directives.go:497
+internal/mcp/term_directives.go:503
+internal/mcp/term_directives.go:503
+internal/mcp/term_directives.go:507
+internal/mcp/term_directives.go:507
+internal/mcp/term_directives.go:513","s.directiveFile(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+s.directiveFile(ctx, withFlags(stmt, flags), win)
+withFlags(stmt, flags)
+s.directiveHost(ctx, withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+})
+boolFlag(stmt, ""restart"")
+firstFlagOtherThan(stmt, ""restart"")
+badRequest(stmt, ""--restart rebuilds the session and changes no configuration, so it cannot be combined with --"" +
+	other + ""; send the edit and the rebuild as two calls"")
+s.directiveExtension(ctx, withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+}), win)
+withFlags(stmt, map[string]string{
+	""action"": act, ""name"": stmt.Key,
+})
+s.directiveAlias(ctx, aliasStatement(stmt, false), win)
+aliasStatement(stmt, false)
+badRequest(stmt, stmt.Op + "" needs a kind: "" + stmt.Op + "" host|ext|alias <name>"" + usage)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,notify,internal/directive/directive.go,591,ops declaration,runDirective switch,internal/mcp.(*Server).directiveNotify,internal/mcp/term_directives.go:168,"s.directiveNotify(ctx, stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges
+DSL directive,help,internal/directive/directive.go,594,ops declaration,runDirective switch,internal/mcp.(*Server).directiveHelp,internal/mcp/term_directives.go:170,"s.directiveHelp(stmt, win)",all typed calls under this top-level directive case; branches preserved in raw edges

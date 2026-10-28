@@ -1,0 +1,169 @@
+surface,entry,operation,resource,current_check,parameters,credential_or_sensitive_data,source
+HTTP,GET /sse,建立旧式 SSE 连接,/sse,—,MCP 客户端参数；X-Termcp-Namespace,承载 DSL 结果与通知；,main.go:395
+HTTP,POST /message,提交 SSE 会话的 JSON-RPC 请求,/message,—,sessionId；JSON-RPC 请求体；X-Termcp-Namespace,承载 DSL 参数；,main.go:396
+HTTP,/stream,MCP Streamable HTTP,/stream,—,GET/POST/DELETE 由 SDK 分派；Mcp-Session-Id、MCP-Protocol-Version、X-Termcp-Namespace,承载 DSL 参数与结果；路由注册不指定 method；不意味着接受所有方法,main.go:397
+HTTP,POST /api/term,执行 DSL 批次,/api/term,按实际 DSL 操作,13 个顶层参数；X-Termcp-Namespace,命令、配置、文件与协议帧均可能含秘密；REST 命令入口；不是仅授权 /api/term 就完成操作授权,main.go:405
+HTTP,GET /api/version,读取版本,/api/version,—,无,无直接凭据返回；,internal/webui/handler_session.go:19
+HTTP,GET /api/clients,列出 MCP 客户端和浏览器连接者,/api/clients,—,无,连接者地址、客户端信息；,internal/webui/viewers.go:175
+HTTP,GET /api/activity,读取跨会话活动,/api/activity,—,limit、since_ms、session_id,活动与命令内容可能含秘密；,internal/webui/activity.go:91
+HTTP,GET /api/daemon,读取 daemon 状态与实例信息,/api/daemon,—,无,实例与运行路径元数据；,internal/webui/daemon.go:17
+HTTP,POST /api/daemon/stop,停止实例,/api/daemon/stop,—,无,无直接凭据返回；进程级操作,internal/webui/daemon.go:31
+HTTP,GET /api/connections,列出连接摘要,/api/connections,—,无,地址、用户名；摘要不含密码；,internal/webui/handler_conn.go:37
+HTTP,GET /api/connections/batch,批量导出连接原文,/api/connections/batch,—,names；X-Termcp-Password 请求头,默认明文 TOML；非空导出密码时加密；当前 dev 的导出实现还会包含临时配置；属于现状记录，后续是否调整单独决策,internal/webui/handler_conn.go:164
+HTTP,POST /api/connections/batch,批量导入持久或临时配置,/api/connections/batch,—,temporary；TOML 或加密文件；X-Termcp-Password,接收凭据；加密文件密码与服务登录凭据独立,internal/webui/handler_conn.go:219
+HTTP,GET /api/connections/{name},读取单条原始 TOML,/api/connections/{name},—,name,原文可含密码、私钥、口令、跳板及代理凭据；,internal/webui/handler_conn.go:81
+HTTP,PUT /api/connections/{name},创建、覆盖、改名或切换临时状态,/api/connections/{name},—,name；from、temporary；TOML 请求体,接收凭据；一个 PUT 同时承载多种操作；internal 覆盖另有约束,internal/webui/handler_conn.go:101
+HTTP,DELETE /api/connections/{name},删除配置,/api/connections/{name},—,name（支持逗号批量）,无直接凭据返回；同时影响后续能否连接,internal/webui/handler_conn.go:297
+HTTP,POST /api/connections/test,测试 SSH 连通与认证,/api/connections/test,—,原始 TOML 请求体（完整连接配置）,接收并使用测试凭据；会发起真实 SSH 连接,internal/webui/handler_conn.go:331
+HTTP,GET /api/config-storage,读取配置加密状态,/api/config-storage,—,无,主机名与存储模式；不返回 key、DEK 或明文凭据,internal/webui/handler_config_storage.go:24
+HTTP,PUT /api/config-storage,设置新建配置是否加密,/api/config-storage,—,encrypt_new,启用时创建或解锁本机 keyring；请求与响应均不含恢复密码,internal/webui/handler_config_storage.go:38
+HTTP,POST /api/config-storage/encrypt,显式加密所选主机,/api/config-storage/encrypt,—,names,内部读取明文 TOML 并生成密文；只返回每主机状态,internal/webui/handler_config_storage.go:76
+HTTP,POST /api/config-storage/restore,显式还原所选主机,/api/config-storage/restore,—,names,内部解密并写回明文；只返回每主机状态,internal/webui/handler_config_storage.go:80
+HTTP,GET /api/extensions,读取扩展摘要与运行状态,/api/extensions,—,无,连接、启动命令和运行信息；,internal/webui/handler_extension.go:109
+HTTP,POST /api/extensions,创建扩展并交给协调器运行,/api/extensions,—,JSON 或 TOML；name、kind、target、command/args、url/headers、allow、paths、forwards、alias,接收认证头和启动内容；可引入新进程、远端工具与网络访问,internal/webui/handler_extension.go:265
+HTTP,GET /api/extensions/batch,导出扩展模板原文,/api/extensions/batch,—,names,原始模板可能含认证 headers 或命令秘密；,internal/webui/handler_extension.go:422
+HTTP,POST /api/extensions/batch,批量导入扩展模板,/api/extensions/batch,—,TOML 请求体,接收认证头和启动内容；,internal/webui/handler_extension.go:449
+HTTP,GET /api/extensions/{name},读取扩展模板,/api/extensions/{name},—,name；format=toml 可读原文,模板原文和 headers 等字段可能含凭据；,internal/webui/handler_extension.go:121
+HTTP,PUT /api/extensions/{name},更新或启停扩展,/api/extensions/{name},—,name；JSON 或 TOML,接收认证头和启动内容；,internal/webui/handler_extension.go:329
+HTTP,DELETE /api/extensions/{name},删除扩展并释放关联资源,/api/extensions/{name},—,name（支持逗号批量）,无直接凭据返回；受内置、只读模板约束,internal/webui/handler_extension.go:363
+HTTP,POST /api/extensions/{name}/retry,重试或重建扩展运行实例,/api/extensions/{name}/retry,—,name,无直接凭据返回；可终止旧实例并重新启动,internal/webui/handler_extension.go:474
+HTTP,GET /api/sessions,列出所有会话,/api/sessions,—,无,会话、目标与进程元数据；,internal/webui/handler_session.go:23
+HTTP,GET /api/resolve,解析 termcp 定位符,/api/resolve,—,url,配置、会话、通道定位信息；,internal/webui/resolve.go:33
+HTTP,POST /api/sessions,按连接配置建立 SSH 会话,/api/sessions,—,JSON：ssh_config、command、args、mode、rows、cols、name、on_exit、parent_session_id,使用凭据；命令参数可能含秘密；对应 session.start，但 REST handler 未接模板 capability 检查,internal/webui/handler_session.go:40
+HTTP,GET /api/sessions/{id},读取会话详情,/api/sessions/{id},—,id,会话、通道、目标元数据；,internal/webui/handler_session.go:130
+HTTP,PATCH /api/sessions/{id},修改会话显示名,/api/sessions/{id},—,id；JSON name,无直接凭据返回；,internal/webui/handler_session.go:232
+HTTP,DELETE /api/sessions/{id},终止并删除会话与历史记录,/api/sessions/{id},session.delete,id（支持逗号批量）,无直接凭据返回；删除记录；与 terminate/disconnect 保留记录不同,internal/webui/handler_session.go:206
+HTTP,GET /api/sessions/{id}/approval,读取或修改会话审阅开关,/api/sessions/{id}/approval,—,id；PATCH：enabled、need、timeout_seconds、scopes,无直接凭据返回；读取与改变安全设置共用 handler；尚无独立审批管理身份,internal/webui/approval.go:50
+HTTP,PATCH /api/sessions/{id}/approval,读取或修改会话审阅开关,/api/sessions/{id}/approval,—,id；PATCH：enabled、need、timeout_seconds、scopes,无直接凭据返回；读取与改变安全设置共用 handler；尚无独立审批管理身份,internal/webui/approval.go:50
+HTTP,GET /api/approvals,列出审批请求,/api/approvals,—,session_id,待审命令、文件操作及配置内容可能含秘密；,internal/webui/approval.go:144
+HTTP,POST /api/approvals/{id}/approve,批准并执行，或拒绝请求,/api/approvals/{id}/approve,—,id；可选 JSON reason,操作内容可能含秘密；批准会触发实际执行；尚无独立审批者权限,internal/webui/approval.go:173
+HTTP,POST /api/approvals/{id}/reject,批准并执行，或拒绝请求,/api/approvals/{id}/reject,—,id；可选 JSON reason,操作内容可能含秘密；批准会触发实际执行；尚无独立审批者权限,internal/webui/approval.go:173
+HTTP,GET /api/sessions/{id}/output-range,读取主通道或指定通道输出字节窗口,/api/sessions/{id}/output-range,shell.output,id；start 或 tail=1；max、stream,终端原文可能含秘密；兼容路径；id 可解析为 shell_id 或 session_id,internal/webui/handler_shell.go:87
+HTTP,POST /api/sessions/{id}/shells,在已有会话中新建通道,/api/sessions/{id}/shells,shell.open,id；JSON command、args、mode、rows、cols、name,命令参数可能含秘密；,internal/webui/handler_shell.go:18
+HTTP,GET /api/sessions/{id}/shells,列出会话通道,/api/sessions/{id}/shells,—,id,通道与进程元数据；,internal/webui/handler_shell.go:197
+HTTP,GET /api/shells/{id}/output-range,读取通道输出字节窗口,/api/shells/{id}/output-range,shell.output,id；start 或 tail=1；max、stream,终端原文可能含秘密；,internal/webui/handler_shell.go:81
+HTTP,GET /api/shells/{id}/marks,读取状态和输入输出标记,/api/shells/{id}/marks,session.message,id；start、end 字节窗口,终端活动及关联输入信息；,internal/webui/marks.go:52
+HTTP,GET /api/shells/{id}/lines,按逻辑行读取历史,/api/shells/{id}/lines,shell.output,id；from、count、content,终端原文可能含秘密；,internal/webui/handler_lines.go:44
+HTTP,GET /api/shells/{id}/rail,按终端宽度读取行布局,/api/shells/{id}/rail,shell.output,id；cols、top、count、height,输出字节范围与活动标记；,internal/webui/shellrail.go:108
+HTTP,DELETE /api/shells/{id},关闭并删除通道元数据,/api/shells/{id},shell.close,id（支持逗号批量）,无直接凭据返回；与 archive 保留可寻址记录不同,internal/webui/handler_shell.go:215
+HTTP,POST /api/shells/{id}/archive,停止通道并保留记录,/api/shells/{id}/archive,shell.close,id（支持逗号批量）,无直接凭据返回；,internal/webui/handler_shell.go:256
+HTTP,POST /api/shells/{id}/input,向通道输入文字并可选回车,/api/shells/{id}/input,shell.input,id；JSON text、press_enter,接收任意终端输入；REST 作为操作者输入，不经过 AI 行级审批,internal/webui/shellio.go:33
+HTTP,POST /api/shells/{id}/key,向通道发送按键,/api/shells/{id}/key,shell.key,id；JSON key、repeat,无直接凭据返回；REST 不经过 AI 行级审批,internal/webui/shellio.go:61
+HTTP,POST /api/shells/{id}/resize,调整 PTY 尺寸,/api/shells/{id}/resize,shell.resize,id；JSON rows、cols,无直接凭据返回；,internal/webui/shellio.go:89
+HTTP,GET /api/forwards,列出全部转发,/api/forwards,—,无,监听地址与网络拓扑；,internal/webui/handler_forward.go:14
+HTTP,DELETE /api/forwards/{id},关闭指定转发,/api/forwards/{id},forward.close,id,无直接凭据返回；,internal/webui/handler_forward.go:22
+HTTP,GET /api/sessions/{id}/forwards,列出会话转发,/api/sessions/{id}/forwards,—,id,监听地址与网络拓扑；,internal/webui/handler_forward.go:161
+HTTP,POST /api/sessions/{id}/forwards,建立 local/remote/dynamic 转发,/api/sessions/{id}/forwards,forward.open,路径 id 优先，兼容 body session_id；direction、remote_host/port、bind_host、local_host/port,无直接凭据返回；三种方向共用操作；监听与目标地址应是后续资源限制维度,internal/webui/handler_forward.go:55
+HTTP,GET /api/sessions/{id}/files,读取文件元数据或目录列表,/api/sessions/{id}/files,file.stat + paths,id；path,文件与目录元数据；,internal/webui/handler_file.go:58
+HTTP,GET /api/sessions/{id}/files/download,下载文件或字节范围,/api/sessions/{id}/files/download,file.read + paths,id；path、h.<Name>；Range 请求头,任意获准路径内容可能含凭据；,internal/webui/handler_file.go:118
+HTTP,PUT /api/sessions/{id}/files,移动或重命名文件,/api/sessions/{id}/files,file.rename + paths,id；from、to,无直接凭据返回；,internal/webui/handler_file.go:414
+HTTP,POST /api/sessions/{id}/files/upload,上传、覆盖或分块续写文件,/api/sessions/{id}/files/upload,file.write + paths,id；path、offset；Content-Range；原始或 multipart 请求体,接收文件内容；,internal/webui/handler_file.go:298
+HTTP,DELETE /api/sessions/{id}/files,删除文件或目录,/api/sessions/{id}/files,file.delete + paths,id；path,无直接凭据返回；,internal/webui/handler_file.go:380
+HTTP,POST /api/sessions/{id}/files/dir,创建目录,/api/sessions/{id}/files/dir,file.mkdir + paths,id；path,无直接凭据返回；,internal/webui/handler_file.go:453
+HTTP,GET /api/ui/ws,升级为浏览器实时连接,/api/ui/ws,—,WebSocket Upgrade；cookie 或 Authorization,握手后推送会话、配置摘要、扩展、连接者、通知与审批事件；消息级操作见单独清单；握手不等于消息级权限,internal/webui/ws.go:120
+HTTP,POST /api/sessions/start,按连接配置建立 SSH 会话,/api/sessions/start,—,JSON：ssh_config、command、args、mode、rows、cols、name、on_exit、parent_session_id,使用凭据；命令参数可能含秘密；对应 session.start，但 REST handler 未接模板 capability 检查,internal/webui/handler_session.go:40
+HTTP,GET /api/sessions/{id}/child-shells,重定向到通道列表,/api/sessions/{id}/child-shells,—,id,无直接凭据返回；301；不是独立能力,internal/webui/handler_shell.go:75
+HTTP,POST /api/sessions/{id}/terminate,断开会话，保留历史记录,/api/sessions/{id}/terminate,session.terminate,id（支持逗号批量）,无直接凭据返回；与 DELETE /api/sessions/{id} 的清除语义不同,internal/webui/handler_session.go:174
+HTTP,POST /api/sessions/{id}/disconnect,断开会话，保留历史记录,/api/sessions/{id}/disconnect,session.terminate,id（支持逗号批量）,无直接凭据返回；与 DELETE /api/sessions/{id} 的清除语义不同,internal/webui/handler_session.go:174
+HTTP,POST /api/sessions/{id}/close-shell,关闭会话主通道,/api/sessions/{id}/close-shell,shell.close,id=session_id,无直接凭据返回；,internal/webui/handler_shell.go:289
+HTTP,POST /api/forwards,建立 local/remote/dynamic 转发,/api/forwards,forward.open,路径 id 优先，兼容 body session_id；direction、remote_host/port、bind_host、local_host/port,无直接凭据返回；三种方向共用操作；监听与目标地址应是后续资源限制维度,internal/webui/handler_forward.go:55
+HTTP,DELETE /api/sessions/{id}/files/delete,删除文件或目录,/api/sessions/{id}/files/delete,file.delete + paths,id；path,无直接凭据返回；,internal/webui/handler_file.go:380
+HTTP,POST /api/sessions/{id}/files/rename,移动或重命名文件,/api/sessions/{id}/files/rename,file.rename + paths,id；from、to,无直接凭据返回；,internal/webui/handler_file.go:414
+HTTP,POST /api/sessions/{id}/files/mkdir,创建目录,/api/sessions/{id}/files/mkdir,file.mkdir + paths,id；path,无直接凭据返回；,internal/webui/handler_file.go:453
+HTTP,/,静态 UI 与资源,/,—,资源路径,文档与静态资源；两条为互斥构建分支；普通构建通过 / 提供 /api.md；仅 GET/HEAD /api.md 可免认证,internal/webui/handler.go:254
+HTTP,/api.md,纯 API 构建的文档路由,/api.md,—,资源路径,文档与静态资源；两条为互斥构建分支；普通构建通过 / 提供 /api.md；仅 GET/HEAD /api.md 可免认证,internal/webui/handler.go:262
+WebSocket,客户端 → 服务端:watch_add,订阅通道输出；会注册 reader,id=shell_id,未见 shell.output 白名单检查,id=shell_id,终端原文,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,客户端 → 服务端:watch_remove,取消此连接上的输出订阅,id=shell_id,连接内 watch 管理，无独立 capability,id=shell_id,无直接凭据返回,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,客户端 → 服务端:input,原始文字输入，可附加换行,id、d、nl,资源模板 shell.input；不经 AI 行级审批,id、d、nl,输入可含秘密,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,客户端 → 服务端:resize,修改 PTY 尺寸,id、rows、cols,资源模板 shell.resize,id、rows、cols,无直接凭据返回,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:sessions,初始及状态变化时推送综合列表,sessions、connections、clients、mcp_clients、extensions,全量列表，未见按调用者权限过滤,sessions、connections、clients、mcp_clients、extensions,配置摘要、运行与连接者元数据,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:terminal,输出原文流,id、d,由 watch_add 的订阅驱动,id、d,输出可含秘密,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:terminal_done,通道输出结束,id,由 watch_add 的订阅驱动,id,无直接凭据返回,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:shell_activity,输入来源及提交状态,shell_id、src、submit,广播；未见按调用者 scope 过滤,shell_id、src、submit,跨会话活动,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:ui_notify,用户通知,title、message、level、duration_seconds、session_id,广播；未见按调用者 scope 过滤,title、message、level、duration_seconds、session_id,通知内容,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+WebSocket,服务端 → 客户端:approval,审批状态变化,session_id、request 与审阅状态,广播；未见独立审批者权限过滤,session_id、request 与审阅状态,待审命令或操作参数,internal/webui/ws.go; internal/webui/wswatch.go; internal/webui/uinotify.go; internal/webui/approval.go
+MCP,initialize / notifications/initialized / ping,MCP 初始化与存活,MCP 会话,SDK 协议生命周期,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+MCP,tools/list,枚举唯一工具 term,MCP 会话,当前没有按调用者 scope 裁剪 DSL 能力,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+MCP,tools/call：term,运行 DSL,MCP 会话,必须按解析并展开后的实际操作授权,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+MCP,prompts/list,列出 learn-api,MCP 会话,提示词发现,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+MCP,prompts/get：learn-api,读取 API 学习提示词，可选 task 参数,MCP 会话,返回本实例 API 文档地址与学习指引,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+MCP,sampling/createMessage（服务端 → 客户端）,将子 MCP 的采样请求转发给宿主 Agent 并返回结果,MCP 会话,客户端需声明 sampling；当前透传不检查提示词内容；参数/响应及授权应单独盘点,,,internal/mcp/register.go; internal/mcp/term_register.go; internal/mcp/docs.go
+DSL,connect <host>,建立连接及首个通道,会话与通道,session.start,connect <host>；使用保存的凭据；--argv 可指定启动命令；当前不因 session.start 自动入审,使用凭据与启动参数,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session>,在已有连接创建 PTY 或 pipe 通道,会话与通道,shell.open,open <session>；--argv、--pty、--pipe、--name、--on-exit、尺寸,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls [<session>] [--all],列举会话、通道及 peer,会话与通道,session.list / shell.list（概念映射）,ls [<session>] [--all]；由 directivePS/列表生成路径直接读取；默认折叠已结束通道，--all 显示,运行与目标元数据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <session>,读取会话详情,会话与通道,session.info（概念映射）,get <session>；direct manager 路径；不能假定已检查 session.info,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <channel>,读取通道详情,会话与通道,session.info / shell.output（缺独立通道详情 ID）,get <channel>；通道存在性检查与 session 详情分开,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close <session> [--grace N],终止会话并保留记录,会话与通道,session.terminate,close <session> [--grace N]；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close <channel>,停止通道并保留记录,会话与通道,shell.close,close <channel>；内部调用 shell_archive,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,rm <session> [--force] [--dry-run],删除会话和记录,会话与通道,session.delete,rm <session> [--force] [--dry-run]；dry-run 与实际删除应分别记录实际效果,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,run <channel> $1,输入命令、提交并读取窗口,终端输入输出,shell.input + shell.key + shell.output,run <channel> $1；多个底层动作；run 的 --tail/--grep/--grep-limit/--encoding 控制本次读窗,输入与输出均可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,input <channel> $1,输入文字，不自动回车,终端输入输出,shell.input,input <channel> $1；AI 来源走已有行级审阅路径,输入可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,key <channel> <key> [--repeat N],发送按键,终端输入输出,shell.key,key <channel> <key> [--repeat N]；Enter 可完成一行并触发审批；Ctrl-C 等也有实际副作用,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,resize <channel> <rows> <cols>,调整 PTY,终端输入输出,shell.resize,resize <channel> <rows> <cols>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <channel>,读取输出窗口,终端输入输出,shell.output,read <channel>；--cursor、--from-line、--tail、--stream、--raw、--grep、--grep-limit、--encoding,终端原文可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,span <channel>,读取状态跨度与标记,终端输入输出,session.message,span <channel>；内部调用 message/list 读取跨度；与 shell.output 是不同的现有 ID,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,reader <channel>,注册独立输出 reader,终端输入输出,shell.reader.register,reader <channel>；改变游标/资源状态，虽然不改远端文件,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,reader <channel> --drop <id>,注销输出 reader,终端输入输出,shell.reader.unregister,reader <channel> --drop <id>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls host,列举连接配置,主机配置,profile.list,ls host；顶层资源，无现成 session Restriction 可约束,目标元数据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get host <name>,读取连接字段,主机配置,profile.list（无独立 get ID）,get host <name>；password/key_passphrase 只回 has_*，但 private_key、proxy 字段仍直接返回；不可笼统标为无秘密,private_key、代理配置、跳板配置可能含凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create host <name>,创建连接配置,主机配置,profile.create,create host <name>；需要 --mcp-manage-ssh-configs；可以接收密码、私钥及跳板字段,接收凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create host <name> --source <other>,复制连接配置,主机配置,profile.copy,create host <name> --source <other>；复制也会复制原有凭据；需要管理配置开关,使用并复制凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,edit host <name>,编辑连接配置,主机配置,profile.edit,edit host <name>；需要管理配置开关；允许修改连通与默认审阅设置,接收凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,rm host <name>,删除连接配置,主机配置,profile.delete,rm host <name>；需要管理配置开关,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls ext,列举扩展状态,扩展,ext.list,ls ext；顶层资源；启动命令/配置需要作为敏感元数据处理,模板与运行信息,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get ext <name>,读取单条模板,扩展,ext.get,get ext <name>；读取 headers、command、args、alias、allow、paths 等内容,headers 和启动内容可能含凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create ext <name>,安装扩展模板,扩展,ext.create,create ext <name>；包括 SSH 通道、远端 MCP、CDP、JSON-RPC 等 kind，能扩大可达能力,接收认证头和启动内容,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,edit ext <name>,更新模板、启停和资源边界,扩展,ext.update,edit ext <name>；--enabled、--allow、--paths、--forwards 不能都混为普通描述修改,接收认证头和启动内容,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,edit ext <name> --restart,重建扩展运行实例,扩展,ext.retry,edit ext <name> --restart；与配置修改分开的动作；对应 REST retry,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,rm ext <name>,删除扩展及关联运行资源,扩展,ext.delete,rm ext <name>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls <session> forward,列出转发,转发,forward.list,ls <session> forward；网络拓扑信息,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> forward,创建 local 转发,转发,forward.open,open <session> forward；限制监听地址与远端目标比单一 capability 更细,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> forward --remote,创建 remote 转发,转发,forward.open,open <session> forward --remote；改变远端监听及回连目标,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> forward --dynamic,创建 SOCKS 转发,转发,forward.open,open <session> forward --dynamic；动态代理的目的地址不完全在创建时确定,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close <session> forward <id>,关闭转发,转发,forward.close,close <session> forward <id>；也支持 --forward-id <id> 形式,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls <session> file <path>,读取目录和文件元数据,文件,file.stat + paths,ls <session> file <path>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <session> file <path> [--op stat],读取文件元数据,文件,file.stat + paths,get <session> file <path> [--op stat]；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <session> file <path>,读取文件内容,文件,file.read + paths,read <session> file <path>；输出窗口与文本/hex 编码,文件可能含凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,write <session> file <path> --data <value>,写入、追加或按偏移更新内容,文件,file.write + paths,write <session> file <path> --data <value>；--offset、--mode、--length 参与动作,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,write <session> file <path> --old-text <old> --new-text <new>,替换文件内容,文件,file.write + paths,write <session> file <path> --old-text <old> --new-text <new>；与普通写共用 capability,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,write <session> file <path> --local-path <file>,上传服务端本地文件到目标,文件,file.write + paths,write <session> file <path> --local-path <file>；可异步返回 task；local-path 是 Termcp 进程所在主机的路径,本地文件可能含凭据,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create <session> file <path>,创建目录,文件,file.mkdir + paths,create <session> file <path>；此形式不是创建空普通文件,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create <session> file <link> --target <target>,创建符号链接,文件,file.link + paths,create <session> file <link> --target <target>；--op symlink 为链接种类,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create <session> file <new> --target <existing> --op link,创建硬链接,文件,file.link + paths,create <session> file <new> --target <existing> --op link；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,rm <session> file <path>,删除文件或目录,文件,file.delete + paths,rm <session> file <path>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op chmod,修改权限,文件,file.perm + paths,get/write <session> file <path> --op chmod；write 仅给 --mode 且无内容也会进入 chmod；get --op 也可进入此写操作,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op chown,修改所有者,文件,file.perm + paths,get/write <session> file <path> --op chown；--uid、--gid 是 write 的参数；get 别因动词只读就放行,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op chtimes,修改时间,文件,file.perm + paths,get/write <session> file <path> --op chtimes；--atime、--mtime,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op readlink,读取符号链接目标,文件,file.link + paths,get/write <session> file <path> --op readlink；与创建链接共用一项 capability，应记录读写混合,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op truncate,截断文件,文件,file.fs + paths,get/write <session> file <path> --op truncate；--size 是 write 的参数；归属与 realpath/statvfs 相同,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op realpath,解析绝对路径,文件,file.fs + paths,get/write <session> file <path> --op realpath；与 truncate 共用 ID，不能直接整组当只读,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op statvfs,读取文件系统统计,文件,file.fs + paths,get/write <session> file <path> --op statvfs；与 truncate 共用 ID,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op getwd,读取远端当前目录,文件,file.getwd,get/write <session> file <path> --op getwd；分派器接受此子操作；仅请求路径不等于实际路径约束,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op urls,生成文件上传下载 URL,文件,file.urls + paths,get/write <session> file <path> --op urls；URL 不应成为绕过对应文件读写权限的凭据,生成下载/上传入口,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get/write <session> file <path> --op stat,读取文件元数据,文件,file.stat + paths,get/write <session> file <path> --op stat；write 动词也可进入读取子操作,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <source-channel> | write <session> file <path>,将输出/帧复制成文件,文件与任务,来源读权限 + file.write（需逐端核对实际检查）,read <source-channel> | write <session> file <path>；异步 task；跨会话/跨资源边界，授权不能只检查管道一端,复制内容可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls task,列举当前进程传输任务,任务,缺独立 ID；直接 tasks 管理器,ls task；当前不是 MCP SDK 的 tasks/list,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get task <id>,查看或等待任务结果,任务,缺独立 ID；直接 tasks 管理器,get task <id>；使用 timeout 等待；任务结束后保留回执一段时间,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close task <id>,取消传输并清理部分文件,任务,缺独立 ID；直接 tasks 管理器,close task <id>；取消具有文件副作用,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> mcp <url>,经会话打开远端 MCP,协议 peer,mcp.open,open <session> mcp <url>；当前检查会话模板；源码明确没有在此执行 review,URL/headers 或远端工具内容可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> cdp <url>,经会话打开浏览器调试 peer,协议 peer,cdp.open,open <session> cdp <url>；当前检查会话模板；可连接调试入口,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> jrpc <url>,经会话打开通用 JSON-RPC peer,协议 peer,jrpc.open,open <session> jrpc <url>；当前检查会话模板；远端方法不由 Termcp 静态定义,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls <session> cdp/mcp/jrpc,列出该类 peer,协议 peer,缺独立 peer.list ID,ls <session> cdp/mcp/jrpc；CDP peer 子层还可列出 targets/pages,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <session> cdp/mcp/jrpc[:N],读取 peer 或附着 target 详情,协议 peer,缺独立 peer.get ID,get <session> cdp/mcp/jrpc[:N]；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <session> cdp[:N] protocol [Domain],读取浏览器协议定义,协议 peer,缺独立协议读取 ID,get <session> cdp[:N] protocol [Domain]；定义来自实际浏览器，方法集合动态变化,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,get <session> mcp[:N] tools [tool],读取远端工具列表或完整 schema,协议 peer,缺独立远端工具发现 ID,get <session> mcp[:N] tools [tool]；不是本机 tools/list,工具说明与 schema,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,open <session> cdp:N --target <targetId>,附着指定浏览器 target,协议 peer,缺独立 target.attach ID,open <session> cdp:N --target <targetId>；与创建初始 CDP peer 不是同一个动作,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,call <peer-or-channel> <frame>,请求 JSON-RPC/CDP 并读取匹配回复,协议 peer,缺独立 peer.call / method 权限,call <peer-or-channel> <frame>；可执行任意远端方法；不能只检查最初的 *.open,帧参数与结果可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,call <peer-or-channel> --send <frame>,仅发送帧,协议 peer,缺独立 peer.send ID,call <peer-or-channel> --send <frame>；与同步 call 共用入口,帧可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,call <session> mcp:N <tool> [<json-args>],按名称调用远端 MCP 工具,协议 peer,缺独立远端 tool 授权,call <session> mcp:N <tool> [<json-args>]；远端工具名、参数、目标是后续权限维度,工具参数和结果可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <peer-or-channel> [--frame],读取下一帧,协议 peer,缺独立 peer.read ID；通道帧读取需结合 shell.output,read <peer-or-channel> [--frame]；网络 peer 与本地 pipe 两种来源,帧可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <session> cdp/mcp/jrpc[:N] --since N,按序列读帧日志/事件,协议 peer,缺独立 peer.events ID,read <session> cdp/mcp/jrpc[:N] --since N；支持 target 与 grep 过滤,帧日志可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,read <session> cdp/mcp/jrpc[:N] --at N --offset B --bytes N,分页读取大帧,协议 peer,缺独立 frame.read ID,read <session> cdp/mcp/jrpc[:N] --at N --offset B --bytes N；--since 与 --at 是不同维度,帧内容可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close <session> cdp/mcp/jrpc,关闭协议 peer,协议 peer,缺独立 peer.close ID,close <session> cdp/mcp/jrpc；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,close <session> cdp:N,解除附着 target,协议 peer,缺独立 target.detach ID,close <session> cdp:N；与断开整个 CDP peer 分开,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,ls alias,读取 alias 表,别名,缺独立 alias.list ID；进程内表,ls alias；包含扩展安装的 alias 与运行时 alias,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,create alias <name> <expansion>,创建运行时 alias,别名,缺独立 alias.create ID,create alias <name> <expansion>；影响后续命令展开；重启不保留,展开内容可能含秘密,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,edit alias <name> <expansion>,修改运行时 alias,别名,缺独立 alias.edit ID,edit alias <name> <expansion>；不能把 alias 名作为最终授权对象,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,rm alias <name>,删除运行时 alias,别名,缺独立 alias.delete ID,rm alias <name>；,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,notify [--on <session>] <body>,通知浏览器用户,通知与帮助,user.notify,notify [--on <session>] <body>；--level、--title、--sticky 或 --for,通知正文,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
+DSL,help [verb-or-node] [--all] / 空 cmd,读取动态帮助,通知与帮助,缺独立 help ID；元数据操作,help [verb-or-node] [--all] / 空 cmd；资源节点帮助与动词帮助均由运行时生成,无直接凭据返回,internal/mcp/term_directives.go; internal/mcp/term_generated.go; internal/mcp/term_open.go; internal/mcp/term_jrpc.go
