@@ -57,6 +57,16 @@ func (g toolGuard) check(ctx context.Context, toolName string, c gate, request m
 	if args == nil || g.server == nil {
 		return nil
 	}
+
+	// BEFORE ANY CONFIGURATION IS READ. The access directory holds the signing key,
+	// and the caller may be the very agent that authored the whitelist it would be
+	// checked against — so the answer cannot be "ask the whitelist". See
+	// protected.go for why this is unconditional and why it covers remote paths
+	// too.
+	if bad := g.refuseProtectedPath(c, args); bad != nil {
+		return bad
+	}
+
 	callerNS := callerNamespace(ctx)
 
 	// A shell-addressed tool resolves through its parent session, since the

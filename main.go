@@ -391,6 +391,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	// No MCP resources: the tool surface describes itself (see internal/mcp/docs.go).
 	mcpSrv.SetDocsFS(webui.Assets())
 	mcpSrv.NoInternal = cfg.NoInternal
+	// The access directory is refused to every caller regardless of configuration
+	// (see internal/mcp/protected.go), so this server has to know where it is.
+	mcpSrv.SetDataDir(cfg.DataDir)
 	mcpSrv.ManageSSHConfigs = cfg.MCPManageSSHConfigs
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())

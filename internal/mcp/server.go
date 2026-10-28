@@ -45,6 +45,13 @@ type Server struct {
 	// attaching or detaching is observable.
 	connections *connRegistry
 
+	// dataDir is where this instance keeps its persistent state. One thing in it
+	// is not data but authority: <dataDir>/access holds the root key local callers
+	// sign tokens with, and protected.go refuses every caller's path arguments
+	// that reach into it. Empty means the guard has nothing to protect, which only
+	// happens in a process that never set it (tests).
+	dataDir string
+
 	// tasks tracks the asynchronous file transfers this process started (#158).
 	// Transfers are always async: a caller behind a tool-call watchdog that fires
 	// at 30s cannot synchronously move a 30 MB binary, and an interrupted transfer
