@@ -315,6 +315,12 @@
       text-align: left;
     }
     .target-chip b { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
+    /* A chip is a door: each one names a section the page already has, so
+       clicking it scrolls there instead of stating the same thing twice. */
+    .target-chip-link { border-bottom: none; text-shadow: none; }
+    .target-chip-link:hover { color: var(--text-muted); border-color: var(--accent); box-shadow: 0 0 12px var(--accent-dim); }
+    /* Anchors land under the sticky header, not behind it. */
+    section[id] { scroll-margin-top: 96px; }
     /* Platform marks: monochrome, currentColor, so they inherit the chip's text
        colour and stay legible in every theme. */
     .target-chip svg {
