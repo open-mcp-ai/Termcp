@@ -123,7 +123,8 @@ termcp <subcommand> [action] [flags]
 | `daemon stdio` | 与 `start` 相同，然后留在前台当该实例的 stdio 桥（可选端点值紧跟动作：`termcp daemon stdio sse`）。它拉起的实例在没有桥连接时开始倒计时。 |
 | `daemon stop` | 请求后台实例优雅停机；只有守护实例接受——手动实例会被指回它被启动的地方。 |
 | `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。它是被动查询，它自己的请求不计入空闲倒计时，所以询问不会让它汇报的实例活着。 |
-| `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；已加密时在 ENV/系统凭据可解锁的前提下报告 catalog revision 与密文 profile 数。 |
+| `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；能自动解锁时报告 catalog revision 与密文 profile 数，否则明确显示 `encrypted (locked)`。 |
+| `config-storage rotate-key` | 仅为不含密码派生的旧密钥环保留兼容入口；密码派生存储会拒绝执行，并要求在 WebUI 用“当前密码、新密码、确认新密码”修改主密钥。 |
 
 每个 daemon 动作都经 HTTP 找它的实例，**从不查进程表**——实例在哪里监听就能在哪里找到。
 
@@ -134,21 +135,58 @@ termcp <subcommand> [action] [flags]
 转换任何已有配置，也不会改变未选择主机的存储方式。会话正文和历史仍使用现有格式，
 不因这个开关加密。
 
+密钥环只在用户第一次主动启用加密时初始化。页面要求用户输入并确认加密密码；只有
+显式提交后才初始化并启用。打开 WebUI、读取状态或取消操作都不会创建密钥环。
+
+主密钥不是随机生成后交给用户备份，也不是把密码直接当作加密正文的密钥：
+
+```text
+用户密码 --Argon2id(salt, 3 次, 64 MiB, 并行度 1)--> 32 字节 Main Key
+Main Key --认证加密--> EDK
+随机 DEK --认证加密--> 配置正文
+```
+
+`keys/config.keys` 只保存 KDF 参数、随机 salt、认证校验信息和可选的系统/ENV 自动
+解锁封装，不保存密码或明文 Main Key。密码至少 8 个 Unicode 字符，最多 1024 个
+UTF-8 字节。密码不会写入日志、URL、浏览器存储或 argv；关闭设置页或离开页面会清空
+密码输入框。
+
 ```bash
-# 容器/非交互环境：先用一个显式 32 字节 KEK，再在 WebUI 中启用
+# 容器：可选注入一个稳定保存的自动解锁 KEK
 export TERMCP_CONFIG_KEK="$(openssl rand -base64 32)"
 termcp config-storage status --data-dir ~/.termcp
 ```
 
-没有设置 `TERMCP_CONFIG_KEK` 时，迁移使用操作系统凭据存储：macOS Keychain、
-Windows DPAPI 或 Linux Secret Service。命令不读取 argv 中的密码，也不把 Main
-Key、DEK 或明文配置写到日志。`status` 看到 `encrypted (locked)` 表示文件名与
-catalog 存在，但当前调用方没有可解锁的 Provider；它不会生成替代密钥或退回明文。
-页面的勾选操作是显式授权：加密所选主机时，只有该主机的明文 `config.toml` 会在
-密文 catalog 提交并被回读验证后删除；还原时先原子写入明文，再移除密文引用。
+`TERMCP_CONFIG_KEK` 不是 Main Key，也不是用户密码。它只是额外的自动解锁封装密钥；
+容器必须稳定保存并在每次启动注入同一个值，不能每次重启重新生成。显式设置该变量时
+只使用 ENV provider，不访问桌面密钥服务。
+
+没有设置 `TERMCP_CONFIG_KEK` 时，程序尝试操作系统凭据存储：macOS Keychain、
+Windows DPAPI 或 Linux Secret Service。系统 provider 不可用不影响密码解锁；
+但每次进程重启都会进入 locked 状态，用户需要在 WebUI 输入密码。`status` 显示的
+`encrypted (locked)` 不会生成替代密钥，也不会退回明文。
+
+加密所选主机时，只有该主机的明文 `config.toml` 会在密文对象和 `store.enc` 提交、
+回读验证成功后删除；还原时先原子写入明文，再移除密文引用。密文代际保存在
+`ssh_configs/<host>/<generation>.enc`，每台持久主机的 `identity` 明文 UUID
+在改名和明密文转换时保持不变。新建配置的加密偏好和主机映射位于认证加密的
+`store.enc`，不受明文配置文件或旧版 `keys/config.settings` 控制。
+
+“修改密码”验证当前密码后，从新密码派生新的 Main Key。它重新封装所有已加密主机及
+`store.enc` 的 EDK，配置正文密文、Object ID、Generation ID、storage mode 和
+`encrypt_new` 保持不变；旧密码在完成发布后失效。操作中断时，状态显示
+`rotation_pending`，加密配置修改暂时冻结。再次输入中断操作所使用的新密码即可续跑。
+该操作不会重新加密正文，也不能撤销已经泄露的 DEK 或明文。
+
+自动解锁失败时，WebUI 根据 `password_required`、`key_provider_unavailable` 或
+`keyring_authentication_failed` 显示密码解锁入口。普通解锁只恢复当前进程；选择
+“解锁并恢复自动保护”会用同一个密码解锁，并在当前系统或 ENV provider 可用时重新
+写入自动解锁封装。错误密码不会修改文件。若容器没有注入可用的
+`TERMCP_CONFIG_KEK`，需要每次重启后手动输入密码。
 
 `encryption-test` 分支的 `keys/master.key`、`config/hosts.enc` 不是兼容格式；
-迁移会拒绝该布局。保留旧目录，并在隔离副本中先用对应版本导出，再导入新实例。
+当前实现会提示并忽略这些文件，不读取、迁移或删除它们。保留旧目录，并在隔离副本中
+先用对应版本导出，再导入新实例。
 
 ## 权限边界
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
 // extState is the mutable runtime half of one extension. Every field behind its
@@ -188,7 +189,11 @@ func fingerprint(ext *Extension) string {
 	// WHAT RUNS IS WHAT IS IN THE FINGERPRINT. Every field a session is built from
 	// belongs here; a field that only describes the template does not, because
 	// changing a description must not tear down a live instance.
-	fmt.Fprintf(&b, "%s|%s|%q|", ext.Target, ext.Mode, ext.Command)
+	target := ext.Target
+	if ext.TargetIdentity != "" && !sshconfig.IsInternalName(ext.Target) {
+		target = ext.TargetIdentity
+	}
+	fmt.Fprintf(&b, "%s|%s|%q|", target, ext.Mode, ext.Command)
 	for _, a := range ext.Args {
 		fmt.Fprintf(&b, "%q,", a)
 	}

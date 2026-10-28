@@ -3,6 +3,7 @@ package extensions
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
@@ -35,6 +37,13 @@ type Store struct {
 	dataDir  string
 	mu       sync.Mutex
 	onChange atomic.Value // func(name string), fired after Save/Delete/Rename
+	profiles atomic.Pointer[sshconfig.Store]
+}
+
+const profileBindingsFileName = "profile-identities.toml"
+
+type profileBindings struct {
+	Targets map[string]string `toml:"targets,omitempty"`
 }
 
 // SetOnChange registers a callback fired after a template changes, naming it.
@@ -92,6 +101,14 @@ func (s *Store) localPath(name string) (string, error) {
 	return filepath.Join(dir, LocalFileName), nil
 }
 
+func (s *Store) profileBindingsPath(name string) (string, error) {
+	dir, err := s.dir(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, profileBindingsFileName), nil
+}
+
 // Exists reports whether a template is stored under name.
 //
 // ONE STAT, and that is the point: the alternative callers reached for was
@@ -143,7 +160,170 @@ func (s *Store) Load(name string) (*Extension, error) {
 		// up with no indication of why.
 		return nil, err
 	}
+	if err := s.bindProfileReferences(name, e, template); err != nil {
+		return nil, err
+	}
 	return e, nil
+}
+
+// SetSSHConfigStore gives the extension store the profile identities its
+// templates are bound to. It is separate from NewStore to avoid a package
+// cycle with the composition root.
+func (s *Store) SetSSHConfigStore(profiles *sshconfig.Store) {
+	s.profiles.Store(profiles)
+}
+
+func (s *Store) readProfileBindings(name string) (profileBindings, error) {
+	path, err := s.profileBindingsPath(name)
+	if err != nil {
+		return profileBindings{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return profileBindings{Targets: map[string]string{}}, nil
+		}
+		return profileBindings{}, err
+	}
+	var out profileBindings
+	if err := toml.Unmarshal(data, &out); err != nil {
+		return profileBindings{}, fmt.Errorf("extension %q profile identities: %w", name, err)
+	}
+	if out.Targets == nil {
+		out.Targets = map[string]string{}
+	}
+	for target, identity := range out.Targets {
+		if err := sshconfig.ValidateName(target); err != nil {
+			return profileBindings{}, fmt.Errorf("extension %q profile identity target: %w", name, err)
+		}
+		id, err := uuid.Parse(identity)
+		if err != nil || id == uuid.Nil || id.String() != identity {
+			return profileBindings{}, fmt.Errorf("extension %q profile identity for %q is invalid", name, target)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) writeProfileBindings(name string, bindings profileBindings) error {
+	path, err := s.profileBindingsPath(name)
+	if err != nil {
+		return err
+	}
+	if len(bindings.Targets) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := toml.Marshal(bindings)
+	if err != nil {
+		return fmt.Errorf("encode extension %q profile identities: %w", name, err)
+	}
+	return writeFileAtomic(path, data)
+}
+
+func sameProfileBindings(a, b profileBindings) bool {
+	if len(a.Targets) != len(b.Targets) {
+		return false
+	}
+	for target, identity := range a.Targets {
+		if b.Targets[target] != identity {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) bindProfileReferences(name string, e *Extension, template []byte) error {
+	profiles := s.profiles.Load()
+	if profiles == nil {
+		return nil
+	}
+	bindings, err := s.readProfileBindings(name)
+	if err != nil {
+		return err
+	}
+	original := profileBindings{Targets: maps.Clone(bindings.Targets)}
+
+	resolve := func(host, identity string) (string, string, error) {
+		host = strings.TrimSpace(host)
+		identity = strings.TrimSpace(identity)
+		if identity == "" {
+			identity = bindings.Targets[host]
+		}
+		if identity == "" {
+			id, err := profiles.Identity(host)
+			if errors.Is(err, sshconfig.ErrNotFound) {
+				return host, "", nil
+			}
+			if err != nil {
+				return "", "", err
+			}
+			return host, id, nil
+		}
+		resolved, err := profiles.NameByIdentity(identity)
+		if errors.Is(err, sshconfig.ErrNotFound) {
+			return host, identity, nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		for boundName, boundIdentity := range bindings.Targets {
+			if boundName != resolved && boundIdentity == identity {
+				delete(bindings.Targets, boundName)
+			}
+		}
+		return resolved, identity, nil
+	}
+
+	if len(e.Targets) == 0 {
+		host, identity, err := resolve(e.Target, e.TargetIdentity)
+		if err != nil {
+			return err
+		}
+		e.Target, e.TargetIdentity = host, identity
+		if identity != "" {
+			bindings.Targets[host] = identity
+		}
+	} else {
+		for i := range e.Targets {
+			host, identity, err := resolve(e.Targets[i].Host, e.Targets[i].TargetIdentity)
+			if err != nil {
+				return err
+			}
+			e.Targets[i].Host, e.Targets[i].TargetIdentity = host, identity
+			if identity != "" {
+				bindings.Targets[host] = identity
+			}
+		}
+	}
+	if !sameProfileBindings(original, bindings) {
+		if err := s.writeProfileBindings(name, bindings); err != nil {
+			return err
+		}
+	}
+	if len(e.Targets) == 0 && e.TargetIdentity != "" {
+		var present struct {
+			Identity string `toml:"target_identity"`
+		}
+		if err := toml.Unmarshal(template, &present); err != nil {
+			return err
+		}
+		if present.Identity == "" {
+			bound := append([]byte(fmt.Sprintf("target_identity = %q\n", e.TargetIdentity)), template...)
+			path, err := s.configPath(name)
+			if err != nil {
+				return err
+			}
+			if err := writeFileAtomic(path, bound); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Template returns the stored template document, holes and all.
@@ -504,6 +684,48 @@ func (s *Store) saveLocked(e *Extension) error {
 	if err != nil {
 		return err
 	}
+	if profiles := s.profiles.Load(); profiles != nil {
+		var old Extension
+		hadOld := false
+		if raw, err := os.ReadFile(p); err == nil {
+			hadOld = toml.Unmarshal(raw, &old) == nil
+		}
+		if len(e.Targets) == 0 {
+			if e.TargetIdentity != "" {
+				current, err := profiles.NameByIdentity(e.TargetIdentity)
+				if hadOld && e.TargetIdentity == old.TargetIdentity && e.Target != old.Target && e.Target != current {
+					e.TargetIdentity = ""
+				} else if err == nil {
+					e.Target = current
+				}
+			}
+			if e.TargetIdentity == "" {
+				if id, err := profiles.Identity(e.Target); err == nil {
+					e.TargetIdentity = id
+				}
+			}
+		} else {
+			oldTargets := old.EffectiveTargets()
+			for i := range e.Targets {
+				if e.Targets[i].TargetIdentity != "" {
+					current, err := profiles.NameByIdentity(e.Targets[i].TargetIdentity)
+					if hadOld && i < len(oldTargets) &&
+						e.Targets[i].TargetIdentity == oldTargets[i].TargetIdentity &&
+						e.Targets[i].Host != oldTargets[i].Host &&
+						e.Targets[i].Host != current {
+						e.Targets[i].TargetIdentity = ""
+					} else if err == nil {
+						e.Targets[i].Host = current
+					}
+				}
+				if e.Targets[i].TargetIdentity == "" {
+					if id, err := profiles.Identity(e.Targets[i].Host); err == nil {
+						e.Targets[i].TargetIdentity = id
+					}
+				}
+			}
+		}
+	}
 	if err := e.Validate(); err != nil {
 		return err
 	}
@@ -514,7 +736,31 @@ func (s *Store) saveLocked(e *Extension) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
-	return writeFileAtomic(p, data)
+	if err := writeFileAtomic(p, data); err != nil {
+		return err
+	}
+	if profiles := s.profiles.Load(); profiles != nil {
+		bindings, err := s.readProfileBindings(e.Name)
+		if err != nil {
+			return err
+		}
+		for _, target := range e.EffectiveTargets() {
+			if targetIdentity := targetIdentityForSave(e, target); targetIdentity != "" {
+				bindings.Targets[target.Host] = targetIdentity
+			}
+		}
+		if err := s.writeProfileBindings(e.Name, bindings); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func targetIdentityForSave(e *Extension, target TargetDecl) string {
+	if len(e.Targets) == 0 {
+		return e.TargetIdentity
+	}
+	return target.TargetIdentity
 }
 
 // Delete removes an extension and its directory. A missing one is not an error: the
@@ -544,6 +790,7 @@ func (s *Store) removeLocked(p string) error {
 	// same name inherit a stranger's hosts — and a host list is the one thing here a
 	// user cannot re-derive from the template.
 	_ = retryFS(func() error { return os.Remove(filepath.Join(filepath.Dir(p), LocalFileName)) })
+	_ = retryFS(func() error { return os.Remove(filepath.Join(filepath.Dir(p), profileBindingsFileName)) })
 	// Best effort: leftover empty dirs are harmless, but a directory holding an
 	// unrelated file must not be swept away by a delete.
 	_ = os.Remove(filepath.Dir(p))

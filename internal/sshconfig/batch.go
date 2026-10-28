@@ -161,8 +161,17 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 		if s.temporary == nil {
 			s.temporary = make(map[string][]byte)
 		}
+		if s.temporaryIdentities == nil {
+			s.temporaryIdentities = make(map[string]string)
+		}
 		for _, item := range items {
+			id, err := newProfileIdentity()
+			if err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
 			s.temporary[item.name] = append([]byte(nil), item.data...)
+			s.temporaryIdentities[item.name] = id
 		}
 	} else if s.encryptNew {
 		if s.encrypted == nil {
@@ -171,6 +180,10 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 		}
 		importItems := make([]configstore.Item, 0, len(items))
 		for _, item := range items {
+			if _, err := ensureProfileIdentity(filepath.Join(s.root(), item.name), ""); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
 			importItems = append(importItems, configstore.Item{Name: item.name, Data: item.data})
 		}
 		if err := s.encrypted.Import(importItems); err != nil {
@@ -183,18 +196,22 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 			p := filepath.Join(s.root(), item.name, "config.toml")
 			if err = os.MkdirAll(filepath.Dir(p), 0o700); err == nil {
 				created = append(created, p)
-				err = writeFileAtomic(p, item.data)
+				_, err = ensureProfileIdentity(filepath.Dir(p), "")
+				if err == nil {
+					err = writeFileAtomic(p, item.data)
+				}
 			}
 			if err != nil {
 				for _, path := range created {
 					_ = os.Remove(path)
-					_ = os.Remove(filepath.Dir(path))
+					_ = removeProfileIdentity(filepath.Dir(path))
 				}
 				s.mu.Unlock()
 				return nil, err
 			}
 		}
 	}
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	s.notifyChange()
 	return result, nil

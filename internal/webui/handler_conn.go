@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -17,6 +18,7 @@ import (
 
 type connectionSummary struct {
 	Name        string `json:"name"`
+	Identity    string `json:"identity"`
 	Kind        string `json:"kind"`
 	Description string `json:"description,omitempty"`
 	Host        string `json:"host,omitempty"`
@@ -42,6 +44,10 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 	}
 	names, err := h.SSH.List()
 	if err != nil {
+		if errors.Is(err, configstore.ErrLocked) {
+			writeConfigStorageError(w, err)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -57,6 +63,7 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		cs := summarizeConnection(n, ent)
 		cs.Temporary = h.SSH.IsTemporary(n)
 		cs.Storage, _ = h.SSH.StorageMode(n)
+		cs.Identity, _ = h.SSH.Identity(n)
 		list = append(list, cs)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": list})

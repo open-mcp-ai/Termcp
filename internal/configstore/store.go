@@ -40,10 +40,11 @@ var (
 )
 
 type catalogDocument struct {
-	Version  uint16           `json:"version"`
-	StoreID  []byte           `json:"store_id"`
-	Revision uint64           `json:"revision"`
-	Profiles []catalogProfile `json:"profiles"`
+	Version    uint16           `json:"version"`
+	StoreID    []byte           `json:"store_id"`
+	Revision   uint64           `json:"revision"`
+	EncryptNew bool             `json:"encrypt_new"`
+	Profiles   []catalogProfile `json:"profiles"`
 }
 
 type catalogProfile struct {
@@ -66,23 +67,35 @@ type Item struct {
 
 // Status is the non-secret administrative state of a repository.
 type Status struct {
-	StoreID  ID
-	Revision uint64
-	Profiles int
-	Closed   bool
+	StoreID            ID
+	Revision           uint64
+	Profiles           int
+	EncryptNew         bool
+	Closed             bool
+	MainKeyID          ID
+	RotationPending    bool
+	Locked             bool
+	ErrorCode          string
+	PasswordConfigured bool
+	AutomaticUnlock    bool
 }
 
 // Repository owns one exclusive encrypted connection-profile directory. The
 // catalog commits name-to-object mappings; profile bodies remain independent
 // generations so one damaged item cannot silently replace another.
 type Repository struct {
-	dataDir string
-	lock    *directoryLock
-	keyring *Keyring
+	dataDir         string
+	lock            *directoryLock
+	keyring         *Keyring
+	unlockErr       error
+	lockedStoreID   ID
+	password        *storedPasswordDerivation
+	automaticUnlock bool
 
 	mu                sync.Mutex
 	catalogGeneration ID
 	revision          uint64
+	encryptNew        bool
 	refs              map[string]catalogRef
 	closed            bool
 }
@@ -91,6 +104,20 @@ type Repository struct {
 // succeeded but catalog publication was interrupted, a retry with the same
 // provider resumes at the missing catalog.
 func InitializeRepository(dataDir string, providers ...Provider) (*Repository, error) {
+	return initializeRepository(dataDir, nil, providers...)
+}
+
+// InitializeRepositoryWithMainKey initializes encryption with the key backed up
+// by the user during the first enable operation. It never replaces existing keys.
+func InitializeRepositoryWithMainKey(dataDir string, main MainKey, providers ...Provider) (*Repository, error) {
+	defer clear(main[:])
+	if isZeroBytes(main[:]) {
+		return nil, ErrFormat
+	}
+	return initializeRepository(dataDir, &main, providers...)
+}
+
+func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Provider) (*Repository, error) {
 	root, err := prepareDataDir(dataDir)
 	if err != nil {
 		return nil, err
@@ -122,7 +149,13 @@ func InitializeRepository(dataDir string, providers ...Provider) (*Repository, e
 		if err != nil {
 			return fail(err)
 		}
-		keyData, keyring, err := CreateKeyring(storeID, providers...)
+		var keyData []byte
+		var keyring *Keyring
+		if suppliedMain == nil {
+			keyData, keyring, err = CreateKeyring(storeID, providers...)
+		} else {
+			keyData, keyring, err = createKeyringWithMainKey(storeID, *suppliedMain, providers...)
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -158,6 +191,15 @@ func InitializeRepository(dataDir string, providers ...Provider) (*Repository, e
 	if err != nil {
 		return fail(err)
 	}
+	if suppliedMain != nil {
+		_, keys, activeID, err := keyring.snapshot()
+		matches := err == nil && keys[activeID] == *suppliedMain && !catalogExists
+		clearMainKeyMap(keys)
+		if !matches {
+			keyring.Destroy()
+			return fail(ErrAlreadyInitialized)
+		}
+	}
 	repository := &Repository{
 		dataDir: root,
 		lock:    lock,
@@ -188,6 +230,17 @@ func InitializeRepository(dataDir string, providers ...Provider) (*Repository, e
 // OpenRepository unlocks the existing keyring and verifies every committed
 // profile before returning.
 func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) {
+	return openRepository(dataDir, false, providers...)
+}
+
+// OpenRepositoryForRecovery retains a locked repository when only provider
+// unlocking fails. The directory remains exclusively held and no reads or
+// mutations can fall back to plaintext while the management UI offers recovery.
+func OpenRepositoryForRecovery(dataDir string, providers ...Provider) (*Repository, error) {
+	return openRepository(dataDir, true, providers...)
+}
+
+func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (*Repository, error) {
 	root, err := prepareDataDir(dataDir)
 	if err != nil {
 		return nil, err
@@ -208,9 +261,26 @@ func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) 
 	if err != nil {
 		return fail(err)
 	}
+	stored, err := parseStoredKeyring(keyData)
+	if err != nil {
+		return fail(err)
+	}
 	keyring, err := UnlockKeyring(keyData, providers...)
 	clear(keyData)
 	if err != nil {
+		if stored.Password != nil && len(stored.Slots) == 0 {
+			err = ErrPasswordRequired
+		}
+		if allowRecovery && (errors.Is(err, ErrProviderUnavailable) || errors.Is(err, ErrAuthentication) || errors.Is(err, ErrPasswordRequired)) {
+			var storeID ID
+			copy(storeID[:], stored.StoreID)
+			if exists, statErr := pathExists(repositoryCatalogPath(root)); statErr != nil {
+				return fail(statErr)
+			} else if !exists {
+				return fail(ErrNotInitialized)
+			}
+			return &Repository{dataDir: root, lock: lock, unlockErr: err, lockedStoreID: storeID, password: stored.Password}, nil
+		}
 		return fail(err)
 	}
 	repository := &Repository{
@@ -223,6 +293,8 @@ func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) 
 		keyring.Destroy()
 		return fail(err)
 	}
+	repository.password = stored.Password
+	repository.automaticUnlock = len(stored.Slots) > 0
 	return repository, nil
 }
 
@@ -231,6 +303,9 @@ func (r *Repository) List() ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	if err := r.refreshProfileDirectories(); err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(r.refs))
@@ -252,6 +327,12 @@ func (r *Repository) Read(name string) ([]byte, error) {
 		return nil, err
 	}
 	ref, ok := r.refs[name]
+	if !ok {
+		if err := r.refreshProfileDirectories(); err != nil {
+			return nil, err
+		}
+		ref, ok = r.refs[name]
+	}
 	if !ok {
 		return nil, fmt.Errorf("%q: %w", name, ErrNotFound)
 	}
@@ -275,7 +356,7 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ready(); err != nil {
+	if err := r.writable(); err != nil {
 		return err
 	}
 
@@ -338,17 +419,17 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 	r.refs = next
 	r.revision++
 	for _, ref := range oldGenerations {
-		_ = removeIfExists(r.objectPath(ref))
+		r.removeObject(ref)
 	}
 	return nil
 }
 
-// Rename changes only the catalog name. The stable object and body generation
-// stay byte-for-byte unchanged.
+// Rename publishes the same ciphertext under the new per-profile directory
+// before committing the catalog rename, then removes the old copy.
 func (r *Repository) Rename(oldName, newName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ready(); err != nil {
+	if err := r.writable(); err != nil {
 		return err
 	}
 	if oldName == newName {
@@ -367,27 +448,54 @@ func (r *Repository) Rename(oldName, newName string) error {
 	if existing, collision := findRef(r.refs, newName); collision {
 		return fmt.Errorf("%s: %w", existing.name, ErrExists)
 	}
+	raw, err := r.readObjectRaw(ref)
+	if err != nil {
+		return err
+	}
+	checked, err := r.openObjectRaw(ref, raw)
+	clear(checked)
+	if err != nil {
+		return err
+	}
+	newRef := ref
+	newRef.name = newName
+	oldDir, newDir := filepath.Dir(r.objectPath(ref)), filepath.Dir(r.objectPath(newRef))
+	if err := requireRealDirectory(oldDir); err != nil {
+		return err
+	}
+	if exists, err := pathExists(newDir); err != nil {
+		return err
+	} else if exists {
+		return ErrExists
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return err
+	}
 	next := cloneRefs(r.refs)
 	delete(next, oldName)
-	ref.name = newName
-	next[newName] = ref
-	if err := r.commitCatalog(r.catalogDocument(next, r.revision+1)); err != nil {
-		if errors.Is(err, ErrDurability) {
+	next[newName] = newRef
+	err = r.commitCatalog(r.catalogDocument(next, r.revision+1))
+	if err != nil && !errors.Is(err, ErrDurability) {
+		if rollbackErr := os.Rename(newDir, oldDir); rollbackErr != nil {
 			r.refs = next
-			r.revision++
+			return fmt.Errorf("%w: profile directory rename needs recovery: %v; rollback: %v", ErrDurability, err, rollbackErr)
 		}
+		_ = syncDir(filepath.Dir(oldDir))
 		return err
 	}
 	r.refs = next
 	r.revision++
-	return nil
+	if syncErr := syncDir(filepath.Dir(newDir)); syncErr != nil {
+		return fmt.Errorf("%w: sync renamed profile directory: %v", ErrDurability, syncErr)
+	}
+	return err
 }
 
 // Delete removes the catalog reference before cleaning its ciphertext.
 func (r *Repository) Delete(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ready(); err != nil {
+	if err := r.writable(); err != nil {
 		return err
 	}
 	ref, ok := r.refs[name]
@@ -405,7 +513,7 @@ func (r *Repository) Delete(name string) error {
 	}
 	r.refs = next
 	r.revision++
-	_ = removeIfExists(r.objectPath(ref))
+	r.removeObject(ref)
 	return nil
 }
 
@@ -416,12 +524,67 @@ func (r *Repository) Status() Status {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Status{
-		StoreID:  r.keyring.StoreID(),
-		Revision: r.revision,
-		Profiles: len(r.refs),
-		Closed:   r.closed,
+	keyID, pending := r.keyring.rotationStatus()
+	password := r.password
+	if r.keyring != nil {
+		password = r.keyring.password
 	}
+	if password != nil && password.Previous != nil {
+		pending = true
+	}
+	storeID := r.lockedStoreID
+	if r.keyring != nil {
+		storeID = r.keyring.StoreID()
+	}
+	return Status{
+		StoreID:            storeID,
+		Revision:           r.revision,
+		Profiles:           len(r.refs),
+		EncryptNew:         r.encryptNew,
+		Closed:             r.closed,
+		MainKeyID:          keyID,
+		RotationPending:    pending,
+		Locked:             r.unlockErr != nil,
+		ErrorCode:          keyUnlockErrorCode(r.unlockErr),
+		PasswordConfigured: password != nil,
+		AutomaticUnlock:    r.automaticUnlock,
+	}
+}
+
+// EncryptNew reports the authenticated preference for newly created profiles.
+func (r *Repository) EncryptNew() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.encryptNew
+}
+
+// SetEncryptNew commits the authenticated preference in the encrypted catalog.
+func (r *Repository) SetEncryptNew(enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.writable(); err != nil {
+		return err
+	}
+	if r.encryptNew == enabled {
+		return nil
+	}
+	next := cloneRefs(r.refs)
+	catalog := r.catalogDocument(next, r.revision+1)
+	catalog.EncryptNew = enabled
+	if err := r.commitCatalog(catalog); err != nil {
+		if !errors.Is(err, ErrDurability) {
+			return err
+		}
+		r.encryptNew = enabled
+		r.revision++
+		return err
+	}
+	r.encryptNew = enabled
+	r.revision++
+	return nil
 }
 
 // DataDir returns the resolved directory owned by this repository.
@@ -452,31 +615,28 @@ func (r *Repository) Close() error {
 }
 
 func (r *Repository) ready() error {
-	if r == nil || r.closed || r.keyring == nil {
+	if r == nil || r.closed {
+		return ErrClosed
+	}
+	if r.unlockErr != nil {
+		return fmt.Errorf("%w: %w", ErrLocked, r.unlockErr)
+	}
+	if r.keyring == nil {
 		return ErrClosed
 	}
 	return nil
 }
 
 func (r *Repository) loadCatalog() error {
-	raw, err := readBoundedFile(repositoryCatalogPath(r.dataDir), envelopeHeaderSize+MaxCatalogPlaintext)
-	if errors.Is(err, os.ErrNotExist) {
-		return ErrNotInitialized
-	}
+	catalog, refs, generationID, err := r.readCatalogSnapshot()
 	if err != nil {
 		return err
 	}
-	envelope, err := parseCatalogEnvelope(raw, r.keyring.StoreID(), catalogObjectID)
+	refs, moved, err := r.resolveProfileDirectories(refs)
 	if err != nil {
 		return err
 	}
-	plaintext, err := r.keyring.Open(envelope)
-	if err != nil {
-		return err
-	}
-	defer clear(plaintext)
-	catalog, refs, err := decodeCatalog(plaintext, r.keyring.StoreID())
-	if err != nil {
+	if err := r.migrateLegacyObjectLayout(refs); err != nil {
 		return err
 	}
 	for _, ref := range refs {
@@ -486,9 +646,17 @@ func (r *Repository) loadCatalog() error {
 		}
 		clear(data)
 	}
-	r.catalogGeneration = envelope.identity.GenerationID
+	r.cleanupLegacyObjectLayout(refs)
+	r.catalogGeneration = generationID
 	r.revision = catalog.Revision
+	r.encryptNew = catalog.EncryptNew
 	r.refs = refs
+	if moved {
+		if err := r.commitCatalog(r.catalogDocument(refs, r.revision+1)); err != nil {
+			return err
+		}
+		r.revision++
+	}
 	return nil
 }
 
@@ -579,14 +747,33 @@ func (r *Repository) readObject(ref catalogRef) ([]byte, error) {
 }
 
 func (r *Repository) readUnlocked(ref catalogRef) ([]byte, error) {
-	path := r.objectPath(ref)
-	raw, err := readBoundedFile(path, envelopeHeaderSize+MaxProfilePlaintext+chacha20poly1305.Overhead)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%w: missing object %s", ErrNotFound, hex.EncodeToString(ref.objectID[:]))
-	}
+	raw, err := r.readObjectRaw(ref)
 	if err != nil {
 		return nil, err
 	}
+	return r.openObjectRaw(ref, raw)
+}
+
+func (r *Repository) readObjectRaw(ref catalogRef) ([]byte, error) {
+	max := int64(envelopeHeaderSize + MaxProfilePlaintext + chacha20poly1305.Overhead)
+	raw, err := readBoundedFile(r.objectPath(ref), max)
+	if err == nil {
+		return raw, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	raw, err = readBoundedFile(r.legacyObjectPath(ref), max)
+	if err == nil {
+		return raw, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: missing object %s", ErrNotFound, hex.EncodeToString(ref.objectID[:]))
+}
+
+func (r *Repository) openObjectRaw(ref catalogRef, raw []byte) ([]byte, error) {
 	identity := Identity{
 		StoreID:      r.keyring.StoreID(),
 		ObjectID:     ref.objectID,
@@ -600,7 +787,57 @@ func (r *Repository) readUnlocked(ref catalogRef) ([]byte, error) {
 	return r.keyring.Open(envelope)
 }
 
+func (r *Repository) migrateLegacyObjectLayout(refs map[string]catalogRef) error {
+	for _, ref := range refs {
+		newPath := r.objectPath(ref)
+		if exists, err := pathExists(newPath); err != nil {
+			return err
+		} else if exists {
+			continue
+		}
+		legacyPath := r.legacyObjectPath(ref)
+		raw, err := readBoundedFile(
+			legacyPath,
+			int64(envelopeHeaderSize+MaxProfilePlaintext+chacha20poly1305.Overhead),
+		)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := r.openObjectRaw(ref, raw); err != nil {
+			return err
+		}
+		if err := writeFileAtomic(newPath, raw); err != nil {
+			return err
+		}
+		_ = removeIfExists(legacyPath)
+		_ = os.Remove(filepath.Dir(legacyPath))
+	}
+	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
+	return nil
+}
+
+func (r *Repository) cleanupLegacyObjectLayout(refs map[string]catalogRef) {
+	for _, ref := range refs {
+		path := r.legacyObjectPath(ref)
+		_ = removeIfExists(path)
+		_ = os.Remove(filepath.Dir(path))
+	}
+	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
+}
+
 func (r *Repository) objectPath(ref catalogRef) string {
+	return filepath.Join(
+		r.dataDir,
+		"ssh_configs",
+		ref.name,
+		hex.EncodeToString(ref.generationID[:])+".enc",
+	)
+}
+
+func (r *Repository) legacyObjectPath(ref catalogRef) string {
 	return filepath.Join(
 		r.dataDir,
 		"ssh_configs",
@@ -608,6 +845,13 @@ func (r *Repository) objectPath(ref catalogRef) string {
 		hex.EncodeToString(ref.objectID[:]),
 		hex.EncodeToString(ref.generationID[:])+".enc",
 	)
+}
+
+func (r *Repository) removeObject(ref catalogRef) {
+	for _, path := range []string{r.objectPath(ref), r.legacyObjectPath(ref)} {
+		_ = removeIfExists(path)
+		_ = os.Remove(filepath.Dir(path))
+	}
 }
 
 func (r *Repository) catalogDocument(refs map[string]catalogRef, revision uint64) catalogDocument {
@@ -624,10 +868,11 @@ func (r *Repository) catalogDocument(refs map[string]catalogRef, revision uint64
 	})
 	storeID := r.keyring.StoreID()
 	return catalogDocument{
-		Version:  repositoryVersion,
-		StoreID:  append([]byte(nil), storeID[:]...),
-		Revision: revision,
-		Profiles: profiles,
+		Version:    repositoryVersion,
+		StoreID:    append([]byte(nil), storeID[:]...),
+		Revision:   revision,
+		EncryptNew: r.encryptNew,
+		Profiles:   profiles,
 	}
 }
 
@@ -764,6 +1009,23 @@ func HasLegacyEncryptionArtifacts(dataDir string) (bool, error) {
 		return false, err
 	}
 	return hasIncompatibleLayout(root)
+}
+
+// HasManagedCatalog reports whether a current encrypted catalog exists. A
+// catalog without its keyring is damaged state and must fail closed.
+func HasManagedCatalog(dataDir string) (bool, error) {
+	root, err := filepath.Abs(filepath.Clean(dataDir))
+	if err != nil {
+		return false, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return pathExists(repositoryCatalogPath(root))
 }
 
 func pathExists(path string) (bool, error) {

@@ -178,6 +178,7 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		done:       make(chan struct{}),
 	}
 	if store != nil {
+		store.SetSSHConfigStore(sshConfigs)
 		// The write names the template, so the runtime does that one and nothing
 		// else. This is the whole of "the store changed" — there is no listing to
 		// diff and no tick to wait for.
@@ -205,6 +206,15 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 // second handle, so a save still reaches this reconciler through the store's
 // own change subscription.
 func (r *Reconciler) Store() *Store { return r.store }
+
+// ProfilesChanged asks the reconciler to retry templates that may have been
+// waiting for a profile. A profile store event has no extension name to sync.
+func (r *Reconciler) ProfilesChanged() {
+	select {
+	case r.revive <- struct{}{}:
+	default:
+	}
+}
 
 // SSHConfigs returns the profile store the templates resolve against. A profile
 // created after an extension that needed it is the recovery the walk is waiting
@@ -360,6 +370,14 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	if r.sshConfigs == nil {
 		return hostPlan{}, errors.New("no ssh config store configured")
 	}
+	target, identity, err := r.sshConfigs.ResolveReference(ext.Target, ext.TargetIdentity)
+	if err != nil {
+		if errors.Is(err, sshconfig.ErrNotFound) {
+			return hostPlan{}, fmt.Errorf("target profile %q does not exist", ext.Target)
+		}
+		return hostPlan{}, fmt.Errorf("cannot resolve target profile %q: %w", ext.Target, err)
+	}
+	ext.Target, ext.TargetIdentity = target, identity
 	ent, err := r.sshConfigs.Load(ext.Target)
 	if err != nil {
 		if errors.Is(err, sshconfig.ErrNotFound) {
@@ -429,11 +447,16 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// The container's name is the namespace it carries, so a leftover is
 	// recognizable in a manifest listing or a log line rather than being a session
 	// with a generated name and no owner.
-	name := ns.ForExtensions(sessionHost)
+	sessionIdentity := ext.TargetIdentity
+	if sessionHost != ext.Target {
+		sessionIdentity = sshconfig.InternalIdentity
+	}
+	name := ns.ForExtensions(namespaceTarget(ext))
 	return hostPlan{
 		config: session.Config{
-			Name:      name,
-			SSHConfig: sessionHost,
+			Name:              name,
+			SSHConfig:         sessionHost,
+			SSHConfigIdentity: sessionIdentity,
 			// The container has no terminal: rows and cols are the channel's, and the
 			// session record merely carries the conventional defaults.
 			Rows:         24,
@@ -782,8 +805,15 @@ func (st *extState) host() string {
 func forTarget(ext *Extension, target string) Extension {
 	out := *ext
 	out.Targets = nil
+	out.TargetIdentity = ""
+	if len(ext.Targets) == 0 {
+		out.TargetIdentity = ext.TargetIdentity
+	}
 	if t, ok := ext.TargetFor(target); ok {
 		out.Target = t.Host
+		if len(ext.Targets) > 0 {
+			out.TargetIdentity = t.TargetIdentity
+		}
 		out.Forwards = t.Forwards
 	}
 	return out

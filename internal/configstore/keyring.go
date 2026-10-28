@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -22,9 +23,10 @@ const (
 var keyringDomain = []byte("termcp/config/keyring/v1")
 
 type storedKeyring struct {
-	Version uint16          `json:"version"`
-	StoreID []byte          `json:"store_id"`
-	Slots   []storedKeySlot `json:"slots"`
+	Version  uint16                    `json:"version"`
+	StoreID  []byte                    `json:"store_id"`
+	Slots    []storedKeySlot           `json:"slots"`
+	Password *storedPasswordDerivation `json:"password,omitempty"`
 }
 
 type storedKeySlot struct {
@@ -55,17 +57,24 @@ type Keyring struct {
 	activeKeyID ID
 	mainKeys    map[ID]MainKey
 	closed      bool
+	password    *storedPasswordDerivation
 }
 
 // CreateKeyring generates one Main Key and exports it through one or more
 // Provider KEKs. The returned bytes are the config.keys representation.
 func CreateKeyring(storeID ID, providers ...Provider) ([]byte, *Keyring, error) {
-	if storeID.IsZero() {
-		return nil, nil, ErrFormat
-	}
 	main, err := GenerateMainKey()
 	if err != nil {
 		return nil, nil, err
+	}
+	defer clear(main[:])
+	return createKeyringWithMainKey(storeID, main, providers...)
+}
+
+func createKeyringWithMainKey(storeID ID, main MainKey, providers ...Provider) ([]byte, *Keyring, error) {
+	defer clear(main[:])
+	if storeID.IsZero() || isZeroBytes(main[:]) {
+		return nil, nil, ErrFormat
 	}
 	keyID, err := NewID()
 	if err != nil {
@@ -124,6 +133,13 @@ func UnlockKeyring(data []byte, providers ...Provider) (*Keyring, error) {
 			keyring, err := parseKeyringPayload(payloadBytes, storeID)
 			clear(payloadBytes)
 			if err == nil {
+				if stored.Password != nil {
+					if err := verifyDerivedKeyring(keyring, stored.Password); err != nil {
+						keyring.Destroy()
+						continue
+					}
+					keyring.password = stored.Password
+				}
 				return keyring, nil
 			}
 		}
@@ -142,40 +158,23 @@ func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 	if k == nil {
 		return nil, ErrFormat
 	}
-	if len(providers) == 0 || len(providers) > maxProviderSlots {
+	if len(providers) > maxProviderSlots || len(providers) == 0 && k.password == nil {
 		return nil, ErrFormat
 	}
-	storeID, keys, activeKeyID, err := k.snapshot()
+	plaintext, err := k.marshalPayload()
 	if err != nil {
 		return nil, err
 	}
-	defer clearMainKeyMap(keys)
-	payload := storedKeyringPayload{
-		Version:     keyringVersion,
-		StoreID:     append([]byte(nil), storeID[:]...),
-		ActiveKeyID: append([]byte(nil), activeKeyID[:]...),
-		Keys:        make([]storedMainKeyMaterial, 0, len(keys)),
-	}
-	for id, material := range keys {
-		payload.Keys = append(payload.Keys, storedMainKeyMaterial{
-			ID:       append([]byte(nil), id[:]...),
-			Material: append([]byte(nil), material[:]...),
-		})
-	}
-	plaintext, err := json.Marshal(payload)
-	clearStoredPayload(payload)
-	if err != nil {
-		return nil, fmt.Errorf("encode keyring: %w", err)
-	}
 	defer clear(plaintext)
-	if len(plaintext) > maxKeyringFile {
-		return nil, ErrTooLarge
-	}
-
+	storeID := k.StoreID()
 	stored := storedKeyring{
-		Version: keyringVersion,
-		StoreID: append([]byte(nil), storeID[:]...),
-		Slots:   make([]storedKeySlot, 0, len(providers)),
+		Version:  keyringVersion,
+		StoreID:  append([]byte(nil), storeID[:]...),
+		Slots:    make([]storedKeySlot, 0, len(providers)),
+		Password: k.password,
+	}
+	if k.password != nil {
+		stored.Version = passwordKeyringVersion
 	}
 	for _, provider := range providers {
 		if provider == nil {
@@ -183,6 +182,9 @@ func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 		}
 		parameters, err := provider.newParameters()
 		if err != nil {
+			if k.password != nil && provider.providerName() != "env" && errors.Is(err, ErrProviderUnavailable) {
+				continue
+			}
 			return nil, err
 		}
 		if err := provider.validateParameters(parameters); err != nil {
@@ -222,6 +224,36 @@ func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 		return nil, ErrTooLarge
 	}
 	return out, nil
+}
+
+func (k *Keyring) marshalPayload() ([]byte, error) {
+	storeID, keys, activeKeyID, err := k.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer clearMainKeyMap(keys)
+	payload := storedKeyringPayload{
+		Version:     keyringVersion,
+		StoreID:     append([]byte(nil), storeID[:]...),
+		ActiveKeyID: append([]byte(nil), activeKeyID[:]...),
+		Keys:        make([]storedMainKeyMaterial, 0, len(keys)),
+	}
+	for id, material := range keys {
+		payload.Keys = append(payload.Keys, storedMainKeyMaterial{
+			ID:       append([]byte(nil), id[:]...),
+			Material: append([]byte(nil), material[:]...),
+		})
+	}
+	plaintext, err := json.Marshal(payload)
+	clearStoredPayload(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode keyring: %w", err)
+	}
+	if len(plaintext) > maxKeyringFile {
+		clear(plaintext)
+		return nil, ErrTooLarge
+	}
+	return plaintext, nil
 }
 
 // Seal encrypts one object with a fresh DEK under the active Main Key.
@@ -319,11 +351,18 @@ func parseStoredKeyring(data []byte) (storedKeyring, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return storedKeyring{}, ErrFormat
 	}
-	if stored.Version != keyringVersion {
+	if stored.Version != keyringVersion && stored.Version != passwordKeyringVersion {
 		return storedKeyring{}, ErrVersion
 	}
 	if len(stored.StoreID) != 16 || isZeroBytes(stored.StoreID) ||
-		len(stored.Slots) == 0 || len(stored.Slots) > maxProviderSlots {
+		len(stored.Slots) > maxProviderSlots || len(stored.Slots) == 0 && stored.Password == nil {
+		return storedKeyring{}, ErrFormat
+	}
+	if stored.Version == passwordKeyringVersion {
+		if stored.Password == nil || validatePasswordDerivation(stored.Password) != nil {
+			return storedKeyring{}, ErrFormat
+		}
+	} else if stored.Password != nil {
 		return storedKeyring{}, ErrFormat
 	}
 	seen := make(map[string]bool)
@@ -420,6 +459,10 @@ func keyringSlotAAD(stored storedKeyring, slot storedKeySlot) []byte {
 	}
 	out = appendLengthPrefixed(out, []byte(slot.Parameters.Reference))
 	out = appendLengthPrefixed(out, slot.Parameters.Protected)
+	if stored.Version == passwordKeyringVersion {
+		metadata, _ := json.Marshal(stored.Password)
+		out = appendLengthPrefixed(out, metadata)
+	}
 	return out
 }
 

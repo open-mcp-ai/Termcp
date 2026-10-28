@@ -72,7 +72,8 @@ type Session struct {
 	Cols       int    `json:"cols"`
 	// SSHConfig is the canonical, non-secret profile name used to create this session.
 	// It is separate from Name because callers may rename a session after it starts.
-	SSHConfig string `json:"ssh_config,omitempty"`
+	SSHConfig         string `json:"ssh_config,omitempty"`
+	SSHConfigIdentity string `json:"ssh_config_identity,omitempty"`
 	// Borrowed marks a session that exists to make short-circuit work visible: the
 	// `use:<host>` container that `run use:<host> $1` creates and then keeps for reuse
 	// (issue #255). It is a session like any other — it archives, it can be closed —
