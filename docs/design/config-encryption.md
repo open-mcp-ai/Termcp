@@ -1,9 +1,9 @@
 # 主机配置逐条信封加密实施方案
 
-状态：P1 双层信封、P2 明文/密文混合 Store、P3 页面上主动启用与逐主机转换已实现；人端密码解锁、断点恢复与密钥轮换尚未实现。日期：2026-10-27。
-代码核对基线：`dev@6a8af551206ef2dcd73abbf47871ac90b4fa568f`；参考分支：`encryption-test@d3e04a3fe220e86fe77e68101182a322b7b12ccc`。
+状态：P1 双层信封、P2 明文/密文混合 Store、P3 页面上主动启用与逐主机转换、密码派生与手动解锁、密码修改及重启续跑已实现；接口鉴权、转换断点恢复与事件后重新加密尚未实现。日期：2026-10-28。
+代码核对基线：基于 `dev@52f02d5` 的当前工作树；参考分支：`encryption-test@d3e04a3fe220e86fe77e68101182a322b7b12ccc`。
 
-本方案落实 Main Key → DEK → 配置正文的密钥层级，衔接 [Agent 权限设计](agent-permissions.md) 和 [命令解耦方案](command-decoupling.md)。下文明确区分已落地部分与后续合同；未标注已实现的管理接口、断点恢复和轮换仍不能视为当前运行时能力。
+本方案落实 Main Key → DEK → 配置正文的密钥层级，衔接 [Agent 权限设计](agent-permissions.md) 和 [命令解耦方案](command-decoupling.md)。下文明确区分已落地部分与后续合同；未标注已实现的管理接口、转换恢复和事件后轮换仍不能视为当前运行时能力。
 
 ## 1. 范围与既有方案评估
 
@@ -11,7 +11,7 @@
 
 - 持久主机配置可选逐条加密，包括完整原始 TOML、递归跳板配置、代理认证信息及 `internal` 的可选覆盖配置。默认仍保存明文。
 - 每份配置的每次正文保存使用独立随机 DEK；Main Key 只封装 DEK，不加密配置正文。
-- Main Key 由系统秘密存储、显式配置的 ENV KEK 或恢复密码保护。
+- Main Key 由用户设置的加密密码通过 Argon2id 直接派生；系统秘密存储或显式 ENV KEK 只提供可选的自动解锁封装。
 - 初始化、解锁、明文迁移、配置读写、改密码、轮换及中断恢复形成可验证闭环。
 - 人主动导出仍可选择默认明文或独立文件密码；Agent 不获得凭据读取、导出及密钥管理权限。
 
@@ -22,15 +22,18 @@
 当前代码已经提供以下闭环：
 
 - `Main Key → 每条对象独立随机 DEK → 配置正文` 的 XChaCha20-Poly1305 双层信封，以及固定 v1 golden 向量。
-- Provider KEK 封装 Main Key；已实现 ENV、恢复密码和 macOS Keychain、Windows DPAPI、Linux Secret Service Adapter。
-- 加密目录 catalog、稳定 Profile/Object ID、每次保存新 Generation ID、改名只提交索引、删除先移除索引，以及目录排他锁和原子发布。
+- 用户密码通过 Argon2id 直接派生 Main Key；ENV 和 macOS Keychain、Windows DPAPI、Linux Secret Service Adapter 可选封装 Main Key，用于进程重启后的自动解锁。
+- 加密目录 catalog、稳定 Profile/Object ID、每次保存新 Generation ID、按主机目录保存代际密文、删除先移除索引，以及目录排他锁和原子发布。
 - `sshconfig.Store` 同时读取明文 `config.toml` 和加密仓库；未选择的主机保持原路径与原字节，临时 profile 仍只存在进程内。
 - WebUI 的“配置加密”页面可选择是否加密新建配置，也可勾选具体主机执行“加密所选”或“还原所选”。
+- 首次启用时才初始化密钥环：用户输入并确认密码，服务以随机 salt 和 Argon2id 派生 Main Key；取消或仅打开 WebUI 不创建密钥环。系统不生成备份码或恢复码，密码和明文 Main Key 均不落盘。
+- 自动解锁不可用时保留排他锁并提供 WebUI，状态区分 `password_required`、`key_provider_unavailable` 与 `keyring_authentication_failed`。用户输入加密密码，验证 catalog、所有配置及业务 TOML 后恢复当前进程；可选择让当前 ENV/系统 provider 重新封装 Main Key。
+- WebUI 可输入当前密码、新密码和确认密码修改 Main Key。服务先持久化双密钥过渡封装，再逐条重封活动配置与 catalog 的 EDK，全部验证后退役旧 key。中断或重启后，以新密码续跑；旧随机密钥存储的 `config-storage rotate-key` CLI 入口仅为兼容保留。
 - 启用只改变新建 profile 的初始存储方式。编辑、改名或重启既有明文 profile 不会自动转换它；编辑既有加密 profile 则继续保存为密文。
 - 启动时探测 `keys/config.keys` 并在 ENV/系统托管可用时自动解锁；已启用新加密方案但缺 key 或业务 TOML 不合法时拒绝降级。
 - 检测 `encryption-test` 的 `keys/master.key`、`config/hosts.enc` 时记录兼容性警告并忽略这些文件；不会读取、迁移、删除或覆盖它们，旁边的明文与新加密配置仍可使用。
 
-尚未提供：独立的人/Agent 角色鉴权、密码交互解锁、断点转换日志、改密码、Main Key rewrap、事件后 reencrypt、旧代际持久清理清单及三平台真实 Provider 端到端验收。管理页面当前复用实例现有的全局 HTTP 认证；在接口鉴权完成前不得把该页面暴露给不受信任网络。
+尚未提供：独立的人/Agent 角色鉴权、断点转换日志、事件后 reencrypt、旧代际持久清理清单及三平台真实 Provider 端到端验收。管理页面当前复用实例现有的全局 HTTP 认证；在接口鉴权完成前不得把该页面暴露给不受信任网络。
 
 ### 1.3 三条基线不能混淆
 
@@ -38,9 +41,9 @@
 | --- | --- | --- |
 | 当前 `dev` | `sshconfig.Store` 原样保存 `config.toml`；`configcrypt` 只处理导入导出 | 新增本机加密后端，保留导出协议 |
 | `encryption-test` | provider KEK 封装随机 master；HKDF 派生用途密钥及文件密钥；主机正文放在 `hosts.enc` | 复用经核对的托管、持久化与恢复经验，不整分支合并 |
-| 本方案 | 每个配置代际有随机 DEK，EDK 与正文同文件 | 取代主机配置的 HKDF 派生数据密钥及整库正文文件 |
+| 本方案 | 密码派生 Main Key；每个配置代际有随机 DEK，EDK 与正文同文件 | 取代主机配置的 HKDF 派生数据密钥及整库正文文件 |
 
-参考分支不是直接拿 master 原始字节加密正文。差异在于：其正文密钥依赖 master 的派生链；本方案的 DEK 独立随机生成，可由另一 Main Key 重新封装。修改恢复密码与轮换 Main Key 是不同操作。
+参考分支不是直接拿 master 原始字节加密正文。差异在于：其正文密钥依赖 master 的派生链；本方案的 DEK 独立随机生成，可由另一 Main Key 重新封装。当前“修改密码”会改变派生的 Main Key，并只重封 EDK，不重新加密正文。
 
 源码核对位置：[`Store`](../../internal/sshconfig/store.go)、[`配置结构`](../../internal/sshconfig/config.go)、[`导出加密`](../../internal/configcrypt/configcrypt.go)、[`HTTP 适配`](../../internal/webui/handler_conn.go)、[`组合根`](../../main.go)。知识图谱没有可用的本项目索引，索引尝试失败；上述结论来自这些文件的定点阅读，不是全仓调用覆盖证明。
 
@@ -50,40 +53,43 @@
 
 | 名称 | 职责 | 是否落盘 |
 | --- | --- | --- |
-| Provider KEK | 保护 Main Key 所在的密钥环；来自系统托管、ENV 或密码 KDF | 只允许系统保护后的材料或 KDF 参数落盘 |
-| Main Key | 本实例配置存储的随机 32 字节封装密钥 | 只以 provider 封装后的密钥环落盘 |
+| 加密密码 | 用户输入的低熵秘密；至少 8 个 Unicode 字符，最多 1024 个 UTF-8 字节 | 不落盘 |
+| KDF 参数与 verifier | Argon2id salt、成本参数和密码校验值 | 位于 `keys/config.keys`；不包含密码 |
+| Main Key | 由加密密码和 salt 通过 Argon2id 直接派生的 32 字节 EDK 封装密钥 | 不直接落盘；可另以系统/ENV provider 封装用于自动解锁 |
+| Provider KEK | 可选的自动解锁密钥；来自系统托管或 ENV | 只允许封装后的 Main Key 快照落盘 |
 | DEK | 随机 32 字节数据密钥，加密一个对象的一个正文代际 | 不以明文落盘 |
 | EDK | Main Key 对 DEK 执行认证加密得到的密文 | 与对应正文密文一起保存 |
 | Store ID | 随机 16 字节存储身份 | 可公开，不是密钥 |
+| Profile identity | `<profile>/identity` 中的明文 UUID，用于跨改名和转换关联 | 明文 sidecar，不是密钥或鉴权凭据 |
 | Profile ID | 随机 16 字节主机身份，不因改名而变化 | 位于加密目录索引及文件认证信息 |
 | Generation ID | 随机 16 字节正文代际身份，每次正文保存更新 | 可公开，不是业务版本号 |
 
 ```text
-系统秘密存储 / ENV KEK / Argon2id(恢复密码)
-                       │ Provider KEK
-                       ▼
-               认证加密的 Main Key 密钥环
-                       │ Main Key
-                       ▼
-                 EDK ──解封──→ DEK
-                                  │
-                                  ▼
-                              配置正文
+用户密码 ──Argon2id(salt, cost)──→ Main Key
+                                      │
+                                      ▼
+                         EDK ──解封──→ DEK
+                                          │
+                                          ▼
+                                      配置正文
+
+系统秘密存储 / ENV KEK ──封装 Main Key──→ 自动解锁快照（可选）
 ```
 
-EDK 是密文，不作为 AEAD 的 key 使用。Main Key、DEK、Provider KEK 具有不同类型或私有包装，避免接口中混用三个裸 `[]byte`。Main Key 不从登录 token、主机名、路径或配置内容派生；DEK 不从 Main Key 派生。
+EDK 是密文，不作为 AEAD 的 key 使用。Main Key、DEK、Provider KEK 具有不同类型或私有包装，避免接口中混用三个裸 `[]byte`。Main Key 只从用户密码和每实例随机 salt 派生，不从登录 token、主机名、路径或配置内容派生；DEK 不从 Main Key 派生。密码 verifier 只用于拒绝错误密码，不能从中恢复 Main Key；真正的主密钥选择由全部密文对象认证验证。
 
 第一版正文加密及 DEK 封装统一使用 `chacha20poly1305.NewX`，32 字节 key、24 字节随机 nonce、16 字节认证标签。随机数来自 `crypto/rand`。两种用途使用不同密钥、不同 nonce 和不同 AAD 域标签；不实现自定义密码算法。
 
 ### 2.2 托管与恢复
 
-按 `encryption-test` 中对应 provider 逐项移植并独立验证：macOS Keychain、Windows DPAPI、Linux Secret Service。容器可显式提供严格 Base64 编码的 32 字节 ENV KEK，变量建议为 `TERMCP_CONFIG_KEK`，不隐式使用会话存储变量。
+按 `encryption-test` 中对应 provider 逐项移植并独立验证：macOS Keychain、Windows DPAPI、Linux Secret Service。它们只承担可选的自动解锁，不是配置加密的必要条件。容器可显式提供严格 Base64 编码的 32 字节 ENV KEK，变量为 `TERMCP_CONFIG_KEK`，不隐式使用会话存储变量。
 
-- 未显式选择方式时，非空 ENV KEK 优先，否则尝试系统托管；系统不可用则进入待初始化状态，供人设置恢复密码，不降级明文。
-- 已有加密存储只能用现有 slot 解锁；托管失效不能触发生成新 Main Key 或覆盖旧密钥文件。
-- 恢复密码使用 Argon2id：初始参数为时间 3、内存 64 MiB、并行度 1，随机 16 字节 salt，输出 32 字节 KEK。参数写入 slot；读取先检查时间 1–10、内存 8–256 MiB、并行度 1–8，再运行 KDF。发布前在三系统测量，不在每次读取配置时运行 KDF。
-- 添加、修改恢复密码与切换解锁方式均要求两次新密码一致；已有密码的管理操作重新验证当前密码。自动方式可保留密码恢复 slot；手动方式只保留密码 slot。
-- 密码、Main Key、DEK 不放入 argv、URL、诊断日志、浏览器存储或临时文件。CLI 密码由交互输入或显式 stdin 读取，密钥管理操作关闭请求/响应正文日志。
+- 未显式选择方式时，非空 ENV KEK 优先，否则尝试系统托管。两者都不可用时，`config.keys` 可以只保留密码派生参数与 verifier，服务启动后进入 locked，等待用户在 WebUI 输入密码。
+- 已有加密存储只能用现有自动解锁 slot 或正确密码解锁；托管失效不能触发生成新 Main Key 或覆盖旧密钥文件。手动解锁成功后，用户可主动把当前 Main Key 重新封装到新的 ENV/系统 provider。
+- 加密密码使用 Argon2id：初始参数为时间 3、内存 64 MiB、并行度 1，随机 16 字节 salt，直接输出 32 字节 Main Key。读取先检查时间 1–10、内存 8–256 MiB、并行度 1–8，再运行 KDF。
+- 首次设置与修改都要求新密码和确认一致。修改时还要验证当前密码；成功后活动 Main Key 改变，所有活动 EDK 与 catalog EDK 重封，配置正文密文不变。
+- 系统不提供主密钥备份码。密码遗失且所有自动解锁 provider 均失效时，已有密文无法恢复。用户需要自行选择可记忆且足够长的密码。
+- 密码、Main Key、DEK 不放入 argv、URL、诊断日志、浏览器存储或临时文件。密码只通过 WebUI JSON 请求正文传递；密钥管理响应使用 `Cache-Control: no-store`，相关输入在对话框关闭或页面卸载时清空。
 - 解锁后进程可持有 Main Key；DEK 和明文配置按调用持有并尽快释放。`clear` 仅尽力清理，不能承诺 Go 内存完全擦除。
 
 磁盘加密不能抵御已经控制解锁进程、能读取同一系统身份秘密存储，或已获得 Main Key 的调用者。配置名称、数量、文件大小及文件系统时间也不全部隐藏。本期不提供防整套目录回滚的外部可信检查点。
@@ -95,16 +101,20 @@ EDK 是密文，不作为 AEAD 的 key 使用。Main Key、DEK、Provider KEK �
   .config.lock
   keys/
     config.keys
-    config.settings                     # 新建配置是否加密
   ssh_configs/
     store.enc
-    objects/
-      <profile_id>/
-        <generation_id>.enc
-    <plaintext-name>/config.toml         # 默认布局，可长期共存
+    kali/
+      identity                           # 明文配置身份 UUID，改名/转换时保留
+      config.toml                        # 未加密时
+      0123456789abcdef0123456789abcdef.enc   # 加密时，每次保存换 generation
+    <profile-name>/
+      identity
+      config.toml                        # 默认布局，可长期共存
     .internal/config.toml                # 明文 internal 覆盖
   sessions/...                          # 不改变现有格式
 ```
+
+`identity` 是用于会话、扩展和目录关联的公开 UUID，与密文格式内部的 Object ID、Generation ID 分开；不作为密钥或鉴权凭据。首次加载缺少 sidecar 的现有主机时补建，不改写原始 TOML。名称可变，关联以 UUID 为准；重复或损坏的 identity 不自动覆盖。复制/导入新配置分配新 UUID，删除后同名重建不能继承旧关联。
 
 第一版使用上述新路径，不复用 `keys/master.key`，也不把原始配置正文放进 `store.enc`。ID 路径统一为小写 32 位十六进制；名字、绝对路径和客户端输入不得直接构造 object 路径。普通 Profile ID 拒绝保留值及碰撞；目录索引与 internal 使用各自固定、不同的保留 Object ID。
 
@@ -112,13 +122,15 @@ EDK 是密文，不作为 AEAD 的 key 使用。Main Key、DEK、Provider KEK �
 
 | 对象 | 内容与作用 |
 | --- | --- |
-| `config.keys` | 有界 provider slot 列表；每个 slot 认证加密同一份密钥环，内含 Store ID、活动 Main Key ID、最多两把 Main Key、解锁方式及轮换状态 |
-| `store.enc` | 加密目录索引：schema、单调 revision、加密模式已提交标记、名称 → Profile ID/Generation ID 映射、internal 覆盖引用、待清理的受控对象引用 |
-| 单条 `.enc` | 一个配置代际的完整原始 TOML；包含它自己的 EDK、正文密文及认证头 |
+| `config.keys` | 有界的密码 KDF 参数、salt、认证 verifier、可选 provider slot 及密码修改中断状态；每个 provider slot 认证加密同一份 Main Key 快照，其中包含 Store ID、活动 Main Key ID 和最多两把 Main Key |
+| `store.enc` | 加密目录索引：schema、Store ID、单调 revision、经过认证的 `encrypt_new` 及名称 → Profile ID/Generation ID 映射 |
+| `<profile>/<generation>.enc` | 一个配置代际的完整原始 TOML；包含它自己的 EDK、正文密文及认证头 |
 
-目录索引只集中身份和提交元数据，主机正文仍逐条独立。名称碰撞继续按大小写不敏感规则处理；删除后同名重建使用新 ID。改名只提交索引，不重加密正文，活会话的 Profile ID 不变。索引本身也使用独立随机 DEK 和 EDK。
+`store.enc` 本身也是 envelope：独立随机 DEK 加密目录 JSON，当前 Main Key 把该 DEK 封装成 EDK。因此未解锁时不能读取主机映射、`encrypt_new` 或当前 Generation ID。Profile 的明文 `identity` 不参与解密，只用于让会话、扩展和 WebUI 跟住目录改名；它不是能力凭据。
 
-正常配置保存的唯一逻辑提交点是 `store.enc` 的持久化原子替换：先写好新代际，后发布索引引用。索引未引用的文件不是已提交配置。不要通过扫描并挑选“最新 mtime”或“最大文件名”恢复配置。
+目录索引只集中身份和提交元数据，主机正文仍逐条独立。名称碰撞继续按大小写不敏感规则处理；删除后同名重建使用新 ID。改名把原密文目录移动到新主机名、提交 catalog，再完成目录持久化；正文 DEK/Generation 与活会话 Profile ID 均不变。
+
+正常配置保存的唯一逻辑提交点是 `store.enc` 的持久化原子替换：先在 `ssh_configs/<name>/` 写好新代际，后发布索引引用，再清理旧代际。索引未引用的文件不是已提交配置。不要通过扫描并挑选“最新 mtime”或“最大文件名”恢复配置。
 
 ### 3.2 持久化与排他访问
 
@@ -169,13 +181,15 @@ Main Key ID、wrap nonce 和 EDK 不加入正文 AAD，否则更换 Main Key 将
 
 已知身份的文件互换必须失败；整套密钥、索引及配置被一起回滚仍可能通过认证，这是本期明确的保护边界。
 
-### 4.3 `config.keys` 的封装合同
+### 4.3 `config.keys` 的密码与封装合同
 
-密钥文件是最大 64 KiB 的严格版本化 JSON，最多 8 个 provider slot；字节字段统一标准 Base64。每个 slot 包含 slot ID、provider ID、参数、nonce 和密钥环密文。provider 参数只允许其声明字段；拒绝未知版本、重复 ID、非法 KDF 成本及未知字段。
+密钥文件是最大 64 KiB 的严格版本化 JSON，最多 8 个 provider slot；字节字段统一使用标准 Base64。密码派生存储使用 version 2，包含 `password` 对象和可选 provider slots。旧 provider-only 存储仍能由兼容代码读取，但新初始化不再生成随机 Main Key 备份模型。
 
-slot AAD 使用固定字段编码，绑定域标签 `termcp/config/keyring/v1`、版本 uint16、Store ID 16 字节、slot ID 16 字节，再依次编码 provider ID 与参数。变长字符串均为 uint32 字节长度加 UTF-8 正文；参数按 provider 的固定 schema 编码，不对任意 JSON 文本直接求 AAD。密码参数固定为 salt 16 字节、时间 uint32、内存 KiB uint32、并行度 uint8；ENV 参数为空；系统参数为随机引用字符串及长度前缀的系统保护 blob。provider ID 枚举及各平台参数在 P0 与 golden 向量一起冻结，第一版仅接受正式注册的 provider。
+`password` 对象固定包含 Key ID 16 字节、salt 16 字节、Argon2id 时间/内存/并行度、verifier nonce 24 字节和 verifier 密文 48 字节；修改中断时可增加一个受新 Main Key 封装、用于继续重封的 previous Main Key。verifier 使用派生 Main Key 认证加密 Store ID 与活动 Key ID，AAD 绑定域标签、Store ID、Key ID、salt 和 KDF 参数。它验证密码选择出的是预期 Main Key，但 catalog 和每个活动配置仍必须逐一认证成功；不能只凭 verifier 判定存储完整。
 
-解密后再次核对密钥环内部的 Store ID、解锁方式、活动 Key ID 及所有 Key ID 唯一性。密钥环最多保留活动与轮换中待退役两把 Main Key，不无限积累历史密钥。普通文件不能指定 provider 或 KDF 参数。
+每个 provider slot 包含 slot ID、provider ID、参数、nonce 和 Main Key 快照密文。slot AAD 使用固定字段编码，绑定域标签 `termcp/config/keyring/v1`、版本 uint16、Store ID、slot ID、provider ID 与参数；变长字符串均为 uint32 字节长度加 UTF-8 正文。ENV 参数为空；系统参数为随机引用字符串及长度前缀的系统保护 blob。解析器拒绝未知版本、未知字段、重复 ID、非法 KDF 成本、零 Key ID 及超出上限的数组。
+
+解密后再次核对 Main Key 快照内部的 Store ID、活动 Key ID 及所有 Key ID 唯一性。密钥环最多保留活动与修改中断中待退役两把 Main Key，不无限积累历史密钥。普通配置文件不能指定 provider、KDF 成本、Main Key 或目标路径。
 
 ## 5. Module 与 Interface
 
@@ -186,14 +200,15 @@ slot AAD 使用固定字段编码，绑定域标签 `termcp/config/keyring/v1`�
 | 位置（拟新增/修改） | 职责 |
 | --- | --- |
 | `internal/configstore/envelope.go` | 固定格式解析、Seal/Open/Rewrap、限长与 AAD；不决定权限和迁移 |
-| `internal/configstore/keyring.go` | provider slots、Main Key 私有生命周期、密码重封与轮换状态 |
+| `internal/configstore/keyring.go` | provider slots、Main Key 私有生命周期、旧格式兼容与自动解锁 |
+| `internal/configstore/password.go` | Argon2id 派生、密码 verifier、手动解锁、密码修改、双密钥过渡与活动 EDK 重封 |
+| `internal/configstore/rotation.go`、`rotation_keyring.go` | 旧随机 Main Key 存储的兼容轮换；密码派生存储拒绝无故重生成随机 key |
 | `internal/configstore/provider_*.go` | OS/ENV/密码 Adapter，平台调用与秘密传输 |
-| `internal/configstore/atomic_*.go` | 原子发布、Sync、文件锁、ACL 与平台错误归一 |
-| `internal/configstore/store.go` | 目录索引、稳定 ID、代际文件、读写提交、孤儿清理 |
-| `internal/configstore/migration.go` | 旧 TOML 迁移、清理确认、可续跑日志 |
-| `internal/configstore/controller.go` | 初始化、解锁、Ready 门禁、关闭、密钥管理串行化 |
+| `internal/configstore/atomic.go`、`lock_*.go` | 原子发布、Sync、目录排他锁与平台错误归一 |
+| `internal/configstore/store.go`、`directories.go` | 目录索引、稳定 ID、代际文件、读写提交、目录改名识别 |
+| `internal/configstore/recovery.go` | 旧备份兼容辅助与锁定状态错误映射；当前 WebUI 不暴露备份码 |
 | `internal/sshconfig/store.go` 等 | 保留解析、名称规则、临时配置与业务 Store 外观，接入持久后端 |
-| `main.go`、管理 handler、CLI | 依赖组装、人端授权、传输解码与状态展示 |
+| `main.go`、`internal/sshconfig/encryption.go`、WebUI handler、CLI | 依赖组装、人端操作、传输解码、状态展示与错误映射 |
 
 这不是通用加密文件系统，不移植 `sessionlog`、追加记录或历史索引。crypto primitive 留在同一 Module 的私有实现内，不向 handler 暴露原始 key 或任意用途解密入口。
 
@@ -218,7 +233,7 @@ Profile ID 随 Store 的描述/建连结果进入会话元数据，供后续主�
 
 ### 5.3 管理 Interface
 
-Controller 提供 `Status`、`Initialize`、`Unlock`、`ChangePassword`、`SetUnlockMode`、`RotateMainKey`、`Resume`、`Close` 的明确操作。Profile Store 的普通调用者拿不到管理 Interface。持久化策略、轮换状态及解锁上下文由 Controller 负责，不由 REST、MCP 各写一份。
+Repository/Store 提供 `Status`、`InitializeRepositoryWithPassword`、`UnlockPassword`、`ChangePassword`、`RebindPasswordProvider`、`SetEncryptNew`、转换与 `Close` 的明确操作。Profile Store 的普通调用者拿不到密钥管理 Interface。持久化策略、修改中断状态及解锁上下文由 Repository 负责，不由 REST、MCP 各写一份。
 
 锁顺序固定为 Controller 管理锁 → Store 变更锁 → 私有 KeyRing 锁。普通读取只通过 Store 获得短期快照，不持 KeyRing 锁回调 Store。注入 RNG、文件持久化及 provider 的私有测试 seam，故障测试仍从正式 Interface 发起。
 
@@ -254,21 +269,22 @@ Controller 提供 `Status`、`Initialize`、`Unlock`、`ChangePassword`、`SetUn
 ### 7.1 配置状态机
 
 ```text
-UNINITIALIZED → LOCKED → MIGRATING → CLEANUP_PENDING → READY
-                         └────无需迁移───────────────→ READY
-READY → ROTATING → READY
+UNINITIALIZED → READY
+启动已有存储 → READY | LOCKED
+READY → PASSWORD_REWRAPPING → READY
+中断的密码修改 → READY(rotation_pending) → READY
 任一不可恢复认证/格式错误 → FAILED
 Close → CLOSED
 ```
 
-自动初始化/解锁可快速经过中间状态，但不跳过验证。进入 READY 前验证 catalog 的全部活动引用，逐条认证并检查业务结构；清理完成前不报告 READY。操作失败后按日志恢复原状态或明确 FAILED，不以空目录替代损坏配置。
+密码初始化和自动解锁可以很快完成，但不跳过验证。进入 READY 前验证 catalog 的全部活动引用，逐条认证并检查业务结构。Provider 不可用或只保存密码派生参数时进入 LOCKED，不以空目录替代损坏配置。
 
 | 状态 | 允许的行为 |
 | --- | --- |
-| UNINITIALIZED / LOCKED | 人端配置状态与初始化/解锁；不读取持久凭据，不新建 SSH 连接 |
-| MIGRATING / CLEANUP_PENDING | 人端进度、重试、关闭；拒绝配置写入、注入和新建连接 |
+| UNINITIALIZED | 明文配置正常使用；人端可设置密码并启用新配置加密；不读取密文 |
+| LOCKED | 人端状态、密码解锁与重新托管；不读取加密主机，不新建依赖加密 profile 的连接 |
 | READY | 正常配置操作；仍受人/Agent 与资源授权限制 |
-| ROTATING | 读取可用，冻结配置变更、导入及模式切换；已建会话继续运行；新连接只读取已验证快照 |
+| PASSWORD_REWRAPPING / `rotation_pending` | 读取可用，冻结配置变更、导入及模式切换；已建会话继续运行；以双 Main Key 验证混合封装后续跑 |
 | FAILED | 状态及人端恢复指引；失败关闭配置能力，不自动新建密钥或回退明文 |
 
 会话历史仍按现有格式读取，配置未解锁不要求把历史删除或迁移。启动时先提供管理与历史读取能力；扩展协调器、自动 SSH 建连及任何依赖 profile 的操作等待配置 READY。即使请求 internal，也不能跳过待解锁的 internal 覆盖规则。第一版不提供运行中 lock；退出时先停止依赖配置的工作，再关闭配置 Store 和 KeyRing。
@@ -279,28 +295,24 @@ daemon 空闲倒计时在配置就绪后才开始，避免等待用户解锁时�
 
 | 接口 | 请求要点 |
 | --- | --- |
-| `GET /api/config-storage` | 返回新建是否加密及每台主机的 `plaintext/encrypted/temporary/builtin` 模式；不返回 key/slot 正文 |
-| `PUT /api/config-storage` | `{"encrypt_new":true|false}`；启用时创建/解锁 keyring，不转换现有主机 |
+| `GET /api/config-storage` | 返回 `locked/error_code`、`encrypt_new`、`password_configured`、`automatic_unlock`、公开 `main_key_id`、`rotation_pending` 及每台主机模式；锁定时模式和 key ID 未知，不返回密码、KDF verifier 或 slot 正文 |
+| `POST /api/config-storage/initialize` | `{"password":"...","confirmation":"..."}`；首次启用的显式初始化，不替换已存在的密钥环 |
+| `PUT /api/config-storage` | `{"encrypt_new":true|false}`；只修改已初始化仓库的模式；未初始化的启用返回 409 |
 | `POST /api/config-storage/encrypt` | `{"names":[...]}`；提交所选密文与 catalog 后删除对应明文源 |
 | `POST /api/config-storage/restore` | `{"names":[...]}`；先原子写回明文，再移除密文引用 |
+| `POST /api/config-storage/unlock` | `{"password":"..."}`；密码只在 JSON body 中，仅解锁当前进程 |
+| `POST /api/config-storage/recover` | `{"password":"..."}`；先验证全部活动配置，再解锁并尝试用当前 provider 恢复自动解锁 |
+| `POST /api/config-storage/password` | 当前密码、新密码、确认；先持久化双 Main Key，再重封全部活动 EDK；中断时输入新密码续跑 |
 
-以下密码与轮换接口尚未实现：
-
-| 接口 | 请求要点 |
-| --- | --- |
-| `POST /api/config-storage/unlock` | 密码只在 JSON body 中 |
-| `POST /api/config-storage/password` | 当前密码、新密码、确认；保存成功后才能确认 |
-| `POST /api/config-storage/unlock-mode` | automatic/password；验证当前密码和目标 provider 可用性 |
-| `POST /api/config-storage/rotate` | 常规 rewrap 或事件后 reencrypt；重新验证管理凭据/恢复密码 |
-| `POST /api/config-storage/resume` | 只恢复已持久化的迁移/轮换计划，不接受客户端任意路径 |
+转换断点日志与单独的 `unlock-mode`/`resume` 路由尚未实现。密码修改的 `rotation_pending` 续跑复用同一个 password 路由。
 
 这些路由必须在配置 LOCKED 时可由可信 human 访问；Agent 即使已有 MCP token 也不能访问。不能把操作者认证记录只放进待解锁的配置存储，造成“必须先解锁才能认证解锁”的循环。可信人端识别是上线前置条件；当前全局 token 模型不能自动满足它，也不能仅凭 loopback、REST 路径或客户端 role 字段认定是人。
 
-入口先认证与识别人/Agent，再做配置状态与操作授权。Agent 的非 MCP 业务请求先拒绝，不借锁定状态获得初始化窗口。配置加密 Module 不另造 token 签发机制，也不复用恢复密码作为 HTTP 登录密码。
+入口先认证与识别人/Agent，再做配置状态与操作授权。Agent 的非 MCP 业务请求先拒绝，不借锁定状态获得初始化窗口。配置加密 Module 不另造 token 签发机制，也不复用加密密码作为 HTTP 登录密码。
 
 密码接口要求有界 JSON、禁止跨源、`Cache-Control: no-store`、尝试频率限制；远程必须 HTTPS。只有显式可信代理可以提供转发协议声明；不信任客户端自报 `X-Forwarded-Proto`。接口在 `no_webui` 构建中同样可用，WebUI 只增加人端“配置加密”设置、解锁及进度展示。
 
-当前 CLI 只提供只读 `termcp config-storage status`。加密开关及逐主机转换在 WebUI 完成；后续 `init/unlock/password/rotate/resume` 仍按同一鉴权原则补充。CLI 不把管理操作开放成 Agent DSL。
+当前 CLI 提供只读 `termcp config-storage status` 及兼容入口 `termcp config-storage rotate-key`。后者只服务旧随机 Main Key 存储，遇到密码派生存储时拒绝并提示在 WebUI 修改密码。加密开关、初始化、解锁、密码修改及逐主机转换在 WebUI 完成；转换日志恢复仍按同一鉴权原则补充。CLI 不把管理操作开放成 Agent DSL。
 
 ### 7.3 错误合同
 
@@ -309,9 +321,14 @@ daemon 空闲倒计时在配置就绪后才开始，避免等待用户解锁时�
 | ErrLocked / ErrNotReady | 503 | 配置能力尚不可用，可显示状态与 Retry-After |
 | ErrBusy | 409 | 正在迁移、轮换或存在并发修改 |
 | ErrInvalid | 400 | 既有 TOML/输入校验失败 |
-| ErrAuthentication | 解锁为 401；读取损坏数据为 503 | 密码不正确或数据不能认证；不返回秘密片段 |
+| ErrLocked | 503 | provider 不能解锁现有密钥环，管理状态给出特定 `error_code`，通过 WebUI 恢复 |
+| ErrPasswordConfirmation / ErrPasswordInvalid | 400 | 新密码不符合规则或确认不一致；不执行 KDF 后的发布 |
+| ErrPasswordNotConfigured | 409 | 旧存储尚无密码派生方式；先恢复原 provider，再设置密码 |
+| ErrPasswordRequired | 409 / 锁定状态 `password_required` | 无可用自动解锁 provider，需要输入密码 |
+| ErrRecoveryKey | 400 | 旧备份兼容路径不能验证全部配置；当前 WebUI 不暴露该入口 |
+| ErrAuthentication | 密码操作 400 `password_incorrect`；provider 启动状态 `keyring_authentication_failed` | 密钥不能认证或数据损坏；不返回秘密片段 |
 | ErrVersion / ErrMissingKey | 503 | 格式不受支持或已有密文缺密钥，需人工恢复 |
-| ErrDurability | 503 | 已发布但持久化未确认，不能宣称成功或简单回滚 |
+| ErrDurability | 当前主密钥管理接口为 500 | 已发布但持久化未确认，不能宣称成功或简单回滚；刷新状态核对已发布结果 |
 | ErrForbidden | 403 | 身份已识别但无权执行；匿名认证失败仍由外层返回 401 |
 
 MCP 使用等价结构化错误与非秘密状态，不把所有错误拼成原始系统 stderr。列表遇到已提交 profile 解密失败应明确失败，不能沿用逐条 `continue` 后返回一个看似正常但少主机的列表。
@@ -321,12 +338,23 @@ MCP 使用等价结构化错误与非秘密状态，不把所有错误拼成原�
 ### 8.1 启动识别
 
 1. 无密钥、无 catalog：所有持久 profile 以明文运行，新建配置也默认明文。
-2. 用户启用“新建配置加密”：创建或解锁 keyring 与空 catalog，并持久化 `config.settings`；已有 `config.toml` 不移动。
+2. 用户首次启用“新建配置加密”：页面要求输入并确认加密密码，提交后才创建密码派生参数、可选 provider 封装、空 keyring 与空 catalog，并保存 `encrypt_new=true`；已有 `config.toml` 不移动。未确认或取消均不初始化。
 3. 此时新配置进入密文仓库；已有明文在编辑、改名或重启时仍保持明文，直到用户显式选择。
 4. 密钥存在但 catalog 缺失、或已启用加密但 keyring 缺失：报错并拒绝降级，不生成替代密钥。
 5. 明文目录与密文 catalog 可长期共存。同名项以密文为权威；转换/还原完成后清理残留明文，避免旧副本重新生效。
+6. keyring 格式有效、但 provider 缺失或不能认证其封装：仓库保留排他锁，业务配置读写返回 `ErrLocked`，WebUI 和状态路由仍运行。状态中的 `encrypt_new` 不能视为已解密策略。只有恢复验证成功后重新发布真实策略；catalog 自身损坏不会被误判成 provider 故障。
 
 启用操作先持久化 provider 封装的密钥环，再写新的新建模式设置。任一步失败时，未完成部分不能把现有明文主机的读取路径截断。
+
+### 8.1.1 密码解锁与自动托管恢复（已实现）
+
+首次启用时，用户密码与随机 salt 经 Argon2id 直接派生 Main Key。`config.keys` 保存 KDF 参数和 verifier，不保存密码或 Main Key；系统也不生成备份码。没有可用 ENV/系统 provider 时允许零自动解锁 slot；服务重启后进入 `password_required`，用户必须在 WebUI 输入密码。
+
+密码解锁首先校验 verifier，再读取 `store.enc`、验证全部当前引用并解析业务 TOML。任一配置不能认证或解析时均保持 LOCKED，不删除、移动或重写配置。正确密码成功后才发布内存中的 Main Key，并允许读取加密主机。普通解锁不改变自动托管 slot。
+
+用户在锁定页选择“解锁并恢复自动保护”时，成功解锁后会尝试用当前 ENV/系统 provider 封装同一 Main Key，并原子替换 `config.keys`。系统服务仍不可用或容器未提供 `TERMCP_CONFIG_KEK` 时，密码解锁仍可成功，但自动托管恢复返回 `key_provider_unavailable`。恢复只改自动解锁封装，配置正文、主动 EDK、Profile ID、Generation ID、revision 和 `encrypt_new` 不变。
+
+容器显式注入 `TERMCP_CONFIG_KEK`，其值应是稳定保存的标准 Base64 32 字节 KEK；设置时仅选 ENV，不尝试系统 provider。没有该变量且系统 provider 不可用时，每次重启都需要输入密码。系统不提供主密钥备份码；密码和可用自动解锁秘密都丢失时，已有密文无法恢复。
 
 ### 8.2 加密所选主机
 
@@ -341,7 +369,7 @@ MCP 使用等价结构化错误与非秘密状态，不把所有错误拼成原�
 1. 只允许选择当前为密文的 profile。
 2. 先从 catalog 路径读取、解封并认证全文，再原子写入对应明文 `config.toml`。
 3. 明文写入成功后提交 catalog 删除；启动和运行时均以密文为权威，因此中途失败留下的双份内容不会让旧密文被明文意外覆盖。
-4. `encrypt_new` 设置保持不变。若它仍为 true，下一台“新配置”继续加密；刚还原的主机因已存在明文而保持明文，除非再次显式加密。
+4. `encrypt_new` 设置保持不变。若它仍为 true，下一台“新配置”继续加密；刚还原的主机因已存在明文而保持明文，除非再次显式加密。该值只存在于认证加密的 catalog，外部修改普通文件不能关闭它；不读取、修改或删除旧版 `config.settings`。
 
 文件删除不是 SSD、快照、备份或系统历史中的安全擦除，不作此保证。转换期间生成的 staging 与临时文件只能包含密文。
 
@@ -351,25 +379,26 @@ MCP 使用等价结构化错误与非秘密状态，不把所有错误拼成原�
 
 从参考分支迁移的人工路径为：在隔离目录用对应版本解锁并执行独立密码加密导出，再在新实例导入；不搬运会话加密数据。恢复和验证成功前保留旧目录。直接 reader 如确有需求，单独实现只读导入 Adapter 及固定样本，不复活该分支的启动链和会话格式。
 
-## 9. 改密码与两类轮换
+## 9. 修改密码与密钥封装
 
-### 9.1 改恢复密码 / 切换 provider
+### 9.1 修改密码 / 重新托管 provider
 
-重新验证当前密码，将同一密钥环封装到新 slot。Main Key、现有 EDK、正文密文和 Profile ID 均不改变。保留仍有效的其他 provider slot；切换方式时验证目标 provider 后才发布。保存未确认前不能退役旧 slot、删除系统托管项或确认新密码已生效。
+修改密码需要重新验证当前密码，并以新密码和随机 salt 派生新的 Main Key。现有 EDK、catalog EDK、Profile ID 和正文密文不发生算法变化，但每个 EDK 与 catalog EDK 都要改用新 Main Key 重封。保存未确认前不能退役旧 Main Key，也不能向用户确认新密码已生效。
 
-### 9.2 常规 Main Key 轮换：只重封 EDK
+切换 ENV/系统 provider 不修改密码，也不改变 Main Key、EDK、正文密文或 Profile ID。它只重新封装 `config.keys` 中的 Main Key 快照。目标 provider 先被验证，保存成功后才报告自动解锁恢复。
 
-目标是后续不再使用旧 Main Key，不声称修复已泄露的 DEK。过程允许读取，冻结持久配置变更和垃圾回收；操作数量及进度有界并可取消/续跑。
+### 9.2 修改密码：双 Main Key 过渡并重封 EDK
 
-1. 重新验证管理资格及所需 provider。密钥环有密码 slot 时需要当前恢复密码，保证新密钥环能在所有保留的 slot 下重新封装；不能因无人提供密码就悄悄丢掉恢复方式。
-2. 生成新 Main Key，原子持久化包含旧/新两把 key 的密钥环，记录轮换状态。持久化确认前不产生只依赖新 key 的文件。
-3. 将新 key 设为活动封装 key；逐个重封 catalog 当前引用的 profile、迁移对象及 catalog 自身。每个文件先完成原封装与正文认证，再保留 D/data nonce/C，更新 Main Key ID、wrap nonce、EDK，原子替换整份文件。
-4. 旧代际/孤儿密文在轮换清单中逐项清理或重封；清理失败保留旧 key 和 ROTATING 状态，不能被垃圾回收扫描漏掉。
-5. 再扫描所有受控活动对象，确认没有依赖旧 key 的文件，认证验证全部通过；随后原子保存只含新 key 的密钥环，标记完成并恢复写入。
+已实现的范围是认证 catalog 当前引用的配置及 catalog 本身，不包含未提交孤儿、外部快照或明文残留。目标是使新密码对应的 Main Key 成为唯一活动 EDK 封装密钥，不声称修复已泄露的 DEK。操作持有 Store/Repository 锁；中断后允许读取，冻结加密配置写入、导入、删除、改名、转换及模式切换，直至用户以新密码主动续跑。明文和临时配置保持原有存储行为。
 
-轮换中崩溃时，两把 key 都已保存；重启先识别文件 Main Key ID，已重封文件跳过，未完成继续。扫描以认证 catalog、计划与受控布局为准，不信任单独的“完成计数”。不得先删旧 key 再重封。
+1. 服务认证当前密码，并重新验证 catalog 及所有活动对象；任一配置不能认证时，在写入前失败。
+2. 从新密码和独立随机 salt 派生新 Main Key，随机生成新的公开 Main Key ID。`config.keys` 先原子持久化双 Main Key 过渡状态：活动 key 是新 key，旧 key 只由新 key 封装，供中断期间读取尚未重封的对象。
+3. 按确定顺序逐个重封 catalog 当前引用的 profile，最后处理 catalog。保留稳定头 D、data nonce、正文密文 C、Profile ID、Generation ID、revision 和 `encrypt_new`；仅更新 Main Key ID、wrap nonce 与 EDK。原子替换整份封装文件，并逐份认证回读。
+4. 所有活动对象验证成功后，原子发布只含新 Main Key 和当前密码派生参数的状态，删除 previous key，恢复配置写入。可用 ENV/系统 provider 会继续封装新的 Main Key；没有 provider slot 也允许完成。
 
-验收应逐字节比较轮换前后正文密文 C 及 D 完全相同，仅封装区域变化。由于 EDK 与正文同文件，物理写入仍可能替换整份文件；“无需重加密正文”不等于零正文 I/O 或 O(1) 操作。
+密码修改中断时，旧、新 Main Key 都已持久化，重启后输入新密码即可读取混合封装。页面显示“继续修改密码”，调用 password 路由时把中断操作使用的新密码放入 `current_password`，新密码字段与确认留空。扫描以认证 catalog 的活动引用为准，不信任额外的完成计数。不得先删旧 key 再重封。
+
+验收逐字节比较修改前后正文密文 C 和稳定头 D，只允许 Main Key ID、wrap nonce 与 EDK 变化。由于 EDK 与正文同文件，物理写入仍会替换整份文件；“配置正文不需要重新加密”不等于零正文 I/O。旧随机 Main Key 存储的 `config-storage rotate-key` 仅作为兼容路径保留。
 
 ### 9.3 泄露处置：换 Main Key、DEK 和正文代际
 
@@ -394,13 +423,13 @@ MCP 使用等价结构化错误与非秘密状态，不把所有错误拼成原�
 
 | 阶段 | 具体改动 | 完成标准 |
 | --- | --- | --- |
-| P0 合同与准入 | 冻结格式/golden、状态/错误；确认可信人端管理身份及安全摘要权限接入；列出原文与导出调用点 | 格式合同与敏感读取清单已冻结；可信人端/Agent 鉴权仍待完成，因此管理路由尚未上线 |
-| P1 加密核心 | envelope、provider slot、KeyRing、平台文件锁及原子持久化 | 已实现双层认证、跨对象替换、畸形输入、密钥错误及持久化核心测试；三平台真实 Provider 验收未完成 |
+| P0 合同与准入 | 冻结格式/golden、状态/错误；确认可信人端管理身份及安全摘要权限接入；列出原文与导出调用点 | 格式合同与敏感读取清单已冻结；配置管理路由已实现，但细粒度接口鉴权仍未完成 |
+| P1 加密核心 | envelope、provider slot、密码 KDF、KeyRing、平台文件锁及原子持久化 | 已实现双层认证、密码 verifier、可选自动解锁、跨对象替换、畸形输入、密钥错误及持久化核心测试；三平台真实 Provider 验收未完成 |
 | P2 Store 闭环 | 私有后端 Interface、catalog、单条代际、稳定 Profile ID、临时/internal 适配 | 已实现创建→重启→读取/改名/删除、raw TOML 保留、临时/internal 分支；复制沿用现有读后写路径 |
-| P3 迁移与启动 | 状态机、明文迁移、清理续跑、组合根及扩展延迟启动 | 已实现页面主动启用、逐主机转换/还原与启动自动探测；断点转换日志和清理重试状态机尚未完成 |
-| P4 人端管理 | REST、CLI、WebUI 解锁/恢复密码/方式选择；日志、传输与频率限制 | 已实现配置加密 WebUI、状态/开关/逐主机转换 REST 与本地 `status` CLI；细粒度人/Agent 鉴权仍是上线前置条件 |
-| P5 轮换与恢复 | 改密码、Main Key rewrap、reencrypt、并发冻结及断点恢复 | 未实现 |
-| P6 发布验收 | 三系统原生 provider、升级/备份说明、Unreleased、文档与嵌入资产同步 | 当前只完成本地 race、跨平台 compile 与 focused tests；发布验收未完成 |
+| P3 迁移与启动 | 状态机、逐主机转换、稳定 identity、组合根及扩展延迟启动 | 已实现页面主动启用、逐主机转换/还原、identity sidecar 与启动自动探测；转换断点日志和清理重试状态机尚未完成 |
+| P4 人端管理 | REST、WebUI 初始化/解锁/改密码/自动托管；日志、传输与频率限制 | 已实现密码操作、状态/开关/逐主机转换 REST 与本地 `status` CLI；细粒度人/Agent 鉴权仍是上线前置条件 |
+| P5 密钥变更与恢复 | 修改密码、EDK rewrap、provider rebind、reencrypt、并发冻结及断点恢复 | 已实现密码派生 Main Key、EDK rewrap、自动托管恢复、加密仓库变更冻结、逐步发布故障与重启续跑测试；reencrypt 及旧代际持久清理清单未实现 |
+| P6 发布验收 | 三系统原生 provider、升级/手动解锁说明、Unreleased、文档与嵌入资产同步 | 当前只完成本地 race、跨平台 compile 与 focused tests；发布验收未完成 |
 
 P0 的身份与授权工作可复用权限阶段，不能用配置加密代替；P1/P2 可先开发测试，但管理入口不得提前以无身份或共用越权模型上线。P2/P3 共同完成存储转换；没有迁移路径时不对既有目录自动启用新后端。
 
@@ -419,8 +448,8 @@ P0 的身份与授权工作可复用权限阶段，不能用配置加密代替�
 | 多级跳板、代理认证、未知 TOML 字段 | 迁移按原字节保留，摘要不泄露秘密 |
 | 迁移第 1 至 7 步任意中断、重复执行、源被修改 | 可续跑、幂等、没有重复身份或误删；清理未完成不 READY |
 | 缺密钥/坏 catalog、目录只有残留 objects | 不自动创建替代 key，不返回空主机列表假成功 |
-| 改密码失败及切换 provider 失败 | 旧方式仍可用；成功时 Main Key、EDK、正文均不改 |
-| 轮换中断与恢复 | 两把 key 可读混合封装；旧 key 到最后才退役 |
+| 改密码失败及切换 provider 失败 | 错误密码或发布前失败不改变当前解锁能力；provider rebind 失败时旧托管仍有效 |
+| 改密码成功与中断恢复 | 新 Main Key/ID 与全部 EDK 改变，正文 C 和稳定头不变；旧密码失效；两把 key 可读混合封装并完成续跑 |
 | rewrap 与 reencrypt 对照 | 前者 D/C 完全一致；后者 DEK/代际/正文密文改变 |
 | 人、Agent、匿名访问每个管理/原文/导出入口 | 身份与能力检查先执行；MCP/REST/WS 无换门绕过 |
 | 存储未就绪、daemon 等待、stdio 协议 | 不自动发起 SSH；历史保持原格式；空闲倒计时不打断初始化；stdout 无杂讯 |
@@ -440,12 +469,13 @@ go build -tags no_webui ./...
 
 上列新 package 路径在实现后才存在。CI 的完整 race 测试继续遵循届时 `.github/workflows/test.yml`（当前 runner timeout 为 1800s）；本地基线命令为 600s，不把本机通过冒充三系统通过。配置变更影响建连/扩展生命周期时，将对应 package 纳入压力测试。
 
-## 13. 升级、备份和回退
+## 13. 升级、恢复和回退
 
-- 上线前说明磁盘格式变化、停止旧实例、备份及所需解锁方式；由人确认备份可恢复后迁移真实目录。
-- 新备份必须同时保留 `config.keys`、catalog、所有活动代际及未完成迁移/轮换状态；系统托管或 ENV 方式还需要对应独立恢复能力。密码恢复 slot 可用于跨系统恢复，但不把 ENV KEK 与数据备份混放。
-- 备份通过 Store 一致性快照或停止实例获得，不能边写边随意复制文件树。恢复时在新目录验证全部活动引用；托管项缺失且无恢复方式时明确不能解密。
-- 回退到旧二进制只能在隔离目录恢复迁移前备份，或由已授权的人显式导出；不能让旧版直接打开新目录继续写 TOML。
+- 当前实现不会自动迁移已有明文配置。用户主动启用加密后，只有新建或明确选择的主机进入密文仓库；升级前仍应停止旧实例并核对目标数据目录。
+- 应用不提供主密钥备份码或导出功能。运维若自行保存目录快照，必须一致地保留 `config.keys`、`store.enc`、所有活动代际、明文 `identity` sidecar 及可能的密码修改中断状态。恢复时还需用户密码，或与 `config.keys` 中 slot 对应的 ENV/系统 provider。
+- 目录复制应在实例停止或 Store 一致性快照时完成，不能在写入过程中随意复制文件树。恢复后必须验证全部活动引用；只有密码而没有可用 KEK 时，服务会启动为 locked，并在输入正确密码后继续。
+- 回退到旧二进制只能在隔离目录恢复升级前快照，或由已授权的人显式导出明文配置；不能让旧版直接打开新目录继续写 TOML。
+- 旧版 `keys/config.settings` 不再参与策略判断，也不会被生产代码清理；真实开关位于认证加密的 `store.enc`。
 - `CHANGELOG.md` 的 Unreleased 在发布前写入用户可见变化和升级条件；本设计文件本身不冒充已实现特性，不执行发布或提交操作。
 
 ## 14. 参考依据

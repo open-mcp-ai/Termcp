@@ -99,8 +99,9 @@ type Handler struct {
 
 	// viewers tracks the Web UI tabs currently attached (see viewers.go), so the
 	// page can show who is watching. Created on first use.
-	viewers    *viewerRegistry
-	viewerOnce sync.Once
+	viewers     *viewerRegistry
+	viewerOnce  sync.Once
+	configKeyMu sync.Mutex
 
 	// MCPConnections lists the MCP clients attached to the MCP server (see
 	// internal/mcp/connections.go). Wired by main to server.Connections; nil when
@@ -136,7 +137,18 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		h.ForwardMgr.SetOnChange(h.sessionHub().broadcast)
 	}
 	if h.SSH != nil {
-		h.SSH.SetOnChange(h.sessionHub().broadcast)
+		if h.Sessions != nil {
+			h.Sessions.SetSSHConfigResolver(h.SSH.ResolveSessionReference)
+		}
+		h.SSH.SetOnChange(func() {
+			if h.Sessions != nil {
+				h.Sessions.RefreshSSHConfigNames()
+			}
+			if h.Extensions != nil {
+				h.Extensions.ProfilesChanged()
+			}
+			h.sessionHub().broadcast()
+		})
 	}
 	if h.Extensions != nil {
 		// An extension's status transition is what the right panel renders, so it
@@ -171,6 +183,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config-storage", h.handleConfigStorageSetting)
 	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
 	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
+	mux.HandleFunc("POST /api/config-storage/initialize", h.handleInitializeConfigKey)
+	mux.HandleFunc("POST /api/config-storage/recover", h.handleRecoverConfigKey)
+	mux.HandleFunc("POST /api/config-storage/unlock", h.handleUnlockConfigKey)
+	mux.HandleFunc("POST /api/config-storage/password", h.handleChangeConfigPassword)
 
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes

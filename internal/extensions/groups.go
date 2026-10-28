@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
@@ -77,7 +78,18 @@ func (r *Reconciler) groupNamed(key string) bool {
 // "the same calls are permitted", and no extension can reach past its own
 // template — which is the whole promise of the layer.
 func groupKey(ext *Extension) string {
-	return strings.TrimSpace(ext.Target) + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+	target := ext.TargetIdentity
+	if target == "" {
+		target = strings.TrimSpace(ext.Target)
+	}
+	return target + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+}
+
+func namespaceTarget(ext *Extension) string {
+	if ext.TargetIdentity != "" && !sshconfig.IsInternalName(ext.Target) {
+		return ext.TargetIdentity
+	}
+	return ext.Target
 }
 
 // restrictionKey renders a whitelist pair as a comparable string. Entries are
@@ -125,7 +137,7 @@ func (r *Reconciler) group(key string, ext *Extension) *extGroup {
 	if g, ok := r.groups[key]; ok {
 		return g
 	}
-	g := &extGroup{key: key, target: ext.Target, namespace: ns.ForExtensions(ext.Target), created: time.Now()}
+	g := &extGroup{key: key, target: ext.Target, namespace: ns.ForExtensions(namespaceTarget(ext)), created: time.Now()}
 	r.groups[key] = g
 	return g
 }

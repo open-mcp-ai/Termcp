@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -69,9 +70,10 @@ const DefaultIdleTimeout = 10 * time.Minute
 type Extension struct {
 	// Identity. Name is the TOML-encoded file's directory name, not a TOML key,
 	// so it is never stored inside the file it names.
-	Name   string `toml:"-"`
-	Kind   string `toml:"kind"`
-	Target string `toml:"target"` // an ssh_config profile name, or "internal"
+	Name           string `toml:"-"`
+	Kind           string `toml:"kind"`
+	Target         string `toml:"target"` // an ssh_config profile name, or "internal"
+	TargetIdentity string `toml:"target_identity,omitempty"`
 	// Description is the author's one-line summary, shown wherever the extension is
 	// listed. It does NOT reach the model by itself: nothing about the set of
 	// installed extensions goes into the MCP instructions, because the tool surface
@@ -272,6 +274,12 @@ func (e *Extension) Validate() error {
 	}
 	if e.Target == "" {
 		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\")")
+	}
+	if e.TargetIdentity != "" {
+		id, err := uuid.Parse(e.TargetIdentity)
+		if err != nil || id == uuid.Nil || id.String() != e.TargetIdentity {
+			return fmt.Errorf("target_identity must be a canonical UUID")
+		}
 	}
 	if !validKinds[e.Kind] {
 		return fmt.Errorf("unknown extension kind %q (mcp, skill, prompt or custom)", e.Kind)

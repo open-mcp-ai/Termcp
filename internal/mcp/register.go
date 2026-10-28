@@ -20,6 +20,9 @@ import (
 // opts tune the server: DeferTools() lazily loads low-frequency tools, and
 // WithHTTPServer() attaches the shared http.Server to the SSE transport.
 func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfig.Store, forwardMgr *forward.ForwardManager, version string, opts ...Option) *Server {
+	if sessMgr != nil && sshConfigs != nil {
+		sessMgr.SetSSHConfigResolver(sshConfigs.ResolveSessionReference)
+	}
 	if version == "" {
 		version = "dev"
 	}

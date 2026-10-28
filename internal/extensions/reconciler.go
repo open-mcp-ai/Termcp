@@ -174,6 +174,7 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		done:       make(chan struct{}),
 	}
 	if store != nil {
+		store.SetSSHConfigStore(sshConfigs)
 		// The write names the template, so the runtime does that one and nothing
 		// else. This is the whole of "the store changed" — there is no listing to
 		// diff and no tick to wait for.
@@ -183,17 +184,19 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		// A profile rewritten by hand is the fix a failing extension was waiting for.
 		// It has no name to give (it is not an extension), so the extensions that gave
 		// up on a missing target get one more attempt.
-		sshConfigs.SetOnChange(func() {
-			select {
-			case r.revive <- struct{}{}:
-			default:
-			}
-		})
+		sshConfigs.SetOnChange(r.ProfilesChanged)
 	}
 	if sessMgr != nil {
 		sessMgr.AddOnDeadHook(r.onSessionDead)
 	}
 	return r
+}
+
+func (r *Reconciler) ProfilesChanged() {
+	select {
+	case r.revive <- struct{}{}:
+	default:
+	}
 }
 
 // Store returns the extension store the reconciler reconciles. Callers that
@@ -356,6 +359,14 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	if r.sshConfigs == nil {
 		return hostPlan{}, errors.New("no ssh config store configured")
 	}
+	target, identity, err := r.sshConfigs.ResolveReference(ext.Target, ext.TargetIdentity)
+	if err != nil {
+		if errors.Is(err, sshconfig.ErrNotFound) {
+			return hostPlan{}, fmt.Errorf("target profile %q does not exist", ext.Target)
+		}
+		return hostPlan{}, fmt.Errorf("cannot resolve target profile %q: %w", ext.Target, err)
+	}
+	ext.Target, ext.TargetIdentity = target, identity
 	ent, err := r.sshConfigs.Load(ext.Target)
 	if err != nil {
 		if errors.Is(err, sshconfig.ErrNotFound) {
@@ -404,11 +415,12 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// The container's name is the namespace it carries, so a leftover is
 	// recognizable in a manifest listing or a log line rather than being a session
 	// with a generated name and no owner.
-	name := ns.ForExtensions(ext.Target)
+	name := ns.ForExtensions(namespaceTarget(ext))
 	return hostPlan{
 		config: session.Config{
-			Name:      name,
-			SSHConfig: ext.Target,
+			Name:              name,
+			SSHConfig:         ext.Target,
+			SSHConfigIdentity: ext.TargetIdentity,
 			// The container has no terminal: rows and cols are the channel's, and the
 			// session record merely carries the conventional defaults.
 			Rows:         24,

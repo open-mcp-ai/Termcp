@@ -72,6 +72,7 @@ func TestParseSubcommand(t *testing.T) {
 		{in: []string{"daemon", "start", "extra"}, wantName: "daemon", wantAction: actionStart, wantRest: []string{"extra"}},
 		{in: []string{"config-storage"}, wantName: "config-storage"},
 		{in: []string{"config-storage", "status"}, wantName: "config-storage", wantAction: actionStatus},
+		{in: []string{"config-storage", "rotate-key", "--data-dir", "profiles"}, wantName: "config-storage", wantAction: actionRotateKey, wantRest: []string{"--data-dir", "profiles"}},
 		{in: []string{"config-storage", "--help"}, wantName: "config-storage", wantAction: actionHelp},
 		// The value namespace takes everything after its name.
 		{in: []string{"stdio"}, wantName: "stdio"},

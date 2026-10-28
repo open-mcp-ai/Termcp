@@ -1,6 +1,7 @@
 package sshconfig
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -29,6 +30,12 @@ type EncryptionStatus struct {
 	EncryptNew                bool             `json:"encrypt_new"`
 	LegacyEncryptionArtifacts bool             `json:"legacy_encryption_artifacts"`
 	Hosts                     []EncryptionHost `json:"hosts"`
+	MainKeyID                 string           `json:"main_key_id,omitempty"`
+	RotationPending           bool             `json:"rotation_pending"`
+	Locked                    bool             `json:"locked"`
+	ErrorCode                 string           `json:"error_code,omitempty"`
+	PasswordConfigured        bool             `json:"password_configured"`
+	AutomaticUnlock           bool             `json:"automatic_unlock"`
 }
 
 // EncryptionResult is one selected host's outcome.
@@ -55,15 +62,18 @@ func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.P
 			return err
 		}
 	}
-	if err := configstore.SaveEncryptNew(s.dataDir, enabled); err != nil {
-		if repo != nil && repo != s.encrypted {
-			_ = repo.Close()
+	if repo != nil {
+		if err := repo.SetEncryptNew(enabled); err != nil {
+			if repo != s.encrypted {
+				_ = repo.Close()
+			}
+			s.mu.Unlock()
+			return err
 		}
-		s.mu.Unlock()
-		return err
 	}
 	s.encrypted = repo
 	s.encryptNew = enabled && repo != nil
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	s.notifyChange()
 	return nil
@@ -73,16 +83,30 @@ func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.P
 // storage. Temporary profiles and the stateless built-in profile are included
 // so the page can explain why they cannot be converted.
 func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
-	names, err := s.List()
-	if err != nil {
-		return EncryptionStatus{}, err
-	}
-	status := EncryptionStatus{}
+	status := EncryptionStatus{Hosts: []EncryptionHost{}}
 	s.mu.Lock()
 	status.Initialized = s.encrypted != nil
 	status.EncryptNew = s.encryptNew
 	status.LegacyEncryptionArtifacts = s.legacyArtifacts
+	if s.encrypted != nil {
+		repoStatus := s.encrypted.Status()
+		if !repoStatus.MainKeyID.IsZero() {
+			status.MainKeyID = hex.EncodeToString(repoStatus.MainKeyID[:])
+		}
+		status.RotationPending = repoStatus.RotationPending
+		status.Locked = repoStatus.Locked
+		status.ErrorCode = repoStatus.ErrorCode
+		status.PasswordConfigured = repoStatus.PasswordConfigured
+		status.AutomaticUnlock = repoStatus.AutomaticUnlock
+	}
 	s.mu.Unlock()
+	if status.Locked {
+		return status, nil
+	}
+	names, err := s.List()
+	if err != nil {
+		return EncryptionStatus{}, err
+	}
 	for _, name := range names {
 		mode, err := s.StorageMode(name)
 		if err != nil {
@@ -91,6 +115,78 @@ func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
 		status.Hosts = append(status.Hosts, EncryptionHost{Name: name, Mode: mode})
 	}
 	return status, nil
+}
+
+// InitializeEncryption derives Main Key from the user's password on first use.
+func (s *Store) InitializeEncryption(password, confirmation string, providers ...configstore.Provider) error {
+	s.mu.Lock()
+	if s.encrypted != nil {
+		s.mu.Unlock()
+		return configstore.ErrAlreadyInitialized
+	}
+	repo, err := configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
+	if err == nil {
+		err = repo.SetEncryptNew(true)
+		if err != nil {
+			_ = repo.Close()
+		}
+	}
+	if err == nil {
+		s.encrypted, s.encryptNew = repo, true
+		s.invalidateIdentitiesLocked()
+	}
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyChange()
+	}
+	return err
+}
+
+func (s *Store) UnlockEncryption(password string, rebind bool, providers ...configstore.Provider) error {
+	s.mu.Lock()
+	if s.encrypted == nil {
+		s.mu.Unlock()
+		return configstore.ErrNotInitialized
+	}
+	err := s.encrypted.UnlockPassword(password)
+	if err == nil && rebind {
+		err = s.encrypted.RebindPasswordProvider(providers...)
+	}
+	if !s.encrypted.Status().Locked {
+		s.encryptNew = s.encrypted.EncryptNew()
+	}
+	s.invalidateIdentitiesLocked()
+	s.mu.Unlock()
+	s.notifyChange()
+	return err
+}
+
+func (s *Store) ChangeEncryptionPassword(current, password, confirmation string, providers ...configstore.Provider) error {
+	s.mu.Lock()
+	if s.encrypted == nil {
+		s.mu.Unlock()
+		return configstore.ErrNotInitialized
+	}
+	err := s.encrypted.ChangePassword(current, password, confirmation, providers...)
+	s.invalidateIdentitiesLocked()
+	s.mu.Unlock()
+	s.notifyChange()
+	return err
+}
+
+// RotateMainKey preserves the compatibility rotation used by old
+// provider-only stores. Password-derived stores must use ChangeEncryptionPassword.
+func (s *Store) RotateMainKey(providers ...configstore.Provider) error {
+	s.mu.Lock()
+	if s.encrypted == nil {
+		s.mu.Unlock()
+		return configstore.ErrNotInitialized
+	}
+	err := s.encrypted.RotateMainKey(providers...)
+	s.mu.Unlock()
+	// A failed publication can still leave a persisted, resumable rotation.
+	s.notifyChange()
+	return err
 }
 
 // StorageMode returns where one profile is currently persisted.
@@ -133,9 +229,17 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 		}
 	}
 	s.mu.Lock()
+	if err := s.refreshIdentitiesLocked(false); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	if s.encrypted == nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("configuration encryption has not been enabled")
+	}
+	if s.encrypted.Status().RotationPending {
+		s.mu.Unlock()
+		return nil, configstore.ErrRotationPending
 	}
 	results := make([]EncryptionResult, 0, len(names))
 	items := make([]configstore.Item, 0, len(names))
@@ -213,6 +317,7 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 	for _, item := range items {
 		clear(item.Data)
 	}
+	s.invalidateIdentitiesLocked()
 	s.mu.Unlock()
 	s.notifyChange()
 	return results, nil
@@ -231,6 +336,14 @@ func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 		}
 	}
 	s.mu.Lock()
+	if err := s.refreshIdentitiesLocked(false); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if s.encrypted != nil && s.encrypted.Status().RotationPending {
+		s.mu.Unlock()
+		return nil, configstore.ErrRotationPending
+	}
 	results := make([]EncryptionResult, 0, len(names))
 	seen := make(map[string]bool, len(names))
 	restored := 0
@@ -279,6 +392,7 @@ func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 	}
 	s.mu.Unlock()
 	if restored > 0 {
+		_ = s.RefreshIdentities()
 		s.notifyChange()
 	}
 	return results, nil

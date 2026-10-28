@@ -56,10 +56,11 @@ type Config struct {
 	Name string
 	// SSHConfig is the profile name that established this session. It is kept
 	// separately from Name because the display name is user-editable.
-	SSHConfig string
-	Rows      int
-	Cols      int
-	Remote    *RemoteSSH
+	SSHConfig         string
+	SSHConfigIdentity string
+	Rows              int
+	Cols              int
+	Remote            *RemoteSSH
 	// DefaultShell is the profile's default_shell, kept so shells opened later on
 	// this connection resolve their shell the same way the first one did: the
 	// caller's command, then this, then the server's own login shell.
@@ -206,18 +207,19 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	s := &Session{
 		Session: api.Session{
-			ID:          sessionID,
-			Name:        name,
-			SSHConfig:   cfg.SSHConfig,
-			Command:     cfg.Command,
-			Args:        cfg.Args,
-			Status:      api.SessionRunning,
-			CreatedAt:   clock.Now(),
-			UpdatedAt:   clock.Now(),
-			Rows:        cfg.Rows,
-			Cols:        cfg.Cols,
-			SSHEndpoint: sshEndpointPublic,
-			Namespace:   cfg.Namespace,
+			ID:                sessionID,
+			Name:              name,
+			SSHConfig:         cfg.SSHConfig,
+			SSHConfigIdentity: cfg.SSHConfigIdentity,
+			Command:           cfg.Command,
+			Args:              cfg.Args,
+			Status:            api.SessionRunning,
+			CreatedAt:         clock.Now(),
+			UpdatedAt:         clock.Now(),
+			Rows:              cfg.Rows,
+			Cols:              cfg.Cols,
+			SSHEndpoint:       sshEndpointPublic,
+			Namespace:         cfg.Namespace,
 		},
 		enterCRLF:    enterCRLF,
 		defaultShell: cfg.DefaultShell,

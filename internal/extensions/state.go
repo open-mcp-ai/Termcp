@@ -178,7 +178,11 @@ func (st *extState) changed(ext *Extension) bool {
 // the same edit.
 func fingerprint(ext *Extension) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%s|%q|", ext.Kind, ext.Target, ext.Mode, ext.Command)
+	target := ext.TargetIdentity
+	if target == "" {
+		target = ext.Target
+	}
+	fmt.Fprintf(&b, "%s|%s|%s|%q|", ext.Kind, target, ext.Mode, ext.Command)
 	for _, a := range ext.Args {
 		fmt.Fprintf(&b, "%q,", a)
 	}

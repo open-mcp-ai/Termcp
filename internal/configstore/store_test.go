@@ -24,8 +24,20 @@ func TestRepositoryRoundTripRenameAndDelete(t *testing.T) {
 	if err := assertTreeOmits(t, dir, "synthetic-secret-value"); err != nil {
 		t.Fatal(err)
 	}
+	beforeRename := repo.refs["prod"]
+	oldPath := repo.objectPath(beforeRename)
 	if err := repo.Rename("prod", "production"); err != nil {
 		t.Fatal(err)
+	}
+	afterRename := repo.refs["production"]
+	if afterRename.objectID != beforeRename.objectID || afterRename.generationID != beforeRename.generationID {
+		t.Fatal("rename changed the profile identity or generation")
+	}
+	if _, err := os.Stat(repo.objectPath(afterRename)); err != nil {
+		t.Fatalf("renamed ciphertext missing: %v", err)
+	}
+	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old ciphertext path remains after rename: %v", err)
 	}
 	firstStatus := repo.Status()
 	if firstStatus.Profiles != 1 || firstStatus.Revision != 3 {
@@ -57,25 +69,56 @@ func TestRepositoryRoundTripRenameAndDelete(t *testing.T) {
 	}
 }
 
-func TestEncryptionPreferenceDefaultsOffAndPersists(t *testing.T) {
+func TestEncryptionPreferenceIsAuthenticatedCatalogState(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x70))
 	dir := t.TempDir()
-	enabled, err := LoadEncryptNew(dir)
-	if err != nil || enabled {
-		t.Fatalf("default preference = %v, err %v", enabled, err)
-	}
-	if err := SaveEncryptNew(dir, true); err != nil {
+	repo, err := InitializeRepository(dir, NewEnvProvider(""))
+	if err != nil {
 		t.Fatal(err)
 	}
-	enabled, err = LoadEncryptNew(dir)
-	if err != nil || !enabled {
-		t.Fatalf("persisted preference = %v, err %v", enabled, err)
+	if repo.EncryptNew() {
+		t.Fatal("new repository defaulted to encrypted profiles")
 	}
-	if err := SaveEncryptNew(dir, false); err != nil {
+	if err := repo.SetEncryptNew(true); err != nil {
 		t.Fatal(err)
 	}
-	enabled, err = LoadEncryptNew(dir)
-	if err != nil || enabled {
-		t.Fatalf("disabled preference = %v, err %v", enabled, err)
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A plaintext file cannot override the authenticated catalog state.
+	settingsPath := filepath.Join(dir, "keys", "config.settings")
+	settingsData := []byte(`{"version":1,"encrypt_new":false}`)
+	if err := os.WriteFile(settingsPath, settingsData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenRepository(dir, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.EncryptNew() {
+		t.Fatal("unauthenticated config.settings overrode the catalog")
+	}
+	remainingSettings, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(remainingSettings, settingsData) {
+		t.Fatal("opening the repository modified the unused plaintext settings")
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	catalogPath := repositoryCatalogPath(dir)
+	catalogBytes, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogBytes[len(catalogBytes)-1] ^= 0x80
+	if err := os.WriteFile(catalogPath, catalogBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRepository(dir, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("tampered catalog error = %v", err)
 	}
 }
 
@@ -93,8 +136,7 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 	}
 	before := repo.refs["alpha"]
 	first := filepath.Join(
-		dir, "ssh_configs", "objects",
-		strings.ToLower(hexString(before.objectID[:])),
+		dir, "ssh_configs", "alpha",
 		strings.ToLower(hexString(before.generationID[:]))+".enc",
 	)
 	firstBytes, err := os.ReadFile(first)
@@ -109,8 +151,7 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 		t.Fatalf("object identity = %x/%x, want stable object and fresh generation", after.objectID, after.generationID)
 	}
 	secondBytes, err := os.ReadFile(filepath.Join(
-		dir, "ssh_configs", "objects",
-		strings.ToLower(hexString(after.objectID[:])),
+		dir, "ssh_configs", "alpha",
 		strings.ToLower(hexString(after.generationID[:]))+".enc",
 	))
 	if err != nil {
@@ -118,6 +159,50 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 	}
 	if bytes.Equal(firstBytes, secondBytes) {
 		t.Fatal("saving identical plaintext produced identical envelopes")
+	}
+	if _, err := os.Stat(first); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old generation remains after save: %v", err)
+	}
+}
+
+func TestRepositoryMigratesLegacyObjectsLayout(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x76))
+	dir := t.TempDir()
+	repo, err := InitializeRepository(dir, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save("kali", []byte("password = \"synthetic\"\n")); err != nil {
+		t.Fatal(err)
+	}
+	ref := repo.refs["kali"]
+	newPath := repo.objectPath(ref)
+	legacyPath := repo.legacyObjectPath(ref)
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(newPath, legacyPath); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Dir(newPath))
+
+	reopened, err := OpenRepository(dir, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("legacy ciphertext was not migrated to the profile directory: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy ciphertext remains: %v", err)
+	}
+	got, err := reopened.Read("kali")
+	if err != nil || !bytes.Equal(got, []byte("password = \"synthetic\"\n")) {
+		t.Fatalf("migrated profile read = %q, err %v", got, err)
 	}
 }
 

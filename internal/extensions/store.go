@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
@@ -31,6 +33,7 @@ type Store struct {
 	dataDir  string
 	mu       sync.Mutex
 	onChange atomic.Value // func(name string), fired after Save/Delete/Rename
+	profiles atomic.Pointer[sshconfig.Store]
 }
 
 // SetOnChange registers a callback fired after a template changes, naming it.
@@ -93,6 +96,8 @@ func (s *Store) Exists(name string) bool {
 
 // Load reads and validates one extension by name.
 func (s *Store) Load(name string) (*Extension, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	p, err := s.configPath(name)
 	if err != nil {
 		return nil, err
@@ -116,7 +121,36 @@ func (s *Store) Load(name string) (*Extension, error) {
 		// up with no indication of why.
 		return nil, err
 	}
+	if profiles := s.profiles.Load(); profiles != nil {
+		if e.TargetIdentity != "" {
+			id, err := uuid.Parse(e.TargetIdentity)
+			if err != nil || id == uuid.Nil || id.String() != e.TargetIdentity {
+				return nil, errors.New("invalid target_identity")
+			}
+			if target, err := profiles.NameByIdentity(e.TargetIdentity); err == nil {
+				e.Target = target
+			}
+		} else if id, err := profiles.Identity(e.Target); err == nil {
+			var fields map[string]any
+			if _, err := toml.Decode(string(data), &fields); err != nil {
+				return nil, err
+			}
+			if _, present := fields["target_identity"]; present {
+				return nil, errors.New("target_identity must not be empty")
+			}
+			// Add only the binding; retain the original template and its comments.
+			bound := append([]byte("target_identity = "+strconv.Quote(id)+"\n"), data...)
+			if err := writeFileAtomic(p, bound); err != nil {
+				return nil, err
+			}
+			e.TargetIdentity = id
+		}
+	}
 	return e, nil
+}
+
+func (s *Store) SetSSHConfigStore(profiles *sshconfig.Store) {
+	s.profiles.Store(profiles)
 }
 
 // NameState reports whether a name is already stored and whether what is stored
@@ -222,6 +256,28 @@ func (s *Store) saveLocked(e *Extension) error {
 	p, err := s.configPath(e.Name)
 	if err != nil {
 		return err
+	}
+	if profiles := s.profiles.Load(); profiles != nil {
+		var old Extension
+		hadOld := false
+		if raw, err := os.ReadFile(p); err == nil {
+			hadOld = toml.Unmarshal(raw, &old) == nil
+		}
+		if e.TargetIdentity != "" {
+			current, err := profiles.NameByIdentity(e.TargetIdentity)
+			// An explicit edit to target selects a new host. A stale display name
+			// in an unchanged template remains bound to its existing identity.
+			if hadOld && e.TargetIdentity == old.TargetIdentity && e.Target != old.Target && e.Target != current {
+				e.TargetIdentity = ""
+			} else if err == nil {
+				e.Target = current
+			}
+		}
+		if e.TargetIdentity == "" {
+			if id, err := profiles.Identity(e.Target); err == nil {
+				e.TargetIdentity = id
+			}
+		}
 	}
 	data, err := toml.Marshal(e)
 	if err != nil {

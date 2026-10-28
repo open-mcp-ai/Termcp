@@ -75,12 +75,14 @@ type Manager struct {
 	msgMgr      *message.Manager
 	store       *storage.Store
 
-	listChangeMu sync.RWMutex
-	onListChange func()
-	onOutputHook func(shellID string)
-	onExitHook   func(shellID string, exitCode *int)
-	onCloseHook  func(shellID string)
-	onDeadHooks  []func(sessionID string)
+	listChangeMu    sync.RWMutex
+	onListChange    func()
+	onOutputHook    func(shellID string)
+	onExitHook      func(shellID string, exitCode *int)
+	onCloseHook     func(shellID string)
+	onDeadHooks     []func(sessionID string)
+	profileMu       sync.RWMutex
+	profileResolver func(name, identity string) (string, string, error)
 }
 
 // NewManager creates a Manager. internalSSH must be the built-in sshserver.Server (after Start) when using internal profiles; may be nil if only remote sessions are used in tests.
@@ -95,6 +97,18 @@ func NewManager(msgMgr *message.Manager, store *storage.Store, internalSSH *sshs
 // Create starts a new session and registers it. A session stays in the registry
 // until explicitly deleted; disconnect/terminate/abort only turn it DEAD.
 func (m *Manager) Create(cfg Config) (*Session, error) {
+	if cfg.SSHConfig != "" || cfg.SSHConfigIdentity != "" {
+		m.profileMu.RLock()
+		resolve := m.profileResolver
+		m.profileMu.RUnlock()
+		if resolve != nil {
+			name, identity, err := resolve(cfg.SSHConfig, cfg.SSHConfigIdentity)
+			if err != nil {
+				return nil, err
+			}
+			cfg.SSHConfig, cfg.SSHConfigIdentity = name, identity
+		}
+	}
 	s, err := New(m.internalSSH, cfg, m.msgMgr)
 	if err != nil {
 		// Failure is invisible downstream (MCP tool error results are debug-levelled;
@@ -191,12 +205,51 @@ func (m *Manager) Get(id string) *Session {
 
 // ListAll returns metadata for all sessions (running and DEAD).
 func (m *Manager) ListAll() []api.Session {
+	m.RefreshSSHConfigNames()
 	var result []api.Session
 	m.sessions.Range(func(_, v any) bool {
 		result = append(result, v.(*Session).Info())
 		return true
 	})
 	return result
+}
+
+// SetSSHConfigResolver associates sessions with a stable profile identity. The
+// callback is installed by the composition root to avoid a package import cycle.
+func (m *Manager) SetSSHConfigResolver(resolve func(name, identity string) (string, string, error)) {
+	m.profileMu.Lock()
+	m.profileResolver = resolve
+	m.profileMu.Unlock()
+}
+
+// RefreshSSHConfigNames follows the current label for known identities only.
+// Legacy records without an identity are not rebound to a same-named new host.
+func (m *Manager) RefreshSSHConfigNames() {
+	m.profileMu.RLock()
+	resolve := m.profileResolver
+	m.profileMu.RUnlock()
+	if resolve == nil {
+		return
+	}
+	m.sessions.Range(func(_, value any) bool {
+		s := value.(*Session)
+		info := s.Info()
+		if info.SSHConfigIdentity == "" {
+			return true
+		}
+		name, identity, err := resolve(info.SSHConfig, info.SSHConfigIdentity)
+		if err != nil || identity != info.SSHConfigIdentity || name == info.SSHConfig {
+			return true
+		}
+		s.mu.Lock()
+		if s.SSHConfigIdentity == identity {
+			s.SSHConfig = name
+			s.UpdatedAt = clock.Now()
+		}
+		s.mu.Unlock()
+		m.persistOne(s.ID)
+		return true
+	})
 }
 
 // Terminate closes a session's process/transport and turns it DEAD in place:
@@ -265,12 +318,23 @@ func (m *Manager) RenameSSHConfig(fromName, toName string) {
 	if fromName == "" || fromName == toName {
 		return
 	}
+	m.profileMu.RLock()
+	resolve := m.profileResolver
+	m.profileMu.RUnlock()
+	targetIdentity := ""
+	if resolve != nil {
+		_, targetIdentity, _ = resolve(toName, "")
+	}
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
 		// Lock, rewrite, unlock, then persist: persistOne reads the session back
 		// through Info(), so it cannot run under the write lock.
 		s.mu.Lock()
 		if s.SSHConfig != fromName {
+			s.mu.Unlock()
+			return true
+		}
+		if s.SSHConfigIdentity != "" && s.SSHConfigIdentity != targetIdentity {
 			s.mu.Unlock()
 			return true
 		}
@@ -330,11 +394,29 @@ func (m *Manager) DisableApproval(id string) error {
 // FindActiveBySSHConfig returns the first running session that matches the
 // profile name, endpoint, or legacy display name.
 func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
+	m.profileMu.RLock()
+	resolve := m.profileResolver
+	m.profileMu.RUnlock()
+	identity := ""
+	if resolve != nil {
+		var err error
+		_, identity, err = resolve(sshConfig, "")
+		if err != nil {
+			return nil
+		}
+	}
 	var found *Session
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
 		info := s.Info()
 		if info.Status != api.SessionRunning {
+			return true
+		}
+		if identity != "" {
+			if info.SSHConfigIdentity == identity {
+				found = s
+				return false
+			}
 			return true
 		}
 		if info.SSHConfig == sshConfig || info.SSHEndpoint == sshConfig || info.Name == sshConfig {

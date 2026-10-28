@@ -28,6 +28,86 @@
   width: min(680px, calc(100vw - 24px));
 }
 
+.config-storage-modal .modal-body {
+  max-height: calc(100dvh - 144px);
+  overflow-y: auto;
+}
+
+.config-storage-key-form {
+  margin: 12px 0;
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.config-storage-key-form h3 {
+  margin: 0 0 8px;
+  font-size: .95rem;
+  color: var(--text-primary);
+}
+
+.config-storage-key-form label {
+  display: block;
+  margin: 12px 0 6px;
+  color: var(--text-primary);
+  font-size: .85rem;
+}
+
+.config-storage-key-form .conn-check-hint {
+  color: var(--text-secondary);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
+.config-storage-key-form input[type="password"],
+.config-storage-key-form input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: .8rem;
+  caret-color: var(--accent);
+}
+
+.config-storage-key-form input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.config-storage-secret,
+.config-storage-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-storage-secret input {
+  flex: 1;
+}
+
+.config-storage-secret .btn {
+  flex: 0 0 auto;
+}
+
+.config-storage-form-actions {
+  flex-wrap: wrap;
+}
+
+.config-storage-key-form .config-storage-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.config-storage-confirm input {
+  margin: 3px 0 0;
+}
+
 .config-storage-toggle {
   display: flex;
   align-items: flex-start;
@@ -51,7 +131,7 @@
   line-height: 1.5;
 }
 
-.config-storage-switch {
+.config-storage-modal .config-storage-switch {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -114,6 +194,34 @@
   align-items: center;
   gap: 10px;
   margin: 16px 0 8px;
+}
+
+.config-storage-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.config-storage-key strong {
+  color: var(--text-primary);
+  font-size: .85rem;
+}
+
+.config-storage-key .conn-check-hint {
+  margin: 5px 0;
+}
+
+.config-storage-key code {
+  color: var(--text-muted);
+  font-size: .7rem;
+  overflow-wrap: anywhere;
+}
+
+.config-storage-key .btn {
+  flex: 0 0 auto;
 }
 
 .config-storage-toolbar strong {
@@ -238,6 +346,12 @@
 
   .config-storage-toolbar {
     flex-wrap: wrap;
+  }
+
+  .config-storage-key {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .config-storage-select-all {
