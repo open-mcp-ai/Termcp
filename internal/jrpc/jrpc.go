@@ -149,11 +149,13 @@ type Channel struct {
 	// POST the caller happened to be waiting on.
 	sseStarted atomic.Bool
 
-	// sseListening reports that the GET stream is UP RIGHT NOW. It is the
+	// sseListening reports that the GET stream is being opened or is up. It is the
 	// difference between "this peer refuses to push" and "this peer can push but
 	// has nothing to say yet" — a distinction a reader has to be able to act on,
 	// because the first is a fact about the peer and the second is a fact about
-	// the window. A GET that the server answered with 405/404 clears it again.
+	// the window. Setting it at request start closes the race where the peer
+	// pushes before response headers are observed here. A GET that the server
+	// answered with 405/404 clears it again.
 	sseListening atomic.Bool
 
 	// sseCancel stops the listening stream on Close, without waiting for a read
@@ -601,6 +603,9 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 	c.evMu.Lock()
 	defer c.evMu.Unlock()
 	for len(c.ev) == 0 {
+		if !c.CanWaitEvents() {
+			return Framed{}, false
+		}
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
 			return Framed{}, false
 		}
@@ -621,7 +626,7 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 		if len(c.ev) > 0 {
 			break
 		}
-		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
+		if !c.CanWaitEvents() || c.shut.Load() || ctx.Err() != nil || c.socketGone() {
 			return Framed{}, false
 		}
 	}
@@ -655,6 +660,9 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 				c.ev = append(c.ev[:i], c.ev[i+1:]...)
 				return f.Data, true
 			}
+		}
+		if !c.CanWaitEvents() {
+			return "", false
 		}
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
 			return "", false
@@ -770,9 +778,15 @@ func (c *Channel) ensureSSEStream(sessionID string) {
 	if !c.sseStarted.CompareAndSwap(false, true) {
 		return
 	}
+	c.setSSEListening(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	c.sseCancel = cancel
 	go c.readSSEStream(ctx, sessionID)
+}
+
+func (c *Channel) setSSEListening(listening bool) {
+	c.sseListening.Store(listening)
+	c.evCond.Broadcast()
 }
 
 // readSSEStream maintains the long-lived GET text/event-stream carrier for
@@ -808,7 +822,7 @@ func (c *Channel) readSSEStream(ctx context.Context, sessionID string) {
 			// A server that refuses GET text/event-stream (405 Method Not Allowed
 			// or 404) does not speak streamable MCP; do not hammer it.
 			if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotFound {
-				c.sseListening.Store(false)
+				c.setSSEListening(false)
 				return
 			}
 			select {
@@ -820,7 +834,7 @@ func (c *Channel) readSSEStream(ctx context.Context, sessionID string) {
 				continue
 			}
 		}
-		c.sseListening.Store(true)
+		c.setSSEListening(true)
 
 		br := bufio.NewReader(io.LimitReader(resp.Body, maxFrameBytes))
 		for {
