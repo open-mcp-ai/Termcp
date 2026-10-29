@@ -11,6 +11,16 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 四者共享一套会话内核，所以你在浏览器里看到的、Agent 正在驱动的、脚本在读的是同一条终端。指令空间由实例自述（`help`、`help <directive>`、空 `cmd` 返回引导），端点见 [`api.md`](./api.md)。
 
+## Managed MCP tokens
+
+首次运行先打开 `/login` 设置管理员；在 `/permissions` 权限管理页新建 Agent，或为自己签发 MCP token。页面提供带 token 的配置片段。下文不含凭据的示例需补充相应 header/env，或用于显式旧共享认证/开放模式。
+
+- HTTP `/stream` 和 SSE `/sse`：每个请求携带 `Authorization: Bearer <token>`（SSE 的 `/message` 请求也需要）。
+- stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
+- 远端实例使用 `stdio <完整 HTTP(S) URL>`。`daemon stdio` 用于本机实例；自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
+- 服务端仅保存摘要，不能再次查看原 token。轮换时为同一身份增发、更新客户端、确认成功后撤销旧 token。撤销一枚 token 不影响其他 token；停用 Agent 会断开该 Agent 的所有 token 连接。
+- 未配置自动解锁时，daemon 重启后需要管理员先登录解锁；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
+
 ## 按客户端接入
 
 ### 一条命令
@@ -104,7 +114,24 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 ## 认证
 
-单个静态 token 保护整个 HTTP 面——Web UI、REST API、MCP SSE、MCP streamable HTTP 与浏览器 WebSocket。（只读文档 `/api.md` 保持公开，好让 Agent 在拿到 token 之前就能取到它。）配置是可选的，仅限 loopback 绑定时保持免配置默认；非 loopback 绑定不带 token 是启动错误。
+默认使用 Admin 托管认证：第一次在本机访问 `/login` 设置用户名与密码，之后登录获得
+HttpOnly JWT Cookie。顶部账号入口 `/auth` 可保存预设角色的 MCP 访问权限并退出登录。
+Admin 主密码同时用于现有 Main Key 的 Argon2id 派生，不保存密码原文。账号、随机
+签名密钥、角色权限和会话保存在 `<data-dir>/auth.enc`，与主机配置共用密钥环；
+`auth.json` 只有版本标记。HTTP/daemon 共用，有自动解锁时重启保留有效 Cookie；
+否则先输入主密码登录解锁。退出后旧 JWT 在服务端失效。
+
+首次设置及待解锁登录可选择本机自动解锁。旧明文账号在成功登录时迁移；已有配置
+加密密码不同时，补填原配置密码以统一。账号页或配置加密页的改密码操作都会更换
+同一 Main Key、重封各对象 DEK 并撤销全部登录。认证加密不会自动转换明文主机配置。
+
+托管模式写请求使用 `/auth/status` 返回的 CSRF 值，通过 `X-Termcp-CSRF` 发送；内置
+WebUI 自动处理。首次设置只接受 loopback 连接及 loopback Host；远程部署可先通过
+SSH 本地转发设置。`/api.md` 仍公开。API-only 构建同样提供必要的登录/设置入口。
+
+当前已实现 Admin 登录、角色入口权限和独立 MCP token。权限管理页支持新建/停用 Agent、签发/撤销 token 和复制配置。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要。完整逐操作 Agent 策略、自动配置和 OAuth 未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
+
+显式传入 `--auth-token` / `--auth-hash` 时，继续使用旧共享凭据模式，行为如下：
 
 ```bash
 # 明文：flag 或环境变量
@@ -129,7 +156,7 @@ TERMCP_AUTH_HASH='sha256-...' ./termcp
 
 - `--auth-token` 与 `--auth-hash` 互斥；同名设置的 flag 值覆盖环境变量。
 - token 里含冒号没问题：服务端在解码后的整个 `user:pass` 串等于 token 时也接受，因此在第一个冒号处拆分的客户端（如 `curl -u user:pass`）照样通过。规范写法仍是 `curl -u :<token>`。
-- 没有 token 或 hash 时，任何非 loopback 主机（`0.0.0.0`、LAN IP，或除 `localhost` 以外的主机名）上的启动都会失败，因此意外暴露的实例绝不可能无认证运行。
+- 没有 token/hash 时选择托管认证，包括非 loopback 监听；未设置 Admin 或未登录的请求不能执行业务。
 - `--disable-auth`（或 `TERMCP_DISABLE_AUTH_TOKEN=1`）显式解除该要求。它是 loopback 专用场景的逃生口——演示视频、录屏、单用户工作站——那里 token 保护不了什么。因为它是一次刻意的覆盖，与 `--auth-token`/`--auth-hash` 同时给出是启动错误而不是某个参数静默胜出，启动日志也从信息行改为警告。
 - 浏览器用的是 HTTP Basic，它是 Base64 而非加密。把 Termcp 提供到自己机器之外时，请在它前面用反向代理终止 TLS——那时 `termcp_token` cookie 才会自动带上 `Secure` 标志（仅当请求经 TLS 到达）。
 

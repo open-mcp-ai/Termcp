@@ -41,6 +41,9 @@ func lookupGate(tool string) gate {
 // the operation was queued for a human and the reply reports that.
 func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, bool) {
 	g := lookupGate(toolName)
+	if bad := s.agentToolCheck(ctx, toolName, request); bad != nil {
+		return bad, false
+	}
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
 		return bad, false
 	}

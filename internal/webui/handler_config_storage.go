@@ -123,7 +123,11 @@ func (h *Handler) handleConfigPassword(w http.ResponseWriter, r *http.Request, a
 	case "initialize":
 		err = h.SSH.InitializeEncryption(body.Password, body.Confirmation, configEncryptionProviders()...)
 	case "password":
-		err = h.SSH.ChangeEncryptionPassword(body.CurrentPassword, body.NewPassword, body.Confirmation, configEncryptionProviders()...)
+		if h.ChangeMainPassword != nil {
+			err = h.ChangeMainPassword(body.CurrentPassword, body.NewPassword, body.Confirmation)
+		} else {
+			err = h.SSH.ChangeEncryptionPassword(body.CurrentPassword, body.NewPassword, body.Confirmation, configEncryptionProviders()...)
+		}
 	case "unlock", "recover":
 		err = h.SSH.UnlockEncryption(body.Password, action == "recover", configEncryptionProviders()...)
 	}
@@ -135,6 +139,9 @@ func (h *Handler) handleConfigPassword(w http.ResponseWriter, r *http.Request, a
 		}
 		writeConfigStorageError(w, err)
 		return
+	}
+	if action == "password" && h.ChangeMainPassword != nil {
+		w.Header().Set("X-Termcp-Reauthenticate", "1")
 	}
 	status, err := h.SSH.EncryptionStatus()
 	if err != nil {

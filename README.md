@@ -83,6 +83,15 @@ and an AI share the same terminals and collaborate.
 
 ## Install
 
+Default startup now requires first-run Admin setup at `/login`. The Admin master password also unlocks configuration encryption. Account settings,
+role entrance permissions and JWT sessions persist encrypted in `<data-dir>/auth.enc`
+under the existing shared keyring; `auth.json` contains only a version marker.
+In Permission management (`/permissions`), create an Agent or issue an MCP token for yourself, then copy
+the generated HTTP/SSE or stdio configuration. Tokens are shown once; the server
+stores only their SHA-256 digests. stdio uses `TERMCP_MCP_TOKEN`, independently of
+legacy server authentication. OAuth remains future work. After a restart without
+automatic unlock, sign in once before MCP clients reconnect.
+
 ### 0 · AI install
 
 ```

@@ -88,6 +88,9 @@ type EndpointReport struct {
 // token, or — when only a hash is configured — the hash string itself, which
 // a hash-configured instance accepts.
 func Credential(cfg *config.Config) string {
+	if cfg.MCPToken != "" {
+		return cfg.MCPToken
+	}
 	if cfg.AuthToken != "" {
 		return cfg.AuthToken
 	}

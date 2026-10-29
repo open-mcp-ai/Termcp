@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -187,6 +188,11 @@ func validateNewPassword(password, confirmation string) error {
 	return nil
 }
 
+// ValidatePassword shares the master-password input constraints with login UI.
+func ValidatePassword(password, confirmation string) error {
+	return validateNewPassword(password, confirmation)
+}
+
 func InitializeRepositoryWithPassword(dataDir, password, confirmation string, providers ...Provider) (*Repository, error) {
 	if err := validateNewPassword(password, confirmation); err != nil {
 		return nil, err
@@ -200,12 +206,58 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		return nil, err
 	}
 	fail := func(err error) (*Repository, error) { _ = lock.Close(); return nil, err }
-	for _, path := range []string{filepath.Join(root, "keys", "config.keys"), repositoryCatalogPath(root)} {
-		if exists, err := pathExists(path); err != nil {
+	keysPath := filepath.Join(root, "keys", "config.keys")
+	initialPath := filepath.Join(root, "keys", "config.initializing")
+	if exists, err := pathExists(repositoryCatalogPath(root)); err != nil {
+		return fail(err)
+	} else if exists {
+		return fail(ErrAlreadyInitialized)
+	}
+	if exists, err := pathExists(keysPath); err != nil {
+		return fail(err)
+	} else if exists {
+		// Only a recorded, incomplete initialization can create a missing
+		// catalog. A lost catalog in an established vault must fail closed.
+		marker, err := readBoundedFile(initialPath, 16)
+		if err != nil {
+			return fail(ErrAlreadyInitialized)
+		}
+		raw, err := readBoundedFile(keysPath, maxKeyringFile)
+		if err != nil {
+			return fail(err)
+		}
+		stored, err := parseStoredKeyring(raw)
+		clear(raw)
+		if err != nil {
+			return fail(err)
+		}
+		if !bytes.Equal(marker, stored.StoreID) {
+			return fail(ErrIdentityMismatch)
+		}
+		if exists, err := HasAuthentication(root); err != nil {
 			return fail(err)
 		} else if exists {
 			return fail(ErrAlreadyInitialized)
 		}
+		if exists, err := hasProfileCiphertext(root); err != nil {
+			return fail(err)
+		} else if exists {
+			return fail(ErrAlreadyInitialized)
+		}
+		secret := []byte(password)
+		k, err := unlockPasswordKeyring(stored, secret)
+		clear(secret)
+		if err != nil {
+			return fail(err)
+		}
+		r := &Repository{dataDir: root, lock: lock, keyring: k, refs: make(map[string]catalogRef), password: stored.Password, automaticUnlock: len(stored.Slots) > 0}
+		if err := r.commitCatalog(catalogDocument{Version: repositoryVersion, StoreID: stored.StoreID, Revision: 1, Profiles: []catalogProfile{}}); err != nil {
+			k.Destroy()
+			return fail(err)
+		}
+		r.revision = 1
+		_ = os.Remove(initialPath)
+		return r, nil
 	}
 	store, err := NewID()
 	if err != nil {
@@ -227,6 +279,10 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		k.Destroy()
 		return fail(err)
 	}
+	if err := writeFileAtomic(initialPath, store[:]); err != nil {
+		k.Destroy()
+		return fail(err)
+	}
 	if err := writeFileAtomic(filepath.Join(root, "keys", "config.keys"), data); err != nil {
 		k.Destroy()
 		return fail(err)
@@ -237,6 +293,7 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		return fail(err)
 	}
 	r.revision = 1
+	_ = os.Remove(initialPath)
 	return r, nil
 }
 
@@ -270,8 +327,13 @@ func (r *Repository) UnlockPassword(password string) error {
 		k.Destroy()
 		return err
 	}
+	if err := probe.loadAuthGeneration(); err != nil {
+		k.Destroy()
+		return err
+	}
 	r.keyring, r.unlockErr = k, nil
 	r.refs, r.encryptNew, r.revision, r.catalogGeneration = probe.refs, probe.encryptNew, probe.revision, probe.catalogGeneration
+	r.authGeneration = probe.authGeneration
 	r.password = stored.Password
 	r.automaticUnlock = false // this operation unlocked through the password
 	return nil

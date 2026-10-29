@@ -148,7 +148,14 @@ func (s *Store) UnlockEncryption(password string, rebind bool, providers ...conf
 		s.mu.Unlock()
 		return configstore.ErrNotInitialized
 	}
-	err := s.encrypted.UnlockPassword(password)
+	var err error
+	if rebind && !s.encrypted.Status().Locked {
+		// Unified Admin login has already unlocked the shared vault. Rebinding
+		// still requires the password, but no second unlock is necessary.
+		err = s.encrypted.VerifyPassword(password)
+	} else {
+		err = s.encrypted.UnlockPassword(password)
+	}
 	if err == nil && rebind {
 		err = s.encrypted.RebindPasswordProvider(providers...)
 	}
