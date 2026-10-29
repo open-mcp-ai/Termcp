@@ -11,14 +11,14 @@ termcp <subcommand> [action] [flags]
 
 | Flag | 默认 | 说明 |
 | --- | --- | --- |
-| `--host` | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。绑定非 loopback **必须**配认证 token/hash，否则启动失败。 |
+| `--host` | `127.0.0.1` | HTTP 绑定地址。`0.0.0.0` 监听所有网卡。默认使用 Admin 托管认证；首次设置仅限本机连接，远程部署可先通过 SSH 本地转发设置。 |
 | `--port` | `18765` | HTTP 端口。Web UI、MCP SSE、MCP streamable HTTP 与文档端点（`/api.md`）共用。 |
 | `--data-dir` | `~/.termcp` | 持久化目录（会话、SSH 配置、转录）。自动创建。可用 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level` | `info` | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 打印所有 MCP 工具调用；失败的工具调用与会话创建错误无论级别都记在 `warn`/`error`。 |
 | `--no-internal` | `false` | 禁用内置的 loopback SSH profile。 |
 | `--assets` | `~/.termcp/assets` | Web UI 与文档的外置静态资源目录。目录里存在的文件覆盖内嵌副本，不存在的回落到内嵌；目录不存在等于什么都没发生。可用 `$TERMCP_ASSETS_DIR` 覆盖。覆盖是**按文件**的：`app.css` 现在是 manifest，`@import` 掉 `static/css/` 下的分块，所以通过覆盖目录换肤意味着覆盖整个 `static/css` 目录——一个只导入内嵌分块的 manifest 会让未被覆盖的部分恢复成内嵌外观。 |
 | `--mcp-manage-ssh-configs` | `false` | 允许 MCP 工具创建/编辑/删除 SSH 配置（凭据永不暴露）。 |
-| `--auth-token` | *(未设)* | HTTP 认证的静态 token（或 `$TERMCP_AUTH_TOKEN`）。每个客户端——API、MCP、浏览器——都要出示。与 `--auth-hash` 互斥。 |
+| `--auth-token` | *(未设)* | 显式选择旧共享 token 模式（或 `$TERMCP_AUTH_TOKEN`），每个客户端——API、MCP、浏览器——都要出示。与 `--auth-hash` 互斥；未设置两者时默认进入 Admin/JWT 托管认证。 |
 | `--auth-hash` | *(未设)* | token 的加盐 SHA-256（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。哈希配置的实例也接受哈希串本身作为凭据——`termcp daemon` 管理与 `termcp stdio` 只拿到哈希也能用——因此把哈希当机密对待。与 `--auth-token` 互斥。 |
 | `--disable-auth` | `false` | **刻意**关掉 HTTP 认证，包括非 loopback 绑定（或 `$TERMCP_DISABLE_AUTH_TOKEN=1`）。请配合 loopback 端口，只让本机调用者可达。与 `--auth-token`/`--auth-hash` 同时给出是错误，而不是某个参数静默胜出。 |
 | `--idle-timeout` | `30s / 不限` | 守护实例在无任何连接或请求时可自行退出前的时长，如 `10m`；`0` 关闭。默认：`termcp daemon stdio` 拉起的实例 30s，`termcp daemon start` 拉起的实例不限时。 |
@@ -207,3 +207,7 @@ Windows DPAPI 或 Linux Secret Service。系统 provider 不可用不影响密�
 # 禁用内置 loopback profile（Agent 只能连远程主机）
 ./termcp --no-internal
 ```
+
+### MCP 客户端凭据
+
+`--mcp-token <token>` / `TERMCP_MCP_TOKEN` 用于 `stdio`、`daemon stdio` 连接 managed 实例。建议放在 MCP 配置的 `env` 中。它与旧服务端 `--auth-token` / `--auth-hash` 互斥，不会配置或覆盖 daemon 的服务端认证，也不会传入子 daemon。先在权限管理页创建 Agent/token；令牌不能初始化管理员或解锁 Main Key。

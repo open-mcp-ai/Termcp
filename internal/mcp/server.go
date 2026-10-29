@@ -29,8 +29,11 @@ type Server struct {
 	forwardMgr   *forward.ForwardManager
 	extensions   *extensions.Reconciler
 	baseURL      string // http://host:port, set from Start()
-	docsFS       fs.FS  // embedded agent docs, set via SetDocsFS
-	NoInternal   bool   // when true, hide and refuse the built-in loopback profile
+	// MCP session IDs are bound to the verified principal and credential.
+	transportOwners sync.Map
+
+	docsFS     fs.FS // embedded agent docs, set via SetDocsFS
+	NoInternal bool  // when true, hide and refuse the built-in loopback profile
 	// ManageSSHConfigs enables the profile write actions (create/edit/copy/delete)
 	// of the `profile` directive; main sets it from --mcp-manage-ssh-configs.
 	ManageSSHConfigs bool
@@ -154,13 +157,13 @@ func (s *Server) SSEHandler() http.Handler {
 
 // MessageHandler exposes the MCP JSON-RPC message endpoint for mounting on a shared mux.
 func (s *Server) MessageHandler() http.Handler {
-	return s.sseServer.MessageHandler()
+	return s.authenticatedTransport(s.sseServer.MessageHandler(), true)
 }
 
 // StreamableHTTPHandler exposes the MCP streamable-HTTP endpoint (POST/GET/DELETE on one path).
 // Mount at "/stream" (or another path with a matching wrapper); clients use e.g. http://host:port/stream.
 func (s *Server) StreamableHTTPHandler() http.Handler {
-	return s.streamServer
+	return s.authenticatedTransport(s.streamServer, false)
 }
 
 // Start begins serving MCP over SSE on the given address.

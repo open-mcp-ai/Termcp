@@ -253,6 +253,9 @@ func daemonIdleHint(stdio bool, idleTimeoutArg string, idleTimeout time.Duration
 // invocation does not hold": both pre-bridge checks — the instance that was just
 // ensured and the one that was already there — must say the same thing.
 func bridgeAuthHint(cfg *config.Config) string {
+	if cfg.ManagedAuth() {
+		return fmt.Sprintf("stdio bridge: authentication is required at %s; open %s/login to set up or sign in as Admin. create an MCP token in the account page and set TERMCP_MCP_TOKEN (or --mcp-token); for a legacy instance use --auth-token or --auth-hash", daemon.BaseURL(cfg.Host, cfg.Port), daemon.BaseURL(cfg.Host, cfg.Port))
+	}
 	return fmt.Sprintf("stdio bridge: the instance at %s requires authentication: pass its token with --auth-token, or its hash with --auth-hash", daemon.BaseURL(cfg.Host, cfg.Port))
 }
 

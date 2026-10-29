@@ -94,6 +94,7 @@ type Repository struct {
 
 	mu                sync.Mutex
 	catalogGeneration ID
+	authGeneration    ID
 	revision          uint64
 	encryptNew        bool
 	refs              map[string]catalogRef
@@ -211,6 +212,10 @@ func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Pr
 			keyring.Destroy()
 			return fail(err)
 		}
+		if err := repository.loadAuthGeneration(); err != nil {
+			keyring.Destroy()
+			return fail(err)
+		}
 		return repository, nil
 	}
 	storeID := keyring.StoreID()
@@ -290,6 +295,10 @@ func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (
 		refs:    make(map[string]catalogRef),
 	}
 	if err := repository.loadCatalog(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
+	if err := repository.loadAuthGeneration(); err != nil {
 		keyring.Destroy()
 		return fail(err)
 	}

@@ -128,6 +128,13 @@ func (h *Handler) handleWebUIWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	// A managed session may be revoked or expire while a browser is idle.
+	// Canceling an HTTP context alone does not close a hijacked WebSocket.
+	go func() {
+		<-ctx.Done()
+		_ = wsConn.Close()
+	}()
 	c := &uiWS{
 		h:      h,
 		conn:   wsConn,

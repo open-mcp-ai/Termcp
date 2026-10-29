@@ -19,6 +19,7 @@ const EnvAssetsDir = "TERMCP_ASSETS_DIR"
 const (
 	EnvAuthToken = "TERMCP_AUTH_TOKEN"
 	EnvAuthHash  = "TERMCP_AUTH_HASH"
+	EnvMCPToken  = "TERMCP_MCP_TOKEN"
 )
 
 // EnvDisableAuth turns HTTP authentication off from the environment. It is the
@@ -35,9 +36,16 @@ type Config struct {
 	LogLevel            string // log verbosity: debug|info|warn|error (default: "info")
 	NoInternal          bool   // disable the built-in loopback SSH profile
 	MCPManageSSHConfigs bool   // enable the profile write actions (create/edit/copy/delete) (default: false)
+	MCPToken            string // client-only MCP bearer credential; never configures server authentication
 	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
 	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
 	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)
+}
+
+// ManagedAuth is the default. Explicit legacy credentials or --disable-auth
+// select their existing modes at startup, never based on an individual request.
+func (c *Config) ManagedAuth() bool {
+	return !c.DisableAuth && c.AuthToken == "" && c.AuthHash == ""
 }
 
 // Default returns a Config with sensible defaults.
@@ -92,6 +100,9 @@ func DefaultThemesDir() (string, error) {
 // variables. The caller should invoke this after parsing flags: a non-empty
 // flag value therefore wins over the environment.
 func (c *Config) ApplyEnv() {
+	if c.MCPToken == "" {
+		c.MCPToken = strings.TrimSpace(os.Getenv(EnvMCPToken))
+	}
 	if c.AuthToken == "" {
 		c.AuthToken = strings.TrimSpace(os.Getenv(EnvAuthToken))
 	}
@@ -115,9 +126,8 @@ func envTruthy(v string) bool {
 	}
 }
 
-// Validate checks that all fields are within valid ranges. A non-loopback
-// listener must be protected by an auth token or hash; loopback-only binds
-// retain the convenient unauthenticated development default.
+// Validate checks ranges and explicit mode conflicts. Without legacy
+// credentials, the server uses managed authentication on every bind address.
 func (c *Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", c.Port)
@@ -129,6 +139,9 @@ func (c *Config) Validate() error {
 	case "", "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("log_level must be one of debug|info|warn|error, got %q", c.LogLevel)
+	}
+	if c.MCPToken != "" && (c.AuthToken != "" || c.AuthHash != "" || c.DisableAuth) {
+		return fmt.Errorf("mcp-token is a client credential and cannot be combined with legacy auth or disable-auth")
 	}
 	if c.AuthToken != "" && c.AuthHash != "" {
 		return fmt.Errorf("auth-token and auth-hash are mutually exclusive")
@@ -145,9 +158,9 @@ func (c *Config) Validate() error {
 		}
 		return nil
 	}
-	if isNonLoopbackBind(c.Host) && c.AuthToken == "" && c.AuthHash == "" {
-		return fmt.Errorf("non-loopback host %q requires --auth-token, --auth-hash, TERMCP_AUTH_TOKEN, or TERMCP_AUTH_HASH (or pass --disable-auth / %s=1 to run open on purpose)", c.Host, EnvDisableAuth)
-	}
+	// Missing legacy credentials now selects managed authentication, including
+	// non-loopback listeners. The managed handler blocks business access before
+	// setup and only permits first-run setup from a local connection.
 	return nil
 }
 

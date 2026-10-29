@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/task"
@@ -41,8 +42,19 @@ func (s *Server) directiveGetTask(ctx context.Context, stmt directive.Statement,
 }
 
 // directiveLsTask answers `ls task`: every transfer this process knows about.
-func (s *Server) directiveLsTask(stmt directive.Statement) envelope.Slot {
+func (s *Server) directiveLsTask(ctx context.Context, stmt directive.Statement) envelope.Slot {
 	list := s.tasks.List()
+	if p, restricted, err := auth.PolicyFromContext(ctx); restricted {
+		filtered := list[:0]
+		if err == nil {
+			for _, v := range list {
+				if s.agentTaskAllowed(ctx, p, v.SessionID) {
+					filtered = append(filtered, v)
+				}
+			}
+		}
+		list = filtered
+	}
 	if len(list) == 0 {
 		return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path},
 			Body: "no transfers. A pipeline (`read <source> file <path> | write <target> file <path>`) starts one and answers with a task id."}

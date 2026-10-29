@@ -1,8 +1,10 @@
 # MCP 接入方式盘点与认证交互
 
-状态：设计提案，认证改动尚未实现。日期：2026-10-27。核验对象：`dev@6a8af55` 及当前工作区；npm 启动行为另外核对相邻的 Termcp-npm 仓库。本次只修改设计文档。
+**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
 
-本文细化 [身份与凭据签发机制](auth-issuance.md) 的接入交互。当前决策为 **OAuth 整体延期，简易静态 token 为 P1**。用户首次运行时设置 Admin，当前明文持久化，未来再配合加密系统；HTTP 和 daemon 使用同一默认 `.termcp` 数据目录。P1 中用户登录 WebUI、新增 Agent、取得 token 并自行填入 MCP 配置；stdio 读取 token 的能力与之同批交付。
+状态：Admin/JWT 登录和预设角色入口权限第一版已实现（2026-10-28），Agent token 为 P1，OAuth 仍是未来计划。下文 Agent 接入交互及桥控制端点保留为提案。原盘点日期：2026-10-27，核验对象 `dev@6a8af55` 及当时工作区；npm 启动行为另核对相邻的 Termcp-npm 仓库。
+
+本文细化 [身份与凭据签发机制](auth-issuance.md) 的接入交互。当前决策为 **OAuth 整体延期，简易静态 token 为 P1**。用户首次运行时设置 Admin 主密码，认证密文与主机配置共用现有 Main Key；HTTP 和 daemon 使用同一默认 `.termcp` 数据目录。P1 中用户登录 WebUI、新增 Agent、取得 token 并自行填入 MCP 配置；stdio 读取 token 的能力与之同批交付。
 
 本文第 3、5 节中的手动填 token 流程属于 P1；HTTP/stdio OAuth 均为未来计划。P1 未交付前，新 managed Agent 接入不具备完整能力，不能用匿名访问补齐。多桥协商、权限持久化、重启和失败语义的最新确认及遗漏项见 [多 stdio 与单 daemon 的协商](stdio-daemon-negotiation.md)。现有 Ensure 已支持目标 endpoint 的实例复用，本认证方案不新增 daemon 启动互斥机制。
 
@@ -56,7 +58,7 @@ token 同时证明准入资格并引用服务端 Agent 身份；稳定身份是 
 
 ### 2.1 未来计划：OAuth（当前不实现）
 
-本节仅保留后续接缝，HTTP 授权服务与 stdio OAuth 客户端均不进入当前实施范围，不阻塞 Admin 明文持久化或 P1 token。
+本节仅保留后续接缝，HTTP 授权服务与 stdio OAuth 客户端均不进入当前实施范围，不阻塞 Admin 加密持久化或 P1 token。
 
 支持 OAuth 的 HTTP/SSE 宿主添加实例 URL 后，通过授权发现打开 Termcp 授权页。用户登录，确认 Agent 名称和业务策略并批准；服务端创建或经用户明确选择关联 Agent Principal/Grant。宿主通过授权码与 PKCE 换取 access token，并在获准签发 refresh token 时负责保存和刷新。不要求用户预先创建静态 token 或复制 refresh token。
 
@@ -76,12 +78,12 @@ HTTP/SSE 客户端直接配置 Bearer；stdio 客户端通过下表提议的 env
 | --- | --- | --- |
 | HTTP `Authorization: Bearer` | 共享 token，全 HTTP 面同权 | 每 Agent 独立凭据，仅允许 Agent 业务及精确的控制端点 |
 | `TERMCP_AUTH_TOKEN` / `TERMCP_AUTH_HASH` | 服务配置、daemon 管理和桥共用 | 留在显式旧模式；不能作为新模式 Agent 的配置模板 |
-| `TERMCP_AGENT_TOKEN` | 尚不存在 | 新增桥专用 env，转换为 Bearer；不配置服务端 Admin，不授予 daemon stop |
+| `TERMCP_MCP_TOKEN` | 尚不存在 | 新增桥专用 env，转换为 Bearer；不配置服务端 Admin，不授予 daemon stop |
 | human session Cookie | 当前只有共享 `termcp_token` Cookie | 新的人端会话，仅供人端登录，不导入桥 |
 
 兼容版本允许直接嵌入原始 token。HTTP 使用字面 header，stdio 使用宿主实际支持的 `env` 字段；不依赖通用占位符，也不要求外部 secret 管理。服务端仅保存 verifier；原始 token 在创建/替换凭据的响应中显示一次。
 
-不能把客户端传来的 `TERMCP_AGENT_TOKEN` 自动登记成服务端的新 Agent，也不能拿它设置新服务的共享密码。服务端必须先有 Admin 签发记录；否则恶意客户端可以自行创建身份。daemon 子进程启动时须剥离桥专用 Agent env，服务从自己的持久化认证库加载授权。
+不能把客户端传来的 `TERMCP_MCP_TOKEN` 自动登记成服务端的新 Agent，也不能拿它设置新服务的共享密码。服务端必须先有 Admin 签发记录；否则恶意客户端可以自行创建身份。daemon 子进程启动时须剥离桥专用 Agent env，服务从自己的持久化认证库加载授权。
 
 身份隔离保护 Termcp 接口；有本机同一 OS 用户的任意 shell/文件权限的进程仍处于部署管理边界内。若需要阻止 Agent 读取或改写服务认证库，必须另用 OS 用户或容器隔离，不能声称一枚 Bearer token 能限制已经拥有本机管理权限的进程。
 
@@ -114,7 +116,7 @@ HTTP 直连的配置示意如下；外层字段由宿主 adapter 渲染，不能
 
 ### 3.2 已有服务：stdio 桥
 
-创建 Agent 的操作相同；页面输出带 `TERMCP_AGENT_TOKEN` 的 stdio 配置。桥读 env 并在每个上游请求中添加 Bearer。
+创建 Agent 的操作相同；页面输出带 `TERMCP_MCP_TOKEN` 的 stdio 配置。桥读 env 并在每个上游请求中添加 Bearer。
 
 连接本机已部署实例时，可以生成 `termcp stdio`；连接远端或反向代理时，应保留完整 URL，例如：
 
@@ -125,7 +127,7 @@ HTTP 直连的配置示意如下；外层字段由宿主 adapter 渲染，不能
       "command": "npx",
       "args": ["-y", "@open-mcp-ai/termcp", "stdio", "https://termcp.example.com/stream"],
       "env": {
-        "TERMCP_AGENT_TOKEN": "<agent-token>"
+        "TERMCP_MCP_TOKEN": "<agent-token>"
       }
     }
   }
@@ -156,7 +158,7 @@ HTTP 直连的配置示意如下；外层字段由宿主 adapter 渲染，不能
 - 这是失败恢复路径；宿主可能隐藏 stderr，不能保证模型会看到提示，也不能依赖先调用 `notify_user`。正常引导仍应放在 Termcp 安装文档和 WebUI 中。
 - 配置修好后，宿主重新启动桥；只要服务认证库与签发时一致，重启不需要再次签发 token。
 
-首次运行时设置 Admin，Admin 配置及凭据当前以明文保存在默认 `.termcp` 下；HTTP/daemon 重启后读取相同记录，后续配合加密系统迁移。初始化仅在未初始化状态开放，完成后关闭。远程部署可先在 loopback 启动，由管理员通过 SSH 本地转发完成设置；不能把普通未认证 MCP 请求当作设置 Admin 的授权。
+首次运行时设置 Admin，Admin 身份、会话和权限加密保存在默认 `.termcp/auth.enc`；HTTP/daemon 与主机配置共用同一密钥环，重启后自动解锁或先登录一次。初始化仅在未初始化状态开放，完成后关闭。远程部署可先在 loopback 启动，由管理员通过 SSH 本地转发完成设置；不能把普通未认证 MCP 请求当作设置 Admin 的授权。
 
 没有可交互终端的 MCP 子进程不能在 stdin 请求管理员密码；首次设置通过用户可见的初始化入口完成。容器/服务器额外的离线 `termcp auth init` 命令保留为候选增强，当前不要求新增该命令或专用本机管理通道。Agent 仍在 Admin 设置并登录后的 WebUI 中创建。
 
@@ -225,7 +227,7 @@ OAuth 安装配置不包含人工复制的访问/刷新凭据；静态兼容配�
 
 ## 7. 分阶段实施与验收
 
-1. 共用基础：首次运行设置 Admin，配置及凭据先明文持久化到默认 `.termcp`；HTTP/daemon 共用配置、权限、身份及撤销状态，后续配合加密系统。
+1. 共用基础：首次运行设置 Admin，认证状态密文保存到默认 `.termcp/auth.enc`；HTTP/daemon 与主机配置共用密钥环，统一改主密码并重封所有对象 DEK。
 2. 权限与桥适配：可信 Actor、权限过滤、MCP session 绑定与撤销，沿用既有 Ensure 复用机制；明确多桥保活、重启后初始化及结果不明时不重放。
 3. **P1 简易 token**：WebUI 新增 Agent、一次性返回随机 token、列表及撤销；同批实现 stdio 读取 token。用户自行填写 header/env，支持人工重发和更新，不增加自动安装或换证依赖。
 4. 同步配置模板和安装文档：HTTP/stdio 共用 P1 凭据模型，保留完整实例 URL；认证失败不自动降级成匿名访问。
@@ -237,6 +239,6 @@ OAuth 整体属于未来计划，不列入当前桥适配或 P1 的必需工作�
 
 实施验收至少覆盖 A/B/C/D：有效/缺失/撤销 token、SSE GET 与 POST 主体一致性、Streamable GET/POST/DELETE、启动后认证恢复、桥初始化前保活，以及越权不能访问 daemon stop。额外验证非默认端口、HTTPS/路径前缀、远端 stdio 不启动本机实例、三 OS 环境继承与子进程剥离、同一 Agent 双 token 替换、不同 data-dir 误连及初始化超时。
 
-当前认证源码仍是共享凭据模式，本次仅核对代码并设计交互，没有声称上述行为已经可用，也没有修改业务测试。
+当前默认认证已改为 Admin/JWT 托管模式，显式 token/hash 保留旧共享模式，disable-auth 保留开放模式。第一版只实现 Admin、持久会话及角色入口权限；上文新增 Agent token 和桥控制端点仍未交付。测试覆盖 JWT 验证、首次设置、权限保存、跨重启登录、会话撤销和活动 WebSocket 关闭。
 
 managed 模式还须修改现有启动验证：不能因未设置旧 `--auth-token` 就拒绝已经初始化的 managed 服务，也不能把 Agent env 当成服务端认证配置来满足旧验证。非 loopback 部署须先完成受控初始化和 HTTPS 部署；显式旧/open 模式与 managed 模式分开选择，不能请求失败后自动降级。

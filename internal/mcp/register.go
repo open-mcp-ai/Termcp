@@ -82,13 +82,15 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 			// object; the client's name arrives with initialize, and the caller's
 			// namespace claim arrives in that same request's context.
 			OnRegisterSession: []mcpserver.OnRegisterSessionHookFunc{
-				func(_ context.Context, session mcpserver.ClientSession) {
+				func(ctx context.Context, session mcpserver.ClientSession) {
+					s.rememberTransport(ctx, session.SessionID())
 					s.connections.add(session)
 					s.notifyConnectionsChanged()
 				},
 			},
 			OnUnregisterSession: []mcpserver.OnUnregisterSessionHookFunc{
 				func(_ context.Context, session mcpserver.ClientSession) {
+					s.transportOwners.Delete(session.SessionID())
 					s.connections.remove(session)
 					s.notifyConnectionsChanged()
 				},
@@ -99,6 +101,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 					// which is how a per-request fact (the namespace claim) is tied
 					// to a session-level row.
 					if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
+						s.rememberTransport(ctx, session.SessionID())
 						s.connections.noteNamespace(session.SessionID(), callerNamespace(ctx))
 					}
 				},

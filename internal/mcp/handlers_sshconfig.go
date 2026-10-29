@@ -11,6 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
@@ -218,6 +219,9 @@ func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToo
 	// they can see is broken.
 	arr := make([]any, 0, len(names))
 	for _, n := range names {
+		if p, restricted, e := auth.PolicyFromContext(ctx); restricted && (e != nil || !s.agentHostAllowed(p, n)) {
+			continue
+		}
 		if s.NoInternal && strings.EqualFold(n, "internal") {
 			continue
 		}
