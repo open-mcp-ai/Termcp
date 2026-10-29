@@ -317,7 +317,10 @@
     .target-chip b { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
     /* A chip is a door: each one names a section the page already has, so
        clicking it scrolls there instead of stating the same thing twice. */
-    .target-chip-link { border-bottom: none; text-shadow: none; }
+    /* No border-bottom here: the chip's own 1px border already outranks the
+       bare `a` underline, and dropping the edge would take the box's bottom
+       line with it. Only the link's text glow has to go. */
+    .target-chip-link { text-shadow: none; }
     .target-chip-link:hover { color: var(--text-muted); border-color: var(--accent); box-shadow: 0 0 12px var(--accent-dim); }
     /* Anchors land under the sticky header, not behind it. */
     section[id] { scroll-margin-top: 96px; }
