@@ -35,7 +35,7 @@ import (
 func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	headers := map[string]string{"Path": stmt.Path}
 
-	sessions := s.sessMgr.ListAll()
+	sessions := s.filterAgentSessions(ctx, s.sessMgr.ListAll())
 	callerNS := callerNamespace(ctx)
 	if !boolFlag(stmt, "all") {
 		sessions = listableSessions(sessions, callerNS)

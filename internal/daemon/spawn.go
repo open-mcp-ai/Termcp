@@ -51,6 +51,7 @@ func childEnv(cfg *config.Config) []string {
 	env := filterEnv(os.Environ(), []string{
 		EnvChild + "=",
 		config.EnvAuthToken + "=",
+		config.EnvMCPToken + "=",
 		config.EnvAuthHash + "=",
 		config.EnvDisableAuth + "=",
 	})

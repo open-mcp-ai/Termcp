@@ -1,5 +1,7 @@
 # Agent 权限机制设计
 
+**2026-10-29 实现更新**：用户最新确认逐 Agent 的功能与主机选配，已在独立 [权限管理页面](permission-management.md) 实现。下方共享缺省策略、三态审批、词面树等保留为早期候选设计；当前范围以新文档及 API 为准。
+
 状态：待实现的权限管理设计，修订版 4。基线：`dev@76b320976ae671721f3370983f5b0d6b412685b1`。日期：2026-10-26。
 
 实施补充：已按 `dev@6a8af55` 核验并编写 [具体实施方案](agent-access-implementation.md) 与 [69 个函数的证据表](agent-access-implementation-evidence.csv)。本页中的稳定主机 ID、标签选择属于目标态；当前代码没有相应字段，第一版按实施方案使用 profile 名称和 all/selected/none。源码行号、Hook 落点、角色接入及可用审批范围以新实施方案为准。

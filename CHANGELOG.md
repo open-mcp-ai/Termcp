@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Permission and token management now has its own desktop page with an Agent list, function checkboxes, a host picker and a separate token tab. Create an Agent, choose its functions and saved hosts, then issue client tokens. Errors remain visible above the workspace and next to the action; the account page keeps login, password and sign-out controls. Function/host selections are enforced on MCP requests and existing session handles.
+
+Admins can now create Agents and issue MCP tokens from the account page, copy HTTP/SSE or stdio configuration, disable an Agent, and revoke individual client tokens. Multiple clients share a stable identity; credentials persist as encrypted digests. stdio uses `TERMCP_MCP_TOKEN` without changing daemon authentication, and token revocation disconnects its active requests. Admins can also issue MCP-only tokens for themselves.
+
+默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，账号、签名密钥、会话和预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。有自动解锁时重启保留有效登录，否则先输入主密码解锁。账号页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文账号可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1，OAuth 尚未实现，显式旧 token/hash 与开放模式仍保留。
+
 每个持久主机配置目录新增明文 `identity` 文件，保存不随改名变化的 UUID。会话和扩展通过该身份关联主机，改名或移动目录后继续解析；删除后同名新建不会继承旧关联。旧配置加载时补建身份文件，配置正文保持原样；重复或损坏的身份会明确报错。
 
 配置加密改为由用户密码通过 Argon2id 直接派生 Main Key。首次启用时输入并确认密码；未启用时不创建密钥环，已有明文配置也不会自动迁移。系统凭据或 `TERMCP_CONFIG_KEK` 只提供可选的自动解锁；两者都不可用时，服务在重启后保持锁定，用户可在 WebUI 输入密码。系统不提供主密钥备份码。

@@ -5,6 +5,8 @@
 
 本方案落实 Main Key → DEK → 配置正文的密钥层级，衔接 [Agent 权限设计](agent-permissions.md) 和 [命令解耦方案](command-decoupling.md)。下文明确区分已落地部分与后续合同；未标注已实现的管理接口、转换恢复和事件后轮换仍不能视为当前运行时能力。
 
+认证数据已接入本系统，见 [Admin 主密码与共享 Main Key](auth-storage-encryption.md)：共用同一密钥环和 Main Key，以 authentication 对象保存 `auth.enc`，`auth.json` 只保留版本。Admin 主密码也是配置加密密码；新建主机加密与已有明文主机转换仍由用户选择。认证对象参与现有改密码重封与中断恢复。
+
 ## 1. 范围与既有方案评估
 
 ### 1.1 本期交付

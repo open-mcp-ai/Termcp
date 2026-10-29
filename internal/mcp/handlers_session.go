@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Server) handleListSessions(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	all := s.sessMgr.ListAll()
+	all := s.filterAgentSessions(ctx, s.sessMgr.ListAll())
 	return jsonResult(map[string]any{"sessions": listableSessions(all, callerNamespace(ctx))}), nil
 }
 

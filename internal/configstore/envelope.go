@@ -56,13 +56,14 @@ var (
 type ObjectKind uint8
 
 const (
-	KindProfile   ObjectKind = 1
-	KindCatalog   ObjectKind = 2
-	KindMigration ObjectKind = 3
+	KindProfile        ObjectKind = 1
+	KindCatalog        ObjectKind = 2
+	KindMigration      ObjectKind = 3
+	KindAuthentication ObjectKind = 4
 )
 
 func (k ObjectKind) valid() bool {
-	return k >= KindProfile && k <= KindMigration
+	return k >= KindProfile && k <= KindAuthentication
 }
 
 func (k ObjectKind) maxPlaintext() (int, bool) {
@@ -73,6 +74,8 @@ func (k ObjectKind) maxPlaintext() (int, bool) {
 		return MaxCatalogPlaintext, true
 	case KindMigration:
 		return MaxMigrationPlaintext, true
+	case KindAuthentication:
+		return 1 << 20, true
 	default:
 		return 0, false
 	}

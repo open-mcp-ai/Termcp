@@ -66,7 +66,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 			fmt.Fprintf(out, "  log:  %s\n", daemon.LogPath(cfg.DataDir))
 			fmt.Fprintf(out, "  %s\n", daemonIdleHint(stdio, idleTimeoutArg, idleTimeout))
 		case res.Unauthorized:
-			if stdio {
+			if stdio && cfg.MCPToken == "" {
 				// The bridge would 401 on every message; say why before it starts.
 				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
 				os.Exit(1)
@@ -98,11 +98,18 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 					os.Exit(1)
 				}
 			}
-			if rep.Unauthorized {
+			if rep.Unauthorized && cfg.MCPToken != "" {
+				idle, err := daemon.ProbeMCP(ctx, cfg.Host, cfg.Port, cfg.MCPToken)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
+					os.Exit(1)
+				}
+				keepAlive = keepAliveFor(idle)
+			} else if rep.Unauthorized {
 				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
 				os.Exit(1)
 			}
-			if rep.Termcp {
+			if rep.Termcp && !rep.Unauthorized {
 				keepAlive = keepAliveFor(rep.Info.IdleTimeout())
 			}
 		}
@@ -117,9 +124,9 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 // presenting whichever credential the configuration holds (see
 // daemon.Credential).
 //
-// namespace, when set, is the caller namespace the bridge claims on every
-// request: it is what makes two bridges to one instance separate agents rather
-// than two callers of the same global view. An invalid name is refused here, at
+// namespace is a legacy caller claim sent on every request. Managed Agent
+// tokens establish their namespace from the verified identity instead; multiple
+// bridges using that identity share the same namespace. An invalid name is refused here, at
 // startup, rather than left for the instance to reject one request at a time — a
 // bridge that fails on its first call is much harder to diagnose than a flag.
 func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, keepAlive time.Duration, namespace string) error {

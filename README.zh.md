@@ -82,6 +82,9 @@
 
 ## 安装
 
+默认启动后先访问 `/login` 完成管理员设置。Admin 主密码同时解锁配置加密，账号、角色入口权限和 JWT 会话通过现有共享密钥环
+保存到 `<data-dir>/auth.enc`；`auth.json` 只保留版本标记。在「权限管理」页 `/permissions` 新建 Agent 或为管理员签发 MCP token，复制生成的 HTTP/SSE 或 stdio 配置即可接入。Token 仅展示一次，服务端只存摘要；stdio 使用 `TERMCP_MCP_TOKEN`，不改变 daemon 认证配置。OAuth 仍为未来计划。未配置自动解锁时，重启后需先登录一次。
+
 ### 0 · AI 安装
 
 ```

@@ -99,6 +99,7 @@ func main() {
 	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log verbosity: debug|info|warn|error")
 	flag.BoolVar(&cfg.NoInternal, "no-internal", cfg.NoInternal, "Disable the built-in loopback SSH profile (no internal connection)")
 	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable the profile write actions of the `profile` directive (create/edit/copy/delete) over MCP (off by default; passwords/keys are never exposed)")
+	flag.StringVar(&cfg.MCPToken, "mcp-token", cfg.MCPToken, "Client-only MCP bearer token for stdio (or $TERMCP_MCP_TOKEN)")
 	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
 	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
 	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
@@ -312,6 +313,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if cfg.MCPToken != "" && !bridging {
+		fmt.Fprintln(os.Stderr, "--mcp-token / TERMCP_MCP_TOKEN is only for stdio clients; create tokens in the WebUI account page")
+		os.Exit(2)
+	}
 	if ensure || bridging {
 		runDaemonFront(cfg, ensure, bridging, idleTimeoutArg, idleTimeout, target, bridgeNamespace)
 		return
@@ -330,6 +335,7 @@ func main() {
 // exits the process - there is nothing sensible left to fall back to.
 func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Duration, isDaemonChild bool) {
 	var verifier *auth.Verifier
+	var managed *auth.Managed
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
 		v, err := auth.NewVerifier(cfg.AuthToken, cfg.AuthHash)
 		if err != nil {
@@ -362,8 +368,8 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		slog.Info("HTTP authentication: enabled (API/MCP: Authorization: Bearer <token>; browsers: native login prompt, token as password)")
 	} else if cfg.DisableAuth {
 		slog.Warn("HTTP authentication: DISABLED on purpose (--disable-auth / $" + config.EnvDisableAuth + "); anyone who can reach this port can drive every session")
-	} else {
-		slog.Info("HTTP authentication: disabled (loopback-only bind)")
+	} else if cfg.ManagedAuth() {
+		slog.Info("HTTP authentication: managed admin login; open /login (first-run setup is local only)")
 	}
 
 	slog.Info("MCP HTTP:")
@@ -389,6 +395,24 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 	if warning := sshStore.StartupWarning(); warning != "" {
 		slog.Warn(warning)
+	}
+	if cfg.ManagedAuth() {
+		var err error
+		managed, err = auth.OpenManaged(cfg.DataDir, sshStore, configStorageProviders()...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot load authentication configuration: %v\n", err)
+			os.Exit(1)
+		}
+		// A newly installed stdio client must leave enough time to open setup.
+		// A password-only vault also needs time for its owner to unlock after
+		// restart. Provider-unlocked, configured instances keep their usual timeout.
+		if isDaemonChild && (!managed.Configured() || managed.NeedsUnlock()) && (idleTimeoutArg == "" || idleTimeout > 0 && idleTimeout < 10*time.Minute) {
+			idleTimeoutArg, idleTimeout = "10m", 10*time.Minute
+		}
+	}
+	if managed != nil {
+		managed.MCPIdleTimeout = idleTimeout
+		managed.HideInternal = cfg.NoInternal
 	}
 	sessMgr.SetSSHConfigResolver(sshStore.ResolveSessionReference)
 
@@ -430,6 +454,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	// so no existing route can be shadowed by it.
 	mux.Handle("POST /api/term", mcpSrv.TermHandler())
 	webuiH := &webui.Handler{Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, Extensions: extReconciler, NoInternal: cfg.NoInternal, Version: versionString(), Daemon: isDaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	if managed != nil {
+		webuiH.ChangeMainPassword = managed.ChangePassword
+	}
 	// The effective countdown is published at GET /api/daemon so the stdio
 	// bridge can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
 	if isDaemonChild {
@@ -463,6 +490,8 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 
 	if verifier != nil {
 		mainSrv.Handler = auth.Middleware(verifier, mux)
+	} else if managed != nil {
+		mainSrv.Handler = managed.Wrap(mux)
 	}
 
 	host := strings.TrimSpace(cfg.Host)
