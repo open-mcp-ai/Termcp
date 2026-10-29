@@ -1,4 +1,6 @@
-// Package auth implements termcp's single-token HTTP authentication.
+// Package auth implements managed Admin JWT sessions and the explicit legacy
+// single-token HTTP authentication mode. The description below covers legacy
+// credentials; managed.go and managed_http.go implement the default mode.
 //
 // The server is configured with either a plaintext token (--auth-token /
 // TERMCP_AUTH_TOKEN) or a salted SHA-256 hash of one (--auth-hash /

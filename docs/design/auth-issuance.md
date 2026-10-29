@@ -1,16 +1,22 @@
 # 人与 Agent 的身份与凭据签发机制
 
-状态：设计提案，未实现。日期：2026-10-27。源码核验基线：`dev@6a8af55`，另有未提交开发；本次只增加设计及交叉引用。
+**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
+
+状态：Admin 初始化、JWT Cookie、可撤销会话及预设角色入口权限第一版已实现（2026-10-28）；本文其他 Agent/Grant、逐操作权限和换证细节仍为设计提案。原始设计日期：2026-10-27，核验基线 `dev@6a8af55`。
+
+第一版实现位于 `internal/auth/managed.go`、`managed_http.go`：默认数据目录的 `auth.enc` 加密保存 Admin 身份、独立随机签名密钥、会话和角色入口权限；`auth.json` 只有版本标记，Admin 主密码通过现有 Argon2id 密钥环验证并解锁同一 Main Key。登录页 `/login`，账号及权限页 `/auth`；会话有效期 24 小时，退出撤销对应 SID 并关闭该会话的活动 WebSocket；无自动解锁时重启后先登录。入口权限修改使用 revision 比较后保存，对新请求立即生效。当前不签发 Agent token，不代表本文完整 Agent 业务策略已实现。
+
+认证存储升级已实现，见 [Admin 主密码与共享 Main Key](auth-storage-encryption.md)：认证与主机配置共用同一密钥环。账号与配置页面统一改主密码并撤销全部会话；此前独立认证密钥环提案已被取代。
 
 本文补齐 [Agent 权限设计](agent-permissions.md) 和 [权限过滤器实施方案](agent-access-implementation.md) 留出的身份签发部分。共享 Agent 业务策略、主机范围、MCP 入口限制及审批复核继续适用。所有新增路由、命令和数据结构均为提案。
 
-按现有接入方式核验的交互见 [MCP 接入方式盘点与认证交互](mcp-access-auth.md)：3 类传输接入、4 种常用配置形态。最新决定为 **OAuth 整体先不实现，简易 token 为 P1**。Admin 由用户第一次运行时设置，配置及凭据当前明文持久化到默认 `.termcp` 下，后续配合加密系统；daemon 与 HTTP 模式读写同一套配置。本文保留的 OAuth、自定义配对、claim/renew 与 Agent Cookie 细节均属未来候选，不进入当前交付。
+按现有接入方式核验的交互见 [MCP 接入方式盘点与认证交互](mcp-access-auth.md)：3 类传输接入、4 种常用配置形态。最新决定为 **OAuth 整体先不实现，简易 token 为 P1**。Admin 由用户第一次运行时设置，主密码同时用于现有 Main Key 派生，配置及会话密文保存到默认 `.termcp` 下；daemon 与 HTTP 模式读写同一套配置。本文保留的 OAuth、自定义配对、claim/renew 与 Agent Cookie 细节均属未来候选，不进入当前交付。
 
 简易 token 的 stdio 读取与 P1 同批交付；HTTP/stdio OAuth 均延期。现有 daemon 按 endpoint 复用，本方案不额外新增启动锁或全机单例要求。多桥共享、权限持久化及待定项集中记录于 [协商与遗漏清单](stdio-daemon-negotiation.md)，讨论中的建议不自动成为已确认需求。
 
 ## 1. 设计结论
 
-如果产品承诺区分 Admin 与 Agent，使用有身份管理的 managed 模式。当前先交付首次设置 Admin、配置/权限明文持久化与人端登录；P1 提供简易 Agent token：用户在 WebUI 新增 Agent，复制随机 token，自行配置到 MCP header/env，不要求自动配对、凭据库或自动换证。OAuth 整体移到未来，`open` 只保留为明确的本机兼容/开发选项。
+如果产品承诺区分 Admin 与 Agent，使用有身份管理的 managed 模式。当前已交付首次设置 Admin、共享 Main Key 加密存储与 JWT 登录；P1 提供简易 Agent token：用户在 WebUI 新增 Agent，复制随机 token，自行配置到 MCP header/env，不要求自动配对、凭据库或自动换证。OAuth 整体移到未来，`open` 只保留为明确的本机兼容/开发选项。
 
 角色始终来自服务端授权记录，客户端不能选择或修改。静态 token 和目标态的短期会话都引用独立 Agent grant；MCP 配置中的显示名称、`clientInfo` 或请求参数都不是身份。`open` 模式没有可信 Agent 身份，不能启用人/Agent 策略隔离，只适用于明确可信的 loopback 场景。
 
@@ -176,7 +182,7 @@ stdio MCP 使用客户端明确支持的环境字段：
       "command": "npx",
       "args": ["-y", "@open-mcp-ai/termcp", "daemon", "stdio"],
       "env": {
-        "TERMCP_AGENT_TOKEN": "<agent-token>"
+        "TERMCP_MCP_TOKEN": "<agent-token>"
       }
     }
   }
@@ -185,7 +191,7 @@ stdio MCP 使用客户端明确支持的环境字段：
 
 这里的关键是让桥和 HTTP server 共用同一个认证器：HTTP 模式从 `Authorization: Bearer` 取 token，stdio 模式从进程环境取 token 并转成同一 Bearer header；两者都解析成同一个 Agent Principal。客户端不支持环境变量插值时，向导直接填入字面 token，不能把一个不会被展开的 `${TOKEN}` 当成安全存储。
 
-`TERMCP_AGENT_TOKEN` 是新增设计，尚未实现；不能用它替代服务端 Admin 初始化或自动登记新 Agent。上例适用于本机实例自动启动；连接已部署的远端服务应生成 `stdio <完整 URL>`。全新安装先用 `npx -y @open-mcp-ai/termcp daemon start` 启动并完成 WebUI 初始化，再复制带 token 的 MCP 配置，具体失败恢复和空闲期限见接入交互方案。
+`TERMCP_MCP_TOKEN` 已实现；不能用它替代服务端 Admin 初始化或自动登记新 Agent。上例适用于本机实例自动启动；连接已部署的远端服务应生成 `stdio <完整 URL>`。全新安装先用 `npx -y @open-mcp-ai/termcp daemon start` 启动并完成 WebUI 初始化，再复制带 token 的 MCP 配置，具体失败恢复和空闲期限见接入交互方案。
 
 可以在 WebUI 中提供一段可复制的 Agent 安装提示词：
 
@@ -392,7 +398,7 @@ Agent 的 MCP transport session 在 `initialize` 时也要绑定认证得到的 
 
 ### 4.2 首次安装与找回
 
-用户第一次运行程序时设置 Admin 账号和密码。当前按已确认需求，将 Admin 配置及凭据明文保存到数据目录，默认 `.termcp`；正常启动直接读取，后续再配合项目加密系统迁移。当前不强制系统凭据库、随机登录密钥、密码 KDF 或独立本机管理通道。
+用户第一次运行程序时设置 Admin 账号和主密码。主密码通过现有 Argon2id 密钥环验证，并派生与主机配置共用的 Main Key；认证状态加密保存到默认 `.termcp/auth.enc`，不保存明文密码。系统/ENV 自动解锁可选；没有自动解锁时通过登录一次完成解锁。旧明文账号在验证后迁移，配置密码不同时还需原配置密码。
 
 HTTP 和 daemon 使用同一份落地配置与权限记录，不按启动方式创建两套 Admin。首次设置成功后关闭初始化入口；配置损坏或读取失败不能自动重新初始化。stdio 的 stdin 只承载 MCP，不能在该通道读取设置密码；首次设置须通过用户可见的入口完成。
 
@@ -652,7 +658,7 @@ PendingPairing (短期内存):
 
 `delivery_mode` 为 cookie 或 bearer，绑定一次 grant，不能换载体时顺带换角色。ConsumedRefresh 保留至 grant 绝对到期后清理，用于验证旧凭据重用；只有 lookup_id 相同但 secret 不匹配不能触发撤销，避免靠公开 ID 制造拒绝服务。CSRF 材料由服务端随机生成并保护存储，不存可直接冒充访问者的 bearer 值。
 
-当前配置及权限统一位于运行时 data-dir，默认 `.termcp`，Admin 凭据先明文持久化，未来再接加密。沿用现有 endpoint 实例复用，不为本认证方案额外引入启动锁或单例管理；保存成功后运行时及重启后须读取相同配置修订。角色、策略或撤销记录不可读/损坏时拒绝业务，不恢复全权。
+当前配置及权限统一位于运行时 data-dir，默认 `.termcp`；Admin、JWT 密钥和会话密文位于 `auth.enc`，与主机配置共用密钥环。沿用现有 endpoint 实例复用，不为本认证方案额外引入启动锁或单例管理；保存成功后运行时及重启后须读取相同配置修订。角色、策略或撤销记录不可读/损坏时拒绝业务，不恢复全权。
 
 后文若选用配对/refresh 候选方案，再实现具备事务的 Store 和 renewal CAS；当前不以这些未来能力要求先引入数据库或独占进程锁。认证库、备份和运行时真实凭据文件均不得进入 Git。
 
@@ -660,7 +666,7 @@ PendingPairing (短期内存):
 
 ## 11. 拟议路由与入口边界
 
-当前先交付首次设置 Admin、明文配置及权限持久化、人端登录；P1 再交付简易 Agent token。OAuth 的资源发现、授权服务、客户端注册、authorize/token、PKCE 与刷新均为未来计划，不列入当前路由实现。
+当前先交付首次设置 Admin、共享 Main Key 的加密持久化、人端登录；P1 再交付简易 Agent token。OAuth 的资源发现、授权服务、客户端注册、authorize/token、PKCE 与刷新均为未来计划，不列入当前路由实现。
 
 以下是后续静态兼容版本的管理路由，以及两种凭据共用的有限桥控制端点：
 
@@ -704,19 +710,19 @@ stdio 的 keepalive/探活也必须保持 agent 身份：目前桥握手前探�
 
 当前交付顺序：
 
-1. 共用基础：首次运行设置 Admin，明文配置及权限保存到默认 `.termcp`；HTTP/daemon 共用同一份状态，后续再接加密。
+1. 共用基础：首次运行设置 Admin 主密码；认证状态加密保存到默认 `.termcp`，HTTP/daemon 与主机配置共用同一 Main Key。
 2. 业务权限：可信 Actor、权限过滤、MCP session 绑定及撤销；沿用既有 daemon Ensure 复用，不新增启动互斥模块。
 3. **P1 简易 token**：WebUI 新增 Agent、一次显示随机 token、查看状态与撤销；同批实现 stdio 读取 token。用户自行填写 MCP header/env，人工重新生成后更新配置。
 4. 桥与迁移：处理 Agent 探测/保活、重启后重新 initialize 和已发送操作不自动重放；旧共享凭据不能绕过新模式，不自动降级。
 5. **未来 OAuth**：HTTP 授权服务、宿主兼容、stdio profile/浏览器授权/凭据保存/刷新均延期，当前不实现。
 
-P1 token 不依赖自动配置、配对或刷新；OAuth 整体为未来计划，因此 P1 前不能宣称新 managed Agent 接入已完整可用。自定义设备配对、claim/renew 和 Agent Cookie 也是可选后续方案。当前不以 OAuth 的 HTTPS/issuer/refresh 等额外能力阻塞首次 Admin 设置和明文配置持久化。
+P1 token 不依赖自动配置、配对或刷新；OAuth 整体为未来计划，因此 P1 前不能宣称新 managed Agent 接入已完整可用。自定义设备配对、claim/renew 和 Agent Cookie 也是可选后续方案。当前不以 OAuth 的 HTTPS/issuer/refresh 等额外能力阻塞首次 Admin 设置和加密配置持久化。
 
 ## 13. 验收重点
 
 这是后续实施所需的验收清单，本次文档变更没有修改或运行业务测试。
 
-- 当前验收首次 Admin 设置、明文持久化及 HTTP/daemon 共用权限；P1 验收 Agent token 只能到达 MCP 和明确的桥控制端点。OAuth 的发现/PKCE/回调/resource/刷新及以下自定义配对/renew/Agent Cookie 项均在未来选用时验收。
+- 当前验收首次 Admin 设置、加密持久化及 HTTP/daemon 共用权限，并覆盖统一改密和中断恢复；P1 验收 Agent token 只能到达 MCP 和明确的桥控制端点。OAuth 的发现/PKCE/回调/resource/刷新及以下自定义配对/renew/Agent Cookie 项均在未来选用时验收。
 - 修改角色参数、使用旧 Cookie、发送错误 Authorization + 有效 human Cookie、混用重复 Cookie，都不能提升权限或降级认证。
 - 配对未批准、过期、码不匹配、claim_verifier 错误、重复领取、两个并发领取，只能拒绝或获得同一个已批准结果；人的浏览器不会被 Agent Cookie 覆盖。
 - 服务端无法主动联系 Agent 时，桥仍能轮询领取并主动 renew；模拟模型上下文清空、桥重启和固定 header 客户端，分别符合第 5.3 节的恢复边界。

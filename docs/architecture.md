@@ -1,8 +1,16 @@
 # Termcp 终端进程通信流程架构
 
-## 零、HTTP 入口与认证中间件（可选）
+## 零、HTTP 入口与认证中间件
 
-启用 `--auth-token` / `--auth-hash` 后，共享 `http.ServeMux` 外层包一层 `internal/auth` 中间件，一次覆盖所有入口（Web UI、REST、MCP SSE、`/stream`、WebSocket）：
+默认使用 `internal/auth.Managed`：首次本机设置 Admin，JWT Cookie 登录；Admin 主密码经 Argon2id 派生现有 Main Key；账号、
+签名密钥、角色入口权限和会话密文位于 `<data-dir>/auth.enc`，`auth.json` 只保留版本，
+HTTP 与 daemon 共用同一配置仓库。无 Provider 时先登录解锁，有效 Cookie 在自动
+解锁后可继续验证；修改主密码统一重封所有 DEK 并撤销全部会话。中间件验证 HS256、issuer/audience/expiry 和服务端 session，再按当前
+角色策略放行；写请求检查 CSRF/来源，退出会撤销会话并取消对应活动连接。当前只签发
+Admin 会话，以及管理员/Agent 的 MCP-only Bearer token。Token 摘要沿用同一加密存储；stdio 使用客户端变量 `TERMCP_MCP_TOKEN`，不覆盖 daemon 认证。OAuth 尚未实现。预设角色入口权限不代替后续
+逐操作 Agent 业务策略。
+
+显式启用 `--auth-token` / `--auth-hash` 后使用旧 `internal/auth.Middleware`，一次覆盖所有入口（Web UI、REST、MCP SSE、`/stream`、WebSocket），下图只描述这个兼容模式：
 
 ```
 浏览器 / AI Agent / curl / 脚本
@@ -26,7 +34,7 @@
 - 凭据按序尝试：`Authorization: Bearer` → `Authorization: Basic`（密码字段即 token，用户名忽略）→ `termcp_token` cookie；任一通过即放行，全部失败返回 401。Basic 若带冒号 token，解码后的整个 `user:pass` 串与原 token 完全一致时也放行（兼容 `curl -u user:pass` 这类在客户端自行拆分密码的用法）。
 - Basic 认证成功时中间件设置 `termcp_token` cookie（HttpOnly、SameSite=Strict、Path=/），使无法携带自定义请求头的浏览器 WebSocket 握手也能完成认证；无服务端 session 存储，cookie 值即 token 本身（TLS 下自动附 `Secure`）。
 - 哈希格式 `sha256-<salt_hex>-<digest_hex>`，其中 `digest = SHA256(salt || token)`，由 `termcp --gen-auth-hash` 生成；服务端可只保存哈希、不落明文。
-- 启动期校验：`--auth-token` 与 `--auth-hash` 互斥；绑定非 loopback 且未配置认证直接拒绝启动；loopback 绑定保持无认证默认行为。
+- 启动期校验：`--auth-token` 与 `--auth-hash` 互斥；无显式旧凭据时默认进入托管认证。`--disable-auth` 显式选择开放模式，与旧凭据冲突时报错。
 
 ## 一、整体分层
 

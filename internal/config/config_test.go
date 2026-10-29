@@ -68,11 +68,14 @@ func TestValidate_AuthTokenAndHashAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-func TestValidate_NonLoopbackRequiresAuth(t *testing.T) {
+func TestValidate_NonLoopbackDefaultsToManagedAuth(t *testing.T) {
 	for _, host := range []string{"0.0.0.0", "::", "[::]", "", "192.168.1.25", "myserver.local"} {
 		cfg := &Config{Host: host, Port: 8080, DataDir: "/tmp/data"}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("expected auth-required error for host %q", host)
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("managed host %q: %v", host, err)
+		}
+		if !cfg.ManagedAuth() {
+			t.Fatalf("host %q must use managed authentication", host)
 		}
 	}
 }
@@ -180,5 +183,27 @@ func TestValidate_DisableAuthConflictsWithHash(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth-hash") {
 		t.Fatalf("error should name the conflicting setting, got: %v", err)
+	}
+}
+
+func TestMCPTokenIsClientOnlyAndRejectsModeConflicts(t *testing.T) {
+	t.Setenv(EnvMCPToken, "synthetic-client-token")
+	cfg := Default()
+	cfg.DataDir = t.TempDir()
+	cfg.ApplyEnv()
+	if cfg.MCPToken != "synthetic-client-token" || !cfg.ManagedAuth() {
+		t.Fatal("client token changed server authentication mode")
+	}
+	cfg.MCPToken = "flag-token"
+	cfg.ApplyEnv()
+	if cfg.MCPToken != "flag-token" {
+		t.Fatal("environment overwrote explicit client token")
+	}
+	for _, conflict := range []func(*Config){func(c *Config) { c.AuthToken = "legacy" }, func(c *Config) { c.AuthHash = "legacy" }, func(c *Config) { c.DisableAuth = true }} {
+		c := *cfg
+		conflict(&c)
+		if c.Validate() == nil {
+			t.Fatal("ambiguous client/server credentials accepted")
+		}
 	}
 }

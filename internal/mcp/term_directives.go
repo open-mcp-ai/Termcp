@@ -29,6 +29,9 @@ import (
 // — info, ps, span — would otherwise be reachable across namespaces, which is
 // exactly the isolation this feature promises.
 func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+	if bad := s.agentStatementCheck(ctx, stmt); bad != nil {
+		return []envelope.Slot{*bad}
+	}
 	// A HANDLE THE RECONCILER TOOK AWAY EXPLAINS ITSELF HERE, once, for every
 	// directive that names one.
 	//

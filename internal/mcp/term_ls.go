@@ -26,7 +26,7 @@ func (s *Server) directiveLS(ctx context.Context, stmt directive.Statement, win 
 			return []envelope.Slot{badRequest(stmt, "`ls task` lists every transfer; for one of them use `get task "+
 				stmt.Key+"` (pass a `timeout` on the call and it waits).")}
 		}
-		return []envelope.Slot{s.directiveLsTask(stmt)}
+		return []envelope.Slot{s.directiveLsTask(ctx, stmt)}
 	case "host":
 		// A NAME HERE WOULD BE SILENTLY DROPPED: the handler lists every entry, so
 		// `ls host prod` answered the whole table and the caller believed it had been

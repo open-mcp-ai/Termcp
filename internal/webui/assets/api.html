@@ -67,7 +67,8 @@
 
     <div class="card">
       <h3>Authentication</h3>
-      <p class="muted" style="margin-top:0">When termcp starts with <code class="inline">--auth-token</code> / <code class="inline">--auth-hash</code> (or the matching environment variable), the same token protects Web UI, REST, MCP, and WebSocket. (Only the read-only documentation endpoint <code class="inline">/api.md</code> stays open without credentials so agents and scripts can fetch it before configuring a token.)</p>
+      <p class="muted">Default startup uses <a href="/login">Admin setup and JWT login</a>. The Admin master password also unlocks configuration encryption. Account settings, signing keys, sessions and preset role entrance permissions are encrypted in <code class="inline">&lt;data-dir&gt;/auth.enc</code>, using the existing shared keyring; <code class="inline">auth.json</code> only marks the format version. Without automatic unlock, sign in once after restart. Open <a href="/permissions">Permission management</a> to create Agents, issue MCP tokens for yourself or an Agent, revoke credentials, and copy client configuration. Tokens are shown once; only digests are stored. HTTP/SSE clients send Bearer on every request; stdio uses TERMCP_MCP_TOKEN. These tokens only grant MCP access, including for Admin. OAuth is future work. The credential-free examples below need the generated header/env, or an explicitly selected legacy/open deployment.</p>
+      <p class="muted" style="margin-top:0">Explicit <code class="inline">--auth-token</code> / <code class="inline">--auth-hash</code> (or the matching environment variable) selects legacy shared-token mode, described below. The read-only documentation endpoint <code class="inline">/api.md</code> stays public in both modes.</p>
       <table>
         <thead><tr><th>Client</th><th>How to authenticate</th></tr></thead>
         <tbody>
@@ -76,7 +77,7 @@
           <tr><td>Browser WebSocket</td><td>A successful Basic prompt sets an HttpOnly <code class="inline">termcp_token</code> cookie, which same-origin WebSocket handshakes send automatically.</td></tr>
         </tbody>
       </table>
-      <p class="muted">Generate a salted hash with <code class="inline">termcp --gen-auth-hash</code>. Do not put tokens in URLs or copied client configuration. Use TLS through a reverse proxy when exposing Basic authentication beyond a trusted local network.</p>
+      <p class="muted">Generate a salted hash with <code class="inline">termcp --gen-auth-hash</code>. Do not put tokens in URLs. Treat client configuration containing tokens as a secret. Use TLS through a reverse proxy when exposing Basic authentication beyond a trusted local network.</p>
     </div>
 
     <h2 id="agentdocs">2. Agent docs (no MCP)</h2>
@@ -131,7 +132,7 @@
         <button type="button" class="copy-btn" data-copy="cfg-stdio-json">Copy</button>
         <pre id="cfg-stdio-json"></pre>
       </div>
-      <p class="muted">stdio clients launch the bridge on their own machine. If the instance requires authentication, pass the credential through the environment — <code class="inline">"env": {"TERMCP_AUTH_TOKEN": "&lt;token&gt;"}</code>, or <code class="inline">TERMCP_AUTH_HASH</code> when only the hash is kept — not in argv or the URL.</p>
+      <p class="muted">stdio clients launch the bridge on their own machine. For managed authentication, create an Agent or your own MCP token on the <a href="/permissions">permission management page</a> and copy its configuration (stdio uses <code class="inline">TERMCP_MCP_TOKEN</code>). For legacy shared-token authentication, pass the credential through the environment — <code class="inline">"env": {"TERMCP_AUTH_TOKEN": "&lt;token&gt;"}</code>, or <code class="inline">TERMCP_AUTH_HASH</code> when only the hash is kept — not in argv or the URL.</p>
     </div>
 
     <div class="card">

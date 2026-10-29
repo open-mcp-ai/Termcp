@@ -162,6 +162,9 @@ func (r *Repository) rotationTargets() []rotationTarget {
 			},
 		})
 	}
+	if !r.authGeneration.IsZero() {
+		targets = append(targets, rotationTarget{path: authenticationPath(r.dataDir), identity: Identity{StoreID: storeID, ObjectID: authenticationObjectID, GenerationID: r.authGeneration, Kind: KindAuthentication}})
+	}
 	return append(targets, rotationTarget{
 		path: repositoryCatalogPath(r.dataDir),
 		identity: Identity{
