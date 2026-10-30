@@ -147,12 +147,14 @@ func TestManagedFirstRunLoginRestartLogout(t *testing.T) {
 	if _, _, err := loaded.verify(cookie.Value); err == nil {
 		t.Fatal("password-only restart must stay locked")
 	}
-	if _, _, err := loaded.login("admin", testPassword); err != nil {
+	fresh, freshSession, err := loaded.login("admin", testPassword)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loaded.verify(cookie.Value); err != nil {
-		t.Fatal("unlock lost the previous session", err)
+	if _, _, err := loaded.verify(cookie.Value); err == nil {
+		t.Fatal("unlock restored a cookie from the previous run")
 	}
+	cookie.Value, session = fresh, freshSession
 	b, err := os.ReadFile(m.path)
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +357,7 @@ func TestManagedSetupLocalAndExclusive(t *testing.T) {
 	}
 }
 
-func TestManagedCorruptionAndSaveFailureFailClosed(t *testing.T) {
+func TestManagedCorruptionFailsClosedAndLogoutDoesNotNeedStorage(t *testing.T) {
 	m, token, _ := configuredManaged(t)
 	cipher := filepath.Join(filepath.Dir(m.path), "auth.enc")
 	if err := os.WriteFile(cipher, []byte("damaged ciphertext"), 0600); err != nil {
@@ -374,11 +376,11 @@ func TestManagedCorruptionAndSaveFailureFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.revoke(id); err == nil {
-		t.Fatal("logout succeeded without saving")
+	if err := m.revoke(id); err != nil {
+		t.Fatal("in-memory logout depended on storage", err)
 	}
-	if _, _, err := m.verify(token); err != nil {
-		t.Fatal("failed save changed live state", err)
+	if _, _, err := m.verify(token); err == nil {
+		t.Fatal("storage error kept a logged-out browser session alive")
 	}
 }
 

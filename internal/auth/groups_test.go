@@ -1,0 +1,290 @@
+package auth
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type groupWire struct {
+	ID              string      `json:"id"`
+	Name            string      `json:"name"`
+	Enabled         bool        `json:"enabled"`
+	Revision        uint64      `json:"revision"`
+	Policy          AgentPolicy `json:"policy"`
+	MemberCount     int         `json:"member_count"`
+	CredentialCount int         `json:"credential_count"`
+}
+
+func createTestGroup(t *testing.T, m *Managed, cookie string, session sessionRecord, name, preset string) groupWire {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"name": name, "preset_id": preset})
+	w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "POST", "/auth/groups", string(body), cookie, session.CSRF)
+	if w.Code != 200 {
+		t.Fatalf("create group: %d %s", w.Code, w.Body)
+	}
+	var out struct {
+		Group groupWire `json:"group"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Group
+}
+func TestPermissionGroupsSharePolicyWithoutSharingIdentity(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	group := createTestGroup(t, m, cookie, session, "shared observers", "viewer")
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"one","group_id":"`+group.ID+`"}`)
+	b := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"two","group_id":"`+group.ID+`"}`)
+	check := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := ActorFromContext(r.Context())
+		if !ok || actor.Role != RoleAgent {
+			t.Error("identity lost")
+		}
+		p, restricted, err := PolicyFromContext(r.Context())
+		if err != nil || !restricted || !p.AllowsOperation("profile.list") || p.AllowsOperation("shell.input") {
+			t.Error("wrong group policy")
+		}
+		_ = json.NewEncoder(w).Encode(actor)
+	}))
+	for _, a := range []issuedCredential{a, b} {
+		w := bearerRequest(check, "POST", "/stream", a.Token, "")
+		var actor Actor
+		_ = json.Unmarshal(w.Body.Bytes(), &actor)
+		if w.Code != 200 || actor.ID != a.Agent.ID || actor.ID == group.ID {
+			t.Fatal("group replaced the subject identity")
+		}
+	}
+	r := httptest.NewRequest("POST", "http://127.0.0.1/stream", nil)
+	r.Header.Set("Authorization", "Bearer "+a.Token)
+	live, done, status := m.admitToken(r)
+	if status != 0 {
+		t.Fatal(status)
+	}
+	defer done()
+	body, _ := json.Marshal(map[string]any{"revision": group.Revision, "name": "renamed observers", "policy": EmptyAgentPolicy()})
+	w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "PATCH", "/auth/groups/"+group.ID, string(body), cookie, session.CSRF)
+	if w.Code != 200 {
+		t.Fatalf("update group: %d %s", w.Code, w.Body)
+	}
+	if live.Err() == nil {
+		t.Fatal("group policy update left existing request running")
+	}
+	for _, client := range []issuedCredential{a, b} {
+		h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, _, err := PolicyFromContext(r.Context())
+			if err != nil || p.AllowsOperation("profile.list") {
+				t.Error("token retained the previous group grant")
+			}
+			w.WriteHeader(204)
+		}))
+		if w := bearerRequest(h, "POST", "/stream", client.Token, ""); w.Code != 204 {
+			t.Fatal("policy save changed the identity or token", w.Code)
+		}
+	}
+}
+
+func TestGroupLifecyclePreviewConflictAndExplicitDeny(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	h := m.Wrap(http.NotFoundHandler())
+	g := createTestGroup(t, m, cookie, session, "disposable", "viewer")
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"member","group_id":"`+g.ID+`"}`)
+	w := managedRequest(t, h, "POST", "/auth/groups/"+g.ID+"/clone", `{"name":"copied"}`, cookie, session.CSRF)
+	if w.Code != 200 {
+		t.Fatalf("clone: %d %s", w.Code, w.Body)
+	}
+	var copied struct {
+		Group groupWire `json:"group"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &copied)
+	if copied.Group.ID == g.ID || copied.Group.MemberCount != 0 || copied.Group.CredentialCount != 0 {
+		t.Fatal("clone copied identity or credentials")
+	}
+	preview := managedRequest(t, h, "POST", "/auth/groups/"+g.ID+"/delete-preview", "", cookie, session.CSRF)
+	if preview.Code != 200 {
+		t.Fatal(preview.Code, preview.Body)
+	}
+	var plan struct {
+		Revision     uint64 `json:"revision"`
+		PlanRevision uint64 `json:"plan_revision"`
+		MemberCount  int    `json:"member_count"`
+	}
+	_ = json.Unmarshal(preview.Body.Bytes(), &plan)
+	if plan.MemberCount != 1 {
+		t.Fatal("preview omitted bound members")
+	}
+	// Issuing another token invalidates the deletion inventory version.
+	issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"agent_id":"`+a.Agent.ID+`","label":"second"}`)
+	body, _ := json.Marshal(map[string]any{"revision": plan.Revision, "plan_revision": plan.PlanRevision, "resolution": "deny"})
+	if w := managedRequest(t, h, "DELETE", "/auth/groups/"+g.ID, string(body), cookie, session.CSRF); w.Code != 409 {
+		t.Fatal("stale deletion preview accepted", w.Code)
+	}
+	preview = managedRequest(t, h, "POST", "/auth/groups/"+g.ID+"/delete-preview", "", cookie, session.CSRF)
+	_ = json.Unmarshal(preview.Body.Bytes(), &plan)
+	body, _ = json.Marshal(map[string]any{"revision": plan.Revision, "plan_revision": plan.PlanRevision, "resolution": "deny"})
+	if w := managedRequest(t, h, "DELETE", "/auth/groups/"+g.ID, string(body), cookie, session.CSRF); w.Code != 200 {
+		t.Fatal("confirmed delete failed", w.Code, w.Body)
+	}
+	if w := bearerRequest(checkNoBusinessHandler(t, m), "POST", "/stream", a.Token, ""); w.Code != 401 {
+		t.Fatal("deleted group left an effective orphan credential", w.Code)
+	}
+	loaded, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.state.Groups[g.ID]; ok {
+		t.Fatal("deleted group came back after restart")
+	}
+	if loaded.state.Agents[a.Agent.ID].ID != a.Agent.ID {
+		t.Fatal("group deletion erased its subject identity")
+	}
+}
+func checkNoBusinessHandler(t *testing.T, m *Managed) http.Handler {
+	return m.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("business handler reached") }))
+}
+
+func TestGroupDefaultScopeAndAdminOnlyManagement(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	h := m.Wrap(http.NotFoundHandler())
+	g := createTestGroup(t, m, cookie, session, "new default", "viewer")
+	w := managedRequest(t, h, "GET", "/auth/groups", "", cookie, "")
+	var listing struct {
+		AccessRevision uint64 `json:"access_revision"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &listing)
+	body, _ := json.Marshal(map[string]any{"group_id": g.ID, "revision": listing.AccessRevision})
+	if w := managedRequest(t, h, "PUT", "/auth/default-group", string(body), cookie, session.CSRF); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"defaulted"}`)
+	if p := stateAgentPolicy(m.state, a.Agent.ID); !p.AllowsOperation("profile.list") {
+		t.Fatal("principal did not inherit configured default")
+	}
+	for _, path := range []string{"/auth/groups", "/auth/group-presets", "/auth/principals", "/auth/default-group"} {
+		if w := bearerRequest(h, "GET", path, a.Token, ""); w.Code != 403 {
+			t.Fatal("Agent reached group management", path, w.Code)
+		}
+	}
+	if w := managedRequest(t, h, "POST", "/auth/groups", `{"name":"owner","preset_id":"owner"}`, cookie, session.CSRF); w.Code != 400 {
+		t.Fatal("Agent group accepted a system administrator preset")
+	}
+	if w := managedRequest(t, h, "POST", "/auth/groups", `{"name":"new default"}`, cookie, session.CSRF); w.Code != 409 {
+		t.Fatal("duplicate group name accepted")
+	}
+	if w := managedRequest(t, h, "PATCH", "/auth/groups/"+g.ID, `{"revision":0,"name":"changed"}`, cookie, session.CSRF); w.Code != 409 {
+		t.Fatal("stale group revision accepted")
+	}
+	presets := managedRequest(t, h, "GET", "/auth/group-presets", "", cookie, "")
+	if presets.Code != 200 || !strings.Contains(presets.Body.String(), "diagnostics") {
+		t.Fatal("preset catalog missing")
+	}
+}
+
+func TestGroupMutationFailureLeavesLivePolicyAndRequests(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	g := createTestGroup(t, m, cookie, session, "durability observers", "viewer")
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"member","group_id":"`+g.ID+`"}`)
+	req := httptest.NewRequest("POST", "http://127.0.0.1/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+a.Token)
+	live, finish, status := m.admitToken(req)
+	if status != 0 {
+		t.Fatal(status)
+	}
+	defer finish()
+	cipher := filepath.Join(filepath.Dir(m.path), "auth.enc")
+	if err := os.Remove(cipher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cipher, 0700); err != nil {
+		t.Fatal(err)
+	}
+	w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "PATCH", "/auth/groups/"+g.ID, `{"revision":1,"policy":{"schema_version":2,"host_mode":"all","actions":{}}}`, cookie, session.CSRF)
+	if w.Code != 500 {
+		t.Fatal("write failure did not surface", w.Code)
+	}
+	if !stateAgentPolicy(m.state, a.Agent.ID).AllowsOperation("profile.list") || live.Err() != nil {
+		t.Fatal("failed save changed live group access")
+	}
+}
+
+func TestGroupVersionMigrationPreservesPrincipalAndCredential(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"historic","policy":{"functions":["file_read"],"host_mode":"selected","hosts":[]}}`)
+	state := credentialState(m.state)
+	p := stateAgentPolicy(state, a.Agent.ID)
+	legacy := state.Agents[a.Agent.ID]
+	legacy.GroupID = ""
+	legacy.Policy = &p
+	state.Agents[a.Agent.ID] = legacy
+	digest := state.Tokens[a.Credential.ID].Digest
+	state.Groups = nil
+	state.DefaultGroupID = ""
+	state.AccessRevision = 0
+	state.Version = 2
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(raw)
+	if err = m.vault.WriteAuthentication(raw); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.state.Version != managedStateVersion || loaded.state.Tokens[a.Credential.ID].Digest != digest {
+		t.Fatal("migration changed a credential")
+	}
+	principal := loaded.state.Agents[a.Agent.ID]
+	if principal.ID != a.Agent.ID || principal.GroupID == "" || principal.Policy != nil {
+		t.Fatal("migration did not separate policy from identity")
+	}
+	policy := stateAgentPolicy(loaded.state, a.Agent.ID)
+	if policy.IsV2() || !policy.Allows("file_read") || policy.HostMode != "selected" {
+		t.Fatal("group migration silently upgraded policy or host scope")
+	}
+	if w := bearerRequest(loaded.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, _ := ActorFromContext(r.Context())
+		if actor.ID != a.Agent.ID || actor.Role != RoleAgent {
+			t.Error("identity changed")
+		}
+		w.WriteHeader(204)
+	})), "POST", "/stream", a.Token, ""); w.Code != 204 {
+		t.Fatal("old token lost its principal identity", w.Code)
+	}
+}
+
+func TestFailedLegacyGroupMigrationKeepsOriginalPolicy(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"old restricted member","policy":{"functions":["file_read"],"host_mode":"selected","hosts":[]}}`)
+	policy := stateAgentPolicy(m.state, a.Agent.ID)
+	old := m.state
+	old.Version = 1
+	old.Groups = nil
+	old.DefaultGroupID = ""
+	old.AccessRevision = 0
+	old.Admin.Password = testPassword
+	old.Agents = map[string]agentRecord{a.Agent.ID: {ID: a.Agent.ID, Name: "old restricted member", Enabled: true, CreatedAt: m.now(), Policy: &policy}}
+	m.legacy = &old
+	m.state = managedState{}
+	m.sealed = false
+	cipher := filepath.Join(filepath.Dir(m.path), "auth.enc")
+	if err := os.Remove(cipher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cipher, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.login("admin", testPassword); err == nil {
+		t.Fatal("broken auth publication succeeded")
+	}
+	principal := m.legacy.Agents[a.Agent.ID]
+	if principal.GroupID != "" || principal.Policy == nil || !principal.Policy.Allows("file_read") || principal.Policy.Allows("terminal_write") {
+		t.Fatal("failed migration widened or mutated the retry source")
+	}
+}

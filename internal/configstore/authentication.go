@@ -76,6 +76,8 @@ func (r *Repository) loadAuthGeneration() error {
 // VerifyPassword checks the password-derived keyring even when a provider has
 // already unlocked it. Automatic unlock is not an Admin login.
 func (r *Repository) VerifyPassword(password string) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
@@ -95,11 +97,18 @@ func (r *Repository) VerifyPassword(password string) error {
 	}
 	secret := []byte(password)
 	defer clear(secret)
-	checked, err := unlockPasswordKeyring(stored, secret)
+	derive := r.passwordDeriver()
+	var checked *Keyring
+	err = r.passwordWorkLocked(raw, func() error { var e error; checked, e = unlockPasswordKeyringUsing(stored, secret, derive); return e })
+	if checked != nil {
+		defer checked.Destroy()
+	}
 	if err != nil {
 		return err
 	}
-	defer checked.Destroy()
+	if err = r.ready(); err != nil {
+		return err
+	}
 	if !sameKeyring(checked, r.keyring) {
 		return ErrAuthentication
 	}

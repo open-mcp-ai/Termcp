@@ -368,6 +368,12 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolR
 		if d.TrustUnknownHost != nil {
 			m["trust_unknown_host"] = *d.TrustUnknownHost
 		}
+		if _, restricted, _ := auth.PolicyFromContext(ctx); restricted {
+			delete(m, "private_key")
+			delete(m, "proxy")
+			m["has_private_key"] = d.PrivateKey != ""
+			m["has_proxy"] = d.Proxy != ""
+		}
 		return m
 	}
 
@@ -380,7 +386,11 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolR
 		out[k] = v
 	}
 	if ent.DefaultShell != "" {
-		out["default_shell"] = ent.DefaultShell
+		if _, restricted, _ := auth.PolicyFromContext(ctx); restricted {
+			out["has_default_shell"] = true
+		} else {
+			out["default_shell"] = ent.DefaultShell
+		}
 	}
 	if ent.DefaultMode != "" {
 		out["default_mode"] = ent.DefaultMode

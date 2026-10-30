@@ -147,8 +147,8 @@ func TestManagedPasswordChangeKeepsHostsAndRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := reopened.verify(newCookie); err != nil {
-		t.Fatal("automatic unlock lost new session", err)
+	if _, _, err := reopened.verify(newCookie); err == nil {
+		t.Fatal("automatic unlock restored a browser session from the previous run")
 	}
 	if _, _, err := reopened.login("admin", testPassword); err == nil {
 		t.Fatal("auto unlock bypassed password verification")
@@ -249,8 +249,8 @@ func TestManagedRememberUnlockAfterProviderLoss(t *testing.T) {
 	if restored.NeedsUnlock() {
 		t.Fatal("rebound provider did not restore automatic unlock")
 	}
-	if _, _, err := restored.verify(original); err != nil {
-		t.Fatal("unlock discarded an existing session", err)
+	if _, _, err := restored.verify(original); err == nil {
+		t.Fatal("provider unlock restored a browser session from the previous run")
 	}
 	if _, _, err := restored.login("admin", "incorrect-password"); err == nil {
 		t.Fatal("provider availability bypassed Admin password")

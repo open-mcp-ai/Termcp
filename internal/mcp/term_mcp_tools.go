@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 )
@@ -33,8 +34,11 @@ func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *j
 	if bad != nil {
 		return *bad
 	}
+	if bad := s.checkAgentPeerEffect(ctx, stmt, operationPlan("mcp.tool.invoke", authorization.Evidence{ToolName: name})); bad != nil {
+		return *bad
+	}
 	if err := s.jrpcReady(ctx, h); err != nil {
-		return jrpcError(stmt, err)
+		return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 	}
 	// A FIRE-AND-FORGET TOOL CALL still goes through Call: the channel assigns the
 	// id, and `--send` needs the frame written without waiting for its answer.
@@ -45,14 +49,14 @@ func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *j
 	}
 	if boolFlag(stmt, "send") {
 		if err := h.ch.Send(ctx, frame); err != nil {
-			return jrpcError(stmt, err)
+			return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 		}
 		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path},
 			Body: "sent `" + name + "`; the answer arrives on `read " + peerAddress(h.sessionID, h.kind, h.index) + "`"}
 	}
 	reply, err := h.ch.Call(ctx, frame)
 	if err != nil {
-		return jrpcError(stmt, err)
+		return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 	}
 	if boolFlag(stmt, "json") {
 		// --json is the escape hatch back to the frame: the content items, the
@@ -173,11 +177,11 @@ func (s *Server) mcpToolList(ctx context.Context, stmt directive.Statement, h *j
 	waitCtx, cancel := context.WithTimeout(ctx, peerCallWindow(win))
 	defer cancel()
 	if err := s.jrpcReady(waitCtx, h); err != nil {
-		return jrpcError(stmt, err)
+		return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 	}
 	reply, err := h.ch.Call(waitCtx, map[string]any{"jsonrpc": "2.0", "method": "tools/list"})
 	if err != nil {
-		return jrpcError(stmt, err)
+		return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 	}
 	var doc struct {
 		Error  json.RawMessage `json:"error"`

@@ -40,6 +40,8 @@ type Store struct {
 	encrypted           *configstore.Repository
 	encryptNew          bool
 	legacyArtifacts     bool
+	passwordMu          sync.Mutex
+	closed              bool
 	mu                  sync.Mutex
 	temporary           map[string][]byte // process-local profiles; guarded by mu
 	temporaryIdentities map[string]string
@@ -61,7 +63,14 @@ func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
-	repo := s.repositorySnapshot()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	repo := s.encrypted
+	s.mu.Unlock()
 	if repo == nil {
 		return nil
 	}

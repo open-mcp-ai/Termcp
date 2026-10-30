@@ -1,20 +1,48 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
 	"sort"
+
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 )
 
 // AgentPolicy grants named function groups and stable saved-profile identities.
 // Empty selections grant nothing; omitted policies on older Agents retain their
 // previous access until an administrator explicitly saves a policy.
+//
+// SchemaVersion 0 keeps the original function-group contract. SchemaVersion 2
+// stores explicit semantic operations and typed constraints in Actions; unknown
+// operations are refused at save time and unlisted operations stay denied.
 type AgentPolicy struct {
-	Functions []string `json:"functions"`
-	HostMode  string   `json:"host_mode"`
-	Hosts     []string `json:"hosts"`
+	SchemaVersion int                            `json:"schema_version,omitempty"`
+	Functions     []string                       `json:"functions"`
+	HostMode      string                         `json:"host_mode"`
+	Hosts         []string                       `json:"hosts"`
+	Actions       map[string]authorization.Grant `json:"actions"`
+}
+
+// Persistent state uses json.Unmarshal as well as the strict HTTP decoder.
+// Keep policy decoding strict in both paths: ignoring an unknown condition on
+// reopen would turn a narrower saved allow into a broader one.
+func (p *AgentPolicy) UnmarshalJSON(raw []byte) error {
+	type wire AgentPolicy
+	var value wire
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&value); err != nil {
+		return err
+	}
+	if value.SchemaVersion == 2 && value.Actions == nil {
+		value.Actions = map[string]authorization.Grant{}
+	}
+	*p = AgentPolicy(value)
+	return nil
 }
 
 type FunctionGroup struct {
@@ -50,14 +78,69 @@ func FullAgentPolicy() AgentPolicy {
 	return p
 }
 
+// EmptyAgentPolicy is the explicit default for a newly created identity. Host
+// scope does not itself authorize any action; historical nil policies retain
+// their separate compatibility path in effectivePolicy.
+func EmptyAgentPolicy() AgentPolicy {
+	return AgentPolicy{SchemaVersion: 2, HostMode: "all", Hosts: []string{}, Functions: []string{}, Actions: map[string]authorization.Grant{}}
+}
+
+// FullV2AgentPolicy is every catalog operation with no constraints, for tests and
+// a future explicit full grant in the UI. It is not the default for legacy Agents.
+func FullV2AgentPolicy() AgentPolicy {
+	return AgentPolicy{SchemaVersion: 2, HostMode: "all", Actions: authorization.FullGrants()}
+}
+
+func (p AgentPolicy) IsV2() bool { return p.SchemaVersion == 2 }
+
+// AuthorizationPolicy projects the saved policy onto the pure decision model.
+func (p AgentPolicy) AuthorizationPolicy() authorization.Policy {
+	return authorization.Policy{HostMode: p.HostMode, Hosts: slices.Clone(p.Hosts), Actions: p.Actions}
+}
+
 func (p AgentPolicy) Allows(function string) bool { return slices.Contains(p.Functions, function) }
+func (p AgentPolicy) AllowsOperation(id string) bool {
+	if !p.IsV2() {
+		return false
+	}
+	grant, ok := p.Actions[id]
+	return ok && grant.Effect == authorization.EffectAllow
+}
 func (p AgentPolicy) AllowsHost(id string) bool {
 	return id != "" && (p.HostMode == "all" || p.HostMode == "selected" && slices.Contains(p.Hosts, id))
 }
 func clonePolicy(p AgentPolicy) AgentPolicy {
 	p.Functions = append([]string{}, p.Functions...)
 	p.Hosts = append([]string{}, p.Hosts...)
+	p.Actions = mapsClone(p.Actions)
 	return p
+}
+
+func mapsClone(in map[string]authorization.Grant) map[string]authorization.Grant {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]authorization.Grant, len(in))
+	for id, grant := range in {
+		if grant.Constraints != nil {
+			clone := *grant.Constraints
+			clone.Keys = slices.Clone(clone.Keys)
+			clone.ToolNames = slices.Clone(clone.ToolNames)
+			clone.Methods = slices.Clone(clone.Methods)
+			clone.Forms = slices.Clone(clone.Forms)
+			if clone.RepeatMax != nil {
+				n := *clone.RepeatMax
+				clone.RepeatMax = &n
+			}
+			if clone.MaxBytes != nil {
+				n := *clone.MaxBytes
+				clone.MaxBytes = &n
+			}
+			grant.Constraints = &clone
+		}
+		out[id] = grant
+	}
+	return out
 }
 func effectivePolicy(a agentRecord) AgentPolicy {
 	if a.Policy == nil {
@@ -73,6 +156,12 @@ func agentRevision(a agentRecord) uint64 {
 }
 
 func validateAgentPolicy(p AgentPolicy) error {
+	if p.SchemaVersion != 0 {
+		return validateAgentPolicyV2(p)
+	}
+	if p.Actions != nil {
+		return errors.New("actions require schema_version 2")
+	}
 	if p.HostMode != "all" && p.HostMode != "selected" && p.HostMode != "none" {
 		return errors.New("host_mode must be all, selected or none")
 	}
@@ -105,6 +194,40 @@ func validateAgentPolicy(p AgentPolicy) error {
 	return nil
 }
 
+func validateAgentPolicyV2(p AgentPolicy) error {
+	if p.SchemaVersion != 2 {
+		return errors.New("schema_version must be 2 for an actions policy")
+	}
+	if len(p.Functions) > 0 {
+		return errors.New("an actions policy cannot mix function groups")
+	}
+	if p.HostMode != "all" && p.HostMode != "selected" && p.HostMode != "none" {
+		return errors.New("host_mode must be all, selected or none")
+	}
+	if len(p.Hosts) > 1024 || p.HostMode != "selected" && len(p.Hosts) > 0 {
+		return errors.New("invalid policy selection")
+	}
+	seen := map[string]bool{}
+	for _, id := range p.Hosts {
+		if id == "" || len(id) > 128 || seen[id] {
+			return errors.New("invalid or duplicate host identity")
+		}
+		seen[id] = true
+	}
+	for id, grant := range p.Actions {
+		if err := authorization.ValidateGrant(id, grant); err != nil {
+			return err
+		}
+		if grant.Effect != authorization.EffectAllow {
+			continue
+		}
+		if op, ok := authorization.Lookup(id); ok && op.Global && p.HostMode != "all" {
+			return errors.New("operation " + id + " changes shared configuration and requires all hosts")
+		}
+	}
+	return nil
+}
+
 type agentPolicyKey struct{}
 type policyResolver func() (AgentPolicy, error)
 
@@ -131,7 +254,7 @@ func (m *Managed) withAgentPolicy(ctx context.Context, principal, credential str
 		if !ok || !a.Enabled || !exists || t.PrincipalID != principal || !permitted {
 			return AgentPolicy{}, errors.New("Agent access has ended")
 		}
-		return effectivePolicy(a), nil
+		return resolvedAgentPolicy(m.state, a)
 	}))
 }
 
@@ -167,5 +290,11 @@ func (m *Managed) accessCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].Name < hosts[j].Name })
-	authJSON(w, 200, map[string]any{"functions": FunctionGroups(), "hosts": hosts})
+	authJSON(w, 200, map[string]any{
+		"catalog_version":    2,
+		"approval_supported": false,
+		"functions":          FunctionGroups(),
+		"operations":         authorization.Catalog(),
+		"hosts":              hosts,
+	})
 }

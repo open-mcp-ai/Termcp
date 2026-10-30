@@ -49,34 +49,28 @@ type EncryptionResult struct {
 // SetNewProfileEncryption enables or disables encryption for newly created
 // persistent profiles. Enabling creates a keyring on first use.
 func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.Provider) error {
-	s.mu.Lock()
-	repo := s.encrypted
-	if enabled && repo == nil {
-		var err error
-		repo, err = configstore.OpenRepository(s.dataDir, providers...)
-		if errors.Is(err, configstore.ErrNotInitialized) {
-			repo, err = configstore.InitializeRepository(s.dataDir, providers...)
-		}
-		if err != nil {
-			s.mu.Unlock()
-			return err
-		}
-	}
-	if repo != nil {
-		if err := repo.SetEncryptNew(enabled); err != nil {
-			if repo != s.encrypted {
-				_ = repo.Close()
+	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
+		original := repo
+		if enabled && repo == nil {
+			var err error
+			repo, err = configstore.OpenRepository(s.dataDir, providers...)
+			if errors.Is(err, configstore.ErrNotInitialized) {
+				repo, err = configstore.InitializeRepository(s.dataDir, providers...)
 			}
-			s.mu.Unlock()
-			return err
+			if err != nil {
+				return original, false, err
+			}
 		}
-	}
-	s.encrypted = repo
-	s.encryptNew = enabled && repo != nil
-	s.invalidateIdentitiesLocked()
-	s.mu.Unlock()
-	s.notifyChange()
-	return nil
+		if repo != nil {
+			if err := repo.SetEncryptNew(enabled); err != nil {
+				if repo != original {
+					_ = repo.Close()
+				}
+				return original, false, err
+			}
+		}
+		return repo, true, nil
+	})
 }
 
 // EncryptionStatus reports which hosts currently use plaintext or encrypted
@@ -119,81 +113,59 @@ func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
 
 // InitializeEncryption derives Main Key from the user's password on first use.
 func (s *Store) InitializeEncryption(password, confirmation string, providers ...configstore.Provider) error {
-	s.mu.Lock()
-	if s.encrypted != nil {
-		s.mu.Unlock()
-		return configstore.ErrAlreadyInitialized
-	}
-	repo, err := configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
-	if err == nil {
-		err = repo.SetEncryptNew(true)
-		if err != nil {
-			_ = repo.Close()
+	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
+		if repo != nil {
+			return repo, false, configstore.ErrAlreadyInitialized
 		}
-	}
-	if err == nil {
-		s.encrypted, s.encryptNew = repo, true
-		s.invalidateIdentitiesLocked()
-	}
-	s.mu.Unlock()
-	if err == nil {
-		s.notifyChange()
-	}
-	return err
+		candidate, err := configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
+		if err != nil {
+			return nil, false, err
+		}
+		if err = candidate.SetEncryptNew(true); err != nil {
+			_ = candidate.Close()
+			return nil, false, err
+		}
+		return candidate, true, nil
+	})
 }
 
 func (s *Store) UnlockEncryption(password string, rebind bool, providers ...configstore.Provider) error {
-	s.mu.Lock()
-	if s.encrypted == nil {
-		s.mu.Unlock()
-		return configstore.ErrNotInitialized
-	}
-	var err error
-	if rebind && !s.encrypted.Status().Locked {
-		// Unified Admin login has already unlocked the shared vault. Rebinding
-		// still requires the password, but no second unlock is necessary.
-		err = s.encrypted.VerifyPassword(password)
-	} else {
-		err = s.encrypted.UnlockPassword(password)
-	}
-	if err == nil && rebind {
-		err = s.encrypted.RebindPasswordProvider(providers...)
-	}
-	if !s.encrypted.Status().Locked {
-		s.encryptNew = s.encrypted.EncryptNew()
-	}
-	s.invalidateIdentitiesLocked()
-	s.mu.Unlock()
-	s.notifyChange()
-	return err
+	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
+		if repo == nil {
+			return nil, false, configstore.ErrNotInitialized
+		}
+		var err error
+		if rebind && !repo.Status().Locked {
+			err = repo.VerifyPassword(password)
+		} else {
+			err = repo.UnlockPassword(password)
+		}
+		if err == nil && rebind {
+			err = repo.RebindPasswordProvider(providers...)
+		}
+		return repo, true, err
+	})
 }
 
 func (s *Store) ChangeEncryptionPassword(current, password, confirmation string, providers ...configstore.Provider) error {
-	s.mu.Lock()
-	if s.encrypted == nil {
-		s.mu.Unlock()
-		return configstore.ErrNotInitialized
-	}
-	err := s.encrypted.ChangePassword(current, password, confirmation, providers...)
-	s.invalidateIdentitiesLocked()
-	s.mu.Unlock()
-	s.notifyChange()
-	return err
+	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
+		if repo == nil {
+			return nil, false, configstore.ErrNotInitialized
+		}
+		err := repo.ChangePassword(current, password, confirmation, providers...)
+		return repo, true, err
+	})
 }
 
-// RotateMainKey preserves the compatibility rotation used by old
-// provider-only stores. Password-derived stores must use ChangeEncryptionPassword.
+// RotateMainKey retains the provider-only compatibility operation.
 func (s *Store) RotateMainKey(providers ...configstore.Provider) error {
-	s.mu.Lock()
-	if s.encrypted == nil {
-		s.mu.Unlock()
-		return configstore.ErrNotInitialized
-	}
-	err := s.encrypted.RotateMainKey(providers...)
-	s.mu.Unlock()
-	// A failed publication can still leave a persisted, resumable rotation.
-	s.notifyChange()
-	return err
+	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
+		if repo == nil {
+			return nil, false, configstore.ErrNotInitialized
+		}
+		err := repo.RotateMainKey(providers...)
+		return repo, true, err
+	})
 }
 
 // StorageMode returns where one profile is currently persisted.
