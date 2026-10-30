@@ -52,11 +52,20 @@ func (s *Server) filterAgentSessions(ctx context.Context, in []api.Session) []ap
 		return in
 	}
 	out := make([]api.Session, 0, len(in))
-	if err != nil || !p.Allows("session_read") {
+	allowed := p.Allows("session_read")
+	if p.IsV2() {
+		// This is a host/namespace projection shared by session and child lists;
+		// their entrance checks decide which listing was requested.
+		allowed = p.AllowsOperation("session.list") || p.AllowsOperation("shell.list")
+	}
+	if err != nil || !allowed {
 		return out
 	}
 	for _, v := range in {
 		if ns.Reachable(v.Namespace, callerNamespace(ctx)) && p.AllowsHost(v.SSHConfigIdentity) {
+			if p.IsV2() && !p.AllowsOperation("shell.list") {
+				v.Shells = nil
+			}
 			out = append(out, v)
 		}
 	}
@@ -66,19 +75,28 @@ func (s *Server) filterAgentSessions(ctx context.Context, in []api.Session) []ap
 func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
+		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
+			return toolError(CodeForbidden, "%s", "Agent policy is unavailable")
+		}
 		return nil
 	}
-	deny := func(e error) *mcpgo.CallToolResult { return toolError(CodeForbidden, "%s", e.Error()) }
 	if err != nil {
-		return deny(err)
+		return toolError(CodeForbidden, "%s", err.Error())
 	}
+	if p.IsV2() {
+		return s.agentToolCheckV2(ctx, p, tool, request)
+	}
+	return s.agentToolCheckV1(ctx, p, tool, request)
+}
 
+func (s *Server) agentToolCheckV1(ctx context.Context, p auth.AgentPolicy, tool string, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+	deny := func(e error) *mcpgo.CallToolResult { return toolError(CodeForbidden, "%s", e.Error()) }
 	args := request.GetArguments()
 	requirement := capability.AgentRequirement(tool, args)
 	if requirement.ParsedDirectives {
 		return nil
 	}
-	if err = agentFunction(p, requirement.Function); err != nil {
+	if err := agentFunction(p, requirement.Function); err != nil {
 		return deny(err)
 	}
 	if key := requirement.ProfileArgument; key != "" && !s.agentHostAllowed(p, getString(args, key, "")) {
@@ -104,9 +122,9 @@ func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.
 				case "forward_id":
 					sess = guard.sessionForForwardID(id)
 				case "shell_id":
-					sess = guard.sessionForShellID(id)
+					sess = guard.lookupShellID(id)
 				default:
-					sess = guard.sessionForSessionID(id)
+					sess = guard.lookupSessionID(id)
 				}
 				if sess == nil || !s.agentSessionAllowed(ctx, p, sess) {
 					return deny(fmt.Errorf("session is outside this Agent's host scope"))
@@ -126,13 +144,23 @@ func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.
 func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Statement) *envelope.Slot {
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
+		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
+			return agentDeniedSlot(stmt, fmt.Errorf("Agent policy is unavailable"))
+		}
 		return nil
 	}
+	if err != nil {
+		return &envelope.Slot{Code: 403, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeForbidden}, Body: err.Error()}
+	}
+	if p.IsV2() {
+		return s.agentStatementCheckV2(ctx, p, stmt)
+	}
+	return s.agentStatementCheckV1(ctx, p, stmt)
+}
+
+func (s *Server) agentStatementCheckV1(ctx context.Context, p auth.AgentPolicy, stmt directive.Statement) *envelope.Slot {
 	deny := func(e error) *envelope.Slot {
 		return &envelope.Slot{Code: 403, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeForbidden}, Body: e.Error()}
-	}
-	if err != nil {
-		return deny(err)
 	}
 	if stmt.Op == "help" {
 		return nil
@@ -181,7 +209,7 @@ func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Stateme
 			group = "notify"
 		}
 	}
-	if err = agentFunction(p, group); err != nil {
+	if err := agentFunction(p, group); err != nil {
 		return deny(err)
 	}
 	if stmt.Pipe != nil {
@@ -221,7 +249,7 @@ func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Stateme
 				h := jrpcChannels[id]
 				jrpcChannelsMu.Unlock()
 				if h != nil {
-					sess = (toolGuard{server: s}).sessionForSessionID(h.sessionID)
+					sess = (toolGuard{server: s}).lookupSessionID(h.sessionID)
 				}
 			}
 			if sess == nil {
@@ -249,7 +277,7 @@ func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Stateme
 }
 
 func (s *Server) agentTaskAllowed(ctx context.Context, p auth.AgentPolicy, target string) bool {
-	sess := (toolGuard{server: s}).sessionForSessionID(target)
+	sess := (toolGuard{server: s}).lookupSessionID(target)
 	if sess == nil {
 		sess, _ = s.resolveTunnelSession(target)
 	}

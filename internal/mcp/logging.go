@@ -35,6 +35,9 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 				}
 				return bad, nil
 			}
+			// Lease renewal is an execution effect. Admission and plan preflight
+			// only look resources up; denied or previewed operations cannot renew.
+			s.touchToolTargets(request)
 		}
 
 		start := time.Now()

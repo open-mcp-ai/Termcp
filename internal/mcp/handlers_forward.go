@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/internal/auth"
 )
 
 func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -115,9 +116,12 @@ func (s *Server) handleListForwards(ctx context.Context, request mcpgo.CallToolR
 		return jsonResult(map[string]any{"forwards": []any{}}), nil
 	}
 	fws := s.forwardMgr.List()
-	arr := make([]any, len(fws))
-	for i, fw := range fws {
-		arr[i] = fw
+	arr := make([]any, 0, len(fws))
+	for _, fw := range fws {
+		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (err != nil || !s.agentSessionAllowed(ctx, p, (toolGuard{server: s}).lookupSessionID(fw.SessionID))) {
+			continue
+		}
+		arr = append(arr, fw)
 	}
 	return jsonResult(map[string]any{"forwards": arr}), nil
 }

@@ -48,7 +48,7 @@ func (s *Server) directiveLsTask(ctx context.Context, stmt directive.Statement) 
 		filtered := list[:0]
 		if err == nil {
 			for _, v := range list {
-				if s.agentTaskAllowed(ctx, p, v.SessionID) {
+				if s.agentTaskViewAllowed(ctx, p, v) {
 					filtered = append(filtered, v)
 				}
 			}

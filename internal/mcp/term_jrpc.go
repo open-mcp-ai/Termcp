@@ -138,6 +138,11 @@ type jrpcHandle struct {
 // dialling from this process, is the thing that would be a new capability, in the sense
 // of one the target host's own network never granted.
 func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, sessionID, rawURL string) envelope.Slot {
+	if rawURL != "" {
+		// Path is response metadata too; preserve the original URL only in the
+		// execution arguments, not in the expanded command trace returned here.
+		stmt.Path = strings.ReplaceAll(stmt.Path, rawURL, peerEndpointLabel(rawURL))
+	}
 	if sessionID == "" {
 		return badRequest(stmt, op+" open needs a session first: "+op+" open <session> <url>\n"+
 			"A gateway URL names a port on the network of the machine the session points at, "+
@@ -150,7 +155,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 	dial, bad := s.dialerForSession(sessionID)
 	if bad != nil {
 		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeSessionNotRunning},
-			Body: fmt.Sprintf("session %q is not running, so there is no tunnel to reach %s through", sessionID, rawURL)}
+			Body: fmt.Sprintf("session %q is not running, so there is no tunnel to reach %s through", sessionID, peerEndpointLabel(rawURL))}
 	}
 	// THE SESSION IS RESOLVED TO ITS ID. `open internal cdp …` names a host, and a host
 	// resolves to that host's one running link; everything downstream (the protocol
@@ -180,7 +185,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 		resolved, err := devtoolsSocket(ctx, rawURL, dial)
 		if err != nil {
 			return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed},
-				Body: "discovery: cannot find DevTools websocket endpoint at " + rawURL + ": " + err.Error()}
+				Body: "discovery: cannot find DevTools websocket endpoint at " + peerEndpointLabel(rawURL) + ": " + peerFailureText(err, rawURL)}
 		}
 		// THE HTTP ENDPOINT IS KEPT, not just the socket it advertises. The live
 		// protocol document lives at /json/protocol on that endpoint, and it is the
@@ -199,7 +204,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 	ch, err := jrpc.Open(ctx, rawURL, dial)
 	if err != nil {
 		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed},
-			Body: "transport: " + err.Error()}
+			Body: "transport: " + peerFailureText(err, rawURL)}
 	}
 	// EVERY OPEN GETS ITS OWN NUMBER. Two browsers on one machine used to be
 	// impossible because the address was `<session> <kind>` and a second open had to
@@ -225,7 +230,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 	// This is also the answer to "is the self-describing layer working?" — a caller
 	// that has never read the spec should be able to make the next call correctly from
 	// this reply alone.
-	body := fmt.Sprintf("%s %s (%s, no shell channel consumed)\n", handle, rawURL, ch.Transport())
+	body := fmt.Sprintf("%s %s (%s, no shell channel consumed)\n", handle, peerEndpointLabel(rawURL), ch.Transport())
 	if op == "cdp" {
 		// A BROWSER'S NEXT STEP IS NOT A FRAME. Everything useful needs a
 		// sessionId, and a caller that does not know that writes Page.navigate at the
@@ -263,7 +268,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 				return envelope.Slot{Code: 502, Headers: map[string]string{
 					"Path": stmt.Path, "Error-Code": CodeConnectionFailed,
 				}, Body: "the MCP handshake failed" + discover + ", so this URL is not an MCP endpoint.\n" +
-					"A 404 usually means the path is wrong (an MCP server answers POST " + rawURL + ", not GET);\n" +
+					"A 404 usually means the path is wrong (an MCP server answers POST " + peerEndpointLabel(rawURL) + ", not GET);\n" +
 					"a version mismatch means the peer does not speak this protocol. Nothing was opened."}
 			}
 			body += "\nprotocol: the MCP handshake failed" + discover + ", so tool calls cannot work until\n" +
@@ -307,15 +312,15 @@ func (s *Server) jrpcDiscoverMCP(ctx context.Context, h *jrpcHandle, handle stri
 		// peer that answers with the wrong protocol version and false for a port with
 		// nothing on it — and the second is the common case. Swallowing err here forced
 		// that sentence to be a guess.
-		return " (" + err.Error() + ")", false, err
+		return " (" + peerFailureText(err, h.ch.URL(), h.httpBase) + ")", false, err
 	}
 	raw, err := h.ch.Call(ctx, map[string]any{"jsonrpc": "2.0", "method": "tools/list"})
 	if err != nil {
-		return "\ntools: the peer negotiated but refused tools/list (" + err.Error() + ")\n", true, nil
+		return "\ntools: the peer negotiated but refused tools/list (" + peerFailureText(err, h.ch.URL(), h.httpBase) + ")\n", true, nil
 	}
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return "\ntools: the peer's tools/list reply was not JSON (" + err.Error() + ")\n", true, nil
+		return "\ntools: the peer's tools/list reply was not JSON (" + peerFailureText(err, h.ch.URL(), h.httpBase) + ")\n", true, nil
 	}
 	result, _ := doc["result"].(map[string]any)
 	items, _ := result["tools"].([]any)
@@ -504,22 +509,29 @@ func (s *Server) jrpcChannel(ctx context.Context, stmt directive.Statement, win 
 		if bad != nil {
 			return *bad
 		}
+		plan, planErr := frameOperationPlan(op, frame)
+		if planErr != nil {
+			return badRequest(stmt, planErr.Error())
+		}
+		if bad := s.checkAgentPeerEffect(ctx, stmt, plan); bad != nil {
+			return *bad
+		}
 		if sub == "send" {
 			if err := s.jrpcReady(ctx, h); err != nil {
-				return jrpcError(stmt, err)
+				return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 			}
 			if err := h.ch.Send(ctx, frame); err != nil {
-				return jrpcError(stmt, err)
+				return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 			}
 			return envelope.Slot{Code: 202, Headers: headers,
 				Body: "sent; read the answer with `" + op + " recv " + handle + "`"}
 		}
 		if err := s.jrpcReady(ctx, h); err != nil {
-			return jrpcError(stmt, err)
+			return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 		}
 		reply, err := h.ch.Call(ctx, frame)
 		if err != nil {
-			return jrpcError(stmt, err)
+			return jrpcError(stmt, err, h.ch.URL(), h.httpBase)
 		}
 		return s.frameReply(ctx, stmt, h, reply, win)
 	}
@@ -623,8 +635,8 @@ const frameSpelling = "A frame is passed bare or in single quotes — quoting he
 	"it does not escape: `call <peer> '{\"method\":\"tools/list\"}'`."
 
 // jrpcError renders a transport failure as a reply, never as a success shape.
-func jrpcError(stmt directive.Statement, err error) envelope.Slot {
+func jrpcError(stmt directive.Statement, err error, endpoints ...string) envelope.Slot {
 	return envelope.Slot{Code: 500,
 		Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed},
-		Body:    err.Error()}
+		Body:    peerFailureText(err, endpoints...)}
 }

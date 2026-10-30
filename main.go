@@ -509,6 +509,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	if verifier != nil {
 		mainSrv.Handler = auth.Middleware(verifier, mux)
 	} else if managed != nil {
+		managed.SetPageAssets(webui.Assets())
 		mainSrv.Handler = managed.Wrap(mux)
 	}
 

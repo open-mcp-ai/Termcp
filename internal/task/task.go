@@ -18,8 +18,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -62,17 +64,26 @@ const retainFinished = 10 * time.Minute
 
 // View is one task as a caller sees it: a plain value, safe to keep or encode.
 type View struct {
-	ID         string    `json:"id"`
-	Kind       Kind      `json:"kind"`
-	SessionID  string    `json:"session_id"`
-	Path       string    `json:"path"`
-	LocalPath  string    `json:"local_path"`
-	Status     Status    `json:"status"`
-	BytesDone  int64     `json:"bytes_done"`
-	BytesTotal int64     `json:"bytes_total"`
-	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	ID         string        `json:"id"`
+	Kind       Kind          `json:"kind"`
+	SessionID  string        `json:"session_id"`
+	Path       string        `json:"path"`
+	LocalPath  string        `json:"local_path"`
+	Status     Status        `json:"status"`
+	BytesDone  int64         `json:"bytes_done"`
+	BytesTotal int64         `json:"bytes_total"`
+	StartedAt  time.Time     `json:"started_at"`
+	EndedAt    time.Time     `json:"ended_at,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	Resources  []ResourceRef `json:"resources,omitempty"`
+}
+
+// ResourceRef binds a transfer end to its stable host and namespace when it is
+// created. Display paths and live session names are not authorization evidence.
+type ResourceRef struct {
+	HostID    string `json:"host_id"`
+	Namespace string `json:"namespace"`
+	Role      string `json:"role"`
 }
 
 // Percent is the completion percentage, or -1 when the total is unknown (a
@@ -116,11 +127,12 @@ type Task struct {
 	done  atomic.Int64
 	total atomic.Int64
 
-	mu       sync.Mutex
-	status   Status
-	err      error
-	endedAt  time.Time
-	finished chan struct{}
+	mu        sync.Mutex
+	status    Status
+	err       error
+	endedAt   time.Time
+	finished  chan struct{}
+	resources []ResourceRef
 }
 
 // ID is the receipt a caller keeps.
@@ -160,6 +172,7 @@ func (t *Task) view() View {
 		Path: t.path, LocalPath: t.localPath,
 		Status: t.status, BytesDone: t.done.Load(), BytesTotal: t.total.Load(),
 		StartedAt: t.startedAt, EndedAt: t.endedAt,
+		Resources: slices.Clone(t.resources),
 	}
 	if t.err != nil {
 		v.Error = t.err.Error()
@@ -194,14 +207,15 @@ func randomID() string {
 // cancel is stored so the task can be stopped from another turn; a transfer that
 // cannot be cancelled is a transfer that runs to completion while its caller is
 // told it was cancelled.
-func (m *Manager) Start(kind Kind, sessionID, path, localPath string, cancel context.CancelFunc) *Task {
+func (m *Manager) Start(kind Kind, sessionID, path, localPath string, cancel context.CancelFunc, resources ...ResourceRef) *Task {
 	m.reap()
 	for {
 		id := randomID()
 		t := &Task{
 			id: id, kind: kind, sessionID: sessionID, path: path, localPath: localPath,
 			startedAt: time.Now(), status: Running, cancel: cancel,
-			finished: make(chan struct{}),
+			finished:  make(chan struct{}),
+			resources: slices.Clone(resources),
 		}
 		if _, loaded := m.tasks.LoadOrStore(id, t); !loaded {
 			return t
@@ -321,6 +335,10 @@ func (m *Manager) Await(ctx context.Context, id string, timeout time.Duration) (
 func (m *Manager) Finish(id string, err error) {
 	t, gerr := m.task(id)
 	if gerr != nil {
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		t.finish(Cancelled, nil)
 		return
 	}
 	if err != nil {

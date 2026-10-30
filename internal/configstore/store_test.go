@@ -16,6 +16,7 @@ func TestRepositoryRoundTripRenameAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = repo.Close() })
 
 	secret := []byte("host = \"private.example\"\npassword = \"synthetic-secret-value\"\n")
 	if err := repo.Save("prod", secret); err != nil {
@@ -76,6 +77,7 @@ func TestEncryptionPreferenceIsAuthenticatedCatalogState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = repo.Close() })
 	if repo.EncryptNew() {
 		t.Fatal("new repository defaulted to encrypted profiles")
 	}
@@ -95,6 +97,7 @@ func TestEncryptionPreferenceIsAuthenticatedCatalogState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = reopened.Close() })
 	if !reopened.EncryptNew() {
 		t.Fatal("unauthenticated config.settings overrode the catalog")
 	}
@@ -172,6 +175,7 @@ func TestRepositoryMigratesLegacyObjectsLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = repo.Close() })
 	if err := repo.Save("kali", []byte("password = \"synthetic\"\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +217,7 @@ func TestRepositoryDetectsTamperingAndWrongProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = repo.Close() })
 	if err := repo.Save("alpha", []byte("password = \"synthetic\"\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +274,7 @@ func assertTreeOmits(t *testing.T, root, needle string) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || path == filepath.Join(root, ".config.lock") {
 			return nil
 		}
 		data, err := os.ReadFile(path)

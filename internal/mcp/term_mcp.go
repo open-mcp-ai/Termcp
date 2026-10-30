@@ -15,6 +15,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 )
@@ -61,6 +63,32 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			frame = payload
 		}
+		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (p.IsV2() || err != nil) {
+			if err != nil {
+				return *agentDeniedSlot(stmt, err)
+			}
+			var value any
+			if err := json.Unmarshal([]byte(frame), &value); err != nil {
+				return badRequest(stmt, err.Error())
+			}
+			plan, err := frameOperationPlan("mcp", value)
+			if err != nil {
+				return badRequest(stmt, err.Error())
+			}
+			plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "shell.input"}, authorization.Requirement{Operation: "shell.key", Evidence: authorization.Evidence{Keys: []string{"enter"}, Repeat: 1}})
+			if sub != "send" && !boolFlag(stmt, "send") {
+				plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "shell.output"})
+			}
+			if bad := s.checkAgentPeerEffect(ctx, stmt, plan); bad != nil {
+				return *bad
+			}
+			for _, tool := range []string{"shell_input", "shell_key"} {
+				args := argsOf("shell_id", handle, "key", "enter")
+				if bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); p.IsV2() && bad != nil {
+					return *agentDeniedSlot(stmt, fmt.Errorf("%s", toolResultText(bad)))
+				}
+			}
+		}
 		// One frame, one line: the peer reads line-delimited JSON-RPC.
 		if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame)); fail != nil {
 			return s.slotFromFailure(ctx, stmt, fail)
@@ -92,6 +120,9 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 		// A notification has no answer to wait for, so waiting would be a lie.
 		return envelope.Slot{Code: 202, Headers: headers, Body: "sent (a notification has no reply); read frames with `read " + handle + " --frame`"}
 	case "recv":
+		if bad := s.checkAgentPeerEffect(ctx, stmt, authorization.Plan{Requirements: []authorization.Requirement{{Operation: "mcp.read"}, {Operation: "shell.output"}}}); bad != nil {
+			return *bad
+		}
 		return s.mcpRecvFrame(ctx, stmt, handle, win)
 	case "close":
 		// The cursor has to go with the handle: handles are minted monotonically

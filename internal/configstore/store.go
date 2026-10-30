@@ -92,6 +92,8 @@ type Repository struct {
 	password        *storedPasswordDerivation
 	automaticUnlock bool
 
+	passwordMu        sync.Mutex
+	derivePassword    passwordDeriver // set before serving; nil uses Argon2id
 	mu                sync.Mutex
 	catalogGeneration ID
 	authGeneration    ID

@@ -74,7 +74,13 @@ func deriveMain(password []byte, p *storedPasswordDerivation) (MainKey, error) {
 	return main, nil
 }
 
+type passwordDeriver func([]byte, *storedPasswordDerivation) (MainKey, error)
+
 func newPasswordKeyring(store ID, password []byte) (*Keyring, error) {
+	return newPasswordKeyringUsing(store, password, deriveMain)
+}
+
+func newPasswordKeyringUsing(store ID, password []byte, derive passwordDeriver) (*Keyring, error) {
 	keyID, err := NewID()
 	if err != nil {
 		return nil, err
@@ -90,7 +96,7 @@ func newPasswordKeyring(store ID, password []byte) (*Keyring, error) {
 	if _, err := io.ReadFull(rand.Reader, p.Nonce); err != nil {
 		return nil, err
 	}
-	main, err := deriveMain(password, p)
+	main, err := derive(password, p)
 	if err != nil {
 		return nil, err
 	}
@@ -129,10 +135,14 @@ func verifyDerivedKeyring(k *Keyring, p *storedPasswordDerivation) error {
 }
 
 func unlockPasswordKeyring(stored storedKeyring, password []byte) (*Keyring, error) {
+	return unlockPasswordKeyringUsing(stored, password, deriveMain)
+}
+
+func unlockPasswordKeyringUsing(stored storedKeyring, password []byte, derive passwordDeriver) (*Keyring, error) {
 	if stored.Password == nil {
 		return nil, ErrPasswordNotConfigured
 	}
-	main, err := deriveMain(password, stored.Password)
+	main, err := derive(password, stored.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +310,8 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 // UnlockPassword derives Main Key directly from the password. It publishes no
 // key material and remains usable without any operating-system or ENV KEK.
 func (r *Repository) UnlockPassword(password string) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -312,30 +324,40 @@ func (r *Repository) UnlockPassword(password string) error {
 	if err != nil {
 		return err
 	}
+	defer clear(data)
 	stored, err := parseStoredKeyring(data)
 	if err != nil {
 		return err
 	}
 	secret := []byte(password)
 	defer clear(secret)
-	k, err := unlockPasswordKeyring(stored, secret)
+	derive := r.passwordDeriver()
+	var candidate *Keyring
+	err = r.passwordWorkLocked(data, func() error { var e error; candidate, e = unlockPasswordKeyringUsing(stored, secret, derive); return e })
 	if err != nil {
+		if candidate != nil {
+			candidate.Destroy()
+		}
 		return err
 	}
-	probe := &Repository{dataDir: r.dataDir, keyring: k}
-	if err := probe.loadCatalog(); err != nil {
-		k.Destroy()
+	if r.unlockErr == nil {
+		candidate.Destroy()
+		return ErrNotLocked
+	}
+	probe := &Repository{dataDir: r.dataDir, keyring: candidate}
+	if err = probe.loadCatalog(); err != nil {
+		candidate.Destroy()
 		return err
 	}
-	if err := probe.loadAuthGeneration(); err != nil {
-		k.Destroy()
+	if err = probe.loadAuthGeneration(); err != nil {
+		candidate.Destroy()
 		return err
 	}
-	r.keyring, r.unlockErr = k, nil
+	r.keyring, r.unlockErr = candidate, nil
 	r.refs, r.encryptNew, r.revision, r.catalogGeneration = probe.refs, probe.encryptNew, probe.revision, probe.catalogGeneration
 	r.authGeneration = probe.authGeneration
 	r.password = stored.Password
-	r.automaticUnlock = false // this operation unlocked through the password
+	r.automaticUnlock = false
 	return nil
 }
 
@@ -387,6 +409,8 @@ func (r *Repository) ChangePassword(current, password, confirmation string, prov
 }
 
 func (r *Repository) changePassword(current, password, confirmation string, providers []Provider, publish func(string, []byte) error) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
@@ -397,6 +421,7 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 	if err != nil {
 		return err
 	}
+	defer clear(data)
 	stored, err := parseStoredKeyring(data)
 	if err != nil {
 		return err
@@ -406,9 +431,18 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 	}
 	if stored.Password != nil {
 		secret := []byte(current)
-		checked, err := unlockPasswordKeyring(stored, secret)
+		derive := r.passwordDeriver()
+		var checked *Keyring
+		err := r.passwordWorkLocked(data, func() error { var e error; checked, e = unlockPasswordKeyringUsing(stored, secret, derive); return e })
 		clear(secret)
 		if err != nil {
+			if checked != nil {
+				checked.Destroy()
+			}
+			return err
+		}
+		if err = r.ready(); err != nil {
+			checked.Destroy()
 			return err
 		}
 		same := sameKeyring(checked, r.keyring)
@@ -431,23 +465,50 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 			return err
 		}
 	}
-	protection := availablePasswordProtection(stored, r.keyring, providers)
-	defer protection.destroy()
+	snapshot, err := r.passwordSnapshotLocked()
+	if err != nil {
+		return err
+	}
+	defer snapshot.Destroy()
+	var protection *keyringProtection
+	err = r.passwordWorkLocked(data, func() error { protection = availablePasswordProtection(stored, snapshot, providers); return nil })
+	if protection != nil {
+		defer protection.destroy()
+	}
+	if err != nil {
+		return err
+	}
+	if err = r.ready(); err != nil {
+		return err
+	}
 	if err := syncDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("%w: sync keyring directory", ErrDurability)
 	}
 	if !pending {
+		secret := []byte(password)
+		store := r.keyring.StoreID()
+		derive := r.passwordDeriver()
+		var next *Keyring
+		err := r.passwordWorkLocked(data, func() error { var e error; next, e = newPasswordKeyringUsing(store, secret, derive); return e })
+		clear(secret)
+		if err != nil {
+			if next != nil {
+				next.Destroy()
+			}
+			return err
+		}
+		if err = r.ready(); err != nil {
+			next.Destroy()
+			return err
+		}
+		// Writes allowed during derivation must be included in the rotation.
 		for _, target := range r.rotationTargets() {
 			if _, err := r.verifyRotationTarget(target); err != nil {
+				next.Destroy()
 				return err
 			}
 		}
-		secret := []byte(password)
-		next, err := newPasswordKeyring(r.keyring.StoreID(), secret)
-		clear(secret)
-		if err != nil {
-			return err
-		}
+
 		oldID, _ := r.keyring.rotationStatus()
 		oldMain := r.keyring.mainKeys[oldID]
 		next.mainKeys[oldID] = oldMain
@@ -485,6 +546,8 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 }
 
 func (r *Repository) RebindPasswordProvider(providers ...Provider) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
@@ -493,8 +556,23 @@ func (r *Repository) RebindPasswordProvider(providers ...Provider) error {
 	if r.keyring.password == nil {
 		return ErrPasswordNotConfigured
 	}
-	data, err := r.keyring.Marshal(providers...)
+	expected, err := readBoundedFile(filepath.Join(r.dataDir, "keys", "config.keys"), maxKeyringFile)
 	if err != nil {
+		return err
+	}
+	defer clear(expected)
+	snapshot, err := r.passwordSnapshotLocked()
+	if err != nil {
+		return err
+	}
+	defer snapshot.Destroy()
+	var data []byte
+	err = r.passwordWorkLocked(expected, func() error { var e error; data, e = snapshot.Marshal(providers...); return e })
+	defer clear(data)
+	if err != nil {
+		return err
+	}
+	if err = r.ready(); err != nil {
 		return err
 	}
 	stored, err := parseStoredKeyring(data)
