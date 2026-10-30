@@ -690,7 +690,7 @@ func (s *Server) directiveForward(ctx context.Context, stmt directive.Statement,
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	doc, _ := toolResultMap(res)
 	return generatedSlot(stmt, win, compactDocument(doc))
@@ -812,7 +812,7 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	doc, ok := toolResultMap(res)
 	if !ok {
@@ -991,7 +991,7 @@ func (s *Server) directiveHost(ctx context.Context, stmt directive.Statement, wi
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	if action == "list" {
 		// The profile listing is a set of names, one per line: copy-pasteable into
@@ -1114,7 +1114,7 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	if action == "list" {
 		// The boot manifest: one extension per line, with its state and handle, so
