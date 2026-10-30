@@ -166,6 +166,28 @@ func (h *Handler) handleApprovalList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": out, "count": len(out)})
 }
 
+// handleApprovalGet returns one request, including its execution result when
+// replay has started. It is the recovery path after a decision response is
+// lost: reading does not repeat the decision or its side effects.
+func (h *Handler) handleApprovalGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	q, _ := h.queueForApproval(id)
+	if q == nil {
+		http.Error(w, "no approval request "+id+" found", http.StatusNotFound)
+		return
+	}
+	req, err := q.Get(id)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, approval.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"request": req})
+}
+
 // handleApprovalDecision approves or rejects one request.
 //
 //	POST /api/approvals/{id}/approve
@@ -205,12 +227,38 @@ func (h *Handler) handleApprovalDecision(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// An approved request is executed here, by the approver's action. The write
-	// happens after the state flip so a failed write cannot leave the queue
-	// believing an unexecuted command ran.
+	// An approved request is replayed here, by the approver's action. Approval
+	// state and execution state are recorded separately: a permitted action can
+	// still fail while it is being applied.
 	if approve && req.State == approval.Approved {
-		if err := h.executeApproved(sess, req); err != nil {
-			http.Error(w, "approved but execution failed: "+err.Error(), http.StatusConflict)
+		req, err = q.BeginExecution(id)
+		if err != nil {
+			http.Error(w, "cannot begin approved execution: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		execErr := h.executeApproved(sess, req)
+		executionState := approval.ExecutionSucceeded
+		if req.Kind == "" || req.Kind == approval.KindShellInput {
+			executionState = approval.ExecutionSubmitted
+		}
+		detail := ""
+		status := http.StatusOK
+		if execErr != nil {
+			executionState = approval.ExecutionFailed
+			detail = execErr.Error()
+			status = http.StatusConflict
+		}
+		req, err = q.FinishExecution(id, executionState, detail)
+		if err != nil {
+			http.Error(w, "cannot record approved execution: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if execErr != nil {
+			writeJSON(w, status, map[string]any{
+				"error":   "approved but execution failed",
+				"detail":  detail,
+				"request": req,
+			})
 			return
 		}
 	}
@@ -309,6 +357,20 @@ func (h *Handler) BroadcastApproval(sessionID string, req approval.Request) {
 	switch req.State {
 	case approval.Approved:
 		level, title = "success", "Approval granted"
+		if req.Execution != nil {
+			switch req.Execution.State {
+			case approval.ExecutionRunning:
+				level, title = "info", "Approval executing"
+			case approval.ExecutionSubmitted:
+				level, title = "success", "Approval input submitted"
+			case approval.ExecutionSucceeded:
+				level, title = "success", "Approval executed"
+			case approval.ExecutionFailed:
+				level, title = "error", "Approval execution failed"
+			case approval.ExecutionUnknown:
+				level, title = "warn", "Approval execution outcome unknown"
+			}
+		}
 	case approval.Rejected:
 		level, title = "warn", "Approval rejected"
 	case approval.Expired:

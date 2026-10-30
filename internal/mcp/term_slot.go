@@ -287,9 +287,36 @@ func (s *Server) addUsage(t *termReply, stmt directive.Statement, headers map[st
 	t.withUsage(stmt, headers)
 }
 
-// reviewPendingFrom extracts the review-pending message from a handler reply, or
-// nil when the call ran.
-func reviewPendingFrom(res *mcpgo.CallToolResult) *string {
+// reviewPendingView is a held reply as the TERM envelope needs it: the message
+// that becomes the body, plus the correlation fields that become headers. The
+// field set is reviewPendingFields, embedded rather than copied, so a new
+// correlation field cannot appear in the JSON body and be missing from the
+// headers.
+type reviewPendingView struct {
+	Message string
+	reviewPendingFields
+}
+
+func (v *reviewPendingView) slot(path string) envelope.Slot {
+	headers := map[string]string{"Path": path}
+	if v.ApprovalID != "" {
+		headers["Approval-ID"] = v.ApprovalID
+	}
+	if v.SessionID != "" {
+		headers["Session-ID"] = v.SessionID
+	}
+	if v.ExpiresAt > 0 {
+		headers["Expires-At"] = strconv.FormatInt(v.ExpiresAt, 10)
+	}
+	return envelope.Slot{Code: 202, Headers: headers, Body: v.Message}
+}
+
+// reviewPendingFrom extracts the review-pending message and correlation fields
+// from a handler reply, or nil when the call ran. The correlation fields are the
+// same ones the reply body carries; the outer TERM slot repeats them as headers
+// (Approval-ID, Session-ID, Expires-At) so a host can pair a held reply with
+// /api/approvals without parsing the body.
+func reviewPendingFrom(res *mcpgo.CallToolResult) *reviewPendingView {
 	doc, ok := toolResultMap(res)
 	if !ok {
 		return nil
@@ -297,8 +324,17 @@ func reviewPendingFrom(res *mcpgo.CallToolResult) *string {
 	if pending, _ := doc["review_pending"].(bool); !pending {
 		return nil
 	}
-	msg := getString(doc, "message", "Submitted for review.")
-	return &msg
+	view := &reviewPendingView{
+		Message: getString(doc, "message", "Submitted for review."),
+		reviewPendingFields: reviewPendingFields{
+			ApprovalID: getString(doc, "approval_id", ""),
+			SessionID:  getString(doc, "session_id", ""),
+		},
+	}
+	if raw, ok := doc["expires_at"].(float64); ok && raw > 0 {
+		view.ExpiresAt = int64(raw)
+	}
+	return view
 }
 
 // toolResultMap parses a handler reply's JSON body.
