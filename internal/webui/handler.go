@@ -194,6 +194,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{id}/approval", h.handleSessionApproval)
 	mux.HandleFunc("PATCH /api/sessions/{id}/approval", h.handleSessionApproval)
 	mux.HandleFunc("GET /api/approvals", h.handleApprovalList)
+	mux.HandleFunc("GET /api/approvals/{id}", h.handleApprovalGet)
 	mux.HandleFunc("POST /api/approvals/{id}/approve", h.handleApprovalDecision)
 	mux.HandleFunc("POST /api/approvals/{id}/reject", h.handleApprovalDecision)
 	mux.HandleFunc("GET /api/ui/ws", h.handleWebUIWS)

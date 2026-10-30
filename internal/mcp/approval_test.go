@@ -62,10 +62,12 @@ func TestHandleSendInputHoldsUnderReview(t *testing.T) {
 	if m["approved"] != false {
 		t.Errorf("approved = %v, want false", m["approved"])
 	}
-	// No id: the agent cannot decide the request, so an id would only invite a
-	// retry loop.
+	// Nothing is queued yet, so there is no approval to correlate.
 	if _, has := m["pending_id"]; has {
 		t.Error("a held input must not hand back a pending_id")
+	}
+	if _, has := m["approval_id"]; has {
+		t.Error("staged input must not hand back an approval_id before the ending key")
 	}
 	// The text is staged, not queued: nothing is reviewable until it ends.
 	q := s.sessMgr.Get(sessionIDOf(t, s, shellID)).ApprovalQueue()
@@ -95,7 +97,8 @@ func TestHandlePressKeyCommitsStagedText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := parseResult(t, keyResult); m["review_pending"] != true {
+	m := parseResult(t, keyResult)
+	if m["review_pending"] != true {
 		t.Errorf("review_pending = %v, want true", m["review_pending"])
 	}
 
@@ -111,6 +114,15 @@ func TestHandlePressKeyCommitsStagedText(t *testing.T) {
 	}
 	if len(reqs[0].Keys) != 1 || reqs[0].Keys[0] != "enter" {
 		t.Errorf("queued keys = %v, want [enter]", reqs[0].Keys)
+	}
+	if m["approval_id"] != reqs[0].ID {
+		t.Errorf("approval_id = %v, want %q", m["approval_id"], reqs[0].ID)
+	}
+	if m["session_id"] != sid {
+		t.Errorf("session_id = %v, want %q", m["session_id"], sid)
+	}
+	if m["expires_at"] != float64(reqs[0].ExpiresAt) {
+		t.Errorf("expires_at = %v, want %d", m["expires_at"], reqs[0].ExpiresAt)
 	}
 }
 
@@ -276,11 +288,10 @@ func sessionIDOf(t *testing.T, s *Server, shellID string) string {
 }
 
 // reviewPendingOperationResult is the reply a held file or forward operation
-// gets. It must carry no pending id for the same reason the command-line reply
-// does not: the agent cannot decide its own request, so an id only invites a
-// retry loop.
-func TestHeldOperationReturnsNoPendingID(t *testing.T) {
-	res := reviewPendingOperationResult("write 1.2 KB to /etc/hosts")
+// gets. The stable approval ID is correlation metadata, not a decision token.
+func TestHeldOperationReturnsApprovalCorrelation(t *testing.T) {
+	request := approval.Request{ID: "approval-1", SessionID: "session-1", ExpiresAt: 1793300000000}
+	res := reviewPendingOperationResult("write 1.2 KB to /etc/hosts", &request)
 	var body map[string]any
 	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
 		t.Fatal(err)
@@ -291,13 +302,44 @@ func TestHeldOperationReturnsNoPendingID(t *testing.T) {
 	if body["approved"] != false {
 		t.Errorf("approved = %v, want false", body["approved"])
 	}
-	if _, has := body["pending_id"]; has {
-		t.Error("a held operation must not hand back a pending_id")
+	if body["approval_id"] != request.ID || body["session_id"] != request.SessionID {
+		t.Errorf("approval correlation = %+v", body)
+	}
+	if body["expires_at"] != float64(request.ExpiresAt) {
+		t.Errorf("expires_at = %v, want %d", body["expires_at"], request.ExpiresAt)
 	}
 	// The message has to name what is waiting: the agent's next step depends on
 	// knowing the operation was understood, not silently dropped.
 	if msg, _ := body["message"].(string); !strings.Contains(msg, "/etc/hosts") {
 		t.Errorf("message does not describe the held operation: %q", msg)
+	}
+}
+
+func TestReviewPendingOuterSlotCarriesCorrelationHeaders(t *testing.T) {
+	res := jsonResult(map[string]any{
+		"ok":             true,
+		"approved":       false,
+		"review_pending": true,
+		"message":        "Submitted for review: write a file",
+		"approval_id":    "approval-1",
+		"session_id":     "session-1",
+		"expires_at":     int64(1790129916410),
+	})
+	held := reviewPendingFrom(res)
+	if held == nil {
+		t.Fatal("reviewPendingFrom() = nil")
+	}
+	slot := held.slot("write session-1 file /tmp/x --data hi")
+	if slot.Code != 202 {
+		t.Fatalf("slot code = %d, want 202", slot.Code)
+	}
+	if slot.Headers["Approval-ID"] != "approval-1" ||
+		slot.Headers["Session-ID"] != "session-1" ||
+		slot.Headers["Expires-At"] != "1790129916410" {
+		t.Fatalf("slot headers = %+v", slot.Headers)
+	}
+	if slot.Body != "Submitted for review: write a file" {
+		t.Fatalf("slot body = %q", slot.Body)
 	}
 }
 
@@ -430,6 +472,12 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 		t.Fatalf("queued %d requests, want 1", len(pend))
 	}
 	req := pend[0]
+	if body["approval_id"] != req.ID || body["session_id"] != req.SessionID {
+		t.Errorf("approval correlation = %+v, want id %q session %q", body, req.ID, req.SessionID)
+	}
+	if body["expires_at"] != float64(req.ExpiresAt) {
+		t.Errorf("expires_at = %v, want %d", body["expires_at"], req.ExpiresAt)
+	}
 	if req.Kind != approval.KindFileWrite {
 		t.Errorf("kind = %q, want %q", req.Kind, approval.KindFileWrite)
 	}
@@ -471,6 +519,31 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 
 // A rejection must leave the host untouched. A gate whose "no" still performed
 // the operation would be worse than no gate at all.
+func TestTERMOuterReviewPendingCarriesCorrelation(t *testing.T) {
+	s := newTestServer(t)
+	sessionID, _ := startGatedSession(t, s, 1, time.Minute)
+	target := filepath.Join(t.TempDir(), "termcp-term-review-correlation.txt")
+	text := termText(t, s, map[string]any{
+		"cmd": "write " + sessionID + " file " + target + " --data hi",
+	})
+	if !strings.HasPrefix(text, "TERM/1 202 Accepted") {
+		t.Fatalf("term review reply = %q", text)
+	}
+	approvalID, ok := headerValue(t, text, "Approval-ID")
+	if !ok || approvalID == "" {
+		t.Fatalf("Approval-ID missing from term reply:\n%s", text)
+	}
+	if session, ok := headerValue(t, text, "Session-ID"); !ok || session != sessionID {
+		t.Fatalf("Session-ID = %q, want %q:\n%s", session, sessionID, text)
+	}
+	if _, ok := headerValue(t, text, "Expires-At"); !ok {
+		t.Fatalf("Expires-At missing from term reply:\n%s", text)
+	}
+	if _, err := s.sessMgr.Get(sessionID).ApprovalQueue().Get(approvalID); err != nil {
+		t.Fatalf("Approval-ID %q is not in the queue: %v", approvalID, err)
+	}
+}
+
 func TestFileWriteIsNotExecutedOnRejection(t *testing.T) {
 	s := newTestServer(t)
 	sessionID, _ := startGatedSession(t, s, 1, time.Minute)

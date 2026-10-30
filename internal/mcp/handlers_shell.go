@@ -9,6 +9,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/directive"
@@ -235,7 +236,7 @@ func (s *Server) writeShellInput(ctx context.Context, shell *session.ChildShell,
 		// canonical review shape rather than the offset receipt: a model branches
 		// on approved/review_pending, and two shapes for one state read as two
 		// states.
-		return reviewFields(false), nil
+		return reviewFields(false, nil), nil
 	}
 
 	// An agent's keystrokes are tagged as AI input, so a transcript can say who
@@ -289,10 +290,11 @@ func (s *Server) pressShellKey(ctx context.Context, shell *session.ChildShell, k
 		// one complete command line. With nothing staged the key alone is the unit:
 		// ctrl+c interrupts a running process, and a bare enter runs an empty line,
 		// either of which a reviewer must still see.
-		if _, err := shell.CommitStagedForApproval(callerSource(ctx), key, repeat); err != nil {
+		requestID, err := shell.CommitStagedForApproval(callerSource(ctx), key, repeat)
+		if err != nil {
 			return nil, toolError(inputErrCode(err), "%s", err.Error())
 		}
-		return reviewFields(true), nil
+		return reviewFields(true, approvalCorrelation(shell.ApprovalQueue(), requestID, shell.ParentSessionID())), nil
 	}
 
 	if err := shell.PressKeyFrom(key, repeat, callerInputSource(ctx)); err != nil {
@@ -327,13 +329,23 @@ func (s *Server) reviewHolds(shell *session.ChildShell) bool {
 // reviewFields is the canonical review-mode payload as a map, shared by the
 // single-call reply and by each entry of a batch. One constructor means a model
 // cannot see two different shapes for the same state.
-func reviewFields(queued bool) map[string]any {
-	return map[string]any{
+func reviewFields(queued bool, request *approval.Request) map[string]any {
+	fields := map[string]any{
 		"ok":             true,
 		"approved":       false,
 		"review_pending": true,
 		"message":        reviewMessage(queued),
 	}
+	if request != nil {
+		fields["approval_id"] = request.ID
+		if request.SessionID != "" {
+			fields["session_id"] = request.SessionID
+		}
+		if request.ExpiresAt > 0 {
+			fields["expires_at"] = request.ExpiresAt
+		}
+	}
+	return fields
 }
 
 // reviewPendingResult is the reply to input that review mode intercepted. It is
@@ -343,7 +355,7 @@ func reviewFields(queued bool) map[string]any {
 // text still needs its ending key, queued text must not be retried (reviewWaitTail
 // says so) and is checked later through the shell's output.
 func reviewPendingResult(queued bool) *mcpgo.CallToolResult {
-	return jsonResult(reviewFields(queued))
+	return jsonResult(reviewFields(queued, nil))
 }
 
 // reviewMessage is the one sentence that tells an agent what to do next in each

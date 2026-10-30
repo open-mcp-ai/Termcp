@@ -287,9 +287,30 @@ func (s *Server) addUsage(t *termReply, stmt directive.Statement, headers map[st
 	t.withUsage(stmt, headers)
 }
 
-// reviewPendingFrom extracts the review-pending message from a handler reply, or
-// nil when the call ran.
-func reviewPendingFrom(res *mcpgo.CallToolResult) *string {
+type reviewPendingView struct {
+	Message    string
+	ApprovalID string
+	SessionID  string
+	ExpiresAt  int64
+}
+
+func (v *reviewPendingView) slot(path string) envelope.Slot {
+	headers := map[string]string{"Path": path}
+	if v.ApprovalID != "" {
+		headers["Approval-ID"] = v.ApprovalID
+	}
+	if v.SessionID != "" {
+		headers["Session-ID"] = v.SessionID
+	}
+	if v.ExpiresAt > 0 {
+		headers["Expires-At"] = strconv.FormatInt(v.ExpiresAt, 10)
+	}
+	return envelope.Slot{Code: 202, Headers: headers, Body: v.Message}
+}
+
+// reviewPendingFrom extracts the review-pending message and correlation fields
+// from a handler reply, or nil when the call ran.
+func reviewPendingFrom(res *mcpgo.CallToolResult) *reviewPendingView {
 	doc, ok := toolResultMap(res)
 	if !ok {
 		return nil
@@ -297,8 +318,15 @@ func reviewPendingFrom(res *mcpgo.CallToolResult) *string {
 	if pending, _ := doc["review_pending"].(bool); !pending {
 		return nil
 	}
-	msg := getString(doc, "message", "Submitted for review.")
-	return &msg
+	view := &reviewPendingView{
+		Message:    getString(doc, "message", "Submitted for review."),
+		ApprovalID: getString(doc, "approval_id", ""),
+		SessionID:  getString(doc, "session_id", ""),
+	}
+	if raw, ok := doc["expires_at"].(float64); ok && raw > 0 {
+		view.ExpiresAt = int64(raw)
+	}
+	return view
 }
 
 // toolResultMap parses a handler reply's JSON body.

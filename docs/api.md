@@ -893,7 +893,10 @@ Response 202:
 {
   "ok": true,
   "approved": false,
-  "review_pending": true
+  "review_pending": true,
+  "approval_id": "9f0c…",          // present once the command line is queued
+  "session_id": "3f2a…",
+  "expires_at": 1790130035403
 }
 ```
 
@@ -1344,13 +1347,21 @@ because nothing is refused: typing works.
 
 ### What the agent is told
 
-A queued write answers `202 Accepted` with no id:
+A queued write answers `202 Accepted` with a stable correlation id:
 
 ```json
-{ "ok": true, "approved": false, "review_pending": true }
+{
+  "ok": true,
+  "approved": false,
+  "review_pending": true,
+  "approval_id": "9f0c…",
+  "session_id": "3f2a…",
+  "expires_at": 1790130035403
+}
 ```
 
-The agent cannot decide the request, so an id would only invite a retry loop. It
+The agent cannot decide the request; `approval_id` is correlation metadata for an
+MCP host or harness, not a decision capability or polling instruction. The agent
 is told the write is waiting and continues; the shell's output afterwards shows
 whether the command ran.
 
@@ -1426,11 +1437,23 @@ Response 200:
 }
 ```
 
+### `GET /api/approvals/{id}`
+
+Returns one approval request, including its `execution` object once replay has
+started. Use this after a lost decision response: it is a read and never repeats
+the approval decision or its side effects. Unknown ids return `404`.
+
 ### `POST /api/approvals/{id}/approve` · `POST /api/approvals/{id}/reject`
 
 ```
 Request: {}                       // a decision needs no body
-Response 200: { "request": { … } }
+Response 200: {
+  "request": {
+    …,
+    "execution": { "state": "submitted|succeeded", "started_at": 1790129915403,
+                   "finished_at": 1790129916410 }
+  }
+}
 ```
 
 A rejection may carry `{"reason": "…"}`. No name is sent: the decision is the
@@ -1449,8 +1472,50 @@ Semantics:
   it does not depend on a caller having entered `Wait`. A late approve is
   refused with `409` and executes nothing.
 - An approved request is executed by the deciding call. If the write fails, the
-  response says so (`409`) rather than reporting success.
+  response says so (`409`) with the same request shape and
+  `execution.state=failed`, rather than reporting success.
 - `404` unknown id; `409` already decided or execution failed.
+
+### Execution result
+
+Approval state and execution state are separate. `request.state=approved` says a
+human granted permission; it does not prove replay succeeded.
+
+```
+"execution": {
+  "state": "running|submitted|succeeded|failed|unknown",
+  "started_at": 1790129915403,
+  "finished_at": 1790129916410,
+  "error": "optional executor failure"
+}
+```
+
+- `running`: replay started and has not recorded a final result yet.
+- `submitted`: shell input bytes were handed to the shell. This is **not**
+  command completion and says nothing about the command's exit code.
+- `succeeded`: a non-shell operation (file operation or port forward) completed.
+- `failed`: the executor reported failure. This does not imply that a partially
+  applied operation had no effect.
+- `unknown`: the client lost the response or cannot trust either outcome. A lost
+  HTTP response must be treated as unknown, never as failure or success.
+- If the session or approval queue closes while replay is still `running`, the
+  execution becomes `unknown`; the approved decision remains recorded.
+
+The execution object is also present in `GET /api/approvals` once replay starts,
+so a client that lost the decision response can recover the recorded result.
+
+When review is reached through the single `term` command surface, the outer
+`TERM/1 202 Accepted` response keeps the human-readable message as its body and
+also carries correlation headers:
+
+```text
+Approval-ID: 9f0c…
+Session-ID: 3f2a…
+Expires-At: 1790130035403
+```
+
+These are status headers, not decision capability or polling instructions. An
+MCP host may use them to correlate the held operation with `/api/approvals`.
 
 > **What is approved.** The request records the *input string*, not a parsed
 > command. `type <channel> "rm -rf / ; ls"` is one request covering two commands.

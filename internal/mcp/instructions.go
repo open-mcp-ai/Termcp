@@ -61,6 +61,6 @@ HARD BOUNDARY
   Human at a prompt: notify, then WAIT. A long command's reply carries what arrived;
   read a slow task in pieces, don't poll.
 
-REVIEW — review_pending=true means HELD: nothing ran, no id to poll. Do NOT resubmit or
-retry; notify, then wait.
+REVIEW — review_pending=true means HELD: nothing ran. approval_id, when present, is
+for correlation only: do NOT poll, resubmit or retry; notify, then wait.
 `

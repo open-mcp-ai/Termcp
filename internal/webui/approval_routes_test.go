@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -558,6 +559,13 @@ func TestApprovedOperationGoesToTheOperationExecutor(t *testing.T) {
 	if called[0].ID != id {
 		t.Errorf("executor received id %q, want %q", called[0].ID, id)
 	}
+	body := env.decode(t, rr)
+	request := body["request"].(map[string]any)
+	execution := request["execution"].(map[string]any)
+	if execution["state"] != string(approval.ExecutionSucceeded) ||
+		execution["started_at"] == float64(0) || execution["finished_at"] == float64(0) {
+		t.Fatalf("execution = %+v, want succeeded with timestamps", execution)
+	}
 }
 
 // A command line must NOT go to the operation executor: it belongs to the shell
@@ -587,6 +595,62 @@ func TestApprovedShellInputStillUsesTheShellPath(t *testing.T) {
 	}
 	if ops != 0 {
 		t.Errorf("ExecuteOperation was called %d time(s) for a command line; it must go to the shell", ops)
+	}
+	body := env.decode(t, rr)
+	request := body["request"].(map[string]any)
+	execution := request["execution"].(map[string]any)
+	if execution["state"] != string(approval.ExecutionSubmitted) {
+		t.Fatalf("execution = %+v, want submitted for shell input", execution)
+	}
+}
+
+func TestApprovedOperationExecutionFailureIsStructured(t *testing.T) {
+	e := newApprovalEnv(t)
+	if err := e.sess.EnableApproval(1, 0); err != nil {
+		t.Fatalf("enable approval: %v", err)
+	}
+	e.handler.ExecuteOperation = func(approval.Request) error {
+		return errors.New("listener unavailable")
+	}
+	q := e.sess.ApprovalQueue()
+	id, err := q.Submit(approval.Submission{
+		Source:  "mcp",
+		Kind:    approval.KindForwardOpen,
+		Summary: "open port 8080",
+		Payload: []byte(`{"port":8080}`),
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	rr := e.do(t, http.MethodPost, "/api/approvals/"+id+"/approve", "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("approve = %d, want 409: %s", rr.Code, rr.Body.String())
+	}
+	body := e.decode(t, rr)
+	request := body["request"].(map[string]any)
+	if request["state"] != string(approval.Approved) {
+		t.Fatalf("approval state = %v, want approved", request["state"])
+	}
+	execution := request["execution"].(map[string]any)
+	if execution["state"] != string(approval.ExecutionFailed) ||
+		execution["error"] != "listener unavailable" {
+		t.Fatalf("execution = %+v", execution)
+	}
+
+	rr = e.do(t, http.MethodGet, "/api/approvals", "")
+	listed := e.decode(t, rr)["approvals"].([]any)[0].(map[string]any)["request"].(map[string]any)
+	if listed["execution"].(map[string]any)["state"] != string(approval.ExecutionFailed) {
+		t.Fatalf("listed request lost execution result: %+v", listed)
+	}
+
+	rr = e.do(t, http.MethodGet, "/api/approvals/"+id, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get approval = %d: %s", rr.Code, rr.Body.String())
+	}
+	one := e.decode(t, rr)["request"].(map[string]any)
+	if one["id"] != id ||
+		one["execution"].(map[string]any)["state"] != string(approval.ExecutionFailed) {
+		t.Fatalf("single approval query = %+v", one)
 	}
 }
 

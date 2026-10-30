@@ -678,11 +678,7 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	// A held command line: review mode staged the text and queued it on the enter.
 	// The reply is the review shape, not a read — there is nothing to read yet.
 	if held := reviewPendingFrom(keyRes); held != nil {
-		return envelope.Slot{
-			Code:    202,
-			Headers: map[string]string{"Path": stmt.Path},
-			Body:    *held,
-		}
+		return held.slot(stmt.Path)
 	}
 
 	// --grep CHANGES WHAT THE WINDOW COUNTS, so it takes the same path `read` does
@@ -727,7 +723,7 @@ func (s *Server) directiveType(ctx context.Context, stmt directive.Statement, wi
 		return []envelope.Slot{s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))}
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return []envelope.Slot{{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}}
+		return []envelope.Slot{held.slot(stmt.Path)}
 	}
 	headers := map[string]string{"Path": stmt.Path}
 	s.addUsage(&termReply{win: win}, stmt, headers)
@@ -752,7 +748,7 @@ func (s *Server) directiveKey(ctx context.Context, stmt directive.Statement, win
 		return []envelope.Slot{s.slotFromFailure(ctx, stmt, fail)}
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return []envelope.Slot{{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}}
+		return []envelope.Slot{held.slot(stmt.Path)}
 	}
 	return []envelope.Slot{{Code: 204, Headers: map[string]string{"Path": stmt.Path}}}
 }

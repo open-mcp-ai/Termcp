@@ -138,15 +138,16 @@ func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolReques
 	if err != nil {
 		return toolError(CodeOperationFailed, "cannot describe the operation for review: %s", err.Error()), true
 	}
-	if _, err := sess.SubmitOperation(approval.Submission{
+	requestID, err := sess.SubmitOperation(approval.Submission{
 		Kind:    kindFor(tool, args),
 		Source:  callerSource(ctx),
 		Summary: summary,
 		Payload: payload,
-	}); err != nil {
+	})
+	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), true
 	}
-	return reviewPendingOperationResult(summary), true
+	return reviewPendingOperationResult(summary, approvalCorrelation(sess.ApprovalQueue(), requestID, sess.ID)), true
 }
 
 // reviewWaitTail is the operational half of every review-mode reply: what the
@@ -154,35 +155,59 @@ func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolReques
 // command line and a held operation answer the same question, and two spellings of
 // one prohibition invite the agent to treat the weaker one as the rule.
 const reviewWaitTail = "A human decides it in the Web UI; nothing happens until then. " +
-	"There is no id to poll: do not resubmit, reword or retry - WAIT."
+	"Use approval_id only to correlate this request: do not poll, resubmit, reword or retry - WAIT."
 
 // reviewPendingReply is the single constructor of a review-mode reply, shared by
 // the two points where review intercepts a call: a held command line
 // (handlers_shell.go) and a held file or forward operation (below).
 //
-// The reply carries no id and no polling instruction. The agent cannot decide the
-// request itself -- decisions are made by a human in the Web UI -- and it has
-// nothing useful to do with an id, so handing one over would only invite a retry
-// loop.
+// A queued request carries its stable approval_id so an MCP host can correlate
+// the result with the approval worklist. The id is metadata, not a decision
+// capability: the agent still cannot decide the request and must not poll it.
 //
 // The JSON shape is built once, here, so the two replies cannot drift apart: a
 // model branches on approved/review_pending, and a shape that differed between
 // them would read as two different states.
-func reviewPendingReply(msg string) *mcpgo.CallToolResult {
-	return jsonResult(map[string]any{
+func reviewPendingReply(msg string, request *approval.Request) *mcpgo.CallToolResult {
+	fields := map[string]any{
 		"ok":             true,
 		"approved":       false,
 		"review_pending": true,
 		"message":        msg,
-	})
+	}
+	if request != nil {
+		fields["approval_id"] = request.ID
+		if request.SessionID != "" {
+			fields["session_id"] = request.SessionID
+		}
+		if request.ExpiresAt > 0 {
+			fields["expires_at"] = request.ExpiresAt
+		}
+	}
+	return jsonResult(fields)
 }
 
 // reviewPendingOperationResult is the reply to an operation that review mode
 // intercepted. The summary is echoed back so the agent can tell which of its calls
 // is now waiting: unlike a command line, none of these operations left a trace
 // anywhere the agent can read later.
-func reviewPendingOperationResult(summary string) *mcpgo.CallToolResult {
-	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail))
+func reviewPendingOperationResult(summary string, request *approval.Request) *mcpgo.CallToolResult {
+	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail), request)
+}
+
+// approvalCorrelation reads the request metadata returned by the queue. If the
+// immediate lookup fails, the stable ID and session are still returned so the
+// caller can correlate the request without inviting a resubmission.
+func approvalCorrelation(queue *approval.Queue, requestID, sessionID string) *approval.Request {
+	if requestID == "" {
+		return nil
+	}
+	if queue != nil {
+		if request, err := queue.Get(requestID); err == nil {
+			return &request
+		}
+	}
+	return &approval.Request{ID: requestID, SessionID: sessionID}
 }
 
 // ExecuteApprovedOperation replays a non-terminal approved request.

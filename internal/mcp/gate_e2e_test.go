@@ -46,6 +46,7 @@ func TestGatedToolsAllHoldUnderReview(t *testing.T) {
 		}, approval.KindForwardOpen},
 	}
 
+	approvalIDs := make([]string, 0, len(cases))
 	for _, tc := range cases {
 		res := dispatch(t, s, tc.tool, tc.args)
 		body := parseResult(t, res)
@@ -56,12 +57,30 @@ func TestGatedToolsAllHoldUnderReview(t *testing.T) {
 		if _, has := body["pending_id"]; has {
 			t.Errorf("%s handed back a pending_id", tc.name)
 		}
+		approvalID, _ := body["approval_id"].(string)
+		if approvalID == "" {
+			t.Errorf("%s did not return an approval_id: %v", tc.name, body)
+		} else {
+			approvalIDs = append(approvalIDs, approvalID)
+		}
+		if body["session_id"] != sessionID {
+			t.Errorf("%s session_id = %v, want %q", tc.name, body["session_id"], sessionID)
+		}
 	}
 
 	q := s.sessMgr.Get(sessionID).ApprovalQueue()
 	reqs := q.List()
 	if len(reqs) != len(cases) {
 		t.Fatalf("queued %d requests, want %d", len(reqs), len(cases))
+	}
+	queuedIDs := make(map[string]bool, len(reqs))
+	for _, request := range reqs {
+		queuedIDs[request.ID] = true
+	}
+	for _, approvalID := range approvalIDs {
+		if !queuedIDs[approvalID] {
+			t.Errorf("returned approval_id %q is not in the queue", approvalID)
+		}
 	}
 	// Every request must say what it will do and carry a replayable payload:
 	// a request a reviewer cannot read, or an executor cannot replay, is a gate
