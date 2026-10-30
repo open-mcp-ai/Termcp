@@ -28,6 +28,12 @@ var _themeStrings = {};
 var _themeInitialResources = null;
 var _themeTerminal = {};
 
+// Authentication pages share the engine through their own public asset mount.
+// Other pages retain their deployment-relative theme URLs.
+function themeResourceURL(name) {
+  return (document.documentElement.getAttribute('data-theme-base') || '') + name;
+}
+
 function validThemeChoice(id) {
   return typeof id === 'string' && id.length > 0 && id.charAt(0) !== '.' && !/[\/\\:\x00-\x1f\x7f]/.test(id);
 }
@@ -101,7 +107,7 @@ function loadThemeJSON(id, filename, normalize) {
     timer = setTimeout(function () { finish({}); }, 3000);
     var options = { cache: 'no-store' };
     if (controller) options.signal = controller.signal;
-    fetch('themes/' + encodeURIComponent(id) + '/' + filename, options).then(function (response) {
+    fetch(themeResourceURL('themes/' + encodeURIComponent(id) + '/' + filename), options).then(function (response) {
       return response.ok ? response.json() : {};
     }).then(function (value) { finish(normalize(value)); }).catch(function () { finish({}); });
   });
@@ -217,7 +223,7 @@ function themeLabel(id) {
 }
 
 function themeAssetURL(path) {
-  return 'themes/' + encodeURIComponent(_themeActive) + '/assets/' + path.split('/').map(encodeURIComponent).join('/');
+  return themeResourceURL('themes/' + encodeURIComponent(_themeActive) + '/assets/' + path.split('/').map(encodeURIComponent).join('/'));
 }
 
 function syncThemeAssets(root) {
@@ -244,7 +250,7 @@ function notifyThemeChange(id, catalog, terminal, choice) {
 }
 
 function discoverThemes() {
-  return fetch('themes/', { cache: 'no-store' }).then(function (response) {
+  return fetch(themeResourceURL('themes/'), { cache: 'no-store' }).then(function (response) {
     if (!response.ok) throw new Error('themes ' + response.status);
     return response.text();
   }).then(function (html) {
@@ -279,7 +285,7 @@ function applyTheme(choice) {
     var next = document.createElement('link');
     next.rel = 'stylesheet';
     next.media = 'not all';
-    next.href = 'themes/' + encodeURIComponent(id) + '/theme.css?reload=' + revision;
+    next.href = themeResourceURL('themes/' + encodeURIComponent(id) + '/theme.css?reload=' + revision);
     var timer;
     var resourcesRequest = loadThemeResources(id);
     var cssReady = false;

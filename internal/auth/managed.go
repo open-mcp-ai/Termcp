@@ -99,33 +99,40 @@ type sessionRecord struct {
 }
 
 type managedState struct {
-	Version     int                      `json:"version"`
-	InstanceID  string                   `json:"instance_id"`
-	SigningKey  string                   `json:"signing_key"`
-	Admin       adminRecord              `json:"admin"`
-	Permissions RolePolicy               `json:"permissions"`
-	Revision    uint64                   `json:"revision"`
-	Sessions    map[string]sessionRecord `json:"sessions"`
-	Agents      map[string]agentRecord   `json:"agents,omitempty"`
-	Tokens      map[string]tokenRecord   `json:"tokens,omitempty"`
+	Version        int                        `json:"version"`
+	InstanceID     string                     `json:"instance_id"`
+	SigningKey     string                     `json:"signing_key"`
+	Admin          adminRecord                `json:"admin"`
+	Permissions    RolePolicy                 `json:"permissions"`
+	Revision       uint64                     `json:"revision"`
+	Sessions       map[string]sessionRecord   `json:"sessions"`
+	Agents         map[string]agentRecord     `json:"agents,omitempty"`
+	Tokens         map[string]tokenRecord     `json:"tokens,omitempty"`
+	Groups         map[string]permissionGroup `json:"groups,omitempty"`
+	DefaultGroupID string                     `json:"default_group_id,omitempty"`
+	AccessRevision uint64                     `json:"access_revision,omitempty"`
 }
 
 type sessionClaims struct {
-	Role Role `json:"role"`
+	Role      Role   `json:"role"`
+	WebBootID string `json:"web_boot_id"`
 	jwt.RegisteredClaims
 }
 
-// Managed owns accounts and sessions encrypted by the shared configuration
-// vault. HTTP and daemon use one keyring; no OAuth is implemented.
+// Managed owns accounts and MCP credentials encrypted by the shared vault.
+// Browser logins are memory-only and bound to this run. No OAuth is implemented.
 type Managed struct {
 	// MCPIdleTimeout is set by the server before serving requests.
 	MCPIdleTimeout time.Duration
 	HideInternal   bool
+	pageAssets     *pageAssets
 	mu             sync.Mutex
 	loginGate      sync.Mutex
+	passwordMu     sync.Mutex // serializes password work without blocking ordinary authentication
 	path           string
 	state          managedState
 	now            func() time.Time
+	background     map[string]map[*int]context.CancelFunc
 	requests       map[string]map[*int]context.CancelFunc
 	attempts       int
 	window         time.Time
@@ -134,6 +141,7 @@ type Managed struct {
 	sealed         bool
 	legacy         *managedState
 	markerDirty    bool
+	webBootID      string // memory-only; vault unlock does not restore browser identity
 }
 
 func randomSecret() (string, error) {
@@ -159,14 +167,19 @@ func (m *Managed) login(username, password string) (string, sessionRecord, error
 }
 
 func (m *Managed) loginWithOptions(username, password, previous string, automatic bool) (string, sessionRecord, error) {
+	m.passwordMu.Lock()
+	defer m.passwordMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.sealed && m.legacy == nil {
+	configured := m.sealed || m.legacy != nil
+	m.mu.Unlock()
+	if !configured {
 		return "", sessionRecord{}, errors.New("set up the admin account first")
 	}
-	if err := m.unlockLocked(username, password, previous, automatic); err != nil {
+	if err := m.unlockForLogin(username, password, previous, automatic); err != nil {
 		return "", sessionRecord{}, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	now := m.now()
 	s := cloneState(m.state)
 	for id, session := range m.state.Sessions {
@@ -186,16 +199,14 @@ func (m *Managed) loginWithOptions(username, password, previous string, automati
 		return "", sessionRecord{}, err
 	}
 	session := sessionRecord{Actor: Actor{ID: s.Admin.ID, Username: username, Role: RoleAdmin}, ExpiresAt: now.Add(SessionLifetime).Truncate(time.Second), CSRF: csrf}
-	claims := sessionClaims{Role: RoleAdmin, RegisteredClaims: jwt.RegisteredClaims{Issuer: s.InstanceID, Subject: session.Actor.ID, Audience: jwt.ClaimStrings{"termcp-web"}, ID: id, IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(session.ExpiresAt)}}
+	claims := sessionClaims{Role: RoleAdmin, WebBootID: m.webBootID, RegisteredClaims: jwt.RegisteredClaims{Issuer: s.InstanceID, Subject: session.Actor.ID, Audience: jwt.ClaimStrings{"termcp-web"}, ID: id, IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(session.ExpiresAt)}}
 	key, _ := base64.RawURLEncoding.DecodeString(s.SigningKey)
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
 	if err != nil {
 		return "", sessionRecord{}, err
 	}
 	s.Sessions[id] = session
-	if err := m.save(s, false); err != nil {
-		return "", sessionRecord{}, errors.New("could not save the login session")
-	}
+	m.state.Sessions = s.Sessions
 	return token, session, nil
 }
 
@@ -208,7 +219,7 @@ func (m *Managed) verify(raw string) (string, sessionRecord, error) {
 	key, _ := base64.RawURLEncoding.DecodeString(m.state.SigningKey)
 	var claims sessionClaims
 	token, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return key, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(m.state.InstanceID), jwt.WithAudience("termcp-web"), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(m.now))
-	if err != nil || !token.Valid {
+	if err != nil || !token.Valid || claims.WebBootID == "" || !equalSecret(claims.WebBootID, m.webBootID) {
 		return "", sessionRecord{}, errors.New("invalid session")
 	}
 	s, ok := m.state.Sessions[claims.ID]
@@ -218,26 +229,19 @@ func (m *Managed) verify(raw string) (string, sessionRecord, error) {
 	return claims.ID, s, nil
 }
 
+// revoke removes an in-memory browser login even if the vault is read-only.
 func (m *Managed) revoke(id string) error {
 	m.mu.Lock()
-	s := cloneState(m.state)
-	for key, value := range m.state.Sessions {
-		if key != id {
-			s.Sessions[key] = value
-		}
-	}
-	err := m.save(s, false)
+	delete(m.state.Sessions, id)
 	var cancels []context.CancelFunc
-	if err == nil || errors.Is(err, configstore.ErrDurability) {
-		for _, cancel := range m.requests[id] {
-			cancels = append(cancels, cancel)
-		}
+	for _, cancel := range m.requests[id] {
+		cancels = append(cancels, cancel)
 	}
 	m.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
 	}
-	return err
+	return nil
 }
 
 func (m *Managed) track(ctx context.Context, id string, s sessionRecord) (context.Context, context.CancelFunc) {

@@ -23,6 +23,9 @@ func (s *Server) handleGetSessionInfo(ctx context.Context, request mcpgo.CallToo
 		return bad, nil
 	}
 	info := sess.Info()
+	if !agentCanView(ctx, "shell.list") {
+		info.Shells = nil
+	}
 	data, _ := json.Marshal(info)
 	return mcpgo.NewToolResultText(string(data)), nil
 }

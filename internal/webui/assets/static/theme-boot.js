@@ -1,6 +1,7 @@
 /* Runs before the body is parsed; theme.js owns subsequent user choices. */
 var termcpBootRoot = document.documentElement;
 var termcpBootLink = document.getElementById('termcp-theme');
+var termcpBootBase = termcpBootRoot.getAttribute('data-theme-base') || '';
 /* The system's own light/dark preference: what "auto" resolves through, so the
    stored choice can stay 'auto' and follow the OS instead of freezing whichever
    theme the system happened to be in when it was picked. theme.js carries the
@@ -31,7 +32,7 @@ function termcpBootFallback() {
     termcpBootRoot.setAttribute('data-theme', termcpBootID);
     clearTimeout(termcpBootTimer);
     termcpBootTimer = setTimeout(termcpBootFinish, 10000);
-    termcpBootLink.href = 'themes/default-light/theme.css';
+    termcpBootLink.href = termcpBootBase + 'themes/default-light/theme.css';
   } else {
     termcpBootFinish();
   }
@@ -42,5 +43,5 @@ if (termcpBootID !== 'default-light') {
   termcpBootLink.onload = termcpBootFinish;
   termcpBootLink.onerror = termcpBootFallback;
   termcpBootTimer = setTimeout(termcpBootFallback, 10000);
-  termcpBootLink.href = 'themes/' + encodeURIComponent(termcpBootID) + '/theme.css';
+  termcpBootLink.href = termcpBootBase + 'themes/' + encodeURIComponent(termcpBootID) + '/theme.css';
 }

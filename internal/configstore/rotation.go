@@ -27,6 +27,8 @@ func (r *Repository) RotateMainKey(providers ...Provider) error {
 }
 
 func (r *Repository) rotateMainKey(providers []Provider, publish func(string, []byte) error) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
@@ -40,12 +42,27 @@ func (r *Repository) rotateMainKey(providers []Provider, publish func(string, []
 	if err != nil {
 		return err
 	}
-	protection, err := unlockKeyringProtection(keyData, r.keyring, providers)
-	clear(keyData)
+	defer clear(keyData)
+	snapshot, err := r.passwordSnapshotLocked()
 	if err != nil {
 		return err
 	}
-	defer protection.destroy()
+	defer snapshot.Destroy()
+	var protection *keyringProtection
+	err = r.passwordWorkLocked(keyData, func() error {
+		var e error
+		protection, e = unlockKeyringProtection(keyData, snapshot, providers)
+		return e
+	})
+	if protection != nil {
+		defer protection.destroy()
+	}
+	if err != nil {
+		return err
+	}
+	if err = r.ready(); err != nil {
+		return err
+	}
 	// A previous publication may have returned ErrDurability. Confirm the
 	// keyring's directory entry before writing anything under its active key.
 	if err := syncDir(filepath.Dir(keysPath)); err != nil {

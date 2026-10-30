@@ -227,7 +227,7 @@ func (s *Server) listPeers(stmt directive.Statement) envelope.Slot {
 	b.WriteString(fmt.Sprint(len(handles)) + " " + stmt.Kind + " connection(s):\n")
 	for _, h := range handles {
 		b.WriteString("  " + peerAddress(h.sessionID, h.kind, h.index) + "\t" +
-			h.ch.Transport().String() + "\t" + h.ch.URL())
+			h.ch.Transport().String() + "\t" + peerEndpointLabel(h.ch.URL()))
 		if h.cdp != nil {
 			b.WriteString(fmt.Sprintf("\t%d target(s) attached", len(h.cdp.snapshot())))
 		}

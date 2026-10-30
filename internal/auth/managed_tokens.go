@@ -19,12 +19,14 @@ const maxAgents = 256
 const maxTokens = 1024
 
 type agentRecord struct {
-	Policy    *AgentPolicy `json:"policy,omitempty"`
-	Revision  uint64       `json:"revision,omitempty"`
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Enabled   bool         `json:"enabled"`
-	CreatedAt time.Time    `json:"created_at"`
+	GroupID        string       `json:"group_id,omitempty"`
+	Policy         *AgentPolicy `json:"policy,omitempty"`
+	PolicyWarnings []string     `json:"policy_warnings,omitempty"`
+	Revision       uint64       `json:"revision,omitempty"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	Enabled        bool         `json:"enabled"`
+	CreatedAt      time.Time    `json:"created_at"`
 }
 
 type tokenRecord struct {
@@ -68,6 +70,9 @@ func validateCredentials(s managedState) error {
 			return errors.New("invalid saved MCP token")
 		}
 	}
+	if s.Version == managedStateVersion {
+		return validateGroupState(s)
+	}
 	return nil
 }
 
@@ -77,6 +82,7 @@ func tokenDigest(raw string) string {
 }
 
 func credentialState(s managedState) managedState {
+	s.Groups = cloneGroups(s.Groups)
 	s.Agents = maps.Clone(s.Agents)
 	if s.Agents == nil {
 		s.Agents = map[string]agentRecord{}
@@ -119,7 +125,8 @@ func (m *Managed) tokenActorLocked(t tokenRecord) (Actor, bool) {
 		return Actor{ID: m.state.Admin.ID, Username: m.state.Admin.Username, Role: RoleAdmin}, true
 	}
 	a, ok := m.state.Agents[t.PrincipalID]
-	return Actor{ID: a.ID, Username: a.Name, Role: RoleAgent}, ok && a.Enabled
+	_, err := resolvedAgentPolicy(m.state, a)
+	return Actor{ID: a.ID, Username: a.Name, Role: RoleAgent}, ok && a.Enabled && err == nil
 }
 
 // admitToken authenticates and registers cancellation under the same lock, so
@@ -169,6 +176,7 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 	m.requests[id][ref] = cancel
 	if actor.Role == RoleAgent {
 		ctx = m.withAgentPolicy(ctx, actor.ID, t.ID)
+		ctx = m.withBackgroundWork(ctx, actor.ID, t.ID)
 	}
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, id)
@@ -185,22 +193,26 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 
 // cancelDeniedTokensLocked also handles global role policy changes.
 func (m *Managed) cancelDeniedTokensLocked() {
-	for id, requests := range m.requests {
-		if !strings.HasPrefix(id, "token:") {
-			continue
+	ids := map[string]bool{}
+	for key := range m.requests {
+		if strings.HasPrefix(key, "token:") {
+			ids[strings.TrimPrefix(key, "token:")] = true
 		}
-		t, ok := m.state.Tokens[strings.TrimPrefix(id, "token:")]
-		actor, enabled := m.tokenActorLocked(t)
-		allowed := false
+	}
+	for id := range m.background {
+		ids[id] = true
+	}
+	for id := range ids {
+		token, exists := m.state.Tokens[id]
+		actor, enabled := m.tokenActorLocked(token)
+		permitted := false
 		for _, surface := range m.state.Permissions[actor.Role] {
 			if surface == "mcp" {
-				allowed = true
+				permitted = true
 			}
 		}
-		if !ok || !enabled || !allowed {
-			for _, cancel := range requests {
-				cancel()
-			}
+		if !exists || !enabled || !permitted {
+			m.cancelCredentialLocked(id)
 		}
 	}
 }
@@ -211,16 +223,36 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	s := credentialState(m.state)
 	var result any
 	switch {
-	case r.URL.Path == "/auth/agents" && r.Method == "GET":
+	case strings.HasPrefix(r.URL.Path, "/auth/agents/") && strings.HasSuffix(r.URL.Path, "/policy-upgrade-preview"):
+		if r.Method != "POST" {
+			authError(w, 405, "method not allowed")
+			return
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/agents/"), "/policy-upgrade-preview")
+		a, ok := s.Agents[id]
+		if !ok || strings.Contains(id, "/") {
+			authError(w, 404, "Agent not found")
+			return
+		}
+		p := *agentPolicyView(s, a).Policy
+		if p.IsV2() {
+			authError(w, 409, "Agent already uses an actions policy")
+			return
+		}
+		authJSON(w, 200, map[string]any{"revision": agentRevision(a), "policy": conservativeUpgrade(p), "notes": []string{
+			"This is a conservative candidate. It has not been saved; review the actions and save with this revision.",
+			"realpath, readlink and statvfs are selected only when both file groups were granted. Global alias writes require all hosts.",
+			"connect requires session.start and shell.open; run requires input, key(enter) and output. Raw protocol grants remain broad.",
+			"Task receipts without complete endpoint metadata are unavailable to V2 Agents. Host and extension summaries hide transport secrets.",
+		}})
+		return
+	case (r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/principals") && r.Method == "GET":
 		agents := make([]agentRecord, 0, len(s.Agents))
 		for _, a := range s.Agents {
-			p := effectivePolicy(a)
-			a.Policy = &p
-			a.Revision = agentRevision(a)
-			agents = append(agents, a)
+			agents = append(agents, agentPolicyView(s, a))
 		}
 		sort.Slice(agents, func(i, j int) bool { return agents[i].CreatedAt.Before(agents[j].CreatedAt) })
-		authJSON(w, 200, map[string]any{"agents": agents})
+		authJSON(w, 200, map[string]any{"agents": agents, "principals": agents, "default_group_id": s.DefaultGroupID, "access_revision": s.AccessRevision})
 		return
 	case r.URL.Path == "/auth/tokens" && r.Method == "GET":
 		tokens := make([]tokenInfo, 0, len(s.Tokens))
@@ -230,8 +262,9 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(tokens, func(i, j int) bool { return tokens[i].CreatedAt.Before(tokens[j].CreatedAt) })
 		authJSON(w, 200, map[string]any{"tokens": tokens})
 		return
-	case r.URL.Path == "/auth/agents" && r.Method == "POST":
+	case (r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/principals") && r.Method == "POST":
 		var input struct {
+			GroupID    *string      `json:"group_id"`
 			Name       string       `json:"name"`
 			Policy     *AgentPolicy `json:"policy"`
 			IssueToken *bool        `json:"issue_token"`
@@ -249,16 +282,33 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			authError(w, 500, "could not create Agent")
 			return
 		}
+		a := agentRecord{ID: id, Name: input.Name, Enabled: true, CreatedAt: m.now().UTC(), Revision: 1}
+		if input.GroupID != nil && input.Policy != nil {
+			authError(w, 400, "group_id and direct policy cannot be combined")
+			return
+		}
+		if input.GroupID != nil {
+			g, ok := s.Groups[*input.GroupID]
+			if !ok || !g.Enabled {
+				authError(w, 400, "permission group is missing or disabled")
+				return
+			}
+			a.GroupID = g.ID
+		}
 		if input.Policy != nil {
 			if err := validateAgentPolicy(*input.Policy); err != nil {
 				authError(w, 400, err.Error())
 				return
 			}
+			if err := setCompatibilityPolicy(&s, &a, *input.Policy); err != nil {
+				authError(w, 400, err.Error())
+				return
+			}
 		}
-		a := agentRecord{ID: id, Name: input.Name, Enabled: true, CreatedAt: m.now().UTC(), Policy: input.Policy, Revision: 1}
+
 		s.Agents[id] = a
-		if input.IssueToken != nil && !*input.IssueToken {
-			result = map[string]any{"agent": a}
+		if input.IssueToken != nil && !*input.IssueToken || r.URL.Path == "/auth/principals" && input.IssueToken == nil {
+			result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a)}
 			break
 		}
 		t, raw, err := m.issueToken(&s, id, input.Name)
@@ -266,17 +316,25 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			authError(w, 400, err.Error())
 			return
 		}
-		result = map[string]any{"agent": a, "token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
+		result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a), "token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
 	case r.URL.Path == "/auth/tokens" && r.Method == "POST":
 		var input struct {
-			AgentID string `json:"agent_id"`
-			Label   string `json:"label"`
+			PrincipalID string `json:"principal_id"`
+			AgentID     string `json:"agent_id"`
+			Label       string `json:"label"`
 		}
 		if decodeJSON(http.MaxBytesReader(w, r.Body, 262144), &input) != nil {
 			authError(w, 400, "invalid token request")
 			return
 		}
-		principal := input.AgentID
+		if input.AgentID != "" && input.PrincipalID != "" && input.AgentID != input.PrincipalID {
+			authError(w, 400, "ambiguous principal identity")
+			return
+		}
+		principal := input.PrincipalID
+		if principal == "" {
+			principal = input.AgentID
+		}
 		if principal == "" {
 			principal = s.Admin.ID
 		}
@@ -311,18 +369,25 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 				authError(w, 400, "policy updates require revision")
 				return
 			}
+			if agentPolicyView(s, a).Policy.IsV2() && !input.Policy.IsV2() {
+				authError(w, 409, "an actions policy cannot be replaced by legacy function groups")
+				return
+			}
 			if err := validateAgentPolicy(*input.Policy); err != nil {
 				authError(w, 400, err.Error())
 				return
 			}
-			a.Policy = input.Policy
+			if err := setCompatibilityPolicy(&s, &a, *input.Policy); err != nil {
+				authError(w, 400, err.Error())
+				return
+			}
 		}
 		if input.Enabled != nil {
 			a.Enabled = *input.Enabled
 		}
 		a.Revision = agentRevision(a) + 1
 		s.Agents[id] = a
-		result = map[string]any{"agent": a}
+		result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a)}
 	case strings.HasPrefix(r.URL.Path, "/auth/tokens/") && r.Method == "DELETE":
 		id := strings.TrimPrefix(r.URL.Path, "/auth/tokens/")
 		if _, ok := s.Tokens[id]; !ok {
@@ -335,18 +400,13 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		authError(w, 405, "method not allowed")
 		return
 	}
+	s.AccessRevision++
 	err := m.save(s, false)
 	if err == nil || errors.Is(err, configstore.ErrDurability) {
 		m.cancelDeniedTokensLocked()
 		if strings.HasPrefix(r.URL.Path, "/auth/agents/") && r.Method == "PATCH" {
 			principal := strings.TrimPrefix(r.URL.Path, "/auth/agents/")
-			for id, t := range m.state.Tokens {
-				if t.PrincipalID == principal {
-					for _, cancel := range m.requests["token:"+id] {
-						cancel()
-					}
-				}
-			}
+			m.cancelPrincipalsLocked([]string{principal})
 		}
 	}
 	if err != nil {

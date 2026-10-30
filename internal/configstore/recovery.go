@@ -89,6 +89,8 @@ func (r *Repository) recoverMainKey(
 	providers []Provider,
 	publish func(string, []byte) error,
 ) error {
+	r.passwordMu.Lock()
+	defer r.passwordMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -143,16 +145,20 @@ func (r *Repository) recoverMainKey(
 	if err != nil {
 		return err
 	}
+	defer clear(previous)
 	stored, err := parseStoredKeyring(previous)
-	clear(previous)
 	if err != nil || !bytes.Equal(stored.StoreID, r.lockedStoreID[:]) {
 		return ErrIdentityMismatch
 	}
-	wrapped, err := candidate.Marshal(providers...)
+	var wrapped []byte
+	err = r.passwordWorkLocked(previous, func() error { var e error; wrapped, e = candidate.Marshal(providers...); return e })
+	defer clear(wrapped)
 	if err != nil {
 		return err
 	}
-	defer clear(wrapped)
+	if r.unlockErr == nil {
+		return ErrNotLocked
+	}
 	err = publish(keysPath, wrapped)
 	if err != nil && !errors.Is(err, ErrDurability) {
 		return err
