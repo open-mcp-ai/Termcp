@@ -387,6 +387,154 @@ func TestNoErrorPathEverApproves(t *testing.T) {
 	}
 }
 
+func TestExecutionRequiresApprovalAndStartsOnce(t *testing.T) {
+	q := newQ(t, 1, time.Minute)
+	id, err := q.SubmitShellInput("shell-1", "mcp", "echo hi", []string{"enter"})
+	if err != nil {
+		t.Fatalf("SubmitShellInput: %v", err)
+	}
+	if _, err := q.BeginExecution(id); !errors.Is(err, approval.ErrNotApproved) {
+		t.Fatalf("BeginExecution before approval error = %v, want ErrNotApproved", err)
+	}
+	if _, err := q.Approve(id); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	started, err := q.BeginExecution(id)
+	if err != nil {
+		t.Fatalf("BeginExecution: %v", err)
+	}
+	if started.Execution == nil || started.Execution.State != approval.ExecutionRunning ||
+		started.Execution.StartedAt == 0 || started.Execution.FinishedAt != 0 {
+		t.Fatalf("started execution = %+v", started.Execution)
+	}
+	if _, err := q.BeginExecution(id); !errors.Is(err, approval.ErrExecutionAlreadyStarted) {
+		t.Fatalf("second BeginExecution error = %v, want ErrExecutionAlreadyStarted", err)
+	}
+}
+
+func TestExecutionStatesRespectRequestKind(t *testing.T) {
+	q := newQ(t, 1, time.Minute)
+	shellID, _ := q.SubmitShellInput("shell-1", "mcp", "echo hi", []string{"enter"})
+	if _, err := q.Approve(shellID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.BeginExecution(shellID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.FinishExecution(shellID, approval.ExecutionSucceeded, ""); !errors.Is(err, approval.ErrInvalidExecutionState) {
+		t.Fatalf("shell succeeded state error = %v, want ErrInvalidExecutionState", err)
+	}
+	shellDone, err := q.FinishExecution(shellID, approval.ExecutionSubmitted, "")
+	if err != nil {
+		t.Fatalf("FinishExecution(submitted): %v", err)
+	}
+	if shellDone.Execution == nil || shellDone.Execution.State != approval.ExecutionSubmitted ||
+		shellDone.Execution.FinishedAt == 0 {
+		t.Fatalf("shell execution = %+v", shellDone.Execution)
+	}
+	if _, err := q.FinishExecution(shellID, approval.ExecutionSubmitted, ""); !errors.Is(err, approval.ErrExecutionNotRunning) {
+		t.Fatalf("second FinishExecution error = %v, want ErrExecutionNotRunning", err)
+	}
+
+	operationID, err := q.Submit(approval.Submission{
+		Kind:    approval.KindFileWrite,
+		Summary: "write a file",
+		Payload: []byte(`{"path":"/tmp/x"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Approve(operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.BeginExecution(operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.FinishExecution(operationID, approval.ExecutionSubmitted, ""); !errors.Is(err, approval.ErrInvalidExecutionState) {
+		t.Fatalf("operation submitted state error = %v, want ErrInvalidExecutionState", err)
+	}
+	operationDone, err := q.FinishExecution(operationID, approval.ExecutionSucceeded, "")
+	if err != nil {
+		t.Fatalf("FinishExecution(succeeded): %v", err)
+	}
+	if operationDone.Execution == nil || operationDone.Execution.State != approval.ExecutionSucceeded {
+		t.Fatalf("operation execution = %+v", operationDone.Execution)
+	}
+}
+
+func TestExecutionFailureIsSeparateFromApprovalState(t *testing.T) {
+	q := newQ(t, 1, time.Minute)
+	id, err := q.Submit(approval.Submission{
+		Kind:    approval.KindForwardOpen,
+		Summary: "open a tunnel",
+		Payload: []byte(`{"port":8080}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Approve(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.BeginExecution(id); err != nil {
+		t.Fatal(err)
+	}
+	done, err := q.FinishExecution(id, approval.ExecutionFailed, "listener unavailable")
+	if err != nil {
+		t.Fatalf("FinishExecution(failed): %v", err)
+	}
+	if done.State != approval.Approved {
+		t.Fatalf("approval state = %q, want approved", done.State)
+	}
+	if done.Execution == nil || done.Execution.State != approval.ExecutionFailed ||
+		done.Execution.Error != "listener unavailable" {
+		t.Fatalf("execution = %+v", done.Execution)
+	}
+}
+
+func TestExecutionSnapshotIsIndependent(t *testing.T) {
+	q := newQ(t, 1, time.Minute)
+	id, _ := q.SubmitShellInput("shell-1", "mcp", "echo hi", nil)
+	_, _ = q.Approve(id)
+	started, _ := q.BeginExecution(id)
+	started.Execution.State = approval.ExecutionFailed
+	started.Execution.Error = "caller mutation"
+	current, _ := q.Get(id)
+	if current.Execution == nil || current.Execution.State != approval.ExecutionRunning ||
+		current.Execution.Error != "" {
+		t.Fatalf("queued execution was mutated through snapshot: %+v", current.Execution)
+	}
+}
+
+func TestClosingQueueSettlesRunningExecutionAsUnknown(t *testing.T) {
+	q := newQ(t, 1, time.Minute)
+	id, err := q.Submit(approval.Submission{
+		Kind:    approval.KindFileWrite,
+		Summary: "write a file",
+		Payload: []byte(`{"path":"/tmp/x"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Approve(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.BeginExecution(id); err != nil {
+		t.Fatal(err)
+	}
+	q.Close("session ended")
+	current, err := q.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State != approval.Approved ||
+		current.Execution == nil ||
+		current.Execution.State != approval.ExecutionUnknown ||
+		current.Execution.FinishedAt == 0 ||
+		current.Execution.Error != "session ended" {
+		t.Fatalf("settled request = %+v", current)
+	}
+}
+
 func TestUnknownIDIsReported(t *testing.T) {
 	q := newQ(t, 1, time.Minute)
 	if _, err := q.Get("nope"); !errors.Is(err, approval.ErrNotFound) {
