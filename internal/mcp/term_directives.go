@@ -28,10 +28,20 @@ import (
 // handler path runs checkAdmission again); the ones that read a manager directly
 // — info, ps, span — would otherwise be reachable across namespaces, which is
 // exactly the isolation this feature promises.
-func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win termArgs) (result []envelope.Slot) {
 	if bad := s.agentStatementCheck(ctx, stmt); bad != nil {
 		return []envelope.Slot{*bad}
 	}
+	// Direct peer/copy/info paths do not all pass through a tool wrapper. Renew
+	// their lease only after an accepted execution, never during authorization.
+	defer func() {
+		for _, slot := range result {
+			if slot.Code >= 200 && slot.Code < 400 {
+				s.touchStatementTargets(stmt)
+				return
+			}
+		}
+	}()
 	// A HANDLE THE RECONCILER TOOK AWAY EXPLAINS ITSELF HERE, once, for every
 	// directive that names one.
 	//
@@ -609,10 +619,10 @@ func (s *Server) sessionForStatement(stmt directive.Statement) *session.Session 
 		return nil
 	}
 	guard := toolGuard{server: s}
-	if sess := guard.sessionForSessionID(stmt.Target); sess != nil {
+	if sess := guard.lookupSessionID(stmt.Target); sess != nil {
 		return sess
 	}
-	return guard.sessionForShellID(stmt.Target)
+	return guard.lookupShellID(stmt.Target)
 }
 
 // The directives themselves.

@@ -4,11 +4,25 @@
 
 ### 新增
 
+Login, setup, account and permission pages now follow the workspace theme, including all four built-in themes, automatic system appearance and local custom themes. Theme resources load before sign-in through a restricted static entrance; missing themes and docs-only builds retain usable fallback styling. Theme switching also remains readable on narrow screens.
+
+Permission management now organizes reusable permission groups with five role presets, explicit default binding, independent principals and client credentials. Groups can be renamed, cloned, disabled or deleted after previewing member impacts; deletion supports moving members or denying access. Existing subject and token identities survive the encrypted-state migration. Access changes also cancel credential-owned background transfers while preserving their receipts.
+
+Password verification, initialization and changes now leave ordinary authentication and profile traffic available during Argon2 derivation. Key operations use independent serialization, recheck key metadata before publication, retain concurrent configuration/permission saves, and dispose of candidates when the store closes.
+
+Empty Agent allowlists now remain empty through API responses, encrypted storage and restart. Older ambiguous conditions are denied with a visible review notice until an administrator explicitly saves the policy. Newly created Agents receive an empty V2 action policy, including when API clients omit the policy field.
+
+Administrator browser logins now end when the service restarts. Automatic vault unlock restores configuration access while requiring a fresh browser login; MCP credentials retain their independent lifetime. Signing in again during the same run preserves other live browser sessions, and logout no longer depends on writing the vault.
+
+Peer connection summaries and generated failures hide endpoint userinfo, private paths, query values and fragments while keeping the original transport settings. Inspecting an MCP peer also handles the absence of CDP state without panicking.
+
+Agent permissions can now use an explicit V2 action list with key/repeat, tool/method and file-transfer conditions. The permissions page separates session lifecycle, terminal readers and file sub-actions, and previews an explicit upgrade from existing function groups. Composite operations are checked before sending input or starting a transfer; task access checks both hosts, and Agent profile/extension summaries hide transport secrets. Existing tokens and V1 policies remain usable.
+
 Permission and token management now has its own desktop page with an Agent list, function checkboxes, a host picker and a separate token tab. Create an Agent, choose its functions and saved hosts, then issue client tokens. Errors remain visible above the workspace and next to the action; the account page keeps login, password and sign-out controls. Function/host selections are enforced on MCP requests and existing session handles.
 
 Admins can now create Agents and issue MCP tokens from the account page, copy HTTP/SSE or stdio configuration, disable an Agent, and revoke individual client tokens. Multiple clients share a stable identity; credentials persist as encrypted digests. stdio uses `TERMCP_MCP_TOKEN` without changing daemon authentication, and token revocation disconnects its active requests. Admins can also issue MCP-only tokens for themselves.
 
-默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，账号、签名密钥、会话和预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。有自动解锁时重启保留有效登录，否则先输入主密码解锁。账号页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文账号可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1，OAuth 尚未实现，显式旧 token/hash 与开放模式仍保留。
+默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，账号、签名密钥、凭据及预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。自动解锁只恢复密钥，管理员浏览器会话每次重启后均需重新登录；无自动解锁时先输入主密码解锁。账号页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文账号可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1，OAuth 尚未实现，显式旧 token/hash 与开放模式仍保留。
 
 - **`term` 可以只要 JSON，不要文本（#231）**。回复有两种投影：渲染文本和它的 JSON 双胞胎。`structured_content` 加上后者，新增的 `content:false` 去掉前者，程序化调用方（机器人、CI）于是只为真正解析的那半付费。两者都拒绝是 400：一条要求「一个字节都别回」的命令是打错的请求，不是请求。REST 的 body 本来就是 JSON，所以那边 `content:false` 只去掉可选的 `X-Termcp-Text` 头。
 - **持久主机配置有稳定身份**。每个配置目录的 `identity` 旁车保存不随改名变化的 UUID；会话、扩展、标签和面板按身份关联，删除后同名新建不会再继承旧授权。旧目录首次加载时补建身份，配置正文保持原样，多目标扩展的身份映射单独保存。

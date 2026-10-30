@@ -11,6 +11,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/directive"
@@ -74,6 +75,9 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 			continue
 		}
 		shells := live.ListChildShells()
+		if !agentCanView(ctx, "shell.list") {
+			shells = nil
+		}
 		if len(shells) == 0 {
 			b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n",
 				sess.ID, sess.Status, dash(sess.SSHConfig), ageOf(sess.CreatedAt)))
@@ -112,7 +116,7 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 	// peer that exists but is invisible there is an address lost the moment you look
 	// away. They are printed with the address that addresses them, so column 1 is
 	// copyable for either kind of node.
-	if peers := peerLines(sessions); peers != "" {
+	if peers := peerLinesFor(ctx, sessions); peers != "" {
 		body += peers
 	}
 	if strings.TrimSpace(body) == "" {
@@ -166,6 +170,9 @@ func (s *Server) directiveInfo(ctx context.Context, stmt directive.Statement, wi
 	if idx := locator.SplitHandle(stmt.Target).Index; idx > 0 {
 		cs, ok := sess.ShellByIndex(idx)
 		if !ok {
+			if !agentCanView(ctx, "shell.list") {
+				return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeShellNotFound, msg: fmt.Sprintf("no channel %d on %s", idx, sess.ID)})
+			}
 			return s.slotFromFailure(ctx, stmt, &toolFailure{
 				code: CodeShellNotFound,
 				msg:  fmt.Sprintf("no channel %d on %s; it has %s", idx, sess.ID, channelSummary(sess)),
@@ -197,6 +204,9 @@ func (s *Server) directiveInfo(ctx context.Context, stmt directive.Statement, wi
 	}
 	writeKV(&b, "approval", approvalSummaryText(info))
 	for _, sh := range sess.ListChildShells() {
+		if !agentCanView(ctx, "shell.list") {
+			break
+		}
 		writeKV(&b, "shell", fmt.Sprintf("%s %s %s %s",
 			handleOf(info.ID, sh.Index), sh.Status, dash(string(sh.Mode)), dash(sh.Name)))
 	}
@@ -2129,6 +2139,10 @@ func flagTable(op directive.Op) string {
 // next command without translating anything. The session half is the id in column 1
 // of the session's own line, which is why the id is repeated rather than implied.
 func peerLines(sessions []api.Session) string {
+	return peerLinesFor(context.Background(), sessions)
+}
+
+func peerLinesFor(ctx context.Context, sessions []api.Session) string {
 	if len(sessions) == 0 {
 		return ""
 	}
@@ -2139,7 +2153,7 @@ func peerLines(sessions []api.Session) string {
 	jrpcChannelsMu.Lock()
 	handles := make([]*jrpcHandle, 0, len(jrpcChannels))
 	for _, h := range jrpcChannels {
-		if want[h.sessionID] {
+		if want[h.sessionID] && agentCanView(ctx, h.kind+".list") {
 			handles = append(handles, h)
 		}
 	}
@@ -2157,13 +2171,18 @@ func peerLines(sessions []api.Session) string {
 	b.WriteString("\npeers (address, transport, endpoint, attached):\n")
 	for _, h := range handles {
 		b.WriteString("  " + peerAddress(h.sessionID, h.kind, h.index) + "\t" +
-			h.ch.Transport().String() + "\t" + h.ch.URL())
+			h.ch.Transport().String() + "\t" + peerEndpointLabel(h.ch.URL()))
 		if h.cdp != nil {
 			b.WriteString(fmt.Sprintf("\t%d page(s) attached", len(h.cdp.snapshot())))
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func agentCanView(ctx context.Context, operation string) bool {
+	p, restricted, err := auth.PolicyFromContext(ctx)
+	return !restricted || err == nil && (!p.IsV2() || p.AllowsOperation(operation))
 }
 
 // streamLen is one channel's stream length, asked of the record rather than of the

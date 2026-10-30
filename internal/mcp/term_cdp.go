@@ -184,7 +184,7 @@ func (s *Server) cdpAttach(ctx context.Context, stmt directive.Statement, h *jrp
 		"params": map[string]any{"targetId": targetID, "flatten": true},
 	})
 	if err != nil {
-		return cdpFailure(stmt, "Target.attachToTarget", err)
+		return cdpFailure(stmt, "Target.attachToTarget", err, h.ch.URL(), h.httpBase)
 	}
 	var doc struct {
 		Result struct {
@@ -258,7 +258,7 @@ func (s *Server) cdpList(ctx context.Context, stmt directive.Statement, h *jrpcH
 	handle := peerAddress(h.sessionID, h.kind, h.index)
 	targets, err := s.cdpTargets(ctx, h)
 	if err != nil {
-		return cdpFailure(stmt, "Target.getTargets", err)
+		return cdpFailure(stmt, "Target.getTargets", err, h.ch.URL(), h.httpBase)
 	}
 	attached := map[string]string{} // targetId -> child handle
 	for _, sess := range h.cdp.snapshot() {
@@ -266,7 +266,7 @@ func (s *Server) cdpList(ctx context.Context, stmt directive.Statement, h *jrpcH
 	}
 
 	var b strings.Builder
-	b.WriteString(handle + "  " + h.ch.URL() + "  (" + h.ch.Transport().String() + ")\n\n")
+	b.WriteString(handle + "  " + peerEndpointLabel(h.ch.URL()) + "  (" + h.ch.Transport().String() + ")\n\n")
 	if len(targets) == 0 {
 		b.WriteString("no targets. A headless browser with no page has none until something creates one:\n")
 		b.WriteString("  call " + handle + " '{\"method\":\"Target.createTarget\",\"params\":{\"url\":\"about:blank\"}}'")
@@ -400,9 +400,12 @@ func (s *Server) cdpDescribe(stmt directive.Statement, h *jrpcHandle, target str
 	handle := peerAddress(h.sessionID, h.kind, h.index)
 	if target == "" {
 		var b strings.Builder
-		b.WriteString(handle + "  " + h.ch.URL() + "  (" + h.ch.Transport().String() + ")\n")
+		b.WriteString(handle + "  " + peerEndpointLabel(h.ch.URL()) + "  (" + h.ch.Transport().String() + ")\n")
 		stats := h.ch.Latest()
 		b.WriteString(fmt.Sprintf("frames received: %d  (read --since N pages the history; N is the number you last saw)\n", stats))
+		if h.cdp == nil {
+			return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path, "Latest": fmt.Sprint(stats)}, Body: b.String()}
+		}
 		sessions := h.cdp.snapshot()
 		if len(sessions) == 0 {
 			b.WriteString("\nno attached targets. `ls " + handle + "` lists the tabs; `open " + handle + " --target <targetId>` attaches one.")
@@ -448,12 +451,12 @@ func (s *Server) cdpProtocol(ctx context.Context, stmt directive.Statement, h *j
 	handle := peerAddress(h.sessionID, h.kind, h.index)
 	if h.httpBase == "" {
 		return badRequest(stmt, "this peer was opened on a bare ws:// URL, so its protocol document has no address to read.\n"+
-			"Reopen it through the http endpoint and the signature comes with it: `open <session> cdp "+h.ch.URL()+"` "+
+			"Reopen it through the http endpoint and the signature comes with it: `open <session> cdp "+peerEndpointLabel(h.ch.URL())+"` "+
 			"or `open <session> cdp http://<host>:<port>`.")
 	}
 	raw, err := fetchOverSession(ctx, h.httpBase+"/json/protocol", h.dial)
 	if err != nil {
-		return cdpFailure(stmt, "GET /json/protocol", err)
+		return cdpFailure(stmt, "GET /json/protocol", err, h.ch.URL(), h.httpBase)
 	}
 	var doc struct {
 		// THE VERSION IS AN OBJECT, not a string: {"major":"1","minor":"3"}.
@@ -613,6 +616,9 @@ func (s *Server) cdpEvents(ctx context.Context, stmt directive.Statement, h *jrp
 
 // cdpSend writes one frame without waiting for an answer.
 func (s *Server) cdpSend(ctx context.Context, stmt directive.Statement, h *jrpcHandle, target string, frame map[string]any) envelope.Slot {
+	if bad := s.checkAgentCDPFrame(ctx, stmt, frame, false); bad != nil {
+		return *bad
+	}
 	handle := peerAddress(h.sessionID, h.kind, h.index)
 	if target != "" {
 		sess, problem := h.cdp.resolve(handle, target)
@@ -624,7 +630,7 @@ func (s *Server) cdpSend(ctx context.Context, stmt directive.Statement, h *jrpcH
 		}
 	}
 	if err := h.ch.Send(ctx, frame); err != nil {
-		return cdpFailure(stmt, frameMethod(frame), err)
+		return cdpFailure(stmt, frameMethod(frame), err, h.ch.URL(), h.httpBase)
 	}
 	return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path},
 		Body: "sent; read the answer or events with `read " + handle + " --since <n>`"}
@@ -645,6 +651,9 @@ func (s *Server) cdpSend(ctx context.Context, stmt directive.Statement, h *jrpcH
 // domain enablement a page event depends on dies with the session — so the reply
 // says that when the frame looks like a first step.
 func (s *Server) cdpCall(ctx context.Context, stmt directive.Statement, h *jrpcHandle, win termArgs, target string, frame map[string]any) envelope.Slot {
+	if bad := s.checkAgentCDPFrame(ctx, stmt, frame, cdpTransientTarget(stmt.Key) != ""); bad != nil {
+		return *bad
+	}
 	handle := peerAddress(h.sessionID, h.kind, h.index)
 	if transient := cdpTransientTarget(stmt.Key); transient != "" {
 		sess, slot, ok := s.cdpTransientSession(ctx, stmt, h, transient)
@@ -663,7 +672,7 @@ func (s *Server) cdpCall(ctx context.Context, stmt directive.Statement, h *jrpcH
 		}
 		reply, err := h.ch.Call(ctx, frame)
 		if err != nil {
-			return cdpFailure(stmt, frameMethod(frame), err)
+			return cdpFailure(stmt, frameMethod(frame), err, h.ch.URL(), h.httpBase)
 		}
 		return s.frameReply(ctx, stmt, h, reply, win)
 	}
@@ -685,7 +694,7 @@ func (s *Server) cdpCall(ctx context.Context, stmt directive.Statement, h *jrpcH
 	}
 	reply, err := h.ch.Call(ctx, frame)
 	if err != nil {
-		return cdpFailure(stmt, frameMethod(frame), err)
+		return cdpFailure(stmt, frameMethod(frame), err, h.ch.URL(), h.httpBase)
 	}
 	return s.frameReply(ctx, stmt, h, reply, win)
 }
@@ -721,7 +730,7 @@ func (s *Server) cdpTransientSession(ctx context.Context, stmt directive.Stateme
 		"params": map[string]any{"targetId": targetID, "flatten": true},
 	})
 	if err != nil {
-		return nil, cdpFailure(stmt, "Target.attachToTarget", err), false
+		return nil, cdpFailure(stmt, "Target.attachToTarget", err, h.ch.URL(), h.httpBase), false
 	}
 	var doc struct {
 		Result struct {
@@ -764,10 +773,10 @@ func (s *Server) cdpDetachQuietly(ctx context.Context, h *jrpcHandle, sessionID 
 
 // cdpFailure renders a transport or protocol failure with the sentence that says
 // what to do about it, instead of a bare error string.
-func cdpFailure(stmt directive.Statement, what string, err error) envelope.Slot {
+func cdpFailure(stmt directive.Statement, what string, err error, endpoints ...string) envelope.Slot {
 	return envelope.Slot{Code: 500, Headers: map[string]string{
 		"Path": stmt.Path, "Error-Code": CodeConnectionFailed,
-	}, Body: what + ": " + err.Error()}
+	}, Body: what + ": " + peerFailureText(err, endpoints...)}
 }
 
 func frameMethod(frame map[string]any) string {

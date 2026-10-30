@@ -9,6 +9,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
 
@@ -67,6 +68,9 @@ func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallTool
 	}
 	out := make([]map[string]any, 0, len(names))
 	for _, name := range names {
+		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (err != nil || p.IsV2() && !s.agentExtensionAllowed(p, name)) {
+			continue
+		}
 		ext, err := s.extensions.Store().Load(name)
 		st, _ := s.extensions.Status(name)
 		entry := map[string]any{"name": name}
@@ -118,7 +122,7 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 		}
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
-	entry := extensionConfigMap(ext)
+	entry := agentExtensionConfigMap(ctx, ext)
 	if holes, hErr := s.extensions.Store().Holes(name); hErr == nil && len(holes) > 0 {
 		entry["holes"] = holes
 	}
@@ -163,7 +167,7 @@ func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallTo
 	if err := extensions.SaveStruct(s.extensions.Store(), &ext); err != nil {
 		return extensionSaveError(err), nil
 	}
-	return extensionSaved(s, &ext)
+	return extensionSaved(ctx, s, &ext)
 }
 
 // handleExtensionUpdate patches a stored template. An omitted field keeps its
@@ -202,7 +206,7 @@ func (s *Server) handleExtensionUpdate(ctx context.Context, request mcpgo.CallTo
 	if err := extensions.SaveStruct(s.extensions.Store(), ext); err != nil {
 		return extensionSaveError(err), nil
 	}
-	return extensionSaved(s, ext)
+	return extensionSaved(ctx, s, ext)
 }
 
 // handleExtensionSet fills the holes a template asks for.
@@ -348,7 +352,7 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
-	entry := extensionConfigMap(ext)
+	entry := agentExtensionConfigMap(ctx, ext)
 	if target != "" {
 		entry["target"] = target
 	}
@@ -427,11 +431,11 @@ func extensionSaveError(err error) *mcpgo.CallToolResult {
 	return toolError(CodeInvalidArgument, "extension not saved: %s", err)
 }
 
-func extensionSaved(s *Server, ext *extensions.Extension) (*mcpgo.CallToolResult, error) {
+func extensionSaved(ctx context.Context, s *Server, ext *extensions.Extension) (*mcpgo.CallToolResult, error) {
 	// The store's own change subscription triggers the reconciler, so the
 	// session is coming up; the returned template is what was persisted.
 	st, _ := s.extensions.Status(ext.Name)
-	entry := extensionConfigMap(ext)
+	entry := agentExtensionConfigMap(ctx, ext)
 	status, next := extensionStatusWord(ext.Name, st, ext.IsEnabled())
 	entry["status"] = status
 	if next != "" {
@@ -481,6 +485,15 @@ func extensionConfigMap(ext *extensions.Extension) map[string]any {
 		entry["targets"] = ext.Targets
 	}
 	return entry
+}
+
+// Agent discovery exposes instructions and capability metadata, never the
+// transport credentials or command arguments used to start the extension.
+func agentExtensionConfigMap(ctx context.Context, ext *extensions.Extension) map[string]any {
+	if _, restricted, _ := auth.PolicyFromContext(ctx); !restricted {
+		return extensionConfigMap(ext)
+	}
+	return map[string]any{"name": ext.Name, "target": ext.Target, "description": ext.Description, "enabled": ext.IsEnabled(), "mode": ext.Mode, "allow": ext.Allow, "paths": ext.Paths, "notes": ext.Notes}
 }
 
 // extensionStatusWord is the word a reply prints for a template's state.

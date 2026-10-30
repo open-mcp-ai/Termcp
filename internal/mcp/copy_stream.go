@@ -80,16 +80,22 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, win ter
 
 	// Its own context: the request's is cancelled the moment this handler returns,
 	// which is now, before the copy is done.
-	taskCtx, cancel := context.WithCancel(context.Background())
 	// Path is the destination and localPath is the source, which is the order
 	// renderTask prints them in ("source -> destination"). Passing them the other way
 	// round made every receipt read backwards.
-	t := s.tasks.Start(task.Copy, dst.Target, dst.Key, src.describe(), cancel)
+	t, taskCtx, release, err := s.startTransfer(ctx, task.Copy, dst.Target, dst.Key, src.describe(), s.taskResource(stmt.Target, "read"), s.taskResource(dst.Target, "write"))
+	if err != nil {
+		return []envelope.Slot{*agentDeniedSlot(stmt, err)}
+	}
 	go func() {
-		defer cancel()
+		defer release()
+		if err := taskCtx.Err(); err != nil {
+			s.finishTransfer(taskCtx, t.ID(), err)
+			return
+		}
 		n, err := s.runCopy(taskCtx, src, dst, t.Add)
 		t.SetTotal(n)
-		s.tasks.Finish(t.ID(), err)
+		s.finishTransfer(taskCtx, t.ID(), err)
 	}()
 
 	// THE SAME RECEIPT SHAPE EVERY OTHER TRANSFER USES (202 + Task + a body that says
@@ -199,6 +205,8 @@ func (s *Server) runCopy(ctx context.Context, src copySource, dst *directive.Sta
 		return 0, fmt.Errorf("%s", errorReplyText(bad))
 	}
 	defer dstCli.Close()
+	stop := context.AfterFunc(ctx, func() { _ = dstCli.Close() })
+	defer stop()
 
 	if src.channel == "" {
 		return s.copyRemoteFile(ctx, src, dst, dstCli, progress)
@@ -214,6 +222,8 @@ func (s *Server) copyRemoteFile(ctx context.Context, src copySource, dst *direct
 		return 0, fmt.Errorf("%s", errorReplyText(bad))
 	}
 	defer srcCli.Close()
+	stop := context.AfterFunc(ctx, func() { _ = srcCli.Close() })
+	defer stop()
 
 	pr, pw := io.Pipe()
 	readErr := make(chan error, 1)

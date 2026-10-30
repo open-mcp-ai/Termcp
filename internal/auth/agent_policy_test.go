@@ -61,6 +61,10 @@ func TestAgentPolicySelectionRevisionAndPersistence(t *testing.T) {
 	if w = bearerRequest(check, "POST", "/stream", c.Token, ""); w.Code != 204 {
 		t.Fatal(w.Code)
 	}
+	cookie, _, err = loaded.login("admin", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
 	catalog := managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "GET", "/auth/access", "", cookie, "")
 	if catalog.Code != 200 || !strings.Contains(catalog.Body.String(), "renamed-host") || strings.Contains(catalog.Body.String(), "synthetic-password") {
 		t.Fatal("host catalog missing or leaked credentials")
@@ -69,7 +73,7 @@ func TestAgentPolicySelectionRevisionAndPersistence(t *testing.T) {
 
 func TestAgentPolicyResolverChecksLiveGrant(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
-	issued := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"agent"}`)
+	issued := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"agent","policy":{"functions":["terminal_write"],"host_mode":"all","hosts":[]}}`)
 	r := httptest.NewRequest("GET", "http://127.0.0.1/sse", nil)
 	r.Header.Set("Authorization", "Bearer "+issued.Token)
 	ctx, done, status := m.admitToken(r)

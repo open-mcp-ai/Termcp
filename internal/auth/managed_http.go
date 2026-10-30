@@ -20,8 +20,11 @@ var loginHTML string
 //go:embed permissions.html
 var permissionsHTML string
 
-var loginTemplate = template.Must(template.New("login").Parse(loginHTML))
-var permissionsTemplate = template.Must(template.New("permissions").Parse(permissionsHTML))
+//go:embed page_theme.html
+var pageThemeHTML string
+
+var loginTemplate = template.Must(template.New("login").Parse(loginHTML + pageThemeHTML))
+var permissionsTemplate = template.Must(template.New("permissions").Parse(permissionsHTML + pageThemeHTML))
 
 const preloginCookie = "termcp_prelogin"
 
@@ -134,6 +137,10 @@ func requestSurface(r *http.Request) string {
 func (m *Managed) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, pageAssetsPrefix) {
+			m.servePageAsset(w, r)
+			return
+		}
 		if isPublicDoc(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -178,6 +185,9 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 		}
 		id, session, err := m.requestSession(r)
 		if err != nil {
+			if _, present := uniqueCookie(r, SessionCookie); present {
+				http.SetCookie(w, &http.Cookie{Name: SessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteLaxMode})
+			}
 			if r.Method == "GET" && !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/auth/") && requestSurface(r) != "mcp" {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 			} else {
@@ -213,7 +223,13 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 				return
 			}
 			m.accessCatalog(w, r)
-		case r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/tokens" || strings.HasPrefix(r.URL.Path, "/auth/agents/") || strings.HasPrefix(r.URL.Path, "/auth/tokens/"):
+		case isGroupPath(r.URL.Path):
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			m.groupManagement(w, r)
+		case r.URL.Path == "/auth/principals" || r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/tokens" || strings.HasPrefix(r.URL.Path, "/auth/agents/") || strings.HasPrefix(r.URL.Path, "/auth/tokens/"):
 			if session.Actor.Role != RoleAdmin {
 				authError(w, 403, "admin required")
 				return
@@ -256,13 +272,16 @@ func (m *Managed) page(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'nonce-"+nonce+"'; font-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	if r.Method != "HEAD" {
 		page := loginTemplate
 		if r.URL.Path == "/permissions" {
 			page = permissionsTemplate
 		}
-		_ = page.Execute(w, struct{ Nonce string }{nonce})
+		_ = page.Execute(w, struct {
+			Nonce  string
+			Themes bool
+		}{nonce, m.pageAssets != nil})
 	}
 }
 

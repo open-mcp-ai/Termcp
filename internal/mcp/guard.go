@@ -5,6 +5,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -73,12 +74,12 @@ func (g toolGuard) check(ctx context.Context, toolName string, c gate, request m
 	// ordinary case is the same loop of one.
 	if shellID := getString(args, "shell_id", ""); shellID != "" {
 		ids, _ := splitBatchIDs(shellID)
-		return g.checkEach(ids, g.sessionForShellID, callerNS, toolName, c, args)
+		return g.checkEach(ids, g.lookupShellID, callerNS, toolName, c, args)
 	}
 
 	if sessionID := getString(args, "session_id", ""); sessionID != "" {
 		ids, _ := splitBatchIDs(sessionID)
-		return g.checkEach(ids, g.sessionForSessionID, callerNS, toolName, c, args)
+		return g.checkEach(ids, g.lookupSessionID, callerNS, toolName, c, args)
 	}
 
 	// ONE TOOL NAMES WHAT IT ACTS ON BY THE RESOURCE'S OWN ID rather than by the
@@ -190,6 +191,21 @@ func (g toolGuard) sessionForShellID(shellID string) *session.Session {
 	return g.sessionForSessionID(shellID)
 }
 
+// lookupShellID resolves authorization targets without renewing extension leases.
+// In particular a refused call or a policy preview must not count as use.
+func (g toolGuard) lookupShellID(id string) *session.Session {
+	if g.server.sessMgr == nil {
+		return nil
+	}
+	if cs := g.server.sessMgr.GetChildShell(id); cs != nil {
+		return g.server.sessMgr.Get(cs.ParentSessionID())
+	}
+	if sess := g.server.sessMgr.GetSessionByShellID(id); sess != nil {
+		return sess
+	}
+	return g.lookupSessionID(id)
+}
+
 // sessionForSessionID resolves a session_id argument the way requireSession
 // does: a raw session id, a shell id belonging to it, a termcp:// locator, or the
 // short `sid:N` handle. The same security note applies: a spelling the resolver
@@ -211,6 +227,9 @@ func (g toolGuard) sessionForSessionID(id string) *session.Session {
 }
 
 func (g toolGuard) lookupSessionID(id string) *session.Session {
+	if g.server.sessMgr == nil {
+		return nil
+	}
 	if sess := g.server.sessMgr.Get(id); sess != nil {
 		return sess
 	}
@@ -261,4 +280,46 @@ func (g toolGuard) checkSession(sess *session.Session, toolName string, c gate, 
 		}
 	}
 	return nil
+}
+
+func (s *Server) touchToolTargets(request mcpgo.CallToolRequest) {
+	if s.extensions == nil {
+		return
+	}
+	g := toolGuard{server: s}
+	args := request.GetArguments()
+	for _, key := range []string{"shell_id", "session_id"} {
+		if raw := getString(args, key, ""); raw != "" {
+			ids, _ := splitBatchIDs(raw)
+			for _, id := range ids {
+				if key == "shell_id" {
+					g.sessionForShellID(id)
+				} else {
+					g.sessionForSessionID(id)
+				}
+			}
+			return
+		}
+	}
+}
+
+func (s *Server) touchStatementTargets(stmt directive.Statement) {
+	if s.extensions == nil {
+		return
+	}
+	if stmt.Target != "" {
+		ids, _ := splitBatchIDs(stmt.Target)
+		for _, id := range ids {
+			if sess := s.agentStatementSession(id); sess != nil {
+				if cs := s.sessMgr.GetChildShell(id); cs != nil {
+					s.extensions.Touch(id, sess.ID)
+				} else {
+					s.extensions.Touch("", sess.ID)
+				}
+			}
+		}
+	}
+	if stmt.Pipe != nil {
+		s.touchStatementTargets(*stmt.Pipe)
+	}
 }

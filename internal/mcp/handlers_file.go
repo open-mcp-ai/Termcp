@@ -63,11 +63,21 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	// reply cannot carry the bytes — they go to a file — so there is nothing lost by
 	// answering with a receipt, and a caller behind a watchdog gets to keep its turn.
 	if mode == "file" && localPath != "" {
-		taskCtx, cancel := context.WithCancel(context.Background())
-		t := s.tasks.Start(task.Download, sessionID, remotePath, localPath, cancel)
+		t, taskCtx, release, err := s.startTransfer(ctx, task.Download, sessionID, remotePath, localPath, s.taskResource(sessionID, "read"), s.localTaskResource(ctx, "write"))
+		if err != nil {
+			_ = sftpCli.Close()
+			return toolError(CodeForbidden, "%s", err.Error()), nil
+		}
 		go func() {
+			defer release()
+			stop := context.AfterFunc(taskCtx, func() { _ = sftpCli.Close() })
+			defer stop()
 			defer sftpCli.Close()
 			defer releaseTransport()
+			if err := taskCtx.Err(); err != nil {
+				s.finishTransfer(taskCtx, t.ID(), err)
+				return
+			}
 			if info, statErr := sftpCli.StatFile(remotePath); statErr == nil {
 				t.SetTotal(info.Size)
 			}
@@ -75,7 +85,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 			if err == nil {
 				t.SetTotal(n)
 			}
-			s.tasks.Finish(t.ID(), err)
+			s.finishTransfer(taskCtx, t.ID(), err)
 		}()
 		return jsonResult(map[string]any{
 			"ok":          true,

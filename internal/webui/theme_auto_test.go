@@ -44,7 +44,7 @@ function boot(stored, dark, opts) {
   let mediaCalls = [];
   const link = { href: 'themes/default-light/theme.css' };
   const context = {
-    document: { documentElement: { setAttribute: (k, v) => attrs[k] = v, classList: { add() {}, remove() {} } },
+    document: { documentElement: { getAttribute: k => attrs[k], setAttribute: (k, v) => attrs[k] = v, classList: { add() {}, remove() {} } },
       getElementById: () => link, dispatchEvent() {} },
     localStorage: { getItem: () => stored },
     window: { matchMedia: q => { mediaCalls.push(q); return { matches: dark }; } },

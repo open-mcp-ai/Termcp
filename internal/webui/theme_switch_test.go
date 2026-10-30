@@ -387,6 +387,22 @@ vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), context);
  assert.equal(term.options.fontSize, 13);
  assert.equal(term.buffer, history);
 
+ // Authentication reuses the same runtime through its separate public mount.
+ attrs['data-theme-base'] = 'auth/ui/';
+ const authStart = requests.length;
+ const authTheme = context.applyTheme('default-dark');
+ links[1].onload();
+ assert.equal(await authTheme, true);
+ assert.ok(links[0].href.startsWith('auth/ui/themes/default-dark/'));
+ assert.ok(requests.slice(authStart).every(url => url.startsWith('auth/ui/themes/')));
+ assert.ok(context.themeAssetURL('icons/terminal-shell.svg').startsWith('auth/ui/themes/default-dark/assets/'));
+ delete attrs['data-theme-base'];
+ // Restore a normal link before checking the existing workspace URLs.
+ const workbenchTheme = context.applyTheme('default-light');
+ links[1].onload();
+ assert.equal(await workbenchTheme, true);
+ requests.splice(authStart);
+
  // The same runtime works in the workbench and docs under a proxy mount.
  for (const page of ['https://app.example/', 'https://app.example/termcp/index.html', 'https://app.example/termcp/api.html']) {
   const prefix = new URL('.', page).pathname;
@@ -496,12 +512,13 @@ const assert = require('assert'), fs = require('fs'), vm = require('vm');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 const pages = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 for (const prefix of ['/', '/tools/termcp/']) {
- for (const page of ['index.html', 'api.html']) {
+ for (const page of ['index.html', 'api.html', 'login', 'permissions']) {
+  const assetPrefix = ['login', 'permissions'].includes(page) ? 'auth/ui/' : '';
   const base = 'https://app.example' + prefix + page;
-  const link = { href: pages[page] }, attrs = {};
-  assert.equal(new URL(link.href, base).pathname, prefix + 'themes/default-light/theme.css');
+  const link = { href: pages[page] || 'auth/ui/themes/default-light/theme.css' }, attrs = { 'data-theme-base': assetPrefix };
+  assert.equal(new URL(link.href, base).pathname, prefix + assetPrefix + 'themes/default-light/theme.css');
   const context = {
-   document: { documentElement: { setAttribute: (k, v) => attrs[k] = v, classList: { add() {}, remove() {} } },
+   document: { documentElement: { getAttribute: k => attrs[k], setAttribute: (k, v) => attrs[k] = v, classList: { add() {}, remove() {} } },
     getElementById: () => link, dispatchEvent() {} },
    localStorage: { getItem: () => 'saved theme' },
    setTimeout: () => 1, clearTimeout() {}, CustomEvent: class {}
@@ -509,10 +526,10 @@ for (const prefix of ['/', '/tools/termcp/']) {
   vm.createContext(context);
   vm.runInContext(source, context);
   assert.equal(attrs['data-theme'], 'saved theme');
-  assert.equal(new URL(link.href, base).pathname, prefix + 'themes/saved%20theme/theme.css');
+  assert.equal(new URL(link.href, base).pathname, prefix + assetPrefix + 'themes/saved%20theme/theme.css');
   link.onerror();
   assert.equal(attrs['data-theme'], 'default-light');
-  assert.equal(new URL(link.href, base).pathname, prefix + 'themes/default-light/theme.css');
+  assert.equal(new URL(link.href, base).pathname, prefix + assetPrefix + 'themes/default-light/theme.css');
  }
 }
 `
