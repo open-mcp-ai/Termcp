@@ -1344,15 +1344,30 @@ because nothing is refused: typing works.
 
 ### What the agent is told
 
-A queued write answers `202 Accepted` with no id:
+A queued write answers `202 Accepted` with the request's correlation fields:
 
 ```json
-{ "ok": true, "approved": false, "review_pending": true }
+{
+  "ok": true,
+  "approved": false,
+  "review_pending": true,
+  "approval_id": "9f0c…",
+  "session_id": "3f2a…",
+  "expires_at": 1790130035403,
+  "message": "Submitted for review: write 1.2 KB to /etc/hosts. …"
+}
 ```
 
-The agent cannot decide the request, so an id would only invite a retry loop. It
-is told the write is waiting and continues; the shell's output afterwards shows
-whether the command ran.
+`approval_id` is the `id` of the request in `GET /api/approvals`, and it exists
+so a harness can PAIR the tool result with the decision it later observes —
+proving which original call a decided request belongs to instead of matching on
+time or wording. `session_id` is the request's session; `expires_at` is its
+deadline in Unix milliseconds and is omitted when the request has none.
+
+The agent cannot decide the request, so the fields are correlation only: they
+change no authority and the reply still forbids polling or resubmitting. A
+staged command line — text submitted with `shell_input` but not yet ended by
+`shell_key` — is not queued yet and carries none of these fields.
 
 ### `GET /api/sessions/{id}/approval`
 

@@ -777,9 +777,12 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 			// it, so a caller that wants to treat it as a failure has the fact. What
 			// it no longer gets is a status that says the READ failed.
 			if code < 400 && *exit != 0 {
+				// The command ran and the stream was read successfully. Its non-zero
+				// status is a failing slot fact, not a failed request: callers can
+				// inspect Exit-Code / Error-Code, while `;` and `&&` continue to work
+				// according to the documented request-level status contract (#240).
 				headers["Error-Code"] = "child_exit"
 				if stmt.Op != "read" {
-					code = 500
 					headers["Error-Code"] = "command_failed"
 				}
 			}

@@ -131,17 +131,17 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 		t.Fatalf("a short-circuit run registered a session: %+v", all)
 	}
 
-	// 5. A NON-ZERO EXIT is this call's failure, exactly as `run` reports one on a channel.
+	// 5. A NON-ZERO EXIT is a failing slot fact, but the TERM request succeeded.
 	command := "sh -c 'exit 3'"
 	if runtime.GOOS == "windows" {
 		command = "cmd.exe /c exit 3"
 	}
 	fail := s.runWithArgs("run use internal $1", command)
-	if len(fail.slots) != 1 || fail.slots[0].Code != 500 {
-		t.Fatalf("a failing command should answer 500, got %+v", fail.slots)
+	if len(fail.slots) != 1 || fail.slots[0].Code != 200 {
+		t.Fatalf("a non-zero child exit must keep the request 2xx, got %+v", fail.slots)
 	}
-	if fail.slots[0].Headers["Exit-Code"] != "3" {
-		t.Errorf("Exit-Code header = %q, want 3; reply: %+v", fail.slots[0].Headers["Exit-Code"], fail.slots[0])
+	if fail.slots[0].Headers["Exit-Code"] != "3" || fail.slots[0].Headers["Error-Code"] != "command_failed" {
+		t.Errorf("failing slot facts missing (Exit-Code=3, Error-Code=command_failed): %+v", fail.slots[0])
 	}
 
 	// 6. `use <host>` UNQUOTED is one target, not a target plus a stray word.
@@ -241,14 +241,16 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 		t.Fatalf("a stopped short-circuit run registered a session: %+v", all)
 	}
 
-	// 11. A FAILURE WITH NO OUTPUT STILL SAYS SOMETHING. A 500 with an empty body and
-	// an exit code is a question, not an answer.
+	// 11. A NON-ZERO EXIT WITH NO OUTPUT still carries the reason in its reply.
 	emptyFail := s.runWithArgs("run use internal $1", `sh -c 'exit 7'`)
 	if runtime.GOOS == "windows" {
 		emptyFail = s.runWithArgs("run use internal $1", "cmd.exe /c exit 7")
 	}
-	if len(emptyFail.slots) != 1 || emptyFail.slots[0].Code != 500 {
-		t.Fatalf("a failing command should answer 500, got %+v", emptyFail.slots)
+	if len(emptyFail.slots) != 1 || emptyFail.slots[0].Code != 200 {
+		t.Fatalf("a non-zero child exit must keep the request 2xx, got %+v", emptyFail.slots)
+	}
+	if emptyFail.slots[0].Headers["Error-Code"] != "command_failed" || emptyFail.slots[0].Headers["Exit-Code"] != "7" {
+		t.Errorf("failing slot facts missing from response: %+v", emptyFail.slots[0])
 	}
 	if strings.TrimSpace(emptyFail.slots[0].Body) == "" {
 		t.Errorf("a failure with no output must explain itself; reply = %+v", emptyFail.slots[0])

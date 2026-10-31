@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -136,8 +137,9 @@ type Session struct {
 	defaultShell   string       // profile default_shell, applied to shells opened later
 	onExit         OnExitPolicy // what to do when the last shell ends by itself
 	primaryShellID string       // first shell id (≠ session id); addressed by session-level helpers; empty when NoShell
-	nextShellIndex int          // guarded by shellStateMu; monotonically assigns channel indexes
-	restriction    Restriction  // the zero value is unrestricted; see Config.Restriction
+	primaryMode    api.SessionMode
+	nextShellIndex int         // guarded by shellStateMu; monotonically assigns channel indexes
+	restriction    Restriction // the zero value is unrestricted; see Config.Restriction
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
@@ -291,6 +293,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	s.buf = buf
 	s.readerID = rid
 	s.primaryShellID = shellID
+	s.primaryMode = cfg.Mode
 	s.nextShellIndex = 1
 
 	root := &ChildShell{
@@ -538,6 +541,14 @@ func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 			return
 		}
 
+		// Windows ConPTY does not support SIGTERM delivery to local child processes
+		// (#239): waiting here would be a pure sleep, so close the internal pty
+		// directly. Other transports still get the requested signal and grace period.
+		skipGrace := runtime.GOOS == "windows" && s.SSHEndpoint == "internal" && s.primaryMode == api.ModePTY
+		if skipGrace {
+			gracePeriod = 0
+		}
+
 		// THE BUDGET. A graceful close gets the caller's grace period plus a little
 		// room for the round trip; a forced one gets a short fixed window, because
 		// there is nothing to wait for. Either way this call returns within it.
@@ -553,7 +564,7 @@ func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 		closed := make(chan struct{})
 		go func() {
 			defer close(closed)
-			if !force {
+			if !force && !skipGrace {
 				_ = es.Signal(ssh.SIGTERM)
 				select {
 				case <-es.Done():

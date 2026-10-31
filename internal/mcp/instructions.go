@@ -52,6 +52,7 @@ At a prompt: notify, then WAIT; read slow tasks in pieces, not by polling.
 A long, awkward call or a capability that should exist but does not?
 say what you are trying to do and ask while a human can answer.
 
-REVIEW — review_pending=true means HELD: nothing ran, no id to poll. Do NOT resubmit or
-retry; notify, then wait.
+REVIEW — review_pending=true means HELD: nothing ran. The reply's approval_id is
+for pairing it with the decision later; it is not authority. Do NOT resubmit or
+retry, and do not poll; notify, then wait.
 `

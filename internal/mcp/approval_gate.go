@@ -138,51 +138,94 @@ func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolReques
 	if err != nil {
 		return toolError(CodeOperationFailed, "cannot describe the operation for review: %s", err.Error()), true
 	}
-	if _, err := sess.SubmitOperation(approval.Submission{
+	id, err := sess.SubmitOperation(approval.Submission{
 		Kind:    kindFor(tool, args),
 		Source:  callerSource(ctx),
 		Summary: summary,
 		Payload: payload,
-	}); err != nil {
+	})
+	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), true
 	}
-	return reviewPendingOperationResult(summary), true
+	return reviewPendingOperationResult(summary, s.correlationOf(sess, id)), true
+}
+
+// correlationOf reads the queue request a reply is about, so the caller can pair
+// this result with the request it will later see decided (#236). A request that is
+// already gone yields just the id: a fabricated deadline would be worse than an
+// omitted one.
+func (s *Server) correlationOf(sess *session.Session, id string) reviewPendingFields {
+	corr := reviewPendingFields{ApprovalID: id}
+	if sess == nil || id == "" {
+		return corr
+	}
+	corr.SessionID = sess.ID
+	if q := sess.ApprovalQueue(); q != nil {
+		if req, err := q.Get(id); err == nil {
+			corr.ExpiresAt = req.ExpiresAt
+		}
+	}
+	return corr
 }
 
 // reviewWaitTail is the operational half of every review-mode reply: what the
 // agent must not do while a request waits. It is a shared constant because a held
 // command line and a held operation answer the same question, and two spellings of
 // one prohibition invite the agent to treat the weaker one as the rule.
+//
+// AN ID IS NOT AN INVITATION TO POLL (#236). The id exists so a harness can CORRELATE
+// this reply with the request it can see in `GET /api/approvals` — proving that the
+// decision it observes belongs to this call — not so the agent can decide it or loop
+// on it. Deciding is a human's act in the Web UI, and the sentence below still says
+// the only correct move is to wait.
 const reviewWaitTail = "A human decides it in the Web UI; nothing happens until then. " +
-	"There is no id to poll: do not resubmit, reword or retry - WAIT."
+	"approval_id names the request for correlation only: do not poll it, resubmit, reword or retry - WAIT."
+
+// reviewPendingFields is the correlation half of a review-mode reply: the queue
+// request this call became, so a harness can pair the tool result with the request
+// it later sees decided. Empty id means nothing was queued (staged text still
+// waiting for its ending key), and the fields are then omitted rather than sent
+// blank.
+type reviewPendingFields struct {
+	ApprovalID string
+	SessionID  string
+	ExpiresAt  int64 // Unix ms; 0 when the request has no deadline
+}
 
 // reviewPendingReply is the single constructor of a review-mode reply, shared by
 // the two points where review intercepts a call: a held command line
 // (handlers_shell.go) and a held file or forward operation (below).
 //
-// The reply carries no id and no polling instruction. The agent cannot decide the
-// request itself -- decisions are made by a human in the Web UI -- and it has
-// nothing useful to do with an id, so handing one over would only invite a retry
-// loop.
-//
-// The JSON shape is built once, here, so the two replies cannot drift apart: a
-// model branches on approved/review_pending, and a shape that differed between
-// them would read as two different states.
-func reviewPendingReply(msg string) *mcpgo.CallToolResult {
-	return jsonResult(map[string]any{
+// The JSON shape is built once, here, so the two replies cannot drift apart: a model
+// branches on approved/review_pending, and a shape that differed between them would
+// read as two different states.
+func reviewPendingDocument(msg string, corr reviewPendingFields) map[string]any {
+	fields := map[string]any{
 		"ok":             true,
 		"approved":       false,
 		"review_pending": true,
 		"message":        msg,
-	})
+	}
+	if corr.ApprovalID != "" {
+		fields["approval_id"] = corr.ApprovalID
+		fields["session_id"] = corr.SessionID
+		if corr.ExpiresAt > 0 {
+			fields["expires_at"] = corr.ExpiresAt
+		}
+	}
+	return fields
+}
+
+func reviewPendingReply(msg string, corr reviewPendingFields) *mcpgo.CallToolResult {
+	return jsonResult(reviewPendingDocument(msg, corr))
 }
 
 // reviewPendingOperationResult is the reply to an operation that review mode
 // intercepted. The summary is echoed back so the agent can tell which of its calls
 // is now waiting: unlike a command line, none of these operations left a trace
 // anywhere the agent can read later.
-func reviewPendingOperationResult(summary string) *mcpgo.CallToolResult {
-	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail))
+func reviewPendingOperationResult(summary string, corr reviewPendingFields) *mcpgo.CallToolResult {
+	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail), corr)
 }
 
 // ExecuteApprovedOperation replays a non-terminal approved request.

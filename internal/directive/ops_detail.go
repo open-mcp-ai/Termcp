@@ -1347,6 +1347,12 @@ before the transport is closed anyway. YOU DO NOT HAVE TO PASS IT: omitted means
 that needs longer has to ask for it. A channel has no such phase, so --grace on a
 handle is refused rather than ignored.
 
+ONE TRANSPORT CANNOT USE THE WAIT: a Windows internal pty. ConPTY does not deliver
+SIGTERM to a local child, so waiting there would be a sleep that ends in the same
+forced close — any --grace value is therefore skipped on that target. Linux and
+SSH targets are unaffected: there SIGTERM does reach the process, and the wait is
+real.
+
 There is no --force. Stopping and erasing are different verbs: close stops and
 keeps the record, rm erases it. A caller who wanted the record gone wants rm.`
 

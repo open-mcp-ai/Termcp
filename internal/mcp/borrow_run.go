@@ -224,8 +224,8 @@ func closeBorrowedCommand(ch *ssh.Session, client *ssh.Client) error {
 //
 // THE HEADERS ARE A CHANNEL RUN'S HEADERS, because a caller should not learn a second
 // vocabulary for the same facts: Status/Exit-Code say how the process ended, a
-// non-zero exit is a 500 with Error-Code command_failed, and Content-Range addresses
-// the bytes this reply carries.
+// non-zero exit is a 2xx failing slot with Error-Code command_failed, and Content-Range
+// addresses the bytes this reply carries.
 func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, host string, output []byte, total int64, exitCode int, exited bool, waited time.Duration, runErr error, win termArgs) envelope.Slot {
 	if runErr != nil && !exited {
 		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: runErr.Error() +
@@ -307,11 +307,8 @@ func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, 
 			slot.Headers["Status"] = "exited"
 			slot.Headers["Exit-Code"] = headers["Exit-Code"]
 			if exitCode != 0 {
+				slot.Headers["Error-Code"] = "command_failed"
 				slot.Headers["Hint"] = note
-				if slot.Code < 400 {
-					slot.Code = 500
-					slot.Headers["Error-Code"] = "command_failed"
-				}
 			}
 		}
 		return slot
@@ -324,8 +321,7 @@ func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, 
 		slot.Headers["Status"] = "stopped"
 		slot.Headers["Error-Code"] = "command_timeout"
 	}
-	if exited && exitCode != 0 && slot.Code < 400 {
-		slot.Code = 500
+	if exited && exitCode != 0 {
 		slot.Headers["Error-Code"] = "command_failed"
 	}
 	return slot

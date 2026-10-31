@@ -343,7 +343,7 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 // on purpose, but the tool LISTING must not: notify_user's description is sent on
 // every tools/list and is not where a held call is explained.
 func TestInstructionsCarryReviewPendingRule(t *testing.T) {
-	for _, want := range []string{"review_pending", "no id to poll", "resubmit"} {
+	for _, want := range []string{"review_pending", "approval_id", "do not poll", "resubmit"} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("instructions no longer explain review mode %q:\n%s", want, mcpServerInstructions)
 		}
@@ -364,7 +364,7 @@ func TestInstructionsCarryReviewPendingRule(t *testing.T) {
 // and differ everywhere else: staged text still needs its ending key, queued or
 // held work must not be retried and is checked later via shell_output.
 func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
-	held := toolResultText(reviewPendingResult(false))
+	held := toolResultText(reviewPendingResult(false, reviewPendingFields{}))
 	if !strings.Contains(held, "ending key") {
 		t.Errorf("the staged reply must ask for the ending key:\n%s", held)
 	}
@@ -374,13 +374,13 @@ func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
 		t.Errorf("the staged reply must not forbid the ending key it just asked for:\n%s", held)
 	}
 
-	queued := toolResultText(reviewPendingResult(true))
-	if !strings.Contains(queued, "no id to poll") || !strings.Contains(queued, "WAIT") {
+	queued := toolResultText(reviewPendingResult(true, reviewPendingFields{ApprovalID: "req-1"}))
+	if !strings.Contains(queued, "do not poll") || !strings.Contains(queued, "WAIT") {
 		t.Errorf("the queued reply must forbid a retry loop:\n%s", queued)
 	}
 	// A held operation shares the queued wording, so one constant keeps the two
 	// paths from forbidding the same retry loop in two different ways.
-	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts")); !strings.Contains(op, reviewWaitTail) {
+	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts", reviewPendingFields{ApprovalID: "req-1"})); !strings.Contains(op, reviewWaitTail) {
 		t.Errorf("a held operation must carry the same retry rule as a held command line:\n%s", op)
 	}
 	// The two replies differ: a model that reads "do not retry" after staging

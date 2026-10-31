@@ -434,6 +434,42 @@ func TestTermFailureKeepsTheBytes(t *testing.T) {
 	}
 }
 
+// A non-zero pipe exit is a command result, not a failed TERM request. The slot
+// keeps Error-Code/Exit-Code for callers, but remains 2xx so later statements and
+// HTTP clients do not mistake the successful execution/read for a server failure.
+func TestPipeRunNonzeroExitIsSuccessfulRequestAndDoesNotShortCircuit(t *testing.T) {
+	s := newTestServer(t)
+	// A pipe shell reads stdin so this channel stays alive for more than one `run` —
+	// the case at issue, unlike a one-shot --argv program. `sh` with no arguments is
+	// such a shell on every platform this test runs on, and it writes nothing but the
+	// caller's own bytes (cmd.exe would echo a GBK codepage banner first).
+	connected := termText(t, s, map[string]any{"cmd": "connect internal --argv sh"})
+	handle := handleFrom(t, connected)
+	failed := termCall(t, s, map[string]any{
+		"cmd":     "run " + handle + " $1 && help",
+		"args":    []any{"exit 4"},
+		"timeout": float64(5),
+	})
+	out := toolResultText(failed)
+	if !strings.HasPrefix(out, "TERM/1 2") {
+		t.Fatalf("command exit must not fail the TERM request:\n%s", out)
+	}
+	if failed.IsError {
+		t.Fatalf("nonzero child exit is a failing slot fact, not an MCP call error:\n%s", out)
+	}
+	if code, _ := headerValue(t, out, "Exit-Code"); code != "4" {
+		t.Errorf("Exit-Code = %q, want 4:\n%s", code, out)
+	}
+	if code, _ := headerValue(t, out, "Error-Code"); code != "command_failed" {
+		t.Errorf("Error-Code = %q, want command_failed:\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "Path: help") {
+		t.Fatalf("`&& help` must execute after a non-zero child exit because the TERM request succeeded:\n%s", out)
+	}
+	_ = termCall(t, s, map[string]any{"cmd": "close " + handle})
+}
+
 // ps is terminal text, one line per channel, and every handle in it is usable
 // verbatim as another directive's target.
 func TestTermPSLinesAreCopyable(t *testing.T) {
