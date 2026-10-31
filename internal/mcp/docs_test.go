@@ -327,10 +327,13 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 			t.Errorf("help notify misses %q: "+want, desc)
 		}
 	}
-	if !strings.Contains(mcpServerInstructions, "before any password/sudo/passphrase/MFA") ||
-		!strings.Contains(mcpServerInstructions, "notify FIRST") ||
-		!strings.Contains(mcpServerInstructions, "HARD BOUNDARY") {
-		t.Errorf("initialize instructions no longer require notify before human input:%s", mcpServerInstructions)
+	for _, want := range []string{
+		"notify FIRST", "before any password/sudo/", "Review mode exists",
+		"capability being granted", "bypassed gate", "notify, then WAIT",
+	} {
+		if !strings.Contains(mcpServerInstructions, want) {
+			t.Errorf("initialize instructions miss human-boundary rationale or action %q:\n%s", want, mcpServerInstructions)
+		}
 	}
 }
 
@@ -795,17 +798,14 @@ func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 	}
 }
 
-func TestInstructionsPairWaitingOnAHumanWithNotify(t *testing.T) {
-	for _, want := range []string{"Human at a prompt", "notify"} {
+func TestInstructionsExplainActionWhenTermcpFeelsAwkward(t *testing.T) {
+	for _, want := range []string{
+		"long, awkward", "capability that should exist", "say what you are trying to do and ask",
+		"create ext", "open <session> mcp <url>", "call <peer> <tool>",
+	} {
 		if !strings.Contains(mcpServerInstructions, want) {
-			t.Errorf("initialize instructions no longer tell the agent how to wait on a human: missing %q", want)
+			t.Errorf("initialize instructions miss high-level action or escalation path %q:\n%s", want, mcpServerInstructions)
 		}
-	}
-	// Both halves must be in the boundary rule's neighbourhood: the waking rule is
-	// only correct when it follows the notification, and an agent reading one
-	// without the other would either poll or stay silent.
-	if strings.Index(mcpServerInstructions, "Human at a prompt") < strings.Index(mcpServerInstructions, "HARD BOUNDARY") {
-		t.Error("the wait-on-a-human rule moved above the notify boundary it depends on")
 	}
 }
 

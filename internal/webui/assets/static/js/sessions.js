@@ -525,6 +525,57 @@ var _archiveBatch = (typeof createBatchBar === 'function') ? createBatchBar({
   onDelete: function (names) { deleteArchivedSessions(archivedSessionsFor(names)); }
 }) : null;
 
+/** Delete every archived session in one call, after one confirmation.
+ *
+ *  The archive fills up on its own — every session that ends lands in it — so
+ *  tidying it by ticking rows is work the page can do itself. This is the bulk
+ *  form, and it goes through the same confirm dialog as the ticked delete: the
+ *  transcripts are erased for good either way.
+ *
+ *  The server decides what is archived (`DELETE /api/sessions?status=dead`), not
+ *  this page. A client-side list of ids would be one frame stale, and the frame
+ *  it was stale for is exactly the one where a session had just ended — the call
+ *  would leave that row behind and report success.
+ */
+function clearAllArchivedSessions() {
+  var ended = (sessionsWithPending() || []).filter(function (s) { return s && s.id && isDeadSession(s); });
+  if (!ended.length) {
+    showCopyToast(t('archive.clearAll.none'));
+    return;
+  }
+  confirmDialog({
+    title: t('archive.clearAll.dialog'),
+    message: t('archive.clearAll.msg', { count: ended.length }),
+    okText: t('archive.clearAll.ok', { count: ended.length }),
+    danger: true
+  }).then(function (ok) {
+    if (!ok) return;
+    var banner = document.getElementById('session-load-banner');
+    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: ended.length }));
+    fetch(apiPath('/api/sessions?status=dead'), { method: 'DELETE' })
+      .then(function (r) {
+        return r.json().then(function (body) {
+          if (!r.ok) throw new Error((body && body.error) || ('HTTP ' + r.status));
+          return body || {};
+        });
+      })
+      .then(function (body) {
+        var gone = body.deleted || [];
+        /* The selection is keyed by id, so it has to let go of the ids that no
+           longer exist: a prune against the next snapshot would do it, but the
+           ids would sit in the set until that frame arrived. */
+        gone.forEach(function (id) { _sessionRegions.forEach(function (rg) { rg.ids.delete(id); }); });
+        if (banner) setLoadBanner(banner, '');
+        showCopyToast(t('archive.clearAll.done', { count: gone.length }));
+        renderSessionGrid('');
+      })
+      .catch(function (e) {
+        if (banner) setLoadBanner(banner, '');
+        showCopyToast(t('archive.clearAll.failed', { msg: String((e && e.message) || e) }));
+      });
+  });
+}
+
 /** A session is over once it stops running; the registry retains it for the
  *  archive rather than dropping it. */
 function isDeadSession(s) { return !(s && s.status === 'running'); }
@@ -683,6 +734,22 @@ function updateSessionBatchBar() {
   (sessionsWithPending() || []).forEach(function (s) { if (s && s.id) live[s.id] = true; });
   pruneSessionSelections(live);
   _archiveBatch.update();
+  paintClearAllKey();
+}
+
+/** The sweep key is enabled by the archive having anything in it.
+ *
+ *  It is painted from the same snapshot every other control reads rather than
+ *  from a click handler's state: the archive grows on its own (a session dying is
+ *  not a user action on this page), so a key enabled once and never rechecked
+ *  would go stale in the direction that matters — enabled with nothing left to
+ *  delete.
+ */
+function paintClearAllKey() {
+  var btn = document.getElementById('archive-clear-all');
+  if (!btn) return;
+  var any = (sessionsWithPending() || []).some(function (s) { return s && s.id && isDeadSession(s); });
+  btn.disabled = !any;
 }
 
 // The list lives in window._lastSessionsSnapshot, written by
@@ -1028,8 +1095,32 @@ function showTerminalEndedMarker(win, ch) {
  * prove who an approver is), and defaulting it silently to 1 would hide that.
  * Turning it off cancels everything pending server-side, hence the confirmation.
  */
+// Wire the archive sweep key. The button is BUILT here rather than written into
+// index.html: that file has a byte budget (assetsplit_test) that is already tight,
+// and this key is one element with one job — it belongs next to the code that
+// enables it.
+document.addEventListener('DOMContentLoaded', function () {
+  var count = document.getElementById('archive-toggle-count');
+  if (!count) return;
+  var clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'ext-key ext-key-icon';
+  clearBtn.id = 'archive-clear-all';
+  clearBtn.setAttribute('data-i18n-title', 'archive.clearAll.title');
+  clearBtn.setAttribute('data-i18n-aria', 'archive.clearAll.title');
+  clearBtn.title = t('archive.clearAll.title');
+  clearBtn.setAttribute('aria-label', t('archive.clearAll.title'));
+  clearBtn.disabled = true;
+  clearBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6"/><path d="M5.5 6l1 13a2 2 0 002 1.9h7a2 2 0 002-1.9l1-13"/><path d="M10 10.5v6M14 10.5v6"/></svg>';
+  count.insertAdjacentElement('afterend', clearBtn);
+  clearBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    clearAllArchivedSessions();
+  });
+  paintClearAllKey();
+});
+
 function toggleSessionApproval(s, gated, btn) {
-  if (!s || !s.id) return;
   if (gated) {
     confirmDialog({
       title: t('review.disable.title'),

@@ -6,60 +6,51 @@ package mcp
 //
 // IT DESCRIBES THE WORLD, AND THE WORLD IS SMALL ENOUGH TO DESCRIBE.
 //
-// Four drafts led here. The first was four numbered rules, three of them "never do X":
+// Five drafts led here. The first was four numbered rules, three of them "never do X":
 // a reader finished knowing every way to fail and nothing about what it held. The
-// second described the terrain in prose — correct but wordy, because prose must say
-// "and also" for each alternative a grammar states once. The third was the full
-// directive table, which is right in an on-demand guide and wrong here: it is re-sent
-// every turn, and most of those words are for verbs the caller is not using yet.
+// second described the terrain in prose — correct but wordy. The third was the full
+// directive table, which is right in an on-demand guide and wrong here. The fourth
+// carried a HARD BOUNDARY section that listed six forbidden tricks (sudo -n, NOPASSWD,
+// setuid …) and no reason: a reader learned what not to type without learning what the
+// boundary protects or what to do instead.
 //
-// This one is ordered the way the tool is built, which is also the order a caller
-// needs it: what the thing is, what a call carries, where capability lives, and what
-// to look at before building anything.
+// This one is ordered the way a caller needs it, and every refusal it prints carries
+// its reason: what the thing is, what a call carries, where capability lives (including
+// where to ADD it), and what a human is for. The writing rules behind that shape are in
+// docs/agents/hints.md.
 //
-// TWO CENTRES, NOT TWENTY-THREE ROWS. `ext` answers "what can I do"; `ps` answers
-// "what is running and what can I do to it". Everything else is an action on one of
-// those. A caller holding this much can derive the rest from `help`, which is why the
-// rest is not here.
+// SYNTAX LIVES IN `help`, NOT HERE. A directive's usage line, its flags and its traps
+// are one call away and change with the implementation; restating them here would cost
+// every turn and drift. What stays is what a model must know BEFORE it can decide to
+// make that call.
 //
 // The tests in docs_test.go and token_budget_test.go hold this line in both
-// directions: the hard boundaries must stay, and the directive table must not
-// migrate back into the text.
+// directions: the human boundary and the review rule must stay, and the directive table
+// must not migrate back into the text.
 
 const mcpServerInstructions = `termcp — a shell-like DSL over SSH; local ("internal") = remote.
 
-cmd = the DSL; sh = a shell command. cmd holds directives only; sh enters as a VALUE
-through args ($1, $2) or vars ($NAME), never as syntax. cmd supports && || ; &
-  run a1f3:1 $1   args: ["make && test"]   one sh line
-  run a1f3:1 $1 && notify done             two cmd directives
+cmd = the DSL; sh = a shell command. sh enters cmd only as a VALUE ($1, $2, $NAME),
+never as syntax (/tmp/$1 refused). cmd composes with && || ; &.
 
-ONE WORD, ONE LANGUAGE: no shell concatenation. /tmp/$1 and a$1 are REFUSED, not
-guessed — pass the whole thing as the value:
-  write a1f3 file /tmp/$1   REFUSED       write a1f3 file $1   args: ["/tmp/x"]
+Tree: host -> session -> channel/file/forward/peer. connect <host> opens a session.
+One-shot commands/files: run use:<host> $1, read/write use:<host> file <path> borrow
+the pool; they create no session/archive and retain no output. Connect for interaction
+or later reads. ls lists addresses; copy, don't invent. help [verb] has usage.
 
-The tree: host -> session -> {<index> = channel, file, forward, peer}. connect <host>,
-open <session> [child]; every other verb works on one node. ls prints every address —
-copy one, never spell it.
+CAPABILITY — inspect before building. ls ext lists resident extensions and their notes;
+ls lists state (learn_mode:true adds usage). MCP: get <session> mcp tools lists tools,
+call <peer> <tool> {json} invokes one. CDP: call <peer> {method}; raw JSON-RPC only for
+non-tool methods. Repeated job? create ext or open <session> mcp <url> for one named call.
 
-TWO CENTRES
-  ls ext  CAPABILITY: resident, capability-trimmed extensions (mcp servers, skills,
-          prompts). Their notes are the manual. LOOK FIRST.
-  ls      STATE. learn_mode:true expands every address it printed.
-
-ACTIONS
-  connect <host>  open <session> [--argv cmd]  run <ch> <line>
-  input (no Enter)  key (ctrl+c/esc)  read (new bytes)  write/get <ch> file <path>
-  open <session> mcp|cdp|jrpc <url> reaches the peer through that session's network
-
-help lists every verb.
-
-HARD BOUNDARY
-  notify FIRST (--level warn|error --sticky --on <session>)
-  before any password/sudo/passphrase/MFA, confirmation, approval, choice or input.
-  Never guess, paste, echo or store a secret; never bypass sudo/auth/approval (sudo -n,
-  NOPASSWD, setuid, sudoers, reword, encode, retry loops).
-  Human at a prompt: notify, then WAIT. A long command's reply carries what arrived;
-  read a slow task in pieces, don't poll.
+A HUMAN IS AN APPROVAL CHANNEL
+  notify FIRST before any password/sudo/passphrase/MFA, confirmation, approval, choice
+or input. Review mode exists so a human sees each capability being granted; guessed,
+echoed or stored secrets — or a bypassed gate (sudo -n, NOPASSWD, setuid) — hide it.
+Keep secrets out of cmd/args; remote echo enters the transcript.
+At a prompt: notify, then WAIT; read slow tasks in pieces, not by polling.
+A long, awkward call or a capability that should exist but does not?
+say what you are trying to do and ask while a human can answer.
 
 REVIEW — review_pending=true means HELD: nothing ran, no id to poll. Do NOT resubmit or
 retry; notify, then wait.

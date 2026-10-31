@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
 // runDirective dispatches one parsed statement onto the existing handlers.
@@ -221,6 +223,10 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 	case "rm":
 		switch {
 		case stmt.Kind == "file":
+			if boolFlag(stmt, "dry-run") {
+				return []envelope.Slot{badRequest(stmt,
+					"`--dry-run` previews session deletion only (`rm <session> --dry-run`). File removal is permanent; inspect it first with `get <host> file <path>`, then omit `--dry-run` to remove it.")}
+			}
 			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, map[string]string{
 				"action":      "delete",
 				"remote-path": stmt.Key,
@@ -608,6 +614,46 @@ func (s *Server) sessionForStatement(stmt directive.Statement) *session.Session 
 // returns the moment the channel closes; on a pty there is no such signal, so it
 // waits out the caller's time window and returns what the terminal produced.
 func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+	// SHORT-CIRCUIT BORROWED HOST EXECUTION (#237): `run use:<host> $1`.
+	// If the target is a borrowed host (bare host name or `use:<host>`), execute
+	// directly through the transport pool without creating a session in the registry.
+	if host, borrowed := s.parseBorrowedHost(stmt.Target); borrowed {
+		// THE GATE IS THE SAME EXIT EVERY OTHER OPERATION USES. This path has no
+		// handler to reach, so it asks admission directly with the capability the
+		// command belongs to — a profile's default_approval must not depend on which
+		// spelling reached the host.
+		if bad := s.checkBorrowedRunAdmission(ctx, "use:"+host); bad != nil {
+			slot := failureSlot(failureFromResult(bad))
+			slot.Headers["Path"] = stmt.Path
+			return []envelope.Slot{slot}
+		}
+		// A FILTER MUST NOT RUN ITS COMMAND TO FIND OUT IT WAS INVALID. Check before
+		// starting the remote process, exactly as checkWindow does for channel runs.
+		if bad := validateBorrowedRunFlags(stmt); bad != nil {
+			slot := s.slotFromFailure(ctx, stmt, bad)
+			return []envelope.Slot{slot}
+		}
+		captureLimit := win.BytesLimit
+		if _, ok := stmt.Flag("grep"); ok {
+			captureLimit = grepMaxScanBytes
+		}
+		output, total, exitCode, exited, waited, err := s.runBorrowedHost(ctx, host, stmt.Payload, win, captureLimit)
+		if err != nil && !exited {
+			// A BORROWED TARGET FAILS IN TWO KINDS: the profile is not there (the
+			// caller's argument, answered with the ssh-config code and a next step), or
+			// the connection/command failed (the server's answer). Mapping both to 500
+			// operation_failed made a typo in the host name read like an outage.
+			code := CodeOperationFailed
+			if errors.Is(err, sshconfig.ErrNotFound) {
+				code = CodeSSHConfigNotFound
+			}
+			slot := s.slotFromFailure(ctx, stmt, &toolFailure{code: code, msg: err.Error()})
+			return []envelope.Slot{slot}
+		}
+		slot := s.borrowedRunSlot(ctx, stmt, host, output, total, exitCode, exited, waited, err, win)
+		return []envelope.Slot{slot}
+	}
+
 	if ids, isBatch := splitBatchIDs(stmt.Target); isBatch {
 		slots := make([]envelope.Slot, 0, len(ids))
 		for _, id := range ids {
@@ -617,7 +663,20 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 		}
 		return slots
 	}
-	return []envelope.Slot{s.runOne(ctx, stmt, win)}
+	slot := s.runOne(ctx, stmt, win)
+	// A BARE WORD THAT RESOLVES TO NOTHING IS TWO POSSIBILITIES, and only one of
+	// them used to be named. `run prod $1` answered `Shell 'prod' not found` even
+	// though a saved host profile is a documented target — the caller had to guess
+	// that the same word works when the profile exists. Say both roads.
+	if slot.Code == 404 && slot.Headers["Error-Code"] == CodeShellNotFound &&
+		stmt.Target != "" && !directive.NamesAChannel(stmt.Target) && s.sshConfigs != nil {
+		if entry, err := s.sshConfigs.Load(stmt.Target); err == nil && entry != nil {
+			slot.Body += "\nThat name IS a saved host profile: `run " + stmt.Target + " $1` targets it directly over a borrowed connection, with no session."
+		} else {
+			slot.Body += "\nIf you meant a saved host profile, `ls host` lists them and `run <host> $1` targets one directly."
+		}
+	}
+	return []envelope.Slot{slot}
 }
 
 // runOne executes one `run` against one handle.

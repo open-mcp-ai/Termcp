@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -12,9 +15,11 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
+	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"golang.org/x/crypto/ssh"
 )
 
 // Manager is a thread-safe registry of sessions with persistence.
@@ -74,6 +79,13 @@ type Manager struct {
 	internalSSH *sshserver.Server
 	msgMgr      *message.Manager
 	store       *storage.Store
+	// transports is where a short-lived operation borrows a connection instead of
+	// asking for a whole session (#237). A session is a USER-FACING record: it
+	// shows up in the list and it archives when it ends, so a one-off `read prod
+	// file /x` that created one would leave a dead tile behind for every call. The
+	// pool holds the connection itself, ref-counted, and hands it out for the
+	// duration of one operation.
+	transports *sshclient.TransportPool
 
 	listChangeMu sync.RWMutex
 	onListChange func()
@@ -89,38 +101,23 @@ func NewManager(msgMgr *message.Manager, store *storage.Store, internalSSH *sshs
 		internalSSH: internalSSH,
 		msgMgr:      msgMgr,
 		store:       store,
+		transports:  sshclient.NewTransportPool(0),
 	}
 }
 
 // Create starts a new session and registers it. A session stays in the registry
 // until explicitly deleted; disconnect/terminate/abort only turn it DEAD.
 func (m *Manager) Create(cfg Config) (*Session, error) {
+	lease, err := m.AcquireTransport(cfg.Ctx, cfg)
+	if err != nil {
+		m.logCreateFailure(cfg, err)
+		return nil, err
+	}
+	cfg.transport = &transportLease{client: lease.Client, release: lease.Release}
 	s, err := New(m.internalSSH, cfg, m.msgMgr)
 	if err != nil {
-		// Failure is invisible downstream (MCP tool error results are debug-levelled;
-		// the web UI handler only replies over HTTP), so log it for the terminal.
-		// Never log credentials or command text; the error itself already carries
-		// the failing host:port for remote dials.
-		attrs := []any{"err", err}
-		if cfg.Mode != "" {
-			attrs = append(attrs, "mode", cfg.Mode) // mode of the first shell
-		}
-		if cfg.Name != "" {
-			attrs = append(attrs, "name", cfg.Name)
-		}
-		if isRemote(cfg) {
-			attrs = append(attrs, "remote_addr", remoteDialAddr(cfg.Remote), "dial_timeout_s", cfg.Remote.DialTimeoutSeconds)
-		} else {
-			attrs = append(attrs, "endpoint", "internal")
-		}
-		// A cancel is the caller withdrawing its request, not a fault of the target.
-		// Logging it at error level would report every closed pending window as a
-		// failed connection attempt to a host that was never given a chance.
-		if errors.Is(err, context.Canceled) {
-			slog.Debug("session create canceled", attrs...)
-			return nil, err
-		}
-		slog.Error("session create failed", attrs...)
+		lease.Release()
+		m.logCreateFailure(cfg, err)
 		return nil, err
 	}
 	m.sessions.Store(s.ID, s)
@@ -197,6 +194,68 @@ func (m *Manager) ListAll() []api.Session {
 		return true
 	})
 	return result
+}
+
+// logCreateFailure records why a session could not be started. Failure is
+// invisible downstream (MCP tool error results are debug-levelled; the web UI
+// handler only replies over HTTP), so it is logged for the terminal. Never logs
+// credentials or command text; the error already carries the failing host:port.
+func (m *Manager) logCreateFailure(cfg Config, err error) {
+	attrs := []any{"err", err}
+	if cfg.Mode != "" {
+		attrs = append(attrs, "mode", cfg.Mode) // mode of the first shell
+	}
+	if cfg.Name != "" {
+		attrs = append(attrs, "name", cfg.Name)
+	}
+	if isRemote(cfg) {
+		attrs = append(attrs, "remote_addr", remoteDialAddr(cfg.Remote), "dial_timeout_s", cfg.Remote.DialTimeoutSeconds)
+	} else {
+		attrs = append(attrs, "endpoint", "internal")
+	}
+	// A cancel is the caller withdrawing its request, not a fault of the target.
+	// Logging it at error level would report every closed pending window as a
+	// failed connection attempt to a host that was never given a chance.
+	if errors.Is(err, context.Canceled) {
+		slog.Debug("session create canceled", attrs...)
+		return
+	}
+	slog.Error("session create failed", attrs...)
+}
+
+// TransportLease holds one reference to a shared SSH transport. Release must be
+// called once when the short operation completes; sessions release their own
+// lease when they transition to DEAD or are purged.
+type TransportLease struct {
+	Client  *ssh.Client
+	Release func()
+}
+
+// AcquireTransport borrows the same host-scoped transport used by ordinary
+// sessions. The effective remote config is hashed for the pool key; credentials
+// never appear in that key or in logs.
+func (m *Manager) AcquireTransport(ctx context.Context, cfg Config) (*TransportLease, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key := "internal"
+	if cfg.Remote != nil {
+		data, err := json.Marshal(cfg.Remote)
+		if err != nil {
+			return nil, fmt.Errorf("encode SSH transport identity: %w", err)
+		}
+		key = fmt.Sprintf("remote:%x", sha256.Sum256(data))
+	}
+	cfg.Ctx = ctx
+	client, release, err := m.transports.Acquire(ctx, key, func(dialCtx context.Context) (*ssh.Client, []io.Closer, error) {
+		cfg.Ctx = dialCtx
+		client, closers, _, err := DialClient(m.internalSSH, cfg)
+		return client, closers, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &TransportLease{Client: client, Release: release}, nil
 }
 
 // Terminate closes a session's process/transport and turns it DEAD in place:

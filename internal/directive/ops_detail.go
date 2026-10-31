@@ -133,7 +133,7 @@ var ops = []Op{
 	{Name: "run", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
 		PayloadType: PayloadVar,
 		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding"},
-		Usage:       "run <channel> [--tail N] [--grep RE] $1   |   run <session> <index> $1",
+		Usage:       "run <channel> [--tail N] [--grep RE] $1   |   run <session> <index> $1   |   run use:<host> $1",
 		Detail:      runDetail},
 	{Name: "input", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
 		PayloadType: PayloadVar,
@@ -184,7 +184,7 @@ var ops = []Op{
 		Kinds:     []string{"cdp", "mcp", "jrpc"},
 		Flags:     []string{"send", "json"},
 		Valueless: []string{"send", "json"},
-		Usage:     "call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <session> mcp:<n> <tool> [<json-args>]   |   call <channel> <frame>",
+		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <tool|frame>",
 		Detail:    callDetail},
 
 	// --- configuration, which outlives any session ---
@@ -340,6 +340,12 @@ live answer and is a different question. --offset 0 is the full replay, and --ta
 A PIPELINE IS A COPY, AND IT IS THE ONLY PIPELINE IN THIS LANGUAGE.
 
   read a1f3:1 --cursor 0 | write b2c4 file /tmp/log
+
+A HOST CAN BE THE TARGET WITHOUT A SESSION. 'read use:<host> file <path>' (or
+'read <host> file <path>' for a saved profile) borrows the pooled SSH transport and
+returns the bytes directly; it creates no session and leaves no archive tile. Use
+'connect <host>' first only when you need a channel, a terminal, or the file URLs
+that belong to a session.
 
 The bytes go from the left node to the right one WITHOUT passing through your
 context: no window, no rendering, and nothing held in between — the two ends are
@@ -645,6 +651,38 @@ and does not consume the transcript: two searches see the same bytes.
 For a program whose output you need in full, prefer pipe (--argv) on the same
 entry — its exit IS observable, so a read after it returns the whole output.
 
+A HOST IS ALSO A TARGET, AND THAT IS THE SHORT-CIRCUIT FORM. 'run use:<host> $1' —
+or 'run <host> $1' with a saved profile name — runs ONE command on a borrowed
+connection and answers with its output:
+
+  cmd: "run use:internal $1"          args: ["echo short-circuit works"]
+  cmd: "run prod $1"                  args: ["systemctl is-active app"]
+
+The transport comes from the pool, so a host whose session you closed a moment ago
+answers without a new handshake; and NOTHING is registered — no session appears in
+ls, and no DEAD tile is archived afterwards for a command that printed one line.
+That is the whole point: connect + run + close is three calls and leaves a record,
+and most of what a caller runs is one line whose only product is its output.
+
+WHAT IT GIVES UP IS THE CHANNEL, so it is not 'run' on a session and does not
+pretend to be:
+  - nothing is retained: no cursor, no later 'read', no 'key'/'input' into the
+    process. The reply is what arrived before it exited.
+  - stdin is closed. A program that asks a question reads EOF and exits, so this
+    form is for commands that do not converse.
+  - --tail and --grep still filter the output, and exit status still rides in
+    Exit-Code — those are properties of the reply, not of a channel.
+  - timeout is a DEADLINE here, not a sample: the SSH channel's process exiting is
+    a real completion signal, so the call returns the moment it exits, and a command
+    that outlives the window is stopped and reported as Status: stopped, because a
+    one-shot has nowhere to keep a live process for a later read.
+  - the host profile's default_approval still applies, and a short-circuit operation
+    is REFUSED when it is on: review is a session's queue, and this form has no
+    session to hold the decision. 'connect' is the way to run a reviewable command.
+
+A command that must be watched, typed into, or read in pieces wants a channel, which
+is what 'connect' is for.
+
 ONE WORD, ONE LANGUAGE. cmd IS THE DIRECTIVE LANGUAGE: a reference ($1, $2, $NAME) is
 the WHOLE word it sits in, never glued to a literal. There is no shell concatenation
 here, because a word made of two languages is read twice and means something different
@@ -856,9 +894,18 @@ const getDetail = `Describe one node: a session, one of its channels, or a peer.
   get a1f3 cdp:1@<id>       one tab: target, url, enabled domains
   get a1f3 cdp:1 protocol   the browser's OWN command list (the live /json/protocol)
   get a1f3 cdp:1 protocol Page   one domain's commands and their parameters
+  get a1f3 mcp tools        list tools offered by a mounted MCP peer
+  get a1f3 mcp tools search inspect input schema for one tool
   get task task_9f2c11ab    one background transfer, waiting up to the window
+  get use:<host> file /p   metadata for one path on a host, no session needed
 
 For the list of what exists, use ls.
+
+A HOST CAN BE THE TARGET, with 'get use:<host> file <path>' (or the bare profile
+name). That reads the path's metadata over a borrowed pooled transport; the reply
+carries "borrowed: true" and no session or upload/download address, because those
+URLs are routes into a session that a one-shot call does not create. Use
+'read use:<host> file <path>' when you want the bytes.
 
 WHY THE PROTOCOL IS ASKED FOR rather than remembered: a hardcoded method table is a
 second truth, and it drifts silently the moment the browser updates — a caller fills
@@ -871,48 +918,53 @@ CALL's timeout argument — there is no --timeout flag — and the reply comes b
 the moment the transfer ends, or reports progress when that window expires instead of
 failing. A receipt stays answerable for ten minutes after the transfer ends.`
 
-const callDetail = `Send one JSON-RPC frame to a peer opened with
-"open <session> mcp|cdp|jrpc <url>", and wait for the reply that answers it.
+const callDetail = `Invoke an MCP tool, send a CDP command, or forward a raw protocol frame.
 
-  call internal mcp:1 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+HOW IT WORKS:
+Peers speak different protocols; call routes by the peer's kind:
+- MCP peer (open <session> mcp <url>): a live tool provider. Passing a tool name
+  calls that tool directly and unpacks its text result.
+- CDP peer (open <session> cdp <ws-url>): Chrome DevTools Protocol. Accepts
+  methods directly (e.g. Page.navigate).
+- JRPC peer (open <session> jrpc <ws-url>): raw JSON-RPC envelope.
+
+STANDARD USAGE:
+  # Calling an MCP tool directly (the common case):
+  get  internal mcp tools                   list available tools on this peer
+  get  internal mcp tools search            show one tool's input schema
+  call internal mcp:1 search {"query":"error"}  invoke a tool and get its text (args optional)
+
+  # Driving a browser through CDP:
   call internal cdp:1 {"method":"Target.getTargets"}
   call internal cdp:1@7D87AB {"method":"Page.navigate","params":{"url":"about:blank"}}
 
-THE ADDRESS IS THE WHOLE STATE. cdp:1 is which connection; @7D87AB is which tab in
-it. A tab address fills in the sessionId that the attach minted, so a page-level
-method does not have to carry it — and cannot go to the browser process by accident,
-which the browser answers with "wasn't found" instead of a refusal.
+LOW-LEVEL USAGE (deliberate raw frame on an MCP/JRPC peer):
+  call internal mcp:1 '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  call internal jrpc:1 '{"jsonrpc":"2.0","id":1,"method":"custom_method"}'
 
-THE FRAME IS VERBATIM: it is not shell-quoted, so the JSON reaches the peer exactly
-as written. That is also why a quote in it is not a quoting problem to solve.
+FLAGS:
+  --send       fire-and-forget: does not wait for a reply (answers arrive on read <peer>).
+  --json       returns the raw MCP response envelope instead of unpacking text.
 
-AN ERROR FROM THE PEER IS A FAILING REPLY, not a 200 with {"error":…} in the body: a
-caller branches on the status, so a silent-looking success is the worst answer this
-door can give. The message also says what to do about the two common traps (a
-page-level method sent to the browser; a sessionId whose tab closed).
+ADDRESSING:
+  <session> <peer:index> names the connection (e.g. internal mcp:1, a1f3 cdp:1).
+  For CDP, append @<targetId> to address a specific tab (e.g. cdp:1@7D87AB).
 
-  --send       do not wait. The reply is 202 and the answer arrives on read <peer>.
-               This is the only way to send a notification, which never has an
-               answer to wait for.
-
-A BIG ANSWER IS A RECEIPT. When the frame does not fit the window you asked for
-(bytes_limit, 8 KB when you name none) the reply carries its number, its size and
-its first bytes instead of the payload — a JSON document cut in the middle is too
-big to have been worth the tokens and too broken to use. The size is YOUR decision:
-raise bytes_limit and the same frame comes back whole. Page it back:
-
-  read internal cdp:1 --at 57 --offset 4096
-  read internal cdp:1 --at 57 --offset 0 --bytes 512
-
-A peer that answers with a request of its own (sampling, progress) is not answered
-here; those arrive on read <peer>. A reply that never comes times out with the
-window, and the frame stays outstanding — read <peer> may still deliver it.`
+LARGE OUTPUT:
+When a result exceeds the byte window (default 8 KB), termcp returns a receipt
+naming the frame number. Raise bytes_limit or page it with:
+  read internal mcp:1 --at <frame> --offset 0 --bytes 4096`
 
 const writeDetail = `Write a file on a session.
 
   write a1f3 file /tmp/x --data hello
   read internal file ./x | write a1f3 file /tmp/x
   write a1f3 file /tmp/x --data hex:00ff
+
+A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
+profile name) writes over a borrowed pooled transport, so no session is created and
+nothing is archived afterwards. Same bytes, same atomic temp-file-and-rename rule;
+the only thing missing is the session the upload/download URLs would address.
 
 --data decodes by --mode (text by default, so \n is a newline). For binary use hex:
 or a pipeline. The write is a plain overwrite, not an append: use --offset only
@@ -1192,46 +1244,32 @@ any interactive shell.`
 // Both are silent when got wrong. A frame sent to a stdio server goes through
 // the shell as bytes, so a malformed one produces no error — just an empty recv
 // later, which reads like the server ignoring the request.
-const mcpDetail = `A peer is a child of a session, opened through it — the URL is resolved on
-the TARGET's network, so localhost:9222 is a port on that machine, not on the one
-termcp runs on.
+const mcpDetail = `Mount and use an external MCP server through a session.
 
-  open <session> mcp http://host/mcp          mount an HTTP endpoint
-  open <session> mcp ws://host/mcp            mount a websocket endpoint
-  open <session> cdp  ws://host:9222/devtools/browser/...
-  open <session> jrpc ws://host/socket        speak the envelope, no protocol on top
+HOW IT WORKS:
+An MCP peer mounts an endpoint through the session's network namespace (HTTP,
+WebSocket, or stdio process). Termcp performs the handshake and tool discovery
+automatically upon opening.
 
-Opening is also the HANDSHAKE. An mcp peer gets initialize + tools/list, and the
-reply names the tools it offers, so there is no separate discovery call to make.
+MOUNTING AN MCP PEER:
+  open <session> mcp http://host:port/mcp      mount an HTTP SSE endpoint
+  open <session> mcp ws://host:port/mcp        mount a WebSocket endpoint
+  open <session> --argv "my-mcp-server"        run a stdio MCP server
 
-Talking to one:
-  call <peer> '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{...}}'
-  read <peer>            the next frame the peer sent on its own (a CDP event)
-  close <peer>
+CALLING TOOLS (preferred):
+  get  <session> mcp tools                     list tools offered by this peer
+  get  <session> mcp tools <tool>              inspect parameters for one tool
+  call <session> mcp:1 <tool> {"arg":"val"}    invoke tool directly and get text
+  call <session> mcp:1 <tool> --json           invoke tool and keep raw JSON
 
-THE FRAME GOES ON call, NOT ON write. write is a file's content and takes flags
-(--data, --mode, --offset); a frame is a verbatim payload where quotes must survive.
-One verb cannot carry both, because the parser has one payload rule per directive.
+RAW PROTOCOL (when not calling a tool):
+  call <session> mcp:1 '{"method":"ping"}'     raw JSON-RPC request
+  read <session> mcp:1                         read incoming unsolicited notifications
+  close <session> mcp:1                        unmount peer
 
-THE FRAME IS THE REST OF THE LINE. Spaces in a JSON body are fine — the payload is
-sliced, not split — and the caller's quoting is optional: it groups the line into one
-word and is then removed, one layer, with the bytes inside left alone. So a frame is
-best written BARE, and if it needs quoting, SINGLE quotes are the safe pair. Inside
-double quotes a backslash is still just a byte: the escaped spelling a shell would
-want is not unescaped here, and a frame written that way is refused as "the frame is
-not JSON" with a line telling the caller which spelling works.
-
-A SHELL RUNNING A SERVER IS THE SAME KIND OF PEER, addressed by its channel. Start
-it with --argv (a pipe), then talk to it the same way. The difference is only where
-frames come from: an HTTP peer answers each call, while a stdio peer's replies appear
-on its stdout, so reading one needs --frame:
-
-  read <channel> --frame
-
-Without --frame, read returns bytes — which is what a command's output is. Parsing
-every read as protocol would break the ordinary case to serve the rare one.
-
-An HTTP peer spends no shell channel: opening a dozen costs no shells.`
+Stdio servers opened with --argv use the channel handle instead of mcp:1:
+  call <channel> <tool> {"arg":"val"}
+  read <channel> --frame                       read frames from stdio stdout`
 
 // forwardDetail is the flag set per direction, which the one-line usage cannot show:
 // `open <session> forward …` does not say which of --remote-host / --local-port belong
@@ -1424,6 +1462,12 @@ session is left untouched, so the guard costs one extra word rather than a mista
 session, because that is exactly when a caller wants to ask before passing --force.
 The reply is 200 with a Dry-Run header and a sentence naming what the real call would
 destroy. Use it whenever you are not certain which session a handle belongs to.
+
+'rm <host> file <path>' also removes one file directly over that host's borrowed
+pooled connection, with no session/archive entry. This is permanent, so check the
+path first with 'get <host> file <path>'. --dry-run previews SESSION deletion only;
+on a file removal it is refused rather than ignored, because a preview that silently
+deletes is worse than no preview at all.
 
 The target is the SESSION, not a channel. rm <session>:1 is refused: a caller who
 named a channel asked about that channel, and erasing the container is a bigger

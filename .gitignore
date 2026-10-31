@@ -39,3 +39,4 @@ templates/
 
 # Agent scratch space (local tooling, not part of the project)
 /.pi-tools/
+/.pi-tmp/

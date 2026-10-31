@@ -98,7 +98,14 @@ type Config struct {
 	// UI's cards, the node cards' session counts and the agent's session_list can
 	// leave it out while its terminal stays openable by whoever holds its id (see
 	// internal/ns). Empty means an ordinary session.
-	Namespace string
+	Namespace        string
+	transport        *transportLease
+	transportRelease func()
+}
+
+type transportLease struct {
+	client  *ssh.Client
+	release func()
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -143,7 +150,8 @@ type Session struct {
 	retainedQueue *approval.Queue
 	// approvalSink is the change handler installed before approval mode is
 	// enabled, so a handler set at startup is not lost.
-	approvalSink func(sessionID string, req approval.Request)
+	approvalSink     func(sessionID string, req approval.Request)
+	transportRelease func()
 
 	// shellHistory retains the last-known per-shell metadata (id, name, status)
 	// so a DEAD session can still render per-shell tabs after shells leave the
@@ -182,9 +190,30 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	usePty := cfg.Mode == api.ModePTY
 
-	execSession, sshEndpointPublic, err := dialTransport(internal, cfg, usePty)
-	if err != nil {
-		return nil, err
+	var execSession *sshclient.ExecSession
+	var sshEndpointPublic string
+	if cfg.transport != nil {
+		endpoint := "internal"
+		if isRemote(cfg) {
+			endpoint = "remote"
+		}
+		sshEndpointPublic = endpoint
+		if cfg.NoShell {
+			execSession = sshclient.BareClient(cfg.transport.client, false, nil)
+		} else {
+			es, err := sshclient.StartWithClient(cfg.transport.client, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
+			if err != nil {
+				return nil, err
+			}
+			execSession = es
+		}
+	} else {
+		es, endpoint, err := dialTransport(internal, cfg, usePty)
+		if err != nil {
+			return nil, err
+		}
+		execSession = es
+		sshEndpointPublic = endpoint
 	}
 	// The dial can also finish in the same instant the caller gives up. Dropping
 	// the transport here rather than registering it keeps the promise the cancel
@@ -229,6 +258,11 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		restriction:  cfg.Restriction,
 		msgMgr:       msgMgr,
 		scope:        newResourceScope(),
+	}
+
+	if cfg.transport != nil && cfg.transport.release != nil {
+		s.transportRelease = cfg.transport.release
+		s.AttachCleanup(cfg.transport.release)
 	}
 
 	// Message-manager session state is a session-scoped resource: release it
@@ -322,37 +356,26 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 	s.watchWG.Add(1)
 	go func() {
 		defer s.watchWG.Done()
-		// THE REASON IS LOGGED WHERE AN OPERATOR LOOKS.
-		//
-		// This line used to be Debug, which is BELOW the daemon's default level (Info),
-		// so on a normal run it was never written — and the one durable record of why a
-		// session disappeared was therefore off. The session itself is then gone from
-		// every surface, and the transcript message says the same sentence whether the
-		// network dropped, the far side closed, or something else ended the transport
-		// (issue #176). Four sessions were lost in one afternoon and ruling out the
-		// causes took four separate experiments; the error that would have answered it
-		// was in this discarded line.
-		//
-		// Warn rather than Info because a transport that ends with an error is not the
-		// session's ordinary exit: the caller may not have asked for it.
-		// THE TRANSCRIPT SAYS WHICH OF THE TWO IT WAS, because the caller reads the
-		// transcript and not the log. One sentence for both events ("SSH connection lost
-		// — network disconnected") claimed a cause nobody had established: the same text
-		// covered a dropped network, a closed far side and a restarted relay (issue
-		// #176). The error decides, and it is also in the log line above.
+
+		waitDone := make(chan error, 1)
+		go func() { waitDone <- es.WaitTransport() }()
+		var err error
+		select {
+		case err = <-waitDone:
+		case <-s.Context().Done():
+			// A session can release its lease while the pooled transport stays
+			// alive for another user. Stop watching this session without waiting
+			// for that unrelated transport to close.
+			return
+		}
+
 		message := transportClosedMessage
-		if err := es.WaitTransport(); err != nil {
+		if err != nil {
 			slog.Warn("session transport lost", "session_id", s.ID, "err", err)
-			// The error IS the cause, and it is the only thing that can distinguish a
-			// dropped network from a far side that went away. The sentence no longer
-			// asserts one on its own (issue #176).
 			message = transportLostMessage + ": " + err.Error()
 		} else {
 			slog.Info("session transport closed", "session_id", s.ID)
 		}
-		// A deliberate close (Terminate, Disconnect, Delete) sets closing before it
-		// touches the transport, so markDeadWithMessage drops this notification
-		// instead of reporting an intentional teardown as a network loss.
 		s.markDeadWithMessage(message)
 	}()
 }
@@ -369,7 +392,7 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
 func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
-	client, closers, endpoint, err := dialClient(internal, cfg)
+	client, closers, endpoint, err := DialClient(internal, cfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -387,7 +410,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 	return es, endpoint, nil
 }
 
-// dialClient acquires the SSH connection a session runs on and reports which
+// DialClient acquires the SSH connection a session runs on and reports which
 // kind it is ("internal" or "remote", the two values published to MCP and the
 // JSON API - never a host or a credential). It opens no channel: what the
 // connection then carries is dialTransport's business.
@@ -399,7 +422,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 // path: the credential is minted before the dial, and leaving it pending would
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
-func dialClient(internal *sshserver.Server, cfg Config) (*ssh.Client, []io.Closer, string, error) {
+func DialClient(internal *sshserver.Server, cfg Config) (*ssh.Client, []io.Closer, string, error) {
 	ctx := cfg.Ctx
 	if !isRemote(cfg) {
 		if internal == nil {
@@ -651,7 +674,12 @@ func (s *Session) markDead() {
 
 func (s *Session) markDeadWithMessage(systemMessage string) {
 	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
+	defer func() {
+		s.shellStateMu.Unlock()
+		if s.transportRelease != nil {
+			s.transportRelease()
+		}
+	}()
 	// A deliberate close may race with an exit watcher that already observed
 	// the transport error. Do not turn that intentional close into a network-loss
 	// notification.
@@ -721,16 +749,18 @@ func (s *Session) finalize() {
 		if s.execSession != nil {
 			_ = s.execSession.Close()
 		}
+		// Release the scope FIRST: it cancels the session context, which is what
+		// tells transport watchers to stop waiting on a connection that may now be
+		// shared with somebody else (#237). Waiting for them before this cancel was
+		// the deadlock: a borrowed client outlives its session, so WaitTransport
+		// never returned and finalize blocked on watchWG forever.
+		if s.scope != nil {
+			s.scope.Release()
+		}
 		// Wait for exit watchers to finish their post-transport writes (final
 		// system message + persist) before releasing the session, so a caller
 		// that purges the data directory afterwards cannot race a writer.
 		s.watchWG.Wait()
-		// Cascade: cancel every goroutine bound to the session scope and run the
-		// registered cleanups (forwards, notification rules, minted credentials,
-		// readers) in LIFO order. Nothing else needs to know what is attached.
-		if s.scope != nil {
-			s.scope.Release()
-		}
 	})
 }
 

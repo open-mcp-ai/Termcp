@@ -1337,6 +1337,12 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  ls host                      what is there (local and ssh, in columns)\n")
 	b.WriteString("  connect <host>               opens a channel, answers its channel (a1f3:1)\n")
 	b.WriteString("  run a1f3:1 $1                types the line, presses Enter, reads what came back\n")
+	// THE SHORT-CIRCUIT FORM, one line after the channel form so the two are read
+	// together: most calls are one command whose only product is its output, and
+	// connect + run + close both costs two extra turns and leaves an archive tile.
+	b.WriteString("  run use:<host> $1            or, with no session at all: borrows a pooled\n")
+	b.WriteString("                               connection, runs one command, answers with its\n")
+	b.WriteString("                               output and exit code, registers nothing.\n")
 	// THE ONE LINE THAT PREVENTS THE WHOLE CLASS OF `run` MISREADING: the bytes go to
 	// whoever owns the channel's input, not to a queue. A caller that thinks it is
 	// submitting a job reads an eaten command as a successful one.
@@ -1352,7 +1358,10 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("                               `help run` has what that means for the reply.\n")
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
-	b.WriteString("  long-running command you want to watch between calls.\n\n")
+	b.WriteString("  long-running command you want to watch between calls.\n")
+	b.WriteString("  For one non-interactive command, `run use:<host> $1` borrows the pooled\n")
+	b.WriteString("  connection and leaves no session/archive entry; connect only when you need\n")
+	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
 
 	b.WriteString("cmd = the DSL.  sh = a shell command.\n")
 	b.WriteString("cmd holds directives only. sh never appears in cmd — it enters as a value through\n")
@@ -1376,12 +1385,15 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  channel  one shell on that link, <session>:<index> (e.g. a1f3:1).\n")
 	b.WriteString("           `open <session>` adds one; the mode follows ssh — --argv means\n")
 	b.WriteString("           a command with no terminal, no --argv means a terminal.\n")
-	b.WriteString("  file     <session> file <path>      — read/write carry BYTES; get carries\n")
-	b.WriteString("           metadata and the upload/download urls; rm, create\n")
+	b.WriteString("  file     <session|use:<host>> file <path> — read/write carry BYTES; get\n")
+	b.WriteString("           metadata and upload/download URLs exist only for sessions.\n")
 	b.WriteString("  forward  <session> forward <id>     — open/close/ls\n")
-	b.WriteString("  peer     <session> mcp|cdp|jrpc <url> — open/read/call/close, through that\n")
-	b.WriteString("           session's network, so localhost means the host's localhost.\n")
-	b.WriteString("  Copy addresses from `ls`; never spell one.\n\n")
+	b.WriteString("  peer     <session> mcp|cdp|jrpc <url> — open once, then call/read/close.\n")
+	b.WriteString("           mcp peers: call <peer> <tool> {json} runs tools directly.\n")
+	b.WriteString("           cdp peers: call <peer> {method} speaks the DevTools protocol.\n")
+	b.WriteString("           All reach the peer through that session's network.\n")
+	b.WriteString("  Copy addresses from `ls`; for a channel-free one-shot, use `run use:<host> $1`\n")
+	b.WriteString("  or `read|write use:<host> file <path>`; no session is created or archived.\n\n")
 
 	// THE POINTER IS CONDITIONAL, and that is the fix a first-time caller asked for:
 	// the guide used to open this section with "`ls ext` CAPABILITY HUB — start here",
@@ -1395,6 +1407,7 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 		b.WriteString("  ls ext  CAPABILITY HUB — start here. Lists resident, capability-trimmed\n")
 		b.WriteString("          extensions: mcp servers, skills (read-only SFTP), prompts.\n")
 		b.WriteString("          Notes inside an extension are its operating manual.\n")
+		b.WriteString("          Need something repeated? `create ext` or `open <session> mcp <url>` adds it.\n")
 		b.WriteString("  ls      SSH STATE & LIFECYCLE — every link, channel, forward and peer.\n")
 		b.WriteString("          Pass learn_mode:true and it expands the verbs that take the\n")
 		b.WriteString("          addresses it just printed.\n\n")
@@ -1405,7 +1418,8 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 		b.WriteString("           Pass learn_mode:true and it expands the verbs that take the\n")
 		b.WriteString("           addresses it just printed.\n")
 		b.WriteString("  ls ext   extensions (mcp servers, skills, prompts). None are installed\n")
-		b.WriteString("           on this instance, so there is nothing to start with there.\n\n")
+		b.WriteString("           yet. When a multi-step job repeats, add one: `create ext` or\n")
+		b.WriteString("           `open <session> mcp <url>` wraps it in a named tool call.\n\n")
 	}
 
 	b.WriteString("ACTIONS:\n")

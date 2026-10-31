@@ -224,6 +224,47 @@ func (h *Handler) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// handlePurgeArchivedSessions sweeps dead/exited sessions (DELETE /api/sessions?status=dead).
+//
+// Running sessions are never deleted here; only sessions with status != "running"
+// are removed. This gives the Web UI and scripts a single idempotent call to clear
+// the archive drawer without hand-picking every ID.
+func (h *Handler) handlePurgeArchivedSessions(w http.ResponseWriter, r *http.Request) {
+	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	if status != "dead" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "status=dead is required"})
+		return
+	}
+
+	var toDelete []string
+	for _, info := range h.Sessions.ListAll() {
+		if info.Status != api.SessionRunning {
+			toDelete = append(toDelete, info.ID)
+		}
+	}
+
+	if len(toDelete) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": []string{}, "count": 0, "failed": []map[string]string{}})
+		return
+	}
+
+	// Refuse if any of the target sessions is forbidden by caller restriction.
+	if h.restRefuseSessionIDs(w, strings.Join(toDelete, ","), capability.SessionDelete) {
+		return
+	}
+
+	var deleted []string
+	var failed []map[string]string
+	for _, id := range toDelete {
+		if err := h.Sessions.Delete(id); err != nil {
+			failed = append(failed, map[string]string{"id": id, "error": err.Error()})
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "count": len(deleted), "failed": failed})
+}
+
 type sessionRenameBody struct {
 	Name *string `json:"name"`
 }
