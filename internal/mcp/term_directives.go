@@ -517,6 +517,15 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 				}
 				act = "retry"
 			}
+			// --values WITHOUT --template IS THE INSTALLATION STEP, not an edit of the
+			// document. The two are different questions (what the extension IS, versus what
+			// it is on this machine) and they are separate capabilities, so one call must
+			// not silently do the other: a caller who sent only values meant only values.
+			if _, hasValues := stmt.Flag("values"); hasValues {
+				if _, hasTemplate := stmt.Flag("template"); !hasTemplate {
+					act = "set"
+				}
+			}
 			return []envelope.Slot{s.directiveExtension(ctx, withFlags(stmt, map[string]string{
 				"action": act, "name": stmt.Key,
 			}), win)}

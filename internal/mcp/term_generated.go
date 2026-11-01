@@ -977,7 +977,7 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	action, rest := resolveAction(stmt, "list")
 	capID, ok := extensionCapability(action)
 	if !ok {
-		return badRequest(stmt, "ext needs --action list|get|create|update|delete|retry, got "+quoteOrDash(action))
+		return badRequest(stmt, "ext needs --action list|get|create|update|set|delete|retry, got "+quoteOrDash(action))
 	}
 	if slot, refused := s.refuseAction(ctx, stmt, capID); refused {
 		return slot
@@ -992,7 +992,6 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 		args["name"] = rest[0]
 	}
 	if slot, bad := stringFlags(args, stmt,
-		[2]string{"kind", "kind"},
 		[2]string{"target", "target"},
 		[2]string{"description", "description"},
 		[2]string{"command", "command"},
@@ -1038,6 +1037,18 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	   objects or host strings, keeping multi-target configuration scoped under
 	   the extension. */
 	if err := setFlagJSONList(args, stmt, "targets", "targets"); err != nil {
+		return badRequest(stmt, err.Error())
+	}
+	/* --template is the document itself: a package's config.toml, holes and all.
+	   A repository ships a file, not a set of flags, and installing it must not
+	   require translating that file into flags and back. */
+	if slot, bad := stringFlags(args, stmt, [2]string{"template", "template"}); bad {
+		return slot
+	}
+	/* --values fills the template's holes. It is the installation step, and the
+	   one place a caller names what goes into the recipe. JSON, because a value is
+	   a TOML value — a number, a list of host tables — not a word. */
+	if err := setFlagJSONObject(args, stmt, "values", "values"); err != nil {
 		return badRequest(stmt, err.Error())
 	}
 	if boolFlag(stmt, "enabled") {
@@ -1151,6 +1162,8 @@ func extensionCapability(action string) (string, bool) {
 		return capability.ExtCreate, true
 	case "update":
 		return capability.ExtUpdate, true
+	case "set":
+		return capability.ExtSet, true
 	case "delete":
 		return capability.ExtDelete, true
 	case "retry", "restart":

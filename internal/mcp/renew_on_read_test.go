@@ -16,7 +16,7 @@ import (
 // nothing else in the suite can tell "using it" from "silence".
 func TestReadingAnExtensionRenewsItsWindow(t *testing.T) {
 	s := newExtensionTestServer(t)
-	ext := extensions.Preset(extensions.KindPrompt)
+	ext := extensions.Extension{Mode: "pty"}
 	ext.Name = "renewed"
 	ext.Target = "internal"
 	ext.Command = blockingCommand()

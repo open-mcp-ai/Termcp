@@ -13,7 +13,7 @@ import (
 // This is what `sampling/createMessage` is FOR. The protocol's own description is
 // "the server asks the client's LLM to generate" — the direction is upstream, from
 // the thing being driven to the thing driving it. A sub-MCP started on a shell
-// channel (`pipe mac --argv npx -y …`, or an extension declared with kind=mcp) has
+// channel (`pipe mac --argv npx -y …`, or an extension that runs a program) has
 // no model of its own, so it asks its host; Termcp sits between them and forwards.
 //
 //	sub-MCP  ──sampling/createMessage──▶  Termcp  ──▶  Agent (MCP client)

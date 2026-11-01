@@ -20,7 +20,7 @@ func TestTermExtCarriesArgvHeadersAndForwards(t *testing.T) {
 	s := newExtensionTestServer(t)
 
 	body := termText(t, s, map[string]any{
-		"cmd": `create ext wire --kind mcp --target internal --mode pipe ` +
+		"cmd": `create ext wire --target internal --mode pipe ` +
 			`--command node --description 'a,b' --headers '{"X-Api-Key":"k1"}' ` +
 			`--forwards '[{"kind":"dynamic","local_port":1080}]' ` +
 			`--args /srv/mcp.js --stdio --label 'x,y'`,
@@ -76,7 +76,7 @@ func TestTermExtCarriesArgvHeadersAndForwards(t *testing.T) {
 func TestTermExtRefusesABadArgsFlag(t *testing.T) {
 	s := newExtensionTestServer(t)
 	for _, tc := range []struct{ name, cmd string }{
-		{"unbalanced quote", `ext create broken1 --kind mcp --target internal --mode pipe --command node --args "unclosed`},
+		{"unbalanced quote", `ext create broken1 --target internal --mode pipe --command node --args "unclosed`},
 		// A quoted `;` is ONE word, so this is a legal argv and must NOT be
 		// refused: the parser's rule is "one program, no shell syntax", and a
 		// quoted semicolon is an argument. The unbalanced quote above is the
@@ -97,12 +97,53 @@ func TestTermExtRefusesABadArgsFlag(t *testing.T) {
 	}
 }
 
+// TestTermExtValuesFillsHoles pins the installation step through the language an
+// agent actually speaks: `edit ext <name> --values …` sets values and does NOT
+// rewrite the document, because "what this extension is" and "what it is on this
+// machine" are two questions with two capabilities behind them.
+func TestTermExtValuesFillsHoles(t *testing.T) {
+	s := newExtensionTestServer(t)
+	if body := termText(t, s, map[string]any{
+		"cmd": `create ext k8s --template 'target = "internal"
+mode = "pipe"
+command = "{{command}}"
+
+[params.command]
+type = "string"
+help = "the program that serves MCP over the pipe"'`,
+	}); !strings.Contains(body, "k8s") {
+		t.Fatalf("installing a package should store it, got %q", body)
+	}
+
+	// Before the value exists the extension is installed and waiting, and the
+	// answer names the hole rather than claiming it is broken.
+	if got := termText(t, s, map[string]any{"cmd": `ls ext`}); !strings.Contains(got, "k8s") {
+		t.Fatalf("an installed-but-unfilled extension must still be listed, got %q", got)
+	}
+
+	termText(t, s, map[string]any{"cmd": `edit ext k8s --values '{"command":"` + blockingCommand() + `"}'`})
+
+	// The value landed in the values file, and the template still carries its hole:
+	// that is what makes an upgrade possible.
+	doc, err := s.extensions.Store().Template("k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(doc), "{{command}}") {
+		t.Errorf("setting a value must not rewrite the template:\n%s", doc)
+	}
+	got := callExtension(t, s, map[string]any{"action": "get", "name": "k8s"})
+	if got["command"] != blockingCommand() {
+		t.Errorf("command = %v, want the value that was set", got["command"])
+	}
+}
+
 // TestTermAcceptsExtensionsSynonym pins that the built-in spelling reaches the
 // ext directive end to end, including the capability check and the dispatch.
 func TestTermAcceptsExtensionsSynonym(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "via-alias", "kind": "skill", "target": "internal",
+		"action": "create", "name": "via-alias", "target": "internal",
 		"paths": []any{"/srv/"},
 	})
 	body := termText(t, s, map[string]any{"cmd": `ls ext`})

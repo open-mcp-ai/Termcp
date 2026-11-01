@@ -15,7 +15,7 @@ import (
 func TestTermExtRestartRebuildsTheSession(t *testing.T) {
 	s := newExtensionTestServer(t)
 	termText(t, s, map[string]any{
-		"cmd": `create ext wire --kind mcp --target internal --mode pipe --command node --args /srv/mcp.js`,
+		"cmd": `create ext wire --target internal --mode pipe --command node --args /srv/mcp.js`,
 	})
 
 	// A configuration edit answers with the stored template.
@@ -38,7 +38,7 @@ func TestTermExtRestartRebuildsTheSession(t *testing.T) {
 func TestTermExtRestartRefusesACombination(t *testing.T) {
 	s := newExtensionTestServer(t)
 	termText(t, s, map[string]any{
-		"cmd": `create ext wire --kind mcp --target internal --mode pipe --command node --args /srv/mcp.js`,
+		"cmd": `create ext wire --target internal --mode pipe --command node --args /srv/mcp.js`,
 	})
 
 	body := termText(t, s, map[string]any{"cmd": `edit ext wire --restart --description hello`})

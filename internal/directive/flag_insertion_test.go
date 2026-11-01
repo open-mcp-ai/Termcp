@@ -53,12 +53,12 @@ var flagProbes = map[string]string{
 	"create": `create host --name ${1} --host ${2} --user ${3} --port ${4} --password ${5} --private-key ${6} --key-passphrase ${7} ` +
 		`--known-hosts ${8} --dial-timeout-seconds ${9} --proxy ${10} --description ${11} --default-shell ${12} --default-mode ${13} ` +
 		`--jump-host ${14} --jump-user ${15} --jump-port ${16} --jump-password ${17} --jump-private-key ${18} --jump-key-passphrase ${19} ` +
-		`--source ${20} --kind ${21} --target ${22} --command ${23} --url ${24} --headers ${25} --allow ${26} --paths ${27} ` +
-		`--notes ${28} --forwards ${29} --link-path ${30} --mode ${31} --op ${32} --args ${33}`,
+		`--source ${20} --target ${21} --command ${22} --url ${23} --headers ${24} --allow ${25} --paths ${26} ` +
+		`--notes ${27} --forwards ${28} --link-path ${29} --mode ${30} --op ${31} --args ${32}`,
 	"edit": `edit host ${1} --name ${2} --host ${3} --user ${4} --port ${5} --password ${6} --private-key ${7} --key-passphrase ${8} ` +
 		`--known-hosts ${9} --dial-timeout-seconds ${10} --proxy ${11} --description ${12} --default-shell ${13} --default-mode ${14} ` +
 		`--jump-host ${15} --jump-user ${16} --jump-port ${17} --jump-password ${18} --jump-private-key ${19} --jump-key-passphrase ${20} ` +
-		`--kind ${21} --target ${22} --command ${23} --url ${24} --headers ${25} --allow ${26} --paths ${27} --notes ${28} --forwards ${29} --args ${30}`,
+		`--target ${21} --command ${22} --url ${23} --headers ${24} --allow ${25} --paths ${26} --notes ${27} --forwards ${28} --args ${29}`,
 }
 
 // TestEveryVerbWithValueFlagsIsProbed keeps the map above honest.
