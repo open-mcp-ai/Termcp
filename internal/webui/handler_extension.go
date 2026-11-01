@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
 
@@ -134,19 +136,36 @@ func (h *Handler) handleGetExtension(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	// The editor has two views of one template: the form (the JSON below, keyed the
-	// way the extension tool's own arguments are) and the file itself. The TOML view
-	// asks for the file, so what the author edits is byte for byte what the store
-	// holds — and what an export hands them.
+	// The file editor asks for the actual stored files, not a rendered template.
+	// `?format=toml` is retained for existing callers as an alias of config.toml.
+	if r.URL.Query().Has("file") {
+		file := r.URL.Query().Get("file")
+		raw, err := h.Extensions.Store().ReadFile(name, file)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(raw)
+		return
+	}
 	if r.URL.Query().Get("format") == "toml" {
-		raw, err := h.Extensions.Store().ReadRaw(name)
+		raw, err := h.Extensions.Store().ReadFile(name, "config.toml")
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/toml; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
+		return
+	}
+	if r.URL.Query().Get("files") == "1" {
+		files, err := h.Extensions.Store().Files(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
 		return
 	}
 	ext, err := h.Extensions.Store().Load(name)
@@ -355,6 +374,29 @@ func (h *Handler) handleUpdateExtension(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := extensionName(r)
+	if file := r.URL.Query().Get("file"); file != "" {
+		body, err := io.ReadAll(io.LimitReader(r.Body, extensions.MaxConfigSize+1))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(body) > extensions.MaxConfigSize {
+			http.Error(w, "extension file too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if strings.HasSuffix(strings.ToLower(file), ".toml") {
+			if _, err := toml.Decode(string(body), new(map[string]any)); err != nil {
+				http.Error(w, "invalid TOML: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := h.Extensions.Store().WriteFile(name, file, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return

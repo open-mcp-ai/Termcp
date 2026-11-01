@@ -1708,10 +1708,10 @@ one host; an omitted target is refused if the extension declares more than one.
 Templates may be packaged as a directory: shared fields stay in `config.toml`,
 `notes.md` (or `notes.txt`) supplies the extension's notes, and each
 `targets/<host>.toml` supplies one host's configuration. The target filename is
-used as the host when the file omits `host`. Loading merges these files into the
-same extension template; saving keeps targets in their files and updates an
-existing notes sidecar. `target =` cannot be used together with files under
-`targets/`.
+used as the host when the file omits `host`. When `targets/` holds any `.toml`
+file it **is** the host list: `target =` and `[[targets]]` in `config.toml` are
+then ignored rather than merged, so adding the first host file never invalidates
+the template. Saving through the editor writes the file it is showing.
 
 **A template that declares no `forwards` is started on demand.** Nothing is
 dialled until a caller asks, and the ask is the MCP tool's `action=use` (or
@@ -1779,6 +1779,15 @@ With `?format=toml` the answer is the file itself (`application/toml`): the text
 `<data>/extensions/<name>/config.toml` holds, so the Web UI's file view edits
 exactly what the store would read back.
 
+A directory-stored template has more than one file, so the editor asks for the
+list and then for one file at a time:
+
+- `?files=1` answers `{"files":[{"path":"config.toml","label":"config.toml"}, …]}`,
+  listing `config.toml`, the notes sidecar when present, and each
+  `targets/<host>.toml`, in that order.
+- `?file=<path>` answers that file's bytes (`text/plain`). `format=toml` is
+  retained as an alias for `config.toml`.
+
 ### `POST /api/extensions`
 
 Creates a template. `name` and `target` are required; `kind` picks the preset that
@@ -1794,6 +1803,13 @@ A body sent as `application/toml` (or `text/plain`) is the file view instead: th
 document replaces the template as written, and nothing is defaulted — what the
 file says is what the template is. A document carrying a `name` key that is not the
 name in the path is refused (`400`), because the name is the directory.
+
+`?file=<path>` writes that one file and leaves the others alone. The path must be
+one the extension may hold — `config.toml`, `notes.md`/`notes.txt`, or
+`targets/<valid host>.toml` — so a traversal (`../ssh_configs/x`) is a refusal
+rather than a tidy-up. A TOML file is syntax-checked, then the whole template is
+read back: a write that would make the extension unloadable (a duplicate host, a
+bad forward) is rolled back and answered `400` with the loader's own reason.
 
 ### `DELETE /api/extensions/{name}`
 

@@ -797,8 +797,10 @@ function openExtensionDialog(name) {
   if (delBtn) delBtn.style.display = name ? '' : 'none';
   modal.classList.remove('hidden');
   if (name) {
-    loadExtensionToml(name);
+    loadExtensionFiles(name);
   } else {
+    _extFile = 'config.toml';
+    paintExtensionFileTabs(name, null);
     var area = extModalEl('ext-f-toml');
     if (area) area.value = extTomlSeed();
     if (nameEl) nameEl.focus();
@@ -847,19 +849,92 @@ function extSharingNote(row) {
 
 /* ---- The configuration page ------------------------------------------------- */
 
-/* loadExtensionToml reads the file the store holds, byte for byte: what the author
- * edits here is what an export hands out and what a colleague's file would
- * contain. */
-function loadExtensionToml(name) {
+/* Which file the editor is showing. A template may be ONE file or a directory:
+ * config.toml plus notes.md plus one file per host. The tabs are the directory,
+ * so an author edits the file that actually holds the thing they came to change
+ * instead of a rendered copy of it. */
+var _extFile = 'config.toml';
+var _extFiles = null;
+
+/* paintExtensionFileTabs draws one tab per stored file, and nothing at all for a
+ * create — a new template is one config.toml, and offering to edit a notes file
+ * that does not exist yet would be offering to write into a directory the create
+ * has not made. */
+function paintExtensionFileTabs(name, files) {
+  var bar = extModalEl('ext-file-tabs');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'ext-file-tabs';
+    bar.className = 'ext-file-tabs';
+    bar.setAttribute('role', 'tablist');
+    var area = extModalEl('ext-f-toml');
+    if (!area || !area.parentNode) return;
+    // Above the label, so the order reads tabs → which file → its text.
+    var label = area.previousElementSibling;
+    var anchor = label && label.tagName === 'LABEL' ? label : area;
+    anchor.parentNode.insertBefore(bar, anchor);
+  }
+  if (!name || !files || files.length < 2) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = files.map(function (f) {
+    var on = f.path === _extFile ? ' class="ext-file-tab is-on" aria-selected="true"' : ' class="ext-file-tab" aria-selected="false"';
+    return '<button type="button" role="tab"' + on + ' data-path="' + escapeHtml(f.path) + '">' +
+      escapeHtml(f.label) + '</button>';
+  }).join('');
+  bar.querySelectorAll('.ext-file-tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var path = btn.getAttribute('data-path');
+      if (!path || path === _extFile) return;
+      _extFile = path;
+      paintExtensionFileTabs(name, _extFiles);
+      loadExtensionFile(name, path);
+    });
+  });
+}
+
+/* loadExtensionFiles asks what the extension is stored as, then loads the first
+ * tab. config.toml is always first, which is why a single-file template looks
+ * exactly as it did before tabs existed. */
+function loadExtensionFiles(name) {
+  _extFile = 'config.toml';
+  _extFiles = null;
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '?files=1')
+    .then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
+    .then(function (doc) {
+      if (_extDialogName !== name) return;
+      _extFiles = doc.files || [];
+      paintExtensionFileTabs(name, _extFiles);
+      loadExtensionFile(name, _extFile);
+    })
+    .catch(function () {
+      showExtError(t('ext.modal.loadFailed'));
+    });
+}
+
+/* loadExtensionFile reads one stored file byte for byte: what the author edits
+ * here is what an export hands out and what a colleague's file would contain. */
+function loadExtensionFile(name, path) {
   var area = extModalEl('ext-f-toml');
   if (area) area.value = '';
-  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '?format=toml')
+  var label = extModalEl('ext-f-toml');
+  if (label && label.previousElementSibling && label.previousElementSibling.tagName === 'LABEL') {
+    label.previousElementSibling.textContent = path;
+  }
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) +
+        '?file=' + encodeURIComponent(path))
     .then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
     })
     .then(function (text) {
-      if (_extDialogName === name && area) area.value = text;
+      if (_extDialogName === name && _extFile === path && area) area.value = text;
     })
     .catch(function () {
       showExtError(t('ext.modal.loadFailed'));
@@ -925,12 +1000,24 @@ function extSaveTemplate() {
   }
   var saveBtn = extModalEl('modal-ext-save');
   if (saveBtn) saveBtn.disabled = true;
-  var url = forCreate
-    ? apiPath('/api/extensions') + query
-    : apiPath('/api/extensions/') + encodeURIComponent(name);
+  /* AN EDIT IS A FILE WRITE. Editing an existing template writes the tab the
+     author is looking at, because that is the file the store holds — going back
+     through the template parser would re-render config.toml from a merged view
+     and quietly move a host list out of targets/ into it. A CREATE is still a
+     template, because there is no file yet. */
+  var url;
+  var type;
+  if (forCreate) {
+    url = apiPath('/api/extensions') + query;
+    type = 'application/toml; charset=utf-8';
+  } else {
+    url = apiPath('/api/extensions/') + encodeURIComponent(name) +
+      '?file=' + encodeURIComponent(_extFile);
+    type = 'text/plain; charset=utf-8';
+  }
   fetch(url, {
     method: forCreate ? 'POST' : 'PUT',
-    headers: { 'Content-Type': 'application/toml; charset=utf-8' },
+    headers: { 'Content-Type': type },
     body: body
   }).then(function (r) {
     if (saveBtn) saveBtn.disabled = false;

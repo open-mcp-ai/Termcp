@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -704,6 +705,82 @@ func TestExtensionsBatchDeleteRoute(t *testing.T) {
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodDelete, "/api/extensions/solo", nil))
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("single delete = %d, want 204 (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestExtensionModularFileRoutes pins the file tabs API: it lists only extension
+// files, reads each file, writes notes and target sidecars, and refuses traversal.
+func TestExtensionModularFileRoutes(t *testing.T) {
+	h := extensionTestHandler(t)
+	store := h.Extensions.Store()
+	ext := extensions.Preset(extensions.KindMCP)
+	ext.Name = "modular"
+	ext.Target = "internal"
+	ext.Command = "example"
+	if err := extensions.SaveTemplate(store, &ext); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		"notes.md":            "notes body",
+		"targets/node-a.toml": "host = \"internal\"\n",
+	} {
+		if err := store.WriteFile("modular", path, []byte(body)); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rr
+	}
+
+	list := request(http.MethodGet, "/api/extensions/modular?files=1", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("file list = %d: %s", list.Code, list.Body.String())
+	}
+	var got struct {
+		Files []extensions.ExtensionFile `json:"files"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"config.toml", "notes.md", "targets/node-a.toml"}
+	if len(got.Files) != len(want) {
+		t.Fatalf("files = %+v, want %v", got.Files, want)
+	}
+	for i, path := range want {
+		if got.Files[i].Path != path {
+			t.Errorf("file[%d] = %q, want %q", i, got.Files[i].Path, path)
+		}
+	}
+	read := request(http.MethodGet, "/api/extensions/modular?file=notes.md", "")
+	if read.Code != http.StatusOK || read.Body.String() != "notes body" {
+		t.Fatalf("read notes = %d %q", read.Code, read.Body.String())
+	}
+	write := request(http.MethodPut, "/api/extensions/modular?file=notes.md", "updated notes")
+	if write.Code != http.StatusNoContent {
+		t.Fatalf("write notes = %d: %s", write.Code, write.Body.String())
+	}
+	read = request(http.MethodGet, "/api/extensions/modular?file=notes.md", "")
+	if read.Code != http.StatusOK || read.Body.String() != "updated notes" {
+		t.Fatalf("updated notes = %d %q", read.Code, read.Body.String())
+	}
+	// A target file that would make the template invalid is refused, and the file
+	// that was there is left alone: the loader is the validator.
+	badTarget := request(http.MethodPut, "/api/extensions/modular?file=targets/node-b.toml", "host = \"not a valid host\"\n")
+	if badTarget.Code < 400 {
+		t.Errorf("writing an invalid target file returned %d, want refusal", badTarget.Code)
+	}
+	if _, err := store.ReadFile("modular", "targets/node-b.toml"); err == nil {
+		t.Error("a refused target file must not be left on disk")
+	}
+	for _, path := range []string{"../ssh_configs/secret.toml", "targets/../config.toml", "targets/not a host.toml"} {
+		bad := request(http.MethodPut, "/api/extensions/modular?file="+url.QueryEscape(path), "x")
+		if bad.Code < 400 {
+			t.Errorf("write to %q returned %d, want refusal", path, bad.Code)
+		}
 	}
 }
 

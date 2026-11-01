@@ -293,13 +293,23 @@ func TestExtensionCardIsAWindowAndConfigIsAModal(t *testing.T) {
 	if strings.Contains(ext, "ext-del-btn") || !strings.Contains(ext, "deleteOneExtension") {
 		t.Error("removal belongs to the configuration modal and the batch, not to the card")
 	}
-	// The page reads and writes the file itself: one content type, and the name in
-	// the query (a document has no name key — the directory is the name).
-	if !strings.Contains(ext, "encodeURIComponent(name) + '?format=toml'") {
-		t.Error("the configuration must read the file the store holds")
+	// The page reads and writes the stored FILES: a template may be one file or a
+	// directory (config.toml + notes.md + targets/<host>.toml), so the editor lists
+	// them and edits the one the author picked.
+	if !strings.Contains(ext, "'?files=1'") {
+		t.Error("the configuration must ask what files the extension is stored as")
 	}
-	if !strings.Contains(ext, "headers: { 'Content-Type': 'application/toml; charset=utf-8' }") {
-		t.Error("the configuration must save the document itself")
+	if !strings.Contains(ext, "'?file=' + encodeURIComponent(path)") {
+		t.Error("the configuration must read the file the author selected")
+	}
+	if !strings.Contains(ext, "'?file=' + encodeURIComponent(_extFile)") {
+		t.Error("an edit must save the tab that is showing, not a re-rendered template")
+	}
+	if !strings.Contains(ext, "type = 'application/toml; charset=utf-8';") {
+		t.Error("a create must save a template document")
+	}
+	if !strings.Contains(ext, "type = 'text/plain; charset=utf-8';") {
+		t.Error("an edit must save the file's own bytes, not a re-encoded document")
 	}
 	if !strings.Contains(ext, "query = '?name=' + encodeURIComponent(newName)") {
 		t.Error("a create must carry its name, which the file itself has no place for")
@@ -309,6 +319,10 @@ func TestExtensionCardIsAWindowAndConfigIsAModal(t *testing.T) {
 	}
 	if !strings.Contains(ext, "# A termcp extension. kind + target is enough") {
 		t.Error("the default template must explain its own fields")
+	}
+	// A single-file template must look exactly as it did before tabs existed.
+	if !strings.Contains(ext, "if (!name || !files || files.length < 2) {") {
+		t.Error("the tab bar must stay hidden unless the extension is stored as more than one file")
 	}
 }
 

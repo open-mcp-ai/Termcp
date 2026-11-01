@@ -123,13 +123,20 @@ func (s *Store) Load(name string) (*Extension, error) {
 		e.Notes = strings.TrimSpace(string(b))
 	}
 
-	// Modular targets: load targets/*.toml if the directory exists.
+	// THE DIRECTORY WINS, and that is the same rule notes.md follows: a file the
+	// author wrote is what they meant. When `targets/` holds anything it IS the host
+	// list — `target =` and `[[targets]]` in config.toml are then ignored, not merged
+	// — because merging left no way to reach the layout from the editor: adding the
+	// first file made the directory invalid, and the one write that fixes it (dropping
+	// `target =`) was refused while the directory was invalid. Replacement has one
+	// precedence to remember; merging has two orders and a conflict to resolve.
 	targetsDir := filepath.Join(extDir, "targets")
 	entries, err := os.ReadDir(targetsDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading extension targets directory: %w", err)
 	}
-	// ReadDir sorts by filename, so the merged list is stable across loads.
+	var fromFiles []TargetDecl
+	// ReadDir sorts by filename, so the list is stable across loads.
 	for _, de := range entries {
 		if de.IsDir() || !strings.HasSuffix(de.Name(), ".toml") || strings.HasPrefix(de.Name(), ".") {
 			continue
@@ -146,14 +153,12 @@ func (s *Store) Load(name string) (*Extension, error) {
 			// The filename is the host, so `targets/cluster-bj.toml` needs no key.
 			decl.Host = strings.TrimSuffix(de.Name(), ".toml")
 		}
-		e.Targets = append(e.Targets, decl)
+		fromFiles = append(fromFiles, decl)
 	}
-	// ONE PLACE PER HOST LIST. `target` names one host and `targets/` names several;
-	// carrying both would leave "where does this run" with two answers, so the
-	// conflict is reported against the files that caused it rather than as the
-	// generic alternatives error from Validate.
-	if len(e.Targets) > 0 && e.Target != "" {
-		return nil, fmt.Errorf("extension %q declares target = %q in config.toml and hosts in targets/: keep the hosts in targets/*.toml and drop target, or remove targets/", name, e.Target)
+	if len(fromFiles) > 0 {
+		e.Targets = fromFiles
+		e.Target = ""
+		e.Forwards = nil
 	}
 
 	e.Normalize()
