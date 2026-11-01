@@ -426,6 +426,11 @@ Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 
 Creates a new SSH connection and session (including its first shell).
 
+Every session dials its own SSH connection. The transport pool is reserved for
+one-shot borrowed operations (`run use:<host>`, `read use:<host>`), so user-created
+sessions never share an underlying SSH client. If a session closes or times out,
+sibling sessions on the same profile keep running uninterrupted.
+
 ```
 Request:
 {
@@ -588,6 +593,28 @@ SSH transport, and forwards, SFTP and new shells all ride it. Only `DELETE /api/
 terminate/disconnect, or a lost connection turn the container `exited` (DEAD, read-only).
 
 Closing a shell that no longer exists also returns 204 (idempotent).
+
+```
+Response: 204 No Content
+```
+
+### `POST /api/shells/{id}/archive`
+
+**Archives** one shell channel and preserves its history record (`POST /api/shells/{id}/archive`).
+
+This is the verb called when a terminal tab is closed ("X") in the Web UI: the child shell
+is terminated, but its metadata, exit code, and buffer output are preserved in the
+retained shell snapshot (`archived = true`). It remains addressable by `shell_id` for
+output reads. If the containing session later ends, its read-only snapshot includes
+this shell; the archive ledger itself is session-level.
+
+In contrast, `DELETE /api/shells/{id}` is the **erase** verb: it terminates the channel
+AND removes it from shell history entirely.
+
+Closing the internal primary shell via `DELETE` is a no-op (the process can outlive the
+tab), whereas `POST /api/shells/{id}/archive` archives the primary shell normally.
+
+Closing a shell that no longer exists returns 204 (idempotent).
 
 ```
 Response: 204 No Content
@@ -1679,10 +1706,11 @@ dialled until a caller asks, and the ask is the MCP tool's `action=use` (or
 nothing asked.
 
 Each ask is answered with its OWN channel — never one somebody else may still be
-driving, because two callers on one channel share a cursor. A channel nothing
-touches for the whole `idle_timeout` (default `10m`, overridable per template) is
-closed, and `action=release` (or `close ext <name> [<channel>]`) hands one back at
-once.
+driving, because two callers on one channel share a cursor. Channels are labelled
+with the extension name (`<name>` for the first, `<name>#2`, `<name>#3` for subsequent
+instances on the shared connection). A channel nothing touches for the whole `idle_timeout`
+(default `10m`, overridable per template; `0` disables idle collection) is closed, and
+`action=release` (or `close ext <name> [<channel>]`) hands one back at once.
 
 **The connection is the install's, not the caller's.** Closing a channel leaves
 the connection up, so the next ask forks again on the same SSH session instead of
