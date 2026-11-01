@@ -24,27 +24,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-// Extension kinds are presets, not code paths: choosing one fills in a set of
-// defaults (see preset.go), and every field stays editable afterwards. An
-// extension always remains one shape — a trimmed session — whatever it is
-// called; the kind only says which common shape it started from.
-const (
-	KindMCP    = "mcp"    // an MCP server driven over a pipe shell (stdio command, or an HTTP endpoint bridged in-process)
-	KindSkill  = "skill"  // a read-only window onto remote files via SFTP
-	KindPrompt = "prompt" // an interactive terminal with instructions attached
-	KindCustom = "custom" // everything by hand
-)
-
-// validKinds retains the historical preset names for documentation and authoring.
-// Kind is a display label and preset scaffold, NOT a code path: runtime capabilities
-// are inferred from what the template actually declares (command, url, paths, forwards, mode).
-var validKinds = map[string]bool{
-	KindMCP:    true,
-	KindSkill:  true,
-	KindPrompt: true,
-	KindCustom: true,
-}
-
 // Forward kinds name a port-forward's direction, after the OpenSSH flags. A
 // forward declared on an extension is set up by the reconciler when its session
 // comes up and torn down with it, so the author describes the tunnel once and
@@ -71,8 +50,15 @@ const DefaultIdleTimeout = 10 * time.Minute
 type Extension struct {
 	// Identity. Name is the TOML-encoded file's directory name, not a TOML key,
 	// so it is never stored inside the file it names.
-	Name   string `toml:"-"`
-	Kind   string `toml:"kind"`
+	Name string `toml:"-"`
+	// THERE IS NO kind FIELD, and its absence is a decision. It used to be a label
+	// — "mcp", "skill", "prompt" — that changed nothing at runtime: capabilities
+	// come from what the template declares (command, url, paths, forwards, mode),
+	// Validate never checked it, and PresetNotes already chose the recipe by the
+	// declared shape rather than the label. A field that only misleads a reader into
+	// thinking there are three kinds of extension, when there is one, is worse than
+	// no field: it makes an agent pick a category instead of writing down what it
+	// wants to happen.
 	Target string `toml:"target,omitempty"` // legacy single-target profile name, or "internal"
 	// Targets defines the hosts this extension runs on. When provided, each entry
 	// names a host and its host-specific forwards, allowing different targets to bind
@@ -118,14 +104,13 @@ type Extension struct {
 	IdleTimeout string `toml:"idle_timeout,omitempty"`
 
 	// Capability restriction. Both are whitelists; an empty value means
-	// unrestricted, so a prompt-kind extension that wants the full terminal
-	// surface simply lists nothing.
+	// unrestricted, so a terminal that wants the full surface simply lists nothing.
 	Allow []string `toml:"allow,omitempty"`
 	Paths []string `toml:"paths,omitempty"`
 
 	// URL is an HTTP MCP endpoint (streamable HTTP, or SSE when the path ends in
-	// /sse). It is the alternative to Command/Args for kind=mcp: instead of a
-	// program to run, the template names a server to speak to, and the session
+	// /sse). It is the alternative to Command/Args: instead of a program to run,
+	// the template names a server to speak to, and the session
 	// carries the in-process relay rather than a process. The relay runs inside
 	// termcp (see internal/mcpbridge), so this needs no second binary on the
 	// target and no PATH lookup — the channel is the pipe, and termcp is both ends
@@ -272,12 +257,8 @@ func (e *Extension) Normalize() {
 	e.Name = strings.TrimSpace(e.Name)
 	e.IdleTimeout = strings.TrimSpace(e.IdleTimeout)
 	e.Target = strings.TrimSpace(e.Target)
-	e.Kind = strings.TrimSpace(e.Kind)
 	e.Mode = strings.TrimSpace(e.Mode)
 	e.Command = strings.TrimSpace(e.Command)
-	if e.Kind == "" {
-		e.Kind = KindCustom
-	}
 	e.URL = strings.TrimSpace(e.URL)
 	// An empty headers map is the same as none, and a header name is an HTTP
 	// token: a blank one is dropped rather than sent as a request line nobody can
@@ -381,7 +362,6 @@ func (e *Extension) Validate() error {
 			return fmt.Errorf("forwards belong to a host: move [[forward]] under the [[targets]] entry it listens for, since two targets cannot both bind the same local port")
 		}
 	}
-	// Kind is an author-facing label/preset, not a rigid constraint. Any kind is allowed.
 	switch e.Mode {
 	case "", "pty", "pipe":
 	default:

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -195,10 +196,13 @@ func waitForFailure(t *testing.T, r *Reconciler, name, stage string) Status {
 // session it created carries the restriction the template declared.
 func TestReconcilerBringsUpSkillExtension(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	// The whitelist is declared, not implied: a template says what it may do, and a
+	// hand-written one that omits allow is unrestricted rather than silently narrowed.
+	ext := Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/skills/docs/"}
+	ext.Allow = []string{capability.FileRead, capability.FileStat}
 	mustSave(t, r.store, &ext)
 
 	wantExtension(t, r, "docs")
@@ -239,7 +243,7 @@ func TestReconcilerBringsUpSkillExtension(t *testing.T) {
 // an author what to fix, so both stages are accepted here.
 func TestReconcilerReportsStartupFailure(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "broken"
 	ext.Target = "internal"
 	ext.Command, ext.Args = immediateExitCommand()
@@ -292,7 +296,7 @@ func TestReconcilerReportsStartupFailure(t *testing.T) {
 // does not exist is reported once, and no session is ever created for it.
 func TestReconcilerMissingTarget(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "nowhere"
 	ext.Target = "no-such-profile"
 	ext.Paths = []string{"/srv/"}
@@ -329,7 +333,7 @@ func TestReconcilerMissingTarget(t *testing.T) {
 // going to create the profile.
 func TestReconcilerTargetAppearsLater(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "late-target"
 	ext.Target = "arrives"
 	ext.Paths = []string{"/srv/"}
@@ -353,7 +357,7 @@ func TestReconcilerTargetAppearsLater(t *testing.T) {
 // no session, no attempt, and the status says why nothing is happening.
 func TestReconcilerDisabled(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "off"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -374,7 +378,7 @@ func TestReconcilerDisabled(t *testing.T) {
 // for the timer.
 func TestReconcilerRetry(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "late"
 	ext.Target = "no-such-profile"
 	ext.Paths = []string{"/srv/"}
@@ -396,7 +400,7 @@ func TestReconcilerRetry(t *testing.T) {
 // config forbids.
 func TestReconcilerRetryDisabledRefused(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "off"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -415,7 +419,7 @@ func TestReconcilerRetryDisabledRefused(t *testing.T) {
 // recorded reason, and the reconciler then brings it back.
 func TestReconcilerSessionDeathMarksUnavailable(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "live"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -456,7 +460,7 @@ func TestReconcilerSessionDeathMarksUnavailable(t *testing.T) {
 // when the template asked for an ephemeral one.
 func TestReconcilerForwardEstablished(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "tunnel"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -507,7 +511,7 @@ func TestReconcilerForwardEstablished(t *testing.T) {
 // host for everyone.
 func TestReconcilerEditRebuildsTheChannel(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "edited"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -553,7 +557,7 @@ func TestReconcilerEditRebuildsTheChannel(t *testing.T) {
 func TestReconcilerSharesOneSessionPerHost(t *testing.T) {
 	r := startReconciler(t)
 	for _, name := range []string{"first", "second"} {
-		ext := Preset(KindMCP)
+		ext := Extension{Mode: "pipe"}
 		ext.Name = name
 		ext.Target = "internal"
 		ext.Command = testShellCommand()
@@ -613,13 +617,13 @@ func TestReconcilerSharesOneSessionPerHost(t *testing.T) {
 // of them the other's reach — the one thing the layer promises it cannot do.
 func TestReconcilerSeparatesByCapability(t *testing.T) {
 	r := startReconciler(t)
-	first := Preset(KindSkill)
+	first := Extension{}
 	first.Name = "docs-a"
 	first.Target = "internal"
 	first.Paths = []string{"/srv/skills/a/"}
 	mustSave(t, r.store, &first)
 
-	second := Preset(KindSkill)
+	second := Extension{}
 	second.Name = "docs-b"
 	second.Target = "internal"
 	second.Paths = []string{"/srv/skills/b/"}
@@ -665,7 +669,7 @@ func TestReconcilerSeparatesByCapability(t *testing.T) {
 // named after the group so a leftover is identifiable.
 func TestReconcilerSessionIsNamespaced(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "hidden"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -723,7 +727,7 @@ func TestReconcilerSweepsRestoredSessions(t *testing.T) {
 // closes the session it kept warm, so an extension that is gone is gone.
 func TestReconcilerDeleteTearsDown(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "gone"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -764,7 +768,7 @@ func TestReconcilerDeleteTearsDown(t *testing.T) {
 // the store reaches the reconciler without an explicit poke.
 func TestReconcilerStoreChangeTriggers(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "wired"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -813,7 +817,7 @@ func shortLivedCommand() (string, []string) {
 // wrong host.
 func TestReconcilerReportsAnInstanceThatEnded(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "short-lived"
 	ext.Target = "internal"
 	ext.Command, ext.Args = shortLivedCommand()

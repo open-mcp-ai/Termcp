@@ -22,7 +22,7 @@ import (
 // forward, which is what makes it on demand.
 func lazyExt(t *testing.T, r *Reconciler, name, idle string) *Extension {
 	t.Helper()
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = name
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -318,7 +318,7 @@ func TestIdleInstanceIsClosedAtTheWindow(t *testing.T) {
 // "idle" — so it is not on demand, and its connection is not a caller's to release.
 func TestResidentExtensionIsNotOnDemand(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "resident"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -345,7 +345,7 @@ func TestIdleTimeoutMustBeADuration(t *testing.T) {
 	// the same one the daemon's --idle-timeout uses. It is covered by
 	// TestExtensionIdleTimeoutZeroDisablesCollectionPinsIssue227.
 	for _, raw := range []string{"10 minutes", "-5m"} {
-		ext := Preset(KindMCP)
+		ext := Extension{Mode: "pipe"}
 		ext.Name = "bad"
 		ext.Target = "internal"
 		ext.Command = testShellCommand()
@@ -355,7 +355,7 @@ func TestIdleTimeoutMustBeADuration(t *testing.T) {
 			t.Errorf("idle_timeout %q should be refused", raw)
 		}
 	}
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "ok"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -376,7 +376,7 @@ func TestIdleTimeoutMustBeADuration(t *testing.T) {
 // JSON-RPC frame into an empty stream (dogfood on #183).
 func TestABrokenProgramIsNotOfferedAsAvailable(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "bad"
 	ext.Target = "internal"
 	ext.Command = "nosuchprogram-xyz"

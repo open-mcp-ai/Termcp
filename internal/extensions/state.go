@@ -185,10 +185,9 @@ func (st *extState) changed(ext *Extension) bool {
 // the same edit.
 func fingerprint(ext *Extension) string {
 	var b strings.Builder
-	// KIND IS NOT IN THE FINGERPRINT. It is a label and a preset scaffold, not a
-	// code path — nothing downstream branches on it, so renaming `custom` to `mcp`
-	// on an unchanged template describes nothing that runs and must not trigger a
-	// rebuild of a live instance.
+	// WHAT RUNS IS WHAT IS IN THE FINGERPRINT. Every field a session is built from
+	// belongs here; a field that only describes the template does not, because
+	// changing a description must not tear down a live instance.
 	fmt.Fprintf(&b, "%s|%s|%q|", ext.Target, ext.Mode, ext.Command)
 	for _, a := range ext.Args {
 		fmt.Fprintf(&b, "%q,", a)

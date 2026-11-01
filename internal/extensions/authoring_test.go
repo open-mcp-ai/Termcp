@@ -37,7 +37,7 @@ func TestApplyArgsRefusesMalformedCapabilityFields(t *testing.T) {
 		{"forwards": "local"},
 	}
 	for _, args := range cases {
-		ext := Preset(KindCustom)
+		ext := Extension{}
 		ext.Name = "probe"
 		ext.Target = "internal"
 		if err := ApplyArgs(&ext, args, true); err == nil {
@@ -46,7 +46,7 @@ func TestApplyArgsRefusesMalformedCapabilityFields(t *testing.T) {
 	}
 
 	// The well-formed shapes still work, including the documented empty array.
-	ext := Preset(KindCustom)
+	ext := Extension{}
 	ext.Name = "probe"
 	ext.Target = "internal"
 	ext.Allow = []string{"file_read"}
@@ -69,7 +69,7 @@ func TestApplyArgsRefusesMalformedCapabilityFields(t *testing.T) {
 // older build — keeps loading, and the value is dropped rather than kept as
 // configuration nothing reads.
 func TestApplyArgsDropsOnExit(t *testing.T) {
-	ext := Preset(KindCustom)
+	ext := Extension{}
 	ext.Name = "probe"
 	ext.Target = "internal"
 	// A real declaration, so this test stays about on_exit being dropped rather than
@@ -88,7 +88,7 @@ func TestApplyArgsDropsOnExit(t *testing.T) {
 // independent facts about one edit.
 func TestStateChangeDetectsBothReadings(t *testing.T) {
 	st := &extState{status: StatusUnavailable}
-	ext := Preset(KindCustom)
+	ext := Extension{}
 	ext.Name = "probe"
 	ext.Target = "internal"
 
@@ -139,7 +139,7 @@ func TestEnsureForwardsKeepsWhatCameUpBeforeAFailure(t *testing.T) {
 	}
 
 	r := startQuietReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "partial"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -188,7 +188,7 @@ func TestEnsureForwardsKeepsWhatCameUpBeforeAFailure(t *testing.T) {
 // that waited on the running reconciler would pass either way.
 func TestReconcileWalkRecordsTheFingerprintWhenTheGroupMoves(t *testing.T) {
 	r := startQuietReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "fingerprint"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/one/"}
@@ -231,7 +231,7 @@ func TestReconcileWalkRecordsTheFingerprintWhenTheGroupMoves(t *testing.T) {
 // count is what makes this fail without the fix rather than pass by luck.
 func TestWalkReadsTheBackoffWindowUnderTheLock(t *testing.T) {
 	r := startQuietReconciler(t)
-	ext := Preset(KindSkill)
+	ext := Extension{}
 	ext.Name = "backoff"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -313,7 +313,7 @@ func TestNameStateTellsStaleFromTaken(t *testing.T) {
 		}
 	}
 
-	good := Preset(KindPrompt)
+	good := Extension{Mode: "pty"}
 	good.Name = "live"
 	good.Target = "internal"
 	if err := s.Save(&good); err != nil {
@@ -325,12 +325,12 @@ func TestNameStateTellsStaleFromTaken(t *testing.T) {
 
 	// The stale case: a file that exists but no longer validates. Written by hand
 	// because Save would refuse it.
-	stale := Preset(KindSkill)
+	stale := Extension{}
 	stale.Name = "stale"
 	stale.Target = "internal"
-	stale.Paths = nil // kind=skill requires at least one, so Validate refuses it
+	stale.Paths = nil // an empty window declares no capability, so Validate refuses it
 	if err := s.Save(&stale); err == nil {
-		t.Fatal("a skill with no paths should not have saved")
+		t.Fatal("a template with no capability should not have saved")
 	}
 	writeStaleTemplate(t, s, "stale")
 	if taken, loadable := s.NameState("stale"); !taken || loadable {

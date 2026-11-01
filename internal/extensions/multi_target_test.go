@@ -13,7 +13,7 @@ import (
 // - top-level forwards are refused when targets is used (forwards belong under a target).
 // - forward ports under different targets do not conflict in validation.
 func TestMultiTargetValidation(t *testing.T) {
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "k8s-debug"
 	ext.Command = "true"
 	ext.Target = "internal"
@@ -60,7 +60,7 @@ func TestMultiTargetValidation(t *testing.T) {
 // - Status folds over the targets: if all are idle, status is idle; if one is up, top status is available.
 func TestMultiTargetAcquireAndIsolation(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "multi-host"
 	ext.Command = testShellCommand()
 	ext.Args = nil

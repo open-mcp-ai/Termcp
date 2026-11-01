@@ -17,10 +17,9 @@ import (
 // field, because "no whitelisted tools" and "no restriction" are different
 // templates.
 //
-// update distinguishes the two call shapes: a create starts from a preset and
-// takes its conventional values for anything left out, while an update already
-// has the stored template behind it and must not gain preset values the author
-// did not ask for.
+// update distinguishes the two call shapes: a create starts from the conventional
+// defaults and takes them for anything left out, while an update already has the
+// stored template behind it and must not gain defaults the author did not ask for.
 //
 // A malformed value is refused rather than silently dropped. It used to fall back
 // to "no change", which for an array field meant CLEARING it: `allow: [1,2]`
@@ -29,11 +28,6 @@ import (
 // it. Refusing is the only reading a client sending the wrong type cannot be
 // surprised by.
 func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
-	if hasOpt(args, "kind") {
-		if kind := strings.TrimSpace(optString(args, "kind", "")); kind != "" {
-			ext.Kind = kind
-		}
-	}
 	if hasOpt(args, "target") {
 		ext.Target = strings.TrimSpace(optString(args, "target", ""))
 	}
@@ -56,12 +50,10 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 	if hasOpt(args, "url") {
 		ext.URL = strings.TrimSpace(optString(args, "url", ""))
 		// A URL template runs termcp's in-process relay instead of a program, and
-		// Validate refuses the pair — but the preset a create starts from is a
-		// stdio server, so it already carries `npx -y example-mcp-server`. Left
-		// in place that preset value collides with the URL the author just gave
-		// and the create fails with "url and command are alternatives", which is
-		// a rule about what the author sent, not about a default nobody asked
-		// for. Clear only what the caller did not name, so an explicit
+		// Validate refuses the pair. Left in place, a command the caller never sent
+		// collides with the URL they did and the create fails with "url and command
+		// are alternatives" — a rule about what the author sent, broken by a value
+		// nobody asked for. Clear only what the caller did not name, so an explicit
 		// command/args still wins and still meets the same refusal.
 		//
 		// This also covers the other direction on update: a stored stdio template
@@ -142,10 +134,10 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 	// all, including one that cleared it — "give me the default" and "leave it
 	// empty" are different requests, and only the first is what an absent key means.
 	//
-	// CREATE NEEDS THIS TOO (#159 D1). The preset fills in the stdio recipe before the
-	// URL is known, so `create ext x --kind mcp --url …` described a program it does
-	// not run. ApplyDefaults now asks isPresetNotes as well, and this line covers the
-	// update path, where defaults are deliberately not re-merged.
+	// CREATE NEEDS THIS TOO (#159 D1). The conventional defaults fill in the stdio
+	// recipe before the URL is known, so a create that names an endpoint described a
+	// program it does not run. ApplyDefaults asks isPresetNotes as well, and this
+	// line covers the update path, where defaults are deliberately not re-merged.
 	if update && !hasOpt(args, "notes") && isPresetNotes(ext.Notes) {
 		ext.Notes = PresetNotes(ext)
 	}
@@ -153,10 +145,14 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 	return nil
 }
 
-// SaveTemplate validates and persists one template. It is the only write path
-// both callers use, so a template the WebUI accepts is a template the MCP tool
-// accepts, and vice versa.
-func SaveTemplate(store *Store, ext *Extension) error {
+// SaveStruct validates and persists an extension as a struct, for a template with
+// no holes. It is the one write path both authoring surfaces use, so a template the
+// WebUI accepts is a template the MCP tool accepts, and vice versa.
+//
+// A TEMPLATE WITH HOLES DOES NOT COME THROUGH HERE. Its document carries the holes,
+// which a struct cannot represent; those are written by Store.SaveTemplate and
+// filled by Store.SetValues.
+func SaveStruct(store *Store, ext *Extension) error {
 	if err := ext.Validate(); err != nil {
 		return err
 	}

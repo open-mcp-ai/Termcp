@@ -14,7 +14,7 @@ import (
 // Termcp and arrive at another unchanged.
 func TestDocumentRoundTrip(t *testing.T) {
 	src := newTestStore(t)
-	first := Preset(KindSkill)
+	first := Extension{}
 	first.Name = "docs"
 	first.Target = "internal"
 	first.Paths = []string{"~/skills/docs/"}
@@ -22,7 +22,7 @@ func TestDocumentRoundTrip(t *testing.T) {
 	if err := src.Save(&first); err != nil {
 		t.Fatal(err)
 	}
-	second := Preset(KindMCP)
+	second := Extension{Mode: "pipe"}
 	second.Name = "tickets"
 	second.Target = "internal"
 	second.Command = "npx"
@@ -53,7 +53,7 @@ func TestDocumentRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Kind != want.Kind || got.Target != want.Target || got.Command != want.Command ||
+		if got.Target != want.Target || got.Command != want.Command ||
 			got.Description != want.Description || got.Notes != want.Notes {
 			t.Errorf("%s came back as %+v, want %+v", name, got, want)
 		}
@@ -72,7 +72,7 @@ func TestDocumentRoundTrip(t *testing.T) {
 func TestExportDocumentSelection(t *testing.T) {
 	s := newTestStore(t)
 	for _, name := range []string{"alpha", "beta"} {
-		ext := Preset(KindSkill)
+		ext := Extension{}
 		ext.Name = name
 		ext.Target = "internal"
 		ext.Paths = []string{"/srv/"}
@@ -100,7 +100,7 @@ func TestExportDocumentSelection(t *testing.T) {
 // — including two entries of the same document fighting over one name.
 func TestImportDocumentRenamesCollisions(t *testing.T) {
 	s := newTestStore(t)
-	stored := Preset(KindSkill)
+	stored := Extension{}
 	stored.Name = "docs"
 	stored.Target = "internal"
 	stored.Paths = []string{"/srv/kept/"}
@@ -111,19 +111,16 @@ func TestImportDocumentRenamesCollisions(t *testing.T) {
 	doc := `
 [[extensions]]
 name = "docs"
-kind = "skill"
 target = "internal"
 paths = ["/srv/imported/"]
 
 [[extensions]]
 name = "docs"
-kind = "skill"
 target = "internal"
 paths = ["/srv/second/"]
 
 [[extensions]]
 name = "fresh"
-kind = "skill"
 target = "internal"
 paths = ["/srv/fresh/"]
 `
@@ -163,7 +160,7 @@ paths = ["/srv/fresh/"]
 // leaves the store exactly as it was rather than importing half of it.
 func TestImportDocumentRejectsBrokenDocuments(t *testing.T) {
 	s := newTestStore(t)
-	good := Preset(KindSkill)
+	good := Extension{}
 	good.Name = "keep-me"
 	good.Target = "internal"
 	good.Paths = []string{"/srv/"}
