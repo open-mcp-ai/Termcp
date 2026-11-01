@@ -231,13 +231,27 @@ function renderExtensionCard(ext) {
     '<span class="ext-kind">' + escapeHtml(extKindLabel(ext.kind)) + '</span>' +
     '<span class="node-sep" aria-hidden="true">·</span>' +
     '<span class="node-status ' + lamp + '">' + escapeHtml(extStatusLabel(ext.status)) + '</span>';
-  var target = ext.target ? '<div class="node-addr">' + escapeHtml(ext.target) + '</div>' : '';
-  var fw = '';
-  (ext.forwards || []).forEach(function (f) {
-    if (!f.listen_addr) return;
-    fw += '<div class="ext-fwd" title="' + escapeHtml(t('ext.fwd.title', { kind: extForwardLabel(f.kind) })) + '">' +
-      escapeHtml(f.listen_addr) + '</div>';
-  });
+  /* COUNTS, NOT CONTENT. A template that names eight hosts with three tunnels
+     each would push every other card off the panel; what a reader needs at this
+     level is "how much is behind this one", and the window behind the card is
+     where the list itself lives. */
+  var hostCount = ext.host_count !== undefined ? ext.host_count :
+    (ext.targets && ext.targets.length ? ext.targets.length : (ext.target ? 1 : 0));
+  var fwdCount = ext.forward_count !== undefined ? ext.forward_count : (ext.forwards || []).length;
+  if (ext.forward_count === undefined) {
+    (ext.targets || []).forEach(function (row) { fwdCount += (row.forwards || []).length; });
+  }
+  var scope = '';
+  if (hostCount > 0) {
+    scope += '<span class="ext-count">' +
+      escapeHtml(tCount('ext.card.hosts.one', 'ext.card.hosts.other', { count: hostCount })) + '</span>';
+  }
+  if (fwdCount > 0) {
+    if (scope) scope += '<span class="node-sep" aria-hidden="true">·</span>';
+    scope += '<span class="ext-count">' +
+      escapeHtml(tCount('ext.card.forwards.one', 'ext.card.forwards.other', { count: fwdCount })) + '</span>';
+  }
+  if (scope) scope = '<div class="node-addr">' + scope + '</div>';
   // One line, not the history: the verdict is what the panel is for, and the
   // card's own window serves the rest.
   var fail = '';
@@ -263,8 +277,7 @@ function renderExtensionCard(ext) {
     gearBtn +
     '</div>' +
     '<div class="node-meta">' + meta + '</div>' +
-    target +
-    fw +
+    scope +
     fail +
     '</div>' +
     '</div>';
@@ -665,10 +678,21 @@ function paintExtensionWindow(win, name) {
     meta.textContent = [extKindLabel(row.kind), row.target, row.enabled ? '' : t('ext.status.parked')]
       .filter(function (x) { return !!x; }).join(' · ');
   }
+  /* Per-host rows, only when there is more than one host. A single-target
+     extension already says everything above; repeating it as a row of one is
+     noise, and the counts on the card are what told the reader to look here. */
+  var hostRows = '';
+  if ((row.targets || []).length > 1) {
+    hostRows = (row.targets || []).map(function (h) {
+      var ports = (h.forwards || []).filter(function (f) { return !!f.listen_addr; })
+        .map(function (f) { return f.listen_addr; }).join(', ');
+      return extStatusRow(h.target, [extStatusLabel(h.status), ports].filter(function (x) { return !!x; }).join(' · '), false);
+    }).join('');
+  }
 
   var grid = win.querySelector('.ext-status-grid');
   if (grid) {
-    var rows = '';
+    var rows = hostRows;
     if (row.description) rows += extStatusRow(t('ext.modal.description'), row.description, false);
     /* A url template's endpoint is what it talks to, and the one field that says
        which of the two mcp shapes this is; the kind label alone cannot. */
@@ -679,6 +703,15 @@ function paintExtensionWindow(win, name) {
       rows += extStatusRow(extForwardLabel(f.kind),
         [f.listen_addr, f.target_addr].filter(function (x) { return !!x; }).join(' → '), false);
     });
+    // A multi-target template carries its tunnels per host, not at the top.
+    if (!(row.forwards || []).length && (row.targets || []).length < 2) {
+      (row.targets || []).forEach(function (t) {
+        (t.forwards || []).forEach(function (f) {
+          rows += extStatusRow(t.target + ' · ' + extForwardLabel(f.kind),
+            [f.listen_addr, f.target_addr].filter(function (x) { return !!x; }).join(' → '), false);
+        });
+      });
+    }
     if (row.next_retry_ms) {
       var secs = Math.max(0, Math.round((row.next_retry_ms - Date.now()) / 1000));
       rows += extStatusRow(t('ext.status.nextRetry'), t('ext.status.inSeconds', { count: secs }), false);

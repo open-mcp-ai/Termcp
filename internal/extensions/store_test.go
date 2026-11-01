@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
@@ -16,6 +17,76 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatal("NewStore returned nil")
 	}
 	return s
+}
+
+// TestStoreLoadModularNotesAndTargets verifies notes.md and targets/*.toml are
+// loaded and merged into the extension without putting everything in config.toml.
+func TestStoreLoadModularNotesAndTargets(t *testing.T) {
+	s := newTestStore(t)
+	dir := filepath.Join(s.root(), "modular-ext")
+	if err := os.MkdirAll(filepath.Join(dir, "targets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `kind = "mcp"
+mode = "pipe"
+command = "kubectl-mcp"
+allow = ["run", "read"]
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	notes := "Use this extension to debug cluster pods."
+	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte(notes), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for file, body := range map[string]string{
+		"bj.toml": "host = \"cluster-bj\"\n[[forward]]\nkind = \"local\"\nlocal_port = 8443\nremote_port = 443\n",
+		"sh.toml": "host = \"cluster-sh\"\n[[forward]]\nkind = \"local\"\nlocal_port = 8444\nremote_port = 443\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "targets", file), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ext, err := s.Load("modular-ext")
+	if err != nil {
+		t.Fatalf("load modular extension: %v", err)
+	}
+	if ext.Notes != notes {
+		t.Errorf("notes = %q, want %q", ext.Notes, notes)
+	}
+	want := map[string]int{"cluster-bj": 8443, "cluster-sh": 8444}
+	if len(ext.Targets) != len(want) {
+		t.Fatalf("targets = %d, want %d", len(ext.Targets), len(want))
+	}
+	for _, target := range ext.Targets {
+		port, ok := want[target.Host]
+		if !ok {
+			t.Fatalf("unexpected host %q", target.Host)
+		}
+		if len(target.Forwards) != 1 || target.Forwards[0].LocalPort != port {
+			t.Errorf("host %q forwards = %+v, want one local forward on %d", target.Host, target.Forwards, port)
+		}
+	}
+
+	// Saving an extension that uses sidecars updates the sidecar, not config.toml.
+	ext.Notes = "new notes text"
+	if err := s.Save(ext); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "notes.md"))
+	if err != nil || strings.TrimSpace(string(raw)) != "new notes text" {
+		t.Fatalf("sidecar notes.md was not updated: %s (err %v)", string(raw), err)
+	}
+	cfgRaw, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("reading config.toml: %v", err)
+	}
+	if strings.Contains(string(cfgRaw), "new notes text") {
+		t.Errorf("config.toml should not duplicate notes when notes.md exists:\n%s", string(cfgRaw))
+	}
+	if strings.Contains(string(cfgRaw), "cluster-bj") {
+		t.Errorf("config.toml should not duplicate targets when targets/ exists:\n%s", string(cfgRaw))
+	}
 }
 
 // TestStoreSaveLoadRoundTrip pins that a template survives a write and read

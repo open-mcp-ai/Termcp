@@ -1034,6 +1034,12 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	if err := setFlagJSONList(args, stmt, "forwards", "forwards"); err != nil {
 		return badRequest(stmt, err.Error())
 	}
+	/* --targets declares hosts and their per-host forwards as a JSON array of
+	   objects or host strings, keeping multi-target configuration scoped under
+	   the extension. */
+	if err := setFlagJSONList(args, stmt, "targets", "targets"); err != nil {
+		return badRequest(stmt, err.Error())
+	}
 	if boolFlag(stmt, "enabled") {
 		args["enabled"] = true
 	}
@@ -1064,16 +1070,16 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	name := strings.TrimSpace(stmt.Key)
 	if name == "" {
-		return badRequest(stmt, "open ext needs a name: open ext <name>")
+		return badRequest(stmt, "open ext needs a name: open ext <name> [--target <host>]")
 	}
-	// WORDS THIS FORM CANNOT HONOR ARE REFUSED, NOT IGNORED. `open ext boxfs extra`
-	// and `open a1f3 ext boxfs` parse (the kind word is taken first, so what looks
-	// like a target becomes one), and an extension's container is the reconciler's —
-	// a caller cannot name it. Reading past either word would answer a question the
-	// caller did not ask.
+	target := ""
+	if v, ok := stmt.Flag("target"); ok && strings.TrimSpace(v) != "" {
+		target = strings.TrimSpace(v)
+	}
+	// WORDS THIS FORM CANNOT HONOR ARE REFUSED, NOT IGNORED.
 	if stmt.Target != "" {
 		return badRequest(stmt, "open ext names no session: the extension's connection belongs to the reconciler. "+
-			"Write `open ext "+name+"`, and drive the handles it returns.")
+			"Write `open ext "+name+"` or `open ext "+name+" --target <host>`, and drive the handles it returns.")
 	}
 	if len(stmt.Args) > 0 {
 		return badRequest(stmt, "open ext takes one name, got extra word "+quoteOrDash(stmt.Args[0]))
@@ -1081,7 +1087,11 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if slot, refused := s.refuseAction(ctx, stmt, capability.ExtGet); refused {
 		return slot
 	}
-	res, fail := s.callTool(ctx, "extension", map[string]any{"action": "use", "name": name})
+	args := map[string]any{"action": "use", "name": name}
+	if target != "" {
+		args["target"] = target
+	}
+	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
 	}

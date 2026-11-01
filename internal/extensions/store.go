@@ -92,6 +92,12 @@ func (s *Store) Exists(name string) bool {
 }
 
 // Load reads and validates one extension by name.
+//
+// MODULAR EXTENSION LAYOUT:
+// When config.toml does not define notes, notes.md or notes.txt in the same directory
+// is loaded as the extension's notes.
+// When targets/ sub-directory exists, *.toml files within it are read and appended
+// to Targets (unless config.toml declares a conflicting legacy Target).
 func (s *Store) Load(name string) (*Extension, error) {
 	p, err := s.configPath(name)
 	if err != nil {
@@ -109,6 +115,47 @@ func (s *Store) Load(name string) (*Extension, error) {
 		return nil, err
 	}
 	e.Name = name
+
+	// Modular notes: notes.md (or notes.txt) is the text when it exists, so a long
+	// operating manual is a file an editor opens, not an escaped TOML string.
+	extDir := filepath.Dir(p)
+	if b, err := os.ReadFile(modularNotesPath(extDir)); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		e.Notes = strings.TrimSpace(string(b))
+	}
+
+	// Modular targets: load targets/*.toml if the directory exists.
+	targetsDir := filepath.Join(extDir, "targets")
+	entries, err := os.ReadDir(targetsDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reading extension targets directory: %w", err)
+	}
+	// ReadDir sorts by filename, so the merged list is stable across loads.
+	for _, de := range entries {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".toml") || strings.HasPrefix(de.Name(), ".") {
+			continue
+		}
+		tb, err := os.ReadFile(filepath.Join(targetsDir, de.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("reading target file %s: %w", de.Name(), err)
+		}
+		var decl TargetDecl
+		if err := toml.Unmarshal(tb, &decl); err != nil {
+			return nil, fmt.Errorf("parsing target file %s: %w", de.Name(), err)
+		}
+		if decl.Host == "" {
+			// The filename is the host, so `targets/cluster-bj.toml` needs no key.
+			decl.Host = strings.TrimSuffix(de.Name(), ".toml")
+		}
+		e.Targets = append(e.Targets, decl)
+	}
+	// ONE PLACE PER HOST LIST. `target` names one host and `targets/` names several;
+	// carrying both would leave "where does this run" with two answers, so the
+	// conflict is reported against the files that caused it rather than as the
+	// generic alternatives error from Validate.
+	if len(e.Targets) > 0 && e.Target != "" {
+		return nil, fmt.Errorf("extension %q declares target = %q in config.toml and hosts in targets/: keep the hosts in targets/*.toml and drop target, or remove targets/", name, e.Target)
+	}
+
 	e.Normalize()
 	if err := e.Validate(); err != nil {
 		// A template that no longer validates is reported rather than silently
@@ -153,7 +200,8 @@ func (s *Store) configPathErr(name string) error {
 	return err
 }
 
-// ReadRaw returns the file bytes for an editor round trip.
+// ReadRaw returns config.toml bytes for an editor/export round trip. Modular notes
+// and targets remain their own files; callers that need runtime data use Load.
 func (s *Store) ReadRaw(name string) ([]byte, error) {
 	p, err := s.configPath(name)
 	if err != nil {
@@ -223,14 +271,71 @@ func (s *Store) saveLocked(e *Extension) error {
 	if err != nil {
 		return err
 	}
-	data, err := toml.Marshal(e)
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	// MODULAR FILES STAY THE SOURCE OF TRUTH FOR WHAT THEY HOLD. A save that copied
+	// targets/*.toml back into config.toml would leave the same host list in two
+	// places, and the next load would either double the hosts or refuse the file —
+	// so the document written here carries only what config.toml owns.
+	doc := *e
+	dir := filepath.Dir(p)
+	if hasModularTargets(dir) {
+		doc.Targets = nil
+	}
+	// A notes sidecar keeps the text, so config.toml does not carry a second copy of
+	// it — and the edit the author made is written where it will be read back, not
+	// dropped. A sidecar that does not exist is no reason to create one: notes stay
+	// in the template exactly as they were before sidecars existed.
+	var notesPath string
+	if p := modularNotesPath(dir); fileExists(p) {
+		notesPath = p
+		doc.Notes = ""
+	}
+	data, err := toml.Marshal(&doc)
 	if err != nil {
 		return fmt.Errorf("marshal extension: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
+	if notesPath != "" {
+		if err := writeFileAtomic(notesPath, []byte(e.Notes+"\n")); err != nil {
+			return err
+		}
+	}
 	return writeFileAtomic(p, data)
+}
+
+// modularNotesPath is the sidecar file that holds an extension's notes. Its
+// existence — not its contents — is what makes it the source of truth, so a
+// save never duplicates the text into config.toml.
+func modularNotesPath(extDir string) string {
+	for _, name := range []string{"notes.md", "notes.txt"} {
+		if p := filepath.Join(extDir, name); fileExists(p) {
+			return p
+		}
+	}
+	return filepath.Join(extDir, "notes.md")
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+// hasModularTargets reports whether a host list lives in targets/*.toml.
+func hasModularTargets(extDir string) bool {
+	entries, err := os.ReadDir(filepath.Join(extDir, "targets"))
+	if err != nil {
+		return false
+	}
+	for _, de := range entries {
+		if !de.IsDir() && strings.HasSuffix(de.Name(), ".toml") && !strings.HasPrefix(de.Name(), ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete removes an extension and its directory. A missing one is not an error:

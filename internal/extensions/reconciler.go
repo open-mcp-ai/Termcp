@@ -122,6 +122,10 @@ type Status struct {
 	ClosedSessionID string `json:"closed_session_id,omitempty"`
 	ClosedShellID   string `json:"closed_shell_id,omitempty"`
 	ClosedReason    string `json:"closed_reason,omitempty"`
+
+	// Targets reports the per-host breakdown when the extension declares multiple
+	// targets. Omitted on single-target templates so the wire format stays small.
+	Targets []TargetStatus `json:"targets,omitempty"`
 }
 
 // maxFailures caps the history. Enough to see a pattern, not so much that a
@@ -285,13 +289,13 @@ func (r *Reconciler) Stop() {
 // probe is one attempt to bring an extension to available. The connection is the
 // group's — reused when it is up, created when it is not — and everything else
 // belongs to this extension: its channel, its tunnels, its failure history.
-func (r *Reconciler) probe(ctx context.Context, name string) {
-	ext, err := r.store.Load(name)
+func (r *Reconciler) probe(ctx context.Context, name, target string) {
+	ext, err := r.loadTarget(name, target)
 	if err != nil || !ext.IsEnabled() {
 		// Removed or parked between the scheduling and the attempt.
 		return
 	}
-	st := r.state(name)
+	st := r.stateFor(name, target)
 	if r.groupFor(st) == nil {
 		return
 	}
@@ -452,6 +456,30 @@ func bridgeCommand(ext *Extension) (string, []string) {
 	return mcpbridge.BuiltinCommand, args
 }
 
+// TargetStatus is one host of an extension, as the reconciler runs it. An
+// extension with a single target reports the same fields at the top level, so a
+// caller that never asked about targets keeps working unchanged.
+type TargetStatus struct {
+	Target string `json:"target"`
+	Status string `json:"status"`
+	// SessionID/ShellID are this host's handles. Extensions on the same host and
+	// whitelist share a session, so the same session id can appear on several hosts'
+	// rows of different extensions — address work by shell_id.
+	SessionID string          `json:"session_id,omitempty"`
+	ShellID   string          `json:"shell_id,omitempty"`
+	Forwards  []ForwardStatus `json:"forwards,omitempty"`
+	Failures  []Failure       `json:"failures,omitempty"`
+	NextRetry int64           `json:"next_retry,omitempty"`
+	// IdleTimeoutMs/IdleForMs describe this host's on-demand window.
+	IdleTimeoutMs   int64  `json:"idle_timeout_ms,omitempty"`
+	IdleForMs       int64  `json:"idle_for_ms,omitempty"`
+	Instances       int    `json:"instances,omitempty"`
+	ClosedAt        int64  `json:"closed_at,omitempty"`
+	ClosedSessionID string `json:"closed_session_id,omitempty"`
+	ClosedShellID   string `json:"closed_shell_id,omitempty"`
+	ClosedReason    string `json:"closed_reason,omitempty"`
+}
+
 // Status reports the runtime state of one extension. ok is false for a name the
 // store does not hold.
 func (r *Reconciler) Status(name string) (Status, bool) {
@@ -463,7 +491,123 @@ func (r *Reconciler) Status(name string) (Status, bool) {
 	if !r.store.Exists(name) {
 		return Status{}, false
 	}
-	st := r.state(name)
+	ext, err := r.store.Load(name)
+	if err != nil {
+		// A template that no longer parses has no targets to walk; the state the
+		// reconciler recorded on it is the whole answer.
+		st := r.state(name)
+		return st.snapshot(), true
+	}
+	return r.statusOf(name, ext), true
+}
+
+// statusOf folds the per-host states of one extension into the single row its
+// callers read.
+//
+// ONE TARGET REPORTS ITSELF. A template that names one host fills the top-level
+// fields from that host, so every caller written before targets existed — the
+// panel, `ls ext`, the MCP list — sees exactly what it saw then. A template that
+// names several reports the fold at the top and the per-host truth in `targets`:
+// a row that said "available" because one of three machines answered would be a
+// lie about the other two.
+func (r *Reconciler) statusOf(name string, ext *Extension) Status {
+	targets := ext.EffectiveTargets()
+	parts := make([]Status, 0, len(targets))
+	for _, t := range targets {
+		st := r.stateFor(name, t.Host)
+		r.reapEnded(name, st)
+		parts = append(parts, st.snapshot())
+	}
+	if len(parts) == 1 {
+		out := parts[0]
+		out.Lazy = ext.Lazy()
+		return out
+	}
+	out := foldStatus(parts)
+	out.Lazy = ext.Lazy()
+	for i, t := range targets {
+		row := TargetStatus{
+			Target:          t.Host,
+			Status:          parts[i].Status,
+			SessionID:       parts[i].SessionID,
+			ShellID:         parts[i].ShellID,
+			Forwards:        parts[i].Forwards,
+			Failures:        parts[i].Failures,
+			NextRetry:       parts[i].NextRetry,
+			IdleTimeoutMs:   parts[i].IdleTimeoutMs,
+			IdleForMs:       parts[i].IdleForMs,
+			Instances:       parts[i].Instances,
+			ClosedAt:        parts[i].ClosedAt,
+			ClosedSessionID: parts[i].ClosedSessionID,
+			ClosedShellID:   parts[i].ClosedShellID,
+			ClosedReason:    parts[i].ClosedReason,
+		}
+		out.Targets = append(out.Targets, row)
+	}
+	return out
+}
+
+// foldStatus is the one-word verdict for an extension spread over several hosts.
+//
+// PROBING OUTRANKS EVERYTHING: something is being tried right now, and that is the
+// most useful thing to say. Otherwise "available" requires ALL of them up, "idle"
+// and "disabled" require all of them so, and any mixture is "unavailable" — the
+// honest answer to "is this extension usable" when half its machines are down.
+func foldStatus(parts []Status) Status {
+	out := Status{Status: StatusUnavailable}
+	if len(parts) == 0 {
+		return out
+	}
+	all := func(word string) bool {
+		for _, p := range parts {
+			if p.Status != word {
+				return false
+			}
+		}
+		return true
+	}
+	for _, p := range parts {
+		if p.Status == StatusProbing {
+			out.Status = StatusProbing
+			return out
+		}
+	}
+	switch {
+	case all(StatusAvailable):
+		out.Status = StatusAvailable
+	case all(StatusIdle):
+		out.Status = StatusIdle
+	case all(StatusDisabled):
+		out.Status = StatusDisabled
+	}
+	// The retry countdown is the soonest one: it is what the reader is waiting for.
+	for _, p := range parts {
+		if p.NextRetry == 0 {
+			continue
+		}
+		if out.NextRetry == 0 || p.NextRetry < out.NextRetry {
+			out.NextRetry = p.NextRetry
+		}
+	}
+	return out
+}
+
+// TargetStatus reports the runtime state of one host of an extension. ok is false
+// when the name is unknown or the host is not one this extension declares.
+func (r *Reconciler) TargetStatus(name, target string) (Status, bool) {
+	if !r.store.Exists(name) {
+		return Status{}, false
+	}
+	ext, err := r.store.Load(name)
+	if err != nil {
+		st := r.state(name)
+		return st.snapshot(), true
+	}
+	t, ok := ext.TargetFor(target)
+	if !ok {
+		return Status{}, false
+	}
+	st := r.stateFor(name, t.Host)
 	r.reapEnded(name, st)
 	return st.snapshot(), true
 }
@@ -477,7 +621,11 @@ func (r *Reconciler) List() []Status {
 	}
 	out := make([]Status, 0, len(names))
 	for _, n := range names {
-		out = append(out, r.state(n).snapshot())
+		st, ok := r.Status(n)
+		if !ok {
+			continue
+		}
+		out = append(out, st)
 	}
 	return out
 }
@@ -489,64 +637,63 @@ func (r *Reconciler) List() []Status {
 // extension's own channel and tunnels, and a session that is gone is rebuilt by
 // the attempt itself.
 func (r *Reconciler) Retry(name string) error {
-	ext, err := r.store.Load(name)
+	return r.RetryTarget(name, "")
+}
+
+// RetryTarget forces an immediate attempt on one host of an extension, clearing
+// its backoff. Empty target defaults to the single declared target.
+func (r *Reconciler) RetryTarget(name, target string) error {
+	ext, err := r.loadTarget(name, target)
 	if err != nil {
 		return err
 	}
 	if !ext.IsEnabled() {
 		return errors.New("extension is disabled; enable it before retrying")
 	}
+	st := r.stateFor(name, ext.Target)
 	if ext.Lazy() {
-		// ON DEMAND, "RETRY" MEANS "GIVE ME AN INSTANCE NOW". There is no channel for
-		// the walk to repair — a lazy extension holds nothing until a caller asks —
-		// so the retry is the ask, and it answers with the same failure the first
-		// attempt did when the template is what is wrong (issue #183).
-		_, err := r.Acquire(name, 0)
+		_, err := r.AcquireTarget(name, ext.Target, 0)
 		return err
 	}
-	st := r.state(name)
-	// A manual retry is an ask: for a resident extension it is what starts it again
-	// after a failure the ladder gave up on. Nothing is woken here — the attempt is
-	// started directly, which is what the walk used to do a tick later.
 	st.want()
 	r.detach(st)
 	st.mark(StatusUnavailable)
 	st.resetRetryBudget()
-	r.retryNow(name)
+	r.retryTargetNow(name, ext.Target)
 	return nil
 }
 
-// retryNow starts one attempt for an extension the reconciler owns. It is what the
-// retry timer, the panel's key and the MCP call all funnel through, so there is one
-// place that decides whether an attempt is allowed to start.
+// retryNow starts one attempt for an extension's default/first target.
 func (r *Reconciler) retryNow(name string) {
-	ext, err := r.store.Load(name)
-	if err != nil || !ext.IsEnabled() {
+	r.retryTargetNow(name, "")
+}
+
+// retryTargetNow starts one attempt on one host of an extension.
+func (r *Reconciler) retryTargetNow(name, target string) {
+	parent, err := r.store.Load(name)
+	if err != nil || !parent.IsEnabled() {
 		return
 	}
-	if ext.Lazy() {
-		// On demand, an attempt is a caller's ask, and nobody asked here.
+	host, ok := resolveTarget(parent, target)
+	if !ok {
 		return
 	}
-	st := r.state(name)
+	view := forTarget(parent, host)
+	if view.Lazy() {
+		return
+	}
+	st := r.stateFor(name, host)
 	if st.statusOf() == StatusProbing {
 		return
 	}
 	if _, autoRetry := st.flags(); !autoRetry {
-		/* The budget is spent. One condition is still worth re-checking without a
-		   nudge: the target profile itself. Recreated by hand, it is a fix rather
-		   than a transient, and reading it costs one store lookup instead of a dial.
-		   A host whose profile resolves fine but is not answering keeps waiting for
-		   the panel's key or the agent — that is the case the budget exists to stop. */
-		if st.lastStage() != "target" || !r.rebuildable(ext) {
+		if st.lastStage() != "target" || !r.rebuildable(&view) {
 			return
 		}
 		st.resetRetryBudget()
 		r.notifyChange()
 	}
 	if wait, ok := st.backoffPending(); ok && wait > 0 {
-		// Still inside the window the failure printed. Re-arm rather than ignore, so
-		// the deadline is kept even if this call arrived early.
 		r.armRetry(st, wait)
 		return
 	}
@@ -554,7 +701,7 @@ func (r *Reconciler) retryNow(name string) {
 	if ctx == nil {
 		return
 	}
-	r.startProbe(ctx, name)
+	r.startProbe(ctx, name, host)
 }
 
 // backoffPending reports how much of the current backoff window is left.
@@ -589,18 +736,103 @@ func (st *extState) name() string {
 	return st.extName
 }
 
+// host is the target this state runs on, so a timer can reload the template and
+// project it onto the same host it was armed for.
+func (st *extState) host() string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.target
+}
+
+// forTarget projects a template onto one of its hosts: the fields the whole
+// extension shares, with Target and Forwards taken from that host's own entry.
+//
+// THIS IS THE WHOLE MULTI-TARGET MECHANISM. Everything downstream — resolve,
+// fingerprint, groupKey, Lazy, ensureForwards — already worked on one host, so
+// narrowing the template here leaves all of it unchanged: each target gets its own
+// connection key, its own forward set (and therefore its own local ports), and its
+// own resident/on-demand decision.
+func forTarget(ext *Extension, target string) Extension {
+	out := *ext
+	out.Targets = nil
+	if t, ok := ext.TargetFor(target); ok {
+		out.Target = t.Host
+		out.Forwards = t.Forwards
+	}
+	return out
+}
+
+// resolveTarget finds the host name for an ask. An empty target accepts the
+// single declared host and refuses an ambiguous multi-target extension.
+func resolveTarget(ext *Extension, target string) (string, bool) {
+	t, ok := ext.TargetFor(target)
+	if !ok {
+		return "", false
+	}
+	return t.Host, true
+}
+
+// loadTarget reads the template and narrows it to one host.
+func (r *Reconciler) loadTarget(name, target string) (*Extension, error) {
+	ext, err := r.store.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	host, ok := resolveTarget(ext, target)
+	if !ok {
+		return nil, fmt.Errorf("target %q not found in extension %q", target, name)
+	}
+	view := forTarget(ext, host)
+	return &view, nil
+}
+
+// stateKey is the identity of one runtime state: an extension plus the host it
+// runs on. A template that names one host keeps the bare name, so every existing
+// state map, timer and test addresses it exactly as before.
+func stateKey(name, target string) string {
+	if target == "" {
+		return name
+	}
+	return name + "@" + target
+}
+
 // state returns the state for name, creating it on first sight. An extension
 // starts unavailable by design: termcp has to prove an extension works before it
 // reports it as ready to use.
 func (r *Reconciler) state(name string) *extState {
+	return r.stateFor(name, "")
+}
+
+// stateFor returns the state for one extension on one host. An empty target
+// resolves to the first host the template declares, so every pre-existing caller
+// that knows only a name lands on the same state the reconciler uses.
+func (r *Reconciler) stateFor(name, target string) *extState {
+	if target == "" {
+		if ext, err := r.store.Load(name); err == nil {
+			if host, ok := resolveTarget(ext, ""); ok {
+				target = host
+			}
+		}
+	}
+	key := stateKey(name, target)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if st, ok := r.states[name]; ok {
+	if st, ok := r.states[key]; ok {
 		return st
 	}
-	st := &extState{status: StatusUnavailable, autoRetry: true, extName: name}
-	r.states[name] = st
+	st := &extState{status: StatusUnavailable, autoRetry: true, extName: name, target: target}
+	r.states[key] = st
 	return st
+}
+
+// statesNamed returns every state filed under one extension name, in the order
+// its targets were declared. One entry for a single-target template.
+func (r *Reconciler) statesNamed(name string, targets []TargetDecl) []*extState {
+	out := make([]*extState, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, r.stateFor(name, t.Host))
+	}
+	return out
 }
 
 func truncate(s string, n int) string {

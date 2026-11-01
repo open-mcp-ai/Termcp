@@ -73,7 +73,12 @@ type Extension struct {
 	// so it is never stored inside the file it names.
 	Name   string `toml:"-"`
 	Kind   string `toml:"kind"`
-	Target string `toml:"target"` // an ssh_config profile name, or "internal"
+	Target string `toml:"target,omitempty"` // legacy single-target profile name, or "internal"
+	// Targets defines the hosts this extension runs on. When provided, each entry
+	// names a host and its host-specific forwards, allowing different targets to bind
+	// non-conflicting local ports while sharing the parent extension's command,
+	// mode, and capabilities.
+	Targets []TargetDecl `toml:"targets,omitempty"`
 	// Description is the author's one-line summary, shown wherever the extension is
 	// listed. It does NOT reach the model by itself: nothing about the set of
 	// installed extensions goes into the MCP instructions, because the tool surface
@@ -173,11 +178,67 @@ type ForwardDecl struct {
 	RemotePort int    `toml:"remote_port,omitempty"`
 }
 
+// TargetDecl defines one host binding under an extension. Any host-specific
+// configuration that would otherwise conflict across targets (such as local
+// forward listen ports) hangs directly off this host entry.
+type TargetDecl struct {
+	Host     string        `toml:"host" json:"host"`
+	Forwards []ForwardDecl `toml:"forward,omitempty" json:"forwards,omitempty"`
+}
+
+// EffectiveTargets returns the target bindings of the extension. If Targets is
+// non-empty, it is returned; otherwise, a legacy Target string is wrapped.
+func (e *Extension) EffectiveTargets() []TargetDecl {
+	if len(e.Targets) > 0 {
+		return e.Targets
+	}
+	if e.Target != "" {
+		return []TargetDecl{{Host: e.Target, Forwards: e.Forwards}}
+	}
+	return nil
+}
+
+// TargetFor finds the matching TargetDecl by host name, or returns the first
+// target if host is empty and exactly one target exists.
+func (e *Extension) TargetFor(host string) (TargetDecl, bool) {
+	targets := e.EffectiveTargets()
+	if len(targets) == 0 {
+		return TargetDecl{}, false
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		if len(targets) == 1 {
+			return targets[0], true
+		}
+		return TargetDecl{}, false
+	}
+	for _, t := range targets {
+		if t.Host == host {
+			return t, true
+		}
+	}
+	return TargetDecl{}, false
+}
+
 // Lazy reports whether the reconciler waits for a caller before bringing this
 // extension up. It does, unless the template declares a forward: a tunnel is a
 // service with no "use" moment to start it, so it is established at startup and
 // kept (issue #183).
-func (e *Extension) Lazy() bool { return len(e.Forwards) == 0 }
+func (e *Extension) Lazy() bool {
+	targets := e.EffectiveTargets()
+	if len(targets) == 0 {
+		return len(e.Forwards) == 0
+	}
+	for _, t := range targets {
+		if len(t.Forwards) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// LazyForTarget reports whether this host entry has no resident forward.
+func (t TargetDecl) Lazy() bool { return len(t.Forwards) == 0 }
 
 // IdleTimeoutDuration is the configured idle window, or the default when the key
 // is absent. An unparsable or non-positive value is an error rather than a
@@ -241,6 +302,12 @@ func (e *Extension) Normalize() {
 	for i := range e.Forwards {
 		e.Forwards[i].Normalize()
 	}
+	for i := range e.Targets {
+		e.Targets[i].Host = strings.TrimSpace(e.Targets[i].Host)
+		for j := range e.Targets[i].Forwards {
+			e.Targets[i].Forwards[j].Normalize()
+		}
+	}
 }
 
 // Normalize fills a forward's conventional defaults.
@@ -277,8 +344,42 @@ func (e *Extension) Validate() error {
 	if err := sshconfig.ValidateName(e.Name); err != nil {
 		return fmt.Errorf("invalid extension name: %w", err)
 	}
-	if e.Target == "" {
-		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\")")
+	if e.Target == "" && len(e.Targets) == 0 {
+		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\"), or a [[targets]] list naming the hosts this extension runs on")
+	}
+	// ONE SPELLING, NOT TWO. A file carrying both `target` and `[[targets]]` would
+	// leave "which hosts does this run on" with two answers, and the runtime would
+	// have to pick one silently.
+	if e.Target != "" && len(e.Targets) > 0 {
+		return fmt.Errorf("target and [[targets]] are alternatives: target names one host, [[targets]] names several. Move %q into the list, or drop the list", e.Target)
+	}
+	if len(e.Targets) > 0 {
+		seen := make(map[string]bool, len(e.Targets))
+		for i, t := range e.Targets {
+			if t.Host == "" {
+				return fmt.Errorf("targets #%d has no host: every entry needs host = \"<ssh_config profile>\"", i+1)
+			}
+			if err := sshconfig.ValidateName(t.Host); err != nil {
+				return fmt.Errorf("targets #%d host: %w", i+1, err)
+			}
+			// A HOST APPEARS ONCE. Two entries for one machine are two channels on one
+			// connection with no way to tell them apart, and the second one's forwards
+			// would collide with the first's.
+			if seen[t.Host] {
+				return fmt.Errorf("targets #%d repeats host %q: each host appears once", i+1, t.Host)
+			}
+			seen[t.Host] = true
+			for j := range t.Forwards {
+				if err := t.Forwards[j].Validate(); err != nil {
+					return fmt.Errorf("targets #%d (%s) forward #%d: %w", i+1, t.Host, j+1, err)
+				}
+			}
+		}
+		// The legacy top-level list belongs to the legacy top-level target; with a
+		// [[targets]] list there is no single host for it to hang off.
+		if len(e.Forwards) > 0 {
+			return fmt.Errorf("forwards belong to a host: move [[forward]] under the [[targets]] entry it listens for, since two targets cannot both bind the same local port")
+		}
 	}
 	// Kind is an author-facing label/preset, not a rigid constraint. Any kind is allowed.
 	switch e.Mode {
@@ -315,8 +416,10 @@ func (e *Extension) Validate() error {
 		// would be looked up on a machine that has never heard of it, and the
 		// failure would read as a missing command rather than as a template asking
 		// the wrong host to do the work.
-		if !sshconfig.IsInternalName(e.Target) {
-			return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", e.Target)
+		for _, t := range e.EffectiveTargets() {
+			if !sshconfig.IsInternalName(t.Host) {
+				return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", t.Host)
+			}
 		}
 		// The relay speaks HTTP; there is no channel for a pty to own.
 		if e.Mode != "" && e.Mode != "pipe" {
@@ -333,6 +436,11 @@ func (e *Extension) Validate() error {
 	// extension actually does (a command, an mcp url, exposed file paths, port forwards,
 	// or an interactive pty shell). Declaring none of these is an empty useless container.
 	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || e.Mode == "pty"
+	for _, t := range e.Targets {
+		if len(t.Forwards) > 0 {
+			hasCapability = true
+		}
+	}
 	if !hasCapability {
 		return fmt.Errorf("extension declares no capability: explicitly specify at least one of command, url, paths, forward, or mode=pty")
 	}

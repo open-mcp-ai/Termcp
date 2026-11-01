@@ -39,6 +39,11 @@ type extensionSummary struct {
 	// NextRetryMs is when the reconciler tries again (Unix ms), 0 = no retry
 	// scheduled. The panel renders it as a countdown for a human waiting on it.
 	NextRetryMs int64 `json:"next_retry_ms,omitempty"`
+	// Targets breaks a multi-host extension down per host. Empty for the common
+	// single-target template, whose fields are mirrored at the top level.
+	Targets      []extensions.TargetStatus `json:"targets,omitempty"`
+	HostCount    int                       `json:"host_count"`
+	ForwardCount int                       `json:"forward_count"`
 }
 
 // summarizeExtension folds a template and its reconciler status into one panel
@@ -57,6 +62,11 @@ func summarizeExtension(ext *extensions.Extension, st extensions.Status) extensi
 		ShellID:     st.ShellID,
 		Forwards:    st.Forwards,
 		NextRetryMs: st.NextRetry,
+		Targets:     st.Targets,
+	}
+	for _, target := range ext.EffectiveTargets() {
+		out.HostCount++
+		out.ForwardCount += len(target.Forwards)
 	}
 	// The failure is reported only while the extension is not up: it is the reason
 	// the reader is looking at a down card, and one that outlived its repair puts
@@ -150,6 +160,8 @@ func (h *Handler) handleGetExtension(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"extension":     summarizeExtension(ext, st),
 		"kind":          ext.Kind,
+		"target":        ext.Target,
+		"targets":       ext.Targets,
 		"mode":          ext.Mode,
 		"command":       ext.Command,
 		"args":          ext.Args,

@@ -62,7 +62,14 @@ type extState struct {
 
 	// extName is what this state is filed under. The timers need it: they fire
 	// outside any call, and have to read the template again to decide.
-	extName string
+	extName  string
+	stateKey string
+
+	// target is the host this state runs on. One extension may declare several, and
+	// each gets its own state: a machine that is down must not make its siblings
+	// unavailable, and two targets must not share a retry ladder or a forward set.
+	// Empty means the single target the template itself names.
+	target string
 
 	// retry is the pending automatic attempt, or nil. One timer, replaced on every
 	// failure — the ladder is a deadline the status prints, so it must be kept.
@@ -594,15 +601,15 @@ func (r *Reconciler) armRetry(st *extState, wait time.Duration) {
 		if ctx != nil && ctx.Err() != nil {
 			return
 		}
-		name := st.name()
+		name, target := st.name(), st.host()
 		if name == "" {
 			return
 		}
-		ext, err := r.store.Load(name)
+		ext, err := r.loadTarget(name, target)
 		if err != nil || !ext.IsEnabled() {
 			return
 		}
-		r.retryNow(name)
+		r.retryTargetNow(name, target)
 	})
 	st.mu.Lock()
 	st.retry = t

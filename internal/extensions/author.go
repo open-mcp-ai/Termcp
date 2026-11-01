@@ -125,6 +125,13 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 		}
 		ext.Forwards = decls
 	}
+	if hasOpt(args, "targets") {
+		targets, err := ParseTargetDecls(args["targets"])
+		if err != nil {
+			return err
+		}
+		ext.Targets = targets
+	}
 	if !update {
 		ApplyDefaults(ext)
 	}
@@ -154,6 +161,48 @@ func SaveTemplate(store *Store, ext *Extension) error {
 		return err
 	}
 	return store.Save(ext)
+}
+
+// ParseTargetDecls decodes a targets list: shorthand host strings ("node1") or
+// full target objects ({ host: "node1", forwards: [...] }).
+func ParseTargetDecls(v any) ([]TargetDecl, error) {
+	if v == nil {
+		return nil, nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("targets must be an array, got %T", v)
+	}
+	out := make([]TargetDecl, 0, len(arr))
+	for i, item := range arr {
+		switch m := item.(type) {
+		case string:
+			out = append(out, TargetDecl{Host: strings.TrimSpace(m)})
+		case map[string]any:
+			host := optString(m, "host", "")
+			if host == "" {
+				host = optString(m, "target", "")
+			}
+			var forwards []ForwardDecl
+			if hasOpt(m, "forwards") {
+				f, err := ParseForwardDecls(m["forwards"])
+				if err != nil {
+					return nil, fmt.Errorf("targets #%d (%s) forwards: %w", i+1, host, err)
+				}
+				forwards = f
+			} else if hasOpt(m, "forward") {
+				f, err := ParseForwardDecls(m["forward"])
+				if err != nil {
+					return nil, fmt.Errorf("targets #%d (%s) forwards: %w", i+1, host, err)
+				}
+				forwards = f
+			}
+			out = append(out, TargetDecl{Host: strings.TrimSpace(host), Forwards: forwards})
+		default:
+			return nil, fmt.Errorf("targets #%d must be a host string or an object with {host, forwards}, got %T", i+1, item)
+		}
+	}
+	return out, nil
 }
 
 // ParseForwardDecls turns the JSON array an author sent into forward

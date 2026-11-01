@@ -1698,6 +1698,21 @@ The same templates are authorable over MCP with the `extension` tool — these
 routes are its REST twin, writing the same files in
 `<data>/extensions/<name>/config.toml`.
 
+A legacy template uses `target = "profile"` and top-level `[[forward]]`. A
+multi-host template instead uses repeated `[[targets]]` entries, each with its own
+`host` and optional `[[targets.forward]]` declarations. An extension remains one
+row/card; its panel shows only host and forward counts, while its detail view shows
+the per-host status and forward addresses. `open ext <name> --target <host>` selects
+one host; an omitted target is refused if the extension declares more than one.
+
+Templates may be packaged as a directory: shared fields stay in `config.toml`,
+`notes.md` (or `notes.txt`) supplies the extension's notes, and each
+`targets/<host>.toml` supplies one host's configuration. The target filename is
+used as the host when the file omits `host`. Loading merges these files into the
+same extension template; saving keeps targets in their files and updates an
+existing notes sidecar. `target =` cannot be used together with files under
+`targets/`.
+
 **A template that declares no `forwards` is started on demand.** Nothing is
 dialled until a caller asks, and the ask is the MCP tool's `action=use` (or
 `open ext <name>` on the terminal surface); it answers with the

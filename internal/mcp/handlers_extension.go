@@ -103,6 +103,9 @@ func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallTool
 			entry["name"] = ext.Name
 			entry["kind"] = ext.Kind
 			entry["target"] = ext.Target
+			if targets := ext.Targets; len(targets) > 0 {
+				entry["targets"] = targets
+			}
 			entry["description"] = ext.Description
 			entry["enabled"] = ext.IsEnabled()
 		}
@@ -229,11 +232,15 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 	// The wait is a bound on the caller's patience, not on the dial: a host that is
 	// slow to answer returns `probing` with what the caller should poll, rather
 	// than a failure it would have to guess was not one.
-	st, err := s.extensions.Acquire(name, extensionUseBudget)
+	target := strings.TrimSpace(getString(args, "target", ""))
+	st, err := s.extensions.AcquireTarget(name, target, extensionUseBudget)
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
 	entry := extensionConfigMap(ext)
+	if target != "" {
+		entry["target"] = target
+	}
 	s.extensionRuntimeFields(entry, st, true)
 	if st.Status == extensions.StatusIdle {
 		entry["status"] = extensions.StatusAvailable
@@ -259,8 +266,9 @@ func (s *Server) handleExtensionRelease(ctx context.Context, request mcpgo.CallT
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
+	target := strings.TrimSpace(getString(args, "target", ""))
 	shellID := strings.TrimSpace(getString(args, "shell_id", ""))
-	released, err := s.extensions.Release(name, shellID)
+	released, err := s.extensions.ReleaseTarget(name, target, shellID)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "releasing extension %q: %s", name, err), nil
 	}
@@ -293,7 +301,7 @@ func (s *Server) handleExtensionRetry(ctx context.Context, request mcpgo.CallToo
 	if _, err := s.extensions.Store().Load(name); err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
-	if err := s.extensions.Retry(name); err != nil {
+	if err := s.extensions.RetryTarget(name, strings.TrimSpace(getString(args, "target", ""))); err != nil {
 		return toolError(CodeOperationFailed, "retrying extension %q: %s", name, err), nil
 	}
 	return successResult(), nil
@@ -358,6 +366,9 @@ func extensionConfigMap(ext *extensions.Extension) map[string]any {
 	}
 	if len(ext.Forwards) > 0 {
 		entry["forwards"] = ext.Forwards
+	}
+	if len(ext.Targets) > 0 {
+		entry["targets"] = ext.Targets
 	}
 	return entry
 }
@@ -457,6 +468,9 @@ func (s *Server) extensionRuntimeFields(entry map[string]any, st extensions.Stat
 	}
 	if len(st.Forwards) > 0 {
 		entry["forwards"] = st.Forwards
+	}
+	if len(st.Targets) > 0 {
+		entry["targets_status"] = st.Targets
 	}
 	if n := len(st.Failures); n > 0 {
 		switch {
