@@ -41,6 +41,15 @@
   }
   </script>
 
+  <script>
+    (() => {
+      const saved = localStorage.getItem('termcp_theme');
+      const theme = saved === 'light' || saved === 'dark' ? saved : 'auto';
+      document.documentElement.dataset.theme = theme === 'auto'
+        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : theme;
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -59,24 +68,40 @@
         </div>
       </div>
 
-      <!-- Wide screens get the native picker; narrow ones collapse to a bare
-           globe, because on a phone the four names eat the whole header. Either
-           control drives the same <select>, so language state lives in one place. -->
-      <div class="lang-select-wrap">
-        <select id="lang-select" aria-label="Language / 语言">
-          <option value="auto">🌐 Auto / 自动</option>
-          <option value="zh-CN">简体中文</option>
-          <option value="zh-TW">繁體中文</option>
-          <option value="en">English</option>
-        </select>
-        <button type="button" class="lang-icon-btn" id="lang-icon-btn"
-                aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu"
-                aria-label="Language / 语言" title="Language / 语言"><span class="lang-globe">🌐</span><span class="lang-current" id="lang-current">自动</span></button>
-        <div class="lang-menu" id="lang-menu" role="listbox" aria-label="Language / 语言" hidden>
-          <button type="button" role="option" data-lang="auto">🌐 Auto / 自动</button>
-          <button type="button" role="option" data-lang="zh-CN">简体中文</button>
-          <button type="button" role="option" data-lang="zh-TW">繁體中文</button>
-          <button type="button" role="option" data-lang="en">English</button>
+      <div class="header-controls">
+        <!-- Theme and language are the same widget: a trigger and a list of real
+             buttons. Not a native <select> — the OS draws that popup in its own
+             colours, so it could never take this page's theme. The trigger names
+             the CHOICE (自动), not the resolved theme, or "auto" would read as if
+             it had been pinned by hand. -->
+        <div class="lang-select-wrap">
+          <button type="button" class="lang-icon-btn" id="theme-btn"
+                  aria-haspopup="listbox" aria-expanded="false" aria-controls="theme-menu"
+                  aria-label="Theme / 主题" title="Theme / 主题"><span class="lang-globe" aria-hidden="true">◐</span><span class="lang-current" id="theme-current">自动</span></button>
+          <div class="lang-menu" id="theme-menu" role="listbox" aria-label="Theme / 主题" hidden>
+            <button type="button" role="option" data-theme-choice="auto" data-i18n="theme_auto">自动</button>
+            <button type="button" role="option" data-theme-choice="light" data-i18n="theme_light">浅色</button>
+            <button type="button" role="option" data-theme-choice="dark" data-i18n="theme_dark">深色</button>
+          </div>
+        </div>
+        <!-- Narrow screens collapse the language picker to a bare globe, because
+             on a phone the four names eat the whole header. -->
+        <div class="lang-select-wrap">
+          <select id="lang-select" aria-label="Language / 语言">
+            <option value="auto">🌐 Auto / 自动</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="zh-TW">繁體中文</option>
+            <option value="en">English</option>
+          </select>
+          <button type="button" class="lang-icon-btn" id="lang-icon-btn"
+                  aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu"
+                  aria-label="Language / 语言" title="Language / 语言"><span class="lang-globe">🌐</span><span class="lang-current" id="lang-current">自动</span></button>
+          <div class="lang-menu" id="lang-menu" role="listbox" aria-label="Language / 语言" hidden>
+            <button type="button" role="option" data-lang="auto">🌐 Auto / 自动</button>
+            <button type="button" role="option" data-lang="zh-CN">简体中文</button>
+            <button type="button" role="option" data-lang="zh-TW">繁體中文</button>
+            <button type="button" role="option" data-lang="en">English</button>
+          </div>
         </div>
       </div>
     </div>
@@ -110,6 +135,21 @@
         <a class="target-chip target-chip-link" href="#fleet"><b>ANY&nbsp;HOST</b><span data-i18n="chip_hosts_desc">跨主机安装使用 MCP，和自己机器一样</span></a>
       </div>
 
+      <!-- The page's guiding thought, said once. -->
+      <p class="hero-manifesto" data-i18n-html="hero_manifesto">无视上下文和机器限制，MCP 自由扩展。让你的 AI 自己开发 MCP，装上自己用。<span class="hero-links">AI 用户请移步 <a href="https://ai.termcp.org" target="_blank" rel="noopener">ai.termcp.org</a><span class="sep">/</span><a href="https://ai.termcp.org/SKILL.md" target="_blank" rel="noopener">SKILL.md</a></span></p>
+      <p class="hero-claim" data-i18n="hero_claim">装一次。以后每一台机器、每一个 MCP，都归它管。</p>
+    </section>
+
+    <!-- Install gets its own section: its own heading says what the plate is
+         for, and it sits directly above the four claims it introduces. Inside
+         #dynamic-mcp it read as a stray block between that section's heading
+         and its cards. -->
+    <section class="section install-section" id="install">
+      <div class="install-title">
+        <span class="install-kicker" data-i18n="install_kicker">INSTALL</span>
+        <h2 data-i18n="install_title">安装 Termcp</h2>
+        <p data-i18n="install_sub">选你的工具或终端环境，一键复制命令接入。</p>
+      </div>
       <div class="command-box">
         <div class="cmd-tabs" id="cmd-tabs">
           <button class="cmd-tab active" data-cmd="ai" data-i18n="cmd_tab_ai">AI Install</button>
@@ -130,12 +170,6 @@
              an unauthenticated console: the note says which half makes it safe. -->
         <p class="cmd-note" id="cmd-note" hidden></p>
       </div>
-
-      <!-- Below the install box: the reader has just seen how to run it, so the
-           two sentences that say what it is land here, as the frame around the
-           whole page rather than an interruption to the pitch. -->
-      <p class="hero-manifesto" data-i18n-html="hero_manifesto">无视上下文和机器限制，MCP 自由扩展。让你的 AI 自己开发 MCP，装上自己用。<span class="hero-links">AI 用户请移步 <a href="https://ai.termcp.org" target="_blank" rel="noopener">ai.termcp.org</a><span class="sep">/</span><a href="https://ai.termcp.org/SKILL.md" target="_blank" rel="noopener">SKILL.md</a></span></p>
-      <p class="hero-claim" data-i18n="hero_claim">装一次。以后每一台机器、每一个 MCP，都归它管。</p>
     </section>
 
     <!-- The hook, immediately under the fold: the MCP surface is the product.

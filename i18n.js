@@ -6,6 +6,12 @@
 const i18nData = {
   'zh-CN': {
     auto_label: '🌐 自动',
+    theme_auto: '自动',
+    theme_light: '浅色',
+    theme_dark: '深色',
+    install_kicker: 'INSTALL',
+    install_title: '安装 Termcp',
+    install_sub: '选你的工具或终端环境，一键复制命令接入。',
     hero_pill: 'AI NATIVE CONTROL PLANE · MCP',
     hero_title: '最终的 MCP',
     hero_desc: '一个 MCP <strong>统御</strong> 所有机器和所有 MCP <span class="lead-sep">|</span> <span class="lead-tail">让 AI 进入你的诸多终端</span>',
@@ -147,6 +153,12 @@ const i18nData = {
   },
   'zh-TW': {
     auto_label: '🌐 自動',
+    theme_auto: '自動',
+    theme_light: '淺色',
+    theme_dark: '深色',
+    install_kicker: 'INSTALL',
+    install_title: '安裝 Termcp',
+    install_sub: '選你的工具或終端環境，一鍵複製指令接入。',
     hero_pill: 'AI NATIVE CONTROL PLANE · MCP',
     hero_title: '最終的 MCP',
     hero_desc: '一個 MCP <strong>統御</strong> 所有機器和所有 MCP <span class="lead-sep">|</span> <span class="lead-tail">讓 AI 進入你的諸多終端</span>',
@@ -288,6 +300,12 @@ const i18nData = {
   },
   'en': {
     auto_label: '🌐 Auto',
+    theme_auto: 'Auto',
+    theme_light: 'Light',
+    theme_dark: 'Dark',
+    install_kicker: 'INSTALL',
+    install_title: 'Install Termcp',
+    install_sub: 'Pick your tool or terminal; copy the command and you are in.',
     hero_pill: 'AI NATIVE CONTROL PLANE · MCP',
     hero_title: 'The Terminus MCP',
     hero_desc: 'One MCP <strong>DOMINATES</strong> every machine and every MCP you own <span class="lead-sep">|</span> <span class="lead-tail">Bring AI into your terminals</span>',

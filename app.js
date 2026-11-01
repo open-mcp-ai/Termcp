@@ -88,6 +88,85 @@ copyBtn.addEventListener('click', () => {
   });
 });
 
+/* --- Header controls: Theme & Language ---
+   Mirrors termcp's own UI (../termcp/internal/webui/assets):
+   1. Stored value is the USER CHOICE ('auto' | 'light' | 'dark'), not the resolved id.
+   2. 'auto' resolves live via prefers-color-scheme so a sunset switch works without refresh.
+   3. Both are button+menu disclosures, not native <select>s, so dropdowns stay themed.
+   4. Opening one menu closes the other. */
+
+let themeChoice = (() => {
+  const v = localStorage.getItem('termcp_theme');
+  return (v === 'light' || v === 'dark') ? v : 'auto';
+})();
+
+const systemThemeMQ = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+
+function resolveTheme(choice) {
+  return choice === 'auto'
+    ? ((systemThemeMQ && systemThemeMQ.matches) ? 'light' : 'dark')
+    : choice;
+}
+
+function applyTheme(choice) {
+  themeChoice = choice;
+  try { localStorage.setItem('termcp_theme', choice); } catch (e) {}
+  document.documentElement.dataset.theme = resolveTheme(choice);
+  syncThemeMenu();
+}
+
+if (systemThemeMQ && systemThemeMQ.addEventListener) {
+  systemThemeMQ.addEventListener('change', () => {
+    if (themeChoice === 'auto') {
+      document.documentElement.dataset.theme = resolveTheme('auto');
+    }
+  });
+}
+
+const themeBtn = document.getElementById('theme-btn');
+const themeMenu = document.getElementById('theme-menu');
+const themeCurrent = document.getElementById('theme-current');
+
+function syncThemeMenu() {
+  const dict = i18nData[currentLang] || i18nData['en'];
+  const labels = {
+    auto: dict.theme_auto || '自动',
+    light: dict.theme_light || '浅色',
+    dark: dict.theme_dark || '深色'
+  };
+  if (themeCurrent) themeCurrent.textContent = labels[themeChoice] || labels.auto;
+  if (themeMenu) {
+    themeMenu.querySelectorAll('[data-theme-choice]').forEach(item => {
+      const choice = item.getAttribute('data-theme-choice');
+      item.textContent = labels[choice] || choice;
+      item.setAttribute('aria-selected', String(choice === themeChoice));
+    });
+  }
+}
+
+function closeThemeMenu() {
+  if (!themeMenu) return;
+  themeMenu.hidden = true;
+  if (themeBtn) themeBtn.setAttribute('aria-expanded', 'false');
+}
+
+if (themeBtn && themeMenu) {
+  themeBtn.addEventListener('click', () => {
+    const opening = themeMenu.hidden;
+    closeLangMenu();
+    themeMenu.hidden = !opening;
+    themeBtn.setAttribute('aria-expanded', String(opening));
+    if (opening) syncThemeMenu();
+  });
+  themeMenu.addEventListener('click', (e) => {
+    const item = e.target.closest('button[data-theme-choice]');
+    if (!item) return;
+    applyTheme(item.getAttribute('data-theme-choice'));
+    closeThemeMenu();
+    try { themeBtn.focus(); } catch (err) {}
+  });
+}
+
 const langSelect = document.getElementById('lang-select');
 const langMenu = document.getElementById('lang-menu');
 const langBtn = document.getElementById('lang-icon-btn');
@@ -157,6 +236,7 @@ function applyLang(lang) {
   if (autoOpt) autoOpt.textContent = dict.auto_label;
   const autoItem = langMenu.querySelector('[data-lang="auto"]');
   if (autoItem) autoItem.textContent = dict.auto_label;
+  syncThemeMenu();
   syncLangMenu();
 }
 
@@ -212,6 +292,7 @@ function closeLangMenu() {
 
 langBtn.addEventListener('click', () => {
   const opening = langMenu.hidden;
+  closeThemeMenu();
   langMenu.hidden = !opening;
   langBtn.setAttribute('aria-expanded', String(opening));
   if (opening) syncLangMenu();
@@ -226,10 +307,16 @@ langMenu.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.lang-select-wrap')) closeLangMenu();
+  if (!e.target.closest('.lang-select-wrap')) {
+    closeLangMenu();
+    closeThemeMenu();
+  }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeLangMenu();
+  if (e.key === 'Escape') {
+    closeLangMenu();
+    closeThemeMenu();
+  }
 });
 
 // Auto fetch GitHub stars & release
@@ -282,6 +369,7 @@ async function fetchGitHubMeta() {
 }
 
 detectLang();
+applyTheme(themeChoice);
 fetchGitHubMeta();
 fetchDonors();
 detectHost();
