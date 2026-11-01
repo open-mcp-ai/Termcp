@@ -241,14 +241,24 @@ function dockEntries() {
   var bare = [];
   var entries = [];
   var covered = Object.create(null);
+  /* How many panels each session occupies, counted from the same pass that builds
+     the entries: a session split across windows is still ONE tab, and the tab has
+     to show that there is more than one place to look (see openSessionPanelsMenu). */
+  var panels = Object.create(null);
   allShellWins().forEach(function (w) {
     /* A status card carries the extension's NAME in `_sid`, so it is not a session
        and must not claim one's tab. */
     var sid = (!w._extName && w._sid) ? w._sid : '';
     if (!sid) { bare.push({ key: 'win:' + w.id, win: w, sid: '', session: null }); return; }
+    panels[sid] = (panels[sid] || 0) + 1;
+    /* ONE TAB PER SESSION. Splitting a session's channels across windows does not
+       split the session: each window is just another panel, and the tab raises a
+       panel that still has a channel to show. */
+    if (covered[sid]) return;
     covered[sid] = true;
-    entries.push({ key: 'sess:' + sid, win: w, sid: sid, session: byId[sid] || null });
+    entries.push({ key: 'sess:' + sid, win: getShellWindowBySid(sid) || w, sid: sid, session: byId[sid] || null });
   });
+  entries.forEach(function (e) { e.panels = panels[e.sid] || 0; });
   snapshot.forEach(function (s) {
     if (!s || !s.id || s.status !== 'running') return;
     if (covered[s.id]) return;
@@ -294,6 +304,10 @@ function dockKeyForWindow(win) {
  * the page used to list only the first kind, which made every session an agent
  * started over MCP invisible here. */
 function refreshSessionTabbar() {
+  /* The one hооk every open, close, raise, minimize, split and merge already runs
+     through: the arrangement this tab shows is saved here rather than at each of
+     those call sites. Debounced, so a burst of repaints costs one write. */
+  savePanelLayoutSoon();
   var bar = sessionTabbarEl();
   if (!bar) return;
   var wins = allShellWins();
@@ -301,6 +315,12 @@ function refreshSessionTabbar() {
   // The empty marker rides the tab strip's place: it says why the row is bare
   // (no windows) without pretending a window exists.
   paintSessdockEmpty(entries.length === 0);
+  /* The sweep key answers "is an archived session still on screen", which changes
+     for reasons a click handler cannot see: a session dies on its own and its
+     window turns read-only, and both of those arrive here. Painting it in the one
+     hook every open/close/raise already runs through is what keeps it from
+     claiming there is nothing to sweep while a read-only window sits on the page. */
+  paintCloseArchivedKey();
   var topWin = null;
   if (!_winsHidden && _layoutMode === 'tile') {
     topWin = (_paneActiveWin && isTiledWin(_paneActiveWin)) ? _paneActiveWin : null;
@@ -385,6 +405,7 @@ function refreshSessionTabbar() {
         '</button>' +
         '<span class="session-tab-label"></span>' +
         '<span class="session-tab-review" hidden data-i18n-title="tab.reviewWaiting"></span>' +
+        '<span class="session-tab-panels" hidden></span>' +
         '<span class="session-tab-close" role="button" title="Close window (session keeps running)" data-i18n-title="tab.closeWindow" aria-label="Close window" data-i18n-aria="tab.aria.closeWindow">' +
         '<svg viewBox="0 0 12 12" width="10" height="10"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></span>';
       tab.addEventListener('click', function (e) {
@@ -415,6 +436,11 @@ function refreshSessionTabbar() {
           }
           return;
         }
+        /* Spread across panels: the tab is one session with several windows, so the
+           press asks WHICH one instead of guessing (see openSessionPanelsMenu). A
+           single window keeps the direct raise — a menu for one row is an extra
+           press for nothing. */
+        if (cur.panels > 1) { openSessionPanelsMenu(cur, tab); return; }
         focusShellWindow(cur.win);
       });
       tab.addEventListener('mousedown', function (e) {
@@ -459,11 +485,30 @@ function refreshSessionTabbar() {
     var label = entry.session ? sessionDockLabel(entry.session) : sessionTabLabel(w);
     tab.querySelector('.session-tab-label').textContent = label;
     tab.title = label;
-    tab.classList.toggle('active', !!w && w === topWin);
-    tab.setAttribute('aria-selected', (!!w && w === topWin) ? 'true' : 'false');
+    /* "Active" is about the SESSION, not about which of its panels happens to be
+       on top: a session split across panels is one tab, and looking at any of
+       them is looking at that session. dockKeyForWindow answers that — every panel
+       is keyed by the session it shows. */
+    var tabActive = !!w && !!topWin && dockKeyForWindow(topWin) === entry.key;
+    tab.classList.toggle('active', tabActive);
+    tab.setAttribute('aria-selected', tabActive ? 'true' : 'false');
     /* A window-less entry is still a session with a state, so the tab says which:
        no window here is a fact about the page, not about the session. */
     tab.classList.toggle('is-windowless', !w);
+    /* More than one panel: say so, because the press will open a menu instead of
+       raising a window — a tab that asks a question with no sign it will is a
+       surprise. Hidden on the ordinary one-window session. */
+    var panelsEl = tab.querySelector('.session-tab-panels');
+    if (panelsEl) {
+      var panelCount = entry.panels || 0;
+      panelsEl.hidden = panelCount < 2;
+      if (panelCount > 1) {
+        panelsEl.textContent = String(panelCount);
+        /* Rendered from t() at paint time, like the label: the tooltip follows a
+           language switch on the next rebuild instead of needing its own hook. */
+        panelsEl.title = t('dock.panels.tip');
+      }
+    }
     /* The rebuild reads the fresh set rather than trusting the class it left behind:
        this loop is the one place a tab is created, and a flag set by an output frame
        while the tab did not exist yet (a session that printed before its first
@@ -520,17 +565,46 @@ function dockEntrySession(entry) {
   return entry.session || null;
 }
 
-/** The tab's x: close the WINDOW, or stop the SESSION when there is no window.
+/** The tab's x: stop the SESSION, not one of its panels.
  *
- *  Those are two different acts and the icon cannot express the difference, so a
- *  window-less entry asks: stopping a session you cannot see the terminal of
- *  should never be one misclick away. */
+ *  The dock lists SESSIONS — a session split across panels is still one tab (it
+ *  only reports how many panels it has). So its x is a session-level key, and it
+ *  must ask the session-level question and, on yes, take the whole session down at
+ *  once. It used to delegate to the window-level close, which is panel-aware: on a
+ *  split session that closed one panel silently and left the reader to press it
+ *  again for each of the others, so "close this session" turned into an unclear
+ *  number of clicks, each one looking like it had done nothing.
+ *
+ *  The window header's own x keeps the panel-level meaning (see
+ *  closeSessionWindowFromUI): there the control sits ON a panel, so "this panel" is
+ *  what it can honestly mean. */
 function closeDockEntry(entry) {
-  if (!entry) return;
-  if (entry.win) { askCloseTabWindow(entry.win); return; }
+  if (!entry) return Promise.resolve('cancelled');
   var s = dockEntrySession(entry);
-  if (!s) return;
-  askCloseSession(s.id, dockSessionTarget(s));
+  if (entry.win) {
+    /* A status card and a dial in flight have no session: askCloseSession drops
+       the window for both, which is all there is to do. */
+    return askCloseSession(entry.win._extName ? null : entry.sid, entry.win);
+  }
+  if (!s) return Promise.resolve('cancelled');
+  return askCloseSession(s.id, dockSessionTarget(s));
+}
+
+/** Close every panel showing a session.
+ *
+ *  Stopping a session removes what all of its panels were views OF, so they go
+ *  together: leaving the others on screen would show transcripts of a session that
+ *  is no longer there, and the reader would have to close each one by hand. */
+function closeSessionPanels(sid) {
+  sessionPanelWindows(sid).forEach(function (w) {
+    /* The session-level terminate already stopped every channel of this session.
+       These windows are losing a VIEW, not closing a shell, so drop each channel
+       view directly: `closeChannelTab` would post a per-shell archive for shells
+       the session teardown has already handled. Dropping the view also detaches
+       the channel's disposable, so releasing the window cannot re-run it. */
+    Object.keys(w._channels || {}).forEach(function (chSid) { _dropChannelView(w, chSid); });
+    closeShellWindow(w);
+  });
 }
 
 /** The session data a tab's window stands for, or null when there is none yet.
@@ -698,6 +772,253 @@ function paintWindowTitleName(win, s) {
  *
  *  One menu element, built on demand and reused: a per-tab menu would be one
  *  stale closure per window, and this page opens and closes windows all day. */
+/** Every open window showing this session, in the workspace's own order.
+ *
+ *  Panels are peers. The order is not a home-first policy: it is simply the order
+ *  the windows occupy across the floating container and tiled grid, so splitting
+ *  or merging does not give one window special identity. */
+function sessionPanelWindows(sid) {
+  if (!sid) return [];
+  return allShellWins().filter(function (w) { return !w._extName && w._sid === sid; });
+}
+
+/* --- the workspace this tab had on screen ----------------------------------
+ *
+ * Which channel sits in which panel is not the server's to know: a session owns
+ * its shells, not the arrangement a reader put them in. So a reload rebuilt one
+ * window per session from the shell list alone, and a session that had been split
+ * across two panels came back merged — the split was silently undone.
+ *
+ * The arrangement is kept in sessionStorage, which is the one store that belongs to
+ * a single TAB. The daemon is a shared instance: another browser, another tab and an
+ * agent can all be attached at once, and a layout stored on the server would be one
+ * record all of them overwrite, so the second tab's reload would rearrange the
+ * first tab's screen. A tab's screen is the tab's business, and it dies with the tab
+ * — which is also when the arrangement stops meaning anything.
+ *
+ * Only the GROUPING is stored, never content: session id, which shells a panel
+ * showed, which one was in front, and where the panel sat. Everything else is
+ * re-read from the server on load, and a shell that no longer exists is left out.
+ */
+var PANEL_LAYOUT_KEY = 'termcp_panel_layout';
+var _panelLayoutSaveTimer = 0;
+/** Saves are gated on restore: the first repaints of a fresh page have no windows
+ *  yet, and writing while async shell lists are arriving would erase panels not
+ *  rebuilt yet. */
+var _panelLayoutRestored = false;
+var _panelLayoutRestoring = false;
+
+/** Remember the open panels. Debounced, because the callers are hot paths (every
+ *  tab-bar repaint is an open, a close, a raise or a frame). */
+function savePanelLayoutSoon() {
+  if (!_panelLayoutRestored || typeof setTimeout !== 'function') return;
+  if (_panelLayoutSaveTimer) clearTimeout(_panelLayoutSaveTimer);
+  _panelLayoutSaveTimer = setTimeout(function () {
+    _panelLayoutSaveTimer = 0;
+    savePanelLayout();
+  }, 250);
+}
+
+function savePanelLayout() {
+  if (!_panelLayoutRestored || _panelLayoutRestoring) return;
+  var panels = [];
+  allShellWins().forEach(function (win) {
+    /* A dial in flight and an extension's status card are not session panels:
+       neither has a session id and shells to name. */
+    if (!win._parentSid || win._placeholder || win._extName) return;
+    var shells = Object.keys(win._channels || {});
+    if (!shells.length) return;
+    var rect = isTiledWin(win) ? win._floatRect : win.style;
+    function px(value) { var n = parseFloat(value); return isFinite(n) ? n : null; }
+    panels.push({
+      sid: win._parentSid,
+      conn: win._connName || '',
+      shells: shells,
+      active: win._activeChannelSid || '',
+      min: win.classList.contains('win-minimized'),
+      rect: rect ? { left: px(rect.left), top: px(rect.top), width: px(rect.width), height: px(rect.height) } : null
+    });
+  });
+  try { sessionStorage.setItem(PANEL_LAYOUT_KEY, JSON.stringify({ v: 1, panels: panels })); } catch (e) {}
+}
+
+function loadPanelLayout() {
+  var raw = '';
+  try { raw = sessionStorage.getItem(PANEL_LAYOUT_KEY) || ''; } catch (e) { return []; }
+  if (!raw) return [];
+  var doc = null;
+  try { doc = JSON.parse(raw); } catch (e) { return []; }
+  if (!doc || doc.v !== 1 || !Array.isArray(doc.panels)) return [];
+  return doc.panels;
+}
+
+/** Put a floating window back where it was. A tiled pane is laid out by the grid
+ *  and a phone's window by the stylesheet, so both keep their own geometry. */
+function applySavedPanelRect(win, rect) {
+  if (!win || !rect || isMobileViewport()) return;
+  var target = isTiledWin(win) ? (win._floatRect || (win._floatRect = {})) : win.style;
+  ['left', 'top', 'width', 'height'].forEach(function (key) {
+    if (typeof rect[key] === 'number' && isFinite(rect[key])) target[key] = Math.round(rect[key]) + 'px';
+  });
+  if (!isTiledWin(win)) clampShellWindowIntoContainer(win);
+}
+
+/** Rebuild the panels this tab had open before the reload.
+ *
+ *  Called with the session snapshot, because a saved panel is only worth rebuilding
+ *  if its session still exists — and the panel's shells are then read from the
+ *  server, so a channel closed elsewhere leaves nothing behind and a panel left with
+ *  no shells is not reopened. Runs once per page load. */
+function restorePanelLayout(sessionById) {
+  if (_panelLayoutRestored) return;
+  var saved = loadPanelLayout().filter(function (p) {
+    return p && typeof p.sid === 'string' && Object.prototype.hasOwnProperty.call(sessionById, p.sid) &&
+      Array.isArray(p.shells) && p.shells.some(function (id) { return typeof id === 'string' && id; });
+  }).map(function (p) {
+    return {
+      sid: p.sid,
+      conn: typeof p.conn === 'string' ? p.conn : '',
+      shells: p.shells.filter(function (id) { return typeof id === 'string' && id; }),
+      active: typeof p.active === 'string' ? p.active : '',
+      min: p.min === true,
+      rect: p.rect
+    };
+  });
+  /* An empty record is a real answer: the reader closed everything, and a reload
+     must not bring it back. */
+  _panelLayoutRestored = true;
+  if (!saved.length) { savePanelLayoutSoon(); return; }
+  _panelLayoutRestoring = true;
+  /* Fetch concurrently, then build in the saved order. Completion order is not
+     window order: letting whichever HTTP response wins append first would make the
+     workspace reshuffle across reloads. */
+  Promise.all(saved.map(function (p) {
+    return fetch(sessionAPI(p.sid, '/shells'))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return j && j.shells ? { panel: p, session: sessionById[p.sid], shells: j.shells } : null; })
+      .catch(function () { return null; });
+  })).then(function (results) {
+    var assigned = Object.create(null), restoredSessions = Object.create(null);
+    results.forEach(function (result) {
+      if (!result) return;
+      var p = result.panel, s = result.session;
+      /* If the reader opened this session manually while the shell lists loaded,
+         their new window wins over the stale saved layout. Further panels from the
+         same saved arrangement are allowed after its first panel is rebuilt. */
+      if (!restoredSessions[p.sid] && sessionPanelWindows(p.sid).length) return;
+      var live = {};
+      result.shells.forEach(function (sh) { live[sh.shell_id || sh.id] = sh; });
+      var wanted = p.shells.filter(function (id) {
+        if (!live[id] || assigned[id]) return false;
+        assigned[id] = true;
+        return true;
+      });
+      if (!wanted.length) return;
+      var head = live[wanted[0]];
+      var win = openShellWindow(p.conn || s.ssh_config || s.name || '', p.sid, null, {
+        shell: wanted[0],
+        index: head.index || 0,
+        readOnly: s.status !== 'running',
+        channelReadOnly: head.status !== 'running'
+      });
+      if (!win) return;
+      restoredSessions[p.sid] = true;
+      for (var i = 1; i < wanted.length; i++) {
+        createChannelTab(win, wanted[i], {
+          index: live[wanted[i]].index || 0,
+          readOnlyHistory: live[wanted[i]].status !== 'running'
+        });
+      }
+      if (p.active && win._channels[p.active]) switchChannelTab(win, p.active);
+      applySavedPanelRect(win, p.rect);
+      if (p.min) minimizeShellWindow(win);
+    });
+    _panelLayoutRestoring = false;
+    savePanelLayoutSoon();
+  });
+}
+
+/** The channels a panel shows, as the labels their tabs carry.
+ *
+ *  A panel is identified by what is IN it: two windows of one session have the
+ *  same title (`profile · session`), so a list of titles would be a list of
+ *  identical rows. The channel labels are what differs — they are also what the
+ *  tabs in the panel say, so the menu reads as a summary of the window. */
+function panelChannelLabel(win) {
+  var ids = win && win._channels ? Object.keys(win._channels) : [];
+  if (!ids.length) return t('channel.empty');
+  var indexes = ids.map(function (sid) {
+    var ch = win._channels[sid];
+    return ch && ch.urlIndex ? ch.urlIndex : 0;
+  });
+  indexes.sort(function (a, b) { return a - b; });
+  return indexes.map(function (n) { return n ? 'shell-' + n : 'shell'; }).join(' · ');
+}
+
+/** The dock tab of a session spread across several panels: pick which one.
+ *
+ *  A session can be split — a channel tab dragged out gets a panel of its own —
+ *  and it keeps ONE dock tab, because it is one session. Raising a window then
+ *  has an answer the page cannot guess: the reader dragged a channel out to look
+ *  at it separately, and pressing the tab is how they say "take me back there".
+ *
+ *  So the press opens a menu UPWARDS from the tab (the dock is the bottom edge of
+ *  the page) with one row per panel, named by the channels it holds. One panel
+ *  keeps the old behaviour and raises the window directly: a menu for a single
+ *  choice is an extra press for nothing. */
+function openSessionPanelsMenu(entry, tabEl) {
+  var sid = entry && entry.sid;
+  if (!sid) return;
+  var open = document.getElementById('sess-tab-menu');
+  if (open && open.dataset.sid === sid) { closeSessionTabMenu(); return; } // second press toggles
+  closeSessionTabMenu();
+
+  var panels = sessionPanelWindows(sid);
+  if (panels.length < 2) return;
+  var current = topVisibleShellWindow();
+
+  var menu = document.createElement('div');
+  menu.className = 'sess-tab-menu sess-panels-menu';
+  menu.id = 'sess-tab-menu';
+  menu.setAttribute('role', 'menu');
+  menu.dataset.sid = sid;
+  menu.dataset.win = entry.key;
+
+  panels.forEach(function (w) {
+    var isCurrent = w === current;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sess-tab-menu-item' + (isCurrent ? ' is-on' : '');
+    b.setAttribute('role', 'menuitem');
+    b.setAttribute('aria-current', isCurrent ? 'true' : 'false');
+    b.innerHTML = dockTickGlyph(w) + '<span>' + escapeHtml(panelChannelLabel(w)) + '</span>' +
+      (isCurrent ? '<span class="sess-tab-menu-dot" aria-hidden="true"></span>' : '');
+    b.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSessionTabMenu();
+      if (entry.sid) dockClearFresh(entry.sid);
+      focusShellWindow(w);
+    });
+    menu.appendChild(b);
+  });
+
+  document.body.appendChild(menu);
+  /* Fixed, measured after mounting, and opening UPWARDS: the anchor is a tab in the
+     dock's bottom bar, so there is no room below it by definition. */
+  var r = menu.getBoundingClientRect();
+  var vw = window.innerWidth || 0;
+  var tab = tabEl && tabEl.getBoundingClientRect ? tabEl.getBoundingClientRect() : null;
+  var left = tab ? tab.left : 8;
+  if (left + r.width > vw - 8) left = Math.max(8, vw - r.width - 8);
+  var top = tab ? tab.top - r.height - 6 : 8;
+  if (top < 8) top = Math.min(8 + (window.innerHeight || 0) - r.height - 8, (tab ? tab.bottom + 6 : 8));
+  menu.style.left = left + 'px';
+  menu.style.top = Math.max(8, top) + 'px';
+  var first = menu.querySelector('.sess-tab-menu-item');
+  if (first) first.focus();
+}
+
 function openSessionTabMenu(entry, x, y) {
   var w = entry && entry.win;
   var s = dockEntrySession(entry);
@@ -785,6 +1106,12 @@ function closeSessionTabMenu() {
    once, on the document, rather than once per menu. */
 document.addEventListener('mousedown', function (e) {
   if (e.target.closest && e.target.closest('.sess-tab-menu')) return;
+  /* The tab that owns the open panels menu is not "anywhere": a second press on it
+     toggles the menu shut (see openSessionPanelsMenu), and closing on the mousedown
+     would leave nothing for the click to toggle. */
+  var menu = document.getElementById('sess-tab-menu');
+  var tab = e.target.closest ? e.target.closest('.session-tab') : null;
+  if (menu && menu.dataset.sid && tab && tab._entry && tab._entry.sid === menu.dataset.sid) return;
   closeSessionTabMenu();
 }, true);
 document.addEventListener('keydown', function (e) {
@@ -809,11 +1136,30 @@ window.addEventListener('resize', closeSessionTabMenu);
   }).observe(c, { childList: true });
 })();
 
-// Fixed action cluster at the right end of the session tab bar (Chrome-style):
+// Fixed right-side window controls, separated from the dock strip by its border:
 // eye (show/hide) · layout toggle (float<->tile, highlighted while tiled) · strategy select.
 (function () {
   var actions = document.getElementById('session-tabbar-actions');
   if (!actions) return;
+  var dock = document.getElementById('sessdock-bar');
+  if (!document.getElementById('dock-close-archived') && dock) {
+    var broom = document.createElement('button');
+    broom.type = 'button';
+    broom.id = 'dock-close-archived';
+    broom.className = 'ext-key ext-key-icon';
+    broom.setAttribute('data-i18n-title', 'dock.closeArchived.title');
+    broom.setAttribute('data-i18n-aria', 'dock.closeArchived.title');
+    broom.title = t('dock.closeArchived.title');
+    broom.setAttribute('aria-label', t('dock.closeArchived.title'));
+    broom.disabled = true;
+    broom.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5l5 5"/><path d="M12.2 6.8l5 5"/><path d="M4 20l7.5-7.5a1.6 1.6 0 012.3 0l.7.7a1.6 1.6 0 010 2.3L7 23"/><path d="M11 9l4 4"/></svg>';
+    broom.addEventListener('click', function (e) { e.preventDefault(); closeArchivedWindows(); });
+    /* The broom belongs to the dock strip, not the arrangement controls. Keep it
+       immediately before their vertical divider: the space it cleans up is in the
+       strip, and the separator marks where layout controls begin. */
+    dock.insertBefore(broom, actions);
+    paintCloseArchivedKey();
+  }
   if (!document.getElementById('session-tabbar-toggle')) {
     var btn = document.createElement('button');
     btn.type = 'button';
@@ -1568,49 +1914,85 @@ function collapseShellWindow(win) {
   }
 }
 
-/** "x" button: close the session.
+/** The window header's x: close THIS panel, or ask to archive the session if it is
+ *  the LAST one.
  *
- *  A running session is NOT destroyed by this key. It asks what to do with it,
- *  because the two outcomes are very different and the icon cannot express the
- *  difference: archiving disconnects the session and keeps its output readable
- *  in the archive (recoverable — its transcript is still there), while deleting
- *  erases the on-disk directory for good. The key used to delete outright, which
- *  made one misclick on a live terminal unrecoverable and gave the archive no way
- *  to grow other than the batch bar.
+ *  This is the panel-level key — it sits on a panel, so "this panel" is what it can
+ *  honestly mean. The dock tab's x is the session-level one and takes the whole
+ *  session down at once (see closeDockEntry). */
+function closeSessionWindowFromUI(win) {
+  if (!win) return;
+  var sid = win._parentSid || win._sid;
+  if (!sid || win._placeholder || win._extName) { closeShellWindow(win); return; }
+  if (sessionPanelWindows(sid).length > 1) {
+    closeShellWindow(win);
+    return;
+  }
+  askCloseSession(sid, win);
+}
+
+/** The dock's broom: close every window whose session is already over.
  *
- *  The dialog offers the same vocabulary the batch bar already uses for the same
- *  two actions (Stop/Archive vs Delete), and for an already-archived session it
- *  keeps the plain delete confirmation: there is nothing left to archive. */
+ *  What it closes is WINDOWS, not records. A session that has ended is retained in
+ *  the archive and its window is a read-only view of a transcript that is already
+ *  filed there; the workspace keeps showing it until someone closes it, one panel
+ *  at a time. This is the sweep for that residue, and it destroys nothing: the
+ *  archive rows, their transcripts and their export all stay where they are.
+ *
+ *  That is also why this key carries no confirmation and no destructive colour.
+ *  The archive column owns erasing records, and it asks first. A key here that did
+ *  the same thing would put the irreversible act on the bar the reader uses to
+ *  tidy, which is the one place they are not expecting to lose anything.
+ *
+ *  Its enablement comes from the PRESENCE of such a window, never from the ticked
+ *  set: a sweep is not a selection, and a key that quietly required one would look
+ *  broken on a page where nobody has ticked anything.
+ */
+function closeArchivedWindows() {
+  var doomed = archivedSessionWindows();
+  if (!doomed.length) {
+    showCopyToast(t('dock.closeArchived.none'));
+    return;
+  }
+  doomed.forEach(function (w) { closeShellWindow(w); });
+  /* The strip is repainted here rather than left to the removal observer: every
+     close is synchronous up to its fetch, and the count and the empty note read
+     off the entry list, which is rebuilt in this pass. */
+  refreshSessionTabbar();
+  showCopyToast(tCount('dock.closeArchived.done.one', 'dock.closeArchived.done.other', { count: doomed.length }));
+}
+
+/** The open windows that show a session that is over.
+ *
+ *  Read from the session snapshot, not from `win._readOnly`: the flag says the
+ *  window was LOCKED, which is also true of a card the operator pinned while its
+ *  session still runs, and those are not swept. */
+function archivedSessionWindows() {
+  return allShellWins().filter(function (w) {
+    /* A dial in flight has no session yet, and an extension's status card has no
+       session at all: neither is a view of an ended session, and closing one would
+       interrupt a connection that is still being made. */
+    return !!w._parentSid && !w._placeholder && !w._extName && isSessionDeadInWindows(w._parentSid);
+  });
+}
+
+/** Enable the broom only while there is something for it to sweep. */
+function paintCloseArchivedKey() {
+  var btn = document.getElementById('dock-close-archived');
+  if (!btn) return;
+  btn.disabled = archivedSessionWindows().length === 0;
+}
+
+/** "x" button: this panel's close, which asks at session scope only when it is the
+ *  last panel left (see closeSessionWindowFromUI). */
 function bindShellWindowCloseButton(win, closeBtn) {
   if (!closeBtn || closeBtn._termcpCloseBound) return;
   closeBtn._termcpCloseBound = true;
   closeBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   closeBtn.addEventListener('click', function (e) {
     e.preventDefault(); e.stopPropagation();
-    var sid = win && win._sid;
-    if (!sid || win._placeholder) { closeShellWindow(win); return; }
-    askCloseSession(sid, win);
+    closeSessionWindowFromUI(win);
   });
-}
-
-/** The dock tab's x.
- *
- *  It used to call closeShellWindow outright, which destroyed the window and
- *  left the session running with nothing on the page pointing at it. That was
- *  survivable while the session list was a permanent plate: the card was still
- *  there to click. It is not survivable now — the dock is the only place the
- *  open sessions appear, so "close the window" and "lose the session" became the
- *  same gesture, and a misclick on a tab cost the user their terminal.
- *
- *  So the tab's x now asks the same question the window header's x asks, through
- *  the same dialog: cancel / archive / delete. The three cases that are NOT a
- *  session (an extension's status card, a dial still in flight) have nothing to
- *  archive or delete, so they still just close. */
-function askCloseTabWindow(win) {
-  if (!win) return;
-  var sid = win._sid;
-  if (!sid || win._placeholder || win._extName) { closeShellWindow(win); return; }
-  askCloseSession(sid, win);
 }
 
 /** Whether a session id belongs to an archived (not running) session, read from
@@ -1873,7 +2255,11 @@ function dockCloseEntries(keys) {
            orphan with no tab, visible only in the archive later. A placeholder with
            no id yet has nothing to stop, and closeShellWindow hangs up its dial. */
         if (entry.sid && !(w && w._extName)) {
-          return archiveSessionById(entry.sid).then(function () { if (w) closeShellWindow(w); });
+          /* Stopping the session takes all of its panels, for the same reason the
+             single tab's x does: the panels were views of a session that no longer
+             exists. */
+          var sid = entry.sid;
+          return archiveSessionById(sid).then(function () { closeSessionPanels(sid); });
         }
         /* No session behind it: dropping the window IS the close. */
         if (w) closeShellWindow(w);
@@ -1906,13 +2292,13 @@ function askCloseSession(sid, win) {
      reach the archive endpoint — the first would post to /sessions/null, the
      second would try to stop a session named after an extension. closing the
      window IS the close for both. */
-  if (!win || !sid || win._placeholder || win._extName) {
-    if (win) closeShellWindow(win);
+  if (!sid || (win && (win._placeholder || win._extName))) {
+    if (win && !win._windowless) closeShellWindow(win);
     return Promise.resolve('closed');
   }
   var name = stripSessionPrefix(sid);
   if (isSessionDeadInWindows(sid)) {
-    closeShellWindow(win);
+    closeSessionPanels(sid);
     return Promise.resolve('closed');
   }
   return confirmDialog({
@@ -1923,7 +2309,7 @@ function askCloseSession(sid, win) {
   }).then(function (ok) {
     if (!ok) return 'cancelled';
     return archiveSessionById(sid).then(function () {
-      closeShellWindow(win);
+      closeSessionPanels(sid);
       return 'archived';
     });
   });
@@ -1942,11 +2328,12 @@ function archiveSessionById(sid) {
       if (!r.ok && r.status !== 204) {
         return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
       }
-      showCopyToast(t('dock.close.done.one', { count: 1 }));
+      showCopyToast(t('toast.session.stopped.one', { count: 1 }));
     })
     .catch(function (err) {
       if (banner) setLoadBanner(banner, '');
       showCopyToast(t('toast.stop.failed', { msg: String(err.message || err) }));
+      throw err;
     });
 }
 
@@ -1961,20 +2348,27 @@ function deleteSessionById(sid, win) {
     .catch(function (err) { showCopyToast(t('toast.delete.failed', { msg: (err.message || err) })); });
 }
 
+/** The window a session's tab raises.
+ *
+ *  Any window of the session will do, and every window is a peer: there is no
+ *  "own" window to prefer. The one preference left is USEFULNESS — a panel that
+ *  still holds channels beats one that a move emptied, because raising the empty
+ *  one would look like the session had lost its terminal. */
 function getShellWindowBySid(sessionId) {
   if (!sessionId) return null;
   var wins = allShellWins();
+  var empty = null;
   for (var i = 0; i < wins.length; i++) {
     /* An extension's status card carries its NAME in _sid so the tab bar can label
        it, and a name is the author's to choose under the same [A-Za-z0-9_-]{1,64}
-       rule that a 12-hex session id satisfies. This lookup means "the window for
-       this SESSION", so a card (which has no session) is never its answer —
-       without this an extension named after a session id would be raised, notified
-       or fed that session's output instead of the session's own window. */
-    if (wins[i]._extName) continue;
-    if (wins[i]._sid === sessionId) return wins[i];
+       rule that a 12-hex session id satisfies. This lookup means "a window for
+       this SESSION", so a card (which has no session) is never its answer. */
+    var w = wins[i];
+    if (w._extName || w._sid !== sessionId) continue;
+    if (w._channels && Object.keys(w._channels).length) return w;
+    if (!empty) empty = w;
   }
-  return null;
+  return empty;
 }
 
 /** The window owning a channel id, or null. */

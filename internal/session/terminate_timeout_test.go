@@ -27,6 +27,7 @@ func TestTerminateReturnsWhenPeerStallsOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	t.Cleanup(func() { _ = m.Delete(sess.ID) })
 
 	// Verify the session is live.
 	if sess.Info().Status != api.SessionRunning {

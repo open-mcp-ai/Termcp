@@ -40,13 +40,10 @@ func (r *Reconciler) reapEnded(name string, st *extState) {
 			// news — not this loop's.
 			continue
 		}
-		if !st.dropExtra(shellID) {
+		reason := r.instanceEndReason(sess, shellID)
+		if !st.retireExtra(sessIDOf(sess), shellID, reason) {
 			continue
 		}
-		reason := r.instanceEndReason(sess, shellID)
-		st.recordFailure("session", reason)
-		st.recordClosed(sessIDOf(sess), shellID, reason)
-		st.mark(StatusUnavailable)
 		slog.Debug("extension instance ended", "name", name, "shell_id", shellID, "reason", reason)
 		changed = true
 	}
@@ -335,7 +332,10 @@ func (r *Reconciler) sweepInstances(name string, ext *Extension, st *extState, l
 // promise, the walk because a promise kept only by a timer is one missed callback
 // away from a process nobody will ever close.
 func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int {
-	due := st.dueExtras(limit)
+	reason := "idle for " + limit.Round(time.Second).String() + " with nothing asked of it"
+	// dueExtras records the close with the removal (see its comment): by the time
+	// this returns, the instance is gone AND the reason is readable.
+	due := st.dueExtras(limit, reason)
 	if len(due) == 0 {
 		return 0
 	}
@@ -344,8 +344,6 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 		if sess != nil {
 			_ = sess.CloseChildShell(shellID)
 		}
-		st.recordClosed(sessIDOf(sess), shellID,
-			"idle for "+limit.Round(time.Second).String()+" with nothing asked of it")
 		slog.Info("extension instance idled out", "name", name, "shell_id", shellID)
 	}
 	return len(due)
@@ -413,19 +411,11 @@ func (r *Reconciler) idleFired(name string) {
 // available, nothing up is idle ("nothing is running because nothing asked"), and
 // a recorded failure outranks both.
 func (r *Reconciler) settle(name string, st *extState) {
-	switch {
-	case len(st.snapshot().Failures) > 0 && st.instanceCount() == 0:
-		// leave the failure standing
-	case st.instanceCount() > 0:
-		if st.statusOf() != StatusAvailable {
-			st.mark(StatusAvailable)
-			r.notifyChange()
-		}
-	default:
-		if st.statusOf() != StatusIdle {
-			st.mark(StatusIdle)
-			r.notifyChange()
-		}
+	st.mu.Lock()
+	changed := st.settleLocked()
+	st.mu.Unlock()
+	if changed {
+		r.notifyChange()
 	}
 }
 

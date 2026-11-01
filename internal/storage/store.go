@@ -215,6 +215,38 @@ func renameOver(tmp, path string) error {
 	return err
 }
 
+// removeAllRetrying removes a tree, retrying the one failure that is transient: a
+// file inside it still held open elsewhere.
+//
+// It is os.RemoveAll in a loop and nothing more, because that is exactly the shape of
+// the problem: RemoveAll deletes what it can and reports the first failure, so each
+// attempt makes progress and the last one finishes the tree once the holder lets go.
+// This is the fix for "deleting an archived session failed once, then worked" — on
+// Windows the leaf file of a just-written log is routinely held for a few hundred
+// milliseconds by an antivirus scan, the search indexer, or a read of the transcript,
+// and the removal was reported as a permanent error.
+//
+// The failure still reaches the caller after the budget: a genuinely undeletable tree
+// (a read-only volume, a permission the process does not have) is not made worse by
+// waiting, but it must not be reported as success either.
+func removeAllRetrying(path string) error {
+	var err error
+	for attempt := 0; attempt < removeAttempts; attempt++ {
+		if err = os.RemoveAll(path); err == nil {
+			return nil
+		}
+		if !isTemporaryLockFailure(err) {
+			return err
+		}
+		/* No sleep after the last attempt: the caller is about to be told it failed,
+		   and waiting before saying so helps nobody. */
+		if attempt < removeAttempts-1 {
+			time.Sleep(removeBackoff << attempt)
+		}
+	}
+	return err
+}
+
 // --- paths -----------------------------------------------------------------
 
 func (s *Store) sessionsDir() string { return filepath.Join(s.dataDir, "sessions") }
@@ -325,7 +357,7 @@ func (s *Store) DeleteShell(sessionID, shellID string) error {
 	defer s.mu.Unlock()
 	// Drop the manifest's cached hash with the file it describes; see writeManifest.
 	delete(s.manifestHash, filepath.Join(s.shellDir(sessionID, shellID), "manifest.json"))
-	return os.RemoveAll(s.shellDir(sessionID, shellID))
+	return removeAllRetrying(s.shellDir(sessionID, shellID))
 }
 
 // DeleteSession removes the whole session directory. Closing a session is a
@@ -353,7 +385,7 @@ func (s *Store) DeleteSession(sessionID string) error {
 			delete(s.manifestHash, path)
 		}
 	}
-	return os.RemoveAll(s.sessionDir(sessionID))
+	return removeAllRetrying(s.sessionDir(sessionID))
 }
 
 // LoadSessions reads every session manifest and the shell manifests beneath it.

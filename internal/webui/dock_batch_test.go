@@ -352,7 +352,7 @@ func TestDockCloseEntriesActsOnWhatItCounted(t *testing.T) {
 	var code strings.Builder
 	// The whole close path, taken from the shipped file: the count, the confirm, the
 	// per-entry action and the toast are one unit under test.
-	for _, fn := range []string{"dockEntryByKey", "dockCloseEntries", "archiveSessionById"} {
+	for _, fn := range []string{"dockEntryByKey", "dockCloseEntries", "closeSessionPanels", "archiveSessionById"} {
 		start := strings.Index(js, "function "+fn+"(")
 		if start < 0 {
 			t.Fatalf("shell-windows.js no longer defines %s", fn)
@@ -409,6 +409,13 @@ const sandbox = {
     return Promise.resolve(true);
   },
   closeShellWindow(w) { sandbox.__closed.push(w.id || w._sid || 'anon'); },
+  /* A session's panels are every window carrying its id: closing the session must
+     drop all of them, not only the one the tab happened to point at. */
+  sessionPanelWindows(sid) {
+    return sandbox.__tabs
+      .map(t => t && t._entry && t._entry.win)
+      .filter(w => w && !w._extName && w._sid === sid);
+  },
   _dockBatch: { setMode() {} },
   fetch: (url) => {
     sandbox.__archived.push(String(url));

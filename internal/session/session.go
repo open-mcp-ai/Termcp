@@ -99,14 +99,7 @@ type Config struct {
 	// UI's cards, the node cards' session counts and the agent's session_list can
 	// leave it out while its terminal stays openable by whoever holds its id (see
 	// internal/ns). Empty means an ordinary session.
-	Namespace        string
-	transport        *transportLease
-	transportRelease func()
-}
-
-type transportLease struct {
-	client  *ssh.Client
-	release func()
+	Namespace string
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -152,8 +145,7 @@ type Session struct {
 	retainedQueue *approval.Queue
 	// approvalSink is the change handler installed before approval mode is
 	// enabled, so a handler set at startup is not lost.
-	approvalSink     func(sessionID string, req approval.Request)
-	transportRelease func()
+	approvalSink func(sessionID string, req approval.Request)
 
 	// shellHistory retains the last-known per-shell metadata (id, name, status)
 	// so a DEAD session can still render per-shell tabs after shells leave the
@@ -192,31 +184,12 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	usePty := cfg.Mode == api.ModePTY
 
-	var execSession *sshclient.ExecSession
-	var sshEndpointPublic string
-	if cfg.transport != nil {
-		endpoint := "internal"
-		if isRemote(cfg) {
-			endpoint = "remote"
-		}
-		sshEndpointPublic = endpoint
-		if cfg.NoShell {
-			execSession = sshclient.BareClient(cfg.transport.client, false, nil)
-		} else {
-			es, err := sshclient.StartWithClient(cfg.transport.client, cfg.Command, cfg.Args, usePty, cfg.Rows, cfg.Cols)
-			if err != nil {
-				return nil, err
-			}
-			execSession = es
-		}
-	} else {
-		es, endpoint, err := dialTransport(internal, cfg, usePty)
-		if err != nil {
-			return nil, err
-		}
-		execSession = es
-		sshEndpointPublic = endpoint
+	es, endpoint, err := dialTransport(internal, cfg, usePty)
+	if err != nil {
+		return nil, err
 	}
+	execSession := es
+	sshEndpointPublic := endpoint
 	// The dial can also finish in the same instant the caller gives up. Dropping
 	// the transport here rather than registering it keeps the promise the cancel
 	// makes: after a cancelled request, no session exists to be listed. Without
@@ -260,11 +233,6 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 		restriction:  cfg.Restriction,
 		msgMgr:       msgMgr,
 		scope:        newResourceScope(),
-	}
-
-	if cfg.transport != nil && cfg.transport.release != nil {
-		s.transportRelease = cfg.transport.release
-		s.AttachCleanup(cfg.transport.release)
 	}
 
 	// Message-manager session state is a session-scoped resource: release it
@@ -366,9 +334,9 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 		select {
 		case err = <-waitDone:
 		case <-s.Context().Done():
-			// A session can release its lease while the pooled transport stays
-			// alive for another user. Stop watching this session without waiting
-			// for that unrelated transport to close.
+			// This session owns its transport, so its resource scope cancel means
+			// the connection is closing; do not wait for a borrowed client's lease
+			// to expire (short-circuit operations do not create Sessions).
 			return
 		}
 
@@ -574,14 +542,10 @@ func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 					return
 				}
 			}
-			// Close the session's own transport, not sibling session channels.
-			// For remote sessions the shared SSH client is left for Disconnect(); for
-			// internal loopback there's no multiplexing so close everything here.
-			if s.SSHEndpoint == "internal" {
-				_ = es.Close()
-			} else {
-				_ = es.CloseSessionOnly()
-			}
+			// A session owns its connection (Create dials one per session), so
+			// closing it here steals nothing from a sibling: it releases the TCP
+			// connection and the remote sshd's slot for this session.
+			_ = es.Close()
 		}()
 
 		select {
@@ -685,12 +649,7 @@ func (s *Session) markDead() {
 
 func (s *Session) markDeadWithMessage(systemMessage string) {
 	s.shellStateMu.Lock()
-	defer func() {
-		s.shellStateMu.Unlock()
-		if s.transportRelease != nil {
-			s.transportRelease()
-		}
-	}()
+	defer s.shellStateMu.Unlock()
 	// A deliberate close may race with an exit watcher that already observed
 	// the transport error. Do not turn that intentional close into a network-loss
 	// notification.

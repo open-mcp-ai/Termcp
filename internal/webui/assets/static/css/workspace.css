@@ -406,6 +406,11 @@
    room for it here, where the two side columns put the number on a switch's face
    (they have a switch; this bar does not). */
 .sessdock-batch .archive-tick-count { margin-left: 2px; }
+/* The broom sits INSIDE the dock bar, immediately before the window-controls
+   cluster — so the vertical divider still marks where arrangement controls begin.
+   No margin of its own: the tab strip absorbs the slack (`.sessdock-tabs` is
+   `flex: 1 1 auto`), which is what puts the broom at the strip's right edge, just
+   left of the line. */
 .sessdock-actions {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;

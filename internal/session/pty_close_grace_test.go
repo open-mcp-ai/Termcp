@@ -37,6 +37,11 @@ func TestWindowsInternalPtyCloseSkipsTheGraceWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create pty session: %v", err)
 	}
+	/* Terminate does not join the exit watcher — it must not, since the watcher
+	   itself drives the DEAD transition — so its final manifest persist can land
+	   after this test returns and race t.TempDir's RemoveAll ("directory is not
+	   empty"). Delete is the join point; see docs/agents/testing.md. */
+	t.Cleanup(func() { _ = m.Delete(sess.ID) })
 	if sess.SSHEndpoint != "internal" {
 		t.Fatalf("this test needs the internal endpoint, got %q", sess.SSHEndpoint)
 	}

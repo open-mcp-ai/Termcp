@@ -107,16 +107,16 @@ func NewManager(msgMgr *message.Manager, store *storage.Store, internalSSH *sshs
 
 // Create starts a new session and registers it. A session stays in the registry
 // until explicitly deleted; disconnect/terminate/abort only turn it DEAD.
+//
+// EVERY SESSION DIALS ITS OWN CONNECTION. The transport pool is for one-shot
+// borrowed operations only: a session that rode a pooled client would die with
+// whichever other session held that client, and closing one session's transport
+// would take its sibling's channels with it. So re-opening a host from the UI
+// must never land on a client another session already holds — the dial below is
+// what guarantees that.
 func (m *Manager) Create(cfg Config) (*Session, error) {
-	lease, err := m.AcquireTransport(cfg.Ctx, cfg)
-	if err != nil {
-		m.logCreateFailure(cfg, err)
-		return nil, err
-	}
-	cfg.transport = &transportLease{client: lease.Client, release: lease.Release}
 	s, err := New(m.internalSSH, cfg, m.msgMgr)
 	if err != nil {
-		lease.Release()
 		m.logCreateFailure(cfg, err)
 		return nil, err
 	}

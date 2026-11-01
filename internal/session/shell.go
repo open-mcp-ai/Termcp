@@ -318,8 +318,9 @@ func (cs *ChildShell) ResizePty(rows, cols int) error {
 	return nil
 }
 
-// TerminateShell closes the child shell's exec session channel without touching the
-// shared SSH client (CloseSessionOnly). The client lifetime is managed by the parent Session.
+// TerminateShell closes this shell's exec session channel without closing the
+// parent Session's SSH client. The parent owns that connection, and the other
+// child shells on it must keep running.
 func (cs *ChildShell) TerminateShell() {
 	if cs.statusValue() != api.SessionRunning {
 		return // already terminated

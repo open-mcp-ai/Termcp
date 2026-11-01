@@ -109,8 +109,12 @@ function _initShellWindowUI(win, connLabel, sessionId) {
     w = w || win;
     var listEl = w.querySelector('.shell-fw-list');
     if (!listEl) return;
-    var cfg = connLabel || 'internal';
-    var fwds = (window._lastForwards || []).filter(function(f) { return forwardMatchesConfig(f, cfg); });
+    /* Forwards belong to the SESSION, not to the panel showing it: every panel of
+       one session lists the same tunnels (that is what makes the state shared),
+       and two independent sessions on the same ssh profile must not see each
+       other's. Matching on the profile did exactly that, so the session id is the
+       key — the server already scopes the record by it. */
+    var fwds = (window._lastForwards || []).filter(function(f) { return f.session_id === sessionId; });
     if (!fwds.length) { listEl.innerHTML = '<div style="padding:16px;color:var(--term-fg-muted);text-align:center">' + escapeHtml(t('fw.empty')) + '</div>'; return; }
     listEl.innerHTML = fwds.map(function(f){
       var dirLabel = f.direction;

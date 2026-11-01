@@ -424,6 +424,9 @@ function deleteArchivedSessions(sessions) {
       return fetch(apiPath('/api/sessions/') + encodeURIComponent(s.id), { method: 'DELETE' })
         .then(function (r) {
           if (r.ok || r.status === 204) return { ok: true, id: s.id };
+          /* A 404 means the record is already gone (deleted by another tab/sweep);
+             treat as success so a stale row does not pop up a failure toast. */
+          if (r.status === 404) return { ok: true, id: s.id, gone: true };
           return r.json().then(function (er) {
             return { ok: false, id: s.id, code: er && er.code, error: (er && er.error) || 'HTTP ' + r.status };
           }).catch(function () { return { ok: false, id: s.id, error: 'HTTP ' + r.status }; });
@@ -524,57 +527,6 @@ var _archiveBatch = (typeof createBatchBar === 'function') ? createBatchBar({
   onExport: function (names) { exportArchivedTranscripts(archivedSessionsFor(names)); },
   onDelete: function (names) { deleteArchivedSessions(archivedSessionsFor(names)); }
 }) : null;
-
-/** Delete every archived session in one call, after one confirmation.
- *
- *  The archive fills up on its own — every session that ends lands in it — so
- *  tidying it by ticking rows is work the page can do itself. This is the bulk
- *  form, and it goes through the same confirm dialog as the ticked delete: the
- *  transcripts are erased for good either way.
- *
- *  The server decides what is archived (`DELETE /api/sessions?status=dead`), not
- *  this page. A client-side list of ids would be one frame stale, and the frame
- *  it was stale for is exactly the one where a session had just ended — the call
- *  would leave that row behind and report success.
- */
-function clearAllArchivedSessions() {
-  var ended = (sessionsWithPending() || []).filter(function (s) { return s && s.id && isDeadSession(s); });
-  if (!ended.length) {
-    showCopyToast(t('archive.clearAll.none'));
-    return;
-  }
-  confirmDialog({
-    title: t('archive.clearAll.dialog'),
-    message: t('archive.clearAll.msg', { count: ended.length }),
-    okText: t('archive.clearAll.ok', { count: ended.length }),
-    danger: true
-  }).then(function (ok) {
-    if (!ok) return;
-    var banner = document.getElementById('session-load-banner');
-    if (banner) setLoadBanner(banner, tCount('banner.deleting.one', 'banner.deleting.other', { count: ended.length }));
-    fetch(apiPath('/api/sessions?status=dead'), { method: 'DELETE' })
-      .then(function (r) {
-        return r.json().then(function (body) {
-          if (!r.ok) throw new Error((body && body.error) || ('HTTP ' + r.status));
-          return body || {};
-        });
-      })
-      .then(function (body) {
-        var gone = body.deleted || [];
-        /* The selection is keyed by id, so it has to let go of the ids that no
-           longer exist: a prune against the next snapshot would do it, but the
-           ids would sit in the set until that frame arrived. */
-        gone.forEach(function (id) { _sessionRegions.forEach(function (rg) { rg.ids.delete(id); }); });
-        if (banner) setLoadBanner(banner, '');
-        showCopyToast(t('archive.clearAll.done', { count: gone.length }));
-        renderSessionGrid('');
-      })
-      .catch(function (e) {
-        if (banner) setLoadBanner(banner, '');
-        showCopyToast(t('archive.clearAll.failed', { msg: String((e && e.message) || e) }));
-      });
-  });
-}
 
 /** A session is over once it stops running; the registry retains it for the
  *  archive rather than dropping it. */
@@ -734,22 +686,6 @@ function updateSessionBatchBar() {
   (sessionsWithPending() || []).forEach(function (s) { if (s && s.id) live[s.id] = true; });
   pruneSessionSelections(live);
   _archiveBatch.update();
-  paintClearAllKey();
-}
-
-/** The sweep key is enabled by the archive having anything in it.
- *
- *  It is painted from the same snapshot every other control reads rather than
- *  from a click handler's state: the archive grows on its own (a session dying is
- *  not a user action on this page), so a key enabled once and never rechecked
- *  would go stale in the direction that matters — enabled with nothing left to
- *  delete.
- */
-function paintClearAllKey() {
-  var btn = document.getElementById('archive-clear-all');
-  if (!btn) return;
-  var any = (sessionsWithPending() || []).some(function (s) { return s && s.id && isDeadSession(s); });
-  btn.disabled = !any;
 }
 
 // The list lives in window._lastSessionsSnapshot, written by
@@ -821,6 +757,29 @@ function archiveDuration(from, to) {
   return secs + 's';
 }
 
+/** When a session left `running`, in milliseconds, for ordering the ledger.
+ *
+ *  The archive is read newest-first: the session someone wants back is almost
+ *  always the one that just ended, and a ledger in map order makes them search the
+ *  whole strip for it. `updated_at` is the moment of the last transition, which for
+ *  a finished session is the moment it finished (the API has no `ended_at`); the
+ *  magnitude guard is the same one archiveAge needs, because seconds-resolution
+ *  values reach that field on the restore path. */
+function archiveEndedAt(s) {
+  var t0 = Number((s && (s.updated_at || s.created_at)) || 0);
+  if (!t0) return 0;
+  if (t0 < 1e12) t0 *= 1000;
+  return t0;
+}
+
+/** Newest first, with the id as a tiebreak so two sessions that ended in the same
+ *  millisecond do not swap places between frames. */
+function compareArchiveRows(a, b) {
+  var d = archiveEndedAt(b) - archiveEndedAt(a);
+  if (d) return d;
+  return String(b.id || '').localeCompare(String(a.id || ''));
+}
+
 /** Render the archive as ROWS, not cards.
  *
  *  The archive is a ledger: it answers "what already happened" and is read in
@@ -836,6 +795,10 @@ function renderArchiveRows(region, all) {
   if (!grid) return;
   grid.innerHTML = '';
   var rows = all.filter(function (s) { return s && s.id && isDeadSession(s) === region.dead; });
+  /* ListAll walks a sync.Map, so its order is random and reshuffles on every
+     frame — a ledger whose rows move under the pointer is not a ledger. Sorted by
+     the moment each session ended, newest first. */
+  rows.sort(compareArchiveRows);
   if (rows.length === 0) {
     /* An empty archive says what it holds rather than showing a blank strip: the
        column is collapsed by default, so the one time it is opened with nothing
@@ -1095,31 +1058,6 @@ function showTerminalEndedMarker(win, ch) {
  * prove who an approver is), and defaulting it silently to 1 would hide that.
  * Turning it off cancels everything pending server-side, hence the confirmation.
  */
-// Wire the archive sweep key. The button is BUILT here rather than written into
-// index.html: that file has a byte budget (assetsplit_test) that is already tight,
-// and this key is one element with one job — it belongs next to the code that
-// enables it.
-document.addEventListener('DOMContentLoaded', function () {
-  var count = document.getElementById('archive-toggle-count');
-  if (!count) return;
-  var clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'ext-key ext-key-icon';
-  clearBtn.id = 'archive-clear-all';
-  clearBtn.setAttribute('data-i18n-title', 'archive.clearAll.title');
-  clearBtn.setAttribute('data-i18n-aria', 'archive.clearAll.title');
-  clearBtn.title = t('archive.clearAll.title');
-  clearBtn.setAttribute('aria-label', t('archive.clearAll.title'));
-  clearBtn.disabled = true;
-  clearBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6"/><path d="M5.5 6l1 13a2 2 0 002 1.9h7a2 2 0 002-1.9l1-13"/><path d="M10 10.5v6M14 10.5v6"/></svg>';
-  count.insertAdjacentElement('afterend', clearBtn);
-  clearBtn.addEventListener('click', function (e) {
-    e.preventDefault();
-    clearAllArchivedSessions();
-  });
-  paintClearAllKey();
-});
-
 function toggleSessionApproval(s, gated, btn) {
   if (gated) {
     confirmDialog({
@@ -1206,6 +1144,9 @@ function applySessionsSnapshot(sessions) {
   // Prune invisible client-side state for sessions that have left the
   // server registry entirely, even if no window was open when they died.
   pruneDeadSessionUIState(sessionById);
+  // Panel grouping is per browser tab, not session data. The first snapshot is
+  // the point where saved session/shell ids can be reconciled before rebuilding.
+  if (typeof restorePanelLayout === 'function') restorePanelLayout(sessionById);
   refreshAllWindowTabs();
 }
 
@@ -1263,34 +1204,30 @@ function syncWindowTabs(win, shells) {
     // prune on refresh (all snapshot shells report exited) and never send input.
     (shells || []).forEach(function(s) {
       var sid = s.shell_id || s.id;
-      if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0 });
+      if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0 });
     });
     return;
   }
   var running = shells.filter(function(s) { return s.status === 'running'; });
   var exited = shells.filter(function(s) { return s.status !== 'running'; });
-  // Add tabs for shells the window does not show yet. An already-exited shell is
-  // opened read-only: its stream is over, and a pipe channel exists precisely to
-  // run to exit, so its tab is the output the user asked for — not a corpse to
-  // sweep away.
+  // Add tabs for shells the window does not show yet. Every panel of a session is a
+  // peer, and so is every channel inside it: there is no "root" channel that this
+  // rule treats differently. A channel the window already shows is skipped by
+  // `existing`, and one another panel owns is refused by `channelFitsWindow` — those
+  // two facts are the whole filter.
   exited.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
+    if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
   });
-  // Primary shell tab is created on explicit open (session create / restore).
-  // Sync only adds additional shells so closing a tab does not recreate it on
-  // the next refresh.
   running.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid, { index: s.index || 0 });
+    if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0 });
   });
   // Prune tabs for shells the server no longer lists at all — closed elsewhere
-  // (MCP shell_close, another window). A shell that merely exited stays listed
-  // with its buffer, so its tab stays too; the primary (root) shell is never
-  // pruned here, because during teardown its exit can surface in a still-RUNNING
-  // list frame before the session flips to DEAD.
+  // (MCP shell_close, another panel). A shell that merely exited stays listed with
+  // its buffer, so its tab stays too. No channel is exempt: once the server stops
+  // listing it, a tab for it would be a view of something that does not exist.
   Object.keys(existing).forEach(function(sid) {
-    if (sid === win._primaryShellId) return;
     var found = shells.some(function(s) { return (s.shell_id || s.id) === sid; });
     if (!found && existing[sid]) closeChannelTab(win, sid);
   });
