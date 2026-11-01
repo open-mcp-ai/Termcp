@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -99,7 +99,7 @@ func TestExtensionsEndpointEmpty(t *testing.T) {
 func TestExtensionsEndpointListsStatus(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -126,7 +126,7 @@ func TestExtensionsEndpointListsStatus(t *testing.T) {
 	if row == nil {
 		t.Fatalf("extension docs missing from %v", rows)
 	}
-	if row.Kind != "skill" || row.Target != "internal" || row.Description != "docs window" {
+	if row.Target != "internal" || row.Description != "docs window" {
 		t.Errorf("template fields not echoed: %+v", row)
 	}
 	if !row.Enabled {
@@ -145,7 +145,7 @@ func TestExtensionsEndpointListsStatus(t *testing.T) {
 func TestExtensionsEndpointDisabled(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "parked"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -171,7 +171,7 @@ func TestExtensionsEndpointDisabled(t *testing.T) {
 func TestExtensionsEndpointFailure(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "nowhere"
 	ext.Target = "no-such-profile"
 	ext.Paths = []string{"/srv/"}
@@ -199,10 +199,11 @@ func TestExtensionsEndpointFailure(t *testing.T) {
 func TestExtensionDetail(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindMCP)
+	ext := extensions.Extension{Mode: "pipe"}
 	ext.Name = "mcpbox"
 	ext.Target = "internal"
 	ext.Command = "cat"
+	ext.Allow = []string{capability.ShellInput, capability.ShellOutput}
 	ext.Notes = "drive it as line-delimited JSON-RPC"
 	saveTestExtension(t, h, &ext)
 
@@ -221,7 +222,7 @@ func TestExtensionDetail(t *testing.T) {
 		t.Errorf("notes = %v, want the template's notes", body["notes"])
 	}
 	if allow, _ := body["allow"].([]any); len(allow) == 0 {
-		t.Error("the mcp preset's whitelist should be served")
+		t.Error("the declared whitelist should be served")
 	}
 	if _, ok := body["extension"]; !ok {
 		t.Errorf("detail should nest the panel row, got %v", body)
@@ -240,7 +241,7 @@ func TestExtensionDetail(t *testing.T) {
 func TestExtensionsWSFrame(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -265,13 +266,13 @@ func TestExtensionsWSFrame(t *testing.T) {
 func TestExtensionRetryEndpoint(t *testing.T) {
 	h := extensionTestHandler(t)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "nowhere"
 	ext.Target = "no-such-profile"
 	ext.Paths = []string{"/srv/"}
 	saveTestExtension(t, h, &ext)
 
-	parked := extensions.Preset(extensions.KindSkill)
+	parked := extensions.Extension{}
 	parked.Name = "parked"
 	parked.Target = "internal"
 	parked.Paths = []string{"/srv/"}
@@ -368,20 +369,20 @@ func callExtension(t *testing.T, mux *http.ServeMux, method, target, body string
 	return rr.Code, out.Extension
 }
 
-// TestExtensionCreate pins the browser's create: a kind and a target are enough,
-// the preset's conventional values are filled in, and the row is echoed back.
+// TestExtensionCreate pins the browser's create: the declared fields are enough,
+// the conventional values for them are filled in, and the row is echoed back.
 func TestExtensionCreate(t *testing.T) {
 	h := extensionTestHandler(t)
 	mux := http.NewServeMux()
 	h.Register(mux)
 
 	code, row := callExtension(t, mux, http.MethodPost, "/api/extensions",
-		`{"name":"docs","kind":"skill","target":"internal","paths":["/srv/"]}`)
+		`{"name":"docs","target":"internal","paths":["/srv/"]}`)
 	if code != http.StatusCreated {
 		t.Fatalf("POST /api/extensions = %d, want 201", code)
 	}
-	if row.Kind != "skill" || row.Target != "internal" {
-		t.Errorf("created row = %+v, want the sent kind and target", row)
+	if row.Target != "internal" {
+		t.Errorf("created row = %+v, want the sent target", row)
 	}
 	// The store is the shared layer: what the route wrote is what the tool reads.
 	ext, err := h.Extensions.Store().Load("docs")
@@ -392,24 +393,24 @@ func TestExtensionCreate(t *testing.T) {
 		t.Errorf("paths = %v, want [/srv/]", ext.Paths)
 	}
 	if len(ext.Allow) == 0 {
-		t.Error("the skill preset's tool whitelist should be filled in on create")
+		t.Error("a read-only file window should get its tool whitelist on create")
 	}
 
 	// A duplicate is a conflict, so the author hears about the name collision
 	// instead of overwriting a template in place.
 	if code, _ := callExtension(t, mux, http.MethodPost, "/api/extensions",
-		`{"name":"docs","kind":"skill","target":"internal"}`); code != http.StatusConflict {
+		`{"name":"docs","target":"internal","paths":["/srv/"]}`); code != http.StatusConflict {
 		t.Errorf("duplicate create = %d, want 409", code)
 	}
 	// A template that cannot be built is refused before it is saved, so the
 	// panel never shows a template the reconciler cannot stand up.
 	if code, _ := callExtension(t, mux, http.MethodPost, "/api/extensions",
-		`{"name":"nopaths","kind":"skill","target":"internal"}`); code != http.StatusBadRequest {
-		t.Errorf("a skill with no paths = %d, want 400", code)
+		`{"name":"nothing","target":"internal"}`); code != http.StatusBadRequest {
+		t.Errorf("a template that declares no capability = %d, want 400", code)
 	}
 	// No name means no file to write it to.
 	if code, _ := callExtension(t, mux, http.MethodPost, "/api/extensions",
-		`{"kind":"skill","target":"internal"}`); code != http.StatusBadRequest {
+		`{"target":"internal","paths":["/srv/"]}`); code != http.StatusBadRequest {
 		t.Errorf("create without a name = %d, want 400", code)
 	}
 	// Malformed JSON is reported, not silently treated as "change nothing".
@@ -418,23 +419,20 @@ func TestExtensionCreate(t *testing.T) {
 	}
 }
 
-// TestExtensionCreateCustom pins that an unknown or absent kind is a custom
-// template rather than an error: the panel's "other" shape is a first-class
-// authoring choice, not a fallback the route apologises for.
+// TestExtensionCreateBareTemplate pins that a terminal declared by its fields is a
+// first-class template: it takes no conventional values beyond what its shape
+// implies, because there is no category to pick first.
 func TestExtensionCreateCustom(t *testing.T) {
 	h := extensionTestHandler(t)
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	code, row := callExtension(t, mux, http.MethodPost, "/api/extensions",
+	code, _ := callExtension(t, mux, http.MethodPost, "/api/extensions",
 		`{"name":"scratch","target":"internal","mode":"pty"}`)
 	if code != http.StatusCreated {
-		t.Fatalf("POST custom = %d, want 201", code)
+		t.Fatalf("POST a bare terminal = %d, want 201", code)
 	}
-	if row.Kind != extensions.KindCustom {
-		t.Errorf("absent kind = %q, want %q", row.Kind, extensions.KindCustom)
-	}
-	// A custom template takes no preset values, so it keeps only what the author
+	// A terminal takes no conventional values, so it keeps only what the author
 	// sent — a pty shell with no whitelisted tools and no notes of its own.
 	ext, err := h.Extensions.Store().Load("scratch")
 	if err != nil {
@@ -444,7 +442,7 @@ func TestExtensionCreateCustom(t *testing.T) {
 		t.Errorf("mode = %q, want pty", ext.Mode)
 	}
 	if ext.Notes != "" || len(ext.Allow) != 0 {
-		t.Errorf("custom template should carry no preset values, got notes=%q allow=%v", ext.Notes, ext.Allow)
+		t.Errorf("a bare terminal should carry no conventional values, got notes=%q allow=%v", ext.Notes, ext.Allow)
 	}
 }
 
@@ -455,7 +453,7 @@ func TestExtensionUpdate(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -514,7 +512,7 @@ func TestExtensionDelete(t *testing.T) {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -555,7 +553,7 @@ func TestExtensionAuthoringWithoutReconciler(t *testing.T) {
 	for _, tc := range []struct {
 		method, target, body string
 	}{
-		{http.MethodPost, "/api/extensions", `{"name":"x","kind":"skill","target":"internal"}`},
+		{http.MethodPost, "/api/extensions", `{"name":"x","target":"internal","paths":["/srv/"]}`},
 		{http.MethodPut, "/api/extensions/x", `{}`},
 		{http.MethodDelete, "/api/extensions/x", ""},
 	} {
@@ -579,7 +577,7 @@ func TestExtensionAuthoringWithoutReconciler(t *testing.T) {
 // there.
 func TestExtensionsExportImportRoutes(t *testing.T) {
 	h := extensionTestHandler(t)
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/docs/"}
@@ -650,7 +648,7 @@ func TestExtensionsImportRouteRefusesBrokenDocument(t *testing.T) {
 func TestExtensionsBatchDeleteRoute(t *testing.T) {
 	h := extensionTestHandler(t)
 	for _, name := range []string{"one", "two"} {
-		ext := extensions.Preset(extensions.KindSkill)
+		ext := extensions.Extension{}
 		ext.Name = name
 		ext.Target = "internal"
 		ext.Paths = []string{"/srv/"}
@@ -696,7 +694,7 @@ func TestExtensionsBatchDeleteRoute(t *testing.T) {
 	}
 
 	// A single name keeps the original contract.
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "solo"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
@@ -708,26 +706,12 @@ func TestExtensionsBatchDeleteRoute(t *testing.T) {
 	}
 }
 
-// TestExtensionModularFileRoutes pins the file tabs API: it lists only extension
-// files, reads each file, writes notes and target sidecars, and refuses traversal.
-func TestExtensionModularFileRoutes(t *testing.T) {
+// TestExtensionHoleRoutes pins the two-file contract seen from the browser: a
+// template is stored with its holes unfilled, the card says which values it needs
+// rather than looking broken, and a value is set by name without anyone naming a
+// file.
+func TestExtensionHoleRoutes(t *testing.T) {
 	h := extensionTestHandler(t)
-	store := h.Extensions.Store()
-	ext := extensions.Preset(extensions.KindMCP)
-	ext.Name = "modular"
-	ext.Target = "internal"
-	ext.Command = "example"
-	if err := extensions.SaveTemplate(store, &ext); err != nil {
-		t.Fatal(err)
-	}
-	for path, body := range map[string]string{
-		"notes.md":            "notes body",
-		"targets/node-a.toml": "host = \"internal\"\n",
-	} {
-		if err := store.WriteFile("modular", path, []byte(body)); err != nil {
-			t.Fatalf("seed %s: %v", path, err)
-		}
-	}
 	mux := http.NewServeMux()
 	h.Register(mux)
 	request := func(method, path, body string) *httptest.ResponseRecorder {
@@ -736,52 +720,101 @@ func TestExtensionModularFileRoutes(t *testing.T) {
 		return rr
 	}
 
-	list := request(http.MethodGet, "/api/extensions/modular?files=1", "")
-	if list.Code != http.StatusOK {
-		t.Fatalf("file list = %d: %s", list.Code, list.Body.String())
+	template := `description = "debug the cluster"
+mode = "pipe"
+command = "{{command}}"
+targets = "{{targets}}"
+
+[params.command]
+type = "string"
+help = "the program that serves MCP over the pipe"
+
+[params.targets]
+type = "array"
+help = "the hosts this runs on"
+`
+	created := request(http.MethodPost, "/api/extensions",
+		`{"name":"k8s","template":`+jsonMarshal(template)+`}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create template = %d: %s", created.Code, created.Body.String())
 	}
-	var got struct {
-		Files []extensions.ExtensionFile `json:"files"`
+
+	// An installed-but-unfilled extension is listed with what it needs, not as a
+	// failure: the two call for different actions from different people.
+	var need struct {
+		Extensions []struct {
+			Name   string   `json:"name"`
+			Needs  []string `json:"needs"`
+			Status string   `json:"status"`
+		} `json:"extensions"`
 	}
-	if err := json.Unmarshal(list.Body.Bytes(), &got); err != nil {
+	if err := json.Unmarshal(request(http.MethodGet, "/api/extensions", "").Body.Bytes(), &need); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"config.toml", "notes.md", "targets/node-a.toml"}
-	if len(got.Files) != len(want) {
-		t.Fatalf("files = %+v, want %v", got.Files, want)
+	if len(need.Extensions) != 1 {
+		t.Fatalf("list = %s", request(http.MethodGet, "/api/extensions", "").Body.String())
 	}
-	for i, path := range want {
-		if got.Files[i].Path != path {
-			t.Errorf("file[%d] = %q, want %q", i, got.Files[i].Path, path)
-		}
+	row := need.Extensions[0]
+	if row.Status != extensions.StatusIdle {
+		t.Errorf("an unfilled extension = %q, want %q (it is waiting, not broken)", row.Status, extensions.StatusIdle)
 	}
-	read := request(http.MethodGet, "/api/extensions/modular?file=notes.md", "")
-	if read.Code != http.StatusOK || read.Body.String() != "notes body" {
-		t.Fatalf("read notes = %d %q", read.Code, read.Body.String())
+	if len(row.Needs) != 2 {
+		t.Errorf("needs = %v, want both holes", row.Needs)
 	}
-	write := request(http.MethodPut, "/api/extensions/modular?file=notes.md", "updated notes")
-	if write.Code != http.StatusNoContent {
-		t.Fatalf("write notes = %d: %s", write.Code, write.Body.String())
+
+	// The template view hands back the document WITH its holes. Rendering it here
+	// would show a reader an extension that does not exist yet, and lose the holes
+	// on the way back in on save.
+	tomlView := request(http.MethodGet, "/api/extensions/k8s?format=toml", "")
+	if tomlView.Code != http.StatusOK || !strings.Contains(tomlView.Body.String(), `"{{targets}}"`) {
+		t.Fatalf("template view should be the hole document:\n%d %s", tomlView.Code, tomlView.Body.String())
 	}
-	read = request(http.MethodGet, "/api/extensions/modular?file=notes.md", "")
-	if read.Code != http.StatusOK || read.Body.String() != "updated notes" {
-		t.Fatalf("updated notes = %d %q", read.Code, read.Body.String())
+
+	// A value is set by name. The caller never mentions config.local.toml.
+	set := request(http.MethodPut, "/api/extensions/k8s",
+		`{"values":{"command":"kubectl-mcp","targets":[{"host":"pi","forward":[{"kind":"local","local_port":8443,"remote_port":443}]}]}}`)
+	if set.Code != http.StatusOK {
+		t.Fatalf("set values = %d: %s", set.Code, set.Body.String())
 	}
-	// A target file that would make the template invalid is refused, and the file
-	// that was there is left alone: the loader is the validator.
-	badTarget := request(http.MethodPut, "/api/extensions/modular?file=targets/node-b.toml", "host = \"not a valid host\"\n")
-	if badTarget.Code < 400 {
-		t.Errorf("writing an invalid target file returned %d, want refusal", badTarget.Code)
+	got, err := h.Extensions.Store().Load("k8s")
+	if err != nil {
+		t.Fatalf("the filled template should now build: %v", err)
 	}
-	if _, err := store.ReadFile("modular", "targets/node-b.toml"); err == nil {
-		t.Error("a refused target file must not be left on disk")
+	if got.Command != "kubectl-mcp" || len(got.Targets) != 1 || got.Targets[0].Host != "pi" {
+		t.Fatalf("rendered template = %+v", got)
 	}
-	for _, path := range []string{"../ssh_configs/secret.toml", "targets/../config.toml", "targets/not a host.toml"} {
-		bad := request(http.MethodPut, "/api/extensions/modular?file="+url.QueryEscape(path), "x")
-		if bad.Code < 400 {
-			t.Errorf("write to %q returned %d, want refusal", path, bad.Code)
-		}
+	// A port that arrived through JSON as 8443 stays an integer: the value file must
+	// not hold 8443.0, which would fail to read back into an int field.
+	if got.Targets[0].Forwards[0].LocalPort != 8443 {
+		t.Errorf("forward port = %d, want 8443", got.Targets[0].Forwards[0].LocalPort)
 	}
+
+	// A value the template never asked for is refused rather than stored: it would
+	// sit in the values file forever, invisible, looking like a setting that works.
+	bad := request(http.MethodPut, "/api/extensions/k8s", `{"values":{"nope":"x"}}`)
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("unknown value name = %d, want 400 (%s)", bad.Code, bad.Body.String())
+	}
+
+	// Replacing the template keeps this installation's values. That is the whole
+	// reason there are two files.
+	editedTemplate := strings.Replace(template, "the program that serves MCP over the pipe", "the program", 1)
+	edited := request(http.MethodPut, "/api/extensions/k8s",
+		`{"template":`+jsonMarshal(editedTemplate)+`}`)
+	if edited.Code != http.StatusOK {
+		t.Fatalf("replace template = %d: %s", edited.Code, edited.Body.String())
+	}
+	if again, err := h.Extensions.Store().Load("k8s"); err != nil || again.Command != "kubectl-mcp" {
+		t.Errorf("a template upgrade must survive with its values: %+v (%v)", again, err)
+	}
+}
+
+func jsonMarshal(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 // TestExtensionsTOMLViewRoutes pins the editor's file view: the text the TOML view
@@ -790,7 +823,7 @@ func TestExtensionModularFileRoutes(t *testing.T) {
 // itself is named by its directory.
 func TestExtensionsTOMLViewRoutes(t *testing.T) {
 	h := extensionTestHandler(t)
-	ext := extensions.Preset(extensions.KindSkill)
+	ext := extensions.Extension{}
 	ext.Name = "docs"
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/docs/"}
@@ -808,7 +841,7 @@ func TestExtensionsTOMLViewRoutes(t *testing.T) {
 		t.Errorf("toml view content type = %q", ct)
 	}
 	document := rr.Body.String()
-	if !strings.Contains(document, `kind = "skill"`) || !strings.Contains(document, "paths = [") {
+	if !strings.Contains(document, "paths = [") {
 		t.Fatalf("the file view should be the template's own TOML:\n%s", document)
 	}
 	if strings.Contains(document, "name =") {
@@ -835,7 +868,7 @@ func TestExtensionsTOMLViewRoutes(t *testing.T) {
 
 	// A document that names something else is refused: the name is the directory.
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/api/extensions/docs", strings.NewReader("name = \"other\"\nkind = \"skill\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"))
+	req = httptest.NewRequest(http.MethodPut, "/api/extensions/docs", strings.NewReader("name = \"other\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"))
 	req.Header.Set("Content-Type", "application/toml")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -845,7 +878,7 @@ func TestExtensionsTOMLViewRoutes(t *testing.T) {
 	// A create from the file view: the name rides in the query, and a taken name is
 	// a conflict rather than an overwrite.
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/extensions?name=notes", strings.NewReader("kind = \"skill\"\ntarget = \"internal\"\npaths = [\"/srv/notes/\"]\n"))
+	req = httptest.NewRequest(http.MethodPost, "/api/extensions?name=notes", strings.NewReader("target = \"internal\"\npaths = [\"/srv/notes/\"]\n"))
 	req.Header.Set("Content-Type", "application/toml")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
@@ -855,7 +888,7 @@ func TestExtensionsTOMLViewRoutes(t *testing.T) {
 		t.Errorf("the created template should be stored: %v", err)
 	}
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/extensions?name=notes", strings.NewReader("kind = \"skill\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"))
+	req = httptest.NewRequest(http.MethodPost, "/api/extensions?name=notes", strings.NewReader("target = \"internal\"\npaths = [\"/srv/\"]\n"))
 	req.Header.Set("Content-Type", "application/toml")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {

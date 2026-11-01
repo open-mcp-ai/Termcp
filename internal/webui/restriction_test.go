@@ -327,7 +327,7 @@ func TestCreateRepairsAStaleTemplate(t *testing.T) {
 	p := newRestProbe(t, nil, nil)
 	p.withExtensions(t)
 
-	// A hand-written file that fails Validate (kind=skill with no paths).
+	// A hand-written file that fails Validate (a pipe with no command).
 	stale := filepath.Join(p.dataDir, "extensions", "stale")
 	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestCreateRepairsAStaleTemplate(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/extensions",
-		strings.NewReader(`{"name":"stale","kind":"prompt","target":"internal"}`))
+		strings.NewReader(`{"name":"stale","target":"internal","mode":"pty"}`))
 	req.Header.Set("Content-Type", "application/json")
 	p.mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
@@ -348,7 +348,7 @@ func TestCreateRepairsAStaleTemplate(t *testing.T) {
 	// A WORKING template of the same name is still protected.
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/extensions",
-		strings.NewReader(`{"name":"stale","kind":"prompt","target":"internal"}`))
+		strings.NewReader(`{"name":"stale","target":"internal","mode":"pty"}`))
 	req.Header.Set("Content-Type", "application/json")
 	p.mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {

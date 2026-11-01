@@ -293,36 +293,46 @@ func TestExtensionCardIsAWindowAndConfigIsAModal(t *testing.T) {
 	if strings.Contains(ext, "ext-del-btn") || !strings.Contains(ext, "deleteOneExtension") {
 		t.Error("removal belongs to the configuration modal and the batch, not to the card")
 	}
-	// The page reads and writes the stored FILES: a template may be one file or a
-	// directory (config.toml + notes.md + targets/<host>.toml), so the editor lists
-	// them and edits the one the author picked.
-	if !strings.Contains(ext, "'?files=1'") {
-		t.Error("the configuration must ask what files the extension is stored as")
-	}
-	if !strings.Contains(ext, "'?file=' + encodeURIComponent(path)") {
-		t.Error("the configuration must read the file the author selected")
-	}
-	if !strings.Contains(ext, "'?file=' + encodeURIComponent(_extFile)") {
-		t.Error("an edit must save the tab that is showing, not a re-rendered template")
-	}
-	if !strings.Contains(ext, "type = 'application/toml; charset=utf-8';") {
-		t.Error("a create must save a template document")
-	}
-	if !strings.Contains(ext, "type = 'text/plain; charset=utf-8';") {
-		t.Error("an edit must save the file's own bytes, not a re-encoded document")
+	// THE PAGE EDITS A DOCUMENT AND FILLS HOLES, and it never names a file. A
+	// template is one document with placeholders; the values are this installation's
+	// answers, saved one at a time. Neither side of that asks a person to learn that
+	// the answers live in config.local.toml.
+	if !strings.Contains(ext, "'?format=toml'") {
+		t.Error("the configuration must read the template document, holes and all")
 	}
 	if !strings.Contains(ext, "query = '?name=' + encodeURIComponent(newName)") {
-		t.Error("a create must carry its name, which the file itself has no place for")
+		t.Error("a create must carry its name, which the document itself has no place for")
+	}
+	if !strings.Contains(ext, "headers: { 'Content-Type': 'application/toml; charset=utf-8' }") {
+		t.Error("a template is saved as the document it is")
 	}
 	if !strings.Contains(ext, "area.value = extTomlSeed();") {
 		t.Error("a create must start from the default template")
 	}
-	if !strings.Contains(ext, "# A termcp extension. kind + target is enough") {
-		t.Error("the default template must explain its own fields")
+	if !strings.Contains(ext, "{{name}}") {
+		t.Error("the default template must show what a hole looks like")
 	}
-	// A single-file template must look exactly as it did before tabs existed.
-	if !strings.Contains(ext, "if (!name || !files || files.length < 2) {") {
-		t.Error("the tab bar must stay hidden unless the extension is stored as more than one file")
+	if !strings.Contains(ext, "[params.<name>]") {
+		t.Error("the default template must show that a hole declares itself")
+	}
+	// THE HOLES ARE THE FORM. A value is set by hole name, never by editing a file.
+	if !strings.Contains(ext, "paintExtensionHoles(name, doc.holes || [])") {
+		t.Error("the configuration must show what the template still asks for")
+	}
+	if !strings.Contains(ext, "body[hole] = value;") {
+		t.Error("a value must be sent keyed by the hole's name")
+	}
+	if !strings.Contains(ext, "JSON.stringify({ values: body })") {
+		t.Error("values travel as the values object, not as a rewritten document")
+	}
+	// A value that is stored but does not render yet must NOT look like a failed save:
+	// the input is the only copy of itself, and clearing the box would lose it.
+	if !strings.Contains(ext, "ext.holes.notApplied") {
+		t.Error("a value that is kept but does not apply must say so, not report a failed save")
+	}
+	// The kind label is gone from the card with the field it read.
+	if strings.Contains(ext, "extKindLabel") {
+		t.Error("the card must not label an extension with a kind it no longer has")
 	}
 }
 

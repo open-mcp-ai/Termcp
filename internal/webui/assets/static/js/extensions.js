@@ -80,17 +80,6 @@ function extStatusLabel(status) {
   }
 }
 
-/* The three presets the config ships; anything else is a custom template and is
-   shown as its own kind verbatim rather than mislabelled. */
-function extKindLabel(kind) {
-  switch (kind) {
-    case 'mcp': return t('ext.kind.mcp');
-    case 'skill': return t('ext.kind.skill');
-    case 'prompt': return t('ext.kind.prompt');
-    default: return kind || '';
-  }
-}
-
 // The forward modal already names the three directions; reusing those strings
 // keeps one vocabulary for one concept, and an unknown kind still has a label.
 function extForwardLabel(kind) {
@@ -228,9 +217,11 @@ function renderExtensionCard(ext) {
   var gearBtn = '<button type="button" class="conn-edit-btn" title="' + escapeHtml(t('conn.aria.editProfile')) +
     '" aria-label="' + escapeHtml(t('conn.aria.editProfile')) + '">' + SVG_CONN_EDIT + '</button>';
   var meta =
-    '<span class="ext-kind">' + escapeHtml(extKindLabel(ext.kind)) + '</span>' +
-    '<span class="node-sep" aria-hidden="true">·</span>' +
-    '<span class="node-status ' + lamp + '">' + escapeHtml(extStatusLabel(ext.status)) + '</span>';
+    '<span class="node-status ' + lamp + '">' + escapeHtml(extStatusLabel(ext.status)) + '</span>' +
+    (ext.needs && ext.needs.length
+      ? '<span class="node-sep" aria-hidden="true">·</span>' +
+        '<span class="ext-needs">' + escapeHtml(t('ext.card.needs', { names: ext.needs.join(', ') })) + '</span>'
+      : '');
   /* COUNTS, NOT CONTENT. A template that names eight hosts with three tunnels
      each would push every other card off the panel; what a reader needs at this
      level is "how much is behind this one", and the window behind the card is
@@ -675,7 +666,7 @@ function paintExtensionWindow(win, name) {
   if (word) word.textContent = extStatusLabel(row.status);
   var meta = win.querySelector('.ext-status-meta');
   if (meta) {
-    meta.textContent = [extKindLabel(row.kind), row.target, row.enabled ? '' : t('ext.status.parked')]
+    meta.textContent = [row.target, row.enabled ? '' : t('ext.status.parked')]
       .filter(function (x) { return !!x; }).join(' · ');
   }
   /* Per-host rows, only when there is more than one host. A single-target
@@ -797,10 +788,9 @@ function openExtensionDialog(name) {
   if (delBtn) delBtn.style.display = name ? '' : 'none';
   modal.classList.remove('hidden');
   if (name) {
-    loadExtensionFiles(name);
+    loadExtensionTemplate(name);
   } else {
-    _extFile = 'config.toml';
-    paintExtensionFileTabs(name, null);
+    paintExtensionHoles(null, null);
     var area = extModalEl('ext-f-toml');
     if (area) area.value = extTomlSeed();
     if (nameEl) nameEl.focus();
@@ -849,136 +839,188 @@ function extSharingNote(row) {
 
 /* ---- The configuration page ------------------------------------------------- */
 
-/* Which file the editor is showing. A template may be ONE file or a directory:
- * config.toml plus notes.md plus one file per host. The tabs are the directory,
- * so an author edits the file that actually holds the thing they came to change
- * instead of a rendered copy of it. */
-var _extFile = 'config.toml';
-var _extFiles = null;
+/* TWO THINGS, AND NEITHER IS A FILE NAME.
+ *
+ * The template is the document: what the extension IS, with holes where this
+ * machine has to answer. The values are this installation's answers, one per hole.
+ * Which file either lands in is the store's business — a person filling in a
+ * hostname has no reason to learn that it went into config.local.toml, and an
+ * agent that had to know would be one more thing to get wrong.
+ *
+ * A template with unfilled holes is a normal, finished-looking state: the card
+ * shows what it still needs, and this form is where it gets it. Nothing here
+ * deletes a value for being wrong; a value that does not render yet is kept and
+ * the reason is shown, because the value is the only copy of what was typed. */
+var _extHoles = [];
 
-/* paintExtensionFileTabs draws one tab per stored file, and nothing at all for a
- * create — a new template is one config.toml, and offering to edit a notes file
- * that does not exist yet would be offering to write into a directory the create
- * has not made. */
-function paintExtensionFileTabs(name, files) {
-  var bar = extModalEl('ext-file-tabs');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'ext-file-tabs';
-    bar.className = 'ext-file-tabs';
-    bar.setAttribute('role', 'tablist');
-    var area = extModalEl('ext-f-toml');
-    if (!area || !area.parentNode) return;
-    // Above the label, so the order reads tabs → which file → its text.
-    var label = area.previousElementSibling;
-    var anchor = label && label.tagName === 'LABEL' ? label : area;
-    anchor.parentNode.insertBefore(bar, anchor);
+function extHoleInputId(name) { return 'ext-hole-' + String(name).replace(/[^A-Za-z0-9_-]/g, '_'); }
+
+/* paintExtensionHoles draws one row per hole the template asks for: what it is,
+   what this installation answered, and a box the right size for its type. */
+function paintExtensionHoles(name, holes) {
+  _extHoles = holes || [];
+  var box = extModalEl('ext-holes');
+  if (!box) {
+    // Built here rather than in index.html, which is at its size budget: the
+    // dialog's own document is the textarea, and this is the part that goes under it.
+    box = document.createElement('div');
+    box.id = 'ext-holes';
+    box.className = 'ext-holes';
+    var anchor = extModalEl('ext-f-toml');
+    if (!anchor || !anchor.parentNode) return;
+    anchor.parentNode.insertBefore(box, anchor.nextSibling);
   }
-  if (!name || !files || files.length < 2) {
-    bar.hidden = true;
-    bar.innerHTML = '';
+  if (!name || !_extHoles.length) {
+    box.innerHTML = '';
+    box.hidden = true;
     return;
   }
-  bar.hidden = false;
-  bar.innerHTML = files.map(function (f) {
-    var on = f.path === _extFile ? ' class="ext-file-tab is-on" aria-selected="true"' : ' class="ext-file-tab" aria-selected="false"';
-    return '<button type="button" role="tab"' + on + ' data-path="' + escapeHtml(f.path) + '">' +
-      escapeHtml(f.label) + '</button>';
+  box.hidden = false;
+  var head = '<div class="ext-holes-head">' + escapeHtml(t('ext.holes.title')) + '</div>' +
+    '<p class="conn-check-hint">' + escapeHtml(t('ext.holes.hint')) + '</p>';
+  box.innerHTML = head + _extHoles.map(function (h) {
+    var id = extHoleInputId(h.name);
+    var label = '<label for="' + id + '"><code>{{' + escapeHtml(h.name) + '}}</code>' +
+      (h.help ? ' — ' + escapeHtml(h.help) : '') + '</label>';
+    var input;
+    if (h.type === 'boolean') {
+      input = '<input id="' + id + '" type="checkbox" data-hole="' + escapeHtml(h.name) +
+        '" data-hole-type="boolean"' + (h.value === true ? ' checked' : '') + '>';
+    } else if (h.type === 'array' || h.type === 'table') {
+      input = '<textarea id="' + id + '" rows="4" spellcheck="false" data-hole="' + escapeHtml(h.name) +
+        '" data-hole-type="' + h.type + '">' +
+        escapeHtml(h.value === undefined ? '' : JSON.stringify(h.value)) + '</textarea>';
+    } else if (h.type === 'integer' || h.type === 'number') {
+      input = '<input id="' + id + '" type="number" step="' + (h.type === 'integer' ? '1' : 'any') +
+        '" data-hole="' + escapeHtml(h.name) + '" data-hole-type="' + h.type + '" value="' +
+        escapeHtml(h.value === undefined ? '' : String(h.value)) + '">';
+    } else {
+      input = '<input id="' + id + '" type="text" spellcheck="false" data-hole="' + escapeHtml(h.name) +
+        '" data-hole-type="string" value="' + escapeHtml(h.value === undefined ? '' : String(h.value)) + '">';
+    }
+    return '<div class="ext-hole' + (h.set ? '' : ' is-empty') + '">' + label + input + '</div>';
   }).join('');
-  bar.querySelectorAll('.ext-file-tab').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var path = btn.getAttribute('data-path');
-      if (!path || path === _extFile) return;
-      _extFile = path;
-      paintExtensionFileTabs(name, _extFiles);
-      loadExtensionFile(name, path);
-    });
+  box.querySelectorAll('[data-hole]').forEach(function (el) {
+    el.addEventListener('change', function () { saveExtensionValue(name, el); });
   });
 }
 
-/* loadExtensionFiles asks what the extension is stored as, then loads the first
- * tab. config.toml is always first, which is why a single-file template looks
- * exactly as it did before tabs existed. */
-function loadExtensionFiles(name) {
-  _extFile = 'config.toml';
-  _extFiles = null;
-  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '?files=1')
-    .then(function (r) {
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    })
-    .then(function (doc) {
-      if (_extDialogName !== name) return;
-      _extFiles = doc.files || [];
-      paintExtensionFileTabs(name, _extFiles);
-      loadExtensionFile(name, _extFile);
-    })
-    .catch(function () {
-      showExtError(t('ext.modal.loadFailed'));
-    });
+/* readHoleInput turns what the box holds into the TOML value the template expects.
+   A box that cannot be parsed is not saved and not cleared: the row keeps what was
+   typed and says what is wrong with it. */
+function readHoleInput(el) {
+  var kind = el.getAttribute('data-hole-type');
+  if (kind === 'boolean') return el.checked;
+  var raw = String(el.value || '').trim();
+  if (raw === '') return null;   // null removes the value, which is "unset" again
+  if (kind === 'integer') {
+    var i = Number(raw);
+    if (!Number.isInteger(i)) throw new Error(t('ext.holes.badInteger'));
+    return i;
+  }
+  if (kind === 'number') {
+    var n = Number(raw);
+    if (!isFinite(n)) throw new Error(t('ext.holes.badNumber'));
+    return n;
+  }
+  if (kind === 'array' || kind === 'table') {
+    try { return JSON.parse(raw); } catch (e) { throw new Error(t('ext.holes.badJSON')); }
+  }
+  return raw;
 }
 
-/* loadExtensionFile reads one stored file byte for byte: what the author edits
- * here is what an export hands out and what a colleague's file would contain. */
-function loadExtensionFile(name, path) {
+function saveExtensionValue(name, el) {
+  var hole = el.getAttribute('data-hole');
+  var value;
+  try {
+    value = readHoleInput(el);
+  } catch (err) {
+    showExtError((err && err.message) || String(err));
+    return;
+  }
+  showExtError('');
+  var body = {};
+  body[hole] = value;
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: body })
+  }).then(function (r) {
+    /* A 400 STILL STORED THE VALUE. The store keeps what was typed and reports why
+       the extension cannot start yet; the message is the second half of that, and
+       the first half is why the box does not clear itself. */
+    return r.text().then(function (txt) { return { ok: r.ok, text: txt }; });
+  }).then(function (res) {
+    if (!res.ok) {
+      showExtError(t('ext.holes.notApplied') + ' ' + res.text);
+      return;
+    }
+    /* Repainted from the answer, so "filled in" and "still needed" are the
+       server's reading rather than a guess from what was typed. */
+    var doc = {};
+    try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
+    paintExtensionHoles(name, doc.holes || _extHoles);
+    showExtError('');
+  }).catch(function (err) {
+    showExtError(t('ext.modal.saveFailed') + ' ' + ((err && err.message) || err));
+  });
+}
+
+/* loadExtensionTemplate reads the document with its holes, then the holes with
+   what this installation has already answered. Two reads because they are two
+   facts: the document is what an author wrote, the holes are what is still open. */
+function loadExtensionTemplate(name) {
+  _extHoles = [];
   var area = extModalEl('ext-f-toml');
   if (area) area.value = '';
-  var label = extModalEl('ext-f-toml');
-  if (label && label.previousElementSibling && label.previousElementSibling.tagName === 'LABEL') {
-    label.previousElementSibling.textContent = path;
-  }
-  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) +
-        '?file=' + encodeURIComponent(path))
+  paintExtensionHoles(name, null);
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '?format=toml')
     .then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
     })
     .then(function (text) {
-      if (_extDialogName === name && _extFile === path && area) area.value = text;
+      if (_extDialogName !== name) return;
+      if (area) area.value = text;
+      return fetch(apiPath('/api/extensions/') + encodeURIComponent(name))
+        .then(function (r) { return r.ok ? r.json() : {}; })
+        .then(function (doc) {
+          if (_extDialogName !== name) return;
+          paintExtensionHoles(name, doc.holes || []);
+        });
     })
     .catch(function () {
       showExtError(t('ext.modal.loadFailed'));
     });
 }
 
-/* The document a create starts from: the two fields a template cannot do without,
- * the conventional stdio server, and a line of comment per field — a person who
- * has never written one of these should be able to read what to change, which is
- * the whole reason this is a document and not a form. */
+/* The document a create starts from. A hole is written as a quoted placeholder —
+   `command = "{{command}}"` — because a bare `{{command}}` is not TOML and a
+   package has to parse before anybody has filled anything in. The [params] block
+   is what tells a reader (and the panel) what the hole is for. */
 function extTomlSeed() {
   return [
-    '# A termcp extension. kind + target is enough; every other field is an override.',
-    'kind = "mcp"',
-    '# target: an ssh_config profile name (ssh_config action=list), or "internal"',
+    '# What this extension IS. Holes are written as "{{name}}" and declared under',
+    '# [params.<name>]; Termcp asks this installation for them and keeps the answers',
+    '# in config.local.toml, which is never part of an export.',
+    'description = "what this extension is for"',
     'target = "internal"',
-    '',
-    '# What it runs. A pipe channel starts this command and speaks line-delimited',
-    '# JSON-RPC to it; pty is an interactive terminal instead; empty is no shell at',
-    '# all (SFTP and forwards only).',
     'mode = "pipe"',
-    'command = "npx"',
-    'args = ["-y", "example-mcp-server"]',
+    'command = "{{command}}"',
     '',
-    '# Or a remote MCP server reached over HTTP instead of a program to run: the',
-    '# relay runs inside termcp, so nothing is installed anywhere and target must be',
-    '# "internal". A path ending in /sse selects the SSE transport. `url` replaces',
-    '# `command`/`args` — set one or the other, not both.',
-    '# url = "https://mcp.example.com/mcp"',
-    '# headers = { X-Api-Key = "..." }',
+    '# A read-only window onto remote files instead of a program: paths = ["/srv/docs/"]',
+    '# An HTTP MCP endpoint instead of a program: url = "https://mcp.example.com/mcp"',
     '',
-    '# What the agent driving it may call (a whitelist; empty = the full surface).',
-    'allow = ["shell_input", "shell_key", "shell_output"]',
-    '',
-    '# Read by the agent before it uses this extension: the part that is not obvious',
-    '# from the fields above.',
-    '# notes = "..."',
+    '[params.command]',
+    'type = "string"',
+    'help = "The program that serves MCP over the pipe (its arguments are `args`)"',
     ''
   ].join('\n');
 }
 
-/* extSaveTemplate saves what the textarea holds. The name is the directory the
- * template lives in, so it rides in the query on a create and in the path on an
- * update — the file itself has no place for it. */
+/* extSaveTemplate writes the document. The values are NOT part of this call: they
+   are saved one at a time, as they are typed, and replacing the template must not
+   disturb them — that separation is the whole reason a package can be upgraded. */
 function extSaveTemplate() {
   var name = _extDialogName;
   var forCreate = !name;
@@ -1000,34 +1042,34 @@ function extSaveTemplate() {
   }
   var saveBtn = extModalEl('modal-ext-save');
   if (saveBtn) saveBtn.disabled = true;
-  /* AN EDIT IS A FILE WRITE. Editing an existing template writes the tab the
-     author is looking at, because that is the file the store holds — going back
-     through the template parser would re-render config.toml from a merged view
-     and quietly move a host list out of targets/ into it. A CREATE is still a
-     template, because there is no file yet. */
-  var url;
-  var type;
-  if (forCreate) {
-    url = apiPath('/api/extensions') + query;
-    type = 'application/toml; charset=utf-8';
-  } else {
-    url = apiPath('/api/extensions/') + encodeURIComponent(name) +
-      '?file=' + encodeURIComponent(_extFile);
-    type = 'text/plain; charset=utf-8';
-  }
-  fetch(url, {
+  fetch(forCreate ? apiPath('/api/extensions') + query
+                  : apiPath('/api/extensions/') + encodeURIComponent(name), {
     method: forCreate ? 'POST' : 'PUT',
-    headers: { 'Content-Type': type },
+    headers: { 'Content-Type': 'application/toml; charset=utf-8' },
     body: body
   }).then(function (r) {
     if (saveBtn) saveBtn.disabled = false;
     if (!r.ok) {
-      return r.text().then(function (txt) {
-        throw new Error(txt || r.status);
-      });
+      return r.text().then(function (txt) { throw new Error(txt || r.status); });
     }
-    /* The dialog closes either way: the next frame repaints the card, and the
-       card is where the result of an edit is read. */
+    if (forCreate) {
+      /* THE CREATE BECOMES AN EDIT, in place: the document is stored, and what it
+         asks for is now a fact this form can show. Closing here would leave the
+         holes to be discovered on the card, which is where a reader looks at a
+         result rather than where it finishes an install. */
+      var created = String((extModalEl('ext-f-name') || {}).value || '').trim();
+      _extDialogName = created;
+      var nameInput = extModalEl('ext-f-name');
+      if (nameInput) nameInput.readOnly = true;
+      var delBtn = extModalEl('modal-ext-delete');
+      if (delBtn) delBtn.style.display = '';
+      var title = extModalEl('modal-ext-title');
+      if (title) title.textContent = created;
+      loadExtensionTemplate(created);
+      return;
+    }
+    /* An edit closes: the next frame repaints the card, and the card is where the
+       result of a change to the document is read. */
     closeExtensionDialog();
   }).catch(function (err) {
     if (saveBtn) saveBtn.disabled = false;

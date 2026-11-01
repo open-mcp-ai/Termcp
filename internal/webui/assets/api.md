@@ -1695,8 +1695,82 @@ what the template's author decided (an MCP server over a pipe shell, a read-only
 file window, an interactive terminal). Extensions that dial the same profile with
 the same whitelist share one session and each drives its own shell channel in it.
 The same templates are authorable over MCP with the `extension` tool — these
-routes are its REST twin, writing the same files in
-`<data>/extensions/<name>/config.toml`.
+routes are its REST twin.
+
+**Two files, and a caller never names either one.** An extension is a directory in
+`<data>/extensions/<name>/`:
+
+- `config.toml` is the **template**: what the extension *is*, written by whoever
+  packaged it. It may contain holes — a value that is exactly `"{{name}}"` — and it
+  declares each hole under `[params.name]`. This file is replaced wholesale when a
+  package is upgraded.
+- `config.local.toml` is **this installation's values**: one entry per hole, keyed
+  by the hole's name. Termcp writes it; nothing else does. It survives a template
+  replacement, which is what makes an upgrade safe.
+
+The interface is the hole's name. `extension(action=set)` takes a `values` object,
+the panel shows one box per hole, and neither has to know which file the answer
+lands in.
+
+```toml
+# config.toml — the package's side
+description = "debug the cluster"
+mode = "pipe"
+command = "{{command}}"
+targets = "{{targets}}"
+
+[params.command]
+type = "string"
+help = "the program that serves MCP over the pipe"
+
+[params.targets]
+type = "array"
+help = "one entry per host, each with its own tunnels"
+```
+
+```toml
+# config.local.toml — written by Termcp, never edited by hand
+command = "kubectl-mcp"
+
+[[targets]]
+host = "pi"
+
+[[targets.forward]]
+kind = "local"
+local_port = 8443
+remote_port = 443
+```
+
+A hole is **the whole value**, quoted, and its declared `type` says what shape the
+answer has (`string`, `integer`, `number`, `boolean`, `array`, `table`). The value
+is substituted as that TOML value, never spliced into text: a command containing a
+quote, a comma or a newline cannot corrupt the document around it, and a port stays
+an integer. A hole embedded inside a longer string is refused, and so is a hole with
+no `[params]` declaration — a template that cannot say what it needs is not a
+package yet.
+
+**A missing value is an error, never an empty expansion.** A template whose holes
+are unfilled is *installed and waiting*: `Load` refuses it by naming the holes, the
+panel shows `idle` with `needs: ["targets"]`, and `extension(action=get)` returns
+`{name, needs, holes}` instead of pretending it is an extension. That is different
+from a broken template, which is a card that can only ever report itself broken.
+
+**A value is kept even when it does not render.** Setting one writes it to
+`config.local.toml` first and only then asks whether the extension can be built, so
+a half-typed port is never discarded; the answer says what is still missing.
+Setting a name the template does not ask for is refused, and so is a value of the
+wrong declared type.
+
+**Export never carries values.** They are this installation's: its hosts, its
+ports, and whatever a header or a path holds. A package that shipped them would
+hand the next person somebody else's machines, and that is exactly where a
+credential sits.
+
+There is **no `kind` field**. What an extension does is what it declares: `command`
+(a program on a pipe channel), `url` (an HTTP MCP endpoint relayed by termcp),
+`paths` (a read-only SFTP window), `mode = "pty"` (a terminal), or `forwards`
+(tunnels). A template that declares none of these is refused, because an empty
+container can never do anything.
 
 A legacy template uses `target = "profile"` and top-level `[[forward]]`. A
 multi-host template instead uses repeated `[[targets]]` entries, each with its own
@@ -1704,14 +1778,6 @@ multi-host template instead uses repeated `[[targets]]` entries, each with its o
 row/card; its panel shows only host and forward counts, while its detail view shows
 the per-host status and forward addresses. `open ext <name> --target <host>` selects
 one host; an omitted target is refused if the extension declares more than one.
-
-Templates may be packaged as a directory: shared fields stay in `config.toml`,
-`notes.md` (or `notes.txt`) supplies the extension's notes, and each
-`targets/<host>.toml` supplies one host's configuration. The target filename is
-used as the host when the file omits `host`. When `targets/` holds any `.toml`
-file it **is** the host list: `target =` and `[[targets]]` in `config.toml` are
-then ignored rather than merged, so adding the first host file never invalidates
-the template. Saving through the editor writes the file it is showing.
 
 **A template that declares no `forwards` is started on demand.** Nothing is
 dialled until a caller asks, and the ask is the MCP tool's `action=use` (or
@@ -1737,9 +1803,9 @@ failed automatic retry is kept by the backoff's own timer, so both happen at the
 moment the status printed rather than at the next sweep. Two consequences are worth
 knowing: a channel whose process ended is noticed by whoever reads it next (reading
 a status asks the connection whether the channel is still there), and a
-`config.toml` edited outside termcp is read at the next start or the next ask —
-saving through the tool or the panel stops what is running and rebuilds it from
-what the file now says.
+`config.toml` or `config.local.toml` edited outside termcp is read at the next
+start or the next ask — saving through the tool or the panel stops what is running
+and rebuilds it from what the files now say.
 
 **A template that declares a forward is not on demand.** A listener has no caller
 whose absence could mean "idle", so it is established at startup and kept, and its
@@ -1753,7 +1819,7 @@ Lists every extension with its reconciler status.
 Response 200:
 {
   "extensions": [
-    { "name": "docs", "kind": "skill", "target": "internal", "description": "docs tree",
+    { "name": "docs", "target": "internal", "description": "docs tree",
       "enabled": true, "status": "available", "session_id": "8f2c1b", "shell_id": "3a91d0" }
   ]
 }
@@ -1772,44 +1838,56 @@ explanation instead of reading as a typo.
 
 ### `GET /api/extensions/{name}`
 
-One template in full: the shape (`kind`, `target`, `mode`, `command`, `args`), the
-whitelist (`allow`, `paths`), the `notes`, and the failure history.
+The rendered extension plus the holes behind it: the shape (`target`, `mode`,
+`command`, `args`, `url`, `paths`, `forwards`), the whitelist (`allow`), the
+`notes`, the failure history, and `holes` — one entry per hole with its `name`,
+declared `type`, the author's `help`, whether this installation has filled it, and
+the value it holds.
 
-With `?format=toml` the answer is the file itself (`application/toml`): the text
-`<data>/extensions/<name>/config.toml` holds, so the Web UI's file view edits
-exactly what the store would read back.
+A template whose holes are unfilled is **not** a 404: the answer is
+`{"name", "holes", "needs", "status": "idle"}`, because the extension exists and
+what it is missing is one value.
 
-A directory-stored template has more than one file, so the editor asks for the
-list and then for one file at a time:
-
-- `?files=1` answers `{"files":[{"path":"config.toml","label":"config.toml"}, …]}`,
-  listing `config.toml`, the notes sidecar when present, and each
-  `targets/<host>.toml`, in that order.
-- `?file=<path>` answers that file's bytes (`text/plain`). `format=toml` is
-  retained as an alias for `config.toml`.
+With `?format=toml` the answer is the template itself (`application/toml`) — the
+document with its holes, exactly as stored. It is deliberately not the rendered
+extension: rendering would show a document nobody wrote and lose the holes on the
+way back in. There is no per-file route; which file a value lives in is the
+store's business.
 
 ### `POST /api/extensions`
 
-Creates a template. `name` and `target` are required; `kind` picks the preset that
-fills the rest (`mcp`, `skill`, `prompt`, or `custom`). Responds `201`, or `409`
-when the name is taken.
+Creates an extension, from either half of the same idea:
+
+- `{"name", "template", "values"}` — install a package: the TOML document first,
+  then the values this installation fills in. Missing values are fine; the answer
+  names what is still needed.
+- `{"name", "target", "command", …}` — author one from its fields, with the same
+  key names `PUT` accepts. A declared `paths` window gets the read-only whitelist
+  by default, and `allow` is never widened by a default.
+
+A body sent as `application/toml` is the template document itself, with its name in
+`?name=`. Responds `201`, or `409` when a *working* extension already holds the
+name; a name whose stored template no longer loads is repaired rather than
+protected, since create is the only way out of a broken file.
 
 ### `PUT /api/extensions/{name}`
 
-Patches a stored template: an **omitted** field keeps its value, an **empty array**
-clears it. `PATCH`-style semantics on `PUT`, matching what the MCP tool does.
+Three bodies, one route:
 
-A body sent as `application/toml` (or `text/plain`) is the file view instead: the
-document replaces the template as written, and nothing is defaulted — what the
-file says is what the template is. A document carrying a `name` key that is not the
-name in the path is refused (`400`), because the name is the directory.
+- `{"values": {"command": "kubectl-mcp"}}` sets holes **by name**. It merges, so
+  setting one value does not forget the others; `null` clears one. The value is
+  written first and the extension is built second, so a value that cannot take
+  effect yet is kept and the answer says why — a `200` with the row, not a `400`
+  that would make a half-typed port look like a lost edit. A name the template does
+  not ask for, or a value of the wrong declared type, is refused and nothing is
+  written.
+- `{"template": "…"}` replaces the document. The values are untouched: that is the
+  upgrade path. A document that renders into an invalid extension is rolled back.
+- A body sent as `application/toml` is the document itself, as above.
 
-`?file=<path>` writes that one file and leaves the others alone. The path must be
-one the extension may hold — `config.toml`, `notes.md`/`notes.txt`, or
-`targets/<valid host>.toml` — so a traversal (`../ssh_configs/x`) is a refusal
-rather than a tidy-up. A TOML file is syntax-checked, then the whole template is
-read back: a write that would make the extension unloadable (a duplicate host, a
-bad forward) is rolled back and answered `400` with the loader's own reason.
+Field arguments (`{"command": …}`, `{"enabled": false}`, …) still patch a stored
+extension that has no holes: an **omitted** field keeps its value, an **empty
+array** clears it.
 
 ### `DELETE /api/extensions/{name}`
 
@@ -1838,18 +1916,28 @@ still exports what remains.
 
 ```toml
 [[extensions]]
-name = "docs"
-kind = "skill"
-target = "internal"
-paths = ["~/skills/docs/"]
+name = "k8s"
+description = "debug the cluster"
+mode = "pipe"
+command = "{{command}}"
+
+[params.command]
+type = "string"
+help = "the program that serves MCP over the pipe"
 ```
+
+The exported entry is the template, holes and `[params]` declarations included, and
+never the values.
 
 ### `POST /api/extensions/batch`
 
 The import: a document in exactly the shape the export produces. Every entry is
-validated before anything is written, so an invalid file imports nothing. Names
-already in use are renamed rather than overwritten — up to the first free
-`-N` suffix — and the response lists them:
+checked before anything is written, so a file that is not a set of templates imports
+nothing: it must parse, and every hole it asks for must be declared. A document with
+no holes is validated all the way, because nothing is missing from it and an
+unloadable one would be a card that can only report itself broken. Names already in
+use are renamed rather than overwritten — up to the first free `-N` suffix — and the
+response lists them:
 
 ```
 Response 201: { "imported": 2, "renamed": [ { "from": "docs", "to": "docs-2" } ] }

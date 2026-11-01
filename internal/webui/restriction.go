@@ -13,7 +13,7 @@ import (
 //
 // The whitelist was enforced on the MCP tool surface only, which is half a
 // boundary: the extension layer's whole promise is that "a call the template did
-// not whitelist is genuinely refused", and every capability its presets name —
+// not whitelist is genuinely refused", and every capability its templates name —
 // terminal I/O, reading files, opening a channel — exists on the HTTP surface
 // too, on the proof that this is "the operator's own interface". That reasoning
 // answers whether review mode should gate the path; it does not answer whether a
