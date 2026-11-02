@@ -35,19 +35,22 @@ var skillAllow = []string{
 	capability.FileStat,
 }
 
-const mcpNotes = `This extension is a stdio MCP server reached through a pipe shell. Drive it
-as line-delimited JSON-RPC:
+const mcpNotes = `This extension is a stdio MCP server, reached through a pipe channel that termcp
+treats as a real MCP peer. The handshake, tool discovery and result unpacking are
+already done — do not write JSON-RPC frames.
 
-1. Write one request with shell_input (the object, no trailing newline), then
-   shell_key(key="enter") — on a pipe channel that key sends the line's \n.
-2. Read the reply with shell_output. A result with partial_tail_bytes > 0 is an
-   unfinished frame: keep it and continue reading from the same cursor until a
-   complete JSON object is in hand, because a partial object has not delivered
-   its fields yet.
-3. The server's own logs arrive on stderr, separately from the protocol. Read
-   them with shell_output(stream="e") so they stay out of the frame stream.
-4. Send initialize, then notifications/initialized, then tools/list. If a call
-   produces no reply, check stream="e" before assuming the request was lost.
+1. List the tools the server offers: get <session>:<n> tools. One tool's full
+   input schema: get <session>:<n> tools <name>.
+2. Call one: call <session>:<n> <tool> {<json-args>}. The reply is the tool's own
+   text, not the envelope; --json returns the raw frame instead.
+3. The first call performs initialize and notifications/initialized by itself,
+   once per channel, and later calls reuse that handshake.
+
+The raw form is still there when you need it: call <session>:<n> '{"jsonrpc":…}'
+sends one line as-is, and read <session>:<n> --frame hands out frames that a
+waiting call parked. The server's own logs arrive on stderr, separately from the
+protocol: read <session>:<n> --stderr shows them so they stay out of the frame
+stream.
 
 This session is kept warm so the next call reuses it. If it has died, the
 extension reports unavailable and is restarted — wait for it, then re-open the
