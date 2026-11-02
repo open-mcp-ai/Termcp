@@ -21,6 +21,11 @@ import (
 // SSH_FX_FAILURE from the same reader is a genuine fault and stays a 500.
 var ErrIsDirectory = errors.New("is a directory")
 
+// ErrBinaryFile reports that a text read found a NUL byte, so the content is not
+// text. Classified as a 400 like ErrIsDirectory: the caller asked for a rendering
+// these bytes do not have, and the message names the two modes that do.
+var ErrBinaryFile = errors.New("binary file cannot be read as text")
+
 // ReplaceInFile errors: exact matching only.
 var (
 	ErrPatternNotFound  = errors.New("pattern not found in file")

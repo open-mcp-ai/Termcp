@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
@@ -148,7 +149,18 @@ func normalizeReadRange(totalSize, offset, length, limit int64) (int64, int64) {
 // the text rendering, because rendering first is what turned a PowerShell log into
 // `\xff\xfeP\x00S\x00...` — true, and unreadable (issue #177). Empty means UTF-8,
 // which is what this file read assumed everywhere until the flag existed.
-func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, localPath, charset string) (*FileResult, error) {
+//
+// raw skips the ESCAPE RENDERING and hands back the text as it is (issue #248).
+// EncodeText turns every newline into the two characters `\n`, which is the right
+// contract for a value a caller will feed back to `write --data` — and the wrong
+// one for reading a config file to review it, where 946 bytes of nginx.conf arrived
+// as one line and a missed line was a missed setting. Escaping exists so a reply can
+// be a single-line value; raw says this reply is text, not a value.
+//
+// numbered prefixes each line with the line's position IN THE FILE, which needs
+// newlines preserved too, so it implies raw. The number is counted, not assumed: a
+// read that starts at an offset is not reading line 1 first.
+func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, localPath, charset string, raw, numbered bool) (*FileResult, error) {
 	f, err := s.client.Open(remotePath)
 	if err != nil {
 		return nil, fmt.Errorf("open remote file: %w", err)
@@ -219,30 +231,98 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 	result.BytesRead = int64(n)
 	result.Length = int64(n)
 
+	// A NUL BYTE IN A TEXT READ IS A BINARY FILE. Naming an encoding is how a
+	// caller says NULs belong to its text (UTF-16 uses them); otherwise inline text
+	// would turn a binary payload into a page of escapes with no usable meaning.
+	if (mode == "text" || mode == "") && charset == "" && bytes.IndexByte(segment, 0) >= 0 {
+		return nil, fmt.Errorf("%s: %w; use `--mode hex` for bytes, or `get <session> file <path> --op urls` for a download", remotePath, ErrBinaryFile)
+	}
+
 	// Encode based on mode.
 	switch mode {
 	case "hex":
 		body := fmt.Sprintf("%x", segment)
 		result.Data = &body
 	case "text", "":
-		body := encoding.EncodeText(segment)
+		text := segment
+		if charset != "" {
+			decoded, err := encoding.Decode(charset, segment)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", remotePath, err)
+			}
+			text = decoded
+		}
+		body := string(text)
+		if numbered {
+			prefix, err := countLinesBefore(f, offset)
+			if err != nil {
+				return nil, fmt.Errorf("%s: count lines before offset: %w", remotePath, err)
+			}
+			body = numberLines(body, prefix+1)
+		} else if !raw {
+			body = encoding.EncodeText(text)
+		}
 		result.Data = &body
 	default:
 		return nil, fmt.Errorf("unknown mode %q (use text, hex, or file)", mode)
 	}
 
-	// THE CHARSET DECODES; IT DOES NOT FILTER. `hex` is the byte-exact door and stays
-	// untouched by --encoding, because a caller asking for hex asked for the bytes.
-	if charset != "" && mode != "hex" {
-		decoded, err := encoding.Decode(charset, segment)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", remotePath, err)
-		}
-		body := encoding.EncodeText(decoded)
-		result.Data = &body
-	}
-
 	return result, nil
+}
+
+// countLinesBefore reads the file from its start to offset and counts the line
+// endings it passes, so a window that begins mid-file can number its first line
+// correctly. offset 0 — the ordinary case, and the whole-file read — therefore
+// costs nothing extra, and the rescan only happens on a page that actually needs it.
+//
+// ponytail: O(offset) bytes re-read per numbered page. If paging a huge log ever
+// matters, cache the (offset -> line) index the way the transcript keeps a sparse
+// mark table; a config review never reaches that ceiling.
+func countLinesBefore(f io.ReaderAt, offset int64) (int, error) {
+	if offset <= 0 {
+		return 0, nil
+	}
+	const chunk = 32 << 10
+	buf := make([]byte, chunk)
+	var count int
+	for pos := int64(0); pos < offset; {
+		want := int64(chunk)
+		if remain := offset - pos; remain < want {
+			want = remain
+		}
+		n, err := f.ReadAt(buf[:want], pos)
+		count += bytes.Count(buf[:n], []byte{'\n'})
+		pos += int64(n)
+		if err == io.EOF || n == 0 {
+			return count, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
+// numberLines prefixes each line with its number and a tab, keeping the file's own
+// line endings. A body that does not end in a newline gets its last line numbered
+// without inventing an ending for it, and a body ending in one gets no phantom
+// numbered blank — the newline terminated the last line, it is not a line itself.
+func numberLines(body string, first int) string {
+	var b strings.Builder
+	n := first
+	for {
+		i := strings.IndexByte(body, '\n')
+		if i < 0 {
+			break
+		}
+		fmt.Fprintf(&b, "%d\t%s\n", n, body[:i])
+		body = body[i+1:]
+		n++
+	}
+	if body != "" {
+		fmt.Fprintf(&b, "%d\t%s", n, body)
+	}
+	return b.String()
 }
 
 // WriteFile writes data to a remote file, either inline or from a local file.

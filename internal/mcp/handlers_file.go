@@ -32,12 +32,23 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	// 5.1 log is UTF-16LE with a BOM by default, so this was the ordinary case on
 	// Windows and not an edge one (issue #177).
 	charset := getString(args, "charset", "")
+	// --raw answers "read me this file" instead of "give me a value". Text mode escapes
+	// newlines so the reply survives being pasted back into `--data`; that is wrong for
+	// reviewing a config, where the whole file became one line (issue #248).
+	raw := getBool(args, "raw", false)
+	// --lines NUMBERS EACH LINE, which is what a caller reviewing a config needs before
+	// it can say "change line 14" — a line number is an address the next `--from-line`
+	// or `replace` call can use, and counting them by hand is the error it prevents.
+	numbered := getBool(args, "lines", false)
 
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
 	if mode != "text" && mode != "hex" && mode != "file" {
 		return toolError(CodeInvalidArgument, "%s", `mode must be "text", "hex", or "file"`), nil
+	}
+	if getBool(args, "lines", false) && (mode == "hex" || mode == "file") {
+		return toolError(CodeInvalidArgument, "%s", "lines applies to text reads; hex counts bytes and file mode writes a local file"), nil
 	}
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
@@ -81,7 +92,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 
 	defer sftpCli.Close()
 	defer releaseTransport()
-	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset)
+	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
 		return fileErr(err, remotePath), nil
 	}
@@ -659,8 +670,10 @@ func classifyFileErr(err error) (string, string) {
 		return CodeFileNotFound, err.Error()
 	case errors.Is(err, os.ErrPermission), errors.Is(err, pkgsftp.ErrSSHFxPermissionDenied):
 		return CodeForbidden, err.Error()
-	case errors.Is(err, filesftp.ErrIsDirectory):
-		// A directory is a caller mistake, not a fault: 400 rather than 500.
+	case errors.Is(err, filesftp.ErrIsDirectory), errors.Is(err, filesftp.ErrBinaryFile):
+		// A directory, or a binary the caller asked to see as text: both are a request
+		// for a rendering these bytes do not have, so 400 rather than 500, and the
+		// message names the modes that do work.
 		return CodeInvalidArgument, err.Error()
 	}
 	return CodeOperationFailed, err.Error()

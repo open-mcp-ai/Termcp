@@ -110,7 +110,6 @@ type termArgs struct {
 	BytesLimit      int
 	LinesLimit      int
 	TotalBytesLimit int
-	OnTimeOverflow  string
 	OnBytesOverflow string
 	OnLinesOverflow string
 	LearnMode       bool
@@ -259,9 +258,64 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	}
 	t := s.executeTerm(ctx, cmd, win)
+	// EVERY 2xx SLOT INHERITS THE CALLER'S WINDOW UNLESS IT SAYS IT ALREADY DID.
+	//
+	// `bytes_limit`/`lines_limit` are documented as an argument of the tool, not of one
+	// directive — but applying them was each handler's own job, done through
+	// generatedSlot for the paths that remembered. The paths that did not (a peer's
+	// tools/list, `cdp protocol`, `ls task`, `help <node>`) answered with the whole
+	// body however small a window the caller asked for, so the same argument meant
+	// "a budget" for a listing and "not consulted" for the listing next to it.
+	//
+	// Enforcing it HERE, at the one place both entrances pass through, is what makes it
+	// the tool's contract rather than a rule each new directive has to be told: a slot
+	// built by a directive that never heard of the window is still cut, and a slot that
+	// deliberately is not (a streamed read with a cursor, a frame that must stay whole)
+	// says so once, at the place that decided it.
+	slots := applySlotWindows(t.slots, win)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
+	return envelope.Reply{Slots: t.applyTotalCap(slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
+}
+
+// applySlotWindows caps every 2xx slot that has not already been shaped to the
+// caller's window, with the same policy (and the same honesty headers) a generated
+// reply gets.
+//
+// WHY IT IS SHAPED LIKE generatedSlot: a caller that reads `ls host` and `ls task`
+// before and after this guard should not be able to tell which one went through a
+// helper. The `Truncated` header, the `bytes */N` content range and the 206 status
+// are the reply's account of what it withheld, so the account is produced in one
+// place and reads the same everywhere.
+func applySlotWindows(slots []envelope.Slot, win termArgs) []envelope.Slot {
+	for i, slot := range slots {
+		// A FAILURE IS NOT A WINDOW'S TO CUT: a refusal that stops mid-sentence is a
+		// refusal the caller cannot act on, and the bytes a diagnosis costs are the
+		// reason it was worth returning. total_bytes_limit still bounds the reply.
+		// ONLY A 200 IS CONTENT: a 202 receipt names a transfer, a 204/206 already
+		// reports its own truncation, and a 4xx/5xx is a diagnosis — cutting any of them
+		// would answer a different question than the one asked (a 202 receipt cut to 100
+		// bytes is a receipt nobody can act on).
+		if slot.Code != 200 || slot.Body == "" {
+			continue
+		}
+		body, code, cut, total := capGeneratedCounted(slot.Body, win)
+		// A slot that already went through a window is 206/204 with its own headers, and
+		// re-running the cap on it finds nothing further to withhold (200, cut 0). Acting
+		// on that would overwrite the 206 with a 200 and erase the truncation the reply
+		// had already reported — so the question is only ever "is there anything to cut?"
+		if code == 200 && cut == 0 {
+			continue
+		}
+		slot.Body = body
+		slot.Code = code
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		noteTruncated(slot.Headers, code, cut, total, win)
+		slots[i] = slot
+	}
+	return slots
 }
 
 // executeTerm parses cmd and runs it, accumulating the reply.
@@ -695,7 +749,6 @@ func defaultTermArgs() termArgs {
 		BytesLimit:      defaultBytesLimit,
 		LinesLimit:      defaultLinesLimit,
 		TotalBytesLimit: defaultTotalBytesLimit,
-		OnTimeOverflow:  "truncate",
 		OnBytesOverflow: "truncate",
 		OnLinesOverflow: "truncate",
 	}

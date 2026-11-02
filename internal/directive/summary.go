@@ -29,12 +29,14 @@ var flagSummaries = map[string]map[string]string{
 		"grep-limit": "cap the matches (default 200); the reply reports the true total",
 		"stream":     "o = stdout only, e = stderr only; default is both, and the other is reported as omitted",
 		"encoding":   "the charset of these bytes; without it a non-UTF-8 window is refused rather than guessed",
-		"raw":        "the bytes as they arrived: no ANSI stripping on a window, no escape-decoding on --at (valueless)",
+		"raw":        "the bytes as they arrived: no ANSI stripping on a window, no escape-decoding on --at, no \\n escaping on a file read (valueless)",
+		"lines":      "on a file read: number each line from the file's own first line (valueless)",
 		"frame":      "read one JSON-RPC frame; advances only when the frame was complete (valueless)",
 		"since":      "on a peer: the frame history after N — does not consume",
 		"at":         "page inside one frame, named by its number",
 		"offset":     "byte offset inside the frame named by --at",
 		"bytes":      "page size for --at (4 KB default)",
+		"mode":       "on a file read: text (default), hex for bytes, or file to download to a local_path",
 	},
 }
 

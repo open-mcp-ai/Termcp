@@ -472,7 +472,7 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 
 	chk2, _ := s.sftpClient(sessionID)
 	defer chk2.Close()
-	f, err := chk2.ReadFile(target, 0, 0, "text", "", "")
+	f, err := chk2.ReadFile(target, 0, 0, "text", "", "", false, false)
 	if err != nil {
 		t.Fatalf("the approved write did not happen: %v", err)
 	}

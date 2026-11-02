@@ -157,9 +157,9 @@ var ops = []Op{
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
 		Flags: []string{"cursor:number", "since:number", "at:number", "offset:number", "bytes:number",
-			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "grep", "grep-limit:number",
-			"frame", "encoding"},
-		Valueless: []string{"raw", "frame"},
+			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
+			"frame", "encoding", "mode"},
+		Valueless: []string{"raw", "lines", "frame"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N] [--grep RE]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
@@ -1111,7 +1111,7 @@ const fileDetail = `Actions and the flags each one uses.
   stat|delete          --remote-path
   mkdir|urls|getwd     --remote-path            (getwd ignores it)
   rename               --from-path --to-path
-  read                 --remote-path --offset --length [--mode text|hex|file]
+  read                 --remote-path --offset --length [--mode text|hex|file] [--raw|--lines]
   write                --remote-path --data --mode text|hex|file
                        --offset is the write position; --length caps it
   replace              --remote-path --old-text --new-text
@@ -1127,7 +1127,10 @@ you read it. Files over 16 MiB are refused: exact replace is an edit, not a copy
 
 --mode MEANS TWO DIFFERENT THINGS, by action. For read and write it is a STRING:
 text, hex, or file ("file" on read means "write the bytes to local_path", which is
-the download half of the API and not reachable from this directive). For
+the download half of the API and not reachable from this directive). Text mode
+escapes newlines so its data fits in one value; --raw preserves them, and --lines
+numbers them from the file's own first line. A NUL byte in a text read is refused
+as binary with the two modes that do work. For
 --action perm --op chmod it is a NUMBER, and the number is DECIMAL, not octal:
 0644 is 420 and 0755 is 493. Writing "0644" there does not fail — it is parsed as
 the decimal value 644, which sets a different (and surprising) permission set, so
