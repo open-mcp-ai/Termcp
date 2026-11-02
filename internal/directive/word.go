@@ -577,7 +577,7 @@ func shellWords(raw string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read --argv: %v", err)
 	}
-	notArgv := fmt.Errorf("%q is a command line, not an argv: one program per --argv (use sh -c or a script for shell syntax)", raw)
+	notArgv := fmt.Errorf("%q is a command line, not an argv: --argv takes one program and its arguments, not shell operators; for compound commands pass the whole shell line as a value, e.g. `open <session> --argv sh -c $1` with args=[\"command1 && command2\"], or write a script and run it", raw)
 	if len(file.Stmts) != 1 || file.Stmts[0].Background {
 		return nil, notArgv
 	}
