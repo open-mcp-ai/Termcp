@@ -711,6 +711,17 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if slot, bad := stringFlags(args, stmt, [2]string{"encoding", "charset"}); bad {
 		return slot
 	}
+	// --raw IS THE SAME FLAG THE CHANNEL READ USES, and on a file read it says the reply
+	// is TEXT, not a value: no \n escaping (issue #248). It was declared for `read`, so
+	// `read <session> file <path> --raw` parsed and was dropped, which is the one shape
+	// this project refuses to ship — a flag accepted and ignored answers a different
+	// question than the one asked.
+	if boolFlag(stmt, "raw") {
+		args["raw"] = true
+	}
+	if boolFlag(stmt, "lines") {
+		args["lines"] = true
+	}
 	if slot, bad := stringFlags(args, stmt,
 		[2]string{"target", "target"},
 		[2]string{"link-path", "link_path"},

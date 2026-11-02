@@ -332,10 +332,14 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			return []envelope.Slot{badRequest(stmt, "this is the right half of a `|`; it runs as part of the pipeline")}
 		}
 		if stmt.Kind == "file" {
-			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, map[string]string{
+			flags := map[string]string{
 				"action":      "read",
 				"remote-path": stmt.Key,
-			}), win)}
+			}
+			if mode, ok := stmt.Flag("mode"); ok {
+				flags["mode"] = mode
+			}
+			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, flags), win)}
 		}
 		// A REGISTRY HANDLE IS ALWAYS A FRAME SOURCE; A SHELL IS BYTES UNLESS ASKED.
 		//

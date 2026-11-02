@@ -576,7 +576,10 @@ func (s *Server) cdpEvents(ctx context.Context, stmt directive.Statement, h *jrp
 		b.WriteString(fmt.Sprintf("\n(the window holds the newest %d frames; %d older ones were dropped. --since is a cursor, not an archive.)",
 			stats.Size, stats.Dropped))
 	}
-	_ = win
+	// win is deliberately not consulted HERE: the page is a count of frames, and a
+	// frame is an indivisible unit, so cutting this body mid-frame would hand back a
+	// JSON fragment. The byte window still applies — the reply-level guard caps any
+	// 200 body the directive did not already shape (issue #209).
 	return envelope.Slot{Code: 200, Headers: headers, Body: b.String()}
 }
 

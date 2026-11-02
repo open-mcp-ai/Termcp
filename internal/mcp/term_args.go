@@ -134,10 +134,12 @@ var termArgDecls = []termArgDecl{
 			"Work that outlives a call belongs on something that outlives it: `open <session> --argv <cmd>` (a pipe reports its exit), a pipeline (a copy answers with a task you poll).", maxWaitSeconds),
 	},
 	{
-		Name:    "bytes_limit",
-		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Bytes of the slice; 0 = channel only, else at least %d. Default %d; %d is the size to stay under.", minWindowBytes, defaultBytesLimit, windowBytesMax),
-		DocNote: fmt.Sprintf("Bytes per slot (default %d; `0` = the channel only, no bytes, otherwise at least %d — a window narrower than one character cannot return one). %d is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply", defaultBytesLimit, minWindowBytes, windowBytesMax),
+		Name: "bytes_limit",
+		Kind: argNumber,
+		Desc: fmt.Sprintf("Bytes of the slice; 0 = channel only, else at least %d. Default %d; %d is the size to stay under.", minWindowBytes, defaultBytesLimit, windowBytesMax),
+		DocNote: fmt.Sprintf("Bytes per slot (default %d; `0` = the channel only, no bytes, otherwise at least %d — a window narrower than one character cannot return one). %d is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.\n"+
+			"Two paths read `0` as \"name the object, consume nothing\" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).\n"+
+			"A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default %d rather than none; a `mcp recv` never reads with a window under %d, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`).", defaultBytesLimit, minWindowBytes, windowBytesMax, defaultBytesLimit, minRecvWindow),
 		Def:     defaultBytesLimit,
 		DefText: strconv.Itoa(defaultBytesLimit),
 		Min:     0,
@@ -174,15 +176,6 @@ var termArgDecls = []termArgDecl{
 		// No ceiling: this is the caller's own budget for one reply.
 		BoundNote: fmt.Sprintf("This is your budget for one reply, so there is no ceiling to enforce: %d bytes is the size to stay under. A reply that exceeds it cuts the remaining slots and says which ones it dropped.\n"+
 			"More is another look: `read <channel> --cursor <n>`.", windowBytesMax),
-	},
-	{
-		Name:    "on_time_overflow",
-		Kind:    argEnum,
-		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold it.",
-		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
-		Def:     "truncate",
-		DefText: "truncate",
 	},
 	{
 		Name:    "on_bytes_overflow",
@@ -361,7 +354,6 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	collect(readNumberArg(args, "bytes_limit", &bytesLimit))
 	collect(readNumberArg(args, "lines_limit", &linesLimit))
 	collect(readNumberArg(args, "total_bytes_limit", &totalLimit))
-	collect(readEnumArg(args, "on_time_overflow", &w.OnTimeOverflow))
 	collect(readEnumArg(args, "on_bytes_overflow", &w.OnBytesOverflow))
 	collect(readEnumArg(args, "on_lines_overflow", &w.OnLinesOverflow))
 	collect(readBoolArg(args, "learn_mode", &w.LearnMode))

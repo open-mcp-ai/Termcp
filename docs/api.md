@@ -1993,10 +1993,11 @@ Response 200:
 <!-- BEGIN termdoc: args -->
 | `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
 | `timeout` | Seconds to look (default 2; a pipe returns as soon as its process exits). 60 is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait |
-| `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply |
+| `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.
+Two paths read `0` as "name the object, consume nothing" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).
+A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default 8192 rather than none; a `mcp recv` never reads with a window under 1048576, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`). |
 | `lines_limit` | Lines per slot (default 200; `0` = no line limit). 2000 is the size to stay under, not a wall: a longer tail is allowed, and said so in the reply |
 | `total_bytes_limit` | Cap for the whole reply (default 32768). 32768 is the size to stay under, not a wall — this is YOUR budget for one reply, so set it as high as you are willing to read |
-| `on_time_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `on_bytes_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `on_lines_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `learn_mode` | Attach each directive's usage line once per reply |
