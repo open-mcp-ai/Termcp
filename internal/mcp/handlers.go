@@ -382,21 +382,10 @@ func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Cl
 		}
 		sshCli = client
 		release = func() {}
-		// A Server built as a struct literal (tests, embedded uses) has no engine cache,
-		// and a file operation must still work: the cache is an optimisation, so its
-		// absence falls back to the per-call engine that was the only behaviour before.
-		if s.sftpEngines == nil {
-			cli, err := sftp.NewClient(sshCli)
-			if err != nil {
-				release()
-				return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
-			}
-			return cli, release, nil
-		}
 		// The canonical session id, not the caller's spelling: `read <id> file` and
 		// `read <name> file` name the same session and must share one engine, and the
 		// DEAD hook that evicts it is called with this id.
-		view, err := s.sftpEngines.get(sess.ID, sshCli)
+		view, err := s.sftpEngines.Get(sess.ID, sshCli)
 		if err != nil {
 			release()
 			return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))

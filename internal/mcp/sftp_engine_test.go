@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 )
 
 // TestAFileOperationReusesTheSessionsEngine pins the fix for issue #244: the SFTP
@@ -60,22 +62,29 @@ func TestAFileOperationReusesTheSessionsEngine(t *testing.T) {
 // TestASessionDeathEvictsItsEngine keeps the cache bounded: a daemon that has served many
 // sessions must not hold a subsystem and its SSH channel for each one for ever.
 //
-// The session is TERMINATED, not merely closed. `close <channel>` closes one channel and
-// leaves the session running, so it never fires the DEAD hook — a test written against
-// that event would wait for something that does not happen and prove nothing.
+// The session is TERMINATED, not merely closed — `close <channel>` leaves the session
+// running and never fires the DEAD hook, so a test written against that event waits for
+// something that does not happen.
+//
+// The assertion stays behavioural: after the death, asking for the same session and the
+// same client must NOT hand back the cached view (a stale entry would). A dead session
+// refuses file operations, so the pool is asked directly — the same object the handlers
+// route through.
 func TestASessionDeathEvictsItsEngine(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	sid := strings.SplitN(h, ":", 2)[0]
 
-	if _, bad := s.sftpClient(sid); bad != nil {
-		t.Fatalf("client: %v", bad)
+	sess, cli, bad := s.sshClientForSession(sid)
+	if bad != nil {
+		t.Fatal("session should be running")
 	}
-	s.sftpEngines.mu.Lock()
-	_, cached := s.sftpEngines.m[sid]
-	s.sftpEngines.mu.Unlock()
-	if !cached {
-		t.Fatal("the engine was not cached, so this test proves nothing")
+	before, err := s.sftpEngines.Get(sess.ID, cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.sftpEngines.Get(sess.ID, cli); after != before {
+		t.Fatal("the engine was not reused while the session lives, so this test proves nothing")
 	}
 
 	if _, err := s.handleTerminateSession(context.Background(), makeRequest(map[string]any{
@@ -83,11 +92,9 @@ func TestASessionDeathEvictsItsEngine(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the engine to be evicted when its session died", func() bool {
-		s.sftpEngines.mu.Lock()
-		defer s.sftpEngines.mu.Unlock()
-		_, still := s.sftpEngines.m[sid]
-		return !still
+	waitFor(t, "the dead session's engine to be forgotten", func() bool {
+		view, _ := s.sftpEngines.Get(sid, cli)
+		return view != before
 	})
 }
 
@@ -115,7 +122,7 @@ func TestTheEngineCacheIsSingleFlight(t *testing.T) {
 	cli := ssh.NewClient(conn, chans, reqs)
 	defer cli.Close()
 
-	e := newSFTPEngines(nil)
+	e := sftpengine.NewPool(nil)
 	const callers = 8
 	var wg sync.WaitGroup
 	got := make([]any, callers)
@@ -124,7 +131,7 @@ func TestTheEngineCacheIsSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			client, err := e.get("s1", cli)
+			client, err := e.Get("s1", cli)
 			errs[i] = err
 			if client != nil {
 				got[i] = client

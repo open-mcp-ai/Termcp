@@ -20,6 +20,24 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
+// sftpFor returns the session's SFTP engine, from the shared pool when one is wired.
+//
+// ONE ENGINE PER SESSION, NOT PER REQUEST (issue #244). The file panel is chatty — a
+// list, a preview, a download — and each of those used to pay three round trips to open
+// its own subsystem before asking for anything (channel open, subsystem request, SFTP
+// INIT/VERSION: 526ms measured over a 350ms link). A nil pool keeps the old behaviour,
+// which is correct and only slower, so a Handler built without one still works.
+//
+// The pool's Client is shared and its Close is a no-op, so the `defer sftpCli.Close()`
+// that every caller below already has stays right: a preview finishing must not close the
+// engine a download is using.
+func (h *Handler) sftpFor(sess *session.Session, sshClient *ssh.Client) (*sftp.Client, error) {
+	if h.SFTP != nil && sess != nil {
+		return h.SFTP.Get(sess.ID, sshClient)
+	}
+	return sftp.NewClient(sshClient)
+}
+
 // resolveFileSession resolves the session a file route names and applies the
 // session's capability whitelist before the handler touches the filesystem.
 //
@@ -63,7 +81,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Debug("handleListFiles", "session", sid, "path", path)
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileStat, [][2]string{{"path", path}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileStat, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
 	}
@@ -99,7 +117,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Remote: use SFTP
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		slog.Error("sftp client", "path", path, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -131,7 +149,7 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRead, [][2]string{{"path", path}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileRead, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
 	}
@@ -139,7 +157,7 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		serveLocalFile(w, r, path, offset, length, isRange, hdr)
 		return
 	}
-	serveRemoteFile(w, r, path, sshClient, offset, length, isRange, hdr)
+	h.serveRemoteFile(w, r, path, sess, sshClient, offset, length, isRange, hdr)
 }
 
 // requestResponseHeaders decodes the ?h.<Name>=<value> parameters a download URL
@@ -245,9 +263,9 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, path string, offset,
 // resolves the Range header against the remote size, then hands the window to
 // StreamReadTo, which reads exactly the requested bytes instead of pulling the
 // whole file to the termcp host first.
-func serveRemoteFile(w http.ResponseWriter, r *http.Request, path string, sshClient *ssh.Client, offset, length int64, isRange bool, hdr http.Header) {
+func (h *Handler) serveRemoteFile(w http.ResponseWriter, r *http.Request, path string, sess *session.Session, sshClient *ssh.Client, offset, length int64, isRange bool, hdr http.Header) {
 	// Remote — SFTP streaming.
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -333,7 +351,7 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileWrite, [][2]string{{"path", path}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileWrite, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
 	}
@@ -362,7 +380,7 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remote — SFTP streaming.
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -384,7 +402,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path required"})
 		return
 	}
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileDelete, [][2]string{{"path", path}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileDelete, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
 	}
@@ -396,7 +414,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -424,7 +442,7 @@ func (h *Handler) handleRenameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileRename, [][2]string{{"from", from}, {"to", to}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileRename, [][2]string{{"from", from}, {"to", to}}, w)
 	if !ok {
 		return
 	}
@@ -437,7 +455,7 @@ func (h *Handler) handleRenameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -458,7 +476,7 @@ func (h *Handler) handleMakeDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, sshClient, ok := h.resolveFileSession(sid, capability.FileMkdir, [][2]string{{"path", path}}, w)
+	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileMkdir, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
 	}
@@ -471,7 +489,7 @@ func (h *Handler) handleMakeDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sftpCli, err := sftp.NewClient(sshClient)
+	sftpCli, err := h.sftpFor(sess, sshClient)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
