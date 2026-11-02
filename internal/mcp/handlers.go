@@ -569,7 +569,7 @@ func (s *Server) shellNotFoundMessage(shellID string) string {
 // resolveSSHFromArgs returns the ssh_config name, loaded entry, and remote dial settings (nil Remote = built-in loopback).
 // The ssh_config value may be a profile name or a termcp:// entry resource URL
 // (e.g. "termcp://mac"); both resolve to the same profile.
-func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Entry, *session.RemoteSSH, error) {
+func (s *Server) resolveSSHFromArgs(ctx context.Context, args map[string]any) (string, *sshconfig.Entry, *session.RemoteSSH, error) {
 	if s.sshConfigs == nil {
 		return "", nil, nil, fmt.Errorf("ssh config store not configured")
 	}
@@ -587,7 +587,7 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 		}
 		name = p.Entry
 	}
-	ent, err := s.sshConfigs.Load(name)
+	name, ent, err := s.loadAgentProfile(ctx, name)
 	if err != nil {
 		return "", nil, nil, err
 	}

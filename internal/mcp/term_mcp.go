@@ -63,7 +63,7 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			frame = payload
 		}
-		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (p.IsV2() || err != nil) {
+		if p, restricted, err := auth.PolicyFromContext(ctx); restricted {
 			if err != nil {
 				return *agentDeniedSlot(stmt, err)
 			}
@@ -84,7 +84,7 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			for _, tool := range []string{"shell_input", "shell_key"} {
 				args := argsOf("shell_id", handle, "key", "enter")
-				if bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); p.IsV2() && bad != nil {
+				if _, bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); bad != nil {
 					return *agentDeniedSlot(stmt, fmt.Errorf("%s", toolResultText(bad)))
 				}
 			}

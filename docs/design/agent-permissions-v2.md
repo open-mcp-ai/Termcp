@@ -1,3 +1,5 @@
+**2026-11-02 实现约束**：仅保留当前动作权限和权限组。未发布的 V1 功能组、兼容 API、迁移与升级预览已删除；下文旧模型对比是历史设计分析，不代表兼容承诺。
+
 # Agent 权限 V2：操作、参数与主机条件
 
 状态：首批 V2 适配已落地，见第 15 节的交付范围。日期：2026-10-29。源码基线：`2ef2baf15fbac2343eb0fe9ee189f14f3926d238`。
@@ -26,7 +28,7 @@ V2 第一阶段继续只有允许/禁止。委托审批、用户/组与权限继
 | --- | --- | --- |
 | `internal/auth/managed.go:29`，`Actor`；`internal/auth/managed_tokens.go:127`，`admitToken` | 身份来自验证后的凭据；Agent token 注入动态策略读取器，管理员 token 不套用 Agent 业务策略 | 复用身份接入，不重新设计 cookie 或签发 |
 | `internal/auth/agent_policy.go:14/27`，`AgentPolicy/functionGroups` | 只保存 Functions、HostMode、Hosts；共 13 个组 | 新增版本化 actions，组不再直接代表执行许可 |
-| `internal/auth/agent_policy.go:62`，`effectivePolicy` | 旧记录 Policy=nil 会得到全功能/all-host；UI 新建明确为空 | 明确迁移旧策略；不能继续用动态全量组推导未来新增操作 |
+| `internal/auth/agent_policy.go`，历史 `effectivePolicy` | 旧记录 Policy=nil 曾得到全功能/all-host；该路径已删除 | 不迁移旧业务权限；未知、缺失或旧 schema 明确拒绝 |
 | `internal/capability/agent.go:16`，`AgentFunction` | session_manage 合并 start/terminate/delete/close，terminal_read 合并 output/marks/reader，file_write 合并多种写操作 | 在现有 capability 表上细分语义操作描述 |
 | `internal/capability/agent.go:49`，`AgentRequirement` | 主要按 tool 或大 action 分类；file_fs/link/perm 的实际 sub-action 没拆细 | classifier 读取规范 action 和参数，而非只看工具名 |
 | `internal/mcp/agent_access.go:126`，`agentStatementCheck` | DSL 按动词/种类分组；随后 handler 路径又按工具分组 | 两个 Adapter 生成同一种操作需求，不保留互相独立的粗分组判断 |
@@ -83,7 +85,7 @@ V2 第一阶段继续只有允许/禁止。委托审批、用户/组与权限继
 | 公共别名 | `alias.list`、`alias.write`、`alias.delete` | 当前 create/edit 都修改全局表；先按实际行为合并 write，不伪造私有别名 |
 | 通知 | `user.notify` | 与主机执行、管理面独立 |
 
-`ext.use/release/retry/list/get` 不再因为同属 extension 就全部要求 all hosts；它们只接触现有模板及其所属主机，可按实际目标限制。修改全局模板仍遵守原上限。这是有意细化的行为变化，迁移预览必须提示。
+`ext.use/release/retry/list/get` 不再因为同属 extension 就全部要求 all hosts；它们只接触现有模板及其所属主机，可按实际目标限制。修改全局模板仍遵守原上限。V1 已删除，不提供升级预览；目录新增动作在旧组中默认禁止。
 
 当前 `ls <session> file` 直接拒绝。不要照搬 file_read 的中文“目录”说明就宣称 Agent 已有目录浏览。独立操作目录必须包含可达性：公开 DSL / 内部工具 / 人端专有 / 保留未实现。
 
@@ -205,7 +207,7 @@ CheckPlan(policy EffectivePolicy, plan Plan) Decision
 
 MCP 的 `PrepareDirective` 需要窗口参数 win，因为 run 是否真正读取输出受窗口影响；当前只接收 stmt 的 agentStatementCheck 不足以描述完整计划。
 
-对文件、forward、profile/ext 分支，抽出纯“构造规范调用”函数，给分派与计划共同使用。调用方声明语义和参数，不自行决定权限。未迁移的分支保持 V1 模式；不能标成 V2 支持后再漏回旧 group 检查。
+对文件、forward、profile/ext 分支，抽出纯“构造规范调用”函数，给分派与计划共同使用。调用方声明语义和参数，不自行决定权限。V1 模式已删除；不能新增绕过当前动作策略的旧 group 检查或兼容分支。
 
 `checkAdmission` 的旧资源限制保留，但 Agent 细粒度判断必须使用相同 classifier。DSL 已预检不等于内部 tool 永远免检：真实 operation/主机/参数必须被私有服务端计划覆盖，不能凭客户端提供的 operation_id 或一个 skip-auth 标志执行。直接工具调用则构造单次完整计划。
 
@@ -243,9 +245,9 @@ task 增加创建时绑定的 ResourceRefs，包含读端和写端的 host UUID�
 
 ## 11. 管理接口与 WebUI
 
-沿用当前 `/permissions` 的 Agent 列表、权限/Token 标签页与保存栏。权限页默认展开常用族，危险写操作与 raw 协议单独显示；条件折叠在对应动作下，不把所有设置摊成一张巨大的复选框表。
+当前 `/permissions` 以权限组为主列表，右侧提供动作/主机策略、成员与凭据。页面默认展开常用族，危险写操作与 raw 协议单独显示；条件折叠在对应动作下，不把所有设置摊成一张巨大的复选框表。
 
-每个动作显示：名称、对应 DSL、允许/禁止、条件摘要、主机条件、当前可达性。父组只用于批量勾选，显示部分选中状态。增设“这条 DSL 能不能运行”的预览，解释实际需求和拒绝原因，例如：
+每个动作显示名称、操作 ID、允许/禁止、条件摘要和主机范围。功能族只用于页面分组与当前 catalog 的批量勾选，不保存通配授权。未来若增加“这条 DSL 能不能运行”的无副作用预览，应解释实际计划和拒绝原因，例如：
 
 ```text
 run <channel> $1
@@ -255,28 +257,28 @@ run <channel> $1
 结果：拒绝，尚未发送输入
 ```
 
-建议接口变更：
+当前管理接口：
 
-| 接口 | V2 内容 |
+| 接口 | 当前合同 |
 | --- | --- |
-| `GET /auth/access` | 增加 catalog_version、操作树、条件 schema、组合 recipe、可达性；旧 functions 字段作为 V1 展示兼容 |
-| `GET /auth/agents` | 返回 policy schema_version、Agent revision 和旧策略模式；不伪装成已迁移 |
-| `PATCH /auth/agents/{id}` | 使用现有 revision 冲突检测，保存 policy V2；未知字段与不支持条件拒绝 |
-| 新增 `POST /auth/access/preview` | 管理员提交拟议策略与 DSL/窗口参数；只做计划与判定，不执行 |
-| 新增 `POST /auth/agents/{id}/policy-upgrade-preview` | 展示 V1→V2 展开、差异、危险能力和无法精确等价的项 |
+| `GET /auth/access` | catalog_version、动作、条件 schema、已保存主机；不返回旧 functions 投影 |
+| `GET/POST /auth/groups` | 列出或创建权限组；创建时使用模板或显式 schema 2 策略 |
+| `PATCH /auth/groups/{id}` | 使用 group revision 保存名称、说明、启停与策略；未知字段和条件拒绝 |
+| `POST /auth/groups/{id}/clone`、`POST /auth/groups/{id}/delete-preview`、`DELETE /auth/groups/{id}` | 复制、删除预览和带版本校验的删除；成员必须迁移或明确拒绝 |
+| `GET/POST /auth/principals`、`PATCH /auth/principals/{id}` | 管理主体身份和启停；不接收主体级策略 |
+| `PUT /auth/principals/{id}/group`、`GET/PUT /auth/default-group` | 管理组绑定和缺省组，使用主体或访问状态 revision |
+| `GET/POST /auth/tokens`、`DELETE /auth/tokens/{id}` | 使用 principal_id 管理凭据；不接受 agent_id 别名 |
 
-新增端点必须在现有 Managed.Wrap 中明确注册/分派，经过管理员会话与 CSRF 检查，不让它们落入静态页面 fallback。preview 不接受客户端 Actor=admin 来绕过判断，它始终模拟指定 Agent 的业务权限。
+所有管理端点必须在现有 `Managed.Wrap` 中明确注册/分派，经过管理员会话、Origin 与 CSRF 检查，不让它们落入静态页面 fallback。Agent bearer 只能进入 MCP。`GET /auth/group-presets` 返回五个版本化角色模板；模板是创建时的策略快照，后续目录新增动作不会自动进入已有组。
 
-## 12. 旧策略迁移，不能简单全量替换
+## 12. 未发布 V1 的删除规则
 
-1. 策略引入独立 schema_version；无字段表示 V1。既有 token 和登录会话无需更换。
-2. V1 继续按当前路径执行，UI 显示“功能组策略”；不在登录或读取时悄悄转换。新增 V2 动作不自动纳入旧功能组的历史许可，应冻结升级时的旧操作集合。
-3. 新建 UI Agent 使用显式空 V2 策略；没有 policy 的旧 Agent 显示 legacy_full，不能误当成空权限或继续对未来操作自动全开。
-4. 管理员发起升级预览，先把旧组展开为明确动作，再展示差异，保存时以 Agent revision 做并发检查；保存成功后继续沿用现有取消在途 token 请求的机制，新请求读取 V2。
-5. 不能宣称所有转换都完全等价。V1 的 DSL 与工具层可能有额外组交集，例如 realpath/readlink；V2 去掉这些偶然耦合后，单纯展开组会改变可执行集合，必须显式确认。
-6. 预览采用保守候选：已确定允许的动作才勾选；只读 fs/link、显式 exec、raw 协议、扩展目标范围和 task.cancel 等单独解释。无法证明等价则保留 V1，不猜测转换。
-7. 冻结 V1 的历史可达集时使用确切 canonical 参数类别，不能只冻结 operation ID 后便把一个旧动作未允许的 sub-action 也放进来。迁移测试同时覆盖 DSL、内部工具和别名入口。
-8. 旧客户端可以更新 V1 Agent；对 V2 Agent 写回旧 functions 格式返回明确冲突，不能把细权限重新扩大成整组。降级二进制不认识 V2 时必须拒绝读取/启用相应策略，不能丢掉字段后继续运行。
+1. 权限策略只接受 `schema_version=2`；缺少版本、`schema_version=1`、混用 `functions` 或主体级 `policy` 都拒绝保存和加载。
+2. 不存在 `legacy_full`、nil 策略全权回退、V1→V2 升级预览、兼容组或旧客户端写回路径。未发布数据没有迁移承诺。
+3. `/auth/agents` 不再提供兼容接口，直接按未实现路径返回 404；其替代接口分别是权限组 `/auth/groups` 与主体 `/auth/principals`。
+4. `/auth/tokens` 只接受 `principal_id`；`agent_id` 作为未知字段拒绝，不能解释成主体、权限组或管理员默认值。
+5. 重启加载不静默修复旧业务权限。未知策略字段、旧 managed state version、旧权限组结构和主体直接策略都让认证状态加载失败。
+6. 登录密码与加密信封的存储迁移只保留认证材料，不导入旧业务权限；迁移后的未授权缺省组不授予任何动作。
 
 UI 不提供“允许未来新功能”通配项。现有全选只选当前 catalog 的已实现动作。策略更新是授权行为变化，不能夹在纯重构中以“兼容”名义自动放宽。
 
@@ -284,11 +286,11 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 
 | 阶段 | 文件落点 | 验收结果 |
 | --- | --- | --- |
-| A：语义目录 | `internal/capability/agent.go`、新增 operation catalog 和纯 action resolver | 动作分类不再依赖 13 组；每个 V2 可达分支有规范描述；旧执行逻辑尚不切换 |
+| A：语义目录 | `internal/capability/agent_plan.go`、operation catalog 和纯 action resolver | 动作分类不再依赖 13 组；每个可达分支有规范描述；旧功能组执行逻辑已删除 |
 | B：V2 数据和判定 | `internal/authorization/*`、`internal/auth/agent_policy.go`、`managed_tokens.go`、持久化校验 | 版本化 actions、类型化条件、稳定主机 ID、动态 revision；未知默认拒绝 |
 | C：统一计划执行 | `internal/mcp/agent_access.go`、`admission.go`、`term_directives.go`、相关 DSL Adapter | 预检复合需求，内部调用与计划核对；移除 V2 的粗组二次拒绝 |
 | D：资源细节 | `guard.go`、`term_generated.go`、`term_task.go`、`copy_stream.go`、文件和摘要 handlers、`internal/task/task.go` | 无授权前 Touch/Acquire/Start/Cancel；列表、凭据摘要与任务双端完整 |
-| E：管理与迁移 | `internal/auth/permissions.html`、`managed_http.go`、`agent_policy.go` | 动作树、条件控件、组合解释、V1 升级预览；旧 token 不必重签 |
+| E：管理与拒绝旧模型 | `internal/auth/permissions.html`、`managed_http.go`、`agent_policy.go` | 动作树、条件控件、权限组和主体分离；V1 路由、字段与存储不迁移 |
 | 后续独立交付 | alias trace/专属词汇、审批恢复 | 解决 #196 和安全 ask；不阻塞前五阶段 |
 
 阶段 A 的局部解析重构保持原参数、返回与副作用顺序；阶段 C 启用 V2 时才引入明确的权限行为变化。无需先进行完整命令模式改造。
@@ -310,7 +312,7 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 | 源 A、目的 B 任一无权限 | pipe copy/upload/download | 两端检查，零传输启动；回执后 get/cancel 也检查完整归属 |
 | 公共别名展开到被禁动作 | 别名和原词面 | 同样拒绝，不能靠定义变化绕过 |
 | 策略收紧/撤 token | 新语句、旧 transport、后续 task 操作 | 使用动态状态并保留现有断连/取消语义 |
-| V1 legacy_full 或细权限 V2 | 升级、旧客户端覆盖、二进制降级 | 不隐式扩权；不能无声丢失细权限 |
+| 旧 V1 字段、路由或存储 | API 保存、旧客户端写入、重启加载 | 明确拒绝；不转换、不回退为全权 |
 
 测试应同时证明允许路径仍工作、拒绝路径没有副作用，并覆盖两种真实 MCP transport。只调用私有 handler 不能代替身份/context/transport 所有权测试。文件和生命周期测试使用临时目录，按仓库要求在三平台执行 race/shuffle；涉及扩展租约、后台传输及并发保存时补 stress。
 
@@ -319,18 +321,18 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 
 ## 15. 首批适配的实际交付范围
 
-本批实现 V2 可配置、可执行的完整纵向路径。没有更换 cookie/token，也没有迁移主机加密存储或加密会话。
+本批实现当前动作策略可配置、可执行、可预览、可审计的完整纵向路径。没有更换 cookie/token，也没有迁移主机加密存储或加密会话。
 
 - `internal/authorization` 保存 86 个明确语义动作及纯 `CheckPlan`。未列出动作、未知动作、未知条件、`ask` 和条件不满足均拒绝。
 - `internal/capability/agent_plan.go` 统一识别内部工具的实际分支和有效参数；MCP Adapter 解析主机、namespace 与资源限制。DSL 的普通操作经原工具 Adapter；run、pipe、peer 等组合/直接调用另做完整预检。`run` 在输入前检查 input、key(enter)、output；建连检查 session.start、shell.open 和显式程序时的 shell.exec。
-- 文件动作分别授权，包括 realpath/readlink/statvfs 与 truncate/chmod/chown/chtimes。读写词面不决定权限。按键 keys/repeat_max、工具 tool_names、方法 methods、文件 forms/max_bytes 可设置；仅 catalog 声明过的条件可以保存。forms 使用 inline、local、pipe；replace 只支持 inline，不接受无法证明的整文件写入大小上限。max_bytes 的读取证据来自内部 file_read 的正 length，现有普通 read file DSL 不声明 length，不能用它证明有界读取；该受限形式会拒绝，不改变原读操作参数行为。
+- 文件动作分别授权，包括 realpath/readlink/statvfs 与 truncate/chmod/chown/chtimes。读写词面不决定权限。按键 keys/repeat_max、工具 tool_names、方法 methods、文件 forms/max_bytes 可设置；仅 catalog 声明过的条件可以保存。forms 使用 inline、local、pipe；replace 只支持 inline，不接受无法证明的整文件写入大小上限。普通 read file 不新增参数，也不改变已有参数含义；inline 使用既有 8 MiB 上限，local/pipe 只在正长度可证明时通过，否则保守拒绝。详情见 [文件操作权限](file-operation-permissions.md)。
 - 具名 MCP 工具、raw tools/call、`--send` 与 stdio batch 识别具体工具名。实际协议发送处再次核验解析结果；raw 许可不能覆盖已识别的禁用工具。stdio 发送前也检查其输入/Enter/实际读取需求；CDP 原生 attach/detach 与临时 attach/call/detach 分别核验。
-- 主机总范围沿用 stable profile identity。复制在启动前检查两端；download/upload/copy 的 task 记录两端 HostID、namespace、read/write 角色。V2 后续查看/取消依据保存的两端事实，不依赖展示路径或仍然存活的 session；没有完整归属的旧 task 拒绝。
-- Agent 主机摘要隐藏 private_key、proxy、default_shell 原文，改为存在标志。扩展摘要保留使用说明及能力元数据，隐藏 command/args/URL/headers；投影在内部工具结果及日志格式化之前。列表过滤主机和 namespace；会话列表按 shell.list/peer.list 隐藏未授权的子项。历史 V1 同样受摘要脱敏和转发列表作用域收紧影响。
+- 主机总范围沿用 stable profile identity。预检绑定 profile UUID、正文摘要以及 extension 模板/目标摘要；handler 按绑定重新加载，检查后改名可继续，删除重建或内容/target 替换则拒绝。复制在启动前检查两端；download/upload/copy 的 task 记录两端 HostID、namespace、read/write 角色。后续查看/取消依据保存的两端事实，不依赖展示路径或仍然存活的 session；没有完整归属的旧 task 拒绝。
+- Agent 主机摘要隐藏 private_key、proxy、default_shell 原文，改为存在标志。扩展摘要保留使用说明及能力元数据，隐藏 command/args/URL/headers；投影在内部工具结果及日志格式化之前。列表过滤主机和 namespace；会话列表按 shell.list/peer.list 隐藏未授权的子项。当前动作权限统一使用摘要投影和转发列表作用域检查。
 - guard 的资源检查只做 lookup；工具实际通过 admission 后才续租，避免预检或拒绝操作续租。Agent 对需要资源审阅的操作继续拒绝，不进入管理员回放路径。
-- `/permissions` 新建空 V2 策略，提供分族动作选择、参数条件、主机范围和原 token 页。旧 V1 保留原组编辑器；`POST /auth/agents/{id}/policy-upgrade-preview` 返回保守候选、revision 与差异提示，页面加载候选后仍需明确保存。没有自动升级；旧客户端不能把 V2 写回功能组。
+- `/permissions` 提供动作树、参数条件、主机范围、可达面/风险/依赖标签和只读 DSL 预览。预览逐项解释缺少的动作，但不建连、不 acquire、不续租、不创建 task。权限组、主体、默认组、角色入口和凭据变更写入结构化审计；拒绝记录动作与原因且不记录秘密。
 - 策略仍保存在现有认证密文。HTTP 与重新加载都拒绝未知策略字段；schema_version 未识别时校验失败。已有 token 继续动态读取当前策略。
 
-本批没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、DSL 无副作用预览端点、词汇分配/子用户组继承、Agent 审批回放。对应控件和不支持的条件不会假装可用。上文中的完整计划绑定及名称/版本并发复核仍是后续工作；本批对普通工具在有效参数构造后重新判定，对直接协议发送在解析后重新判定，不把一次预检当作可复用的绕过凭据。
+本批没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、词汇分配/子用户组继承、Agent 审批回放。对应控件和不支持的条件不会假装可用。直接协议发送在解析后再次判定，不把一次预检当作可复用的绕过凭据。
 
-验证覆盖真实 HTTP/SSE 认证入口、原始与具名工具形式、拒绝前无副作用、别名、主机边界、任务双端、策略持久化和 V1 兼容。完整测试与 stress 执行结果由本次变更交付记录说明。
+验证覆盖真实 HTTP/SSE 认证入口、原始与具名工具形式、拒绝前无副作用、别名、主机边界、任务双端、策略持久化和旧策略拒绝。完整测试与 stress 执行结果由本次变更交付记录说明。

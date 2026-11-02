@@ -17,17 +17,16 @@ const maxPermissionGroups = 512
 const deniedGroupID = "system-deny"
 
 type permissionGroup struct {
-	ID                string      `json:"id"`
-	Name              string      `json:"name"`
-	Description       string      `json:"description"`
-	Enabled           bool        `json:"enabled"`
-	Revision          uint64      `json:"revision"`
-	CreatedAt         time.Time   `json:"created_at"`
-	Policy            AgentPolicy `json:"policy"`
-	PolicyWarnings    []string    `json:"policy_warnings,omitempty"`
-	PresetID          string      `json:"preset_id,omitempty"`
-	PresetVersion     int         `json:"preset_version,omitempty"`
-	LegacyPrincipalID string      `json:"legacy_principal_id,omitempty"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	Description    string      `json:"description"`
+	Enabled        bool        `json:"enabled"`
+	Revision       uint64      `json:"revision"`
+	CreatedAt      time.Time   `json:"created_at"`
+	Policy         AgentPolicy `json:"policy"`
+	PolicyWarnings []string    `json:"policy_warnings,omitempty"`
+	PresetID       string      `json:"preset_id,omitempty"`
+	PresetVersion  int         `json:"preset_version,omitempty"`
 }
 
 type groupPreset struct {
@@ -79,49 +78,6 @@ func seedPermissionGroups(s *managedState, now time.Time) {
 	s.AccessRevision = 1
 }
 
-// migratePermissionGroups preserves old principal and credential identities.
-// V1 policy upgrading remains a separate explicit administrator action.
-func migratePermissionGroups(s *managedState, now time.Time) (bool, error) {
-	if s.Version == managedStateVersion {
-		return false, nil
-	}
-	if s.Version != 2 {
-		return false, errors.New("unsupported authentication state version")
-	}
-	if len(s.Groups) > 0 || s.DefaultGroupID != "" {
-		return false, errors.New("legacy authentication contains unexpected permission groups")
-	}
-	seedPermissionGroups(s, now)
-	for id, agent := range s.Agents {
-		groupID := "legacy-" + id
-		name := uniqueCompatibilityGroupName(*s, agent.Name, id)
-		s.Groups[groupID] = permissionGroup{ID: groupID, Name: name, Enabled: true, Revision: 1, CreatedAt: agent.CreatedAt, Policy: effectivePolicy(agent), PolicyWarnings: slices.Clone(agent.PolicyWarnings), LegacyPrincipalID: id}
-		agent.GroupID = groupID
-		agent.Policy = nil
-		agent.PolicyWarnings = nil
-		s.Agents[id] = agent
-	}
-	s.Version = managedStateVersion
-	return true, nil
-}
-
-func uniqueCompatibilityGroupName(s managedState, name, id string) string {
-	if groupNameAvailable(s, name, "") {
-		return name
-	}
-	for n := 1; ; n++ {
-		suffix := fmt.Sprintf(" · %d", n)
-		runes := []rune(name)
-		for len(string(runes))+len(suffix) > 128 {
-			runes = runes[:len(runes)-1]
-		}
-		candidate := string(runes) + suffix
-		if groupNameAvailable(s, candidate, "") {
-			return candidate
-		}
-	}
-}
-
 func groupNameAvailable(s managedState, name, except string) bool {
 	for id, g := range s.Groups {
 		if id != except && strings.EqualFold(g.Name, name) {
@@ -138,8 +94,8 @@ func boundGroupID(s managedState, a agentRecord) string {
 	return s.DefaultGroupID
 }
 func resolvedAgentPolicy(s managedState, a agentRecord) (AgentPolicy, error) {
-	if s.Version < managedStateVersion {
-		return effectivePolicy(a), nil
+	if s.Version != managedStateVersion {
+		return AgentPolicy{}, errors.New("unsupported permission state version")
 	}
 	id := boundGroupID(s, a)
 	if id == deniedGroupID {
@@ -150,21 +106,6 @@ func resolvedAgentPolicy(s managedState, a agentRecord) (AgentPolicy, error) {
 		return AgentPolicy{}, errors.New("permission group is missing or disabled")
 	}
 	return clonePolicy(group.Policy), nil
-}
-func agentPolicyView(s managedState, a agentRecord) agentRecord {
-	if s.Version < managedStateVersion {
-		p := effectivePolicy(a)
-		a.Policy = &p
-		return a
-	}
-	p := EmptyAgentPolicy()
-	if group, ok := s.Groups[boundGroupID(s, a)]; ok {
-		p = clonePolicy(group.Policy)
-		a.PolicyWarnings = slices.Clone(group.PolicyWarnings)
-	}
-	a.Policy = &p
-	a.Revision = agentRevision(a)
-	return a
 }
 func stateAgentPolicy(s managedState, id string) AgentPolicy {
 	a, ok := s.Agents[id]
@@ -207,9 +148,6 @@ func validateGroupState(s managedState) error {
 		}
 	}
 	for _, a := range s.Agents {
-		if a.Policy != nil || len(a.PolicyWarnings) > 0 {
-			return errors.New("principal contains a direct policy in group state")
-		}
 		id := boundGroupID(s, a)
 		if id == deniedGroupID {
 			continue

@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 )
 
 const identityFileName = "identity"
 
 // InternalIdentity belongs to the virtual built-in profile. Its defaults never
 // create a directory just to persist an identity.
-const InternalIdentity = "00000000-0000-4000-8000-000000000001"
+const InternalIdentity = configstore.InternalProfileIdentity
 
 var (
 	ErrInvalidIdentity   = errors.New("invalid profile identity")
@@ -204,7 +205,11 @@ func (s *Store) refreshIdentitiesLocked(force bool) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if !force && s.identitiesLoaded && stamp.Equal(s.identityStamp) {
+	revision := uint64(0)
+	if s.encrypted != nil {
+		revision = s.encrypted.Status().Revision
+	}
+	if !force && s.identitiesLoaded && stamp.Equal(s.identityStamp) && revision == s.identityRevision {
 		return nil
 	}
 	byName := map[string]string{"internal": InternalIdentity}
@@ -218,6 +223,14 @@ func (s *Store) refreshIdentitiesLocked(force bool) error {
 		}
 		for _, name := range names {
 			encrypted[strings.ToLower(name)] = true
+			id, err := s.encrypted.ProfileIdentity(name)
+			if err != nil {
+				return err
+			}
+			if previous, exists := byID[id]; exists && !strings.EqualFold(previous, name) {
+				return ErrDuplicateIdentity
+			}
+			byName[strings.ToLower(name)], byID[id] = id, name
 		}
 	}
 	entries, err := os.ReadDir(s.root())
@@ -227,6 +240,9 @@ func (s *Store) refreshIdentitiesLocked(force bool) error {
 	for _, entry := range entries {
 		name := entry.Name()
 		if !entry.IsDir() || name != strings.TrimSpace(name) || ValidateName(name) != nil {
+			continue
+		}
+		if knownEncrypted && encrypted[strings.ToLower(name)] {
 			continue
 		}
 		dir := filepath.Join(s.root(), name)
@@ -276,6 +292,7 @@ func (s *Store) refreshIdentitiesLocked(force bool) error {
 	}
 	s.identityByName, s.nameByIdentity = byName, byID
 	s.identityStamp, s.identitiesLoaded = stamp, true
+	s.identityRevision = revision
 	return nil
 }
 

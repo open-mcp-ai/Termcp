@@ -77,10 +77,10 @@ func decodeRecoveryKey(encoded string, storeID, catalogKeyID ID) (*Keyring, erro
 }
 
 // RecoverMainKey verifies the backup against the catalog and every committed
-// object before replacing only config.keys with fresh provider protection.
+// object before replacing the global keyring section with fresh provider protection.
 // validate, when supplied, must be a pure parser and must not call Repository.
 func (r *Repository) RecoverMainKey(encoded string, validate func(string, []byte) error, providers ...Provider) error {
-	return r.recoverMainKey(encoded, validate, providers, writeFileAtomic)
+	return r.recoverMainKey(encoded, validate, providers, writeStoreFile)
 }
 
 func (r *Repository) recoverMainKey(

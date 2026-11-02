@@ -14,6 +14,9 @@ import (
 func (r *Repository) resolveProfileDirectories(refs map[string]catalogRef) (map[string]catalogRef, bool, error) {
 	root := filepath.Join(r.dataDir, "ssh_configs")
 	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) && len(refs) == 0 {
+		return map[string]catalogRef{}, false, nil
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -75,6 +78,10 @@ func (r *Repository) resolveProfileDirectories(refs map[string]catalogRef) (map[
 		}
 		moved = moved || ref.name != original.name
 		next[ref.name] = ref
+	}
+	if r.centralStateExists() {
+		updated, changed, err := r.resolveCentralProfiles(next)
+		return updated, moved || changed, err
 	}
 	return next, moved, nil
 }

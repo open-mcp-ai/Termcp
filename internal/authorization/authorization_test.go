@@ -147,3 +147,54 @@ func TestCatalogIsCompleteAndIndexed(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogMetadataIsCompleteAndRecipesReferenceKnownOperations(t *testing.T) {
+	for _, op := range Catalog() {
+		if op.Risk != RiskStandard && op.Risk != RiskElevated && op.Risk != RiskHigh {
+			t.Errorf("%s has invalid risk %q", op.ID, op.Risk)
+		}
+		if len(op.AccessPaths) == 0 {
+			t.Errorf("%s has no declared access path", op.ID)
+		}
+		if len(op.DSLVerbs) > 0 && !containsAccessPath(op.AccessPaths, AccessDSL) {
+			t.Errorf("%s lists DSL verbs without DSL reachability", op.ID)
+		}
+		if len(op.InternalTools) > 0 && !containsAccessPath(op.AccessPaths, AccessTool) {
+			t.Errorf("%s lists tools without tool reachability", op.ID)
+		}
+		if len(op.WebUIRoutes) > 0 && !containsAccessPath(op.AccessPaths, AccessWebUI) {
+			t.Errorf("%s lists WebUI routes without WebUI reachability", op.ID)
+		}
+		for _, dependency := range op.Dependencies {
+			if _, ok := Lookup(dependency); !ok || dependency == op.ID {
+				t.Errorf("%s has invalid dependency %q", op.ID, dependency)
+			}
+		}
+		for _, parameter := range op.Parameters {
+			if !supports(op, parameter.Kind) {
+				t.Errorf("%s documents unsupported parameter %q", op.ID, parameter.Kind)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, recipe := range Recipes() {
+		if recipe.ID == "" || seen[recipe.ID] || len(recipe.Requirements) == 0 {
+			t.Errorf("invalid recipe %+v", recipe)
+		}
+		seen[recipe.ID] = true
+		for _, id := range append(append([]string{}, recipe.Requirements...), recipe.Optional...) {
+			if _, ok := Lookup(id); !ok {
+				t.Errorf("recipe %s references unknown operation %s", recipe.ID, id)
+			}
+		}
+	}
+}
+
+func containsAccessPath(paths []AccessPath, wanted AccessPath) bool {
+	for _, path := range paths {
+		if path == wanted {
+			return true
+		}
+	}
+	return false
+}

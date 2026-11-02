@@ -119,7 +119,7 @@ func InspectEndpoint(ctx context.Context, host string, port int, credential stri
 		return EndpointReport{}
 	}
 	switch resp.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusLocked:
 		resp.Body.Close()
 		if IsServing(ctx, host, port) {
 			return EndpointReport{Termcp: true, Unauthorized: true}

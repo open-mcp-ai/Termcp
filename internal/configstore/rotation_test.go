@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -33,7 +32,7 @@ func newRotationRepository(t *testing.T) (*Repository, Provider) {
 
 func readRotationFile(t *testing.T, path string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := readStoreFileForTest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +115,8 @@ func TestRepositoryRotatesMainKeyWithoutChangingDataCiphertext(t *testing.T) {
 }
 
 func TestRepositoryRotationResumesEveryInterruptedPublication(t *testing.T) {
-	// Three profiles, the catalog, and the initial/final keyring publications.
-	const publications = 6
+	// Initial dual-key state, one atomic EDK-table update, and final key retirement.
+	const publications = 3
 	for failAt := 1; failAt <= publications; failAt++ {
 		for _, afterPublication := range []bool{false, true} {
 			t.Run(fmt.Sprintf("write-%d/after-%v", failAt, afterPublication), func(t *testing.T) {
@@ -130,7 +129,7 @@ func TestRepositoryRotationResumesEveryInterruptedPublication(t *testing.T) {
 					if calls == failAt && !afterPublication {
 						return injected
 					}
-					if err := writeFileAtomic(path, data); err != nil {
+					if err := writeStoreFile(path, data); err != nil {
 						return err
 					}
 					if calls == failAt {
@@ -265,7 +264,7 @@ func TestRepositoryRotationRejectsTamperedDataBeforeChangingKeys(t *testing.T) {
 	path := repo.objectPath(repo.refs["beta"])
 	data := readRotationFile(t, path)
 	data[len(data)-1] ^= 0x80
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := overwriteStoreFileForTest(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RotateMainKey(provider); !errors.Is(err, ErrAuthentication) {

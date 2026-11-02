@@ -39,6 +39,7 @@ type v2Harness struct {
 	csrf    string
 	token   string
 	agentID string
+	groupID string
 }
 
 func newV2Harness(t *testing.T, p auth.AgentPolicy) *v2Harness {
@@ -75,10 +76,16 @@ func newV2Harness(t *testing.T, p auth.AgentPolicy) *v2Harness {
 		Token string `json:"token"`
 		Agent struct {
 			ID string `json:"id"`
-		} `json:"agent"`
+		} `json:"principal"`
 	}
-	h.adminRequest("POST", "/auth/agents", map[string]any{"name": "limited", "policy": p}, &created)
-	h.token, h.agentID = created.Token, created.Agent.ID
+	var group struct {
+		Group struct {
+			ID string `json:"id"`
+		} `json:"group"`
+	}
+	h.adminRequest("POST", "/auth/groups", map[string]any{"name": "limited-policy", "policy": p}, &group)
+	h.adminRequest("POST", "/auth/principals", map[string]any{"name": "limited", "group_id": group.Group.ID, "issue_token": true}, &created)
+	h.token, h.agentID, h.groupID = created.Token, created.Agent.ID, group.Group.ID
 	return h
 }
 func (h *v2Harness) adminRequest(method, path string, body, out any) {

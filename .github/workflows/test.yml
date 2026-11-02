@@ -56,6 +56,10 @@ jobs:
         timeout-minutes: 45
         run: go test ./... -count=1 -shuffle=on -race -timeout 1800s
 
+      - name: Permission lifecycle matrix
+        timeout-minutes: 25
+        run: go test ./internal/auth ./internal/authorization ./internal/capability ./internal/fileop ./internal/mcp ./internal/webui -count=2 -shuffle=on -race -timeout 1200s
+
       - name: Test pure-API build
         run: |
           go build -tags no_webui ./...

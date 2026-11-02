@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -19,14 +21,24 @@ const maxAgents = 256
 const maxTokens = 1024
 
 type agentRecord struct {
-	GroupID        string       `json:"group_id,omitempty"`
-	Policy         *AgentPolicy `json:"policy,omitempty"`
-	PolicyWarnings []string     `json:"policy_warnings,omitempty"`
-	Revision       uint64       `json:"revision,omitempty"`
-	ID             string       `json:"id"`
-	Name           string       `json:"name"`
-	Enabled        bool         `json:"enabled"`
-	CreatedAt      time.Time    `json:"created_at"`
+	GroupID   string    `json:"group_id,omitempty"`
+	Revision  uint64    `json:"revision,omitempty"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (a *agentRecord) UnmarshalJSON(raw []byte) error {
+	type wire agentRecord
+	var value wire
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	*a = agentRecord(value)
+	return nil
 }
 
 type tokenRecord struct {
@@ -54,12 +66,7 @@ func validateCredentials(s managedState) error {
 		return errors.New("credential limit exceeded")
 	}
 	for id, a := range s.Agents {
-		if a.Policy != nil {
-			if err := validateAgentPolicy(*a.Policy); err != nil {
-				return err
-			}
-		}
-		if id == "" || id != a.ID || id == s.Admin.ID || !validLabel(a.Name) || a.CreatedAt.IsZero() {
+		if a.Revision == 0 || id == "" || id != a.ID || id == s.Admin.ID || !validLabel(a.Name) || a.CreatedAt.IsZero() {
 			return errors.New("invalid saved Agent")
 		}
 	}
@@ -70,10 +77,7 @@ func validateCredentials(s managedState) error {
 			return errors.New("invalid saved MCP token")
 		}
 	}
-	if s.Version == managedStateVersion {
-		return validateGroupState(s)
-	}
-	return nil
+	return validateGroupState(s)
 }
 
 func tokenDigest(raw string) string {
@@ -147,6 +151,9 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.state.Version == 0 || m.vault.AuthenticationLocked() {
+		return nil, nil, 423
+	}
 	t, ok := m.state.Tokens[pair[0]]
 	if !ok || !equalSecret(t.Digest, tokenDigest(raw)) || m.vault.AuthenticationLocked() {
 		return nil, nil, 401
@@ -222,37 +229,21 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 	s := credentialState(m.state)
 	var result any
+	beforeAccessRevision := s.AccessRevision
+	targetID := auditTargetID(r.URL.Path)
+	markAuditTarget := func(id string) {
+		if id != "" {
+			targetID = id
+		}
+	}
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/auth/agents/") && strings.HasSuffix(r.URL.Path, "/policy-upgrade-preview"):
-		if r.Method != "POST" {
-			authError(w, 405, "method not allowed")
-			return
-		}
-		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/agents/"), "/policy-upgrade-preview")
-		a, ok := s.Agents[id]
-		if !ok || strings.Contains(id, "/") {
-			authError(w, 404, "Agent not found")
-			return
-		}
-		p := *agentPolicyView(s, a).Policy
-		if p.IsV2() {
-			authError(w, 409, "Agent already uses an actions policy")
-			return
-		}
-		authJSON(w, 200, map[string]any{"revision": agentRevision(a), "policy": conservativeUpgrade(p), "notes": []string{
-			"This is a conservative candidate. It has not been saved; review the actions and save with this revision.",
-			"realpath, readlink and statvfs are selected only when both file groups were granted. Global alias writes require all hosts.",
-			"connect requires session.start and shell.open; run requires input, key(enter) and output. Raw protocol grants remain broad.",
-			"Task receipts without complete endpoint metadata are unavailable to V2 Agents. Host and extension summaries hide transport secrets.",
-		}})
-		return
-	case (r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/principals") && r.Method == "GET":
-		agents := make([]agentRecord, 0, len(s.Agents))
+	case r.URL.Path == "/auth/principals" && r.Method == "GET":
+		principals := make([]agentRecord, 0, len(s.Agents))
 		for _, a := range s.Agents {
-			agents = append(agents, agentPolicyView(s, a))
+			principals = append(principals, a)
 		}
-		sort.Slice(agents, func(i, j int) bool { return agents[i].CreatedAt.Before(agents[j].CreatedAt) })
-		authJSON(w, 200, map[string]any{"agents": agents, "principals": agents, "default_group_id": s.DefaultGroupID, "access_revision": s.AccessRevision})
+		sort.Slice(principals, func(i, j int) bool { return principals[i].CreatedAt.Before(principals[j].CreatedAt) })
+		authJSON(w, 200, map[string]any{"principals": principals, "default_group_id": s.DefaultGroupID, "access_revision": s.AccessRevision})
 		return
 	case r.URL.Path == "/auth/tokens" && r.Method == "GET":
 		tokens := make([]tokenInfo, 0, len(s.Tokens))
@@ -262,79 +253,57 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(tokens, func(i, j int) bool { return tokens[i].CreatedAt.Before(tokens[j].CreatedAt) })
 		authJSON(w, 200, map[string]any{"tokens": tokens})
 		return
-	case (r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/principals") && r.Method == "POST":
+	case r.URL.Path == "/auth/principals" && r.Method == "POST":
 		var input struct {
-			GroupID    *string      `json:"group_id"`
-			Name       string       `json:"name"`
-			Policy     *AgentPolicy `json:"policy"`
-			IssueToken *bool        `json:"issue_token"`
+			Name       string `json:"name"`
+			GroupID    string `json:"group_id"`
+			IssueToken bool   `json:"issue_token"`
 		}
-		if decodeJSON(http.MaxBytesReader(w, r.Body, 262144), &input) != nil || !validLabel(input.Name) {
-			authError(w, 400, "a valid Agent name is required")
+		if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil || !validLabel(input.Name) {
+			authError(w, 400, "a valid principal name and group binding are required")
 			return
 		}
 		if len(s.Agents) >= maxAgents {
-			authError(w, 409, "Agent limit reached")
+			authError(w, 409, "principal limit reached")
 			return
 		}
-		id, err := randomSecret()
-		if err != nil {
-			authError(w, 500, "could not create Agent")
-			return
-		}
-		a := agentRecord{ID: id, Name: input.Name, Enabled: true, CreatedAt: m.now().UTC(), Revision: 1}
-		if input.GroupID != nil && input.Policy != nil {
-			authError(w, 400, "group_id and direct policy cannot be combined")
-			return
-		}
-		if input.GroupID != nil {
-			g, ok := s.Groups[*input.GroupID]
+		if input.GroupID != "" {
+			g, ok := s.Groups[input.GroupID]
 			if !ok || !g.Enabled {
 				authError(w, 400, "permission group is missing or disabled")
 				return
 			}
-			a.GroupID = g.ID
 		}
-		if input.Policy != nil {
-			if err := validateAgentPolicy(*input.Policy); err != nil {
-				authError(w, 400, err.Error())
-				return
-			}
-			if err := setCompatibilityPolicy(&s, &a, *input.Policy); err != nil {
-				authError(w, 400, err.Error())
-				return
-			}
-		}
-
-		s.Agents[id] = a
-		if input.IssueToken != nil && !*input.IssueToken || r.URL.Path == "/auth/principals" && input.IssueToken == nil {
-			result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a)}
-			break
-		}
-		t, raw, err := m.issueToken(&s, id, input.Name)
+		id, err := randomSecret()
 		if err != nil {
-			authError(w, 400, err.Error())
+			authError(w, 500, "could not create principal")
 			return
 		}
-		result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a), "token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
+		a := agentRecord{ID: id, Name: input.Name, GroupID: input.GroupID, Enabled: true, Revision: 1, CreatedAt: m.now().UTC()}
+		s.Agents[id] = a
+		markAuditTarget(a.ID)
+		result = map[string]any{"principal": a}
+		if input.IssueToken {
+			t, raw, err := m.issueToken(&s, id, input.Name)
+			if err != nil {
+				authError(w, 400, err.Error())
+				return
+			}
+			result = map[string]any{"principal": a, "token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
+			auditDetail(r.Context(), func(draft *auditDraft) {
+				draft.action = "principal.create_with_credential"
+			})
+		}
 	case r.URL.Path == "/auth/tokens" && r.Method == "POST":
 		var input struct {
 			PrincipalID string `json:"principal_id"`
-			AgentID     string `json:"agent_id"`
 			Label       string `json:"label"`
 		}
 		if decodeJSON(http.MaxBytesReader(w, r.Body, 262144), &input) != nil {
 			authError(w, 400, "invalid token request")
 			return
 		}
-		if input.AgentID != "" && input.PrincipalID != "" && input.AgentID != input.PrincipalID {
-			authError(w, 400, "ambiguous principal identity")
-			return
-		}
 		principal := input.PrincipalID
-		if principal == "" {
-			principal = input.AgentID
-		}
 		if principal == "" {
 			principal = s.Admin.ID
 		}
@@ -344,50 +313,31 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result = map[string]any{"token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
-	case strings.HasPrefix(r.URL.Path, "/auth/agents/") && r.Method == "PATCH":
-		id := strings.TrimPrefix(r.URL.Path, "/auth/agents/")
+		markAuditTarget(t.ID)
+	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == "PATCH":
+		id := strings.TrimPrefix(r.URL.Path, "/auth/principals/")
 		a, ok := s.Agents[id]
-		if !ok {
-			authError(w, 404, "Agent not found")
+		if !ok || strings.Contains(id, "/") {
+			authError(w, 404, "principal not found")
 			return
 		}
 		var input struct {
-			Enabled  *bool        `json:"enabled"`
-			Policy   *AgentPolicy `json:"policy"`
-			Revision *uint64      `json:"revision"`
+			Enabled  *bool  `json:"enabled"`
+			Revision uint64 `json:"revision"`
 		}
-		if decodeJSON(http.MaxBytesReader(w, r.Body, 262144), &input) != nil || input.Enabled == nil && input.Policy == nil {
-			authError(w, 400, "enabled or policy is required")
+		if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil || input.Enabled == nil {
+			authError(w, 400, "enabled and revision are required")
 			return
 		}
-		if input.Revision != nil && *input.Revision != agentRevision(a) {
-			authError(w, 409, "Agent changed; reload before saving")
+		if input.Revision != agentRevision(a) {
+			authError(w, 409, "principal changed; reload before saving")
 			return
 		}
-		if input.Policy != nil {
-			if input.Revision == nil {
-				authError(w, 400, "policy updates require revision")
-				return
-			}
-			if agentPolicyView(s, a).Policy.IsV2() && !input.Policy.IsV2() {
-				authError(w, 409, "an actions policy cannot be replaced by legacy function groups")
-				return
-			}
-			if err := validateAgentPolicy(*input.Policy); err != nil {
-				authError(w, 400, err.Error())
-				return
-			}
-			if err := setCompatibilityPolicy(&s, &a, *input.Policy); err != nil {
-				authError(w, 400, err.Error())
-				return
-			}
-		}
-		if input.Enabled != nil {
-			a.Enabled = *input.Enabled
-		}
-		a.Revision = agentRevision(a) + 1
+		a.Enabled = *input.Enabled
+		a.Revision++
 		s.Agents[id] = a
-		result = map[string]any{"agent": agentPolicyView(s, a), "principal": agentPolicyView(s, a)}
+		markAuditTarget(a.ID)
+		result = map[string]any{"principal": a}
 	case strings.HasPrefix(r.URL.Path, "/auth/tokens/") && r.Method == "DELETE":
 		id := strings.TrimPrefix(r.URL.Path, "/auth/tokens/")
 		if _, ok := s.Tokens[id]; !ok {
@@ -395,6 +345,7 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		delete(s.Tokens, id)
+		markAuditTarget(id)
 		result = map[string]bool{"ok": true}
 	default:
 		authError(w, 405, "method not allowed")
@@ -404,8 +355,8 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	err := m.save(s, false)
 	if err == nil || errors.Is(err, configstore.ErrDurability) {
 		m.cancelDeniedTokensLocked()
-		if strings.HasPrefix(r.URL.Path, "/auth/agents/") && r.Method == "PATCH" {
-			principal := strings.TrimPrefix(r.URL.Path, "/auth/agents/")
+		if strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == "PATCH" {
+			principal := strings.TrimPrefix(r.URL.Path, "/auth/principals/")
 			m.cancelPrincipalsLocked([]string{principal})
 		}
 	}
@@ -413,5 +364,10 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		authError(w, 500, "could not save credentials; reload to check the result")
 		return
 	}
+	auditDetail(r.Context(), func(draft *auditDraft) {
+		draft.targetID = targetID
+		draft.beforeRevision = beforeAccessRevision
+		draft.afterRevision = s.AccessRevision
+	})
 	authJSON(w, 200, result)
 }

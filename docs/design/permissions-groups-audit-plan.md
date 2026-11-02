@@ -1,6 +1,6 @@
 # 权限组、认证生命周期与交付遗漏：检查清单及方案
 
-日期：2026-10-29。状态：第 1–9 节保留检查时的快照；本分支实施记录见第 10–12 节，尚未合并。
+日期：2026-11-02。状态：第 1–9 节保留检查时的快照；本分支实施记录见第 10–17 节，23 项在当前工作区全部完成，尚未合并。
 
 分支跟踪 issue：[#232](https://github.com/open-mcp-ai/Termcp/issues/232)。
 
@@ -259,3 +259,61 @@ G01/G02/G03/G04/G05/O01 已在工作区实现，尚未提交或合并。完整�
 验证：macOS 全仓 make test（race/shuffle）通过，主题回归六轮并发通过；公开文件替换检查六轮通过。no_webui 构建及对应回归通过。内置浏览器实际检查四主题、auto、未设置账号、账号/权限组、退出后加载、390px 窄屏、外部主题发现及主题移除回退。正常页面无 CSP/控制台错误；缺失主题的预期 404 不影响页面恢复。Win11 auth 完整包及真实内置主题资源递归加载回归通过（windows/amd64、CGO=0），未跑 Windows 全仓/race 或 Linux CI。
 
 当前累计 **14/23** 项在本分支实现，剩余 **9** 项：S01、P01–P04、O02、D01、Q01、D02。代码尚未合并；#228 的 jrpc/SSE baseline 继续排除。
+
+## 13. 文件操作参数与字节上限（2026-10-30 历史记录）
+
+本节保留上一轮实施记录；2026-11-02 已按用户要求收回 DSL 扩展，当前范围与完成状态以第 14 节为准。
+
+- [x] **P02**：fileop 统一授权与执行的读取/写入参数、既有 inline 8 MiB 上限和数据解码。普通 read file 支持 --length/--bytes；明确有界的本地上传/下载与文件管道把同一上限用于两端检查；未知或超限在创建 task/写文件前拒绝。无效场景的 --length 明确报错。合同见 [文件操作权限](file-operation-permissions.md)。
+- 联动修复：管道右侧递归展开参数引用，避免真实写入内部占位符文件名；补齐简版 help 和源/内嵌 API 文档。
+- **O01 复核补充**：SSE HTTP 202 后的活跃 message 可以登记后台传输；登记校验实际 message context、主体修订及角色入口修订。主体/入口停用再恢复不能复活旧 message 的登记资格，新的请求可以使用恢复后的权限。
+
+验证：新增回归及两端分别收紧、SSE 旧消息恢复用例通过不同 CPU 并发度的六轮 race/shuffle；no_webui 构建和所选回归通过。Win11 上 auth、fileop 完整包及 capability、directive、MCP 的所选实际文件读写/HTTP/SSE 回归通过（windows/amd64、CGO=0）。未运行 Windows 全仓/race 或 Linux CI。
+
+最终 macOS make test（全仓 race/shuffle）通过。首轮发现新增 --length 缺少简版 help、后续发现源/内嵌 API 文档不同步；两处均补齐，对应回归及最终全仓复测通过。
+
+累计 **15/23** 项在本地实现；本轮 P02 与联动修复尚未 commit/push，之前 14 项已提交为 5070c53。剩余 **8** 项为 S01、P01、P03、P04、O02、D01、Q01、D02。jrpc/SSE 传输 baseline 继续排除，本轮 SSE 修复属于 MCP 后台工作授权生命周期。
+
+## 14. #232 范围收敛（2026-11-02）
+
+按用户要求，仅处理 #232 的鉴权问题；DSL 只允许必要的鉴权接入改动，不扩展命令、参数、帮助或解析行为。
+
+- 撤回普通 read 新增 --length、--bytes 别名、对应 help/适配逻辑及管道右侧参数展开修复。internal/directive 与对应 DSL 适配文件恢复到本分支已提交版本。
+- 保留 P02 的有效参数/真实字节证据、内部 file_read 既有 length、本地上传既有 length、文件管道既有 --bytes 的两端授权检查。小于既有 8 MiB 上限、又没有可证明边界的普通 DSL 文件读取继续拒绝。
+- 保留 O01 的 SSE message 上下文及权限修订校验，不变更凭据签发与 DSL。
+- [ ] **P02**：整体恢复为部分完成。涉及普通 DSL 读取接口扩展的子项暂不实施，不能继续以 15/23 表示全部验收已满足。
+
+当前累计完成 **14/23**，剩余 **9** 项（含部分完成的 P02）：S01、P01–P04、O02、D01、Q01、D02。之前已提交的代码保持不变，本轮修改尚未 commit/push。第 13 节的旧验收记录不代表此次收敛后已经重跑的平台范围。
+
+## 15. 主机密文位置约束（2026-11-02）
+
+用户追加要求：config.toml 加密后仍在原主机目录，配置正文不迁入集中对象目录。当前正文恢复为 `ssh_configs/<host>/<generation>.enc`；global state 只集中密钥封装、身份/路径索引等元数据，catalog/auth 正文仍使用独立对象。
+
+已有集中正文须先解锁验证，再复制回主机目录、发布索引并清理集中副本。主机目录的旧信封原地接入；旧清理清单不得删除已经成为当前正文的同一路径。状态缺失不能重新初始化覆盖主机密文，正文缺失不能从旧迁移副本悄悄恢复。完整合同及验证见 [Local state 与独立密码](local-state-and-passwords.md)。
+
+macOS 全仓 race/shuffle、相关定向验证及 Win11 所选主机存储/回迁用例通过；未运行 Windows 全仓/race 或 Linux CI。DSL 定义、帮助、解析与适配文件仍与 5070c53 一致，保留的是鉴权层改动。此项记录用户追加的存储约束，不另计 #232 的完成项；P02 仍为部分完成，统计保持 14/23。本轮无 commit/push。
+
+## 16. 移除未发布 V1 权限模型（2026-11-02）
+
+用户明确不需要权限 V1 兼容。P04 调整为删除旧模型：仅支持 schema_version=2 的动作策略和当前权限组状态；V1 功能族、nil 全权回退、升级预览、逐主体直接策略及兼容 API 均移除。
+
+策略由 /auth/groups 管理，主体由 /auth/principals 管理，token 仅接收 principal_id。新主体默认不签发凭据；显式 issue_token:true 可签发。页面和当前 API 文档使用同一合同。旧业务权限数据明确拒绝，不导入或静默扩权。登录/存储格式迁移和加密信封 v1 不属于旧权限管理，保持独立。
+
+- [x] **P04（范围替代）**：不再冻结或维护 V1；直接删除权限 V1 运行、迁移、界面和升级代码。相关回归覆盖新接口、当前策略持久化、旧字段/旧状态拒绝和共享组热收权。
+
+本轮仅触及鉴权及其管理面；DSL 定义、参数、解析和执行不变。term_generated.go 的改动仅移除权限投影 helper 中的 V1 放行分支。完成项统计为 15/23，尚未 commit/push。
+
+## 17. 剩余八项收口（2026-11-02）
+
+按用户要求完成 #232 剩余八项。除权限接入所需的目标绑定和保护判断外，DSL 定义、语法、帮助、参数解析和执行顺序不变。
+
+- [x] **S01**：MCP 预检把 profile UUID/正文摘要、extension 模板摘要和目标 profile 绑定写入可信 context；handler 按绑定加载，名称改名可保持授权，删除重建、正文变化或 target 替换拒绝。扩展的授权 acquire/retry 使用预解析 target plan。
+- [x] **P01**：catalog 增加 risk/access/dependencies/parameter evidence；预置只使用当前可证明条件，初始组无动作，viewer/diagnostics 不获得终端输入、文件写或 raw 协议；操作员预置的终端执行能力有明确高风险说明。
+- [x] **P02**：执行和授权共用 `internal/fileop` 有效参数与解码字节；inline 使用既有 8 MiB 上限，local/pipe 只在有效正长度可证明时通过。未增加普通 DSL 参数，无法证明更小上限时保守拒绝。
+- [x] **P03**：`/auth/access` 返回可达面、参数说明、依赖与三种 recipe；`POST /auth/access/preview` 和权限页只读预览逐项解释缺失动作。预览不执行、不建连、不续租、不 acquire、不创建 task，执行 override 字段拒绝。
+- [x] **O02**：权限管理写入结构化审计，含已验证 actor、目标、前后 revision、结果、原因和影响数量；MCP 拒绝记录动作/目标/原因。凭据值与请求正文不进入审计。
+- [x] **D01**：9 个大型 capability CSV 从源码树移除；`make audit-capabilities` 使用 `scripts/capability_audit` 在已忽略的 `dist/audits/` 重新生成源码哈希、函数、调用表达式和权限目录。
+- [x] **Q01**：加入 `make test-permissions` 与三平台 CI 重复矩阵；真实 HTTP/SSE、浏览器、主题、预览、资源绑定和并发生命周期测试纳入包级执行。Linux/Windows 测试二进制交叉编译通过；实际 Windows/Linux 运行由 CI matrix 执行。
+- [x] **D02**：API、权限组、权限管理、静态 token、客户端、CLI、README、UI 文案、测试矩阵和 CHANGELOG 统一到权限组/主体/凭据、当前动作策略、预览与审计合同；历史设计明确标注替代关系。
+
+完成项统计更新为 **23/23**。本批验证包括定向 auth/authorization/capability/fileop/MCP/webui/sshconfig/extensions 测试、全仓 race/shuffle、权限生命周期重复矩阵、生成器实际运行和真实内置浏览器检查。具体运行平台及未运行项按 [权限测试矩阵](../agents/permissions-testing.md) 记录。

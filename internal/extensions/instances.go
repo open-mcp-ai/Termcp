@@ -119,7 +119,7 @@ func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Sta
 		r.retryTargetNow(name, targetHost)
 		return r.awaitTarget(name, targetHost, wait)
 	}
-
+	state = r.stateFor(name, targetHost)
 	state.want()
 	state.setIdleLimit(limit)
 	sid, shellID, _, _, err := r.bringUp(context.Background(), &view, state, true)
@@ -128,6 +128,35 @@ func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Sta
 		return got, nil
 	}
 	return r.instanceStatusFor(name, targetHost, sid, shellID), nil
+}
+
+func (r *Reconciler) acquirePlan(name, target string, ext *Extension, plan hostPlan, wait time.Duration) (Status, error) {
+	st, ok := r.Status(name)
+	if !ok {
+		return Status{}, fmt.Errorf("extension %q not found", name)
+	}
+	if !ext.IsEnabled() {
+		return st, nil
+	}
+	limit, err := ext.IdleTimeoutDuration()
+	if err != nil {
+		return Status{}, err
+	}
+	state := r.stateFor(name, target)
+	if !ext.Lazy() {
+		state.want()
+		r.startPreparedProbe(r.runCtx(), name, target, ext, plan)
+		return r.await(name, wait)
+	}
+
+	state.want()
+	state.setIdleLimit(limit)
+	sid, shellID, _, _, err := r.bringUpPlan(context.Background(), ext, plan, state, true)
+	if err != nil {
+		got, _ := r.Status(name)
+		return got, nil
+	}
+	return r.instanceStatusFor(name, target, sid, shellID), nil
 }
 
 // closeInstances closes every instance of an on-demand extension, recording why.
@@ -182,7 +211,6 @@ func (r *Reconciler) instanceEndReason(sess *session.Session, shellID string) st
 // function: two copies of it is how the two paths start disagreeing about what
 // "dial failed" means.
 func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, fresh bool) (sessionID, shellID, label, stage string, err error) {
-	name := st.name()
 	plan, err := r.resolve(ext)
 	if err != nil {
 		// The stage is the diagnosis: a template that does not resolve is fixed by
@@ -190,6 +218,11 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		r.failForGood(st, "target", err.Error())
 		return "", "", "", "target", err
 	}
+	return r.bringUpPlan(ctx, ext, plan, st, fresh)
+}
+
+func (r *Reconciler) bringUpPlan(ctx context.Context, ext *Extension, plan hostPlan, st *extState, fresh bool) (sessionID, shellID, label, stage string, err error) {
+	name := st.name()
 	g := r.groupFor(st)
 	if g == nil {
 		// Nothing has registered this extension's group yet: the first ask can arrive

@@ -4,7 +4,7 @@
 
 新版代码接入说明：见基于 `dev@6a8af55` 的 [Agent 权限过滤器实施方案](agent-access-implementation.md)。其中的局部 MCP Hook 不依赖本阶段全量解耦；本页保持为旧基线的纯重构方案，不将旧调用计数和行号当作新版审计结果。
 
-依据 [调用连接审计](capability-call-audit.md)、[714 个连接点](capability-connection-points.md) 和 [98 项语义/分支对照](capability-convergence.csv)。本阶段目标是统一执行结构，重构前后行为一致；不同时启用 [权限设计](agent-permissions.md) 中的新策略。
+依据 [调用连接审计](capability-call-audit.md) 和 [连接点结论](capability-connection-points.md)。本阶段目标是统一执行结构，重构前后行为一致；不同时启用 [权限设计](agent-permissions.md) 中的新策略。
 
 ## 1. 本阶段完成和不完成的事项
 

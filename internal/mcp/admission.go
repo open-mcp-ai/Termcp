@@ -39,13 +39,14 @@ func lookupGate(tool string) gate {
 //
 // The result is (refusal, held): a refusal is the reply to send, and held means
 // the operation was queued for a human and the reply reports that.
-func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, bool) {
+func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult, bool) {
 	g := lookupGate(toolName)
-	if bad := s.agentToolCheck(ctx, toolName, request); bad != nil {
-		return bad, false
+	ctx, bad := s.agentToolCheck(ctx, toolName, request)
+	if bad != nil {
+		return ctx, bad, false
 	}
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
-		return bad, false
+		return ctx, bad, false
 	}
 	// A SHORT-CIRCUIT TARGET HAS NO SESSION, SO REVIEW HAS NOWHERE TO PUT IT.
 	//
@@ -64,16 +65,17 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	// is deliberate — putting a listing behind a decision trains a reviewer to
 	// click Accept without reading, which is how a gate stops working.
 	if kindFor(toolName, request.GetArguments()) == "" {
-		return nil, false
+		return ctx, nil, false
 	}
 	// A staged operation is reviewed by its own write path, not by queueing this
 	// call: terminal input is one command line split across two calls, and the
 	// line is the unit a human decides. See capability.Capability.Staged.
 	if g.Staged {
-		return nil, false
+		return ctx, nil, false
 	}
 	sessionID := targetSessionID(request)
-	return s.gateOperation(ctx, request, toolName, sessionID)
+	bad, held := s.gateOperation(ctx, request, toolName, sessionID)
+	return ctx, bad, held
 }
 
 // admission answers the reachability and whitelist questions and returns a

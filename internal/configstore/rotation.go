@@ -19,11 +19,11 @@ type rotationTarget struct {
 	identity Identity
 }
 
-// RotateMainKey generates a new random Main Key and rewraps every committed
-// profile and the catalog. An interrupted operation resumes the same rotation.
+// RotateMainKey generates a random MK for provider-only compatibility vaults
+// and rewraps committed EDKs in the global state. Interrupted work resumes.
 // Existing provider slots, DEKs, identities, and body ciphertext are preserved.
 func (r *Repository) RotateMainKey(providers ...Provider) error {
-	return r.rotateMainKey(providers, writeFileAtomic)
+	return r.rotateMainKey(providers, writeStoreFile)
 }
 
 func (r *Repository) rotateMainKey(providers []Provider, publish func(string, []byte) error) error {
@@ -65,7 +65,7 @@ func (r *Repository) rotateMainKey(providers []Provider, publish func(string, []
 	}
 	// A previous publication may have returned ErrDurability. Confirm the
 	// keyring's directory entry before writing anything under its active key.
-	if err := syncDir(filepath.Dir(keysPath)); err != nil {
+	if err := syncDir(localSyncDirectory(keysPath)); err != nil {
 		return fmt.Errorf("%w: sync keyring directory: %v", ErrDurability, err)
 	}
 	targets := r.rotationTargets()
@@ -95,8 +95,10 @@ func (r *Repository) rotateMainKey(providers []Provider, publish func(string, []
 
 func (r *Repository) rewrapActiveObjects(publish func(string, []byte) error) error {
 	activeID, _ := r.keyring.rotationStatus()
-	for _, target := range r.rotationTargets() {
-		envelope, err := r.readRotationTarget(target)
+	updates := map[string][]byte{}
+	targets := r.rotationTargets()
+	for _, target := range targets {
+		envelope, err := r.verifyRotationTarget(target)
 		if err != nil {
 			return err
 		}
@@ -105,24 +107,24 @@ func (r *Repository) rewrapActiveObjects(publish func(string, []byte) error) err
 			if err != nil {
 				return err
 			}
-			if err := publish(target.path, rewrapped.Bytes()); err != nil {
-				return err
-			}
+			updates[target.path] = rewrapped.Bytes()
 		}
-		verified, err := r.verifyRotationTarget(target)
+	}
+	if len(updates) > 0 {
+		if err := r.publishEnvelopeBatch(updates, publish); err != nil {
+			return err
+		}
+	}
+	for _, target := range targets {
+		envelope, err := r.verifyRotationTarget(target)
 		if err != nil {
 			return err
 		}
-		if verified.WrapKeyID() != activeID {
+		if envelope.WrapKeyID() != activeID {
 			return ErrAuthentication
 		}
-		// Also sync skipped files from an interrupted run before retiring the
-		// old key; their prior rename may not have been confirmed durable.
-		if err := syncDir(filepath.Dir(target.path)); err != nil {
-			return fmt.Errorf("%w: sync rewrapped configuration: %v", ErrDurability, err)
-		}
 	}
-	return nil
+	return syncDir(stateDirectory(r.dataDir))
 }
 
 func (r *Repository) publishRotationKeyring(

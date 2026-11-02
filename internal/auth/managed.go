@@ -123,25 +123,30 @@ type sessionClaims struct {
 // Browser logins are memory-only and bound to this run. No OAuth is implemented.
 type Managed struct {
 	// MCPIdleTimeout is set by the server before serving requests.
-	MCPIdleTimeout time.Duration
-	HideInternal   bool
-	pageAssets     *pageAssets
-	mu             sync.Mutex
-	loginGate      sync.Mutex
-	passwordMu     sync.Mutex // serializes password work without blocking ordinary authentication
-	path           string
-	state          managedState
-	now            func() time.Time
-	background     map[string]map[*int]context.CancelFunc
-	requests       map[string]map[*int]context.CancelFunc
-	attempts       int
-	window         time.Time
-	vault          Vault
-	providers      []configstore.Provider
-	sealed         bool
-	legacy         *managedState
-	markerDirty    bool
-	webBootID      string // memory-only; vault unlock does not restore browser identity
+	MCPIdleTimeout  time.Duration
+	HideInternal    bool
+	pageAssets      *pageAssets
+	mu              sync.Mutex
+	loginGate       sync.Mutex
+	passwordMu      sync.Mutex // serializes password work without blocking ordinary authentication
+	path            string
+	state           managedState
+	now             func() time.Time
+	background      map[string]map[*int]context.CancelFunc
+	requests        map[string]map[*int]context.CancelFunc
+	attempts        int
+	window          time.Time
+	vault           Vault
+	providers       []configstore.Provider
+	policyPreviewer PolicyPreviewer
+	auditSink       AuditSink
+	sealed          bool
+	legacy          *managedState
+	markerDirty     bool
+	credential      *loginCredential
+	webSigningKey   string
+	verifyLoginHash func(string, string) bool // configured before serving
+	webBootID       string                    // memory-only; vault unlock does not restore browser identity
 }
 
 func randomSecret() (string, error) {
@@ -175,9 +180,32 @@ func (m *Managed) loginWithOptions(username, password, previous string, automati
 	if !configured {
 		return "", sessionRecord{}, errors.New("set up the admin account first")
 	}
-	if err := m.unlockForLogin(username, password, previous, automatic); err != nil {
+	credential, _, err := m.readLoginCredential()
+	if err != nil {
 		return "", sessionRecord{}, err
 	}
+	if credential == nil {
+		if err := m.unlockForLogin(username, password, previous, automatic); err != nil {
+			return "", sessionRecord{}, err
+		}
+		credential = m.credential
+	} else if !equalSecret(username, credential.Actor.Username) || !m.verifyLoginPassword(credential.PasswordHash, password) {
+		return "", sessionRecord{}, configstore.ErrAuthentication
+	}
+	if previous != "" {
+		if err := m.unlockVault(previous, automatic); err != nil {
+			return "", sessionRecord{}, err
+		}
+	}
+	m.mu.Lock()
+	if m.markerDirty {
+		if err := m.writeMarker(); err != nil {
+			m.mu.Unlock()
+			return "", sessionRecord{}, err
+		}
+	}
+	m.credential = credential
+	m.mu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
@@ -198,9 +226,9 @@ func (m *Managed) loginWithOptions(username, password, previous string, automati
 	if err != nil {
 		return "", sessionRecord{}, err
 	}
-	session := sessionRecord{Actor: Actor{ID: s.Admin.ID, Username: username, Role: RoleAdmin}, ExpiresAt: now.Add(SessionLifetime).Truncate(time.Second), CSRF: csrf}
-	claims := sessionClaims{Role: RoleAdmin, WebBootID: m.webBootID, RegisteredClaims: jwt.RegisteredClaims{Issuer: s.InstanceID, Subject: session.Actor.ID, Audience: jwt.ClaimStrings{"termcp-web"}, ID: id, IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(session.ExpiresAt)}}
-	key, _ := base64.RawURLEncoding.DecodeString(s.SigningKey)
+	session := sessionRecord{Actor: credential.Actor, ExpiresAt: now.Add(SessionLifetime).Truncate(time.Second), CSRF: csrf}
+	claims := sessionClaims{Role: RoleAdmin, WebBootID: m.webBootID, RegisteredClaims: jwt.RegisteredClaims{Issuer: credential.InstanceID, Subject: session.Actor.ID, Audience: jwt.ClaimStrings{"termcp-web"}, ID: id, IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(session.ExpiresAt)}}
+	key, _ := base64.RawURLEncoding.DecodeString(m.webSigningKey)
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
 	if err != nil {
 		return "", sessionRecord{}, err
@@ -213,12 +241,12 @@ func (m *Managed) loginWithOptions(username, password, previous string, automati
 func (m *Managed) verify(raw string) (string, sessionRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.state.Version == 0 || len(raw) > 8192 {
+	if m.credential == nil || len(raw) > 8192 {
 		return "", sessionRecord{}, errors.New("invalid session")
 	}
-	key, _ := base64.RawURLEncoding.DecodeString(m.state.SigningKey)
+	key, _ := base64.RawURLEncoding.DecodeString(m.webSigningKey)
 	var claims sessionClaims
-	token, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return key, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(m.state.InstanceID), jwt.WithAudience("termcp-web"), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(m.now))
+	token, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return key, nil }, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(m.credential.InstanceID), jwt.WithAudience("termcp-web"), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(m.now))
 	if err != nil || !token.Valid || claims.WebBootID == "" || !equalSecret(claims.WebBootID, m.webBootID) {
 		return "", sessionRecord{}, errors.New("invalid session")
 	}

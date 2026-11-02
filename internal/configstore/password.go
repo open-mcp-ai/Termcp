@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -216,6 +215,9 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		return nil, err
 	}
 	fail := func(err error) (*Repository, error) { _ = lock.Close(); return nil, err }
+	if err := migrateLocalState(root); err != nil {
+		return fail(err)
+	}
 	keysPath := filepath.Join(root, "keys", "config.keys")
 	initialPath := filepath.Join(root, "keys", "config.initializing")
 	if exists, err := pathExists(repositoryCatalogPath(root)); err != nil {
@@ -266,7 +268,8 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 			return fail(err)
 		}
 		r.revision = 1
-		_ = os.Remove(initialPath)
+		_ = removeStoreEntry(initialPath)
+		cleanupLocalMigration(root)
 		return r, nil
 	}
 	store, err := NewID()
@@ -289,11 +292,11 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		k.Destroy()
 		return fail(err)
 	}
-	if err := writeFileAtomic(initialPath, store[:]); err != nil {
+	if err := writeStoreFile(initialPath, store[:]); err != nil {
 		k.Destroy()
 		return fail(err)
 	}
-	if err := writeFileAtomic(filepath.Join(root, "keys", "config.keys"), data); err != nil {
+	if err := writeStoreFile(filepath.Join(root, "keys", "config.keys"), data); err != nil {
 		k.Destroy()
 		return fail(err)
 	}
@@ -303,7 +306,7 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 		return fail(err)
 	}
 	r.revision = 1
-	_ = os.Remove(initialPath)
+	_ = removeStoreEntry(initialPath)
 	return r, nil
 }
 
@@ -358,6 +361,8 @@ func (r *Repository) UnlockPassword(password string) error {
 	r.authGeneration = probe.authGeneration
 	r.password = stored.Password
 	r.automaticUnlock = false
+	cleanupLocalMigration(r.dataDir)
+	r.pruneLocalObjects()
 	return nil
 }
 
@@ -405,7 +410,7 @@ func availablePasswordProtection(stored storedKeyring, expected *Keyring, provid
 }
 
 func (r *Repository) ChangePassword(current, password, confirmation string, providers ...Provider) error {
-	return r.changePassword(current, password, confirmation, providers, writeFileAtomic)
+	return r.changePassword(current, password, confirmation, providers, writeStoreFile)
 }
 
 func (r *Repository) changePassword(current, password, confirmation string, providers []Provider, publish func(string, []byte) error) error {
@@ -481,7 +486,7 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 	if err = r.ready(); err != nil {
 		return err
 	}
-	if err := syncDir(filepath.Dir(path)); err != nil {
+	if err := syncDir(localSyncDirectory(path)); err != nil {
 		return fmt.Errorf("%w: sync keyring directory", ErrDurability)
 	}
 	if !pending {
@@ -582,7 +587,7 @@ func (r *Repository) RebindPasswordProvider(providers ...Provider) error {
 	if len(stored.Slots) == 0 {
 		return ErrProviderUnavailable
 	}
-	err = writeFileAtomic(filepath.Join(r.dataDir, "keys", "config.keys"), data)
+	err = writeStoreFile(filepath.Join(r.dataDir, "keys", "config.keys"), data)
 	if err == nil || errors.Is(err, ErrDurability) {
 		r.automaticUnlock = len(stored.Slots) > 0
 	}

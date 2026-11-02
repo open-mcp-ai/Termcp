@@ -28,7 +28,10 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 		// A nil server means there is nothing to admit against (a logging-only test
 		// harness), so the wrapper passes the call through.
 		if s != nil {
-			if bad, held := s.checkAdmission(ctx, name, request); bad != nil || held {
+			var bad *mcpgo.CallToolResult
+			var held bool
+			ctx, bad, held = s.checkAdmission(ctx, name, request)
+			if bad != nil || held {
 				if bad != nil {
 					slog.DebugContext(ctx, "tool refused by session restriction",
 						append([]any{"tool", name}, restrictionAttrs(request)...)...)

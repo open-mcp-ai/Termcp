@@ -13,7 +13,7 @@ func TestBackgroundWorkSurvivesResponseAndStopsOnAccessChanges(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			m, cookie, session := configuredManaged(t)
 			group := createTestGroup(t, m, cookie, session, "background owners", "viewer")
-			a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"worker","group_id":"`+group.ID+`"}`)
+			a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"worker","group_id":"`+group.ID+`"}`)
 			req := httptest.NewRequest("POST", "http://127.0.0.1/stream", nil)
 			req.Header.Set("Authorization", "Bearer "+a.Token)
 			ctx, finish, status := m.admitToken(req)
@@ -60,7 +60,7 @@ func TestBackgroundWorkSurvivesResponseAndStopsOnAccessChanges(t *testing.T) {
 				method = "PUT"
 				body = `{"revision":1,"group_id":"preset-no-access"}`
 			case "principal-disable":
-				path = "/auth/agents/" + a.Agent.ID
+				path = "/auth/principals/" + a.Agent.ID
 				body = `{"revision":1,"enabled":false}`
 			}
 			if w := managedRequest(t, m.Wrap(http.NotFoundHandler()), method, path, body, cookie, session.CSRF); w.Code != 200 {
@@ -76,7 +76,7 @@ func TestBackgroundWorkSurvivesResponseAndStopsOnAccessChanges(t *testing.T) {
 func TestBackgroundRegistrationRefusesAlreadyRevokedIntent(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	group := createTestGroup(t, m, cookie, session, "revoked owners", "viewer")
-	a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"worker","group_id":"`+group.ID+`"}`)
+	a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"worker","group_id":"`+group.ID+`"}`)
 	req := httptest.NewRequest("POST", "http://127.0.0.1/stream", nil)
 	req.Header.Set("Authorization", "Bearer "+a.Token)
 	ctx, finish, status := m.admitToken(req)
@@ -91,5 +91,78 @@ func TestBackgroundRegistrationRefusesAlreadyRevokedIntent(t *testing.T) {
 	if release, err := RegisterBackgroundWork(ctx, func() {}); err == nil {
 		release()
 		t.Fatal("revoked request registered new background authority")
+	}
+}
+
+func TestDetachedMessageCanRegisterWorkAfterHTTPResponse(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"detached-worker"}`)
+	req := httptest.NewRequest("POST", "http://127.0.0.1/message", nil)
+	req.Header.Set("Authorization", "Bearer "+a.Token)
+	ctx, finish, status := m.admitToken(req)
+	if status != 0 {
+		t.Fatal(status)
+	}
+	// The SSE library sends 202 and handles the message on a detached context.
+	message, stop := context.WithCancel(context.WithoutCancel(ctx))
+	defer stop()
+	finish()
+	release, err := RegisterBackgroundWork(message, func() {})
+	if err != nil {
+		t.Fatal("HTTP response completion revoked the live message", err)
+	}
+	release()
+	stop()
+	if release, err = RegisterBackgroundWork(message, func() {}); err == nil {
+		release()
+		t.Fatal("cancelled message registered new work")
+	}
+}
+
+func TestDetachedMessageCannotReuseAuthorityAfterPermissionRestore(t *testing.T) {
+	for _, change := range []string{"principal", "role"} {
+		t.Run(change, func(t *testing.T) {
+			m, cookie, session := configuredManaged(t)
+			a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"stale-detached-worker"}`)
+			req := httptest.NewRequest("POST", "http://127.0.0.1/message", nil)
+			req.Header.Set("Authorization", "Bearer "+a.Token)
+			ctx, finish, status := m.admitToken(req)
+			if status != 0 {
+				t.Fatal(status)
+			}
+			message := context.WithoutCancel(ctx)
+			finish()
+			h := m.Wrap(http.NotFoundHandler())
+			for i, enabled := range []bool{false, true} {
+				path, method := "/auth/principals/"+a.Agent.ID, "PATCH"
+				input := map[string]any{"revision": i + 1, "enabled": enabled}
+				if change == "role" {
+					path, method = "/auth/permissions", "PUT"
+					policy := defaultPolicy()
+					if !enabled {
+						policy[RoleAgent] = []string{}
+					}
+					input = map[string]any{"revision": i + 1, "permissions": policy}
+				}
+				body, _ := json.Marshal(input)
+				if w := managedRequest(t, h, method, path, string(body), cookie, session.CSRF); w.Code != 200 {
+					t.Fatal(w.Code, w.Body)
+				}
+			}
+			if release, err := RegisterBackgroundWork(message, func() {}); err == nil {
+				release()
+				t.Fatal("stale message reused authority after a disable/enable cycle")
+			}
+			ctx, finish, status = m.admitToken(req)
+			if status != 0 {
+				t.Fatal("restored permission did not admit a fresh request", status)
+			}
+			defer finish()
+			if release, err := RegisterBackgroundWork(ctx, func() {}); err != nil {
+				t.Fatal("fresh request retained stale authority", err)
+			} else {
+				release()
+			}
+		})
 	}
 }

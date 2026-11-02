@@ -17,6 +17,15 @@ func HasAuthentication(dataDir string) (bool, error) { return pathExists(authent
 
 // A stale initialization marker cannot authorize replacing a profile catalog.
 func hasProfileCiphertext(dataDir string) (bool, error) {
+	if state, err := loadLocalState(dataDir); err == nil {
+		for _, h := range state.Envelopes {
+			if ObjectKind(h[12]) == KindProfile {
+				return true, nil
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
 	entries, err := os.ReadDir(filepath.Join(dataDir, "ssh_configs"))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -147,7 +156,7 @@ func (r *Repository) WriteAuthentication(data []byte) error {
 	if err != nil {
 		return err
 	}
-	err = writeFileAtomic(authenticationPath(r.dataDir), envelope.Bytes())
+	err = writeStoreFile(authenticationPath(r.dataDir), envelope.Bytes())
 	if err == nil || errors.Is(err, ErrDurability) {
 		r.authGeneration = generation
 	}

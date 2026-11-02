@@ -12,9 +12,6 @@ import (
 func repairAmbiguousAgentPolicies(state *managedState) bool {
 	changed := false
 	for id, group := range state.Groups {
-		if !group.Policy.IsV2() {
-			continue
-		}
 		policy := clonePolicy(group.Policy)
 		warnings := slices.Clone(group.PolicyWarnings)
 		repaired := false

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -37,8 +36,8 @@ func TestRepositoryRoundTripRenameAndDelete(t *testing.T) {
 	if _, err := os.Stat(repo.objectPath(afterRename)); err != nil {
 		t.Fatalf("renamed ciphertext missing: %v", err)
 	}
-	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("old ciphertext path remains after rename: %v", err)
+	if filepath.Dir(repo.objectPath(afterRename)) != filepath.Join(repo.dataDir, "ssh_configs", "production") || repo.objectPath(afterRename) == oldPath {
+		t.Fatal("renamed ciphertext did not stay with its host directory")
 	}
 	firstStatus := repo.Status()
 	if firstStatus.Profiles != 1 || firstStatus.Revision != 3 {
@@ -89,6 +88,9 @@ func TestEncryptionPreferenceIsAuthenticatedCatalogState(t *testing.T) {
 	}
 	// A plaintext file cannot override the authenticated catalog state.
 	settingsPath := filepath.Join(dir, "keys", "config.settings")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
+		t.Fatal(err)
+	}
 	settingsData := []byte(`{"version":1,"encrypt_new":false}`)
 	if err := os.WriteFile(settingsPath, settingsData, 0o600); err != nil {
 		t.Fatal(err)
@@ -112,12 +114,12 @@ func TestEncryptionPreferenceIsAuthenticatedCatalogState(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalogPath := repositoryCatalogPath(dir)
-	catalogBytes, err := os.ReadFile(catalogPath)
+	catalogBytes, err := readStoreFileForTest(catalogPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalogBytes[len(catalogBytes)-1] ^= 0x80
-	if err := os.WriteFile(catalogPath, catalogBytes, 0o600); err != nil {
+	if err := overwriteStoreFileForTest(catalogPath, catalogBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenRepository(dir, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {
@@ -138,11 +140,8 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := repo.refs["alpha"]
-	first := filepath.Join(
-		dir, "ssh_configs", "alpha",
-		strings.ToLower(hexString(before.generationID[:]))+".enc",
-	)
-	firstBytes, err := os.ReadFile(first)
+	first := repo.objectPath(before)
+	firstBytes, err := readStoreFileForTest(first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,10 +152,7 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 	if after.objectID != before.objectID || after.generationID == before.generationID {
 		t.Fatalf("object identity = %x/%x, want stable object and fresh generation", after.objectID, after.generationID)
 	}
-	secondBytes, err := os.ReadFile(filepath.Join(
-		dir, "ssh_configs", "alpha",
-		strings.ToLower(hexString(after.generationID[:]))+".enc",
-	))
+	secondBytes, err := readStoreFileForTest(repo.objectPath(repo.refs["alpha"]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,45 +164,23 @@ func TestRepositorySaveUsesStableObjectAndFreshGeneration(t *testing.T) {
 	}
 }
 
-func TestRepositoryMigratesLegacyObjectsLayout(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x76))
-	dir := t.TempDir()
-	repo, err := InitializeRepository(dir, NewEnvProvider(""))
+func TestCentralStateDoesNotFollowMovedObjects(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x71))
+	r, err := InitializeRepository(t.TempDir(), NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.Save("kali", []byte("password = \"synthetic\"\n")); err != nil {
+	if err = r.Save("kali", []byte("retained")); err != nil {
 		t.Fatal(err)
 	}
-	ref := repo.refs["kali"]
-	newPath := repo.objectPath(ref)
-	legacyPath := repo.legacyObjectPath(ref)
-	if err := repo.Close(); err != nil {
+	path := r.objectPath(r.refs["kali"])
+	if err = os.Rename(path, path+".moved"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(newPath, legacyPath); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Remove(filepath.Dir(newPath))
-
-	reopened, err := OpenRepository(dir, NewEnvProvider(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	if _, err := os.Stat(newPath); err != nil {
-		t.Fatalf("legacy ciphertext was not migrated to the profile directory: %v", err)
-	}
-	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy ciphertext remains: %v", err)
-	}
-	got, err := reopened.Read("kali")
-	if err != nil || !bytes.Equal(got, []byte("password = \"synthetic\"\n")) {
-		t.Fatalf("migrated profile read = %q, err %v", got, err)
+	dir := r.dataDir
+	_ = r.Close()
+	if _, err = OpenRepository(dir, NewEnvProvider("")); err == nil {
+		t.Fatal("missing identity-addressed body was silently replaced")
 	}
 }
 
@@ -227,12 +201,12 @@ func TestRepositoryDetectsTamperingAndWrongProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, err := os.ReadFile(path)
+	raw, err := readStoreFileForTest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw[len(raw)-1] ^= 0x80
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := overwriteStoreFileForTest(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenRepository(dir, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {

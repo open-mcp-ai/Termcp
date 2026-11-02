@@ -1,5 +1,7 @@
 # Admin 主密码与共享 Main Key
 
+**2026-11-02 更新**：当前实现使用 [Local state 与独立密码](local-state-and-passwords.md)。登录密码与配置密码仅初始化时相同，后续独立；登录校验、密钥保护、identity 和 EDK 集中到 `local-state/state.json`，正文按对象身份保存。下方内容记录旧共享主密码方案，不再代表现行存储和改密行为。
+
 状态：已实现，2026-10-29。此方案取代此前“独立认证密钥环”的候选设计。认证和主机配置使用同一 Repository、同一密钥环及同一 Main Key。
 
 关联：[配置加密](config-encryption.md)、[认证与签发](auth-issuance.md)、[stdio/daemon 协商](stdio-daemon-negotiation.md)。[简易 MCP token](mcp-static-tokens.md) 已实现，OAuth 仍未实现。

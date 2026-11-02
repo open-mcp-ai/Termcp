@@ -137,6 +137,14 @@ func requestSurface(r *http.Request) string {
 func (m *Managed) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		m.mu.Lock()
+		auditSink := m.auditSink
+		m.mu.Unlock()
+		r = r.WithContext(withAuditSink(r.Context(), auditSink))
+		if r.URL.Path == "/auth/agents" || strings.HasPrefix(r.URL.Path, "/auth/agents/") {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, pageAssetsPrefix) {
 			m.servePageAsset(w, r)
 			return
@@ -203,7 +211,16 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 			authError(w, 403, "WebSocket origin is required")
 			return
 		}
-		if !m.allows(session.Actor.Role, requestSurface(r)) {
+		minimal := r.URL.Path == "/auth" || r.URL.Path == "/auth/unlock" || r.URL.Path == "/auth/logout" || r.URL.Path == "/auth/password"
+		if m.NeedsUnlock() && !minimal {
+			if r.Method == "GET" && requestSurface(r) == "web" {
+				http.Redirect(w, r, "/auth", http.StatusSeeOther)
+			} else {
+				authError(w, 423, "vault is locked; sign in and unlock configuration encryption at /auth")
+			}
+			return
+		}
+		if !minimal && !m.allows(session.Actor.Role, requestSurface(r)) {
 			authError(w, 403, "role does not allow this entrance")
 			return
 		}
@@ -215,6 +232,8 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 		}
 		r = r.WithContext(ctx)
 		switch {
+		case r.URL.Path == "/auth/unlock" && r.Method == "POST":
+			m.unlock(w, r)
 		case r.URL.Path == "/auth/mcp":
 			m.mcpProbe(w, r)
 		case r.URL.Path == "/auth/access":
@@ -223,18 +242,32 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 				return
 			}
 			m.accessCatalog(w, r)
+		case r.URL.Path == "/auth/access/preview":
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			m.accessPreview(w, r)
 		case isGroupPath(r.URL.Path):
 			if session.Actor.Role != RoleAdmin {
 				authError(w, 403, "admin required")
 				return
 			}
-			m.groupManagement(w, r)
-		case r.URL.Path == "/auth/principals" || r.URL.Path == "/auth/agents" || r.URL.Path == "/auth/tokens" || strings.HasPrefix(r.URL.Path, "/auth/agents/") || strings.HasPrefix(r.URL.Path, "/auth/tokens/"):
+			if unsafeMethod(r.Method) {
+				m.audited(w, r, auditAction(r), m.groupManagement)
+			} else {
+				m.groupManagement(w, r)
+			}
+		case r.URL.Path == "/auth/principals" || r.URL.Path == "/auth/tokens" || strings.HasPrefix(r.URL.Path, "/auth/principals/") || strings.HasPrefix(r.URL.Path, "/auth/tokens/"):
 			if session.Actor.Role != RoleAdmin {
 				authError(w, 403, "admin required")
 				return
 			}
-			m.credentials(w, r)
+			if unsafeMethod(r.Method) {
+				m.audited(w, r, auditAction(r), m.credentials)
+			} else {
+				m.credentials(w, r)
+			}
 		case r.URL.Path == "/auth/logout" && r.Method == "POST":
 			if err := m.revoke(id); err != nil {
 				authError(w, 500, "could not save logout; try again")
@@ -247,13 +280,17 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 				authError(w, 403, "admin required")
 				return
 			}
-			m.permissions(w, r)
+			if r.Method == "PUT" {
+				m.audited(w, r, auditAction(r), m.permissions)
+			} else {
+				m.permissions(w, r)
+			}
 		case r.URL.Path == "/auth/password" && r.Method == "POST":
 			if session.Actor.Role != RoleAdmin {
 				authError(w, 403, "admin required")
 				return
 			}
-			m.password(w, r)
+			m.audited(w, r, auditAction(r), m.password)
 		case r.URL.Path == "/permissions" && (r.Method == "GET" || r.Method == "HEAD"):
 			m.page(w, r)
 		case r.URL.Path == "/auth" && r.Method == "GET":
@@ -292,14 +329,15 @@ func (m *Managed) status(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Lock()
 	configured := m.sealed || m.legacy != nil
-	migration := m.legacy != nil && !m.sealed
+	migration := m.credential == nil && (m.legacy != nil || m.sealed)
 	locked := m.sealed && (m.state.Version == 0 || m.vault.AuthenticationLocked())
 	existing := m.vault.AuthenticationInitialized()
+	initialShared := m.credential != nil && m.credential.InitialPasswordsShared
 	m.mu.Unlock()
 	id, session, err := m.requestSession(r)
 	if err == nil {
 		_ = id
-		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt})
+		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": locked, "vault_ready": !locked, "initial_passwords_shared": initialShared})
 		return
 	}
 	if len(r.Header.Values("Authorization")) > 0 {
@@ -369,7 +407,7 @@ func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			if errors.Is(err, configstore.ErrAuthentication) || errors.Is(err, configstore.ErrPasswordRequired) {
-				authError(w, 400, "Enter the existing configuration encryption password to use one master password.")
+				authError(w, 400, "Enter the existing configuration encryption password; it remains independent of the login password.")
 				return
 			}
 			// Filesystem errors must never expose the configuration path or contents.
@@ -384,12 +422,20 @@ func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	token, session, err := m.loginWithOptions(input.Username, input.Password, input.ConfigPassword, input.AutomaticUnlock)
 	if err != nil {
-		authError(w, 401, "Could not sign in. Check the username and master password; migration may also require the previous configuration password.")
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			authError(w, 503, "Legacy account cleanup or login metadata access failed. Check local file permissions and retry.")
+			return
+		}
+		authError(w, 401, "Could not sign in. Check the username and login password; legacy migration may also require the configuration password.")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: int(SessionLifetime.Seconds()), Expires: session.ExpiresAt})
 	http.SetCookie(w, &http.Cookie{Name: preloginCookie, Path: "/auth/", MaxAge: -1, HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode})
-	authJSON(w, 200, map[string]any{"actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt})
+	m.mu.Lock()
+	initialShared := m.credential != nil && m.credential.InitialPasswordsShared
+	m.mu.Unlock()
+	authJSON(w, 200, map[string]any{"actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": m.NeedsUnlock(), "initial_passwords_shared": r.URL.Path == "/auth/setup" && initialShared})
 }
 
 func (m *Managed) password(w http.ResponseWriter, r *http.Request) {
@@ -407,7 +453,7 @@ func (m *Managed) password(w http.ResponseWriter, r *http.Request) {
 			authError(w, 400, "Check the current password; the new passwords must match and contain at least 8 characters.")
 			return
 		}
-		authError(w, 503, "Password replacement did not complete. Sign in with the current or new password to resume safely.")
+		authError(w, 503, "Login password replacement did not complete. Reload and try the current or new login password.")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteLaxMode})
@@ -429,6 +475,7 @@ func (m *Managed) permissions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.mu.Lock()
+		beforeRevision := m.state.Revision
 		if input.Revision != m.state.Revision {
 			m.mu.Unlock()
 			authError(w, 409, "permissions changed; reload before saving")
@@ -446,6 +493,10 @@ func (m *Managed) permissions(w http.ResponseWriter, r *http.Request) {
 			authError(w, 500, "could not save permissions")
 			return
 		}
+		auditDetail(r.Context(), func(draft *auditDraft) {
+			draft.beforeRevision = beforeRevision
+			draft.afterRevision = s.Revision
+		})
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -459,4 +510,25 @@ func (m *Managed) mcpProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	authJSON(w, 200, map[string]any{"ok": true, "idle_timeout_ms": m.MCPIdleTimeout.Milliseconds()})
+}
+
+func (m *Managed) unlock(w http.ResponseWriter, r *http.Request) {
+	if !m.loginGate.TryLock() {
+		authError(w, 429, "another password operation is running")
+		return
+	}
+	defer m.loginGate.Unlock()
+	var input struct {
+		Password  string `json:"password"`
+		Automatic bool   `json:"automatic_unlock"`
+	}
+	if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil {
+		authError(w, 400, "invalid unlock request")
+		return
+	}
+	if err := m.UnlockVault(input.Password, input.Automatic); err != nil {
+		authError(w, 400, "Configuration unlock failed. Check the configuration password and encrypted data.")
+		return
+	}
+	authJSON(w, 200, map[string]bool{"ok": true, "locked": false})
 }
