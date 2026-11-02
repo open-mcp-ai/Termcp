@@ -1769,8 +1769,25 @@ credential sits.
 There is **no `kind` field**. What an extension does is what it declares: `command`
 (a program on a pipe channel), `url` (an HTTP MCP endpoint relayed by termcp),
 `paths` (a read-only SFTP window), `mode = "pty"` (a terminal), or `forwards`
-(tunnels). A template that declares none of these is refused, because an empty
-container can never do anything.
+(tunnels). These are not alternatives: one template may declare a `command` **and**
+`forwards`, and the tunnels come up and go down with that same session, so a program
+on a remote host that also needs a port does not need two extensions that know
+nothing about each other. `local`, `remote` and `dynamic` entries mix freely in one
+list. (`url` is the one exception: the relay runs inside termcp, so an endpoint
+template still requires an internal target.)
+
+Three consequences of declaring `forwards` are not visible in the field:
+
+- **It changes when the extension runs.** With none it is lazy — dialled only on a
+  caller's ask and reclaimed after `idle_timeout`. With one it is resident from
+  startup, because a listener has no "use" moment to start it.
+- **Order is identity.** A forward is tracked by its position across reconciler
+  walks, so reordering the list is not cosmetic.
+- **A partial failure is kept.** A failure at entry 3 does not undo entries 1-2:
+  they stay listening and recorded, and the retry targets only the one that failed.
+  A failed tunnel therefore does not take the session down — the extension reports
+  `failures[]`, is still usable for everything else it declares, and "some forwards
+  failed" is not "the extension is broken".
 
 A legacy template uses `target = "profile"` and top-level `[[forward]]`. A
 multi-host template instead uses repeated `[[targets]]` entries, each with its own
@@ -1984,6 +2001,7 @@ Response 200:
 | `on_lines_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `learn_mode` | Attach each directive's usage line once per reply |
 | `structured_content` | Also send the JSON projection as `structuredContent`. **Off by default**: the two projections carry the same bytes, so the JSON copy is a duplicate a human sees on every call. Pass `true` for a client that reads structured content |
+| `content` | Send the rendered text projection. **On by default**. `content:false` with `structured_content:true` answers with `structuredContent` only; `content:false` alone is refused, because a reply with neither projection carries nothing |
 | `args` | Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets` |
 | `vars` | Named values for `$NAME` in `cmd`. The same mechanism as `args` under another spelling — the position decides the insertion, never which table named the value — so a `$NAME` that is the whole payload and a `$1` that is the whole payload behave identically. Every name must be referenced by cmd: an unused entry is refused before anything runs, and so is a `$NAME` this table does not define. **These values ARE recorded in the server log**, which is what makes the log a faithful record of the call: a value that must not be written down belongs in `secrets` instead |
 | `secrets` | Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, while `vars` is logged verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed |
@@ -1992,12 +2010,17 @@ Response 200:
 The window parameters are identical to the tool's, with the same names and the
 same defaults — they bound what comes back, never what the command does.
 
-`structured_only` is not a window: the windows bound how much of a body comes
-back, this declines a duplicate of the body that did come back. It exists because
-the two projections (rendered text and JSON) carry the same bytes, which is a
-rounding error on a listing and most of the reply on a large read — exactly where
-the windows were meant to protect the caller from paying for output it did not ask
-for. A caller moving a big payload turns it on; one reading `ls` need not.
+`content` and `structured_content` are two switches over the same rule: a reply has
+two projections, and each one is sent only if asked for. `content` is on by default
+(rendered text) and `structured_content` is off by default (its JSON twin), so a
+normal call sends one projection. A program consumer that parses the JSON declines
+the duplicate with `content:false`; combined with `structured_content:true` it gets
+the JSON alone. Asking for NEITHER is a 400, because a reply that carries no bytes
+is a mistake spelled as a request.
+
+REST always returns the JSON envelope as its body — the text is the optional extra
+there — so on that entrance `content:false` omits the `X-Termcp-Text` header and
+never empties the reply. One rule, two entrances.
 
 **Statements.** `;` separates statements and each gets its own slot: `help; ls`
 answers twice. `&&` and `|` stay inside one statement (that is one command).

@@ -265,8 +265,8 @@ func structValue(key, value string) any {
 //
 // The body is always included. A client that renders only this projection is the
 // reason the field exists, so omitting it would leave that client with no bytes
-// at all. The TEXT projection is where the redundancy gets resolved (see
-// Reply.StructuredOnly) — this one stays unconditional.
+// at all. A tool caller can decline the rendered text projection and keep this
+// structured one; this one stays unconditional.
 func (s Slot) Structured() map[string]any {
 	out := make(map[string]any, len(s.Headers)+4)
 	out["protocol"] = Protocol
@@ -298,15 +298,22 @@ type Reply struct {
 	// reply because both projections are produced in one place, and the choice
 	// belongs to the value rather than to whichever transport renders it.
 	StructuredContent bool
+
+	// Content controls the rendered text projection on the MCP wire. It is ON by
+	// default; structured-only callers may turn it off to avoid paying for a
+	// duplicate rendering. REST always serves the structured projection as its body.
+	//
+	// Spelled NEGATIVELY, on purpose: `content:false` is the tool argument, but a Go
+	// zero value has to mean "behave as before", and a Reply built by an early error
+	// return would otherwise ship no text at all. So the field suppresses rather than
+	// grants.
+	NoText bool
 }
 
 // Text renders every slot, separated by one blank line between responses (an
 // HTTP message ends at its body; the separator is what makes two responses two).
-//
-// An empty string when the reply asked for the structured projection only — see
-// Reply.StructuredOnly. The caller (the tool result) then sends no text content,
-// which is the point: a client reading only structuredContent gets the same
-// answer for half the bytes.
+// The MCP tool-result renderer can omit this projection when NoText is set; the
+// underlying reply remains complete for REST, whose body is always structured.
 func (r Reply) Text() string {
 	parts := make([]string, 0, len(r.Slots))
 	for _, s := range r.Slots {

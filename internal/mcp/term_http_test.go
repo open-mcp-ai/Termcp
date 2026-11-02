@@ -445,8 +445,46 @@ func TestStructuredContentIsOffByDefault(t *testing.T) {
 	}
 }
 
+// TestContentProjectionSwitchPinsAllFourCombinations pins both projections and
+// refuses the empty cell, so the MCP wire never silently sends nothing.
+func TestContentProjectionSwitchPinsAllFourCombinations(t *testing.T) {
+	s := newTestServer(t)
+
+	// Existing calls remain text-only by default; opting into structured content
+	// keeps the text projection too.
+	defaultResult := termCall(t, s, map[string]any{"cmd": "help"})
+	if len(defaultResult.Content) == 0 || defaultResult.StructuredContent != nil {
+		t.Fatalf("default projections = content:%d structured:%v, want text only", len(defaultResult.Content), defaultResult.StructuredContent)
+	}
+	both := termCall(t, s, map[string]any{"cmd": "help", "structured_content": true})
+	if len(both.Content) == 0 || both.StructuredContent == nil {
+		t.Fatalf("both projections = content:%d structured:%v, want both", len(both.Content), both.StructuredContent)
+	}
+
+	// A structured-only MCP result has no text content, but keeps the JSON object.
+	structuredOnly := termCall(t, s, map[string]any{"cmd": "help", "content": false, "structured_content": true})
+	if len(structuredOnly.Content) != 0 || structuredOnly.StructuredContent == nil {
+		t.Fatalf("structured-only projections = content:%d structured:%v", len(structuredOnly.Content), structuredOnly.StructuredContent)
+	}
+
+	// Asking for neither is a caller error; do not return an empty shell.
+	empty := termCall(t, s, map[string]any{"cmd": "help", "content": false, "structured_content": false})
+	if !empty.IsError || !strings.Contains(toolResultText(empty), "both projections are declined") {
+		t.Fatalf("empty projection request = error:%v text:%q", empty.IsError, toolResultText(empty))
+	}
+
+	// The REST body is always the structured projection, so content:false can only
+	// suppress the optional rendered header; it must not erase the body. The rule is
+	// the same on both entrances — declining both projections is a 400 even where the
+	// body would still be safe, because one argument table gets one meaning.
+	rest := postTerm(t, s, `{"cmd":"help","content":false,"structured_content":true}`)
+	if rest.Code != http.StatusOK || rest.Header().Get("X-Termcp-Text") != "" || termSlots(t, rest)[0]["body"] == "" {
+		t.Fatalf("REST structured-only reply = status:%d text:%q body:%v", rest.Code, rest.Header().Get("X-Termcp-Text"), termSlots(t, rest)[0]["body"])
+	}
+}
+
 // TestStructuredContentOverHTTP pins the same switch on the REST entrance.
-//
+
 // The two entrances differ in which projection is primary, and that is why the
 // switch means the mirror image of itself here. Over MCP the `content` field is
 // mandatory, so the text is the default and structuredContent is the optional

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 新增
+
+- **`term` 可以只要 JSON，不要文本（#231）**。回复有两种投影：渲染文本和它的 JSON 双胞胎。`structured_content` 加上后者，新增的 `content:false` 去掉前者，程序化调用方（机器人、CI）于是只为真正解析的那半付费。两者都拒绝是 400：一条要求「一个字节都别回」的命令是打错的请求，不是请求。REST 的 body 本来就是 JSON，所以那边 `content:false` 只去掉可选的 `X-Termcp-Text` 头。
+
+### 改进
+
+- **扩展能同时带 MCP 与隧道，并且终于有人说了（#235）**。`forwards` 早已能和 `command`、`paths`、`--mode pty` 写进同一个模板，local/remote/dynamic 也能混在一张表里，但 `help ext create` 只给了半句，结果是想要「一台远端机器上的 MCP 服务 + 一个通往它背后 Web UI 的端口」的人认定得开两个互不知情的扩展。现在三件看不见的后果写进了 help 与 `docs/api.md`：声明 forward 会让扩展从按需变成常驻；数组的顺序就是身份（第 i 条按第 i 条追踪）；第 3 条失败不会回滚 1-2，也不会把会话带崩。`url` 仍是例外——中继跑在 termcp 本机，所以它要求 internal target。
+- **提示会教正确的做法，不只是说「不对」（#242）**。`--argv` 遇到 shell 语法时，报错不再只说「这是一条命令行」，而是给出能照抄的注入写法（`--argv sh -c $1` 加 args）。MCP instructions 补了两条选型事实：回复是类 HTTP 的信封（`TERM/1 <code>` + 状态头 + body），以及非交互任务该用 pipe（无回显、退出码可观察）、pty 只为 TUI 和交互提示存在（没有结束信号，读到的是采样）。
 
 ## v0.2.9-rc.1 — 2026-11-02
 
