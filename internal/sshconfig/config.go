@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/BurntSushi/toml"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -67,13 +68,46 @@ func ValidateName(name string) error {
 }
 
 // ParseAndValidate decodes TOML and validates by kind.
+// quoteKeys renders the undecoded key list the way the caller wrote it, so the
+// message can be pasted back into the file: `"privat_key"` reads as a location,
+// `privat_key` reads as prose.
+func quoteKeys(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	if len(q) == 1 {
+		return "the key " + q[0]
+	}
+	return "the keys " + strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
+}
+
 func ParseAndValidate(data []byte) (*Entry, error) {
 	if len(data) > maxConfigFileSize {
 		return nil, fmt.Errorf("config file too large (max %d bytes)", maxConfigFileSize)
 	}
 	var e Entry
-	if err := toml.Unmarshal(data, &e); err != nil {
+	// A MISSING KEY IS NOT A TYPO, BUT AN UNKNOWN ONE IS (issue #249.4).
+	//
+	// TOML decoding drops keys the struct does not name, so `privat_key = "..."` or
+	// `trust_unkown_host = true` parses cleanly, produces a zero value, and fails later
+	// at dial time as "unable to authenticate" — a message that describes the symptom
+	// and hides the edit. Metadata.Undecoded() is the decoder's own list of keys it did
+	// not map, which is exactly the caller's typo list.
+	//
+	// It names the keys rather than saying "unknown field": the caller's next action is
+	// to fix these words, and every key named here is one they wrote.
+	md, err := toml.Decode(string(data), &e)
+	if err != nil {
 		return nil, fmt.Errorf("config toml: %w", err)
+	}
+	if und := md.Undecoded(); len(und) > 0 {
+		names := make([]string, len(und))
+		for i, k := range und {
+			names[i] = k.String()
+		}
+		return nil, fmt.Errorf("config has %s that nothing reads, so the value is ignored: %w",
+			quoteKeys(names), ErrInvalid)
 	}
 	k := strings.TrimSpace(strings.ToLower(e.Kind))
 	if k == "" {

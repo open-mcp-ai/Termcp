@@ -387,6 +387,37 @@ func (s *Server) handleSession(sess ssh.Session) {
 	sess.Exit(exitCode)
 }
 
+// describeStartError turns a failed exec into the sentence that names the mistake
+// (issue #208.2).
+//
+// `--argv "cmd /c echo A"` is a COMMAND LINE quoted as one word. The shell grammar is
+// right to keep it whole — that is what quoting does — so it reaches exec as a single
+// program name, and exec answers `executable file not found in %PATH%`. The caller then
+// goes looking in PATH for something that was never in PATH because it was never a
+// program. The failure is the quoting, and this is the last layer that can see it: the
+// argv arrives already split, so the parse cannot tell "one program whose path has
+// spaces" from "a line somebody quoted".
+//
+// THE TWO READINGS ARE DISAMBIGUATED BY THE LOOKUP, not by the space. A real path with
+// spaces (`C:\Program Files\…`) resolves and is left alone; a name that does not
+// resolve and contains a space is a line, and the guess costs nothing when it is wrong
+// because the suggestion names the form that always works.
+func describeStartError(cmd *exec.Cmd, err error) string {
+	msg := err.Error()
+	name := strings.TrimSpace(cmd.Path)
+	if name == "" || !strings.Contains(name, " ") {
+		return msg
+	}
+	if _, lookErr := exec.LookPath(name); lookErr == nil {
+		return msg
+	}
+	return msg + "\n" +
+		"this is one word containing spaces, and no program by that name exists: --argv is an\n" +
+		"argv, split into a program and its arguments. If you meant a command line, write the\n" +
+		"words out (`--argv cmd /c echo A`), or hand the whole line to a shell as a value\n" +
+		"(`--argv sh -c $1` with args=[\"echo A; exit 7\"])."
+}
+
 // startProcess launches cmd on the session and reports whether it started. On
 // failure it has already written the reason to the client and ended the session
 // with exit code 1, so the caller's only job is to return.
@@ -403,7 +434,7 @@ func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) 
 		startErr := ps.pty.Start(cmd)
 		ps.mu.Unlock()
 		if startErr != nil {
-			io.WriteString(sess, startErr.Error()+"\n")
+			io.WriteString(sess, describeStartError(cmd, startErr)+"\n")
 			sess.Exit(1)
 			return false
 		}
@@ -427,7 +458,7 @@ func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) 
 	cmd.Stderr = sess.Stderr()
 	if err := cmd.Start(); err != nil {
 		_ = in.Close()
-		io.WriteString(sess, err.Error()+"\n")
+		io.WriteString(sess, describeStartError(cmd, err)+"\n")
 		sess.Exit(1)
 		return false
 	}
