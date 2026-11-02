@@ -346,8 +346,19 @@ func (s *Server) sftpClient(target string) (*sftp.Client, *mcpgo.CallToolResult)
 	return cli, nil
 }
 
-// sftpClientContext resolves a session (or borrowed host, #237) and creates an
-// SFTP client over it. The caller closes the SFTP client and invokes release.
+// sftpClientContext resolves a session (or borrowed host, #237) and returns an SFTP
+// client over it. The caller closes the SFTP client and invokes release.
+//
+// A SESSION'S ENGINE IS REUSED; A BORROWED HOST'S IS NOT (issue #244). The reuse is what
+// removes three round trips — channel open, subsystem request, INIT/VERSION — from every
+// file operation. A borrowed host keeps the old per-call engine because its transport
+// lease is request-scoped: caching one would hand a later call a transport that has
+// already been released, which is a correctness bug traded for a latency win.
+//
+// The shared Client's Close is a no-op (see sftp.Shared), so every existing
+// `defer sftpCli.Close()` in the handlers stays correct without knowing which kind it
+// got. That is deliberate: the alternative was editing twelve handlers and trusting each
+// one to remember which branch it was on.
 func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcpgo.CallToolResult) {
 	var sshCli *ssh.Client
 	var release func()
@@ -365,12 +376,32 @@ func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Cl
 			return nil, nil, toolError(code, "%s", err.Error())
 		}
 	} else {
-		_, client, bad := s.sshClientForSession(target)
+		sess, client, bad := s.sshClientForSession(target)
 		if bad != nil {
 			return nil, nil, bad
 		}
 		sshCli = client
 		release = func() {}
+		// A Server built as a struct literal (tests, embedded uses) has no engine cache,
+		// and a file operation must still work: the cache is an optimisation, so its
+		// absence falls back to the per-call engine that was the only behaviour before.
+		if s.sftpEngines == nil {
+			cli, err := sftp.NewClient(sshCli)
+			if err != nil {
+				release()
+				return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
+			}
+			return cli, release, nil
+		}
+		// The canonical session id, not the caller's spelling: `read <id> file` and
+		// `read <name> file` name the same session and must share one engine, and the
+		// DEAD hook that evicts it is called with this id.
+		view, err := s.sftpEngines.get(sess.ID, sshCli)
+		if err != nil {
+			release()
+			return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
+		}
+		return view, release, nil
 	}
 
 	cli, err := sftp.NewClient(sshCli)

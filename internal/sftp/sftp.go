@@ -80,10 +80,31 @@ type FileStatResult struct {
 // sftpClient abstracts SFTP operations.
 type Client struct {
 	client *sftp.Client
+	// shared marks a Client that borrows somebody else's engine, so Close is a no-op.
+	// It is a field rather than a second type because every operation below is the
+	// same call either way — only the lifetime differs, and lifetime is what this flag
+	// records.
+	shared bool
 }
 
-// Close closes the SFTP client.
+// Shared wraps an existing engine as a Client whose Close does nothing.
+//
+// WHY A VIEW RATHER THAN A REFERENCE COUNT: the engine's lifetime is its session's, and
+// a caller cannot know when the last of several concurrent calls finishes. Handing out
+// an owned-looking Client would invite `defer Close()`, which would leave every later
+// call holding a dead engine — the bug this type exists to make impossible to write.
+func Shared(engine *sftp.Client) *Client {
+	return &Client{client: engine, shared: true}
+}
+
+// Close closes the SFTP client, unless it is shared.
 func (s *Client) Close() error {
+	if s.shared {
+		// Nothing to close: the session owns the engine and closes it when the session
+		// ends. Silently succeeding is the honest answer — the caller's contract is
+		// "release what this call opened", and this call opened nothing.
+		return nil
+	}
 	return s.client.Close()
 }
 

@@ -22,22 +22,25 @@ func TestALearnedQuietThresholdReplacesTheFloorForThisChannel(t *testing.T) {
 	awaitPtyReady(t, s, h)
 
 	// Seed the learning rather than waiting for it: a channel that has reported two
-	// chunks 20ms apart has shown its rhythm, and the wait should use it. Seeding is
-	// what makes the assertion below about the WAIT and not about how fast this
-	// machine's shell happens to be.
+	// chunks 20ms apart has shown its rhythm, and the wait should use it.
 	s.quietTracker(h).seed(20 * time.Millisecond)
 
-	start := time.Now()
 	got := termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{"echo learned-quiet"}})
-	elapsed := time.Since(start)
-
 	if !strings.Contains(got, "learned-quiet") {
 		t.Fatalf("the command's output is missing:\n%s", got)
 	}
-	// The floor alone would put the earliest possible answer at 500ms. Anything
-	// under it means the channel's own threshold was used.
-	if elapsed >= ptyQuiet {
-		t.Errorf("a channel that reported 20ms gaps still waited %v, at or above the %v floor", elapsed, ptyQuiet)
+	// WHICH THRESHOLD THE WAIT USED, READ RATHER THAN INFERRED.
+	//
+	// This assertion used to be `elapsed < ptyQuiet`, and it was wrong twice over: it
+	// charged the shell's own latency (measured 270ms for an echo here: the typed line's
+	// echo, a repaint, then the output) to the wait, and it treated a constant chosen for
+	// the SLOWEST observed shell as the ceiling for this one. Under the full-suite load
+	// that latency crossed 500ms and the test failed with the learner working correctly.
+	// The fact the test is about — did the wait use this channel's threshold? — is
+	// recorded now, so nothing has to be derived from a clock.
+	if used := s.quietTracker(h).quietUsed(); used >= ptyQuiet {
+		t.Errorf("the wait used %v, the floor for an unmeasured channel, although this one "+
+			"had been seeded at 20ms gaps (want %v)", used, ptyQuietMin)
 	}
 }
 

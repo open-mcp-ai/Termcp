@@ -112,6 +112,11 @@ type Server struct {
 	// ptyQuiet is a bounded learner per channel (see pty_quiet.go). It is dropped
 	// on channel close and on session DEAD.
 	ptyQuiet *quietTrackers
+
+	// sftpEngines caches one SFTP subsystem per SSH connection (see
+	// sftp_engines.go), so a file operation does not pay three round trips to open
+	// its own engine every call (issue #244).
+	sftpEngines *sftpEngines
 }
 
 // Option customizes a Server at construction time. Options keep New's signature
