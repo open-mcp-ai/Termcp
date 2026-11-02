@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,5 +95,64 @@ func TestTheWindowGuardLeavesNonContentAlone(t *testing.T) {
 	}
 	if !strings.Contains(refusal, "peer's frame log") {
 		t.Errorf("the refusal was truncated before it named the right form:\n%s", refusal)
+	}
+}
+
+// A PEER'S ANSWER IS CONTENT TOO, AND IT WAS THE BIGGEST ONE.
+//
+// `bytes_limit` held on the terminal's own listings and not on the two doors that
+// return a peer's document: `get <s> mcp:1 tools` and `cdp protocol` answered with
+// whatever the peer published — the case issue #209 is actually about, a 41 KB
+// tools/list — while a window that small would have cut any local listing to size.
+// Both paths return a slot literal and never name a window, so these two assertions
+// are the regression: without the guard they answer 200 with the whole document.
+func TestAPeersDocumentObeysTheCallersWindow(t *testing.T) {
+	s := newTestServer(t)
+	internalSession(t, s)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		id := req["id"]
+		switch req["method"] {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{"protocolVersion": "2024-11-05",
+					"serverInfo":   map[string]any{"name": "mock", "version": "1"},
+					"capabilities": map[string]any{"tools": map[string]any{}}}})
+		case "tools/list":
+			// A table with enough text in it that a 60-byte window cannot hold it.
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{"tools": []map[string]any{
+					{"name": "echo", "description": strings.Repeat("describe the echo tool. ", 12),
+						"inputSchema": map[string]any{"type": "object"}},
+					{"name": "shout", "description": strings.Repeat("describe the shout tool. ", 12),
+						"inputSchema": map[string]any{"type": "object"}},
+				}}})
+		default:
+			http.Error(w, "unknown method", 404)
+		}
+	}))
+	defer srv.Close()
+
+	h := handleFrom(t, termText(t, s, map[string]any{"cmd": "open internal mcp " + srv.URL}))
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	whole := termText(t, s, map[string]any{"cmd": "get " + h + " tools"})
+	if len(whole) <= 60 {
+		t.Fatalf("the mock table is too small to prove anything:\n%s", whole)
+	}
+	cut := termText(t, s, map[string]any{"cmd": "get " + h + " tools", "bytes_limit": 60})
+	if !strings.HasPrefix(cut, "TERM/1 206") {
+		t.Fatalf("a peer's tools/list ignored bytes_limit=60:\n%s", firstLine(cut))
+	}
+	if !strings.Contains(cut, "Content-Range: bytes */") {
+		t.Errorf("the cut table does not report its full size, so it cannot be priced:\n%s", cut)
+	}
+	// A single tool's full schema takes the same path.
+	schema := termText(t, s, map[string]any{"cmd": "get " + h + " tools echo", "bytes_limit": 60})
+	if !strings.HasPrefix(schema, "TERM/1 206") {
+		t.Errorf("one tool's schema ignored bytes_limit=60:\n%s", firstLine(schema))
 	}
 }
