@@ -546,9 +546,10 @@ clock every other directive uses.`
 //   - A pty is a terminal. Whatever runs inside it is the shell's child, not
 //     ours, and a terminal does not report "the command inside me finished".
 //     There is no signal to wait for, so `run` on a pty waits for the OUTPUT to
-//     stop: half a second without a new byte ends the wait. Only a command that
-//     has printed nothing yet has no output to watch, and that wait runs to the
-//     caller's window.
+//     stop: half a second without a new byte ends the wait — or less, once this
+//     channel has measured its own prompt and found it answers faster. Only a
+//     command that has printed nothing yet has no output to watch, and that wait
+//     runs to the caller's window.
 //
 // That is why an empty reply on a pty is not evidence the command produced
 // nothing — it is evidence nothing arrived within the window. Raising `timeout`
@@ -614,6 +615,10 @@ therefore waits for the stream to go STILL — half a second without a new byte
 ends the wait, longer than a pipe needs because a prompt repaints itself — and
 falls back to timeout seconds (default 2) only while the command has printed
 nothing at all, where there is nothing else to watch.
+
+The half second is a STARTING bet, not a constant: a channel that has shown its
+chunks arriving closer together stops paying for a slower shell elsewhere, down to
+a quarter second. It never waits longer than the half second, whatever it sees.
 
 The reply says WHICH of the two happened, because the difference is the whole
 question: Completion: quiet means the stream went quiet (the ordinary ending — the
