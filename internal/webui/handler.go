@@ -176,6 +176,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/extensions/batch", h.handleExportExtensions)
 	mux.HandleFunc("POST /api/extensions/batch", h.handleImportExtensions)
 	mux.HandleFunc("GET /api/extensions/{name}", h.handleGetExtension)
+	mux.HandleFunc("POST /api/extensions/{name}/preview", h.handlePreviewExtension)
 	mux.HandleFunc("PUT /api/extensions/{name}", h.handleUpdateExtension)
 	mux.HandleFunc("DELETE /api/extensions/{name}", h.handleDeleteExtension)
 	mux.HandleFunc("POST /api/extensions/{name}/retry", h.handleRetryExtension)

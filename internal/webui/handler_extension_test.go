@@ -770,6 +770,13 @@ help = "the hosts this runs on"
 		t.Fatalf("template view should be the hole document:\n%d %s", tomlView.Code, tomlView.Body.String())
 	}
 
+	// Preview renders the unsaved template with this installation's values and
+	// validates it without changing the stored template.
+	preview := request(http.MethodPost, "/api/extensions/k8s/preview", template)
+	if preview.Code != http.StatusBadRequest || !strings.Contains(preview.Body.String(), "no value for {{command}}") {
+		t.Fatalf("preview before filling holes = %d: %s", preview.Code, preview.Body.String())
+	}
+
 	// A value is set by name. The caller never mentions config.local.toml.
 	set := request(http.MethodPut, "/api/extensions/k8s",
 		`{"values":{"command":"kubectl-mcp","targets":[{"host":"pi","forward":[{"kind":"local","local_port":8443,"remote_port":443}]}]}}`)
@@ -787,6 +794,14 @@ help = "the hosts this runs on"
 	// not hold 8443.0, which would fail to read back into an int field.
 	if got.Targets[0].Forwards[0].LocalPort != 8443 {
 		t.Errorf("forward port = %d, want 8443", got.Targets[0].Forwards[0].LocalPort)
+	}
+
+	preview = request(http.MethodPost, "/api/extensions/k8s/preview", template)
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `command = "kubectl-mcp"`) || strings.Contains(preview.Body.String(), "{{command}}") {
+		t.Fatalf("preview should return the rendered TOML: %d %s", preview.Code, preview.Body.String())
+	}
+	if again, err := h.Extensions.Store().Template("k8s"); err != nil || string(again) != template {
+		t.Fatalf("preview must not save its template: %v", err)
 	}
 
 	// A value the template never asked for is refused rather than stored: it would

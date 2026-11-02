@@ -774,6 +774,8 @@ function extRepaintWindows() {
 function openExtensionDialog(name) {
   var modal = extModalEl('modal-ext');
   if (!modal) return;
+  var preview = document.getElementById('modal-ext-preview-view');
+  if (preview) preview.classList.add('hidden');
   _extDialogName = name || null;
   showExtError('');
   var title = extModalEl('modal-ext-title');
@@ -786,6 +788,10 @@ function openExtensionDialog(name) {
   /* Removal is a stored template's business: a create has nothing to remove. */
   var delBtn = extModalEl('modal-ext-delete');
   if (delBtn) delBtn.style.display = name ? '' : 'none';
+  /* A preview renders THIS installation's values into the template, so there is
+     nothing to preview before the name (and therefore the values) exists. */
+  var previewBtn = extModalEl('modal-ext-preview');
+  if (previewBtn) previewBtn.style.display = name ? '' : 'none';
   modal.classList.remove('hidden');
   if (name) {
     loadExtensionTemplate(name);
@@ -853,16 +859,13 @@ function extSharingNote(row) {
  * the reason is shown, because the value is the only copy of what was typed. */
 var _extHoles = [];
 
-function extHoleInputId(name) { return 'ext-hole-' + String(name).replace(/[^A-Za-z0-9_-]/g, '_'); }
-
-/* paintExtensionHoles draws one row per hole the template asks for: what it is,
-   what this installation answered, and a box the right size for its type. */
+/* paintExtensionHoles draws the variable table: one row per hole — `{{name}}: what
+   it is for`, then this installation's answer as a preview. */
 function paintExtensionHoles(name, holes) {
   _extHoles = holes || [];
   var box = extModalEl('ext-holes');
   if (!box) {
-    // Built here rather than in index.html, which is at its size budget: the
-    // dialog's own document is the textarea, and this is the part that goes under it.
+    // Built here rather than in index.html, which is at its size budget.
     box = document.createElement('div');
     box.id = 'ext-holes';
     box.className = 'ext-holes';
@@ -876,38 +879,59 @@ function paintExtensionHoles(name, holes) {
     return;
   }
   box.hidden = false;
-  var head = '<div class="ext-holes-head">' + escapeHtml(t('ext.holes.title')) + '</div>' +
-    '<p class="conn-check-hint">' + escapeHtml(t('ext.holes.hint')) + '</p>';
+  var head = '<div class="ext-holes-head">' + escapeHtml(t('ext.holes.title')) + '</div>';
   box.innerHTML = head + _extHoles.map(function (h) {
-    var id = extHoleInputId(h.name);
-    var label = '<label for="' + id + '"><code>{{' + escapeHtml(h.name) + '}}</code>' +
-      (h.help ? ' — ' + escapeHtml(h.help) : '') + '</label>';
-    var input;
-    if (h.type === 'boolean') {
-      input = '<input id="' + id + '" type="checkbox" data-hole="' + escapeHtml(h.name) +
-        '" data-hole-type="boolean"' + (h.value === true ? ' checked' : '') + '>';
-    } else if (h.type === 'array' || h.type === 'table') {
-      input = '<textarea id="' + id + '" rows="4" spellcheck="false" data-hole="' + escapeHtml(h.name) +
-        '" data-hole-type="' + h.type + '">' +
-        escapeHtml(h.value === undefined ? '' : JSON.stringify(h.value)) + '</textarea>';
-    } else if (h.type === 'integer' || h.type === 'number') {
-      input = '<input id="' + id + '" type="number" step="' + (h.type === 'integer' ? '1' : 'any') +
-        '" data-hole="' + escapeHtml(h.name) + '" data-hole-type="' + h.type + '" value="' +
-        escapeHtml(h.value === undefined ? '' : String(h.value)) + '">';
-    } else {
-      input = '<input id="' + id + '" type="text" spellcheck="false" data-hole="' + escapeHtml(h.name) +
-        '" data-hole-type="string" value="' + escapeHtml(h.value === undefined ? '' : String(h.value)) + '">';
-    }
-    return '<div class="ext-hole' + (h.set ? '' : ' is-empty') + '">' + label + input + '</div>';
+    /* A BOOLEAN IS ITS OWN EDITOR. A dialog holding one checkbox asks the same
+       question twice, so a true/false hole is a checkbox in the row and saves when
+       it is ticked; everything else previews its value and opens the editor. */
+    var cell = h.type === 'boolean'
+      ? '<input class="ext-hole-tick" type="checkbox" data-hole="' + escapeHtml(h.name) +
+        '" data-hole-type="boolean" aria-label="' + escapeHtml(h.name) + '"' +
+        (h.value === true ? ' checked' : '') + '>'
+      : '<button type="button" class="ext-hole-value" data-hole="' + escapeHtml(h.name) + '"' +
+        ' title="' + escapeHtml(t('ext.holes.edit')) + '">' +
+        escapeHtml(holePreview(h)) + '</button>';
+    return '<div class="ext-hole' + (h.set ? '' : ' is-empty') + '">' +
+      '<span class="ext-hole-name"><code>{{' + escapeHtml(h.name) + '}}</code>' +
+      (h.help ? ': <span class="ext-hole-help">' + escapeHtml(h.help) + '</span>' : '') + '</span>' +
+      cell + '</div>';
   }).join('');
-  box.querySelectorAll('[data-hole]').forEach(function (el) {
-    el.addEventListener('change', function () { saveExtensionValue(name, el); });
+  box.querySelectorAll('.ext-hole-value').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var hole = _extHoles.filter(function (h) { return h.name === btn.getAttribute('data-hole'); })[0];
+      if (hole) openHoleEditor(name, hole);
+    });
+  });
+  box.querySelectorAll('.ext-hole-tick').forEach(function (tick) {
+    tick.addEventListener('change', function () {
+      var hole = tick.getAttribute('data-hole');
+      putExtensionValue(name, hole, tick.checked).then(function (res) {
+        if (!res.ok) showExtError(t('ext.holes.notApplied') + ' ' + res.text);
+        return res;
+      }).then(function (res) {
+        var doc = {};
+        try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
+        paintExtensionHoles(name, doc.holes || _extHoles);
+      }).catch(function (err) {
+        showExtError(t('ext.modal.saveFailed') + ' ' + ((err && err.message) || err));
+      });
+    });
   });
 }
 
-/* readHoleInput turns what the box holds into the TOML value the template expects.
-   A box that cannot be parsed is not saved and not cleared: the row keeps what was
-   typed and says what is wrong with it. */
+/* holePreview is the cell's text: the value as a person would read it, or a dash
+   for a hole this installation has not answered. The cell is a button, not a
+   field — a one-line box for a JSON array is a scrollbar and a resize grip where
+   the whole value belongs behind a click. */
+function holePreview(h) {
+  if (!h.set || h.value === undefined || h.value === null) return t('ext.holes.empty');
+  if (typeof h.value === 'string') return h.value;
+  return JSON.stringify(h.value);
+}
+
+/* readHoleInput turns what the editor holds into the TOML value the template
+   expects. It reads `data-hole-type`, `value` and `checked` off any element, so
+   the same rules serve the inline box and the editor's textarea. */
 function readHoleInput(el) {
   var kind = el.getAttribute('data-hole-type');
   if (kind === 'boolean') return el.checked;
@@ -929,40 +953,106 @@ function readHoleInput(el) {
   return raw;
 }
 
-function saveExtensionValue(name, el) {
-  var hole = el.getAttribute('data-hole');
-  var value;
-  try {
-    value = readHoleInput(el);
-  } catch (err) {
-    showExtError((err && err.message) || String(err));
-    return;
+/* The value editor: one hole, opened from its row. Built on demand for the same
+   reason the table is — the dialog's markup budget belongs to the template. */
+function holeEditor() {
+  var box = document.getElementById('modal-ext-value');
+  if (box) return box;
+  box = document.createElement('div');
+  box.id = 'modal-ext-value';
+  box.className = 'modal-backdrop hidden';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.innerHTML =
+    '<div class="modal" style="max-width:420px">' +
+    '<div class="modal-h"><h2 id="modal-ext-value-title"></h2>' +
+    '<button type="button" class="modal-x" data-act="cancel" title="' + escapeHtml(t('common.close')) + '">' +
+    '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" ' +
+    'stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button></div>' +
+    '<div class="modal-body">' +
+    '<p id="modal-ext-value-help" class="ext-hole-help"></p>' +
+    '<p id="modal-ext-value-err" class="err" style="display:none"></p>' +
+    '<textarea id="modal-ext-value-text" spellcheck="false" rows="5"></textarea>' +
+    '<div class="modal-actions">' +
+    '<button type="button" class="btn" data-act="cancel">' + escapeHtml(t('common.cancel')) + '</button>' +
+    '<button type="button" class="btn btn-primary" data-act="save">' + escapeHtml(t('common.save')) + '</button>' +
+    '</div></div></div>';
+  document.body.appendChild(box);
+  return box;
+}
+
+function openHoleEditor(name, hole) {
+  var box = holeEditor();
+  var title = box.querySelector('#modal-ext-value-title');
+  var help = box.querySelector('#modal-ext-value-help');
+  var err = box.querySelector('#modal-ext-value-err');
+  var text = box.querySelector('#modal-ext-value-text');
+  title.textContent = hole.name;
+  help.textContent = hole.help || '';
+  help.hidden = !hole.help;
+  err.style.display = 'none';
+  err.textContent = '';
+  text.value = hole.value === undefined || hole.value === null ? '' :
+    (typeof hole.value === 'string' ? hole.value : JSON.stringify(hole.value));
+  text.setAttribute('data-hole-type', hole.type || 'string');
+  function close() {
+    box.classList.add('hidden');
+    box.removeEventListener('keydown', onKey);
+    box.removeEventListener('click', onClick);
   }
-  showExtError('');
+  function fail(msg) {
+    err.textContent = msg;
+    err.style.display = 'block';
+  }
+  function save() {
+    var value;
+    try { value = readHoleInput(text); } catch (e) {
+      fail((e && e.message) || String(e));
+      return;
+    }
+    putExtensionValue(name, hole.name, value).then(function (res) {
+      if (!res.ok) {
+        /* Stored but not applied: the dialog stays open on the value the caller
+           typed, and the reason is the answer's own words. */
+        fail(t('ext.holes.notApplied') + ' ' + res.text);
+        return;
+      }
+      close();
+      var doc = {};
+      try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
+      paintExtensionHoles(name, doc.holes || _extHoles);
+    }).catch(function (e) {
+      fail(t('ext.modal.saveFailed') + ' ' + ((e && e.message) || e));
+    });
+  }
+  function onClick(e) {
+    var act = e.target.closest('[data-act]');
+    if (act) {
+      if (act.getAttribute('data-act') === 'save') save(); else close();
+      return;
+    }
+    if (e.target === box) close();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+  }
+  box.addEventListener('click', onClick);
+  box.addEventListener('keydown', onKey);
+  box.classList.remove('hidden');
+  try { text.focus(); } catch (e) {}
+}
+
+/* putExtensionValue is the one write both the table and the editor use. */
+function putExtensionValue(name, hole, value) {
   var body = {};
   body[hole] = value;
-  fetch(apiPath('/api/extensions/') + encodeURIComponent(name), {
+  return fetch(apiPath('/api/extensions/') + encodeURIComponent(name), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values: body })
   }).then(function (r) {
-    /* A 400 STILL STORED THE VALUE. The store keeps what was typed and reports why
-       the extension cannot start yet; the message is the second half of that, and
-       the first half is why the box does not clear itself. */
     return r.text().then(function (txt) { return { ok: r.ok, text: txt }; });
-  }).then(function (res) {
-    if (!res.ok) {
-      showExtError(t('ext.holes.notApplied') + ' ' + res.text);
-      return;
-    }
-    /* Repainted from the answer, so "filled in" and "still needed" are the
-       server's reading rather than a guess from what was typed. */
-    var doc = {};
-    try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
-    paintExtensionHoles(name, doc.holes || _extHoles);
-    showExtError('');
-  }).catch(function (err) {
-    showExtError(t('ext.modal.saveFailed') + ' ' + ((err && err.message) || err));
   });
 }
 
@@ -1000,9 +1090,8 @@ function loadExtensionTemplate(name) {
    is what tells a reader (and the panel) what the hole is for. */
 function extTomlSeed() {
   return [
-    '# What this extension IS. Holes are written as "{{name}}" and declared under',
-    '# [params.<name>]; Termcp asks this installation for them and keeps the answers',
-    '# in config.local.toml, which is never part of an export.',
+    '# Holes are "{{name}}", declared under [params.<name>]. Their values belong to',
+    '# this installation, are never exported, and survive a template upgrade.',
     'description = "what this extension is for"',
     'target = "internal"',
     'mode = "pipe"',
@@ -1021,6 +1110,60 @@ function extTomlSeed() {
 /* extSaveTemplate writes the document. The values are NOT part of this call: they
    are saved one at a time, as they are typed, and replacing the template must not
    disturb them — that separation is the whole reason a package can be upgraded. */
+function previewExtensionTemplate() {
+  var name = _extDialogName;
+  var template = String((extModalEl('ext-f-toml') || {}).value || '');
+  if (!name) {
+    showExtError(t('ext.preview.needsInstall'));
+    return;
+  }
+  var button = extModalEl('modal-ext-preview');
+  if (button) button.disabled = true;
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/toml; charset=utf-8' },
+    body: template
+  }).then(function (r) {
+    return r.text().then(function (text) {
+      if (!r.ok) throw new Error(text || r.status);
+      return text;
+    });
+  }).then(function (text) {
+    showExtensionPreview(name, text);
+  }).catch(function (err) {
+    showExtError((err && err.message) || String(err));
+  }).then(function () {
+    if (button) button.disabled = false;
+  }, function () {
+    if (button) button.disabled = false;
+  });
+}
+
+function showExtensionPreview(name, rendered) {
+  var box = document.getElementById('modal-ext-preview-view');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'modal-ext-preview-view';
+    box.className = 'modal-backdrop hidden';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.innerHTML = '<div class="modal ext-rendered-preview"><div class="modal-h">' +
+      '<h2></h2><button type="button" class="modal-x" data-preview-close aria-label="' +
+      escapeHtml(t('common.close')) + '">×</button></div>' +
+      '<div class="modal-body"><pre></pre></div></div>';
+    document.body.appendChild(box);
+    box.addEventListener('click', function (e) {
+      if (e.target === box || e.target.closest('[data-preview-close]')) box.classList.add('hidden');
+    });
+    box.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); box.classList.add('hidden'); }
+    });
+  }
+  box.querySelector('h2').textContent = t('ext.preview.title', { name: name });
+  box.querySelector('pre').textContent = rendered;
+  box.classList.remove('hidden');
+}
+
 function extSaveTemplate() {
   var name = _extDialogName;
   var forCreate = !name;
@@ -1236,6 +1379,7 @@ function closeExtAddMenu() {
   extModalEl('modal-ext-close').addEventListener('click', closeExtensionDialog);
   extModalEl('modal-ext-cancel').addEventListener('click', closeExtensionDialog);
   extModalEl('modal-ext-save').addEventListener('click', extSaveTemplate);
+  extModalEl('modal-ext-preview').addEventListener('click', previewExtensionTemplate);
   var modalDelete = extModalEl('modal-ext-delete');
   if (modalDelete) modalDelete.addEventListener('click', function () {
     var name = _extDialogName;

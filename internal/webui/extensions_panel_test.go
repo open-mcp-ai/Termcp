@@ -316,11 +316,35 @@ func TestExtensionCardIsAWindowAndConfigIsAModal(t *testing.T) {
 		t.Error("the default template must show that a hole declares itself")
 	}
 	// THE HOLES ARE THE FORM. A value is set by hole name, never by editing a file.
+	// THE FORM IS A TABLE, AND IT EXPLAINS NOTHING. A caption about saving answers a
+	// question nobody asked; a row is a name, the author's note, and the answer.
+	if strings.Contains(ext, "ext.holes.hint") {
+		t.Error("the form must not explain itself; the table says what to fill")
+	}
+	// The row reads `{{name}}: what it is for` — the placeholder as the template
+	// spells it, then the author's note on the same line.
+	if !strings.Contains(ext, `<code>{{' + escapeHtml(h.name) + '}}</code>`) {
+		t.Error("a row must name the hole the way the template writes it")
+	}
+	if !strings.Contains(ext, `': <span class="ext-hole-help">'`) {
+		t.Error("each row must show the author's note beside the hole's name")
+	}
+	// THE VALUE CELL IS A PREVIEW, NOT A FIELD. It is a button that opens the editor,
+	// so nothing in the table is a box to type into or a corner to drag.
+	if !strings.Contains(ext, `class="ext-hole-value" data-hole=`) {
+		t.Error("the answer must be a preview that opens the editor")
+	}
+	if !strings.Contains(ext, "function openHoleEditor(") {
+		t.Error("clicking a value must open the editor for that hole")
+	}
 	if !strings.Contains(ext, "paintExtensionHoles(name, doc.holes || [])") {
 		t.Error("the configuration must show what the template still asks for")
 	}
 	if !strings.Contains(ext, "body[hole] = value;") {
 		t.Error("a value must be sent keyed by the hole's name")
+	}
+	if !strings.Contains(ext, "function previewExtensionTemplate()") || !strings.Contains(ext, "'/preview'") {
+		t.Error("preview must render the edited document with installed values without saving it")
 	}
 	if !strings.Contains(ext, "JSON.stringify({ values: body })") {
 		t.Error("values travel as the values object, not as a rewritten document")

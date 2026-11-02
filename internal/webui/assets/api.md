@@ -1854,6 +1854,15 @@ extension: rendering would show a document nobody wrote and lose the holes on th
 way back in. There is no per-file route; which file a value lives in is the
 store's business.
 
+### `POST /api/extensions/{name}/preview`
+
+Renders the document in the body against **this installation's** stored values and
+answers the resulting TOML (`application/toml`), or a 400 naming what is missing.
+Nothing is written: the template being previewed is the one in the editor, which
+may not be saved yet, so this is the only way to see the joined document before
+committing to it. It is validated exactly as `GET /api/extensions/{name}` would
+validate a stored one, so a preview cannot approve something the save refuses.
+
 ### `POST /api/extensions`
 
 Creates an extension, from either half of the same idea:

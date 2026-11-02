@@ -156,6 +156,52 @@ func (h *Handler) handleListExtensions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"extensions": rows})
 }
 
+func (h *Handler) handlePreviewExtension(w http.ResponseWriter, r *http.Request) {
+	if h.Extensions == nil {
+		http.Error(w, "extensions are not configured", http.StatusServiceUnavailable)
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "extension name is required", http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, extensions.MaxConfigSize+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > extensions.MaxConfigSize {
+		http.Error(w, "extension template too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	values, err := h.Extensions.Store().Values(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rendered, err := extensions.Render(body, values)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// VALIDATED THE WAY Load VALIDATES, so a preview cannot call something fine that
+	// the store will refuse the moment it is saved.
+	parsed, err := extensions.Parse(rendered)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	parsed.Name = name
+	parsed.Normalize()
+	if err := parsed.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
+	_, _ = w.Write(rendered)
+}
+
 func (h *Handler) handleGetExtension(w http.ResponseWriter, r *http.Request) {
 	if h.Extensions == nil {
 		writeJSON(w, http.StatusOK, map[string]any{})
