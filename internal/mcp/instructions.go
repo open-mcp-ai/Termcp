@@ -33,31 +33,31 @@ const mcpServerInstructions = `termcp — a shell-like DSL over SSH; local ("int
 Replies are HTTP-like: TERM/1 <code>, then state headers (Waited, Content-Range,
 Still-Running, Error-Code) and a body.
 
-cmd = the DSL; sh = a shell command. sh enters cmd only as a VALUE ($1, $2, $NAME),
-never as syntax (/tmp/$1 refused). cmd composes with && || ; &.
+cmd = the DSL; sh = a shell command. A shell line reaches cmd only as a referenced
+VALUE ($1, $NAME), because cmd is parsed as DSL: /tmp/$1 would be read by two
+grammars at once. cmd composes with && || ; &.
 
 Tree: host -> session -> channel/file/forward/peer. connect <host> opens one;
-run/read/write use:<host> … borrow the pool and leave no session. ls lists
-addresses; copy, don't invent. help [verb] has usage.
+run/read/write use:<host> … borrow the pool, leave no session. ls prints the
+addresses that exist; help [verb] the usage.
 
-MODE: pipe (--argv) = no echo, observable exit — use it for scripts and batch
-work; pty = TUI and prompts, no exit signal, so its reply is only a sample.
+MODE: pipe (--argv) = no echo, an observable exit — scripts, batch work; a pty =
+TUI and prompts, no exit signal, so its reply is only a sample.
 
 CAPABILITY — inspect first. ls ext lists resident extensions and their notes;
 ls lists state (learn_mode:true adds usage). MCP: get <session> mcp tools, then
-call <peer> <tool> {json}. CDP: call <peer> {method}. Repeated job? create ext or
+call <peer> <tool> {json}; CDP: call <peer> {method}. Repeated job? create ext or
 open <session> mcp <url>.
 
 A HUMAN IS AN APPROVAL CHANNEL
-  notify FIRST before any password/sudo/passphrase/MFA, confirmation, approval, choice
-or input. Review mode exists so a human sees each capability being granted; guessed,
-echoed or stored secrets — or a bypassed gate (sudo -n, NOPASSWD, setuid) — hide it.
-Keep secrets out of cmd/args; remote echo enters the transcript.
-At a prompt: notify, then WAIT; read slow tasks in pieces, not by polling.
-A long, awkward call or a capability that should exist but does not?
-say what you are trying to do and ask while a human can answer.
-
-REVIEW — review_pending=true means HELD: nothing ran. The reply's approval_id is
-for pairing it with the decision later; it is not authority. Do NOT resubmit or
-retry, and do not poll; notify, then wait.
+  termcp cannot ask a person: notify reaches open Web UI pages, and delivery is not
+ acknowledgement — an answer comes back only as the human's reply or as channel
+ bytes. A password, sudo, MFA or confirmation therefore goes out through notify and
+ the wait is for that answer; polling asks a page, not a person. Review mode lets a
+ human see each capability granted: review_pending=true means HELD, nothing ran;
+ approval_id pairs the request with the decision, and resending queues a second
+ rather than releasing the first. cmd/args reach the server log verbatim, secrets
+ logs names — and the remote shell echoes what it runs anyway.
+ Long, awkward, or missing a capability?
+ say what you are trying to do and ask while a human can answer.
 `

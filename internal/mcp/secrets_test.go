@@ -149,10 +149,11 @@ func TestAnUnusedSecretIsRefused(t *testing.T) {
 // it arrives BEFORE the value does — a caller that learns about `secrets` after putting
 // the password in `args` has already written it down.
 //
-// The negative half matters as much: `cmd` is not a safe carrier just because it is the
+// The negative half mattered as much: `cmd` is not a safe carrier just because it is the
 // DSL. A payload (`run h:1 <the whole line>`) and a flag value (`--data …`) are part of
-// the command line and are logged with it, so the guide says where a password must NOT
-// be typed as well as where it must.
+// the command line and are logged with it. The guide now states the mechanism — which
+// channels the log records verbatim — so the conclusion is drawn from where the bytes go,
+// not from a prohibition. The comment above is retained because it names the failure mode.
 func TestTheGuideSaysWhereAPasswordGoes(t *testing.T) {
 	s := newTestServer(t)
 	out := termText(t, s, map[string]any{})
@@ -161,12 +162,11 @@ func TestTheGuideSaysWhereAPasswordGoes(t *testing.T) {
 		t.Fatalf("the guide never names secrets, so a caller learns about it after the "+
 			"password is already in args:\n%s", out)
 	}
-	if !strings.Contains(out, "password belongs there") {
-		t.Errorf("the guide does not say a password belongs in secrets:\n%s", out)
+	if !strings.Contains(out, "secrets, which records names only") {
+		t.Errorf("the guide does not say what secrets does, which is the only reason a password goes there:\n%s", out)
 	}
-	if !strings.Contains(out, "never typed into cmd or args") {
-		t.Errorf("the guide does not say where a password must NOT be typed, and cmd looks "+
-			"safe because it is the DSL:\n%s", out)
+	if !strings.Contains(out, "cmd, args and vars are") || !strings.Contains(out, "verbatim") {
+		t.Errorf("the guide does not say where a credential gets written down. cmd looks safe because it is the DSL:\n%s", out)
 	}
 	// And the limitation, on the same screen: the terminal echoes what it runs.
 	if !strings.Contains(out, "echoes what it runs") {

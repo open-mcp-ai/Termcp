@@ -251,7 +251,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "args",
 		Kind:    argStringArray,
-		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable, leave only the reference in cmd. DSL and shell are never mixed.",
+		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable and leave only the reference in cmd, which is parsed as DSL.",
 		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",

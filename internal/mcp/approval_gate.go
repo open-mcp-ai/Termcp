@@ -168,18 +168,20 @@ func (s *Server) correlationOf(sess *session.Session, id string) reviewPendingFi
 	return corr
 }
 
-// reviewWaitTail is the operational half of every review-mode reply: what the
-// agent must not do while a request waits. It is a shared constant because a held
-// command line and a held operation answer the same question, and two spellings of
-// one prohibition invite the agent to treat the weaker one as the rule.
+// reviewWaitTail is the operational half of every review-mode reply: what happens
+// while a request waits. It is a shared constant because a held command line and a
+// held operation answer the same question, and two spellings of one rule invite the
+// agent to treat the weaker one as the rule.
 //
 // AN ID IS NOT AN INVITATION TO POLL (#236). The id exists so a harness can CORRELATE
 // this reply with the request it can see in `GET /api/approvals` — proving that the
 // decision it observes belongs to this call — not so the agent can decide it or loop
-// on it. Deciding is a human's act in the Web UI, and the sentence below still says
-// the only correct move is to wait.
-const reviewWaitTail = "A human decides it in the Web UI; nothing happens until then. " +
-	"approval_id names the request for correlation only: do not poll it, resubmit, reword or retry - WAIT."
+// on it. Deciding is a human's act in the Web UI; the sentence below names that and
+// the state it produces, so the next move follows from the mechanism rather than from
+// a list of forbidden verbs.
+const reviewWaitTail = "A human decides it in the Web UI, so the state changes only when they act. " +
+	"approval_id correlates this reply with that request; resubmitting queues another request " +
+	"and leaves this one waiting."
 
 // reviewPendingFields is the correlation half of a review-mode reply: the queue
 // request this call became, so a harness can pair the tool result with the request
