@@ -319,17 +319,17 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 		"confirmation", "approval",
 		"--sticky",
 		"long task ends or fails",
-		"never poll",
-		// The await rule is useless without knowing what not to do while waiting.
-		"never poll",
+		"wait for the person's reply", "no acknowledgement signal",
+		// The await rule follows from notification delivery having no acknowledgement.
+		"polling cannot tell you whether anyone has seen it",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("help notify misses %q: "+want, desc)
 		}
 	}
 	for _, want := range []string{
-		"notify FIRST", "before any password/sudo/", "Review mode exists",
-		"capability being granted", "bypassed gate", "notify, then WAIT",
+		"notify reaches open Web UI pages", "delivery is not", "Review mode",
+		"capability", "polling asks a page, not a person", "password, sudo",
 	} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("initialize instructions miss human-boundary rationale or action %q:\n%s", want, mcpServerInstructions)
@@ -343,7 +343,7 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 // on purpose, but the tool LISTING must not: notify_user's description is sent on
 // every tools/list and is not where a held call is explained.
 func TestInstructionsCarryReviewPendingRule(t *testing.T) {
-	for _, want := range []string{"review_pending", "approval_id", "do not poll", "resubmit"} {
+	for _, want := range []string{"review_pending", "approval_id", "resending queues a second"} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("instructions no longer explain review mode %q:\n%s", want, mcpServerInstructions)
 		}
@@ -357,12 +357,10 @@ func TestInstructionsCarryReviewPendingRule(t *testing.T) {
 	}
 }
 
-// The rule reaches the model in three places, each doing one job: the initialize
-// instructions state it as a rule, and the two tool results restate it for the
-// moment it is met. The two replies are NOT duplicates of each other though --
-// they need opposite next steps, so they share the retry rule (reviewWaitTail)
-// and differ everywhere else: staged text still needs its ending key, queued or
-// held work must not be retried and is checked later via shell_output.
+// The waiting model reaches the agent before the call in initialize instructions,
+// then the tool result tells it that review is pending. The two replies are not
+// duplicates: staged text still needs its ending key, while a queued operation is
+// held until the human decision changes its state.
 func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
 	held := toolResultText(reviewPendingResult(false, reviewPendingFields{}))
 	if !strings.Contains(held, "ending key") {
@@ -375,11 +373,10 @@ func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
 	}
 
 	queued := toolResultText(reviewPendingResult(true, reviewPendingFields{ApprovalID: "req-1"}))
-	if !strings.Contains(queued, "do not poll") || !strings.Contains(queued, "WAIT") {
-		t.Errorf("the queued reply must forbid a retry loop:\n%s", queued)
+	if !strings.Contains(queued, "human decides") || !strings.Contains(queued, "resubmitting queues another") {
+		t.Errorf("the queued reply must explain who changes the state and what resubmitting does:\n%s", queued)
 	}
-	// A held operation shares the queued wording, so one constant keeps the two
-	// paths from forbidding the same retry loop in two different ways.
+	// A held operation shares the queued explanation, so both paths describe the same state transition.
 	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts", reviewPendingFields{ApprovalID: "req-1"})); !strings.Contains(op, reviewWaitTail) {
 		t.Errorf("a held operation must carry the same retry rule as a held command line:\n%s", op)
 	}
@@ -800,7 +797,7 @@ func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 
 func TestInstructionsExplainActionWhenTermcpFeelsAwkward(t *testing.T) {
 	for _, want := range []string{
-		"long, awkward", "capability that should exist", "say what you are trying to do and ask",
+		"Long, awkward", "missing a capability", "say what you are trying to do and ask",
 		"create ext", "open <session> mcp <url>", "call <peer> <tool>",
 	} {
 		if !strings.Contains(mcpServerInstructions, want) {

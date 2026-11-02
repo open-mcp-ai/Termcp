@@ -690,8 +690,8 @@ func TestHeldOperationReportsCorrelationFields(t *testing.T) {
 	if reqs[0].ExpiresAt > 0 && body["expires_at"] != float64(reqs[0].ExpiresAt) {
 		t.Errorf("expires_at = %v, want %d", body["expires_at"], reqs[0].ExpiresAt)
 	}
-	if msg, _ := body["message"].(string); !strings.Contains(msg, "do not poll") || !strings.Contains(msg, "resubmit") {
-		t.Errorf("the correlation fields must not soften the no-retry rule: %q", msg)
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "human decides") || !strings.Contains(msg, "resubmitting queues another") {
+		t.Errorf("the correlation fields must explain the human decision and resubmission effect: %q", msg)
 	}
 }
 

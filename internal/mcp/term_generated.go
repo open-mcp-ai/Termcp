@@ -1374,14 +1374,12 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	// submitting a job reads an eaten command as a successful one.
 	b.WriteString("                               into the TERMINAL: whoever owns the input reads it\n")
 	b.WriteString("                               (a program waiting for an answer TAKES your line).\n")
-	// THE INTERFACE IS IMPRECISE, AND THAT IS THE INTERFACE. A caller that wants a
-	// precise state (did it run? is something in the foreground?) is asking the terminal
-	// for something a person at the same screen never had either — they read the screen.
-	// Saying so here costs two lines and prevents the whole class of "the reply does not
-	// tell me" reports about a pty.
-	b.WriteString("                               A terminal is not precise: the bytes in the reply\n")
-	b.WriteString("                               ARE the state — read them as you would a screen.\n")
-	b.WriteString("                               `help run` has what that means for the reply.\n")
+	// State the missing signal, then the practical reading: a pty reports bytes,
+	// while pipe mode also reports process exit.
+	b.WriteString("                               A terminal has no exit signal for the command\n")
+	b.WriteString("                               inside it, so its reply is an output sample:\n")
+	b.WriteString("                               read it as you would a screen, or use a pipe\n")
+	b.WriteString("                               (--argv) when you need an observable exit.\n")
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
 	b.WriteString("  long-running command you want to watch between calls.\n")
@@ -1390,14 +1388,14 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
 
 	b.WriteString("cmd = the DSL.  sh = a shell command.\n")
-	b.WriteString("cmd holds directives only. sh never appears in cmd — it enters as a value through\n")
-	b.WriteString("args ($1, $2) or vars ($NAME). cmd supports &&, ||, ;, and &.\n")
-	// A CREDENTIAL HAS TO HAVE SOMEWHERE TO GO THAT IS NOT THE LOG, and the caller has to
-	// know it exists before it types the password into args. One line, where the two
-	// other value channels are named.
-	b.WriteString("A value that must not be written to the server log goes in secrets ($NAME too);\n")
-	b.WriteString("a password belongs there, never typed into cmd or args. The remote shell still\n")
-	b.WriteString("echoes what it runs — that is the channel's transcript.\n")
+	b.WriteString("cmd is parsed by the directive grammar, so shell text reaches it as one\n")
+	b.WriteString("value through args ($1, $2) or vars ($NAME), for the remote shell to parse.\n")
+	b.WriteString("cmd supports &&, ||, ;, and &.\n")
+	// State where each value flows: the server log records the DSL call, while the
+	// remote process may echo its input into the channel transcript.
+	b.WriteString("A credential goes in secrets, which records names only. cmd, args and vars are\n")
+	b.WriteString("recorded verbatim in the server log, so a password in one of them is written\n")
+	b.WriteString("down. The remote shell echoes what it runs — the channel is the other copy.\n")
 	b.WriteString("  run a1f3:1 $1   args: [\"make && test\"]   one sh line, operators live\n")
 	b.WriteString("  run a1f3:1 $1 && notify done             two cmd directives\n\n")
 
