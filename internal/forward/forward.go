@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/ssh"
 
@@ -18,32 +19,32 @@ import (
 var ErrNotFound = errors.New("not found")
 
 // ForwardManager manages port forwards for SSH connections.
+//
+// One forward is one independent entry keyed by id, so the table is a sync.Map;
+// the change callback is a single value read on every mutation, so it is an
+// atomic.Pointer rather than something a lock has to guard.
 type ForwardManager struct {
-	mu       sync.Mutex
-	forwards map[string]*forwardState
-	onChange func()
+	forwards sync.Map // id string -> *forwardState
+	onChange atomic.Pointer[func()]
 }
 
 // NewForwardManager creates a ForwardManager.
 func NewForwardManager() *ForwardManager {
-	return &ForwardManager{
-		forwards: make(map[string]*forwardState),
-	}
+	return &ForwardManager{}
 }
 
 // SetOnChange sets a callback invoked when forwards are added or removed.
 func (fm *ForwardManager) SetOnChange(fn func()) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-	fm.onChange = fn
+	if fn == nil {
+		fm.onChange.Store(nil)
+		return
+	}
+	fm.onChange.Store(&fn)
 }
 
 func (fm *ForwardManager) notifyChange() {
-	fm.mu.Lock()
-	fn := fm.onChange
-	fm.mu.Unlock()
-	if fn != nil {
-		fn()
+	if fn := fm.onChange.Load(); fn != nil && *fn != nil {
+		(*fn)()
 	}
 }
 
@@ -75,17 +76,15 @@ type forwardState struct {
 	cancelFunc context.CancelFunc
 }
 
-var forwardCounter struct {
-	mu    sync.Mutex
-	count int
-}
+// forwardCounter is atomic rather than a mutex around an int: one counter is one
+// atomic, and a lock that guards a single scalar is a deadlock waiting for a
+// reason to happen.
+var forwardCounter atomic.Uint64
 
 // ForwardID generates a unique forward id.
 func ForwardID(direction ForwardDirection) string {
-	forwardCounter.mu.Lock()
-	defer forwardCounter.mu.Unlock()
-	forwardCounter.count++
-	return fmt.Sprintf("fw-%s-%d-%d", direction, clock.Now(), forwardCounter.count)
+	n := forwardCounter.Add(1)
+	return fmt.Sprintf("fw-%s-%d-%d", direction, clock.Now(), n)
 }
 
 // put registers a forward after SessionID/SSHConfig are set on fw.
@@ -94,9 +93,7 @@ func (fm *ForwardManager) put(fw *ForwardInfo, ln net.Listener, cancel context.C
 	if fw == nil {
 		return
 	}
-	fm.mu.Lock()
-	fm.forwards[fw.ForwardID] = &forwardState{ForwardInfo: *fw, listener: ln, cancelFunc: cancel}
-	fm.mu.Unlock()
+	fm.forwards.Store(fw.ForwardID, &forwardState{ForwardInfo: *fw, listener: ln, cancelFunc: cancel})
 	fm.notifyChange()
 }
 
@@ -170,39 +167,42 @@ func (fm *ForwardManager) CreateDynamic(sessionID, sshConfig, bindHost string, l
 
 // List returns all forward infos.
 func (fm *ForwardManager) List() []ForwardInfo {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-	out := make([]ForwardInfo, 0, len(fm.forwards))
-	for _, fw := range fm.forwards {
-		out = append(out, fw.ForwardInfo)
-	}
+	var out []ForwardInfo
+	fm.forwards.Range(func(_, v any) bool {
+		if fw, ok := v.(*forwardState); ok {
+			out = append(out, fw.ForwardInfo)
+		}
+		return true
+	})
 	return out
 }
 
 // ListBySession returns forwards belonging to sessionID.
 func (fm *ForwardManager) ListBySession(sessionID string) []ForwardInfo {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-	out := make([]ForwardInfo, 0)
-	for _, fw := range fm.forwards {
-		if fw.SessionID == sessionID {
+	var out []ForwardInfo
+	fm.forwards.Range(func(_, v any) bool {
+		if fw, ok := v.(*forwardState); ok && fw.SessionID == sessionID {
 			out = append(out, fw.ForwardInfo)
 		}
-	}
+		return true
+	})
 	return out
 }
 
 // CloseBySession closes all forwards belonging to the given session ID.
 func (fm *ForwardManager) CloseBySession(sessionID string) {
-	fm.mu.Lock()
 	var toClose []*forwardState
-	for id, fw := range fm.forwards {
+	fm.forwards.Range(func(k, v any) bool {
+		fw, ok := v.(*forwardState)
+		if !ok {
+			return true
+		}
 		if fw.SessionID == sessionID {
 			toClose = append(toClose, fw)
-			delete(fm.forwards, id)
+			fm.forwards.Delete(k)
 		}
-	}
-	fm.mu.Unlock()
+		return true
+	})
 	for _, fw := range toClose {
 		slog.Info("forward: closing on session terminate", "forward_id", fw.ForwardID, "session_id", sessionID)
 		if fw.cancelFunc != nil {
@@ -219,15 +219,13 @@ func (fm *ForwardManager) CloseBySession(sessionID string) {
 
 // Close closes a forward by ID and cleans up resources.
 func (fm *ForwardManager) Close(forwardID string) error {
-	fm.mu.Lock()
-	fw, ok := fm.forwards[forwardID]
+	v, ok := fm.forwards.Load(forwardID)
 	if !ok {
-		fm.mu.Unlock()
 		slog.Warn("forward close: not found", "forward_id", forwardID)
 		return fmt.Errorf("forward %q %w", forwardID, ErrNotFound)
 	}
-	delete(fm.forwards, forwardID)
-	fm.mu.Unlock()
+	fm.forwards.Delete(forwardID)
+	fw, _ := v.(*forwardState)
 
 	slog.Info("forward close: removed from map", "forward_id", forwardID, "has_cancel", fw.cancelFunc != nil, "has_listener", fw.listener != nil)
 	if fw.cancelFunc != nil {

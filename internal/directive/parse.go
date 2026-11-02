@@ -423,12 +423,24 @@ func statementRawSpans(src string, stmt *syntax.Stmt) []span {
 	// would have seen the quotes as part of the name.
 	var out []span
 	if op.Target && len(rest) > 0 && !strings.HasPrefix(mustLiteralWord(src, rest[0]), "--") {
+		targetEnd := int(rest[0].End().Offset())
+		consumed := 1
+		// THE `use <host>` FOLD TAKES A SECOND WORD WITH IT (see parseStatement).
+		//
+		// This walk must consume exactly the words the parser consumes, or the payload
+		// region starts one word too early: `run use internal $1` left `internal` in
+		// `rest`, so the payload appeared to begin there and the reference looked like
+		// shell text glued to a literal. One fold, two walks, same rule.
+		if borrowedHostTarget(op.Name) && len(rest) > 1 && mustLiteralWord(src, rest[0]) == "use" {
+			targetEnd = int(rest[1].End().Offset())
+			consumed = 2
+		}
 		out = append(out, span{
 			start: int(rest[0].Pos().Offset()),
-			end:   int(rest[0].End().Offset()),
+			end:   targetEnd,
 			mode:  spanVerbatim,
 		})
-		rest = rest[1:]
+		rest = rest[consumed:]
 	}
 
 	if op.Kind == KindFlags {
@@ -927,6 +939,15 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 	return left, true, nil
 }
 
+func borrowedHostTarget(op string) bool {
+	switch op {
+	case "run", "read", "write", "get", "rm":
+		return true
+	default:
+		return false
+	}
+}
+
 // parseStatement reads one statement. ok is false for a statement that is not a
 // directive at all (an assignment, a redirection-only command) — those are left
 // for the next statement rather than reported, because `cmd` is a shell string
@@ -1067,8 +1088,20 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable) (Statem
 				}
 			}
 		default:
-			out.Target = rest[0].text
-			rest = rest[1:]
+			// `use <host>` is one target, not two positional words. Fold it only on
+			// the operations that accept borrowed hosts, so the same explicit spelling
+			// works for a one-shot run and direct file operations without changing the
+			// grammar of commands whose second word is a child kind or payload.
+			if len(rest) > 0 && rest[0].text == "use" && borrowedHostTarget(name) {
+				if len(rest) < 2 {
+					return Statement{}, false, &Error{Op: name, Msg: "use needs a host name", Usage: op.Usage}
+				}
+				out.Target = "use " + rest[1].text
+				rest = rest[2:]
+			} else {
+				out.Target = rest[0].text
+				rest = rest[1:]
+			}
 			// THE KIND CHECK RUNS AGAIN AFTER SUBSTITUTION, not only here.
 			//
 			// A target that came from `args` is a sentinel at parse time

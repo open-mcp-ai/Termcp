@@ -68,18 +68,24 @@ func TestCreateExtensionReportsStartingNotUnavailable(t *testing.T) {
 	s := newExtensionTestServer(t)
 
 	res, err := s.handleExtensionCreate(context.Background(), makeRequest(map[string]any{
-		"action": "create", "name": "fresh", "kind": "skill", "target": "internal",
+		"action": "create", "name": "fresh", "target": "internal",
 		"paths": []any{"/srv/"},
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("create: %v", err)
 	}
 	doc := parseResult(t, res)
-	if doc["status"] == "unavailable" {
-		t.Errorf("a fresh template reports unavailable, which reads as a failed create: %v", doc["status"])
-	}
-	if doc["status"] != "probing" {
-		t.Errorf("status = %v, want the transitional one", doc["status"])
+	// WHICH TRANSITIONAL WORD IS TIMING, NOT POLICY. A template that declares no
+	// forward is started on demand, so the reconciler may already have walked it and
+	// said "idle"; a moment earlier the answer is "probing". Both mean the same thing
+	// to the caller — nothing has failed, look again — and the fault this test exists
+	// for is the third word, `unavailable`.
+	switch doc["status"] {
+	case "probing", "idle":
+	case "unavailable":
+		t.Errorf("a fresh template reports unavailable, which reads as a failed create: %v", doc)
+	default:
+		t.Errorf("status = %v, want a transitional word", doc["status"])
 	}
 	if next, _ := doc["next"].(string); !strings.Contains(next, "fresh") {
 		t.Errorf("the next-hint must name the extension so it can be pasted: %q", next)
@@ -87,7 +93,7 @@ func TestCreateExtensionReportsStartingNotUnavailable(t *testing.T) {
 
 	// A disabled template is not "starting": nothing will ever probe it.
 	res, err = s.handleExtensionCreate(context.Background(), makeRequest(map[string]any{
-		"action": "create", "name": "off", "kind": "skill", "target": "internal",
+		"action": "create", "name": "off", "target": "internal",
 		"paths": []any{"/srv/"}, "enabled": false,
 	}))
 	if err != nil || res.IsError {

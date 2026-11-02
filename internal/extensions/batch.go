@@ -3,6 +3,8 @@ package extensions
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -22,7 +24,6 @@ import (
 //
 //	[[extensions]]
 //	name = "docs"
-//	kind = "skill"
 //	target = "internal"
 //	paths = ["~/skills/docs/"]
 //
@@ -62,7 +63,7 @@ func (s *Store) ExportDocument(only []string) ([]byte, error) {
 	}
 	entries := make([]map[string]any, 0, len(names))
 	for _, name := range names {
-		raw, err := s.ReadRaw(name)
+		raw, err := s.Template(name)
 		if err != nil {
 			if len(only) > 0 && errors.Is(err, ErrNotFound) {
 				continue
@@ -70,8 +71,13 @@ func (s *Store) ExportDocument(only []string) ([]byte, error) {
 			return nil, fmt.Errorf("extension %q: %w", name, err)
 		}
 		// Round-tripped through a map rather than re-marshalled from the struct:
-		// what is exported is the file that exists, so a key this build does not
-		// know about still travels with it instead of being dropped on the way out.
+		// what is exported is the document that exists — holes, comments and keys
+		// this build does not know included — so it can be installed elsewhere.
+		//
+		// THE VALUES ARE NOT EXPORTED. They are this installation's: its hosts, its
+		// ports, and whatever a header or a path carries. A package that shipped them
+		// would hand the next person somebody else's machines, and the one place a
+		// credential is likely to sit is exactly there.
 		var entry map[string]any
 		if err := toml.Unmarshal(raw, &entry); err != nil {
 			return nil, fmt.Errorf("extension %q: %w", name, err)
@@ -121,7 +127,7 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 
 	type item struct {
 		name string
-		ext  *Extension
+		data []byte
 	}
 	items := make([]item, 0, len(doc.Extensions))
 	// Names the document itself claims, so a stored template is never renamed onto
@@ -133,15 +139,28 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 			return nil, fmt.Errorf("extension %d has an invalid name", i+1)
 		}
 		reserved[strings.ToLower(name)] = true
+		delete(entry, "name")
 		raw, err := toml.Marshal(entry)
 		if err != nil {
 			return nil, fmt.Errorf("extension %q: %w", name, err)
 		}
-		ext, err := ParseTemplate(raw, name)
+		// A PACKAGE ARRIVES WITH HOLES AND NO VALUES, so what can be checked here is
+		// what a template has to satisfy on its own: it parses, and every hole it asks
+		// for is declared. Whether it can run yet is the installation's question.
+		//
+		// A DOCUMENT WITH NO HOLES IS CHECKED ALL THE WAY, because nothing is missing
+		// from it: it either validates now or it never will, and importing it would put
+		// a card in the panel that can only ever say it is broken.
+		_, written, err := TemplateOf(raw)
 		if err != nil {
 			return nil, fmt.Errorf("extension %q: %w", name, err)
 		}
-		items = append(items, item{name: name, ext: ext})
+		if len(written) == 0 {
+			if err := validatePlainTemplate(raw, name); err != nil {
+				return nil, fmt.Errorf("extension %q: %w", name, err)
+			}
+		}
+		items = append(items, item{name: name, data: raw})
 	}
 
 	s.mu.Lock()
@@ -159,7 +178,6 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 		original := items[i].name
 		if existing[strings.ToLower(original)] {
 			items[i].name = availableDocumentName(original, existing, reserved)
-			items[i].ext.Name = items[i].name
 			result.Renamed = append(result.Renamed, BatchRename{From: original, To: items[i].name})
 		}
 		existing[strings.ToLower(items[i].name)] = true
@@ -167,10 +185,17 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 
 	created := make([]string, 0, len(items))
 	for _, it := range items {
-		if err := s.saveLocked(it.ext); err != nil {
+		p, cerr := s.configPath(it.name)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			return nil, err
+		}
+		if err := writeFileAtomic(p, it.data); err != nil {
 			for _, name := range created {
-				if p, cerr := s.configPath(name); cerr == nil {
-					_ = s.removeLocked(p)
+				if cp, cerr := s.configPath(name); cerr == nil {
+					_ = s.removeLocked(cp)
 				}
 			}
 			return nil, err
@@ -185,35 +210,17 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 	return result, nil
 }
 
-// ParseTemplate decodes one template from the TOML text a file holds. The name is
-// the storage name the caller is saving under: a document that carries a different
-// one — an exported entry pasted into the editor, say — is refused rather than
-// stored under a name neither its author nor the panel would expect. A document
-// with no name at all is the ordinary case: a config.toml is named by its
-// directory, so the file itself never carries one.
-func ParseTemplate(data []byte, name string) (*Extension, error) {
-	if err := sshconfig.ValidateName(name); err != nil {
-		return nil, fmt.Errorf("invalid extension name: %w", err)
-	}
-	ext, err := Parse(data)
+// validatePlainTemplate checks a document that has no holes, the way Load would.
+// It exists so an import can refuse what it would otherwise store as a card that
+// only ever reports itself broken.
+func validatePlainTemplate(raw []byte, name string) error {
+	e, err := Parse(raw)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var doc struct {
-		Name string `toml:"name"`
-	}
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("extension toml: %w", err)
-	}
-	if got := strings.TrimSpace(doc.Name); got != "" && got != name {
-		return nil, fmt.Errorf("the document names %q, but this is being saved as %q", got, name)
-	}
-	ext.Name = name
-	ext.Normalize()
-	if err := ext.Validate(); err != nil {
-		return nil, err
-	}
-	return ext, nil
+	e.Name = name
+	e.Normalize()
+	return e.Validate()
 }
 
 // availableDocumentName finds a free name for a template whose own is taken: the

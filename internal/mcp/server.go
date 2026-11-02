@@ -63,39 +63,51 @@ type Server struct {
 	// own cursor cannot serve: with no reader_id it hands out a NEW reader at the
 	// current end of the stream, so a byte window that ended mid-frame made recv
 	// report 204 and then skip the frames behind it on the next call — silently.
-	recvCursorMu sync.Mutex
-	recvCursors  map[string]int64
-	// recvReaders holds one mutex per handle, held for the WHOLE read (#183).
+	// recvCursors is where each channel's `mcp recv` has read up to.
+	//
+	// A caller reads one frame at a time out of a growing stream, and the position
+	// it reached is the only thing that stops the next call from re-reading the
+	// first frame or skipping the ones in between. Independent entries, so sync.Map.
+	recvCursors sync.Map // handle string -> int64
+
+	// recvReaders gives a handle one reader at a time, held for the WHOLE read
+	// (#183).
 	//
 	// The cursor above is a read POSITION, and a position does not say who is
-	// reading it. Two concurrent recvs on one handle therefore both start at the
-	// same offset, both find the same frame, and both return it — measured, 3 runs
-	// out of 3. The cursor never moves backwards, so nothing is lost; the contract
-	// degrades from exactly-once to at-least-once, and duplicate delivery is what
-	// JSON-RPC id pairing cannot survive: two `id:3` and no `id:4` leaves the client
-	// waiting for an answer another reader already consumed.
+	// reading it: two concurrent recvs both start at the same offset, both find the
+	// same frame, and both return it. Duplicate delivery is what JSON-RPC id pairing
+	// cannot survive — two `id:3` and no `id:4` leaves the client waiting for an
+	// answer another reader already consumed.
 	//
-	// Per HANDLE rather than one global mutex, because a recv can wait out the
-	// caller's whole window: a global lock would park every unrelated channel behind
-	// it for fifteen seconds.
-	recvReaders map[string]*sync.Mutex
+	// Per HANDLE, because a recv can wait out the caller's whole window.
+	// A TOKEN, NOT A MUTEX (issue #224): Mutex.Lock takes no context, so a second
+	// recv could not leave when its own window expired. The one-slot channel is the
+	// same exclusivity with a door.
+	recvReaders sync.Map // handle string -> chan struct{}
 
-	// closedReads is where each CLOSED channel's plain `read` has read up to.
+	// lineLocks serialises the two writes that make ONE line on a channel (#212).
+	//
+	// `run` is two calls into the shell layer — the text, then the enter that ends it
+	// — and nothing used to keep another `run` from landing between them. Two
+	// concurrent runs produced `{"id":1}{"id":2}\n\n`: not two lines and not one
+	// valid line either, so a line-protocol peer read it as corrupt and exited.
+	//
+	// PER HANDLE and held ONLY around the writes: the wait for output that follows
+	// must not hold it, or a run would park every later command on the channel.
+	lineLocks sync.Map // handle string -> *sync.Mutex
+
+	// closedReads is where each CLOSED channel's plain `read` has read up to (#188).
 	//
 	// A live channel's position lives in its ring-buffer reader, which is the only
 	// place it can live while bytes are still arriving. A closed one has no such
-	// reader — its bytes come from the persisted log — so the position has to be
-	// kept here or the default read has no way to mean "what is new since last
-	// time". Without it the default read answered with the tail of the history on
-	// every call: the same bytes, forever, with offsets that never advanced
-	// (#159 C1).
+	// reader — its bytes come from the persisted log — so the position is kept here
+	// or the default read has no way to mean "what is new since last time", and it
+	// answered with the tail of the history on every call (#159 C1).
 	//
 	// ponytail: one int64 per (session, channel) ever read after closing, never
-	// evicted. Bounded by the number of channels this process has read, which is
-	// the same order as the sessions it holds; an LRU is the right shape if a
-	// daemon ever outlives thousands of them.
-	closedReadMu sync.Mutex
-	closedReads  map[string]int64
+	// evicted. Bounded by the number of channels this process has read; an LRU is
+	// the right shape if a daemon ever outlives thousands of them.
+	closedReads sync.Map // key string -> int64
 }
 
 // Option customizes a Server at construction time. Options keep New's signature

@@ -23,7 +23,7 @@ import (
 // discovered by the reconciler three walks later.
 func TestURLTemplateValidation(t *testing.T) {
 	base := func() *Extension {
-		return &Extension{Name: "http", Kind: KindMCP, Target: "internal", Mode: "pipe"}
+		return &Extension{Name: "http", Target: "internal", Mode: "pipe"}
 	}
 	t.Run("url alone is valid", func(t *testing.T) {
 		e := base()
@@ -81,30 +81,27 @@ func TestURLTemplateValidation(t *testing.T) {
 // The endpoint form has to be reachable through the AUTHORING path, not only
 // through a hand-built Extension.
 //
-// Both real entry points — the WebUI's JSON create and the MCP `extension` tool —
-// start from extensions.Preset(kind), and a kind=mcp preset carries `npx -y
-// example-mcp-server`. ApplyArgs used to set URL beside that command, so Validate
-// refused the pair with "url and command are alternatives" and the documented
-// shape could not be created at all: the author never sent a command, and the
-// refusal named a rule they had not broken. Only the TOML editor worked, because
-// a document is taken literally with no preset behind it.
+// A create starts from the conventional defaults for the fields an author has not
+// named. ApplyArgs used to set URL beside a defaulted command, so Validate refused
+// the pair with "url and command are alternatives" — the author never sent a
+// command, and the refusal named a rule they had not broken. Only a hand-written
+// document worked, because a document is taken literally with no defaults behind it.
 //
 // The earlier end-to-end test (TestURLTemplateAvailableWithoutAnExternalBinary)
-// missed this because it clears the preset by hand before saving, which is
+// missed this because it clears the command by hand before saving, which is
 // precisely the step the real callers do not take.
 func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
-	t.Run("a create needs no hand-clearing of the preset", func(t *testing.T) {
-		ext := Preset(KindMCP)
+	t.Run("a create needs no hand-clearing of the defaults", func(t *testing.T) {
+		ext := Extension{Mode: "pipe"}
 		ext.Name, ext.Target = "http-ext", "internal"
 		if err := ApplyArgs(&ext, map[string]any{
-			"kind":   "mcp",
 			"target": "internal",
 			"url":    "https://mcp.example.com/mcp",
 		}, false); err != nil {
 			t.Fatalf("ApplyArgs: %v", err)
 		}
 		if ext.Command != "" || ext.Args != nil {
-			t.Fatalf("the stdio preset survived a URL template: command=%q args=%v", ext.Command, ext.Args)
+			t.Fatalf("the stdio default survived a URL template: command=%q args=%v", ext.Command, ext.Args)
 		}
 		if err := ext.Validate(); err != nil {
 			t.Fatalf("the documented url shape must be creatable: %v", err)
@@ -116,7 +113,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 		// so a create kept instructions whose first line tells the reader to run a
 		// command this template does not have. An author's own notes are still
 		// theirs, which is the other half of the rule.
-		viaURL := Preset(KindMCP)
+		viaURL := Extension{Mode: "pipe"}
 		viaURL.Name, viaURL.Target = "http-ext", "internal"
 		if err := ApplyArgs(&viaURL, map[string]any{
 			"url": "https://mcp.example.com/mcp",
@@ -127,7 +124,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 			t.Errorf("a url create kept the stdio recipe:\n%s", viaURL.Notes)
 		}
 
-		viaCommand := Preset(KindMCP)
+		viaCommand := Extension{Mode: "pipe"}
 		viaCommand.Name, viaCommand.Target = "stdio-ext", "internal"
 		if err := ApplyArgs(&viaCommand, map[string]any{
 			"command": "node", "args": []any{"server.js"},
@@ -138,7 +135,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 			t.Errorf("a stdio create should keep the stdio recipe, got:\n%s", viaCommand.Notes)
 		}
 
-		mine := Preset(KindMCP)
+		mine := Extension{Mode: "pipe"}
 		mine.Name, mine.Target = "mine", "internal"
 		if err := ApplyArgs(&mine, map[string]any{
 			"url": "https://mcp.example.com/mcp", "notes": "ask the billing team first",
@@ -154,7 +151,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 		// The fix clears only what the caller did not name. A caller that names
 		// both answered one question twice, and that refusal is the point of the
 		// rule — so it must survive.
-		ext := Preset(KindMCP)
+		ext := Extension{Mode: "pipe"}
 		ext.Name, ext.Target = "both", "internal"
 		if err := ApplyArgs(&ext, map[string]any{
 			"url":     "https://mcp.example.com/mcp",
@@ -175,7 +172,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 		// The same collision blocks the other direction: the command is already in
 		// the stored template, and setting a url left it there. An update must be
 		// able to change the shape, which is what the notes refresh also assumes.
-		ext := Preset(KindMCP)
+		ext := Extension{Mode: "pipe"}
 		ext.Name, ext.Target = "conv", "internal"
 		if err := ApplyArgs(&ext, map[string]any{
 			"command": "npx", "args": []any{"-y", "example-mcp-server"},
@@ -196,7 +193,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 	t.Run("clearing the url restores the commandless-pipe refusal", func(t *testing.T) {
 		// The url branch must not become a way to produce a pipe with nothing to
 		// run: clearing the endpoint leaves neither side, and Validate says so.
-		ext := Preset(KindMCP)
+		ext := Extension{Mode: "pipe"}
 		ext.Name, ext.Target = "gone", "internal"
 		if err := ApplyArgs(&ext, map[string]any{"url": "https://mcp.example.com/mcp"}, false); err != nil {
 			t.Fatalf("create: %v", err)
@@ -215,7 +212,7 @@ func TestCreateURLTemplateThroughApplyArgs(t *testing.T) {
 // line; the map is left nil when nothing survives, so an empty table and no
 // table are the same template.
 func TestNormalizeDropsBlankHeaders(t *testing.T) {
-	e := &Extension{Kind: KindMCP, Target: "internal", Headers: map[string]string{
+	e := &Extension{Target: "internal", Headers: map[string]string{
 		"":          "dropped",
 		"   ":       "dropped",
 		" X-Real ":  "kept",
@@ -232,7 +229,7 @@ func TestNormalizeDropsBlankHeaders(t *testing.T) {
 		t.Errorf("headers = %v, want exactly the two named ones", e.Headers)
 	}
 
-	empty := &Extension{Kind: KindMCP, Target: "internal", Headers: map[string]string{"": "x"}}
+	empty := &Extension{Target: "internal", Headers: map[string]string{"": "x"}}
 	empty.Normalize()
 	if empty.Headers != nil {
 		t.Errorf("a map with nothing left should be nil, got %v", empty.Headers)
@@ -249,7 +246,7 @@ func TestNormalizeDropsBlankHeaders(t *testing.T) {
 // it).
 func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 	e := &Extension{
-		Kind: KindMCP, Target: "internal", Mode: "pipe",
+		Target: "internal", Mode: "pipe",
 		URL:     "https://mcp.example.com/mcp",
 		Headers: map[string]string{"X-Api-Key": "sekrit", "X-Tenant": "acme"},
 	}
@@ -278,7 +275,7 @@ func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 // that has never heard of it, and the failure would read as a missing command.
 func TestURLTemplateRequiresInternalTarget(t *testing.T) {
 	e := &Extension{
-		Name: "remote-http", Kind: KindMCP, Target: "somewhere", Mode: "pipe",
+		Name: "remote-http", Target: "somewhere", Mode: "pipe",
 		URL: "https://mcp.example.com/mcp",
 	}
 	e.Normalize()
@@ -307,7 +304,7 @@ func TestURLTemplateAvailableWithoutAnExternalBinary(t *testing.T) {
 	mcpURL := startStreamableEchoEndpoint(t)
 	r := startReconciler(t)
 
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "http-mcp"
 	ext.Target = "internal"
 	// The author names a server instead of a program: clearing the preset's
@@ -316,7 +313,7 @@ func TestURLTemplateAvailableWithoutAnExternalBinary(t *testing.T) {
 	ext.URL = mcpURL
 	ext.Headers = map[string]string{"X-Api-Key": "sekrit"}
 	ApplyDefaults(&ext)
-	if err := SaveTemplate(r.store, &ext); err != nil {
+	if err := SaveStruct(r.store, &ext); err != nil {
 		t.Fatalf("saving the endpoint template: %v", err)
 	}
 
@@ -400,7 +397,7 @@ func TestURLTemplateAvailableWithoutAnExternalBinary(t *testing.T) {
 // thing a preset cannot know, so it always wins.
 func TestNotesFollowTheTemplateShape(t *testing.T) {
 	t.Run("a preset recipe is refreshed when the shape changes", func(t *testing.T) {
-		e := &Extension{Name: "x", Kind: KindMCP, Target: "internal", Notes: mcpNotes}
+		e := &Extension{Name: "x", Target: "internal", Notes: mcpNotes}
 		if err := ApplyArgs(e, map[string]any{"url": "https://mcp.example.com/mcp"}, true); err != nil {
 			t.Fatal(err)
 		}
@@ -417,7 +414,7 @@ func TestNotesFollowTheTemplateShape(t *testing.T) {
 	})
 
 	t.Run("an author's own notes are never touched", func(t *testing.T) {
-		e := &Extension{Name: "x", Kind: KindMCP, Target: "internal", Notes: "mine, keep it"}
+		e := &Extension{Name: "x", Target: "internal", Notes: "mine, keep it"}
 		if err := ApplyArgs(e, map[string]any{"url": "https://mcp.example.com/mcp"}, true); err != nil {
 			t.Fatal(err)
 		}
@@ -430,7 +427,7 @@ func TestNotesFollowTheTemplateShape(t *testing.T) {
 		// Clearing notes is a request for an unannotated template, not a request
 		// for the default: an absent key is what asks for the preset, and this one
 		// is present.
-		e := &Extension{Name: "x", Kind: KindMCP, Target: "internal", Notes: mcpNotes}
+		e := &Extension{Name: "x", Target: "internal", Notes: mcpNotes}
 		if err := ApplyArgs(e, map[string]any{"url": "https://mcp.example.com/mcp", "notes": ""}, true); err != nil {
 			t.Fatal(err)
 		}

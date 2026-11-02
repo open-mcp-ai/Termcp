@@ -90,6 +90,7 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 		Stderr:    stderr,
 		done:      make(chan struct{}),
 		ownClient: ownClient,
+		stdinTok:  newStdinToken(),
 	}
 
 	go func() {

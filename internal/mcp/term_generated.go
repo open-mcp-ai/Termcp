@@ -682,7 +682,6 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 		[2]string{"remote-path", "remote_path"},
 		[2]string{"from-path", "from_path"},
 		[2]string{"to-path", "to_path"},
-		[2]string{"local-path", "local_path"},
 		[2]string{"data", "data"},
 	); bad {
 		return slot
@@ -735,17 +734,20 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if action != "read" && action != "write" && action != "getwd" {
 		// perm/link/fs each dispatch on their OWN action field (chmod, symlink,
 		// realpath …), so the sub-action overwrites the verb that selected the
-		// tool. --op is the spelling; --action-verb is the older alias.
+		// tool.
 		//
 		// A missing flag yields "", not nil — the previous `== nil` test therefore
 		// never fired and the sub-action was silently empty, which is what made
 		// these three reachable only as "action must be chmod, chown, or chtimes".
+		//
+		// THERE IS NO --action-verb FALLBACK HERE ANY MORE, and there never needed
+		// to be: the parser refuses a flag the directive does not declare, so a call
+		// carrying --action-verb died at parse time and this branch was unreachable.
+		// It read as a supported spelling and was not one. The name is in the
+		// directive's RetiredFlags now, so the refusal says what to write instead.
 		switch action {
 		case "perm", "link", "fs":
 			sub, _ := stmt.Flag("op")
-			if sub == "" {
-				sub, _ = stmt.Flag("action-verb")
-			}
 			if sub == "" {
 				return badRequest(stmt, "file --action "+action+" needs the sub-action: --op "+fileSubActions(action))
 			}
@@ -975,7 +977,7 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	action, rest := resolveAction(stmt, "list")
 	capID, ok := extensionCapability(action)
 	if !ok {
-		return badRequest(stmt, "ext needs --action list|get|create|update|delete|retry, got "+quoteOrDash(action))
+		return badRequest(stmt, "ext needs --action list|get|create|update|set|delete|retry, got "+quoteOrDash(action))
 	}
 	if slot, refused := s.refuseAction(ctx, stmt, capID); refused {
 		return slot
@@ -990,7 +992,6 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 		args["name"] = rest[0]
 	}
 	if slot, bad := stringFlags(args, stmt,
-		[2]string{"kind", "kind"},
 		[2]string{"target", "target"},
 		[2]string{"description", "description"},
 		[2]string{"command", "command"},
@@ -1032,6 +1033,24 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	if err := setFlagJSONList(args, stmt, "forwards", "forwards"); err != nil {
 		return badRequest(stmt, err.Error())
 	}
+	/* --targets declares hosts and their per-host forwards as a JSON array of
+	   objects or host strings, keeping multi-target configuration scoped under
+	   the extension. */
+	if err := setFlagJSONList(args, stmt, "targets", "targets"); err != nil {
+		return badRequest(stmt, err.Error())
+	}
+	/* --template is the document itself: a package's config.toml, holes and all.
+	   A repository ships a file, not a set of flags, and installing it must not
+	   require translating that file into flags and back. */
+	if slot, bad := stringFlags(args, stmt, [2]string{"template", "template"}); bad {
+		return slot
+	}
+	/* --values fills the template's holes. It is the installation step, and the
+	   one place a caller names what goes into the recipe. JSON, because a value is
+	   a TOML value — a number, a list of host tables — not a word. */
+	if err := setFlagJSONObject(args, stmt, "values", "values"); err != nil {
+		return badRequest(stmt, err.Error())
+	}
 	if boolFlag(stmt, "enabled") {
 		args["enabled"] = true
 	}
@@ -1062,16 +1081,16 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	name := strings.TrimSpace(stmt.Key)
 	if name == "" {
-		return badRequest(stmt, "open ext needs a name: open ext <name>")
+		return badRequest(stmt, "open ext needs a name: open ext <name> [--target <host>]")
 	}
-	// WORDS THIS FORM CANNOT HONOR ARE REFUSED, NOT IGNORED. `open ext boxfs extra`
-	// and `open a1f3 ext boxfs` parse (the kind word is taken first, so what looks
-	// like a target becomes one), and an extension's container is the reconciler's —
-	// a caller cannot name it. Reading past either word would answer a question the
-	// caller did not ask.
+	target := ""
+	if v, ok := stmt.Flag("target"); ok && strings.TrimSpace(v) != "" {
+		target = strings.TrimSpace(v)
+	}
+	// WORDS THIS FORM CANNOT HONOR ARE REFUSED, NOT IGNORED.
 	if stmt.Target != "" {
 		return badRequest(stmt, "open ext names no session: the extension's connection belongs to the reconciler. "+
-			"Write `open ext "+name+"`, and drive the handles it returns.")
+			"Write `open ext "+name+"` or `open ext "+name+" --target <host>`, and drive the handles it returns.")
 	}
 	if len(stmt.Args) > 0 {
 		return badRequest(stmt, "open ext takes one name, got extra word "+quoteOrDash(stmt.Args[0]))
@@ -1079,7 +1098,11 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if slot, refused := s.refuseAction(ctx, stmt, capability.ExtGet); refused {
 		return slot
 	}
-	res, fail := s.callTool(ctx, "extension", map[string]any{"action": "use", "name": name})
+	args := map[string]any{"action": "use", "name": name}
+	if target != "" {
+		args["target"] = target
+	}
+	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
@@ -1139,6 +1162,8 @@ func extensionCapability(action string) (string, bool) {
 		return capability.ExtCreate, true
 	case "update":
 		return capability.ExtUpdate, true
+	case "set":
+		return capability.ExtSet, true
 	case "delete":
 		return capability.ExtDelete, true
 	case "retry", "restart":
@@ -1335,6 +1360,12 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  ls host                      what is there (local and ssh, in columns)\n")
 	b.WriteString("  connect <host>               opens a channel, answers its channel (a1f3:1)\n")
 	b.WriteString("  run a1f3:1 $1                types the line, presses Enter, reads what came back\n")
+	// THE SHORT-CIRCUIT FORM, one line after the channel form so the two are read
+	// together: most calls are one command whose only product is its output, and
+	// connect + run + close both costs two extra turns and leaves an archive tile.
+	b.WriteString("  run use:<host> $1            or, with no session at all: borrows a pooled\n")
+	b.WriteString("                               connection, runs one command, answers with its\n")
+	b.WriteString("                               output and exit code, registers nothing.\n")
 	// THE ONE LINE THAT PREVENTS THE WHOLE CLASS OF `run` MISREADING: the bytes go to
 	// whoever owns the channel's input, not to a queue. A caller that thinks it is
 	// submitting a job reads an eaten command as a successful one.
@@ -1350,7 +1381,10 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("                               `help run` has what that means for the reply.\n")
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
-	b.WriteString("  long-running command you want to watch between calls.\n\n")
+	b.WriteString("  long-running command you want to watch between calls.\n")
+	b.WriteString("  For one non-interactive command, `run use:<host> $1` borrows the pooled\n")
+	b.WriteString("  connection and leaves no session/archive entry; connect only when you need\n")
+	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
 
 	b.WriteString("cmd = the DSL.  sh = a shell command.\n")
 	b.WriteString("cmd holds directives only. sh never appears in cmd — it enters as a value through\n")
@@ -1374,12 +1408,15 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  channel  one shell on that link, <session>:<index> (e.g. a1f3:1).\n")
 	b.WriteString("           `open <session>` adds one; the mode follows ssh — --argv means\n")
 	b.WriteString("           a command with no terminal, no --argv means a terminal.\n")
-	b.WriteString("  file     <session> file <path>      — read/write carry BYTES; get carries\n")
-	b.WriteString("           metadata and the upload/download urls; rm, create\n")
+	b.WriteString("  file     <session|use:<host>> file <path> — read/write carry BYTES; get\n")
+	b.WriteString("           metadata and upload/download URLs exist only for sessions.\n")
 	b.WriteString("  forward  <session> forward <id>     — open/close/ls\n")
-	b.WriteString("  peer     <session> mcp|cdp|jrpc <url> — open/read/call/close, through that\n")
-	b.WriteString("           session's network, so localhost means the host's localhost.\n")
-	b.WriteString("  Copy addresses from `ls`; never spell one.\n\n")
+	b.WriteString("  peer     <session> mcp|cdp|jrpc <url> — open once, then call/read/close.\n")
+	b.WriteString("           mcp peers: call <peer> <tool> {json} runs tools directly.\n")
+	b.WriteString("           cdp peers: call <peer> {method} speaks the DevTools protocol.\n")
+	b.WriteString("           All reach the peer through that session's network.\n")
+	b.WriteString("  Copy addresses from `ls`; for a channel-free one-shot, use `run use:<host> $1`\n")
+	b.WriteString("  or `read|write use:<host> file <path>`; no session is created or archived.\n\n")
 
 	// THE POINTER IS CONDITIONAL, and that is the fix a first-time caller asked for:
 	// the guide used to open this section with "`ls ext` CAPABILITY HUB — start here",
@@ -1393,6 +1430,7 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 		b.WriteString("  ls ext  CAPABILITY HUB — start here. Lists resident, capability-trimmed\n")
 		b.WriteString("          extensions: mcp servers, skills (read-only SFTP), prompts.\n")
 		b.WriteString("          Notes inside an extension are its operating manual.\n")
+		b.WriteString("          Need something repeated? `create ext` or `open <session> mcp <url>` adds it.\n")
 		b.WriteString("  ls      SSH STATE & LIFECYCLE — every link, channel, forward and peer.\n")
 		b.WriteString("          Pass learn_mode:true and it expands the verbs that take the\n")
 		b.WriteString("          addresses it just printed.\n\n")
@@ -1403,7 +1441,8 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 		b.WriteString("           Pass learn_mode:true and it expands the verbs that take the\n")
 		b.WriteString("           addresses it just printed.\n")
 		b.WriteString("  ls ext   extensions (mcp servers, skills, prompts). None are installed\n")
-		b.WriteString("           on this instance, so there is nothing to start with there.\n\n")
+		b.WriteString("           yet. When a multi-step job repeats, add one: `create ext` or\n")
+		b.WriteString("           `open <session> mcp <url>` wraps it in a named tool call.\n\n")
 	}
 
 	b.WriteString("ACTIONS:\n")
@@ -1795,7 +1834,7 @@ func capGeneratedCounted(body string, win termArgs) (capped string, code, cut, t
 //
 // The old `ok && v != ""` test is why an explicitly empty `--data` could not write
 // an empty file: the caller's explicit empty value was discarded here, the handler
-// saw no `data` key at all, and answered "data or local_path required" for a flag
+// saw no `data` key at all, and answered that no data had been given — for a flag
 // that had been given. The other half of the same test was worse: `--remote-path`
 // with no value was also discarded, so a fumbled flag looked identical to a
 // forgotten one.

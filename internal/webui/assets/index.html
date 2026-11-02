@@ -673,10 +673,9 @@
   </div>
 
   <!-- The extension configuration: the modal behind a card's gear, and behind New.
-       It edits the TOML file the store holds — the same text an export hands out
-       and a colleague's file would contain. There is no field form on purpose: the
-       fields would be a second description of the template to keep in step with
-       this one, and the people who read this panel are not the ones who live in it.
+       It edits the template the store holds — the same text an export hands out.
+       The variable table under it and the value editor it opens are built by
+       extensions.js, which keeps this page's markup budget for the document.
        Removal lives here rather than on the card: it is a template-level action,
        and the batch row carries the bulk form of it. -->
   <div id="modal-ext" class="modal-backdrop hidden" role="dialog" aria-modal="true">
@@ -689,10 +688,10 @@
         <p id="modal-ext-err" class="err" style="display:none"></p>
         <label for="ext-f-name" data-i18n="ext.modal.name">Name</label>
         <input id="ext-f-name" type="text" autocomplete="off" spellcheck="false" placeholder="my-tool">
-        <label for="ext-f-toml" data-i18n="ext.modal.toml">config.toml</label>
-        <textarea id="ext-f-toml" spellcheck="false" rows="16"></textarea>
-        <p class="conn-check-hint" data-i18n="ext.modal.tomlHint">The name of an extension is its directory, so the file carries no name key.</p>
+        <label for="ext-f-toml" data-i18n="ext.modal.toml">Template</label>
+        <textarea id="ext-f-toml" spellcheck="false" rows="14"></textarea>
         <div class="modal-actions">
+          <button type="button" class="btn" id="modal-ext-preview" data-i18n="ext.preview.button">Preview</button>
           <button type="button" class="btn btn-danger" id="modal-ext-delete" style="display:none" data-i18n="common.delete">Delete</button>
           <button type="button" class="btn" id="modal-ext-cancel" data-i18n="common.cancel">Cancel</button>
           <button type="button" class="btn btn-primary" id="modal-ext-save" data-i18n="common.save">Save</button>

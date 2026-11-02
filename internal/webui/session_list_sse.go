@@ -2,37 +2,37 @@ package webui
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // sessionListHub fans out coalesced signals to SSE subscribers when the session registry changes.
+//
+// The client table is a sync.Map and the id counter is atomic: each subscriber is
+// an independent entry, so there is nothing for a lock to keep consistent.
 type sessionListHub struct {
-	mu      sync.Mutex
-	nextID  uint64
-	clients map[uint64]chan struct{}
+	nextID  atomic.Uint64
+	clients sync.Map // id uint64 -> chan struct{}
 }
 
 func newSessionListHub() *sessionListHub {
-	return &sessionListHub{clients: make(map[uint64]chan struct{})}
+	return &sessionListHub{}
 }
 
 func (h *sessionListHub) register() (id uint64, signal <-chan struct{}, unregister func()) {
 	ch := make(chan struct{}, 1)
-	h.mu.Lock()
-	h.nextID++
-	id = h.nextID
-	h.clients[id] = ch
-	h.mu.Unlock()
+	id = h.nextID.Add(1)
+	h.clients.Store(id, ch)
 	return id, ch, func() {
-		h.mu.Lock()
-		delete(h.clients, id)
-		h.mu.Unlock()
+		h.clients.Delete(id)
 	}
 }
 
 func (h *sessionListHub) broadcast() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, ch := range h.clients {
+	h.clients.Range(func(_, v any) bool {
+		ch, ok := v.(chan struct{})
+		if !ok {
+			return true
+		}
 		// Buffered(1): if a wake is already pending, a second default would drop this notify
 		// and the client might never pull ListAll() again — drain then enqueue one coalesced wake.
 		select {
@@ -43,7 +43,8 @@ func (h *sessionListHub) broadcast() {
 		case ch <- struct{}{}:
 		default:
 		}
-	}
+		return true
+	})
 }
 
 func (h *Handler) sessionHub() *sessionListHub {

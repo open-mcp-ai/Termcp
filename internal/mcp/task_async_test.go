@@ -33,7 +33,11 @@ func TestAFileUploadAnswersWithAReceipt(t *testing.T) {
 	}
 	dst := filepath.Join(dir, "landed.bin")
 
-	got := termText(t, s, map[string]any{"cmd": "write " + sid + " file " + dst + " --local-path " + src})
+	// A PIPELINE, NOT --local-path. The flag is gone: it read the daemon's disk with
+	// no capability check, which is what --no-internal exists to prevent. Both ends
+	// here are the same session, so this pins the receipt contract of the copy path
+	// that replaced it.
+	got := termText(t, s, map[string]any{"cmd": "read " + sid + " file " + src + " | write " + sid + " file " + dst})
 	if !strings.HasPrefix(got, "TERM/1 202") {
 		t.Fatalf("a transfer must answer with a receipt, not a result:\n%s", got)
 	}
@@ -82,8 +86,12 @@ func TestAFailedTransferLeavesNoHalfFile(t *testing.T) {
 
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "never.bin")
+	// THE SOURCE IS MISSING, and the pipeline still answers with a receipt: the copy
+	// is a background task, so a source that cannot be opened surfaces on the task
+	// rather than as a refusal here. That is the same contract the --local-path route
+	// had, on the route that survives.
 	got := termText(t, s, map[string]any{
-		"cmd": "write " + sid + " file " + dst + " --local-path " + filepath.Join(dir, "missing.bin"),
+		"cmd": "read " + sid + " file " + filepath.Join(dir, "missing.bin") + " | write " + sid + " file " + dst,
 	})
 	if !strings.HasPrefix(got, "TERM/1 202") {
 		t.Fatalf("the receipt must come back even when the source is missing:\n%s", got)
@@ -133,7 +141,7 @@ func TestTaskVerbsRefuseWhatTheyCannotAnswer(t *testing.T) {
 
 	// And the empty listing teaches the verb that fills it.
 	empty := termText(t, s, map[string]any{"cmd": "ls task"})
-	if !strings.Contains(empty, "--local-path") {
+	if !strings.Contains(empty, "read") || !strings.Contains(empty, "write") {
 		t.Errorf("an empty task list does not say how a transfer is started:\n%s", empty)
 	}
 }
@@ -161,7 +169,7 @@ func TestAnUploadLandsWhereTheArgumentSaid(t *testing.T) {
 	// The destination arrives as a positional value, which is how an agent passes a
 	// path it computed: the address in the receipt must be the address it computed.
 	got := termText(t, s, map[string]any{
-		"cmd":  "write " + sid + " file $1 --local-path " + src,
+		"cmd":  "read " + sid + " file " + src + " | write " + sid + " file $1",
 		"args": []any{dst},
 	})
 	if !strings.HasPrefix(got, "TERM/1 202") {

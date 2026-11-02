@@ -23,7 +23,7 @@ func TestStatusAsksAboutOneNameNotTheWholeDirectory(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 	for _, name := range []string{"alpha", "beta", "gamma"} {
-		ext := Extension{Name: name, Kind: KindMCP, Target: "internal", Command: "true"}
+		ext := Extension{Name: name, Target: "internal", Command: "true"}
 		if err := store.Save(&ext); err != nil {
 			t.Fatal(err)
 		}

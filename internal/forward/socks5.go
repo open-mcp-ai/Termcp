@@ -2,11 +2,15 @@ package forward
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"sync"
+	"syscall"
+	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // serveSOCKS5 accepts connections and proxies them through the dialer function.
@@ -40,7 +44,8 @@ func serveSOCKS5(ctx context.Context, ln net.Listener, dialer func(target string
 			remote, err := dialer(target)
 			if err != nil {
 				slog.Error("SOCKS5 dial failed", "target", target, "err", err)
-				conn.Write(socks5Reply(1)) // general failure
+				_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+				_, _ = conn.Write(socks5Reply(socks5ErrCode(err)))
 				return
 			}
 			defer remote.Close()
@@ -54,11 +59,7 @@ func serveSOCKS5(ctx context.Context, ln net.Listener, dialer func(target string
 				conn.Close()
 				remote.Close()
 			})
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() { io.Copy(remote, conn); wg.Done() }()
-			go func() { io.Copy(conn, remote); wg.Done() }()
-			wg.Wait()
+			proxyBoth(conn, remote)
 			stopOnCancel()
 		}()
 	}
@@ -86,7 +87,12 @@ func socks5ReadRequest(conn net.Conn) (string, error) {
 		return "", err
 	}
 	if buf[1] != 1 {
-		return "", fmt.Errorf("only CONNECT supported")
+		// RFC 1928: 0x07 = Command not supported. Send the reply so the caller
+		// learns why it was refused, rather than dropping the connection with
+		// no explanation.
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = conn.Write(socks5Reply(7))
+		return "", fmt.Errorf("only CONNECT supported (got command %d)", buf[1])
 	}
 	var host string
 	switch buf[3] {
@@ -110,6 +116,9 @@ func socks5ReadRequest(conn net.Conn) (string, error) {
 		}
 		host = net.IP(buf[:16]).String()
 	default:
+		// RFC 1928: 0x08 = Address type not supported.
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = conn.Write(socks5Reply(8))
 		return "", fmt.Errorf("unsupported address type %d", buf[3])
 	}
 	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
@@ -122,4 +131,57 @@ func socks5ReadRequest(conn net.Conn) (string, error) {
 func socks5Reply(rep byte) []byte {
 	// Always return IPv4 0.0.0.0:0 for simplicity
 	return []byte{5, rep, 0, 1, 0, 0, 0, 0, 0, 0}
+}
+
+// socks5ErrCode translates a dial failure into RFC 1928's reply field so the caller
+// gets an answer it can act on instead of general failure for everything. The codes
+// that carry real information:
+//
+//	0x02 connection not allowed by ruleset
+//	0x03 network unreachable
+//	0x04 host unreachable
+//	0x05 connection refused
+//	0x06 TTL expired / timed out
+//	0x07 command not supported
+//	0x08 address type not supported
+//
+// The interesting half is SSH's: when the far end refuses to open the channel it
+// answers with an OpenChannelError carrying a RejectionReason, which distinguishes
+// "administratively prohibited" from "connection failed" -- two failures a caller
+// must not confuse, because the first is permanent and the second is worth retrying.
+func socks5ErrCode(err error) byte {
+	if err == nil {
+		return 0
+	}
+	var oce *ssh.OpenChannelError
+	if errors.As(err, &oce) {
+		switch oce.Reason {
+		case ssh.Prohibited:
+			return 0x02
+		case ssh.ConnectionFailed:
+			return 0x05
+		case ssh.UnknownChannelType:
+			return 0x07
+		case ssh.ResourceShortage:
+			return 0x01
+		}
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return 0x04
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return 0x05
+	}
+	if errors.Is(err, syscall.ENETUNREACH) {
+		return 0x03
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) {
+		return 0x04
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return 0x06
+	}
+	return 0x01
 }

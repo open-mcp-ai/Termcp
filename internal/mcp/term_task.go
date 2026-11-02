@@ -45,7 +45,7 @@ func (s *Server) directiveLsTask(stmt directive.Statement) envelope.Slot {
 	list := s.tasks.List()
 	if len(list) == 0 {
 		return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path},
-			Body: "no transfers. A `write <session> file <path> --local-path <file>` starts one and answers with a task id."}
+			Body: "no transfers. A pipeline (`read <source> file <path> | write <target> file <path>`) starts one and answers with a task id."}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d task(s):\n", len(list))

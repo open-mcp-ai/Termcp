@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	charset := getString(args, "charset", "")
 
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
 	if mode != "text" && mode != "hex" && mode != "file" {
 		return toolError(CodeInvalidArgument, "%s", `mode must be "text", "hex", or "file"`), nil
@@ -42,7 +43,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
@@ -55,6 +56,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 		t := s.tasks.Start(task.Download, sessionID, remotePath, localPath, cancel)
 		go func() {
 			defer sftpCli.Close()
+			defer releaseTransport()
 			if info, statErr := sftpCli.StatFile(remotePath); statErr == nil {
 				t.SetTotal(info.Size)
 			}
@@ -78,6 +80,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	}
 
 	defer sftpCli.Close()
+	defer releaseTransport()
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset)
 	if err != nil {
 		return fileErr(err, remotePath), nil
@@ -94,117 +97,34 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequ
 	// byte. They shared the value 0 once, and the destructive one was the default.
 	offset := int64PtrFromArgs(args, "offset")
 	data := getString(args, "data", "")
-	// EMPTY MEANS NOT GIVEN, and the distinction is load-bearing: --mode is the
-	// ENCODING of --data, so an explicit "text" on a --local-path write is a flag that
-	// cannot be honoured, while saying nothing is the ordinary case. Spelling the
-	// default as "text" made the two indistinguishable (#190).
 	mode := getString(args, "mode", "")
-	localPath := getString(args, "local_path", "")
-	localOffset := int64(getFloat64(args, "local_offset", 0))
-	length := int64(getFloat64(args, "length", 0))
 
-	// ONE PLACE, BOTH PATHS (#190).
-	//
-	// `--mode` was validated on the `--data` path and IGNORED on the `--local-path`
-	// one: `--mode 0755` answered 500 on the first and 202 "done" on the second,
-	// while the file landed with the default permissions. A caller who meant "make
-	// this script executable" then watched `open --argv` fail with "permission
-	// denied" and went looking at mounts, users and paths — the parameter had been
-	// dropped in silence, which is the one failure mode a reply cannot recover from.
-	//
-	// The check is on the VALUE, so both routes refuse the same input with the same
-	// sentence. Empty means "not given", which is text.
 	switch mode {
-	case "":
-		// NOT GIVEN. For --data that means text, which is what every caller expects;
-		// for --local-path it means nothing is decoded, which is the ordinary case.
-	case "text", "hex":
-		// A LOCAL FILE CARRIES ITS OWN BYTES, so a decoding mode has nothing to do
-		// here — and saying so is the difference between a caller fixing its command
-		// and a caller believing the flag took effect.
-		if localPath != "" {
-			return toolError(CodeInvalidArgument, "%s",
-				"--mode "+mode+" does not apply to --local-path: the file's bytes are sent as they are. "+
-					"Drop --mode, or pass --mode file to say so."), nil
-		}
-	case "file":
+	case "", "text", "hex":
 	default:
 		return toolError(CodeInvalidArgument, "%s",
-			"unknown mode "+strconv.Quote(mode)+": it is the ENCODING of --data, one of text, hex, file. "+
+			"unknown mode "+strconv.Quote(mode)+": it is the ENCODING of --data, one of text, hex. "+
 				"(Permissions are not this flag: use --op chmod --mode 0755.)"), nil
 	}
 
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	if localPath == "" && data == "" {
-		return toolError(CodeInvalidArgument, "%s", "data or local_path required"), nil
-	}
-
-	// A LOCAL PATH IS RESOLVED ONCE, HERE, AND THE RESOLUTION IS WHAT TRAVELS (#192).
-	//
-	// The path is relative to the DAEMON's working directory — not the caller's, and
-	// not the session's — because the file is read by the process that owns this
-	// handler. A caller whose cwd is elsewhere gets `open local file: open
-	// ./autopilot/s1.sh: no such file or directory`, which quotes the path it TYPED
-	// and never the path that was tried, so the first reading is "but the file is
-	// right there". Resolving up front puts the answer in the error and in the task
-	// record, and it is the same path the transfer then opens.
-	if localPath != "" {
-		localPath = resolveLocalPath(localPath)
+	if data == "" {
+		return toolError(CodeInvalidArgument, "%s", "data required"), nil
 	}
 
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
-
-	// INLINE DATA STAYS SYNCHRONOUS. It is a string the caller already holds, bounded
-	// by the request size, and its whole point is the byte count in the reply —
-	// turning it into a receipt would make every small config edit a two-call dance.
-	if localPath == "" {
-		defer sftpCli.Close()
-		n, err := sftpCli.WriteFile(remotePath, offset, data, mode, localPath, localOffset, length)
-		if err != nil {
-			return fileErr(err, remotePath), nil
-		}
-		return jsonResult(map[string]any{"ok": true, "bytes_written": n}), nil
+	defer sftpCli.Close()
+	defer releaseTransport()
+	n, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
+	if err != nil {
+		return fileErr(err, remotePath), nil
 	}
-
-	// A LOCAL FILE IS A TRANSFER, AND A TRANSFER IS ALWAYS ASYNC (#158). The caller is
-	// usually an agent behind a tool-call watchdog of 30-60s, and moving a large file
-	// over SFTP takes longer than that on a slow link — so a synchronous write is not
-	// "slow", it is a call that gets killed partway, leaving a truncated file on the
-	// far side with no error anywhere. The receipt costs milliseconds.
-	//
-	// The transfer gets its OWN context and its own client handle: the request's
-	// context is cancelled the moment this handler returns, which is now before
-	// the copy is done, and the sftp client must outlive the return as well.
-	taskCtx, cancel := context.WithCancel(context.Background())
-	t := s.tasks.Start(task.Upload, sessionID, remotePath, localPath, cancel)
-	go func() {
-		defer sftpCli.Close()
-		localInfo, statErr := os.Stat(localPath)
-		if statErr == nil {
-			t.SetTotal(localInfo.Size())
-		}
-		n, err := sftpCli.WriteFromLocalProgress(taskCtx, remotePath, offset, localPath, localOffset, length, t.Add)
-		if err == nil {
-			t.SetTotal(n)
-		}
-		s.tasks.Finish(t.ID(), err)
-	}()
-	return jsonResult(map[string]any{
-		"ok":          true,
-		"accepted":    true,
-		"task_id":     t.ID(),
-		"status":      string(task.Running),
-		"kind":        string(task.Upload),
-		"bytes_total": getFloat64(args, "length", 0),
-		"remote_path": remotePath,
-		"local_path":  localPath,
-		"next":        "get task " + t.ID() + "   (give the call a `timeout` and it waits)",
-	}), nil
+	return jsonResult(map[string]any{"ok": true, "bytes_written": n}), nil
 }
 
 // handleFileReplace performs an exact, unique, atomic replacement inside a file.
@@ -225,17 +145,18 @@ func (s *Server) handleFileReplace(ctx context.Context, request mcpgo.CallToolRe
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
 	if oldText == "" {
 		return toolError(CodeInvalidArgument, "%s", "old_text required; it must identify exactly one location"), nil
 	}
 
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 
 	n, err := sftpCli.ReplaceInFile(remotePath, oldText, newText)
 	if err != nil {
@@ -247,31 +168,48 @@ func (s *Server) handleFileReplace(ctx context.Context, request mcpgo.CallToolRe
 	return jsonResult(map[string]any{"ok": true, "bytes_written": n, "remote_path": remotePath}), nil
 }
 
+// remotePathRequired is the one refusal for a file request with no path: it names
+// the missing word and shows the shape of a complete call, because "remote_path
+// required" alone leaves the caller to guess where the path goes in the DSL.
+const remotePathRequired = "remote_path is required: name the file after `file`, e.g. `read <session|host> file /tmp/app.log`"
+
 func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
 
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
 
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
+	result, err := sftpCli.StatFile(remotePath)
+	if err != nil {
+		return fileErr(err, remotePath), nil
+	}
+	m := toMap(result)
+
+	// A BORROWED HOST HAS NO SESSION TO BUILD A URL FROM (#237). The stat is a
+	// property of the connection, so it answers; the download/upload urls are
+	// addresses in the session REST surface, and inventing one for a target that has
+	// no session would hand the caller a URL that 404s. Omitting them says what is
+	// true: this answer came from a borrowed connection.
+	if _, borrowed := s.parseBorrowedHost(sessionID); borrowed {
+		m["borrowed"] = true
+		return jsonResult(m), nil
+	}
+
 	// Resolve for the echoed id and URLs; the SFTP client above already proved the
 	// session exists and is running, so a failure here is only about the spelling.
 	sess, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return bad, nil
 	}
-	result, err := sftpCli.StatFile(remotePath)
-	if err != nil {
-		return fileErr(err, remotePath), nil
-	}
-	m := toMap(result)
 	// Build the URLs and the echoed id from the RESOLVED session, never the
 	// argument: a locator here would produce
 	// /api/sessions/termcp://#<sid>/files/download, a URL containing '#' and '://'
@@ -291,13 +229,14 @@ func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolReq
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 	if err := sftpCli.RemoveFile(remotePath); err != nil {
 		return fileErr(err, remotePath), nil
 	}
@@ -315,11 +254,12 @@ func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolReq
 	if fromPath == "" || toPath == "" {
 		return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 	if err := sftpCli.RenameFile(fromPath, toPath); err != nil {
 		return fileErr(err, fromPath), nil
 	}
@@ -334,13 +274,14 @@ func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRe
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 	if err := sftpCli.MakeDir(remotePath); err != nil {
 		return fileErr(err, remotePath), nil
 	}
@@ -355,7 +296,15 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
+		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
+	}
+	// THE URLS ADDRESS A SESSION, so a borrowed host cannot have them: they are
+	// routes in the session REST surface. Saying so is the answer; resolving the
+	// target as a session first would report "not found" about a host that exists.
+	if host, borrowed := s.parseBorrowedHost(sessionID); borrowed {
+		return toolError(CodeInvalidArgument, "%s", "the download/upload urls are session routes, and "+
+			quoteOrDash(host)+" is a host used through a borrowed connection, so it has no session to address. "+
+			"Use `read "+host+" file "+remotePath+"` for the bytes, or connect to the host if you need the HTTP surface."), nil
 	}
 	if _, bad := s.requireRunningSession(sessionID); bad != nil {
 		return bad, nil
@@ -420,11 +369,12 @@ func (s *Server) handleFilePerm(ctx context.Context, request mcpgo.CallToolReque
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 
 	switch action {
 	case "chmod":
@@ -496,11 +446,12 @@ func (s *Server) handleFileLinkOp(ctx context.Context, request mcpgo.CallToolReq
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 
 	switch action {
 	case "readlink":
@@ -546,11 +497,12 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolReque
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 
 	switch action {
 	case "truncate":
@@ -631,7 +583,7 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolReque
 }
 
 // handleFileGetwd returns the remote working directory via SSH/SFTP.
-func (s *Server) handleFileGetwd(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileGetwd(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 
@@ -639,11 +591,12 @@ func (s *Server) handleFileGetwd(_ context.Context, request mcpgo.CallToolReques
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
 
-	sftpCli, bad := s.sftpClient(sessionID)
+	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
+	defer releaseTransport()
 	dir, err := sftpCli.Getwd()
 	if err != nil {
 		// No caller path is involved: the working directory is the server's own.
@@ -691,6 +644,9 @@ func fileErr(err error, remotePath string) *mcpgo.CallToolResult {
 	code, msg := classifyFileErr(err)
 	if code == CodeOperationFailed {
 		msg += wireSpellingHint(remotePath)
+	}
+	if code == CodeFileNotFound {
+		msg = fmt.Sprintf("%s. Check that the host and remote path are correct before retrying", msg)
 	}
 	return toolError(code, "%s", msg)
 }

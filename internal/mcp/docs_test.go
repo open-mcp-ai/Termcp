@@ -327,10 +327,13 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 			t.Errorf("help notify misses %q: "+want, desc)
 		}
 	}
-	if !strings.Contains(mcpServerInstructions, "before any password/sudo/passphrase/MFA") ||
-		!strings.Contains(mcpServerInstructions, "notify FIRST") ||
-		!strings.Contains(mcpServerInstructions, "HARD BOUNDARY") {
-		t.Errorf("initialize instructions no longer require notify before human input:%s", mcpServerInstructions)
+	for _, want := range []string{
+		"notify FIRST", "before any password/sudo/", "Review mode exists",
+		"capability being granted", "bypassed gate", "notify, then WAIT",
+	} {
+		if !strings.Contains(mcpServerInstructions, want) {
+			t.Errorf("initialize instructions miss human-boundary rationale or action %q:\n%s", want, mcpServerInstructions)
+		}
 	}
 }
 
@@ -340,7 +343,7 @@ func TestNotifyHelpRequiresProactiveHumanAlert(t *testing.T) {
 // on purpose, but the tool LISTING must not: notify_user's description is sent on
 // every tools/list and is not where a held call is explained.
 func TestInstructionsCarryReviewPendingRule(t *testing.T) {
-	for _, want := range []string{"review_pending", "no id to poll", "resubmit"} {
+	for _, want := range []string{"review_pending", "approval_id", "do not poll", "resubmit"} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("instructions no longer explain review mode %q:\n%s", want, mcpServerInstructions)
 		}
@@ -361,7 +364,7 @@ func TestInstructionsCarryReviewPendingRule(t *testing.T) {
 // and differ everywhere else: staged text still needs its ending key, queued or
 // held work must not be retried and is checked later via shell_output.
 func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
-	held := toolResultText(reviewPendingResult(false))
+	held := toolResultText(reviewPendingResult(false, reviewPendingFields{}))
 	if !strings.Contains(held, "ending key") {
 		t.Errorf("the staged reply must ask for the ending key:\n%s", held)
 	}
@@ -371,13 +374,13 @@ func TestReviewPendingRepliesStateTheNextStep(t *testing.T) {
 		t.Errorf("the staged reply must not forbid the ending key it just asked for:\n%s", held)
 	}
 
-	queued := toolResultText(reviewPendingResult(true))
-	if !strings.Contains(queued, "no id to poll") || !strings.Contains(queued, "WAIT") {
+	queued := toolResultText(reviewPendingResult(true, reviewPendingFields{ApprovalID: "req-1"}))
+	if !strings.Contains(queued, "do not poll") || !strings.Contains(queued, "WAIT") {
 		t.Errorf("the queued reply must forbid a retry loop:\n%s", queued)
 	}
 	// A held operation shares the queued wording, so one constant keeps the two
 	// paths from forbidding the same retry loop in two different ways.
-	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts")); !strings.Contains(op, reviewWaitTail) {
+	if op := toolResultText(reviewPendingOperationResult("write /etc/hosts", reviewPendingFields{ApprovalID: "req-1"})); !strings.Contains(op, reviewWaitTail) {
 		t.Errorf("a held operation must carry the same retry rule as a held command line:\n%s", op)
 	}
 	// The two replies differ: a model that reads "do not retry" after staging
@@ -795,17 +798,14 @@ func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 	}
 }
 
-func TestInstructionsPairWaitingOnAHumanWithNotify(t *testing.T) {
-	for _, want := range []string{"Human at a prompt", "notify"} {
+func TestInstructionsExplainActionWhenTermcpFeelsAwkward(t *testing.T) {
+	for _, want := range []string{
+		"long, awkward", "capability that should exist", "say what you are trying to do and ask",
+		"create ext", "open <session> mcp <url>", "call <peer> <tool>",
+	} {
 		if !strings.Contains(mcpServerInstructions, want) {
-			t.Errorf("initialize instructions no longer tell the agent how to wait on a human: missing %q", want)
+			t.Errorf("initialize instructions miss high-level action or escalation path %q:\n%s", want, mcpServerInstructions)
 		}
-	}
-	// Both halves must be in the boundary rule's neighbourhood: the waking rule is
-	// only correct when it follows the notification, and an agent reading one
-	// without the other would either poll or stay silent.
-	if strings.Index(mcpServerInstructions, "Human at a prompt") < strings.Index(mcpServerInstructions, "HARD BOUNDARY") {
-		t.Error("the wait-on-a-human rule moved above the notify boundary it depends on")
 	}
 }
 

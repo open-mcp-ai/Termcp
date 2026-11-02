@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -40,13 +41,10 @@ func (r *Reconciler) reapEnded(name string, st *extState) {
 			// news — not this loop's.
 			continue
 		}
-		if !st.dropExtra(shellID) {
+		reason := r.instanceEndReason(sess, shellID)
+		if !st.retireExtra(sessIDOf(sess), shellID, reason) {
 			continue
 		}
-		reason := r.instanceEndReason(sess, shellID)
-		st.recordFailure("session", reason)
-		st.recordClosed(sessIDOf(sess), shellID, reason)
-		st.mark(StatusUnavailable)
 		slog.Debug("extension instance ended", "name", name, "shell_id", shellID, "reason", reason)
 		changed = true
 	}
@@ -77,10 +75,33 @@ func (r *Reconciler) reapEnded(name string, st *extState) {
 // instance: a host that is slow to answer returns `probing` with what to poll
 // rather than a failure the caller would have to guess was not one.
 func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
+	return r.AcquireTarget(name, "", wait)
+}
+
+// AcquireTarget brings up an instance on a specific host of an extension. An
+// empty target is accepted only when the extension declares exactly one host.
+func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Status, error) {
 	ext, err := r.store.Load(name)
 	if err != nil {
 		return Status{}, err
 	}
+	tDecl, ok := ext.TargetFor(target)
+	if !ok {
+		targets := ext.EffectiveTargets()
+		if len(targets) > 1 && strings.TrimSpace(target) == "" {
+			names := make([]string, 0, len(targets))
+			for _, t := range targets {
+				names = append(names, t.Host)
+			}
+			return Status{}, fmt.Errorf("extension %q declares multiple targets (%s): specify target", name, strings.Join(names, ", "))
+		}
+		if strings.TrimSpace(target) != "" {
+			return Status{}, fmt.Errorf("extension %q has no target %q", name, target)
+		}
+		return Status{}, fmt.Errorf("extension %q has no targets configured", name)
+	}
+	targetHost := tDecl.Host
+	view := forTarget(ext, targetHost)
 	st, ok := r.Status(name)
 	if !ok {
 		return Status{}, fmt.Errorf("extension %q not found", name)
@@ -90,34 +111,23 @@ func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
 	}
 	limit, err := ext.IdleTimeoutDuration()
 	if err != nil {
-		// A template carrying an unreadable window is a broken template, and
-		// refusing it is the only honest answer to a caller asking it to start one.
 		return Status{}, err
 	}
-	if !ext.Lazy() {
-		// Resident: the reconciler keeps exactly one instance and everyone shares
-		// it. Wanting it is what starts it, and the attempt begins now rather than
-		// at whatever moment a sweep would have come round.
-		r.state(name).want()
-		r.retryNow(name)
-		return r.await(name, wait)
+	state := r.stateFor(name, targetHost)
+	if !view.Lazy() {
+		state.want()
+		r.retryTargetNow(name, targetHost)
+		return r.awaitTarget(name, targetHost, wait)
 	}
 
-	// EVERY ASK GETS ITS OWN CHANNEL — not a free one, not a reused one. A channel
-	// somebody else may still be driving is the one thing that cannot be handed
-	// over, and deciding "is that one free" costs more code than a fork does. The
-	// process is the cheap part; callers never share a cursor.
-	state := r.state(name)
 	state.want()
 	state.setIdleLimit(limit)
-	sid, shellID, _, _, err := r.bringUp(context.Background(), ext, state, true)
+	sid, shellID, _, _, err := r.bringUp(context.Background(), &view, state, true)
 	if err != nil {
-		// The failure is already recorded and its retry armed; the caller's answer is
-		// the status, which carries the reason.
 		got, _ := r.Status(name)
 		return got, nil
 	}
-	return r.instanceStatus(name, sid, shellID), nil
+	return r.instanceStatusFor(name, targetHost, sid, shellID), nil
 }
 
 // closeInstances closes every instance of an on-demand extension, recording why.
@@ -272,8 +282,8 @@ func (st *extState) nextLabel(ext *Extension) string {
 // instanceStatus renders a status for the instance just handed out: the
 // extension's own state with THIS caller's handles on it, which is what the
 // reply needs and what `Status` alone cannot say when there is more than one.
-func (r *Reconciler) instanceStatus(name, sessionID, shellID string) Status {
-	got, _ := r.Status(name)
+func (r *Reconciler) instanceStatusFor(name, target, sessionID, shellID string) Status {
+	got, _ := r.TargetStatus(name, target)
 	got.SessionID, got.ShellID = sessionID, shellID
 	return got
 }
@@ -281,9 +291,14 @@ func (r *Reconciler) instanceStatus(name, sessionID, shellID string) Status {
 // await polls until the extension has an answer: up, or down with a reason. Used
 // by the resident path, where the walk owns the dial.
 func (r *Reconciler) await(name string, wait time.Duration) (Status, error) {
+	return r.awaitTarget(name, "", wait)
+}
+
+// awaitTarget is await for one host of an extension.
+func (r *Reconciler) awaitTarget(name, target string, wait time.Duration) (Status, error) {
 	deadline := time.Now().Add(wait)
 	for {
-		got, ok := r.Status(name)
+		got, ok := r.TargetStatus(name, target)
 		if !ok {
 			return Status{}, fmt.Errorf("extension %q not found", name)
 		}
@@ -335,7 +350,10 @@ func (r *Reconciler) sweepInstances(name string, ext *Extension, st *extState, l
 // promise, the walk because a promise kept only by a timer is one missed callback
 // away from a process nobody will ever close.
 func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int {
-	due := st.dueExtras(limit)
+	reason := "idle for " + limit.Round(time.Second).String() + " with nothing asked of it"
+	// dueExtras records the close with the removal (see its comment): by the time
+	// this returns, the instance is gone AND the reason is readable.
+	due := st.dueExtras(limit, reason)
 	if len(due) == 0 {
 		return 0
 	}
@@ -344,8 +362,6 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 		if sess != nil {
 			_ = sess.CloseChildShell(shellID)
 		}
-		st.recordClosed(sessIDOf(sess), shellID,
-			"idle for "+limit.Round(time.Second).String()+" with nothing asked of it")
 		slog.Info("extension instance idled out", "name", name, "shell_id", shellID)
 	}
 	return len(due)
@@ -375,7 +391,7 @@ func (r *Reconciler) armIdle(name string, st *extState) {
 		if st.ctx != nil && st.ctx.Err() != nil {
 			return
 		}
-		r.idleFired(name)
+		r.idleFired(name, st.host())
 	})
 }
 
@@ -392,8 +408,8 @@ func (st *extState) stopIdle() {
 // idleFired is the window running out. It closes what is due and re-arms for the
 // next channel, rather than closing everything: channels opened at different
 // moments run out at different moments.
-func (r *Reconciler) idleFired(name string) {
-	ext, err := r.store.Load(name)
+func (r *Reconciler) idleFired(name, target string) {
+	ext, err := r.loadTarget(name, target)
 	if err != nil || !ext.Lazy() {
 		return
 	}
@@ -401,7 +417,7 @@ func (r *Reconciler) idleFired(name string) {
 	if err != nil {
 		return
 	}
-	st := r.state(name)
+	st := r.stateFor(name, ext.Target)
 	if r.reapDue(name, st, limit) > 0 {
 		r.settle(name, st)
 		r.notifyChange()
@@ -413,19 +429,11 @@ func (r *Reconciler) idleFired(name string) {
 // available, nothing up is idle ("nothing is running because nothing asked"), and
 // a recorded failure outranks both.
 func (r *Reconciler) settle(name string, st *extState) {
-	switch {
-	case len(st.snapshot().Failures) > 0 && st.instanceCount() == 0:
-		// leave the failure standing
-	case st.instanceCount() > 0:
-		if st.statusOf() != StatusAvailable {
-			st.mark(StatusAvailable)
-			r.notifyChange()
-		}
-	default:
-		if st.statusOf() != StatusIdle {
-			st.mark(StatusIdle)
-			r.notifyChange()
-		}
+	st.mu.Lock()
+	changed := st.settleLocked()
+	st.mu.Unlock()
+	if changed {
+		r.notifyChange()
 	}
 }
 
@@ -468,9 +476,9 @@ func (r *Reconciler) Touch(shellID, sessionID string) {
 	// read. With one extension it looked perfect; with ten on one connection it
 	// reaped the channel being used almost every time (dogfood on #183).
 	if shellID != "" {
-		for name, st := range pairs {
+		for _, st := range pairs {
 			if st.renew(shellID) {
-				r.armIdle(name, st)
+				r.armIdle(st.name(), st)
 				return
 			}
 		}
@@ -478,9 +486,9 @@ func (r *Reconciler) Touch(shellID, sessionID string) {
 	if sessionID != "" {
 		// The session IS in use, and every extension hanging off it is being used
 		// with it — so all of them are renewed, not just whichever came first.
-		for name, st := range pairs {
+		for _, st := range pairs {
 			if st.renewSession(sessionID) {
-				r.armIdle(name, st)
+				r.armIdle(st.name(), st)
 			}
 		}
 	}
@@ -496,43 +504,64 @@ func (r *Reconciler) Touch(shellID, sessionID string) {
 // did not keep the handle. It reports how many were released, so the reply can say
 // whether the caller's handle was one of them.
 func (r *Reconciler) Release(name, shellID string) (int, error) {
+	return r.ReleaseTarget(name, "", shellID)
+}
+
+// ReleaseTarget is Release narrowed to one host of a multi-target extension. An
+// empty target means every host, which is what a single-target template has.
+func (r *Reconciler) ReleaseTarget(name, target, shellID string) (int, error) {
 	ext, err := r.store.Load(name)
 	if err != nil {
 		return 0, err
 	}
-	if !ext.Lazy() {
-		// A resident extension's connection is the reconciler's, not the caller's:
-		// its template declares a listener, so there is nothing to hand back.
-		return 0, errors.New("this extension is not on demand: it declares a forward, so its connection stays up")
-	}
-	st := r.state(name)
-	var targets []string
-	if shellID != "" {
-		if !st.hasExtra(shellID) {
-			return 0, fmt.Errorf("extension %q is not running an instance with shell id %q", name, shellID)
+	states := r.statesOfName(name)
+	if target != "" {
+		t, ok := ext.TargetFor(target)
+		if !ok {
+			return 0, fmt.Errorf("extension %q declares no target %q", name, target)
 		}
-		targets = []string{shellID}
-	} else {
-		targets = st.extraShells()
+		states = []*extState{r.stateFor(name, t.Host)}
 	}
-	sess := r.sessionOfRecord(st)
-	n := 0
-	for _, id := range targets {
-		if !st.dropExtra(id) {
-			continue
+	if len(states) == 0 {
+		return 0, fmt.Errorf("extension %q not found", name)
+	}
+	total := 0
+	found := false
+	for _, st := range states {
+		var ids []string
+		if shellID != "" {
+			if !st.hasExtra(shellID) {
+				continue
+			}
+			found = true
+			ids = []string{shellID}
+		} else {
+			ids = st.extraShells()
 		}
-		if sess != nil {
-			_ = sess.CloseChildShell(id)
+		sess := r.sessionOfRecord(st)
+		for _, id := range ids {
+			if !st.dropExtra(id) {
+				continue
+			}
+			if sess != nil {
+				_ = sess.CloseChildShell(id)
+			}
+			st.recordClosed(sessIDOf(sess), id, "released by the caller")
+			total++
 		}
-		st.recordClosed(sessIDOf(sess), id, "released by the caller")
-		n++
+		if st.instanceCount() == 0 && st.statusOf() == StatusAvailable {
+			st.mark(StatusIdle)
+		}
+		r.armIdle(name, st)
+		if shellID != "" && found {
+			break
+		}
 	}
-	if st.instanceCount() == 0 && st.statusOf() == StatusAvailable {
-		st.mark(StatusIdle)
+	if shellID != "" && !found {
+		return 0, fmt.Errorf("extension %q is not running an instance with shell id %q", name, shellID)
 	}
-	r.armIdle(name, st)
 	r.notifyChange()
-	return n, nil
+	return total, nil
 }
 
 // hasExtra reports whether this shell id names one of the extension's instances.
@@ -566,19 +595,19 @@ func (r *Reconciler) ExplainClosed(sessionID, shellID string) (name, reason stri
 		return "", "", time.Time{}, false
 	}
 	r.mu.Lock()
-	states := make(map[string]*extState, len(r.states))
-	for n, st := range r.states {
-		states[n] = st
+	states := make([]*extState, 0, len(r.states))
+	for _, st := range r.states {
+		states = append(states, st)
 	}
 	r.mu.Unlock()
-	for n, st := range states {
+	for _, st := range states {
 		st.mu.Lock()
 		match := (sessionID != "" && st.closedSessionID == sessionID) ||
 			(shellID != "" && st.closedShellID == shellID)
 		reason, at = st.closedReason, st.closedAt
 		st.mu.Unlock()
 		if match {
-			return n, reason, at, true
+			return st.name(), reason, at, true
 		}
 	}
 	return "", "", time.Time{}, false

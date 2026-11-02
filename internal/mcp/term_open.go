@@ -225,14 +225,31 @@ func createdBody(doc map[string]any, mode string) string {
 }
 
 // shortHandle renders `<session>:N` from a handler reply.
+//
+// N COMES FROM THE REPLY OR IS NOT INVENTED. The positional form is a shorthand for a
+// locator the caller will hand back, so a number made up here is not cosmetic: it is a
+// promise the resolver does not have to keep. An extension reply carries
+// session_id + shell_id and used to carry no index, so every `open ext` advertised
+// `<session>:1` — right by accident for the first channel, and a guaranteed 404 for the
+// one the reconciler had rebuilt as `:2` (issue #211).
+//
+// A bare shell id is a locator too, and every directive resolves it, so its absence costs
+// the caller a few characters and costs the reply nothing. That is the trade this makes
+// in one direction only.
 func shortHandle(doc map[string]any) string {
 	shellID := getString(doc, "shell_id", "")
 	sessionID := getString(doc, "session_id", "")
-	index := int(getFloatAny(doc, "index", 1))
-	if sessionID != "" {
-		return handleOf(sessionID, index)
+	if sessionID == "" {
+		return shellID
 	}
-	return shellID
+	if _, known := doc["index"]; !known {
+		return shellID
+	}
+	index := int(getFloatAny(doc, "index", 1))
+	if index <= 0 {
+		return shellID
+	}
+	return handleOf(sessionID, index)
 }
 
 // parseSize reads the `--size 24x80` form: rows x cols, the order a terminal

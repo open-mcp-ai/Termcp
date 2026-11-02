@@ -104,18 +104,12 @@ func TestRevokeClientConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv.mu.Lock()
-	_, pendingBefore := srv.pending[cfg.User]
-	srv.mu.Unlock()
-	if !pendingBefore {
+	if _, pendingBefore := srv.pending.Load(cfg.User); !pendingBefore {
 		t.Fatal("minted credential should be pending before revoke")
 	}
 
 	srv.RevokeClientConfig(cfg.User)
-	srv.mu.Lock()
-	_, pendingAfter := srv.pending[cfg.User]
-	srv.mu.Unlock()
-	if pendingAfter {
+	if _, pendingAfter := srv.pending.Load(cfg.User); pendingAfter {
 		t.Fatal("RevokeClientConfig left the credential in the pending map")
 	}
 

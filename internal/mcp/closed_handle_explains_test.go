@@ -14,7 +14,7 @@ import (
 // actually keeps.
 func TestAClosedChannelExplainsItself(t *testing.T) {
 	s := newExtensionTestServer(t)
-	ext := extensions.Preset(extensions.KindPrompt)
+	ext := extensions.Extension{Mode: "pty"}
 	ext.Name = "gone"
 	ext.Target = "internal"
 	ext.Command = blockingCommand()

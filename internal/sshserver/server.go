@@ -30,13 +30,11 @@ type Server struct {
 	server   *ssh.Server
 	listener *inMemListener
 	started  atomic.Bool
-	mu       sync.Mutex
-	// pending maps one-time username -> password. A successful password auth removes the entry.
-	pending map[string]string
-	// builtins maps a command name to the in-process handler that serves it. Read
-	// through a mutex rather than atomically because registration happens at
-	// startup, before Start, and a map is not a value an atomic can hold.
-	builtins map[string]CommandHandler
+	// pending maps one-time username -> password in a sync.Map. Successful auth
+	// consumes the entry with LoadAndDelete: lock-free, single-use.
+	pending sync.Map // user string -> password string
+	// builtins maps a command name to the in-process handler that serves it.
+	builtins sync.Map // name string -> CommandHandler
 }
 
 // RegisterCommand teaches the server a command it serves in-process: a session
@@ -50,20 +48,18 @@ func (s *Server) RegisterCommand(name string, h CommandHandler) {
 	if strings.TrimSpace(name) == "" || h == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.builtins == nil {
-		s.builtins = make(map[string]CommandHandler)
-	}
-	s.builtins[name] = h
+	s.builtins.Store(name, h)
 }
 
 // builtin returns the handler for a command name, or nil when the name is not a
 // built-in and must be exec'd normally.
 func (s *Server) builtin(name string) CommandHandler {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.builtins[name]
+	v, ok := s.builtins.Load(name)
+	if !ok {
+		return nil
+	}
+	h, _ := v.(CommandHandler)
+	return h
 }
 
 // BuiltinForTest exposes builtin to package-external tests, which need to assert
@@ -141,9 +137,7 @@ func drainWindowChanges(pty ssh.Pty, winch <-chan ssh.Window) {
 
 // New creates an internal SSH server that communicates in-process via net.Pipe (no TCP port).
 func New() *Server {
-	s := &Server{
-		pending: make(map[string]string),
-	}
+	s := &Server{}
 	srv := &ssh.Server{
 		Handler: func(sess ssh.Session) {
 			s.handleSession(sess)
@@ -273,9 +267,10 @@ func (s *Server) Stop() error {
 	if !s.started.Load() {
 		return nil
 	}
-	s.mu.Lock()
-	s.pending = make(map[string]string)
-	s.mu.Unlock()
+	s.pending.Range(func(k, _ any) bool {
+		s.pending.Delete(k)
+		return true
+	})
 	_ = s.listener.Close()
 	return s.server.Close()
 }

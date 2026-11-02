@@ -665,6 +665,10 @@ func (t *sentinelTable) expandStatement(st Statement) Statement {
 		filled := t.expand(*v)
 		st.Flags[k] = &filled
 	}
+	if st.Pipe != nil {
+		expanded := t.expandStatement(*st.Pipe)
+		st.Pipe = &expanded
+	}
 	return st
 }
 

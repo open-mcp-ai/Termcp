@@ -55,6 +55,36 @@ func TestArchiveRendersRowsNotCards(t *testing.T) {
 	}
 }
 
+// TestArchiveNewestFirst pins the archive ledger's reading order.
+//
+// ListAll walks a sync.Map, so the snapshot order is deliberately unspecified.
+// Rendering it directly made the archive look random, and every session frame
+// could move a row under the pointer. The timestamp that matters is updated_at:
+// for a dead session that is the last transition, i.e. when it ended. Newest
+// first brings the session the reader just lost to the top; the id breaks ties so
+// equal timestamps do not reshuffle between frames.
+func TestArchiveNewestFirst(t *testing.T) {
+	js := readAssetLF(t, "static/js/sessions.js")
+	ended := between(t, js, "function archiveEndedAt(", "\n}\n")
+	cmp := between(t, js, "function compareArchiveRows(", "\n}\n")
+	render := between(t, js, "function renderArchiveRows(", "\n}\n")
+	if ended == "" || !strings.Contains(ended, "updated_at") {
+		t.Fatal("archive ordering must read the server's updated_at timestamp")
+	}
+	if !strings.Contains(ended, "created_at") || !strings.Contains(ended, "1e12") {
+		t.Error("archive ordering must fall back to created_at and normalise second-resolution timestamps")
+	}
+	if !strings.Contains(cmp, "archiveEndedAt(b) - archiveEndedAt(a)") {
+		t.Error("archive rows must compare later timestamps before earlier ones")
+	}
+	if !strings.Contains(cmp, "localeCompare") {
+		t.Error("equal end timestamps need a stable id tie-break")
+	}
+	if !strings.Contains(render, "rows.sort(compareArchiveRows)") {
+		t.Error("renderArchiveRows must sort before building archive rows")
+	}
+}
+
 // TestArchiveStartsFolded is the whole point of the column: these sessions are
 // over, nothing in them is urgent, and the work they would take pixels from is
 // the extensions beside them. The rail's count is what makes opening it an

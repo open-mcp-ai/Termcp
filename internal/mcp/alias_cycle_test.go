@@ -11,7 +11,7 @@ import (
 // directive: aa" sends the caller hunting for a typo in a directive that exists —
 // and the only way to make a cycle is through the alias table.
 func TestAliasCycleIsReportedAsACycle(t *testing.T) {
-	a := &aliasTable{m: map[string]string{"aa": "bb", "bb": "aa"}}
+	a := newAliasTableForTest(map[string]string{"aa": "bb", "bb": "aa"})
 	path := a.cyclePath("aa")
 	if len(path) == 0 {
 		t.Fatal("a two-name cycle was not detected")
@@ -23,7 +23,7 @@ func TestAliasCycleIsReportedAsACycle(t *testing.T) {
 }
 
 func TestAliasSelfReferenceIsACycle(t *testing.T) {
-	a := &aliasTable{m: map[string]string{"self": "self"}}
+	a := newAliasTableForTest(map[string]string{"self": "self"})
 	if path := a.cyclePath("self"); len(path) == 0 {
 		t.Fatal("a self-referencing alias was not reported as a cycle")
 	}
@@ -31,7 +31,7 @@ func TestAliasSelfReferenceIsACycle(t *testing.T) {
 
 // A chain that resolves is NOT a cycle, and cyclePath must not claim otherwise.
 func TestAliasChainWithoutCycleHasNoCyclePath(t *testing.T) {
-	a := &aliasTable{m: map[string]string{"mx": "ls --all"}}
+	a := newAliasTableForTest(map[string]string{"mx": "ls --all"})
 	if path := a.cyclePath("mx"); len(path) != 0 {
 		t.Fatalf("cyclePath = %v, want none", path)
 	}
@@ -41,7 +41,7 @@ func TestAliasChainWithoutCycleHasNoCyclePath(t *testing.T) {
 // directive fails parsing, and the alias is resolved from that error. Reporting a
 // cycle only from Expand() left this path still saying "unknown directive".
 func TestAliasCycleIsReportedThroughTheParseError(t *testing.T) {
-	a := &aliasTable{m: map[string]string{"aa": "bb", "bb": "aa"}}
+	a := newAliasTableForTest(map[string]string{"aa": "bb", "bb": "aa"})
 	_, err := directive.Parse("aa")
 	if err == nil {
 		t.Fatal("expected the parser to reject an invented directive")
@@ -57,7 +57,7 @@ func TestAliasCycleIsReportedThroughTheParseError(t *testing.T) {
 
 // An unrelated parse error must not be turned into a cycle report.
 func TestUnresolvableNameIsNotACycle(t *testing.T) {
-	a := &aliasTable{m: map[string]string{}}
+	a := newAliasTableForTest(map[string]string{})
 	_, err := directive.Parse("nosuchdirective")
 	if err == nil {
 		t.Fatal("expected a parse error")

@@ -22,6 +22,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -110,9 +111,12 @@ type Task struct {
 	startedAt time.Time
 	cancel    context.CancelFunc
 
+	// done and total are atomic so the 32 KB copy loop never takes a lock (the
+	// comment on Add documented that intention and previously did the opposite).
+	done  atomic.Int64
+	total atomic.Int64
+
 	mu       sync.Mutex
-	done     int64
-	total    int64
 	status   Status
 	err      error
 	endedAt  time.Time
@@ -123,19 +127,14 @@ type Task struct {
 func (t *Task) ID() string { return t.id }
 
 // Add records n more bytes as transferred. Called from the copy loop, so it is
-// lock-free: a mutex per 32 KB chunk would serialise the transfer against every
-// reader asking how it is going.
+// lock-free: atomic add, no mutex per chunk (issue #223).
 func (t *Task) Add(n int64) {
-	t.mu.Lock()
-	t.done += n
-	t.mu.Unlock()
+	t.done.Add(n)
 }
 
 // SetTotal records the size the transfer expects to move.
 func (t *Task) SetTotal(n int64) {
-	t.mu.Lock()
-	t.total = n
-	t.mu.Unlock()
+	t.total.Store(n)
 }
 
 // finish moves the task to a terminal status exactly once.
@@ -159,7 +158,7 @@ func (t *Task) view() View {
 	v := View{
 		ID: t.id, Kind: t.kind, SessionID: t.sessionID,
 		Path: t.path, LocalPath: t.localPath,
-		Status: t.status, BytesDone: t.done, BytesTotal: t.total,
+		Status: t.status, BytesDone: t.done.Load(), BytesTotal: t.total.Load(),
 		StartedAt: t.startedAt, EndedAt: t.endedAt,
 	}
 	if t.err != nil {
@@ -168,15 +167,16 @@ func (t *Task) view() View {
 	return v
 }
 
-// Manager owns every task this process started.
+// Manager owns every task this process started. Tasks are indexed by id in a
+// sync.Map: callers only ever look up, insert, or list them, so there is no
+// multi-key invariant for a mutex to protect.
 type Manager struct {
-	mu    sync.Mutex
-	tasks map[string]*Task
+	tasks sync.Map // id string -> *Task
 }
 
 // NewManager creates an empty manager.
 func NewManager() *Manager {
-	return &Manager{tasks: make(map[string]*Task)}
+	return &Manager{}
 }
 
 func randomID() string {
@@ -195,43 +195,45 @@ func randomID() string {
 // cannot be cancelled is a transfer that runs to completion while its caller is
 // told it was cancelled.
 func (m *Manager) Start(kind Kind, sessionID, path, localPath string, cancel context.CancelFunc) *Task {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.reapLocked()
-	id := randomID()
-	for m.tasks[id] != nil {
-		id = randomID()
-	}
-	t := &Task{
-		id: id, kind: kind, sessionID: sessionID, path: path, localPath: localPath,
-		startedAt: time.Now(), status: Running, cancel: cancel,
-		finished: make(chan struct{}),
-	}
-	m.tasks[id] = t
-	return t
-}
-
-// reapLocked drops finished tasks that have been answerable long enough.
-func (m *Manager) reapLocked() {
-	cutoff := time.Now().Add(-retainFinished)
-	for id, t := range m.tasks {
-		t.mu.Lock()
-		stale := t.status != Running && t.endedAt.Before(cutoff)
-		t.mu.Unlock()
-		if stale {
-			delete(m.tasks, id)
+	m.reap()
+	for {
+		id := randomID()
+		t := &Task{
+			id: id, kind: kind, sessionID: sessionID, path: path, localPath: localPath,
+			startedAt: time.Now(), status: Running, cancel: cancel,
+			finished: make(chan struct{}),
+		}
+		if _, loaded := m.tasks.LoadOrStore(id, t); !loaded {
+			return t
 		}
 	}
 }
 
+// reap drops finished tasks that have been answerable long enough.
+func (m *Manager) reap() {
+	cutoff := time.Now().Add(-retainFinished)
+	m.tasks.Range(func(k, v any) bool {
+		t, ok := v.(*Task)
+		if !ok {
+			return true
+		}
+		t.mu.Lock()
+		stale := t.status != Running && t.endedAt.Before(cutoff)
+		t.mu.Unlock()
+		if stale {
+			m.tasks.Delete(k)
+		}
+		return true
+	})
+}
+
 // task returns the record for id, or ErrNotFound.
 func (m *Manager) task(id string) (*Task, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	t, ok := m.tasks[id]
+	v, ok := m.tasks.Load(id)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
+	t, _ := v.(*Task)
 	return t, nil
 }
 
@@ -246,12 +248,13 @@ func (m *Manager) Get(id string) (View, error) {
 
 // List returns every known task, newest first.
 func (m *Manager) List() []View {
-	m.mu.Lock()
-	all := make([]*Task, 0, len(m.tasks))
-	for _, t := range m.tasks {
-		all = append(all, t)
-	}
-	m.mu.Unlock()
+	var all []*Task
+	m.tasks.Range(func(_, v any) bool {
+		if t, ok := v.(*Task); ok {
+			all = append(all, t)
+		}
+		return true
+	})
 
 	out := make([]View, 0, len(all))
 	for _, t := range all {
@@ -330,12 +333,13 @@ func (m *Manager) Finish(id string, err error) {
 // Close stops every running task. Called when the daemon shuts down, so an
 // interrupted transfer does not leave a .part file behind without a receipt.
 func (m *Manager) Close() {
-	m.mu.Lock()
-	all := make([]*Task, 0, len(m.tasks))
-	for _, t := range m.tasks {
-		all = append(all, t)
-	}
-	m.mu.Unlock()
+	var all []*Task
+	m.tasks.Range(func(_, v any) bool {
+		if t, ok := v.(*Task); ok {
+			all = append(all, t)
+		}
+		return true
+	})
 	for _, t := range all {
 		t.mu.Lock()
 		cancel := t.cancel

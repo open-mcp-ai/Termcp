@@ -129,22 +129,18 @@ func TestExtensionUnknownAction(t *testing.T) {
 	}
 }
 
-// TestExtensionCreateGetList walks the whole read path: a template created with
-// kind+target alone picks up the preset, is listed, and comes back from get with
-// the same key names update accepts.
+// TestExtensionCreateGetList walks the whole read path: a template created from its
+// declared fields is listed, and comes back from get with the same key names update
+// accepts.
 func TestExtensionCreateGetList(t *testing.T) {
 	s := newExtensionTestServer(t)
 
 	created := callExtension(t, s, map[string]any{
 		"action": "create",
 		"name":   "docs",
-		"kind":   "skill",
 		"target": "internal",
 		"paths":  []any{"/srv/"},
 	})
-	if created["kind"] != "skill" {
-		t.Errorf("kind not echoed: %v", created["kind"])
-	}
 	if created["status"] == extensions.StatusAvailable {
 		// A fresh extension starts unavailable and is pushed toward available, so
 		// the status read back an instant later may already be probing — but never
@@ -156,15 +152,15 @@ func TestExtensionCreateGetList(t *testing.T) {
 	if got["target"] != "internal" {
 		t.Errorf("target = %v", got["target"])
 	}
-	// The skill preset's whitelist is part of what "kind=skill" means.
+	// A declared paths window gets the read-only whitelist by default.
 	if allow, _ := got["allow"].([]any); len(allow) == 0 {
-		t.Error("a skill preset should carry its tool whitelist")
+		t.Error("a paths window should carry the read-only tool whitelist")
 	}
 	if paths, _ := got["paths"].([]any); len(paths) != 1 || paths[0] != "/srv/" {
 		t.Errorf("paths = %v", paths)
 	}
 	if notes, _ := got["notes"].(string); notes == "" {
-		t.Error("the skill preset's notes should reach get")
+		t.Error("the notes a paths window implies should reach get")
 	}
 
 	useExtension(t, s, "docs")
@@ -182,8 +178,7 @@ func TestExtensionCreateGetList(t *testing.T) {
 func TestExtensionCreateConflict(t *testing.T) {
 	s := newExtensionTestServer(t)
 	args := map[string]any{
-		"action": "create", "name": "one", "kind": "skill", "target": "internal",
-		"paths": []any{"/srv/"},
+		"action": "create", "name": "one", "target": "internal", "paths": []any{"/srv/"},
 	}
 	callExtension(t, s, args)
 	out := extensionError(t, s, args)
@@ -198,8 +193,8 @@ func TestExtensionValidation(t *testing.T) {
 	s := newExtensionTestServer(t)
 
 	for _, args := range []map[string]any{
-		{"action": "create", "name": "bad", "kind": "nope", "target": "internal"},
-		{"action": "create", "name": "bad", "kind": "skill", "target": "internal"}, // skill needs paths
+		{"action": "create", "name": "bad", "target": "internal"},                         // no capability at all
+		{"action": "create", "name": "bad", "target": "internal", "paths": []any{"re:["}}, // bad pattern
 	} {
 		out := extensionError(t, s, args)
 		if out["error_code"] != CodeInvalidArgument {
@@ -217,7 +212,7 @@ func TestExtensionValidation(t *testing.T) {
 func TestExtensionUpdatePatchSemantics(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "patch", "kind": "prompt", "target": "internal",
+		"action": "create", "name": "patch", "target": "internal", "mode": "pty",
 		"command": blockingCommand(),
 		"allow":   []any{"shell_input"},
 		"notes":   "first",
@@ -258,7 +253,7 @@ func TestExtensionUpdatePatchSemantics(t *testing.T) {
 func TestExtensionDelete(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "tmp", "kind": "skill", "target": "internal",
+		"action": "create", "name": "tmp", "target": "internal",
 		"paths": []any{"/srv/"},
 	})
 	callExtension(t, s, map[string]any{"action": "delete", "name": "tmp"})
@@ -273,7 +268,7 @@ func TestExtensionDelete(t *testing.T) {
 func TestExtensionRetryDisabled(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "parked", "kind": "skill", "target": "internal",
+		"action": "create", "name": "parked", "target": "internal",
 		"paths": []any{"/srv/"}, "enabled": false,
 	})
 	out := extensionError(t, s, map[string]any{"action": "retry", "name": "parked"})
@@ -335,7 +330,7 @@ func waitForExtensionFailure(t *testing.T, s *Server, name string, stages ...str
 // brings it to available.
 func TestExtensionRetryBringsUp(t *testing.T) {
 	s := newExtensionTestServer(t)
-	ext := extensions.Preset(extensions.KindPrompt)
+	ext := extensions.Extension{Mode: "pty"}
 	ext.Name = "flaky"
 	ext.Target = "internal"
 	ext.Command, ext.Args = exitCommand()
@@ -369,7 +364,7 @@ func TestExtensionRetryBringsUp(t *testing.T) {
 func TestExtensionUpdateRestarts(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "live", "kind": "prompt", "target": "internal",
+		"action": "create", "name": "live", "target": "internal", "mode": "pty",
 		"command": blockingCommand(), "args": []any{},
 	})
 	useExtension(t, s, "live")
@@ -418,7 +413,7 @@ func TestExtensionUpdateRestarts(t *testing.T) {
 func TestExtensionSessionsStayOutOfSessionList(t *testing.T) {
 	s := newExtensionTestServer(t)
 	callExtension(t, s, map[string]any{
-		"action": "create", "name": "quiet", "kind": "prompt", "target": "internal",
+		"action": "create", "name": "quiet", "target": "internal", "mode": "pty",
 		"command": blockingCommand(), "args": []any{},
 	})
 	useExtension(t, s, "quiet")
@@ -449,5 +444,145 @@ func TestExtensionSessionsStayOutOfSessionList(t *testing.T) {
 	}
 	if got := parseResult(t, info)["id"]; got != sid {
 		t.Errorf("session_info returned %v, want %q", got, sid)
+	}
+}
+
+// TestExtensionInstallFromTemplate walks the package path an agent actually takes:
+// install a document, read what it asks for, fill it, use it. The three steps are
+// separate calls because they are separate decisions — the recipe, this machine's
+// answer, and the ask that starts something.
+func TestExtensionInstallFromTemplate(t *testing.T) {
+	s := newExtensionTestServer(t)
+	doc := `description = "drive the cluster"
+mode = "pipe"
+command = "{{command}}"
+targets = "{{targets}}"
+
+[params.command]
+type = "string"
+help = "the program that serves MCP over the pipe"
+
+[params.targets]
+type = "array"
+help = "one entry per host"
+`
+	// A package arrives with holes and no values. Storing it is a success, and the
+	// answer says which holes remain rather than reporting a failed write.
+	installed := callExtension(t, s, map[string]any{"action": "create", "name": "k8s", "template": doc})
+	needs, _ := installed["needs"].([]any)
+	if len(needs) != 2 {
+		t.Fatalf("an installed template should report both holes as open, got %v", installed)
+	}
+	if installed["stored"] != true {
+		t.Errorf("the install should say it stored the document: %v", installed)
+	}
+
+	// get on an unfilled extension answers with the holes rather than a not-found:
+	// the extension exists, and what it lacks is one value.
+	got := callExtension(t, s, map[string]any{"action": "get", "name": "k8s"})
+	holes, _ := got["holes"].([]any)
+	if len(holes) != 2 {
+		t.Fatalf("get should serve the holes to fill, got %v", got)
+	}
+	if first, _ := holes[0].(map[string]any); first["type"] != "string" || first["help"] == "" {
+		t.Errorf("a hole must carry its declared type and the author's help line, got %v", holes[0])
+	}
+
+	// A value for a hole nobody asked for is refused, so a typo does not become a
+	// setting that looks applied and does nothing.
+	bad := extensionError(t, s, map[string]any{"action": "set", "name": "k8s",
+		"values": map[string]any{"hostname": "internal"}})
+	if bad["error_code"] != CodeInvalidArgument {
+		t.Errorf("an unknown value name = %v, want a refusal", bad)
+	}
+
+	filled := callExtension(t, s, map[string]any{"action": "set", "name": "k8s",
+		"values": map[string]any{"command": blockingCommand(),
+			"targets": []any{map[string]any{"host": "internal"}}}})
+	if filled["command"] != blockingCommand() {
+		t.Fatalf("the filled extension should come back rendered, got %v", filled)
+	}
+	// The holes still travel with the row: a caller that just typed a value needs to
+	// see that the box it aimed at is now filled.
+	if hs, _ := filled["holes"].([]any); len(hs) != 2 {
+		t.Errorf("a filled extension should still report its holes as set, got %v", filled["holes"])
+	}
+
+	useExtension(t, s, "k8s")
+	st := waitForExtensionStatus(t, s, "k8s", extensions.StatusAvailable)
+	if st["shell_id"] == "" {
+		t.Errorf("an extension filled in through the tool should run like any other, got %v", st)
+	}
+
+	// Replacing the template keeps the values: the upgrade path the split exists for.
+	callExtension(t, s, map[string]any{"action": "update", "name": "k8s",
+		"template": strings.Replace(doc, "drive the cluster", "drive the pods", 1)})
+	after := callExtension(t, s, map[string]any{"action": "get", "name": "k8s"})
+	if after["command"] != blockingCommand() {
+		t.Errorf("a template upgrade must not discard this installation's values, got %v", after)
+	}
+	if after["description"] != "drive the pods" {
+		t.Errorf("the new document should be what is stored, got %v", after["description"])
+	}
+}
+
+// TestOpenExtReflectsRebuiltShellIndex pins that open ext advertises the channel
+// that is actually running, not :1 from an uninitialised default (issue #211).
+//
+// When an extension's process exits, the reconciler starts a new one on the same
+// connection. The new shell has index 2 (or higher), while the dead index 1 is either
+// gone or closed. An `open ext` whose Handle header fell back to index 1 therefore
+// emitted a locator that immediately answered 404.
+func TestOpenExtReflectsRebuiltShellIndex(t *testing.T) {
+	s := newExtensionTestServer(t)
+	// Create a pipe-mode prompt extension that runs a resident command.
+	callExtension(t, s, map[string]any{
+		"action":  "create",
+		"name":    "worker",
+		"target":  "internal",
+		"mode":    "pty",
+		"command": blockingCommand(),
+	})
+
+	// First use: brings it up at index 1.
+	used := callExtension(t, s, map[string]any{"action": "use", "name": "worker"})
+	firstShellID := used["shell_id"].(string)
+
+	// Close the first shell directly, simulating a process exit.
+	if _, err := s.sessMgr.CloseChildShell(firstShellID); err != nil {
+		t.Fatalf("closing first shell: %v", err)
+	}
+
+	// Trigger reconciler by asking for the extension again.
+	// The reconciler starts a replacement on the same session, which takes index 2.
+	used2 := callExtension(t, s, map[string]any{"action": "use", "name": "worker"})
+	newShellID := used2["shell_id"].(string)
+	if newShellID == firstShellID {
+		t.Fatal("the shell was not replaced")
+	}
+
+	// Now drive the user-facing command: `open ext worker`
+	reply := termText(t, s, map[string]any{"cmd": "open ext worker"})
+	if !strings.HasPrefix(reply, "TERM/1 200") {
+		t.Fatalf("open ext worker failed:\n%s", reply)
+	}
+	handle, ok := headerValue(t, reply, "Handle")
+	if !ok || handle == "" {
+		t.Fatalf("open ext worker reply missing Handle header:\n%s", reply)
+	}
+
+	// The handle MUST NOT be :1, and must resolve to the live shell.
+	if strings.HasSuffix(handle, ":1") {
+		t.Fatalf("open ext advertised dead channel :1 (handle=%q); want :2 or the bare shell id", handle)
+	}
+
+	// Driving the handle with a command must succeed and not return 404 out of range.
+	runGot := termText(t, s, map[string]any{
+		"cmd":     "run " + handle + " $1",
+		"args":    []any{"hello-rebuilt"},
+		"timeout": 2,
+	})
+	if strings.Contains(runGot, "out of range") || strings.Contains(runGot, "404") {
+		t.Fatalf("running on the advertised handle failed with out of range:\n%s", runGot)
 	}
 }

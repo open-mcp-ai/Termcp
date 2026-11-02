@@ -78,8 +78,10 @@ func Run(ctx context.Context, cfg Config) error {
 		cancel: cancel,
 		client: &http.Client{},
 		fatal:  make(chan error, 1),
+		outTok: make(chan struct{}, 1),
 	}
 
+	b.outTok <- struct{}{}
 	b.pendingCond = sync.NewCond(&b.pendingMu)
 	if !cfg.SSE && cfg.KeepAlive > 0 {
 		go b.keepAliveLoop()
@@ -134,12 +136,16 @@ type bridge struct {
 	sessionID  string // streamable mode: captured from the initialize reply; "" until then
 	messageURL string // SSE mode: POST target learned from the stream's endpoint event
 
-	// outMu and errMu are separate on purpose: a client that stops reading stdout
-	// blocks writeOut on its pipe, and diagnostics must not block with it.
-	outMu sync.Mutex
-	errMu sync.Mutex
-	fatal chan error     // buffered(1): first terminal error wins
-	wg    sync.WaitGroup // in-flight forwards, drained when stdin closes
+	// outTok serialises writes to stdout with a door: a client that stops reading
+	// stdout must not park every writer in the bridge forever (issue #220).
+	// Writers give up after writeOutWait and report the failure.
+	//
+	// errMu stays a mutex: diagnostics are short, and unlike stdout they are not a
+	// pipe an agent's harness might stop reading.
+	outTok chan struct{}
+	errMu  sync.Mutex
+	fatal  chan error     // buffered(1): first terminal error wins
+	wg     sync.WaitGroup // in-flight forwards, drained when stdin closes
 
 	pendingMu    sync.Mutex     // guards the three fields below
 	pending      map[string]int // SSE mode: forwarded request ids still owed a reply
@@ -362,9 +368,32 @@ func (b *bridge) fail(msg []byte, text string) {
 	b.pendingCond.Broadcast()
 }
 
+// writeOutWait is how long a write to stdout may wait for the prior write to finish.
+//
+// BOUNDED, NOT UNBOUNDED (issue #220). The comment above outTok documents the
+// danger: a client that stops reading stdout leaves the write stuck in the OS.
+// Five seconds is far longer than any working pipe needs and short enough that a
+// caller gets an answer rather than waiting forever.
+const writeOutWait = 5 * time.Second
+
 func (b *bridge) writeOut(msg []byte) {
-	b.outMu.Lock()
-	defer b.outMu.Unlock()
+	timer := time.NewTimer(writeOutWait)
+	defer timer.Stop()
+	select {
+	case <-b.outTok:
+	case <-timer.C:
+		b.errf("mcpbridge: dropping output because a prior write has not finished in %s; the client is probably not reading stdout", writeOutWait)
+		return
+	case <-b.ctx.Done():
+		return
+	}
+	defer func() {
+		select {
+		case b.outTok <- struct{}{}:
+		default:
+		}
+	}()
+
 	_, _ = b.cfg.Out.Write(bytes.TrimRight(msg, "\r\n"))
 	_, _ = b.cfg.Out.Write([]byte{'\n'})
 }

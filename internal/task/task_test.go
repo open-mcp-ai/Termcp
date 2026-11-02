@@ -257,3 +257,58 @@ func TestListIsNewestFirst(t *testing.T) {
 	}
 	_ = first
 }
+
+// TestTaskAddAndPollAreLockFreeAndRaceClean pins that Add runs concurrently with
+// readers without data races or mutex contention (issue #223).
+func TestTaskAddAndPollAreLockFreeAndRaceClean(t *testing.T) {
+	task := &Task{startedAt: time.Now()}
+	task.SetTotal(1000 * 32 * 1024)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// 4 concurrent writers simulating chunks landing from multiple streams/pipes
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					task.Add(32 * 1024)
+					time.Sleep(10 * time.Microsecond)
+				}
+			}
+		}()
+	}
+
+	// 2 concurrent readers polling progress (the Web UI pattern)
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					v := task.view()
+					if v.BytesDone < 0 {
+						t.Errorf("negative bytes: %d", v.BytesDone)
+					}
+					time.Sleep(20 * time.Microsecond)
+				}
+			}
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if task.view().BytesDone <= 0 {
+		t.Fatal("no bytes accumulated")
+	}
+}

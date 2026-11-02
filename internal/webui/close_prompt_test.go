@@ -39,12 +39,9 @@ func TestClosingARunningSessionStopsAndArchives(t *testing.T) {
 	// The real functions, spliced so the probe runs shipped code. `between` cuts
 	// at the next top-level close, so each is taken on its own.
 	var code strings.Builder
-	for _, fn := range []string{"askCloseSession", "isSessionDeadInWindows", "archiveSessionById", "closeShellWindowForTest"} {
+	for _, fn := range []string{"closeDockEntry", "closeSessionPanels", "dockEntrySession", "closeSessionWindowFromUI", "askCloseSession", "isSessionDeadInWindows", "archiveSessionById", "closeShellWindowForTest"} {
 		if fn == "closeShellWindowForTest" {
-			// closeShellWindow is defined with a leading doc comment and may not
-			// end in the exact shape the loop expects; the probe only needs to
-			// observe that it was reached, so it is stubbed in the sandbox below
-			// instead of spliced.
+			// closeShellWindow is stubbed in the sandbox below.
 			continue
 		}
 		start := strings.Index(body, "function "+fn+"(")
@@ -110,12 +107,17 @@ const sandbox = {
   hideModal() { sandbox._hidden = true; }, showModal() { sandbox._hidden = false; },
   setLoadBanner() {}, showCopyToast(m) { sandbox._toasts.push(m); },
   stripSessionPrefix: s => s,
-  closeShellWindow() { sandbox._closed++; },
+  closeShellWindow(w) { sandbox._closed++; },
+  dockSessionTarget: s => ({ _windowless: true, _sid: s.id }),
+  sessionForTabWindow: () => null,
+  sessionPanelWindows: () => sandbox._panelList,
+  _panelList: [],
   _toasts: [], _closed: 0, _hidden: true,
   // confirmDialog's answer is driven per case.
-  confirmDialog: () => Promise.resolve(sandbox._confirmAnswer),
+  confirmDialog: () => { sandbox._prompted++; return Promise.resolve(sandbox._confirmAnswer); },
   applyI18n() {},
   _confirmAnswer: true,
+  _prompted: 0,
   _snap: [],
 };
 vm.createContext(sandbox);
@@ -141,11 +143,15 @@ const out = { cases: [] };
 
 async function run(name, snap, answer, extra) {
   calls.length = 0;
+  /* One panel, unless the case says otherwise: askCloseSession now closes every
+     panel of the session, and these cases are about the DECISION. */
+  sandbox._panelList = [win];
   sandbox._toasts.length = 0;
   sandbox._hidden = true;
+  sandbox._closed = 0;
   sandbox._confirmAnswer = answer;
   snap();
-  if (extra && extra.win) Object.assign(win, extra.win); else Object.assign(win, { _sid: 'abc', _placeholder: false, _extName: null });
+  if (extra && extra.win) Object.assign(win, extra.win); else Object.assign(win, { _sid: 'abc', _parentSid: 'abc', _placeholder: false, _extName: null });
   let result;
   try {
     result = await vm.runInContext('askCloseSession', sandbox)(win._sid, win);
@@ -171,6 +177,50 @@ async function run(name, snap, answer, extra) {
   // so neither may reach the archive endpoint.
   await run('placeholder', liveSnap, true, { win: { _sid: null, _placeholder: true, _extName: null } });
   await run('status-card', liveSnap, true, { win: { _sid: 'cdpx', _placeholder: false, _extName: 'cdpx' } });
+
+  /* THE BOTTOM DOCK's x is a SESSION key: the dock lists sessions, and a session
+     split across panels is still one tab. One confirmation must take the whole
+     session down — one POST, every peer panel closed — instead of closing one
+     panel and leaving the reader to press it again for each of the others. */
+  calls.length = 0;
+  sandbox._confirmAnswer = true;
+  sandbox._prompted = 0;
+  sandbox._closed = 0;
+  Object.assign(win, { _sid: 'abc', _parentSid: 'abc', _placeholder: false, _extName: null });
+  sandbox._panelList = [win, { _sid: 'abc' }];
+  sandbox.window._lastSessionsSnapshot = [{ id: 'abc', status: 'running' }];
+  await vm.runInContext('closeDockEntry', sandbox)({ win, sid: 'abc' });
+  await Promise.resolve();
+  await Promise.resolve();
+  out.dockSessionClose = {
+    prompted: sandbox._prompted,
+    requests: calls.map(c => c.method + ' ' + c.url),
+    closedPanels: sandbox._closed,
+  };
+
+  /* The WINDOW header's x stays panel-level: with several panels it closes only
+     the one it sits on, asking nothing. */
+  sandbox._panelList = [win, { _sid: 'abc' }];
+  sandbox._confirmAnswer = false;
+  sandbox._prompted = 0;
+  sandbox._closed = 0;
+  liveSnap();
+  const handlers = {};
+  const closeBtn = { _termcpCloseBound: false, addEventListener(type, fn) { handlers[type] = fn; } };
+  const panel = { _sid: 'abc', _parentSid: 'abc', _placeholder: false, _extName: null };
+  vm.runInContext('bindShellWindowCloseButton', sandbox)(panel, closeBtn);
+  handlers.click({ preventDefault() {}, stopPropagation() {} });
+  out.multiPanelClose = { prompted: sandbox._prompted, closedImmediately: sandbox._closed === 1 };
+
+  /* Down to the LAST window, the same key asks the session-level archive question.
+     Cancelling proves it asked and left the window alone. */
+  sandbox._panelList = [win];
+  sandbox._closed = 0;
+  sandbox._prompted = 0;
+  handlers.click({ preventDefault() {}, stopPropagation() {} });
+  await Promise.resolve();
+  await Promise.resolve();
+  out.lastPanelClose = { prompted: sandbox._prompted, stayedOpen: sandbox._closed === 0 };
 
   // The window's own close key must route through the prompt, not act itself.
   const src2 = fs.readFileSync(process.argv[3], 'utf8');
@@ -222,6 +272,15 @@ async function run(name, snap, answer, extra) {
 	}
 	if strings.Contains(got, "sessions/null") || strings.Contains(got, "sessions/cdpx") {
 		t.Errorf("a placeholder or a status card must never reach /terminate; got\n%s", got)
+	}
+	if !strings.Contains(got, `"dockSessionClose":{"prompted":1,"requests":["POST /api/sessions/abc/terminate"],"closedPanels":2}`) {
+		t.Errorf("the bottom dock x must ask once, archive once, and close every panel for that session; got\n%s", got)
+	}
+	if !strings.Contains(got, `"multiPanelClose":{"prompted":0,"closedImmediately":true}`) {
+		t.Errorf("closing one window-header panel must close immediately without prompting; got\n%s", got)
+	}
+	if !strings.Contains(got, `"lastPanelClose":{"prompted":1,"stayedOpen":true}`) {
+		t.Errorf("closing the last window-header panel must ask the archive question; got\n%s", got)
 	}
 	if strings.Contains(got, "DELETE") {
 		t.Errorf("the page must not delete a session directly any more; got\n%s", got)

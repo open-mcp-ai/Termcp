@@ -138,18 +138,24 @@ function fixture() {
     addEventListener() {}
   };
   const openRequests = [];
+  const panelRequests = [];
   const ctx = { document, console, innerWidth: 1280, innerHeight: 800,
     localStorage: { getItem() { return null; }, setItem() {} },
     matchMedia() { return { matches: false }; }, addEventListener() {},
     requestAnimationFrame() { return 1; }, applyI18n() {}, onLangChange() {}, t: key => key,
     tCount: (one, other, p) => (p.count === 1 ? one : other) + ':' + p.count,
     openShellWindow(label, sid, pos, opts) { openRequests.push({ label, sid, pos, opts }); },
+    openSessionPanelsMenu(entry, tab) { panelRequests.push({ key: entry.key, panels: entry.panels }); },
     closeShellWindow(w) { w.remove(); ctx.refreshSessionTabbar(); },
     lockWindowReadonly(w) { w.readonlyApplied = true; }
   };
   ctx.window = ctx;
   vm.createContext(ctx);
   sources.forEach(src => vm.runInContext(src, ctx));
+  // The menu builder itself is DOM-heavy and has its own probe; here the question is
+  // WHEN the press asks instead of raising. Overridden after the sources load
+  // because shell-windows.js defines the real one as a global.
+  ctx.openSessionPanelsMenu = (entry, tab) => { panelRequests.push({ key: entry.key, panels: entry.panels }); };
   function snapshot(list) { ctx.window._lastSessionsSnapshot = list; ctx.refreshSessionTabbar(); }
   function win(n, sid) {
     const w = element('shell-window-' + n, 'shell-window');
@@ -163,7 +169,7 @@ function fixture() {
   const tabs = () => ids['session-tabs-scroll'].children;
   const keys = () => tabs().map(t => t.getAttribute('data-win-id'));
   const labels = () => tabs().map(t => t.querySelector('.session-tab-label').textContent);
-  return { ctx, ids, document, win, snapshot, tabs, keys, labels, openRequests };
+  return { ctx, ids, document, win, snapshot, tabs, keys, labels, openRequests, panelRequests };
 }
 
 let failures = 0;
@@ -341,6 +347,53 @@ function eq(label, got, want) {
   eq('no windows, one session: no empty note', f.document.getElementById('sessdock-empty'), null);
   f.snapshot([]);
   eq('nothing at all: the note is back', f.document.getElementById('sessdock-empty') != null, true);
+}
+
+// A SESSION SPLIT ACROSS PANELS IS STILL ONE TAB.
+//
+// Dragging a channel tab out of its window gives that channel a panel of its own;
+// the session behind both windows has not changed, so the dock must not grow a
+// second tab for it, and the tab that exists must raise the window holding the
+// SESSION — raising a one-channel panel instead would hide every other channel.
+{
+  const f = fixture();
+  const home = f.win(1, 's1');
+  const panel = f.win(2, 's1');
+  home._channels = { a: { urlIndex: 1 }, b: { urlIndex: 2 } };
+  panel._channels = { a: { urlIndex: 1 } };
+  f.snapshot([{ id: 's1', name: 'box', status: 'running', created_at: 1 }]);
+  eq('a split session has one tab', f.keys(), ['sess:s1']);
+  eq('the tab raises a panel that still shows a channel', f.tabs()[0]._win === home, true);
+  /* The press must ASK which panel, not guess: the reader dragged a channel out to
+     look at it separately, so the tab is the way back to either. */
+  eq('the tab says how many panels it stands for', f.tabs()[0]._entry.panels, 2);
+  eq('and shows the count', f.tabs()[0].querySelector('.session-tab-panels').textContent, '2');
+  f.panelRequests.length = 0;
+  f.tabs()[0].listeners.click({ target: { closest() { return null; } }, clientX: 10, clientY: 20 });
+  eq('pressing it offers the panels', f.panelRequests, [{ key: 'sess:s1', panels: 2 }]);
+  eq('and raises nothing by itself', home.focused, undefined);
+
+  // Tiled mode moves a window into the grid, which is a different container and a
+  // different position in allShellWins(). Panels are peers, so a window changing
+  // container must not change the fact that the session has two of them.
+  f.ids['pane-grid'].appendChild(home);
+  f.snapshot([{ id: 's1', name: 'box', status: 'running', created_at: 1 }]);
+  eq('a tiled panel is still one of two', f.tabs()[0]._entry.panels, 2);
+  f.panelRequests.length = 0;
+  f.tabs()[0].listeners.click({ target: { closest() { return null; } }, clientX: 10, clientY: 20 });
+  eq('and the press still asks', f.panelRequests, [{ key: 'sess:s1', panels: 2 }]);
+
+  // One panel closed: the survivor is the tab, and the press stops asking a
+  // question there is one answer to. Either panel can be the survivor — nothing
+  // ranks one above the other.
+  home.remove();
+  f.snapshot([{ id: 's1', name: 'box', status: 'running', created_at: 1 }]);
+  eq('the remaining panel takes the tab over', f.tabs()[0]._win === panel, true);
+  eq('one panel: no count', f.tabs()[0].querySelector('.session-tab-panels').hidden, true);
+  f.panelRequests.length = 0;
+  f.tabs()[0].listeners.click({ target: { closest() { return null; } }, clientX: 10, clientY: 20 });
+  eq('one panel: the press raises it directly', f.panelRequests, []);
+  eq('one panel: the window was raised', panel.focused, true);
 }
 
 if (failures) process.exit(1);

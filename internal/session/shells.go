@@ -13,7 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// Lock ordering: shellStateMu -> mu -> stdinMu (and shellStateMu -> cs.mu).
+// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
 // Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
 // only taken by session-level transitions (close/DEAD/terminate, new shells).
 // The manager-assigned callbacks and the per-shell closed flag are atomics and
@@ -65,7 +65,7 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 	s.mu.RLock()
 	running := s.Status == api.SessionRunning
 	s.mu.RUnlock()
-	if s.closing || !running {
+	if s.closing.Load() || !running {
 		return nil, fmt.Errorf("session has exited")
 	}
 

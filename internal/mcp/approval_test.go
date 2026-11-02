@@ -95,7 +95,8 @@ func TestHandlePressKeyCommitsStagedText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := parseResult(t, keyResult); m["review_pending"] != true {
+	m := parseResult(t, keyResult)
+	if m["review_pending"] != true {
 		t.Errorf("review_pending = %v, want true", m["review_pending"])
 	}
 
@@ -103,6 +104,16 @@ func TestHandlePressKeyCommitsStagedText(t *testing.T) {
 	reqs := q.List()
 	if len(reqs) != 1 {
 		t.Fatalf("expected exactly 1 queued command line, got %d", len(reqs))
+	}
+	// The committed key response returns the queued request ID for correlation (#236).
+	if m["approval_id"] != reqs[0].ID {
+		t.Errorf("committed key response missing approval_id = %v, got %v", reqs[0].ID, m["approval_id"])
+	}
+	if m["session_id"] != sid {
+		t.Errorf("committed key response session_id = %v, want %v", m["session_id"], sid)
+	}
+	if reqs[0].ExpiresAt > 0 && m["expires_at"] != float64(reqs[0].ExpiresAt) {
+		t.Errorf("committed key response expires_at = %v, want %d", m["expires_at"], reqs[0].ExpiresAt)
 	}
 	// The text and the newline are one unit, so a reviewer cannot approve the
 	// text and reject the newline.
@@ -275,29 +286,39 @@ func sessionIDOf(t *testing.T, s *Server, shellID string) string {
 	return ""
 }
 
-// reviewPendingOperationResult is the reply a held file or forward operation
-// gets. It must carry no pending id for the same reason the command-line reply
-// does not: the agent cannot decide its own request, so an id only invites a
-// retry loop.
-func TestHeldOperationReturnsNoPendingID(t *testing.T) {
-	res := reviewPendingOperationResult("write 1.2 KB to /etc/hosts")
-	var body map[string]any
-	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
-		t.Fatal(err)
-	}
+func TestHeldOperationReturnsCorrelationFields(t *testing.T) {
+	body := reviewPendingDocument("Submitted for review: write 1.2 KB to /etc/hosts. WAIT.", reviewPendingFields{
+		ApprovalID: "approval-123",
+		SessionID:  "session-456",
+		ExpiresAt:  1790130035403,
+	})
 	if body["review_pending"] != true {
 		t.Errorf("review_pending = %v, want true", body["review_pending"])
 	}
 	if body["approved"] != false {
 		t.Errorf("approved = %v, want false", body["approved"])
 	}
-	if _, has := body["pending_id"]; has {
-		t.Error("a held operation must not hand back a pending_id")
+	if body["approval_id"] != "approval-123" || body["session_id"] != "session-456" || body["expires_at"] != int64(1790130035403) {
+		t.Errorf("correlation fields = %#v", body)
 	}
-	// The message has to name what is waiting: the agent's next step depends on
-	// knowing the operation was understood, not silently dropped.
-	if msg, _ := body["message"].(string); !strings.Contains(msg, "/etc/hosts") {
-		t.Errorf("message does not describe the held operation: %q", msg)
+	if _, has := body["pending_id"]; has {
+		t.Error("use approval_id, not an ambiguous pending_id")
+	}
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "/etc/hosts") || !strings.Contains(msg, "WAIT") {
+		t.Errorf("message must describe the operation and still forbid polling: %q", msg)
+	}
+}
+
+func TestReviewPendingReplyWithoutQueuedRequestOmitsCorrelationFields(t *testing.T) {
+	res := reviewPendingReply("Held for review: send the ending key.", reviewPendingFields{})
+	var body map[string]any
+	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"approval_id", "session_id", "expires_at"} {
+		if _, has := body[field]; has {
+			t.Errorf("unsubmitted staged text must not include %q: %#v", field, body)
+		}
 	}
 }
 
@@ -311,7 +332,10 @@ func TestOperationSummaryNamesTheOperationAndItsTarget(t *testing.T) {
 		want []string
 	}{
 		{"file_write", map[string]any{"remote_path": "/etc/hosts", "data": strings.Repeat("x", 2048)}, []string{"/etc/hosts", "2.0 KB"}},
-		{"file_write", map[string]any{"remote_path": "/tmp/a", "local_path": "/local/b"}, []string{"/tmp/a", "/local/b"}},
+		// NO file_write/local_path CASE ANY MORE. The summary used to fold the source path
+		// into the line a reviewer reads; the flag is gone, so there is no second path to
+		// name. Kept as a note rather than a silent deletion because a reviewer's summary
+		// is exactly where a stale argument would look like a real one.
 		{"file_delete", map[string]any{"remote_path": "/etc/hosts"}, []string{"delete", "/etc/hosts"}},
 		{"file_rename", map[string]any{"from_path": "/a", "to_path": "/b"}, []string{"/a", "/b"}},
 		{"file_mkdir", map[string]any{"remote_path": "/srv/new"}, []string{"/srv/new"}},
@@ -632,6 +656,42 @@ func TestScopedReviewLetsUnscopedOperationsThrough(t *testing.T) {
 		"session_id": sessionID,
 	}), "forward", sessionID); !held {
 		t.Fatal("with no scopes the forward must be held again")
+	}
+}
+
+// A held file operation reports the queue request it became, so an MCP host can
+// pair this result with the request it later sees decided (#236). The pairing is
+// the whole point: a summary and a timestamp are not proof of identity.
+func TestHeldOperationReportsCorrelationFields(t *testing.T) {
+	s := newTestServer(t)
+	sessionID, _ := startGatedSession(t, s, 1, time.Minute)
+
+	res, held := s.gateOperation(context.Background(), makeRequest(map[string]any{
+		"session_id":  sessionID,
+		"remote_path": "/tmp/gated",
+		"data":        "x",
+	}), "file_write", sessionID)
+	if !held || res == nil {
+		t.Fatal("a reviewable file write must be held")
+	}
+	body := parseResult(t, res)
+	id, _ := body["approval_id"].(string)
+	if id == "" {
+		t.Fatalf("the held reply must name the queued request: %#v", body)
+	}
+	q := s.sessMgr.Get(sessionID).ApprovalQueue()
+	reqs := q.List()
+	if len(reqs) != 1 || reqs[0].ID != id {
+		t.Fatalf("approval_id %q does not name the queued request %v", id, reqs)
+	}
+	if body["session_id"] != sessionID {
+		t.Errorf("session_id = %v, want %v", body["session_id"], sessionID)
+	}
+	if reqs[0].ExpiresAt > 0 && body["expires_at"] != float64(reqs[0].ExpiresAt) {
+		t.Errorf("expires_at = %v, want %d", body["expires_at"], reqs[0].ExpiresAt)
+	}
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "do not poll") || !strings.Contains(msg, "resubmit") {
+		t.Errorf("the correlation fields must not soften the no-retry rule: %q", msg)
 	}
 }
 

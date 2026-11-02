@@ -9,6 +9,45 @@ function _channelNeighbor(win, sid) {
   }
   return prev || null;
 }
+
+/* --- which panel shows which channel --------------------------------------
+ *
+ * A session can occupy more than one panel: a channel tab dragged out into empty
+ * space gets a panel of its own. A channel is still exactly ONE view — the server
+ * keeps one watch per channel id and addWatch replaces the previous reader, so
+ * two windows claiming one channel would each see part of the stream.
+ *
+ * Every panel of a session is a peer. There is no "home window" or "guest panel":
+ * any panel may adopt an unowned channel, any panel may receive a merge from any
+ * other panel of the same session, and an emptied panel closes itself.
+ *
+ * Ownership is recorded here, as the WINDOW that shows it, because both places
+ * that add tabs unprompted (openShellWindow's restore and syncWindowTabs) must
+ * ask first: a channel another window already shows is simply not theirs. The
+ * map holds DOM nodes rather than ids because its whole job is window identity;
+ * reload restores the grouping via sessionStorage.
+ */
+var _channelOwner = Object.create(null);
+
+function claimChannel(win, sid) { if (sid) _channelOwner[sid] = win; }
+
+function releaseChannel(win, sid) {
+  if (sid && _channelOwner[sid] === win) delete _channelOwner[sid];
+}
+
+/** May `win` take a channel nobody shows yet?
+ *
+ *  Ownership is the whole rule. A channel has exactly ONE view (the server replaces
+ *  the previous reader on addWatch), so the first window that opens it owns it and
+ *  every other window gets `false` from the owner check. Nothing here asks whether
+ *  the window came first, was split out, or was opened from the archive: those are
+ *  histories, not roles, and a panel that is a peer must not be treated as a guest
+ *  because of how it was born. */
+function channelFitsWindow(win, sid) {
+  var owner = _channelOwner[sid];
+  return !owner || owner === win;
+}
+
 /** Create a channel tab + xterm instance for sessionId.
  *
  * `opt.index` is the channel's server-assigned number — the N of
@@ -26,6 +65,8 @@ function createChannelTab(win, sessionId, opt) {
   opt = opt || {};
   if (!win._channels) { win._channels = {}; win._channelCount = 0; }
   if (win._channels[sessionId]) { switchChannelTab(win, sessionId); return; }
+  var owner = _channelOwner[sessionId];
+  if (owner && owner !== win) return; // One live browser view/watch per server channel.
   var urlIndex = Number(opt.index);
   var haveIndex = Number.isInteger(urlIndex) && urlIndex >= 1;
   if (!haveIndex) {
@@ -52,6 +93,11 @@ function createChannelTab(win, sessionId, opt) {
   var tab = document.createElement('div');
   tab.className = 'shell-channel-tab active';
   tab.setAttribute('data-chsid', sessionId);
+  /* Draggable so the channel can be given a panel of its own, or dropped on a
+     sibling panel of the same session (see the channel-drag section below). The
+     tab is the handle because that is what the operator points at when they mean
+     "this channel"; dragging the terminal itself is text selection. */
+  tab.draggable = true;
   tab.innerHTML = '<span class="shell-channel-tab-label">' + escapeHtml(label || 'shell') + '</span>' +
     '<button type="button" class="shell-channel-tab-copy" title="Copy URL" data-i18n-title="common.copyUrl" aria-label="Copy URL" data-i18n-aria="common.copyUrl">' + SVG_COPY_12 + '</button>' +
     '<span class="shell-channel-tab-state" style="display:none"></span>' +
@@ -122,8 +168,19 @@ function createChannelTab(win, sessionId, opt) {
     fitRo: null,
     urlIndex: urlIndex
   };
+  /* THE WINDOW IS THIS CHANNEL'S PARENT. Its teardown is registered on the
+     window, so destroying the window releases the channel through the parent's
+     own list rather than through a loop that has to know what a channel is — and
+     the registration travels with the channel when a drag re-parents it
+     (_dropChannelView unregisters it, createChannelTab registers it on the new
+     owner). One owner, one registration, one release. */
+  var ch = win._channels[sessionId];
+  ch.closeFromOwner = function () { closeChannelTab(win, sessionId); };
+  addWinDisposable(win, ch.closeFromOwner);
+  claimChannel(win, sessionId);
   win._activeChannelSid = sessionId;
   win._channelCount += 1;
+  if (typeof savePanelLayoutSoon === 'function') savePanelLayoutSoon();
 
   // Deactivate previous tabs
   Object.keys(win._channels).forEach(function(sid) {
@@ -220,7 +277,19 @@ function createChannelTab(win, sessionId, opt) {
     closeChannelTab(win, sessionId);
   });
 
+  // Drag handle for the split/merge gesture.
+  tab.addEventListener('dragstart', function(e) {
+    if (e.target.closest && e.target.closest('button')) { e.preventDefault(); return; }
+    if (!canStartChannelDrag(win)) { e.preventDefault(); return; }
+    _channelDrag = { win: win, sid: sessionId };
+    try {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', sessionId);
+    } catch (eDT) {}
+  });
+
   // Focus
+  syncChannelTabDraggable(win);
   requestAnimationFrame(function() { try { term.focus(); } catch(e) {} });
 
   return term;
@@ -233,6 +302,7 @@ function switchChannelTab(win, sessionId) {
   if (win._activeChannelSid === sessionId) return;
   win._activeChannelSid = sessionId;
   win._shellUserInputReady = true;  // explicit switch = user intends to type
+  if (typeof savePanelLayoutSoon === 'function') savePanelLayoutSoon();
 
   // Tabs
   var tabsBar = win.querySelector('.shell-channel-tabs');
@@ -264,11 +334,6 @@ function closeChannelTab(win, sessionId) {
   var ch = win._channels && win._channels[sessionId];
   if (!ch) return;
 
-  ch.streamDone = true;
-
-  // Unsubscribe
-  sendTerminalWatch(sessionId, false);
-
   // A read-only view has no live channel to stop, so it must not touch the server at
   // all — closing the tab only closes the view.
   //
@@ -284,6 +349,32 @@ function closeChannelTab(win, sessionId) {
     fetch(apiPath('/api/shells/') + encodeURIComponent(sessionId) + '/archive', { method: 'POST' }).catch(function() {});
   }
 
+  _dropChannelView(win, sessionId);
+}
+
+/** Tear down one channel's VIEW: xterm, DOM nodes, tab state, subscription.
+ *
+ * It is the half of closeChannelTab that a MOVE also needs: dragging a tab into
+ * another panel must not archive the shell (the process is alive and still the
+ * user's), only stop showing it here. The destination rebuilds the view from the
+ * same persisted log a reopened window restores from, which is why the view is
+ * torn down instead of re-parented: every listener the tab and the terminal
+ * carry closes over the window that created them. */
+function _dropChannelView(win, sessionId) {
+  var ch = win._channels && win._channels[sessionId];
+  if (!ch) return;
+
+  ch.streamDone = true;
+
+  // Unsubscribe. The destination subscribes again when it builds its view.
+  sendTerminalWatch(sessionId, false);
+  if (window._pendingTerminalWatch && window._pendingTerminalWatch[sessionId]) {
+    delete window._pendingTerminalWatch[sessionId];
+  }
+  if (ch.statusTimer) { clearTimeout(ch.statusTimer); ch.statusTimer = 0; }
+  ch.lineKind = 0;
+  ch.statusState = '';
+
   // Dispose xterm
   try {
     if (ch.fitRo) { ch.fitRo.unobserve(ch.instEl); }
@@ -297,18 +388,156 @@ function closeChannelTab(win, sessionId) {
   // Update state
   delete win._channels[sessionId];
   win._channelCount = Math.max(0, win._channelCount - 1);
+  // The channel leaves this window's ownership, and its teardown with it: after a
+  // move the new owner is the parent, and releasing the old window must not
+  // archive a shell another panel is showing.
+  removeWinDisposable(win, ch.closeFromOwner);
+  ch.closeFromOwner = null;
+  releaseChannel(win, sessionId);
 
   // Switch or show empty
   if (win._activeChannelSid === sessionId) {
+    win._activeChannelSid = null;
     var neighbor = _channelNeighbor(win, sessionId);
     if (neighbor && win._channels[neighbor]) {
       switchChannelTab(win, neighbor);
     } else if (win._channelCount === 0) {
-      win._activeChannelSid = null;
       _showChannelEmpty(win, true);
     }
   }
   updateTermScrollButton(win);
+  syncChannelTabDraggable(win);
+  if (typeof savePanelLayoutSoon === 'function') savePanelLayoutSoon();
+}
+
+/* --- moving a channel between panels --------------------------------------
+ *
+ * Every window here is one session's panel (see openShellWindow), and a session
+ * may be shown by several of them. Dragging any channel tab onto another window of
+ * the SAME session moves the channel there; dragging a channel out into empty space
+ * gives it a panel of its own only when the source has another channel left behind.
+ * A drop on a window of a different session is refused — the channel belongs to the
+ * connection that created it, so the panels a session can be split across are its
+ * own.
+ *
+ * The panels are PEERS. A window whose channel was split out is not a guest of the
+ * window it came from: it may take a channel nobody shows, it may receive a merge,
+ * and it may be the window a session's tab raises. The one rule that decides who
+ * shows what is `_channelOwner`, which is why every path here goes through it.
+ *
+ * The moved view is rebuilt, not re-parented (see _dropChannelView), so a move is
+ * cheap for the page and lossless for the user: the new tab restores the same log.
+ */
+var _channelDrag = null;
+
+/** The window a drag would land on, or `{empty:true}` for "give it its own
+ *  panel", or null when the drop is a no-op. */
+function canStartChannelDrag(win) {
+  /* Any channel tab can be dragged: a single-channel window can merge into another
+     panel of the same session. If dropped outside, the drop is cancelled so the
+     source window never becomes an empty shell. */
+  return !!win && win._channelCount >= 1;
+}
+
+/** Paint the grab affordance to match canStartChannelDrag: a tab that cannot be
+ *  dragged must not show a drag cursor. Called wherever a window's channel count
+ *  changes, since the rule is about the count and not about the tab. */
+function syncChannelTabDraggable(win) {
+  if (!win || !win._channels) return;
+  var can = canStartChannelDrag(win);
+  Object.keys(win._channels).forEach(function (sid) {
+    var tab = win._channels[sid] && win._channels[sid].tabEl;
+    if (tab) tab.draggable = can;
+  });
+}
+
+function _channelDropTargetFor(e) {
+  var drag = _channelDrag;
+  if (!drag) return null;
+  var node = e.target;
+  var win = node && node.closest ? node.closest('.shell-window') : null;
+  if (win) {
+    /* Dropped back where it came from: the channel is already there. */
+    if (win === drag.win) return null;
+    if (!win._placeholder && !!win._readOnly === !!drag.win._readOnly &&
+        win._parentSid === drag.win._parentSid) return win;
+  }
+  /* When dragging from a multi-channel window, an outside drop splits the channel
+     off into a new panel. When dragging the ONLY channel of a window, an outside
+     drop is a no-op: it cannot create a new panel, otherwise the source window
+     would be emptied into a husk. */
+  if (drag.win._channelCount <= 1) return null;
+  /* Another session's pane, the empty workspace, anything else: the channel gets
+     a panel of its own at the pointer. A channel belongs to the connection that
+     created it, so it is never grafted onto a session it is not part of. */
+  return { empty: true };
+}
+
+function _channelDragHint(win) {
+  Array.prototype.forEach.call(document.querySelectorAll('.shell-window.channel-drop-target'), function (w) {
+    if (w !== win) w.classList.remove('channel-drop-target');
+  });
+  if (win && !win.classList.contains('channel-drop-target')) win.classList.add('channel-drop-target');
+}
+
+function _onChannelDragOver(e) {
+  if (!_channelDrag) return;
+  var target = _channelDropTargetFor(e);
+  _channelDragHint(target && !target.empty ? target : null);
+  if (!target) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+}
+
+function _onChannelDrop(e) {
+  var drag = _channelDrag;
+  if (!drag) return;
+  e.preventDefault();
+  var target = _channelDropTargetFor(e);
+  _channelDragHint(null);
+  _channelDrag = null;
+  if (!target) return;
+  if (target.empty) detachChannelToPanel(drag.win, drag.sid, windowPositionFromClick(e));
+  else moveChannelToWindow(drag.win, drag.sid, target);
+}
+
+function _onChannelDragEnd() {
+  _channelDrag = null;
+  _channelDragHint(null);
+}
+
+document.addEventListener('dragover', _onChannelDragOver, false);
+document.addEventListener('drop', _onChannelDrop, false);
+document.addEventListener('dragend', _onChannelDragEnd, false);
+
+/** Show one channel in another window of the same session. */
+function moveChannelToWindow(srcWin, sid, dstWin) {
+  var ch = srcWin && srcWin._channels && srcWin._channels[sid];
+  if (!ch || !dstWin || dstWin === srcWin) return;
+  var index = ch.urlIndex;
+  var readOnly = !!(ch.readOnlyHistory || ch.streamDone);
+  _dropChannelView(srcWin, sid);
+  createChannelTab(dstWin, sid, { index: index, readOnlyHistory: readOnly });
+  /* When any source window loses its last channel because it was merged into
+     another window of the same session, close the emptied window so no empty
+     husk remains on screen. */
+  if (srcWin._channelCount === 0) closeShellWindow(srcWin);
+  refreshSessionTabbar();
+}
+
+/** Give one channel a panel of its own, at `pos` (a client position). The caller
+ *  only does this for a multi-channel source, so the original panel is not emptied. */
+function detachChannelToPanel(srcWin, sid, pos) {
+  var ch = srcWin && srcWin._channels && srcWin._channels[sid];
+  if (!ch || !srcWin._parentSid) return;
+  var index = ch.urlIndex;
+  var readOnly = !!(ch.readOnlyHistory || ch.streamDone);
+  _dropChannelView(srcWin, sid);
+  if (srcWin._channelCount === 0) closeShellWindow(srcWin);
+  openShellWindow(srcWin._connName || '', srcWin._parentSid, pos, {
+    shell: sid, index: index, readOnly: !!srcWin._readOnly, channelReadOnly: readOnly
+  });
+  refreshSessionTabbar();
 }
 
 function _showChannelEmpty(win, show) {
@@ -376,16 +605,13 @@ function openChannelAddMenu(win, anchorEl) {
   document.body.appendChild(el);
   _channelAddMenu = el;
   el._win = win;
+  el._anchor = anchor;
 
-  /* Fixed positioning against the pressed button's viewport rect. Opens below when
-     there is room (the empty state sits mid-window), and flips above when there is
-     not — the footer button is on the bottom edge. */
-  var r = anchor.getBoundingClientRect();
-  var maxLeft = Math.max(8, window.innerWidth - el.offsetWidth - 8);
-  el.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
-  var below = r.bottom + 4;
-  if (below + el.offsetHeight > window.innerHeight - 8) below = r.top - el.offsetHeight - 4;
-  el.style.top = Math.max(8, below) + 'px';
+  /* Fixed positioning against the pressed button's viewport rect. Recalculate
+     while the owning window moves: the menu is deliberately portaled to body
+     (the tiled workspace creates a fixed-position containing block), so it
+     cannot travel with the window in the DOM. */
+  repositionChannelAddMenu();
   anchor.classList.add('active');
 
   /* Deferred so the click that opened the menu does not reach the closing
@@ -393,8 +619,44 @@ function openChannelAddMenu(win, anchorEl) {
   setTimeout(function () {
     document.addEventListener('click', _onChannelAddMenuDocClick, true);
     document.addEventListener('keydown', _onChannelAddMenuKey);
-    window.addEventListener('resize', closeChannelAddMenu);
+    document.addEventListener('mousemove', scheduleChannelAddMenuPosition, true);
+    window.addEventListener('resize', repositionChannelAddMenu);
+    window.addEventListener('scroll', repositionChannelAddMenu, true);
   }, 0);
+}
+
+var _channelAddMenuRaf = 0;
+
+/* The menu is a portal, so it cannot move with the window in the DOM: it is
+ * re-placed from the anchor's rect whenever the pointer moves. The rect is read
+ * synchronously (the window drag handler runs later in the bubble, so the
+ * position it would report is this event's, not the next one) and the placement
+ * is deferred to the next frame. The comparison doubles as the record of "this
+ * press moved the panel": a window drag ends with a synthesized click, and that
+ * click must not count as the dismissal (see _onChannelAddMenuDocClick). */
+function scheduleChannelAddMenuPosition() {
+  var el = _channelAddMenu;
+  if (!el || !el._anchor) return;
+  var r = el._anchor.getBoundingClientRect();
+  var was = el._anchorAt;
+  el._anchorAt = { left: r.left, top: r.top };
+  if (was && (was.left !== r.left || was.top !== r.top)) el._moved = true;
+  if (_channelAddMenuRaf) return;
+  _channelAddMenuRaf = requestAnimationFrame(function () {
+    _channelAddMenuRaf = 0;
+    repositionChannelAddMenu();
+  });
+}
+
+function repositionChannelAddMenu() {
+  if (!_channelAddMenu || !_channelAddMenu._anchor || !_channelAddMenu._anchor.isConnected) return;
+  var el = _channelAddMenu;
+  var r = el._anchor.getBoundingClientRect();
+  var maxLeft = Math.max(8, window.innerWidth - el.offsetWidth - 8);
+  el.style.left = Math.max(8, Math.min(r.left, maxLeft)) + 'px';
+  var below = r.bottom + 4;
+  if (below + el.offsetHeight > window.innerHeight - 8) below = r.top - el.offsetHeight - 4;
+  el.style.top = Math.max(8, below) + 'px';
 }
 
 var _channelAddMenu = null;
@@ -406,7 +668,11 @@ function closeChannelAddMenu() {
   }
   document.removeEventListener('click', _onChannelAddMenuDocClick, true);
   document.removeEventListener('keydown', _onChannelAddMenuKey);
-  window.removeEventListener('resize', closeChannelAddMenu);
+  document.removeEventListener('mousemove', scheduleChannelAddMenuPosition, true);
+  if (_channelAddMenuRaf) cancelAnimationFrame(_channelAddMenuRaf);
+  _channelAddMenuRaf = 0;
+  window.removeEventListener('resize', repositionChannelAddMenu);
+  window.removeEventListener('scroll', repositionChannelAddMenu, true);
   Array.prototype.forEach.call(document.querySelectorAll('.shell-channel-add-caret.active, .shell-channel-empty-caret.active, .shell-channel-tab-add.active, .shell-channel-empty-add.active'), function (b) {
     b.classList.remove('active');
   });
@@ -416,6 +682,10 @@ function _onChannelAddMenuDocClick(e) {
   if (!_channelAddMenu) return;
   if (_channelAddMenu.contains(e.target)) return;
   if (e.target.closest && e.target.closest('.shell-channel-add-caret, .shell-channel-empty-caret, .shell-channel-tab-add, .shell-channel-empty-add')) return;
+  /* A window drag ends with a click on whatever the pointer was released over.
+     That click is the gesture's full stop, not a request to dismiss: closing here
+     made the menu impossible to keep while moving the panel it belongs to. */
+  if (_channelAddMenu._moved) { _channelAddMenu._moved = false; return; }
   closeChannelAddMenu();
 }
 

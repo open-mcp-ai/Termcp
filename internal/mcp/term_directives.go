@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
 // runDirective dispatches one parsed statement onto the existing handlers.
@@ -221,6 +223,10 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 	case "rm":
 		switch {
 		case stmt.Kind == "file":
+			if boolFlag(stmt, "dry-run") {
+				return []envelope.Slot{badRequest(stmt,
+					"`--dry-run` previews session deletion only (`rm <session> --dry-run`). File removal is permanent; inspect it first with `get <host> file <path>`, then omit `--dry-run` to remove it.")}
+			}
 			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, map[string]string{
 				"action":      "delete",
 				"remote-path": stmt.Key,
@@ -422,9 +428,7 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 				action, extra["op"] = group, op
 			} else if _, ok := stmt.Flag("mode"); ok {
 				if _, hasData := stmt.Flag("data"); !hasData {
-					if _, hasFile := stmt.Flag("local-path"); !hasFile {
-						action, extra["op"] = "perm", "chmod"
-					}
+					action, extra["op"] = "perm", "chmod"
 				}
 			}
 			flags := map[string]string{"action": action, "remote-path": stmt.Key}
@@ -512,6 +516,15 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 							other+"; send the edit and the rebuild as two calls")}
 				}
 				act = "retry"
+			}
+			// --values WITHOUT --template IS THE INSTALLATION STEP, not an edit of the
+			// document. The two are different questions (what the extension IS, versus what
+			// it is on this machine) and they are separate capabilities, so one call must
+			// not silently do the other: a caller who sent only values meant only values.
+			if _, hasValues := stmt.Flag("values"); hasValues {
+				if _, hasTemplate := stmt.Flag("template"); !hasTemplate {
+					act = "set"
+				}
 			}
 			return []envelope.Slot{s.directiveExtension(ctx, withFlags(stmt, map[string]string{
 				"action": act, "name": stmt.Key,
@@ -610,6 +623,46 @@ func (s *Server) sessionForStatement(stmt directive.Statement) *session.Session 
 // returns the moment the channel closes; on a pty there is no such signal, so it
 // waits out the caller's time window and returns what the terminal produced.
 func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+	// SHORT-CIRCUIT BORROWED HOST EXECUTION (#237): `run use:<host> $1`.
+	// If the target is a borrowed host (bare host name or `use:<host>`), execute
+	// directly through the transport pool without creating a session in the registry.
+	if host, borrowed := s.parseBorrowedHost(stmt.Target); borrowed {
+		// THE GATE IS THE SAME EXIT EVERY OTHER OPERATION USES. This path has no
+		// handler to reach, so it asks admission directly with the capability the
+		// command belongs to — a profile's default_approval must not depend on which
+		// spelling reached the host.
+		if bad := s.checkBorrowedRunAdmission(ctx, "use:"+host); bad != nil {
+			slot := failureSlot(failureFromResult(bad))
+			slot.Headers["Path"] = stmt.Path
+			return []envelope.Slot{slot}
+		}
+		// A FILTER MUST NOT RUN ITS COMMAND TO FIND OUT IT WAS INVALID. Check before
+		// starting the remote process, exactly as checkWindow does for channel runs.
+		if bad := validateBorrowedRunFlags(stmt); bad != nil {
+			slot := s.slotFromFailure(ctx, stmt, bad)
+			return []envelope.Slot{slot}
+		}
+		captureLimit := win.BytesLimit
+		if _, ok := stmt.Flag("grep"); ok {
+			captureLimit = grepMaxScanBytes
+		}
+		output, total, exitCode, exited, waited, err := s.runBorrowedHost(ctx, host, stmt.Payload, win, captureLimit)
+		if err != nil && !exited {
+			// A BORROWED TARGET FAILS IN TWO KINDS: the profile is not there (the
+			// caller's argument, answered with the ssh-config code and a next step), or
+			// the connection/command failed (the server's answer). Mapping both to 500
+			// operation_failed made a typo in the host name read like an outage.
+			code := CodeOperationFailed
+			if errors.Is(err, sshconfig.ErrNotFound) {
+				code = CodeSSHConfigNotFound
+			}
+			slot := s.slotFromFailure(ctx, stmt, &toolFailure{code: code, msg: err.Error()})
+			return []envelope.Slot{slot}
+		}
+		slot := s.borrowedRunSlot(ctx, stmt, host, output, total, exitCode, exited, waited, err, win)
+		return []envelope.Slot{slot}
+	}
+
 	if ids, isBatch := splitBatchIDs(stmt.Target); isBatch {
 		slots := make([]envelope.Slot, 0, len(ids))
 		for _, id := range ids {
@@ -619,7 +672,20 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 		}
 		return slots
 	}
-	return []envelope.Slot{s.runOne(ctx, stmt, win)}
+	slot := s.runOne(ctx, stmt, win)
+	// A BARE WORD THAT RESOLVES TO NOTHING IS TWO POSSIBILITIES, and only one of
+	// them used to be named. `run prod $1` answered `Shell 'prod' not found` even
+	// though a saved host profile is a documented target — the caller had to guess
+	// that the same word works when the profile exists. Say both roads.
+	if slot.Code == 404 && slot.Headers["Error-Code"] == CodeShellNotFound &&
+		stmt.Target != "" && !directive.NamesAChannel(stmt.Target) && s.sshConfigs != nil {
+		if entry, err := s.sshConfigs.Load(stmt.Target); err == nil && entry != nil {
+			slot.Body += "\nThat name IS a saved host profile: `run " + stmt.Target + " $1` targets it directly over a borrowed connection, with no session."
+		} else {
+			slot.Body += "\nIf you meant a saved host profile, `ls host` lists them and `run <host> $1` targets one directly."
+		}
+	}
+	return []envelope.Slot{slot}
 }
 
 // runOne executes one `run` against one handle.
@@ -654,12 +720,28 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 		return s.slotFromFailure(ctx, stmt, f)
 	}
 
-	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload)); fail != nil {
-		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))
+	// THE LINE IS ONE UNIT: THE TEXT AND ITS ENTER LAND TOGETHER (issue #212).
+	//
+	// These are two calls into the shell layer, and nothing used to keep a second
+	// `run` from landing between them -- so two concurrent runs wrote
+	// `{"id":1}{"id":2}\n\n`, which is neither two lines nor one valid line, and a
+	// line-protocol peer (a stdio MCP server, a JSON-RPC relay) read it as corruption
+	// and exited.
+	//
+	// THE LOCK COVERS THE WRITES ONLY. The wait for output below must not hold it, or
+	// a slow command would park every later run on this channel for the length of its
+	// window -- the same reason recvReaders is per handle rather than global.
+	line := s.lineLock(stmt.Target)
+	line.Lock()
+	_, inputFail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload))
+	if inputFail != nil {
+		line.Unlock()
+		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, inputFail, s))
 	}
-	keyRes, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", stmt.Target, "key", "enter"))
-	if fail != nil {
-		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, fail, s))
+	keyRes, keyFail := s.callTool(ctx, "shell_key", argsOf("shell_id", stmt.Target, "key", "enter"))
+	line.Unlock()
+	if keyFail != nil {
+		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, keyFail, s))
 	}
 	// A held command line: review mode staged the text and queued it on the enter.
 	// The reply is the review shape, not a read — there is nothing to read yet.
@@ -760,6 +842,22 @@ const ptyQuiet = 500 * time.Millisecond
 // and asking for it is cheaper than registering a second reader that would then
 // swallow bytes meant for `read`.
 const ptyPoll = 20 * time.Millisecond
+
+// pipeQuiet is how long a pipe's stream must stand still before a wait on a
+// resident process calls the command done.
+//
+// SHORTER THAN ptyQuiet ON PURPOSE, because the two streams are not the same
+// thing. A pty interposes a line discipline and, on the shells that reach a
+// caller here, a prompt that repaints itself in several chunks over a second —
+// ptyQuiet is sized for those gaps. A pipe is a byte stream from a child this
+// server started: a command's output lands as it is written, with no repaint and
+// no echo of the typed line to survive, so the gap it must outlast is one write
+// and not five.
+//
+// IT IS A CALIBRATION, NOT A LAW. Raise it if a command's output ever arrives
+// split across two replies; `read` returns the rest either way, and that is what
+// makes a 100ms guess affordable where 500ms would be a tax on every call.
+const pipeQuiet = 100 * time.Millisecond
 
 // parseSince reads the --since cursor.
 func parseSince(raw string) (int64, error) {

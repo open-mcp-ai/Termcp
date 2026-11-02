@@ -14,20 +14,15 @@ import (
 )
 
 func (s *Server) passwordOK(user, password string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	expPass, ok := s.pending[user]
+	v, ok := s.pending.LoadAndDelete(user)
 	if !ok {
 		return false
 	}
+	expPass, _ := v.(string)
 	if len(password) != len(expPass) {
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(password), []byte(expPass)) != 1 {
-		return false
-	}
-	delete(s.pending, user)
-	return true
+	return subtle.ConstantTimeCompare([]byte(password), []byte(expPass)) == 1
 }
 
 func (s *Server) mintCreds() (user, pass string, err error) {
@@ -52,9 +47,7 @@ func (s *Server) MintClientConfig() (*sshstd.ClientConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	s.pending[user] = pass
-	s.mu.Unlock()
+	s.pending.Store(user, pass)
 	return &sshstd.ClientConfig{
 		User:            user,
 		Auth:            []sshstd.AuthMethod{sshstd.Password(pass)},
@@ -73,9 +66,7 @@ func (s *Server) RevokeClientConfig(user string) {
 	if user == "" {
 		return
 	}
-	s.mu.Lock()
-	delete(s.pending, user)
-	s.mu.Unlock()
+	s.pending.Delete(user)
 }
 
 // generateHostKeyPEM mints the ephemeral host key the in-process server presents.

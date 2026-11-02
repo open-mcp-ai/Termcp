@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Lock ordering: shellStateMu -> mu -> stdinMu (and shellStateMu -> cs.mu).
+// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
 // Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
 // only taken by session-level transitions (close/DEAD/terminate, new shells).
 // The manager-assigned callbacks and the per-shell closed flag are atomics and

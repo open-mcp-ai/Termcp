@@ -176,16 +176,37 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 		},
 	})
 
-	// Swap under both locks so a concurrent input either sees the old queue
-	// (and was approved under the old rule) or the new one, never a half state.
+	// s.closing is an atomic.Bool (AGENTS.md rule 5): no mutex, no lock hierarchy,
+	// no nested locking. If the session has begun shutting down, reject immediately.
+	if s.closing.Load() {
+		st.discardStaged()
+		st.queue.Close("session is closing")
+		return ErrSessionClosing
+	}
+
 	s.mu.Lock()
+	if s.closing.Load() {
+		s.mu.Unlock()
+		st.discardStaged()
+		st.queue.Close("session is closing")
+		return ErrSessionClosing
+	}
 	prev := s.approval
 	s.approval = st
+	// A live queue supersedes the retained one: the cancelled history belongs to a
+	// mode that is no longer in force.
+	s.retainedQueue = nil
 	s.mu.Unlock()
 
 	if prev != nil {
 		prev.discardStaged()
 		prev.queue.Close("approval mode reconfigured")
+	}
+
+	// Catch shutdown that arrived while the previous queue was tearing down.
+	if s.closing.Load() {
+		s.DisableApproval()
+		return ErrSessionClosing
 	}
 	return nil
 }
@@ -199,6 +220,14 @@ func (s *Session) DisableApproval() {
 	s.mu.Lock()
 	st := s.approval
 	s.approval = nil
+	if st != nil {
+		// KEEP THE QUEUE READABLE (issue #217). Clearing it made every pending
+		// request vanish from /api/approvals the moment the session closed: the
+		// safety half was right (approving answered 404/409 and nothing executed),
+		// but the promised terminal `cancelled` state could never be observed, so a
+		// harness could not tell why a request ended.
+		s.retainedQueue = st.queue
+	}
 	s.mu.Unlock()
 
 	if st != nil {
@@ -271,10 +300,14 @@ func (st *approvalState) scopeList() []approval.Kind {
 func (s *Session) ApprovalQueue() *approval.Queue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.approval == nil {
-		return nil
+	if s.approval != nil {
+		return s.approval.queue
 	}
-	return s.approval.queue
+	// A disabled or closed session retains its closed queue so readers can observe
+	// the terminal cancelled state (issue #217). It gates nothing — ApprovalEnabled
+	// and GatesKind both read s.approval — and approving from it answers
+	// ErrNotPending, so a late click cannot execute anything.
+	return s.retainedQueue
 }
 
 // SetApprovalChangeHandler installs the sink notified on every queue
@@ -331,6 +364,11 @@ func (s *Session) SubmitOperation(sub approval.Submission) (string, error) {
 // ErrApprovalOff reports that a session does not gate input, so the caller
 // should write the bytes straight through.
 var ErrApprovalOff = fmt.Errorf("approval mode is off")
+
+// ErrSessionClosing reports that approval mode cannot be reconfigured while the
+// session is shutting down (PR #226): installing a fresh queue on a closed session
+// would hand back a gate whose requests can never execute.
+var ErrSessionClosing = fmt.Errorf("session is closing")
 
 // ChildShell-side view of the session's approval state.
 //

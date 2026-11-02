@@ -293,22 +293,70 @@ func TestExtensionCardIsAWindowAndConfigIsAModal(t *testing.T) {
 	if strings.Contains(ext, "ext-del-btn") || !strings.Contains(ext, "deleteOneExtension") {
 		t.Error("removal belongs to the configuration modal and the batch, not to the card")
 	}
-	// The page reads and writes the file itself: one content type, and the name in
-	// the query (a document has no name key — the directory is the name).
-	if !strings.Contains(ext, "encodeURIComponent(name) + '?format=toml'") {
-		t.Error("the configuration must read the file the store holds")
-	}
-	if !strings.Contains(ext, "headers: { 'Content-Type': 'application/toml; charset=utf-8' }") {
-		t.Error("the configuration must save the document itself")
+	// THE PAGE EDITS A DOCUMENT AND FILLS HOLES, and it never names a file. A
+	// template is one document with placeholders; the values are this installation's
+	// answers, saved one at a time. Neither side of that asks a person to learn that
+	// the answers live in config.local.toml.
+	if !strings.Contains(ext, "'?format=toml'") {
+		t.Error("the configuration must read the template document, holes and all")
 	}
 	if !strings.Contains(ext, "query = '?name=' + encodeURIComponent(newName)") {
-		t.Error("a create must carry its name, which the file itself has no place for")
+		t.Error("a create must carry its name, which the document itself has no place for")
+	}
+	if !strings.Contains(ext, "headers: { 'Content-Type': 'application/toml; charset=utf-8' }") {
+		t.Error("a template is saved as the document it is")
 	}
 	if !strings.Contains(ext, "area.value = extTomlSeed();") {
 		t.Error("a create must start from the default template")
 	}
-	if !strings.Contains(ext, "# A termcp extension. kind + target is enough") {
-		t.Error("the default template must explain its own fields")
+	if !strings.Contains(ext, "{{name}}") {
+		t.Error("the default template must show what a hole looks like")
+	}
+	if !strings.Contains(ext, "[params.<name>]") {
+		t.Error("the default template must show that a hole declares itself")
+	}
+	// THE HOLES ARE THE FORM. A value is set by hole name, never by editing a file.
+	// THE FORM IS A TABLE, AND IT EXPLAINS NOTHING. A caption about saving answers a
+	// question nobody asked; a row is a name, the author's note, and the answer.
+	if strings.Contains(ext, "ext.holes.hint") {
+		t.Error("the form must not explain itself; the table says what to fill")
+	}
+	// The row reads `{{name}}: what it is for` — the placeholder as the template
+	// spells it, then the author's note on the same line.
+	if !strings.Contains(ext, `<code>{{' + escapeHtml(h.name) + '}}</code>`) {
+		t.Error("a row must name the hole the way the template writes it")
+	}
+	if !strings.Contains(ext, `': <span class="ext-hole-help">'`) {
+		t.Error("each row must show the author's note beside the hole's name")
+	}
+	// THE VALUE CELL IS A PREVIEW, NOT A FIELD. It is a button that opens the editor,
+	// so nothing in the table is a box to type into or a corner to drag.
+	if !strings.Contains(ext, `class="ext-hole-value" data-hole=`) {
+		t.Error("the answer must be a preview that opens the editor")
+	}
+	if !strings.Contains(ext, "function openHoleEditor(") {
+		t.Error("clicking a value must open the editor for that hole")
+	}
+	if !strings.Contains(ext, "paintExtensionHoles(name, doc.holes || [])") {
+		t.Error("the configuration must show what the template still asks for")
+	}
+	if !strings.Contains(ext, "body[hole] = value;") {
+		t.Error("a value must be sent keyed by the hole's name")
+	}
+	if !strings.Contains(ext, "function previewExtensionTemplate()") || !strings.Contains(ext, "'/preview'") {
+		t.Error("preview must render the edited document with installed values without saving it")
+	}
+	if !strings.Contains(ext, "JSON.stringify({ values: body })") {
+		t.Error("values travel as the values object, not as a rewritten document")
+	}
+	// A value that is stored but does not render yet must NOT look like a failed save:
+	// the input is the only copy of itself, and clearing the box would lose it.
+	if !strings.Contains(ext, "ext.holes.notApplied") {
+		t.Error("a value that is kept but does not apply must say so, not report a failed save")
+	}
+	// The kind label is gone from the card with the field it read.
+	if strings.Contains(ext, "extKindLabel") {
+		t.Error("the card must not label an extension with a kind it no longer has")
 	}
 }
 

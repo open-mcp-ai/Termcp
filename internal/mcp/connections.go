@@ -143,25 +143,30 @@ func (r *connRegistry) noteNamespace(sessionID, namespace string) {
 // reading their fields afterwards is a data race with a client that is
 // initializing at the same moment (caught by this package's own -race test).
 func (r *connRegistry) list() []Connection {
+	// Snapshot the rows under the lock, but call external methods (mcp-go's
+	// SessionID and GetClientInfo) OUTSIDE it. Calling into third-party interfaces
+	// inside our mutex risks foreign locking or stalls locking us out.
 	r.mu.Lock()
-	out := make([]Connection, 0, len(r.conns))
+	entries := make([]connEntry, 0, len(r.conns))
 	for _, e := range r.conns {
+		entries = append(entries, *e)
+	}
+	r.mu.Unlock()
+
+	out := make([]Connection, 0, len(entries))
+	for _, e := range entries {
 		c := Connection{
 			SessionID:   e.session.SessionID(),
 			Namespace:   e.namespace,
 			ConnectedAt: e.connectedAt.Format(time.RFC3339),
 			seq:         e.seq,
 		}
-		// The client's name is read from the session, which mcp-go stores
-		// atomically: safe here, and the only correct place — it arrives with
-		// initialize, after the session registered.
 		if withInfo, ok := e.session.(mcpserver.SessionWithClientInfo); ok {
 			info := withInfo.GetClientInfo()
 			c.Name, c.Version = info.Name, info.Version
 		}
 		out = append(out, c)
 	}
-	r.mu.Unlock()
 
 	// Sorted after unlocking: the timestamps are copies by now, and holding the
 	// lock through a sort would block a client connecting for no reason.

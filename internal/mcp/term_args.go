@@ -131,7 +131,7 @@ var termArgDecls = []termArgDecl{
 		BoundNote: fmt.Sprintf("Time and space are both costs the caller pays, and neither has a hard cap here: %d seconds is the wait to stay under, not a wall.\n"+
 			"So this is an upper bound on waiting, not a wait for completion: the command keeps running and `read <channel>` takes another look whenever you want one.\n"+
 			"One real ceiling exists and it is not this server's: the MCP transport in front of you may give up sooner (30s on this server's SSE bridge, 15s on a peer call). Past that the reply is lost while the command runs on, and the reply's own `Waited`/`Still-Running` headers are how you tell what happened.\n"+
-			"Work that outlives a call belongs on something that outlives it: `open <session> --argv <cmd>` (a pipe reports its exit), `write … --local-path` (a transfer answers with a task you poll).", maxWaitSeconds),
+			"Work that outlives a call belongs on something that outlives it: `open <session> --argv <cmd>` (a pipe reports its exit), a pipeline (a copy answers with a task you poll).", maxWaitSeconds),
 	},
 	{
 		Name:    "bytes_limit",

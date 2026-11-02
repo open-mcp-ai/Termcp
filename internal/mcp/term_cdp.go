@@ -71,75 +71,70 @@ type cdpSession struct {
 // address a reply prints can be pasted straight back into the next frame — and two
 // tabs can never collide on it the way a counter can after a detach.
 type cdpState struct {
-	mu       sync.Mutex
-	sessions map[string]*cdpSession // by targetId
-	byID     map[string]*cdpSession // by sessionId
+	sessions sync.Map // targetId string -> *cdpSession
+	byID     sync.Map // sessionId string -> *cdpSession
 }
 
 func newCDPState() *cdpState {
-	return &cdpState{sessions: map[string]*cdpSession{}, byID: map[string]*cdpSession{}}
+	return &cdpState{}
 }
 
 // resolve maps a target id onto its attached state, or explains what exists.
 func (c *cdpState) resolve(handle, target string) (*cdpSession, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sess := c.sessions[target]
-	if sess == nil {
-		live := c.listLocked()
-		if len(live) == 0 {
-			return nil, handle + " has no attached target yet, so " + handle + "@" + target +
-				" names nothing. Attach one: `open " + handle + " --target <targetId>` (target ids come from `ls " + handle + "`)."
+	v, ok := c.sessions.Load(target)
+	if ok && v != nil {
+		if sess, _ := v.(*cdpSession); sess != nil {
+			return sess, ""
 		}
-		return nil, "no target " + target + " attached to " + handle + ". Live ones: " + strings.Join(live, ", ") +
-			". A target exists after `open " + handle + " --target <targetId>`."
 	}
-	return sess, ""
-}
-
-func (c *cdpState) listLocked() []string {
-	out := make([]string, 0, len(c.sessions))
-	for target := range c.sessions {
-		out = append(out, target)
+	live := c.live()
+	if len(live) == 0 {
+		return nil, handle + " has no attached target yet, so " + handle + "@" + target +
+			" names nothing. Attach one: `open " + handle + " --target <targetId>` (target ids come from `ls " + handle + "`)."
 	}
-	sort.Strings(out)
-	return out
+	return nil, "no target " + target + " attached to " + handle + ". Live ones: " + strings.Join(live, ", ") +
+		". A target exists after `open " + handle + " --target <targetId>`."
 }
 
 // live reports the child indices currently attached.
 func (c *cdpState) live() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.listLocked()
+	var out []string
+	c.sessions.Range(func(k, _ any) bool {
+		if target, ok := k.(string); ok {
+			out = append(out, target)
+		}
+		return true
+	})
+	sort.Strings(out)
+	return out
 }
 
 // record remembers an attach.
 func (c *cdpState) record(sess *cdpSession) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	sess.Created = time.Now()
-	c.sessions[sess.Target] = sess
-	c.byID[sess.ID] = sess
+	c.sessions.Store(sess.Target, sess)
+	c.byID.Store(sess.ID, sess)
 }
 
 // forget drops a session (detached, or destroyed by the page closing).
 func (c *cdpState) forget(sessionID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sess := c.byID[sessionID]
-	if sess == nil {
+	v, ok := c.byID.LoadAndDelete(sessionID)
+	if !ok {
 		return
 	}
-	delete(c.byID, sessionID)
-	delete(c.sessions, sess.Target)
+	if sess, ok := v.(*cdpSession); ok && sess != nil {
+		c.sessions.Delete(sess.Target)
+	}
 }
 
 // noteEnabled records a successful domain enable, so the session's own state is
 // readable instead of guessed.
 func (c *cdpState) noteEnabled(sessionID, domain string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sess := c.byID[sessionID]
+	v, ok := c.byID.Load(sessionID)
+	if !ok {
+		return
+	}
+	sess, _ := v.(*cdpSession)
 	if sess == nil {
 		return
 	}
@@ -153,16 +148,21 @@ func (c *cdpState) noteEnabled(sessionID, domain string) {
 
 // snapshot copies the sessions for rendering.
 func (c *cdpState) snapshot() []*cdpSession {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]*cdpSession, 0, len(c.sessions))
-	targets := make([]string, 0, len(c.sessions))
-	for target := range c.sessions {
-		targets = append(targets, target)
-	}
+	m := make(map[string]*cdpSession)
+	var targets []string
+	c.sessions.Range(func(k, v any) bool {
+		target, ok := k.(string)
+		sess, ok2 := v.(*cdpSession)
+		if ok && ok2 {
+			targets = append(targets, target)
+			m[target] = sess
+		}
+		return true
+	})
 	sort.Strings(targets)
+	out := make([]*cdpSession, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, c.sessions[target])
+		out = append(out, m[target])
 	}
 	return out
 }

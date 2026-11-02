@@ -24,25 +24,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-// Extension kinds are presets, not code paths: choosing one fills in a set of
-// defaults (see preset.go), and every field stays editable afterwards. An
-// extension always remains one shape — a trimmed session — whatever it is
-// called; the kind only says which common shape it started from.
-const (
-	KindMCP    = "mcp"    // an MCP server driven over a pipe shell (stdio command, or an HTTP endpoint bridged in-process)
-	KindSkill  = "skill"  // a read-only window onto remote files via SFTP
-	KindPrompt = "prompt" // an interactive terminal with instructions attached
-	KindCustom = "custom" // everything by hand
-)
-
-// validKinds is the set Validate accepts. An empty kind is saved as custom.
-var validKinds = map[string]bool{
-	KindMCP:    true,
-	KindSkill:  true,
-	KindPrompt: true,
-	KindCustom: true,
-}
-
 // Forward kinds name a port-forward's direction, after the OpenSSH flags. A
 // forward declared on an extension is set up by the reconciler when its session
 // comes up and torn down with it, so the author describes the tunnel once and
@@ -69,9 +50,21 @@ const DefaultIdleTimeout = 10 * time.Minute
 type Extension struct {
 	// Identity. Name is the TOML-encoded file's directory name, not a TOML key,
 	// so it is never stored inside the file it names.
-	Name   string `toml:"-"`
-	Kind   string `toml:"kind"`
-	Target string `toml:"target"` // an ssh_config profile name, or "internal"
+	Name string `toml:"-"`
+	// THERE IS NO kind FIELD, and its absence is a decision. It used to be a label
+	// — "mcp", "skill", "prompt" — that changed nothing at runtime: capabilities
+	// come from what the template declares (command, url, paths, forwards, mode),
+	// Validate never checked it, and PresetNotes already chose the recipe by the
+	// declared shape rather than the label. A field that only misleads a reader into
+	// thinking there are three kinds of extension, when there is one, is worse than
+	// no field: it makes an agent pick a category instead of writing down what it
+	// wants to happen.
+	Target string `toml:"target,omitempty"` // legacy single-target profile name, or "internal"
+	// Targets defines the hosts this extension runs on. When provided, each entry
+	// names a host and its host-specific forwards, allowing different targets to bind
+	// non-conflicting local ports while sharing the parent extension's command,
+	// mode, and capabilities.
+	Targets []TargetDecl `toml:"targets,omitempty"`
 	// Description is the author's one-line summary, shown wherever the extension is
 	// listed. It does NOT reach the model by itself: nothing about the set of
 	// installed extensions goes into the MCP instructions, because the tool surface
@@ -111,14 +104,13 @@ type Extension struct {
 	IdleTimeout string `toml:"idle_timeout,omitempty"`
 
 	// Capability restriction. Both are whitelists; an empty value means
-	// unrestricted, so a prompt-kind extension that wants the full terminal
-	// surface simply lists nothing.
+	// unrestricted, so a terminal that wants the full surface simply lists nothing.
 	Allow []string `toml:"allow,omitempty"`
 	Paths []string `toml:"paths,omitempty"`
 
 	// URL is an HTTP MCP endpoint (streamable HTTP, or SSE when the path ends in
-	// /sse). It is the alternative to Command/Args for kind=mcp: instead of a
-	// program to run, the template names a server to speak to, and the session
+	// /sse). It is the alternative to Command/Args: instead of a program to run,
+	// the template names a server to speak to, and the session
 	// carries the in-process relay rather than a process. The relay runs inside
 	// termcp (see internal/mcpbridge), so this needs no second binary on the
 	// target and no PATH lookup — the channel is the pipe, and termcp is both ends
@@ -171,11 +163,67 @@ type ForwardDecl struct {
 	RemotePort int    `toml:"remote_port,omitempty"`
 }
 
+// TargetDecl defines one host binding under an extension. Any host-specific
+// configuration that would otherwise conflict across targets (such as local
+// forward listen ports) hangs directly off this host entry.
+type TargetDecl struct {
+	Host     string        `toml:"host" json:"host"`
+	Forwards []ForwardDecl `toml:"forward,omitempty" json:"forwards,omitempty"`
+}
+
+// EffectiveTargets returns the target bindings of the extension. If Targets is
+// non-empty, it is returned; otherwise, a legacy Target string is wrapped.
+func (e *Extension) EffectiveTargets() []TargetDecl {
+	if len(e.Targets) > 0 {
+		return e.Targets
+	}
+	if e.Target != "" {
+		return []TargetDecl{{Host: e.Target, Forwards: e.Forwards}}
+	}
+	return nil
+}
+
+// TargetFor finds the matching TargetDecl by host name, or returns the first
+// target if host is empty and exactly one target exists.
+func (e *Extension) TargetFor(host string) (TargetDecl, bool) {
+	targets := e.EffectiveTargets()
+	if len(targets) == 0 {
+		return TargetDecl{}, false
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		if len(targets) == 1 {
+			return targets[0], true
+		}
+		return TargetDecl{}, false
+	}
+	for _, t := range targets {
+		if t.Host == host {
+			return t, true
+		}
+	}
+	return TargetDecl{}, false
+}
+
 // Lazy reports whether the reconciler waits for a caller before bringing this
 // extension up. It does, unless the template declares a forward: a tunnel is a
 // service with no "use" moment to start it, so it is established at startup and
 // kept (issue #183).
-func (e *Extension) Lazy() bool { return len(e.Forwards) == 0 }
+func (e *Extension) Lazy() bool {
+	targets := e.EffectiveTargets()
+	if len(targets) == 0 {
+		return len(e.Forwards) == 0
+	}
+	for _, t := range targets {
+		if len(t.Forwards) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// LazyForTarget reports whether this host entry has no resident forward.
+func (t TargetDecl) Lazy() bool { return len(t.Forwards) == 0 }
 
 // IdleTimeoutDuration is the configured idle window, or the default when the key
 // is absent. An unparsable or non-positive value is an error rather than a
@@ -191,8 +239,13 @@ func (e *Extension) IdleTimeoutDuration() (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("idle_timeout is not a duration (%q): write it as a Go duration, such as 10m or 90s", e.IdleTimeout)
 	}
-	if d <= 0 {
-		return 0, fmt.Errorf("idle_timeout must be positive, got %q", e.IdleTimeout)
+	// ZERO MEANS "NO IDLE COLLECTION", the same word the daemon's own
+	// --idle-timeout uses (issue #227). An extension that carries a background duty
+	// — an MCP server holding a WebSocket so it can push events — is not idle when
+	// nobody calls a tool, and it had no way to say so: every legal window eventually
+	// reaped it, and the only workaround was a semantic lie like "87600h".
+	if d < 0 {
+		return 0, fmt.Errorf("idle_timeout cannot be negative, got %q; write 0 to disable idle collection", e.IdleTimeout)
 	}
 	return d, nil
 }
@@ -204,12 +257,8 @@ func (e *Extension) Normalize() {
 	e.Name = strings.TrimSpace(e.Name)
 	e.IdleTimeout = strings.TrimSpace(e.IdleTimeout)
 	e.Target = strings.TrimSpace(e.Target)
-	e.Kind = strings.TrimSpace(e.Kind)
 	e.Mode = strings.TrimSpace(e.Mode)
 	e.Command = strings.TrimSpace(e.Command)
-	if e.Kind == "" {
-		e.Kind = KindCustom
-	}
 	e.URL = strings.TrimSpace(e.URL)
 	// An empty headers map is the same as none, and a header name is an HTTP
 	// token: a blank one is dropped rather than sent as a request line nobody can
@@ -233,6 +282,12 @@ func (e *Extension) Normalize() {
 	}
 	for i := range e.Forwards {
 		e.Forwards[i].Normalize()
+	}
+	for i := range e.Targets {
+		e.Targets[i].Host = strings.TrimSpace(e.Targets[i].Host)
+		for j := range e.Targets[i].Forwards {
+			e.Targets[i].Forwards[j].Normalize()
+		}
 	}
 }
 
@@ -270,11 +325,42 @@ func (e *Extension) Validate() error {
 	if err := sshconfig.ValidateName(e.Name); err != nil {
 		return fmt.Errorf("invalid extension name: %w", err)
 	}
-	if e.Target == "" {
-		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\")")
+	if e.Target == "" && len(e.Targets) == 0 {
+		return fmt.Errorf("target is required (an ssh_config profile name or \"internal\"), or a [[targets]] list naming the hosts this extension runs on")
 	}
-	if !validKinds[e.Kind] {
-		return fmt.Errorf("unknown extension kind %q (mcp, skill, prompt or custom)", e.Kind)
+	// ONE SPELLING, NOT TWO. A file carrying both `target` and `[[targets]]` would
+	// leave "which hosts does this run on" with two answers, and the runtime would
+	// have to pick one silently.
+	if e.Target != "" && len(e.Targets) > 0 {
+		return fmt.Errorf("target and [[targets]] are alternatives: target names one host, [[targets]] names several. Move %q into the list, or drop the list", e.Target)
+	}
+	if len(e.Targets) > 0 {
+		seen := make(map[string]bool, len(e.Targets))
+		for i, t := range e.Targets {
+			if t.Host == "" {
+				return fmt.Errorf("targets #%d has no host: every entry needs host = \"<ssh_config profile>\"", i+1)
+			}
+			if err := sshconfig.ValidateName(t.Host); err != nil {
+				return fmt.Errorf("targets #%d host: %w", i+1, err)
+			}
+			// A HOST APPEARS ONCE. Two entries for one machine are two channels on one
+			// connection with no way to tell them apart, and the second one's forwards
+			// would collide with the first's.
+			if seen[t.Host] {
+				return fmt.Errorf("targets #%d repeats host %q: each host appears once", i+1, t.Host)
+			}
+			seen[t.Host] = true
+			for j := range t.Forwards {
+				if err := t.Forwards[j].Validate(); err != nil {
+					return fmt.Errorf("targets #%d (%s) forward #%d: %w", i+1, t.Host, j+1, err)
+				}
+			}
+		}
+		// The legacy top-level list belongs to the legacy top-level target; with a
+		// [[targets]] list there is no single host for it to hang off.
+		if len(e.Forwards) > 0 {
+			return fmt.Errorf("forwards belong to a host: move [[forward]] under the [[targets]] entry it listens for, since two targets cannot both bind the same local port")
+		}
 	}
 	switch e.Mode {
 	case "", "pty", "pipe":
@@ -288,10 +374,18 @@ func (e *Extension) Validate() error {
 	if e.Mode == "pipe" && e.Command == "" && e.URL == "" {
 		return fmt.Errorf("mode=pipe requires a command (a pipe channel has no fallback shell)")
 	}
-	// URL and Command are two answers to one question — what runs on the channel
-	// — so a template carrying both would have to pick one silently.
+	// URL AND COMMAND STILL EXCLUDE EACH OTHER, and the reason is mechanical rather
+	// than conceptual: a template gets ONE channel, and both fields claim it. With
+	// `url` what runs on the channel is termcp's bridge (resolve() replaces cmd/args
+	// with bridgeCommand), so a `command` here would be saved and silently never run.
+	//
+	// "Start the server, then connect to it" IS a real need — an HTTP MCP server that
+	// termcp itself brings up — but it needs TWO channels (one daemon, one bridge),
+	// which the template cannot express yet. Refusing is what keeps that gap visible;
+	// accepting would ship a field that does nothing.
 	if e.URL != "" && e.Command != "" {
-		return fmt.Errorf("url and command are alternatives: set one, not both")
+		return fmt.Errorf("url and command are alternatives on one channel: with url, the channel runs termcp's bridge, so a command here would never execute. " +
+			"Split it in two for now — one extension runs the server, another takes its url — or use a stdio command that speaks MCP itself")
 	}
 	if e.URL != "" {
 		if err := validEndpointURL(e.URL); err != nil {
@@ -302,8 +396,10 @@ func (e *Extension) Validate() error {
 		// would be looked up on a machine that has never heard of it, and the
 		// failure would read as a missing command rather than as a template asking
 		// the wrong host to do the work.
-		if !sshconfig.IsInternalName(e.Target) {
-			return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", e.Target)
+		for _, t := range e.EffectiveTargets() {
+			if !sshconfig.IsInternalName(t.Host) {
+				return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", t.Host)
+			}
 		}
 		// The relay speaks HTTP; there is no channel for a pty to own.
 		if e.Mode != "" && e.Mode != "pipe" {
@@ -315,10 +411,18 @@ func (e *Extension) Validate() error {
 			return fmt.Errorf("rows and cols must be 0 (default) or 1-1000")
 		}
 	}
-	// A skill with no paths would be a read-only window onto nothing. Any other
-	// kind may leave paths empty to stay unrestricted.
-	if e.Kind == KindSkill && len(e.Paths) == 0 {
-		return fmt.Errorf("a skill extension requires at least one path (the directories it may read)")
+	// AN EXTENSION MUST EXPLICITLY DECLARE AT LEAST ONE CAPABILITY.
+	// We no longer rely on kind as a gate: an author (or AI) must declare what the
+	// extension actually does (a command, an mcp url, exposed file paths, port forwards,
+	// or an interactive pty shell). Declaring none of these is an empty useless container.
+	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || e.Mode == "pty"
+	for _, t := range e.Targets {
+		if len(t.Forwards) > 0 {
+			hasCapability = true
+		}
+	}
+	if !hasCapability {
+		return fmt.Errorf("extension declares no capability: explicitly specify at least one of command, url, paths, forward, or mode=pty")
 	}
 	for i := range e.Forwards {
 		if err := e.Forwards[i].Validate(); err != nil {

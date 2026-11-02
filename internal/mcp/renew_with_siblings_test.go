@@ -16,7 +16,7 @@ func TestSiblingsOnOneConnectionDoNotStealTheRenew(t *testing.T) {
 	s := newExtensionTestServer(t)
 	// Siblings: same target, so they share the connection they dial.
 	for _, name := range []string{"st1", "st2", "st3", "st4", "st5"} {
-		ext := extensions.Preset(extensions.KindPrompt)
+		ext := extensions.Extension{Mode: "pty"}
 		ext.Name = name
 		ext.Target = "internal"
 		ext.Command = blockingCommand()
@@ -34,7 +34,7 @@ func TestSiblingsOnOneConnectionDoNotStealTheRenew(t *testing.T) {
 
 	// The extension under test comes up LAST so its window starts after the
 	// siblings' slow starts (each ask waits out the startup grace).
-	ext := extensions.Preset(extensions.KindPrompt)
+	ext := extensions.Extension{Mode: "pty"}
 	ext.Name = "elder"
 	ext.Target = "internal"
 	ext.Command = blockingCommand()

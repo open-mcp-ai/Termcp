@@ -50,11 +50,18 @@ func TestPeerSendThenRecvDeliversTheAnswer(t *testing.T) {
 	})
 }
 
-// TestRecvOnAnHttpChannelExplainsItself pins the one door where recv cannot wait.
+// TestRecvOnAnHttpChannelExplainsItself pins the door where recv has nothing to wait
+// for.
 //
-// An HTTP channel has no pushed frames: every frame is the answer to a call, so a recv
-// that returned "nothing yet" would be indistinguishable from a slow peer. The reply
-// says which shape to use instead.
+// A peer that sends nothing on its own has no stream to deliver unsolicited frames, so a
+// recv that returned "nothing yet" would be indistinguishable from a slow peer. The
+// reply says which shape to use instead.
+//
+// THIS IS NO LONGER A STATEMENT ABOUT HTTP. Streamable MCP carries server-initiated
+// frames on a listening GET stream, so an HTTP endpoint that accepts one CAN be pushed
+// to (issue #210) — the question is asked of the channel, not of the transport. The
+// peer here is one that refuses that stream, which is the case that still has nothing
+// to wait for.
 func TestRecvOnAnHttpChannelExplainsItself(t *testing.T) {
 	s := newTestServer(t)
 	internalSession(t, s)
@@ -68,6 +75,54 @@ func TestRecvOnAnHttpChannelExplainsItself(t *testing.T) {
 	}
 	if !strings.Contains(got, "nothing to wait for") {
 		t.Errorf("recv on an HTTP channel did not explain why it cannot wait:\n%s", got)
+	}
+}
+
+// TestRecvOnAStreamableHttpMcpChannelReadsUnsolicitedEvents pins unsolicited server
+// events over HTTP MCP (#210).
+//
+// A spec-compliant streamable HTTP MCP server sends unsolicited notifications on the
+// listening GET stream (text/event-stream with Mcp-Session-Id). A `recv` (read --frame)
+// issued over such a channel must deliver that event rather than reporting that there is
+// nothing to wait for.
+func TestRecvOnAStreamableHttpMcpChannelReadsUnsolicitedEvents(t *testing.T) {
+	s := newTestServer(t)
+	internalSession(t, s)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.Header().Set("Mcp-Session-Id", "sess-test-recv")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/test\",\"params\":{\"val\":42}}\n\n"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+
+	h := handleFrom(t, termText(t, s, map[string]any{"cmd": "open internal jrpc " + srv.URL}))
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	// One call to negotiate the session ID.
+	initGot := termText(t, s, map[string]any{"cmd": "call " + h + ` '{"id":1,"method":"init"}'`})
+	if !strings.HasPrefix(initGot, "TERM/1 2") {
+		t.Fatalf("init call failed:\n%s", initGot)
+	}
+
+	// NO WAITING FOR THE HANDSHAKE (issue #213). The read runs immediately after the
+	// call, so it exercises the window where the listening GET has not yet finished
+	// connecting.
+	got := termText(t, s, map[string]any{"cmd": "read " + h + " --frame", "timeout": 2})
+	if !strings.HasPrefix(got, "TERM/1 200") {
+		t.Fatalf("expected 200 with the unsolicited event, got:\n%s", got)
+	}
+	if !strings.Contains(got, `"notifications/test"`) || !strings.Contains(got, `"val":42`) {
+		t.Fatalf("the reply did not contain the pushed notification:\n%s", got)
 	}
 }
 

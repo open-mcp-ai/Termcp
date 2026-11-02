@@ -115,20 +115,23 @@ func TestEveryWriteOpReachesTheFile(t *testing.T) {
 		}
 	})
 
-	t.Run("upload-local-path", func(t *testing.T) {
+	t.Run("copy-via-pipeline", func(t *testing.T) {
 		src := filepath.Join(dir, "src.txt")
 		if err := os.WriteFile(src, []byte("uploaded body"), 0644); err != nil {
 			t.Fatal(err)
 		}
 		dst := filepath.Join(dir, "dst.txt")
-		res := write("write " + sid + " file " + dst + " --local-path " + src)
-		// A TRANSFER ANSWERS WITH A RECEIPT (202 Accepted, #158). Wait for the task
+		// A PIPELINE NOW, NOT --local-path. The flag read the daemon's disk without a
+		// capability check, which is what --no-internal exists to stop; the pipeline
+		// goes through a session, so the isolation flag can refuse it.
+		res := write("read " + sid + " file " + src + " | write " + sid + " file " + dst)
+		// A COPY ANSWERS WITH A RECEIPT (202 Accepted, #158). Wait for the task
 		// using `get task <id>` — the way a caller does.
 		if taskID := headerValueOr(res, "Task", ""); taskID != "" {
 			termText(t, s, map[string]any{"cmd": "get task " + taskID, "timeout": 5})
 		}
 		if b, _ := os.ReadFile(dst); string(b) != "uploaded body" {
-			t.Errorf("uploaded content = %q, want %q", b, "uploaded body")
+			t.Errorf("copied content = %q, want %q", b, "uploaded body")
 		}
 	})
 }

@@ -184,8 +184,7 @@ function connectUIWebSocket() {
           }
         }
       } else if (j.type === 'terminal_done') {
-        var win2 = getShellWindowBySid(j.id);
-        if (!win2) win2 = findShellWindowByChannelSid(j.id);
+        var win2 = findShellWindowByChannelSid(j.id) || getShellWindowBySid(j.id);
         if (win2) {
           var ch2 = win2._channels && win2._channels[j.id];
           if (ch2) {
@@ -224,8 +223,7 @@ function connectUIWebSocket() {
            from a person on its own. A local send also comes back through here,
            which is deliberate — one path paints the chip instead of a local
            guess racing a server event for the same field. */
-        var winA = getShellWindowBySid(j.shell_id);
-        if (!winA) winA = findShellWindowByChannelSid(j.shell_id);
+        var winA = findShellWindowByChannelSid(j.shell_id) || getShellWindowBySid(j.shell_id);
         if (winA) {
           shellStatusOnInput(winA, j.shell_id, j.src, j.submit);
           /* INPUT COUNTS AS A CHANGE. The frame path marks output; a keystroke that
@@ -550,6 +548,16 @@ function addWinDisposable(win, disposeFn) {
   win._disposables.push(disposeFn);
 }
 
+/** Forget one registered teardown. A child that is handed to ANOTHER owner (a
+ *  channel tab dragged into a sibling panel) must take its cleanup with it: the
+ *  old window no longer owns it, and running its closer later would archive a
+ *  shell that is still on screen somewhere else. */
+function removeWinDisposable(win, disposeFn) {
+  if (!win || !win._disposables || !disposeFn) return;
+  var i = win._disposables.indexOf(disposeFn);
+  if (i >= 0) win._disposables.splice(i, 1);
+}
+
 /** Run every window-scoped teardown exactly once, LIFO. */
 function disposeWinResources(win) {
   if (!win || !win._disposables || !win._disposables.length) return;
@@ -562,6 +570,7 @@ function disposeWinResources(win) {
 
 function closeShellWindow(win) {
   if (!win || win._windowless) return;
+  if (typeof _channelAddMenu !== 'undefined' && _channelAddMenu && _channelAddMenu._win === win) closeChannelAddMenu();
   // Remember active tab for reconnect.
   if (win._parentSid && win._activeChannelSid) {
     if (!window._shellLastActive) window._shellLastActive = {};
@@ -572,24 +581,6 @@ function closeShellWindow(win) {
     try { win._connectAbort.abort(); } catch (e) {}
     win._connectAbort = null;
   }
-  // Clean up channel tabs
-  var usedChannels = false;
-  if (win._channels) {
-    Object.keys(win._channels).forEach(function(sid) {
-      var ch = win._channels[sid];
-      sendTerminalWatch(sid, false);
-      if (ch.fitRo && ch.instEl) { try { ch.fitRo.unobserve(ch.instEl); } catch(e) {} }
-      if (ch.term) { try { ch.term.dispose(); } catch(e) {} }
-      if (sid === win._sid) usedChannels = true;
-    });
-    win._channels = {};
-  }
-  if (win._sid) {
-    if (!usedChannels) sendTerminalWatch(win._sid, false);
-    if (window._pendingTerminalWatch && window._pendingTerminalWatch[win._sid]) {
-      delete window._pendingTerminalWatch[win._sid];
-    }
-  }
   if (win._shellResizeSyncTimer) {
     clearRetryTimer(win._shellResizeSyncTimer);
     win._shellResizeSyncTimer = null;
@@ -598,8 +589,9 @@ function closeShellWindow(win) {
     try { win._shellInputUnlockAC.abort(); } catch (e) {}
     win._shellInputUnlockAC = null;
   }
-  // Release everything registered through addWinDisposable (document-level
-  // listeners, drag/resize finish hooks, pending requests).
+  // All resources (channels/shells, observers, timers, listeners) are attached
+  // to this window's disposable list. Releasing the window tears down its child
+  // tree cleanly and symmetrically without ad-hoc loops here.
   disposeWinResources(win);
   var wasPending = !!win._placeholder;
   win.remove();
@@ -618,11 +610,13 @@ function setupShellWindowDrag(win, header) {
     if (!drag.active) return;
     win.style.left = (drag.startLeft + e.clientX - drag.startX) + 'px';
     win.style.top = (drag.startTop + e.clientY - drag.startY) + 'px';
+    if (typeof scheduleChannelAddMenuPosition === 'function') scheduleChannelAddMenuPosition();
   }
   function onUp() {
     if (!drag.active) return;
     drag.active = false;
     clampShellWindowIntoContainer(win);
+    savePanelLayoutSoon();
     document.body.style.cursor = '';
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
@@ -713,6 +707,7 @@ function setupShellWindowResize(win) {
       win._shellResizeSyncTimer = null;
     }
     applyPending(true);
+    savePanelLayoutSoon();
     if (pointerId !== null && activeHandle && activeHandle.hasPointerCapture && activeHandle.hasPointerCapture(pointerId)) {
       try { activeHandle.releasePointerCapture(pointerId); } catch (e) {}
     }

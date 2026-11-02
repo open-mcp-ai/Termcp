@@ -176,6 +176,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/extensions/batch", h.handleExportExtensions)
 	mux.HandleFunc("POST /api/extensions/batch", h.handleImportExtensions)
 	mux.HandleFunc("GET /api/extensions/{name}", h.handleGetExtension)
+	mux.HandleFunc("POST /api/extensions/{name}/preview", h.handlePreviewExtension)
 	mux.HandleFunc("PUT /api/extensions/{name}", h.handleUpdateExtension)
 	mux.HandleFunc("DELETE /api/extensions/{name}", h.handleDeleteExtension)
 	mux.HandleFunc("POST /api/extensions/{name}/retry", h.handleRetryExtension)
@@ -189,6 +190,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/sessions/{id}", h.handleRenameSession)
 	// DELETE purges the session (terminate + remove its on-disk directory).
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.handlePurgeSession)
+	// DELETE on the collection sweeps archived sessions: only those that already
+	// ended are removed, so a caller can tidy the archive without naming ids and
+	// without being able to close a running session by accident.
+	mux.HandleFunc("DELETE /api/sessions", h.handlePurgeArchivedSessions)
 	// Approval mode: per-session gate control, plus the approver worklist and
 	// decisions. See approval.go for why the two groups are separate.
 	mux.HandleFunc("GET /api/sessions/{id}/approval", h.handleSessionApproval)

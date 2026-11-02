@@ -228,7 +228,10 @@ func (h *Handler) handleCloseShell(w http.ResponseWriter, r *http.Request) {
 	if sess := h.sessionOwning(id, id); restRefuseTool(w, sess, capability.ShellClose) {
 		return
 	}
-	// Internal primary shell: tab close is a no-op (process outlives the tab).
+	// The erase path keeps the built-in loopback's documented rule: closing the
+	// terminal that owns the session's primary channel ends that view, not the
+	// container. Archiving it explicitly releases the channel, while this DELETE
+	// remains the compatible erase verb.
 	if sess := h.Sessions.GetByShellID(id); sess != nil && sess.IsInternalPrimaryShell(id) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -245,14 +248,16 @@ func (h *Handler) handleCloseShell(w http.ResponseWriter, r *http.Request) {
 // handleArchiveShell closes one shell channel and KEEPS its record
 // (POST /api/shells/{id}/archive).
 //
-// This is what the terminal tab's X calls. DELETE /api/shells/{id} stays the erase:
-// it stops the channel and drops the record, so nothing addresses the transcript
-// afterwards. Both exist because both are wanted, and the UI's ordinary close needs
-// the first, not the second.
+// This is the verb a terminal window uses when it goes away. A window owns the
+// channels it showed, so every one of them — including an internal session's
+// primary — is archived with the window. The container survives its last shell
+// (docs/api.md §7: the session owns the transport), so stopping one view cannot
+// take the session, its forwards or its transport with it.
 //
-// A missing shell answers 204 like its DELETE twin: the caller's intent — this
-// channel is not running — is already true, and an error would only teach the UI to
-// ignore errors.
+// DELETE /api/shells/{id} is the separate erase verb and retains the built-in
+// loopback's historic primary-channel no-op. A missing shell answers 204 like
+// its DELETE twin: the caller's intent — this channel is not running — is already
+// true, and an error would only teach the UI to ignore errors.
 func (h *Handler) handleArchiveShell(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -267,12 +272,6 @@ func (h *Handler) handleArchiveShell(w http.ResponseWriter, r *http.Request) {
 	// it, and an extension that never granted shell_close must not have its channel
 	// stopped by a spelling it did not expect.
 	if sess := h.sessionOwning(id, id); restRefuseTool(w, sess, capability.ShellClose) {
-		return
-	}
-	// The internal primary shell outlives its tab; closing it is a no-op, and
-	// archiving it would claim a record for a shell that is still running.
-	if sess := h.Sessions.GetByShellID(id); sess != nil && sess.IsInternalPrimaryShell(id) {
-		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if cs := h.Sessions.GetChildShell(id); cs != nil {

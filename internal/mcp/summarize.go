@@ -87,9 +87,6 @@ func summarizeOperation(tool string, args map[string]any) string {
 	switch tool {
 	case "file_write":
 		path := s("remote_path")
-		if lp := s("local_path"); lp != "" {
-			return fmt.Sprintf("write to %s from local file %s", path, lp)
-		}
 		return fmt.Sprintf("write %s to %s", describeBytes(len(s("data")), s("mode")), path)
 
 	case "file_delete":

@@ -115,15 +115,12 @@ type jrpcHandle struct {
 	// the other two doors, which have no such concept.
 	cdp *cdpState
 
-	// initMu guards init. It is not the channel's mutex: the channel is held for
-	// a whole call, so a handshake under it would let a second caller begin
-	// while the first is still inside the channel — which is exactly how
-	// initialize ran once per concurrent caller instead of once per handle.
-	initMu sync.Mutex
-	// init reports that the MCP handshake has run. It is per handle, not per
-	// channel: the channel does not know what MCP is, which is what lets `jrpc`
-	// and `cdp` share it.
-	init bool
+	// initDone is closed when initialize finishes (successfully or not).
+	// Callers wait on it via select + ctx.Done() so each obeys its own deadline
+	// rather than blocking on a mutex (issue #221).
+	initOnce sync.Once
+	initDone chan struct{}
+	initErr  error
 }
 
 // jrpcOpen connects a URL THROUGH a session and hands back a handle.
@@ -476,12 +473,20 @@ func (s *Server) jrpcChannel(ctx context.Context, stmt directive.Statement, win 
 			return s.frameReply(ctx, stmt, h, frame, win)
 		}
 		// A RECV THAT TOOK NOTHING DELIVERED NOTHING, so it is a 204 — and the two
-		// sentences below are not the same news: on HTTP there is nothing to wait for at
-		// all, on a socket the window was simply empty. Each rides in the Hint header,
-		// never the body, for the reason noContentSaying documents.
-		if h.ch.Transport() == jrpc.HTTP {
-			return noContentSaying(headers, "no frame. On an HTTP channel every frame is an answer to a call, so there is "+
-				"nothing to wait for; a peer that pushes on its own needs a socket (cdp open ws://…).")
+		// sentences below are not the same news: a peer with no incoming stream has
+		// nothing that could ever arrive, while a live one simply had an empty window.
+		// Each rides in the Hint header, never the body, for the reason
+		// noContentSaying documents.
+		//
+		// AN HTTP CHANNEL NOW HAS A THIRD SHAPE, which is why this can no longer be a
+		// check on the transport: streamable MCP carries server-initiated frames on a
+		// listening GET stream, so "HTTP" stopped meaning "cannot be pushed to" (issue
+		// #210). The channel is asked instead of the transport.
+		if !h.ch.CanWaitEvents() {
+			return noContentSaying(headers, "no frame. This peer sends nothing on its own: it answers "+
+				"inside the response to a call, and an answer is read by the call that asked, so there is "+
+				"nothing to wait for. A peer that pushes needs a socket, or an MCP endpoint whose listening "+
+				"GET stream it accepts.")
 		}
 		return noContentSaying(headers, "no frame within the window")
 	case "call", "send":
@@ -550,32 +555,42 @@ func (s *Server) jrpcReady(ctx context.Context, h *jrpcHandle) error {
 	if h.kind != "mcp" {
 		return nil
 	}
-	// Held across the handshake, not just around the flag: the point of the
-	// mutex is that the SECOND caller waits for the handshake instead of
-	// starting a competing one. Checking the flag under the lock and releasing
-	// before the call would leave the window open.
-	h.initMu.Lock()
-	defer h.initMu.Unlock()
-	if h.init {
-		return nil
+	// RUNS ONCE PER HANDLE, BUT CALLERS WAIT ON A CHANNEL RATHER THAN A MUTEX (issue #221).
+	// A mutex made the second caller wait for the whole handshake with no way out: if the
+	// peer hangs or the first caller had a long timeout, the second could not honour its
+	// own context cancellation. Listening on initDone lets each caller leave when its own
+	// context expires.
+	h.initOnce.Do(func() {
+		h.initDone = make(chan struct{})
+		go func() {
+			defer close(h.initDone)
+			initCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if _, err := h.ch.Call(initCtx, map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "initialize",
+				"params": map[string]any{
+					"protocolVersion": mcpgo.LATEST_PROTOCOL_VERSION,
+					"capabilities":    map[string]any{},
+					"clientInfo":      map[string]any{"name": "termcp", "version": "jrpc"},
+				},
+			}); err != nil {
+				h.initErr = fmt.Errorf("initialize: %w", err)
+				return
+			}
+			if err := h.ch.Send(initCtx, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+				h.initErr = fmt.Errorf("notifications/initialized: %w", err)
+				return
+			}
+		}()
+	})
+
+	select {
+	case <-h.initDone:
+		return h.initErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if _, err := h.ch.Call(ctx, map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": mcpgo.LATEST_PROTOCOL_VERSION,
-			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "termcp", "version": "jrpc"},
-		},
-	}); err != nil {
-		return fmt.Errorf("initialize: %w", err)
-	}
-	// A notification: no id, so no answer is owed and none is waited for.
-	if err := h.ch.Send(ctx, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
-		return fmt.Errorf("notifications/initialized: %w", err)
-	}
-	h.init = true
-	return nil
 }
 
 // parseJRPCFrame reads the frame out of the rest of the line.

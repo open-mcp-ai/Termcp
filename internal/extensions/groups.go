@@ -20,12 +20,22 @@ import (
 // — the profile they dial and the capability set they were granted — and it holds
 // nothing but that session until the last of its members goes away.
 type extGroup struct {
-	// mu serializes the group's session against the probes of its members: two
-	// extensions coming up at once must open one connection, not two.
+	// mu guards the fields below, and NOTHING ELSE. It used to be held across
+	// sessMgr.Create — a full SSH dial and handshake — so one member rebuilding the
+	// connection stalled every other operation on the same group for as long as the
+	// network took (issue #222). A lock around a network call is the same bug as
+	// #218 through #221 in a different place.
+	//
+	// "Two extensions coming up at once must open ONE connection" is still the rule;
+	// it is now expressed by dialing, which a caller can leave.
 	mu        sync.Mutex
 	key       string
 	target    string
 	namespace string
+	// dialing is the connection currently being established, if any. Callers that
+	// find it set wait for it instead of starting a second dial, and wait somewhere
+	// their own context can release them.
+	dialing *groupDial
 	// created is when this group was first resolved. The sweep uses it to leave
 	// alone a connection that appeared while the walk was running: the walk's
 	// picture of who wants what was taken at the top, and a group that did not exist
@@ -155,27 +165,69 @@ func (r *Reconciler) groupList() []*extGroup {
 // ensureGroupSession returns the connection the group is served by: the one it
 // already has when that is still running, a new one otherwise. The group's own
 // lock is what makes two members starting at once share the answer.
+// groupDial is one in-flight connection attempt. Its done channel is closed when
+// the attempt finishes, and the outcome is read from sess/err afterwards.
+type groupDial struct {
+	done chan struct{}
+	sess *session.Session
+	err  error
+}
+
 func (r *Reconciler) ensureGroupSession(ctx context.Context, g *extGroup, base session.Config) (*session.Session, error) {
+	// FAST PATH AND SINGLE-FLIGHT DECISION UNDER THE LOCK, DIAL OUTSIDE IT.
+	//
+	// The lock now protects only the bookkeeping: is there a live session, and is
+	// somebody already dialing. Both are answered in a few instructions, so the lock
+	// is never held across anything that can block.
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if sess := r.liveSession(g.sessionID); sess != nil {
+		g.mu.Unlock()
 		return sess, nil
 	}
-	// The previous session is DEAD and has served its purpose — it held the
-	// failure's output for anyone watching — and the group is about to be served
-	// by a new one. Finalizing it here keeps a failing group from leaving one dead
-	// connection per attempt behind.
-	if g.sessionID != "" {
-		_ = r.sessMgr.Delete(g.sessionID)
-		g.sessionID = ""
+	if d := g.dialing; d != nil {
+		// Somebody else is already opening this group's connection. Wait for THEIR
+		// result, but wait somewhere this caller's context can end the wait — which
+		// is the whole reason this is a channel and not the mutex.
+		g.mu.Unlock()
+		select {
+		case <-d.done:
+			return d.sess, d.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	d := &groupDial{done: make(chan struct{})}
+	g.dialing = d
+	deadID := g.sessionID
+	g.sessionID = ""
+	g.mu.Unlock()
+
+	// THE SLOW HALF, UNLOCKED. Finalizing the dead connection and dialing a new one
+	// are both network operations, and neither may hold the group's lock.
+	if deadID != "" {
+		// The previous session is DEAD and has served its purpose — it held the
+		// failure's output for anyone watching — and the group is about to be served
+		// by a new one. Finalizing it here keeps a failing group from leaving one dead
+		// connection per attempt behind.
+		_ = r.sessMgr.Delete(deadID)
 	}
 	cfg := base
 	cfg.Ctx = ctx
 	sess, err := r.sessMgr.Create(cfg)
+
+	g.mu.Lock()
+	g.dialing = nil
+	if err == nil {
+		g.sessionID = sess.ID
+	}
+	g.mu.Unlock()
+
+	d.sess, d.err = sess, err
+	close(d.done) // broadcast: every waiter re-reads the outcome
+
 	if err != nil {
 		return nil, err
 	}
-	g.sessionID = sess.ID
 	slog.Debug("extension session up", "group", g.key, "target", g.target, "session_id", sess.ID)
 	return sess, nil
 }

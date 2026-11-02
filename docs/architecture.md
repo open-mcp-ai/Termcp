@@ -54,7 +54,7 @@ Termcp 是平台型架构：**一个会话内核（session/message/sshclient/ssh
 ┌──────────────────────┐      ┌──────────────────────────┐
 │ internal/mcp/        │      │ internal/webui/          │
 │ server.go 工具注册    │      │ 会话卡片/终端窗口/历史     │
-│ handlers.go 31 工具   │      │ handler.go REST+WS        │
+│ term 单工具 (TERM/1)  │      │ handler.go REST+WS        │
 │ logging.go 结构化日志  │      └───────────┬──────────────┘
 └──────┬───────────────┘                  │
        │                                  │
@@ -388,9 +388,15 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 **关键不变量：**
 
 1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭（哪怕一个不剩）就把仍可用的 Session 标成 DEAD —— 容器持有的是 SSH transport，端口转发、SFTP 与 `shell_open` 都只依赖它。
-2. 手动关闭 Shell 是删除操作：从 live map、shell history snapshot 和持久化的 shell manifest 中移除；它不会产生 `exited` shell，也不会被 UI 渲染成 `end` tab。
-3. 只有自然退出或 transport 异常断线的 shell，才会保留 `exited` 元数据供 DEAD/只读视图使用。
+2. Shell 的关闭有两种语义：
+   - **归档并保留记录（`ArchiveChildShell`，`POST /api/shells/{id}/archive`）**：关闭通道并标记 `archived`，退出码与最后日志保留在 `shellHistory` 快照中，UI 移除活动标签但可在归档列表和只读视图回溯。
+   - **彻底删除（`CloseChildShell`，`DELETE /api/shells/{id}`）**：从 live map、shell history snapshot 中彻底删除，不留记录。
+3. 只有自然退出、归档或 transport 异常断线的 shell，才会保留元数据供 DEAD/只读/归档视图使用。
 4. Session 转为 `exited` 后不能创建新 shell；显式 `DELETE` 才释放对象、buffer、transport 并从 registry 移除。`exited` 只由 terminate/disconnect/transport 断线/shutdown 产生，永远不由 shell 生命周期产生。
+5. **传输隔离与连接池**：
+   - 普通会话（Session）各拥有独立的 SSH 传输，互不共享 client；同一主机的会话断线不会影响其他会话。
+   - `Manager.AcquireTransport`（`TransportPool`）仅为无会话的一次性指令借用（如 `run use:<host>`、`read use:<host>`）。
+   - 扩展层（Extensions）由 `Reconciler` 基于 `groupKey`（目标主机 + 权限白名单）单例共享 Session，在内部按需分配独立 channel。
 
 **exitOnce / closeOnce 保证**：无论是进程自然退出还是 terminate/手动关闭触发，状态转换和 Done channel 都只执行一次；手动关闭与自然退出并发时，关闭标记优先，避免 shell 被重新写回历史快照。
 

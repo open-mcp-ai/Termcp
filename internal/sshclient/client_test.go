@@ -360,3 +360,61 @@ func TestStartWithConfigCancelDuringHandshake(t *testing.T) {
 		t.Errorf("cancel took %v; the socket was not closed, so the handshake ran to its own timeout", elapsed)
 	}
 }
+
+// TestWriteStdinGivesUpWhenAnotherWriteStalls pins that stdin writes do not queue
+// behind a stuck network write forever (issue #219).
+//
+// The token is the right to write; a write that blocked in x/crypto holds it, and a
+// second caller must be told so rather than parked. Without the bound, a peer that
+// stopped reading its socket took every later input on the channel with it — and,
+// because teardown also closed stdin under the same mutex, the close path too.
+func TestWriteStdinGivesUpWhenAnotherWriteStalls(t *testing.T) {
+	es := BareClient(nil, false, nil)
+	// Take the token and never return it: this is what a write stuck in the kernel
+	// looks like from the outside.
+	if err := es.acquireStdin(time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	err := es.acquireStdin(150 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a second writer got the token while a stuck write still held it")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("the second writer waited %v; it must be bounded", elapsed)
+	}
+	if !strings.Contains(err.Error(), "not queueing behind it") {
+		t.Fatalf("the refusal does not say what happened: %v", err)
+	}
+}
+
+// TestCloseStdinDoesNotQueueBehindAStuckWrite pins the teardown half of the same
+// bug: a close that waits for a stuck write is a close that never happens, and that
+// is what made the whole close path unresponsive (issue #218 through this door).
+func TestCloseStdinDoesNotQueueBehindAStuckWrite(t *testing.T) {
+	es := BareClient(nil, false, nil)
+	es.Stdin = nopWriteCloser{}
+	// Hold the token, as a stuck write does.
+	if err := es.acquireStdin(time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		es.closeStdin()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closeStdin blocked on the token a stuck write is holding")
+	}
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(b []byte) (int, error) { return len(b), nil }
+func (nopWriteCloser) Close() error                { return nil }

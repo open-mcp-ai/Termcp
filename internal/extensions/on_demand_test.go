@@ -22,7 +22,7 @@ import (
 // forward, which is what makes it on demand.
 func lazyExt(t *testing.T, r *Reconciler, name, idle string) *Extension {
 	t.Helper()
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = name
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -318,7 +318,7 @@ func TestIdleInstanceIsClosedAtTheWindow(t *testing.T) {
 // "idle" — so it is not on demand, and its connection is not a caller's to release.
 func TestResidentExtensionIsNotOnDemand(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "resident"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -341,8 +341,11 @@ func TestResidentExtensionIsNotOnDemand(t *testing.T) {
 // wrote "10 minutes" meant something and running with ten minutes instead of what
 // it wrote is the kind of help that hides a typo.
 func TestIdleTimeoutMustBeADuration(t *testing.T) {
-	for _, raw := range []string{"10 minutes", "-5m", "0"} {
-		ext := Preset(KindMCP)
+	// "0" is NOT in this list: it is the word for "no idle collection" (issue #227),
+	// the same one the daemon's --idle-timeout uses. It is covered by
+	// TestExtensionIdleTimeoutZeroDisablesCollectionPinsIssue227.
+	for _, raw := range []string{"10 minutes", "-5m"} {
+		ext := Extension{Mode: "pipe"}
 		ext.Name = "bad"
 		ext.Target = "internal"
 		ext.Command = testShellCommand()
@@ -352,7 +355,7 @@ func TestIdleTimeoutMustBeADuration(t *testing.T) {
 			t.Errorf("idle_timeout %q should be refused", raw)
 		}
 	}
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "ok"
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
@@ -373,7 +376,7 @@ func TestIdleTimeoutMustBeADuration(t *testing.T) {
 // JSON-RPC frame into an empty stream (dogfood on #183).
 func TestABrokenProgramIsNotOfferedAsAvailable(t *testing.T) {
 	r := startReconciler(t)
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	ext.Name = "bad"
 	ext.Target = "internal"
 	ext.Command = "nosuchprogram-xyz"
@@ -455,5 +458,80 @@ func TestDrivingAChannelResetsTheReportedSilence(t *testing.T) {
 	}
 	if after.IdleForMs > 150 {
 		t.Errorf("driving the channel left the reported silence at %d ms (was %d)", after.IdleForMs, before.IdleForMs)
+	}
+}
+
+// TestStatusReportsTheNewestInstancePinsIssue230 pins that repeated asks for an
+// on-demand extension report the newest instance in Status/snapshot rather than
+// sticking to the first one (issue #230).
+func TestStatusReportsTheNewestInstancePinsIssue230(t *testing.T) {
+	r := startReconciler(t)
+	lazyExt(t, r, "multichannel", "10m")
+
+	first, err := r.Acquire("multichannel", 10*time.Second)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	second, err := r.Acquire("multichannel", 10*time.Second)
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+
+	if first.ShellID == second.ShellID {
+		t.Fatal("every ask must get its own channel, got the same shell_id twice")
+	}
+
+	current, ok := r.Status("multichannel")
+	if !ok {
+		t.Fatal("extension disappeared from status")
+	}
+
+	if current.ShellID != second.ShellID {
+		t.Fatalf("Status().ShellID = %q, want newest instance %q (issue #230: old code returned the first instance %q)",
+			current.ShellID, second.ShellID, first.ShellID)
+	}
+	if current.Instances != 2 {
+		t.Fatalf("Instances = %d, want 2", current.Instances)
+	}
+}
+
+// TestExtensionIdleTimeoutZeroDisablesCollectionPinsIssue227 pins that
+// idle_timeout = "0" is accepted by configuration validation and prevents instances
+// from ever being collected for silence (issue #227).
+func TestExtensionIdleTimeoutZeroDisablesCollectionPinsIssue227(t *testing.T) {
+	r := startReconciler(t)
+
+	// 1. Negative is still rejected.
+	neg := &Extension{Name: "neg", Target: "internal", IdleTimeout: "-5s"}
+	if _, err := neg.IdleTimeoutDuration(); err == nil {
+		t.Fatal("negative idle_timeout should be rejected")
+	}
+
+	// 2. Zero is accepted as "no idle collection".
+	zero := &Extension{Name: "forever", Target: "internal", IdleTimeout: "0"}
+	dur, err := zero.IdleTimeoutDuration()
+	if err != nil {
+		t.Fatalf("idle_timeout=0 should be accepted, got: %v", err)
+	}
+	if dur != 0 {
+		t.Fatalf("expected duration 0, got %v", dur)
+	}
+
+	// 3. Runtime verification: instances are NEVER reaped when limit <= 0.
+	lazyExt(t, r, "forever", "0")
+	inst, err := r.Acquire("forever", 10*time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	st := r.state("forever")
+	// Sweep with limit = 0: must return 0 reaped.
+	if reaped := r.reapDue("forever", st, 0); reaped != 0 {
+		t.Fatalf("reapDue with limit=0 reaped %d instances, want 0", reaped)
+	}
+
+	current, ok := r.Status("forever")
+	if !ok || current.Instances != 1 || current.ShellID != inst.ShellID {
+		t.Fatalf("instance was reaped despite idle_timeout=0: %+v", current)
 	}
 }

@@ -61,6 +61,18 @@
   }
   .session-tab .session-tab-review[hidden] { display: none; }
   .session-tab.has-review { border-color: var(--term-danger); }
+  /* How many panels this session is spread across (a channel tab dragged out gets
+     its own). Neutral rather than alarming: it is a place count, not a state to act
+     on, and the rows behind the press are what it promises. Hidden for the ordinary
+     one-window session — the chip exists to say "this press will ask you a
+     question". */
+  .session-tab .session-tab-panels {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 14px; height: 14px; padding: 0 3px; flex-shrink: 0;
+    border: 1px solid var(--term-border-2); border-radius: 3px;
+    color: var(--term-fg-muted); font-size: 9px; font-weight: 600; line-height: 12px;
+  }
+  .session-tab .session-tab-panels[hidden] { display: none; }
   /* ---- pane workspace (tiled mode) ---- */
   /* The tiled layer starts below the page header, not at the viewport top: the
      header is page chrome (the wordmark, the docs/language links) and a full grid
@@ -91,6 +103,11 @@
   .shell-window.win-minimized { display: none !important; }
   .session-tabbar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
   .session-tabbar-toggle:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+  /* A key that cannot act yet still wears its shape: `.ext-key:disabled` is the page's
+     contract for that state, and this cluster has its own anatomy, so it repeats the
+     same two facts — reduced contrast, no hover lift — rather than disappearing. */
+  .session-tabbar-toggle:disabled { opacity: .55; cursor: default; color: var(--term-fg-muted); border-color: var(--term-border-2); }
+  .session-tabbar-toggle:disabled:hover { color: var(--term-fg-muted); border-color: var(--term-border-2); }
   /* ---- Batch keys on the dock ------------------------------------------------
      Two rows is what made room for these: the tabs keep row 1 to themselves, and
      row 2 holds the batch verbs at its left end and the window controls at its
@@ -587,6 +604,15 @@
     transition: background .1s, color .1s;
   }
   .shell-channel-tab:hover { background: var(--term-hover); color: var(--term-fg); }
+  /* The tab is a drag handle (its channel can be given a panel of its own), so the
+     pointer says so before the press instead of after the drag. */
+  .shell-channel-tab[draggable="true"] { cursor: grab; }
+  .shell-channel-tab[draggable="true"]:active { cursor: grabbing; }
+  /* A window that will accept the dragged channel: a ring on its own edge, so the
+     target is obvious without the box moving, the glass shadow being replaced or
+     the terminal refitting. */
+  .shell-window.channel-drop-target { outline: 2px solid var(--term-accent); outline-offset: -2px; }
+  .shell-window.channel-drop-target .shell-channel-tabs { background: var(--term-hover); }
   .shell-channel-tab:focus-visible { outline: 2px solid var(--term-accent); outline-offset: -2px; z-index: var(--z-focus-lift); }
   .shell-channel-tab.active { background: var(--term-bg); color: var(--term-fg-soft-2); border-top: 2px solid var(--term-accent); }
   .shell-channel-tab-label {

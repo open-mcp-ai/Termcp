@@ -126,13 +126,23 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 // peer writes) are skipped by the trim in firstMCPMessage, and the offset advances
 // over them too, so a resumed read starts at the next '{'.
 func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, handle string, win termArgs) envelope.Slot {
-	// ONE READER AT A TIME, FOR THE WHOLE READ (#183). The lock spans the poll loop
+	// ONE READER AT A TIME, FOR THE WHOLE READ (#183). The gate spans the poll loop
 	// because that is where the duplication happens: two readers that both start
 	// before the frame arrives both find it. It is held across the recursive call's
 	// setup but NOT across the recursion itself, which re-enters here.
+	//
+	// ACQUIRED WITH A DOOR (issue #224). A mutex here meant a second recv on the same
+	// handle could not leave when its own window expired: it waited out the first
+	// caller's whole poll loop. The token is a one-slot channel so the waiter can
+	// select against ctx.Done() and report its own deadline instead.
 	reader := s.recvReader(handle)
-	reader.Lock()
-	defer reader.Unlock()
+	select {
+	case <-reader:
+	case <-ctx.Done():
+		return noContentSaying(map[string]string{"Path": stmt.Path},
+			"another reader on this channel is still inside its own window; this call gave up waiting for it")
+	}
+	defer func() { reader <- struct{}{} }()
 	for {
 		slot, readAgain := s.mcpRecvFrameOnce(ctx, stmt, handle, win)
 		if !readAgain {
@@ -152,8 +162,16 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 	// A whole frame has to fit the window, or a single large reply could never be
 	// delivered: the window is a cap on what one recv will consider, not a
 	// statement about how long a frame may be.
-	window := defaultBytesLimit
-	if window < minRecvWindow {
+	//
+	// THE CALLER'S bytes_limit IS THE WINDOW (issue #229). This used to be the
+	// constant defaultBytesLimit raised to minRecvWindow — a hard 1 MiB wall with no
+	// knob — so an MCP server returning a base64 screenshot answered 413 forever: no
+	// cursor could page inside a frame, and both `read --frame` and `call` went
+	// through here. `minRecvWindow` is now a FLOOR, not the answer, and bytes_limit
+	// is documented as having no upper bound because the caller is the party that
+	// pays for what lands in its context.
+	window := win.BytesLimit
+	if !win.BytesLimitSet || window < minRecvWindow {
 		window = minRecvWindow
 	}
 	// POLL, BECAUSE THE READ ITSELF DOES NOT WAIT FOR AN OFFSETTED WINDOW.
@@ -440,46 +458,55 @@ const minRecvWindow = 1 << 20
 // Keyed by handle without the server's own offset bookkeeping: two callers reading
 // the same channel is a race the protocol does not describe, and serialising here
 // means neither silently loses a frame to the other's window.
-// recvReader returns the mutex that makes one handle's frames have one reader at a
-// time, creating it on first use.
-func (s *Server) recvReader(handle string) *sync.Mutex {
-	s.recvCursorMu.Lock()
-	defer s.recvCursorMu.Unlock()
-	if s.recvReaders == nil {
-		s.recvReaders = make(map[string]*sync.Mutex)
+//
+// recvReader returns the one-token gate that gives a handle one reader at a time,
+// creating it on first use. The token is in the channel when the gate is free.
+func (s *Server) recvReader(handle string) chan struct{} {
+	if v, ok := s.recvReaders.Load(handle); ok {
+		return v.(chan struct{})
 	}
-	m, ok := s.recvReaders[handle]
-	if !ok {
-		m = &sync.Mutex{}
-		s.recvReaders[handle] = m
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	actual, _ := s.recvReaders.LoadOrStore(handle, tok)
+	return actual.(chan struct{})
+}
+
+// lineLock returns the mutex that makes one channel's writes land as whole lines,
+// creating it on first use.
+//
+// THE UNIT IS A LINE, not a write: `run` sends the text and the enter that ends it as
+// two calls, and two runs interleaving there produce a stream no line reader can
+// parse (issue #212). Callers hold this across both writes and release it before
+// waiting for output.
+func (s *Server) lineLock(handle string) *sync.Mutex {
+	if v, ok := s.lineLocks.Load(handle); ok {
+		return v.(*sync.Mutex)
 	}
-	return m
+	m := &sync.Mutex{}
+	actual, _ := s.lineLocks.LoadOrStore(handle, m)
+	return actual.(*sync.Mutex)
 }
 
 func (s *Server) recvCursor(handle string) int64 {
-	s.recvCursorMu.Lock()
-	defer s.recvCursorMu.Unlock()
-	return s.recvCursors[handle]
+	v, ok := s.recvCursors.Load(handle)
+	if !ok {
+		return 0
+	}
+	n, _ := v.(int64)
+	return n
 }
 
 // dropRecvCursor forgets a closed handle's read position.
 func (s *Server) dropRecvCursor(handle string) {
-	s.recvCursorMu.Lock()
-	defer s.recvCursorMu.Unlock()
-	delete(s.recvCursors, handle)
-	// The reader lock goes too: handles are minted monotonically, so a reopened
+	s.recvCursors.Delete(handle)
+	// The reader gate goes too: handles are minted monotonically, so a reopened
 	// channel never reuses this key and the map would grow by one entry per channel
 	// the process ever opened.
-	delete(s.recvReaders, handle)
+	s.recvReaders.Delete(handle)
 }
 
 func (s *Server) setRecvCursor(handle string, at int64) {
-	s.recvCursorMu.Lock()
-	defer s.recvCursorMu.Unlock()
-	if s.recvCursors == nil {
-		s.recvCursors = make(map[string]int64)
-	}
-	s.recvCursors[handle] = at
+	s.recvCursors.Store(handle, at)
 }
 
 // notAFrame says what the buffer holds when nothing in it parsed as a value, so a
@@ -647,16 +674,14 @@ func isSyntaxEOF(err error) bool {
 // such reader, and a position that is not kept anywhere is a default read that
 // replays the same bytes forever (#159 C1).
 func (s *Server) closedReadCursor(key string) int64 {
-	s.closedReadMu.Lock()
-	defer s.closedReadMu.Unlock()
-	return s.closedReads[key]
+	v, ok := s.closedReads.Load(key)
+	if !ok {
+		return 0
+	}
+	n, _ := v.(int64)
+	return n
 }
 
 func (s *Server) setClosedReadCursor(key string, at int64) {
-	s.closedReadMu.Lock()
-	defer s.closedReadMu.Unlock()
-	if s.closedReads == nil {
-		s.closedReads = make(map[string]int64)
-	}
-	s.closedReads[key] = at
+	s.closedReads.Store(key, at)
 }

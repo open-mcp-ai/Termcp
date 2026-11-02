@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -19,39 +20,7 @@ import (
 // restart is retry's other name, and the one a caller looks for: the action rebuilds
 // a session, which is what "restart" means and what "retry" only implies. Both are
 // accepted so neither entrance has to know which word the other one chose.
-var extensionActions = []string{"list", "get", "use", "release", "create", "update", "delete", "retry", "restart"}
-
-// extensionToolDescription is the extension surface in one paragraph. The tool
-// is the only place an agent hears about extensions, so it has to carry both
-// halves: what the layer is, and how a listed extension is actually driven.
-const extensionToolDescription = `Extensions: named, pinned sessions whose capabilities are trimmed to what their template allows — an MCP server driven over a pipe shell, a read-only window onto remote files, or an interactive terminal with instructions attached. Every enabled extension on a host shares one connection with the others that were granted the same capabilities, each driving its own shell_id in it.
-
-action=list returns every extension with its status and, when available, the session_id/shell_id you drive it through — several extensions can report the same session_id, so address work by shell_id. An extension that declares no forward is STARTED ON DEMAND: its status is "idle" until something asks for it, and action=use is the ask — it brings the extension up and returns the handles. open ext <name> Nothing else starts one, and an instance nothing uses for its idle_timeout is closed again (the handles you were holding then answer with what happened to them). action=get returns one template in full, including the notes that are its operating instructions: read them before first use, they are the extension's own documentation. create and update author templates: kind + target is enough to start, every other field is an override, an omitted field keeps its stored value and an empty array clears it. An MCP template names either command/args (a stdio server to run) or url (an HTTP endpoint to relay, with headers) — the two are alternatives. delete removes a template (and the connection it kept warm, when nothing else is left on it). retry asks termcp to reconnect an unavailable extension now instead of waiting out its backoff.
-
-An available extension is an ordinary session: call the run and read directives (or file --action read / --action stat) against its handles. A call the template did not whitelist is genuinely refused — the refusal is the template doing its job, not a bug. Extension sessions are infrastructure: they are not listed by session_list and are never terminated or deleted by hand, so never terminate or delete them. A template that declares a forward is not on demand: a listener has no caller to start it, so it comes up with termcp and stays up. If an extension has died, it reports unavailable and is restarted — wait for it, then take the new handle from action=use or action=list.`
-
-// extensionForwardItems is the items schema for the forwards array. mcp-go has
-// no array-of-object helper, so the property built by WithArray is widened here;
-// the shape mirrors ForwardDecl field for field.
-func extensionForwardItems() mcpgo.ToolOption {
-	return func(t *mcpgo.Tool) {
-		prop, ok := t.InputSchema.Properties["forwards"].(map[string]any)
-		if !ok {
-			return
-		}
-		prop["items"] = map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"kind":        map[string]any{"type": "string", "enum": []string{"dynamic", "local", "remote"}},
-				"local_host":  map[string]any{"type": "string"},
-				"local_port":  map[string]any{"type": "integer", "description": "dynamic/local: termcp's listen port, 0 = picked at runtime. remote: the target's listen port"},
-				"remote_host": map[string]any{"type": "string", "description": "local: host the target dials (default localhost). remote: required"},
-				"remote_port": map[string]any{"type": "integer", "description": "local/remote: the port a connection is carried to"},
-			},
-			"additionalProperties": false,
-		}
-	}
-}
+var extensionActions = []string{"list", "get", "use", "release", "create", "update", "set", "delete", "retry", "restart"}
 
 // handleExtensionOps is the whole extension surface in one tool, after the
 // ssh_config pattern: an agent lists, reads one template's detail (including
@@ -77,6 +46,8 @@ func (s *Server) handleExtensionOps(ctx context.Context, request mcpgo.CallToolR
 		return s.handleExtensionCreate(ctx, request)
 	case "update":
 		return s.handleExtensionUpdate(ctx, request)
+	case "set":
+		return s.handleExtensionSet(ctx, request)
 	case "delete":
 		return s.handleExtensionDelete(ctx, request)
 	case "retry", "restart":
@@ -101,14 +72,22 @@ func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallTool
 		entry := map[string]any{"name": name}
 		if err == nil {
 			entry["name"] = ext.Name
-			entry["kind"] = ext.Kind
 			entry["target"] = ext.Target
+			if targets := ext.Targets; len(targets) > 0 {
+				entry["targets"] = targets
+			}
 			entry["description"] = ext.Description
 			entry["enabled"] = ext.IsEnabled()
+		} else if missing, mErr := s.extensions.Store().Missing(name); mErr == nil && len(missing) > 0 {
+			// AN INSTALLED TEMPLATE WITH UNFILLED HOLES IS NOT A BROKEN ONE. It is
+			// waiting for this installation's values, which a caller can act on — and the
+			// difference between "needs targets" and "cannot parse" is the difference
+			// between filling something in and repairing a file.
+			entry["needs"] = missing
 		}
 		// A file that no longer parses is still listed, with the failure the
 		// reconciler recorded on it: the status explains the rest.
-		extensionRuntimeFields(entry, st, false)
+		s.extensionRuntimeFields(entry, st, false)
 		out = append(out, entry)
 	}
 	b, err := json.Marshal(map[string]any{"extensions": out})
@@ -127,13 +106,24 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
+	// GET SERVES THE HOLES TOO, not only the rendered extension: an agent that has to
+	// fill in a value needs to see what is being asked for, and a template whose holes
+	// are unfilled has nothing to render yet.
 	ext, err := s.extensions.Store().Load(name)
 	if err != nil {
+		if missing, mErr := s.extensions.Store().Missing(name); mErr == nil && len(missing) > 0 {
+			holes, _ := s.extensions.Store().Holes(name)
+			b, _ := json.Marshal(map[string]any{"name": name, "needs": missing, "holes": holes})
+			return mcpgo.NewToolResultText(string(b)), nil
+		}
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
 	entry := extensionConfigMap(ext)
+	if holes, hErr := s.extensions.Store().Holes(name); hErr == nil && len(holes) > 0 {
+		entry["holes"] = holes
+	}
 	st, _ := s.extensions.Status(name)
-	extensionRuntimeFields(entry, st, true)
+	s.extensionRuntimeFields(entry, st, true)
 	b, err := json.Marshal(entry)
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension: %s", err), nil
@@ -141,9 +131,9 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 	return mcpgo.NewToolResultText(string(b)), nil
 }
 
-// handleExtensionCreate stores a new template. Fields an author leaves out are
-// filled from the kind's preset, so kind + target is enough for a working
-// extension and everything else is an override.
+// handleExtensionCreate stores a template document or authors one from its fields.
+// A template's declared shape is its behavior; an unfilled package can be installed
+// first and completed later with action=set.
 func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
@@ -157,12 +147,20 @@ func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallTo
 	if taken, loadable := s.extensions.Store().NameState(name); taken && loadable {
 		return toolError(CodeConflict, "extension %q already exists; use action=update to change it", name), nil
 	}
-	ext := extensions.Preset(getString(args, "kind", extensions.KindCustom))
+	// A DOCUMENT PLUS VALUES, or the field arguments — one create covers both. A
+	// package is installed as `template` (the TOML a repository ships, holes and all)
+	// plus the `values` this installation fills in; a one-off is created by naming
+	// fields. Neither is a special case of the other, so both are accepted and the
+	// document wins when it is present.
+	if doc, ok := templateArg(args); ok {
+		return s.createExtensionFromTemplate(name, doc, valuesArg(args))
+	}
+	ext := extensions.Extension{}
 	ext.Name = name
 	if err := extensions.ApplyArgs(&ext, args, false); err != nil {
 		return extensionSaveError(err), nil
 	}
-	if err := extensions.SaveTemplate(s.extensions.Store(), &ext); err != nil {
+	if err := extensions.SaveStruct(s.extensions.Store(), &ext); err != nil {
 		return extensionSaveError(err), nil
 	}
 	return extensionSaved(s, &ext)
@@ -178,17 +176,133 @@ func (s *Server) handleExtensionUpdate(ctx context.Context, request mcpgo.CallTo
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
+	if doc, ok := templateArg(args); ok {
+		if err := s.extensions.Store().SaveTemplate(name, []byte(doc)); err != nil {
+			return extensionSaveError(err), nil
+		}
+		if set := valuesArg(args); len(set) > 0 {
+			if err := s.extensions.Store().SetValues(name, set); err != nil {
+				return extensionSaveError(err), nil
+			}
+		}
+		return s.extensionAfterWrite(name)
+	}
 	ext, err := s.extensions.Store().Load(name)
 	if err != nil {
+		if missing, mErr := s.extensions.Store().Missing(name); mErr == nil && len(missing) > 0 {
+			return toolError(CodeConflict,
+				"extension %q is installed but still needs %s: send action=set with values, or action=update with a template",
+				name, strings.Join(missing, ", ")), nil
+		}
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
 	if err := extensions.ApplyArgs(ext, args, true); err != nil {
 		return extensionSaveError(err), nil
 	}
-	if err := extensions.SaveTemplate(s.extensions.Store(), ext); err != nil {
+	if err := extensions.SaveStruct(s.extensions.Store(), ext); err != nil {
 		return extensionSaveError(err), nil
 	}
 	return extensionSaved(s, ext)
+}
+
+// handleExtensionSet fills the holes a template asks for.
+//
+// THIS IS THE INSTALLATION STEP. A package arrives with a recipe and no values; this
+// call is what turns it into an extension on this machine. The values are keyed by
+// hole name, so a caller never has to know where or how they are stored — and a value
+// for a hole the template does not have is refused rather than filed away where
+// nothing will read it.
+func (s *Server) handleExtensionSet(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := request.GetArguments()
+	name := strings.TrimSpace(getString(args, "name", ""))
+	if name == "" {
+		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
+	}
+	set := valuesArg(args)
+	if len(set) == 0 {
+		return toolError(CodeInvalidArgument,
+			"set needs values: send a `values` object keyed by hole name (action=get reports what this extension asks for)"), nil
+	}
+	if err := s.extensions.Store().SetValues(name, set); err != nil {
+		var notApplied *extensions.NotApplied
+		if !errors.As(err, &notApplied) {
+			return extensionSaveError(err), nil
+		}
+	}
+	return s.extensionAfterWrite(name)
+}
+
+// createExtensionFromTemplate installs a document: the template first, then the
+// values. It does NOT fail when the values do not cover every hole — that is the
+// installed-but-unset state a caller is expected to finish, and the answer says which
+// holes remain.
+func (s *Server) createExtensionFromTemplate(name, doc string, values map[string]any) (*mcpgo.CallToolResult, error) {
+	if err := s.extensions.Store().SaveTemplate(name, []byte(doc)); err != nil {
+		return extensionSaveError(err), nil
+	}
+	if len(values) > 0 {
+		if err := s.extensions.Store().SetValues(name, values); err != nil {
+			return extensionSaveError(err), nil
+		}
+	}
+	return s.extensionAfterWrite(name)
+}
+
+// extensionAfterWrite answers with the extension as it now stands, or with what it
+// still needs. A write that leaves holes unfilled has SUCCEEDED — the recipe is
+// stored — so reporting a failure would be wrong, and reporting plain success would
+// leave the caller thinking it can be used.
+func (s *Server) extensionAfterWrite(name string) (*mcpgo.CallToolResult, error) {
+	holes, _ := s.extensions.Store().Holes(name)
+	missing, _ := s.extensions.Store().Missing(name)
+	ext, err := s.extensions.Store().Load(name)
+	if err != nil {
+		entry := map[string]any{"name": name, "stored": true, "holes": holes}
+		if len(missing) > 0 {
+			entry["needs"] = missing
+			entry["next"] = "fill them with action=set values={...}"
+		} else {
+			entry["error"] = err.Error()
+		}
+		b, _ := json.Marshal(entry)
+		return mcpgo.NewToolResultText(string(b)), nil
+	}
+	entry := extensionConfigMap(ext)
+	entry["holes"] = holes
+	st, _ := s.extensions.Status(name)
+	s.extensionRuntimeFields(entry, st, false)
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return toolError(CodeInternalError, "encoding extension: %s", err), nil
+	}
+	return mcpgo.NewToolResultText(string(b)), nil
+}
+
+// templateArg reads a TOML template document from the arguments.
+func templateArg(args map[string]any) (string, bool) {
+	v, ok := args["template"]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	return s, s != ""
+}
+
+// valuesArg reads the hole values a caller is setting.
+func valuesArg(args map[string]any) map[string]any {
+	v, ok := args["values"]
+	if !ok {
+		return nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
 }
 
 // handleExtensionDelete removes a template and, with it, the session the
@@ -229,12 +343,16 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 	// The wait is a bound on the caller's patience, not on the dial: a host that is
 	// slow to answer returns `probing` with what the caller should poll, rather
 	// than a failure it would have to guess was not one.
-	st, err := s.extensions.Acquire(name, extensionUseBudget)
+	target := strings.TrimSpace(getString(args, "target", ""))
+	st, err := s.extensions.AcquireTarget(name, target, extensionUseBudget)
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
 	entry := extensionConfigMap(ext)
-	extensionRuntimeFields(entry, st, true)
+	if target != "" {
+		entry["target"] = target
+	}
+	s.extensionRuntimeFields(entry, st, true)
 	if st.Status == extensions.StatusIdle {
 		entry["status"] = extensions.StatusAvailable
 	}
@@ -259,8 +377,9 @@ func (s *Server) handleExtensionRelease(ctx context.Context, request mcpgo.CallT
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
+	target := strings.TrimSpace(getString(args, "target", ""))
 	shellID := strings.TrimSpace(getString(args, "shell_id", ""))
-	released, err := s.extensions.Release(name, shellID)
+	released, err := s.extensions.ReleaseTarget(name, target, shellID)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "releasing extension %q: %s", name, err), nil
 	}
@@ -293,7 +412,7 @@ func (s *Server) handleExtensionRetry(ctx context.Context, request mcpgo.CallToo
 	if _, err := s.extensions.Store().Load(name); err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
-	if err := s.extensions.Retry(name); err != nil {
+	if err := s.extensions.RetryTarget(name, strings.TrimSpace(getString(args, "target", ""))); err != nil {
 		return toolError(CodeOperationFailed, "retrying extension %q: %s", name, err), nil
 	}
 	return successResult(), nil
@@ -331,7 +450,6 @@ func extensionSaved(s *Server, ext *extensions.Extension) (*mcpgo.CallToolResult
 func extensionConfigMap(ext *extensions.Extension) map[string]any {
 	entry := map[string]any{
 		"name":        ext.Name,
-		"kind":        ext.Kind,
 		"target":      ext.Target,
 		"description": ext.Description,
 		"enabled":     ext.IsEnabled(),
@@ -358,6 +476,9 @@ func extensionConfigMap(ext *extensions.Extension) map[string]any {
 	}
 	if len(ext.Forwards) > 0 {
 		entry["forwards"] = ext.Forwards
+	}
+	if len(ext.Targets) > 0 {
+		entry["targets"] = ext.Targets
 	}
 	return entry
 }
@@ -408,7 +529,7 @@ func extensionStatusWord(name string, st extensions.Status, enabled bool) (word,
 // attempt. The list and get surfaces differ only in how much of the failure
 // history they carry — the list keeps the latest reason, get keeps the history —
 // so everything they share is written once, here.
-func extensionRuntimeFields(entry map[string]any, st extensions.Status, withHistory bool) {
+func (s *Server) extensionRuntimeFields(entry map[string]any, st extensions.Status, withHistory bool) {
 	enabled, _ := entry["enabled"].(bool)
 	name, _ := entry["name"].(string)
 	status, next := extensionStatusWord(name, st, enabled)
@@ -421,6 +542,18 @@ func extensionRuntimeFields(entry map[string]any, st extensions.Status, withHist
 	}
 	if st.ShellID != "" {
 		entry["shell_id"] = st.ShellID
+		// THE INDEX IS A FACT THE SESSION MANAGER OWNS (issue #211). An extension
+		// restarted by the reconciler takes the next index on the shared connection
+		// (`:2`, `:3`), and leaving it off made the open envelope invent `:1` from
+		// nowhere — right by accident for the first channel, and a guaranteed 404
+		// once the instance had been rebuilt.
+		if s.sessMgr != nil {
+			if cs, bad := s.requireShell(st.ShellID); bad == nil && cs != nil {
+				if idx := cs.Info().Index; idx > 0 {
+					entry["index"] = float64(idx)
+				}
+			}
+		}
 	}
 	if st.Lazy {
 		// HOW LONG IT HAS BEEN IDLE, AND HOW LONG IT HAS LEFT. Both are facts the
@@ -445,6 +578,9 @@ func extensionRuntimeFields(entry map[string]any, st extensions.Status, withHist
 	}
 	if len(st.Forwards) > 0 {
 		entry["forwards"] = st.Forwards
+	}
+	if len(st.Targets) > 0 {
+		entry["targets_status"] = st.Targets
 	}
 	if n := len(st.Failures); n > 0 {
 		switch {

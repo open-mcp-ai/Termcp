@@ -7,7 +7,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -28,10 +27,22 @@ type ExecSession struct {
 	err          error
 	ownClient    bool // if false, Close() does not close the underlying SSH client
 	extraClosers []io.Closer
-	// stdinMu serializes stdin writes with stdin teardown. x/crypto's channel
-	// does not tolerate a concurrent Write and CloseWrite (they race on the
-	// channel's EOF flag), and teardown can happen at any time.
-	stdinMu sync.Mutex
+	// stdinTok is the right to touch stdin, held as ONE TOKEN rather than a mutex.
+	//
+	// x/crypto's channel does not tolerate a concurrent Write and CloseWrite (they
+	// race on the channel's EOF flag), so the two must not overlap — but a mutex made
+	// the WAIT unbounded: a write to a peer that stopped reading never returns, and
+	// every later write, plus the stdin close on every teardown path, queued behind it
+	// forever (issue #219). A one-slot channel is the same mutual exclusion with a
+	// door: whoever wants the token can give up, and teardown can decide not to wait.
+	stdinTok chan struct{}
+}
+
+// newStdinToken builds the one-token channel with its token already in place.
+func newStdinToken() chan struct{} {
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	return tok
 }
 
 func closeIfCloser(r io.Reader) {
@@ -259,6 +270,7 @@ func BareClient(client *ssh.Client, ownClient bool, closers []io.Closer) *ExecSe
 		ownClient:    ownClient,
 		extraClosers: closers,
 		done:         make(chan struct{}),
+		stdinTok:     newStdinToken(),
 	}
 }
 
@@ -304,9 +316,50 @@ func (es *ExecSession) ResizePty(rows, cols int) error {
 // WriteStdin writes to the process stdin. Safe to race with Close/termination:
 // the write is serialized with the stdin teardown.
 func (es *ExecSession) WriteStdin(data []byte) (int, error) {
-	es.stdinMu.Lock()
-	defer es.stdinMu.Unlock()
+	if err := es.acquireStdin(stdinBusyWait); err != nil {
+		return 0, err
+	}
+	defer es.releaseStdin()
 	return es.Stdin.Write(data)
+}
+
+// How long a caller waits for the right to write stdin, and how long teardown waits
+// for it before giving up.
+//
+// THE WAIT IS THE BUG, NOT ITS LENGTH. A write that never returns is the situation
+// these bounds exist for; what matters is that the caller gets an answer instead of
+// queueing behind it forever. Five seconds is far longer than any healthy write and
+// short enough that a caller sees the failure while it still has a context to report
+// it on.
+const (
+	stdinBusyWait  = 5 * time.Second
+	stdinCloseWait = 1 * time.Second
+)
+
+// acquireStdin takes the stdin token, giving up after wait.
+func (es *ExecSession) acquireStdin(wait time.Duration) error {
+	if es.stdinTok == nil {
+		return nil // a transport built outside the constructors: nothing to serialise
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-es.stdinTok:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("another write to this channel has not completed in %s, so the peer is probably "+
+			"not reading its socket; not queueing behind it", wait)
+	}
+}
+
+func (es *ExecSession) releaseStdin() {
+	if es.stdinTok == nil {
+		return
+	}
+	select {
+	case es.stdinTok <- struct{}{}:
+	default: // already returned
+	}
 }
 
 // Signal sends a signal to the remote process.
@@ -318,9 +371,18 @@ func (es *ExecSession) Signal(sig ssh.Signal) error {
 }
 
 // closeStdin closes the stdin pipe, serialized with in-flight writes.
+//
+// IT GIVES UP RATHER THAN WAITING FOREVER (issue #219). Skipping the close is safe
+// and is the whole point of the token: the caller of this function is a teardown
+// path, which closes the session and then the connection — that is what unblocks a
+// write stuck in the kernel, and it makes the stdin close redundant. What is NOT
+// safe is having teardown queue behind that write, because then a peer that stopped
+// reading takes the close path down with it.
 func (es *ExecSession) closeStdin() {
-	es.stdinMu.Lock()
-	defer es.stdinMu.Unlock()
+	if err := es.acquireStdin(stdinCloseWait); err != nil {
+		return
+	}
+	defer es.releaseStdin()
 	if es.Stdin == nil {
 		return
 	}

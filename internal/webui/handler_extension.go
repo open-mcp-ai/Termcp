@@ -11,13 +11,10 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
 
-// extensionSummary is one row of the right panel. It carries what a browser
-// needs to render the card without a second fetch: the template's shape, the
-// reconciler's verdict on it, and the handles an available extension is driven
-// through.
+// extensionSummary is one row of the right panel: its name, the reconciler's
+// verdict, and the holes a human on this installation still has to fill.
 type extensionSummary struct {
 	Name        string `json:"name"`
-	Kind        string `json:"kind"`
 	Target      string `json:"target"`
 	Description string `json:"description,omitempty"`
 	Enabled     bool   `json:"enabled"`
@@ -39,6 +36,18 @@ type extensionSummary struct {
 	// NextRetryMs is when the reconciler tries again (Unix ms), 0 = no retry
 	// scheduled. The panel renders it as a countdown for a human waiting on it.
 	NextRetryMs int64 `json:"next_retry_ms,omitempty"`
+	// Targets breaks a multi-host extension down per host. Empty for the common
+	// single-target template, whose fields are mirrored at the top level.
+	Targets      []extensions.TargetStatus `json:"targets,omitempty"`
+	HostCount    int                       `json:"host_count"`
+	ForwardCount int                       `json:"forward_count"`
+	// Holes is what the template still asks this installation for. A card with
+	// unfilled holes is not broken — it is installed and waiting — and the panel
+	// needs the two to look different, because one is a click and the other is a
+	// repair.
+	Holes []extensions.Hole `json:"holes,omitempty"`
+	// Needs is the names of the unfilled holes, for a compact badge.
+	Needs []string `json:"needs,omitempty"`
 }
 
 // summarizeExtension folds a template and its reconciler status into one panel
@@ -47,7 +56,6 @@ type extensionSummary struct {
 func summarizeExtension(ext *extensions.Extension, st extensions.Status) extensionSummary {
 	out := extensionSummary{
 		Name:        ext.Name,
-		Kind:        ext.Kind,
 		Target:      ext.Target,
 		Description: ext.Description,
 		Enabled:     ext.IsEnabled(),
@@ -57,6 +65,11 @@ func summarizeExtension(ext *extensions.Extension, st extensions.Status) extensi
 		ShellID:     st.ShellID,
 		Forwards:    st.Forwards,
 		NextRetryMs: st.NextRetry,
+		Targets:     st.Targets,
+	}
+	for _, target := range ext.EffectiveTargets() {
+		out.HostCount++
+		out.ForwardCount += len(target.Forwards)
 	}
 	// The failure is reported only while the extension is not up: it is the reason
 	// the reader is looking at a down card, and one that outlived its repair puts
@@ -90,18 +103,43 @@ func summarizeExtensions(r *extensions.Reconciler) []extensionSummary {
 		st, _ := r.Status(name)
 		ext, err := r.Store().Load(name)
 		if err != nil {
-			// A file that no longer parses has no template to read, so only the name
-			// and the reconciler's verdict are known. Enabled is reported as false
+			// A template that no longer parses has no extension to read, so only the
+			// name and the reconciler's verdict are known. Enabled is reported as false
 			// rather than true: the panel's toggle reads it, and a card that claims a
 			// broken template is enabled invites a click that cannot do anything.
-			rows = append(rows, extensionSummary{
+			row := extensionSummary{
 				Name:    name,
 				Enabled: false,
 				Status:  firstNonEmpty(st.Status, extensions.StatusUnavailable),
-			})
+			}
+			// AN INSTALLED TEMPLATE WAITING FOR VALUES IS NOT A BROKEN ONE. The
+			// difference is the whole installation story: one card needs a value typed
+			// in, the other needs a file repaired, and a panel that shows them the same
+			// way teaches neither.
+			if holes, hErr := r.Store().Holes(name); hErr == nil && len(holes) > 0 {
+				row.Holes = holes
+				for _, h := range holes {
+					if !h.Set {
+						row.Needs = append(row.Needs, h.Name)
+					}
+				}
+				if len(row.Needs) > 0 {
+					row.Status = extensions.StatusIdle
+				}
+			}
+			rows = append(rows, row)
 			continue
 		}
-		rows = append(rows, summarizeExtension(ext, st))
+		row := summarizeExtension(ext, st)
+		if holes, hErr := r.Store().Holes(name); hErr == nil && len(holes) > 0 {
+			row.Holes = holes
+			for _, h := range holes {
+				if !h.Set {
+					row.Needs = append(row.Needs, h.Name)
+				}
+			}
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -118,44 +156,114 @@ func (h *Handler) handleListExtensions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"extensions": rows})
 }
 
+func (h *Handler) handlePreviewExtension(w http.ResponseWriter, r *http.Request) {
+	if h.Extensions == nil {
+		http.Error(w, "extensions are not configured", http.StatusServiceUnavailable)
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "extension name is required", http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, extensions.MaxConfigSize+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body) > extensions.MaxConfigSize {
+		http.Error(w, "extension template too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	values, err := h.Extensions.Store().Values(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rendered, err := extensions.Render(body, values)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// VALIDATED THE WAY Load VALIDATES, so a preview cannot call something fine that
+	// the store will refuse the moment it is saved.
+	parsed, err := extensions.Parse(rendered)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	parsed.Name = name
+	parsed.Normalize()
+	if err := parsed.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
+	_, _ = w.Write(rendered)
+}
+
 func (h *Handler) handleGetExtension(w http.ResponseWriter, r *http.Request) {
 	if h.Extensions == nil {
 		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 	name := r.PathValue("name")
-	// The editor has two views of one template: the form (the JSON below, keyed the
-	// way the extension tool's own arguments are) and the file itself. The TOML view
-	// asks for the file, so what the author edits is byte for byte what the store
-	// holds — and what an export hands them.
+	// `format=toml` answers the TEMPLATE — the document with its holes — because that
+	// is what an author or a package writes. It is not the extension: the extension is
+	// the template plus this installation's values.
 	if r.URL.Query().Get("format") == "toml" {
-		raw, err := h.Extensions.Store().ReadRaw(name)
+		raw, err := h.Extensions.Store().Template(name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/toml; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
+		return
+	}
+	holes, holesErr := h.Extensions.Store().Holes(name)
+	if holesErr != nil {
+		http.NotFound(w, r)
 		return
 	}
 	ext, err := h.Extensions.Store().Load(name)
 	if err != nil {
+		// A template whose holes are unfilled still has a detail view: it is the view
+		// that says which holes are unfilled. Reporting 404 here would tell a reader the
+		// extension does not exist when the truth is that it needs one value.
+		var missing []string
+		for _, hole := range holes {
+			if !hole.Set {
+				missing = append(missing, hole.Name)
+			}
+		}
+		if len(missing) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"name":     name,
+				"holes":    holes,
+				"needs":    missing,
+				"status":   extensions.StatusIdle,
+				"template": "the template is stored and waiting for these values",
+			})
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
 	st, _ := h.Extensions.Status(name)
-	// The detail view serves the whole template, notes included: the panel's
-	// editor and the failure history both live behind this one call.
+	// The detail view serves the rendered extension AND the holes behind it: what an
+	// extension does, and what this installation supplied to make it do that.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"extension":     summarizeExtension(ext, st),
-		"kind":          ext.Kind,
+		"target":        ext.Target,
+		"targets":       ext.Targets,
 		"mode":          ext.Mode,
 		"command":       ext.Command,
 		"args":          ext.Args,
 		"allow":         ext.Allow,
 		"paths":         ext.Paths,
 		"notes":         ext.Notes,
+		"holes":         holes,
 		"failures":      st.Failures,
 		"forward_decls": ext.Forwards,
 	})
@@ -170,9 +278,9 @@ func firstNonEmpty(a, b string) string {
 
 /* The three authoring routes. They are the browser's half of the same authoring
    layer the MCP `extension` tool uses — both decode the author's fields into a
-   map, hand it to extensions.ApplyArgs, and persist through
-   extensions.SaveTemplate. A field an author omits keeps its stored value on
-   update and the preset's value on create; a field present but empty clears it.
+   map, hand it to extensions.ApplyArgs, and persist through the same Store this
+   tool writes. A field an author omits keeps its stored value on update and the
+   conventional default on create; a field present but empty clears it.
    That is the whole semantic contract, and because it lives in
    internal/extensions the two callers cannot drift apart on it. */
 
@@ -188,6 +296,13 @@ func readExtensionBody(w http.ResponseWriter, r *http.Request) (map[string]any, 
 	if len(body) > extensions.MaxConfigSize {
 		http.Error(w, "extension template too large", http.StatusRequestEntityTooLarge)
 		return nil, false
+	}
+	// A TOML body is the template itself, which is what the document view sends back.
+	// Two spellings of one route, because the two callers send different things: the
+	// panel sends a command (`{template, values}`), a person pasting a package sends
+	// the document.
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/toml") {
+		return map[string]any{"template": string(body)}, true
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return map[string]any{}, true
@@ -221,70 +336,9 @@ func bodyName(args map[string]any) (string, bool) {
 	return "", true
 }
 
-// bodyKind is the preset to start a create from; an absent or empty kind means a
-// custom template with no preset values of its own.
-func bodyKind(args map[string]any) string {
-	if v, ok := args["kind"]; ok {
-		if s, _ := v.(string); strings.TrimSpace(s) != "" {
-			return s
-		}
-	}
-	return extensions.KindCustom
-}
-
-// isTOMLRequest reports whether a write carries the file view of a template
-// rather than the form's fields. The editor's two views are two content types on
-// one route, so the same URL serves both and neither needs its own endpoint.
-func isTOMLRequest(r *http.Request) bool {
-	ct := strings.ToLower(r.Header.Get("Content-Type"))
-	return strings.HasPrefix(ct, "application/toml") || strings.HasPrefix(ct, "text/plain")
-}
-
-// readTemplateTOML reads the file view: the TOML a config.toml holds, named by the
-// caller. Nothing is defaulted — a hand-written document is taken literally, which
-// is what makes the file view honest: the panel's form fills preset values because
-// it starts from one, and a file you wrote does not silently gain fields.
-func readTemplateTOML(w http.ResponseWriter, r *http.Request, name string) (*extensions.Extension, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, extensions.MaxConfigSize+1))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return nil, false
-	}
-	if len(body) > extensions.MaxConfigSize {
-		http.Error(w, "extension template too large", http.StatusRequestEntityTooLarge)
-		return nil, false
-	}
-	ext, err := extensions.ParseTemplate(body, name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return nil, false
-	}
-	return ext, true
-}
-
 func (h *Handler) handleCreateExtension(w http.ResponseWriter, r *http.Request) {
 	if h.Extensions == nil {
 		http.Error(w, "extensions are not configured", http.StatusServiceUnavailable)
-		return
-	}
-	if isTOMLRequest(r) {
-		// A document has no place to put the storage name (the file is named by its
-		// directory), so a create carries it in the query — the editor's name field
-		// is what fills it.
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		if name == "" {
-			http.Error(w, "name is required", http.StatusBadRequest)
-			return
-		}
-		ext, ok := readTemplateTOML(w, r, name)
-		if !ok {
-			return
-		}
-		if taken, loadable := h.Extensions.Store().NameState(name); taken && loadable {
-			http.Error(w, "extension "+name+" already exists; use PUT to change it", http.StatusConflict)
-			return
-		}
-		h.saveExtensionTemplate(w, r, ext, http.StatusCreated)
 		return
 	}
 	args, ok := readExtensionBody(w, r)
@@ -297,6 +351,11 @@ func (h *Handler) handleCreateExtension(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if name == "" {
+		// A pasted document carries no name — a stored template is named by its
+		// directory — so the create route takes it from the query.
+		name = strings.TrimSpace(r.URL.Query().Get("name"))
+	}
+	if name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
@@ -304,37 +363,74 @@ func (h *Handler) handleCreateExtension(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "extension "+name+" already exists; use PUT to change it", http.StatusConflict)
 		return
 	}
-	ext := extensions.Preset(bodyKind(args))
+	if template, ok := args["template"].(string); ok && strings.TrimSpace(template) != "" {
+		if err := h.Extensions.Store().SaveTemplate(name, []byte(template)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if values, ok := args["values"].(map[string]any); ok && len(values) > 0 {
+			if !h.applyValues(w, name, values) {
+				return
+			}
+		}
+		h.writeExtensionAfterEdit(w, name, http.StatusCreated)
+		return
+	}
+	ext := extensions.Extension{}
 	ext.Name = name
 	if err := extensions.ApplyArgs(&ext, args, false); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.saveExtensionTemplate(w, r, &ext, http.StatusCreated)
-}
-
-// saveExtensionTemplate persists one template and answers with the same summary a
-// read would produce. Both views of the editor land here, so a template saved from
-// the form and one saved from the file go through identical validation and land as
-// the same bytes on disk.
-func (h *Handler) saveExtensionTemplate(w http.ResponseWriter, r *http.Request, ext *extensions.Extension, status int) {
-	if err := extensions.SaveTemplate(h.Extensions.Store(), ext); err != nil {
+	if err := extensions.SaveStruct(h.Extensions.Store(), &ext); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// SAVING FROM THE PANEL IS AN ASK (issue #183). An extension that declares no
-	// forward is not dialled until something asks for it, and a person who has just
-	// filled in the form and pressed save is asking: leaving them with a row that
-	// says `idle` and no button that means "start it" would be a panel that cannot
-	// do the one thing the form is for. A LIST is still passive — the panel polling
-	// the extension table must not dial anything.
-	//
-	// The wait is zero because this is a request handler: the ask is what matters,
-	// and the panel's next poll shows the outcome. A resident template ignores the
-	// ask's timing entirely — the walk brings it up.
-	_, _ = h.Extensions.Acquire(ext.Name, 0)
-	st, _ := h.Extensions.Status(ext.Name)
-	writeJSON(w, status, map[string]any{"extension": summarizeExtension(ext, st)})
+	h.writeExtensionAfterEdit(w, name, http.StatusCreated)
+}
+
+// applyValues stores a value set and answers the two failures differently.
+//
+// A REFUSED VALUE IS A 400 — it names a hole this template does not have, or a type
+// it cannot hold — and nothing was written. A value that IS stored but does not yet
+// render is not an error at all: the caller's input is the only copy of itself, so
+// it is kept and the row comes back with what is still missing. Collapsing the two
+// would either throw away a half-typed port or claim a typo was accepted.
+func (h *Handler) applyValues(w http.ResponseWriter, name string, values map[string]any) bool {
+	err := h.Extensions.Store().SetValues(name, values)
+	if err == nil {
+		return true
+	}
+	var notApplied *extensions.NotApplied
+	if errors.As(err, &notApplied) {
+		return true
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+	return false
+}
+
+// writeExtensionAfterEdit answers with either the running extension or the holes
+// it still needs. Installing a template before filling its holes is a successful
+// install, not a failed write.
+func (h *Handler) writeExtensionAfterEdit(w http.ResponseWriter, name string, status int) {
+	holes, _ := h.Extensions.Store().Holes(name)
+	missing, _ := h.Extensions.Store().Missing(name)
+	ext, err := h.Extensions.Store().Load(name)
+	if err != nil {
+		writeJSON(w, status, map[string]any{"name": name, "holes": holes, "needs": missing, "stored": true})
+		return
+	}
+	_, _ = h.Extensions.Acquire(name, 0)
+	st, _ := h.Extensions.Status(name)
+	// THE HOLES TRAVEL WITH THE ROW either way. A caller that just typed a value needs
+	// to see whether it filled the hole it was aimed at, and a row that says
+	// "available" while a value sits unused would be the panel lying about what it
+	// just did.
+	writeJSON(w, status, map[string]any{
+		"extension": summarizeExtension(ext, st),
+		"holes":     holes,
+		"needs":     missing,
+	})
 }
 
 func (h *Handler) handleUpdateExtension(w http.ResponseWriter, r *http.Request) {
@@ -347,28 +443,48 @@ func (h *Handler) handleUpdateExtension(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	ext, err := h.Extensions.Store().Load(name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if isTOMLRequest(r) {
-		edited, ok := readTemplateTOML(w, r, name)
-		if !ok {
-			return
-		}
-		h.saveExtensionTemplate(w, r, edited, http.StatusOK)
-		return
-	}
 	args, ok := readExtensionBody(w, r)
 	if !ok {
+		return
+	}
+	if template, ok := args["template"].(string); ok && strings.TrimSpace(template) != "" {
+		if err := h.Extensions.Store().SaveTemplate(name, []byte(template)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if values, ok := args["values"].(map[string]any); ok && len(values) > 0 {
+			if !h.applyValues(w, name, values) {
+				return
+			}
+		}
+		h.writeExtensionAfterEdit(w, name, http.StatusOK)
+		return
+	}
+	if values, ok := args["values"].(map[string]any); ok && len(values) > 0 {
+		if !h.applyValues(w, name, values) {
+			return
+		}
+		h.writeExtensionAfterEdit(w, name, http.StatusOK)
+		return
+	}
+	ext, err := h.Extensions.Store().Load(name)
+	if err != nil {
+		if missing, mErr := h.Extensions.Store().Missing(name); mErr == nil && len(missing) > 0 {
+			http.Error(w, "extension still needs values for "+strings.Join(missing, ", "), http.StatusConflict)
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 	if err := extensions.ApplyArgs(ext, args, true); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.saveExtensionTemplate(w, r, ext, http.StatusOK)
+	if err := extensions.SaveStruct(h.Extensions.Store(), ext); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.writeExtensionAfterEdit(w, name, http.StatusOK)
 }
 
 func (h *Handler) handleDeleteExtension(w http.ResponseWriter, r *http.Request) {

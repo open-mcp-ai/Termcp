@@ -80,17 +80,6 @@ function extStatusLabel(status) {
   }
 }
 
-/* The three presets the config ships; anything else is a custom template and is
-   shown as its own kind verbatim rather than mislabelled. */
-function extKindLabel(kind) {
-  switch (kind) {
-    case 'mcp': return t('ext.kind.mcp');
-    case 'skill': return t('ext.kind.skill');
-    case 'prompt': return t('ext.kind.prompt');
-    default: return kind || '';
-  }
-}
-
 // The forward modal already names the three directions; reusing those strings
 // keeps one vocabulary for one concept, and an unknown kind still has a label.
 function extForwardLabel(kind) {
@@ -228,16 +217,32 @@ function renderExtensionCard(ext) {
   var gearBtn = '<button type="button" class="conn-edit-btn" title="' + escapeHtml(t('conn.aria.editProfile')) +
     '" aria-label="' + escapeHtml(t('conn.aria.editProfile')) + '">' + SVG_CONN_EDIT + '</button>';
   var meta =
-    '<span class="ext-kind">' + escapeHtml(extKindLabel(ext.kind)) + '</span>' +
-    '<span class="node-sep" aria-hidden="true">·</span>' +
-    '<span class="node-status ' + lamp + '">' + escapeHtml(extStatusLabel(ext.status)) + '</span>';
-  var target = ext.target ? '<div class="node-addr">' + escapeHtml(ext.target) + '</div>' : '';
-  var fw = '';
-  (ext.forwards || []).forEach(function (f) {
-    if (!f.listen_addr) return;
-    fw += '<div class="ext-fwd" title="' + escapeHtml(t('ext.fwd.title', { kind: extForwardLabel(f.kind) })) + '">' +
-      escapeHtml(f.listen_addr) + '</div>';
-  });
+    '<span class="node-status ' + lamp + '">' + escapeHtml(extStatusLabel(ext.status)) + '</span>' +
+    (ext.needs && ext.needs.length
+      ? '<span class="node-sep" aria-hidden="true">·</span>' +
+        '<span class="ext-needs">' + escapeHtml(t('ext.card.needs', { names: ext.needs.join(', ') })) + '</span>'
+      : '');
+  /* COUNTS, NOT CONTENT. A template that names eight hosts with three tunnels
+     each would push every other card off the panel; what a reader needs at this
+     level is "how much is behind this one", and the window behind the card is
+     where the list itself lives. */
+  var hostCount = ext.host_count !== undefined ? ext.host_count :
+    (ext.targets && ext.targets.length ? ext.targets.length : (ext.target ? 1 : 0));
+  var fwdCount = ext.forward_count !== undefined ? ext.forward_count : (ext.forwards || []).length;
+  if (ext.forward_count === undefined) {
+    (ext.targets || []).forEach(function (row) { fwdCount += (row.forwards || []).length; });
+  }
+  var scope = '';
+  if (hostCount > 0) {
+    scope += '<span class="ext-count">' +
+      escapeHtml(tCount('ext.card.hosts.one', 'ext.card.hosts.other', { count: hostCount })) + '</span>';
+  }
+  if (fwdCount > 0) {
+    if (scope) scope += '<span class="node-sep" aria-hidden="true">·</span>';
+    scope += '<span class="ext-count">' +
+      escapeHtml(tCount('ext.card.forwards.one', 'ext.card.forwards.other', { count: fwdCount })) + '</span>';
+  }
+  if (scope) scope = '<div class="node-addr">' + scope + '</div>';
   // One line, not the history: the verdict is what the panel is for, and the
   // card's own window serves the rest.
   var fail = '';
@@ -263,8 +268,7 @@ function renderExtensionCard(ext) {
     gearBtn +
     '</div>' +
     '<div class="node-meta">' + meta + '</div>' +
-    target +
-    fw +
+    scope +
     fail +
     '</div>' +
     '</div>';
@@ -662,13 +666,24 @@ function paintExtensionWindow(win, name) {
   if (word) word.textContent = extStatusLabel(row.status);
   var meta = win.querySelector('.ext-status-meta');
   if (meta) {
-    meta.textContent = [extKindLabel(row.kind), row.target, row.enabled ? '' : t('ext.status.parked')]
+    meta.textContent = [row.target, row.enabled ? '' : t('ext.status.parked')]
       .filter(function (x) { return !!x; }).join(' · ');
+  }
+  /* Per-host rows, only when there is more than one host. A single-target
+     extension already says everything above; repeating it as a row of one is
+     noise, and the counts on the card are what told the reader to look here. */
+  var hostRows = '';
+  if ((row.targets || []).length > 1) {
+    hostRows = (row.targets || []).map(function (h) {
+      var ports = (h.forwards || []).filter(function (f) { return !!f.listen_addr; })
+        .map(function (f) { return f.listen_addr; }).join(', ');
+      return extStatusRow(h.target, [extStatusLabel(h.status), ports].filter(function (x) { return !!x; }).join(' · '), false);
+    }).join('');
   }
 
   var grid = win.querySelector('.ext-status-grid');
   if (grid) {
-    var rows = '';
+    var rows = hostRows;
     if (row.description) rows += extStatusRow(t('ext.modal.description'), row.description, false);
     /* A url template's endpoint is what it talks to, and the one field that says
        which of the two mcp shapes this is; the kind label alone cannot. */
@@ -679,6 +694,15 @@ function paintExtensionWindow(win, name) {
       rows += extStatusRow(extForwardLabel(f.kind),
         [f.listen_addr, f.target_addr].filter(function (x) { return !!x; }).join(' → '), false);
     });
+    // A multi-target template carries its tunnels per host, not at the top.
+    if (!(row.forwards || []).length && (row.targets || []).length < 2) {
+      (row.targets || []).forEach(function (t) {
+        (t.forwards || []).forEach(function (f) {
+          rows += extStatusRow(t.target + ' · ' + extForwardLabel(f.kind),
+            [f.listen_addr, f.target_addr].filter(function (x) { return !!x; }).join(' → '), false);
+        });
+      });
+    }
     if (row.next_retry_ms) {
       var secs = Math.max(0, Math.round((row.next_retry_ms - Date.now()) / 1000));
       rows += extStatusRow(t('ext.status.nextRetry'), t('ext.status.inSeconds', { count: secs }), false);
@@ -750,6 +774,8 @@ function extRepaintWindows() {
 function openExtensionDialog(name) {
   var modal = extModalEl('modal-ext');
   if (!modal) return;
+  var preview = document.getElementById('modal-ext-preview-view');
+  if (preview) preview.classList.add('hidden');
   _extDialogName = name || null;
   showExtError('');
   var title = extModalEl('modal-ext-title');
@@ -762,10 +788,15 @@ function openExtensionDialog(name) {
   /* Removal is a stored template's business: a create has nothing to remove. */
   var delBtn = extModalEl('modal-ext-delete');
   if (delBtn) delBtn.style.display = name ? '' : 'none';
+  /* A preview renders THIS installation's values into the template, so there is
+     nothing to preview before the name (and therefore the values) exists. */
+  var previewBtn = extModalEl('modal-ext-preview');
+  if (previewBtn) previewBtn.style.display = name ? '' : 'none';
   modal.classList.remove('hidden');
   if (name) {
-    loadExtensionToml(name);
+    loadExtensionTemplate(name);
   } else {
+    paintExtensionHoles(null, null);
     var area = extModalEl('ext-f-toml');
     if (area) area.value = extTomlSeed();
     if (nameEl) nameEl.focus();
@@ -814,63 +845,325 @@ function extSharingNote(row) {
 
 /* ---- The configuration page ------------------------------------------------- */
 
-/* loadExtensionToml reads the file the store holds, byte for byte: what the author
- * edits here is what an export hands out and what a colleague's file would
- * contain. */
-function loadExtensionToml(name) {
+/* TWO THINGS, AND NEITHER IS A FILE NAME.
+ *
+ * The template is the document: what the extension IS, with holes where this
+ * machine has to answer. The values are this installation's answers, one per hole.
+ * Which file either lands in is the store's business — a person filling in a
+ * hostname has no reason to learn that it went into config.local.toml, and an
+ * agent that had to know would be one more thing to get wrong.
+ *
+ * A template with unfilled holes is a normal, finished-looking state: the card
+ * shows what it still needs, and this form is where it gets it. Nothing here
+ * deletes a value for being wrong; a value that does not render yet is kept and
+ * the reason is shown, because the value is the only copy of what was typed. */
+var _extHoles = [];
+
+/* paintExtensionHoles draws the variable table: one row per hole — `{{name}}: what
+   it is for`, then this installation's answer as a preview. */
+function paintExtensionHoles(name, holes) {
+  _extHoles = holes || [];
+  var box = extModalEl('ext-holes');
+  if (!box) {
+    // Built here rather than in index.html, which is at its size budget.
+    box = document.createElement('div');
+    box.id = 'ext-holes';
+    box.className = 'ext-holes';
+    var anchor = extModalEl('ext-f-toml');
+    if (!anchor || !anchor.parentNode) return;
+    anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  }
+  if (!name || !_extHoles.length) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  var head = '<div class="ext-holes-head">' + escapeHtml(t('ext.holes.title')) + '</div>';
+  box.innerHTML = head + _extHoles.map(function (h) {
+    /* A BOOLEAN IS ITS OWN EDITOR. A dialog holding one checkbox asks the same
+       question twice, so a true/false hole is a checkbox in the row and saves when
+       it is ticked; everything else previews its value and opens the editor. */
+    var cell = h.type === 'boolean'
+      ? '<input class="ext-hole-tick" type="checkbox" data-hole="' + escapeHtml(h.name) +
+        '" data-hole-type="boolean" aria-label="' + escapeHtml(h.name) + '"' +
+        (h.value === true ? ' checked' : '') + '>'
+      : '<button type="button" class="ext-hole-value" data-hole="' + escapeHtml(h.name) + '"' +
+        ' title="' + escapeHtml(t('ext.holes.edit')) + '">' +
+        escapeHtml(holePreview(h)) + '</button>';
+    return '<div class="ext-hole' + (h.set ? '' : ' is-empty') + '">' +
+      '<span class="ext-hole-name"><code>{{' + escapeHtml(h.name) + '}}</code>' +
+      (h.help ? ': <span class="ext-hole-help">' + escapeHtml(h.help) + '</span>' : '') + '</span>' +
+      cell + '</div>';
+  }).join('');
+  box.querySelectorAll('.ext-hole-value').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var hole = _extHoles.filter(function (h) { return h.name === btn.getAttribute('data-hole'); })[0];
+      if (hole) openHoleEditor(name, hole);
+    });
+  });
+  box.querySelectorAll('.ext-hole-tick').forEach(function (tick) {
+    tick.addEventListener('change', function () {
+      var hole = tick.getAttribute('data-hole');
+      putExtensionValue(name, hole, tick.checked).then(function (res) {
+        if (!res.ok) showExtError(t('ext.holes.notApplied') + ' ' + res.text);
+        return res;
+      }).then(function (res) {
+        var doc = {};
+        try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
+        paintExtensionHoles(name, doc.holes || _extHoles);
+      }).catch(function (err) {
+        showExtError(t('ext.modal.saveFailed') + ' ' + ((err && err.message) || err));
+      });
+    });
+  });
+}
+
+/* holePreview is the cell's text: the value as a person would read it, or a dash
+   for a hole this installation has not answered. The cell is a button, not a
+   field — a one-line box for a JSON array is a scrollbar and a resize grip where
+   the whole value belongs behind a click. */
+function holePreview(h) {
+  if (!h.set || h.value === undefined || h.value === null) return t('ext.holes.empty');
+  if (typeof h.value === 'string') return h.value;
+  return JSON.stringify(h.value);
+}
+
+/* readHoleInput turns what the editor holds into the TOML value the template
+   expects. It reads `data-hole-type`, `value` and `checked` off any element, so
+   the same rules serve the inline box and the editor's textarea. */
+function readHoleInput(el) {
+  var kind = el.getAttribute('data-hole-type');
+  if (kind === 'boolean') return el.checked;
+  var raw = String(el.value || '').trim();
+  if (raw === '') return null;   // null removes the value, which is "unset" again
+  if (kind === 'integer') {
+    var i = Number(raw);
+    if (!Number.isInteger(i)) throw new Error(t('ext.holes.badInteger'));
+    return i;
+  }
+  if (kind === 'number') {
+    var n = Number(raw);
+    if (!isFinite(n)) throw new Error(t('ext.holes.badNumber'));
+    return n;
+  }
+  if (kind === 'array' || kind === 'table') {
+    try { return JSON.parse(raw); } catch (e) { throw new Error(t('ext.holes.badJSON')); }
+  }
+  return raw;
+}
+
+/* The value editor: one hole, opened from its row. Built on demand for the same
+   reason the table is — the dialog's markup budget belongs to the template. */
+function holeEditor() {
+  var box = document.getElementById('modal-ext-value');
+  if (box) return box;
+  box = document.createElement('div');
+  box.id = 'modal-ext-value';
+  box.className = 'modal-backdrop hidden';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.innerHTML =
+    '<div class="modal" style="max-width:420px">' +
+    '<div class="modal-h"><h2 id="modal-ext-value-title"></h2>' +
+    '<button type="button" class="modal-x" data-act="cancel" title="' + escapeHtml(t('common.close')) + '">' +
+    '<svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" ' +
+    'stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button></div>' +
+    '<div class="modal-body">' +
+    '<p id="modal-ext-value-help" class="ext-hole-help"></p>' +
+    '<p id="modal-ext-value-err" class="err" style="display:none"></p>' +
+    '<textarea id="modal-ext-value-text" spellcheck="false" rows="5"></textarea>' +
+    '<div class="modal-actions">' +
+    '<button type="button" class="btn" data-act="cancel">' + escapeHtml(t('common.cancel')) + '</button>' +
+    '<button type="button" class="btn btn-primary" data-act="save">' + escapeHtml(t('common.save')) + '</button>' +
+    '</div></div></div>';
+  document.body.appendChild(box);
+  return box;
+}
+
+function openHoleEditor(name, hole) {
+  var box = holeEditor();
+  var title = box.querySelector('#modal-ext-value-title');
+  var help = box.querySelector('#modal-ext-value-help');
+  var err = box.querySelector('#modal-ext-value-err');
+  var text = box.querySelector('#modal-ext-value-text');
+  title.textContent = hole.name;
+  help.textContent = hole.help || '';
+  help.hidden = !hole.help;
+  err.style.display = 'none';
+  err.textContent = '';
+  text.value = hole.value === undefined || hole.value === null ? '' :
+    (typeof hole.value === 'string' ? hole.value : JSON.stringify(hole.value));
+  text.setAttribute('data-hole-type', hole.type || 'string');
+  function close() {
+    box.classList.add('hidden');
+    box.removeEventListener('keydown', onKey);
+    box.removeEventListener('click', onClick);
+  }
+  function fail(msg) {
+    err.textContent = msg;
+    err.style.display = 'block';
+  }
+  function save() {
+    var value;
+    try { value = readHoleInput(text); } catch (e) {
+      fail((e && e.message) || String(e));
+      return;
+    }
+    putExtensionValue(name, hole.name, value).then(function (res) {
+      if (!res.ok) {
+        /* Stored but not applied: the dialog stays open on the value the caller
+           typed, and the reason is the answer's own words. */
+        fail(t('ext.holes.notApplied') + ' ' + res.text);
+        return;
+      }
+      close();
+      var doc = {};
+      try { doc = JSON.parse(res.text) || {}; } catch (e) { doc = {}; }
+      paintExtensionHoles(name, doc.holes || _extHoles);
+    }).catch(function (e) {
+      fail(t('ext.modal.saveFailed') + ' ' + ((e && e.message) || e));
+    });
+  }
+  function onClick(e) {
+    var act = e.target.closest('[data-act]');
+    if (act) {
+      if (act.getAttribute('data-act') === 'save') save(); else close();
+      return;
+    }
+    if (e.target === box) close();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+  }
+  box.addEventListener('click', onClick);
+  box.addEventListener('keydown', onKey);
+  box.classList.remove('hidden');
+  try { text.focus(); } catch (e) {}
+}
+
+/* putExtensionValue is the one write both the table and the editor use. */
+function putExtensionValue(name, hole, value) {
+  var body = {};
+  body[hole] = value;
+  return fetch(apiPath('/api/extensions/') + encodeURIComponent(name), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: body })
+  }).then(function (r) {
+    return r.text().then(function (txt) { return { ok: r.ok, text: txt }; });
+  });
+}
+
+/* loadExtensionTemplate reads the document with its holes, then the holes with
+   what this installation has already answered. Two reads because they are two
+   facts: the document is what an author wrote, the holes are what is still open. */
+function loadExtensionTemplate(name) {
+  _extHoles = [];
   var area = extModalEl('ext-f-toml');
   if (area) area.value = '';
+  paintExtensionHoles(name, null);
   fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '?format=toml')
     .then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
     })
     .then(function (text) {
-      if (_extDialogName === name && area) area.value = text;
+      if (_extDialogName !== name) return;
+      if (area) area.value = text;
+      return fetch(apiPath('/api/extensions/') + encodeURIComponent(name))
+        .then(function (r) { return r.ok ? r.json() : {}; })
+        .then(function (doc) {
+          if (_extDialogName !== name) return;
+          paintExtensionHoles(name, doc.holes || []);
+        });
     })
     .catch(function () {
       showExtError(t('ext.modal.loadFailed'));
     });
 }
 
-/* The document a create starts from: the two fields a template cannot do without,
- * the conventional stdio server, and a line of comment per field — a person who
- * has never written one of these should be able to read what to change, which is
- * the whole reason this is a document and not a form. */
+/* The document a create starts from. A hole is written as a quoted placeholder —
+   `command = "{{command}}"` — because a bare `{{command}}` is not TOML and a
+   package has to parse before anybody has filled anything in. The [params] block
+   is what tells a reader (and the panel) what the hole is for. */
 function extTomlSeed() {
   return [
-    '# A termcp extension. kind + target is enough; every other field is an override.',
-    'kind = "mcp"',
-    '# target: an ssh_config profile name (ssh_config action=list), or "internal"',
+    '# Holes are "{{name}}", declared under [params.<name>]. Their values belong to',
+    '# this installation, are never exported, and survive a template upgrade.',
+    'description = "what this extension is for"',
     'target = "internal"',
-    '',
-    '# What it runs. A pipe channel starts this command and speaks line-delimited',
-    '# JSON-RPC to it; pty is an interactive terminal instead; empty is no shell at',
-    '# all (SFTP and forwards only).',
     'mode = "pipe"',
-    'command = "npx"',
-    'args = ["-y", "example-mcp-server"]',
+    'command = "{{command}}"',
     '',
-    '# Or a remote MCP server reached over HTTP instead of a program to run: the',
-    '# relay runs inside termcp, so nothing is installed anywhere and target must be',
-    '# "internal". A path ending in /sse selects the SSE transport. `url` replaces',
-    '# `command`/`args` — set one or the other, not both.',
-    '# url = "https://mcp.example.com/mcp"',
-    '# headers = { X-Api-Key = "..." }',
+    '# A read-only window onto remote files instead of a program: paths = ["/srv/docs/"]',
+    '# An HTTP MCP endpoint instead of a program: url = "https://mcp.example.com/mcp"',
     '',
-    '# What the agent driving it may call (a whitelist; empty = the full surface).',
-    'allow = ["shell_input", "shell_key", "shell_output"]',
-    '',
-    '# Read by the agent before it uses this extension: the part that is not obvious',
-    '# from the fields above.',
-    '# notes = "..."',
+    '[params.command]',
+    'type = "string"',
+    'help = "The program that serves MCP over the pipe (its arguments are `args`)"',
     ''
   ].join('\n');
 }
 
-/* extSaveTemplate saves what the textarea holds. The name is the directory the
- * template lives in, so it rides in the query on a create and in the path on an
- * update — the file itself has no place for it. */
+/* extSaveTemplate writes the document. The values are NOT part of this call: they
+   are saved one at a time, as they are typed, and replacing the template must not
+   disturb them — that separation is the whole reason a package can be upgraded. */
+function previewExtensionTemplate() {
+  var name = _extDialogName;
+  var template = String((extModalEl('ext-f-toml') || {}).value || '');
+  if (!name) {
+    showExtError(t('ext.preview.needsInstall'));
+    return;
+  }
+  var button = extModalEl('modal-ext-preview');
+  if (button) button.disabled = true;
+  fetch(apiPath('/api/extensions/') + encodeURIComponent(name) + '/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/toml; charset=utf-8' },
+    body: template
+  }).then(function (r) {
+    return r.text().then(function (text) {
+      if (!r.ok) throw new Error(text || r.status);
+      return text;
+    });
+  }).then(function (text) {
+    showExtensionPreview(name, text);
+  }).catch(function (err) {
+    showExtError((err && err.message) || String(err));
+  }).then(function () {
+    if (button) button.disabled = false;
+  }, function () {
+    if (button) button.disabled = false;
+  });
+}
+
+function showExtensionPreview(name, rendered) {
+  var box = document.getElementById('modal-ext-preview-view');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'modal-ext-preview-view';
+    box.className = 'modal-backdrop hidden';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.innerHTML = '<div class="modal ext-rendered-preview"><div class="modal-h">' +
+      '<h2></h2><button type="button" class="modal-x" data-preview-close aria-label="' +
+      escapeHtml(t('common.close')) + '">×</button></div>' +
+      '<div class="modal-body"><pre></pre></div></div>';
+    document.body.appendChild(box);
+    box.addEventListener('click', function (e) {
+      if (e.target === box || e.target.closest('[data-preview-close]')) box.classList.add('hidden');
+    });
+    box.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); box.classList.add('hidden'); }
+    });
+  }
+  box.querySelector('h2').textContent = t('ext.preview.title', { name: name });
+  box.querySelector('pre').textContent = rendered;
+  box.classList.remove('hidden');
+}
+
 function extSaveTemplate() {
   var name = _extDialogName;
   var forCreate = !name;
@@ -892,22 +1185,34 @@ function extSaveTemplate() {
   }
   var saveBtn = extModalEl('modal-ext-save');
   if (saveBtn) saveBtn.disabled = true;
-  var url = forCreate
-    ? apiPath('/api/extensions') + query
-    : apiPath('/api/extensions/') + encodeURIComponent(name);
-  fetch(url, {
+  fetch(forCreate ? apiPath('/api/extensions') + query
+                  : apiPath('/api/extensions/') + encodeURIComponent(name), {
     method: forCreate ? 'POST' : 'PUT',
     headers: { 'Content-Type': 'application/toml; charset=utf-8' },
     body: body
   }).then(function (r) {
     if (saveBtn) saveBtn.disabled = false;
     if (!r.ok) {
-      return r.text().then(function (txt) {
-        throw new Error(txt || r.status);
-      });
+      return r.text().then(function (txt) { throw new Error(txt || r.status); });
     }
-    /* The dialog closes either way: the next frame repaints the card, and the
-       card is where the result of an edit is read. */
+    if (forCreate) {
+      /* THE CREATE BECOMES AN EDIT, in place: the document is stored, and what it
+         asks for is now a fact this form can show. Closing here would leave the
+         holes to be discovered on the card, which is where a reader looks at a
+         result rather than where it finishes an install. */
+      var created = String((extModalEl('ext-f-name') || {}).value || '').trim();
+      _extDialogName = created;
+      var nameInput = extModalEl('ext-f-name');
+      if (nameInput) nameInput.readOnly = true;
+      var delBtn = extModalEl('modal-ext-delete');
+      if (delBtn) delBtn.style.display = '';
+      var title = extModalEl('modal-ext-title');
+      if (title) title.textContent = created;
+      loadExtensionTemplate(created);
+      return;
+    }
+    /* An edit closes: the next frame repaints the card, and the card is where the
+       result of a change to the document is read. */
     closeExtensionDialog();
   }).catch(function (err) {
     if (saveBtn) saveBtn.disabled = false;
@@ -1074,6 +1379,7 @@ function closeExtAddMenu() {
   extModalEl('modal-ext-close').addEventListener('click', closeExtensionDialog);
   extModalEl('modal-ext-cancel').addEventListener('click', closeExtensionDialog);
   extModalEl('modal-ext-save').addEventListener('click', extSaveTemplate);
+  extModalEl('modal-ext-preview').addEventListener('click', previewExtensionTemplate);
   var modalDelete = extModalEl('modal-ext-delete');
   if (modalDelete) modalDelete.addEventListener('click', function () {
     var name = _extDialogName;

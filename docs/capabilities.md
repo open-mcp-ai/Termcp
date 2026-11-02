@@ -25,7 +25,7 @@ human decision, per session.
 | **Notifications** | `notify_user` toasts the human with the instance URL, plays a short tone and raises a desktop notification. One-way by design: nothing in termcp wakes an agent, so a caller waits on the reply it already has. |
 | **SSH profiles** | A central TOML store with batch import/export, in-memory temporary hosts, connection testing, and edit/copy/rename. |
 | **Review mode** | Per-session approval gate: every agent write waits for a human decision. |
-| **Extensions** | A stored template for a session whose capabilities are trimmed to what you decided: an MCP server over a pipe channel, a read-only window onto remote files, an interactive terminal with instructions attached. One that declares no listener starts on demand (`open ext <name>`) and closes itself after `idle_timeout`. |
+| **Extensions** | A stored session template with a tool/path whitelist and agent notes. Templates without forwards start on demand (`open ext <name>` / `extension(action=use)`), issue a separate channel per ask, and close idle instances after `idle_timeout`; templates with forwards start at daemon startup and stay resident. Extensions with the same target and whitelist share an infrastructure session, but each channel instance remains separate. |
 | **Connected clients** | The header lists who is attached: MCP clients with the name they announced and their namespace, plus Web UI tabs with their address and what they are watching. |
 | **Update notice** | The header tells you when a newer release exists — only for real `vX.Y.Z` builds, never for a local `dev-<sha>`. |
 | **One REST entrance** | `POST /api/term` speaks the same command language as the MCP tool, so an agent drives everything with plain `curl`. |

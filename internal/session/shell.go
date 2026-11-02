@@ -31,9 +31,9 @@ func (e *processGoneError) Error() string {
 }
 func (e *processGoneError) Is(target error) bool { return target == ErrProcessGone }
 
-// Lock ordering: shellStateMu -> stdinMu. Never acquire in reverse order.
+// Lock ordering: shellStateMu -> mu.
 // shellStateMu is only taken by session-level transitions (close/DEAD/terminate,
-// new shells), and stdinMu serializes writes only. Per-shell state that changes
+// new shells), and stdin uses a bounded channel token (see #219). Per-shell state that changes
 // after creation is atomic, so there is no per-shell lock to order: a reader
 // never blocks the exit watcher (see the field docs below).
 
@@ -59,7 +59,6 @@ type ChildShell struct {
 	done        chan struct{}
 	closeOnce   sync.Once
 	cleanupOnce sync.Once // guards explicit removal from the parent shell map
-	stdinMu     sync.Mutex
 	// status is stored through atomic.Value so the zero value stays "" (a shell
 	// built directly in a test), matching the old plain field. Load returns nil
 	// until the constructor publishes running.
@@ -254,9 +253,11 @@ func (cs *ChildShell) SendTerminalBytesFrom(data []byte, pressEnter bool, src In
 	// and a keystroke that leaves the line open is not a span of the transcript.
 	// See logInput for why a partial line writes nothing.
 	cs.logInput(src, submit)
-	cs.stdinMu.Lock()
+	// NO LOCK HERE: ExecSession owns the only write serialisation (a one-token
+	// channel that a caller can give up on), and wrapping it in a second, unbounded
+	// mutex was what turned one stuck network write into "every input on this channel
+	// hangs" (issue #219).
 	_, err := cs.execSession.WriteStdin(toWrite)
-	cs.stdinMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -292,9 +293,7 @@ func (cs *ChildShell) PressKeyFrom(key string, repeat int, src InputSource) erro
 	// receives.
 	submit := submitsLine(payload)
 	cs.logInput(src, submit)
-	cs.stdinMu.Lock()
 	_, err = cs.execSession.WriteStdin(payload)
-	cs.stdinMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -319,8 +318,9 @@ func (cs *ChildShell) ResizePty(rows, cols int) error {
 	return nil
 }
 
-// TerminateShell closes the child shell's exec session channel without touching the
-// shared SSH client (CloseSessionOnly). The client lifetime is managed by the parent Session.
+// TerminateShell closes this shell's exec session channel without closing the
+// parent Session's SSH client. The parent owns that connection, and the other
+// child shells on it must keep running.
 func (cs *ChildShell) TerminateShell() {
 	if cs.statusValue() != api.SessionRunning {
 		return // already terminated

@@ -14,7 +14,7 @@ func TestMcpCreateRequiresTheProgram(t *testing.T) {
 	// DIRECTION ONE: naming a program must not keep the default's arguments.
 	// `--command cat` ran `cat -y example-mcp-server` and died with "cat: illegal
 	// option -- y", which names neither the flag nor the default that supplied it.
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	if err := ApplyArgs(&ext, map[string]any{"command": "cat"}, false); err != nil {
 		t.Fatalf("ApplyArgs: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestMcpCreateRequiresTheProgram(t *testing.T) {
 		t.Errorf("an empty create should keep the preset's (absent) command, got %q", ext.Command)
 	}
 
-	bare := Preset(KindMCP)
+	bare := Extension{Mode: "pipe"}
 	bare.Name, bare.Target = "probe", "internal"
 	err := bare.Validate()
 	if err == nil {
@@ -49,7 +49,7 @@ func TestMcpCreateRequiresTheProgram(t *testing.T) {
 // The argv the author DOES give is carried through untouched, including a flag
 // that looks like the one the preset used to add.
 func TestMcpCreateCarriesTheAuthorsArgv(t *testing.T) {
-	ext := Preset(KindMCP)
+	ext := Extension{Mode: "pipe"}
 	err := ApplyArgs(&ext, map[string]any{
 		"command": "npx", "args": []any{"-y", "@scope/server"},
 	}, false)

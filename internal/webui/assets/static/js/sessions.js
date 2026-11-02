@@ -424,6 +424,9 @@ function deleteArchivedSessions(sessions) {
       return fetch(apiPath('/api/sessions/') + encodeURIComponent(s.id), { method: 'DELETE' })
         .then(function (r) {
           if (r.ok || r.status === 204) return { ok: true, id: s.id };
+          /* A 404 means the record is already gone (deleted by another tab/sweep);
+             treat as success so a stale row does not pop up a failure toast. */
+          if (r.status === 404) return { ok: true, id: s.id, gone: true };
           return r.json().then(function (er) {
             return { ok: false, id: s.id, code: er && er.code, error: (er && er.error) || 'HTTP ' + r.status };
           }).catch(function () { return { ok: false, id: s.id, error: 'HTTP ' + r.status }; });
@@ -754,6 +757,29 @@ function archiveDuration(from, to) {
   return secs + 's';
 }
 
+/** When a session left `running`, in milliseconds, for ordering the ledger.
+ *
+ *  The archive is read newest-first: the session someone wants back is almost
+ *  always the one that just ended, and a ledger in map order makes them search the
+ *  whole strip for it. `updated_at` is the moment of the last transition, which for
+ *  a finished session is the moment it finished (the API has no `ended_at`); the
+ *  magnitude guard is the same one archiveAge needs, because seconds-resolution
+ *  values reach that field on the restore path. */
+function archiveEndedAt(s) {
+  var t0 = Number((s && (s.updated_at || s.created_at)) || 0);
+  if (!t0) return 0;
+  if (t0 < 1e12) t0 *= 1000;
+  return t0;
+}
+
+/** Newest first, with the id as a tiebreak so two sessions that ended in the same
+ *  millisecond do not swap places between frames. */
+function compareArchiveRows(a, b) {
+  var d = archiveEndedAt(b) - archiveEndedAt(a);
+  if (d) return d;
+  return String(b.id || '').localeCompare(String(a.id || ''));
+}
+
 /** Render the archive as ROWS, not cards.
  *
  *  The archive is a ledger: it answers "what already happened" and is read in
@@ -769,6 +795,10 @@ function renderArchiveRows(region, all) {
   if (!grid) return;
   grid.innerHTML = '';
   var rows = all.filter(function (s) { return s && s.id && isDeadSession(s) === region.dead; });
+  /* ListAll walks a sync.Map, so its order is random and reshuffles on every
+     frame — a ledger whose rows move under the pointer is not a ledger. Sorted by
+     the moment each session ended, newest first. */
+  rows.sort(compareArchiveRows);
   if (rows.length === 0) {
     /* An empty archive says what it holds rather than showing a blank strip: the
        column is collapsed by default, so the one time it is opened with nothing
@@ -1029,7 +1059,6 @@ function showTerminalEndedMarker(win, ch) {
  * Turning it off cancels everything pending server-side, hence the confirmation.
  */
 function toggleSessionApproval(s, gated, btn) {
-  if (!s || !s.id) return;
   if (gated) {
     confirmDialog({
       title: t('review.disable.title'),
@@ -1115,6 +1144,9 @@ function applySessionsSnapshot(sessions) {
   // Prune invisible client-side state for sessions that have left the
   // server registry entirely, even if no window was open when they died.
   pruneDeadSessionUIState(sessionById);
+  // Panel grouping is per browser tab, not session data. The first snapshot is
+  // the point where saved session/shell ids can be reconciled before rebuilding.
+  if (typeof restorePanelLayout === 'function') restorePanelLayout(sessionById);
   refreshAllWindowTabs();
 }
 
@@ -1172,34 +1204,30 @@ function syncWindowTabs(win, shells) {
     // prune on refresh (all snapshot shells report exited) and never send input.
     (shells || []).forEach(function(s) {
       var sid = s.shell_id || s.id;
-      if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0 });
+      if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0 });
     });
     return;
   }
   var running = shells.filter(function(s) { return s.status === 'running'; });
   var exited = shells.filter(function(s) { return s.status !== 'running'; });
-  // Add tabs for shells the window does not show yet. An already-exited shell is
-  // opened read-only: its stream is over, and a pipe channel exists precisely to
-  // run to exit, so its tab is the output the user asked for — not a corpse to
-  // sweep away.
+  // Add tabs for shells the window does not show yet. Every panel of a session is a
+  // peer, and so is every channel inside it: there is no "root" channel that this
+  // rule treats differently. A channel the window already shows is skipped by
+  // `existing`, and one another panel owns is refused by `channelFitsWindow` — those
+  // two facts are the whole filter.
   exited.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid]) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
+    if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0, readOnlyHistory: true });
   });
-  // Primary shell tab is created on explicit open (session create / restore).
-  // Sync only adds additional shells so closing a tab does not recreate it on
-  // the next refresh.
   running.forEach(function(s) {
     var sid = s.shell_id || s.id;
-    if (!existing[sid] && sid !== win._primaryShellId) createChannelTab(win, sid, { index: s.index || 0 });
+    if (!existing[sid] && channelFitsWindow(win, sid)) createChannelTab(win, sid, { index: s.index || 0 });
   });
   // Prune tabs for shells the server no longer lists at all — closed elsewhere
-  // (MCP shell_close, another window). A shell that merely exited stays listed
-  // with its buffer, so its tab stays too; the primary (root) shell is never
-  // pruned here, because during teardown its exit can surface in a still-RUNNING
-  // list frame before the session flips to DEAD.
+  // (MCP shell_close, another panel). A shell that merely exited stays listed with
+  // its buffer, so its tab stays too. No channel is exempt: once the server stops
+  // listing it, a tab for it would be a view of something that does not exist.
   Object.keys(existing).forEach(function(sid) {
-    if (sid === win._primaryShellId) return;
     var found = shells.some(function(s) { return (s.shell_id || s.id) === sid; });
     if (!found && existing[sid]) closeChannelTab(win, sid);
   });

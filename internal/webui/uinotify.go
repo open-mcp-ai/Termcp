@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
@@ -10,27 +11,24 @@ import (
 // uiNotifyHub fans out UI notification payloads (pre-marshaled JSON) to every
 // connected WebSocket tab. It is payload-carrying, unlike sessionListHub whose
 // clients re-pull state on a bare signal.
+//
+// Subscribers are independent entries and the id is a counter, so the table is a
+// sync.Map and the counter is atomic: no lock, nothing to serialise.
 type uiNotifyHub struct {
-	mu      sync.Mutex
-	nextID  uint64
-	clients map[uint64]chan<- []byte
+	nextID  atomic.Uint64
+	clients sync.Map // id uint64 -> chan<- []byte
 }
 
 func newUINotifyHub() *uiNotifyHub {
-	return &uiNotifyHub{clients: make(map[uint64]chan<- []byte)}
+	return &uiNotifyHub{}
 }
 
 // register subscribes ch to the hub; the returned func unsubscribes.
 func (h *uiNotifyHub) register(ch chan<- []byte) func() {
-	h.mu.Lock()
-	h.nextID++
-	id := h.nextID
-	h.clients[id] = ch
-	h.mu.Unlock()
+	id := h.nextID.Add(1)
+	h.clients.Store(id, ch)
 	return func() {
-		h.mu.Lock()
-		delete(h.clients, id)
-		h.mu.Unlock()
+		h.clients.Delete(id)
 	}
 }
 
@@ -41,16 +39,19 @@ func (h *uiNotifyHub) broadcast(payload map[string]any) int {
 	if err != nil {
 		return 0
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	delivered := 0
-	for _, ch := range h.clients {
+	h.clients.Range(func(_, v any) bool {
+		ch, ok := v.(chan<- []byte)
+		if !ok {
+			return true
+		}
 		select {
 		case ch <- b:
 			delivered++
 		default:
 		}
-	}
+		return true
+	})
 	return delivered
 }
 

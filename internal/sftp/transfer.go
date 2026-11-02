@@ -54,12 +54,35 @@ func (s *Client) StreamReadTo(w io.Writer, remotePath string, offset, length int
 // StreamWriteFrom reads raw bytes from r and writes them to remotePath at the given
 // offset. A nil offset truncates the file; a pointer to 0 overwrites from the first
 // byte without truncating. Uses io.Copy to stream without buffering in memory.
+//
+// A WHOLE-FILE WRITE GOES THROUGH A TEMPORARY SIBLING, the same rule
+// WriteFromLocalProgress follows and for the same reason (#158): a stream that dies
+// partway — the reader errored, the caller cancelled, the link dropped — must not
+// leave a truncated file where the real one goes. This path had no such protection,
+// so `read <a> file <x> | write <b> file <y>` where x could not be opened left an
+// empty <y> behind: a copy that failed, reported failed, and destroyed the
+// destination anyway.
+//
+// An explicit offset still patches in place: a patch cannot be assembled in a sibling
+// without copying the rest of the file first.
 func (s *Client) StreamWriteFrom(r io.Reader, remotePath string, offset *int64) (int64, error) {
-	f, off, err := s.openForWrite(remotePath, offset)
+	writePath := remotePath
+	if offset == nil {
+		writePath = siblingOf(remotePath, ".termcp-part-"+randomSuffix())
+	}
+
+	f, off, err := s.openForWrite(writePath, offset)
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	// A failed or cancelled write must not leave the part file behind.
+	success := false
+	defer func() {
+		_ = f.Close()
+		if writePath != remotePath && !success {
+			_ = s.RemoveFile(writePath)
+		}
+	}()
 
 	if off > 0 {
 		if _, err := f.Seek(off, io.SeekStart); err != nil {
@@ -67,7 +90,23 @@ func (s *Client) StreamWriteFrom(r io.Reader, remotePath string, offset *int64) 
 		}
 	}
 
-	return io.Copy(f, r)
+	n, err := io.Copy(f, r)
+	if err != nil {
+		return n, err
+	}
+	// The rename is the commit point: until it happens the target still holds the old
+	// file, and after it the target holds all of the new one.
+	if writePath != remotePath {
+		if err := f.Close(); err != nil {
+			return n, fmt.Errorf("close %s: %w", writePath, err)
+		}
+		if err := s.client.Rename(writePath, remotePath); err != nil {
+			_ = s.RemoveFile(writePath)
+			return n, fmt.Errorf("rename %s -> %s: %w", writePath, remotePath, err)
+		}
+	}
+	success = true
+	return n, nil
 }
 
 // maxInlineRead caps how many bytes a single text/hex read pulls into memory.

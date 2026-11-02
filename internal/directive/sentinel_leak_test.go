@@ -85,9 +85,9 @@ func itoa(i int) string {
 
 // TestASubstitutedPathReachesTheFileVerb pins the caller-visible consequence, because
 // the field list above is a claim about the parser and this is a claim about the
-// surface: the address in the receipt must be the address that was asked for.
+// surface: the address in the statement must be the address that was asked for.
 func TestASubstitutedPathReachesTheFileVerb(t *testing.T) {
-	f, err := ParseWithSubst("write $1 file $2 --local-path go.mod", Subst{Pos: []string{"h", "/tmp/report.txt"}})
+	f, err := ParseWithSubst("write $1 file $2 --data payload", Subst{Pos: []string{"h", "/tmp/report.txt"}})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

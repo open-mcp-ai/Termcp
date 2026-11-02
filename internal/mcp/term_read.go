@@ -129,7 +129,7 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 func (s *Server) awaitRunOutput(ctx context.Context, stmt directive.Statement, win termArgs, start int64) time.Duration {
 	began := time.Now()
 	if s.completionWait(stmt.Target) {
-		s.awaitExit(ctx, stmt.Target, win)
+		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
 		s.awaitWindow(ctx, stmt.Target, win, start)
 	}
@@ -139,14 +139,16 @@ func (s *Server) awaitRunOutput(ctx context.Context, stmt directive.Statement, w
 // readSlotAfter reads the window a command produced, starting where it was
 // submitted.
 //
-// Completion differs by mode:
+// Completion differs by mode, and neither kind ends on one signal:
 //
-//   - A PIPE channel's completion signal is its process exiting. When the program
-//     the channel runs is what the caller just ran, waiting IS the answer: the
-//     channel closes and the exit code arrives with the bytes.
-//   - A PTY channel has no such signal — a shell does not report that a command
-//     finished. There the caller's time window is the window: wait it out, then
-//     read what the terminal produced.
+//   - A PIPE channel's process is a child this server started, so its exit is
+//     observed — the stronger fact, since the channel closes and the exit code
+//     arrives with the bytes. A resident process never exits, so the stream
+//     standing still after this call's bytes (pipeQuiet) ends that wait too.
+//   - A PTY channel has no exit to observe — a shell does not report that a
+//     command finished — so the stream standing still (ptyQuiet) is the only
+//     signal there is, and only a command that has printed nothing has to wait
+//     out the window.
 //
 // `timeout` bounds both and defaults to two seconds.
 func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, win termArgs, start int64) envelope.Slot {
@@ -185,7 +187,7 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	windowExpired := false
 	waitedOnAPty := false
 	if wait := s.completionWait(stmt.Target); wait {
-		s.awaitExit(ctx, stmt.Target, win)
+		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
 		waitedOnAPty = true
 		windowExpired = s.awaitWindow(ctx, stmt.Target, win, start)
@@ -401,25 +403,65 @@ func (s *Server) completionWait(handle string) bool {
 // awaitExit waits for a pipe channel's process to exit, bounded by the caller's
 // timeout. It returns as soon as the channel closes — that is the whole point of
 // the pipe half of the completion rule.
-func (s *Server) awaitExit(ctx context.Context, handle string, win termArgs) {
+//
+// A RESIDENT PROCESS HAS NO EXIT TO WAIT FOR, and this used to wait for one
+// anyway: `adb shell`, a REPL, a daemon — anything that reads a line and stays
+// alive — made every `run` burn the caller's ENTIRE window on a command that had
+// answered in twenty milliseconds. Measured on a resident echo process: a 1s
+// window took 1.0065s, a 3s window took 3.0068s, linear in the window and not in
+// the command (issue #207).
+//
+// SO THERE ARE TWO ENDINGS NOW, and the exit stays first because it is the
+// stronger fact:
+//
+//   - the process exited — completion, reported as a status exactly as before
+//   - the stream went still for pipeQuiet after this call's bytes — the command
+//     answered, and the process is merely still resident
+//
+// `start` IS THE WHOLE REASON THE SECOND ENDING IS SAFE. Quiet before the first
+// byte is not an answer, it is a command that has not started talking; waiting
+// for the window is the only honest thing to do there, which is what
+// `now <= start` preserves. Without it a resident process would answer every
+// silent command instantly with an empty 204 — the failure mode this change
+// would otherwise introduce while fixing the slow one.
+func (s *Server) awaitExit(ctx context.Context, handle string, win termArgs, start int64) {
 	limit := time.Duration(win.TimeoutSeconds * float64(time.Second))
 	if limit <= 0 {
 		return
 	}
-	deadline := time.After(limit)
-	ticker := time.NewTicker(20 * time.Millisecond)
+	deadline := time.Now().Add(limit)
+	ticker := time.NewTicker(ptyPoll)
 	defer ticker.Stop()
+	last := start
+	var still time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-deadline:
-			return
 		case <-ticker.C:
-			cs, bad := s.requireShell(handle)
-			if bad != nil || cs.Info().Status != api.SessionRunning {
+		}
+		cs, bad := s.requireShell(handle)
+		if bad != nil || cs.Info().Status != api.SessionRunning {
+			return
+		}
+		now, ok := s.outputSizeFor(handle)
+		if !ok {
+			return
+		}
+		switch {
+		case now != last:
+			last, still = now, time.Time{}
+		case now <= start:
+			// Nothing said yet. Only the window can end this wait.
+		default:
+			if still.IsZero() {
+				still = time.Now()
+			} else if time.Since(still) >= pipeQuiet {
 				return
 			}
+		}
+		if !time.Now().Before(deadline) {
+			return
 		}
 	}
 }
@@ -735,9 +777,12 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 			// it, so a caller that wants to treat it as a failure has the fact. What
 			// it no longer gets is a status that says the READ failed.
 			if code < 400 && *exit != 0 {
+				// The command ran and the stream was read successfully. Its non-zero
+				// status is a failing slot fact, not a failed request: callers can
+				// inspect Exit-Code / Error-Code, while `;` and `&&` continue to work
+				// according to the documented request-level status contract (#240).
 				headers["Error-Code"] = "child_exit"
 				if stmt.Op != "read" {
-					code = 500
 					headers["Error-Code"] = "command_failed"
 				}
 			}

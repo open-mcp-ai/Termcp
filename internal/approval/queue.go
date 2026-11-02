@@ -180,19 +180,32 @@ func (q *Queue) SubmitShellInput(shellID, source, text string, keys []string) (s
 // Get returns a snapshot of one request.
 func (q *Queue) Get(id string) (Request, error) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	r, ok := q.byID[id]
 	if !ok {
+		q.mu.Unlock()
 		return Request{}, ErrNotFound
 	}
-	return r.clone(), nil
+	expired := q.expireIfDueLocked(r)
+	snap := r.clone()
+	q.mu.Unlock()
+	if expired {
+		q.notify(snap)
+	}
+	return snap, nil
 }
 
 // List returns every request, pending first, so the API can show a worklist
 // with the actionable entries at the top.
 func (q *Queue) List() []Request {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	// A worklist that still shows an expired request as actionable is a worklist
+	// that lies about what can be approved (issue #216).
+	var due []Request
+	for _, r := range q.byID {
+		if q.expireIfDueLocked(r) {
+			due = append(due, r.clone())
+		}
+	}
 	out := make([]Request, 0, len(q.byID))
 	for _, r := range q.byID {
 		if r.State == Pending {
@@ -204,19 +217,30 @@ func (q *Queue) List() []Request {
 			out = append(out, r.clone())
 		}
 	}
+	q.mu.Unlock()
+	for _, snap := range due {
+		q.notify(snap)
+	}
 	return out
 }
 
 // ListForShell returns one shell's requests, oldest first.
 func (q *Queue) ListForShell(shellID string) []Request {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	var due []Request
 	ids := q.byShell[shellID]
 	out := make([]Request, 0, len(ids))
 	for _, id := range ids {
 		if r, ok := q.byID[id]; ok {
+			if q.expireIfDueLocked(r) {
+				due = append(due, r.clone())
+			}
 			out = append(out, r.clone())
 		}
+	}
+	q.mu.Unlock()
+	for _, snap := range due {
+		q.notify(snap)
 	}
 	return out
 }
@@ -233,6 +257,18 @@ func (q *Queue) Approve(id string) (Request, error) {
 	if !ok {
 		q.mu.Unlock()
 		return Request{}, ErrNotFound
+	}
+	// An expired request is not pending, whatever the map still says (issue #216).
+	if q.expireIfDueLocked(r) {
+		snap := r.clone()
+		q.mu.Unlock()
+		q.notify(snap)
+		return snap, ErrTimeout
+	}
+	if r.State == Expired {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrTimeout
 	}
 	if r.State != Pending {
 		snap := r.clone()
@@ -258,6 +294,19 @@ func (q *Queue) Reject(id, reason string) (Request, error) {
 	if !ok {
 		q.mu.Unlock()
 		return Request{}, ErrNotFound
+	}
+	// A rejection after the deadline is still a refusal, but the honest state is
+	// Expired: the window closed before a human decided (issue #216).
+	if q.expireIfDueLocked(r) {
+		snap := r.clone()
+		q.mu.Unlock()
+		q.notify(snap)
+		return snap, ErrTimeout
+	}
+	if r.State == Expired {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrTimeout
 	}
 	if r.State != Pending {
 		snap := r.clone()
@@ -385,6 +434,26 @@ func (q *Queue) expire(id string) (Request, error) {
 
 	q.notify(snap)
 	return snap, ErrTimeout
+}
+
+// expireIfDue moves a pending request to Expired when its deadline has passed, and
+// reports whether it did. The queue lock must be held.
+//
+// EXPIRY IS A FACT ABOUT THE CLOCK, NOT AN EVENT ONLY Wait CAN DELIVER (issue #216).
+// The transition used to be driven exclusively by Wait's timer, but the review flow
+// answers 202 immediately and creates no waiter — so a request nobody blocked on
+// stayed Pending forever, and a late Approve returned 200 and executed the write.
+// That made timeout_seconds a promise the server did not keep, in exactly the case
+// it exists for.
+//
+// Every reader and every decision calls this first, so a request is expired by the
+// time anyone can observe or act on it.
+func (q *Queue) expireIfDueLocked(r *Request) bool {
+	if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
+		return false
+	}
+	q.resolveLocked(r, Expired, "", "")
+	return true
 }
 
 // resolveLocked performs the one-way transition to a terminal state and signals

@@ -290,6 +290,12 @@ const (
 	ExtGet    = "ext.get"
 	ExtCreate = "ext.create"
 	ExtUpdate = "ext.update"
+	// ExtSet fills a template's holes — the installation step. It is separate from
+	// ExtUpdate because the two answer different questions: update changes what the
+	// extension IS, set changes what it is ON THIS MACHINE. A whitelist that lets an
+	// agent configure an extension's hosts should not have to grant it the ability to
+	// rewrite the recipe as well.
+	ExtSet    = "ext.set"
 	ExtDelete = "ext.delete"
 	ExtRetry  = "ext.retry"
 

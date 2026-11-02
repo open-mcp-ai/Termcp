@@ -27,8 +27,11 @@ func TestAQuotedPathStillLandsWhereItSays(t *testing.T) {
 	}
 	dst := filepath.Join(dir, "asked.bin")
 
+	// A PIPELINE NOW. The quoted-destination question this test pins is unchanged --
+	// a path the caller computed must arrive byte for byte -- and the pipeline is the
+	// route that still exists for moving bytes onto a session.
 	got := termText(t, s, map[string]any{
-		"cmd":  `write ` + sid + ` file "$1" --local-path ` + src,
+		"cmd":  `read ` + sid + ` file ` + src + ` | write ` + sid + ` file "$1"`,
 		"args": []any{dst},
 	})
 	if !strings.HasPrefix(got, "TERM/1 202") {

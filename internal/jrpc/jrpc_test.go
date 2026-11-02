@@ -3,6 +3,7 @@ package jrpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -205,11 +206,175 @@ func TestCallDeadlineIsNotUnbounded(t *testing.T) {
 	}
 }
 
-// localDial is the process's own network, which is what these tests exercise: the
+// TestAListeningStreamIsNotEndedByItsTotalSize pins the unit the frame limit is
+// counted in (issue #213).
+//
+// The listening stream is a persistent connection that is expected to deliver an
+// unbounded number of frames, so a limit wrapped around its BODY ends the stream once
+// the running total passes it — turning "this peer has been chatty" into "this peer
+// stopped talking", which is the kind of silence that looks like a quiet peer. The cap
+// belongs on one frame.
+//
+// The sizes are small enough to run fast and large enough that the total crosses the
+// per-frame cap: the old code returned EOF partway through.
+func TestAListeningStreamIsNotEndedByItsTotalSize(t *testing.T) {
+	const frames = 24
+	payload := strings.Repeat("x", 64<<10) // 64 KiB per frame, ~1.5 MiB total
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.Header().Set("Mcp-Session-Id", "sess-big")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			for i := 0; i < frames; i++ {
+				_, _ = fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"n/%d\",\"params\":{\"pad\":\"%s\"}}\n\n", i, payload)
+			}
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+
+	ch, err := Open(t.Context(), srv.URL, localDial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := ch.Call(ctx, map[string]any{"id": 1, "method": "initialize"}); err != nil {
+		t.Fatalf("initialize call failed: %v", err)
+	}
+
+	// The last frame is the one past the old cap, so reading all of them is what
+	// proves the stream survived the total.
+	//
+	// ORDER AND NO REPEATS, because that is what a broken stream actually looks
+	// like from here: a body limit ends the carrier mid-way, the reconnect loop
+	// opens a new one, and the server pushes its backlog again from the start. A
+	// count alone cannot see that — the duplicates fill the same total — so each
+	// read has to be the frame it should be.
+	for i := 0; i < frames; i++ {
+		readCtx, readCancel := context.WithTimeout(t.Context(), 5*time.Second)
+		ev, ok := ch.Next(readCtx)
+		readCancel()
+		if !ok {
+			t.Fatalf("the stream ended after %d of %d frames; its total size must not close it", i, frames)
+		}
+		var got struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal([]byte(ev), &got); err != nil {
+			t.Fatalf("frame %d is not a JSON object: %v", i, err)
+		}
+		if want := fmt.Sprintf("n/%d", i); got.Method != want {
+			t.Fatalf("read %d was %q, want %q; a restarted stream re-delivers frames it already sent", i, got.Method, want)
+		}
+	}
+}
+
+// not implement streamable GET (405 Method Not Allowed) does not cause infinite
+// retry storms or errors.
+func TestHTTPChannelSilentlyHandlesUnsupportedGET(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.Header().Set("Mcp-Session-Id", "sess-405")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+		case http.MethodGet:
+			http.Error(w, "not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	ch, err := Open(t.Context(), srv.URL, localDial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := ch.Call(ctx, map[string]any{"id": 1, "method": "initialize"}); err != nil {
+		t.Fatalf("call failed: %v", err)
+	}
+
+	// Wait briefly to confirm no panic, busy-loop, or hang.
+	time.Sleep(100 * time.Millisecond)
+}
+
 // SSH path is covered where it is built (internal/mcp), and this package is about the
 // channel's framing and locking rather than where the bytes came from.
 func localDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
+
+// TestHTTPChannelReceivesUnsolicitedEvents pins unsolicited server-initiated events
+// over the HTTP transport (#210).
+//
+// A spec-compliant streamable HTTP MCP server sends unsolicited notifications on the
+// listening GET stream (text/event-stream with Mcp-Session-Id). The channel must open
+// this stream as soon as a session id is assigned, and unsolicited events must land in
+// the event backlog where Next/Take can read them without waiting for an active POST.
+//
+// THE READ HAPPENS IMMEDIATELY AFTER THE CALL, ON PURPOSE (issue #213). The listening
+// GET is opened by a goroutine, so there is a window in which the POST has answered and
+// the stream has not finished handshaking. A reader that asks "is the stream up" in that
+// window gets false and gives up, even though the frame is microseconds away. So this
+// waits for the FRAME and never for the handshake.
+func TestHTTPChannelReceivesUnsolicitedEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.Header().Set("Mcp-Session-Id", "sess-123")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+		case http.MethodGet:
+			if r.Header.Get("Mcp-Session-Id") != "sess-123" {
+				http.Error(w, "missing session id", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			// Push an unsolicited notification.
+			_, _ = fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"text\":\"hello-from-server\"}}\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		default:
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	ch, err := Open(t.Context(), srv.URL, localDial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+
+	// Initial call establishes the session id.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := ch.Call(ctx, map[string]any{"id": 1, "method": "initialize"}); err != nil {
+		t.Fatalf("initialize call failed: %v", err)
+	}
+
+	// NO WAITING FOR THE HANDSHAKE. The event is pushed by the server as soon as the
+	// GET arrives, and Next is what has to be willing to wait for it.
+	readCtx, readCancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer readCancel()
+	ev, ok := ch.Next(readCtx)
+	if !ok {
+		t.Fatal("ch.Next failed to read the unsolicited event")
+	}
+	if !strings.Contains(ev, "hello-from-server") {
+		t.Fatalf("unexpected event payload: %s", ev)
+	}
 }
 
 // TestTakeDoesNotStealTheAnswerACallIsWaitingFor pins the race between the two

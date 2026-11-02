@@ -24,7 +24,7 @@ import (
 // end-to-end did NOT, because the map operations there are too widely spaced to
 // interleave — which is why this drives the table directly.
 func TestAliasTableIsSafeUnderConcurrency(t *testing.T) {
-	a := &aliasTable{m: map[string]string{}}
+	a := newAliasTableForTest(map[string]string{})
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)

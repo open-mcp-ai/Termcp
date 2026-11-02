@@ -62,7 +62,14 @@ type extState struct {
 
 	// extName is what this state is filed under. The timers need it: they fire
 	// outside any call, and have to read the template again to decide.
-	extName string
+	extName  string
+	stateKey string
+
+	// target is the host this state runs on. One extension may declare several, and
+	// each gets its own state: a machine that is down must not make its siblings
+	// unavailable, and two targets must not share a retry ladder or a forward set.
+	// Empty means the single target the template itself names.
+	target string
 
 	// retry is the pending automatic attempt, or nil. One timer, replaced on every
 	// failure — the ladder is a deadline the status prints, so it must be kept.
@@ -178,7 +185,10 @@ func (st *extState) changed(ext *Extension) bool {
 // the same edit.
 func fingerprint(ext *Extension) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%s|%q|", ext.Kind, ext.Target, ext.Mode, ext.Command)
+	// WHAT RUNS IS WHAT IS IN THE FINGERPRINT. Every field a session is built from
+	// belongs here; a field that only describes the template does not, because
+	// changing a description must not tear down a live instance.
+	fmt.Fprintf(&b, "%s|%s|%q|", ext.Target, ext.Mode, ext.Command)
 	for _, a := range ext.Args {
 		fmt.Fprintf(&b, "%q,", a)
 	}
@@ -323,10 +333,24 @@ func (st *extState) dropExtra(shellID string) bool {
 	return false
 }
 
-// dueExtras removes and returns the instances whose silence has run out. Taking
-// them out of the state is what keeps the walk from handing one out while it is
-// being closed.
-func (st *extState) dueExtras(limit time.Duration) []string {
+// dueExtras removes and returns the instances whose silence has run out, and
+// records the close for each.
+//
+// THE REMOVAL, THE REASON AND THE STATUS COME OUT OF ONE LOCK SCOPE. They used to
+// be three calls from the caller: the instance was gone, then the reason was
+// written, then the status settled — and a reader (Status/List → snapshot) landing
+// in between saw an extension with no instances, no closed channel and a status
+// that still said "available". A window running out is exactly the case a reader
+// asks about, so the answer must never be that half-state. Taking them out of the
+// state is what keeps the walk from handing one out while it is being closed.
+func (st *extState) dueExtras(limit time.Duration, reason string) []string {
+	// A ZERO WINDOW COLLECTS NOTHING (issue #227). Without this guard the comparison
+	// below reads `now.Sub(lastUse) >= 0`, which is true for every instance — so
+	// allowing idle_timeout = 0 at the config layer alone would have reaped every
+	// channel the moment it was created.
+	if limit <= 0 {
+		return nil
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := time.Now()
@@ -337,11 +361,20 @@ func (st *extState) dueExtras(limit time.Duration) []string {
 		// the next caller — so there is nothing for a window to run out on.
 		if ex.shellID != "" && now.Sub(ex.lastUse) >= limit {
 			due = append(due, ex.shellID)
+			sessionID := st.sessionID
+			if sessionID == "" {
+				sessionID = ex.sessionID
+			}
+			st.closedAt = now
+			st.closedSessionID, st.closedShellID, st.closedReason = sessionID, ex.shellID, reason
 			continue
 		}
 		kept = append(kept, ex)
 	}
 	st.extra = kept
+	if len(due) > 0 {
+		st.settleLocked()
+	}
 	return due
 }
 
@@ -374,11 +407,72 @@ func (st *extState) extraShells() []string {
 func (st *extState) instanceCount() int {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	return st.instanceCountLocked()
+}
+
+// instanceCountLocked is instanceCount for a caller that already holds st.mu.
+func (st *extState) instanceCountLocked() int {
 	n := len(st.extra)
 	if st.shellID != "" {
 		n++
 	}
 	return n
+}
+
+// retireExtra drops one dead instance, records why it ended and settles the
+// status, in ONE lock scope.
+//
+// The three steps used to be separate calls from the walk, so a reader landing
+// between them saw an extension that had just lost its channel and could say
+// neither which one nor why — status still "available", closed id empty. The reason
+// belongs to the channel, so it is written together with the removal that makes it
+// news.
+func (st *extState) retireExtra(sessionID, shellID, reason string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	idx := -1
+	for i, ex := range st.extra {
+		if ex.shellID == shellID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	st.extra = append(st.extra[:idx], st.extra[idx+1:]...)
+	st.recordFailureLocked("session", reason)
+	st.closedAt = time.Now()
+	st.closedSessionID, st.closedShellID, st.closedReason = sessionID, shellID, reason
+	st.status = StatusUnavailable
+	st.settleLocked()
+	return true
+}
+
+// settleLocked applies the runtime-status rule to the instances that are left and
+// reports whether the status changed.
+//
+// ONE DECISION, SHARED: "no instances left" is a fact two callers create — the
+// walk settling after a sweep, and the reap step that just removed the instance.
+// Deciding it only on the walk's path left the moment described in retireExtra and
+// dueExtras.
+func (st *extState) settleLocked() bool {
+	switch {
+	case len(st.failures) > 0 && st.instanceCountLocked() == 0:
+		return false // leave the failure standing
+	case st.instanceCountLocked() > 0:
+		if st.status == StatusAvailable {
+			return false
+		}
+		st.status = StatusAvailable
+		return true
+	default:
+		if st.status == StatusIdle {
+			return false
+		}
+		st.status = StatusIdle
+		return true
+	}
 }
 
 // sessionOf and shellOf describe the extension's FIRST instance, which is what
@@ -506,15 +600,15 @@ func (r *Reconciler) armRetry(st *extState, wait time.Duration) {
 		if ctx != nil && ctx.Err() != nil {
 			return
 		}
-		name := st.name()
+		name, target := st.name(), st.host()
 		if name == "" {
 			return
 		}
-		ext, err := r.store.Load(name)
+		ext, err := r.loadTarget(name, target)
 		if err != nil || !ext.IsEnabled() {
 			return
 		}
-		r.retryNow(name)
+		r.retryTargetNow(name, target)
 	})
 	st.mu.Lock()
 	st.retry = t
@@ -562,6 +656,11 @@ func (st *extState) lastStage() string {
 func (st *extState) recordFailure(stage, reason string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	st.recordFailureLocked(stage, reason)
+}
+
+// recordFailureLocked is the same history update for a caller that holds st.mu.
+func (st *extState) recordFailureLocked(stage, reason string) {
 	if len(st.failures) > 0 {
 		last := st.failures[len(st.failures)-1]
 		if last.Stage == stage && last.Reason == reason {
@@ -591,15 +690,23 @@ func (st *extState) snapshot() Status {
 		Instances: len(st.extra),
 	}
 	// THE CHANNEL REPORTED IS ONE THE CALLER CAN DRIVE. For a template with its own
-	// channel that is the reconciler's; for an on-demand extension it is the first
-	// instance it handed out, because there is no other channel to name.
+	// channel that is the reconciler's; for an on-demand extension it is the instance
+	// handed out MOST RECENTLY (issue #230).
+	//
+	// It used to be the FIRST one, which made `ls ext` and `open ext` name different
+	// channels in the same breath: every ask gets its own channel (see Acquire), so
+	// after two opens `ls` reported :1 while `open` returned :2 — two directives, two
+	// addresses, no way to tell which was live. The newest is the one an `open` just
+	// returned, so the two now agree; Instances carries how many exist, and
+	// `get <session>` still lists every one of them.
 	if st.shellID != "" {
 		out.Instances++
 	} else if len(st.extra) > 0 {
-		out.ShellID = st.extra[0].shellID
+		newest := st.extra[len(st.extra)-1]
+		out.ShellID = newest.shellID
 	}
 	if out.SessionID == "" && len(st.extra) > 0 {
-		out.SessionID = st.extra[0].sessionID
+		out.SessionID = st.extra[len(st.extra)-1].sessionID
 	}
 	if st.lazy {
 		out.IdleTimeoutMs = st.idleLimit.Milliseconds()

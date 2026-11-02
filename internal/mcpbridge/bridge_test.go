@@ -596,3 +596,50 @@ func TestSSEUnreachableEndpointIsTerminal(t *testing.T) {
 		t.Errorf("stderr does not name the failing call: %q", stderr)
 	}
 }
+
+// blockingWriter never returns from Write, which is what a client that stopped
+// reading its stdout pipe looks like from inside the bridge.
+type blockingWriter struct{ release chan struct{} }
+
+func (w *blockingWriter) Write(b []byte) (int, error) {
+	<-w.release
+	return len(b), nil
+}
+
+// TestWriteOutDoesNotQueueBehindAStalledClient pins that one stuck write to stdout
+// cannot park every later writer forever (issue #220).
+//
+// The bridge writes replies to its client's stdout. When that client stops reading,
+// the write blocks in the OS and the mutex that serialised writes was held forever —
+// so every later reply, including the error reply `fail` wants to send, queued
+// behind it. A bridge that cannot report its own failure is the failure mode.
+func TestWriteOutDoesNotQueueBehindAStalledClient(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	w := &blockingWriter{release: release}
+
+	b := &bridge{
+		cfg:    Config{Out: w, Err: io.Discard},
+		ctx:    context.Background(),
+		outTok: make(chan struct{}, 1),
+	}
+	b.outTok <- struct{}{}
+
+	// First write takes the token and blocks inside Write.
+	go b.writeOut([]byte(`{"id":1}`))
+	// Give it a moment to be inside Write.
+	time.Sleep(50 * time.Millisecond)
+
+	// The second write must give up rather than wait for the first forever.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.writeOut([]byte(`{"id":2}`))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(writeOutWait + 3*time.Second):
+		t.Fatal("a second write waited past writeOutWait for a stalled client")
+	}
+}

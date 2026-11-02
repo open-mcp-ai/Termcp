@@ -79,3 +79,49 @@ func TestManifestWriteSurvivesAReaderHoldingTheFile(t *testing.T) {
 	}
 	t.Logf("published the exited status after %v (reader held the file for %v)", took, holdFor)
 }
+
+// TestDeleteSessionSurvivesAReaderHoldingALogFile pins the removal half of the
+// sharing-violation fix: on Windows an open read handle on log.bin causes RemoveAll
+// to fail with "The process cannot access the file because it is being used by another
+// process", which previously surfaced as "删除失败".
+//
+// The reader holds log.bin open for a bounded time (shorter than removeAttempts'
+// backoff budget), exactly as an in-flight output-range fetch, transcript preview,
+// or file scanner does; DeleteSession must wait it out and remove the tree.
+func TestDeleteSessionSurvivesAReaderHoldingALogFile(t *testing.T) {
+	st := newStore(t)
+	const sess, shell = "held-sess-1", "held-shell-1"
+	if err := st.SaveSession(api.Session{ID: sess, Name: sess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendLog(sess, shell, []byte("log contents"), StdioOut); err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := st.LogPath(sess, shell)
+	held, err := os.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const holdFor = 25 * time.Millisecond
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(holdFor)
+		held.Close()
+	}()
+	defer func() { <-released }()
+
+	started := time.Now()
+	if err := st.DeleteSession(sess); err != nil {
+		t.Fatalf("DeleteSession while reader holds log failed: %v", err)
+	}
+	took := time.Since(started)
+
+	if _, err := os.Stat(st.sessionDir(sess)); !os.IsNotExist(err) {
+		t.Fatalf("session dir still present after DeleteSession: %v", err)
+	}
+	if took < holdFor {
+		t.Errorf("delete took %v, faster than the %v hold; sharing window was not exercised", took, holdFor)
+	}
+}

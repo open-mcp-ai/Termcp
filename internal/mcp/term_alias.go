@@ -27,48 +27,47 @@ import (
 // corrupts under load — the worst kind, because it shows up as an alias resolving
 // to a mangled expansion rather than as a crash.
 //
-// ponytail: one RWMutex over one map. An alias table holds a handful of entries and
-// is read once per statement, so sharding it would be code that never runs in the
-// hot path it was written for.
+// An alias table is a key-value store with no multi-key invariant: every operation
+// touches exactly one entry. That is the shape sync.Map is for, so there is no
+// lock to get wrong.
 type aliasTable struct {
-	mu sync.RWMutex
-	m  map[string]string
+	m sync.Map // name string -> expansion string
 }
 
 // aliases is the process-wide table.
-var aliases = &aliasTable{m: map[string]string{}}
+var aliases = &aliasTable{}
 
 // get reads one entry.
 func (a *aliasTable) get(name string) (string, bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	v, ok := a.m[name]
-	return v, ok
+	v, ok := a.m.Load(name)
+	if !ok {
+		return "", false
+	}
+	s, _ := v.(string)
+	return s, true
 }
 
 // set writes one entry.
 func (a *aliasTable) set(name, expansion string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.m[name] = expansion
+	a.m.Store(name, expansion)
 }
 
 // drop removes one entry.
 func (a *aliasTable) drop(name string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.m, name)
+	a.m.Delete(name)
 }
 
-// snapshot copies the table for a listing, so the reply is rendered from one
-// consistent moment instead of iterating a map another goroutine may be editing.
+// snapshot copies the table for a listing. Range does not promise a consistent
+// snapshot, which is fine here: the answer is a rendering for a human, and a
+// listing that misses an alias added a microsecond ago is not an error.
 func (a *aliasTable) snapshot() map[string]string {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	out := make(map[string]string, len(a.m))
-	for k, v := range a.m {
-		out[k] = v
-	}
+	out := make(map[string]string)
+	a.m.Range(func(k, v any) bool {
+		name, _ := k.(string)
+		expansion, _ := v.(string)
+		out[name] = expansion
+		return true
+	})
 	return out
 }
 

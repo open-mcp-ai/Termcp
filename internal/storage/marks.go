@@ -250,13 +250,8 @@ func seekRef(refs []markRef, start int64) int {
 // the entries that read already holds.
 func (s *Store) markCursors(sessionID, shellID string) ([]markRef, error) {
 	key := sessionID + "\x00" + shellID
-	s.idxMu.Lock()
-	idx := s.markIdx[key]
-	if idx == nil {
-		idx = &markIndex{}
-		s.markIdx[key] = idx
-	}
-	s.idxMu.Unlock()
+	actual, _ := s.markIdx.LoadOrStore(key, &markIndex{})
+	idx, _ := actual.(*markIndex)
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -270,9 +265,7 @@ func (s *Store) markCursors(sessionID, shellID string) ([]markRef, error) {
 // removed: an index that outlived its file would answer a later shell that
 // reused the id from positions in a log that no longer exists.
 func (s *Store) dropMarkIndex(sessionID, shellID string) {
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	delete(s.markIdx, sessionID+"\x00"+shellID)
+	s.markIdx.Delete(sessionID + "\x00" + shellID)
 }
 
 // dropSessionMarkIndex forgets every shell index under one session, for the same
@@ -280,11 +273,10 @@ func (s *Store) dropMarkIndex(sessionID, shellID string) {
 // from matching a longer one that starts with it.
 func (s *Store) dropSessionMarkIndex(sessionID string) {
 	prefix := sessionID + "\x00"
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	for k := range s.markIdx {
-		if strings.HasPrefix(k, prefix) {
-			delete(s.markIdx, k)
+	s.markIdx.Range(func(k, _ any) bool {
+		if name, ok := k.(string); ok && strings.HasPrefix(name, prefix) {
+			s.markIdx.Delete(k)
 		}
-	}
+		return true
+	})
 }

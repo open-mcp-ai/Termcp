@@ -410,3 +410,46 @@ func ids(rs []approval.Request) []string {
 	}
 	return out
 }
+
+// TestExpiryHoldsWithoutAWaitCallerPinsIssue216 pins that a review request expires
+// on the clock even when nobody is blocked in Wait (issue #216).
+//
+// The public review flow answers 202 "review_pending" and creates no waiter, but
+// the Pending → Expired transition used to be driven ONLY by Wait's timer. A
+// request nobody waited on therefore stayed Pending forever, and a late Approve
+// returned success and executed the write — turning timeout_seconds, the one
+// security bound review mode has, into a decoration.
+func TestExpiryHoldsWithoutAWaitCallerPinsIssue216(t *testing.T) {
+	q := approval.NewQueue("s1", approval.Options{Timeout: 40 * time.Millisecond})
+	id, err := q.Submit(approval.Submission{
+		Kind: approval.KindShellInput, ShellID: "sh1",
+		Summary: "write a file", Text: "echo hi > out",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// NO WAITER. This is the whole point: the public path returns immediately.
+	time.Sleep(80 * time.Millisecond)
+
+	got, err := q.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != approval.Expired {
+		t.Fatalf("state after the window closed = %s, want %s; expiry must not depend on a waiter",
+			got.State, approval.Expired)
+	}
+
+	// A late approval must be refused, not executed.
+	if _, err := q.Approve(id); !errors.Is(err, approval.ErrTimeout) {
+		t.Fatalf("approve after expiry err = %v, want ErrTimeout", err)
+	}
+
+	// The worklist must not still offer it as actionable.
+	for _, r := range q.List() {
+		if r.ID == id && r.State == approval.Pending {
+			t.Fatal("List still reports the expired request as pending")
+		}
+	}
+}

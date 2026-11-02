@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -328,18 +330,55 @@ func (s *Server) sshClientOnly(sessionID string) (*ssh.Client, *mcpgo.CallToolRe
 	return cli, bad
 }
 
-// sftpClient resolves a session and creates an SFTP client over it.
-// Caller must defer Close() on the returned client.
-func (s *Server) sftpClient(sessionID string) (*sftp.Client, *mcpgo.CallToolResult) {
-	_, sshCli, bad := s.sshClientForSession(sessionID)
+// sftpClient preserves the session-only helper used by tests and callers that
+// already own the session lifecycle. Production directives use sftpClientContext
+// so a borrowed transport lease can be released alongside the SFTP channel.
+func (s *Server) sftpClient(target string) (*sftp.Client, *mcpgo.CallToolResult) {
+	cli, release, bad := s.sftpClientContext(context.Background(), target)
 	if bad != nil {
 		return nil, bad
 	}
-	cli, err := sftp.NewClient(sshCli)
-	if err != nil {
-		return nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
+	if _, borrowed := s.parseBorrowedHost(target); borrowed {
+		_ = cli.Close()
+		release()
+		return nil, toolError(CodeInvalidArgument, "%s", "borrowed SFTP requires a request-scoped transport lease")
 	}
 	return cli, nil
+}
+
+// sftpClientContext resolves a session (or borrowed host, #237) and creates an
+// SFTP client over it. The caller closes the SFTP client and invokes release.
+func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcpgo.CallToolResult) {
+	var sshCli *ssh.Client
+	var release func()
+	if host, borrowed := s.parseBorrowedHost(target); borrowed {
+		var err error
+		// The explicit marker is kept across this boundary: `host` is already known
+		// to be a borrowed target, and handing the resolver a bare word would make it
+		// re-decide (an unknown profile then read as a missing session).
+		sshCli, release, err = s.acquireSSHTransport(ctx, "use:"+host)
+		if err != nil {
+			code := CodeConnectionFailed
+			if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+				code = CodeSSHConfigNotFound
+			}
+			return nil, nil, toolError(code, "%s", err.Error())
+		}
+	} else {
+		_, client, bad := s.sshClientForSession(target)
+		if bad != nil {
+			return nil, nil, bad
+		}
+		sshCli = client
+		release = func() {}
+	}
+
+	cli, err := sftp.NewClient(sshCli)
+	if err != nil {
+		release()
+		return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
+	}
+	return cli, release, nil
 }
 
 // requireShell looks up a shell by shell_id for terminal I/O (never session_id).

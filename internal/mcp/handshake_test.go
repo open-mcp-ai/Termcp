@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -88,14 +89,18 @@ func TestMcpHandshakeRunsOncePerHandle(t *testing.T) {
 // sends its own — two.
 //
 // It drives jrpcReady directly because the property under test is that ONE helper
-// holds its lock across the handshake. A Term-level test would exercise the whole
-// dispatch path and could pass or fail for reasons unrelated to this lock; the
-// helper is where the guarantee lives.
+// makes the handshake happen exactly once even when two callers overlap. A Term-level
+// test would exercise the whole dispatch path and could pass or fail for reasons
+// unrelated to this guarantee; the helper is where it lives.
+//
+// THE SECOND CALLER WAITS ON A CHANNEL, NOT A MUTEX (issue #221): it must still be
+// parked while the first handshake is in flight, but it is parked somewhere its own
+// context can release it, which the third assertion below covers.
 //
 // (This used to say Server was unsafe for concurrent Term calls, because
 // s.currentReply was per-call state on the shared value. That field is gone — see
 // TestLearnModeUsageIsPerReply — so a concurrent Term is now legal.)
-func TestJrpcReadyHoldsItsLockAcrossTheHandshake(t *testing.T) {
+func TestJrpcReadyRunsTheHandshakeOnceForOverlappingCallers(t *testing.T) {
 	release := make(chan struct{})
 	srv, inits := countingPeer(t, release)
 
@@ -150,4 +155,61 @@ func TestJrpcReadyHoldsItsLockAcrossTheHandshake(t *testing.T) {
 	if n := inits(); n != 1 {
 		t.Fatalf("initialize ran %d times for two overlapping ready calls; it must run once", n)
 	}
+}
+
+// TestASecondCallerCanLeaveTheHandshakeItIsWaitingFor pins the reason the wait moved
+// off a mutex (issue #221).
+//
+// The first handshake is parked inside the peer and does not finish. A second caller
+// arrives with a SHORT context. With a mutex around the handshake it had no way out:
+// Lock does not take a context, so it waited for the first caller's whole window —
+// which for a 60s call is a minute of an agent's budget spent on somebody else's
+// handshake. Waiting on a channel gives it a door, and the assertion is that it uses
+// it: the call returns its own deadline error while the first is still in flight.
+func TestASecondCallerCanLeaveTheHandshakeItIsWaitingFor(t *testing.T) {
+	release := make(chan struct{})
+	srv, inits := countingPeer(t, release)
+	s := newTestServer(t)
+
+	direct := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	ch, err := jrpc.Open(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http"), direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+	h := &jrpcHandle{ch: ch, kind: "mcp"}
+
+	// First caller: a long window, parked inside the peer.
+	go func() {
+		long, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = s.jrpcReady(long, h)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for inits() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if inits() == 0 {
+		t.Fatal("the first handshake never reached the peer")
+	}
+
+	// Second caller: its own short window, while the first is still stuck.
+	short, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = s.jrpcReady(short, h)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("the second caller reported success while the handshake was still in flight")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the second caller returned %v, want its own deadline", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("the second caller waited %v; it must honour its own context", elapsed)
+	}
+	close(release)
 }

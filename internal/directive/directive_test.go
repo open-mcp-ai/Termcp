@@ -860,7 +860,7 @@ func TestValuelessFlagsAreReal(t *testing.T) {
 // startup error that named no flag — so the shape is pinned here, where the
 // parser can refuse it before anything runs.
 func TestExtArgsTakesTheRestOfTheLine(t *testing.T) {
-	f, err := Parse(`create ext srv --kind mcp --target internal --mode pipe --command node --args /srv/mcp.js --stdio --label 'a,b'`)
+	f, err := Parse(`create ext srv --target internal --mode pipe --command node --args /srv/mcp.js --stdio --label 'a,b'`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestExtArgsTakesTheRestOfTheLine(t *testing.T) {
 	}
 	// The other flags still parsed: --args stops the scan, it does not swallow
 	// what came before it.
-	for k, want := range map[string]string{"kind": "mcp", "target": "internal", "mode": "pipe", "command": "node"} {
+	for k, want := range map[string]string{"target": "internal", "mode": "pipe", "command": "node"} {
 		if got := flagOf(t, st, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}

@@ -406,6 +406,11 @@
    room for it here, where the two side columns put the number on a switch's face
    (they have a switch; this bar does not). */
 .sessdock-batch .archive-tick-count { margin-left: 2px; }
+/* The broom sits INSIDE the dock bar, immediately before the window-controls
+   cluster — so the vertical divider still marks where arrangement controls begin.
+   No margin of its own: the tab strip absorbs the slack (`.sessdock-tabs` is
+   `flex: 1 1 auto`), which is what puts the broom at the strip's right edge, just
+   left of the line. */
 .sessdock-actions {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;
@@ -688,8 +693,56 @@
 .conn-tile.ext-card .conn-nm { font-size: .82rem; word-break: break-word; }
 .node-lamp.is-disabled { background: var(--text-faint); }
 .node-status.is-disabled { color: var(--text-muted); }
-.ext-kind { color: var(--accent); }
-/* A bound tunnel, shown as the address an agent connects to. */
+/* What this installation still has to answer, on the card: the one line a reader
+   can act on, and the reason an installed-but-unfinished template does not read
+   as a broken one. */
+.ext-needs { color: var(--warning); font: 400 .68rem var(--font-mono); }
+/* The variable table under the template: the hole's name and its author's note on
+   the left, this installation's answer on the right. Two columns, because a table of
+   names and values is read down the answers; stacked labels turn every row into a
+   block and the eye has to re-find the column each time. */
+.ext-holes { margin-top: 8px; }
+.ext-holes[hidden] { display: none; }
+.ext-holes-head {
+  font-size: .72rem; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .04em; padding-bottom: 4px; border-bottom: 1px solid var(--border-subtle);
+}
+.ext-hole {
+  display: grid; grid-template-columns: minmax(80px, 34%) 1fr;
+  gap: 4px 10px; align-items: center; padding: 5px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ext-hole-name { min-width: 0; font-size: .72rem; line-height: 1.35; overflow-wrap: anywhere; }
+.ext-hole code { font: 400 .72rem var(--font-mono); color: var(--text); }
+.ext-hole.is-empty code { color: var(--warning); }
+.ext-hole-help { color: var(--text-muted); }
+.ext-hole-value {
+  display: block; width: 100%; min-width: 0; min-height: 32px; margin: 0; padding: 6px 9px;
+  overflow: hidden; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-subtle);
+  border-radius: 6px; font: 400 .74rem/1.35 var(--font-mono); cursor: pointer;
+}
+.ext-hole-value:hover { border-color: var(--accent); }
+.ext-hole-value:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ext-hole.is-empty .ext-hole-value { color: var(--text-muted); font-family: inherit; font-style: italic; }
+/* A boolean's box is a tick, not a field: it is the value, not a control that
+   opens one. Everything else previews its value in a button. */
+.ext-hole input.ext-hole-tick { width: auto; justify-self: start; margin: 0; cursor: pointer; }
+#modal-ext-value { z-index: var(--z-modal-top); }
+#modal-ext-value .modal-body > textarea { min-height: 120px; resize: vertical; }
+/* The rendered document, as a document: monospace, wrapping, and its own scroll so a
+   long target list does not stretch the dialog past the viewport. */
+#modal-ext-preview-view { z-index: var(--z-modal-top); }
+#modal-ext-preview-view .modal { max-width: 640px; }
+#modal-ext-preview-view pre {
+  margin: 0 0 8px; max-height: 60vh; overflow: auto; padding: 10px 12px;
+  background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px;
+  color: var(--text-primary); font: 400 .74rem/1.45 var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .ext-hole { grid-template-columns: 1fr; }
+}
 .ext-fwd {
   margin-top: 3px; font: 400 .64rem var(--font-mono); color: var(--text-muted);
   overflow-wrap: anywhere;

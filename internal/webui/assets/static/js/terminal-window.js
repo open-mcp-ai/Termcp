@@ -139,8 +139,8 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, pos, opt
 
   win._sid = sessionId;
   win._parentSid = sessionId;
-  win._primaryShellId = shellId || sessionId;
   win._connName = connLabel || '';
+  win._readOnly = false;
   var sidEl = win.querySelector('.shell-sid-copy .sid');
   if (sidEl) sidEl.textContent = stripSessionPrefix(sessionId);
   var pend = win.querySelector('.shell-pending');
@@ -152,7 +152,7 @@ function finalizePendingShellWindow(win, connLabel, sessionId, shellId, pos, opt
   // session created in this tab takes, and without it _approvalMode stays
   // undefined, so typing is forwarded and the server silently drops it.
   applyApprovalModeFromSnapshot(win, sessionId);
-  createChannelTab(win, win._primaryShellId, { index: opt.index > 0 ? opt.index : 1 });
+  createChannelTab(win, shellId || sessionId, { index: opt.index > 0 ? opt.index : 1 });
   refreshSessionTabbar();
   // The placeholder that made this profile read "connecting" is gone; repaint so
   // the card shows the session it just got (or, on the failure path below, stops
@@ -248,10 +248,13 @@ var SHELL_REVIEW_SHEET_HTML =
 function openShellWindow(connLabel, sessionId, pos, opts) {
   opts = opts || {};
   var readOnly = !!opts.readOnly;
-  if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return; }
-  if (getShellWindowBySid(sessionId)) {
+  if (typeof Terminal === 'undefined') { alert(t('alert.xterm.failed')); return null; }
+  /* An explicit shell request means "open this channel in another panel"; with no
+     shell requested, an existing session panel is raised instead. The window does
+     not retain any role once it exists: every panel of the session is a peer. */
+  if (!opts.shell && getShellWindowBySid(sessionId)) {
     focusSessionWindow(connLabel, sessionId, pos, opts);
-    return;
+    return null;
   }
   var container = shellWindowsEl();
   if (!container) return;
@@ -347,6 +350,16 @@ SHELL_WINDOW_PANELS_HTML +
   // _initShellWindowUI resets the input gate; enforce read-only DEAD mode after.
   win._inputClosed = readOnly;
 
+  /* An explicit shell request opens just that channel in the new panel. Fetching
+     every shell here would race panels that already own them, and swap their
+     WebSocket readers out. Any other shell this panel is asked to show arrives by
+     the normal ownership path (createChannelTab / syncWindowTabs). */
+  if (opts.shell) {
+    createChannelTab(win, opts.shell, { index: opts.index || 0, readOnlyHistory: !!opts.channelReadOnly });
+    refreshSessionTabbar();
+    return win;
+  }
+
   // Restore all peer shells. readOnly DEAD views include exited snapshot shells.
   fetch(sessionAPI(sessionId, '/shells'))
     .then(function(r) { if (!r.ok) return []; return r.json().then(function(j) { return j.shells || []; }); })
@@ -362,10 +375,8 @@ SHELL_WINDOW_PANELS_HTML +
         return;
       }
       var tabs = shells.filter(function(s) { return readOnly || s.status === 'running'; });
+      tabs = tabs.filter(function(s) { return channelFitsWindow(win, s.shell_id || s.id); });
       if (tabs.length > 0) {
-        if (!win._primaryShellId) {
-          win._primaryShellId = (tabs[0].shell_id || tabs[0].id);
-        }
         tabs.forEach(function(s) { createChannelTab(win, s.shell_id || s.id, { index: s.index || 0 }); });
         /* The caller's channel wins over the remembered one: a window opened from
            the extension panel is a request for one extension's terminal, and the

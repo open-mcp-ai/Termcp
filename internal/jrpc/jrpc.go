@@ -143,6 +143,28 @@ type Channel struct {
 	// shut reports that Close ran.
 	shut atomic.Bool
 
+	// sseStarted reports that the listening GET stream has been dispatched. HTTP
+	// only: streamable MCP carries unsolicited server messages on a GET
+	// text/event-stream, so without it a peer can push only inside the body of a
+	// POST the caller happened to be waiting on.
+	sseStarted atomic.Bool
+
+	// sseRefused reports that the peer answered the listening GET with a permanent
+	// refusal (405/404), so it has no stream to push on and nothing will ever arrive
+	// there.
+	//
+	// IT IS NOT THE SAME QUESTION AS "IS THE STREAM UP". A reader that asked
+	// "is the stream up RIGHT NOW" got false for the whole handshake — which is a
+	// few hundred microseconds during which a pushed frame is perfectly able to
+	// arrive — and returned "no frame" at once instead of waiting for it (issue
+	// #213). The wait asks whether a frame COULD still arrive, so the refusal is
+	// what it watches, and the handshake is allowed to finish underneath it.
+	sseRefused atomic.Bool
+
+	// sseCancel stops the listening stream on Close, without waiting for a read
+	// deadline that a blocked SSE body does not honour.
+	sseCancel context.CancelFunc
+
 	// readErr carries why the socket stopped; done is closed by Close, releasing
 	// blocked readers and senders; dead is closed by the read loop when the socket
 	// stops delivering, so a waiter learns the difference between "nothing yet" and
@@ -577,14 +599,17 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 	if frame, ok := c.pop(); ok {
 		return frame, true
 	}
-	if c.transport != WS {
+	if !c.CanWaitEvents() {
 		return Framed{}, false
 	}
 	// Wait on the backlog until a frame arrives, Close runs, or ctx expires.
 	c.evMu.Lock()
 	defer c.evMu.Unlock()
 	for len(c.ev) == 0 {
-		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
+		// THE REFUSAL IS CHECKED INSIDE THE LOOP, not only before it: while this
+		// wait was parked the peer may have answered the listening GET with
+		// "no" — a fact this wait has to act on rather than spend its window on.
+		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return Framed{}, false
 		}
 		// A helper goroutine releases the condition when ctx or done closes, so a
@@ -604,7 +629,7 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 		if len(c.ev) > 0 {
 			break
 		}
-		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
+		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return Framed{}, false
 		}
 	}
@@ -627,7 +652,7 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 	if frame, ok := c.popEvent(); ok {
 		return frame.Data, true
 	}
-	if c.transport != WS {
+	if !c.CanWaitEvents() {
 		return "", false
 	}
 	c.evMu.Lock()
@@ -639,7 +664,7 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 				return f.Data, true
 			}
 		}
-		if c.shut.Load() || ctx.Err() != nil || c.socketGone() {
+		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return "", false
 		}
 		stop := make(chan struct{})
@@ -700,15 +725,27 @@ func (c *Channel) pop() (Framed, bool) {
 }
 
 // Close shuts the channel. A socket is closed with a normal closure frame so the
-// peer does not log an abnormal one.
+// peer does not log an abnormal one, when write access is free.
 func (c *Channel) Close() error {
 	if !c.shut.CompareAndSwap(false, true) {
 		return nil
 	}
 	close(c.done)
+	if c.sseCancel != nil {
+		c.sseCancel()
+	}
 	if c.conn != nil {
-		_ = c.conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		// THE WRITE GATE IS HONOURED, NOT RACED WITH. gorilla/websocket forbids
+		// concurrent writers, so sending CloseMessage while a Call/Send is in flight
+		// races on the connection's writer. If the gate is available, send the polite
+		// close frame; if it is occupied, skip the frame and drop the socket directly.
+		select {
+		case c.callGate <- struct{}{}:
+			_ = c.conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			<-c.callGate
+		default:
+		}
 		return c.conn.Close()
 	}
 	return nil
@@ -732,6 +769,98 @@ func (c *Channel) wsCall(ctx context.Context, frame map[string]any, id any) (str
 	return c.awaitAnswer(ctx, id, func() error { return c.writeFrame(ctx, frame) })
 }
 
+// CanWaitEvents reports whether a frame could still arrive on this channel that no
+// call is waiting for: always true on a socket, and true on HTTP once the listening
+// stream has been dispatched and the peer has not refused it.
+//
+// IT DELIBERATELY DOES NOT REQUIRE THE STREAM TO BE UP YET. Waiting for the
+// handshake before allowing a wait would make the first read after `open` lose the
+// race against it and answer "no frame" while the frame was in flight (issue #213).
+func (c *Channel) CanWaitEvents() bool {
+	return c.transport == WS || (c.sseStarted.Load() && !c.sseRefused.Load())
+}
+
+// ensureSSEStream starts the listening GET stream for an HTTP channel once a
+// session id is known.
+//
+// THE STREAM OPENS AFTER INITIALIZE, NOT BEFORE. Streamable MCP assigns the
+// session on the first POST (initialize), and opening a GET before that makes a
+// spec-compliant server mint a SECOND session rather than attaching to the one
+// being initialized.
+func (c *Channel) ensureSSEStream(sessionID string) {
+	if !c.sseStarted.CompareAndSwap(false, true) {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.sseCancel = cancel
+	go c.readSSEStream(ctx, sessionID)
+}
+
+// readSSEStream maintains the long-lived GET text/event-stream carrier for
+// server-initiated messages.
+//
+// UNSOLICITED NOTIFICATIONS BELONG TO THIS STREAM. A streamable HTTP MCP server
+// delivers notifications and progress here while requests run over separate
+// POST calls; without this stream those frames are permanently lost.
+func (c *Channel) readSSEStream(ctx context.Context, sessionID string) {
+	for !c.shut.Load() && ctx.Err() == nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Mcp-Session-Id", sessionID)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil || c.shut.Load() {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.done:
+				return
+			case <-time.After(500 * time.Millisecond):
+				continue
+			}
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			// A server that refuses GET text/event-stream (405 Method Not Allowed
+			// or 404) does not speak streamable MCP; do not hammer it.
+			if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotFound {
+				c.sseRefused.Store(true)
+				// WAKE THE PARKED READERS: "nothing will ever arrive here" is a
+				// change they asked to be told about, and a waiter that is not woken
+				// spends the rest of its window on a stream that already said no.
+				c.evCond.Broadcast()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.done:
+				return
+			case <-time.After(time.Second):
+				continue
+			}
+		}
+
+		br := bufio.NewReader(resp.Body)
+		for {
+			payload, err := readEvent(br, maxFrameBytes)
+			if err != nil {
+				_ = resp.Body.Close()
+				break
+			}
+			if payload == "" {
+				continue
+			}
+			c.dispatch(c.record(payload))
+		}
+	}
+}
+
 // httpCall posts one frame and reads its answer.
 //
 // The answer is the response body when the peer answers in JSON, and one event
@@ -740,10 +869,9 @@ func (c *Channel) wsCall(ctx context.Context, frame map[string]any, id any) (str
 // reading the whole body and searching it afterwards — which hung whenever the
 // stream stayed open for notifications, as a spec-compliant one does.
 //
-// ponytail: one POST sees only the events carried by its own response. Server
-// messages that arrive while no request is open need the listening GET stream,
-// which this does not open. Add it when a caller depends on unsolicited MCP
-// notifications; a request/response peer (and CDP, which uses a socket) does not.
+// Server-initiated messages (unsolicited notifications, progress) are delivered
+// over the listening GET stream (see ensureSSEStream) which opens once a session
+// id exists; frames carried there land in the backlog and are readable via Take/Next.
 func (c *Channel) httpCall(ctx context.Context, frame map[string]any, id any) (string, error) {
 	resp, err := c.httpPost(ctx, frame)
 	if err != nil {
@@ -765,7 +893,7 @@ func (c *Channel) httpCall(ctx context.Context, frame map[string]any, id any) (s
 	}
 	br := bufio.NewReader(io.LimitReader(resp.Body, maxFrameBytes))
 	for {
-		payload, err := readEvent(br)
+		payload, err := readEvent(br, maxFrameBytes)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return "", fmt.Errorf("the event stream ended before the reply to id %v arrived", id)
@@ -802,6 +930,9 @@ func (c *Channel) httpPost(ctx context.Context, frame map[string]any) (*http.Res
 	}
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		c.sess.Store(&sid)
+		c.ensureSSEStream(sid)
+	} else if existing := c.sess.Load(); existing != nil && *existing != "" {
+		c.ensureSSEStream(*existing)
 	}
 	return resp, nil
 }
@@ -891,7 +1022,13 @@ func isEventStream(ct string) bool {
 // Multi-line data is joined with newlines, which is what the spec says and what
 // a pretty-printed JSON frame produces; a comment line (`:keepalive`) is skipped
 // rather than concatenated, which is what makes a long-lived stream usable.
-func readEvent(br *bufio.Reader) (string, error) {
+//
+// `max` IS PER EVENT, NOT PER CONNECTION. A listening stream lives for as long as
+// the channel does and is expected to deliver an unbounded number of frames, so a
+// limit wrapped around the body would end the stream once the total passed it —
+// silently turning "the peer has been chatty for an hour" into "the peer stopped
+// talking" (issue #213). Bounding each frame is the thing the limit was for.
+func readEvent(br *bufio.Reader, max int) (string, error) {
 	var data strings.Builder
 	for {
 		line, err := br.ReadString('\n')
@@ -902,6 +1039,9 @@ func readEvent(br *bufio.Reader) (string, error) {
 					data.WriteByte('\n')
 				}
 				data.WriteString(payload)
+				if max > 0 && data.Len() > max {
+					return "", fmt.Errorf("an event exceeded %d bytes", max)
+				}
 			}
 		} else if data.Len() > 0 {
 			// The blank line that ends an event.

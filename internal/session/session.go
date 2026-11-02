@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,7 +23,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Lock ordering: shellStateMu -> mu -> stdinMu (and shellStateMu -> cs.mu).
+// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
 // Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
 // only taken by session-level transitions (close/DEAD/terminate, new shells).
 // The manager-assigned callbacks and the per-shell closed flag are atomics and
@@ -106,9 +107,8 @@ type Config struct {
 type Session struct {
 	api.Session
 	mu            sync.RWMutex
-	shellStateMu  sync.Mutex // serializes child registration with close/DEAD transition
-	closing       bool       // guarded by shellStateMu; blocks new child channels
-	stdinMu       sync.Mutex
+	shellStateMu  sync.Mutex  // serializes child registration with close/DEAD transition
+	closing       atomic.Bool // blocks new child channels and approval reconfiguration
 	terminateOnce sync.Once
 	deadOnce      sync.Once
 	exitOnce      sync.Once
@@ -130,14 +130,19 @@ type Session struct {
 	defaultShell   string       // profile default_shell, applied to shells opened later
 	onExit         OnExitPolicy // what to do when the last shell ends by itself
 	primaryShellID string       // first shell id (≠ session id); addressed by session-level helpers; empty when NoShell
-	nextShellIndex int          // guarded by shellStateMu; monotonically assigns channel indexes
-	restriction    Restriction  // the zero value is unrestricted; see Config.Restriction
+	primaryMode    api.SessionMode
+	nextShellIndex int         // guarded by shellStateMu; monotonically assigns channel indexes
+	restriction    Restriction // the zero value is unrestricted; see Config.Restriction
 
 	shells sync.Map // *ChildShell by ID
 	// approval gates input for the whole session when non-nil (see approval.go).
 	// It is session-scoped because production access is per-target: one
 	// deployment can hold a scratch host and a prod host at the same time.
 	approval *approvalState
+	// retainedQueue holds the closed queue after approval mode is disabled or the
+	// session closes, so /api/approvals can still report the terminal cancelled
+	// state to a harness or an auditor (issue #217). It gates nothing.
+	retainedQueue *approval.Queue
 	// approvalSink is the change handler installed before approval mode is
 	// enabled, so a handler set at startup is not lost.
 	approvalSink func(sessionID string, req approval.Request)
@@ -179,10 +184,12 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 
 	usePty := cfg.Mode == api.ModePTY
 
-	execSession, sshEndpointPublic, err := dialTransport(internal, cfg, usePty)
+	es, endpoint, err := dialTransport(internal, cfg, usePty)
 	if err != nil {
 		return nil, err
 	}
+	execSession := es
+	sshEndpointPublic := endpoint
 	// The dial can also finish in the same instant the caller gives up. Dropping
 	// the transport here rather than registering it keeps the promise the cancel
 	// makes: after a cancelled request, no session exists to be listed. Without
@@ -254,6 +261,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	s.buf = buf
 	s.readerID = rid
 	s.primaryShellID = shellID
+	s.primaryMode = cfg.Mode
 	s.nextShellIndex = 1
 
 	root := &ChildShell{
@@ -319,37 +327,26 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 	s.watchWG.Add(1)
 	go func() {
 		defer s.watchWG.Done()
-		// THE REASON IS LOGGED WHERE AN OPERATOR LOOKS.
-		//
-		// This line used to be Debug, which is BELOW the daemon's default level (Info),
-		// so on a normal run it was never written — and the one durable record of why a
-		// session disappeared was therefore off. The session itself is then gone from
-		// every surface, and the transcript message says the same sentence whether the
-		// network dropped, the far side closed, or something else ended the transport
-		// (issue #176). Four sessions were lost in one afternoon and ruling out the
-		// causes took four separate experiments; the error that would have answered it
-		// was in this discarded line.
-		//
-		// Warn rather than Info because a transport that ends with an error is not the
-		// session's ordinary exit: the caller may not have asked for it.
-		// THE TRANSCRIPT SAYS WHICH OF THE TWO IT WAS, because the caller reads the
-		// transcript and not the log. One sentence for both events ("SSH connection lost
-		// — network disconnected") claimed a cause nobody had established: the same text
-		// covered a dropped network, a closed far side and a restarted relay (issue
-		// #176). The error decides, and it is also in the log line above.
+
+		waitDone := make(chan error, 1)
+		go func() { waitDone <- es.WaitTransport() }()
+		var err error
+		select {
+		case err = <-waitDone:
+		case <-s.Context().Done():
+			// This session owns its transport, so its resource scope cancel means
+			// the connection is closing; do not wait for a borrowed client's lease
+			// to expire (short-circuit operations do not create Sessions).
+			return
+		}
+
 		message := transportClosedMessage
-		if err := es.WaitTransport(); err != nil {
+		if err != nil {
 			slog.Warn("session transport lost", "session_id", s.ID, "err", err)
-			// The error IS the cause, and it is the only thing that can distinguish a
-			// dropped network from a far side that went away. The sentence no longer
-			// asserts one on its own (issue #176).
 			message = transportLostMessage + ": " + err.Error()
 		} else {
 			slog.Info("session transport closed", "session_id", s.ID)
 		}
-		// A deliberate close (Terminate, Disconnect, Delete) sets closing before it
-		// touches the transport, so markDeadWithMessage drops this notification
-		// instead of reporting an intentional teardown as a network loss.
 		s.markDeadWithMessage(message)
 	}()
 }
@@ -366,7 +363,7 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
 func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshclient.ExecSession, string, error) {
-	client, closers, endpoint, err := dialClient(internal, cfg)
+	client, closers, endpoint, err := DialClient(internal, cfg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -384,7 +381,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 	return es, endpoint, nil
 }
 
-// dialClient acquires the SSH connection a session runs on and reports which
+// DialClient acquires the SSH connection a session runs on and reports which
 // kind it is ("internal" or "remote", the two values published to MCP and the
 // JSON API - never a host or a credential). It opens no channel: what the
 // connection then carries is dialTransport's business.
@@ -396,7 +393,7 @@ func dialTransport(internal *sshserver.Server, cfg Config, usePty bool) (*sshcli
 // path: the credential is minted before the dial, and leaving it pending would
 // grow the server's map by one dead entry per failed attempt for the life of the
 // process.
-func dialClient(internal *sshserver.Server, cfg Config) (*ssh.Client, []io.Closer, string, error) {
+func DialClient(internal *sshserver.Server, cfg Config) (*ssh.Client, []io.Closer, string, error) {
 	ctx := cfg.Ctx
 	if !isRemote(cfg) {
 		if internal == nil {
@@ -479,36 +476,101 @@ func (s *Session) Restriction() Restriction {
 // buffers, and its byte log are all kept for read-only viewing; nothing
 // is removed from the registry or purged. Only Manager.Delete/finalize release
 // resources.
+//
+// IT IS BOUNDED, AND THAT IS THE WHOLE POINT (issue #218). Every step below used to
+// be a synchronous call into x/crypto, and each one writes a packet: `Signal` writes a
+// "signal" request, `CloseSessionOnly` writes a channel-close. When the far side stops
+// reading its socket -- a target pinned in userspace with the kernel still answering
+// handshakes, or a peer whose receive window never grows again -- that write never
+// returns, and it holds the SSH channel's write mutex while it waits. Three
+// consequences followed from one stuck write:
+//
+//   - Terminate never returned, so `close` never answered;
+//   - the grace period never even started, because Signal ran BEFORE the timer;
+//   - markDead never ran, so the session reported `status: running` forever;
+//   - and sync.Once made it everyone's problem: a second caller BLOCKS inside Do
+//     rather than skipping it, so every later close queued behind the first.
+//
+// So the graceful half runs in its own goroutine and the caller waits on a deadline.
+// On expiry the only move that actually helps is closing the underlying connection:
+// x/crypto's writes are blocked in the OS, and net.Conn.Close is what makes them
+// return. The goroutine then unwinds on its own -- nothing is left parked.
 func (s *Session) Terminate(force bool, gracePeriod time.Duration) {
 	s.terminateOnce.Do(func() {
 		s.beginClosing()
+		// DEFERRED, so the state transition happens on every path including the one
+		// where the graceful close never comes back. A session that cannot be marked
+		// dead is a session the caller keeps trying to close.
+		defer s.markDead()
+
 		es := s.execSession
 		if es == nil {
 			// Restored (restart) placeholder with no live transport.
-			s.markDead()
 			return
 		}
-		if !force {
-			es.Signal(ssh.SIGTERM)
-			select {
-			case <-es.Done():
-				s.markDead()
-				return
-			case <-time.After(gracePeriod):
-			}
+
+		// Windows ConPTY does not support SIGTERM delivery to local child processes
+		// (#239): waiting here would be a pure sleep, so close the internal pty
+		// directly. Other transports still get the requested signal and grace period.
+		skipGrace := runtime.GOOS == "windows" && s.SSHEndpoint == "internal" && s.primaryMode == api.ModePTY
+		if skipGrace {
+			gracePeriod = 0
 		}
 
-		// Close the session's own transport, not sibling session channels.
-		// For remote sessions the shared SSH client is left for Disconnect(); for
-		// internal loopback there's no multiplexing so close everything here.
-		if s.SSHEndpoint == "internal" {
-			es.Close()
-		} else {
-			es.CloseSessionOnly()
+		// THE BUDGET. A graceful close gets the caller's grace period plus a little
+		// room for the round trip; a forced one gets a short fixed window, because
+		// there is nothing to wait for. Either way this call returns within it.
+		timeout := gracePeriod + terminateSlack
+		if force || gracePeriod <= 0 {
+			timeout = terminateSlack
 		}
-		s.markDead()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		// THE GRACEFUL PATH, OFF THE CALLER'S STACK. Everything in here can block on a
+		// write that will never complete; none of it may block the deadline below.
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			if !force && !skipGrace {
+				_ = es.Signal(ssh.SIGTERM)
+				select {
+				case <-es.Done():
+					return
+				case <-time.After(gracePeriod):
+				case <-ctx.Done():
+					return
+				}
+			}
+			// A session owns its connection (Create dials one per session), so
+			// closing it here steals nothing from a sibling: it releases the TCP
+			// connection and the remote sshd's slot for this session.
+			_ = es.Close()
+		}()
+
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			// THE PEER IS NOT READING. Dropping the connection is the only thing that
+			// unblocks a write already stuck in the kernel: it makes every parked
+			// writePacket return an error, which is what lets the goroutine above
+			// finish instead of leaking.
+			if client := es.SSHClient(); client != nil {
+				_ = client.Close()
+			}
+			_ = es.Close()
+		}
 	})
 }
+
+// terminateSlack is how much longer than the grace period a close may take before the
+// connection is dropped instead of asked politely.
+//
+// A ROUND TRIP, NOT A SECOND GRACE PERIOD: the grace period is time for the remote
+// process to exit after SIGTERM, and this is time for the messages that request and
+// report that exit to cross the network. Two seconds is generous for a healthy link
+// and irrelevant for a dead one, where the point is to stop waiting.
+const terminateSlack = 2 * time.Second
 
 // transportLostMessage is the system message recorded when a session's SSH
 // connection dies under it (network loss, remote sshd gone). The per-shell
@@ -567,11 +629,10 @@ func (s *Session) closeIfLastShellEnded() {
 		}
 		return true
 	})
-	closing := s.closing
 	s.shellStateMu.Unlock()
 	// A live channel (or a session already going down) means this was not the
 	// end of the session's work; another shell will report its own exit.
-	if live || closing {
+	if live || s.closing.Load() {
 		return
 	}
 	slog.Debug("one-shot session closing after its last shell exited", "session_id", s.ID)
@@ -592,14 +653,14 @@ func (s *Session) markDeadWithMessage(systemMessage string) {
 	// A deliberate close may race with an exit watcher that already observed
 	// the transport error. Do not turn that intentional close into a network-loss
 	// notification.
-	if systemMessage != "" && s.closing {
+	if systemMessage != "" && s.closing.Load() {
 		return
 	}
 	// A session the CALLER closed has a reason too, and "no reason" is not it: whoever
 	// asks `get` after a close wants to be told the close was theirs, not left to guess
 	// between that and something breaking. beginClosing() sets s.closing before the
 	// deliberate paths call here, which is exactly what distinguishes them.
-	if systemMessage == "" && s.closing {
+	if systemMessage == "" && s.closing.Load() {
 		systemMessage = exitReasonRequested
 	}
 	s.markDeadLocked(systemMessage)
@@ -607,7 +668,7 @@ func (s *Session) markDeadWithMessage(systemMessage string) {
 
 // markDeadLocked requires shellStateMu.
 func (s *Session) markDeadLocked(systemMessage string) {
-	s.closing = true
+	s.closing.Store(true)
 	s.deadOnce.Do(func() {
 		// Flush output pipe goroutines so the last bytes are appended to the
 		// byte log before DEAD becomes observable.
@@ -658,16 +719,18 @@ func (s *Session) finalize() {
 		if s.execSession != nil {
 			_ = s.execSession.Close()
 		}
+		// Release the scope FIRST: it cancels the session context, which is what
+		// tells transport watchers to stop waiting on a connection that may now be
+		// shared with somebody else (#237). Waiting for them before this cancel was
+		// the deadlock: a borrowed client outlives its session, so WaitTransport
+		// never returned and finalize blocked on watchWG forever.
+		if s.scope != nil {
+			s.scope.Release()
+		}
 		// Wait for exit watchers to finish their post-transport writes (final
 		// system message + persist) before releasing the session, so a caller
 		// that purges the data directory afterwards cannot race a writer.
 		s.watchWG.Wait()
-		// Cascade: cancel every goroutine bound to the session scope and run the
-		// registered cleanups (forwards, notification rules, minted credentials,
-		// readers) in LIFO order. Nothing else needs to know what is attached.
-		if s.scope != nil {
-			s.scope.Release()
-		}
 	})
 }
 
@@ -729,17 +792,13 @@ func (s *Session) Disconnect() {
 }
 
 func (s *Session) beginClosing() {
-	s.shellStateMu.Lock()
-	if s.closing {
-		s.shellStateMu.Unlock()
+	if !s.closing.CompareAndSwap(false, true) {
 		return
 	}
-	s.closing = true
 	s.shells.Range(func(_, v any) bool {
 		v.(*ChildShell).deliberateClose.Store(true)
 		return true
 	})
-	s.shellStateMu.Unlock()
 
 	// A closing session can no longer execute anything, so its pending requests
 	// must not stay decidable. Without this, Terminate (which does not run the

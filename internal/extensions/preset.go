@@ -6,51 +6,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/capability"
 )
 
-// Preset returns the starting template for a kind. Every field it fills is a
-// default an author can change; the point of keeping kinds as presets is that
-// an extension remains one shape — a trimmed session — so a kind only supplies
-// the conventional values for that shape rather than behavior of its own.
-//
-// AN MCP PRESET HAS NO COMMAND, ON PURPOSE. It used to carry `npx -y
-// example-mcp-server`, and that default was wrong in both directions. A create
-// that named its own program kept the args (`--command cat` ran `cat -y
-// example-mcp-server` and died on an option it never asked for), and a create
-// that named nothing produced an extension that looked configured and could
-// never work. An MCP server IS a program plus its argv — there is nothing
-// conventional to guess, because `npx -y <package>` is one way to start one and
-// `python server.py` is another.
-//
-// So the caller fills it in, and leaving it out fails at create time with
-// "mode=pipe requires a command", which is a better answer than a template that
-// validates and cannot run.
-func Preset(kind string) Extension {
-	switch strings.TrimSpace(kind) {
-	case KindMCP:
-		return Extension{
-			Kind:  KindMCP,
-			Mode:  "pipe",
-			Allow: append([]string(nil), mcpAllow...),
-			Notes: mcpNotes,
-		}
-	case KindSkill:
-		return Extension{
-			Kind:  KindSkill,
-			Mode:  "", // no shell: this extension is SFTP only
-			Allow: append([]string(nil), skillAllow...),
-			Notes: skillNotes,
-		}
-	case KindPrompt:
-		return Extension{
-			Kind: KindPrompt,
-			Mode: "pty",
-		}
-	default:
-		// An unknown kind yields an empty custom template, so a caller that passes an
-		// unvalidated string gets something valid rather than a half-filled extension.
-		return Extension{Kind: KindCustom}
-	}
-}
-
 // mcpAllow is the minimum surface an agent needs to drive a stdio MCP server
 // over a pipe shell: write a frame, read it back, and watch for output. The
 // session's lifecycle is the reconciler's, so tools that stop or delete it are
@@ -130,64 +85,57 @@ This session is kept warm for reuse; do not terminate or delete it. If it has
 died, the extension reports unavailable and is restarted — wait for it, then
 re-open the conversation on the new handle from extension(action=list).`
 
-// ApplyDefaults fills the fields an author left unset from the kind's preset,
-// so creating an extension with a kind and a target is enough to get a working
-// template. Fields the author set are left alone.
+// ApplyDefaults fills the fields an author left unset, choosing them from what the
+// template already declares.
 //
-// This runs at create time, not on every save: merging defaults into an
-// already-saved extension would silently undo a deliberate deletion (clearing
-// Notes to get an unannotated terminal, for instance, would be refilled).
+// THIS RUNS AT CREATE TIME ONLY. Merging defaults into an already-saved extension
+// would silently undo a deliberate deletion — clearing the whitelist to get an
+// unrestricted terminal would be refilled with the narrow one — so an update never
+// calls it.
+//
+// A WHITELIST IS NEVER WIDENED BY A DEFAULT. `allow` is filled only when the caller
+// said nothing at all about it, and the value chosen is the narrow surface the
+// declared shape needs. Anything else would make "I forgot to send allow" mean
+// "give this MCP server the whole terminal".
 func ApplyDefaults(e *Extension) {
-	p := Preset(e.Kind)
-	if e.Mode == "" {
-		e.Mode = p.Mode
-	}
-	// An HTTP endpoint needs no program: filling in the preset's command there
-	// would produce a template that runs `npx` and never contacts the URL.
-	if e.URL == "" {
-		if e.Command == "" {
-			e.Command = p.Command
-		}
-		if e.Args == nil {
-			e.Args = p.Args
-		}
+	if e.Mode == "" && e.Command != "" && e.URL == "" {
+		// A program to run over a pipe is the shape that needs no shell; an empty
+		// mode with nothing declared stays empty rather than guessing.
+		e.Mode = "pipe"
 	}
 	if e.Allow == nil {
-		e.Allow = p.Allow
+		switch {
+		case e.URL != "" || e.Command != "":
+			e.Allow = append([]string(nil), mcpAllow...)
+		case len(e.Paths) > 0:
+			e.Allow = append([]string(nil), skillAllow...)
+		}
 	}
-	if e.Paths == nil {
-		e.Paths = p.Paths
-	}
-	// A PRESET RECIPE IS NOT AN AUTHOR'S TEXT (#159 D1). Checking only for an empty
-	// Notes was enough while the template's shape never changed between presetting
-	// and defaulting — but `create ext x --kind mcp --url …` starts from
-	// Preset(KindMCP), which already filled in the STDIO recipe, so the URL form kept
-	// instructions whose first line tells the reader to run a command it does not
-	// have. isPresetNotes is the test the update path already used; create now asks
-	// the same question, so the two cannot disagree.
 	if isPresetNotes(e.Notes) {
 		e.Notes = PresetNotes(e)
 	}
-	if e.Rows == 0 {
-		e.Rows = p.Rows
-	}
-	if e.Cols == 0 {
-		e.Cols = p.Cols
-	}
 }
 
-// PresetNotes is the operating instructions a template's own shape implies: the
-// endpoint form of kind=mcp gets the recipe that describes it rather than the
-// stdio one, whose first line would be a lie.
+// PresetNotes is the operating instructions a template's own shape implies: an
+// endpoint gets the recipe that describes it rather than the stdio one, whose
+// first line would be a lie.
 //
 // It is a preset, not a policy: an author's own text replaces it, and the
 // caller that refreshes a stored template consults isPresetNotes so that editing
 // a template from stdio to an endpoint does not leave the wrong recipe behind.
 func PresetNotes(ext *Extension) string {
-	if ext.Kind == KindMCP && ext.URL != "" {
+	// BY WHAT THE TEMPLATE DECLARES. There is nothing else to ask: a label could
+	// disagree with the fields, and the fields are what runs.
+	if ext.URL != "" {
 		return mcpHTTPNotes
 	}
-	return Preset(ext.Kind).Notes
+	if ext.Command != "" {
+		return mcpNotes
+	}
+	if len(ext.Paths) > 0 {
+		return skillNotes
+	}
+	return ""
 }
 
 // isPresetNotes reports whether text is one of the recipes this package ships

@@ -13,6 +13,70 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
+// proxyBoth copies in both directions until both sides are finished, and reports
+// each side's end to the other as it happens.
+//
+// The naive version -- two io.Copy calls and a WaitGroup -- is wrong in a way that
+// only shows up on a peer that says goodbye by closing: when the target stops
+// writing, io.Copy(conn, remote) returns, but conn is left open, so the caller waits
+// for a FIN that never comes. A command that has finished is then indistinguishable
+// from one that hung, which is how this was found (the adb server closes after every
+// `shell:` reply, and the reader blocked forever in ReadUntilEof).
+//
+// THERE ARE EXACTLY TWO ENDINGS, and they must not be confused. A direction that
+// ends with no error is finished: it half-closes, leaving the other direction free to
+// keep carrying bytes. A direction that ends with an error did not finish -- the
+// stream broke -- and half-closing there would tell the peer a truncated transfer
+// completed. So it aborts instead.
+//
+// What cannot cross the tunnel: SSH has no reset message and no out-of-band channel,
+// so the far end only ever learns "EOF" or "closed". An abort can be told to the
+// caller on this side only.
+func proxyBoth(a, b net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); relayOneWay(b, a) }()
+	go func() { defer wg.Done(); relayOneWay(a, b) }()
+	wg.Wait()
+}
+
+// relayOneWay moves src into dst once and finishes the stream according to how it
+// ended.
+func relayOneWay(dst, src net.Conn) {
+	if _, err := io.Copy(dst, src); err != nil {
+		slog.Debug("forward: stream broke, aborting both sides", "err", err)
+		resetConn(dst)
+		resetConn(src)
+		return
+	}
+	closeWriteHalf(dst)
+}
+
+// closeWriteHalf reports end-of-stream to the peer of c without tearing down the
+// direction that is still running. *net.TCPConn and *ssh.chanConn both implement
+// CloseWrite, which is every connection a forward actually carries.
+func closeWriteHalf(c net.Conn) {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+		return
+	}
+	_ = c.Close()
+}
+
+// resetConn tears a connection down in a way the peer cannot mistake for a clean
+// end. For a local TCP connection that means sending RST: with the linger timeout at
+// zero, Close discards anything unsent and resets instead of sending FIN, so a caller
+// reading the tail of a truncated transfer gets an error rather than a silent EOF.
+//
+// An SSH channel has no equivalent -- Close sends CHANNEL_CLOSE, which the far end
+// reads as an ordinary hangup. The asymmetry is the protocol's, not ours.
+func resetConn(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+	_ = c.Close()
+}
+
 // tunnel connections back via smux to termcp's remoteHost:remotePort.
 // LocalForwardSSH creates a local forward (ssh -L): termcp listens on a local port and
 // tunnels each connection through the SSH client's direct-tcpip channel to the remote target.
@@ -66,11 +130,7 @@ func LocalForwardSSH(ctx context.Context, client *ssh.Client, bindHost string, r
 					localConn.Close()
 					remoteConn.Close()
 				})
-				var wg sync.WaitGroup
-				wg.Add(2)
-				go func() { io.Copy(remoteConn, localConn); wg.Done() }()
-				go func() { io.Copy(localConn, remoteConn); wg.Done() }()
-				wg.Wait()
+				proxyBoth(localConn, remoteConn)
 				stopOnCancel()
 			}()
 		}
@@ -123,11 +183,7 @@ func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string,
 					agentConn.Close()
 					remoteConn.Close()
 				})
-				var wg sync.WaitGroup
-				wg.Add(2)
-				go func() { io.Copy(remoteConn, agentConn); wg.Done() }()
-				go func() { io.Copy(agentConn, remoteConn); wg.Done() }()
-				wg.Wait()
+				proxyBoth(agentConn, remoteConn)
 				stopOnCancel()
 			}()
 		}

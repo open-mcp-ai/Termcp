@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,10 +46,12 @@ type Viewer struct {
 // were a live connection — the exact confusion this panel exists to remove. The
 // session list and approval count push over the same socket, so every page that
 // is actually open has a row here.
+//
+// One tab is one independent entry and the id is a counter, so the table is a
+// sync.Map and the counter is atomic.
 type viewerRegistry struct {
-	mu     sync.Mutex
-	nextID uint64
-	tabs   map[uint64]*viewerEntry
+	nextID atomic.Uint64
+	tabs   sync.Map // id uint64 -> *viewerEntry
 }
 
 type viewerEntry struct {
@@ -60,28 +63,24 @@ type viewerEntry struct {
 }
 
 func newViewerRegistry() *viewerRegistry {
-	return &viewerRegistry{tabs: make(map[uint64]*viewerEntry)}
+	return &viewerRegistry{}
 }
 
 // add registers a tab and returns its id for removal.
 func (r *viewerRegistry) add(addr, userAgent string, watching func() int) uint64 {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.nextID++
-	r.tabs[r.nextID] = &viewerEntry{
-		id:        r.nextID,
+	id := r.nextID.Add(1)
+	r.tabs.Store(id, &viewerEntry{
+		id:        id,
 		addr:      addr,
 		userAgent: userAgent,
 		since:     time.Now().UTC(),
 		watching:  watching,
-	}
-	return r.nextID
+	})
+	return id
 }
 
 func (r *viewerRegistry) remove(id uint64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.tabs, id)
+	r.tabs.Delete(id)
 }
 
 // list returns the attached tabs, longest-attached first.
@@ -91,12 +90,13 @@ func (r *viewerRegistry) remove(id uint64) {
 // panel should still show you your own row (that is how you know the list works),
 // but "connected clients" means "clients other than the page you are looking at".
 func (r *viewerRegistry) list(selfID uint64) []Viewer {
-	r.mu.Lock()
-	entries := make([]*viewerEntry, 0, len(r.tabs))
-	for _, e := range r.tabs {
-		entries = append(entries, e)
-	}
-	r.mu.Unlock()
+	var entries []*viewerEntry
+	r.tabs.Range(func(_, v any) bool {
+		if e, ok := v.(*viewerEntry); ok {
+			entries = append(entries, e)
+		}
+		return true
+	})
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].since.Before(entries[j].since) })
 
