@@ -105,10 +105,10 @@ var ops = []Op{
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "ext"},
 		Flags: []string{"pipe", "pty", "argv", "name", "on-exit:enum=keep,close", "rows:number", "cols:number",
 			"size:geometry", "bind-host", "remote-host", "remote-port:number", "local-port:number",
-			"local-host", "dynamic", "remote", "target", "all"},
+			"local-host", "dynamic", "remote", "target", "channel", "all"},
 		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
-		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
+		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name> [--channel <ch>]   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
 	{Name: "ls", Core: true, Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true,
 		Kinds:     []string{"forward", "file", "host", "ext", "alias", "cdp", "mcp", "jrpc", "task"},
@@ -118,11 +118,12 @@ var ops = []Op{
 		Detail:    lsDetail},
 	{Name: "get", Core: true, Kind: KindFlags, Target: true,
 		Kinds: []string{"file", "host", "ext", "protocol", "cdp", "mcp", "jrpc", "task"},
-		Flags: []string{"op", "all"},
+		// --offset/--length narrow `--op sha256` to a byte range (#357 §1.4).
+		Flags: []string{"op", "all", "offset:number", "length:number"},
 		// `get <s> cdp:1 protocol <Domain>` and `get <s> mcp:1 tools <name>`: the
 		// word after the key is a NAME the peer understands, not grammar of ours.
 		DataArgs: 1,
-		Usage:    "get <session|channel|host-name>   |   get host <name>   |   get ext <name>   |   get task <id>   |   get <session> file <path> [--op stat|realpath|urls|…]   |   get <session> cdp[:N][@target] [protocol [Domain]]",
+		Usage:    "get <session|channel|host-name>   |   get host <name>   |   get ext <name>   |   get task <id>   |   get <session> file <path> [--op stat|realpath|urls|sha256|…]   |   get <session> cdp[:N][@target] [protocol [Domain]]",
 		Detail:   getDetail},
 	{Name: "close", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		// mcp/cdp/jrpc/file are DECLARED SO THEY ARE REFUSED BY NAME. Dropping them
@@ -130,20 +131,31 @@ var ops = []Op{
 		// becomes a stray positional argument and the statement still reaches the
 		// container. A declared kind is recognised, and the dispatcher's default branch
 		// then answers with what to write instead.
-		Kinds:     []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
-		Flags:     []string{"grace:number", "forward-id", "channel", "later"},
-		Valueless: []string{"later"},
+		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
+		// --index and --all are the two SPELLINGS OF A MULTI-TARGET CLOSE (#341):
+		// `close a1f3 --index 1,2,3` names channels of one session, `close a1f3 --all`
+		// names the container. Both are explicit and countable — neither can turn a
+		// channel target into a session one, which is the trap #199 was about.
+		Flags:     []string{"grace:number", "forward-id", "channel", "later", "index", "all"},
+		Valueless: []string{"later", "all"},
 		RetiredFlags: map[string]string{
 			"force": "--force is gone. `close` stops and keeps the record, `rm` erases it.",
 		},
 		Usage:  "close <session> [<index>]   |   close <peer>   |   close ext <name> [<channel>]",
 		Detail: closeDetail},
-	{Name: "rm", Kind: KindFlags, Target: true, NoPositional: true, TargetKind: TargetSession,
-		Kinds:     []string{"file", "host", "ext", "alias"},
-		Flags:     []string{"force", "dry-run"},
-		Valueless: []string{"force", "dry-run"},
-		Usage:     "rm <session>   |   rm <session> file <path>   |   rm host|ext|alias <name>",
-		Detail:    rmDetail},
+	// TargetOptional: `rm --dead` names its targets by STATE rather than by name, and
+	// a verb that required a target could not say it. `rm` with neither a target nor
+	// --dead is refused by the handler, which can list the forms.
+	{Name: "rm", Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true, TargetKind: TargetSession,
+		Kinds: []string{"file", "host", "ext", "alias"},
+		// --dead is the archive sweep (#339): every session that has ENDED, and only
+		// those. A running session is never swept, which is why --force has no power
+		// over this flag.
+		Flags:     []string{"force", "dry-run", "dead"},
+		Valueless: []string{"force", "dry-run", "dead"},
+		Usage: "rm <session>[,<session>…]   |   rm --dead [--dry-run]   |   " +
+			"rm <session> file <path>   |   rm host|ext|alias <name>",
+		Detail: rmDetail},
 
 	// --- inside a channel ---
 
@@ -174,12 +186,21 @@ var ops = []Op{
 
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
+		// The left end of the ONE pipeline this language has. Declared here rather
+		// than hardcoded in the parser so the refusal can describe the vocabulary it
+		// is refusing in (see Grammar.PipePair).
+		PipeEnd: "source",
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
-			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait"},
+			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait",
+			// A DIRECTORY READ'S CAPS (#340) AND CROSS-FILE SEARCH (#357 §1.1):
+			// --limit bounds rows, --depth bounds levels walked, --name matches file
+			// names, --glob filters which files --grep searches, --context adds the
+			// lines around each match.
+			"depth:number", "limit:number", "name", "glob", "context:number"},
 		Valueless: []string{"raw", "lines", "frame", "screen", "wait"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
-			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
+			"read <session> file <path> [--grep RE [--glob G] [--context N]|--name G]   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
 			"read <session> <index> [--tail N]",
 		Detail: readDetail},
@@ -188,19 +209,31 @@ var ops = []Op{
 	// the two legitimate forms. The dispatcher tells them apart by Kind.
 	{Name: "write", Kind: KindFlags, Target: true,
 		Kinds: []string{"file"},
+		// The right end: `read … | write …` is a copy, and it is the only pairing
+		// either side accepts.
+		PipeEnd: "sink",
 		// --size is the truncate target. It was missing, so `--op truncate` could not be
 		// satisfied by any spelling: the handler requires remote_path and size, and the
 		// flag for size did not exist.
 		Flags: []string{"data", "mode", "offset:number", "length:number", "size:number",
-			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number"},
-		Usage:  "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
-		Detail: writeDetail},
+			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number",
+			// --recursive IS THE SWITCH THAT MAKES A DIRECTORY TARGET LEGAL (#340), and
+			// --dry-run is its cautious half. Without the switch a directory target is
+			// refused by name rather than opened as a file.
+			"recursive", "dry-run", "verify"},
+		Valueless: []string{"recursive", "dry-run", "verify"},
+		Usage:     "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
+		Detail:    writeDetail},
 
 	// --- a peer: one call, or the manual send/recv pair ---
 
 	{Name: "call", Kind: KindPayload, PayloadSpan: SpanVerbatim, Target: true,
-		Kinds:     []string{"cdp", "mcp", "jrpc"},
-		Flags:     []string{"send", "json"},
+		Kinds: []string{"cdp", "mcp", "jrpc"},
+		// --file NAMES THE FRAME THE WAY @<path> DOES, in the spelling a caller reaches
+		// for first: `call <peer> --file /tmp/frame.json` (issue #354). Both forms read
+		// the bytes on the host running termcp, after the line is parsed, so a large
+		// frame or one full of quotes never passes through a quoting layer.
+		Flags:     []string{"send", "json", "file"},
 		Valueless: []string{"send", "json"},
 		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <frame>",
 		Detail:    callDetail},
@@ -354,7 +387,47 @@ page until it is dealt with, rather than timing out while the human is away.`
 // readDetail states the defaults because "read" without a selector is the
 // common call: whether that means "new bytes" or "everything" decides what the
 // caller does next, and guessing it from silence is how loops get written.
-const readDetail = `Defaults: the new bytes since the last read, on a live channel and on a
+const readDetail = `READING A DIRECTORY LISTS IT. read <session> file <path> answers with a
+table when the path is a directory — one row per entry: type (d/- /l), name, size,
+mtime and mode — instead of the old "is a directory" refusal, which left the caller
+parsing terminal output from a run ls. It is the same call either way: a caller that
+does not know whether its path is a file or a directory does not have to find out.
+
+  read a1f3 file /srv/app                 the entries of one directory
+  read a1f3 file /srv/app --depth 2       two levels, cap 5
+  read a1f3 file /srv/app --limit 500     more rows, cap 2000
+  read a1f3 file /C:/tc/a.txt             Windows absolute path (POSIX wire form)
+
+--limit (default 200) bounds the rows and --depth (default 1) the levels walked.
+Whatever the caps withheld is COUNTED in the reply, because "nothing is there" and
+"you are not being shown" have to read differently.
+
+SEARCHING A TREE IS THE SAME CALL (#357). --grep searches FILE CONTENTS and --name
+searches FILE NAMES, on one file or on a directory:
+
+  read a1f3 file /srv/app --grep 'ERROR|FATAL'          every match, path:line:text
+  read a1f3 file /srv/app --grep TODO --glob '*.go'     only Go files
+  read a1f3 file /srv/app --name '*.log'                which paths are called this
+  read a1f3 file /srv/app --grep FIXME --context 2      two lines around each match
+  read a1f3 file /srv/app/main.go --grep panic          one file's contents
+
+The match happens HERE, over the bytes SFTP hands back: there is no remote grep and
+no rg, so a POSIX host and a Windows one answer in the same shape — path:line:text
+for a hit and path-line-text for context, the delimiters grep has always used — and
+a host that has rg behaves exactly like one that does not. A directory search walks
+--depth levels (default 5, cap 10) and --limit entries (default 200); a file bigger
+than 1 MiB, a binary file, and a file your session's paths rule refuses are each
+NAMED in the closing line rather than silently skipped, because "no match" and "did
+not look" must never arrive in the same shape.
+
+--glob filters which files are searched and --context how many lines surround a match
+(cap 5). --grep-limit (default 200, cap 200) bounds the matches. An empty --grep is
+refused: it matches every line and would return the file. A symbolic link is reported with
+its target and never followed — a link pointing at its own parent would loop — and an
+entry that cannot be read (permissions, a broken link) is listed WITH the reason
+rather than dropped.
+
+Defaults: the new bytes since the last read, on a live channel and on a
 closed one alike. --stream o keeps stdout only, e keeps stderr only; the default
 keeps both. --cursor N is a byte offset (end+1 from Content-Range), --from-line N
 a complete line, --tail N the last N lines.
@@ -452,9 +525,19 @@ link's time, not in milliseconds, and a call that waited for it would be killed
 partway by whatever watchdog is in front of you. get task <id> waits, and
 reports progress while it runs.
 
-| belongs to the next layer: inside a shell payload, run h:1 $1 with args
-["ls | wc -l"] sends the pipeline to the remote shell. read | write connects
-two termcp file streams. The same symbol serves each grammar at its own layer.
+THE PIPE IS ONE PAIR, NOT AN OPERATOR. read | write connects two termcp file streams,
+and that is the only "|" this language has: cmd1 | cmd2 is refused — not run, not
+guessed at — because "|" one layer down belongs to the remote shell, and one character
+cannot mean two things.
+
+A SHELL PIPELINE IS WRITTEN INSIDE A PAYLOAD, where "|" is the shell's:
+
+  cmd: "run h:1 $1"    args: ["ls -la | wc -l"]
+  cmd: "run h:1 $1"    args: ["grep -rn TODO . | head -20"]
+
+Outside a payload (grep x | head written directly in cmd) there is nothing to pipe:
+grep and head are not directives, and the refusal names the read | write pair so the
+caller learns it rather than guessing a third spelling.
 
 --grep RE FILTERS BEFORE THE WINDOW, AND THE DIFFERENCE MATTERS. The pattern runs
 over this daemon's own transcript — the command already finished, its bytes are
@@ -694,7 +777,9 @@ THE REPLY DOES NOT CLAIM THE COMMAND FINISHED, because a pty gives nothing to ba
 that on: a finished command and one that is working without printing are the same
 bytes. So Completion appears ONLY when there is evidence to name:
 Completion: matched when your own --until pattern was observed, Completion: exit when
-the remote shell reported the end itself (OSC 133, together with Exit-Code). NO
+the remote shell reported the end itself (OSC 133, together with Exit-Code). The
+completion report is read whether or not you asked for it, so a shell with integration
+enabled gives an exit code to a plain run — the marker is in the bytes either way. NO
 Completion HEADER MEANS THE STATE IS UNKNOWN — the honest answer, not a failure: read
 the stream and decide, the way a human at the same screen would. Still-Running: true
 is the one other fact, and it means the window ran out while bytes were still
@@ -868,6 +953,11 @@ value it never found a use for and nothing has run yet.
 
 const openDetail = `Add a child to a session you already have: a channel, a forward, or a peer.
 
+OPEN EXT NAMES A CHANNEL WHEN THE TEMPLATE HAS SEVERAL: open ext NAME --channel CH.
+With no --channel the default one answers, which is what a single-channel template has
+always done. A name the template does not have is refused with the list of names it
+does have.
+
 OPEN EXT IS THE ONE FORM WITH NO SESSION IN IT. Every other open names a container first,
 because the caller is adding to a connection it already has; an extension's connection
 belongs to the reconciler, which is what keeps it trimmed to the template. So open ext
@@ -882,17 +972,17 @@ a long capability list becomes a count, because what a caller acts on here is th
 and the tools, not an essay. '--all' prints the template whole, and
 'get ext <name> --all' is the same document.
 
-An extension that declares no forward is started ON DEMAND. Every call is answered with
-an instance of its own: one that has been silent for the whole idle_timeout is nobody's
-and is handed over, and one that was used a moment ago belongs to whoever is using it, so
-the next caller gets its own process. An instance nobody touches for the whole window is
-closed, and the id that named it then answers with when and why instead of "not found".
+An extension with no forward and no resident=true is started ON DEMAND. Every call gets
+a new instance. An instance nobody touches for its configured idle window is closed, and
+the id that named it then answers with when and why instead of "not found".
 
   close ext boxfs             give the instance back now instead of at the end of the
                               window; close ext boxfs <shell_id> gives back one
 
-A template that declares a forward is the exception - a listener has no caller to start
-it, so it is up from startup and stays up, and its connection is not yours to close.
+A template with a forward or resident=true is resident: a listener has no caller to
+start it, so it is up from startup and stays up. If its process exits, use
+'open ext <name>' again — the exited channel is archived and a replacement starts; a
+resident that is still running keeps the channel it has.
 
 THE MODE IS SSH'S OWN RULE, which is why it needs no remembering: ssh host gives you a
 terminal, ssh host cmd runs cmd without one, ssh -t host cmd forces a terminal back.
@@ -974,6 +1064,12 @@ two sessions, always.
 
   connect prod                    a session, ready for open
   connect prod --argv htop        ...with a first channel already running it
+  connect prod --name web         ...giving the session a name you can address it by
+
+A SESSION IS ADDRESSED BY ID, NAME, OR PREFIX: its full 12-character id, the --name
+it was connected with (run web:1), or any unique prefix of at least four characters
+(get 70ab, ls 70ab). Ambiguous names and prefixes are refused with the matching ids
+rather than guessed, because guessing puts the next close on someone else's session.
 
 The host must already be configured: ls host lists them, create host adds one.`
 
@@ -1006,18 +1102,35 @@ output it still has.`
 
 const getDetail = `Describe one node: a session, one of its channels, or a peer.
 
+--op sha256 HASHES THE BYTES ON THE HOST (#357): get <session> file <path> --op
+sha256 [--offset N] [--length N] answers with the digest, the byte count it covered
+and the path, streamed rather than read into memory — the question "is the file over
+there the file I have" answered in one call instead of by comparing lengths, which is
+the one fact a truncated copy preserves. It needs file.read as well as the filesystem
+capability: a digest is content, one whole file at a time, so a session that may
+truncate a file must not be able to recognise its contents by hash.
+
   get a1f3              status, endpoint, mode, age, and why it ended
   get a1f3:1            that channel's state
   get a1f3 cdp:1            the connection: endpoint, frame cursor, attached tabs
   get a1f3 cdp:1@<id>       one tab: target, url, enabled domains
   get a1f3 cdp:1 protocol   the browser's OWN command list (the live /json/protocol)
   get a1f3 cdp:1 protocol Page   one domain's commands and their parameters
-  get a1f3 mcp tools        list tools offered by a mounted MCP peer
-  get a1f3 mcp tools search inspect input schema for one tool
+  get a1f3 mcp:1 tools        list tools offered by a mounted MCP peer
+  get a1f3 mcp:1 tools search inspect input schema for one tool
+  get a1f3:2 tools          list tools offered by an extension's stdio MCP channel
+  get a1f3:2 tools search   inspect input schema for one tool there
   get task task_9f2c11ab    one background transfer, waiting up to the window
   get use:<host> file /p   metadata for one path on a host, no session needed
 
 For the list of what exists, use ls.
+
+"tools" MEANS THE SAME THING ON BOTH KINDS OF MCP ADDRESS. A mounted peer answers it
+(get a1f3 mcp:1 tools); so does an extension channel whose template declares a stdio
+MCP server (get a1f3:2 tools) — the reconciler owns that channel and the template says
+what runs on it, so the table exists rather than being guessed. On any other channel the
+word is not an address this layer answers, and the reply is the ordinary channel
+description: that channel is a byte pipe, and a pipe has no tool table.
 
 A HOST CAN BE THE TARGET, with 'get use:<host> file <path>' (or the bare profile
 name). That reads the path's metadata over the host's pooled transport; the reply
@@ -1042,15 +1155,26 @@ HOW IT WORKS:
 Peers speak different protocols; call routes by the peer's kind:
 - MCP peer (open <session> mcp <url>): a live tool provider. Passing a tool name
   calls that tool directly and unpacks its text result.
+- An extension's stdio MCP channel (ls ext, then open ext <name>): also a real MCP
+  server, reached over a pipe instead of a socket. The reconciler owns the channel and
+  the template declares that the process speaks MCP, so the same tool form works and
+  the handshake (initialize + notifications/initialized) happens once, by itself. A
+  plain open channel is a byte pipe with no such declaration: it takes raw frames
+  only, because anything at all may be running on it.
 - CDP peer (open <session> cdp <ws-url>): Chrome DevTools Protocol. Accepts
   methods directly (e.g. Page.navigate).
 - JRPC peer (open <session> jrpc <ws-url>): raw JSON-RPC envelope.
 
 STANDARD USAGE:
   # Calling an MCP tool directly (the common case):
-  get  internal mcp tools                   list available tools on this peer
-  get  internal mcp tools search            show one tool's input schema
+  get  internal mcp:1 tools                 list available tools on this peer
+  get  internal mcp:1 tools search          show one tool's input schema
   call internal mcp:1 search {"query":"error"}  invoke a tool and get its text (args optional)
+  call a1f3:2 search {"query":"error"}      the same on an extension's stdio MCP channel
+
+  The :1 is the connection number, and it is part of the address: "mcp" alone works
+  only while the session has exactly one MCP peer, and stops working the moment a
+  second one is mounted. Copy the address "ls ext" prints rather than retyping it.
 
   # Driving a browser through CDP:
   call internal cdp:1 {"method":"Target.getTargets"}
@@ -1059,6 +1183,21 @@ STANDARD USAGE:
 LOW-LEVEL USAGE (deliberate raw frame on an MCP/JRPC peer):
   call internal mcp:1 '{"jsonrpc":"2.0","id":1,"method":"ping"}'
   call internal jrpc:1 '{"jsonrpc":"2.0","id":1,"method":"custom_method"}'
+
+A quote mark inside a single-quoted frame is spelled with the shell's splice — close the
+quotes, spell the quote, reopen them:
+  call internal cdp:1 '{"method":"Runtime.evaluate","params":{"expression":"document.title.includes('\''X'\'')"}}'
+The bytes inside a frame are JSON, so JSON's escapes are the only ones that apply: " inside
+a string is written \", a backslash is \\, and \' is not JSON at all.
+
+FRAME FROM A FILE (large frames, or frames whose bytes would need quoting):
+  call internal cdp:1 @/tmp/frame.json
+  call internal mcp:1 @/tmp/frame.json
+An @<path> payload is a path, not a frame: the bytes are read on the host running termcp
+after the line is parsed, so no quoting layer touches them and the line's length stops
+being a limit (8 MiB). The file must hold one JSON frame; a JSON error names the file
+instead of the command line. There is no stdin form: a frame on stdin would be a pipeline
+(read … | call …), and call takes its bytes from the line or from a file.
 
 FLAGS:
   --send       fire-and-forget: does not wait for a reply (answers arrive on read <peer>).
@@ -1079,6 +1218,23 @@ const writeDetail = `Write a file on a session.
   read internal file ./x | write a1f3 file /tmp/x
   write a1f3 file /tmp/x --data hex:00ff
 
+WRITING SEVERAL FILES, ONE CALL. A directory has no bytes of its own, so
+'write <session> file <dir>' is refused by name and the refusal names both forms:
+
+  write a1f3 file /srv/app/a.txt --data hi; write a1f3 file /srv/app/b.txt --data yo
+  write a1f3 file /srv/app --recursive --data '{"a.txt":"hi","sub/b.txt":"yo"}'
+
+The first is ordinary statement sequencing — one call, one reply slot per file, and it
+needs no flag at all. The second is the batch form: --data carries a JSON OBJECT of
+path→content, each key is RELATIVE to the directory named by the target, and a key that
+is absolute or climbs out with '..' is refused (the tree the caller named is the tree
+it writes). Caps: 100 files and 1 MiB per call, because the payload travels inside the
+call. The reply is one line per file plus a count, and a file that failed is the only
+one that did not happen — nothing is rolled back. Preview with --dry-run.
+
+The directory itself is created when it is absent, like mkdir -p for the tree; that is
+the same promise the single-file form makes about a file.
+
 A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
 profile name) writes over the host's pooled transport, so no session is created and
 nothing is archived afterwards. Same bytes, same atomic temp-file-and-rename rule;
@@ -1093,15 +1249,49 @@ Every write reports the SHA256 of the bytes that actually landed, and text mode
 reports what it decoded (\n -> LF, \\ -> \) so a rewritten payload is visible in
 the reply rather than only downstream when a build or compile fails.
 
+--old-text/--new-text EDIT ONE PLACE INSTEAD OF REPLACING THE FILE. The old text must
+appear EXACTLY ONCE: zero matches and several matches are both refused, and the
+ambiguous one names the count so you can add surrounding context rather than guess.
+It reads, writes a temporary file beside the original and renames over it, so a
+reader sees the old file or the new one and never a half-written one, and the mode is
+preserved. Use it instead of --data when the file is too big to rewrite by hand, since
+--data replaces the WHOLE file and loses anything that changed since you read it.
+THE REPLY SHOWS THE EDIT: besides bytes_written it carries the 1-based line that
+changed and a one-line diff (L2: - old | + new), so checking the result does not cost
+another read of the file. Files over 16 MiB are refused: exact replace is an edit,
+not a copy.
+
 PATHS ARE POSIX ON THE WIRE, ON EVERY PLATFORM. SFTP is a POSIX-shaped protocol, so
-a Windows absolute path has a second spelling: C:/tc/x is /C:/tc/x on the wire, and
-that is what a server recognises as absolute. Written as C:/tc/x it is RELATIVE to
-a server that resolves paths against a working directory, which then joins the two
-and fails with a system error about the file NAME — a sentence that says nothing
-about the spelling, and that arrives after an extension's whitelist has already
-admitted the path. Use /C:/... in the request and in the extension's declared
-paths, which are matched against the same string you pass. help read, docs/api.md
-and this page said nothing about it until issue #186.
+the wire form of a Windows absolute path has a leading slash: /C:/tc/x. That is what
+a server recognises as absolute; written C:/tc/x it is RELATIVE to a server that
+resolves paths against a working directory, which then joins the two and fails with a
+system error about the file NAME — a sentence that says nothing about the spelling.
+
+The preferred spelling is forward slashes with the leading slash:
+  read  a1f3 file /C:/tc/x/a.txt
+  write a1f3 file /C:/tc/x/a.txt --data hi
+  get   a1f3 file /C:/tc/x
+
+BACKSLASHES ARE ACCEPTED TOO, and the reply says when it adapted them: a drive-prefixed
+path containing a backslash is rewritten to the wire form, and the receipt carries
+  path_adapted: C:\tc\x\a.txt -> /C:/tc/x/a.txt
+so the spelling you typed and the one that ran are both on record. Only that shape is
+rewritten, because a backslash is an ordinary byte in a POSIX filename: a relative path
+(dir\file) and anything without a drive prefix is passed through exactly as typed, and
+./C:\x stays the way to name a file that really contains a backslash. A drive's
+whitelist rule is rewritten the same way, so an extension declaring /C:/tc admits either
+spelling.
+
+A RELATIVE path is resolved by the server against its own working directory, not yours,
+and there is no way to ask the wire for the caller's cwd: name the absolute path.
+
+--verify MAKES THE FAR SIDE ANSWER (#357). The receipt already carries the sha256 of
+the bytes that were sent; --verify reads them back and compares, so "the copy arrived
+intact" stops being an assumption. The comparison covers the range that was written, so
+a --offset write verifies its own block rather than the whole file, and the hash is
+streamed on the host side — verifying a 2 GB file costs no memory here. A mismatch is
+NOT a 200: the bytes are already on the host, so the refusal says the file's contents
+are unknown rather than absent. --recursive --verify checks every file it writes.
 
 A PIPELINE IS A TRANSFER AND ANSWERS 202 WITH A RECEIPT. Moving a file between nodes
 (including from the daemon host via the internal session) takes as long as the link
@@ -1137,10 +1327,19 @@ const createDetail = `Create saved configuration. It outlives every session and 
   create alias ll 'ls a1f3'
 
 AN ALIAS IS A WORD FOR A COMMAND, AND THERE ARE TWO KINDS. "create alias" (and
-"edit alias") writes it to <data-dir>/aliases.json, so it is still there after a
-restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
+"edit alias") writes it to <data-dir>/aliases/<name>.toml, so it is still there after
+a restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
 the process. Both expand at parse time, so the reply's Path shows the command that
 actually ran.
+
+A BODY'S REFERENCES HAVE TWO LEVELS, AND THE DOLLAR COUNT PICKS ONE. One dollar is
+the caller's: $1 and $NAME in the body are filled from the args and vars the caller
+passes when INVOKING the alias, which is what makes one alias a command for many
+arguments. Two dollars are the shell's: $$1 and $$NAME are stored as written and
+reach the directive as a literal $1 for the shell to read -- the alias layer leaves
+them alone. So "create alias runsh 'run h:1 sh -c $$1'" takes no argument and hands
+the shell a $1 it expands itself, while an alias with $1 takes the payload from its
+caller.
 
 AN EXTENSION'S TEMPLATE MAY SHIP ITS OWN, under an [alias] table, and those are
 addressed as <ext>.<alias> — "jira.search openapi". The dot is required: two
@@ -1329,7 +1528,27 @@ template keeps the values, which is what makes an upgrade safe.
 --allow is the capability whitelist, comma-separated, e.g. --allow file_read,file_stat.
 --paths is the path whitelist; a path outside it is refused even when the
 capability is allowed. --forwards declares tunnels that come up and go down with
-the session, as a JSON array of {kind, local_port, remote_host, remote_port}.
+the session, as a JSON array of {kind, local_port, remote_host, remote_port, via}.
+
+VIA IS THE ONE FIELD THAT NAMES A SECOND HOST. Without it a tunnel is built on the
+extension's own connection — true for every ordinary template, and the reason it is
+the default. A template that mounts an outbound endpoint AND has to LISTEN on a
+machine it does not run on needs the tunnel somewhere else:
+  --url http://127.0.0.1:18890/mcp --target internal
+  --forwards '[{"kind":"remote","via":"vps","local_port":18890,
+                "remote_host":"127.0.0.1","remote_port":18890}]'
+Now the relay dials 127.0.0.1:18890 from INSIDE the container (the extension's own
+connection), while the listener stands on vps. One template, two directions, one
+card. The extension still has ONE target, so its handle and "open ext" are unchanged;
+a via host is a connection opened for the tunnel alone.
+  - via does not apply to a dynamic (SOCKS) forward: the proxy listens where its
+    connection is, so there is nothing for via to carry.
+  - via does not apply to a forward written under [[targets]]: that entry already
+    names the host, and two answers to one question is what Validate refuses.
+  - via = the extension's own connection is refused by name rather than accepted as
+    a no-op: writing it would look like a decision that changed nothing.
+  - the tunnel reports its via in "ext get", because a listener on another machine is
+    invisible here and ss -ltn would otherwise disagree with the reply.
 THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
   - ONE TEMPLATE CAN CARRY BOTH. A forwards list beside --command (or --paths, or
     --mode pty) is not two extensions: the program runs on the target, the tunnels
@@ -1355,6 +1574,29 @@ THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
     not undo entries 1-2: they stay listening and are recorded, the retry targets
     only the one that failed, and the extension stays usable for everything the
     tunnel was not for.
+
+A TEMPLATE MAY HAVE SEVERAL CHANNELS (v2, the channel table). The four fields above are
+the one-channel spelling; a list is the several-channel one, and a file that uses
+both is refused rather than merged:
+  [[channel]]
+  name = "api"                       the name --channel addresses
+  kind = "http"                      http | stdio | pty (inferred from url/command)
+  url  = "http://127.0.0.1:18890/mcp"
+  [[channel]]
+  name = "worker"
+  kind = "stdio"
+  command = "node"
+  args = ["worker.mjs"]
+Each channel may name its own --target: an http channel's target is the machine its
+requests leave from (its connection is the loopback one, as with --url above), and a
+stdio or pty channel's target is where that process runs — so one card can hold an
+endpoint here and a worker there, on two connections. One channel may say
+default = true: that is the one "open ext NAME" with no --channel answers with, and
+the one the /ext route talks to when it is the http one.
+  - a channel is opened ONCE per session, not once per caller: a declared worker runs
+    one process, and "open ext NAME --channel worker" hands back that one.
+  - "get ext NAME" reports every channel with its handle and status, including a
+    channel that failed, because that is the one a reader needs to see.
 
 --args is an ARGV WORD LIST, the same grammar --argv uses for pipe/pty: quoting is
 the shell's, and an argument may contain a comma or a space. It takes the REST of
@@ -1391,14 +1633,17 @@ so address terminal work by shell_id. Closing the shared session ends every
 extension on that connection. A dead extension restarts on its own, and the LATEST
 listing carries its new handle.
 
-A template that declares --command: the handle is the SHELL running the server.
-Drive it the way any channel is driven — call <handle> <frame> to write one and wait
-for its reply, or read <handle> --frame to take the next frame off the stream.
-Frames can arrive in pieces — a result with partial_tail_bytes > 0 is an unfinished
-frame, and a partial object has not delivered its fields yet. A frame is a JSON-RPC
-message (object with id or method, or an array); other server output is reported as
-text. Server logs come on stderr; --stream e reads that separate stream. Handshake:
-initialize, then notifications/initialized, then tools/list.
+A template that declares --command: the handle is the SHELL running the server, and
+termcp drives it as a real MCP peer — the handshake (initialize, then
+notifications/initialized) happens once, by itself, on the first call.
+  get  <handle> tools          list the tools the server offers
+  get  <handle> tools <name>   one tool's full input schema
+  call <handle> <tool> {args}  call it; the reply is the tool's own text, --json the frame
+The raw form is still there: call <handle> <frame> writes one line and waits for its
+reply, and read <handle> --frame takes the next frame off the stream. Frames can
+arrive in pieces — a result with partial_tail_bytes > 0 is an unfinished frame, and a
+partial object has not delivered its fields yet. Server logs come on stderr;
+--stream e reads that separate stream.
 
 A template that declares --paths: a read-only window onto remote files. It has NO
 shell, so drive it over SFTP against the session_id — and only inside the
@@ -1428,10 +1673,14 @@ MOUNTING AN MCP PEER:
   open <session> --argv my-mcp-server        run a stdio MCP server
 
 CALLING TOOLS (preferred):
-  get  <session> mcp tools                     list tools offered by this peer
-  get  <session> mcp tools <tool>              inspect parameters for one tool
-  call <session> mcp:1 <tool> {"arg":"val"}    invoke tool directly and get text
-  call <session> mcp:1 <tool> --json           invoke tool and keep raw JSON
+  get  <session> mcp:<n> tools                 list tools offered by this peer
+  get  <session> mcp:<n> tools <tool>          inspect parameters for one tool
+  call <session> mcp:<n> <tool> {"arg":"val"}  invoke tool directly and get text
+  call <session> mcp:<n> <tool> --json         invoke tool and keep raw JSON
+
+<n> is the connection number from "ls <session> mcp" (or the "mcp:N" address "ls ext"
+prints for a mounted extension). Leaving it out is accepted while the session has
+exactly one MCP peer and refused with the live list as soon as it has two.
 
 RAW PROTOCOL (when not calling a tool):
   call <session> mcp:1 '{"method":"ping"}'     raw JSON-RPC request
@@ -1483,11 +1732,20 @@ Two different addresses, because the side that listens differs:
                 reach this machine — that is a deliberate act, and the review
                 prompt says so.
   --local-host  what the TARGET listens on for remote. Default 127.0.0.1;
-                "0.0.0.0" publishes it to the target's network.
+                "0.0.0.0" (or "*") publishes it to the target's network.
 
-dynamic has no --bind-host on purpose: the SOCKS5 proxy this server runs performs
-no authentication (same as "ssh -D"), so on any other interface it would be an open
-proxy for whoever can reach it. Use --action local to publish one service instead.
+The two are NOT interchangeable, and the wrong one is refused rather than ignored:
+--local-host on a local forward answers 400 and names --bind-host, because a flag
+that parses and changes nothing produces a 200 about an address the caller never
+asked for. Same for --bind-host on --remote.
+
+dynamic is LOOPBACK ONLY, and that is not a default: the SOCKS5 proxy this server
+runs performs no authentication (same as "ssh -D"), so any other interface would
+be an open proxy for whoever can reach it. --bind-host is accepted there only as
+the loopback it has to be, and refused otherwise; to publish one service use a
+local forward instead. A --remote-host/--local-host written on a dynamic forward
+is refused for the same reason a target would be pointless: the client names the
+destination per connection, so there is no fixed destination to carry.
 
 The reply differs by direction, which is easy to misread: local and dynamic report
 the listening address as local_port, while remote reports the port on the TARGET as
@@ -1519,6 +1777,22 @@ close <session>:<index>   stops that CHANNEL. Other channels and the connection
 close <session>           stops the whole SESSION: every channel ends, the
                           transport drops, and the entry stays in the archive as
                           exited with its output still readable.
+
+SEVERAL TARGETS IN ONE CALL. A task that connected to five machines leaves five
+sessions, and closing them one at a time is five round trips:
+
+  close a1f3:1,b2c4:1,b2c4:2   each address closed as written, one reply slot each
+  close a1f3 --index 1,2,3     those channels OF a1f3
+  close a1f3 --all             the whole session (the same thing close a1f3 does)
+
+EACH TARGET IS ANSWERED SEPARATELY, in the order written, and each slot carries a
+"Batch:" header naming the address it belongs to. A target that no longer resolves
+does not stop the ones beside it and does not undo them — what closed stays closed.
+
+--all ON A CHANNEL HANDLE IS REFUSED, not upgraded: close a1f3:1 --all would have to
+close the session that channel belongs to, taking every other channel with it, and
+that is the widening a caller naming one channel did not ask for. The refusal names
+close a1f3, which says what it does.
 
 --grace N (sessions only) is how long the process gets to exit after SIGTERM
 before the transport is closed anyway. YOU DO NOT HAVE TO PASS IT: omitted means
@@ -1642,6 +1916,23 @@ session is left untouched, so the guard costs one extra word rather than a mista
   rm <session>              a stopped session, no ceremony
   rm <session> --force      a running one; its channels and forwards are released first
   rm <session> --dry-run    say what would be erased, erase nothing
+  rm a1f3,b2c4,c5d6         SEVERAL sessions, one slot each, in the order written
+  rm --dead                 every session that has ENDED — the archive sweep
+  rm --dead --dry-run       the same list, erased nothing
+
+ONE CALL FOR THE WHOLE ARCHIVE. A finished task usually leaves five or six dead
+sessions behind, and erasing them one at a time is five or six round trips. rm --dead
+clears exactly the entries that have ended (any status other than running) and answers
+one line per session plus a count, so a partial failure is still attributable to an id.
+
+--dead NEVER TAKES A LIVE SESSION, and --force does not change that: force erases a
+running session the caller NAMED, while --dead names its targets by STATE. Combining
+them is refused, because the pair reads as "the archive, and whatever else is running".
+To erase one live session, name it.
+
+A COMMA LIST IS NOT ALL-OR-NOTHING. Each entry is erased independently and answered
+with its own status line: a running session in the list is refused with 409 (and says
+so) while the stopped ones beside it are erased. What succeeded stays succeeded.
 
 --dry-run is the cautious call, and it comes first: it is answered even for a RUNNING
 session, because that is exactly when a caller wants to ask before passing --force.
