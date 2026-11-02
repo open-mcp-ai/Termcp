@@ -13,9 +13,17 @@ import (
 // ever waited out. The single attempt and the zero backoff are what guarantee that - a
 // shared budget here would add latency to every write on the two platforms that never
 // needed it.
+//
+// removeAttempts and removeBackoff shape removeAllRetrying. They are declared on both
+// platforms because the loop that reads them is not built per-OS: leaving them in the
+// Windows file alone broke every POSIX build, which is how CI found it and a Windows
+// checkout never could.
 const (
 	renameAttempts = 1
 	renameBackoff  = 0
+
+	removeAttempts = 1
+	removeBackoff  = 0
 )
 
 // isSharingViolation is always false on POSIX: there is no "the target is busy"
