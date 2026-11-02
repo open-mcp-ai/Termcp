@@ -146,7 +146,9 @@ Main Key --认证加密--> EDK
 随机 DEK --认证加密--> 配置正文
 ```
 
-`keys/config.keys` 只保存 KDF 参数、随机 salt、认证校验信息和可选的系统/ENV 自动
+当前密钥保护、identity 和 EDK 集中到 `local-state/state.json`，正文保存在 `local-state/objects/`。以下 `keys/config.keys`、`store.enc` 路径仅描述旧布局与迁移兼容。登录密码与配置密码分别修改；登录后若收到 423，先在 `/auth` 用配置密码解锁。
+
+`keys/config.keys` 旧格式只保存 KDF 参数、随机 salt、认证校验信息和可选的系统/ENV 自动
 解锁封装，不保存密码或明文 Main Key。密码至少 8 个 Unicode 字符，最多 1024 个
 UTF-8 字节。密码不会写入日志、URL、浏览器存储或 argv；关闭设置页或离开页面会清空
 密码输入框。
@@ -210,4 +212,4 @@ Windows DPAPI 或 Linux Secret Service。系统 provider 不可用不影响密�
 
 ### MCP 客户端凭据
 
-`--mcp-token <token>` / `TERMCP_MCP_TOKEN` 用于 `stdio`、`daemon stdio` 连接 managed 实例。建议放在 MCP 配置的 `env` 中。它与旧服务端 `--auth-token` / `--auth-hash` 互斥，不会配置或覆盖 daemon 的服务端认证，也不会传入子 daemon。先在权限管理页创建 Agent/token；令牌不能初始化管理员或解锁 Main Key。
+`--mcp-token <token>` / `TERMCP_MCP_TOKEN` 用于 `stdio`、`daemon stdio` 连接 managed 实例。建议放在 MCP 配置的 `env` 中。它与旧服务端 `--auth-token` / `--auth-hash` 互斥，不会配置或覆盖 daemon 的服务端认证，也不会传入子 daemon。先在权限管理页配置权限组和主体并签发 token；令牌不能初始化管理员或解锁 Main Key。

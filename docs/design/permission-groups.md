@@ -1,26 +1,40 @@
-# 权限组：当前实现与兼容合同
+# 权限组：当前实现合同
 
-状态：2026-10-30 已在本分支实现，尚未合并。对应 #232 的 G01–G05 与 O01。主题接线已完成 U01/U02；高级参数条件、DSL 权限预览、审批回放仍在独立待办中。
+状态：2026-11-02 已在工作区实现，尚未合并。对应 #232 的 G01–G05、O01、P01–P03、S01 与 O02。审批回放和 #196/#197 的词汇/多组继承仍不属于本批范围。
 
 ## 身份、组和凭据
 
 认证密文状态升级到 version=3，包含 Groups、DefaultGroupID、AccessRevision，以及保持稳定 ID 的 Agent 主体和 MCP 凭据。外层 auth.json 的 version=2 仍表示认证密文格式，没有改变主机配置密钥环或对象加密协议。
 
 - 主体保留 ID、Name、Enabled、Revision、CreatedAt 和 GroupID。
-- 权限组保存 ID、名称、说明、启停、Revision、V1/V2 策略、待复核操作及模板来源版本。
+- 权限组保存 ID、名称、说明、启停、Revision、V2 动作策略、待复核操作及模板来源版本。
 - token 仍指向 PrincipalID，只保存摘要。组名、组 ID 和模板都不会变成人端 RoleAdmin。
 - 一个主体当前绑定一个组；GroupID 为空时使用实例缺省组。没有逐 Agent 动作覆盖或多组继承。
 - 组不存在/被停用时凭据拒绝认证。删除选择“拒绝访问”会绑定虚拟 system-deny，不能因缺省组较宽而自动恢复权限。页面的“待分配主体”可将其重新绑定。
 
 namespace 继续由主体 ID 派生，MCP transport owner 继续检查主体和凭据。共用组只复用策略，不自动合并两个主体的私有会话、传输所有权或 namespace。
 
+## 授权绑定
+
+授权预检把每次操作解析成明确动作和资源事实。对 profile 引用，绑定保存稳定 UUID 与配置正文摘要；对 extension 引用，绑定同时保存模板摘要和解析后的目标 profile UUID/摘要。执行 handler 使用绑定重新加载对象，不按并发变化后的同名对象继续运行。
+
+名称改名但 UUID 与内容不变仍可用；删除后同名重建、配置正文改变或 extension target 改变会拒绝执行。管理员直接调用和不受 Agent 策略约束的旧入口保持原有资源解析，不伪造一份绑定。DSL 语法、参数和执行顺序没有因绑定新增而改变。
+
+## 参数、风险与预览
+
+`/auth/access` 返回 86 个动作及 `risk`、`access_paths`、`dsl_verbs`、`internal_tools`、`webui_routes`、`dependencies` 和参数证据。`recipes` 说明 run、connect 和文件复制等组合动作需要哪些明确操作。模板只引用当前可证明的条件；高风险动作不会由未授权或缺省组隐式获得。
+
+`POST /auth/access/preview` 只解析和判定，不执行。请求选择一个 `tool` 调用或一个 DSL `cmd`，返回每项操作的允许/拒绝状态、原因和资源检查。预览不提交策略、不建连、不 acquire extension、不续租、不创建 task；`overrides` 等执行旁路字段直接拒绝。文件 `max_bytes` 只在执行前能证明有效字节数时通过，普通无界 DSL 读取保持原有语法并保守拒绝更小上限。
+
+## 审计
+
+权限组、主体、默认组、角色入口和凭据管理写入结构化 `permission audit` 事件，包含已验证操作者、目标 ID、前后 revision、结果和受影响主体数量。MCP 权限拒绝记录动作、目标工具/指令种类和原因。审计不含密码、Cookie、bearer token、请求正文或资源连接秘密。
+
 ## 一次性初始化与迁移
 
 首次初始化创建五个实际权限组：未授权、资源观察、只读诊断、文件维护、主机运维；初始缺省为未授权。它们是模板的当前策略快照，可以修改、复制、停用和按删除规则移除。后续启动不会重建用户已删除的组，也不会因为模板新增动作而自动扩权。
 
-v2 认证密文在加载时迁移：每个原 Agent 的策略进入一个兼容组；保持主体 ID、namespace、token ID/digest、原 host_mode/hosts。历史 nil 策略单独保留旧全功能语义，显式 V1 仍为 V1，策略升级需要管理员另外预览并保存。重复名称生成唯一组名。v1 明文账号在原密码验证与统一加密迁移流程中进入同一组模型。
-
-迁移在副本上处理，并通过既有 auth.enc 原子发布提交；失败不会修改重试来源或启用新实时状态。旧二进制不认识 version=3 时会拒绝加载，不会丢弃组字段后继续赋权。降级需按既有密文备份/迁移合同处理。
+当前权限状态仅接受 version=3 和 schema_version=2 的动作策略。未发布的 V1 功能组、nil 全权回退、逐主体直接策略和权限升级迁移均已删除；旧权限数据明确拒绝。登录/存储格式迁移与业务权限模型是不同的合同，不会导入旧业务权限。
 
 ## 管理接口
 
@@ -33,9 +47,9 @@ v2 认证密文在加载时迁移：每个原 Agent 的策略进入一个兼容�
 | POST /auth/groups/{id}/clone | 复制策略及说明，生成新 ID，无成员、无 token。 |
 | POST /auth/groups/{id}/delete-preview | 返回组 revision、访问数据 plan_revision、成员 ID 和影响数量。 |
 | DELETE /auth/groups/{id} | 校验预览版本；有成员时明确 move/deny；删除缺省时必须提供新缺省组。 |
-| POST /auth/groups/{id}/policy-upgrade-preview | 返回 V1→V2 保守候选；不改变实时策略。 |
 | GET /auth/group-presets | 五个版本化角色模板及明确动作、条件。 |
 | GET/POST /auth/principals | 列出主体，或创建并绑定到有效组；默认不签发 token。 |
+| PATCH /auth/principals/{id} | 带主体 revision 更新 enabled；不接收主体直接策略。 |
 | PUT /auth/principals/{id}/group | 带主体 revision 修改绑定，空字符串表示跟随缺省。 |
 | GET/PUT /auth/default-group | 使用 AccessRevision 修改缺省引用，影响未显式绑定主体。 |
 
@@ -49,17 +63,17 @@ v2 认证密文在加载时迁移：每个原 Agent 的策略进入一个兼容�
 
 模板新组的主机范围为 all，包含以后新增的已保存主机；这本身不授予任何业务动作。历史组不套用新范围。
 
-## 兼容接口
+## 唯一管理入口
 
-/auth/agents 仍是主体接口，不能把旧 agent_id 解释为组 ID。读取时提供实际组策略的兼容投影；旧调用者明确创建/修改 per-agent policy 时，变成独立的单成员兼容组。若成员已共用组，兼容写入会为该主体创建独立组，不会悄悄改动其他成员。
-
-/auth/tokens 接受 principal_id，并保留 agent_id；二者同时指定且不一致时拒绝。管理员自己的 MCP 凭据仍由人端单独管理，不能通过业务组模板获得管理员身份。
+策略只通过 /auth/groups 管理，主体只通过 /auth/principals 管理。创建主体默认不签发凭据；显式 issue_token:true 可同时签发。/auth/tokens 使用 principal_id，管理员凭据不绑定业务组。旧 /auth/agents、agent_id、逐主体策略和升级预览不保留别名或兼容实现。
 
 ## 请求与后台工作撤权
 
 组策略、启停、成员迁移、缺省变化、删除和 token 撤销，在持久提交成功后取消受影响 token 的活动请求。持久失败时保留原实时状态；持久性告警按既有“提交已可见”合同收权。
 
 upload/download/copy 在真实传输启动点向服务端认证 context 登记后台工作，绑定已验证主体和凭据。登记与撤权共用认证锁，已撤销请求无法再登记新工作；正常响应结束不影响独立后台生命周期。工作完成时注销；停用/删除/撤 token 会发取消并关闭传输客户端，以中断阻塞 I/O。
+
+SSE 的 HTTP 202 与实际 message 分开处理：登记检查 message 的存活状态及 admission 时的主体/入口修订。权限被停用再恢复，也不会使旧 message 重新获得登记资格；新请求可以使用恢复后的权限。有界文件传输的两端条件见 [文件操作权限](file-operation-permissions.md)。
 
 回执保留 Cancelled 状态，已写入的远端副作用不承诺回滚。任务查看/取消继续检查保存的源、目的两端主机和 namespace。管理员的后台任务保留原独立生命周期。
 
@@ -71,4 +85,4 @@ upload/download/copy 在真实传输启动点向服务端认证 context 登记�
 
 ## 验证
 
-测试覆盖共享组的两个独立主体、策略热收权、删除预览冲突、clone 无成员/凭据、缺省继承、Agent 拒绝管理接口、迁移与失败不扩权、持久失败保留原状态、请求完成后后台仍运行及组/凭据撤权取消、真实传输启动点回执保留。浏览器使用临时加密仓库及真实 Managed HTTP 接口验证创建、关联、改名、删除迁移、拒绝后重新分配；未改动真实账号。
+测试覆盖共享组的两个独立主体、策略热收权、删除预览冲突、clone 无成员/凭据、缺省继承、Agent 拒绝管理接口、失败不扩权、持久失败保留原状态、请求完成后后台仍运行及组/凭据撤权取消、真实传输启动点回执保留、资源绑定竞态、只读预览、结构化审计和空白名单。`make test-permissions` 在三平台 CI 上重复执行权限生命周期矩阵；浏览器使用临时加密仓库及真实 Managed HTTP 接口验证登录、权限组、预览和主题；未改动真实账号。完整矩阵见 [权限测试矩阵](../agents/permissions-testing.md)。

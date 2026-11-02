@@ -38,6 +38,7 @@ func pauseVault(t *testing.T, m *Managed, phase string) (<-chan struct{}, func()
 	t.Helper()
 	p := &pausedPasswordVault{Vault: m.vault, phase: phase, entered: make(chan struct{}), resume: make(chan struct{})}
 	m.vault = p
+	m.verifyLoginHash = func(hash, password string) bool { p.pause(phase); return verifyPasswordHash(hash, password) }
 	var once sync.Once
 	release := func() { once.Do(func() { close(p.resume) }) }
 	t.Cleanup(release)
@@ -64,7 +65,7 @@ func waitForVaultResult(t *testing.T, done <-chan error) error {
 
 func TestLoginPasswordWorkAllowsAuthenticationAndConcurrentPolicySave(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
-	agent := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"client"}`)
+	agent := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"client"}`)
 	entered, resume := pauseVault(t, m, "unlock")
 	logged := make(chan error, 1)
 	go func() { _, _, err := m.login("admin", testPassword); logged <- err }()
@@ -75,7 +76,7 @@ func TestLoginPasswordWorkAllowsAuthenticationAndConcurrentPolicySave(t *testing
 			traffic <- err
 			return
 		}
-		w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "PATCH", "/auth/agents/"+agent.Agent.ID, `{"revision":1,"enabled":false}`, cookie, session.CSRF)
+		w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "PATCH", "/auth/principals/"+agent.Agent.ID, `{"revision":1,"enabled":false}`, cookie, session.CSRF)
 		if w.Code != 200 {
 			traffic <- configstore.ErrAuthentication
 			return
@@ -114,7 +115,7 @@ func TestPasswordChangeWorkAllowsExistingMCPCredentials(t *testing.T) {
 	for _, phase := range []string{"unlock", "change"} {
 		t.Run(phase, func(t *testing.T) {
 			m, cookie, session := configuredManaged(t)
-			agent := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"client"}`)
+			agent := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"client"}`)
 			entered, resume := pauseVault(t, m, phase)
 			changed := make(chan error, 1)
 			go func() {

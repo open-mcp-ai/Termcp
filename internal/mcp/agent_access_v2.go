@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -43,11 +45,14 @@ func operationPlan(id string, evidence authorization.Evidence) authorization.Pla
 	return authorization.Plan{Requirements: []authorization.Requirement{{Operation: id, Evidence: evidence}}}
 }
 
-func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool string, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult) {
 	if tool == "term" {
-		return nil
+		return ctx, nil
 	} // parsed statements are checked before dispatch
-	deny := func(err error) *mcpgo.CallToolResult { return toolError(CodeForbidden, "%s", err.Error()) }
+	deny := func(err error) (context.Context, *mcpgo.CallToolResult) {
+		recordAgentDenied(ctx, "mcp.tool.invoke", tool, err.Error())
+		return ctx, toolError(CodeForbidden, "%s", err.Error())
+	}
 	args := request.GetArguments()
 	plan, err := capability.AgentToolPlan(tool, args)
 	if err != nil {
@@ -56,12 +61,28 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 	if err = checkAgentPlan(p, plan); err != nil {
 		return deny(err)
 	}
+	bindings := agentResourceBindings{profiles: map[string]sshconfig.AuthorizationBinding{}, extensions: map[string]extensions.AuthorizationBinding{}}
 	targets := capability.AgentToolTargets(tool, args)
-	if key := targets.ProfileArgument; key != "" && !s.agentHostAllowed(p, getString(args, key, "")) {
-		return deny(fmt.Errorf("host is outside this Agent's scope"))
+	if key := targets.ProfileArgument; key != "" {
+		name := getString(args, key, "")
+		binding, err := s.profileAuthorizationBinding(name)
+		if err != nil {
+			return deny(fmt.Errorf("cannot resolve the authorized host: %w", err))
+		}
+		if !p.AllowsHost(binding.Identity) {
+			return deny(fmt.Errorf("host is outside this Agent's scope"))
+		}
+		bindings.profiles[name] = binding
+		bindings.profiles[strings.TrimSpace(name)] = binding
+		bindings.profiles[binding.Name] = binding
 	}
-	if key := targets.ExtensionArgument; key != "" && !s.agentExtensionAllowed(p, getString(args, key, "")) {
-		return deny(fmt.Errorf("extension is outside this Agent's host scope"))
+	if key := targets.ExtensionArgument; key != "" {
+		name := getString(args, key, "")
+		binding, err := s.agentExtensionBinding(p, name)
+		if err != nil {
+			return deny(fmt.Errorf("extension is outside this Agent's host scope: %w", err))
+		}
+		bindings.extensions[strings.TrimSpace(name)] = binding
 	}
 	if targets.NeedsLocal && !s.agentHostAllowed(p, "internal") {
 		return deny(fmt.Errorf("local access requires the internal host"))
@@ -90,26 +111,26 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 			}
 		}
 	}
-	return nil
+	return withAgentResourceBindings(ctx, bindings), nil
 }
 
 func (s *Server) agentExtensionAllowed(p auth.AgentPolicy, name string) bool {
+	_, err := s.agentExtensionBinding(p, name)
+	return err == nil
+}
+
+func (s *Server) agentExtensionBinding(p auth.AgentPolicy, name string) (extensions.AuthorizationBinding, error) {
 	if s.extensions == nil {
-		return false
+		return extensions.AuthorizationBinding{}, errors.New("extensions are not configured")
 	}
-	ext, err := s.extensions.Store().Load(strings.TrimSpace(name))
+	binding, err := s.extensions.Binding(name)
 	if err != nil {
-		return false
+		return extensions.AuthorizationBinding{}, err
 	}
-	target := ext.Target
-	if s.sshConfigs != nil {
-		resolved, _, err := s.sshConfigs.ResolveReference(ext.Target, ext.TargetIdentity)
-		if err != nil {
-			return false
-		}
-		target = resolved
+	if !p.AllowsHost(binding.TargetProfile.Identity) {
+		return extensions.AuthorizationBinding{}, errors.New("target host is outside this Agent's scope")
 	}
-	return s.agentHostAllowed(p, target)
+	return binding, nil
 }
 
 // agentStatementSession is a read-only counterpart of dispatch's target lookup.
@@ -143,7 +164,10 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 	if stmt.Op == "help" {
 		return nil
 	}
-	deny := func(err error) *envelope.Slot { return agentDeniedSlot(stmt, err) }
+	deny := func(err error) *envelope.Slot {
+		recordAgentDenied(ctx, "mcp.dsl.authorize", strings.TrimSpace(stmt.Kind+" "+stmt.Op), err.Error())
+		return agentDeniedSlot(stmt, err)
+	}
 	// These branches dispatch through checkAdmission after their effective arguments
 	// have been built. Preclassifying them by verb would reintroduce the old drift.
 	delegated := stmt.Kind == "host" || stmt.Kind == "ext" || stmt.Kind == "file" || stmt.Kind == "forward"
@@ -152,11 +176,20 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 	}
 	if stmt.Pipe != nil {
 		source := "shell.output"
+		evidence := authorization.Evidence{Forms: []string{"pipe"}}
 		if stmt.Kind == "file" {
 			source = "file.read"
+			// copySource only parses addressing. It does not open a file or start
+			// a task. Execution applies the same range, possibly narrowed further
+			// by the call's bytes_limit, so this is a conservative byte bound.
+			src, bad := s.copySource(stmt, termArgs{})
+			if bad != nil {
+				return bad
+			}
+			evidence.Bytes, evidence.HasBytes = src.length, src.length > 0
 		}
-		plan := operationPlan(source, authorization.Evidence{Forms: []string{"pipe"}})
-		plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "file.write", Evidence: authorization.Evidence{Forms: []string{"pipe"}}})
+		plan := operationPlan(source, evidence)
+		plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "file.write", Evidence: evidence})
 		if err := checkAgentPlan(p, plan); err != nil {
 			return deny(err)
 		}
@@ -230,7 +263,7 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 				}
 				for _, tool := range []string{"shell_input", "shell_key", "shell_output"} {
 					args := argsOf("shell_id", stmt.Target, "key", "enter")
-					if bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); bad != nil {
+					if _, bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); bad != nil {
 						return deny(fmt.Errorf("%s", toolResultText(bad)))
 					}
 					if bad := s.admission(ctx, tool, lookupGate(tool), toolRequest(tool, args)); bad != nil {
@@ -299,9 +332,6 @@ func (s *Server) checkAgentPeerEffect(ctx context.Context, stmt directive.Statem
 	}
 	if err != nil {
 		return agentDeniedSlot(stmt, err)
-	}
-	if !p.IsV2() {
-		return nil
 	}
 	if err = checkAgentPlan(p, plan); err != nil {
 		return agentDeniedSlot(stmt, err)
@@ -457,9 +487,6 @@ func (s *Server) localTaskResource(ctx context.Context, role string) task.Resour
 }
 
 func (s *Server) agentTaskViewAllowed(ctx context.Context, p auth.AgentPolicy, v task.View) bool {
-	if !p.IsV2() {
-		return s.agentTaskAllowed(ctx, p, v.SessionID)
-	}
 	if len(v.Resources) != 2 {
 		return false
 	}

@@ -2,23 +2,27 @@
 
 ## Unreleased
 
+The unpublished V1 permission model has been removed. Permission groups now use only explicit operation grants; principals bind to groups through /auth/principals. Legacy function groups, principal-local policies, upgrade previews and management aliases are rejected instead of migrated.
+
+Login and configuration passwords are now independent: registration initializes both from the same input, then each changes separately. Owners can sign in while the configuration vault is locked and unlock it with the configuration password; optional system protection remains a parallel automatic-unlock path. Keys, identity references and per-object EDKs now commit in `local-state/state.json`, with host ciphertext retained in each host directory and catalog/auth bodies stored by object identity and generation. Configuration password changes rewrap the EDK table without replacing body files. Existing encrypted layouts migrate with authenticated verification before legacy cleanup.
+
+File permission checks now use the same effective parameters and byte decoder as execution. Bounded transfers check both endpoints using existing operation parameters; DSL syntax and parameter meanings are unchanged. Inline reads no longer acquire local-transfer permissions from an unused local_path. SSE messages can register background transfers after HTTP 202 while still rejecting stale authority after permission changes.
+
 Login, setup, account and permission pages now follow the workspace theme, including all four built-in themes, automatic system appearance and local custom themes. Theme resources load before sign-in through a restricted static entrance; missing themes and docs-only builds retain usable fallback styling. Theme switching also remains readable on narrow screens.
 
-Permission management now organizes reusable permission groups with five role presets, explicit default binding, independent principals and client credentials. Groups can be renamed, cloned, disabled or deleted after previewing member impacts; deletion supports moving members or denying access. Existing subject and token identities survive the encrypted-state migration. Access changes also cancel credential-owned background transfers while preserving their receipts.
+Permission management now organizes reusable permission groups with five role presets, explicit default binding, independent principals and client credentials. Groups can be renamed, cloned, disabled or deleted after previewing member impacts; deletion supports moving members or denying access. Access changes also cancel credential-owned background transfers while preserving their receipts.
 
 Password verification, initialization and changes now leave ordinary authentication and profile traffic available during Argon2 derivation. Key operations use independent serialization, recheck key metadata before publication, retain concurrent configuration/permission saves, and dispose of candidates when the store closes.
 
-Empty Agent allowlists now remain empty through API responses, encrypted storage and restart. Older ambiguous conditions are denied with a visible review notice until an administrator explicitly saves the policy. Newly created Agents receive an empty V2 action policy, including when API clients omit the policy field.
+Empty operation allowlists now remain empty through API responses, encrypted storage and restart. Ambiguous stored conditions are denied with a visible review notice until an administrator explicitly saves the group policy. Newly created principals inherit the selected or default permission group and receive no credential unless issuance is explicit.
 
 Administrator browser logins now end when the service restarts. Automatic vault unlock restores configuration access while requiring a fresh browser login; MCP credentials retain their independent lifetime. Signing in again during the same run preserves other live browser sessions, and logout no longer depends on writing the vault.
 
 Peer connection summaries and generated failures hide endpoint userinfo, private paths, query values and fragments while keeping the original transport settings. Inspecting an MCP peer also handles the absence of CDP state without panicking.
 
-Agent permissions can now use an explicit V2 action list with key/repeat, tool/method and file-transfer conditions. The permissions page separates session lifecycle, terminal readers and file sub-actions, and previews an explicit upgrade from existing function groups. Composite operations are checked before sending input or starting a transfer; task access checks both hosts, and Agent profile/extension summaries hide transport secrets. Existing tokens and V1 policies remain usable.
+Agent permissions use explicit schema 2 actions with key/repeat, tool/method and file-transfer conditions. The permissions page separates session lifecycle, terminal readers and file sub-actions while grouping principals and credentials under reusable policies. Composite operations are checked before sending input or starting a transfer; task access checks both hosts, and Agent profile/extension summaries hide transport secrets.
 
-Permission and token management now has its own desktop page with an Agent list, function checkboxes, a host picker and a separate token tab. Create an Agent, choose its functions and saved hosts, then issue client tokens. Errors remain visible above the workspace and next to the action; the account page keeps login, password and sign-out controls. Function/host selections are enforced on MCP requests and existing session handles.
-
-Admins can now create Agents and issue MCP tokens from the account page, copy HTTP/SSE or stdio configuration, disable an Agent, and revoke individual client tokens. Multiple clients share a stable identity; credentials persist as encrypted digests. stdio uses `TERMCP_MCP_TOKEN` without changing daemon authentication, and token revocation disconnects its active requests. Admins can also issue MCP-only tokens for themselves.
+Permission management now includes risk, reachability and dependency metadata, a read-only DSL preview, stable resource bindings, and structured audit events. A profile or extension replaced after authorization is refused instead of redirecting execution to a reused name. Large capability-audit inventories are generated under `dist/audits/`, and a focused permission lifecycle matrix runs on all three CI platforms.
 
 默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，账号、签名密钥、凭据及预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。自动解锁只恢复密钥，管理员浏览器会话每次重启后均需重新登录；无自动解锁时先输入主密码解锁。账号页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文账号可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1，OAuth 尚未实现，显式旧 token/hash 与开放模式仍保留。
 

@@ -155,20 +155,14 @@ func TestManagedFirstRunLoginRestartLogout(t *testing.T) {
 		t.Fatal("unlock restored a cookie from the previous run")
 	}
 	cookie.Value, session = fresh, freshSession
-	b, err := os.ReadFile(m.path)
+	b, err := os.ReadFile(configstore.LocalStatePath(filepath.Dir(m.path)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(b, []byte(testPassword)) || bytes.Contains(b, []byte("signing_key")) {
-		t.Fatal("plaintext credentials persisted")
+	if bytes.Contains(b, []byte(testPassword)) || len(loaded.state.SigningKey) > 0 && bytes.Contains(b, []byte(loaded.state.SigningKey)) {
+		t.Fatal("plaintext account secret persisted")
 	}
-	cipher, err := os.ReadFile(filepath.Join(filepath.Dir(m.path), "auth.enc"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(cipher, []byte(testPassword)) || bytes.Contains(cipher, []byte(loaded.state.SigningKey)) {
-		t.Fatal("authentication secrets are not encrypted")
-	}
+
 	logout := managedRequest(t, loaded.Wrap(next), "POST", "/auth/logout", "", cookie.Value, session.CSRF)
 	if logout.Code != 200 {
 		t.Fatalf("logout: %d", logout.Code)
@@ -192,7 +186,7 @@ func TestManagedRejectsForgedAndWrongPurposeJWT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, _ := base64.RawURLEncoding.DecodeString(m.state.SigningKey)
+	key, _ := base64.RawURLEncoding.DecodeString(m.webSigningKey)
 	tests := []struct {
 		name   string
 		edit   func(*sessionClaims)
@@ -359,12 +353,12 @@ func TestManagedSetupLocalAndExclusive(t *testing.T) {
 
 func TestManagedCorruptionFailsClosedAndLogoutDoesNotNeedStorage(t *testing.T) {
 	m, token, _ := configuredManaged(t)
-	cipher := filepath.Join(filepath.Dir(m.path), "auth.enc")
-	if err := os.WriteFile(cipher, []byte("damaged ciphertext"), 0600); err != nil {
+	cipher := configstore.LocalStatePath(filepath.Dir(m.path))
+	if err := os.WriteFile(cipher, []byte("damaged state"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenManaged(filepath.Dir(m.path), m.vault, m.providers...); err == nil {
-		t.Fatal("corrupt ciphertext became setup")
+		t.Fatal("corruption reopened setup")
 	}
 	if err := os.Remove(cipher); err != nil {
 		t.Fatal(err)
@@ -372,6 +366,7 @@ func TestManagedCorruptionFailsClosedAndLogoutDoesNotNeedStorage(t *testing.T) {
 	if err := os.Mkdir(cipher, 0700); err != nil {
 		t.Fatal(err)
 	}
+
 	id, _, err := m.verify(token)
 	if err != nil {
 		t.Fatal(err)

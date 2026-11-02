@@ -231,6 +231,13 @@ type Operation struct {
 	Resource        string           `json:"resource,omitempty"`
 	Global          bool             `json:"global"`
 	ConstraintKinds []ConstraintKind `json:"constraint_kinds"`
+	Risk            RiskLevel        `json:"risk"`
+	AccessPaths     []AccessPath     `json:"access_paths"`
+	DSLVerbs        []string         `json:"dsl_verbs,omitempty"`
+	InternalTools   []string         `json:"internal_tools,omitempty"`
+	WebUIRoutes     []string         `json:"webui_routes,omitempty"`
+	Dependencies    []string         `json:"dependencies,omitempty"`
+	Parameters      []ParameterSpec  `json:"parameters,omitempty"`
 }
 
 var catalog = []Operation{
@@ -345,6 +352,7 @@ var catalog = []Operation{
 }
 
 var byID = func() map[string]Operation {
+	applyCatalogMetadata()
 	m := make(map[string]Operation, len(catalog))
 	for _, op := range catalog {
 		if _, dup := m[op.ID]; dup {

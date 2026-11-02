@@ -13,7 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-func TestConfigurationPasswordRouteChangesAdminPassword(t *testing.T) {
+func TestConfigurationPasswordRouteKeepsLoginPasswordIndependent(t *testing.T) {
 	dir := t.TempDir()
 	vault, err := sshconfig.OpenConfiguredStore(dir)
 	if err != nil {
@@ -26,7 +26,7 @@ func TestConfigurationPasswordRouteChangesAdminPassword(t *testing.T) {
 	}
 	h := extensionTestHandler(t)
 	h.SSH = vault
-	h.ChangeMainPassword = account.ChangePassword
+
 	mux := http.NewServeMux()
 	h.Register(mux)
 	server := httptest.NewServer(account.Wrap(mux))
@@ -71,9 +71,9 @@ func TestConfigurationPasswordRouteChangesAdminPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	response = post("/api/config-storage/password", `{"current_password":"sample-password-for-tests","new_password":"replacement-master-password","confirmation":"replacement-master-password"}`)
-	if response.StatusCode != 200 || response.Header.Get("X-Termcp-Reauthenticate") != "1" {
+	if response.StatusCode != 200 || response.Header.Get("X-Termcp-Reauthenticate") != "" {
 		response.Body.Close()
-		t.Fatalf("unified password route: %d, missing sign-in instruction", response.StatusCode)
+		t.Fatalf("configuration password route: %d, unexpectedly requested reauthentication", response.StatusCode)
 	}
 	response.Body.Close()
 	response, err = client.Get(server.URL + "/api/version")
@@ -81,9 +81,14 @@ func TestConfigurationPasswordRouteChangesAdminPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != 401 {
-		t.Fatal("old Admin session survived configuration password change")
+	if response.StatusCode != 200 {
+		t.Fatal("configuration password change invalidated independent login session")
 	}
+	if err := vault.UnlockAuthentication("replacement-master-password"); err != nil {
+		t.Fatal("new configuration password was not activated", err)
+	}
+	response = post("/auth/logout", `{}`)
+	response.Body.Close()
 	response, err = client.Get(server.URL + "/auth/status")
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +98,9 @@ func TestConfigurationPasswordRouteChangesAdminPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = post("/auth/login", `{"username":"test-admin","password":"replacement-master-password"}`)
+	response = post("/auth/login", `{"username":"test-admin","password":"sample-password-for-tests"}`)
 	response.Body.Close()
 	if response.StatusCode != 200 {
-		t.Fatal("new configuration password did not become Admin password")
+		t.Fatal("configuration password change replaced the login password")
 	}
 }

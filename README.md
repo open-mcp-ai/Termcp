@@ -83,14 +83,20 @@ and an AI share the same terminals and collaborate.
 
 ## Install
 
-Default startup now requires first-run Admin setup at `/login`. The Admin master password also unlocks configuration encryption. Account settings,
-role entrance permissions and JWT sessions persist encrypted in `<data-dir>/auth.enc`
-under the existing shared keyring; `auth.json` contains only a version marker.
-In Permission management (`/permissions`), create an Agent or issue an MCP token for yourself, then copy
-the generated HTTP/SSE or stdio configuration. Tokens are shown once; the server
-stores only their SHA-256 digests. stdio uses `TERMCP_MCP_TOKEN`, independently of
-legacy server authentication. OAuth remains future work. After a restart without
-automatic unlock, sign in once before MCP clients reconnect.
+Default startup requires first-run Admin setup at `/login`. Registration initializes
+two independent passwords from the same input: login and configuration encryption.
+Change them separately afterwards. Salted login verifiers, key protection,
+identity references and per-object EDKs commit through
+`<data-dir>/local-state/state.json`; host ciphertext stays in `ssh_configs/<host>/`, while catalog/auth bodies live in `local-state/objects/`.
+Each configuration password directly derives the instance MK. Optional system/ENV
+KEKs enable automatic vault unlocking; browser sign-in is always separate.
+
+In Permission management (`/permissions`), choose or create a permission group,
+configure actions and host scope, add a principal and issue its MCP token. The page
+can preview a DSL request without executing it and explain missing grants. Tokens are shown once;
+only their digests persist in encrypted private state. stdio uses
+`TERMCP_MCP_TOKEN`. Without automatic vault unlocking, sign in and unlock at
+`/auth` after a restart before MCP clients reconnect. OAuth remains future work.
 
 ### 0 · AI install
 

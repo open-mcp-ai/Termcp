@@ -8,13 +8,17 @@ import (
 // PrepareAuthentication shares the profile repository and Main Key. Creating
 // a keyring for authentication does not opt plaintext profiles into encryption.
 func (s *Store) PrepareAuthentication(password, previous string, automatic bool, providers ...configstore.Provider) error {
+	configPassword := password
+	if previous != "" {
+		configPassword = previous
+	}
 	return s.passwordRepository(func(repo *configstore.Repository) (*configstore.Repository, bool, error) {
 		if repo == nil {
 			var selected []configstore.Provider
 			if automatic {
 				selected = providers
 			}
-			candidate, err := configstore.InitializeRepositoryWithPassword(s.dataDir, password, password, selected...)
+			candidate, err := configstore.InitializeRepositoryWithPassword(s.dataDir, configPassword, configPassword, selected...)
 			if err == nil {
 				return candidate, true, nil
 			}
@@ -26,36 +30,25 @@ func (s *Store) PrepareAuthentication(password, previous string, automatic bool,
 				return nil, false, err
 			}
 		}
-		changed, proved := false, false
+		changed := false
 		if repo.Status().Locked {
-			candidate := password
-			if previous != "" {
-				candidate = previous
-			}
-			if err := repo.UnlockPassword(candidate); err != nil {
-				return repo, changed, err
+			if err := repo.UnlockPassword(configPassword); err != nil {
+				return repo, false, err
 			}
 			changed = true
-			proved = candidate == password
+		} else if repo.Status().PasswordConfigured {
+			if err := repo.VerifyPassword(configPassword); err != nil {
+				return repo, false, err
+			}
 		}
 		if !repo.Status().PasswordConfigured {
-			if err := repo.ChangePassword("", password, password, providers...); err != nil {
+			if err := repo.ChangePassword("", configPassword, configPassword, providers...); err != nil {
 				return repo, changed, err
 			}
 			changed = true
-		} else if !proved {
-			if err := repo.VerifyPassword(password); err != nil {
-				if previous == "" {
-					return repo, changed, configstore.ErrAuthentication
-				}
-				if err := repo.ChangePassword(previous, password, password, providers...); err != nil {
-					return repo, changed, err
-				}
-				changed = true
-			}
 		}
 		if repo.Status().RotationPending {
-			if err := repo.ChangePassword(password, "", "", providers...); err != nil {
+			if err := repo.ChangePassword(configPassword, "", "", providers...); err != nil {
 				return repo, changed, err
 			}
 			changed = true
@@ -119,11 +112,39 @@ func (s *Store) AuthenticationLocked() bool {
 		return true
 	}
 	state := s.encrypted.Status()
-	return state.Closed || state.Locked
+	return state.Closed || state.Locked || state.RotationPending
 }
 
 func (s *Store) AuthenticationInitialized() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.encrypted != nil
+}
+
+func (s *Store) ReadLoginCredential() ([]byte, error) {
+	s.mu.Lock()
+	repo := s.encrypted
+	s.mu.Unlock()
+	if repo == nil {
+		return nil, nil
+	}
+	return repo.ReadLoginCredential()
+}
+func (s *Store) WriteLoginCredential(expected, next []byte) error {
+	s.mu.Lock()
+	repo := s.encrypted
+	s.mu.Unlock()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	return repo.WriteLoginCredential(expected, next)
+}
+func (s *Store) WriteAuthenticationAndLogin(data, login []byte) error {
+	s.mu.Lock()
+	repo := s.encrypted
+	s.mu.Unlock()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	return repo.WriteAuthenticationAndLogin(data, login)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -122,8 +121,8 @@ func TestPasswordChangeRewrapsEDKsAndRejectsOldPassword(t *testing.T) {
 }
 
 func TestPasswordChangeResumesUsingNewPasswordWithoutKEK(t *testing.T) {
-	// One profile plus catalog, between two keyring publications.
-	for failAt := 1; failAt <= 4; failAt++ {
+	// One atomic EDK-table publication between the two keyring publications.
+	for failAt := 1; failAt <= 3; failAt++ {
 		t.Run(fmt.Sprintf("publication-%d", failAt), func(t *testing.T) {
 			r := passwordRepository(t)
 			initialID := r.Status().MainKeyID
@@ -131,7 +130,7 @@ func TestPasswordChangeResumesUsingNewPasswordWithoutKEK(t *testing.T) {
 			writes := 0
 			err := r.changePassword(firstPassword, secondPassword, secondPassword, nil, func(path string, data []byte) error {
 				writes++
-				if err := writeFileAtomic(path, data); err != nil {
+				if err := writeStoreFile(path, data); err != nil {
 					return err
 				}
 				if writes == failAt {
@@ -239,7 +238,7 @@ func TestPasswordRejectsInvalidDerivationBeforeKDF(t *testing.T) {
 	}
 	// Altering the fixed cost is rejected structurally before allocating memory.
 	data = bytes.Replace(data, []byte("\"memory_kib\":65536"), []byte("\"memory_kib\":4294967295"), 1)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := overwriteStoreFileForTest(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if opened, err := OpenRepositoryForRecovery(r.dataDir); opened != nil || !errors.Is(err, ErrFormat) {

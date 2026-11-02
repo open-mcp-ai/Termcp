@@ -6,7 +6,7 @@ import (
 )
 
 type backgroundWorkKey struct{}
-type backgroundRegistrar func(context.CancelFunc) (func(), error)
+type backgroundRegistrar func(context.Context, context.CancelFunc) (func(), error)
 
 // RegisterBackgroundWork binds work to the verified credential independently of
 // the request lifetime. Normal response completion does not revoke background
@@ -15,7 +15,7 @@ type backgroundRegistrar func(context.CancelFunc) (func(), error)
 func RegisterBackgroundWork(ctx context.Context, cancel context.CancelFunc) (func(), error) {
 	register, ok := ctx.Value(backgroundWorkKey{}).(backgroundRegistrar)
 	if ok {
-		return register(cancel)
+		return register(ctx, cancel)
 	}
 	if actor, present := ActorFromContext(ctx); present && actor.Role == RoleAgent {
 		return nil, errors.New("Agent background-work authority is unavailable")
@@ -26,16 +26,23 @@ func RegisterBackgroundWork(ctx context.Context, cancel context.CancelFunc) (fun
 	return func() {}, nil
 }
 func (m *Managed) withBackgroundWork(ctx context.Context, principal, credential string) context.Context {
-	return context.WithValue(ctx, backgroundWorkKey{}, backgroundRegistrar(func(cancel context.CancelFunc) (func(), error) {
+	// Called by admitToken with m.mu held. Bind the request's authority, not the
+	// HTTP response's lifetime: SSE handles a message after returning HTTP 202.
+	revision := agentRevision(m.state.Agents[principal])
+	roleRevision := m.state.Revision
+	return context.WithValue(ctx, backgroundWorkKey{}, backgroundRegistrar(func(message context.Context, cancel context.CancelFunc) (func(), error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if err := ctx.Err(); err != nil {
+		if err := message.Err(); err != nil {
 			return nil, err
 		}
 		a, ok := m.state.Agents[principal]
 		token, exists := m.state.Tokens[credential]
 		if !ok || !a.Enabled || !exists || token.PrincipalID != principal {
 			return nil, errors.New("credential access has ended")
+		}
+		if agentRevision(a) != revision || m.state.Revision != roleRevision {
+			return nil, errors.New("credential authority changed; start a new request")
 		}
 		if _, err := resolvedAgentPolicy(m.state, a); err != nil {
 			return nil, err

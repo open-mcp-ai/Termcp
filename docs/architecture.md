@@ -2,13 +2,9 @@
 
 ## 零、HTTP 入口与认证中间件
 
-默认使用 `internal/auth.Managed`：首次本机设置 Admin，JWT Cookie 登录；Admin 主密码经 Argon2id 派生现有 Main Key；账号、
-签名密钥、角色入口权限和会话密文位于 `<data-dir>/auth.enc`，`auth.json` 只保留版本，
-HTTP 与 daemon 共用同一配置仓库。无 Provider 时先登录解锁，有效 Cookie 在自动
-解锁后可继续验证；修改主密码统一重封所有 DEK 并撤销全部会话。中间件验证 HS256、issuer/audience/expiry 和服务端 session，再按当前
-角色策略放行；写请求检查 CSRF/来源，退出会撤销会话并取消对应活动连接。当前只签发
-Admin 会话，以及管理员/Agent 的 MCP-only Bearer token。Token 摘要沿用同一加密存储；stdio 使用客户端变量 `TERMCP_MCP_TOKEN`，不覆盖 daemon 认证。OAuth 尚未实现。预设角色入口权限不代替后续
-逐操作 Agent 业务策略。
+默认使用 `internal/auth.Managed`：首次本机设置管理员，注册时由同一次输入初始化两份独立密码。登录密码以独立 salt 的 Argon2id 校验记录保存；配置密码直接派生 MK，系统/ENV KEK 为可选的自动解锁路径。JWT 签名密钥、浏览器会话和 CSRF 只在本次进程内存中，重启后需要重新登录。
+
+`local-state/state.json` 是 keyring、登录 bootstrap、identity、EDK 与代际引用的统一提交点；主机密文正文保留在 `ssh_configs/<host>/<generation>.enc`；仅 catalog/auth 正文位于 `local-state/objects/<object-id>/<generation>.enc`。每个对象仍有独立随机 DEK。改登录密码只更新校验记录并撤销浏览器会话；改配置密码集中重封 EDK，不替换正文文件或浏览器登录。已登录但保险库锁定时，只开放账号/解锁等必要操作，MCP 和业务入口返回 423。详见 [Local state 与独立密码](design/local-state-and-passwords.md)。
 
 显式启用 `--auth-token` / `--auth-hash` 后使用旧 `internal/auth.Middleware`，一次覆盖所有入口（Web UI、REST、MCP SSE、`/stream`、WebSocket），下图只描述这个兼容模式：
 

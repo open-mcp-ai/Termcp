@@ -1,8 +1,8 @@
 package configstore
 
 import (
+	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -138,13 +138,23 @@ func TestPasswordDerivationRejectsChangedKeyMetadata(t *testing.T) {
 	go func() { done <- r.VerifyPassword(firstPassword) }()
 	awaitPasswordPhase(t, entered)
 	path := filepath.Join(r.dataDir, "keys", "config.keys")
-	original, err := os.ReadFile(path)
+	original, err := readStoreFileForTest(path)
 	if err != nil {
 		resume()
 		t.Fatal(err)
 	}
-	modified := append(append([]byte(nil), original...), '\n')
-	if err = os.WriteFile(path, modified, 0600); err != nil {
+	stored, parseErr := parseStoredKeyring(original)
+	if parseErr != nil {
+		resume()
+		t.Fatal(parseErr)
+	}
+	stored.Password.Nonce[0] ^= 1
+	modified, marshalErr := json.Marshal(stored)
+	if marshalErr != nil {
+		resume()
+		t.Fatal(marshalErr)
+	}
+	if err = overwriteStoreFileForTest(path, modified, 0600); err != nil {
 		resume()
 		t.Fatal(err)
 	}
@@ -152,7 +162,7 @@ func TestPasswordDerivationRejectsChangedKeyMetadata(t *testing.T) {
 	if err := awaitPasswordResult(t, done); err == nil {
 		t.Fatal("password proof ignored key metadata replacement")
 	}
-	if err = os.WriteFile(path, original, 0600); err != nil {
+	if err = overwriteStoreFileForTest(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

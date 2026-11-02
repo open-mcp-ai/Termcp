@@ -455,7 +455,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	mux.Handle("POST /api/term", mcpSrv.TermHandler())
 	webuiH := &webui.Handler{Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, Extensions: extReconciler, NoInternal: cfg.NoInternal, Version: versionString(), Daemon: isDaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339)}
 	if managed != nil {
-		webuiH.ChangeMainPassword = managed.ChangePassword
+		// Account and configuration passwords have independent lifecycles.
 	}
 	// The effective countdown is published at GET /api/daemon so the stdio
 	// bridge can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
@@ -475,6 +475,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
 	mcpSrv.SetExtensionReconciler(extReconciler)
 	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
+	if managed != nil {
+		managed.SetPolicyPreviewer(mcpSrv)
+	}
 	// Who is attached: the Web UI lists MCP clients from the MCP server and its
 	// own tabs from its own registry. The listener wakes the same broadcast the
 	// session list uses, so a client connecting shows up without a poll.

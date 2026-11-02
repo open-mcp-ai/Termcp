@@ -2,7 +2,7 @@
 
 基线 `76b320976ae671721f3370983f5b0d6b412685b1`。每行是一个静态源码调用位置；CSV 保留列号、三平台目标、完整参数数组与语法分支容器。详见 [核对结论](capability-call-audit.md)。
 
-“旁路”仅指是否经过当前 MCP 的 callTool/checkAdmission 包装，不等于没有全局认证或必然存在安全漏洞。函数内出现 guard 的证据不自动证明其支配全部分支。语言格式化、序列化等普通辅助调用不列入本表，但完整保留在 [全量调用 CSV](capability-call-edges.csv)。
+“旁路”仅指是否经过当前 MCP 的 callTool/checkAdmission 包装，不等于没有全局认证或必然存在安全漏洞。函数内出现 guard 的证据不自动证明其支配全部分支。语言格式化、序列化等普通辅助调用不列入本表；可按 [调用审计生成命令](capability-call-audit.md) 在 `dist/audits/call-expressions.csv` 重新生成。
 
 | 连接 ID | 调用点：文件 / 行 / 函数 | 调用方向 | 完整实参（源码表达式） | 类型 | 旁路判定及局部检查证据 |
 | --- | --- | --- | --- | --- | --- |

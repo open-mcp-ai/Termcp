@@ -61,10 +61,10 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	}
 	csrf = call("GET", "/auth/status", "")["csrf"].(string)
 	csrf = call("POST", "/auth/setup", `{"username":"test-admin","password":"synthetic-transport-password"}`)["csrf"].(string)
-	first := call("POST", "/auth/agents", `{"name":"agent A"}`)
+	first := call("POST", "/auth/principals", `{"name":"agent A","issue_token":true}`)
 	token := first["token"].(string)
-	principal := first["agent"].(map[string]any)["id"].(string)
-	second := call("POST", "/auth/agents", `{"name":"agent B"}`)
+	principal := first["principal"].(map[string]any)["id"].(string)
+	second := call("POST", "/auth/principals", `{"name":"agent B","issue_token":true}`)
 	other := second["token"].(string)
 	networkCtx, networkCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer networkCancel()

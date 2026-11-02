@@ -13,6 +13,7 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
+	"github.com/open-mcp-ai/termcp/internal/fileop"
 	filesftp "github.com/open-mcp-ai/termcp/internal/sftp"
 	"github.com/open-mcp-ai/termcp/internal/task"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -22,15 +23,13 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
-	offset := int64(getFloat64(args, "offset", 0))
-	length := int64(getFloat64(args, "length", 0))
-	mode := getString(args, "mode", "text")
-	localPath := getString(args, "local_path", "")
+	p := fileop.ReadFromArgs(args)
+	offset, length, mode, localPath := p.Offset, p.Length, p.Mode, p.LocalPath
 	// `--encoding` ON A FILE READ WAS ACCEPTED AND IGNORED, which is worse than refused:
 	// the caller named the interpretation and was handed a different one. A PowerShell
 	// 5.1 log is UTF-16LE with a BOM by default, so this was the ordinary case on
 	// Windows and not an edge one (issue #177).
-	charset := getString(args, "charset", "")
+	charset := p.Charset
 
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", "remote_path required"), nil
@@ -102,16 +101,13 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequ
 	// A POINTER ALL THE WAY DOWN, because absence and 0 are different requests:
 	// "no offset" means replace the file, "offset 0" means overwrite from the first
 	// byte. They shared the value 0 once, and the destructive one was the default.
-	offset := int64PtrFromArgs(args, "offset")
-	data := getString(args, "data", "")
+	p := fileop.WriteFromArgs(args)
+	offset, data := p.Offset, p.Data
 	// EMPTY MEANS NOT GIVEN, and the distinction is load-bearing: --mode is the
 	// ENCODING of --data, so an explicit "text" on a --local-path write is a flag that
 	// cannot be honoured, while saying nothing is the ordinary case. Spelling the
 	// default as "text" made the two indistinguishable (#190).
-	mode := getString(args, "mode", "")
-	localPath := getString(args, "local_path", "")
-	localOffset := int64(getFloat64(args, "local_offset", 0))
-	length := int64(getFloat64(args, "length", 0))
+	mode, localPath, localOffset, length := p.Mode, p.LocalPath, p.LocalOffset, p.Length
 
 	// ONE PLACE, BOTH PATHS (#190).
 	//
