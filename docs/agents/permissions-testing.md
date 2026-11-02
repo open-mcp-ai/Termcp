@@ -1,0 +1,52 @@
+# Permission lifecycle test matrix
+
+`#232` uses the normal three-platform CI matrix and adds a focused repeated run
+for permission state. The focused command is:
+
+```sh
+make test-permissions
+```
+
+It runs on Ubuntu, macOS and Windows with `-race`, `-shuffle=on` and
+`-count=2`. The focused packages are:
+
+| Package | Required behavior |
+| --- | --- |
+| `internal/auth` | Login lifetime, group revisions, principal binding, token revocation, audit events and inactive authorization state |
+| `internal/authorization` | Explicit allow/deny, constraints, recipes and catalog metadata |
+| `internal/capability` | Effective tool arguments and composite operation plans |
+| `internal/fileop` | Shared execution/authorization byte evidence |
+| `internal/mcp` | Real Streamable HTTP and SSE admission, MCP/DSL equivalence, resource bindings, previews and background cancellation |
+| `internal/webui` | Shared themes, authenticated page assets, browser rendering probes and no-WebUI behavior |
+
+The same workflow also runs:
+
+```sh
+go test ./... -count=1 -shuffle=on -race -timeout 1800s
+go build -tags no_webui ./...
+go test -tags no_webui -count=1 -race -run TestNoWebUIBuildCarriesDocsOnly ./internal/webui/
+```
+
+Browser checks use a temporary data directory and synthetic credentials. They
+must not use the operator's real data directory or account. The browser contract
+covers setup/login, `/permissions`, all built-in themes, language switching,
+desktop and narrow layouts, preview rendering, and the absence of CSP or console
+errors.
+
+Before a release, also run on an idle local machine:
+
+```sh
+make test-stress STRESS_PKGS="./internal/auth ./internal/mcp ./internal/configstore ./internal/sshconfig"
+```
+
+CI execution and a local run are separate evidence. A platform not actually run
+must be reported as unverified; compilation alone is not a substitute for that
+platform's tests.
+
+## 2026-11-02 verification record
+
+- macOS: `make test` passed for the complete repository with race and shuffle.
+- macOS: `make test-permissions` passed twice for auth, authorization, capability, fileop, MCP, and WebUI.
+- macOS: single-CPU stress passed for auth, MCP, configstore, sshconfig, and extensions.
+- macOS: the real `/permissions` page was exercised in the built-in browser with a temporary encrypted data directory and synthetic Admin credentials. The preview reported missing `shell.input`, `shell.key`, and `shell.output`, and did not create a session.
+- Linux/amd64 and Windows/amd64: permission-package test binaries cross-compiled with `CGO_ENABLED=0`. Native execution is assigned to the three-platform CI matrix and was not available in the local macOS run.

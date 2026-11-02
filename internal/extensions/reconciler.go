@@ -303,6 +303,14 @@ func (r *Reconciler) probe(ctx context.Context, name string) {
 	_, _, _, _, _ = r.bringUp(ctx, ext, st, false)
 }
 
+func (r *Reconciler) probePlan(ctx context.Context, name string, ext *Extension, plan hostPlan) {
+	st := r.state(name)
+	if st.name() != name {
+		return
+	}
+	_, _, _, _, _ = r.bringUpPlan(ctx, ext, plan, st, false)
+}
+
 // fail records a reason, marks the extension unavailable, and arms the backoff
 // ladder. It is the shape of every failure a redial or a reopened channel might
 // clear — a dial that timed out, a process that exited, a port that was taken —
@@ -374,10 +382,27 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 		}
 		return hostPlan{}, fmt.Errorf("cannot read target profile %q: %w", ext.Target, err)
 	}
+	return r.resolveEntry(ext, ent)
+}
+
+func (r *Reconciler) resolveBound(ext *Extension, binding sshconfig.AuthorizationBinding) (hostPlan, error) {
+	if r.sshConfigs == nil {
+		return hostPlan{}, errors.New("no ssh config store configured")
+	}
+	canonical, ent, err := r.sshConfigs.LoadBound(ext.Target, binding)
+	if err != nil {
+		return hostPlan{}, fmt.Errorf("cannot use authorized target %q: %w", ext.Target, err)
+	}
+	ext.Target, ext.TargetIdentity = canonical, binding.Identity
+	return r.resolveEntry(ext, ent)
+}
+
+func (r *Reconciler) resolveEntry(ext *Extension, ent *sshconfig.Entry) (hostPlan, error) {
 	if ent.Kind == sshconfig.KindInternal && r.NoInternal {
 		return hostPlan{}, fmt.Errorf("target profile %q is the built-in loopback profile, which is disabled", ext.Target)
 	}
 	var remote *session.RemoteSSH
+	var err error
 	if ent.Kind != sshconfig.KindInternal {
 		remote, err = sshconfig.RemoteFromEntry(ent, r.sshConfigs.ConfigDir(ext.Target))
 		if err != nil {

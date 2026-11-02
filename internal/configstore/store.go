@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -48,21 +49,24 @@ type catalogDocument struct {
 }
 
 type catalogProfile struct {
-	Name         string `json:"name"`
-	ObjectID     []byte `json:"object_id"`
-	GenerationID []byte `json:"generation_id"`
+	ProfileIdentity string `json:"profile_identity,omitempty"`
+	Name            string `json:"name"`
+	ObjectID        []byte `json:"object_id"`
+	GenerationID    []byte `json:"generation_id"`
 }
 
 type catalogRef struct {
-	name         string
-	objectID     ID
-	generationID ID
+	profileIdentity string
+	name            string
+	objectID        ID
+	generationID    ID
 }
 
 // Item is one opaque profile body for an import transaction.
 type Item struct {
-	Name string
-	Data []byte
+	ProfileIdentity string
+	Name            string
+	Data            []byte
 }
 
 // Status is the non-secret administrative state of a repository.
@@ -134,6 +138,9 @@ func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Pr
 		return nil, err
 	}
 
+	if err := migrateLocalState(root); err != nil {
+		return fail(err)
+	}
 	keysPath := filepath.Join(root, "keys", "config.keys")
 	catalogPath := repositoryCatalogPath(root)
 	keysExist, err := pathExists(keysPath)
@@ -162,7 +169,7 @@ func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Pr
 		if err != nil {
 			return fail(err)
 		}
-		if err := writeFileAtomic(keysPath, keyData); err != nil {
+		if err := writeStoreFile(keysPath, keyData); err != nil {
 			keyring.Destroy()
 			return fail(err)
 		}
@@ -261,6 +268,9 @@ func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (
 		return nil, err
 	}
 
+	if err := migrateLocalState(root); err != nil {
+		return fail(err)
+	}
 	keyData, err := readBoundedFile(filepath.Join(root, "keys", "config.keys"), maxKeyringFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return fail(ErrNotInitialized)
@@ -306,6 +316,8 @@ func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (
 	}
 	repository.password = stored.Password
 	repository.automaticUnlock = len(stored.Slots) > 0
+	cleanupLocalMigration(root)
+	repository.pruneLocalObjects()
 	return repository, nil
 }
 
@@ -408,6 +420,25 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 		} else {
 			oldGenerations = append(oldGenerations, ref)
 		}
+		if item.ProfileIdentity != "" {
+			if !validProfileID(item.ProfileIdentity) || ref.profileIdentity != "" && ref.profileIdentity != item.ProfileIdentity {
+				return ErrIdentityMismatch
+			}
+			ref.profileIdentity = item.ProfileIdentity
+		}
+		if ref.profileIdentity == "" {
+			ref.profileIdentity = legacyProfileID(r.dataDir, item.Name)
+		}
+		if strings.EqualFold(item.Name, "internal") {
+			ref.profileIdentity = InternalProfileIdentity
+		}
+		if ref.profileIdentity == "" {
+			id, err := uuid.NewRandom()
+			if err != nil {
+				return err
+			}
+			ref.profileIdentity = id.String()
+		}
 		generationID, err := NewID()
 		if err != nil {
 			return err
@@ -435,8 +466,8 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 	return nil
 }
 
-// Rename publishes the same ciphertext under the new per-profile directory
-// before committing the catalog rename, then removes the old copy.
+// Rename moves the host directory and updates its authenticated references.
+// Object identity, generation and ciphertext bytes remain unchanged.
 func (r *Repository) Rename(oldName, newName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -470,16 +501,23 @@ func (r *Repository) Rename(oldName, newName string) error {
 	}
 	newRef := ref
 	newRef.name = newName
-	oldDir, newDir := filepath.Dir(r.objectPath(ref)), filepath.Dir(r.objectPath(newRef))
-	if err := requireRealDirectory(oldDir); err != nil {
-		return err
-	}
-	if exists, err := pathExists(newDir); err != nil {
-		return err
-	} else if exists {
-		return ErrExists
-	}
-	if err := os.Rename(oldDir, newDir); err != nil {
+	oldDir := filepath.Join(r.dataDir, "ssh_configs", oldName)
+	newDir := filepath.Join(r.dataDir, "ssh_configs", newName)
+	moved := false
+	if info, err := os.Lstat(oldDir); err == nil {
+		if !info.IsDir() {
+			return ErrFormat
+		}
+		if _, err := os.Lstat(newDir); err == nil {
+			return ErrExists
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(oldDir, newDir); err != nil {
+			return err
+		}
+		moved = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	next := cloneRefs(r.refs)
@@ -487,17 +525,17 @@ func (r *Repository) Rename(oldName, newName string) error {
 	next[newName] = newRef
 	err = r.commitCatalog(r.catalogDocument(next, r.revision+1))
 	if err != nil && !errors.Is(err, ErrDurability) {
-		if rollbackErr := os.Rename(newDir, oldDir); rollbackErr != nil {
-			r.refs = next
-			return fmt.Errorf("%w: profile directory rename needs recovery: %v; rollback: %v", ErrDurability, err, rollbackErr)
+		if moved {
+			_ = os.Rename(newDir, oldDir)
 		}
-		_ = syncDir(filepath.Dir(oldDir))
 		return err
 	}
 	r.refs = next
 	r.revision++
-	if syncErr := syncDir(filepath.Dir(newDir)); syncErr != nil {
-		return fmt.Errorf("%w: sync renamed profile directory: %v", ErrDurability, syncErr)
+	if moved {
+		if syncErr := syncDir(filepath.Dir(newDir)); syncErr != nil {
+			return fmt.Errorf("%w: profile directory rename", ErrDurability)
+		}
 	}
 	return err
 }
@@ -643,6 +681,9 @@ func (r *Repository) loadCatalog() error {
 	if err != nil {
 		return err
 	}
+	if err := r.migrateCentralProfileBodies(refs); err != nil {
+		return err
+	}
 	refs, moved, err := r.resolveProfileDirectories(refs)
 	if err != nil {
 		return err
@@ -698,9 +739,8 @@ func (r *Repository) commitCatalog(catalog catalogDocument) error {
 	if err != nil {
 		return err
 	}
-	path := repositoryCatalogPath(r.dataDir)
 	durabilityErr := error(nil)
-	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
+	if err := r.publishCatalogEnvelope(envelope.Bytes(), catalog.Profiles); err != nil {
 		if !errors.Is(err, ErrDurability) {
 			return err
 		}
@@ -735,7 +775,7 @@ func (r *Repository) writeObject(ref catalogRef, data []byte) error {
 		return err
 	}
 	path := r.objectPath(ref)
-	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
+	if err := writeStoreFile(path, envelope.Bytes()); err != nil {
 		return err
 	}
 	parsed, err := Parse(envelope.Bytes(), identity)
@@ -773,6 +813,16 @@ func (r *Repository) readObjectRaw(ref catalogRef) ([]byte, error) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
+	}
+	// Once a host location is committed, a missing host body cannot be
+	// resurrected from an old centralized or flat-layout migration source.
+	state, stateErr := loadLocalState(r.dataDir)
+	if stateErr != nil {
+		return nil, stateErr
+	}
+	key := hex.EncodeToString(ref.objectID[:]) + "/" + hex.EncodeToString(ref.generationID[:])
+	if state.ProfilePaths[key] != "" {
+		return nil, fmt.Errorf("%w: missing host object %s", ErrNotFound, hex.EncodeToString(ref.objectID[:]))
 	}
 	raw, err = readBoundedFile(r.legacyObjectPath(ref), max)
 	if err == nil {
@@ -820,7 +870,7 @@ func (r *Repository) migrateLegacyObjectLayout(refs map[string]catalogRef) error
 		if _, err := r.openObjectRaw(ref, raw); err != nil {
 			return err
 		}
-		if err := writeFileAtomic(newPath, raw); err != nil {
+		if err := writeStoreFile(newPath, raw); err != nil {
 			return err
 		}
 		_ = removeIfExists(legacyPath)
@@ -840,12 +890,7 @@ func (r *Repository) cleanupLegacyObjectLayout(refs map[string]catalogRef) {
 }
 
 func (r *Repository) objectPath(ref catalogRef) string {
-	return filepath.Join(
-		r.dataDir,
-		"ssh_configs",
-		ref.name,
-		hex.EncodeToString(ref.generationID[:])+".enc",
-	)
+	return filepath.Join(r.dataDir, "ssh_configs", ref.name, hex.EncodeToString(ref.generationID[:])+".enc")
 }
 
 func (r *Repository) legacyObjectPath(ref catalogRef) string {
@@ -859,19 +904,18 @@ func (r *Repository) legacyObjectPath(ref catalogRef) string {
 }
 
 func (r *Repository) removeObject(ref catalogRef) {
-	for _, path := range []string{r.objectPath(ref), r.legacyObjectPath(ref)} {
-		_ = removeIfExists(path)
-		_ = os.Remove(filepath.Dir(path))
-	}
+	_ = removeStoreEntry(r.objectPath(ref))
+	_ = removeIfExists(r.objectPath(ref))
 }
 
 func (r *Repository) catalogDocument(refs map[string]catalogRef, revision uint64) catalogDocument {
 	profiles := make([]catalogProfile, 0, len(refs))
 	for _, ref := range refs {
 		profiles = append(profiles, catalogProfile{
-			Name:         ref.name,
-			ObjectID:     append([]byte(nil), ref.objectID[:]...),
-			GenerationID: append([]byte(nil), ref.generationID[:]...),
+			Name:            ref.name,
+			ObjectID:        append([]byte(nil), ref.objectID[:]...),
+			GenerationID:    append([]byte(nil), ref.generationID[:]...),
+			ProfileIdentity: ref.profileIdentity,
 		})
 	}
 	sort.Slice(profiles, func(i, j int) bool {
@@ -923,9 +967,10 @@ func decodeCatalog(data []byte, storeID ID) (catalogDocument, map[string]catalog
 		}
 		folded[nameKey] = profile.Name
 		refs[profile.Name] = catalogRef{
-			name:         profile.Name,
-			objectID:     objectID,
-			generationID: generationID,
+			profileIdentity: profile.ProfileIdentity,
+			name:            profile.Name,
+			objectID:        objectID,
+			generationID:    generationID,
 		}
 	}
 	return catalog, refs, nil
@@ -1039,15 +1084,11 @@ func HasManagedCatalog(dataDir string) (bool, error) {
 	return pathExists(repositoryCatalogPath(root))
 }
 
-func pathExists(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return err == nil, err
-}
+func pathExists(path string) (bool, error) { return storeFileExists(path) }
 
-func readBoundedFile(path string, max int64) ([]byte, error) {
+func readBoundedFile(path string, max int64) ([]byte, error) { return readStoreFile(path, max) }
+
+func readPhysicalFile(path string, max int64) ([]byte, error) {
 	if err := requireRealDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}

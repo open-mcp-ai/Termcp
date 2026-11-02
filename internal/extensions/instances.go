@@ -90,6 +90,34 @@ func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
 	}
 	limit, err := ext.IdleTimeoutDuration()
 	if err != nil {
+		return Status{}, err
+	}
+	if !ext.Lazy() {
+		r.state(name).want()
+		r.retryNow(name)
+		return r.await(name, wait)
+	}
+	state := r.state(name)
+	state.want()
+	state.setIdleLimit(limit)
+	sid, shellID, _, _, err := r.bringUp(context.Background(), ext, state, true)
+	if err != nil {
+		got, _ := r.Status(name)
+		return got, nil
+	}
+	return r.instanceStatus(name, sid, shellID), nil
+}
+
+func (r *Reconciler) acquirePlan(name string, ext *Extension, plan hostPlan, wait time.Duration) (Status, error) {
+	st, ok := r.Status(name)
+	if !ok {
+		return Status{}, fmt.Errorf("extension %q not found", name)
+	}
+	if !ext.IsEnabled() {
+		return st, nil
+	}
+	limit, err := ext.IdleTimeoutDuration()
+	if err != nil {
 		// A template carrying an unreadable window is a broken template, and
 		// refusing it is the only honest answer to a caller asking it to start one.
 		return Status{}, err
@@ -99,7 +127,7 @@ func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
 		// it. Wanting it is what starts it, and the attempt begins now rather than
 		// at whatever moment a sweep would have come round.
 		r.state(name).want()
-		r.retryNow(name)
+		r.startPreparedProbe(r.runCtx(), name, ext, plan)
 		return r.await(name, wait)
 	}
 
@@ -110,7 +138,7 @@ func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
 	state := r.state(name)
 	state.want()
 	state.setIdleLimit(limit)
-	sid, shellID, _, _, err := r.bringUp(context.Background(), ext, state, true)
+	sid, shellID, _, _, err := r.bringUpPlan(context.Background(), ext, plan, state, true)
 	if err != nil {
 		// The failure is already recorded and its retry armed; the caller's answer is
 		// the status, which carries the reason.
@@ -172,7 +200,6 @@ func (r *Reconciler) instanceEndReason(sess *session.Session, shellID string) st
 // function: two copies of it is how the two paths start disagreeing about what
 // "dial failed" means.
 func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, fresh bool) (sessionID, shellID, label, stage string, err error) {
-	name := st.name()
 	plan, err := r.resolve(ext)
 	if err != nil {
 		// The stage is the diagnosis: a template that does not resolve is fixed by
@@ -180,6 +207,11 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		r.failForGood(st, "target", err.Error())
 		return "", "", "", "target", err
 	}
+	return r.bringUpPlan(ctx, ext, plan, st, fresh)
+}
+
+func (r *Reconciler) bringUpPlan(ctx context.Context, ext *Extension, plan hostPlan, st *extState, fresh bool) (sessionID, shellID, label, stage string, err error) {
+	name := st.name()
 	g := r.groupFor(st)
 	if g == nil {
 		// Nothing has registered this extension's group yet: the first ask can arrive

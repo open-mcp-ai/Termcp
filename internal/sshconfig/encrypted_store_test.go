@@ -3,6 +3,7 @@ package sshconfig
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -301,12 +302,26 @@ func TestEnabledEncryptionWithoutKeyringFailsClosed(t *testing.T) {
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(dir, "keys", "config.keys")); err != nil {
+	raw, err := os.ReadFile(configstore.LocalStatePath(dir))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenConfiguredStore(dir, configstore.NewEnvProvider("")); !errors.Is(err, configstore.ErrNotInitialized) {
-		t.Fatalf("missing keyring error = %v", err)
+	var state map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
 	}
+	delete(state, "keyring")
+	raw, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configstore.LocalStatePath(dir), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenConfiguredStore(dir, configstore.NewEnvProvider("")); err == nil || opened != nil {
+		t.Fatal("missing keyring became plaintext mode")
+	}
+
 }
 
 func TestEncryptedStoreKeepsTemporaryCollisionAndSelectionRules(t *testing.T) {

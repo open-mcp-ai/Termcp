@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -185,7 +184,7 @@ func TestRecoveryNeedsAllKeysDuringInterruptedRotation(t *testing.T) {
 		if writes == 3 {
 			return injected
 		}
-		return writeFileAtomic(path, data)
+		return writeStoreFile(path, data)
 	}); !errors.Is(err, injected) {
 		t.Fatalf("interrupted rotation = %v", err)
 	}
@@ -247,7 +246,7 @@ func TestRecoveryValidatesBeforePublishingAndTracksVisibleWrites(t *testing.T) {
 			injected := errors.New("injected publication failure")
 			err = locked.recoverMainKey(backup, nil, []Provider{provider}, func(path string, data []byte) error {
 				if published {
-					if err := writeFileAtomic(path, data); err != nil {
+					if err := writeStoreFile(path, data); err != nil {
 						return err
 					}
 					return ErrDurability
@@ -271,7 +270,7 @@ func TestDamagedCatalogDoesNotBecomeProviderRecovery(t *testing.T) {
 	path := repositoryCatalogPath(dir)
 	raw := readRotationFile(t, path)
 	raw[len(raw)-1] ^= 0x80
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := overwriteStoreFileForTest(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Close(); err != nil {

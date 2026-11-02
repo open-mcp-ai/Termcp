@@ -98,11 +98,18 @@ Default startup uses managed Admin authentication. Open `/login` from the same
 machine (or through SSH local forwarding) to set up the first Admin. Setup checks
 both a loopback peer and loopback Host. Subsequent logins issue an HttpOnly,
 SameSite=Lax JWT Cookie named `termcp_session`; HTTPS requests set Secure.
-The Admin master password is verified through the existing Argon2id keyring, which
-also protects host configurations. `<data-dir>/auth.enc` encrypts the account, random
-JWT key, permissions and sessions; `auth.json` is only a version marker. HTTP and
-daemon share one repository/Main Key. Provider-unlocked restarts retain valid
-Cookies; otherwise sign in once to unlock. No password is stored in plaintext.
+The login password and configuration encryption password are independent. First
+registration uses the same input to initialize both. The login verifier is salted
+Argon2id; configuration passwords directly derive the MK through a separate salt
+and the existing Argon2id keyring. Optional OS/ENV KEKs wrap that same MK for
+automatic vault unlocking. Neither password nor a plaintext key is stored.
+
+`<data-dir>/local-state/state.json` is the single commit point for login bootstrap,
+keyring protection, identity references and detached EDKs. Host ciphertext remains in `ssh_configs/<host>/<generation>.enc`. Immutable
+catalog/auth bodies live in `local-state/objects/<object-id>/<generation>.enc`. The private
+account/policy/token state is an encrypted object in that store. Browser session
+keys and logins are process-local; a restart always requires browser sign-in.
+Automatic vault unlocking is independent of browser authentication.
 
 | Managed route | Method | Behavior |
 | --- | --- | --- |
@@ -110,23 +117,42 @@ Cookies; otherwise sign in once to unlock. No password is stored in plaintext.
 | `/auth/status` | GET | Session status and CSRF token; anonymous callers receive a short-lived prelogin Cookie |
 | `/auth/setup` | POST | One-time local Admin creation; JSON `username`/`password`, at least 8 password characters |
 | `/auth/login` | POST | Admin login; same JSON shape |
-| `/auth/password` | POST | Change the shared master password: `current_password`, `new_password`, `confirmation`; revoke all sessions and rewrap host/catalog/auth DEKs |
+| `/auth/password` | POST | Change only the login password: `current_password`, `new_password`, `confirmation`; revoke browser sessions and preserve MK/EDKs/MCP credentials |
+| `/auth/unlock` | POST | Authenticated vault unlock: JSON `password` is the configuration password; optional `automatic_unlock` rebinds provider protection |
 | `/auth/logout` | POST | Revoke this session, clear Cookie, cancel its active connections |
-| `/auth` | GET | Account, master password and sign-out page |
-| `/permissions` | GET | Desktop permission management: select an Agent, configure functions/hosts, manage its tokens |
-| `/auth/access` | GET | Admin-only function and saved-host catalog; host entries contain stable `id` and display `name` |
+| `/auth` | GET | Account, login-password change, independent vault unlock and sign-out page |
+| `/permissions` | GET | Manage permission groups, actions, host scope, principals and client credentials |
+| `/auth/access` | GET | Admin-only operation/condition and saved-host catalog; hosts contain stable `id` and display `name` |
+| `/auth/access/preview` | POST | Admin-only, non-executing authorization plan for one `tool` call or DSL `cmd`; returns per-operation decisions and rejects execution overrides |
 | `/auth/permissions` | GET / PUT | Read or atomically replace role entrance permissions; PUT requires current `revision` and `permissions` |
-| `/auth/agents` | GET / POST | List Agents or create one with JSON `name`, optional `policy` and `issue_token`; `issue_token:false` creates the identity without a credential |
-| `/auth/agents/{id}` | PATCH | JSON `enabled` and/or `policy`; policy changes require current Agent `revision`. Updates cancel that Agent’s active token requests |
-| `/auth/tokens` | GET / POST | List token metadata or issue one: JSON `label`, optional `agent_id`; omit `agent_id` to issue for the signed-in Admin |
+| `/auth/groups` | GET / POST | List or create groups using a preset or explicit schema 2 policy |
+| `/auth/groups/{id}` | PATCH / DELETE | Update with current revision; delete with a current delete preview and explicit member resolution |
+| `/auth/groups/{id}/clone` | POST | Copy policy into a new group without members or credentials |
+| `/auth/groups/{id}/delete-preview` | POST | Preview members, credentials, requests and work affected by deletion |
+| `/auth/group-presets` | GET | Versioned role templates |
+| `/auth/default-group` | GET / PUT | Read or change the default group with its current access revision |
+| `/auth/principals` | GET / POST | Create an identity using name and optional group_id; default follows the default group. Credentials require explicit issue_token:true |
+| `/auth/principals/{id}` | PATCH | Update enabled using the principal revision; policy belongs to its group |
+| `/auth/principals/{id}/group` | PUT | Change group binding using group_id and principal revision; empty group_id follows the default |
+| `/auth/tokens` | GET / POST | List or issue credentials using label and optional principal_id; omitted principal_id selects the signed-in Admin |
 | `/auth/tokens/{id}` | DELETE | Revoke this token and cancel its active requests |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
 
-Setup/login also accept optional `config_password` for legacy migration or existing
-configuration passwords that differ, and `automatic_unlock` for remembered unlock
-on supported providers. Status reports `locked`, `migration_required` and
-`encryption_initialized`. Provider unlock does not bypass password verification.
-The existing configuration password route uses the same managed operation.
+Setup/legacy migration accepts optional `config_password` to prove an existing
+configuration password without replacing it with the login password. Modern
+login can succeed while the vault remains locked. The UI then directs the owner
+to `/auth` and `POST /auth/unlock`. Status returns `authenticated` and `locked`
+separately, plus `vault_ready`, `migration_required`, `encryption_initialized` and
+an informational `initial_passwords_shared` flag. That flag never links future
+password changes. Business requests while the vault needs unlocking/resuming
+return HTTP 423; only account/logout/login-password/unlock operations remain
+available. Agent tokens do not unlock MKs.
+
+`POST /api/config-storage/password` changes only the configuration password,
+rewrapping all committed EDKs in the global state without replacing body files or
+invalidating independent browser logins. Its interrupted transition resumes with
+the new configuration password through `/auth/unlock`. Ordinary login-password
+changes work even while the vault is locked and do not touch encrypted bodies.
 
 Managed Cookie-authenticated writes require `X-Termcp-CSRF` from `/auth/status`, plus the appropriate
 prelogin/session Cookie. Present Origin/Referer and WebSocket Origin must match
@@ -134,7 +160,7 @@ the request host; the WebSocket requires Origin. The built-in UI attaches CSRF
 automatically. Explicit Authorization never falls back to a browser Cookie.
 Current role permissions are read for every request rather than frozen in JWT
 claims. `admin` retains Web/API management access; `agent` can only be allowed
-MCP. This is entrance authorization, not the planned per-operation Agent policy.
+MCP. This entrance policy is separate from the operation policy of each permission group.
 MCP clients use `Authorization: Bearer <token>` on every `/stream`, `/sse`, and
 `/message` request. Bearer credentials do not require CSRF headers and never grant
 WebUI, account, REST or daemon management access, even when owned by Admin.
@@ -142,47 +168,62 @@ Issuance/list/revocation require an Admin Cookie and CSRF for mutations. Creatio
 returns `token` once and `credential` metadata (`id`, `principal_id`, `label`,
 `created_at`). Lists never return secrets or digests. A token has no automatic
 expiry in this version; rotate by issuing another for the same identity, updating
-client configuration, then revoking the old token. Logout/master-password changes
+client configuration, then revoking the old token. Logout/login-password changes
 revoke browser sessions and preserve independent MCP tokens. Disabling a role or
-Agent cancels its live token requests. Revoked tokens remain rejected after restart.
+principal cancels its live token requests. Revoked tokens remain rejected after restart.
 Agent session namespaces derive from verified IDs; caller headers cannot change
 them. Transport session IDs are bound to the credential that initialized them.
-Agent function/host checks are described below; these do not provide an operating-system sandbox.
+Agent operation and host checks are described below; these do not provide an
+operating-system sandbox.
 OAuth is future work. `--disable-auth` explicitly selects open mode.
 
-### Agent function and host selection
+### Agent permission groups
 
-The WebUI at `/permissions` creates an Agent with no functions and no host access,
-then saves explicit checkbox selections before token issuance. Each Agent carries
-its own `policy` and `revision`. An example PATCH body is:
+The unpublished V1 function-group model has been removed. Only schema_version 2
+policies are accepted; there is no V1 migration, full-access nil-policy fallback,
+per-principal policy, upgrade preview, /auth/agents route or agent_id token alias.
+Saved unsupported permission data is rejected explicitly.
+
+Create or select a permission group, configure actions and host scope, then add
+principals. A principal belongs to one group or follows the default. The initial
+default group has actions={} and host_mode=all: host scope alone grants no action.
+Principal creation issues no credential unless issue_token:true is explicit.
+Policy changes require the group's current revision, for example:
 
 ```json
-{"revision":1,"policy":{"functions":["session_read","file_read","profile_read"],"host_mode":"selected","hosts":["<stable-profile-id>"]}}
+{"revision":1,"policy":{"schema_version":2,"host_mode":"selected","hosts":["<stable-profile-id>"],"actions":{"file.read":{"effect":"allow","constraints":{"forms":["inline"],"max_bytes":8388608}},"file.stat":{"effect":"allow"}}}}
 ```
 
-Function IDs are returned by `/auth/access`: `session_read`, `session_manage`,
-`terminal_read`, `terminal_write`, `file_read`, `file_write`, `forward`, `peer`,
-`profile_read`, `profile_write`, `extension`, `alias`, `notify`. Host mode is `all`
-(current/future saved hosts), `selected` (explicit IDs), or `none`. Empty selected
-hosts grant no hosts; display names never select identities. Rename preserves a
-grant; deleting and recreating a profile does not transfer it. `profile_write`
-and `extension` require `all`, because they manage global connection definitions.
-Local file transfers require internal-host access and both file function groups.
+Operation IDs and supported conditions come from /auth/access. Unlisted actions
+are denied. The catalog also declares each operation's DSL/tool/WebUI reachability,
+risk level, dependencies and supported parameter evidence. Composite `recipes`
+describe requests such as `run` and file copy without changing the DSL grammar.
+Host mode is all, selected or none; rename preserves identity and a
+same-name replacement does not inherit it. Operations that change shared
+configuration require all-host scope. Each transfer checks both endpoints.
+max_bytes counts source/written bytes after actual decoding, not reply JSON size.
+It uses existing operation parameters; ordinary DSL file reads keep their syntax
+and 8 MiB inline cap. Insufficient byte evidence is rejected before side effects.
 
-The server checks actual functions and targets on each call, including normalized
-DSL aliases, parameter-selected operations and both ends of copies. Host and
-session listings are filtered. Existing session handles do not retain a removed
-grant. Unknown functions are rejected. Cookie-authenticated operator calls and
-Admin-owned MCP tokens retain their existing rights. Old Agents without a policy
-retain the former broad function/all-host access until explicitly configured.
-The new UI always creates an explicit empty policy. API clients may retain the
-original create-and-issue flow by omitting `issue_token:false`.
+The server reads current group policy for every operation. Group changes, member
+moves and credential revocation end affected active requests/background transfers.
+Authorization binds the stable profile identity, profile content version and
+extension template target before execution; a changed or replaced resource is
+rejected instead of being silently reloaded. Permission-management changes and
+MCP authorization denials emit structured `permission audit` events containing
+the verified actor, target, revision/impact and decision. Passwords, Cookies,
+bearer tokens and request bodies are never copied into those events.
+Namespace and MCP transport ownership remain tied to verified principal and
+credential IDs, independently of group reuse. Group management requires an Admin
+browser session; joining a group cannot confer Admin identity.
 
-This version supports allow/deny groups; it does not implement delegated approval
-policies. Actions that require existing session review must be performed through
-the WebUI, so a queued action cannot execute under an outdated Agent grant. Shell
-execution, peer access and forwarding still operate with their host’s OS/network
-rights; a host grant is not a process sandbox.
+Preview is read-only. A denied `run` can report missing `shell.input`,
+`shell.key(enter)` or `shell.output`; it never inserts bytes, creates a session,
+acquires an extension, renews a lease or starts a transfer.
+
+Allow/deny is supported; delegated approval replay remains future work. Operations
+requiring operator review must be performed through the WebUI. Terminal and network
+operations use their host's OS/network rights; permissions are not a process sandbox.
 
 ### Legacy shared-token mode
 
@@ -443,7 +484,11 @@ Unicode characters and at most 1024 UTF-8 bytes. A 32-byte Main Key is derived
 directly with Argon2id using a random 16-byte salt (3 iterations, 64 MiB,
 parallelism 1). The password and plaintext Main Key are never stored. Only the
 KDF parameters, salt, an authenticated verifier, and optional automatic-unlock
-wrappers are stored in `keys/config.keys`.
+wrappers are stored in the keyring section of `local-state/state.json`.
+
+The former `keys/config.keys`, `auth.enc`, and `ssh_configs/store.enc` paths are
+legacy layout only. Current key protection and EDKs are sections of the global
+state. See the [storage migration contract](design/local-state-and-passwords.md).
 
 This explicit action initializes the keyring and sets `encrypt_new=true`.
 Canceling leaves the data directory uninitialized. Existing plaintext files are

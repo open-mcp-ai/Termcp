@@ -296,13 +296,12 @@ func TestConfigStorageInitializationAndProviderRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := getConfigStorageStatus(t, mux)
-	keyPath := filepath.Join(dir, "keys", "config.keys")
+	keyPath := configstore.LocalStatePath(dir)
 	keysBefore, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogPath := filepath.Join(dir, "ssh_configs", "store.enc")
-	catalogBefore, err := os.ReadFile(catalogPath)
+	catalogBefore, err := readCentralCatalog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +342,7 @@ func TestConfigStorageInitializationAndProviderRecovery(t *testing.T) {
 			t.Fatalf("profile %s was not recovered: %v", name, err)
 		}
 	}
-	catalogAfter, err := os.ReadFile(catalogPath)
+	catalogAfter, err := readCentralCatalog(dir)
 	if err != nil || !bytes.Equal(catalogBefore, catalogAfter) {
 		t.Fatal("key-provider recovery changed the authenticated catalog")
 	}
@@ -394,4 +393,20 @@ func TestConfigStorageDoesNotExposeBackupOrRandomRotation(t *testing.T) {
 			t.Fatalf("removed %s endpoint returned %d", path, rec.Code)
 		}
 	}
+}
+
+func readCentralCatalog(dir string) ([]byte, error) {
+	raw, err := os.ReadFile(configstore.LocalStatePath(dir))
+	if err != nil {
+		return nil, err
+	}
+	var state struct {
+		Heads     map[string]string `json:"heads"`
+		Envelopes map[string][]byte `json:"envelopes"`
+	}
+	if err = json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	head := state.Heads["catalog"]
+	return append([]byte(head), state.Envelopes[head]...), nil
 }

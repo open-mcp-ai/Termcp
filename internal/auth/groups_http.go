@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,7 +36,7 @@ func (m *Managed) groupViewLocked(s managedState, g permissionGroup) groupView {
 	return out
 }
 func isGroupPath(path string) bool {
-	return path == "/auth/groups" || strings.HasPrefix(path, "/auth/groups/") || path == "/auth/group-presets" || path == "/auth/default-group" || strings.HasPrefix(path, "/auth/principals/")
+	return path == "/auth/groups" || strings.HasPrefix(path, "/auth/groups/") || path == "/auth/group-presets" || path == "/auth/default-group" || (strings.HasPrefix(path, "/auth/principals/") && strings.HasSuffix(path, "/group"))
 }
 
 func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +45,13 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 	s := credentialState(m.state)
 	affected := []string{}
 	var result any
+	beforeAccessRevision := s.AccessRevision
+	targetID := auditTargetID(r.URL.Path)
+	markAuditTarget := func(id string) {
+		if id != "" {
+			targetID = id
+		}
+	}
 	fail := func(code int, message string) { authError(w, code, message) }
 	if r.URL.Path == "/auth/group-presets" {
 		if r.Method != "GET" {
@@ -114,10 +122,6 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			if in.Policy != nil {
 				policy = clonePolicy(*in.Policy)
 			}
-			if !policy.IsV2() {
-				fail(400, "new permission groups require a V2 policy")
-				return
-			}
 			if err := validateAgentPolicy(policy); err != nil {
 				fail(400, err.Error())
 				return
@@ -129,6 +133,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			}
 			group := permissionGroup{ID: id, Name: in.Name, Description: in.Description, Enabled: true, Revision: 1, CreatedAt: m.now().UTC(), Policy: policy, PresetID: in.PresetID, PresetVersion: presetVersion}
 			s.Groups[id] = group
+			markAuditTarget(group.ID)
 			result = map[string]any{"group": m.groupViewLocked(s, group)}
 		default:
 			fail(405, "method not allowed")
@@ -168,6 +173,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		s.DefaultGroupID = g.ID
+		markAuditTarget(g.ID)
 		result = map[string]any{"group_id": g.ID, "revision": s.AccessRevision + 1}
 	} else if strings.HasPrefix(r.URL.Path, "/auth/principals/") {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/auth/principals/"), "/")
@@ -201,8 +207,9 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 		a.GroupID = in.GroupID
 		a.Revision = agentRevision(a) + 1
 		s.Agents[a.ID] = a
+		markAuditTarget(a.ID)
 		affected = append(affected, a.ID)
-		result = map[string]any{"principal": agentPolicyView(s, a), "agent": agentPolicyView(s, a)}
+		result = map[string]any{"principal": a}
 	} else {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/auth/groups/"), "/")
 		group, ok := s.Groups[parts[0]]
@@ -211,6 +218,10 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		members := groupMemberIDs(s, group.ID)
+		if len(parts) > 1 && (len(parts) != 2 || parts[1] != "clone" && parts[1] != "delete-preview") {
+			fail(404, "group operation not found")
+			return
+		}
 		if len(parts) == 2 && parts[1] == "delete-preview" {
 			if r.Method != "POST" {
 				fail(405, "method not allowed")
@@ -218,18 +229,6 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			}
 			view := m.groupViewLocked(s, group)
 			authJSON(w, 200, map[string]any{"group_id": group.ID, "revision": group.Revision, "plan_revision": s.AccessRevision, "member_count": view.MemberCount, "credential_count": view.CredentialCount, "active_requests": view.ActiveRequests, "active_work": view.ActiveWork, "members": members, "is_default": view.IsDefault})
-			return
-		}
-		if len(parts) == 2 && parts[1] == "policy-upgrade-preview" {
-			if r.Method != "POST" {
-				fail(405, "method not allowed")
-				return
-			}
-			if group.Policy.IsV2() {
-				fail(409, "group already uses V2")
-				return
-			}
-			authJSON(w, 200, map[string]any{"revision": group.Revision, "policy": conservativeUpgrade(group.Policy), "notes": []string{"Review this conservative candidate and explicitly save. Composite permissions and host bounds still apply."}})
 			return
 		}
 		if len(parts) == 2 && parts[1] == "clone" {
@@ -261,10 +260,10 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			group.Name = in.Name
 			group.Revision = 1
 			group.CreatedAt = m.now().UTC()
-			group.LegacyPrincipalID = ""
 			group.Policy = clonePolicy(group.Policy)
-			group.PolicyWarnings = cloneWarningIDs(group.PolicyWarnings)
+			group.PolicyWarnings = slices.Clone(group.PolicyWarnings)
 			s.Groups[id] = group
+			markAuditTarget(group.ID)
 			result = map[string]any{"group": m.groupViewLocked(s, group)}
 		} else if len(parts) == 1 && r.Method == "PATCH" {
 			var in struct {
@@ -301,10 +300,6 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 				group.Description = *in.Description
 			}
 			if in.Policy != nil {
-				if group.Policy.IsV2() && !in.Policy.IsV2() {
-					fail(409, "V2 group cannot be downgraded to function groups")
-					return
-				}
 				if err := validateAgentPolicy(*in.Policy); err != nil {
 					fail(400, err.Error())
 					return
@@ -370,6 +365,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 				s.Agents[id] = a
 			}
 			delete(s.Groups, group.ID)
+			markAuditTarget(group.ID)
 			affected = append(affected, members...)
 			result = map[string]any{"ok": true, "affected_principals": len(members)}
 		} else {
@@ -387,5 +383,11 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 		fail(500, "could not save access state; reload to check the result")
 		return
 	}
+	auditDetail(r.Context(), func(draft *auditDraft) {
+		draft.targetID = targetID
+		draft.beforeRevision = beforeAccessRevision
+		draft.afterRevision = s.AccessRevision
+		draft.affectedSubjects = len(affected)
+	})
 	authJSON(w, 200, result)
 }

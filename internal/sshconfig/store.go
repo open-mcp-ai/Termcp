@@ -47,6 +47,7 @@ type Store struct {
 	temporaryIdentities map[string]string
 	identityByName      map[string]string
 	nameByIdentity      map[string]string
+	identityRevision    uint64
 	identityStamp       time.Time
 	identitiesLoaded    bool
 	onChange            atomic.Value // func(), set via SetOnChange, called after Save/Delete/Rename
@@ -525,11 +526,13 @@ func (s *Store) saveHybrid(name string, data []byte, temporary bool) error {
 	if IsInternalName(name) {
 		expected = InternalIdentity
 	}
-	if _, err := ensureProfileIdentity(filepath.Join(s.root(), name), expected); err != nil {
+	id, err := ensureProfileIdentity(filepath.Join(s.root(), name), expected)
+	if err != nil {
 		s.mu.Unlock()
 		return err
 	}
-	if err := s.encrypted.Save(name, data); err != nil {
+	expected = id
+	if err := s.encrypted.SaveWithProfileIdentity(name, data, expected); err != nil {
 		s.mu.Unlock()
 		return err
 	}

@@ -3,7 +3,7 @@ package capability
 import (
 	"fmt"
 	"github.com/open-mcp-ai/termcp/internal/authorization"
-	textencoding "github.com/open-mcp-ai/termcp/internal/encoding"
+	"github.com/open-mcp-ai/termcp/internal/fileop"
 	"strings"
 )
 
@@ -48,55 +48,33 @@ func AgentToolPlan(tool string, args map[string]any) (authorization.Plan, error)
 		id = "file." + action
 	case "file_read", "file_write", "file_replace":
 		id = "file." + strings.TrimPrefix(tool, "file_")
-		form := "inline"
-		local := getString(args, "local_path", "") != ""
-		if local {
-			form = "local"
+		e.Forms = []string{"inline"}
+		local := false
+		switch tool {
+		case "file_read":
+			p := fileop.ReadFromArgs(args)
+			local = p.LocalTransfer()
+			e.Bytes, e.HasBytes = p.ByteLimit()
+		case "file_write":
+			p := fileop.WriteFromArgs(args)
+			local = p.LocalPath != ""
+			var err error
+			e.Bytes, e.HasBytes, err = p.ByteLimit()
+			if err != nil {
+				return authorization.Plan{}, err
+			}
 		}
-		e.Forms = []string{form}
-		if tool == "file_read" {
-			// A positive length is a provable upper bound. An unbounded stream isn't.
-			if n := int64(getFloat64(args, "length", 0)); n > 0 {
-				e.Bytes = n
-				e.HasBytes = true
-			}
-		} else if !local {
-			data := getString(args, "data", "")
-			if tool == "file_replace" {
-				data = getString(args, "new_text", "")
-				e.Bytes = int64(len(data))
-				e.HasBytes = true
-			} else {
-				mode := getString(args, "mode", "")
-				var raw []byte
-				var err error
-				switch mode {
-				case "hex":
-					raw, err = textencoding.HexDecode(data)
-				case "text", "":
-					if hex, ok := strings.CutPrefix(data, "hex:"); ok {
-						raw, err = textencoding.HexDecode(hex)
-					} else {
-						raw = textencoding.DecodeText(data)
-					}
-				default:
-					return authorization.Plan{}, fmt.Errorf("unclassified write mode %q", mode)
-				}
-				if err != nil {
-					return authorization.Plan{}, err
-				}
-				e.Bytes = int64(len(raw))
-				e.HasBytes = true
-			}
+		if local {
+			e.Forms = []string{"local"}
 		}
 		plan := operationPlan(id, e)
-		// Only the read handler's file form writes to the local filesystem.
-		if local && (tool != "file_read" || getString(args, "mode", "text") == "file") {
+		if local {
 			other := "file.read"
 			if tool == "file_read" {
 				other = "file.write"
 			}
-			plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: other, Evidence: authorization.Evidence{Forms: []string{"local"}}})
+			// The same bounded transfer reads one endpoint and writes the other.
+			plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: other, Evidence: e})
 		}
 		return plan, nil
 	case "forward":
@@ -137,13 +115,41 @@ type AgentTargets struct {
 }
 
 func AgentToolTargets(tool string, args map[string]any) AgentTargets {
-	legacy := AgentRequirement(tool, args)
-	out := AgentTargets{ProfileArgument: legacy.ProfileArgument, NeedsLocal: legacy.NeedsLocal}
-	if tool == "extension" {
-		switch getString(args, "action", "") {
-		case "get", "use", "release", "retry", "restart":
-			out.ExtensionArgument = "name"
+	out := AgentTargets{}
+	switch tool {
+	case "session_start":
+		out.ProfileArgument = "ssh_config"
+	case "shell_detect":
+		out.NeedsLocal = true
+	case "ssh_config":
+		switch getString(args, "action", "list") {
+		case "get", "edit", "delete":
+			out.ProfileArgument = "name"
+		case "copy":
+			out.ProfileArgument = "source_name"
 		}
+	case "extension":
+		switch getString(args, "action", "") {
+		case "get", "use", "release", "retry", "restart", "delete":
+			out.ExtensionArgument = "name"
+		case "update":
+			out.ExtensionArgument = "name"
+			if getString(args, "target", "") != "" {
+				out.ProfileArgument = "target"
+			}
+		case "create":
+			if getString(args, "target", "") != "" {
+				out.ProfileArgument = "target"
+			}
+		}
+	}
+	switch tool {
+	case "file_read":
+		out.NeedsLocal = fileop.ReadFromArgs(args).LocalTransfer()
+	case "file_write":
+		out.NeedsLocal = fileop.WriteFromArgs(args).LocalPath != ""
+	case "file_replace":
+		out.NeedsLocal = false // the replacement handler never uses local_path
 	}
 	return out
 }

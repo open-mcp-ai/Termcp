@@ -97,7 +97,7 @@ func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallTool
 	}
 	out := make([]map[string]any, 0, len(names))
 	for _, name := range names {
-		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (err != nil || p.IsV2() && !s.agentExtensionAllowed(p, name)) {
+		if p, restricted, err := auth.PolicyFromContext(ctx); restricted && (err != nil || !s.agentExtensionAllowed(p, name)) {
 			continue
 		}
 		ext, err := s.extensions.Store().Load(name)
@@ -131,7 +131,7 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	ext, err := s.extensions.Store().Load(name)
+	ext, err := s.loadAgentExtension(ctx, name)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
@@ -166,6 +166,11 @@ func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallTo
 	if err := extensions.ApplyArgs(&ext, args, false); err != nil {
 		return extensionSaveError(err), nil
 	}
+	if _, changed := args["target"]; changed {
+		if err := s.validateAgentExtensionTarget(ctx, ext.Target); err != nil {
+			return toolError(CodeForbidden, "%s", err.Error()), nil
+		}
+	}
 	if err := extensions.SaveTemplate(s.extensions.Store(), &ext); err != nil {
 		return extensionSaveError(err), nil
 	}
@@ -182,12 +187,15 @@ func (s *Server) handleExtensionUpdate(ctx context.Context, request mcpgo.CallTo
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	ext, err := s.extensions.Store().Load(name)
+	ext, err := s.loadAgentExtension(ctx, name)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
 	if err := extensions.ApplyArgs(ext, args, true); err != nil {
 		return extensionSaveError(err), nil
+	}
+	if err := s.validateAgentExtensionTarget(ctx, ext.Target); err != nil {
+		return toolError(CodeForbidden, "%s", err.Error()), nil
 	}
 	if err := extensions.SaveTemplate(s.extensions.Store(), ext); err != nil {
 		return extensionSaveError(err), nil
@@ -203,8 +211,15 @@ func (s *Server) handleExtensionDelete(ctx context.Context, request mcpgo.CallTo
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	if _, err := s.extensions.Store().Load(name); err != nil {
+	if _, err := s.loadAgentExtension(ctx, name); err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
+	}
+	bindings, _ := agentBindingsFromContext(ctx)
+	if expected, ok := bindings.extensions[name]; ok {
+		if err := s.extensions.DeleteBound(expected); err != nil {
+			return toolError(CodeConflict, "deleting extension %q: %s", name, err), nil
+		}
+		return successResult(), nil
 	}
 	if err := s.extensions.Store().Delete(name); err != nil {
 		return toolError(CodeOperationFailed, "deleting extension %q: %s", name, err), nil
@@ -226,14 +241,14 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	ext, err := s.extensions.Store().Load(name)
+	ext, err := s.loadAgentExtension(ctx, name)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
 	// The wait is a bound on the caller's patience, not on the dial: a host that is
 	// slow to answer returns `probing` with what the caller should poll, rather
 	// than a failure it would have to guess was not one.
-	st, err := s.extensions.Acquire(name, extensionUseBudget)
+	st, err := s.acquireAgentExtension(ctx, name, extensionUseBudget)
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
@@ -264,6 +279,9 @@ func (s *Server) handleExtensionRelease(ctx context.Context, request mcpgo.CallT
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 	shellID := strings.TrimSpace(getString(args, "shell_id", ""))
+	if _, err := s.loadAgentExtension(ctx, name); err != nil {
+		return toolError(CodeRuleNotFound, "extension %q not found or changed authorization binding", name), nil
+	}
 	released, err := s.extensions.Release(name, shellID)
 	if err != nil {
 		return toolError(CodeRuleNotFound, "releasing extension %q: %s", name, err), nil
@@ -294,10 +312,10 @@ func (s *Server) handleExtensionRetry(ctx context.Context, request mcpgo.CallToo
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	if _, err := s.extensions.Store().Load(name); err != nil {
+	if _, err := s.loadAgentExtension(ctx, name); err != nil {
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
-	if err := s.extensions.Retry(name); err != nil {
+	if err := s.retryAgentExtension(ctx, name); err != nil {
 		return toolError(CodeOperationFailed, "retrying extension %q: %s", name, err), nil
 	}
 	return successResult(), nil

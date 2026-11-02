@@ -15,6 +15,7 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 
 	"github.com/open-mcp-ai/termcp/internal/encoding"
+	"github.com/open-mcp-ai/termcp/internal/fileop"
 )
 
 // StreamReadTo reads from remotePath (optionally at offset for length bytes) and streams
@@ -73,7 +74,7 @@ func (s *Client) StreamWriteFrom(r io.Reader, remotePath string, offset *int64) 
 // maxInlineRead caps how many bytes a single text/hex read pulls into memory.
 // The file is still fully reachable: callers page with offset + has_more.
 // mode=file streams to a local file and is intentionally uncapped.
-const maxInlineRead = 8 << 20 // 8 MiB
+const maxInlineRead = fileop.InlineReadLimit
 
 // normalizeReadRange clamps a requested byte window to [0, totalSize] and to an
 // optional in-memory limit. It is overflow-safe by construction: it never
@@ -215,39 +216,9 @@ func (s *Client) WriteFile(remotePath string, offset *int64, data string, mode s
 }
 
 func (s *Client) writeInline(remotePath string, offset *int64, data string, mode string) (int64, error) {
-	var raw []byte
-	switch mode {
-	case "hex":
-		decoded, err := encoding.HexDecode(data)
-		if err != nil {
-			return 0, fmt.Errorf("hex decode: %w", err)
-		}
-		raw = decoded
-	case "text", "":
-		// `hex:` IS A PREFIX, AND IT IS READ HERE BECAUSE THE DOCUMENTATION
-		// PROMISES IT. `help write` says "--data hex:00ff" writes two bytes, but
-		// nothing decoded the prefix: the seven characters `hex:00ff` went into the
-		// file as text and the reply said 200 with an honest-looking byte count.
-		//
-		// That is the one failure mode worth spending code on, because it is
-		// SILENT: every other bad argument in this surface is refused by name, while
-		// this one produces a file that parses as neither hex nor the intended
-		// bytes, and the caller has no reason to look.
-		//
-		// Only the text mode interprets the prefix: `--mode hex --data hex:00ff` is a
-		// caller writing those characters deliberately, and a mode that already says
-		// "hex" must not then read a prefix off the front of its own payload.
-		if hex, ok := strings.CutPrefix(data, "hex:"); ok {
-			decoded, err := encoding.HexDecode(hex)
-			if err != nil {
-				return 0, fmt.Errorf("hex decode after the `hex:` prefix: %w", err)
-			}
-			raw = decoded
-			break
-		}
-		raw = encoding.DecodeText(data)
-	default:
-		return 0, fmt.Errorf("unknown mode %q", mode)
+	raw, err := fileop.DecodeWriteData(data, mode)
+	if err != nil {
+		return 0, err
 	}
 
 	f, off, err := s.openForWrite(remotePath, offset)

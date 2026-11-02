@@ -11,7 +11,7 @@ import (
 
 func TestWebSessionsExpireOnRestartAndMCPCredentialsRemain(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
-	credential := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"persistent-client"}`)
+	credential := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"persistent-client"}`)
 	raw, err := m.vault.ReadAuthentication()
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestWebSessionClaimsAreBoundToCurrentRun(t *testing.T) {
 	if _, _, err := jwt.NewParser().ParseUnverified(cookie, &claims); err != nil {
 		t.Fatal(err)
 	}
-	key, err := base64.RawURLEncoding.DecodeString(m.state.SigningKey)
+	key, err := base64.RawURLEncoding.DecodeString(m.webSigningKey)
 	if err != nil {
 		t.Fatal(err)
 	}
