@@ -1201,6 +1201,21 @@ template keeps the values, which is what makes an upgrade safe.
 --paths is the path whitelist; a path outside it is refused even when the
 capability is allowed. --forwards declares tunnels that come up and go down with
 the session, as a JSON array of {kind, local_port, remote_host, remote_port}.
+THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
+  - ONE TEMPLATE CAN CARRY BOTH. A forwards list beside --command (or --paths, or
+    --mode pty) is not two extensions: the program runs on the target, the tunnels
+    come up on that same session, and they live and die together. Mixing local,
+    remote and dynamic entries in one list is allowed. --url is the exception: the
+    relay runs inside termcp, so it requires --target internal.
+  - ADDING A FORWARD CHANGES WHEN IT RUNS. Without one the extension is lazy:
+    nothing starts until a caller uses it, and it is reclaimed after idle_timeout.
+    With one it is resident from startup and never reclaimed, because a listener
+    has no "use" moment.
+  - ORDER IS IDENTITY, AND A PARTIAL FAILURE IS KEPT. Entry i is tracked as entry i
+    across walks, so reordering the list is not cosmetic. A failure at entry 3 does
+    not undo entries 1-2: they stay listening and are recorded, the retry targets
+    only the one that failed, and the extension stays usable for everything the
+    tunnel was not for.
 
 --args is an ARGV WORD LIST, the same grammar --argv uses for pipe/pty: quoting is
 the shell's, and an argument may contain a comma or a space. It takes the REST of

@@ -120,6 +120,10 @@ type termArgs struct {
 	// the text is the copy a caller usually reads, so the JSON twin is a duplicate
 	// paid for on every call. See envelope.Reply.StructuredContent.
 	StructuredContent bool
+	// Content suppresses the rendered text projection on the MCP wire when the
+	// caller asks for structuredContent only. False is the zero-value default and
+	// preserves the existing behavior; so the inverse travels with the reply.
+	NoText bool
 
 	// Vars holds values substituted into cmd at AST parse time, by variable name.
 	//
@@ -257,7 +261,7 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	t := s.executeTerm(ctx, cmd, win)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredContent: win.StructuredContent}
+	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
 }
 
 // executeTerm parses cmd and runs it, accumulating the reply.
@@ -609,6 +613,12 @@ type termReply struct {
 // empty, and every field the caller needs is in structuredContent.
 func toolResult(reply envelope.Reply) *mcpgo.CallToolResult {
 	result := mcpgo.NewToolResultText(reply.Text())
+	if reply.NoText {
+		// A structured-only caller gets NO text content. `content` is allowed to be
+		// empty in the tool-result schema, and leaving the rendering in would bill the
+		// duplicate the caller explicitly declined.
+		result.Content = nil
+	}
 	result.IsError = reply.IsError()
 	/* The JSON twin is built only when it was asked for. Structured() renders every
 	   slot a second time, and on a large reply that render is the cost the default

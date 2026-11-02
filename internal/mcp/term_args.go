@@ -179,7 +179,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_time_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
+		Desc:    "truncate = show part, fold = withhold it.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -188,7 +188,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_bytes_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
+		Desc:    "truncate = show part, fold = withhold it.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -197,7 +197,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_lines_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
+		Desc:    "truncate = show part, fold = withhold it.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -228,10 +228,25 @@ var termArgDecls = []termArgDecl{
 		// text instead; `content_only` was the same intent spelled backwards, which
 		// made "no duplicate" the thing you had to ask for. One positive flag with the
 		// quiet default says what it does: pass true and you get the JSON twin.
-		Desc:    "Also send structuredContent. Default: false.",
+		Desc:    "Include JSON projection. Default: false.",
 		DocNote: "Also send the JSON projection as `structuredContent`. **Off by default**: the two projections carry the same bytes, so the JSON copy is a duplicate a human sees on every call. Pass `true` for a client that reads structured content",
 		Def:     false,
 		DefText: "false",
+	},
+	{
+		Name: "content",
+		Kind: argBool,
+		// THE OTHER DIRECTION OF THE SAME SWITCH, and the reason it is separate: a
+		// program consumer (a bot, a CI job) parses structuredContent and never reads
+		// the rendering, so it pays for a duplicate on every call. `content:false`
+		// declines that half.
+		//
+		// Declining BOTH is refused: a call that asks for neither projection has
+		// declined every byte of the reply, which is a mistake spelled as a request.
+		Desc:    "Include text. Default: true.",
+		DocNote: "Send the rendered text projection. **On by default**. `content:false` with `structured_content:true` answers with `structuredContent` only; `content:false` alone is refused, because a reply with neither projection carries nothing",
+		Def:     true,
+		DefText: "true",
 	},
 	{
 		Name:    "args",
@@ -392,6 +407,17 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	if err := readBoolArg(args, "structured_content", &w.StructuredContent); err != nil {
 		return termArgs{}, err
 	}
+	// `content` declines the OTHER half. A program consumer that parses structuredContent
+	// never reads the rendering, so it pays for a duplicate it discards; declining both
+	// projections is refused rather than answered with nothing at all.
+	content := true
+	if err := readBoolArg(args, "content", &content); err != nil {
+		return termArgs{}, err
+	}
+	if !content && !w.StructuredContent {
+		return termArgs{}, &directive.Error{Msg: "content:false with structured_content:false asks for a reply that carries no bytes at all: both projections are declined. Send `structured_content:true` for the JSON form alone, or leave `content` on"}
+	}
+	w.NoText = !content
 	vars, derr := readNamedArg(args, "vars")
 	if derr != nil {
 		return termArgs{}, derr
