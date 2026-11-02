@@ -369,6 +369,7 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 	// point of a per-channel learner — the second `run` is cheaper than the first.
 	tracker := s.quietTracker(handle)
 	quiet := tracker.threshold()
+	tracker.noteUsed(quiet)
 	deadline := time.Now().Add(limit)
 	last := start
 	var still time.Time

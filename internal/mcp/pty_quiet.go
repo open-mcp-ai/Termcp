@@ -93,10 +93,41 @@ type ptyQuietTracker struct {
 	recent [ptyQuietHistory]time.Duration
 	next   int
 	filled int
+	// used is the quiet window the last wait actually applied. Written by the waiter,
+	// read by tests; it is not part of the learning.
+	used time.Duration
 }
 
 // threshold is the quiet window this channel should use: twice its widest recent
 // gap, floored at ptyQuietMin and never above the ptyQuiet it started from.
+// noteUsed records the threshold one wait decided to use, so a test can assert the
+// wiring rather than infer it from a clock.
+//
+// WHY THIS FIELD EXISTS: the first version of the test for this learner asserted that a
+// seeded channel answered in under ptyQuiet — and it was flaky, because the answer also
+// contains the shell's own latency (echoed line, repaint, command output: 270ms measured
+// here). Under load that latency pushed an otherwise correct wait past the constant, so
+// the test failed while the code was right. "Which threshold did the wait use" is the
+// fact the test is actually about, and it can be read instead of derived.
+func (t *ptyQuietTracker) noteUsed(quiet time.Duration) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.used = quiet
+	t.mu.Unlock()
+}
+
+// quietUsed reports the threshold the last wait on this channel used.
+func (t *ptyQuietTracker) quietUsed() time.Duration {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.used
+}
+
 func (t *ptyQuietTracker) threshold() time.Duration {
 	if t == nil {
 		return ptyQuiet

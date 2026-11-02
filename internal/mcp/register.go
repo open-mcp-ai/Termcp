@@ -45,6 +45,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		connections: newConnRegistry(),
 		tasks:       task.NewManager(),
 		ptyQuiet:    newPtyQuietTracker(sessMgr),
+		sftpEngines: newSFTPEngines(sessMgr),
 	}
 	for _, opt := range opts {
 		opt(s)
