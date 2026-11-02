@@ -368,6 +368,13 @@ func TestSplitArgvReadsWordsNotSpaces(t *testing.T) {
 
 // TestSplitArgvRefusesACommandLine pins that shell syntax is an error rather
 // than text handed to the program: --argv is an argv, not a command line.
+func TestSplitArgvRefusalTeachesVariableInjection(t *testing.T) {
+	_, _, err := SplitArgv(`echo hi && echo bye`)
+	if err == nil || !strings.Contains(err.Error(), `open <session> --argv sh -c $1`) || !strings.Contains(err.Error(), `args=["command1 && command2"]`) {
+		t.Fatalf("compound command refusal should teach the variable-injection form, got %v", err)
+	}
+}
+
 func TestSplitArgvRefusesACommandLine(t *testing.T) {
 	for _, raw := range []string{
 		`echo hi; ls`,
@@ -376,8 +383,17 @@ func TestSplitArgvRefusesACommandLine(t *testing.T) {
 		`FOO=1 echo hi`,
 		`echo "unbalanced`,
 	} {
-		if _, _, err := SplitArgv(raw); err == nil {
+		_, _, err := SplitArgv(raw)
+		if err == nil {
 			t.Errorf("SplitArgv(%q) accepted a command line", raw)
+			continue
+		}
+		// THE ERROR IS THE INTERFACE (issue #242): a caller that gets only "not an
+		// argv" goes on nesting quotes until it gives up and writes a script. The
+		// refusal must name the way that actually works. A malformed line (an
+		// unbalanced quote) is a different error and is not held to that shape.
+		if strings.Contains(err.Error(), "not an argv") && !strings.Contains(err.Error(), "$1") {
+			t.Errorf("SplitArgv(%q) refused without naming the injection form: %v", raw, err)
 		}
 	}
 }

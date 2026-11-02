@@ -30,18 +30,23 @@ package mcp
 
 const mcpServerInstructions = `termcp — a shell-like DSL over SSH; local ("internal") = remote.
 
+Replies are HTTP-like: TERM/1 <code>, then state headers (Waited, Content-Range,
+Still-Running, Error-Code) and a body.
+
 cmd = the DSL; sh = a shell command. sh enters cmd only as a VALUE ($1, $2, $NAME),
 never as syntax (/tmp/$1 refused). cmd composes with && || ; &.
 
-Tree: host -> session -> channel/file/forward/peer. connect <host> opens a session.
-One-shot commands/files: run use:<host> $1, read/write use:<host> file <path> borrow
-the pool; they create no session/archive and retain no output. Connect for interaction
-or later reads. ls lists addresses; copy, don't invent. help [verb] has usage.
+Tree: host -> session -> channel/file/forward/peer. connect <host> opens one;
+run/read/write use:<host> … borrow the pool and leave no session. ls lists
+addresses; copy, don't invent. help [verb] has usage.
 
-CAPABILITY — inspect before building. ls ext lists resident extensions and their notes;
-ls lists state (learn_mode:true adds usage). MCP: get <session> mcp tools lists tools,
-call <peer> <tool> {json} invokes one. CDP: call <peer> {method}; raw JSON-RPC only for
-non-tool methods. Repeated job? create ext or open <session> mcp <url> for one named call.
+MODE: pipe (--argv) = no echo, observable exit — use it for scripts and batch
+work; pty = TUI and prompts, no exit signal, so its reply is only a sample.
+
+CAPABILITY — inspect first. ls ext lists resident extensions and their notes;
+ls lists state (learn_mode:true adds usage). MCP: get <session> mcp tools, then
+call <peer> <tool> {json}. CDP: call <peer> {method}. Repeated job? create ext or
+open <session> mcp <url>.
 
 A HUMAN IS AN APPROVAL CHANNEL
   notify FIRST before any password/sudo/passphrase/MFA, confirmation, approval, choice
