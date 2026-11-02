@@ -121,8 +121,6 @@ type Handler struct {
 	// cycle Go rejects. The values are still mcp.Connection — the page sees JSON
 	// either way.
 	MCPConnections func() []any
-	// Managed authentication and profile encryption share one master password.
-	ChangeMainPassword func(current, password, confirmation string) error
 }
 
 // Register mounts /api/... and / (HTML/CSS/JS via embed.FS + http.FileServer).

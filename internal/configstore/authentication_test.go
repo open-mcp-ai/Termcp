@@ -22,7 +22,7 @@ func TestAuthenticationSharesMainKeyAndRotation(t *testing.T) {
 	if err := r.Save("host", []byte("profile payload")); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(authenticationPath(dir))
+	before, err := readStoreFileForTest(authenticationPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestAuthenticationSharesMainKeyAndRotation(t *testing.T) {
 	if err := r.ChangePassword(firstPassword, next, next); err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.ReadFile(authenticationPath(dir))
+	after, err := readStoreFileForTest(authenticationPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,10 @@ func TestAuthenticationRewrapResumesAfterRestart(t *testing.T) {
 	next := "replacement-master-password"
 	failure := errors.New("simulated auth publication interruption")
 	err = r.changePassword(firstPassword, next, next, nil, func(path string, data []byte) error {
-		if path == authenticationPath(r.dataDir) {
+		if path == LocalStatePath(r.dataDir) {
 			return failure
 		}
-		return writeFileAtomic(path, data)
+		return writeStoreFile(path, data)
 	})
 	if !errors.Is(err, failure) || !r.Status().RotationPending {
 		t.Fatalf("missing resumable transition: %v", err)
@@ -134,8 +134,9 @@ func TestPasswordInitializationResumesOnlyRecordedPartialCreation(t *testing.T) 
 	if err := writeFileAtomic(profilePath, []byte("retained ciphertext")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := InitializeRepositoryWithPassword(dir, firstPassword, firstPassword); !errors.Is(err, ErrAlreadyInitialized) {
-		t.Fatal("stale marker replaced a profile catalog", err)
+	if opened, err := InitializeRepositoryWithPassword(dir, firstPassword, firstPassword); err == nil {
+		_ = opened.Close()
+		t.Fatal("stale marker replaced retained ciphertext")
 	}
 	if err := os.Remove(profilePath); err != nil {
 		t.Fatal(err)

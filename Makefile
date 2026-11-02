@@ -1,4 +1,4 @@
-.PHONY: build build-api build-debug test test-stress clean dist sync-assets prepare-release check-release
+.PHONY: build build-api build-debug test test-stress test-permissions audit-capabilities clean dist sync-assets prepare-release check-release
 
 # Plain `make` must keep meaning "build the release binary" (GNU make otherwise
 # picks the first target in the file as the default goal).
@@ -93,6 +93,19 @@ test-stress:
 # no failing assertion, which reads like a hang and is not one; it is the budget.
 # Run this on an idle machine, otherwise the number it produces is the machine's.
 	go test $(STRESS_PKGS) -count=$(STRESS_COUNT) -cpu=$(STRESS_CPU) -shuffle=on $(race_flag) -timeout 1800s
+
+# Large capability inventories are generated under dist/ so they never become
+# source review noise. The permission-catalog.csv is also useful as a compact
+# review surface for operation metadata.
+audit-capabilities:
+	go run ./scripts/capability_audit -out dist/audits
+
+# Focused lifecycle matrix used by all three CI operating systems. The full
+# suite still runs above; this repeat catches ordering leaks in request
+# cancellation, transport ownership and permission-group revision changes.
+test-permissions:
+	go test ./internal/auth ./internal/authorization ./internal/capability ./internal/fileop ./internal/mcp ./internal/webui \
+		-count=2 -shuffle=on $(race_flag) -timeout 1200s
 
 # 发布 PR：将 Unreleased 归档到指定版本，并同步 server.json。
 prepare-release:

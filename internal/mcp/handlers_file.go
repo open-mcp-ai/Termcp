@@ -14,6 +14,7 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
+	"github.com/open-mcp-ai/termcp/internal/fileop"
 	filesftp "github.com/open-mcp-ai/termcp/internal/sftp"
 	"github.com/open-mcp-ai/termcp/internal/task"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -23,10 +24,8 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
-	offset := int64(getFloat64(args, "offset", 0))
-	length := int64(getFloat64(args, "length", 0))
-	mode := getString(args, "mode", "text")
-	localPath := getString(args, "local_path", "")
+	p := fileop.ReadFromArgs(args)
+	offset, length, mode, localPath := p.Offset, p.Length, p.Mode, p.LocalPath
 	// `--encoding` ON A FILE READ WAS ACCEPTED AND IGNORED, which is worse than refused:
 	// the caller named the interpretation and was handed a different one. A PowerShell
 	// 5.1 log is UTF-16LE with a BOM by default, so this was the ordinary case on

@@ -11,19 +11,18 @@ import (
 func TestAgentEmptyAllowlistsSurviveAPIAndEncryptedRestart(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	h := m.Wrap(http.NotFoundHandler())
-	body := `{"name":"empty-selections","issue_token":false,"policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":[]}},"mcp.tool.invoke":{"effect":"allow","constraints":{"tool_names":[]}},"cdp.method.invoke":{"effect":"allow","constraints":{"methods":[]}},"file.write":{"effect":"allow","constraints":{"forms":[]}}}}}`
-	w := managedRequest(t, h, "POST", "/auth/agents", body, cookie, session.CSRF)
+	body := `{"name":"empty-selections","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":[]}},"mcp.tool.invoke":{"effect":"allow","constraints":{"tool_names":[]}},"cdp.method.invoke":{"effect":"allow","constraints":{"methods":[]}},"file.write":{"effect":"allow","constraints":{"forms":[]}}}}}`
+	w := managedRequest(t, h, "POST", "/auth/groups", body, cookie, session.CSRF)
 	if w.Code != 200 {
-		t.Fatalf("create: %d %s", w.Code, w.Body)
+		t.Fatal(w.Code, w.Body)
 	}
 	var created struct {
-		Agent agentRecord `json:"agent"`
+		Group groupWire `json:"group"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	assertEmptySelectionsDeny(t, *created.Agent.Policy)
-	// A write/read through the real encrypted vault must retain the empty sets too.
+	assertEmptySelectionsDeny(t, created.Group.Policy)
 	raw, err := m.vault.ReadAuthentication()
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +32,7 @@ func TestAgentEmptyAllowlistsSurviveAPIAndEncryptedRestart(t *testing.T) {
 	if err = json.Unmarshal(raw, &saved); err != nil {
 		t.Fatal(err)
 	}
-	assertEmptySelectionsDeny(t, stateAgentPolicy(saved, created.Agent.ID))
+	assertEmptySelectionsDeny(t, saved.Groups[created.Group.ID].Policy)
 	loaded, err := reopenManaged(t, m)
 	if err != nil {
 		t.Fatal(err)
@@ -42,26 +41,35 @@ func TestAgentEmptyAllowlistsSurviveAPIAndEncryptedRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w = managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "GET", "/auth/agents", "", cookie, "")
+	group := readTestGroup(t, loaded, cookie, created.Group.ID)
+	assertEmptySelectionsDeny(t, group.Policy)
+	payload, _ := json.Marshal(map[string]any{"revision": group.Revision, "policy": group.Policy})
+	w = managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "PATCH", "/auth/groups/"+group.ID, string(payload), cookie, session.CSRF)
 	if w.Code != 200 {
-		t.Fatalf("list: %d %s", w.Code, w.Body)
+		t.Fatal(w.Code, w.Body)
+	}
+	assertEmptySelectionsDeny(t, loaded.state.Groups[group.ID].Policy)
+}
+
+func readTestGroup(t *testing.T, m *Managed, cookie, id string) groupWire {
+	t.Helper()
+	w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "GET", "/auth/groups", "", cookie, "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
 	}
 	var list struct {
-		Agents []agentRecord `json:"agents"`
+		Groups []groupWire `json:"groups"`
 	}
-	if err = json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Agents) != 1 {
-		t.Fatal("missing restored Agent")
+	for _, g := range list.Groups {
+		if g.ID == id {
+			return g
+		}
 	}
-	assertEmptySelectionsDeny(t, *list.Agents[0].Policy)
-	payload, _ := json.Marshal(map[string]any{"revision": list.Agents[0].Revision, "policy": list.Agents[0].Policy})
-	w = managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "PATCH", "/auth/agents/"+created.Agent.ID, string(payload), cookie, session.CSRF)
-	if w.Code != 200 {
-		t.Fatalf("resave: %d %s", w.Code, w.Body)
-	}
-	assertEmptySelectionsDeny(t, stateAgentPolicy(loaded.state, created.Agent.ID))
+	t.Fatal("missing group", id)
+	return groupWire{}
 }
 
 func assertEmptySelectionsDeny(t *testing.T, p AgentPolicy) {
@@ -89,7 +97,7 @@ func TestAgentAmbiguousStoredConditionsFailClosedAndCanBeReviewed(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 
 			m, cookie, session := configuredManaged(t)
-			a := issueTestCredential(t, m, cookie, session, "/auth/agents", `{"name":"old-policy","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"]}},"file.realpath":{"effect":"allow"}}}}`)
+			a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"old-policy","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"]}},"file.realpath":{"effect":"allow"}}}}`)
 			raw, err := m.vault.ReadAuthentication()
 			if err != nil {
 				t.Fatal(err)
@@ -127,19 +135,9 @@ func TestAgentAmbiguousStoredConditionsFailClosedAndCanBeReviewed(t *testing.T) 
 				t.Fatal(err)
 			}
 			h := loaded.Wrap(http.NotFoundHandler())
-			w := managedRequest(t, h, "GET", "/auth/agents", "", cookie, "")
-			var list struct {
-				Agents []struct {
-					ID       string   `json:"id"`
-					Revision uint64   `json:"revision"`
-					Warnings []string `json:"policy_warnings"`
-				} `json:"agents"`
-			}
-			if err = json.Unmarshal(w.Body.Bytes(), &list); err != nil {
-				t.Fatal(err)
-			}
-			if len(list.Agents) != 1 || len(list.Agents[0].Warnings) != 1 || list.Agents[0].Warnings[0] != "shell.key" {
-				t.Fatal("missing operation review notice", w.Body)
+			group := readTestGroup(t, loaded, cookie, a.Agent.GroupID)
+			if len(group.Warnings) != 1 || group.Warnings[0] != "shell.key" {
+				t.Fatal("missing group review notice", group)
 			}
 			raw, err = loaded.vault.ReadAuthentication()
 			if err != nil {
@@ -155,20 +153,20 @@ func TestAgentAmbiguousStoredConditionsFailClosedAndCanBeReviewed(t *testing.T) 
 			}
 			// An explicit human save can choose a new allow with no constraints.
 			p.Actions["shell.key"] = authorization.Grant{Effect: authorization.EffectAllow}
-			payload, _ := json.Marshal(map[string]any{"revision": list.Agents[0].Revision, "policy": p})
-			w = managedRequest(t, h, "PATCH", "/auth/agents/"+a.Agent.ID, string(payload), cookie, session.CSRF)
+			payload, _ := json.Marshal(map[string]any{"revision": group.Revision, "policy": p})
+			w := managedRequest(t, h, "PATCH", "/auth/groups/"+group.ID, string(payload), cookie, session.CSRF)
 			if w.Code != 200 {
 				t.Fatalf("review save: %d %s", w.Code, w.Body)
 			}
 			var updated struct {
-				Agent struct {
+				Group struct {
 					Warnings []string `json:"policy_warnings"`
-				} `json:"agent"`
+				} `json:"group"`
 			}
 			if err = json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
 				t.Fatal(err)
 			}
-			if len(updated.Agent.Warnings) != 0 || !stateAgentPolicy(loaded.state, a.Agent.ID).AllowsOperation("shell.key") {
+			if len(updated.Group.Warnings) != 0 || !stateAgentPolicy(loaded.state, a.Agent.ID).AllowsOperation("shell.key") {
 				t.Fatal("explicit review was not applied")
 			}
 
@@ -180,7 +178,7 @@ func TestAgentRejectsAmbiguousEmptyConditionsAtWrite(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	h := m.Wrap(http.NotFoundHandler())
 	for _, c := range []string{`{}`, `{"keys":null}`} {
-		w := managedRequest(t, h, "POST", "/auth/agents", `{"name":"ambiguous","issue_token":false,"policy":{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"allow","constraints":`+c+`}}}}`, cookie, session.CSRF)
+		w := managedRequest(t, h, "POST", "/auth/groups", `{"name":"ambiguous","policy":{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"allow","constraints":`+c+`}}}}`, cookie, session.CSRF)
 		if w.Code != 400 {
 			t.Errorf("ambiguous constraints accepted: %d", w.Code)
 		}

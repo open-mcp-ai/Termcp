@@ -10,6 +10,9 @@ detectors, not budgets. A test that passes on your machine and flakes in
 CI costs everyone a re-run and teaches people to ignore red. Write for the
 runner, not for your checkout.
 
+Permission and authentication changes also run the focused lifecycle matrix in
+[permissions-testing.md](permissions-testing.md) on all three CI platforms.
+
 ## Never hardcode a shared path
 
 A fixed absolute path (`/tmp/x`, `C:\tmp\x`, `/etc/hostname`) is shared state:

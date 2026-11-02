@@ -271,6 +271,17 @@ func (r *Reconciler) run(ctx context.Context) {
 // goroutine, because a dial to an unreachable host blocks for its timeout and
 // must not delay the other extensions or the walk.
 func (r *Reconciler) startProbe(ctx context.Context, name, target string) {
+	r.startProbeTask(ctx, name, target, "", nil, hostPlan{})
+}
+
+func (r *Reconciler) startPreparedProbe(ctx context.Context, name, target string, ext *Extension, plan hostPlan) {
+	r.startProbeTask(ctx, name, target, "prepared", ext, plan)
+}
+
+func (r *Reconciler) startProbeTask(ctx context.Context, name, target, mode string, ext *Extension, plan hostPlan) {
+	if ctx == nil {
+		return
+	}
 	st := r.stateFor(name, target)
 	st.mu.Lock()
 	if st.status == StatusProbing {
@@ -283,6 +294,11 @@ func (r *Reconciler) startProbe(ctx context.Context, name, target string) {
 	r.probes.Add(1)
 	go func() {
 		defer r.probes.Done()
+		r.probe(ctx, name, target)
+		if mode == "prepared" {
+			r.probePlan(ctx, name, target, ext, plan)
+			return
+		}
 		r.probe(ctx, name, target)
 	}()
 }

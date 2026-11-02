@@ -32,15 +32,19 @@
 | 产物 | 内容 |
 | --- | --- |
 | [完整连接点 Markdown](capability-connection-points.md) | 714 个连接点，逐行列出文件、函数、行号、方向、完整源码实参、旁路类别和局部 guard 证据 |
-| [连接点 CSV](capability-connections.csv) | 同一完整清单，增加列号、接收者静态类型、被调函数定义与三平台位置 |
-| [逐能力汇合 CSV](capability-convergence.csv) | 98 项，保存双方完整逐跳路径、实参、DSL 分发绑定、浏览器引用和限定条件 |
-| [全部 Go 调用表达式](capability-call-edges.csv) | 11247 个三平台去重调用位置，包含调用面内部连接及业务层下游调用；不省略普通辅助调用 |
-| [函数/闭包/初始化节点定义](capability-function-definitions.csv) | 2236 个定义位置，区分构建平台 |
-| [函数值与回调绑定引用](capability-function-references.csv) | 320 个函数值引用；不把引用本身伪装成已执行调用 |
-| [实参构造与赋值](capability-argument-bindings.csv) | 3887 个调用面 Go 赋值与浏览器请求构造相关绑定，保留源码表达式，不伪造运行值 |
-| [浏览器网络/API 连接点](capability-webui-client-calls.csv) | 112 处网络调用、地址引用和请求 wrapper，含文件、函数、行号、实参和同函数前置绑定 |
-| [入口注册覆盖](capability-entrypoints.csv) | 69 个 HTTP 注册模式、4 个 WS 入站消息和 19 个 DSL 动词，合计 92 项 |
-| [源文件哈希](capability-source-hashes.csv) | 固定所有直接参与提取的源码文件内容，供复核报告是否仍匹配代码 |
+| `dist/audits/call-expressions.csv` | 当前源码的调用表达式、调用者与源码位置；不含请求正文或潜在秘密值 |
+| `dist/audits/functions.csv` | 函数和方法定义位置 |
+| `dist/audits/source-files.csv` | 参与扫描的源文件、行数、哈希和调用计数 |
+| `dist/audits/permission-catalog.csv` | 权限动作、风险、可达面和组合依赖摘要 |
+| `dist/audits/summary.md` | 本次生成的计数和文件索引 |
+
+这些大型派生文件不再提交到仓库。运行以下命令在已忽略的 `dist/audits/` 下重新生成：
+
+```sh
+go run ./scripts/capability_audit -out dist/audits
+```
+
+生成器保留可重复的源码文件、函数和调用表达式清单；历史版本中依赖未入库类型解析器生成的逐参数表达式 CSV 不再作为当前合同，旧提交中的文件可由 Git 历史追溯。
 
 “能力层”在当前代码中不是单一 package：本报告同时盘点 capability/ns/approval 等检查层、session/sshconfig/extensions/forward/sftp/transcript/jrpc/task 等业务层，以及适配器直接访问的 OS/IO。Go 全量清单覆盖项目的 34 个生产 package 的函数体及顶层初始化表达式；初始化节点明确以 $init 标记。普通错误格式化、HTTP 响应写入等不属于能力执行连接点，不列入连接点表，但不从全量调用 CSV 删除。不包含测试文件、第三方库内部或 OS 内核实现。浏览器侧覆盖应用 static/js 和 HTML 内联脚本，不解析第三方 vendor/xterm 库作为 Termcp 自身代码。
 

@@ -17,7 +17,7 @@ import (
 
 const testHost = "kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n"
 
-func TestManagedMigrationUnifiesExistingConfigurationPassword(t *testing.T) {
+func TestManagedMigrationPreservesIndependentConfigurationPassword(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TERMCP_TEST_AUTH_KEK", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
 	provider := configstore.NewEnvProvider("TERMCP_TEST_AUTH_KEK")
@@ -75,15 +75,17 @@ func TestManagedMigrationUnifiesExistingConfigurationPassword(t *testing.T) {
 	if _, _, err := m.verify(oldCookie); err == nil {
 		t.Fatal("legacy JWT survived migration")
 	}
-	for _, name := range []string{"auth.json", "auth.enc", "keys/config.keys"} {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bytes.Contains(data, []byte(testPassword)) || bytes.Contains(data, []byte(previous)) || bytes.Contains(data, []byte(m.state.SigningKey)) {
-			t.Fatalf("secret persisted in %s", name)
-		}
+	data, err := os.ReadFile(configstore.LocalStatePath(dir))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if bytes.Contains(data, []byte(testPassword)) || bytes.Contains(data, []byte(previous)) || bytes.Contains(data, []byte(m.state.SigningKey)) {
+		t.Fatal("plaintext secret persisted in local state")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "auth.json")); !os.IsNotExist(err) {
+		t.Fatal("legacy plaintext account was not removed")
+	}
+
 	if err := m.vault.(*sshconfig.Store).Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +97,11 @@ func TestManagedMigrationUnifiesExistingConfigurationPassword(t *testing.T) {
 	if data, err := repo.Read("saved-host"); err != nil || string(data) != testHost {
 		t.Fatalf("migration damaged encrypted host: %v", err)
 	}
-	if err := repo.VerifyPassword(testPassword); err != nil {
-		t.Fatal("Admin password did not become Main Key password", err)
+	if err := repo.VerifyPassword(testPassword); err == nil {
+		t.Fatal("migration replaced configuration password with login password")
 	}
-	if err := repo.VerifyPassword(previous); err == nil {
-		t.Fatal("old configuration password remained valid")
+	if err := repo.VerifyPassword(previous); err != nil {
+		t.Fatal("migration lost configuration password", err)
 	}
 }
 
@@ -130,8 +132,8 @@ func TestManagedPasswordChangeKeepsHostsAndRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.MainKeyID == after.MainKeyID {
-		t.Fatal("Main Key did not change")
+	if before.MainKeyID != after.MainKeyID {
+		t.Fatal("login password change rotated configuration MK")
 	}
 	if _, _, err := m.verify(token); err == nil {
 		t.Fatal("password change left old sessions valid")
@@ -168,7 +170,7 @@ func TestManagedPasswordChangeKeepsHostsAndRevokesSessions(t *testing.T) {
 
 func TestManagedMissingMarkerDoesNotReopenSetup(t *testing.T) {
 	m, _, _ := configuredManaged(t)
-	if err := os.Remove(m.path); err != nil {
+	if err := os.Remove(m.path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	reopened, err := reopenManaged(t, m)
@@ -232,7 +234,7 @@ func TestManagedRememberUnlockAfterProviderLoss(t *testing.T) {
 		t.Fatal("missing provider did not lock authentication")
 	}
 	t.Setenv("TERMCP_TEST_REBOUND_KEK", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{11}, 32)))
-	if _, _, err := locked.loginWithOptions("admin", testPassword, "", true); err != nil {
+	if _, _, err := locked.loginWithOptions("admin", testPassword, testPassword, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.Close(); err != nil {
@@ -257,7 +259,7 @@ func TestManagedRememberUnlockAfterProviderLoss(t *testing.T) {
 	}
 }
 
-func TestManagedHTTPChangesUnifiedPassword(t *testing.T) {
+func TestManagedHTTPChangesLoginPassword(t *testing.T) {
 	m, token, session := configuredManaged(t)
 	handler := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
 	body := `{"current_password":"` + testPassword + `","new_password":"replacement-master-password","confirmation":"replacement-master-password"}`

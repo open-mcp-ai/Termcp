@@ -134,9 +134,11 @@ func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcpgo.CallTo
 	//
 	// The check is Load, not List: Load is the same door every other read uses, so a
 	// profile that cannot be loaded is not reported as removed either.
-	if _, err := s.sshConfigs.Load(name); err != nil {
+	canonical, _, err := s.loadAgentProfile(ctx, name)
+	if err != nil {
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
+	name = canonical
 	if err := s.sshConfigs.Delete(name); err != nil {
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
@@ -153,7 +155,7 @@ func (s *Server) handleCopySSHConfig(ctx context.Context, request mcpgo.CallTool
 	if src == "" || dst == "" {
 		return toolError(CodeInvalidArgument, "%s", "source_name and target_name are required"), nil
 	}
-	data, err := s.sshConfigs.ReadRaw(src)
+	src, data, err := s.readAgentProfileRaw(ctx, src)
 	if err != nil {
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
@@ -173,10 +175,11 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
 
-	existing, err := s.sshConfigs.Load(name)
+	canonical, existing, err := s.loadAgentProfile(ctx, name)
 	if err != nil {
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}
+	name = canonical
 
 	applyEntryEdits(existing, args)
 
@@ -340,7 +343,7 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolR
 	if name == "" {
 		return toolError(CodeInvalidArgument, "%s", "name is required"), nil
 	}
-	ent, err := s.sshConfigs.Load(name)
+	canonical, ent, err := s.loadAgentProfile(ctx, name)
 	if err != nil {
 		if errors.Is(err, sshconfig.ErrNotFound) {
 			// THE CODE NAMES THE THING THAT IS MISSING. It was session_not_found, which
@@ -352,6 +355,7 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolR
 		}
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
+	name = canonical
 
 	dial := func(d sshconfig.DialSpec) map[string]any {
 		m := map[string]any{

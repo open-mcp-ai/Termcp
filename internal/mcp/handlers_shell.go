@@ -31,7 +31,7 @@ func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolR
 		return bad, nil
 	}
 
-	cfgName, ent, remote, err := s.resolveSSHFromArgs(args)
+	cfgName, ent, remote, err := s.resolveSSHFromArgs(ctx, args)
 	if err != nil {
 		return toolError(sshConfigErrCode(err), "%s", err.Error()), nil
 	}

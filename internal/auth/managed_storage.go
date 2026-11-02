@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,9 @@ type Vault interface {
 	AuthenticationLocked() bool
 	AuthenticationInitialized() bool
 	ChangeEncryptionPassword(current, password, confirmation string, providers ...configstore.Provider) error
+	ReadLoginCredential() ([]byte, error)
+	WriteLoginCredential(expected, next []byte) error
+	WriteAuthenticationAndLogin(data, login []byte) error
 }
 
 var errInitialized = errors.New("admin is already configured")
@@ -30,13 +32,13 @@ var errInitialized = errors.New("admin is already configured")
 func (m *Managed) Configured() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.sealed || m.legacy != nil
+	return m.credential != nil || m.sealed || m.legacy != nil
 }
 
 func (m *Managed) NeedsUnlock() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.legacy != nil || m.sealed && m.state.Version == 0
+	return m.legacy != nil || m.sealed && (m.state.Version == 0 || m.vault.AuthenticationLocked())
 }
 
 func OpenManaged(dataDir string, vault Vault, providers ...configstore.Provider) (*Managed, error) {
@@ -47,7 +49,18 @@ func OpenManaged(dataDir string, vault Vault, providers ...configstore.Provider)
 	if err != nil {
 		return nil, err
 	}
-	m := &Managed{background: make(map[string]map[*int]context.CancelFunc), path: filepath.Join(dataDir, "auth.json"), now: time.Now, requests: make(map[string]map[*int]context.CancelFunc), vault: vault, providers: providers, webBootID: boot}
+	signing, err := randomSecret()
+	if err != nil {
+		return nil, err
+	}
+	m := &Managed{webSigningKey: signing, background: make(map[string]map[*int]context.CancelFunc), path: filepath.Join(dataDir, "auth.json"), now: time.Now, requests: make(map[string]map[*int]context.CancelFunc), vault: vault, providers: providers, webBootID: boot, auditSink: SlogAuditSink{}}
+	m.credential, _, err = m.readLoginCredential()
+	if err != nil {
+		return nil, err
+	}
+	if m.state.Sessions == nil {
+		m.state.Sessions = map[string]sessionRecord{}
+	}
 	m.sealed, err = configstore.HasAuthentication(dataDir)
 	if err != nil {
 		return nil, err
@@ -67,6 +80,9 @@ func OpenManaged(dataDir string, vault Vault, providers ...configstore.Provider)
 		if err := json.Unmarshal(raw, &marker); err != nil {
 			return nil, errors.New("invalid authentication metadata")
 		}
+	}
+	if m.credential != nil && !m.sealed {
+		return nil, errors.New("login bootstrap exists without encrypted account")
 	}
 	if m.sealed {
 		m.markerDirty = marker.Version != 2
@@ -119,29 +135,17 @@ func validateState(s managedState, legacy bool) error {
 			return errors.New("invalid saved session")
 		}
 	}
+	if legacy {
+		if len(s.Agents) > 0 || len(s.Groups) > 0 {
+			return errors.New("unsupported legacy permission state")
+		}
+		return nil
+	}
 	return validateCredentials(s)
 }
 
 func (m *Managed) writeMarker() error {
-	f, err := os.CreateTemp(filepath.Dir(m.path), ".auth-metadata-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0600); err != nil {
-		return err
-	}
-	if _, err = f.WriteString("{\"version\":2}\n"); err != nil {
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(f.Name(), m.path); err != nil {
+	if err := os.Remove(m.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	m.markerDirty = false
@@ -161,22 +165,24 @@ func (m *Managed) loadLocked() error {
 	// Sessions in historical ciphertext are intentionally ignored. Preserve only
 	// logins already created by this Managed instance while reloading the vault.
 	state.Sessions = make(map[string]sessionRecord)
-	if state.Admin.ID == m.state.Admin.ID && equalSecret(state.SigningKey, m.state.SigningKey) {
+	if m.credential != nil && (state.Admin.ID != m.credential.Actor.ID || state.Admin.Username != m.credential.Actor.Username || state.InstanceID != m.credential.InstanceID) {
+		return errors.New("account bootstrap does not match encrypted account")
+	}
+	if state.Admin.ID == m.state.Admin.ID || m.credential != nil && state.Admin.ID == m.credential.Actor.ID {
 		for id, session := range m.state.Sessions {
 			if m.now().Before(session.ExpiresAt) {
 				state.Sessions[id] = session
 			}
 		}
 	}
-	migrated, err := migratePermissionGroups(&state, m.now())
-	if err != nil {
-		return err
+	if state.Version != managedStateVersion {
+		return errors.New("unsupported permission state version")
 	}
 	repaired := repairAmbiguousAgentPolicies(&state)
 	if err := validateState(state, false); err != nil {
 		return err
 	}
-	if repaired || migrated {
+	if repaired {
 		return m.save(state, false)
 	}
 	m.state = state
@@ -232,6 +238,9 @@ func (m *Managed) setupWithOptions(username, password, previous string, automati
 	if username != strings.TrimSpace(username) || username == "" || len(username) > 128 || strings.ContainsAny(username, "\r\n\x00") {
 		return errors.New("a valid username is required")
 	}
+	if err := configstore.ValidatePassword(password, password); err != nil {
+		return err
+	}
 	if err := m.vault.PrepareAuthentication(password, previous, automatic, m.providers...); err != nil {
 		return err
 	}
@@ -255,7 +264,11 @@ func (m *Managed) setupWithOptions(username, password, previous string, automati
 	state := managedState{Version: managedStateVersion, InstanceID: instance, SigningKey: key, Admin: adminRecord{ID: id, Username: username}, Permissions: defaultPolicy(), Revision: 1, Sessions: make(map[string]sessionRecord)}
 	seedPermissionGroups(&state, m.now().UTC())
 	m.markerDirty = true
-	return m.save(state, true)
+	credential, err := m.newLoginCredential(state, password, previous == "" || equalSecret(password, previous))
+	if err != nil {
+		return err
+	}
+	return m.saveWithLogin(state, credential)
 }
 
 // unlockForLogin holds passwordMu, but releases the ordinary policy mutex while
@@ -282,14 +295,20 @@ func (m *Managed) unlockForLogin(username, password, previous string, automatic 
 		if m.legacy != legacy || m.sealed {
 			return errInitialized
 		}
-		old.Version = 2
-		if _, err := migratePermissionGroups(&old, m.now().UTC()); err != nil {
-			return err
+		// Login/storage migration never imports retired business permissions.
+		if len(old.Agents) > 0 {
+			return errors.New("unsupported legacy permission state")
 		}
+		old.Version = managedStateVersion
+		seedPermissionGroups(&old, m.now().UTC())
 		old.Admin.Password = ""
 		old.Sessions = make(map[string]sessionRecord)
 		old.SigningKey = key
-		return m.save(old, true)
+		credential, err := m.newLoginCredential(old, password, false)
+		if err != nil {
+			return err
+		}
+		return m.saveWithLogin(old, credential)
 	}
 	if err := m.vault.UnlockAuthentication(password, m.providers...); err != nil {
 		return err
@@ -304,52 +323,18 @@ func (m *Managed) unlockForLogin(username, password, previous string, automatic 
 		return err
 	}
 	if automatic {
-		return m.vault.PrepareAuthentication(password, "", true, m.providers...)
-	}
-	return nil
-}
-
-// ChangePassword revokes runtime browser sessions before the resumable key
-// transition. Password work does not hold the ordinary authentication mutex.
-func (m *Managed) ChangePassword(current, password, confirmation string) error {
-	m.passwordMu.Lock()
-	defer m.passwordMu.Unlock()
-	m.mu.Lock()
-	ready := m.sealed && m.state.Version == managedStateVersion
-	m.mu.Unlock()
-	if !ready {
-		return configstore.ErrLocked
-	}
-	if err := configstore.ValidatePassword(password, confirmation); err != nil {
-		return err
-	}
-	if err := m.vault.UnlockAuthentication(current, m.providers...); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	state := m.state
-	state.Sessions = make(map[string]sessionRecord)
-	err := m.save(state, false)
-	var cancels []context.CancelFunc
-	if err == nil || errors.Is(err, configstore.ErrDurability) {
-		for id, requests := range m.requests {
-			if strings.HasPrefix(id, "token:") {
-				continue
-			}
-			for _, cancel := range requests {
-				cancels = append(cancels, cancel)
-			}
+		if err := m.vault.PrepareAuthentication(password, "", true, m.providers...); err != nil {
+			return err
 		}
 	}
+	m.mu.Lock()
+	snapshot := m.state
 	m.mu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
-	}
+	credential, err := m.newLoginCredential(snapshot, password, false)
 	if err != nil {
 		return err
 	}
-	if err := m.vault.ChangeEncryptionPassword(current, password, confirmation, m.providers...); err != nil {
-		return fmt.Errorf("change shared master password: %w", err)
-	}
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.saveWithLogin(m.state, credential)
 }
