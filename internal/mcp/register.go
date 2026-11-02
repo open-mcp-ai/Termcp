@@ -8,6 +8,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/task"
 )
@@ -45,7 +46,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		connections: newConnRegistry(),
 		tasks:       task.NewManager(),
 		ptyQuiet:    newPtyQuietTracker(sessMgr),
-		sftpEngines: newSFTPEngines(sessMgr),
+		sftpEngines: sftpengine.NewPool(sessMgr),
 	}
 	for _, opt := range opts {
 		opt(s)

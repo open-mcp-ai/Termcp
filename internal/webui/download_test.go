@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -469,5 +471,46 @@ func TestRequestResponseHeadersValidation(t *testing.T) {
 	}
 	if got := rr.Header().Get("Content-Range"); got != "" {
 		t.Errorf("Content-Range = %q, want it dropped", got)
+	}
+}
+
+// TestTheFilePanelSharesOneSFTPEnginePerSession pins issue #244's second half: the Web
+// UI's file routes reuse the session's SFTP engine instead of opening one per request.
+//
+// The panel is chatty — a list, a preview, a download — and each of those used to pay
+// three round trips (channel open, subsystem request, INIT/VERSION: 526ms measured over a
+// 350ms link) before asking for anything. The assertion is on the ENGINE the helper
+// returns, not on elapsed time, because loopback latency is microseconds and a timing
+// test would pass either way.
+func TestTheFilePanelSharesOneSFTPEnginePerSession(t *testing.T) {
+	env := newDownloadEnv(t)
+	pool := sftpengine.NewPool(env.sessMgr)
+
+	// The session's live transport, resolved the way a file route resolves it.
+	_, sshClient, ok := (&Handler{Sessions: env.sessMgr}).resolveFileSession(
+		env.sess.ID, capability.FileStat, [][2]string{{"path", env.dir}}, httptest.NewRecorder())
+	if !ok || sshClient == nil {
+		t.Fatal("the session should resolve to a live transport")
+	}
+	h := &Handler{Sessions: env.sessMgr, SFTP: pool}
+	first, err := h.sftpFor(env.sess, sshClient)
+	if err != nil {
+		t.Fatalf("first engine: %v", err)
+	}
+	second, err := h.sftpFor(env.sess, sshClient)
+	if err != nil {
+		t.Fatalf("second engine: %v", err)
+	}
+	if first != second {
+		t.Error("two file-panel requests opened two SFTP engines; the handshake is being " +
+			"paid on every request (issue #244)")
+	}
+	// The shared view's Close must be a no-op: a preview finishing cannot close the
+	// engine a download is streaming from.
+	if err := first.Close(); err != nil {
+		t.Errorf("Close on a shared engine returned %v", err)
+	}
+	if _, err := second.StatFile(env.dir); err != nil {
+		t.Errorf("the engine died after a preview closed its view: %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
@@ -93,6 +94,13 @@ type Handler struct {
 	// lines can be approved. It exists so the queue can gate operations it does
 	// not itself know how to perform.
 	ExecuteOperation func(approval.Request) error
+
+	// SFTP keeps one engine per session for the file panel (see
+	// internal/sftpengine, issue #244). A nil value is legal: the file routes then
+	// open and close an engine per request, which is what they did before the pool
+	// existed and is correct, only slower. main wires the same pool the MCP file
+	// tools use, so a panel preview and a `read … file` share one subsystem.
+	SFTP *sftpengine.Pool
 
 	sessHub   *sessionListHub
 	notifyHub *uiNotifyHub

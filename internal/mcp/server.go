@@ -13,6 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/task"
 )
@@ -113,11 +114,20 @@ type Server struct {
 	// on channel close and on session DEAD.
 	ptyQuiet *quietTrackers
 
-	// sftpEngines caches one SFTP subsystem per SSH connection (see
-	// sftp_engines.go), so a file operation does not pay three round trips to open
-	// its own engine every call (issue #244).
-	sftpEngines *sftpEngines
+	// sftpEngines keeps one SFTP subsystem per session, so a file operation does not
+	// pay three round trips to open its own engine every call (see
+	// internal/sftpengine, issue #244).
+	sftpEngines *sftpengine.Pool
 }
+
+// SFTPPool exposes the shared SFTP engine pool, so a second surface over the same
+// sessions (the Web UI's file panel) reuses the engine a tool call already opened
+// instead of paying the handshake again (issue #244).
+//
+// It is an accessor rather than a construction option because there is exactly one
+// pool per process and it must be the one whose DEAD hook evicts entries: two pools
+// would mean two subsystems per session and one of them never evicted.
+func (s *Server) SFTPPool() *sftpengine.Pool { return s.sftpEngines }
 
 // Option customizes a Server at construction time. Options keep New's signature
 // stable for callers (and tests) that do not care about the newer knobs.
