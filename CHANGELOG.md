@@ -551,6 +551,7 @@
 - **禁令改成原理**。产品内的提示按 hints.md §2.4 重新核对：只有真实安全边界、协议约束或能力缺失才保留拒绝，其余「不要做 X」都补上机制与替代做法。pty 一段现在说清「终端里没有命令结束信号，所以读到的是采样，要退出码就用 pipe」；凭据一段不再只说「别写进 cmd」，而是写明 cmd/args/vars 会原样进服务器日志、secrets 只记名字、远端 shell 仍会回显；review 回复由「禁止轮询/重发」改成「决定由人在 Web UI 做出，状态只随其动作改变，重发只会多排一个请求」。MCP instructions 的人机审批与 review 两段也合并成一段审批通道描述，仍在 1800 B 预算内（1796 B）。
 
 - **提示会教正确的做法，不只是说「不对」（#242）**。`--argv` 遇到 shell 语法时，报错不再只说「这是一条命令行」，而是给出能照抄的注入写法（`--argv sh -c $1` 加 args）。MCP instructions 补了两条选型事实：回复是类 HTTP 的信封（`TERM/1 <code>` + 状态头 + body），以及非交互任务该用 pipe（无回显、退出码可观察）、pty 只为 TUI 和交互提示存在（没有结束信号，读到的是采样）。
+- **`bytes_limit` 是 `term` 的统一合同，不再因指令而异（#209）**。生成式回包原来只在调用方写了 `generatedSlot` 的地方才按窗口切：`help <node>`、`ls task`、`cdp protocol` 等裸 slot 返回了整段正文不管多小；现在一个统一的出口守卫对所有 2xx 内容做同样的裁剪并附同样的事实头（`Truncated`, `Content-Range`），而 202 回执、204/206 已有自述的 slot、4xx/5xx 诊断不被窗口切——它们被切了就不再是一个能照着做事的答复。同时还了三个债：删掉从未被消费的 `on_time_overflow`（公布、校验、写进结构体，没人读）；把 `mcp recv` 的 1 MiB 接收下限写进 `bytes_limit` 的说明；把 `bytes_limit: 0` 在“通道/生成式/帧”三条路上的真实含义分别写明，而不是一句「the channel only」。新测试从三个不调用任何 helper 的裸 slot 出发，把出口守卫拿掉就会变红。
 
 - **`bytes_limit` 是 `term` 的统一合同，不再因指令而异（#209）**。生成式回包原来只在调用方写了 `generatedSlot` 的地方才按窗口切：`help <node>`、`ls task`、`cdp protocol` 等裸 slot 返回了整段正文不管多小；现在一个统一的出口守卫对所有 2xx 内容做同样的裁剪并附同样的事实头（`Truncated`, `Content-Range`），而 202 回执、204/206 已有自述的 slot、4xx/5xx 诊断不被窗口切——它们被切了就不再是一个能照着做事的答复。同时还了三个债：删掉从未被消费的 `on_time_overflow`（公布、校验、写进结构体，没人读）；把 `mcp recv` 的 1 MiB 接收下限写进 `bytes_limit` 的说明；把 `bytes_limit: 0` 在“通道/生成式/帧”三条路上的真实含义分别写明，而不是一句「the channel only」。新测试从三个不调用任何 helper 的裸 slot 出发，把出口守卫拿掉就会变红。
 
