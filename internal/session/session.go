@@ -446,7 +446,7 @@ func DialClient(internal *sshserver.Server, cfg Config) (*ssh.Client, []io.Close
 	}
 	client, err := sshclient.Handshake(ctx, conn, addr, clientCfg)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("ssh handshake: %w", err)
+		return nil, nil, "", fmt.Errorf("ssh handshake %s: %w (%s)", addr, err, authSummary(r))
 	}
 	return client, nil, "remote", nil
 }

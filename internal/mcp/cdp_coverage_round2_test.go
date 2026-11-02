@@ -241,3 +241,74 @@ func TestHumanBytesCoversEveryScale(t *testing.T) {
 		}
 	}
 }
+
+// TestATargetListKeepsTheURLFromEatingTheTable pins issue #249.3.
+//
+// A devtools url carries the page's whole query string, so one tracking-heavy page can
+// be a kilobyte on its own: every row below it stops lining up, and a caller reading with
+// a small `bytes_limit` gets the LIST cut rather than the url that caused it. The fix is
+// at the shared renderer, so `ls <peer>` and the attach receipt get the same bound.
+//
+// The assertion is about the ROW, not the whole reply: a long url must be shortened with
+// a visible ellipsis, and a short one must be untouched — the second half is what keeps
+// this from being satisfied by truncating everything.
+func TestATargetListKeepsTheURLFromEatingTheTable(t *testing.T) {
+	long := "https://example.test/dashboard?utm_source=" + strings.Repeat("x", 400)
+
+	// fakeCdpWithURL answers each target with the url the caller names.
+	fakeCdpWithURL := func(t *testing.T, url string) string {
+		t.Helper()
+		up := websocket.Upgrader{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/json/version" {
+				_, _ = w.Write([]byte(`{"webSocketDebuggerUrl":"ws://` + r.Host + `/devtools/browser/x"}`))
+				return
+			}
+			conn, err := up.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			for {
+				var frame map[string]any
+				if err := conn.ReadJSON(&frame); err != nil {
+					return
+				}
+				if m, _ := frame["method"].(string); m == "Target.getTargets" {
+					_ = conn.WriteJSON(map[string]any{
+						"id": frame["id"],
+						"result": map[string]any{"targetInfos": []any{
+							map[string]any{"targetId": "T1", "type": "page", "title": "A", "url": url},
+						}},
+					})
+					continue
+				}
+				_ = conn.WriteJSON(map[string]any{"id": frame["id"], "result": map[string]any{}})
+			}
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+
+	layout := func(t *testing.T, url string) string {
+		t.Helper()
+		s := newTestServer(t)
+		internalSession(t, s)
+		h := handleFrom(t, termText(t, s, map[string]any{"cmd": "open internal cdp " + fakeCdpWithURL(t, url)}))
+		defer termText(t, s, map[string]any{"cmd": "close " + h})
+		return termText(t, s, map[string]any{"cmd": "ls " + h})
+	}
+
+	out := layout(t, long)
+	if strings.Contains(out, long) {
+		t.Errorf("a %d-character url was rendered whole, so the list cannot line up:\n%s", len(long), out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("the url was shortened without saying so; a caller cannot tell it from the real one:\n%s", out)
+	}
+
+	short := "https://example.test/a"
+	if got := layout(t, short); !strings.Contains(got, short) {
+		t.Errorf("a %d-character url was shortened; the bound must not touch short ones:\n%s", len(short), got)
+	}
+}
