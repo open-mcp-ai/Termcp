@@ -552,6 +552,8 @@
 
 - **提示会教正确的做法，不只是说「不对」（#242）**。`--argv` 遇到 shell 语法时，报错不再只说「这是一条命令行」，而是给出能照抄的注入写法（`--argv sh -c $1` 加 args）。MCP instructions 补了两条选型事实：回复是类 HTTP 的信封（`TERM/1 <code>` + 状态头 + body），以及非交互任务该用 pipe（无回显、退出码可观察）、pty 只为 TUI 和交互提示存在（没有结束信号，读到的是采样）。
 - **`bytes_limit` 是 `term` 的统一合同，不再因指令而异（#209）**。生成式回包原来只在调用方写了 `generatedSlot` 的地方才按窗口切：`help <node>`、`ls task`、`cdp protocol` 等裸 slot 返回了整段正文不管多小；现在一个统一的出口守卫对所有 2xx 内容做同样的裁剪并附同样的事实头（`Truncated`, `Content-Range`），而 202 回执、204/206 已有自述的 slot、4xx/5xx 诊断不被窗口切——它们被切了就不再是一个能照着做事的答复。同时还了三个债：删掉从未被消费的 `on_time_overflow`（公布、校验、写进结构体，没人读）；把 `mcp recv` 的 1 MiB 接收下限写进 `bytes_limit` 的说明；把 `bytes_limit: 0` 在“通道/生成式/帧”三条路上的真实含义分别写明，而不是一句「the channel only」。新测试从三个不调用任何 helper 的裸 slot 出发，把出口守卫拿掉就会变红。
+- **SFTP 引擎按会话复用，不再每次文件操作重新握手（#244）**。每个文件 handler 原来都 `sftp.NewClient` 一次、返回时关掉：SSH 开通道、请求 subsystem、SFTP INIT/VERSION，三个往返在发出第一个字节之前花掉。在 350ms RTT 的链路上量得引擎 526ms、894 字节上传 879ms——issue 报的 KB 级文件里，握手是墙钟时间的大头，而且与传输内容无关。现在一个会话一个引擎，会话 DEAD 时随它回收；借用主机的 transport 是请求级租约，所以仍然每次自开自关，否则下一个调用会拿到一条已释放的连接。共用的引擎交出去的是视图，它的 `Close` 是空操作，所以十二个 handler 里现有的 `defer sftpCli.Close()` 不用改，也不可能把别人的引擎关掉。**写文件本身的四个往返不在修复范围内**：open/write/close/rename 是一次原子写的价格；而 issue 怀疑的「分块上传」在 32 KiB 以下从来没有发生过，894 字节一直就是一个 WRITE（已测）。需要把大文件算成时间而不是往返数时，走上传 URL 或 scp，不是控制通道。
+
 
 - **`bytes_limit` 是 `term` 的统一合同，不再因指令而异（#209）**。生成式回包原来只在调用方写了 `generatedSlot` 的地方才按窗口切：`help <node>`、`ls task`、`cdp protocol` 等裸 slot 返回了整段正文不管多小；现在一个统一的出口守卫对所有 2xx 内容做同样的裁剪并附同样的事实头（`Truncated`, `Content-Range`），而 202 回执、204/206 已有自述的 slot、4xx/5xx 诊断不被窗口切——它们被切了就不再是一个能照着做事的答复。同时还了三个债：删掉从未被消费的 `on_time_overflow`（公布、校验、写进结构体，没人读）；把 `mcp recv` 的 1 MiB 接收下限写进 `bytes_limit` 的说明；把 `bytes_limit: 0` 在“通道/生成式/帧”三条路上的真实含义分别写明，而不是一句「the channel only」。新测试从三个不调用任何 helper 的裸 slot 出发，把出口守卫拿掉就会变红。
 
