@@ -108,6 +108,10 @@ type Server struct {
 	// evicted. Bounded by the number of channels this process has read; an LRU is
 	// the right shape if a daemon ever outlives thousands of them.
 	closedReads sync.Map // key string -> int64
+
+	// ptyQuiet is a bounded learner per channel (see pty_quiet.go). It is dropped
+	// on channel close and on session DEAD.
+	ptyQuiet *quietTrackers
 }
 
 // Option customizes a Server at construction time. Options keep New's signature

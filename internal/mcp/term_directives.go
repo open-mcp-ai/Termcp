@@ -825,22 +825,16 @@ func (s *Server) directiveKey(ctx context.Context, stmt directive.Statement, win
 	return []envelope.Slot{{Code: 204, Headers: map[string]string{"Path": stmt.Path}}}
 }
 
-// ptyQuiet is how long a pty's stream must stand still before a wait calls the
-// command done.
-//
-// MEASURED, NOT GUESSED. One `echo` on a PowerShell with an oh-my-posh profile
-// arrives as five chunks spread over 1.1s: the echo of the typed line at 120ms,
-// a first repaint at 510ms, the command's own output at 940ms. The gaps between
-// chunks reach 430ms, so a shorter grace ends the wait on the echo alone and the
-// reply looks like a command that printed nothing. 500ms covers the widest gap
-// this shell showed and still ends a fast command in about a quarter of the 2s
-// window a caller typically passes.
-const ptyQuiet = 500 * time.Millisecond
-
 // ptyPoll is how often the wait asks the stream how long it is. The wait is a
 // poll rather than a subscribe because the length is already tracked per channel
 // and asking for it is cheaper than registering a second reader that would then
 // swallow bytes meant for `read`.
+//
+// IT IS ALSO THE RESOLUTION OF THE LEARNED THRESHOLD: a gap is measured between
+// two polls, so a real gap is under-reported by up to one ptyPoll. That is the
+// safe direction (the threshold comes out slightly tight, and ptyQuietFactor's
+// margin absorbs it), but it means a threshold cannot honestly go below this —
+// which is why ptyQuietMin sits at 100ms and not at the poll interval.
 const ptyPoll = 20 * time.Millisecond
 
 // pipeQuiet is how long a pipe's stream must stand still before a wait on a
@@ -849,10 +843,10 @@ const ptyPoll = 20 * time.Millisecond
 // SHORTER THAN ptyQuiet ON PURPOSE, because the two streams are not the same
 // thing. A pty interposes a line discipline and, on the shells that reach a
 // caller here, a prompt that repaints itself in several chunks over a second —
-// ptyQuiet is sized for those gaps. A pipe is a byte stream from a child this
-// server started: a command's output lands as it is written, with no repaint and
-// no echo of the typed line to survive, so the gap it must outlast is one write
-// and not five.
+// ptyQuiet is sized for those gaps, and a pty channel learns its own from there
+// (pty_quiet.go). A pipe is a byte stream from a child this server started: a
+// command's output lands as it is written, with no repaint and no echo of the
+// typed line to survive, so the gap it must outlast is one write and not five.
 //
 // IT IS A CALIBRATION, NOT A LAW. Raise it if a command's output ever arrives
 // split across two replies; `read` returns the rest either way, and that is what

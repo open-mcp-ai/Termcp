@@ -328,9 +328,19 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 	if limit <= 0 {
 		return false
 	}
+	// THE THRESHOLD IS READ ONCE, AT ENTRY.
+	//
+	// A gap observed during this wait must not shorten this wait: the command that
+	// produced it may still have a chunk coming, and ending on the evidence of the
+	// first two chunks is exactly the truncation the threshold exists to avoid. What
+	// was learned here is for the NEXT command on this channel, which is the whole
+	// point of a per-channel learner — the second `run` is cheaper than the first.
+	tracker := s.quietTracker(handle)
+	quiet := tracker.threshold()
 	deadline := time.Now().Add(limit)
 	last := start
 	var still time.Time
+	var prevChunk time.Time
 	ticker := time.NewTicker(ptyPoll)
 	defer ticker.Stop()
 	for {
@@ -347,6 +357,10 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 		}
 		switch {
 		case now != last:
+			if !prevChunk.IsZero() {
+				tracker.observe(time.Since(prevChunk))
+			}
+			prevChunk = time.Now()
 			last, still = now, time.Time{}
 			// THE REPLY CANNOT GROW, SO WAITING BUYS NOTHING.
 			//
@@ -367,7 +381,7 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 		default:
 			if still.IsZero() {
 				still = time.Now()
-			} else if time.Since(still) >= ptyQuiet {
+			} else if time.Since(still) >= quiet {
 				return false
 			}
 		}

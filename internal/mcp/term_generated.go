@@ -372,6 +372,9 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 		// the channel: handles are minted monotonically, so nothing ever reclaims the
 		// entry and a long-lived instance grows one per channel it ever opened.
 		s.dropRecvCursor(stmt.Target)
+		// The learned quiet threshold goes with the channel too: it describes a
+		// process that no longer exists.
+		s.dropQuietTracker(stmt.Target)
 		return closedSlot(stmt, stmt.Target, name)
 	}
 
