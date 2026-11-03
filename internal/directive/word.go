@@ -544,6 +544,22 @@ func literalWord(src string, w *syntax.Word) (string, bool) {
 	return wordLiteral(src, w), true
 }
 
+// takesRestValue reports whether THIS statement carried a flag whose value is the
+// rest of the line — the other way a caller hands a whole command line to a directive
+// (issue #208.3).
+//
+// The question is asked about a statement rather than about the op because every
+// directive with a RestValue flag makes it optional: `open internal --pty` has no argv
+// and must not be blamed for the `&` that ended the line.
+func (op Op) takesRestValue(st Statement) bool {
+	for _, name := range op.RestValue {
+		if _, ok := st.Flag(name); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // SplitArgv turns a --argv value into the executable and its arguments.
 //
 // Words are read with the shell's own grammar, so quoting groups the way a
