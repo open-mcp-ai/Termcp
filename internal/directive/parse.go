@@ -256,13 +256,21 @@ func trailingPayloadOp(stmts []Statement) string {
 	if len(stmts) == 0 {
 		return ""
 	}
-	n := stmts[len(stmts)-1].Op
-	op, known := Lookup(n)
+	last := stmts[len(stmts)-1]
+	op, known := Lookup(last.Op)
 	if !known {
 		return ""
 	}
 	if op.hasPayload() {
 		return op.Name
+	}
+	// A RestValue flag is the other slot that swallows the rest of the line (issue
+	// #208.3). `open internal --argv cmd.exe /c echo OUT & exit 7` splits at the `&`,
+	// so `exit` is read as a directive name and the failure looks like a typo rather
+	// than a line that ended early. The reply can only name the operator if it knows
+	// which statement owned the words, and --argv is that owner.
+	if op.takesRestValue(last) {
+		return op.Name + " --" + op.RestValue[0]
 	}
 	return ""
 }
