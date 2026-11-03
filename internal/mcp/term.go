@@ -599,19 +599,29 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	// common error of all.
 	body := derr.Msg
 	if derr.AfterPayload != "" {
-		// The failing statement followed a directive whose payload goes to a
-		// terminal, so the most likely cause is a `;` the caller meant as SHELL
-		// sequencing. Naming the fix beats naming the directive table: the caller
-		// did not misspell a directive, they wrote a shell command line in a slot
-		// that holds one directive.
-		// NO `&&` SUGGESTION. That advice is now wrong twice over: `&&` separates
-		// DIRECTIVES, so `run h:1 pwd && whoami` reads `whoami` as a directive name
-		// and fails the same way. A shell line goes through args, full stop.
-		body += fmt.Sprintf("\nHINT: %q follows a `%s`, whose payload is ONE VARIABLE REFERENCE. `;` and `&&` in\n"+
-			"cmd are termcp syntax — `;` separates statements and `&&` gates the next one — so a\n"+
-			"shell command line with its own operators belongs in args:\n"+
-			"  cmd: \"%s <channel> $1\"   args: [\"pwd; whoami\"]   or   args: [\"make && echo ok\"]",
-			derr.Op, derr.AfterPayload, derr.AfterPayload)
+		if strings.Contains(derr.AfterPayload, " --argv") {
+			// `&` ended the `--argv` word list and the remainder became a directive;
+			// name the operator as well as the slot. The whole cmd is rejected before
+			// any of it runs, so the caller can safely replace the operator with a
+			// shell-quoted argument or pass the line through `$1`.
+			body += fmt.Sprintf("\nHINT: `%s` ended at `&`; `&` is termcp's background operator, not part of --argv.\n"+
+				"To run a shell command line, pass it as one argument to a shell:\n"+
+				"  open <session> --argv sh -c $1   args: [\"echo OUT; exit 7\"]",
+				derr.AfterPayload)
+		} else {
+			// The failing statement followed a directive whose payload goes to a
+			// terminal, so the most likely cause is a `;` the caller meant as SHELL
+			// sequencing. Naming the fix beats naming the directive table: the caller
+			// did not misspell the directive, they wrote shell text in a slot holding
+			// one variable reference.
+			// NO `&&` SUGGESTION. That advice is wrong here: `&&` separates DIRECTIVES,
+			// and a shell line goes through args, full stop.
+			body += fmt.Sprintf("\nHINT: %q follows a `%s`, whose payload is ONE VARIABLE REFERENCE. `;` and `&&` in\n"+
+				"cmd are termcp syntax — `;` separates statements and `&&` gates the next one — so a\n"+
+				"shell command line with its own operators belongs in args:\n"+
+				"  cmd: \"%s <channel> $1\"   args: [\"pwd; whoami\"]   or   args: [\"make && echo ok\"]",
+				derr.Op, derr.AfterPayload, derr.AfterPayload)
+		}
 	}
 	if derr.Parsed > 0 {
 		body += fmt.Sprintf("\nnothing was executed, including the %d statement(s) before this one: a cmd is parsed in full before any of it runs", derr.Parsed)
