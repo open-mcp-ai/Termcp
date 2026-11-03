@@ -198,13 +198,6 @@ var ops = []Op{
 			"source", "target", "targets", "command", "args", "url", "headers", "allow", "paths",
 			"notes", "enabled", "resident", "forwards", "link-path", "mode", "op", "idle-timeout",
 			"template", "values"},
-		// THE LABEL IS RETIRED, NOT MERELY IGNORED. An extension used to take a
-		// --kind (mcp/skill/prompt) that changed nothing at runtime: what it does is
-		// already in --command, --url, --paths, --forwards and --mode. Accepting the
-		// flag and dropping it would let a caller believe they had chosen a behaviour.
-		RetiredFlags: map[string]string{
-			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
-		},
 		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "create host|ext|alias <name> [flags]   |   create <session> file <path> [--target <path-it-points-at> [--op link]]",
@@ -217,9 +210,6 @@ var ops = []Op{
 			"jump-host", "jump-user", "jump-port", "jump-password", "jump-private-key", "jump-key-passphrase",
 			"target", "targets", "command", "args", "url", "headers", "allow", "paths", "notes", "enabled",
 			"forwards", "restart", "resident", "idle-timeout", "template", "values"},
-		RetiredFlags: map[string]string{
-			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
-		},
 		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "restart", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "edit host|ext|alias <name> [flags]",
