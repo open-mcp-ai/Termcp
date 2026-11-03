@@ -315,12 +315,16 @@ func numberLines(body string, first int) string {
 		if i < 0 {
 			break
 		}
-		fmt.Fprintf(&b, "%d\t%s\n", n, body[:i])
+		// A CARRIAGE RETURN IS NOT PART OF THE NUMBERED LINE (issue #208.6). A CRLF
+		// file numbered by index put the '\r' at the end of every line, invisible in a
+		// terminal and copied into the caller's next write as a stray byte. The
+		// terminator is stripped, the number prefixed, and the line emitted with '\n'.
+		fmt.Fprintf(&b, "%d\t%s\n", n, strings.TrimSuffix(body[:i], "\r"))
 		body = body[i+1:]
 		n++
 	}
 	if body != "" {
-		fmt.Fprintf(&b, "%d\t%s", n, body)
+		fmt.Fprintf(&b, "%d\t%s", n, strings.TrimSuffix(body, "\r"))
 	}
 	return b.String()
 }
