@@ -383,19 +383,40 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	}
 
 	cmd, args := sshconfig.EffectiveCommand(ent, ext.Command, ext.Args)
+	// THE TARGET OF A url TEMPLATE IS THE MACHINE THE CONNECTION LEAVES FROM (#233).
+	// It is not where the process runs: what runs on the channel is termcp's own
+	// bridge, an in-process command only the built-in loopback server knows. So the
+	// session stays internal and the far host rides as `--via`, where the relay dials
+	// its requests inside that host's SSH connection.
+	//
+	// The profile is still loaded above, and still has to exist: a template naming a
+	// host nothing has configured should fail as "no such profile", not as a
+	// connection to somewhere else. What changes is only which machine CARRIES the
+	// channel.
+	bridgeVia := ""
+	if ext.URL != "" && !sshconfig.IsInternalName(ext.Target) {
+		bridgeVia = ext.Target
+	}
+	// A url TEMPLATE'S SESSION IS ALWAYS THE LOOPBACK ONE, because the thing that
+	// runs on its channel is termcp's built-in relay and nothing else serves it.
+	// The far host travels as `--via` instead, so the session is not "where the
+	// process is" but "where the relay stands" — which is this machine.
+	sessionHost := ext.Target
 	if ext.URL != "" {
-		// The endpoint form runs the in-process relay instead of a program: the
-		// template names a server, and what executes on the channel is termcp's own
-		// bridge (see internal/mcpbridge).
-		//
-		// That relay is termcp's own process, so the channel has to be the in-memory
-		// one: on a remote target this command would be looked up on the far host,
-		// where it does not exist. Refusing here rather than at dial is what turns
-		// "command not found" into a sentence about the template.
-		if ent.Kind != sshconfig.KindInternal {
-			return hostPlan{}, fmt.Errorf("url requires target = \"internal\": the bridge runs inside termcp, so the endpoint is reached from this host (not from %q)", ext.Target)
+		sessionHost = "internal"
+		switch {
+		case r.NoInternal:
+			return hostPlan{}, fmt.Errorf("url requires the built-in loopback profile, which is disabled on this instance")
+		case bridgeVia != "":
+			// The remote profile was loaded and validated above; drop its transport,
+			// because the session itself no longer dials it. `--via` re-dials it from
+			// the relay side, through the same pool.
+			ent = sshconfig.InternalEntry()
+			remote = nil
+		default:
+			// target = "internal" with a url: the loopback entry already loaded above.
 		}
-		cmd, args = bridgeCommand(ext)
+		cmd, args = bridgeCommand(ext, bridgeVia)
 	}
 	mode := sshconfig.EffectiveMode(ent, ext.Mode)
 	rows, cols := ext.Rows, ext.Cols
@@ -408,11 +429,11 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// The container's name is the namespace it carries, so a leftover is
 	// recognizable in a manifest listing or a log line rather than being a session
 	// with a generated name and no owner.
-	name := ns.ForExtensions(ext.Target)
+	name := ns.ForExtensions(sessionHost)
 	return hostPlan{
 		config: session.Config{
 			Name:      name,
-			SSHConfig: ext.Target,
+			SSHConfig: sessionHost,
 			// The container has no terminal: rows and cols are the channel's, and the
 			// session record merely carries the conventional defaults.
 			Rows:         24,
@@ -448,8 +469,14 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 // relay's name, then the endpoint and its headers. Rendering happens here rather
 // than being stored because a stored argv is a second copy of the URL that can
 // drift from it — an edit would have to remember to rewrite both.
-func bridgeCommand(ext *Extension) (string, []string) {
+//
+// via names the machine the connection leaves from; empty means this one, which
+// is what `target = "internal"` says (#233).
+func bridgeCommand(ext *Extension, via string) (string, []string) {
 	args := []string{ext.URL}
+	if via != "" {
+		args = append(args, "--via", via)
+	}
 	for _, name := range sortedKeys(ext.Headers) {
 		args = append(args, "--header", name+"="+ext.Headers[name])
 	}

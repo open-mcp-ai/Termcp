@@ -87,7 +87,14 @@ func (r *Reconciler) groupNamed(key string) bool {
 // "the same calls are permitted", and no extension can reach past its own
 // template — which is the whole promise of the layer.
 func groupKey(ext *Extension) string {
-	return strings.TrimSpace(ext.Target) + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+	target := strings.TrimSpace(ext.Target)
+	if ext.URL != "" {
+		// A url extension runs its bridge on the loopback connection regardless of
+		// which host its requests leave from (#233). It groups with other internal
+		// extensions carrying the same capability set.
+		target = "internal"
+	}
+	return target + "\x00" + restrictionKey(ext.Allow, ext.Paths)
 }
 
 // restrictionKey renders a whitelist pair as a comparable string. Entries are
