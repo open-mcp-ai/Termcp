@@ -124,3 +124,24 @@ func TestMultiTargetAcquireAndIsolation(t *testing.T) {
 		t.Fatalf("expected 1 released instance, got %d", n)
 	}
 }
+
+// TestMixedForwardDirectionsValidateAndAreResident pins issue #235:
+// - A single template may declare local, remote, and dynamic forwards together.
+// - All three validate, and the extension becomes resident (Lazy() == false).
+func TestMixedForwardDirectionsValidateAndAreResident(t *testing.T) {
+	ext := Extension{Mode: "pipe"}
+	ext.Name = "mixed-stack"
+	ext.Target = "internal"
+	ext.Command = "true"
+	ext.Forwards = []ForwardDecl{
+		{Kind: ForwardLocal, LocalPort: 18080, RemotePort: 80, RemoteHost: "127.0.0.1"},
+		{Kind: ForwardRemote, LocalPort: 19090, RemoteHost: "10.0.0.5", RemotePort: 9090},
+		{Kind: ForwardDynamic, LocalPort: 10808},
+	}
+	if err := ext.Validate(); err != nil {
+		t.Fatalf("mixed local+remote+dynamic forwards failed validation: %v", err)
+	}
+	if ext.Lazy() {
+		t.Fatalf("extension with declared forwards must not be lazy (must be resident from startup)")
+	}
+}
