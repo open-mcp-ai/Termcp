@@ -12,11 +12,22 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/directive"
 )
 
+type policyPreviewKey struct{}
+
+func withPreviewMode(ctx context.Context) context.Context {
+	return context.WithValue(ctx, policyPreviewKey{}, true)
+}
+
+func previewMode(ctx context.Context) bool {
+	value, _ := ctx.Value(policyPreviewKey{}).(bool)
+	return value
+}
+
 // PreviewPolicy plans a request against a proposed policy. It deliberately does
 // not call runDirective, admission effects, Acquire, manager Touch, or task
 // creation.
 func (s *Server) PreviewPolicy(ctx context.Context, p auth.AgentPolicy, input auth.PolicyPreviewInput) auth.PolicyPreview {
-	ctx = auth.WithoutAudit(ctx)
+	ctx = withPreviewMode(auth.WithoutAudit(ctx))
 	out := auth.PolicyPreview{Requirements: []auth.PolicyPreviewRequirement{}}
 	var plan authorization.Plan
 	if input.Tool != "" {
@@ -63,7 +74,7 @@ func (s *Server) PreviewPolicy(ctx context.Context, p auth.AgentPolicy, input au
 				return out
 			}
 			plan.Requirements = append(plan.Requirements, part.Requirements...)
-			if bad := s.previewStatementResource(ctx, p, stmt); bad != "" {
+			if bad := s.previewStatementResource(ctx, p, stmt, win); bad != "" {
 				out.Resource = bad
 			}
 		}
@@ -87,14 +98,25 @@ func previewDecision(p auth.AgentPolicy, plan authorization.Plan, out auth.Polic
 			item.Reason = "operation changes shared configuration and requires all hosts"
 		} else if grant, ok := policy.Actions[req.Operation]; !ok {
 			item.Reason = "operation is not granted"
-		} else if grant.Effect != authorization.EffectAllow {
-			item.Reason = "operation is denied"
-		} else if grant.Constraints != nil {
-			if ok, reason := grant.Constraints.Satisfied(req.Evidence); !ok {
-				item.Reason = "constraint does not match: " + reason
+		} else {
+			item.Effect = string(grant.Effect)
+			switch grant.Effect {
+			case authorization.EffectAllow:
+			case authorization.EffectAsk:
+				item.Approval = true
+				out.ApprovalRequired = true
+			default:
+				item.Reason = "operation is denied"
+			}
+			if item.Reason == "" && grant.Constraints != nil {
+				if ok, reason := grant.Constraints.Satisfied(req.Evidence); !ok {
+					item.Reason = "constraint does not match: " + reason
+				}
 			}
 		}
-		item.Allowed = item.Reason == ""
+		if item.Reason == "" {
+			item.Allowed = true
+		}
 		out.Requirements = append(out.Requirements, item)
 		if !item.Allowed && out.Reason == "" {
 			out.Reason = fmt.Sprintf("%s: %s", item.Operation, item.Reason)
@@ -126,14 +148,14 @@ func (s *Server) previewToolResource(ctx context.Context, p auth.AgentPolicy, to
 	if tool == "" || tool == termToolName {
 		return ""
 	}
-	if _, bad := s.agentToolCheckV2(ctx, p, tool, request); bad != nil {
+	if _, bad, _ := s.agentToolCheckV2(ctx, p, tool, request); bad != nil {
 		return toolResultText(bad)
 	}
 	return ""
 }
 
-func (s *Server) previewStatementResource(ctx context.Context, p auth.AgentPolicy, stmt directive.Statement) string {
-	if bad := s.agentStatementCheckV2(ctx, p, stmt); bad != nil {
+func (s *Server) previewStatementResource(ctx context.Context, p auth.AgentPolicy, stmt directive.Statement, win termArgs) string {
+	if bad := s.agentStatementCheckV2(ctx, p, stmt, win); bad != nil {
 		return bad.Body
 	}
 	return ""

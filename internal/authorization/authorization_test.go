@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,30 @@ func TestCheckPlanDenyWins(t *testing.T) {
 	}})
 	if decision.Allowed || decision.Reason == "" {
 		t.Fatal("denied composite plan passed")
+	}
+}
+
+func TestCheckPlanReportsApprovalWithoutTreatingItAsDeny(t *testing.T) {
+	policy := Policy{Actions: map[string]Grant{
+		"shell.input":  {Effect: EffectAllow},
+		"shell.key":    {Effect: EffectAsk},
+		"shell.output": {Effect: EffectAllow},
+	}}
+	decision := CheckPlan(policy, Plan{Requirements: []Requirement{
+		{Operation: "shell.input"},
+		{Operation: "shell.key", Evidence: Evidence{Keys: []string{"enter"}, Repeat: 1}},
+		{Operation: "shell.output"},
+	}})
+	if !decision.Allowed || !decision.NeedsApproval || decision.Reason != "" {
+		t.Fatalf("ask decision = %+v", decision)
+	}
+	policy.Actions["shell.output"] = Grant{Effect: EffectDeny}
+	decision = CheckPlan(policy, Plan{Requirements: []Requirement{
+		{Operation: "shell.key", Evidence: Evidence{Keys: []string{"enter"}, Repeat: 1}},
+		{Operation: "shell.output"},
+	}})
+	if decision.Allowed || !strings.Contains(decision.Reason, "denied") {
+		t.Fatalf("deny did not win: %+v", decision)
 	}
 }
 
@@ -107,8 +132,11 @@ func TestValidateGrantRejectsUnknownAndMalformed(t *testing.T) {
 	if err := ValidateGrant("session.nope", Grant{Effect: EffectAllow}); err == nil {
 		t.Fatal("unknown operation accepted")
 	}
-	if err := ValidateGrant("session.start", Grant{Effect: "ask"}); err == nil {
+	if err := ValidateGrant("session.start", Grant{Effect: "approval"}); err == nil {
 		t.Fatal("unsupported effect accepted")
+	}
+	if err := ValidateGrant("session.start", Grant{Effect: EffectAsk}); err != nil {
+		t.Fatal("ask effect rejected:", err)
 	}
 	if err := ValidateGrant("shell.input", Grant{Effect: EffectDeny, Constraints: &Constraints{
 		Keys: []string{"enter"},
@@ -174,6 +202,21 @@ func TestCatalogMetadataIsCompleteAndRecipesReferenceKnownOperations(t *testing.
 			if !supports(op, parameter.Kind) {
 				t.Errorf("%s documents unsupported parameter %q", op.ID, parameter.Kind)
 			}
+		}
+	}
+	for _, id := range []string{"shell.input", "shell.key", "shell.exec", "shell.detect"} {
+		op, _ := Lookup(id)
+		if op.Risk == RiskHigh {
+			t.Errorf("core host operation %s is mislabeled high risk", id)
+		}
+	}
+	for _, id := range []string{"mcp.raw", "cdp.raw", "jrpc.raw", "profile.edit", "ext.create"} {
+		op, _ := Lookup(id)
+		if op.Risk != RiskHigh {
+			t.Errorf("configuration/raw operation %s risk = %q", id, op.Risk)
+		}
+		if op.Description == "" {
+			t.Errorf("operation %s has no description", id)
 		}
 	}
 	seen := map[string]bool{}

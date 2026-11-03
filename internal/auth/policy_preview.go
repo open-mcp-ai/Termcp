@@ -19,18 +19,21 @@ type PolicyPreviewInput struct {
 type PolicyPreviewRequirement struct {
 	Operation string `json:"operation"`
 	Name      string `json:"name"`
+	Effect    string `json:"effect,omitempty"`
 	Allowed   bool   `json:"allowed"`
+	Approval  bool   `json:"approval,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 }
 
 // PolicyPreview is the result of a non-executing authorization check.
 type PolicyPreview struct {
-	Allowed      bool                       `json:"allowed"`
-	Reason       string                     `json:"reason,omitempty"`
-	Requirements []PolicyPreviewRequirement `json:"requirements"`
-	Recipes      []string                   `json:"recipes,omitempty"`
-	Resource     string                     `json:"resource_error,omitempty"`
-	Executed     bool                       `json:"executed"`
+	Allowed          bool                       `json:"allowed"`
+	ApprovalRequired bool                       `json:"approval_required,omitempty"`
+	Reason           string                     `json:"reason,omitempty"`
+	Requirements     []PolicyPreviewRequirement `json:"requirements"`
+	Recipes          []string                   `json:"recipes,omitempty"`
+	Resource         string                     `json:"resource_error,omitempty"`
+	Executed         bool                       `json:"executed"`
 }
 
 // PolicyPreviewer is wired by the composition root after the MCP adapter exists.

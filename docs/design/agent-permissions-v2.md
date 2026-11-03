@@ -237,11 +237,13 @@ task 增加创建时绑定的 ResourceRefs，包含读端和写端的 host UUID�
 
 ## 10. 审批范围
 
-当前实现对要求资源审阅的 Agent 操作主动拒绝，由管理员在 WebUI 执行；V2 第一阶段继续这一行为，catalog 明确 approval_supported=false，UI 不提供不可用的“需审批”。
+`effect=ask` 现在是可保存的第三种权限效果：`deny`、`allow`、`ask`。目录返回 `approval_supported=true`，权限页把三者分开显示。`ask` 不会退化成 `allow`；约束不满足、资源不在主机范围、凭据已撤销或策略已收紧时仍然拒绝。
 
-以后支持 ask，至少需要：保存原 Agent/credential 和规范计划、固定审批意图、按当前策略重新复核、同时覆盖普通操作回放与 WebUI 直接 ChildShell 输入回放，并解决 staged text/key、无 session 建连以及结果交付。两个回放落点仍分别是 `internal/mcp/approval_gate.go:198` 和 `internal/webui/approval.go:253`。
+队列保存原工具或 DSL statement、参数、资源绑定、principal 和 credential。人批准时重新读取当前 token、主体、权限组和主机绑定，再按最初固定下来的操作重放；重放上下文只跳过“再次入同一审批队列”，不会跳过业务权限、资源或参数检查。主体停用、token 撤销、组被删除或配置锁定时，批准返回冲突并且没有副作用。
 
-这些完成以前，不允许仅增加 effect=ask 然后落入现有 withApproved(background) 路径。粒度升级与审批机制升级分开交付。
+带会话的请求由原生终端审阅面板承载。没有会话可归属的 `session.start`、`session.list` 等策略请求进入工作区顶部的同一套审批请求列表；两者都调用 `/api/approvals` 和同一个决定接口。列表不下发 opaque `payload`，浏览器只看到可审查的 `kind` 与 `summary`。
+
+审批通过后的工具操作同步完成；DSL statement 会恢复原 statement/window 并通过正常 directive 路径执行，shell 对命令的实际处理仍可能稍后完成。服务重启会清空内存中的待审批请求，不把旧批准或旧请求恢复成可执行状态。
 
 ## 11. 管理接口与 WebUI
 
@@ -319,20 +321,20 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 此表作为逐步实施的验收清单，尚未覆盖的目标见下一节。细粒度授权不会改变已授予终端/代理能力的系统本质，也不把接口权限开关宣传为进程沙箱。
 
 
-## 15. 首批适配的实际交付范围
+## 15. 当前实际交付范围
 
 本批实现当前动作策略可配置、可执行、可预览、可审计的完整纵向路径。没有更换 cookie/token，也没有迁移主机加密存储或加密会话。
 
-- `internal/authorization` 保存 86 个明确语义动作及纯 `CheckPlan`。未列出动作、未知动作、未知条件、`ask` 和条件不满足均拒绝。
+- `internal/authorization` 保存明确语义动作及纯 `CheckPlan`。未列出动作、未知动作、未知条件和条件不满足均拒绝；`ask` 允许进入审批队列。
 - `internal/capability/agent_plan.go` 统一识别内部工具的实际分支和有效参数；MCP Adapter 解析主机、namespace 与资源限制。DSL 的普通操作经原工具 Adapter；run、pipe、peer 等组合/直接调用另做完整预检。`run` 在输入前检查 input、key(enter)、output；建连检查 session.start、shell.open 和显式程序时的 shell.exec。
 - 文件动作分别授权，包括 realpath/readlink/statvfs 与 truncate/chmod/chown/chtimes。读写词面不决定权限。按键 keys/repeat_max、工具 tool_names、方法 methods、文件 forms/max_bytes 可设置；仅 catalog 声明过的条件可以保存。forms 使用 inline、local、pipe；replace 只支持 inline，不接受无法证明的整文件写入大小上限。普通 read file 不新增参数，也不改变已有参数含义；inline 使用既有 8 MiB 上限，local/pipe 只在正长度可证明时通过，否则保守拒绝。详情见 [文件操作权限](file-operation-permissions.md)。
 - 具名 MCP 工具、raw tools/call、`--send` 与 stdio batch 识别具体工具名。实际协议发送处再次核验解析结果；raw 许可不能覆盖已识别的禁用工具。stdio 发送前也检查其输入/Enter/实际读取需求；CDP 原生 attach/detach 与临时 attach/call/detach 分别核验。
 - 主机总范围沿用 stable profile identity。预检绑定 profile UUID、正文摘要以及 extension 模板/目标摘要；handler 按绑定重新加载，检查后改名可继续，删除重建或内容/target 替换则拒绝。复制在启动前检查两端；download/upload/copy 的 task 记录两端 HostID、namespace、read/write 角色。后续查看/取消依据保存的两端事实，不依赖展示路径或仍然存活的 session；没有完整归属的旧 task 拒绝。
 - Agent 主机摘要隐藏 private_key、proxy、default_shell 原文，改为存在标志。扩展摘要保留使用说明及能力元数据，隐藏 command/args/URL/headers；投影在内部工具结果及日志格式化之前。列表过滤主机和 namespace；会话列表按 shell.list/peer.list 隐藏未授权的子项。当前动作权限统一使用摘要投影和转发列表作用域检查。
-- guard 的资源检查只做 lookup；工具实际通过 admission 后才续租，避免预检或拒绝操作续租。Agent 对需要资源审阅的操作继续拒绝，不进入管理员回放路径。
+- guard 的资源检查只做 lookup；工具实际通过 admission 后才续租，避免预检或拒绝操作续租。Agent 的 `ask` 操作保存规范参数和资源绑定，由人批准后按当前身份与策略重放。
 - `/permissions` 提供动作树、参数条件、主机范围、可达面/风险/依赖标签和只读 DSL 预览。预览逐项解释缺少的动作，但不建连、不 acquire、不续租、不创建 task。权限组、主体、默认组、角色入口和凭据变更写入结构化审计；拒绝记录动作与原因且不记录秘密。
 - 策略仍保存在现有认证密文。HTTP 与重新加载都拒绝未知策略字段；schema_version 未识别时校验失败。已有 token 继续动态读取当前策略。
 
-本批没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、词汇分配/子用户组继承、Agent 审批回放。对应控件和不支持的条件不会假装可用。直接协议发送在解析后再次判定，不把一次预检当作可复用的绕过凭据。
+当前没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、词汇分配/子用户组继承。对应控件和不支持的条件不会假装可用。直接协议发送在解析后再次判定，不把一次预检当作可复用的绕过凭据。
 
 验证覆盖真实 HTTP/SSE 认证入口、原始与具名工具形式、拒绝前无副作用、别名、主机边界、任务双端、策略持久化和旧策略拒绝。完整测试与 stress 执行结果由本次变更交付记录说明。

@@ -41,9 +41,13 @@ func lookupGate(tool string) gate {
 // the operation was queued for a human and the reply reports that.
 func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult, bool) {
 	g := lookupGate(toolName)
-	ctx, bad := s.agentToolCheck(ctx, toolName, request)
-	if bad != nil {
-		return ctx, bad, false
+	var (
+		bad  *mcpgo.CallToolResult
+		held bool
+	)
+	ctx, bad, held = s.agentToolCheck(ctx, toolName, request)
+	if bad != nil || held {
+		return ctx, bad, held
 	}
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
 		return ctx, bad, false
@@ -74,7 +78,7 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 		return ctx, nil, false
 	}
 	sessionID := targetSessionID(request)
-	bad, held := s.gateOperation(ctx, request, toolName, sessionID)
+	bad, held = s.gateOperation(ctx, request, toolName, sessionID)
 	return ctx, bad, held
 }
 

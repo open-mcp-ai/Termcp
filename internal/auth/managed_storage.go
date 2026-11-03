@@ -178,11 +178,14 @@ func (m *Managed) loadLocked() error {
 	if state.Version != managedStateVersion {
 		return errors.New("unsupported permission state version")
 	}
-	repaired := repairAmbiguousAgentPolicies(&state)
+	changed := repairAmbiguousAgentPolicies(&state)
+	if upgradePresetGroups(&state) {
+		changed = true
+	}
 	if err := validateState(state, false); err != nil {
 		return err
 	}
-	if repaired {
+	if changed {
 		return m.save(state, false)
 	}
 	m.state = state

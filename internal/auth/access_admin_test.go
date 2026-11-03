@@ -66,11 +66,22 @@ func TestPermissionPresetsKeepRiskyActionsExplicit(t *testing.T) {
 		diagnostics.AllowsOperation("shell.input") || diagnostics.AllowsOperation("file.write") {
 		t.Fatal("diagnostics preset is not read-only")
 	}
+	operator := byID["host-operator"].Policy
+	for _, id := range []string{"shell.detect", "shell.exec", "shell.input", "shell.key", "session.start", "file.write", "forward.open.local", "alias.list"} {
+		if !operator.AllowsOperation(id) {
+			t.Errorf("host operator does not include %s", id)
+		}
+	}
 	for _, id := range []string{"profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "mcp.raw", "cdp.raw", "jrpc.raw"} {
 		for _, preset := range presets {
 			if preset.Policy.AllowsOperation(id) {
 				t.Errorf("preset %s implicitly grants high-risk action %s", preset.ID, id)
 			}
+		}
+	}
+	for _, id := range []string{"mcp.raw", "cdp.raw", "jrpc.raw", "profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "ext.delete", "alias.write", "alias.delete"} {
+		if operator.AllowsOperation(id) {
+			t.Errorf("host operator grants global or raw action %s", id)
 		}
 	}
 }

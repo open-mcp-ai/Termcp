@@ -44,7 +44,7 @@
 go run ./scripts/capability_audit -out dist/audits
 ```
 
-生成器保留可重复的源码文件、函数和调用表达式清单；历史版本中依赖未入库类型解析器生成的逐参数表达式 CSV 不再作为当前合同，旧提交中的文件可由 Git 历史追溯。
+生成器保留可重复的源码文件、函数和调用表达式清单；历史版本中依赖未入库类型解析器生成的逐参数表达式 CSV 不再作为当前合同，相关大型派生文件已从 Git 历史清理。
 
 “能力层”在当前代码中不是单一 package：本报告同时盘点 capability/ns/approval 等检查层、session/sshconfig/extensions/forward/sftp/transcript/jrpc/task 等业务层，以及适配器直接访问的 OS/IO。Go 全量清单覆盖项目的 34 个生产 package 的函数体及顶层初始化表达式；初始化节点明确以 $init 标记。普通错误格式化、HTTP 响应写入等不属于能力执行连接点，不列入连接点表，但不从全量调用 CSV 删除。不包含测试文件、第三方库内部或 OS 内核实现。浏览器侧覆盖应用 static/js 和 HTML 内联脚本，不解析第三方 vendor/xterm 库作为 Termcp 自身代码。
 

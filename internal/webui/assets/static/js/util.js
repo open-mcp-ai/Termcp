@@ -409,10 +409,11 @@ function showUiNotify(n) {
   if (isNaN(dur) || dur < 0) dur = 10;
   if (dur > 600) dur = 600;
   var sid = String(n.session_id || '');
+  var policyReview = !!(n.open_policy_approvals || (n.open_review && sid === 'policy'));
 
   var card = document.createElement('div');
   card.className = 'ui-notify-card ntf-' + level;
-  card._sessionId = sid;
+  card._sessionId = policyReview ? '' : sid;
   var titleEl = document.createElement('div');
   titleEl.className = 'ui-notify-title';
   titleEl.textContent = title;
@@ -421,7 +422,7 @@ function showUiNotify(n) {
   msgEl.textContent = message;
   card.appendChild(titleEl);
   card.appendChild(msgEl);
-  if (sid) {
+  if (sid && !policyReview) {
     var sessEl = document.createElement('div');
     sessEl.className = 'ui-notify-sess';
     sessEl.textContent = t('notify.sessionPrefix', { id: sid });
@@ -445,13 +446,18 @@ function showUiNotify(n) {
      pane) — which is exactly the set of cases a "go to this session" click has
      to cover. A notification about a minimized terminal is the common case, and
      opening a second window for it would be wrong. */
-  if (sid) {
+  if ((sid && !policyReview) || policyReview) {
     card.classList.add('ui-notify-clickable');
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
-    card.title = t('session.open.tip', { sid: sid });
+    card.title = policyReview ? t('notify.policyReviewTip') : t('session.open.tip', { sid: sid });
     var openSession = function (e) {
       if (e.target.closest('.ui-notify-close')) return;
+      if (policyReview) {
+        dismissUiNotify(card);
+        openPolicyApprovalMenu();
+        return;
+      }
       var snap = window._lastSessionsSnapshot || [];
       var name = '', dead = false;
       for (var i = 0; i < snap.length; i++) {
@@ -498,7 +504,7 @@ function showUiNotify(n) {
   }
   uiNotifyStackEl().appendChild(card);
 
-  markSessNotified(sid);
+  if (!policyReview) markSessNotified(sid);
   playNotifySound(level);
   browserSystemNotify(n);
 }

@@ -56,6 +56,21 @@
   .approval-actions { display: flex; gap: 6px; }
   .approval-actions .btn { padding: 4px 12px; font-size: 0.78rem; }
   .approval-state { font-size: 0.78rem; color: var(--text-muted); text-transform: capitalize; flex: 0 0 auto; }
+  .approval-header-count {
+    min-width: 17px; padding: 0 5px;
+    border: 1px solid var(--danger); border-radius: 999px;
+    background: var(--danger); color: var(--bg-card);
+    font: 700 0.67rem/17px var(--font-mono);
+    text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .policy-approval-panel { width: min(520px, calc(100vw - 24px)); }
+  .policy-approval-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 8px 4px; }
+  .policy-approval-head strong { display: block; color: var(--text-primary); font-size: 0.9rem; }
+  .policy-approval-head p { margin: 3px 0 0; color: var(--text-muted); font-size: 0.72rem; line-height: 1.45; }
+  .policy-approval-head button { flex: 0 0 auto; padding: 4px 7px; }
+  .policy-approval-head svg { display: block; }
+  #policy-approval-list { padding: 4px 8px 8px; }
+  .policy-approval-empty { padding: 22px 12px; color: var(--text-muted); text-align: center; font-size: 0.82rem; }
   /* Touch: the approver decides from a phone, so the buttons need real height,
      and they go back side by side — a narrow screen has no room to waste on a
      stacked pair, and 40px is a comfortable thumb target either way. */

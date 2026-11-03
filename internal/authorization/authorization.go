@@ -12,13 +12,15 @@ import (
 	"fmt"
 )
 
-// Effect is the single per-operation verdict. Only allow and deny exist today:
-// approval is delivered separately and cannot be encoded as a third effect.
+// Effect is the per-operation verdict. Ask permits the operation only after a
+// human approval; constraints still apply before the request enters the queue
+// and again when an approved operation is replayed.
 type Effect string
 
 const (
 	EffectAllow Effect = "allow"
 	EffectDeny  Effect = "deny"
+	EffectAsk   Effect = "ask"
 )
 
 // ConstraintKind names one typed condition a grant may attach to an operation.
@@ -138,37 +140,42 @@ type Evidence struct {
 
 // Decision is the outcome of checking a plan. Reason is empty on allow.
 type Decision struct {
-	Allowed bool
-	Reason  string
+	Allowed       bool
+	NeedsApproval bool
+	Reason        string
 }
 
 // CheckPlan requires every operation in the plan to carry an explicit allow grant
 // whose constraints all hold. Missing grants and deny grants both refuse.
 func CheckPlan(p Policy, plan Plan) Decision {
 	if len(plan.Requirements) == 0 {
-		return Decision{false, "the plan has no operation"}
+		return Decision{Allowed: false, Reason: "the plan has no operation"}
 	}
+	needsApproval := false
 	for _, req := range plan.Requirements {
 		if _, known := Lookup(req.Operation); !known {
-			return Decision{false, fmt.Sprintf("unknown operation %q", req.Operation)}
+			return Decision{Allowed: false, Reason: fmt.Sprintf("unknown operation %q", req.Operation)}
 		}
 		grant, ok := p.Actions[req.Operation]
 		if !ok {
-			return Decision{false, fmt.Sprintf("operation %q is not granted", req.Operation)}
+			return Decision{Allowed: false, Reason: fmt.Sprintf("operation %q is not granted", req.Operation)}
 		}
-		if grant.Effect != EffectAllow {
-			return Decision{false, fmt.Sprintf("operation %q is denied", req.Operation)}
+		if grant.Effect == EffectDeny {
+			return Decision{Allowed: false, Reason: fmt.Sprintf("operation %q is denied", req.Operation)}
+		}
+		if grant.Effect == EffectAsk {
+			needsApproval = true
 		}
 		if grant.Constraints != nil {
 			if grant.Constraints.Empty() {
-				return Decision{false, fmt.Sprintf("operation %q has ambiguous empty constraints", req.Operation)}
+				return Decision{Allowed: false, Reason: fmt.Sprintf("operation %q has ambiguous empty constraints", req.Operation)}
 			}
 			if ok, reason := grant.Constraints.Satisfied(req.Evidence); !ok {
-				return Decision{false, fmt.Sprintf("operation %q violates constraints: %s", req.Operation, reason)}
+				return Decision{Allowed: false, Reason: fmt.Sprintf("operation %q violates constraints: %s", req.Operation, reason)}
 			}
 		}
 	}
-	return Decision{Allowed: true}
+	return Decision{Allowed: true, NeedsApproval: needsApproval}
 }
 
 // Satisfied checks one set of constraints against resolved evidence. A set
@@ -257,7 +264,7 @@ var catalog = []Operation{
 	{ID: "shell.key", Family: "shell", Name: "Press keys", Resource: "shell.key",
 		ConstraintKinds: []ConstraintKind{KindKeys, KindRepeatMax}},
 	{ID: "shell.marks", Family: "shell", Name: "Read spans", Resource: "session.message"},
-	{ID: "shell.detect", Family: "shell", Name: "Detect environment", Resource: "shell.detect"},
+	{ID: "shell.detect", Family: "shell", Name: "Detect local Termcp shell", Resource: "shell.detect"},
 	{ID: "shell.reader.register", Family: "shell", Name: "Register readers", Resource: "shell.reader.register"},
 	{ID: "shell.reader.unregister", Family: "shell", Name: "Unregister readers", Resource: "shell.reader.unregister"},
 
@@ -389,13 +396,13 @@ func ValidateGrant(id string, grant Grant) error {
 	if !ok {
 		return fmt.Errorf("unknown operation %q", id)
 	}
-	if grant.Effect != EffectAllow && grant.Effect != EffectDeny {
+	if grant.Effect != EffectAllow && grant.Effect != EffectDeny && grant.Effect != EffectAsk {
 		return fmt.Errorf("operation %q has an unknown effect %q", id, grant.Effect)
 	}
 	if grant.Constraints == nil {
 		return nil
 	}
-	if grant.Effect == EffectAllow && grant.Constraints.Empty() {
+	if grant.Effect != EffectDeny && grant.Constraints.Empty() {
 		return fmt.Errorf("operation %q has empty constraints; omit constraints for an unrestricted allow", id)
 	}
 	if grant.Effect == EffectDeny && !grant.Constraints.Empty() {

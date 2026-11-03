@@ -29,7 +29,7 @@ import (
 // — info, ps, span — would otherwise be reachable across namespaces, which is
 // exactly the isolation this feature promises.
 func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win termArgs) (result []envelope.Slot) {
-	if bad := s.agentStatementCheck(ctx, stmt); bad != nil {
+	if bad := s.agentStatementCheck(ctx, stmt, win); bad != nil {
 		return []envelope.Slot{*bad}
 	}
 	// Direct peer/copy/info paths do not all pass through a tool wrapper. Renew

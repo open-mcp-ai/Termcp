@@ -79,9 +79,9 @@
 | --- | --- | --- | --- |
 | 未授权 / No access | 静态帮助；业务动作空集合 | 全部业务动作 | 初始缺省组；新身份尚未获人授权。 |
 | 资源观察 / Viewer | 主机摘要、会话/通道状态、扩展摘要列表、任务进度；使用安全元数据投影 | 文件内容、终端输出、输入、执行、配置修改、网络转发、原始协议 | 查看资源是否存在和运行。 |
-| 只读诊断 / Diagnostics reader | Viewer，加终端 output/marks 和文件读取/属性/路径查询 | 输入/Enter/exec、文件修改、reader 管理、启动/重建扩展、配置变更 | 诊断人工已分配的可达资源；能读取业务内容，不能称为无数据访问风险。 |
-| 文件维护 / File maintainer | 只读诊断，加 inline write/replace/mkdir | delete/rename/truncate/chmod/chown/chtimes/link、终端执行、本地中转、代理/转发、配置定义 | 更新文件内容；不是进程沙箱，修改被其他程序执行的文件仍可能产生后续影响。 |
-| 主机运维 / Host operator | 诊断能力，加建连、开关通道、显式程序、input/key/resize、reader 管理、会话停止；沿用文件维护范围 | 会话永久删除、文件破坏/属性动作、主机/扩展定义、组与 token 管理、raw/CDP/MCP 任意调用、转发 | 操作已授权主机。终端执行具有目标 OS 账号的实际能力，不能靠关闭 file.delete 阻止 shell rm。 |
+| 只读诊断 / Diagnostics reader | Viewer，加本机 shell 检测、终端 output/marks 和文件读取/属性/路径查询 | 输入/Enter/exec、文件修改、reader 管理、启动/重建扩展、配置变更 | 诊断人工已分配的可达资源；`shell.detect` 只检查 Termcp 本机，不探测远端主机。 |
+| 文件维护 / File maintainer | 只读诊断，加 inline write/replace/mkdir | delete/rename/truncate/chmod/chown/chtimes/link、终端执行、代理、转发、配置定义 | 更新文件内容；不是进程沙箱，修改被其他程序执行的文件仍可能产生后续影响。 |
+| 主机运维 / Host operator | 诊断与文件维护，加建连、通道、显式程序、input/key/resize、reader、常用文件写删/属性、转发、已配置扩展、任务取消、通知、`alias.list` | 会话永久删除、主机/扩展定义、凭据、组与 token 管理、别名写删、raw/MCP/CDP/JSON-RPC 任意调用 | 操作已授权主机。终端执行具有目标 OS 账号的实际能力，不能靠关闭 file.delete 阻止 shell rm。 |
 
 系统管理员 / Owner 保留为受保护的人端身份，管理账号、权限组、凭据和配置；**不能把 Agent 加入某个名为 Owner 的组就变成 RoleAdmin**。权限管理员、审计员等人端受限角色，需先完成相应管理动作门禁与审计数据，后续再提供；本轮不展示可选但实际仍拥有全部管理员权限的假角色。
 
@@ -90,9 +90,9 @@
 建议的明确动作集合：
 
 - Viewer：`profile.list/get`、`session.list/info`、`shell.list`、`ext.list`、`task.list/info`。此处斜线表示分别存储对应明确 ID。
-- Diagnostics reader 增加：`shell.output/marks`、`file.read/stat/realpath/readlink/getwd/statvfs`。
+- Diagnostics reader 增加：`shell.output/marks/detect`、`file.read/stat/realpath/readlink/getwd/statvfs/urls`。
 - File maintainer 增加：`file.write/replace/mkdir`；read/write forms 为 inline，replace 为 inline。
-- Host operator 增加：`session.start/terminate`、`shell.open/close/exec/input/key/resize/reader.register/reader.unregister`、`user.notify`。
+- Host operator 增加：`session.start/terminate`、完整终端操作、常用文件与转发操作、`ext.get/use/release/retry`、`task.cancel`、`user.notify`、`alias.list`。
 - 未列出的所有动作均拒绝。集合必须展开为当前目录中的 ID 后持久化，不保存这些缩写或通配符。
 
 只读组不能自行建连这一点要在界面说明。它需要可达会话或扩展资源；当前 namespace 上限仍有效。不能为了让“只读”组看起来能工作而隐式加上启动程序或改成共享管理员会话。资源分配与组内是否共享会话，需要独立明确合同。
@@ -212,7 +212,7 @@ Repository 和 Store 都要遵循同一流程；只解开 Store.mu，仍会被 R
 ## 9. 关联 RFC 与本轮之外的保留项
 
 - #196 的子用户 allow/reject 与专属词汇，#197 的多组、子凭据、父子撤销链继续经统一 PolicyResolver 接入；本轮不重新设计签发协议。
-- #197 的 allow/deny/approval 不表示当前 effect=ask 已可用。现有 Agent 审阅操作拒绝策略继续；审批回放必须绑定冻结意图并按原调用者权限复核后另行交付。
+- #197 的 allow/deny/approval 现在映射为显式 `allow / deny / ask`。`ask` 绑定冻结的请求、原 principal/credential 与资源事实；批准时按当前 token、主体、组和主机边界重新复核后执行。带 session 的请求使用原生终端审阅面板，无 session 的策略请求使用工作区顶部列表。
 - [#214](https://github.com/open-mcp-ai/Termcp/issues/214) 是 RFC/原型，不能当成已经合并的实现规范。其冻结 Intent、管理材料保护及授权管理隔离值得纳入后续安全评审。
 - #214 提出改口令撤销全部 token；当前 `Managed.ChangePassword` 只清 Web Sessions，并跳过 token 请求取消。建议统一为“管理员主密码变更默认撤销全部认证凭据”，但这是一项额外的凭据生命周期变更，需连同客户端重新签发、退出行为和文档一起交付，不能夹在重启 cookie 修复中悄悄改变。
 - [#180](https://github.com/open-mcp-ai/Termcp/issues/180) 的“默认 WebUI 无鉴权”描述不能直接套到当前默认 managed 模式：当前 Wrap 已执行登录、入口权限和 CSRF 检查。应保留这些已实现保护，并单独描述用户主动选用 legacy/open 模式的行为。

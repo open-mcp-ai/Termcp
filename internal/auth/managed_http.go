@@ -527,6 +527,13 @@ func (m *Managed) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.UnlockVault(input.Password, input.Automatic); err != nil {
+		m.mu.Lock()
+		credential := m.credential
+		m.mu.Unlock()
+		if credential != nil && m.verifyLoginPassword(credential.PasswordHash, input.Password) {
+			authError(w, 400, "That password matches the login account, but not the configuration encryption key. Login and configuration passwords are independent; changing the login password does not change configuration encryption. Use Configuration encryption settings with both passwords when they need to match.")
+			return
+		}
 		authError(w, 400, "Configuration unlock failed. Check the configuration password and encrypted data.")
 		return
 	}

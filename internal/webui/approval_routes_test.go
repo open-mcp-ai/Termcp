@@ -371,6 +371,34 @@ func TestApprovalListEndpoint(t *testing.T) {
 	}
 }
 
+func TestPolicyApprovalsUseTheSameListAndDecisionRoutes(t *testing.T) {
+	e := newApprovalEnv(t)
+	request := approval.Request{
+		ID: "policy-request", SessionID: "policy", Kind: "session.list",
+		Summary: "list sessions [session.list]", State: approval.Pending, Need: 1,
+		Payload: []byte("must-not-reach-browser"),
+	}
+	e.handler.PolicyApprovals = func() []approval.Request { return []approval.Request{request} }
+	var decided approval.Request
+	e.handler.DecidePolicyApproval = func(id string, approve bool, reason string) (approval.Request, error) {
+		if id != request.ID || !approve || reason != "checked" {
+			t.Fatalf("decision = %q %v %q", id, approve, reason)
+		}
+		request.State = approval.Approved
+		decided = request
+		return request, nil
+	}
+
+	rr := e.do(t, http.MethodGet, "/api/approvals", "")
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "must-not-reach-browser") {
+		t.Fatalf("policy approval list leaked payload: %d %s", rr.Code, rr.Body.String())
+	}
+	rr = e.do(t, http.MethodPost, "/api/approvals/"+request.ID+"/approve", `{"reason":"checked"}`)
+	if rr.Code != http.StatusOK || decided.ID != request.ID {
+		t.Fatalf("policy decision = %d %s, decided=%+v", rr.Code, rr.Body.String(), decided)
+	}
+}
+
 // An unknown pending id is a 404, not a silent success.
 func TestApprovalDecisionUnknownID(t *testing.T) {
 	e := newApprovalEnv(t)

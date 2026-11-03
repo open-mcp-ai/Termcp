@@ -123,7 +123,8 @@ termcp <subcommand> [action] [flags]
 | `daemon stdio` | 与 `start` 相同，然后留在前台当该实例的 stdio 桥（可选端点值紧跟动作：`termcp daemon stdio sse`）。它拉起的实例在没有桥连接时开始倒计时。 |
 | `daemon stop` | 请求后台实例优雅停机；只有守护实例接受——手动实例会被指回它被启动的地方。 |
 | `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。它是被动查询，它自己的请求不计入空闲倒计时，所以询问不会让它汇报的实例活着。 |
-| `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；能自动解锁时报告 catalog revision 与密文 profile 数，否则明确显示 `encrypted (locked)`。 |
+| `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；识别当前 `local-state` 与旧文件布局，能自动解锁时报告 catalog revision 与密文 profile 数，否则明确显示锁定状态。 |
+| `config-storage verify-password` | 从终端或 stdin 读取配置加密密码，只验证当前布局中的密码槽；不获取 daemon 写锁、不改变持久状态。 |
 | `config-storage rotate-key` | 仅为不含密码派生的旧密钥环保留兼容入口；密码派生存储会拒绝执行，并要求在 WebUI 用“当前密码、新密码、确认新密码”修改主密钥。 |
 
 每个 daemon 动作都经 HTTP 找它的实例，**从不查进程表**——实例在哪里监听就能在哪里找到。
@@ -157,6 +158,7 @@ UTF-8 字节。密码不会写入日志、URL、浏览器存储或 argv；关闭
 # 容器：可选注入一个稳定保存的自动解锁 KEK
 export TERMCP_CONFIG_KEK="$(openssl rand -base64 32)"
 termcp config-storage status --data-dir ~/.termcp
+termcp config-storage verify-password --data-dir ~/.termcp
 ```
 
 `TERMCP_CONFIG_KEK` 不是 Main Key，也不是用户密码。它只是额外的自动解锁封装密钥；

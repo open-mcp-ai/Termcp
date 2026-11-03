@@ -196,7 +196,7 @@ function closeLangMenu() { setLangMenuOpen(false); }
  *  closes the rest, which is also what the reader meant by the second click. */
 function closeHeaderMenus(except) {
   if (except !== 'lang') closeLangMenu();
-  ['theme-switch', 'clients-menu'].forEach(function (id) {
+  ['theme-switch', 'clients-menu', 'approval-menu'].forEach(function (id) {
     if (except === id) return;
     var d = document.getElementById(id);
     if (d && d.open) d.open = false;
