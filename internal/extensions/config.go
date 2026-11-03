@@ -596,9 +596,6 @@ func (e *Extension) Validate() error {
 	if e.Resident && strings.TrimSpace(e.IdleTimeout) != "" {
 		return fmt.Errorf("resident = true and idle_timeout are alternatives: a resident extension is up from startup and stays up, so an idle collection window has nothing to apply to (remove idle_timeout or drop resident = true)")
 	}
-	if e.Resident && strings.TrimSpace(e.IdleTimeout) != "" {
-		return fmt.Errorf("resident = true and idle_timeout are alternatives: a resident extension is up from startup and stays up, so an idle collection window has nothing to apply to (remove idle_timeout or drop resident = true)")
-	}
 	if _, err := e.IdleTimeoutDuration(); err != nil {
 		return err
 	}
