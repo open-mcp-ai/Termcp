@@ -95,13 +95,26 @@ type Extension struct {
 	// IdleTimeout closes the channel after this long with nothing asked of it.
 	//
 	// IT APPLIES TO THE EXTENSIONS THE RECONCILER STARTS ON DEMAND — every enabled
-	// template that declares no forward — and is ignored for one that does: a
-	// listener has no caller whose absence could mean "idle", so a template with a
-	// tunnel is up from startup and stays up (issue #183).
+	// template that is neither resident nor declares a forward — and is ignored for
+	// one that is: a listener has no caller whose absence could mean "idle", so a
+	// resident template is up from startup and stays up (issues #183, #227).
 	//
 	// A string rather than a time.Duration so the file reads the way the flag does
 	// ("10m", "90s"). Empty means DefaultIdleTimeout.
 	IdleTimeout string `toml:"idle_timeout,omitempty"`
+
+	// Resident keeps this extension up for as long as termcp runs, instead of
+	// starting it on demand and reaping it after IdleTimeout.
+	//
+	// THIS IS A DIFFERENT REASON FROM A FORWARD, and it used to have no way to be
+	// said (issue #227). A template that declares a forward is resident because a
+	// listener has no "use" moment to start it; a template with no forward can still
+	// have a duty nobody calls in for — an MCP server holding a WebSocket so it can
+	// push events, a poller writing into a log — and for that one every legal
+	// IdleTimeout eventually killed it, silently, with the only workaround being a
+	// semantic lie like `idle_timeout = "87600h"`. Resident says what those templates
+	// meant: it is started at boot and restarted when it exits.
+	Resident bool `toml:"resident,omitempty"`
 
 	// Capability restriction. Both are whitelists; an empty value means
 	// unrestricted, so a terminal that wants the full surface simply lists nothing.
@@ -206,10 +219,14 @@ func (e *Extension) TargetFor(host string) (TargetDecl, bool) {
 }
 
 // Lazy reports whether the reconciler waits for a caller before bringing this
-// extension up. It does, unless the template declares a forward: a tunnel is a
-// service with no "use" moment to start it, so it is established at startup and
-// kept (issue #183).
+// extension up. It does not when the template is resident, and it does not when it
+// declares a forward: a tunnel is a service with no "use" moment to start it, so it
+// is established at startup and kept (issue #183). `resident = true` is the same
+// promise for a template whose duty is not a listener (issue #227).
 func (e *Extension) Lazy() bool {
+	if e.Resident {
+		return false
+	}
 	targets := e.EffectiveTargets()
 	if len(targets) == 0 {
 		return len(e.Forwards) == 0
@@ -428,6 +445,9 @@ func (e *Extension) Validate() error {
 		if err := e.Forwards[i].Validate(); err != nil {
 			return fmt.Errorf("forward #%d: %w", i+1, err)
 		}
+	}
+	if e.Resident && strings.TrimSpace(e.IdleTimeout) != "" {
+		return fmt.Errorf("resident = true and idle_timeout are alternatives: a resident extension is up from startup and stays up, so an idle collection window has nothing to apply to (remove idle_timeout or drop resident = true)")
 	}
 	if _, err := e.IdleTimeoutDuration(); err != nil {
 		return err

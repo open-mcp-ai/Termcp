@@ -196,7 +196,7 @@ var ops = []Op{
 			"default-shell", "default-mode", "default-approval",
 			"jump-host", "jump-user", "jump-port", "jump-password", "jump-private-key", "jump-key-passphrase",
 			"source", "target", "targets", "command", "args", "url", "headers", "allow", "paths",
-			"notes", "enabled", "forwards", "link-path", "mode", "op", "idle-timeout",
+			"notes", "enabled", "resident", "forwards", "link-path", "mode", "op", "idle-timeout",
 			"template", "values"},
 		// THE LABEL IS RETIRED, NOT MERELY IGNORED. An extension used to take a
 		// --kind (mcp/skill/prompt) that changed nothing at runtime: what it does is
@@ -205,7 +205,7 @@ var ops = []Op{
 		RetiredFlags: map[string]string{
 			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
 		},
-		Valueless: []string{"trust-unknown-host", "default-approval", "enabled"},
+		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "create host|ext|alias <name> [flags]   |   create <session> file <path> [--target <path-it-points-at> [--op link]]",
 		Detail:    createDetail + "\n\n" + hostFileFormat},
@@ -216,11 +216,11 @@ var ops = []Op{
 			"default-shell", "default-mode", "default-approval",
 			"jump-host", "jump-user", "jump-port", "jump-password", "jump-private-key", "jump-key-passphrase",
 			"target", "targets", "command", "args", "url", "headers", "allow", "paths", "notes", "enabled",
-			"forwards", "restart", "idle-timeout", "template", "values"},
+			"forwards", "restart", "resident", "idle-timeout", "template", "values"},
 		RetiredFlags: map[string]string{
 			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
 		},
-		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "restart"},
+		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "restart", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "edit host|ext|alias <name> [flags]",
 		Detail:    editDetail},
@@ -1221,6 +1221,11 @@ THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
     nothing starts until a caller uses it, and it is reclaimed after idle_timeout.
     With one it is resident from startup and never reclaimed, because a listener
     has no "use" moment.
+  - RESIDENT WITHOUT FORWARDS (--resident). A template with no tunnel can still
+    carry an unasked-for background duty — an MCP server maintaining a WebSocket
+    to push webhooks, a continuous log sink — that idle collection would kill.
+    --resident starts it at daemon boot, keeps it up, and restarts it if it exits.
+    --resident and --idle-timeout are mutually exclusive.
   - ORDER IS IDENTITY, AND A PARTIAL FAILURE IS KEPT. Entry i is tracked as entry i
     across walks, so reordering the list is not cosmetic. A failure at entry 3 does
     not undo entries 1-2: they stay listening and are recorded, the retry targets

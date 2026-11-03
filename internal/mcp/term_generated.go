@@ -1072,6 +1072,9 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	if boolFlag(stmt, "enabled") {
 		args["enabled"] = true
 	}
+	if boolFlag(stmt, "resident") {
+		args["resident"] = true
+	}
 	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
