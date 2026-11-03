@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -58,6 +59,15 @@ type Config struct {
 	// stop. The SSE transport needs none — its event stream is opened before
 	// anything else.
 	KeepAlive time.Duration
+
+	// DialContext, when set, is the network dialer used for HTTP and SSE requests.
+	// Used when the endpoint is reached through a remote host's network via an
+	// SSH client dialer, rather than dialed directly from this machine.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// Via, when set, is the SSH profile name whose network carries the requests.
+	// Parsed from `--via <profile>` on BuiltinCommand's argv.
+	Via string
 }
 
 // Run bridges Config.In to the MCP endpoint until stdin reaches EOF, the
@@ -72,11 +82,23 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Err = io.Discard
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	// THE DIALER IS THE EGRESS MACHINE (#233). With a default client, every
+	// request leaves from this process's own network, so a URL naming 127.0.0.1
+	// means the machine termcp happens to run on. An extension whose target is a
+	// remote host asks for the request to leave from THERE instead: same URL, same
+	// HTTP, but dialled inside that host's SSH connection. That is the whole
+	// semantic difference between `target = "internal"` and `target = "<host>"` for
+	// a url extension — and it costs no listening port, so two extensions pointing
+	// at the same endpoint cannot collide.
+	client := &http.Client{}
+	if cfg.DialContext != nil {
+		client.Transport = &http.Transport{DialContext: cfg.DialContext}
+	}
 	b := &bridge{
 		cfg:    cfg,
 		ctx:    ctx,
 		cancel: cancel,
-		client: &http.Client{},
+		client: client,
 		fatal:  make(chan error, 1),
 		outTok: make(chan struct{}, 1),
 	}

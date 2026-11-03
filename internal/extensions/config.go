@@ -238,23 +238,6 @@ func (e *Extension) Lazy() bool {
 // LazyForTarget reports whether this host entry has no resident forward.
 func (t TargetDecl) Lazy() bool { return len(t.Forwards) == 0 }
 
-// targetHasLocalForward reports whether this host entry opens a listener ON THIS
-// MACHINE that reaches into the target — the one arrangement under which a url
-// naming 127.0.0.1 is answered where the bridge stands (#233).
-//
-// A dynamic (-D) forward is deliberately NOT enough. It opens a SOCKS5 proxy, so
-// reaching a service through it takes a proxy-aware client; the bridge is not one.
-// Accepting -D here would let a template validate and then fail at connect time
-// with nothing naming the reason.
-func targetHasLocalForward(t TargetDecl) bool {
-	for _, f := range t.Forwards {
-		if f.Kind == ForwardLocal {
-			return true
-		}
-	}
-	return false
-}
-
 // IdleTimeoutDuration is the configured idle window, or the default when the key
 // is absent. An unparsable or non-positive value is an error rather than a
 // silent fallback: a caller that wrote "10 minutes" meant something, and running
@@ -421,33 +404,18 @@ func (e *Extension) Validate() error {
 		if err := validEndpointURL(e.URL); err != nil {
 			return err
 		}
-		// The relay runs inside termcp, so the endpoint is reached from THIS host.
+		// THE TARGET OF A url EXTENSION IS THE MACHINE THE CONNECTION LEAVES FROM (#233).
 		//
-		// THAT IS STILL TRUE, AND IT IS WHY THE CHECK EXISTS: a bridge that dials
-		// `127.0.0.1:8080` dials termcp's own machine, so on a remote target the
-		// name would be looked up on a machine that has never heard of it and the
-		// failure would read as a missing program rather than as a template asking
-		// the wrong host to do the work.
+		// When target = "internal", requests leave from this process's own network, so
+		// `http://127.0.0.1:8080` reaches this host's loopback.
 		//
-		// A LOCAL FORWARD IS THE EXCEPTION, and it is not a loophole (#233): the
-		// template that declares `kind = "local", local_port = 18080, remote_port =
-		// 8080` has opened 127.0.0.1:18080 ON THIS HOST and pointed it at the remote
-		// one, so a url naming that port is reached exactly where the bridge stands.
-		// Requiring `target = "internal"` there forced the caller into two
-		// extensions with no shared lifetime: the tunnel could die while the MCP
-		// relay still reported itself connected. One template that owns both makes
-		// the lifetime one thing.
-		for _, t := range e.EffectiveTargets() {
-			if sshconfig.IsInternalName(t.Host) {
-				continue
-			}
-			if targetHasLocalForward(t) {
-				continue
-			}
-			return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q). "+
-				"To reach a service on %q, declare a local forward in this template and point url at the port it listens on here — e.g. [[targets]] host = %q with forward kind = \"local\", local_port = 18080, remote_host = \"127.0.0.1\", remote_port = 8080, then url = \"http://127.0.0.1:18080/...\"",
-				t.Host, t.Host, t.Host)
-		}
+		// When target names a remote host (e.g. `target = "prod-box"`), requests leave
+		// from THAT host's network: the in-process bridge dials inside that host's SSH
+		// connection. A URL naming 127.0.0.1 then reaches the remote host's loopback,
+		// and private network addresses (10.x, 192.168.x) are resolved from its side.
+		// No port forward is needed on this machine, no listening port is bound, and
+		// two extensions reaching the same remote service cannot collide.
+		//
 		// The relay speaks HTTP; there is no channel for a pty to own.
 		if e.Mode != "" && e.Mode != "pipe" {
 			return fmt.Errorf("url requires mode=pipe (the bridge speaks a line protocol, not a terminal)")

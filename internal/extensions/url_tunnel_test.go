@@ -1,65 +1,53 @@
 package extensions
 
 import (
-	"strings"
 	"testing"
 )
 
-// TestURLOnRemoteTargetAllowedWithLocalForward pins issue #233 (decision B-1):
+// TestURLOnAnyTargetAllowed pins the egress-machine semantics of issue #233:
 //
-// An HTTP MCP relay runs inside termcp (on this host). It used to reject every
-// non-"internal" target outright, which made "remote MCP reached through an SSH
-// tunnel" impossible to write in a single template.
+// A url template's `target` names the machine the connection LEAVES from, not
+// where the process runs. The in-process relay dials its requests inside that
+// host's SSH connection, so:
+//   - target = "internal" dials from this host (loopback = this machine)
+//   - target = "prod-box" dials from prod-box (loopback = prod-box's loopback)
 //
-// It is now accepted when the template declares a local forward (which opens a
-// listener ON THIS HOST reaching the target), and still rejected when it does not
-// or when it only declares a dynamic (SOCKS5) forward.
-func TestURLOnRemoteTargetAllowedWithLocalForward(t *testing.T) {
-	// 1. Remote target with local forward -> VALID
-	valid := Extension{
-		Name:   "remote-mcp",
+// No manual port forward is required, no local port is bound, and two extensions
+// reaching the same remote service cannot collide.
+func TestURLOnAnyTargetAllowed(t *testing.T) {
+	// 1. Remote target with NO forward -> now perfectly valid (target is the egress host)
+	directRemote := Extension{
+		Name:   "direct-remote-mcp",
 		Target: "prod-box",
 		Mode:   "pipe",
-		URL:    "http://127.0.0.1:18080/mcp",
-		Forwards: []ForwardDecl{
-			{Kind: ForwardLocal, LocalPort: 18080, RemoteHost: "127.0.0.1", RemotePort: 8080},
-		},
+		URL:    "http://127.0.0.1:8080/mcp",
 	}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("remote target with local forward should validate: %v", err)
+	if err := directRemote.Validate(); err != nil {
+		t.Fatalf("remote target without forward should validate, got: %v", err)
 	}
 
-	// 2. Remote target with NO forward -> REFUSED
-	noForward := Extension{
-		Name:   "no-forward",
-		Target: "prod-box",
+	// 2. Internal target -> valid (egress is loopback)
+	internal := Extension{
+		Name:   "local-mcp",
+		Target: "internal",
 		Mode:   "pipe",
-		URL:    "http://127.0.0.1:18080/mcp",
+		URL:    "http://127.0.0.1:8080/mcp",
 	}
-	err := noForward.Validate()
-	if err == nil {
-		t.Fatal("remote target with no forward should be refused")
-	}
-	if !strings.Contains(err.Error(), "declare a local forward") {
-		t.Errorf("refusal should teach declaring a local forward, got: %v", err)
+	if err := internal.Validate(); err != nil {
+		t.Fatalf("internal target should validate, got: %v", err)
 	}
 
-	// 3. Remote target with ONLY dynamic (-D) forward -> REFUSED
-	// SOCKS5 does not listen for HTTP; the bridge would fail at dial time without an explanation.
-	dynamicOnly := Extension{
-		Name:   "dynamic-only",
-		Target: "prod-box",
-		Mode:   "pipe",
-		URL:    "http://127.0.0.1:18080/mcp",
-		Forwards: []ForwardDecl{
-			{Kind: ForwardDynamic, LocalPort: 18080},
+	// 3. Multi-target with remote hosts -> also valid
+	multi := Extension{
+		Name: "multi-remote-mcp",
+		Targets: []TargetDecl{
+			{Host: "cluster-bj"},
+			{Host: "cluster-hk"},
 		},
+		Mode: "pipe",
+		URL:  "http://127.0.0.1:8080/mcp",
 	}
-	err = dynamicOnly.Validate()
-	if err == nil {
-		t.Fatal("remote target with only dynamic forward should be refused")
-	}
-	if !strings.Contains(err.Error(), "declare a local forward") {
-		t.Errorf("refusal should explain that a local forward is needed, got: %v", err)
+	if err := multi.Validate(); err != nil {
+		t.Fatalf("multi-target remote url should validate, got: %v", err)
 	}
 }

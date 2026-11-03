@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 )
 
@@ -27,11 +28,39 @@ const BuiltinCommand = "termcp-mcp-bridge"
 // more `--header Name=Value` pairs. It is a plain io-based function — no ssh
 // types — so the only package that knows both the transport and the relay is
 // the one wiring them together.
-func CommandHandler(ctx context.Context, in io.Reader, out io.Writer, errOut io.Writer, argv []string) int {
+func CommandHandler(ctx context.Context, in io.Reader, out io.Writer, errOut io.Writer, argv []string, via ViaDialer) int {
 	cfg, err := ParseArgs(argv)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", BuiltinCommand, err)
 		return 2
+	}
+	// `--via <profile>` NAMES THE MACHINE THE CONNECTION LEAVES FROM (#233).
+	// Without it every request leaves from this process, so a URL naming
+	// 127.0.0.1 means the machine termcp runs on; with it the request is dialled
+	// inside that host's SSH connection and 127.0.0.1 means THAT host. No port is
+	// bound here, so two extensions reaching the same endpoint cannot collide and a
+	// caller never has to pick a number.
+	//
+	// A resolver that is not wired is REFUSED, not ignored: falling back to a local
+	// dial would quietly talk to a different server than the template asked for.
+	if cfg.Via != "" {
+		if via == nil {
+			fmt.Fprintf(errOut, "%s: --via is not available on this instance (no SSH dialer is wired)\n", BuiltinCommand)
+			return 2
+		}
+		dial, release, derr := via(ctx, cfg.Via)
+		if derr != nil {
+			fmt.Fprintf(errOut, "%s: cannot dial through %q: %v\n", BuiltinCommand, cfg.Via, derr)
+			return 2
+		}
+		if release != nil {
+			// The lease outlives every request this bridge makes and ends with it,
+			// which is what the bridge's own lifetime already means.
+			defer release()
+		}
+		cfg.DialContext = func(dctx context.Context, network, addr string) (net.Conn, error) {
+			return dial(network, addr)
+		}
 	}
 	cfg.In, cfg.Out, cfg.Err = in, out, errOut
 	if err := Run(ctx, cfg); err != nil && ctx.Err() == nil {
@@ -62,6 +91,24 @@ func ParseArgs(argv []string) (Config, error) {
 			}
 			continue
 		}
+		if arg == "--via" || arg == "-via" {
+			if i+1 >= len(argv) {
+				return Config{}, fmt.Errorf("%s needs a profile name after it", arg)
+			}
+			i++
+			cfg.Via = strings.TrimSpace(argv[i])
+			if cfg.Via == "" {
+				return Config{}, fmt.Errorf("%s needs a profile name after it", arg)
+			}
+			continue
+		}
+		if rest, ok := cutViaPrefix(arg); ok {
+			cfg.Via = strings.TrimSpace(rest)
+			if cfg.Via == "" {
+				return Config{}, fmt.Errorf("--via needs a profile name")
+			}
+			continue
+		}
 		if rest, ok := cutHeaderPrefix(arg); ok {
 			if err := addHeader(&cfg, rest); err != nil {
 				return Config{}, err
@@ -69,7 +116,7 @@ func ParseArgs(argv []string) (Config, error) {
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
-			return Config{}, fmt.Errorf("unknown argument %q (expected <url> and --header Name=Value)", arg)
+			return Config{}, fmt.Errorf("unknown argument %q (expected <url>, --header Name=Value, --via <profile>)", arg)
 		}
 		if cfg.URL != "" {
 			return Config{}, fmt.Errorf("unexpected extra argument %q (only one endpoint is bridged)", arg)
@@ -81,6 +128,14 @@ func ParseArgs(argv []string) (Config, error) {
 	}
 	cfg.SSE = isSSEEndpoint(cfg.URL)
 	return cfg, nil
+}
+
+// cutViaPrefix reports whether arg is the `--via=<profile>` spelling.
+func cutViaPrefix(arg string) (string, bool) {
+	if rest, ok := strings.CutPrefix(arg, "--via="); ok {
+		return rest, true
+	}
+	return strings.CutPrefix(arg, "-via=")
 }
 
 // cutHeaderPrefix reports whether arg is the `--header=Name=Value` spelling and

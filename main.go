@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
+	"github.com/open-mcp-ai/termcp/internal/jrpc"
 	"github.com/open-mcp-ai/termcp/internal/logansi"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
@@ -331,11 +333,6 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	var sshSrv *sshserver.Server
 	if !cfg.NoInternal {
 		sshSrv = sshserver.New()
-		// The in-process MCP bridge is a command the internal server serves
-		// itself: an extension template reaches an HTTP MCP server over its own
-		// channel with no second binary and no PATH lookup (see
-		// internal/mcpbridge.RegisterBuiltin).
-		mcpbridge.RegisterBuiltin(sshSrv)
 		if err := sshSrv.Start(); err != nil {
 			slog.Error("failed to start SSH server", "err", err)
 			os.Exit(1)
@@ -365,6 +362,18 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 
 	sshStore := sshconfig.NewStore(cfg.DataDir)
+
+	// The in-process MCP bridge is a command the internal SSH server serves itself,
+	// so an extension reaches an HTTP MCP server over its own channel with no second
+	// binary and no PATH lookup (see internal/mcpbridge.RegisterBuiltin).
+	//
+	// REGISTERED HERE RATHER THAN NEXT TO sshSrv.Start(), because `--via <profile>`
+	// needs the profile store and the session manager to answer "which machine does
+	// this connection leave from" (#233). Registration is a sync.Map insert, so doing
+	// it after the server started is safe and needs no second start.
+	if sshSrv != nil {
+		mcpbridge.RegisterBuiltin(sshSrv, viaDialer(sessMgr, sshStore, cfg.NoInternal))
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	mux := http.NewServeMux()
@@ -538,4 +547,64 @@ func buildLogHandler(cfg *config.Config) slog.Handler {
 	}
 	color := term.IsTerminal(int(os.Stderr.Fd()))
 	return logansi.NewTextHandler(os.Stderr, logansi.Options{MinLevel: minLevel, Color: color})
+}
+
+// viaDialer answers `--via <profile>` for the in-process MCP bridge: the dialer
+// it returns makes its connections from THAT profile's machine, so a template can
+// point at `http://127.0.0.1:8080` and mean the far host's loopback rather than
+// this one (#233).
+//
+// The lease is held for the whole bridge lifetime and released when it ends, for
+// the reason the bridge exists: one MCP session makes many requests to one host,
+// and a per-request lease would pay a handshake for each.
+//
+// It borrows the same transport pool ordinary sessions use, so a template that
+// reaches one host does not open a second connection to a host termcp is already
+// connected to.
+func viaDialer(sessMgr *session.Manager, sshStore *sshconfig.Store, noInternal bool) mcpbridge.ViaDialer {
+	return func(ctx context.Context, profile string) (func(network, addr string) (net.Conn, error), func(), error) {
+		profile = strings.TrimSpace(profile)
+		if profile == "" {
+			return nil, nil, errors.New("--via needs a profile name")
+		}
+		cfg := session.Config{Ctx: ctx}
+		if !sshconfig.IsInternalName(profile) {
+			entry, err := sshStore.Load(profile)
+			if err != nil {
+				if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+					return nil, nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles", sshconfig.ErrNotFound, profile)
+				}
+				return nil, nil, err
+			}
+			remote, err := sshconfig.RemoteFromEntry(entry, sshStore.ConfigDir(profile))
+			if err != nil {
+				return nil, nil, err
+			}
+			cfg.Remote = remote
+			cfg.SSHConfig = profile
+		} else if noInternal {
+			return nil, nil, errors.New("the built-in loopback profile is disabled on this instance")
+		}
+		lease, err := sessMgr.AcquireTransport(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		if lease == nil || lease.Client == nil {
+			if lease != nil && lease.Release != nil {
+				lease.Release()
+			}
+			return nil, nil, fmt.Errorf("no SSH connection to %q", profile)
+		}
+		dial := func(network, addr string) (net.Conn, error) {
+			conn, derr := lease.Client.Dial(network, addr)
+			if derr != nil {
+				return nil, derr
+			}
+			// An SSH channel carries no deadlines of its own, so the wrapper drops
+			// them rather than letting a caller's HTTP deadline surface as an error
+			// from SetDeadline. Same wrapper `mcp open` uses for the same connection.
+			return jrpc.NoDeadlineConn(conn), nil
+		}
+		return dial, lease.Release, nil
+	}
 }

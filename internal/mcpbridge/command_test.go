@@ -149,7 +149,7 @@ func TestCommandHandlerSendsHeaders(t *testing.T) {
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n")
 
 	code := CommandHandler(context.Background(), in, out, errOut,
-		[]string{proxy.URL + "/stream", "--header", "X-Api-Key=sekrit"})
+		[]string{proxy.URL + "/stream", "--header", "X-Api-Key=sekrit"}, nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr: %s", code, errOut.String())
 	}
@@ -213,7 +213,7 @@ func TestBuiltinCommandOverInternalSSH(t *testing.T) {
 	mcpURL, _ := newMCPEndpoint(t)
 
 	srv := sshserver.New()
-	RegisterBuiltin(srv)
+	RegisterBuiltin(srv, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestBuiltinCommandOverInternalSSH(t *testing.T) {
 // reason, and a session that hangs produces no reason at all.
 func TestBuiltinCommandRejectsBadArgs(t *testing.T) {
 	srv := sshserver.New()
-	RegisterBuiltin(srv)
+	RegisterBuiltin(srv, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -310,12 +310,12 @@ func TestBuiltinCommandRejectsBadArgs(t *testing.T) {
 // name must not take the name away from the host's PATH.
 func TestRegisterCommandIgnoresEmpty(t *testing.T) {
 	srv := sshserver.New()
-	RegisterBuiltin(nil)
+	RegisterBuiltin(nil, nil)
 	if h := srv.BuiltinForTest(""); h != nil {
 		t.Error("an empty name must not be registered")
 	}
 	if h := srv.BuiltinForTest(BuiltinCommand); h != nil {
-		t.Error("RegisterBuiltin(nil) must register nothing")
+		t.Error("RegisterBuiltin(nil, nil) must register nothing")
 	}
 }
 

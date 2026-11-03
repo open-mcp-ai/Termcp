@@ -1205,8 +1205,13 @@ THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
   - ONE TEMPLATE CAN CARRY BOTH. A forwards list beside --command (or --paths, or
     --mode pty) is not two extensions: the program runs on the target, the tunnels
     come up on that same session, and they live and die together. Mixing local,
-    remote and dynamic entries in one list is allowed. --url is the exception: the
-    relay runs inside termcp, so it requires --target internal.
+    remote and dynamic entries in one list is allowed.
+  - WITH --url, --target NAMES THE MACHINE THE CONNECTION LEAVES FROM. The relay
+    always runs on the loopback channel, but its HTTP requests are dialled from
+    --target's network: with --target internal, http://127.0.0.1:8080 is THIS
+    machine's loopback; with --target prod-box it is prod-box's loopback, reached
+    inside that host's SSH connection. So a remote MCP server needs no tunnel, no
+    --forwards entry and no local port — write the URL as the far host would see it.
   - ADDING A FORWARD CHANGES WHEN IT RUNS. Without one the extension is lazy:
     nothing starts until a caller uses it, and it is reclaimed after idle_timeout.
     With one it is resident from startup and never reclaimed, because a listener
