@@ -29,6 +29,7 @@ human decision, per session.
 | **Connected clients** | The header lists who is attached: MCP clients with the name they announced and their namespace, plus Web UI tabs with their address and what they are watching. |
 | **Update notice** | The header tells you when a newer release exists — only for real `vX.Y.Z` builds, never for a local `dev-<sha>`. |
 | **One REST entrance** | `POST /api/term` speaks the same command language as the MCP tool, so an agent drives everything with plain `curl`. |
+| **One MCP endpoint per extension** | `POST /ext/{name}/stream` exposes that extension's own MCP server over streamable HTTP, so an MCP client reaches its tools by pointing its config at a URL instead of learning this project's directive language. Frames are forwarded verbatim: `initialize` is answered by the extension, so the `serverInfo` and capabilities the client reads are its own. termcp keeps ownership of both halves — an on-demand extension is started by the first request and reaped by the same idle rule, and every call still passes the template's capability whitelist and the review gate. There is no listening `GET` stream (a line-protocol peer never initiates a message) and no `Mcp-Session-Id` (the extension *is* the session, so there is no per-client state to name). |
 
 ---
 

@@ -51,14 +51,10 @@ type Extension struct {
 	// Identity. Name is the TOML-encoded file's directory name, not a TOML key,
 	// so it is never stored inside the file it names.
 	Name string `toml:"-"`
-	// THERE IS NO kind FIELD, and its absence is a decision. It used to be a label
-	// — "mcp", "skill", "prompt" — that changed nothing at runtime: capabilities
-	// come from what the template declares (command, url, paths, forwards, mode),
-	// Validate never checked it, and PresetNotes already chose the recipe by the
-	// declared shape rather than the label. A field that only misleads a reader into
-	// thinking there are three kinds of extension, when there is one, is worse than
-	// no field: it makes an agent pick a category instead of writing down what it
-	// wants to happen.
+	// CAPABILITIES COME FROM WHAT THE TEMPLATE DECLARES, never from a label:
+	// command, url, paths, forwards and mode are the whole vocabulary. A template
+	// says what it wants to happen rather than which category it belongs to, which
+	// is why there is no classification field to fill in.
 	Target string `toml:"target,omitempty"` // legacy single-target profile name, or "internal"
 	// Targets defines the hosts this extension runs on. When provided, each entry
 	// names a host and its host-specific forwards, allowing different targets to bind
@@ -242,6 +238,23 @@ func (e *Extension) Lazy() bool {
 // LazyForTarget reports whether this host entry has no resident forward.
 func (t TargetDecl) Lazy() bool { return len(t.Forwards) == 0 }
 
+// targetHasLocalForward reports whether this host entry opens a listener ON THIS
+// MACHINE that reaches into the target — the one arrangement under which a url
+// naming 127.0.0.1 is answered where the bridge stands (#233).
+//
+// A dynamic (-D) forward is deliberately NOT enough. It opens a SOCKS5 proxy, so
+// reaching a service through it takes a proxy-aware client; the bridge is not one.
+// Accepting -D here would let a template validate and then fail at connect time
+// with nothing naming the reason.
+func targetHasLocalForward(t TargetDecl) bool {
+	for _, f := range t.Forwards {
+		if f.Kind == ForwardLocal {
+			return true
+		}
+	}
+	return false
+}
+
 // IdleTimeoutDuration is the configured idle window, or the default when the key
 // is absent. An unparsable or non-positive value is an error rather than a
 // silent fallback: a caller that wrote "10 minutes" meant something, and running
@@ -408,15 +421,32 @@ func (e *Extension) Validate() error {
 		if err := validEndpointURL(e.URL); err != nil {
 			return err
 		}
-		// The relay runs inside termcp, so the endpoint is reached from this host
-		// and the channel has to be the in-memory one. On a remote target the name
-		// would be looked up on a machine that has never heard of it, and the
-		// failure would read as a missing command rather than as a template asking
+		// The relay runs inside termcp, so the endpoint is reached from THIS host.
+		//
+		// THAT IS STILL TRUE, AND IT IS WHY THE CHECK EXISTS: a bridge that dials
+		// `127.0.0.1:8080` dials termcp's own machine, so on a remote target the
+		// name would be looked up on a machine that has never heard of it and the
+		// failure would read as a missing program rather than as a template asking
 		// the wrong host to do the work.
+		//
+		// A LOCAL FORWARD IS THE EXCEPTION, and it is not a loophole (#233): the
+		// template that declares `kind = "local", local_port = 18080, remote_port =
+		// 8080` has opened 127.0.0.1:18080 ON THIS HOST and pointed it at the remote
+		// one, so a url naming that port is reached exactly where the bridge stands.
+		// Requiring `target = "internal"` there forced the caller into two
+		// extensions with no shared lifetime: the tunnel could die while the MCP
+		// relay still reported itself connected. One template that owns both makes
+		// the lifetime one thing.
 		for _, t := range e.EffectiveTargets() {
-			if !sshconfig.IsInternalName(t.Host) {
-				return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", t.Host)
+			if sshconfig.IsInternalName(t.Host) {
+				continue
 			}
+			if targetHasLocalForward(t) {
+				continue
+			}
+			return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q). "+
+				"To reach a service on %q, declare a local forward in this template and point url at the port it listens on here — e.g. [[targets]] host = %q with forward kind = \"local\", local_port = 18080, remote_host = \"127.0.0.1\", remote_port = 8080, then url = \"http://127.0.0.1:18080/...\"",
+				t.Host, t.Host, t.Host)
 		}
 		// The relay speaks HTTP; there is no channel for a pty to own.
 		if e.Mode != "" && e.Mode != "pipe" {
@@ -429,9 +459,9 @@ func (e *Extension) Validate() error {
 		}
 	}
 	// AN EXTENSION MUST EXPLICITLY DECLARE AT LEAST ONE CAPABILITY.
-	// We no longer rely on kind as a gate: an author (or AI) must declare what the
-	// extension actually does (a command, an mcp url, exposed file paths, port forwards,
-	// or an interactive pty shell). Declaring none of these is an empty useless container.
+	// An author must declare what the extension actually does (a command, an mcp url,
+	// exposed file paths, port forwards, or an interactive pty shell). Declaring none
+	// of these is an empty container.
 	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || e.Mode == "pty"
 	for _, t := range e.Targets {
 		if len(t.Forwards) > 0 {

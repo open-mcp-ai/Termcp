@@ -395,6 +395,15 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	mux.Handle("GET /sse", mcpSrv.SSEHandler())
 	mux.Handle("POST /message", mcpSrv.MessageHandler())
 	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
+	// ONE MCP ENDPOINT PER EXTENSION (issue #234). /stream above serves termcp's own
+	// tool surface, whose only tool speaks this project's directive language — so an
+	// MCP client that does not know the language cannot reach an extension's tools.
+	// /ext/{name}/stream exposes that extension's own MCP server verbatim, letting a
+	// client reach it by pointing its config at a URL. termcp keeps the lifecycle
+	// (on-demand start, idle reaping) and the policy (the template's capability
+	// whitelist and review gate), so this is a new door onto the same room, not a
+	// second way around its lock.
+	mux.Handle("/ext/{name}/stream", mcpSrv.ExtMCPHandler())
 	// The REST entrance to the same command space: POST /api/term takes the term
 	// tool's argument object and answers the same envelope. Mounted here rather
 	// than by webuiH because admission and the namespace claim live in internal/mcp
