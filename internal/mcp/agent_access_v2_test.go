@@ -56,6 +56,7 @@ func newV2Harness(t *testing.T, p auth.AgentPolicy) *v2Harness {
 	}
 	s, _, mgr, _ := newTestServerWithHistory(t)
 	s.sshConfigs = vault
+	s.SetApprovalContextProvider(account.ApprovalContextForCredential)
 	mgr.SetSSHConfigResolver(vault.ResolveSessionReference)
 	mux := http.NewServeMux()
 	mux.Handle("/stream", s.StreamableHTTPHandler())

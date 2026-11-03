@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -68,6 +69,47 @@ func TestPasswordDirectlyDerivesMainKeyAndUnlocksWithoutKEK(t *testing.T) {
 	}
 	if !bytes.Equal(data, readRotationFile(t, path)) {
 		t.Fatal("manual unlock changed the on-disk keyring")
+	}
+}
+
+func TestVerifyDataDirPasswordDoesNotAcquireRepositoryLock(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := InitializeRepositoryWithPassword(dir, firstPassword, firstPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := VerifyDataDirPassword(dir, firstPassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyDataDirPassword(dir, "incorrect password"); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("wrong password = %v", err)
+	}
+}
+
+func TestVerifyDataDirPasswordReadsLocalStateKeyring(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := InitializeRepositoryWithPassword(dir, firstPassword, firstPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(LocalStatePath(dir)); err != nil {
+		t.Fatalf("local state was not created: %v", err)
+	}
+	// Current storage treats the keyring as an entry inside state.json. Removing
+	// the legacy physical path must not turn password verification into "not
+	// initialized".
+	if err := os.RemoveAll(filepath.Join(dir, "keys")); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyDataDirPassword(dir, firstPassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyDataDirPassword(dir, "incorrect password"); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("wrong password = %v", err)
 	}
 }
 

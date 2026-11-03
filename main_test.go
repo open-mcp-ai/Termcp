@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,26 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 )
+
+func TestBuildLogHandlerWritesManualInstanceLog(t *testing.T) {
+	t.Setenv(daemon.EnvChild, "")
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.LogLevel = "info"
+	handler, closeLog := buildLogHandler(cfg)
+	logger := slog.New(handler)
+	logger.Info("manual instance marker")
+	if err := closeLog(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(daemon.LogPath(cfg.DataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("manual instance marker")) {
+		t.Fatalf("manual instance log missing marker: %s", raw)
+	}
+}
 
 func TestResolveBridgeTarget(t *testing.T) {
 	const origin = "http://127.0.0.1:18765"
@@ -73,6 +95,7 @@ func TestParseSubcommand(t *testing.T) {
 		{in: []string{"config-storage"}, wantName: "config-storage"},
 		{in: []string{"config-storage", "status"}, wantName: "config-storage", wantAction: actionStatus},
 		{in: []string{"config-storage", "rotate-key", "--data-dir", "profiles"}, wantName: "config-storage", wantAction: actionRotateKey, wantRest: []string{"--data-dir", "profiles"}},
+		{in: []string{"config-storage", "verify-password", "--data-dir", "profiles"}, wantName: "config-storage", wantAction: actionVerifyPassword, wantRest: []string{"--data-dir", "profiles"}},
 		{in: []string{"config-storage", "--help"}, wantName: "config-storage", wantAction: actionHelp},
 		// The value namespace takes everything after its name.
 		{in: []string{"stdio"}, wantName: "stdio"},

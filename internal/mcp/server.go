@@ -9,6 +9,7 @@ import (
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -54,6 +55,13 @@ type Server struct {
 	// at 30s cannot synchronously move a 30 MB binary, and an interrupted transfer
 	// used to leave a truncated file with no error anywhere.
 	tasks *task.Manager
+	// policyApprovals holds effect=ask requests separately from a session's
+	// optional review mode. Queues are created by target session (or "policy"
+	// for sessionless operations) and only exist in memory.
+	policyApprovalMu sync.Mutex
+	policyApprovals  map[string]*approval.Queue
+	approvalNotify   func(string, approval.Request)
+	approvalContext  func(context.Context, string, string) (context.Context, error)
 	// connListener is called when that set changes, so the Web UI can refresh
 	// without polling. Set by main to the same broadcast the session list uses.
 	connListener func()
@@ -184,6 +192,7 @@ func (s *Server) Start(addr string) error {
 
 // Stop gracefully shuts down the SSE server.
 func (s *Server) Stop() error {
+	s.closePolicyApprovals()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if s.streamServer != nil {

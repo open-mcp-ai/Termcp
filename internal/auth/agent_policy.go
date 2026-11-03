@@ -57,6 +57,16 @@ func (p AgentPolicy) AllowsOperation(id string) bool {
 	grant, ok := p.Actions[id]
 	return ok && grant.Effect == authorization.EffectAllow
 }
+
+// MayRequestOperation reports whether an operation can enter the normal check
+// path. EffectAsk belongs here: it queues unless the context is an approved
+// replay, while output filtering must not mistake the persisted ask effect for
+// a denial and hide the result after that replay succeeds.
+func (p AgentPolicy) MayRequestOperation(id string) bool {
+	grant, ok := p.Actions[id]
+	return ok && (grant.Effect == authorization.EffectAllow || grant.Effect == authorization.EffectAsk)
+}
+
 func (p AgentPolicy) AllowsHost(id string) bool {
 	return id != "" && (p.HostMode == "all" || p.HostMode == "selected" && slices.Contains(p.Hosts, id))
 }
@@ -117,7 +127,7 @@ func validateAgentPolicy(p AgentPolicy) error {
 		if err := authorization.ValidateGrant(id, grant); err != nil {
 			return err
 		}
-		if grant.Effect != authorization.EffectAllow {
+		if grant.Effect != authorization.EffectAllow && grant.Effect != authorization.EffectAsk {
 			continue
 		}
 		if op, ok := authorization.Lookup(id); ok && op.Global && p.HostMode != "all" {
@@ -129,6 +139,34 @@ func validateAgentPolicy(p AgentPolicy) error {
 
 type agentPolicyKey struct{}
 type policyResolver func() (AgentPolicy, error)
+
+// ApprovalContextForCredential reconstructs a verified Agent context for replay
+// of a previously queued effect=ask operation. It uses current credential,
+// principal and group state, so an approval cannot outlive a revocation.
+func (m *Managed) ApprovalContextForCredential(ctx context.Context, principalID, credentialID string) (context.Context, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vault.AuthenticationLocked() {
+		return nil, errors.New("configuration vault is locked")
+	}
+	t, ok := m.state.Tokens[credentialID]
+	if !ok || t.PrincipalID != principalID {
+		return nil, errors.New("approval credential is unavailable")
+	}
+	actor, ok := m.tokenActorLocked(t)
+	if !ok || actor.Role != RoleAgent {
+		return nil, errors.New("approval principal is disabled")
+	}
+	permitted := slices.Contains(m.state.Permissions[RoleAgent], "mcp")
+	if !permitted {
+		return nil, errors.New("Agent MCP access is disabled")
+	}
+	ctx = m.withAgentPolicy(ctx, actor.ID, credentialID)
+	ctx = m.withBackgroundWork(ctx, actor.ID, credentialID)
+	ctx = context.WithValue(ctx, actorKey{}, actor)
+	ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
+	return ctx, nil
+}
 
 // PolicyFromContext consults live server state, never a client-provided policy.
 func PolicyFromContext(ctx context.Context) (AgentPolicy, bool, error) {
@@ -191,7 +229,7 @@ func (m *Managed) accessCatalog(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].Name < hosts[j].Name })
 	authJSON(w, 200, map[string]any{
 		"catalog_version":    3,
-		"approval_supported": false,
+		"approval_supported": true,
 		"operations":         authorization.Catalog(),
 		"recipes":            authorization.Recipes(),
 		"hosts":              hosts,

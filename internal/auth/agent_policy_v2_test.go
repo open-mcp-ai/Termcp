@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 )
 
 func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
@@ -45,12 +47,13 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 	}
 	invalid := []string{
 		`{"schema_version":2,"host_mode":"all","actions":{"file.unknown":{"effect":"allow"}}}`,
-		`{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"ask"}}}`,
+		`{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"approval"}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"allow","constraints":{"unknown":true}}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"session.start":{"effect":"allow","constraints":{"keys":["tab"]}}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"file.write":{"effect":"allow","constraints":{"forms":["imaginary"]}}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"file.replace":{"effect":"allow","constraints":{"max_bytes":4}}}}`,
 		`{"schema_version":2,"host_mode":"selected","hosts":[],"actions":{"ext.create":{"effect":"allow"}}}`,
+		`{"schema_version":2,"host_mode":"selected","hosts":[],"actions":{"ext.create":{"effect":"ask"}}}`,
 		`{"host_mode":"all","actions":{"shell.input":{"effect":"allow"}}}`,
 		`{"schema_version":3,"host_mode":"all","actions":{}}`,
 		`{"schema_version":2,"host_mode":"all","functions":["file_write"],"actions":{}}`,
@@ -66,7 +69,25 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "GET", "/auth/access", "", cookie, "")
-	if catalog.Code != 200 || !strings.Contains(catalog.Body.String(), `"id":"shell.marks"`) || !strings.Contains(catalog.Body.String(), `"approval_supported":false`) {
+	if catalog.Code != 200 || !strings.Contains(catalog.Body.String(), `"id":"shell.marks"`) || !strings.Contains(catalog.Body.String(), `"approval_supported":true`) {
 		t.Fatalf("missing action catalog: %d %s", catalog.Code, catalog.Body)
+	}
+}
+
+func TestMayRequestOperationIncludesAskWhileAllowsRequiresAllow(t *testing.T) {
+	p := EmptyAgentPolicy()
+	p.Actions["session.list"] = authorization.Grant{Effect: authorization.EffectAsk}
+	p.Actions["shell.list"] = authorization.Grant{Effect: authorization.EffectAllow}
+	p.Actions["file.read"] = authorization.Grant{Effect: authorization.EffectDeny}
+	if p.AllowsOperation("session.list") {
+		t.Fatal("AllowsOperation must keep its strict no-approval meaning")
+	}
+	for _, id := range []string{"session.list", "shell.list"} {
+		if !p.MayRequestOperation(id) {
+			t.Errorf("MayRequestOperation(%q) = false", id)
+		}
+	}
+	if p.MayRequestOperation("file.read") || p.MayRequestOperation("file.write") {
+		t.Fatal("deny or missing operations entered the request path")
 	}
 }

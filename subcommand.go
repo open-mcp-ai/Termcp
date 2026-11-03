@@ -11,12 +11,13 @@ import (
 // the real verbs: the help flags (`--help`, `-h`) and the help word reach it,
 // while the bare subcommand shows the brief action index.
 const (
-	actionHelp      = "help"
-	actionStart     = "start"
-	actionStop      = "stop"
-	actionStatus    = "status"
-	actionStdio     = "stdio"
-	actionRotateKey = "rotate-key"
+	actionHelp           = "help"
+	actionStart          = "start"
+	actionStop           = "stop"
+	actionStatus         = "status"
+	actionStdio          = "stdio"
+	actionRotateKey      = "rotate-key"
+	actionVerifyPassword = "verify-password"
 )
 
 // subcommand describes one leading command-line namespace: `termcp <name>
@@ -34,7 +35,7 @@ type subcommand struct {
 // subcommands lists the namespaces in the order they are shown to the user.
 var subcommands = []subcommand{
 	{name: "daemon", summary: "manage the background instance", argHint: "<action>", actions: []string{actionStart, actionStop, actionStatus, actionStdio}},
-	{name: "config-storage", summary: "manage encrypted connection-profile storage", argHint: "<action>", actions: []string{actionStatus, actionRotateKey}},
+	{name: "config-storage", summary: "manage encrypted connection-profile storage", argHint: "<action>", actions: []string{actionStatus, actionRotateKey, actionVerifyPassword}},
 	{name: "stdio", summary: "bridge stdin/stdout MCP to an instance already answering", argHint: "[endpoint]"},
 }
 

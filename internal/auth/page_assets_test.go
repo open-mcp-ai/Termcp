@@ -142,6 +142,30 @@ func TestManagedPagesKeepFallbackWhenThemesAreUnavailable(t *testing.T) {
 	}
 }
 
+func TestPermissionPageUsesStableAccessPathLabels(t *testing.T) {
+	for _, want := range []string{"function permissionAccessLabel(pathName)", "dsl:'accessDSL'", "webui:'accessWebUI'"} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions page lacks %q", want)
+		}
+	}
+	if strings.Contains(permissionsHTML, "t('access'+") {
+		t.Fatal("permissions page constructs access labels from camelizing internal path names")
+	}
+}
+
+func TestPermissionPageKeepsPreviewPresetsAndIndependentScrollPanes(t *testing.T) {
+	for _, want := range []string{
+		"previewPresetList", "previewPresetHost", "previewPresetConnect",
+		"previewPresetOutput", "previewPresetRun", "previewPresetReadFile",
+		"previewPresetWriteFile", "previewPresetForwards",
+		".auth-permissions #policy-pane .action-panel,.auth-permissions #policy-pane .scope-panel{min-height:0;overflow-y:auto",
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions page lacks %q", want)
+		}
+	}
+}
+
 func TestPageAssetsRejectConditionalStaleThemeResponse(t *testing.T) {
 	m := &Managed{}
 	m.SetPageAssets(testPageAssets())

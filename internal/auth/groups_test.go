@@ -2,13 +2,16 @@ package auth
 
 import (
 	"encoding/json"
-	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/open-mcp-ai/termcp/internal/authorization"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 )
 
 type groupWire struct {
@@ -210,5 +213,56 @@ func TestGroupMutationFailureLeavesLivePolicyAndRequests(t *testing.T) {
 	}
 	if !stateAgentPolicy(m.state, a.Agent.ID).AllowsOperation("profile.list") || live.Err() != nil {
 		t.Fatal("failed save changed live group access")
+	}
+}
+
+func TestUpgradePresetGroupsRefreshesOnlyUnmodifiedShippedPolicy(t *testing.T) {
+	presets := map[string]groupPreset{}
+	for _, preset := range groupPresets() {
+		presets[preset.ID] = preset
+	}
+	legacyOperator := groupPresetsV1()["host-operator"]
+	legacyMaintainer := groupPresetsV1()["file-maintainer"]
+	legacyV2Operator := groupPresetsV2()["host-operator"]
+	operator := permissionGroup{
+		ID: "preset-host-operator", Name: legacyOperator.Name, Description: legacyOperator.Description,
+		Enabled: true, Revision: 7, PresetID: legacyOperator.ID, PresetVersion: legacyOperator.Version,
+		Policy: clonePolicy(legacyOperator.Policy),
+	}
+	maintainer := permissionGroup{
+		ID: "preset-file-maintainer", Name: legacyMaintainer.Name, Description: "operator reviewed",
+		Enabled: true, Revision: 9, PresetID: legacyMaintainer.ID, PresetVersion: legacyMaintainer.Version,
+		Policy: clonePolicy(legacyMaintainer.Policy),
+	}
+	maintainer.Policy.Actions["file.delete"] = authorization.Grant{Effect: authorization.EffectAsk}
+	v2Operator := permissionGroup{
+		ID: "preset-diagnostics", Name: "custom diagnostics", Description: legacyV2Operator.Description,
+		Enabled: true, Revision: 4, PresetID: "diagnostics", PresetVersion: 2,
+		Policy: clonePolicy(groupPresetsV2()["diagnostics"].Policy),
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{operator.ID: operator, maintainer.ID: maintainer, v2Operator.ID: v2Operator},
+		AccessRevision: 12,
+	}
+
+	if !upgradePresetGroups(&state) {
+		t.Fatal("v1 seeded presets were not upgraded")
+	}
+	gotOperator := state.Groups[operator.ID]
+	if gotOperator.PresetVersion != presets["host-operator"].Version ||
+		!gotOperator.Policy.AllowsOperation("shell.detect") ||
+		!reflect.DeepEqual(gotOperator.Policy, presets["host-operator"].Policy) {
+		t.Fatalf("host operator was not refreshed: %+v", gotOperator)
+	}
+	if gotOperator.Revision != operator.Revision+1 || state.AccessRevision != 13 {
+		t.Fatal("preset refresh did not advance policy revisions")
+	}
+	gotV2 := state.Groups[v2Operator.ID]
+	if gotV2.PresetVersion != presets["diagnostics"].Version || !reflect.DeepEqual(gotV2.Policy, presets["diagnostics"].Policy) {
+		t.Fatalf("v2 built-in preset was not refreshed: %+v", gotV2)
+	}
+	gotMaintainer := state.Groups[maintainer.ID]
+	if !reflect.DeepEqual(gotMaintainer, maintainer) {
+		t.Fatal("preset refresh overwrote an administrator-edited group")
 	}
 }

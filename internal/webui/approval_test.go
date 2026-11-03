@@ -55,9 +55,24 @@ func TestApprovalUIIsWired(t *testing.T) {
 	if !strings.Contains(index, `static/js/approval.js`) {
 		t.Error("index.html must load approval.js")
 	}
-	// The page-level worklist is gone: a decision is about one command line in
-	// one session, and the terminal already says which session that is. A header
-	// button opened a modal that asked the question the terminal answers.
+	appr := readAssetLF(t, "static/js/approval.js")
+	// There is one worklist: session-bound decisions stay in the terminal, while
+	// the header list contains only policy requests that have no session window.
+	if !strings.Contains(appr, "function installPolicyApprovalMenu()") ||
+		!strings.Contains(appr, `id="policy-approval-list"`) {
+		t.Error("approval.js must expose the global worklist for unbound policy approvals")
+	}
+	if !strings.Contains(appr, "it.request.session_id === 'policy'") {
+		t.Error("the global worklist must exclude approvals already owned by a session window")
+	}
+	if !strings.Contains(appr, "function openPolicyApprovalMenu(") {
+		t.Error("approval notifications need an entrance to the unbound policy worklist")
+	}
+	if i18n := readAssetLF(t, "static/js/i18n.js"); !strings.Contains(i18n, "'approval-menu'") {
+		t.Error("opening another header menu must close the policy-approval menu")
+	}
+	// These older controls remain removed: they asked reviewers to invent an
+	// approver or compose the operation again.
 	for _, gone := range []string{
 		`id="modal-approvals"`, `id="approvals-open"`, `class="approvals-open"`,
 		`id="modal-approval-compose"`, `id="approval-compose-text"`, `id="approvals-approver"`,
@@ -740,10 +755,10 @@ func TestNotificationClickOpensItsSession(t *testing.T) {
 	if !strings.Contains(body, "ui-notify-clickable") {
 		t.Error("the clickable affordance must be added for a notification that names a session")
 	}
-	// Only notifications with a session may look clickable: one without has
-	// nowhere to go.
-	if !strings.Contains(body, "if (sid)") {
-		t.Error("the click handling must be conditional on having a session")
+	// A notification is clickable only when it can reach a session panel or the
+	// policy worklist. A notification with neither has nowhere to go.
+	if !strings.Contains(body, "policyReview") {
+		t.Error("the click handling must distinguish session and policy approvals")
 	}
 	// Clicking the close button must dismiss rather than also navigating.
 	if !strings.Contains(body, "closest('.ui-notify-close')") {
@@ -933,6 +948,9 @@ func TestApprovalNotificationClickOpensTheReviewPanel(t *testing.T) {
 	if !strings.Contains(util, "if (n.open_review) {") {
 		t.Fatal("the notification click must honour an open_review flag")
 	}
+	if !strings.Contains(util, "openPolicyApprovalMenu()") {
+		t.Fatal("a policy approval notification must open the native header worklist")
+	}
 	// It must open the panel on the window it just focused, and cope with a window
 	// that had to be CREATED first (a session with no window yet is built by the
 	// focus call, so the panel cannot be opened before that returns).
@@ -946,6 +964,9 @@ func TestApprovalNotificationClickOpensTheReviewPanel(t *testing.T) {
 	// approval.js is the entrance that sets the flag.
 	if !strings.Contains(appr, "open_review: true") {
 		t.Error("the approval event must ask for the panel to open")
+	}
+	if !strings.Contains(appr, "open_policy_approvals: payload.session_id === 'policy'") {
+		t.Error("a targetless policy request must route to the header worklist")
 	}
 	ev := between(t, appr, "function onApprovalEvent(payload) {", "\n}")
 	if !strings.Contains(ev, "open_review") {

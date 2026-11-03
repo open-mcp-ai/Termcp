@@ -2216,7 +2216,7 @@ func peerLinesFor(ctx context.Context, sessions []api.Session) string {
 
 func agentCanView(ctx context.Context, operation string) bool {
 	p, restricted, err := auth.PolicyFromContext(ctx)
-	return !restricted || err == nil && p.AllowsOperation(operation)
+	return !restricted || err == nil && p.MayRequestOperation(operation)
 }
 
 // streamLen is one channel's stream length, asked of the record rather than of the

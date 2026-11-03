@@ -6,7 +6,7 @@
 
 范围说明：函数位置和内容哈希固定到上述 Git 提交；阅读期间工作区另有配置加密开发，本方案未修改那些业务文件，也未将其未提交变化混入基线证据。
 
-本文把 [权限需求](agent-permissions.md) 收敛为当前代码可以实施的方案。涉及源码位置以本文及 [函数证据表](agent-access-implementation-evidence.csv) 为准；旧调用审计固定在 `76b3209`，不能把旧行号、714 个连接点或 98 项对照直接当作新版覆盖结果。
+本文把 [权限需求](agent-permissions.md) 收敛为当前代码可以实施的方案。涉及源码位置以本文列出的函数位置为准；旧调用审计固定在 `76b3209`，不能把旧行号、714 个连接点或 98 项对照直接当作新版覆盖结果。
 
 后续接入设计见 [人与 Agent 的身份与凭据签发机制](auth-issuance.md)。选择该方案时，以其中的 Admin 登录、Agent token、可选配对、续期和撤销流程替代本文第 4 节的静态凭据过渡方案；本文其余业务权限约束继续适用。两份方案均未实现。
 
@@ -230,22 +230,15 @@ func (e *Engine) Replace(expectedRevision uint64, next PolicyInput) (PolicyView,
 
 ## 9. Ask 和审批恢复
 
-`Capability.Reviewable()` 不等于当前能安全支持所有 ask。`gateOperation` 在无 session 时不入队，且只有资源已启用对应 review scope 才排队；回放只处理可映射 handler，成功结果目前丢弃。不能把 session.start、查询、raw peer、copy/task 或任意扩展动作标成全支持。
+策略中的 `ask` 现在进入与原生审阅相同的 WebUI 决策面。带 session 的操作显示在该 session 的终端审阅面板；没有 session 的策略请求显示在工作区顶部的策略审批列表。两种入口读同一个 `/api/approvals`，调用同一个 approve/reject 接口，并渲染服务器的 `kind` 与 `summary`；浏览器不会收到 opaque `payload`。
 
-目录为审批支持区分 `none / existing_operation / staged_input`。第一版只对已有可完整保存、排队和回放的操作提供 ask：
+1. 工具调用和普通 DSL statement 在预检后保存工具名与有效参数，或原 statement 与窗口参数。输入与 Enter 仍作为完整 line 一起等待，任何 ask 依赖存在时都不先写 PTY。
+2. `approved` 是单次重放标记，不是可复用的能力。`ExecuteApprovedOperation` 先用保存的 principal/credential 重建当前身份，再重新读取主体、权限组、token 和主机绑定。
+3. 重放继续经过正常 handler 或 directive 路径；`withApproved` 只抑制同一固定请求再次入队，不能绕开 deny、约束、资源范围和参数检查。
+4. 主体停用、凭据撤销、组删除、配置锁定或当前策略已不允许时，批准失败且不执行。浏览器不提供填写请求内容的入口，因此审批表单不能扩大原始意图。
+5. 服务重启会清空内存队列；待审批请求和旧批准不会跨重启恢复。
 
-1. 预检原 session 的队列和 scope 是否已支持该操作；缺少时返回 `review_unavailable`，不退化为 allow。
-2. 不自动把整个 session 的 review 开关打开，不改变人的输入路径。
-3. `writeShellInput/pressShellKey` 在真实写入点再次确认 ask 的排队条件；若预检后资源 review 被关闭，则拒绝，不能直写。
-4. staged text、key 合成完整请求时保存所有需求。input=ask、key=allow 时提交仍需审批；input=deny 时不得暂存。
-5. `approval.Request` 或其受控扩展元数据保存原 Actor、规范资源、完整参数及策略 revision；数据由服务器提交路径产生，不接受批准表单覆写。
-6. `webui.executeApproved` 两分支前调用同一个 `AuthorizeApproved` 回调，普通操作回放再核对规范参数。重新按当前策略和资源上限检查原 Agent；人只是批准者。
-
-复核结果为 deny 或主机已移出范围则不执行；仍为 ask 且该完整请求已获批准，则仅放行这个固定操作的一次执行；不重新入同一审批队列。`withApproved` 只抑制重复排队，不绕过业务权限、资源限制或目标核对。
-
-已有无 Actor 元数据的待审记录不能在启用新机制后猜测发起者；标为需要重新提交，由人清理。若同时在做纯命令解耦，旧记录处理和复核都属于后续明确的权限行为变更，不能混入保持行为的阶段。
-
-策略变化对下一 statement、新调用和待审回放生效。已经开始的终端写入或后台传输不自动撤回，不能承诺零时差吊销已发出的字节；第一版也不隐式新增批量终止任务机制。
+已经开始的终端命令或后台传输不能撤回，策略更新保证后续请求和尚未执行的审批重放使用当前状态。
 
 ## 10. 策略存储和人端管理
 
@@ -277,7 +270,7 @@ decision = "deny"
 
 示例是人已选择的权限，不是默认开放全部动作。缺省主机范围 all，缺省未登记动作 deny；首次生成的策略只允许静态发现，业务权限由人选择预置后保存。可以提供“观察”“终端操作”等明确展开的预置，但不使用未来自动扩张的 `*`。
 
-未知字段、未知操作、不可达动作、非法参数约束、不支持 ask、未解析标签/个体覆盖均拒绝保存。文件缺失生成明确初始策略；已有文件损坏则 Agent 业务关闭，并保留 human 管理恢复入口，不能当作文件缺失回退。
+未知字段、未知操作、不可达动作、非法参数约束、不能完整重放的 ask、未解析标签/个体覆盖均拒绝保存。文件缺失生成明确初始策略；已有文件损坏则 Agent 业务关闭，并保留 human 管理恢复入口，不能当作文件缺失回退。
 
 实现使用不可变快照，保存时先完整验证，再串行检查 expected revision，临时文件写入/关闭/原子替换成功后才发布新快照；写失败旧策略继续有效。策略文件使用仅当前用户可读写的权限，复用跨平台文件替换惯例。第一版由单个 daemon 管理该目录；如果实际部署允许多个进程共享目录，则需在启用写管理前增加跨进程锁，不能仅靠 Go mutex 声称支持多进程并发写。
 
@@ -293,7 +286,7 @@ decision = "deny"
 
 所有接口只允许 human。修改策略不增加一个 Agent 可调用的 DSL 管理命令。预览中的目标、角色由服务端解析，不能接受 `role=human` 来模拟较宽身份。
 
-新增 `permissions.html` 与 `static/js/agent-permissions.js`，导航放在现有 API 页面入口附近。页面只有一份“共享 Agent 策略”：动作词树、主机 all/selected/none、公共词汇、预览与保存。没有 Agent 列表、个体例外、继承按钮或 token 签发按钮。不支持 ask 的操作禁用该选项并显示原因。
+新增权限管理页：动作词树、主机 all/selected/none、公共词汇、预览与保存，并按“禁止 / 允许 / 需审批”保存效果。不能完整冻结和重放的操作不得提供可用的 ask 选项。
 
 `no_webui` 构建继续不打包页面；人端权限管理 REST 不依赖静态页面。UI 与后端使用同一 catalog 和 validation，后端是最终检查方。
 
@@ -338,8 +331,8 @@ decision = "deny"
 - Agent 访问 `POST /api/term`、文件 URL、权限接口、WS Upgrade 全部拒绝；人端 REST/WS 终端维持旧行为；非法 Bearer 不回退有效 human cookie。
 - 真实 SSE/Streamable HTTP 握手、后续消息、断连/重连及跨角色 transport session ID 复用测试；不能只测直接调用 handler 的 context。
 - host/ext/Jump 的凭据字段和认证 URL 不出现在 Agent 返回或日志；guide 与列表的数量、提示、task 源/目的不泄露范围外资源。
-- ask 无队列/无 scope/中途关闭 review 时 fail closed；staged input 与 key 决策不同仍完整审阅；普通回放与直接终端回放都按原 Actor 复核。
-- 策略写失败、损坏、revision 冲突、并发读写、未知字段与不支持 ask；测试用临时目录，不共享固定路径。
+- ask 无队列、资源失效或当前策略已收紧时 fail closed；staged input 与 key 决策不同仍完整审阅；普通回放与直接终端回放都按原 Actor 复核。
+- 策略写失败、损坏、revision 冲突、并发读写、未知字段与不能完整重放的 ask；测试用临时目录，不共享固定路径。
 - 默认及 `no_webui` 构建检查；按仓库要求运行 `make test RACE=1`，涉及审批/扩展/task 生命周期和文件并发时运行 `make test-stress`；CI 三平台执行，不为本方案调整工作流。
 
 本设计本身只增加文档。后续实现的验收必须同时包含“应该拒绝且没有副作用”和“应该允许且仍保持原行为”，不能只验证 UI 上的开关状态。

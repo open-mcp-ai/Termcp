@@ -16,8 +16,213 @@
 @media(max-width:700px){header{flex-wrap:wrap;height:auto;gap:12px;padding:12px 16px}.workspace{display:flex;flex-direction:column;overflow:auto}.workspace aside{border-right:0;border-bottom:1px solid var(--line);max-height:240px;flex:none}.agent-list{display:flex;gap:6px;overflow:auto;min-height:62px}.agent-item{min-width:170px}.detail{min-height:600px;flex:none}.detail-heading{align-items:start;flex-direction:column}.group-editor form{grid-template-columns:1fr}.member-row{align-items:start;flex-direction:column}.member-row .group-actions{justify-content:start}.group-editor{padding:16px 20px}}
 </style>
 <style>
-.policy-preview{padding:18px 28px;border-top:1px solid var(--line);background:var(--canvas)}
-.policy-preview-row{display:flex;gap:10px;align-items:end}.policy-preview-row label{flex:1}.policy-preview textarea{width:100%;min-height:70px;resize:vertical}.policy-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0 0;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);font:12px/1.55 ui-monospace,monospace;color:var(--ink)}
+body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permission-soft:var(--selected);--permission-divider:var(--line)}
+.auth-permissions .brand,.auth-permissions h1,.auth-permissions h2,.auth-permissions h3,.auth-permissions h4{letter-spacing:normal}
+.auth-permissions>header{min-height:60px;padding:0 24px;gap:28px}
+.auth-permissions nav{gap:4px}
+.auth-permissions nav a{min-height:34px;display:inline-flex;align-items:center;padding:0 10px;border-radius:5px;color:var(--muted);font-weight:500}
+.auth-permissions nav a:hover{background:var(--canvas);text-decoration:none;color:var(--ink)}
+.auth-permissions nav a[aria-current]{background:var(--selected);color:var(--ink)}
+.auth-permissions .page-heading{width:100%;max-width:1760px;margin:0 auto;padding:18px 24px 14px;align-items:end}
+.auth-permissions .page-heading h1{font-size:25px;line-height:1.25;letter-spacing:normal}
+.auth-permissions .page-heading form{display:flex;align-items:center}
+.auth-permissions .role-controls details{position:relative}
+.auth-permissions .role-controls summary{list-style:none;display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 11px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-weight:550;cursor:pointer}
+.auth-permissions .role-controls summary::-webkit-details-marker{display:none}
+.auth-permissions .role-controls summary::after{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px)}
+.auth-permissions .role-controls details[open] summary::after{transform:rotate(225deg) translate(-1px,-1px)}
+.auth-permissions .role-controls details[open]{display:block}
+.auth-permissions .role-controls details>.role-controls{position:absolute;z-index:12;right:0;top:calc(100% + 7px);width:min(360px,calc(100vw - 32px));padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);box-shadow:0 10px 28px var(--shadow-dropdown,rgba(28,36,49,.12));align-items:flex-start}
+.auth-permissions .role-controls details>.role-controls label{min-height:30px}
+.auth-permissions #feedback{width:calc(100% - 48px);max-width:1712px;margin:0 auto 12px;min-height:36px;padding:8px 12px;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:12px}
+.auth-permissions #feedback::before{content:"";display:inline-block;width:6px;height:6px;margin:0 8px 1px 0;border-radius:50%;background:var(--accent);vertical-align:middle}
+.auth-permissions #feedback[data-tone=error]::before{background:var(--error)}
+.auth-permissions #feedback[data-tone=success]::before{background:var(--good)}
+.auth-permissions .workspace{width:calc(100% - 48px);max-width:1712px;margin:0 auto 20px;grid-template-columns:276px minmax(0,1fr);border-radius:8px}
+.auth-permissions .workspace>aside{background:var(--permission-rail)}
+.auth-permissions .sidebar-head{padding:18px 16px 10px;align-items:center}
+.auth-permissions .sidebar-head h2{font-size:13px;color:var(--muted);font-weight:650}
+.auth-permissions .sidebar-actions{display:flex;align-items:center;gap:8px}
+.auth-permissions .group-count{font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.auth-permissions .agent-list{padding:2px 8px 10px}
+.auth-permissions .agent-item{position:relative;display:grid;grid-template-columns:8px minmax(0,1fr);grid-template-areas:"dot title" "dot meta";column-gap:10px;row-gap:3px;min-height:56px;padding:10px 11px;border:1px solid transparent;border-radius:6px;color:var(--ink);font-weight:600;line-height:1.25;transition:background .16s ease,border-color .16s ease}
+.auth-permissions .agent-item:hover{background:var(--paper);border-color:var(--line)}
+.auth-permissions .agent-item[aria-pressed=true]{background:var(--paper);border-color:var(--accent);color:var(--ink)}
+.auth-permissions .agent-item-title{grid-area:title;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auth-permissions .agent-item small{grid-area:meta;display:block;min-width:0;color:var(--muted);font-size:11px;font-weight:450;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}
+.auth-permissions .group-status{grid-area:dot;align-self:start;width:7px;height:7px;margin-top:5px;border-radius:50%;background:var(--line)}
+.auth-permissions .agent-item[aria-pressed=true] .group-status{background:var(--accent)}
+.auth-permissions .agent-item.is-default .group-status{background:var(--good)}
+.auth-permissions .agent-item.is-disabled .group-status{background:var(--error)}
+.auth-permissions .agent-item.is-special{margin-top:8px;border-top:1px solid var(--line);border-radius:0 0 6px 6px;padding-top:12px}
+.auth-permissions .group-search{padding:5px 12px 10px}
+.auth-permissions .search-control{position:relative;display:block}
+.auth-permissions .search-control>svg{position:absolute;left:11px;top:50%;width:15px;height:15px;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.auth-permissions input[type=search]{min-height:38px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:8px 10px;max-width:100%;caret-color:var(--accent)}
+.auth-permissions .search-control input{width:100%;padding-left:34px;background:var(--paper)}
+.auth-permissions .group-search .search-control input{padding-right:38px}
+.auth-permissions .group-search .search-control .icon-button{position:absolute;right:2px;top:1px;width:32px;min-width:32px;height:32px;border:0;background:transparent}
+.auth-permissions .visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.auth-permissions .create-agent{padding:14px;background:var(--paper);border-top:1px solid var(--line);max-height:46%;overflow:auto}
+.auth-permissions .detail{background:var(--paper)}
+.auth-permissions .detail-heading{padding:18px 24px 14px;align-items:flex-start}
+.auth-permissions .detail-heading h2{font-size:21px;line-height:1.25}
+.auth-permissions .detail-heading p{max-width:80ch;line-height:1.5}
+.auth-permissions .group-actions{gap:6px;justify-content:flex-end}
+.auth-permissions .group-actions button{min-height:32px;padding:5px 9px;font-size:12px}
+.auth-permissions .tabs{padding:0 24px;gap:4px;background:var(--paper)}
+.auth-permissions .tabs button{display:inline-flex;align-items:center;gap:7px;padding:0 12px;margin-bottom:-1px;border:1px solid transparent;border-bottom:2px solid transparent;border-radius:5px 5px 0 0;font-size:13px}
+.auth-permissions .tabs button:hover{background:var(--canvas)}
+.auth-permissions .tabs button[aria-selected=true]{color:var(--ink);border-color:var(--line);border-bottom-color:var(--accent);background:var(--paper)}
+.auth-permissions .pane{background:var(--paper)}
+.auth-permissions .permission-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:12px 24px 10px;border-bottom:1px solid var(--line);background:var(--paper)}
+.auth-permissions .permission-toolbar-copy{min-width:0}
+.auth-permissions .permission-toolbar h2{font-size:18px;line-height:1.3}
+.auth-permissions .permission-toolbar p{max-width:68ch;margin:5px 0 0;font-size:12px;line-height:1.5}
+.auth-permissions .permission-metrics{display:flex;align-items:stretch;flex:none;border:1px solid var(--line);border-radius:6px;background:var(--canvas);overflow:hidden}
+.auth-permissions .permission-metric{min-width:84px;padding:7px 12px;border-left:1px solid var(--line)}
+.auth-permissions .permission-metric:first-child{border-left:0}
+.auth-permissions .permission-metric strong{display:block;color:var(--ink);font-size:16px;line-height:1.2;font-variant-numeric:tabular-nums}
+.auth-permissions .permission-metric span{display:block;margin-top:2px;color:var(--muted);font-size:10px;line-height:1.2}
+.auth-permissions .permission-metric.is-risk strong{color:var(--warning-bright,var(--warning,var(--ink)))}
+.auth-permissions .policy-columns{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:0;padding:0;min-height:0}
+.auth-permissions .action-panel{padding:16px 24px 24px;min-width:0}
+.auth-permissions .scope-panel{padding:20px 20px 24px;background:var(--canvas);border-left:1px solid var(--line);min-width:0}
+.auth-permissions .section-head{align-items:flex-start;margin-bottom:10px}
+.auth-permissions .section-title-block{min-width:0}
+.auth-permissions .section-head h3{font-size:15px;line-height:1.3;margin:0}
+.auth-permissions .section-caption{display:block;margin-top:4px;color:var(--muted);font-size:11px;line-height:1.45}
+.auth-permissions .section-count{display:inline-flex;align-items:center;min-height:20px;padding:0 7px;border-radius:4px;background:var(--canvas);color:var(--muted);font:600 11px/20px var(--font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
+.auth-permissions .section-head button{flex:none}
+.auth-permissions .button-with-icon{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.auth-permissions .button-with-icon svg,.auth-permissions summary svg,.auth-permissions .tabs button svg{width:15px;height:15px;flex:none}
+.auth-permissions #policy-mode{display:none}
+.auth-permissions .permission-tools{display:grid;grid-template-columns:minmax(220px,1fr) auto;align-items:center;gap:8px 10px;margin-bottom:10px}
+.auth-permissions .permission-search-row{display:flex;gap:8px;align-items:center}
+.auth-permissions .permission-search-row .search-control{flex:1;min-width:0}
+.auth-permissions .icon-button{display:inline-grid;place-items:center;width:36px;min-width:36px;height:36px;padding:0;color:var(--muted)}
+.auth-permissions .icon-button svg{width:15px;height:15px}
+.auth-permissions .permission-search-row input{min-height:36px;background:var(--canvas)}
+.auth-permissions .permission-filter{display:flex;align-items:center;gap:2px;width:max-content;max-width:100%;padding:3px;border:1px solid var(--line);border-radius:6px;background:var(--canvas)}
+.auth-permissions .permission-filter button{min-height:28px;padding:3px 9px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:11px}
+.auth-permissions .permission-filter button:hover{background:var(--paper);color:var(--ink)}
+.auth-permissions .permission-filter button[aria-pressed=true]{background:var(--paper);color:var(--ink);box-shadow:0 1px 3px var(--shadow-soft,rgba(28,36,49,.12))}
+.auth-permissions #permission-result-count{grid-column:1/-1;min-height:16px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.auth-permissions .function-grid.v2{display:block;border-top:1px solid var(--line)}
+.auth-permissions .operation-family{padding:0;border-top:0;border-bottom:1px solid var(--line)}
+.auth-permissions .operation-family>summary{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:50px;padding:9px 2px;list-style:none;cursor:pointer}
+.auth-permissions .operation-family>summary::-webkit-details-marker{display:none}
+.auth-permissions .operation-family>summary::after{content:"";position:absolute;left:2px;top:21px;width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .16s ease}
+.auth-permissions .operation-family[open]>summary::after{transform:rotate(45deg) translateY(-2px)}
+.auth-permissions .family-heading{display:flex;align-items:center;gap:10px;padding-left:17px;min-width:0;flex:1}
+.auth-permissions .family-copy{min-width:0}
+.auth-permissions .family-copy strong{display:block;font-size:13px;line-height:1.35}
+.auth-permissions .family-copy small{display:block;margin-top:2px;font-size:11px;line-height:1.35;color:var(--muted)}
+.auth-permissions .family-control{display:flex;align-items:center;gap:8px;flex:none}
+.auth-permissions .family-coverage{font:600 11px/20px var(--font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums;color:var(--muted)}
+.auth-permissions .family-control input{margin:0}
+.auth-permissions .operation-list{padding:0 0 8px 19px;animation:permission-reveal .18s ease-out both}
+.auth-permissions .permission-row{display:block;position:relative;padding:0;border-top:1px solid var(--line);transition:background .15s ease}
+.auth-permissions .permission-row:hover{background:var(--permission-soft)}
+.auth-permissions .permission-row.is-selected{background:var(--accent-surface-soft,var(--permission-soft))}
+.auth-permissions .permission-choice{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;align-items:start;padding:10px 8px 10px 0;cursor:pointer}
+.auth-permissions .permission-row .permission-check{align-self:start;margin-top:2px}
+.auth-permissions input[type=checkbox].permission-check,.auth-permissions input[type=checkbox].host-check{appearance:none;display:grid;place-items:center;width:17px;height:17px;margin:1px 0 0;border:1.5px solid var(--line);border-radius:4px;background:var(--paper);accent-color:auto}
+.auth-permissions input[type=checkbox].permission-check:checked,.auth-permissions input[type=checkbox].host-check:checked{border-color:var(--accent);background:var(--accent)}
+.auth-permissions input[type=checkbox].permission-check:checked::after,.auth-permissions input[type=checkbox].host-check:checked::after{content:"";width:5px;height:9px;border:solid var(--button-ink);border-width:0 1.5px 1.5px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.auth-permissions input[type=checkbox].permission-check:indeterminate,.auth-permissions input[type=checkbox].host-check:indeterminate{border-color:var(--accent);background:var(--accent)}
+.auth-permissions input[type=checkbox].permission-check:indeterminate::after,.auth-permissions input[type=checkbox].host-check:indeterminate::after{content:"";width:7px;border-top:1.5px solid var(--button-ink)}
+.auth-permissions input[type=checkbox].permission-check:disabled,.auth-permissions input[type=checkbox].host-check:disabled{opacity:.45}
+.auth-permissions .permission-copy{min-width:0}
+.auth-permissions .permission-name{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:var(--ink);font-size:13px;font-weight:600;line-height:1.4}
+.auth-permissions .permission-id{color:var(--muted);font:500 10px/1.4 var(--font-mono,ui-monospace,monospace);white-space:nowrap}
+.auth-permissions .permission-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:5px}
+.auth-permissions .permission-description{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.45;font-weight:400}
+.auth-permissions .tag{display:inline-flex;align-items:center;min-height:19px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:var(--muted);font-size:10px;line-height:17px;white-space:nowrap}
+.auth-permissions .tag.is-risk-high{border-color:var(--error);color:var(--error)}
+.auth-permissions .tag.is-risk-elevated{border-color:var(--warning-border,var(--line));color:var(--warning-bright,var(--ink))}
+.auth-permissions .tag.is-global{border-style:dashed}
+.auth-permissions .permission-dependency{margin:5px 0 0;color:var(--muted);font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+.auth-permissions .operation-conditions{margin:0 0 8px 30px;padding:8px 10px;border:0;border-top:1px solid var(--line);background:var(--paper);font-size:11px}
+.auth-permissions .operation-conditions summary{color:var(--muted);cursor:pointer;font-weight:550}
+.auth-permissions .operation-conditions .field{margin-top:8px;font-weight:500}
+.auth-permissions .operation-conditions input{min-height:32px;padding:4px 8px;font:12px/1.3 var(--font-mono,ui-monospace,monospace)}
+.auth-permissions .permission-empty{margin:0;padding:38px 16px;border-bottom:1px solid var(--line);text-align:center}
+.auth-permissions .scope-modes{display:grid;grid-template-columns:1fr;gap:7px;margin:0 0 12px}
+.auth-permissions .scope-option{display:grid!important;grid-template-columns:18px minmax(0,1fr);gap:9px!important;align-items:start!important;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);cursor:pointer}
+.auth-permissions .scope-option:hover{border-color:var(--accent-border,var(--accent));background:var(--permission-soft)}
+.auth-permissions .scope-option:has(input:checked){border-color:var(--accent);background:var(--selected)}
+.auth-permissions .scope-option input{margin-top:2px}
+.auth-permissions .scope-option-copy strong{display:block;font-size:12px;line-height:1.35}
+.auth-permissions .scope-option-copy small{display:block;margin-top:2px;white-space:normal;line-height:1.35}
+.auth-permissions #scope-note{display:none}
+.auth-permissions #host-picker{padding-top:12px;border-top:1px solid var(--line)}
+.auth-permissions #host-search{min-height:36px;background:var(--paper)}
+.auth-permissions .host-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 0 6px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.auth-permissions .host-toolbar-actions{display:flex;gap:4px}
+.auth-permissions .host-toolbar button{min-height:27px;padding:2px 7px;font-size:10px}
+.auth-permissions .host-grid{display:grid;grid-template-columns:1fr;gap:0}
+.auth-permissions .host-choice{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--line);font-weight:500}
+.auth-permissions .host-choice:hover{background:var(--permission-soft)}
+.auth-permissions .host-choice span{min-width:0;overflow-wrap:anywhere}
+.auth-permissions .host-choice small{margin-top:1px}
+.auth-permissions .access-summary{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.auth-permissions .access-summary h4{font-size:12px;margin:0 0 9px}
+.auth-permissions .summary-list{display:grid;gap:0;margin:0}
+.auth-permissions .summary-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
+.auth-permissions .summary-item dt{color:var(--muted);font-size:11px}
+.auth-permissions .summary-item dd{margin:0;color:var(--ink);font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;text-align:right}
+.auth-permissions .summary-note{margin:9px 0 0;font-size:10px;line-height:1.45}
+.auth-permissions .summary-note.has-risk{color:var(--warning-bright,var(--ink))}
+.auth-permissions .policy-note{margin-top:12px;font-size:11px;line-height:1.5}
+.auth-permissions .policy-preview{display:none;flex:none;padding:8px 24px 10px;border-top:1px solid var(--line);background:var(--canvas)}
+.auth-permissions .policy-preview.is-open:not([hidden]){display:block!important}
+.auth-permissions .policy-preview-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px}
+.auth-permissions .policy-preview-row label{display:contents;font-size:11px}
+.auth-permissions .policy-preview-row label>span{white-space:nowrap}
+.auth-permissions .policy-preview textarea{flex:1;min-height:36px;height:36px;max-height:110px;padding:7px 10px;resize:vertical;font:12px/1.4 var(--font-mono,ui-monospace,monospace);background:var(--paper)}
+.auth-permissions .policy-preview-row button{min-height:36px;white-space:nowrap}
+.auth-permissions .policy-preview pre{max-height:180px;overflow:auto;margin-top:9px;font-family:var(--font-mono,ui-monospace,monospace)}
+.auth-permissions .save-bar{position:relative;z-index:5;min-height:64px;padding:11px 24px;background:var(--paper)}
+.auth-permissions .save-bar>div{min-width:0}
+.auth-permissions .save-actions{display:flex;align-items:center;gap:8px;flex:none}
+.auth-permissions .save-bar p{margin:0;font-size:11px}
+.auth-permissions #save-state{display:flex;align-items:center;gap:7px;color:var(--muted);font-weight:600}
+.auth-permissions #save-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good)}
+.auth-permissions #save-state[data-state=busy]::before{background:var(--accent)}
+.auth-permissions #save-state[data-state=dirty]::before{background:var(--warning,var(--accent))}
+.auth-permissions #save-state[data-state=review]::before{background:var(--warning,var(--accent))}
+.auth-permissions #save-policy{min-width:126px}
+.auth-permissions #save-policy:disabled{opacity:.48}
+.auth-permissions dialog{box-shadow:0 18px 46px var(--shadow-modal,rgba(28,36,49,.24))}
+.auth-permissions input::placeholder{color:var(--muted)}
+.auth-permissions ::selection{background:var(--accent);color:var(--button-ink)}
+.auth-permissions *{scrollbar-color:var(--line) transparent}
+.auth-permissions #policy-pane{display:flex;flex-direction:column;overflow:hidden}
+.auth-permissions #policy-pane .policy-columns{flex:1;min-height:0;overflow:hidden}
+.auth-permissions #policy-pane .action-panel,.auth-permissions #policy-pane .scope-panel{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.auth-permissions .permission-effect{display:inline-flex;flex:none;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--canvas)}
+.auth-permissions .permission-choice.permission-choice-state{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;cursor:default}
+.auth-permissions .permission-choice-state .permission-copy{flex:1;min-width:0}
+.auth-permissions .permission-effect label{position:relative;cursor:pointer}
+.auth-permissions .permission-effect input{position:absolute;opacity:0;pointer-events:none}
+.auth-permissions .permission-effect span{display:block;padding:4px 7px;border-left:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.35;font-weight:600;white-space:nowrap}
+.auth-permissions .permission-effect label:first-child span{border-left:0}
+.auth-permissions .permission-effect input:checked+span{background:var(--paper);color:var(--ink)}
+.auth-permissions .permission-effect input[value=allow]:checked+span{color:var(--good)}
+.auth-permissions .permission-effect input[value=ask]:checked+span{color:var(--warning-bright,var(--warning,var(--accent)))}
+.auth-permissions .permission-effect input:focus-visible+span{outline:2px solid var(--accent);outline-offset:-2px}
+.auth-permissions .permission-effect input:disabled+span{opacity:.45;cursor:default}
+.auth-permissions .permission-row.is-approval{background:var(--warning-surface,var(--permission-soft))}
+.auth-permissions .preview-presets{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.auth-permissions .preview-presets button{min-height:28px;padding:3px 8px;font-size:10px;color:var(--muted)}
+@keyframes permission-reveal{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media(max-width:1240px){.auth-permissions .policy-columns{grid-template-columns:minmax(0,1fr) 286px}.auth-permissions .workspace{grid-template-columns:250px minmax(0,1fr)}.auth-permissions .permission-tools{grid-template-columns:1fr}.auth-permissions .permission-filter{grid-column:1}}
+@media(max-width:1060px){.auth-permissions .workspace{grid-template-columns:250px minmax(0,1fr)}}
+@media(max-width:840px){.auth-permissions{height:auto;min-height:100dvh;overflow:auto}.auth-permissions>header{flex-wrap:wrap;padding-block:10px}.auth-permissions .page-heading,.auth-permissions #feedback,.auth-permissions .workspace{width:calc(100% - 32px)}.auth-permissions .workspace{display:flex;flex-direction:column;overflow:visible}.auth-permissions .workspace>aside{border-right:0;border-bottom:1px solid var(--line);min-height:0}.auth-permissions .agent-list{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:5px;overflow-x:auto;padding-bottom:12px}.auth-permissions .agent-item{margin:0}.auth-permissions .create-agent{max-height:none}.auth-permissions .detail{min-height:0}.auth-permissions .pane,#policy-pane .policy-columns,#policy-pane .action-panel,#policy-pane .scope-panel{overflow:visible}.auth-permissions .permission-toolbar{position:static}.auth-permissions .policy-preview{position:relative}.auth-permissions .save-bar{position:sticky;bottom:0}}
+@media(max-width:780px){.auth-permissions .policy-columns{grid-template-columns:1fr}.auth-permissions .scope-panel{border-left:0;border-top:1px solid var(--line)}.auth-permissions .scope-modes{grid-template-columns:repeat(3,minmax(0,1fr))}.auth-permissions .host-grid{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:14px}.auth-permissions .access-summary{max-width:520px}}
+@media(max-width:620px){.auth-permissions>header{padding:10px 16px;gap:10px}.auth-permissions .page-controls{gap:6px}.auth-permissions .theme-label{display:none}.auth-permissions nav{order:3;width:100%;overflow-x:auto}.auth-permissions .page-heading{padding:14px 0 10px;align-items:flex-start;flex-direction:column;gap:10px}.auth-permissions .page-heading form{align-self:stretch}.auth-permissions .role-controls details{width:100%}.auth-permissions .role-controls summary{justify-content:space-between}.auth-permissions .role-controls details>.role-controls{left:0;right:auto;width:100%}.auth-permissions #feedback,.auth-permissions .workspace{width:calc(100% - 24px)}.auth-permissions .detail-heading{padding:16px;flex-direction:column;gap:12px}.auth-permissions .group-actions{justify-content:flex-start}.auth-permissions .tabs{padding:0 12px;overflow-x:auto}.auth-permissions .permission-toolbar{align-items:flex-start;flex-direction:column;gap:8px;padding:14px 16px 10px}.auth-permissions .permission-metrics{width:100%}.auth-permissions .permission-metric{flex:1;min-width:0}.auth-permissions .action-panel,.auth-permissions .scope-panel{padding:16px}.auth-permissions .scope-modes{grid-template-columns:1fr}.auth-permissions .host-grid{grid-template-columns:1fr}.auth-permissions .policy-preview{padding:14px 16px}.auth-permissions .policy-preview-row{display:flex;flex-direction:column;align-items:stretch}.auth-permissions .policy-preview-row label{display:flex}.auth-permissions .policy-preview-row button{width:100%}.auth-permissions .save-bar{flex-wrap:wrap;gap:8px;padding:10px 16px}.auth-permissions .save-bar>div{flex:1 1 100%}.auth-permissions .save-actions{width:auto;margin-left:auto;justify-content:flex-end}.auth-permissions #save-policy{min-width:112px}.auth-permissions .group-editor{padding:16px}.auth-permissions .group-editor form{grid-template-columns:1fr}.auth-permissions .member-row{align-items:flex-start;flex-direction:column}.auth-permissions .token-pane{padding:18px 16px}.auth-permissions .token-form{flex-direction:column;align-items:stretch}.auth-permissions .token-form label{max-width:none}.auth-permissions .token-table{display:block;overflow-x:auto}.auth-permissions .function-grid{grid-template-columns:1fr}.auth-permissions .permission-name{align-items:flex-start;flex-direction:column;gap:2px}.auth-permissions .permission-filter{width:100%;overflow-x:auto}.auth-permissions .permission-filter button{flex:1;white-space:nowrap}}
+@media(prefers-reduced-motion:reduce){.auth-permissions *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 </style>
 </head>
 <body class="auth-page auth-permissions">
@@ -64,10 +269,12 @@ function renderDetail(){const a=agents.find(a=>a.id===selected),admin=selected==
 function setTab(value){tab=value;$('policy-tab').setAttribute('aria-selected',String(value==='policy'));$('tokens-tab').setAttribute('aria-selected',String(value==='tokens'));$('policy-pane').hidden=value!=='policy';$('policy-save-bar').hidden=value!=='policy';$('policy-preview').hidden=value!=='policy'||!draft;$('tokens-pane').hidden=value!=='tokens';}
 function renderFunctions(){$('policy-mode').textContent=t('finePolicy');const grid=$('function-grid');grid.classList.add('v2');grid.replaceChildren();renderOperations(grid);}
 const familyNames={session:['会话','Sessions'],shell:['终端与通道','Terminal channels'],file:['文件','Files'],forward:['端口转发','Port forwarding'],peer:['外部协议','External protocols'],task:['传输任务','Transfer tasks'],profile:['主机配置','Host profiles'],extension:['扩展','Extensions'],alias:['公共别名','Shared aliases'],notify:['通知','Notifications']};
-const actionNames={'session.list':'列出会话','session.info':'查看会话','session.start':'建立连接','session.terminate':'停止会话','session.delete':'删除会话','shell.list':'列出通道','shell.open':'打开通道','shell.close':'关闭通道','shell.exec':'指定启动程序','shell.resize':'调整终端大小','shell.output':'读取终端输出','shell.input':'发送终端输入','shell.key':'发送按键','shell.marks':'读取状态跨度','shell.detect':'检测环境','shell.reader.register':'注册 reader','shell.reader.unregister':'注销 reader','file.read':'读取文件','file.stat':'读取文件属性','file.realpath':'解析真实路径','file.readlink':'读取链接目标','file.getwd':'读取工作目录','file.statvfs':'读取文件系统信息','file.urls':'获取传输地址','file.write':'写入文件','file.replace':'替换文件文本','file.delete':'删除文件','file.mkdir':'创建目录','file.truncate':'截断文件','file.chmod':'修改文件权限','file.chown':'修改文件所有者','file.chtimes':'修改文件时间','file.symlink':'创建符号链接','file.link':'创建硬链接','file.rename':'重命名文件','forward.list':'列出转发','forward.open.local':'创建本地转发','forward.open.remote':'创建远程转发','forward.open.dynamic':'创建动态代理','forward.close':'关闭转发','task.list':'列出任务','task.info':'查看任务','task.cancel':'取消任务','profile.list':'列出主机','profile.get':'查看主机摘要','profile.create':'创建主机配置','profile.edit':'修改主机配置','profile.copy':'复制主机配置','profile.delete':'删除主机配置','ext.list':'列出扩展','ext.get':'查看扩展摘要','ext.use':'启动并使用扩展','ext.release':'释放扩展','ext.retry':'重建扩展','ext.create':'创建扩展定义','ext.update':'修改扩展定义','ext.delete':'删除扩展定义','alias.list':'列出公共别名','alias.write':'修改公共别名','alias.delete':'删除公共别名','user.notify':'发送通知','mcp.tools.list':'列出 MCP 工具','mcp.tool.invoke':'调用指定 MCP 工具','cdp.protocol.read':'读取 CDP 协议','cdp.attach':'附加浏览器目标','cdp.detach':'分离浏览器目标','cdp.method.invoke':'调用指定 CDP 方法','jrpc.method.invoke':'调用指定 JSON-RPC 方法'};
+const actionNames={'session.list':'列出会话','session.info':'查看会话','session.start':'建立连接','session.terminate':'停止会话','session.delete':'删除会话','shell.list':'列出通道','shell.open':'打开通道','shell.close':'关闭通道','shell.exec':'指定启动程序','shell.resize':'调整终端大小','shell.output':'读取终端输出','shell.input':'发送终端输入','shell.key':'发送按键','shell.marks':'读取状态跨度','shell.detect':'检测 Termcp 本机环境','shell.reader.register':'注册 reader','shell.reader.unregister':'注销 reader','file.read':'读取文件','file.stat':'读取文件属性','file.realpath':'解析真实路径','file.readlink':'读取链接目标','file.getwd':'读取工作目录','file.statvfs':'读取文件系统信息','file.urls':'获取传输地址','file.write':'写入文件','file.replace':'替换文件文本','file.delete':'删除文件','file.mkdir':'创建目录','file.truncate':'截断文件','file.chmod':'修改文件权限','file.chown':'修改文件所有者','file.chtimes':'修改文件时间','file.symlink':'创建符号链接','file.link':'创建硬链接','file.rename':'重命名文件','forward.list':'列出转发','forward.open.local':'创建本地转发','forward.open.remote':'创建远程转发','forward.open.dynamic':'创建动态代理','forward.close':'关闭转发','task.list':'列出任务','task.info':'查看任务','task.cancel':'取消任务','profile.list':'列出主机','profile.get':'查看主机摘要','profile.create':'创建主机配置','profile.edit':'修改主机配置','profile.copy':'复制主机配置','profile.delete':'删除主机配置','ext.list':'列出扩展','ext.get':'查看扩展摘要','ext.use':'启动并使用扩展','ext.release':'释放扩展','ext.retry':'重建扩展','ext.create':'创建扩展定义','ext.update':'修改扩展定义','ext.delete':'删除扩展定义','alias.list':'列出公共别名','alias.write':'修改公共别名','alias.delete':'删除公共别名','user.notify':'发送通知','mcp.tools.list':'列出 MCP 工具','mcp.tool.invoke':'调用指定 MCP 工具','cdp.protocol.read':'读取 CDP 协议','cdp.attach':'附加浏览器目标','cdp.detach':'分离浏览器目标','cdp.method.invoke':'调用指定 CDP 方法','jrpc.method.invoke':'调用指定 JSON-RPC 方法'};
+const actionDescriptions={'shell.detect':'检测 Termcp 本机使用的 shell 环境，不检查远端主机。','shell.input':'向已打开终端输入文本；仍需目标系统账号权限。','shell.exec':'在终端中显式启动程序或 argv。','file.write':'写入内联数据，或按明确字节上限从本地路径传输。','file.delete':'删除目标账号命名空间内的文件或目录。','file.truncate':'截断或扩展远程文件，可能破坏已有内容。','file.chmod':'修改目标文件的权限位。','file.chown':'修改目标文件的所有者或所属组。','file.chtimes':'修改目标文件的访问或修改时间。','file.symlink':'在目标主机创建符号链接。','file.link':'在目标主机创建硬链接。','forward.open.local':'通过本机监听转发到远程目标。','forward.open.remote':'请求远程主机监听并转发流量。','forward.open.dynamic':'在目标连接上启动仅监听回环地址的 SOCKS 代理。','forward.close':'关闭一个已存在的端口转发。','mcp.open':'经现有会话连接远程 MCP 服务。','mcp.tool.invoke':'调用远程 MCP 服务上的指定工具。','mcp.raw':'发送未分类的 MCP 帧，范围大于单个工具授权。','cdp.open':'经现有会话连接 CDP 端点。','cdp.attach':'附加一个浏览器目标。','cdp.detach':'分离一个浏览器目标。','cdp.method.invoke':'调用一个指定的 CDP 方法。','cdp.raw':'发送未分类的 CDP 帧。','jrpc.open':'经现有会话连接 JSON-RPC 服务。','jrpc.method.invoke':'调用一个指定的 JSON-RPC 方法。','jrpc.raw':'发送未分类的 JSON-RPC 帧。','profile.create':'创建包含连接材料的主机配置。','profile.edit':'修改主机配置的目标或凭据。','profile.copy':'复制主机配置；副本仍包含连接材料。','profile.delete':'删除主机配置及其连接材料。','ext.create':'创建可执行扩展定义。','ext.update':'修改扩展的程序、端点、白名单或目标。','ext.delete':'删除扩展定义并停止其受管实例。','ext.retry':'按当前扩展定义重建受管实例。','ext.use':'启动或获取扩展实例的使用通道。','ext.release':'释放扩展使用通道，保留扩展定义。','alias.write':'修改所有 Agent 共用的词面。','alias.delete':'删除所有 Agent 共用的词面。','alias.list':'查看所有 Agent 共用的词面。','user.notify':'向 WebUI 发送操作员通知。','session.delete':'删除已经结束的会话记录。','task.cancel':'取消由 Termcp 启动的传输任务。'};
 function operationName(op){if(lang!=='zh')return op.name;if(actionNames[op.id])return actionNames[op.id];const [kind,act]=op.id.split('.');return kind.toUpperCase()+' · '+({open:'建立连接',list:'列出连接',info:'查看连接',close:'关闭连接',read:'读取帧',raw:'发送自定义协议帧（广泛权限）'}[act]||op.name);}
-function grantAction(op,enabled){if(enabled)draft.actions[op.id]=draft.actions[op.id]?.effect==='allow'?draft.actions[op.id]:{effect:'allow'};else delete draft.actions[op.id];}
-function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=['session','shell','file'].includes(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(v=>t('access'+v[0].toUpperCase()+v.slice(1))).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
+function setActionEffect(op,effect){if(effect==='deny'||!effect){delete draft.actions[op.id];return;}const previous=draft.actions[op.id];draft.actions[op.id]=previous?Object.assign(previous,{effect}):{effect};}
+function grantAction(op,enabled){setActionEffect(op,enabled?'allow':'deny');}
+function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=['session','shell','file'].includes(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
 function renderHosts(){document.querySelectorAll('[name=host-mode]').forEach(n=>n.checked=n.value===draft.host_mode);$('host-count').textContent=draft.host_mode==='selected'?String(draft.hosts.length):'';$('scope-note').textContent=t(draft.host_mode==='all'?'allHint':draft.host_mode==='none'?'noneHint':'selectedHint');$('host-picker').hidden=draft.host_mode!=='selected';const list=$('host-grid');list.replaceChildren();const query=$('host-search').value.toLowerCase();const hosts=[...catalog.hosts,...draft.hosts.filter(id=>!catalog.hosts.some(h=>h.id===id)).map(id=>({id,name:t('missing')+' · '+id.slice(0,8)}))].filter(h=>h.name.toLowerCase().includes(query));hosts.forEach(h=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.value=h.id;input.checked=draft.hosts.includes(h.id);label.append(input,el('span',h.name));input.onchange=()=>{draft.hosts=input.checked?[...draft.hosts,h.id]:draft.hosts.filter(id=>id!==h.id);$('host-count').textContent=String(draft.hosts.length);updateSave();};list.append(label);});if(!hosts.length)list.append(el('p',t('noMatches')));}
 function renderTokens(){const members=new Set(groupMembers().map(p=>p.id));const list=tokens.filter(c=>selected==='admin'?c.principal_id===state.actor.id:members.has(c.principal_id));$('tokens-empty').hidden=list.length>0;$('token-list').replaceChildren();list.forEach(c=>{const row=el('tr'),name=el('td',c.label);const principal=principals.find(p=>p.id===c.principal_id);name.append(el('small',(principal?principal.name+' · ':'')+c.id.slice(0,10)));row.append(name,el('td',new Date(c.created_at).toLocaleDateString(lang)));const cell=el('td'),button=el('button',t('revoke'));button.type='button';button.className='danger';button.onclick=async()=>{if(!confirm(t('revokeConfirm')))return;setBusy(true);try{await request('/auth/tokens/'+encodeURIComponent(c.id),{method:'DELETE'});if(revealed?.credential.id===c.id)clearRevealed();await reload();feedback(t('saved'),'success');}catch(e){fail(e,'token-error');}finally{setBusy(false);}};cell.append(button);row.append(cell);$('token-list').append(row);});}
 async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens')]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;renderList();renderMembers();renderTokens();}
@@ -98,11 +305,785 @@ $('delete-resolution').onchange=()=>{$('delete-replacement-field').hidden=$('del
 $('cancel-delete').onclick=()=>{$('delete-dialog').close();deletePlan=null;};
 $('refresh-delete').onclick=async()=>{setBusy(true);try{await reload();await previewDelete();}catch(e){fail(e,'delete-error');}finally{setBusy(false);}};
 $('delete-form').onsubmit=async e=>{e.preventDefault();if(!deletePlan)return;setBusy(true);try{await request('/auth/groups/'+encodeURIComponent(deletePlan.group_id),{method:'DELETE',body:JSON.stringify({revision:deletePlan.revision,plan_revision:deletePlan.plan_revision,resolution:$('delete-resolution').value,replacement_group_id:$('delete-replacement').value,default_group_id:deletePlan.is_default?$('delete-default').value:''})});$('delete-dialog').close();deletePlan=null;selected=null;draft=null;original='';await reload();select(defaultGroupID,true);feedback(t('saved'),'success');}catch(e){fail(e,'delete-error');}finally{setBusy(false);}};
-function renderPolicyPreview(result){const lines=[result.allowed?t('previewAllowed'):t('previewDenied'),t('previewNotRun')];if(result.reason)lines.push(result.reason);(result.requirements||[]).forEach(r=>{const name=lang==='zh'?(actionNames[r.operation]||r.name):r.name;lines.push('['+(r.allowed?t('previewAllowed'):t('previewDenied'))+'] '+r.operation+' · '+name+(r.reason?' · '+r.reason:''))});if(result.resource_error)lines.push(t('previewResource')+': '+result.resource_error);const box=$('policy-preview-result');box.textContent=lines.join('\n');box.hidden=false;}
+function renderPolicyPreview(result){const lines=[result.approval_required?t('permissionApproval'):result.allowed?t('previewAllowed'):t('previewDenied'),t('previewNotRun')];if(result.reason)lines.push(result.reason);(result.requirements||[]).forEach(r=>{const name=lang==='zh'?(actionNames[r.operation]||r.name):r.name;const state=r.approval?'['+t('permissionApproval')+']':r.allowed?'['+t('previewAllowed')+']':'['+t('previewDenied')+']';lines.push(state+' '+r.operation+' · '+name+(r.reason?' · '+r.reason:''))});if(result.resource_error)lines.push(t('previewResource')+': '+result.resource_error);const box=$('policy-preview-result');box.textContent=lines.join('\n');box.hidden=false;}
+async function runPolicyPreview(cmd){cmd=String(cmd||'');if(!cmd.trim()){feedback(t('previewEmpty'),'error');return;}setBusy(true);try{renderPolicyPreview(await request('/auth/access/preview',{method:'POST',body:JSON.stringify({policy:draft,cmd})}));}catch(error){fail(error);}finally{setBusy(false);}}
 $('policy-tab').onclick=()=>setTab('policy');$('tokens-tab').onclick=()=>{setTab('tokens');renderConfig();};$('host-search').oninput=renderHosts;$('config-mode').onchange=renderConfig;$('dismiss-token').onclick=clearRevealed;$('language').onchange=e=>{lang=e.target.value;renderLanguage();};
-$('run-policy-preview').onclick=async()=>{const cmd=$('preview-command').value;if(!cmd.trim()){feedback(t('previewEmpty'),'error');return;}setBusy(true);try{renderPolicyPreview(await request('/auth/access/preview',{method:'POST',body:JSON.stringify({policy:draft,cmd})}));}catch(error){fail(error);}finally{setBusy(false);}};
+$('run-policy-preview').onclick=()=>runPolicyPreview($('preview-command').value);
 $('copy-config').onclick=async()=>{try{await navigator.clipboard.writeText($('token-config').value);$('copy-state').textContent=t('copied');}catch{$('token-config').select();$('copy-state').textContent=t('manualCopy');}};
 window.addEventListener('beforeunload',e=>{if(changed()||revealed){e.preventDefault();e.returnValue='';}});
 async function load(){renderLanguage();feedback(t('loading'));setBusy(true);try{state=await request('/auth/status');if(!state.authenticated){location.replace('/login');return;}const data=await Promise.all([request('/auth/access'),request('/auth/permissions'),request('/auth/group-presets')]);catalog=data[0];roles=data[1];presets=data[2].presets;renderPresets();$('admin-mcp').checked=roles.permissions.admin.includes('mcp');$('agent-mcp').checked=roles.permissions.agent.includes('mcp');await reload();if(agents.length)select(agents[0].id,true);feedback(t('intro'));$('config-mode').querySelector('[value=daemon]').hidden=!/^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(location.hostname);}catch(error){fail(error);}finally{setBusy(false);}}
 load();
+</script>
+<script nonce="{{.Nonce}}">
+'use strict';
+Object.assign(copy.zh,{
+  permissionTitle:'权限选择',
+  permissionOverview:'选择实际动作并限定主机边界；未选择的动作默认拒绝。',
+  permissionGranted:'已授权',
+  permissionSensitive:'敏感',
+  permissionTotal:'全部动作',
+  permissionApproval:'需审批',
+  effectDeny:'禁止',
+  effectAllow:'允许',
+  effectAsk:'需审批',
+  filterApproval:'需审批',
+  searchActions:'搜索动作名称、ID 或权限入口',
+  filterAll:'全部',
+  filterGranted:'已授权',
+  filterSensitive:'敏感',
+  permissionResult:'当前显示 %n 项',
+  noActionMatches:'没有匹配的动作。调整搜索词或筛选条件后重试。',
+  previewOpen:'验证权限',
+  previewPresets:'常用预览',
+  previewPresetList:'列出会话',
+  previewPresetHost:'查看主机',
+  previewPresetConnect:'建立连接',
+  previewPresetOutput:'读取终端',
+  previewPresetRun:'运行命令',
+  previewPresetReadFile:'读取文件',
+  previewPresetWriteFile:'写入文件',
+  previewPresetForwards:'列出转发',
+  actionCount:'已授权动作',
+  selectVisible:'授权当前结果',
+  clearVisible:'清空当前结果',
+  scopeAllHint:'包括当前与以后新增的主机。',
+  scopeSelectedHint:'只允许已选主机；没有选择时不授予主机权限。',
+  scopeNoneHint:'不授予任何主机资源。',
+  hostsSelected:'已选 %n 台',
+  selectAllHosts:'全选主机',
+  clearHosts:'清空',
+  effectiveAccess:'授权摘要',
+  summaryActions:'可执行动作',
+  summaryHosts:'主机范围',
+  summarySensitive:'敏感动作',
+  summaryNoSensitive:'未包含敏感或高风险动作',
+  summarySensitiveCount:'包含 %n 项敏感或高风险动作',
+  groupsUnit:'个权限组',
+  permissionNote:'选择动作只决定可调用的能力；终端命令仍受远端系统账号权限约束。'
+});
+Object.assign(copy.en,{
+  permissionTitle:'Permission selection',
+  permissionOverview:'Choose concrete actions and limit their host boundary. Unselected actions are denied.',
+  permissionGranted:'Granted',
+  permissionSensitive:'Sensitive',
+  permissionTotal:'All actions',
+  permissionApproval:'Needs approval',
+  effectDeny:'Deny',
+  effectAllow:'Allow',
+  effectAsk:'Approval',
+  filterApproval:'Approval',
+  searchActions:'Search action name, ID, or entry point',
+  filterAll:'All',
+  filterGranted:'Granted',
+  filterSensitive:'Sensitive',
+  permissionResult:'%n shown',
+  noActionMatches:'No actions match. Adjust the search or filter and try again.',
+  previewOpen:'Validate access',
+  previewPresets:'Common previews',
+  previewPresetList:'List sessions',
+  previewPresetHost:'Inspect host',
+  previewPresetConnect:'Connect',
+  previewPresetOutput:'Read terminal',
+  previewPresetRun:'Run command',
+  previewPresetReadFile:'Read file',
+  previewPresetWriteFile:'Write file',
+  previewPresetForwards:'List forwards',
+  actionCount:'Granted actions',
+  selectVisible:'Grant visible',
+  clearVisible:'Clear visible',
+  scopeAllHint:'Includes current and future saved hosts.',
+  scopeSelectedHint:'Only selected saved hosts are accessible. An empty selection grants none.',
+  scopeNoneHint:'No host resources are available.',
+  hostsSelected:'%n selected',
+  selectAllHosts:'Select all hosts',
+  clearHosts:'Clear',
+  effectiveAccess:'Access summary',
+  summaryActions:'Available actions',
+  summaryHosts:'Host scope',
+  summarySensitive:'Sensitive actions',
+  summaryNoSensitive:'No sensitive or high-risk actions included',
+  summarySensitiveCount:'Includes %n sensitive or high-risk actions',
+  groupsUnit:'permission groups',
+  permissionNote:'Actions define callable capabilities; terminal commands still inherit the remote account permissions.'
+});
+
+const permissionIconPaths={
+  plus:['M12 5v14','M5 12h14'],
+  save:['M5 3h11l3 3v15H5z','M8 3v6h8V3','M8 21v-7h8v7'],
+  search:['M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z','m20 20-4-4'],
+  check:['m20 6-11 11-5-5'],
+  sliders:['M4 21v-7','M4 10V3','M12 21v-9','M12 8V3','M20 21v-5','M20 12V3','M1 14h6','M9 8h6','M17 16h6'],
+  key:['M15.5 7.5a4.5 4.5 0 1 1-8.8 1.3L3 12.5V17h4.5v-2H10v-2.5h2.2a4.5 4.5 0 0 0 3.3-5Z'],
+  shield:['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z','m9 12 2 2 4-4'],
+  close:['M18 6 6 18','m6 6 12 12']
+};
+
+function permissionIcon(name){
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 24 24');
+  svg.setAttribute('fill','none');
+  svg.setAttribute('stroke','currentColor');
+  svg.setAttribute('stroke-width','1.8');
+  svg.setAttribute('stroke-linecap','round');
+  svg.setAttribute('stroke-linejoin','round');
+  svg.setAttribute('aria-hidden','true');
+  (permissionIconPaths[name]||[]).forEach(d=>{
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d',d);
+    svg.append(path);
+  });
+  return svg;
+}
+
+function permissionCreate(tag,className,text){
+  const node=el(tag,text);
+  if(className)node.className=className;
+  return node;
+}
+
+function permissionFormat(key,count){
+  return t(key).replace('%n',String(count));
+}
+
+function permissionAccessLabel(pathName){
+  const keys={dsl:'accessDSL',tool:'accessTool',webui:'accessWebUI',internal:'accessInternal'};
+  return t(keys[pathName]||'accessInternal');
+}
+
+const permissionUI={
+  query:'',
+  filter:'all',
+  openFamilies:new Set(['session','shell','file']),
+  installed:false
+};
+
+function permissionSetButton(id,key,iconName){
+  const button=$(id);
+  if(!button)return;
+  const label=permissionCreate('span','',t(key));
+  label.dataset.text=key;
+  if(iconName){
+    button.replaceChildren(permissionIcon(iconName),label);
+    button.classList.add('button-with-icon');
+  }else{
+    button.replaceChildren(label);
+  }
+}
+
+function permissionDecorateButton(id,iconName){
+  const button=$(id);
+  if(!button||button.dataset.permissionDecorated)return;
+  const key=button.dataset.text;
+  permissionSetButton(id,key||'',iconName);
+  button.removeAttribute('data-text');
+  button.dataset.permissionDecorated='true';
+}
+
+function permissionDecorateSearch(id,key){
+  const input=$(id);
+  if(!input||input.dataset.permissionSearch)return;
+  const label=input.closest('label');
+  if(!label)return;
+  const caption=label.querySelector('[data-text]');
+  if(caption)caption.classList.add('visually-hidden');
+  const wrap=permissionCreate('span','search-control');
+  wrap.append(permissionIcon('search'),input);
+  label.append(wrap);
+  input.placeholder=t(key);
+  input.dataset.permissionSearch='true';
+}
+
+function permissionLocalizeChrome(){
+  const actionSearch=$('permission-search');
+  if(actionSearch)actionSearch.placeholder=t('searchActions');
+  const hostSearch=$('host-search');
+  if(hostSearch)hostSearch.placeholder=t('searchHosts');
+  const groupSearch=$('group-search');
+  if(groupSearch)groupSearch.placeholder=t('searchGroups');
+  document.querySelectorAll('[data-scope-description]').forEach(node=>{
+    node.textContent=t(node.dataset.scopeDescription);
+  });
+}
+
+function permissionEnsureStructure(){
+  if(permissionUI.installed)return;
+  const pane=$('policy-pane');
+  const columns=pane?.querySelector('.policy-columns');
+  if(!pane||!columns)return;
+
+  const actionPanel=columns.children[0];
+  const scopePanel=columns.children[1];
+  actionPanel.classList.add('action-panel');
+  scopePanel.classList.add('scope-panel');
+
+  const toolbar=permissionCreate('section','permission-toolbar');
+  const toolbarCopy=permissionCreate('div','permission-toolbar-copy');
+  const title=permissionCreate('h2','',t('permissionTitle'));
+  title.dataset.text='permissionTitle';
+  const overview=permissionCreate('p','',t('permissionOverview'));
+  overview.dataset.text='permissionOverview';
+  toolbarCopy.append(title,overview);
+  const metrics=permissionCreate('div','permission-metrics');
+  [
+    ['permission-granted','permissionGranted',''],
+    ['permission-total','permissionTotal',''],
+    ['permission-sensitive','permissionSensitive','is-risk'],
+    ['permission-approval','permissionApproval','']
+  ].forEach(([id,key,extra])=>{
+    const metric=permissionCreate('div','permission-metric'+(extra?' '+extra:''));
+    const value=permissionCreate('strong','','0');
+    value.id=id;
+    const label=permissionCreate('span','',t(key));
+    label.dataset.text=key;
+    metric.append(value,label);
+    metrics.append(metric);
+  });
+  toolbar.append(toolbarCopy,metrics);
+  pane.insertBefore(toolbar,columns);
+
+  const actionHead=actionPanel.querySelector('.section-head');
+  const actionTitle=actionHead.querySelector('h3');
+  const actionCount=permissionCreate('span','section-count','0');
+  actionCount.id='action-count';
+  actionTitle.after(actionCount);
+
+  const tools=permissionCreate('div','permission-tools');
+  const searchRow=permissionCreate('div','permission-search-row');
+  const searchLabel=permissionCreate('label','search-control');
+  const searchCaption=permissionCreate('span','visually-hidden',t('searchActions'));
+  searchCaption.dataset.text='searchActions';
+  const searchInput=document.createElement('input');
+  searchInput.id='permission-search';
+  searchInput.type='search';
+  searchInput.placeholder=t('searchActions');
+  searchInput.autocomplete='off';
+  searchLabel.append(searchCaption,permissionIcon('search'),searchInput);
+  const searchClear=permissionCreate('button','icon-button');
+  searchClear.id='permission-search-clear';
+  searchClear.type='button';
+  searchClear.hidden=true;
+  searchClear.setAttribute('aria-label',t('clearAll'));
+  searchClear.append(permissionIcon('close'));
+  searchRow.append(searchLabel,searchClear);
+  const filterBar=permissionCreate('div','permission-filter');
+  filterBar.id='permission-filter';
+  filterBar.setAttribute('role','group');
+  filterBar.setAttribute('aria-label',t('filterAll'));
+  [
+    ['all','filterAll'],
+    ['granted','filterGranted'],
+    ['approval','filterApproval'],
+    ['risk','filterSensitive']
+  ].forEach(([value,key],index)=>{
+    const button=permissionCreate('button','',t(key));
+    button.type='button';
+    button.dataset.filter=value;
+    button.dataset.text=key;
+    button.setAttribute('aria-pressed',String(value==='all'));
+    if(index===0)button.classList.add('is-active');
+    filterBar.append(button);
+  });
+  const resultCount=permissionCreate('span','',t('permissionResult').replace('%n','0'));
+  resultCount.id='permission-result-count';
+  resultCount.setAttribute('aria-live','polite');
+  tools.append(searchRow,filterBar,resultCount);
+  const grid=$('function-grid');
+  grid.before(tools);
+
+  document.querySelectorAll('[name=host-mode]').forEach(input=>{
+    const label=input.closest('label');
+    label.classList.add('scope-option');
+    const caption=label.querySelector('[data-text]');
+    const copyNode=permissionCreate('span','scope-option-copy');
+    const description=permissionCreate('small','',t(input.value==='all'?'scopeAllHint':input.value==='selected'?'scopeSelectedHint':'scopeNoneHint'));
+    description.dataset.scopeDescription=input.value==='all'?'scopeAllHint':input.value==='selected'?'scopeSelectedHint':'scopeNoneHint';
+    copyNode.append(caption,description);
+    label.append(copyNode);
+  });
+  $('host-modes').setAttribute('role','radiogroup');
+
+  permissionDecorateSearch('host-search','searchHosts');
+  const hostPicker=$('host-picker');
+  const hostToolbar=permissionCreate('div','host-toolbar');
+  const hostCountLabel=permissionCreate('span','','');
+  hostCountLabel.id='host-selection-count';
+  const hostToolbarActions=permissionCreate('span','host-toolbar-actions');
+  const selectHosts=permissionCreate('button','',t('selectAllHosts'));
+  selectHosts.id='select-all-hosts';
+  selectHosts.type='button';
+  selectHosts.dataset.text='selectAllHosts';
+  const clearHosts=permissionCreate('button','',t('clearHosts'));
+  clearHosts.id='clear-hosts';
+  clearHosts.type='button';
+  clearHosts.dataset.text='clearHosts';
+  hostToolbarActions.append(selectHosts,clearHosts);
+  hostToolbar.append(hostCountLabel,hostToolbarActions);
+  hostPicker.firstElementChild.after(hostToolbar);
+
+  const summary=permissionCreate('section','access-summary');
+  const summaryTitle=permissionCreate('h4','',t('effectiveAccess'));
+  summaryTitle.dataset.text='effectiveAccess';
+  const list=document.createElement('dl');
+  list.className='summary-list';
+  [
+    ['summary-actions','summaryActions'],
+    ['summary-hosts','summaryHosts'],
+    ['summary-sensitive','summarySensitive']
+  ].forEach(([id,key])=>{
+    const item=permissionCreate('div','summary-item');
+    const term=permissionCreate('dt','',t(key));
+    term.dataset.text=key;
+    const value=permissionCreate('dd','','0');
+    value.id=id;
+    item.append(term,value);
+    list.append(item);
+  });
+  const summaryNote=permissionCreate('p','summary-note','');
+  summaryNote.id='summary-note';
+  summary.append(summaryTitle,list,summaryNote);
+  scopePanel.append(summary);
+
+  const saveBar=$('policy-save-bar');
+  const saveButton=$('save-policy');
+  const saveActions=permissionCreate('span','save-actions');
+  const previewToggle=permissionCreate('button','','');
+  previewToggle.id='preview-toggle';
+  previewToggle.type='button';
+  previewToggle.dataset.text='previewOpen';
+  previewToggle.setAttribute('aria-controls','policy-preview');
+  previewToggle.setAttribute('aria-expanded','false');
+  saveButton.before(saveActions);
+  saveActions.append(previewToggle,saveButton);
+  previewToggle.onclick=()=>{
+    const preview=$('policy-preview');
+    const open=!preview.classList.contains('is-open');
+    preview.classList.toggle('is-open',open);
+    preview.hidden=!open&&tab!=='policy';
+    previewToggle.setAttribute('aria-expanded',String(open));
+    if(open)$('preview-command').focus();
+  };
+  const previewSection=$('policy-preview');
+  const previewPresets=permissionCreate('div','preview-presets');
+  const previewCaption=permissionCreate('span','status-dot',t('previewPresets'));
+  previewCaption.dataset.text='previewPresets';
+  previewPresets.append(previewCaption);
+  const hostExample=()=>catalog.hosts?.[0]?.name||'demo';
+  [
+    ['previewPresetList',()=> 'ls'],
+    ['previewPresetHost',()=> 'get host '+hostExample()],
+    ['previewPresetConnect',()=> 'connect '+hostExample()],
+    ['previewPresetOutput',()=> 'read demo:1'],
+    ['previewPresetRun',()=> 'run demo:1 $1'],
+    ['previewPresetReadFile',()=> 'read demo:1 file /tmp/termcp-preview'],
+    ['previewPresetWriteFile',()=> 'write demo:1 file /tmp/termcp-preview --data hello'],
+    ['previewPresetForwards',()=> 'ls forward']
+  ].forEach(([key,build])=>{
+    const button=permissionCreate('button','',t(key));
+    button.type='button';
+    button.dataset.text=key;
+    button.onclick=()=>{
+      const command=build();
+      $('preview-command').value=command;
+      runPolicyPreview(command);
+    };
+    previewPresets.append(button);
+  });
+  previewSection.insertBefore(previewPresets,previewSection.querySelector('pre'));
+
+  const note=scopePanel.querySelector('.policy-note');
+  if(note)note.textContent=t('permissionNote');
+
+  permissionDecorateButton('new-agent','plus');
+  permissionDecorateButton('select-functions','check');
+  permissionDecorateButton('save-policy','save');
+  permissionDecorateButton('preview-toggle','shield');
+  permissionDecorateButton('run-policy-preview','shield');
+  permissionDecorateButton('policy-tab','sliders');
+  permissionDecorateButton('tokens-tab','key');
+
+  const sidebarHead=document.querySelector('.workspace>aside .sidebar-head');
+  const newGroup=$('new-agent');
+  if(sidebarHead&&newGroup){
+    const actions=permissionCreate('span','sidebar-actions');
+    const count=permissionCreate('span','group-count','0 '+t('groupsUnit'));
+    count.id='group-count';
+    newGroup.before(actions);
+    actions.append(count,newGroup);
+  }
+  const groupSearch=$('group-search').closest('label');
+  if(groupSearch)permissionDecorateSearch('group-search','searchGroups');
+
+  const clearButton=permissionCreate('button','icon-button');
+  clearButton.id='group-search-clear';
+  clearButton.type='button';
+  clearButton.hidden=true;
+  clearButton.setAttribute('aria-label',t('clearAll'));
+  clearButton.append(permissionIcon('close'));
+  groupSearch.querySelector('.search-control').append(clearButton);
+
+  searchInput.oninput=()=>{
+    permissionUI.query=searchInput.value.trim();
+    searchClear.hidden=!permissionUI.query;
+    renderOperations($('function-grid'));
+  };
+  searchClear.onclick=()=>{
+    permissionUI.query='';
+    searchInput.value='';
+    searchClear.hidden=true;
+    searchInput.focus();
+    renderOperations($('function-grid'));
+  };
+  filterBar.onclick=event=>{
+    const button=event.target.closest('button[data-filter]');
+    if(!button)return;
+    permissionUI.filter=button.dataset.filter;
+    filterBar.querySelectorAll('button').forEach(item=>{
+      const active=item===button;
+      item.setAttribute('aria-pressed',String(active));
+      item.classList.toggle('is-active',active);
+    });
+    renderOperations($('function-grid'));
+  };
+  selectHosts.onclick=()=>{
+    const query=$('host-search').value.trim().toLowerCase();
+    catalog.hosts.forEach(host=>{
+      if(host.name.toLowerCase().includes(query)&&!draft.hosts.includes(host.id))draft.hosts.push(host.id);
+    });
+    renderHosts();
+    updateSave();
+  };
+  clearHosts.onclick=()=>{
+    draft.hosts=[];
+    renderHosts();
+    updateSave();
+  };
+  $('group-search-clear').onclick=()=>{
+    $('group-search').value='';
+    $('group-search-clear').hidden=true;
+    renderList();
+    $('group-search').focus();
+  };
+  $('group-search').addEventListener('input',()=>{
+    $('group-search-clear').hidden=!$('group-search').value;
+  });
+
+  permissionUI.installed=true;
+  permissionLocalizeChrome();
+}
+
+function permissionMatchesFilter(operation){
+  if(permissionUI.filter==='granted')return ['allow','ask'].includes(draft?.actions?.[operation.id]?.effect);
+  if(permissionUI.filter==='approval')return draft?.actions?.[operation.id]?.effect==='ask';
+  if(permissionUI.filter==='risk')return operation.risk==='high'||operation.risk==='elevated';
+  return true;
+}
+
+function permissionMatchesQuery(operation,family){
+  const query=permissionUI.query.toLowerCase();
+  if(!query)return true;
+  const familyLabel=(familyNames[family]?.[lang==='zh'?0:1]||family).toLowerCase();
+  const access=(operation.access_paths||[]).map(permissionAccessLabel).join(' ').toLowerCase();
+  return [operation.id,operationName(operation),familyLabel,access].join(' ').toLowerCase().includes(query);
+}
+
+function permissionSyncFamily(section){
+  const boxes=[...section.querySelectorAll('.permission-row .permission-check')];
+  const checked=boxes.filter(input=>input.checked).length;
+  const select=section.querySelector('.family-select');
+  if(select){
+    select.checked=boxes.length>0&&checked===boxes.length;
+    select.indeterminate=checked>0&&checked<boxes.length;
+  }
+}
+
+function permissionFocusOperation(id){
+  const row=document.querySelector('.permission-row[data-operation="'+CSS.escape(id)+'"]');
+  row?.querySelector('.permission-effect input:checked, .permission-effect input')?.focus();
+}
+
+renderOperations=function renderOperationsEnhanced(grid){
+  draft.actions||={};
+  const families=new Map();
+  catalog.operations.forEach(operation=>{
+    if(!permissionMatchesFilter(operation)||!permissionMatchesQuery(operation,operation.family))return;
+    if(!families.has(operation.family))families.set(operation.family,[]);
+    families.get(operation.family).push(operation);
+  });
+  grid.classList.add('v2');
+  grid.replaceChildren();
+
+  if(!families.size){
+    const empty=permissionCreate('p','permission-empty',t('noActionMatches'));
+    empty.setAttribute('role','status');
+    grid.append(empty);
+    permissionSyncStats();
+    return;
+  }
+
+  families.forEach((operations,family)=>{
+    const allFamilyOperations=catalog.operations.filter(operation=>operation.family===family);
+    const granted=allFamilyOperations.filter(operation=>['allow','ask'].includes(draft.actions[operation.id]?.effect)).length;
+    const section=document.createElement('details');
+    section.className='operation-family';
+    section.dataset.family=family;
+    section.open=permissionUI.query||permissionUI.filter!=='all'||permissionUI.openFamilies.has(family);
+    section.addEventListener('toggle',()=>{
+      if(section.open)permissionUI.openFamilies.add(family);
+      else permissionUI.openFamilies.delete(family);
+    });
+
+    const summary=document.createElement('summary');
+    const heading=permissionCreate('span','family-heading');
+    const familyCopy=permissionCreate('span','family-copy');
+    const familyTitle=permissionCreate('strong','',familyNames[family]?.[lang==='zh'?0:1]||family);
+    familyTitle.id='family-'+family;
+    const familyMeta=permissionCreate('small','',granted+' / '+allFamilyOperations.length+' '+t('permissionGranted').toLowerCase());
+    familyCopy.append(familyTitle,familyMeta);
+    heading.append(familyCopy);
+
+    const control=permissionCreate('span','family-control');
+    const coverage=permissionCreate('span','family-coverage',granted+'/'+allFamilyOperations.length);
+    const select=document.createElement('input');
+    select.type='checkbox';
+    select.className='family-select';
+    select.setAttribute('aria-label',familyTitle.textContent+' '+t('selectVisible'));
+    select.setAttribute('aria-describedby',familyTitle.id);
+    const available=operations.filter(operation=>!operation.global||draft.host_mode==='all');
+    const visibleChecked=available.filter(operation=>draft.actions[operation.id]?.effect==='allow').length;
+    select.checked=available.length>0&&visibleChecked===available.length;
+    select.indeterminate=visibleChecked>0&&visibleChecked<available.length;
+    select.disabled=!available.length;
+    select.onclick=event=>event.stopPropagation();
+    select.onchange=()=>{
+      available.forEach(operation=>grantAction(operation,select.checked));
+      renderOperations(grid);
+      updateSave();
+    };
+    control.append(coverage,select);
+    summary.append(heading,control);
+    section.append(summary);
+
+    const list=permissionCreate('div','operation-list');
+    operations.forEach(operation=>{
+      const row=permissionCreate('div','permission-row');
+      row.dataset.operation=operation.id;
+      const effect=draft.actions[operation.id]?.effect||'deny';
+      const selected=effect==='allow';
+      row.classList.toggle('is-selected',selected);
+      row.classList.toggle('is-approval',effect==='ask');
+      const choice=permissionCreate('div','permission-choice permission-choice-state');
+      const mode=permissionCreate('div','permission-effect');
+      mode.setAttribute('role','radiogroup');
+      mode.setAttribute('aria-label',operationName(operation)+' '+t('permissionTitle'));
+      [['deny','effectDeny'],['allow','effectAllow'],['ask','effectAsk']].forEach(([value,key])=>{
+        const option=document.createElement('label');
+        const radio=document.createElement('input');
+        radio.type='radio';
+        radio.name='effect-'+operation.id;
+        radio.value=value;
+        radio.checked=effect===value;
+        radio.disabled=!!operation.global&&draft.host_mode!=='all';
+        radio.onchange=()=>{
+          setActionEffect(operation,value);
+          renderOperations(grid);
+          updateSave();
+        };
+        option.append(radio,permissionCreate('span','',t(key)));
+        mode.append(option);
+      });
+      const content=permissionCreate('span','permission-copy');
+      const nameLine=permissionCreate('span','permission-name');
+      nameLine.append(permissionCreate('span','',operationName(operation)),permissionCreate('code','permission-id',operation.id));
+      const tags=permissionCreate('span','permission-tags');
+      (operation.access_paths||[]).forEach(pathName=>tags.append(permissionCreate('span','tag',permissionAccessLabel(pathName))));
+      if(operation.risk==='high')tags.append(permissionCreate('span','tag is-risk-high',t('riskHigh')));
+      if(operation.risk==='elevated')tags.append(permissionCreate('span','tag is-risk-elevated',t('riskElevated')));
+      if(operation.global)tags.append(permissionCreate('span','tag is-global',t('allHosts')));
+      content.append(nameLine,tags);
+      const description=lang==='zh'?(actionDescriptions[operation.id]||operation.description):operation.description;
+      if(description)content.append(permissionCreate('span','permission-description',description));
+      const dependencies=operation.dependencies||[];
+      if(dependencies.length){
+        const shown=dependencies.slice(0,3).join(', ');
+        const rest=dependencies.length>3?' +'+(dependencies.length-3):'';
+        content.append(permissionCreate('span','permission-dependency',t('requires')+': '+shown+rest));
+      }
+      choice.append(content,mode);
+      row.append(choice);
+      if(effect!=='deny'&&operation.constraint_kinds?.length){
+        const details=document.createElement('details');
+        details.className='operation-conditions';
+        details.open=!!draft.actions[operation.id].constraints;
+        const conditionsSummary=permissionCreate('summary','',t('conditions'));
+        details.append(conditionsSummary);
+        operation.constraint_kinds.forEach(kind=>{
+          const field=permissionCreate('label','field');
+          field.append(permissionCreate('span','',t(kind)));
+          const control=document.createElement('input');
+          const numeric=['repeat_max','max_bytes'].includes(kind);
+          control.type=numeric?'number':'text';
+          control.setAttribute('aria-label',operation.id+' '+t(kind));
+          const value=draft.actions[operation.id].constraints?.[kind];
+          control.value=numeric?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';
+          if(numeric){
+            control.min=kind==='repeat_max'?'1':'0';
+            control.step='1';
+          }else{
+            control.placeholder=t('unlimited');
+          }
+          control.oninput=()=>{
+            const raw=control.value.trim();
+            const grant=draft.actions[operation.id];
+            let parsed;
+            if(numeric&&raw!==''){
+              parsed=Number(raw);
+              if(!Number.isSafeInteger(parsed)||parsed<Number(control.min)){
+                control.setCustomValidity('Invalid integer');
+                updateSave();
+                return;
+              }
+            }else if(!numeric&&raw!==''){
+              parsed=raw==='[]'?[]:raw.split(',').map(item=>item.trim());
+            }
+            control.setCustomValidity('');
+            grant.constraints||={};
+            if(raw==='')delete grant.constraints[kind];
+            else grant.constraints[kind]=parsed;
+            if(!Object.keys(grant.constraints).length)delete grant.constraints;
+            updateSave();
+          };
+          field.append(control);
+          details.append(field);
+        });
+        row.append(details);
+      }
+      list.append(row);
+    });
+    section.append(list);
+    grid.append(section);
+  });
+  grid.append(permissionCreate('p','policy-note',t('recipe')));
+  permissionSyncStats();
+};
+
+renderHosts=function renderHostsEnhanced(){
+  document.querySelectorAll('[name=host-mode]').forEach(input=>{
+    input.checked=input.value===draft.host_mode;
+  });
+  const selectedCount=draft.hosts.length;
+  $('host-count').textContent=draft.host_mode==='selected'?String(selectedCount):'';
+  $('scope-note').textContent=t(draft.host_mode==='all'?'scopeAllHint':draft.host_mode==='none'?'scopeNoneHint':'scopeSelectedHint');
+  $('host-picker').hidden=draft.host_mode!=='selected';
+  $('host-selection-count').textContent=draft.host_mode==='selected'?permissionFormat('hostsSelected',selectedCount):'';
+  const query=$('host-search').value.trim().toLowerCase();
+  const hosts=[
+    ...catalog.hosts,
+    ...draft.hosts.filter(id=>!catalog.hosts.some(host=>host.id===id)).map(id=>({
+      id,
+      name:t('missing')+' · '+id.slice(0,8)
+    }))
+  ].filter(host=>host.name.toLowerCase().includes(query));
+  const list=$('host-grid');
+  list.replaceChildren();
+  hosts.forEach(host=>{
+    const label=document.createElement('label');
+    label.className='host-choice';
+    const check=document.createElement('input');
+    check.type='checkbox';
+    check.className='host-check';
+    check.value=host.id;
+    check.checked=draft.hosts.includes(host.id);
+    const copyNode=permissionCreate('span','');
+    copyNode.append(permissionCreate('span','',host.name),permissionCreate('small','',host.id.slice(0,12)));
+    label.append(check,copyNode);
+    check.onchange=()=>{
+      draft.hosts=check.checked?[...draft.hosts,host.id]:draft.hosts.filter(id=>id!==host.id);
+      renderHosts();
+      updateSave();
+    };
+    list.append(label);
+  });
+  if(!hosts.length)list.append(permissionCreate('p','permission-empty',t('noMatches')));
+  permissionSyncStats();
+};
+
+renderList=function renderListEnhanced(){
+  const list=$('agent-list');
+  list.replaceChildren();
+  const query=$('group-search').value.trim().toLowerCase();
+  const shown=agents.filter(group=>group.name.toLowerCase().includes(query));
+  const add=(id,name,note,kind,isDefault,isDisabled)=>{
+    const button=permissionCreate('button','agent-item'+(kind?' is-'+kind:'')+(isDefault?' is-default':'')+(isDisabled?' is-disabled':''));
+    button.type='button';
+    button.dataset.groupId=id;
+    button.setAttribute('aria-pressed',String(selected===id));
+    button.append(permissionCreate('span','group-status'));
+    button.append(permissionCreate('span','agent-item-title',name));
+    button.append(permissionCreate('small','',note));
+    button.onclick=()=>select(id);
+    list.append(button);
+  };
+  shown.forEach(group=>{
+    const flags=[];
+    if(group.id===defaultGroupID)flags.push(t('isDefault'));
+    flags.push(t(group.enabled?'enabled':'disabled'));
+    flags.push(group.member_count+' '+t('memberCount'));
+    if(group.policy_warnings?.length)flags.push(t('policyReview'));
+    add(group.id,group.name,flags.join(' · '),'group',group.id===defaultGroupID,!group.enabled);
+  });
+  if(!shown.length)list.append(permissionCreate('p','permission-empty',t('noGroupMatches')));
+  add('denied',t('unassigned'),principals.filter(principal=>principal.group_id==='system-deny').length+' '+t('memberCount'),'special');
+  add('admin',t('admin'),'MCP tokens','special');
+  const groupCount=$('group-count');
+  if(groupCount)groupCount.textContent=agents.length+' '+t('groupsUnit');
+};
+
+function permissionSyncStats(){
+  if(!permissionUI.installed)return;
+  const total=catalog.operations.length;
+  const granted=catalog.operations.filter(operation=>['allow','ask'].includes(draft?.actions?.[operation.id]?.effect)).length;
+  const approval=catalog.operations.filter(operation=>draft?.actions?.[operation.id]?.effect==='ask').length;
+  const sensitive=catalog.operations.filter(operation=>['allow','ask'].includes(draft?.actions?.[operation.id]?.effect)&&(operation.risk==='high'||operation.risk==='elevated')).length;
+  const shown=catalog.operations.filter(operation=>permissionMatchesFilter(operation)&&permissionMatchesQuery(operation,operation.family)).length;
+  $('permission-granted').textContent=String(granted);
+  $('permission-total').textContent=String(total);
+  $('permission-sensitive').textContent=String(sensitive);
+  $('permission-approval').textContent=String(approval);
+  $('action-count').textContent=granted+' / '+total;
+  $('permission-result-count').textContent=permissionFormat('permissionResult',shown);
+  const availableVisible=catalog.operations.filter(operation=>(!operation.global||draft?.host_mode==='all')&&permissionMatchesFilter(operation)&&permissionMatchesQuery(operation,operation.family));
+  const allVisibleGranted=availableVisible.length>0&&availableVisible.every(operation=>draft?.actions?.[operation.id]?.effect==='allow');
+  permissionSetButton('select-functions',allVisibleGranted?'clearVisible':'selectVisible','check');
+  $('summary-actions').textContent=granted+' / '+total;
+  $('summary-actions').textContent=granted+' / '+total+(approval?' · '+approval+' '+t('permissionApproval'):'');
+  $('summary-hosts').textContent=draft?.host_mode==='all'?t('allHosts'):draft?.host_mode==='none'?t('noHosts'):permissionFormat('hostsSelected',draft?.hosts?.length||0);
+  $('summary-sensitive').textContent=String(sensitive);
+  const note=$('summary-note');
+  note.textContent=sensitive?permissionFormat('summarySensitiveCount',sensitive):t('summaryNoSensitive');
+  note.classList.toggle('has-risk',sensitive>0);
+  const state=$('save-state');
+  if(state&&draft){
+    const review=agents.find(group=>group.id===selected)?.policy_warnings?.length>0;
+    state.dataset.state=busy?'busy':review?'review':changed()?'dirty':'saved';
+  }
+}
+
+permissionEnsureStructure();
+if(permissionUI.installed){
+  const originalUpdateSave=updateSave;
+  updateSave=function updateSaveEnhanced(){
+    originalUpdateSave();
+    permissionSyncStats();
+  };
+  const originalRenderLanguage=renderLanguage;
+  renderLanguage=function renderLanguageEnhanced(){
+    originalRenderLanguage();
+    permissionLocalizeChrome();
+  };
+  $('host-search').oninput=()=>{
+    renderHosts();
+  };
+  renderList();
+  permissionLocalizeChrome();
+}
 </script>{{template "theme-script" .}}</body></html>

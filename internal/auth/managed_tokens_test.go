@@ -97,7 +97,7 @@ func TestMCPCredentialsIdentityPersistenceAndPurpose(t *testing.T) {
 	check(admin.Token, Actor{ID: m.state.Admin.ID, Username: "admin", Role: RoleAdmin})
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
 	for _, token := range []string{a.Token, admin.Token} {
-		for _, path := range []string{"/api/daemon", "/api/daemon/stop", "/auth/principals", "/auth/tokens", "/auth/permissions", "/auth/password", "/api/sessions", "/"} {
+		for _, path := range []string{"/api/daemon", "/api/daemon/stop", "/auth/principals", "/auth/tokens", "/auth/permissions", "/auth/password", "/api/sessions", "/api/approvals", "/api/approvals/fake/approve", "/"} {
 			if w := bearerRequest(h, "POST", path, token, cookie); w.Code != 403 {
 				t.Fatalf("bearer escaped MCP: %s %d", path, w.Code)
 			}
