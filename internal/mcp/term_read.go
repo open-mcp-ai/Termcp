@@ -85,6 +85,18 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 	if _, ok := stmt.Flag("grep"); ok {
 		return s.readGrep(ctx, stmt, win)
 	}
+	// THE TARGET IS NORMALISED TO A REAL SHELL ID HERE, ONCE (issue #247).
+	//
+	// Every path below hands this value to `shell_output`, which resolves ids and
+	// nothing else — so a name-addressed channel (`dogfood:1`) or a name-addressed
+	// session (`dogfood`) reached the tool as an unknown id and answered
+	// `session "dogfood" not found`. Resolving here rather than in each tool keeps
+	// one spelling rule for the whole verb, and the same resolver the other
+	// directives use (`requireShell` / `sessionByName`) so a name means the same
+	// thing everywhere.
+	if cs, bad := s.requireShell(stmt.Target); bad == nil && cs != nil {
+		stmt.Target = cs.ID
+	}
 	args := argsOf("shell_id", stmt.Target)
 	// --offset IS THE SAME BYTE POSITION AS --cursor, and on a channel read it used to
 	// be accepted and IGNORED (dogfood finding on #159): the flag is declared for the
