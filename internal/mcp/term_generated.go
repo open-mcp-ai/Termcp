@@ -180,6 +180,10 @@ func (s *Server) directiveInfo(ctx context.Context, stmt directive.Statement, wi
 	writeKV(&b, "status", string(info.Status))
 	writeKV(&b, "ssh_config", dash(info.SSHConfig))
 	writeKV(&b, "endpoint", dash(info.SSHEndpoint))
+	// WHAT SHELL IS ON THE OTHER SIDE (issue #208.1). A caller writing the next command
+	// has to know whether `ls -la` means a listing or a PowerShell alias failure, and
+	// until now the only way to find out was to run something and read the error.
+	writeKV(&b, "shell_family", dash(info.DetectedShell))
 	if info.ExitCode != nil {
 		writeKV(&b, "exit_code", fmt.Sprint(*info.ExitCode))
 	}
