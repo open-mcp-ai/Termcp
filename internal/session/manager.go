@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,6 +176,30 @@ func (m *Manager) Create(cfg Config) (*Session, error) {
 	m.persistOne(s.ID)
 	m.notifyListChange()
 	return s, nil
+}
+
+// SessionsNamed returns every session whose display name is name (issue #247).
+//
+// IT RETURNS A SLICE, NOT "THE" SESSION, because a name is not unique and cannot be
+// made unique without breaking the case it exists for: Name defaults to the profile
+// name, so every session started from `internal` without an explicit --name is called
+// "internal". A lookup that quietly picked one of them would let `close internal` kill
+// a session the caller was not looking at — the worst kind of wrong answer, because it
+// succeeds. The caller decides what an ambiguous name means; this only reports.
+func (m *Manager) SessionsNamed(name string) []*Session {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	var out []*Session
+	m.sessions.Range(func(_, v any) bool {
+		sess := v.(*Session)
+		if sess.Info().Name == name {
+			out = append(out, sess)
+		}
+		return true
+	})
+	return out
 }
 
 // Get returns a session by ID.

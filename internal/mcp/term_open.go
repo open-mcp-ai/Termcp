@@ -40,10 +40,21 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 		return []envelope.Slot{{Code: 409, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConflict},
 			Body: "the internal profile is disabled on this instance (it was started with --no-internal)"}}
 	}
-	capID := capability.ShellOpen
-	if _, bad := s.requireSession(stmt.Target); bad != nil {
-		// The target is not an existing session, so this call creates one.
-		capID = capability.SessionStart
+	// CONNECT ALWAYS STARTS A NEW LINK; OPEN MAY REUSE ONE (issue #247).
+	//
+	// `connect` was distinguished from `open` by whether its target resolved to a live
+	// session: unresolvable meant "this is a profile, start one". That test breaks the
+	// moment a session can be addressed BY NAME, because the second `connect internal`
+	// then resolves to the first session called "internal" and silently adds a channel
+	// to a connection somebody else owns — a different connection than the caller asked
+	// for, reported as success. The verb says which it means, so the verb decides.
+	capID := capability.SessionStart
+	if stmt.Op == "open" {
+		capID = capability.ShellOpen
+		if _, bad := s.requireSession(stmt.Target); bad != nil {
+			// The target is not an existing session, so this call creates one.
+			capID = capability.SessionStart
+		}
 	}
 	if slot, refused := s.refuseAction(ctx, stmt, capID); refused {
 		return []envelope.Slot{slot}
