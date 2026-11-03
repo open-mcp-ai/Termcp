@@ -398,6 +398,9 @@ type Error struct {
 	// Rest is the statement after Op, verbatim, so a caller-defined directive can
 	// be re-parsed once its meaning is known.
 	Rest string
+	// TrailingSep is the operator that separated the failing statement from the
+	// one before it: "&", ";", "&&", or "||".
+	TrailingSep string
 	// AfterPayload names the payload directive the failing statement FOLLOWED, and
 	// is set only when that is the plausible cause.
 	//
