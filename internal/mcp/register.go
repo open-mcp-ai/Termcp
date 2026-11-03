@@ -5,6 +5,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -41,12 +42,13 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		sessMgr.AddOnDeadHook(closePeersBySession)
 	}
 	s := &Server{
-		sessMgr:     sessMgr,
-		msgMgr:      msgMgr,
-		sshConfigs:  sshConfigs,
-		forwardMgr:  forwardMgr,
-		connections: newConnRegistry(),
-		tasks:       task.NewManager(),
+		sessMgr:         sessMgr,
+		msgMgr:          msgMgr,
+		sshConfigs:      sshConfigs,
+		forwardMgr:      forwardMgr,
+		connections:     newConnRegistry(),
+		tasks:           task.NewManager(),
+		policyApprovals: make(map[string]*approval.Queue),
 	}
 	for _, opt := range opts {
 		opt(s)

@@ -3,12 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
+	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
@@ -96,8 +99,14 @@ func callerInputSource(ctx context.Context) session.InputSource {
 
 // gatedPayload is what a held operation stores so it can be replayed.
 type gatedPayload struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
+	Mode         string                `json:"mode,omitempty"`
+	Tool         string                `json:"tool,omitempty"`
+	Args         map[string]any        `json:"args,omitempty"`
+	Statement    *directive.Statement  `json:"statement,omitempty"`
+	Window       *termArgs             `json:"window,omitempty"`
+	PrincipalID  string                `json:"principal_id,omitempty"`
+	CredentialID string                `json:"credential_id,omitempty"`
+	Bindings     agentResourceBindings `json:"bindings,omitempty"`
 }
 
 // gateOperation holds an MCP operation for review when the session gates.
@@ -134,7 +143,14 @@ func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolReques
 	}
 	args := request.GetArguments()
 	summary := summarizeOperation(tool, args)
-	payload, err := json.Marshal(gatedPayload{Tool: tool, Args: args})
+	actor, _ := auth.ActorFromContext(ctx)
+	credentialID := strings.TrimPrefix(auth.CredentialIDFromContext(ctx), "token:")
+	bindings, _ := agentBindingsFromContext(ctx)
+	payload, err := json.Marshal(gatedPayload{
+		Mode: "tool", Tool: tool, Args: args,
+		PrincipalID: actor.ID, CredentialID: credentialID,
+		Bindings: bindings,
+	})
 	if err != nil {
 		return toolError(CodeOperationFailed, "cannot describe the operation for review: %s", err.Error()), true
 	}
@@ -200,6 +216,36 @@ func (s *Server) ExecuteApprovedOperation(req approval.Request) error {
 	if err := json.Unmarshal(req.Payload, &p); err != nil {
 		return fmt.Errorf("cannot read the approved operation: %w", err)
 	}
+	ctx := context.Background()
+	if p.PrincipalID != "" || p.CredentialID != "" {
+		s.policyApprovalMu.Lock()
+		provider := s.approvalContext
+		s.policyApprovalMu.Unlock()
+		if provider == nil {
+			return errors.New("this deployment cannot reauthorize Agent approvals")
+		}
+		var err error
+		ctx, err = provider(ctx, p.PrincipalID, p.CredentialID)
+		if err != nil {
+			return err
+		}
+	}
+	ctx = withApproved(withAgentResourceBindings(ctx, p.Bindings))
+	if p.Mode == "dsl" {
+		if p.Statement == nil || p.Window == nil {
+			return errors.New("approved DSL payload is incomplete")
+		}
+		slots := s.runDirective(ctx, *p.Statement, *p.Window)
+		for _, slot := range slots {
+			if slot.Code >= 400 {
+				return errors.New(slot.Body)
+			}
+		}
+		return nil
+	}
+	if p.Tool == "" {
+		return errors.New("approved operation has no tool")
+	}
 	handler := s.handlerFor(p.Tool)
 	if handler == nil {
 		return fmt.Errorf("no handler for approved operation %q", p.Tool)
@@ -207,21 +253,13 @@ func (s *Server) ExecuteApprovedOperation(req approval.Request) error {
 	if p.Args == nil {
 		p.Args = map[string]any{}
 	}
-	// Re-resolve the session id from the request when the operation acts on one:
-	// it is authoritative, and a payload that named a different session must not
-	// be able to redirect the operation that a human approved. An operation that
-	// acts on the instance instead (installing an extension, creating a profile)
-	// has no session to pin, and injecting an empty one would only overwrite what
-	// the payload carried.
-	if req.SessionID != "" {
+	if req.SessionID != "" && req.SessionID != "policy" {
 		p.Args["session_id"] = req.SessionID
 	}
-
 	call := mcpgo.CallToolRequest{}
 	call.Params.Name = p.Tool
 	call.Params.Arguments = p.Args
-
-	res, err := handler(withApproved(context.Background()), call)
+	res, err := withLogging(p.Tool, handler, s)(ctx, call)
 	if err != nil {
 		return err
 	}

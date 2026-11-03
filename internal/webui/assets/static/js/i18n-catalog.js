@@ -513,6 +513,10 @@ var I18N_CATALOG = {
     'review.kind.fileTruncate': 'truncate',
     'review.kind.forwardOpen': 'port forward',
     'review.kind.forwardClose': 'forward close',
+    'approvals.title': 'Approvals',
+    'approvals.policyHint': 'Policy requests that are not tied to a terminal session wait here.',
+    'approvals.empty': 'Nothing is waiting for approval.',
+    'notify.policyReviewTip': 'Open policy approvals',
 
     /* --- terminal timeline rail --- */
     'rail.label': 'Terminal timeline',
@@ -1028,6 +1032,10 @@ var I18N_CATALOG = {
     'review.kind.fileTruncate': '截断',
     'review.kind.forwardOpen': '端口转发',
     'review.kind.forwardClose': '关闭转发',
+    'approvals.title': '审批',
+    'approvals.policyHint': '不依附终端会话的策略请求会在这里等待裁决。',
+    'approvals.empty': '当前没有待审批请求。',
+    'notify.policyReviewTip': '打开策略审批',
 
     /* --- terminal timeline rail --- */
     'rail.label': '终端时间轴',
@@ -1543,6 +1551,10 @@ var I18N_CATALOG = {
     'review.kind.fileTruncate': '截斷',
     'review.kind.forwardOpen': '通訊埠轉送',
     'review.kind.forwardClose': '關閉轉送',
+    'approvals.title': '審批',
+    'approvals.policyHint': '不依附終端工作階段的策略請求會在這裡等待裁決。',
+    'approvals.empty': '目前沒有待審批請求。',
+    'notify.policyReviewTip': '開啟策略審批',
 
     /* --- terminal timeline rail --- */
     'rail.label': '終端時間軸',

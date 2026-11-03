@@ -345,7 +345,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		verifier = v
 	}
 
-	slog.SetDefault(slog.New(buildLogHandler(cfg)))
+	logHandler, closeLog := buildLogHandler(cfg)
+	defer closeLog()
+	slog.SetDefault(slog.New(logHandler))
 	slog.Info("termcp server started", "version", versionString())
 
 	// Start internal SSH server (in-process, no TCP port) unless disabled.
@@ -471,12 +473,16 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	// SFTP and forward machinery). The Web UI decides; this is how its decision
 	// gets replayed where the operation is implemented.
 	webuiH.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
+	webuiH.PolicyApprovals = mcpSrv.ListPolicyApprovals
+	webuiH.DecidePolicyApproval = mcpSrv.DecidePolicyApproval
 	webuiH.Register(mux)
 	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
 	mcpSrv.SetExtensionReconciler(extReconciler)
 	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
+	mcpSrv.SetApprovalNotifier(webuiH.BroadcastApproval)
 	if managed != nil {
 		managed.SetPolicyPreviewer(mcpSrv)
+		mcpSrv.SetApprovalContextProvider(managed.ApprovalContextForCredential)
 	}
 	// Who is attached: the Web UI lists MCP clients from the MCP server and its
 	// own tabs from its own registry. The listener wakes the same broadcast the
@@ -577,7 +583,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 }
 
-func buildLogHandler(cfg *config.Config) slog.Handler {
+func buildLogHandler(cfg *config.Config) (slog.Handler, func() error) {
 	var minLevel slog.Level
 	switch cfg.LogLevel {
 	case "debug":
@@ -590,5 +596,67 @@ func buildLogHandler(cfg *config.Config) slog.Handler {
 		minLevel = slog.LevelInfo
 	}
 	color := term.IsTerminal(int(os.Stderr.Fd()))
-	return logansi.NewTextHandler(os.Stderr, logansi.Options{MinLevel: minLevel, Color: color})
+	handlers := []slog.Handler{
+		logansi.NewTextHandler(os.Stderr, logansi.Options{MinLevel: minLevel, Color: color}),
+	}
+	var logFile *os.File
+	// Detached daemon children already have stdout/stderr redirected to this
+	// file by the launcher. A manually started instance did not, which left
+	// diagnostics only in the terminal and made <data-dir>/termcp.log disappear.
+	if os.Getenv(daemon.EnvChild) == "" {
+		if file, err := os.OpenFile(daemon.LogPath(cfg.DataDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			logFile = file
+			handlers = append(handlers, logansi.NewTextHandler(logFile, logansi.Options{MinLevel: minLevel, Color: false}))
+		}
+	}
+	closeLog := func() error {
+		if logFile != nil {
+			return logFile.Close()
+		}
+		return nil
+	}
+	if len(handlers) == 1 {
+		return handlers[0], closeLog
+	}
+	return multiSlogHandler(handlers), closeLog
+}
+
+type multiSlogHandler []slog.Handler
+
+func (h multiSlogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h multiSlogHandler) Handle(ctx context.Context, record slog.Record) error {
+	var first error
+	for _, handler := range h {
+		if !handler.Enabled(ctx, record.Level) {
+			continue
+		}
+		if err := handler.Handle(ctx, record.Clone()); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (h multiSlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := make(multiSlogHandler, 0, len(h))
+	for _, handler := range h {
+		next = append(next, handler.WithAttrs(attrs))
+	}
+	return next
+}
+
+func (h multiSlogHandler) WithGroup(name string) slog.Handler {
+	next := make(multiSlogHandler, 0, len(h))
+	for _, handler := range h {
+		next = append(next, handler.WithGroup(name))
+	}
+	return next
 }

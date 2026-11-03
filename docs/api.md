@@ -198,6 +198,11 @@ Operation IDs and supported conditions come from /auth/access. Unlisted actions
 are denied. The catalog also declares each operation's DSL/tool/WebUI reachability,
 risk level, dependencies and supported parameter evidence. Composite `recipes`
 describe requests such as `run` and file copy without changing the DSL grammar.
+Each grant has one of three effects: `allow`, `deny`, or `ask`. `ask` queues the
+complete, normalized tool call or DSL statement for a human. Session-bound asks
+appear in that session's native review panel; targetless policy asks appear in
+the workspace header's policy-approval list. Approval reloads the credential,
+principal, current group policy and resource bindings before replay.
 Host mode is all, selected or none; rename preserves identity and a
 same-name replacement does not inherit it. Operations that change shared
 configuration require all-host scope. Each transfer checks both endpoints.
@@ -221,8 +226,9 @@ Preview is read-only. A denied `run` can report missing `shell.input`,
 `shell.key(enter)` or `shell.output`; it never inserts bytes, creates a session,
 acquires an extension, renews a lease or starts a transfer.
 
-Allow/deny is supported; delegated approval replay remains future work. Operations
-requiring operator review must be performed through the WebUI. Terminal and network
+Approval is a one-shot decision for the fixed request, not a new persistent grant.
+Rejection, expiry, a disabled principal or credential, a deleted group, a changed
+host binding or a stricter current policy prevents execution. Terminal and network
 operations use their host's OS/network rights; permissions are not a process sandbox.
 
 ### Legacy shared-token mode
@@ -1491,9 +1497,10 @@ arrives exactly there. It holds two things:
 
 There is no composer and no editable field. The commands in the queue are
 written by the AI; a human's job is to accept or refuse them, and typing a
-command belongs in the terminal behind the panel. The page header carries no
-approval entry point: a decision is about one command line in one session, and
-the terminal already says which session that is.
+command belongs in the terminal behind the panel. A decision attached to a
+session stays in that session's panel. A policy `ask` with no session to own it
+appears in the page header's policy-approvals worklist; both surfaces render the
+same request row and call the same decision endpoint.
 
 Named keys are shown as chips beside the command, with one exception: **Enter is
 not shown**. It is the key that ends a command line, so it never varies and the
@@ -1701,7 +1708,9 @@ Errors: `400` `need` > 1, negative timeout, malformed body; `404` unknown sessio
 
 ### `GET /api/approvals`
 
-Every request across all sessions, so an approver's page shows one worklist.
+Every request across all sessions and targetless policy queues. The Web UI uses
+the same response in the session panel and in the header worklist for
+`session_id: "policy"`.
 
 ```
 Query:
@@ -1718,6 +1727,8 @@ Response 200:
         "session_id": "3f2a…",
         "shell_id": "5e71…",
         "source": "mcp",          // mcp | rest
+        "kind": "shell_input",
+        "summary": "rm -rf /tmp/x", // reviewer-facing operation description
         "text": "rm -rf /tmp/x",
         "keys": ["ctrl+c"],       // named keys, never raw bytes
         "created_at": 1790129915403,
@@ -1730,6 +1741,11 @@ Response 200:
   ]
 }
 ```
+
+`session_id` is `"policy"` when the request has no terminal to own it. The list
+omits `payload`, so the opaque replay data never reaches the browser. For policy
+operations, `kind` is the denied/asked operation ID and `summary` is the
+reviewer-facing description.
 
 ### `POST /api/approvals/{id}/approve` · `POST /api/approvals/{id}/reject`
 

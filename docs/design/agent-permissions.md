@@ -6,9 +6,9 @@
 
 状态：待实现的权限管理设计，修订版 4。基线：`dev@76b320976ae671721f3370983f5b0d6b412685b1`。日期：2026-10-26。
 
-实施补充：已按 `dev@6a8af55` 核验并编写 [具体实施方案](agent-access-implementation.md) 与 [69 个函数的证据表](agent-access-implementation-evidence.csv)。本页中的稳定主机 ID、标签选择属于目标态；当前代码没有相应字段，第一版按实施方案使用 profile 名称和 all/selected/none。源码行号、Hook 落点、角色接入及可用审批范围以新实施方案为准。
+实施补充：已按 `dev@6a8af55` 核验并编写 [具体实施方案](agent-access-implementation.md)。本页中的稳定主机 ID、标签选择属于目标态；当前代码没有相应字段，第一版按实施方案使用 profile 名称和 all/selected/none。源码行号、Hook 落点、角色接入及可用审批范围以新实施方案为准。
 
-对应 [接口与操作清单](interface-inventory.md) 及 [CSV 底表](interface-inventory.csv)。本次聚焦权限划分、统一管理、人/Agent 区分和 WebUI 配置；不设计 cookie 或 token 的签发机制。所有新接口和格式均为提案，尚未实现。
+对应 [接口与操作清单](interface-inventory.md)。本次聚焦权限划分、统一管理、人/Agent 区分和 WebUI 配置；不设计 cookie 或 token 的签发机制。所有新接口和格式均为提案，尚未实现。
 
 签发机制的后续设计见 [人与 Agent 的身份与凭据签发机制](auth-issuance.md)，涵盖人端登录、Agent token、可选配对、续期与撤销；本文仍负责共享业务策略。该补充尚未实现，不代表当前已具备可信角色隔离。
 
@@ -501,7 +501,7 @@ Agent 如需发现自身可用词汇，通过 MCP 的帮助/权限发现能力�
 
 需审批是业务操作的有效决策，不是突破 deny 或范围外主机的通道。Agent 不可批准自己的请求、关闭审阅或修改权限配置。
 
-本期复用既有审阅机制，为尚不能安全审阅的动作标明不可用；不能把 ask 保存成实际 allow。首次建连等无 session 的动作需要实例级队列支持，完成前不能宣称已支持其 ask。
+审批复用原生审阅面板。带 session 的请求由该 session 承载；首次建连、列表等无 session 的请求进入工作区顶部的策略审批列表，二者调用同一个审批决定接口。浏览器只收到可审阅摘要，不收到用于回放的不透明 payload。
 
 审批绑定确定计划、上下文、共享策略/alias/主机版本及一次性执行标识；执行前复核。配置、标签或别名变化后重新判断，旧批准不能为改变后的内容授权。
 

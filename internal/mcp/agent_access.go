@@ -49,13 +49,13 @@ func (s *Server) filterAgentSessions(ctx context.Context, in []api.Session) []ap
 		return in
 	}
 	out := make([]api.Session, 0, len(in))
-	allowed := p.AllowsOperation("session.list") || p.AllowsOperation("shell.list")
+	allowed := p.MayRequestOperation("session.list") || p.MayRequestOperation("shell.list")
 	if err != nil || !allowed {
 		return out
 	}
 	for _, v := range in {
 		if ns.Reachable(v.Namespace, callerNamespace(ctx)) && p.AllowsHost(v.SSHConfigIdentity) {
-			if !p.AllowsOperation("shell.list") {
+			if !p.MayRequestOperation("shell.list") {
 				v.Shells = nil
 			}
 			out = append(out, v)
@@ -64,23 +64,23 @@ func (s *Server) filterAgentSessions(ctx context.Context, in []api.Session) []ap
 	return out
 }
 
-func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult) {
+func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult, bool) {
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
 		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
 			recordAgentDenied(ctx, "mcp.authorize", tool, "Agent policy is unavailable")
-			return ctx, toolError(CodeForbidden, "%s", "Agent policy is unavailable")
+			return ctx, toolError(CodeForbidden, "%s", "Agent policy is unavailable"), false
 		}
-		return ctx, nil
+		return ctx, nil, false
 	}
 	if err != nil {
 		recordAgentDenied(ctx, "mcp.authorize", tool, err.Error())
-		return ctx, toolError(CodeForbidden, "%s", err.Error())
+		return ctx, toolError(CodeForbidden, "%s", err.Error()), false
 	}
 	return s.agentToolCheckV2(ctx, p, tool, request)
 }
 
-func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Statement) *envelope.Slot {
+func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Statement, win termArgs) *envelope.Slot {
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
 		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
@@ -93,5 +93,5 @@ func (s *Server) agentStatementCheck(ctx context.Context, stmt directive.Stateme
 		recordAgentDenied(ctx, "mcp.authorize", "dsl", err.Error())
 		return &envelope.Slot{Code: 403, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeForbidden}, Body: err.Error()}
 	}
-	return s.agentStatementCheckV2(ctx, p, stmt)
+	return s.agentStatementCheckV2(ctx, p, stmt, win)
 }

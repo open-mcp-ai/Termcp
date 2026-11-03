@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
@@ -89,8 +90,8 @@ func TestIndependentPasswordsAndAuthenticatedLockedVault(t *testing.T) {
 	if w := managedRequest(t, h, "GET", "/auth/status", "", cookie, ""); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"authenticated":true`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"locked":true`)) {
 		t.Fatal("missing authenticated/locked state", w.Body.String())
 	}
-	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+loginPassword+`"}`, cookie, session.CSRF); w.Code != 400 {
-		t.Fatal("login password unlocked an independent vault")
+	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+loginPassword+`"}`, cookie, session.CSRF); w.Code != 400 || !strings.Contains(w.Body.String(), "matches the login account") {
+		t.Fatalf("login password unlocked an independent vault or lacked the diagnostic: %d %s", w.Code, w.Body.String())
 	}
 	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+configPassword+`"}`, cookie, session.CSRF); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())

@@ -84,7 +84,7 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			for _, tool := range []string{"shell_input", "shell_key"} {
 				args := argsOf("shell_id", handle, "key", "enter")
-				if _, bad := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); bad != nil {
+				if _, bad, _ := s.agentToolCheckV2(ctx, p, tool, toolRequest(tool, args)); bad != nil {
 					return *agentDeniedSlot(stmt, fmt.Errorf("%s", toolResultText(bad)))
 				}
 			}

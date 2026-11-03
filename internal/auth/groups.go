@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -40,10 +41,67 @@ type groupPreset struct {
 
 func groupPresets() []groupPreset {
 	viewer := []string{"profile.list", "profile.get", "session.list", "session.info", "shell.list", "ext.list", "task.list", "task.info"}
+	diagnostics := append(slices.Clone(viewer), "shell.output", "shell.marks", "shell.detect", "file.read", "file.stat", "file.realpath", "file.readlink", "file.getwd", "file.statvfs", "file.urls")
+	maintainer := append(slices.Clone(diagnostics), "file.write", "file.replace", "file.mkdir")
+	operator := append(slices.Clone(maintainer),
+		"session.start", "session.terminate",
+		"shell.open", "shell.close", "shell.exec", "shell.input", "shell.key", "shell.resize",
+		"shell.reader.register", "shell.reader.unregister",
+		"file.delete", "file.truncate", "file.chmod", "file.chown", "file.chtimes",
+		"file.symlink", "file.link", "file.rename",
+		"forward.list", "forward.open.local", "forward.open.remote", "forward.open.dynamic", "forward.close",
+		"task.cancel", "ext.get", "ext.use", "ext.release", "ext.retry", "user.notify",
+		"alias.list",
+	)
+	out := []groupPreset{}
+	for _, spec := range []struct {
+		id, name, english, description string
+		operations                     []string
+	}{
+		{"no-access", "未授权", "No access", "业务动作默认禁止；主机范围本身不授予操作权限。", nil},
+		{"viewer", "资源观察", "Viewer", "查看安全摘要和状态，不读取终端输出或文件正文。", viewer},
+		{"diagnostics", "只读诊断", "Diagnostics reader", "读取已分配资源的输出和文件内容，需要已有的可达会话。", diagnostics},
+		{"file-maintainer", "文件维护", "File maintainer", "允许文件读写和目录维护；不授予终端执行、网络转发或全局配置管理。", maintainer},
+		{"host-operator", "主机运维", "Host operator", "允许连接主机、操作终端、常用文件、转发和已配置扩展；不授予凭据配置、别名管理或 raw 协议。", operator},
+	} {
+		policy := EmptyAgentPolicy()
+		for _, id := range spec.operations {
+			policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow}
+		}
+		if spec.id == "diagnostics" {
+			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+				if _, exists := policy.Actions[id]; exists {
+					policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+				}
+			}
+		}
+		if spec.id == "file-maintainer" {
+			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+			}
+		}
+		if spec.id == "host-operator" {
+			for _, id := range []string{"file.read", "file.write"} {
+				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline", "local", "pipe"}}}
+			}
+			policy.Actions["file.replace"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+		}
+		out = append(out, groupPreset{spec.id, spec.name, spec.english, spec.description, 3, policy})
+	}
+	return out
+}
+
+// groupPresetsV1 is the first released built-in policy set. A server restart
+// used to keep those seeded groups forever, so correcting a preset never
+// reached an existing installation. Upgrade a built-in group only while its
+// policy still exactly matches the shipped v1 template; edited groups remain
+// under the administrator's control.
+func groupPresetsV1() map[string]groupPreset {
+	viewer := []string{"profile.list", "profile.get", "session.list", "session.info", "shell.list", "ext.list", "task.list", "task.info"}
 	diagnostics := append(slices.Clone(viewer), "shell.output", "shell.marks", "file.read", "file.stat", "file.realpath", "file.readlink", "file.getwd", "file.statvfs")
 	maintainer := append(slices.Clone(diagnostics), "file.write", "file.replace", "file.mkdir")
 	operator := append(slices.Clone(maintainer), "session.start", "session.terminate", "shell.open", "shell.close", "shell.exec", "shell.input", "shell.key", "shell.resize", "shell.reader.register", "shell.reader.unregister", "user.notify")
-	out := []groupPreset{}
+	out := map[string]groupPreset{}
 	for _, spec := range []struct {
 		id, name, english, description string
 		operations                     []string
@@ -63,9 +121,95 @@ func groupPresets() []groupPreset {
 				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
 			}
 		}
-		out = append(out, groupPreset{spec.id, spec.name, spec.english, spec.description, 1, policy})
+		out[spec.id] = groupPreset{ID: spec.id, Name: spec.name, English: spec.english, Description: spec.description, Version: 1, Policy: policy}
 	}
 	return out
+}
+
+// groupPresetsV2 is the corrected operation/risk set before terminal operators
+// gained read access to their shared alias vocabulary.
+func groupPresetsV2() map[string]groupPreset {
+	viewer := []string{"profile.list", "profile.get", "session.list", "session.info", "shell.list", "ext.list", "task.list", "task.info"}
+	diagnostics := append(slices.Clone(viewer), "shell.output", "shell.marks", "shell.detect", "file.read", "file.stat", "file.realpath", "file.readlink", "file.getwd", "file.statvfs", "file.urls")
+	maintainer := append(slices.Clone(diagnostics), "file.write", "file.replace", "file.mkdir")
+	operator := append(slices.Clone(maintainer),
+		"session.start", "session.terminate",
+		"shell.open", "shell.close", "shell.exec", "shell.input", "shell.key", "shell.resize",
+		"shell.reader.register", "shell.reader.unregister",
+		"file.delete", "file.truncate", "file.chmod", "file.chown", "file.chtimes",
+		"file.symlink", "file.link", "file.rename",
+		"forward.list", "forward.open.local", "forward.open.remote", "forward.open.dynamic", "forward.close",
+		"task.cancel", "ext.get", "ext.use", "ext.release", "ext.retry", "user.notify",
+	)
+	out := map[string]groupPreset{}
+	for _, spec := range []struct {
+		id, name, english, description string
+		operations                     []string
+	}{
+		{"no-access", "未授权", "No access", "业务动作默认禁止；主机范围本身不授予操作权限。", nil},
+		{"viewer", "资源观察", "Viewer", "查看安全摘要和状态，不读取终端输出或文件正文。", viewer},
+		{"diagnostics", "只读诊断", "Diagnostics reader", "读取已分配资源的输出和文件内容，需要已有的可达会话。", diagnostics},
+		{"file-maintainer", "文件维护", "File maintainer", "允许文件读写和目录维护；不授予终端执行、网络转发或全局配置管理。", maintainer},
+		{"host-operator", "主机运维", "Host operator", "允许连接主机、操作终端、常用文件、转发和已配置扩展；不授予凭据配置、公共别名或 raw 协议。", operator},
+	} {
+		policy := EmptyAgentPolicy()
+		for _, id := range spec.operations {
+			policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow}
+		}
+		if spec.id == "diagnostics" {
+			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+				if _, exists := policy.Actions[id]; exists {
+					policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+				}
+			}
+		}
+		if spec.id == "file-maintainer" {
+			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+			}
+		}
+		if spec.id == "host-operator" {
+			policy.Actions["file.read"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline", "local", "pipe"}}}
+			policy.Actions["file.write"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline", "local", "pipe"}}}
+			policy.Actions["file.replace"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
+		}
+		out[spec.id] = groupPreset{ID: spec.id, Name: spec.name, English: spec.english, Description: spec.description, Version: 2, Policy: policy}
+	}
+	return out
+}
+
+func upgradePresetGroups(s *managedState) bool {
+	current := map[string]groupPreset{}
+	for _, preset := range groupPresets() {
+		current[preset.ID] = preset
+	}
+	history := map[int]map[string]groupPreset{
+		1: groupPresetsV1(),
+		2: groupPresetsV2(),
+	}
+	changed := false
+	for id, group := range s.Groups {
+		preset, ok := current[group.PresetID]
+		if !ok || group.ID != "preset-"+preset.ID || group.PresetVersion <= 0 || group.PresetVersion >= preset.Version {
+			continue
+		}
+		legacy, ok := history[group.PresetVersion][group.PresetID]
+		if !ok || !reflect.DeepEqual(group.Policy, legacy.Policy) {
+			continue
+		}
+		group.Policy = clonePolicy(preset.Policy)
+		if group.Description == legacy.Description {
+			group.Description = preset.Description
+		}
+		group.PresetVersion = preset.Version
+		group.Revision++
+		s.Groups[id] = group
+		changed = true
+	}
+	if changed {
+		s.AccessRevision++
+	}
+	return changed
 }
 
 func seedPermissionGroups(s *managedState, now time.Time) {

@@ -53,7 +53,7 @@ func TestAgentToolCheckCarriesBindingThroughAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := argsOf("ssh_config", "termcp://internal", "mode", "pipe")
-	ctx, bad := h.server.agentToolCheckV2(context.Background(), p, "session_start", toolRequest("session_start", args))
+	ctx, bad, _ := h.server.agentToolCheckV2(context.Background(), p, "session_start", toolRequest("session_start", args))
 	if bad != nil {
 		t.Fatal(toolResultText(bad))
 	}

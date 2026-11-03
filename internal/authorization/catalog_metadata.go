@@ -242,20 +242,54 @@ func applyCatalogMetadata() {
 		},
 	}
 	risk := map[string]RiskLevel{
-		"session.delete": RiskElevated, "shell.input": RiskHigh, "shell.key": RiskHigh,
-		"shell.exec": RiskHigh, "file.write": RiskElevated, "file.replace": RiskElevated,
+		"session.delete": RiskElevated,
+		"file.write":     RiskElevated, "file.replace": RiskElevated,
 		"file.delete": RiskHigh, "file.truncate": RiskHigh, "file.chmod": RiskHigh,
 		"file.chown": RiskHigh, "file.chtimes": RiskHigh, "file.symlink": RiskHigh,
-		"file.link": RiskHigh, "file.rename": RiskHigh, "forward.open.local": RiskHigh,
-		"forward.open.remote": RiskHigh, "forward.open.dynamic": RiskHigh,
+		"file.link": RiskHigh, "file.rename": RiskElevated,
+		"forward.open.local": RiskElevated, "forward.open.remote": RiskElevated, "forward.open.dynamic": RiskElevated,
 		"mcp.open": RiskHigh, "mcp.tool.invoke": RiskHigh, "mcp.raw": RiskHigh,
 		"cdp.open": RiskHigh, "cdp.attach": RiskHigh, "cdp.detach": RiskHigh,
 		"cdp.method.invoke": RiskHigh, "cdp.raw": RiskHigh, "jrpc.open": RiskHigh,
 		"jrpc.method.invoke": RiskHigh, "jrpc.raw": RiskHigh,
 		"profile.create": RiskHigh, "profile.edit": RiskHigh, "profile.copy": RiskHigh,
 		"profile.delete": RiskHigh, "ext.create": RiskHigh, "ext.update": RiskHigh,
-		"ext.delete": RiskHigh, "ext.retry": RiskElevated, "ext.use": RiskElevated,
+		"ext.delete": RiskHigh, "ext.retry": RiskStandard, "ext.use": RiskElevated,
 		"alias.write": RiskElevated, "alias.delete": RiskHigh,
+	}
+	descriptions := map[string]string{
+		"shell.detect":            "Detect the local shell environment used by this Termcp process; it does not inspect the remote target.",
+		"shell.exec":              "Start an explicit program or argv in a terminal channel.",
+		"shell.input":             "Type text into an existing terminal. The target OS account still decides what that text can do.",
+		"file.write":              "Write inline data or transfer from a local path with an explicit byte bound.",
+		"file.delete":             "Delete a file or directory in the target account's namespace.",
+		"file.truncate":           "Reduce or extend a remote file, which can destroy existing content.",
+		"file.chmod":              "Change a remote file mode.",
+		"file.chown":              "Change a remote file owner or group.",
+		"file.chtimes":            "Change remote file timestamps.",
+		"file.symlink":            "Create a symbolic link on the target.",
+		"file.link":               "Create a hard link on the target.",
+		"forward.open.local":      "Expose a remote destination through a local listener.",
+		"forward.open.remote":     "Ask the remote host to listen and forward traffic.",
+		"forward.open.dynamic":    "Run a loopback-only SOCKS proxy through the target connection.",
+		"mcp.tool.invoke":         "Invoke a specific tool on a connected remote MCP server.",
+		"mcp.raw":                 "Send an unclassified MCP frame; this is broader than a named tool grant.",
+		"cdp.method.invoke":       "Invoke a specific method on a connected CDP endpoint.",
+		"cdp.raw":                 "Send an unclassified CDP frame; this is broader than a specific method grant.",
+		"jrpc.method.invoke":      "Invoke a specific method on a connected JSON-RPC endpoint.",
+		"jrpc.raw":                "Send an unclassified JSON-RPC frame; this is broader than a specific method grant.",
+		"profile.create":          "Create a saved host profile and its connection material.",
+		"profile.edit":            "Change a saved profile's destination or credential material.",
+		"profile.delete":          "Delete a saved host profile.",
+		"ext.create":              "Create an executable extension definition.",
+		"ext.update":              "Change an extension executable command, endpoint, allowlist or target.",
+		"ext.delete":              "Delete an extension definition and stop its managed instance.",
+		"alias.write":             "Change the shared command vocabulary inherited by every Agent.",
+		"alias.delete":            "Delete a shared command alias inherited by every Agent.",
+		"user.notify":             "Send an operator-facing UI notification and optional session reference.",
+		"session.delete":          "Delete a Termcp session record after it has ended.",
+		"task.cancel":             "Cancel a transfer task started through Termcp.",
+		"mcp.tools.list":          "List the tools exposed by a connected remote MCP server.",
 	}
 	dependencies := map[string][]string{}
 	for id, verbs := range dsl {
@@ -286,5 +320,8 @@ func applyCatalogMetadata() {
 		}
 		op.Dependencies = append([]string(nil), dependencies[op.ID]...)
 		op.Parameters = append([]ParameterSpec(nil), parameters[op.ID]...)
+		if description := descriptions[op.ID]; description != "" {
+			op.Description = description
+		}
 	}
 }

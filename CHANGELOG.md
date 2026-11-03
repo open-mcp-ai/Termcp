@@ -24,6 +24,10 @@ Agent permissions use explicit schema 2 actions with key/repeat, tool/method and
 
 Permission management now includes risk, reachability and dependency metadata, a read-only DSL preview, stable resource bindings, and structured audit events. A profile or extension replaced after authorization is refused instead of redirecting execution to a reused name. Large capability-audit inventories are generated under `dist/audits/`, and a focused permission lifecycle matrix runs on all three CI platforms.
 
+Permissions now support `deny`, `allow`, and `ask`. Session-bound approvals use the terminal's existing review panel; policy requests with no session use a header worklist with the same request rows and decision endpoint. Approval reloads the current credential, principal, group, host bindings, and policy before replay. Preset groups are corrected and upgraded only when they still match the previously shipped template, and the permission page includes common read-only preview commands plus independently scrolling action and host panes.
+
+Configuration password diagnostics now read the current `local-state` keyring as well as the legacy key file, and a login-password mismatch produces a specific explanation. Manually started instances again write `<data-dir>/termcp.log` while continuing to mirror logs to the terminal; daemon start keeps its launcher-owned log redirection.
+
 默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，账号、签名密钥、凭据及预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。自动解锁只恢复密钥，管理员浏览器会话每次重启后均需重新登录；无自动解锁时先输入主密码解锁。账号页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文账号可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1，OAuth 尚未实现，显式旧 token/hash 与开放模式仍保留。
 
 每个持久主机配置目录新增明文 `identity` 文件，保存不随改名变化的 UUID。会话和扩展通过该身份关联主机，改名或移动目录后继续解析；删除后同名新建不会继承旧关联。旧配置加载时补建身份文件，配置正文保持原样；重复或损坏的身份会明确报错。

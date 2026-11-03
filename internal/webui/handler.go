@@ -93,6 +93,12 @@ type Handler struct {
 	// lines can be approved. It exists so the queue can gate operations it does
 	// not itself know how to perform.
 	ExecuteOperation func(approval.Request) error
+	// PolicyApprovals lists effect=ask requests owned by the MCP server. They use
+	// the same browser worklist and decision controls as session review mode.
+	PolicyApprovals func() []approval.Request
+	// DecidePolicyApproval reauthorizes, approves or rejects, and on approval
+	// executes the original server-side payload.
+	DecidePolicyApproval func(string, bool, string) (approval.Request, error)
 
 	sessHub   *sessionListHub
 	notifyHub *uiNotifyHub

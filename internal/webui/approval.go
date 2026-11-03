@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
@@ -19,10 +20,10 @@ import (
 //   - mode control (GET/PATCH /api/sessions/{id}/approval) is for whoever is
 //     authorized to relax the gate. Authorization is the existing HTTP auth:
 //     a caller holding the deployment token can turn the gate on or off.
-//   - decisions (GET/POST /api/approvals...) are for the approvers. The approver
-//     name is part of the request body and is recorded verbatim — until the
-//     deployment issues a token per approver, that name is asserted rather than
-//     proven, which is why the threshold, not the name, is the real control.
+//   - decisions (GET/POST /api/approvals...) are for authenticated operators.
+//     The managed middleware supplies the verified actor; the older local-token
+//     mode still records the queue's non-identity marker, so no caller-supplied
+//     approver name is trusted.
 
 type approvalModeBody struct {
 	Enabled bool `json:"enabled"`
@@ -158,12 +159,25 @@ func (h *Handler) handleApprovalList(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, req := range q.List() {
 			out = append(out, map[string]any{
-				"request": req,
+				"request": approvalForList(req),
 				"need":    q.Need(),
 			})
 		}
 	}
+	if h.PolicyApprovals != nil {
+		for _, req := range h.PolicyApprovals() {
+			if filterSession != "" && req.SessionID != filterSession {
+				continue
+			}
+			out = append(out, map[string]any{"request": approvalForList(req), "need": req.Need})
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": out, "count": len(out)})
+}
+
+func approvalForList(req approval.Request) approval.Request {
+	req.Payload = nil
+	return req
 }
 
 // handleApprovalDecision approves or rejects one request.
@@ -173,6 +187,19 @@ func (h *Handler) handleApprovalList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	approve := strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "approve")
+	audit := func(result string, req approval.Request, reason string) {
+		if reason == "" {
+			reason = string(req.Kind)
+		}
+		action := "approval.reject"
+		if approve {
+			action = "approval.approve"
+		}
+		auth.RecordAudit(r.Context(), auth.AuditEvent{
+			Action: action, TargetType: "approval", TargetID: id,
+			Result: result, Reason: reason,
+		})
+	}
 
 	var body approvalDecisionBody
 	// An empty body is fine: a decision is the click itself, and a rejection
@@ -183,7 +210,22 @@ func (h *Handler) handleApprovalDecision(w http.ResponseWriter, r *http.Request)
 
 	q, sess := h.queueForApproval(id)
 	if q == nil {
-		http.Error(w, "no approval request "+id+" found", http.StatusNotFound)
+		if h.DecidePolicyApproval == nil {
+			http.Error(w, "no approval request "+id+" found", http.StatusNotFound)
+			return
+		}
+		req, err := h.DecidePolicyApproval(id, approve, body.Reason)
+		if err != nil {
+			audit("deny", req, "approval could not be decided or reauthorized")
+			status := http.StatusConflict
+			if errors.Is(err, approval.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		audit("success", req, "")
+		writeJSON(w, http.StatusOK, map[string]any{"request": req})
 		return
 	}
 
@@ -197,6 +239,7 @@ func (h *Handler) handleApprovalDecision(w http.ResponseWriter, r *http.Request)
 		req, err = q.Reject(id, body.Reason)
 	}
 	if err != nil {
+		audit("deny", req, "approval could not be decided")
 		status := http.StatusConflict
 		if errors.Is(err, approval.ErrNotFound) {
 			status = http.StatusNotFound
@@ -210,10 +253,12 @@ func (h *Handler) handleApprovalDecision(w http.ResponseWriter, r *http.Request)
 	// believing an unexecuted command ran.
 	if approve && req.State == approval.Approved {
 		if err := h.executeApproved(sess, req); err != nil {
+			audit("deny", req, "approved operation failed to execute")
 			http.Error(w, "approved but execution failed: "+err.Error(), http.StatusConflict)
 			return
 		}
 	}
+	audit("success", req, "")
 	writeJSON(w, http.StatusOK, map[string]any{"request": req})
 }
 

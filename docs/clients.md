@@ -124,7 +124,7 @@ HttpOnly JWT Cookie。顶部账号入口 `/auth` 可保存预设角色的 MCP �
 WebUI 自动处理。首次设置只接受 loopback 连接及 loopback Host；远程部署可先通过
 SSH 本地转发设置。`/api.md` 仍公开。API-only 构建同样提供必要的登录/设置入口。
 
-当前已实现 Admin 登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。OAuth、多个权限组继承、专属词汇和审批回放尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
+当前已实现 Admin 登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、三种效果（禁止/允许/需审批）、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。OAuth、多个权限组继承和专属词汇尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
 
 显式传入 `--auth-token` / `--auth-hash` 时，继续使用旧共享凭据模式，行为如下：
 
