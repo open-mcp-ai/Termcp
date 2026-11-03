@@ -600,14 +600,17 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	body := derr.Msg
 	if derr.AfterPayload != "" {
 		if strings.Contains(derr.AfterPayload, " --argv") {
-			// `&` ended the `--argv` word list and the remainder became a directive;
-			// name the operator as well as the slot. The whole cmd is rejected before
-			// any of it runs, so the caller can safely replace the operator with a
-			// shell-quoted argument or pass the line through `$1`.
-			body += fmt.Sprintf("\nHINT: `%s` ended at `&`; `&` is termcp's background operator, not part of --argv.\n"+
+			// The operator that separated the statements ended the `--argv` word list,
+			// and the remainder became a directive. Name the exact operator (`;`, `&`,
+			// `&&`) so the diagnosis is true for the line the caller actually wrote.
+			opName := derr.TrailingSep
+			if opName == "" {
+				opName = ";"
+			}
+			body += fmt.Sprintf("\nHINT: `%s` ended at `%s`; `%s` is termcp syntax, not part of --argv.\n"+
 				"To run a shell command line, pass it as one argument to a shell:\n"+
 				"  open <session> --argv sh -c $1   args: [\"echo OUT; exit 7\"]",
-				derr.AfterPayload)
+				derr.AfterPayload, opName, opName)
 		} else {
 			// The failing statement followed a directive whose payload goes to a
 			// terminal, so the most likely cause is a `;` the caller meant as SHELL

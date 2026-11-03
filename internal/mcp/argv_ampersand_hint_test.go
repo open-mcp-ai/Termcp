@@ -30,3 +30,23 @@ func TestAnAmpersandAfterArgvNamesTheOperatorAndTheFix(t *testing.T) {
 		t.Errorf("the refusal names no way to write the line:\n%s", firstLine(out))
 	}
 }
+
+// TestASemicolonAfterArgvNamesSemicolon pins that the hint names the operator the
+// caller actually wrote (`;` vs `&` vs `&&`).
+func TestASemicolonAfterArgvNamesSemicolon(t *testing.T) {
+	s := newTestServer(t)
+	internalSession(t, s)
+
+	out := termText(t, s, map[string]any{"cmd": `open internal --argv echo OUT; exit 7`})
+	if !strings.Contains(out, "ended at `;`") {
+		t.Errorf("the refusal does not name the semicolon that cut the line:\n%s", out)
+	}
+	if !strings.Contains(out, "--argv") {
+		t.Errorf("the refusal does not name the slot:\n%s", out)
+	}
+
+	outAnd := termText(t, s, map[string]any{"cmd": `open internal --argv echo OUT && exit 7`})
+	if !strings.Contains(outAnd, "ended at `&&`") {
+		t.Errorf("the refusal does not name &&:\n%s", outAnd)
+	}
+}
