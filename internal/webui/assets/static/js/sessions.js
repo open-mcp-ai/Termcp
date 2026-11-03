@@ -21,6 +21,73 @@
  *  drives. */
 var _sessionRegions = [{ dead: true, ids: new Set(), gridId: 'archive-grid' }];
 
+/* THE ARCHIVE FILTER, kept here rather than on the input.
+ *
+ * It has to outlive a repaint: the archive is rebuilt from scratch on every
+ * session snapshot (a session ending, a rename, another tab's delete), and an
+ * input's own value would be thrown away with the row it was typed above. Holding
+ * the query in a module variable is what makes a filter survive the push that
+ * happens while someone is reading the result. */
+var _archiveFilter = '';
+
+/* archiveRowMatches reports whether an archived session answers the filter.
+ *
+ * IT MATCHES EVERY FACT THE ROW SHOWS, not just the name. The reason someone
+ * reaches for this box is that two sessions look alike — the same profile dialled
+ * twice, the same command run against two hosts — so matching only the name would
+ * answer "everything" exactly when the archive is hardest to read. The host, the
+ * command and the id are on the row for the same reason, so they are searchable
+ * for the same reason. */
+function archiveRowMatches(s, needle) {
+  if (!needle) return true;
+  var parts = [sessionCardName(s), s.ssh_config, s.ssh_endpoint, s.command, s.id, s.reason];
+  if (s.shells && s.shells.length && typeof s.shells[0].exit_code === 'number') {
+    parts.push('exit ' + s.shells[0].exit_code);
+  }
+  for (var i = 0; i < parts.length; i++) {
+    var v = parts[i];
+    if (v && String(v).toLowerCase().indexOf(needle) >= 0) return true;
+  }
+  return false;
+}
+
+/* ensureArchiveSearch puts the filter box above the ledger, once.
+ *
+ * IT IS BUILT HERE RATHER THAN IN index.html, and that is a budget decision, not
+ * a style one: index.html is capped by a test and has a handful of bytes left, so
+ * a new element in the document would fail the build. Building it on the first
+ * paint costs one guard and keeps the markup where the list it filters lives. */
+function ensureArchiveSearch(grid) {
+  var panel = grid && grid.parentElement;
+  if (!panel || panel.querySelector('.archive-search')) return;
+  var wrap = document.createElement('div');
+  wrap.className = 'archive-search';
+  var input = document.createElement('input');
+  input.type = 'search';
+  input.className = 'archive-search-input';
+  input.placeholder = t('archive.search.placeholder');
+  input.setAttribute('aria-label', t('archive.search.placeholder'));
+  input.value = _archiveFilter;
+  /* THE KEYSTROKE REPAINTS THE LIST ONLY, never the whole grid from the server:
+   * the snapshot is already in memory, so filtering is a synchronous re-render of
+   * what the page holds. A round trip per keystroke would make the box feel slow
+   * for data that has not changed. */
+  input.addEventListener('input', function () {
+    _archiveFilter = String(input.value || '').trim().toLowerCase();
+    renderSessionGrid('');
+    /* renderSessionGrid rebuilds the grid, which rebuilds this box; putting the
+     * caret back is what keeps typing possible past the first character. */
+    var again = document.querySelector('.archive-search-input');
+    if (again) {
+      again.focus();
+      var end = again.value.length;
+      try { again.setSelectionRange(end, end); } catch (e) {}
+    }
+  });
+  wrap.appendChild(input);
+  panel.insertBefore(wrap, grid);
+}
+
 /* The ticked sessions, in the order the grid shows them.
  *
  *  The component keys cards by whatever `nameAttr` names, and this column hands it
@@ -793,8 +860,16 @@ function compareArchiveRows(a, b) {
 function renderArchiveRows(region, all) {
   var grid = document.getElementById(region.gridId);
   if (!grid) return;
+  ensureArchiveSearch(grid);
   grid.innerHTML = '';
   var rows = all.filter(function (s) { return s && s.id && isDeadSession(s) === region.dead; });
+  /* THE FILTER IS APPLIED BEFORE THE SORT, so the two never disagree about what the
+     ledger holds: sorting a filtered set and filtering a sorted one produce the same
+     order, and doing it in this one place keeps every caller (a snapshot, a rename,
+     a delete) filtered without each remembering to. */
+  if (region.dead && _archiveFilter) {
+    rows = rows.filter(function (s) { return archiveRowMatches(s, _archiveFilter); });
+  }
   /* ListAll walks a sync.Map, so its order is random and reshuffles on every
      frame — a ledger whose rows move under the pointer is not a ledger. Sorted by
      the moment each session ended, newest first. */
@@ -802,10 +877,17 @@ function renderArchiveRows(region, all) {
   if (rows.length === 0) {
     /* An empty archive says what it holds rather than showing a blank strip: the
        column is collapsed by default, so the one time it is opened with nothing
-       in it is the one time the sentence has to carry its own meaning. */
+       in it is the one time the sentence has to carry its own meaning.
+
+       A FILTER WITH NO HITS IS A DIFFERENT SENTENCE from an empty archive, and
+       saying "nothing here" over a full archive would read as data loss. */
     var empty = document.createElement('div');
     empty.className = 'sess-plate-empty archive-empty';
-    empty.textContent = window._lastSessionsSnapshot ? t('archive.empty.hint') : '';
+    if (region.dead && _archiveFilter) {
+      empty.textContent = t('archive.search.empty');
+    } else {
+      empty.textContent = window._lastSessionsSnapshot ? t('archive.empty.hint') : '';
+    }
     grid.appendChild(empty);
     if (typeof paintArchiveRail === 'function') paintArchiveRail();
     return;

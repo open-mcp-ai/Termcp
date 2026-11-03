@@ -1255,6 +1255,47 @@
    bars are the same kind of control: a handful of flat verbs over a list that is
    always tickable. Sharing the chip class is what keeps the two from drifting —
    the reason this file no longer has a `.archive-tools` vocabulary of its own. */
+.archive-search {
+  /* The box sits ABOVE the toolbar rather than inside it. The toolbar is four
+     flat verbs sized to their own content; a text field wants every pixel the
+     column has, and putting it in that flex row would leave a filter you can
+     barely read a word in. */
+  flex: 0 0 auto;
+  padding: 0 10px 8px;
+}
+.archive-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  /* Height and radius follow .ext-key so the box and the verbs below it read as
+     one control group rather than a form field that wandered into a toolbar. */
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: .78rem;
+}
+.archive-search-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+/* A search field the user cannot clear is a trap: the list looks empty and the
+   only way out is to select the text and delete it by hand. Native [type=search]
+   supplies the control on some engines and not others, so the affordance is
+   made explicit here rather than left to whichever engine opened the page. */
+.archive-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  cursor: pointer;
+}
 .archive-keys {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 6px;
