@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -205,26 +206,31 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	// it via the shell detector. For remote sessions the target OS is unknown
 	// without an extra round-trip; unix (\n) is the safe default for SSH targets.
 	enterCRLF := false
+	detectedShell := cfg.DefaultShell
 	if sshEndpointPublic == "internal" {
-		if _, family, _ := shell.NewDetector().Detect(); family != "unix" {
+		if path, family, _ := shell.NewDetector().Detect(); family != "unix" {
 			enterCRLF = true
+			detectedShell = family + " (" + filepath.Base(path) + ")"
+		} else if path != "" {
+			detectedShell = family + " (" + filepath.Base(path) + ")"
 		}
 	}
 
 	s := &Session{
 		Session: api.Session{
-			ID:          sessionID,
-			Name:        name,
-			SSHConfig:   cfg.SSHConfig,
-			Command:     cfg.Command,
-			Args:        cfg.Args,
-			Status:      api.SessionRunning,
-			CreatedAt:   clock.Now(),
-			UpdatedAt:   clock.Now(),
-			Rows:        cfg.Rows,
-			Cols:        cfg.Cols,
-			SSHEndpoint: sshEndpointPublic,
-			Namespace:   cfg.Namespace,
+			ID:            sessionID,
+			Name:          name,
+			SSHConfig:     cfg.SSHConfig,
+			Command:       cfg.Command,
+			Args:          cfg.Args,
+			Status:        api.SessionRunning,
+			CreatedAt:     clock.Now(),
+			UpdatedAt:     clock.Now(),
+			Rows:          cfg.Rows,
+			Cols:          cfg.Cols,
+			SSHEndpoint:   sshEndpointPublic,
+			DetectedShell: detectedShell,
+			Namespace:     cfg.Namespace,
 		},
 		enterCRLF:    enterCRLF,
 		defaultShell: cfg.DefaultShell,
