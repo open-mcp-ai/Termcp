@@ -71,6 +71,13 @@ var headerOrder = []string{
 	"Sampled",
 	"Executed",
 	"Dry-Run",
+	// A DRY RUN'S OWN LINES (#241). Verdict is the answer to the question the caller
+	// asked; Target and Expanded are what the line will resolve to. They sit next to
+	// Dry-Run so a preview reads top to bottom: "this is a preview → is it valid →
+	// what does it name → what does it expand to".
+	"Verdict",
+	"Target",
+	"Expanded",
 	"Pending-ID",
 	"Error-Code",
 	"Idempotent",

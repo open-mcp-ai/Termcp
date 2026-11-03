@@ -114,6 +114,10 @@ type termArgs struct {
 	OnLinesOverflow string
 	LearnMode       bool
 
+	// DryRun stops after parse and expansion, before dispatch (#241). See
+	// dryRunSlots for what that guarantees and what it deliberately does not.
+	DryRun bool
+
 	// StructuredContent also sends the reply as the JSON projection, on top of the
 	// rendered text. It is off by default because the two carry the SAME bytes and
 	// the text is the copy a caller usually reads, so the JSON twin is a duplicate
@@ -331,12 +335,35 @@ func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) term
 		// case must keep falling through to the normal parse-error teaching below.
 		stmt, resolved, cycle := aliases.expandErrorCycle(err)
 		if resolved {
+			if win.DryRun {
+				return termReply{win: win, slots: s.dryRunSlots([]directive.Statement{stmt}, win)}
+			}
 			return s.runStatements(ctx, []directive.Statement{stmt}, win)
 		}
 		if len(cycle) > 0 {
-			return termReply{win: win, slots: []envelope.Slot{aliasCycleSlot(directive.Statement{Path: cmd}, cycle)}}
+			slot := aliasCycleSlot(directive.Statement{Path: cmd}, cycle)
+			if win.DryRun {
+				if slot.Headers == nil {
+					slot.Headers = map[string]string{}
+				}
+				slot.Headers["Dry-Run"] = "true"
+				slot.Headers["Verdict"] = "invalid"
+			}
+			return termReply{win: win, slots: []envelope.Slot{slot}}
 		}
-		return termReply{win: win, slots: []envelope.Slot{s.parseErrorSlot(err)}}
+		// A PARSE FAILURE IN A DRY RUN IS STILL A DRY RUN: the caller asked to be told
+		// whether this line is valid, and the answer is no. The existing refusal keeps
+		// its body (it is the teaching text that fixes the mistake) and gains the two
+		// headers that say which question it answered (#241).
+		slot := s.parseErrorSlot(err)
+		if win.DryRun {
+			if slot.Headers == nil {
+				slot.Headers = map[string]string{}
+			}
+			slot.Headers["Dry-Run"] = "true"
+			slot.Headers["Verdict"] = "invalid"
+		}
+		return termReply{win: win, slots: []envelope.Slot{slot}}
 	}
 	// An empty cmd is the "I just woke up" call: it must be legal, cheap, and
 	// information-dense, never an error.
@@ -379,7 +406,7 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// reached through an alias expansion never passes the caller's parse, and that is
 	// the path a substituted value would take into the terminal.
 	if _, name, found := controlByteInShell(stmts); found {
-		return termReply{win: win, slots: []envelope.Slot{{
+		ctrlSlot := envelope.Slot{
 			Code: 400,
 			Headers: map[string]string{
 				"Error-Code": "raw_control_byte",
@@ -389,9 +416,32 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 				"To press a key, name it: `key <channel> ctrl-c` (`help key` lists the names).\n"+
 				"If the byte is DATA — a path, a file's contents — send it to a destination no terminal reads: "+
 				"`--data`, a Path, a frame. Those arrive as written.", name),
-		}}}
+		}
+		// THE CONTROL BYTE IS A DEFECT THIS LINE HAS, SO A DRY RUN REPORTS IT AS ONE
+		// (#241). It is caught before dispatch, which is exactly the boundary a
+		// preview draws; answering a real refusal while withholding the two headers
+		// would leave a harness unable to tell "checked and rejected" from "not
+		// checked at all".
+		if win.DryRun {
+			ctrlSlot.Headers["Dry-Run"] = "true"
+			ctrlSlot.Headers["Verdict"] = "invalid"
+		}
+		return termReply{win: win, slots: []envelope.Slot{ctrlSlot}}
 	}
 	out := termReply{win: win, seenUsage: map[string]bool{}, previousOK: true}
+
+	// DRY RUN STOPS HERE, before the group loop below reaches any directive
+	// (#241). Everything that had to happen to answer "is this valid" has
+	// happened already — parse, substitution, alias expansion and the control-byte
+	// funnel above — so the only thing left to skip is the dispatch itself.
+	//
+	// It is one branch at the funnel rather than a flag threaded into every
+	// directive, because a directive that forgot to read the flag would execute: the
+	// safety of a preview cannot depend on twenty call sites remembering it.
+	if win.DryRun {
+		out.slots = s.dryRunSlots(stmts, win)
+		return out
+	}
 
 	// GROUPS ARE THE UNIT OF CONCURRENCY. `a & b` is two statements that run
 	// together; `a & b; c` is a parallel pair followed by a sequential one.

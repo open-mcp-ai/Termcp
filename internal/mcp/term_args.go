@@ -204,6 +204,21 @@ var termArgDecls = []termArgDecl{
 		DefText: "false",
 	},
 	{
+		Name: "dry_run",
+		Kind: argBool,
+		// PREVIEW ONLY (#241).
+		//
+		// Parse cmd, expand $1/$NAME and aliases, validate statement grammar, then
+		// stop BEFORE dispatch. Connects to nothing, writes no stdin, sends no
+		// bytes, creates no session, and records no audit span. It is a static health
+		// check for a caller or a benchmark harness, answering each statement's
+		// expanded form with Verdict: valid-syntax or invalid.
+		Desc:    "Preview: parse, expand, validate cmd, then stop before dispatch. No bytes sent. Default: false.",
+		DocNote: "Parse and validate `cmd` without executing. Substitutes `$1`/`$NAME` and expands aliases, then stops before dispatch: connects to nothing, creates no sessions, produces no audit spans, and bounds no wait. Each statement reports `Verdict: valid-syntax` or `invalid`. Secrets are never echoed in `Expanded:`. **Off by default**",
+		Def:     false,
+		DefText: "false",
+	},
+	{
 		Name: "structured_content",
 		Kind: argBool,
 		// OFF by default, and that is the whole point of the argument.
@@ -397,6 +412,9 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 			w.BytesLimit, minWindowBytes)}
 	}
 	if err := readBoolArg(args, "structured_content", &w.StructuredContent); err != nil {
+		return termArgs{}, err
+	}
+	if err := readBoolArg(args, "dry_run", &w.DryRun); err != nil {
 		return termArgs{}, err
 	}
 	// `content` declines the OTHER half. A program consumer that parses structuredContent
