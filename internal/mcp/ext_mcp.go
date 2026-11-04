@@ -38,8 +38,15 @@ import (
 	"strings"
 	"time"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/authorization"
+	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/internal/extensions"
+	"github.com/open-mcp-ai/termcp/internal/ns"
 )
 
 const (
@@ -125,9 +132,24 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 
+	binding, err := s.authorizeExtensionMCP(r.Context(), name)
+	if err != nil {
+		auth.RecordAudit(r.Context(), auth.AuditEvent{
+			Action: "mcp.ext.authorize", TargetType: "extension", TargetID: name,
+			Result: "deny", Reason: err.Error(),
+		})
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
 	// THE EXTENSION IS RESOLVED FIRST, because the reply to a bad name should be a
 	// fact about the name rather than a frame that went nowhere.
-	st, err := s.extensions.Acquire(name, extMCPStartWait)
+	var st extensions.Status
+	if binding != nil {
+		st, err = s.extensions.AcquireBound(*binding, extMCPStartWait)
+	} else {
+		st, err = s.extensions.Acquire(name, extMCPStartWait)
+	}
 	if err != nil {
 		http.Error(w, "extension "+name+": "+err.Error(), http.StatusNotFound)
 		return
@@ -143,6 +165,19 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 	}
 
 	ctx := r.Context()
+	if binding != nil {
+		sess := (toolGuard{server: s}).lookupShellID(shellID)
+		if sess == nil {
+			http.Error(w, "extension "+name+": acquired channel is unavailable", http.StatusConflict)
+			return
+		}
+		info := sess.Info()
+		if !ns.IsExtensions(info.Namespace) {
+			http.Error(w, "extension "+name+": acquired channel is not owned by the extension layer", http.StatusConflict)
+			return
+		}
+		ctx = withExtensionMCPExecution(ctx, info.Namespace, shellID)
+	}
 	stmt := directive.Statement{Op: "mcp", Kind: "mcp", Target: shellID}
 	win := termArgs{TimeoutSet: true, TimeoutSeconds: extMCPCallWindow}
 
@@ -171,6 +206,56 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// authorizeExtensionMCP resolves the extension before it is started. A verified
+// Agent needs ext.get for this direct MCP door, and the returned binding freezes
+// the template and target profile so a concurrent edit cannot redirect launch.
+// Approval-required ext.get is refused here because a raw MCP frame cannot be
+// safely replayed into a later JSON-RPC response; the Agent can use the normal
+// extension/DSL surface, whose whole operation is replayable.
+func (s *Server) authorizeExtensionMCP(ctx context.Context, name string) (*extensions.AuthorizationBinding, error) {
+	p, restricted, err := auth.PolicyFromContext(ctx)
+	if !restricted {
+		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
+			return nil, fmt.Errorf("Agent policy is unavailable")
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	decision, err := evaluateAgentPlan(p, operationPlan(capability.ExtGet, authorization.Evidence{}))
+	if err != nil {
+		return nil, err
+	}
+	if !decision.Allowed {
+		return nil, fmt.Errorf("Agent permission denied: %s", decision.Reason)
+	}
+	if decision.NeedsApproval {
+		return nil, fmt.Errorf("ext.get requires approval; this direct MCP frame cannot be resumed after approval. Allow ext.get for this endpoint, or use the termcp MCP peer/DSL surface whose whole call can be replayed")
+	}
+	binding, err := s.agentExtensionBinding(p, name, "")
+	if err != nil {
+		return nil, fmt.Errorf("extension is outside this Agent's scope: %w", err)
+	}
+	return &binding, nil
+}
+
+// extensionMCPToolAuthorized limits the post-ext.get inner bypass to the exact
+// shell that extensionMCPPost acquired. It is package-private context, not a
+// request field, so a caller cannot manufacture it through MCP parameters.
+func extensionMCPToolAuthorized(ctx context.Context, tool string, request mcpgo.CallToolRequest) bool {
+	execution, ok := extensionMCPExecutionFromContext(ctx)
+	if !ok {
+		return false
+	}
+	g := lookupGate(tool)
+	if !g.known || !g.ExtensionFrameWrite {
+		return false
+	}
+	ids, _ := splitBatchIDs(getString(request.GetArguments(), "shell_id", ""))
+	return len(ids) == 1 && ids[0] == execution.shellID
 }
 
 // extMCPFail turns a tool-call failure into an HTTP error whose body names what

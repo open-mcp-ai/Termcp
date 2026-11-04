@@ -22,6 +22,30 @@ const NamespaceHeader = "X-Termcp-Namespace"
 // the context hook to the guard, the list filters and the handlers.
 type callerNSKey struct{}
 
+// extensionMCPExecutionKey marks only the inner shell calls made by the
+// /ext/{name}/stream adapter after ext.get and the extension binding have been
+// authorized. The extension owns an infrastructure namespace, so the ordinary
+// Agent namespace rule would otherwise refuse the exact shell the adapter just
+// acquired on the Agent's behalf.
+type extensionMCPExecutionKey struct{}
+
+type extensionMCPExecution struct {
+	namespace string
+	shellID   string
+}
+
+func withExtensionMCPExecution(ctx context.Context, namespace, shellID string) context.Context {
+	return context.WithValue(ctx, extensionMCPExecutionKey{}, extensionMCPExecution{
+		namespace: namespace,
+		shellID:   shellID,
+	})
+}
+
+func extensionMCPExecutionFromContext(ctx context.Context) (extensionMCPExecution, bool) {
+	execution, ok := ctx.Value(extensionMCPExecutionKey{}).(extensionMCPExecution)
+	return execution, ok && execution.shellID != "" && execution.namespace != ""
+}
+
 // withCallerNamespace reads the claim off a request and installs it on the
 // context. It is the only place the header is parsed, so every surface that
 // reaches a session asks the same question of the same value.
@@ -54,6 +78,9 @@ const invalidNamespace = "ns:\x00invalid"
 // ordinary (unnamespaced) surfaces — the browser, a stdio bridge, an agent that
 // set no header — and the caller's own for one that claimed it.
 func callerNamespace(ctx context.Context) string {
+	if execution, ok := extensionMCPExecutionFromContext(ctx); ok {
+		return execution.namespace
+	}
 	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
 		return ns.ForCaller("agent-" + actor.ID)
 	}

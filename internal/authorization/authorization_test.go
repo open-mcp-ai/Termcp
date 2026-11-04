@@ -1,7 +1,10 @@
 package authorization
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -230,6 +233,31 @@ func TestCatalogMetadataIsCompleteAndRecipesReferenceKnownOperations(t *testing.
 				t.Errorf("recipe %s references unknown operation %s", recipe.ID, id)
 			}
 		}
+	}
+}
+
+func TestPermissionsDocumentTracksCatalog(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "permissions.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile("(?m)^\\| [^|]+ \\| `([^`]+)` \\|")
+	operationID := regexp.MustCompile(`^(?:session|shell|file|profile|ext|forward|mcp|cdp|jrpc|user)\.[a-z0-9._-]+$`)
+	documented := map[string]bool{}
+	for _, match := range re.FindAllSubmatch(raw, -1) {
+		id := string(match[1])
+		if operationID.MatchString(id) {
+			documented[id] = true
+		}
+	}
+	for _, op := range Catalog() {
+		if !documented[op.ID] {
+			t.Errorf("docs/permissions.md is missing operation %s", op.ID)
+		}
+		delete(documented, op.ID)
+	}
+	for id := range documented {
+		t.Errorf("docs/permissions.md documents non-catalog operation %s", id)
 	}
 }
 
