@@ -166,6 +166,20 @@ func TestPermissionPageKeepsPreviewPresetsAndIndependentScrollPanes(t *testing.T
 	}
 }
 
+func TestPermissionCreatePanelCanCloseFromButtonKeyboardAndToggle(t *testing.T) {
+	for _, want := range []string{
+		`id="close-new-agent"`,
+		`function closeNewAgentForm()`,
+		`event.key==='Escape'`,
+		`wrap.hidden=false`,
+		`if(!wrap.hidden){closeNewAgentForm();return;}`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions create panel lacks %q", want)
+		}
+	}
+}
+
 func TestPageAssetsRejectConditionalStaleThemeResponse(t *testing.T) {
 	m := &Managed{}
 	m.SetPageAssets(testPageAssets())
