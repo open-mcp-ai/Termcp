@@ -605,7 +605,7 @@ Bidirectional real-time channel.
 
 | type | Fields | Meaning |
 |------|--------|---------|
-| `watch_add` | `id` | Subscribe to terminal output |
+| `watch_add` | `id` | Subscribe to terminal output and request a `watch_ready` acknowledgement |
 | `watch_remove` | `id` | Unsubscribe |
 | `input` | `id`, `d`(string), `nl` | Send keystrokes (dropped for a session in review mode — see §11) |
 | `resize` | `id`, `rows`, `cols` | Change PTY size |
@@ -615,7 +615,9 @@ Bidirectional real-time channel.
 | type | Fields | Meaning |
 |------|--------|---------|
 | `sessions` | `sessions` | Session list (on connect and on change) |
-| `terminal` | `id`, `d`(string) | Terminal output chunk |
+| `watch_ready` | `id`, `cursor` | Subscription accepted; `cursor` is the first absolute byte offset that may appear in subsequent terminal frames |
+| `watch_error` | `id`, `error` | Subscription rejected; no terminal output will be sent for this `watch_add` |
+| `terminal` | `id`, `d`(string), `start`, `end` | Terminal output chunk covering the half-open absolute byte range `[start,end)` |
 | `shell_activity` | `shell_id`, `src`(`api`\|`ai`), `submit` | A shell received input, and from where |
 | `ui_notify` | `title`, `message`, `level`, `session_id`, `duration_seconds` | User-facing notification (MCP `notify_user`) |
 | `approval` | session, request | Approval queue changed (see §11) |
@@ -649,10 +651,18 @@ instead: an echo-window heuristic fails both ways, holding real output from a
 fast command (`ls`) and letting a slow echo through on a laggy link. A silence
 of a few seconds is reported as "finished" on top of that, since a byte stream
 offers no better a signal that a command returned.
-| `terminal_done` | `id` | Shell exited |
+| `terminal_done` | `id`, `cursor` | Shell exited after all output through the absolute offset `cursor` |
 
 > Terminal I/O `id` values are shell IDs; session IDs are only for connection-level
 > REST resources.
+
+`watch_ready` is ordered before the first `terminal` frame for that
+subscription. A client that needs both retained history and live output sends
+`watch_add`, waits for `watch_ready`, reads history ending at
+`watch_ready.cursor`, and buffers subsequent terminal frames until that history
+has been applied. `[start,end)` ranges make overlap, duplication and gaps
+detectable; clients must not infer continuity from frame timing or payload
+text.
 
 ### `GET /api/shells/{id}/output-range`
 

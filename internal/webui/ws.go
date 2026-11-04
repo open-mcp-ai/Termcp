@@ -65,6 +65,8 @@ var uiUpgrader = websocket.Upgrader{
 	},
 }
 
+var errWSControlUnavailable = errors.New("websocket control channel unavailable")
+
 type wsClientMsg struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -286,7 +288,9 @@ func (c *uiWS) readPump() {
 		switch strings.TrimSpace(msg.Type) {
 		case "watch_add":
 			if id := strings.TrimSpace(msg.ID); id != "" {
-				_ = c.addWatch(id)
+				if err := c.addWatch(id); err != nil {
+					c.sendWatchError(id, err)
+				}
 			}
 		case "watch_remove":
 			if id := strings.TrimSpace(msg.ID); id != "" {

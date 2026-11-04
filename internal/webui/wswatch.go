@@ -10,19 +10,63 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func (c *uiWS) sendTerminalPayload(payload []byte) {
+const watchControlEnqueueTimeout = 2 * time.Second
+
+// sendWatchTerminalPayload serializes a terminal frame with watch replacement.
+// The watch mutex covers both the generation check and the enqueue, so once
+// addWatch replaces an entry no stale pump can put a frame behind the new
+// watch_ready acknowledgement.
+func (c *uiWS) sendWatchTerminalPayload(sid string, rid int, payload []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.watch[sid]
+	if entry == nil || entry.rid != rid {
+		return false
+	}
 	select {
 	case c.send <- payload:
 	case <-c.ctx.Done():
 	default:
 	}
+	return true
 }
 
-func (c *uiWS) sendTerminalDonePayload(payload []byte) {
+func (c *uiWS) sendWatchControlPayload(sid string, rid int, payload []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.watch[sid]
+	if entry == nil || entry.rid != rid {
+		return false
+	}
+	return c.sendControlPayload(payload)
+}
+
+// sendControlPayload never silently drops a subscription control frame. If the
+// connection cannot accept it promptly, the socket is closed so the client
+// observes a disconnect instead of believing that a subscription is established.
+func (c *uiWS) sendControlPayload(payload []byte) bool {
+	timer := time.NewTimer(watchControlEnqueueTimeout)
+	defer timer.Stop()
 	select {
 	case c.send <- payload:
+		return true
 	case <-c.ctx.Done():
-	default:
+		return false
+	case <-timer.C:
+		c.cancel()
+		_ = c.conn.Close()
+		return false
+	}
+}
+
+func (c *uiWS) sendWatchError(sid string, err error) {
+	payload, marshalErr := json.Marshal(map[string]string{
+		"type":  "watch_error",
+		"id":    sid,
+		"error": err.Error(),
+	})
+	if marshalErr == nil {
+		c.sendControlPayload(payload)
 	}
 }
 
@@ -43,21 +87,32 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 	   `lastFlush` is what tells an idle echo from a stream. */
 	var batch []byte
 	var inBatch bool
+	var batchStart int64
+	var batchEnd int64
 	var lastFlush time.Time
-	flush := func() {
+	flush := func() bool {
 		if len(batch) == 0 {
 			inBatch = false
-			return
+			return true
 		}
 		// Terminal bytes travel as a plain JSON string; encoding/json escapes
 		// whatever it must. base64 would only add a layer the client undoes.
-		payload, err := json.Marshal(map[string]string{"type": "terminal", "id": sid, "d": string(batch)})
+		payload, err := json.Marshal(map[string]any{
+			"type":  "terminal",
+			"id":    sid,
+			"d":     string(batch),
+			"start": batchStart,
+			"end":   batchEnd,
+		})
 		batch = batch[:0]
 		inBatch = false
+		batchStart = 0
+		batchEnd = 0
 		lastFlush = time.Now()
 		if err == nil {
-			c.sendTerminalPayload(payload)
+			return c.sendWatchTerminalPayload(sid, rid, payload)
 		}
+		return true
 	}
 
 	for {
@@ -88,14 +143,26 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 			if err == io.EOF {
 				// Whatever the batch still holds belongs to the shell's final output
 				// and must precede the marker that ends it.
-				flush()
-				payload, _ := json.Marshal(map[string]string{"type": "terminal_done", "id": sid})
-				c.sendTerminalDonePayload(payload)
+				if !flush() {
+					return
+				}
+				payload, _ := json.Marshal(map[string]any{
+					"type":   "terminal_done",
+					"id":     sid,
+					"cursor": shell.ReaderCursor(rid),
+				})
+				c.sendWatchControlPayload(sid, rid, payload)
 				return
 			}
 			continue
 		}
 		if out != "" {
+			end := shell.ReaderCursor(rid)
+			start := end - int64(len(out))
+			if !inBatch {
+				batchStart = start
+			}
+			batchEnd = end
 			batch = append(batch, out...)
 			inBatch = true
 		}
@@ -115,16 +182,26 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 		   the page cannot afford. */
 		switch {
 		case len(batch) >= terminalFlushBytes:
-			flush()
+			if !flush() {
+				return
+			}
 		case !shell.HasMoreOutput(rid) && time.Since(lastFlush) >= terminalFlushMinGap:
-			flush()
+			if !flush() {
+				return
+			}
 		}
 		info := shell.Info()
 		if (info.Status != api.SessionRunning || shell.IsBufferClosed()) && !shell.HasMoreOutput(rid) {
-			flush()
-			payload, err := json.Marshal(map[string]string{"type": "terminal_done", "id": sid})
+			if !flush() {
+				return
+			}
+			payload, err := json.Marshal(map[string]any{
+				"type":   "terminal_done",
+				"id":     sid,
+				"cursor": shell.ReaderCursor(rid),
+			})
 			if err == nil {
-				c.sendTerminalDonePayload(payload)
+				c.sendWatchControlPayload(sid, rid, payload)
 			}
 			return
 		}
@@ -140,13 +217,32 @@ func (c *uiWS) addWatch(sid string) error {
 	if err != nil {
 		return err
 	}
+	cursor := shell.ReaderCursor(rid)
+	ready, err := json.Marshal(map[string]any{
+		"type":   "watch_ready",
+		"id":     sid,
+		"cursor": cursor,
+	})
+	if err != nil {
+		shell.UnregisterReader(rid)
+		return err
+	}
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.mu.Lock()
 	if old, ok := c.watch[sid]; ok && old != nil && old.cancel != nil {
 		old.cancel()
 	}
 	c.watch[sid] = &wsWatchEntry{cancel: cancel, rid: rid}
+	if !c.sendControlPayload(ready) {
+		delete(c.watch, sid)
+		c.mu.Unlock()
+		cancel()
+		shell.UnregisterReader(rid)
+		return errWSControlUnavailable
+	}
 	c.mu.Unlock()
+	// The acknowledgement is enqueued before the output pump starts, so a
+	// client can treat ready.cursor as the first possible byte of later frames.
 	go c.runWatch(ctx, shell, sid, rid)
 	return nil
 }

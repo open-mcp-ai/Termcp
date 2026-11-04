@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -24,16 +25,37 @@ import (
 // reports one only after the full deadline, a dead one reports immediately.
 const readDeadline = 2 * time.Second
 
+func TestReplacedWatchPumpCannotSendStaleFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ws := &uiWS{
+		ctx:   ctx,
+		send:  make(chan []byte, 2),
+		watch: map[string]*wsWatchEntry{"shell-1": {rid: 2}},
+	}
+
+	if ws.sendWatchTerminalPayload("shell-1", 1, []byte(`{"type":"terminal"}`)) {
+		t.Fatal("stale terminal frame was accepted")
+	}
+	if ws.sendWatchControlPayload("shell-1", 1, []byte(`{"type":"terminal_done"}`)) {
+		t.Fatal("stale terminal_done was accepted")
+	}
+	if len(ws.send) != 0 {
+		t.Fatalf("stale frames reached the send queue: %d", len(ws.send))
+	}
+	if !ws.sendWatchTerminalPayload("shell-1", 2, []byte(`{"type":"terminal"}`)) {
+		t.Fatal("current terminal frame was rejected")
+	}
+}
+
 // TestWatchAddActuallySubscribes drives the Web UI socket the way a browser tab
 // does and asks the only question that matters to a user: once a tab says it is
 // watching a channel, does that channel's output reach the tab?
 //
-// It exists because watch_add has no server-side acknowledgement: readPump drops
-// addWatch's error (`_ = c.addWatch(id)`), so a failed subscription is completely
-// silent — the tab simply never receives bytes and nothing says why. Any handle
-// the browser holds but addWatch cannot resolve therefore looks exactly like a
-// quiet terminal. This test pins the working path so a regression cannot hide
-// behind that silence.
+// The subscriber now receives a watch_ready acknowledgement carrying the first
+// byte offset that can appear in a terminal frame. The test also requires every
+// terminal frame to describe a contiguous half-open byte range, so a reconnect
+// or browser consumer can distinguish a complete handoff from a gap.
 func TestWatchAddActuallySubscribes(t *testing.T) {
 	sshSrv := sshserver.New()
 	if err := sshSrv.Start(); err != nil {
@@ -91,8 +113,47 @@ func TestWatchAddActuallySubscribes(t *testing.T) {
 		}
 	}
 
+	missingID := shell.ID + "-missing"
+	if err := conn.WriteJSON(map[string]any{"type": "watch_add", "id": missingID}); err != nil {
+		t.Fatalf("bad watch_add: %v", err)
+	}
+	for {
+		var m map[string]any
+		if err := conn.ReadJSON(&m); err != nil {
+			t.Fatalf("waiting for watch_error: %v", err)
+		}
+		if m["type"] == "watch_error" {
+			if id, _ := m["id"].(string); id != missingID {
+				t.Fatalf("watch_error id = %q", id)
+			}
+			break
+		}
+	}
+
 	if err := conn.WriteJSON(map[string]any{"type": "watch_add", "id": shell.ID}); err != nil {
 		t.Fatalf("watch_add: %v", err)
+	}
+	var expectedOffset int64
+	ready := false
+	for !ready {
+		var m map[string]any
+		if err := conn.ReadJSON(&m); err != nil {
+			t.Fatalf("waiting for watch_ready: %v", err)
+		}
+		switch m["type"] {
+		case "watch_error":
+			t.Fatalf("watch_add failed: %v", m["error"])
+		case "watch_ready":
+			if id, _ := m["id"].(string); id != shell.ID {
+				t.Fatalf("watch_ready id = %q", id)
+			}
+			cursor, ok := m["cursor"].(float64)
+			if !ok || cursor < 0 {
+				t.Fatalf("watch_ready cursor = %#v", m["cursor"])
+			}
+			expectedOffset = int64(cursor)
+			ready = true
+		}
 	}
 	marker := "watch-marker-" + time.Now().Format("150405.000000")
 
@@ -155,6 +216,8 @@ func TestWatchAddActuallySubscribes(t *testing.T) {
 	// error means the peer is gone. Nothing in between needs a heuristic.
 	readDeadline := time.Now().Add(20 * time.Second)
 	var got strings.Builder
+	sentExit := false
+	resubscribePending := false
 	_ = conn.SetReadDeadline(readDeadline)
 	for {
 		var m map[string]any
@@ -164,16 +227,60 @@ func TestWatchAddActuallySubscribes(t *testing.T) {
 			}
 			t.Fatalf("reading the watch channel: %v (got %q)", err, got.String())
 		}
-		if m["type"] != "terminal" {
-			continue
-		}
 		if id, _ := m["id"].(string); id != shell.ID {
 			continue
 		}
+		if m["type"] == "watch_ready" {
+			if !resubscribePending {
+				t.Fatalf("unexpected second watch_ready: %+v", m)
+			}
+			cursor, ok := m["cursor"].(float64)
+			if !ok || cursor < 0 {
+				t.Fatalf("replacement watch_ready cursor = %#v", m["cursor"])
+			}
+			expectedOffset = int64(cursor)
+			resubscribePending = false
+			if err := conn.WriteJSON(map[string]any{"type": "input", "id": shell.ID, "d": "exit\n"}); err != nil {
+				t.Fatalf("input exit: %v", err)
+			}
+			sentExit = true
+			continue
+		}
+		if m["type"] == "terminal_done" {
+			if !sentExit {
+				t.Fatalf("terminal_done arrived before the marker: %q", got.String())
+			}
+			cursor, ok := m["cursor"].(float64)
+			if !ok {
+				t.Fatalf("terminal_done lacks its final cursor: %+v", m)
+			}
+			if int64(cursor) != expectedOffset {
+				t.Fatalf("terminal_done cursor = %.0f, want %d", cursor, expectedOffset)
+			}
+			return
+		}
+		if m["type"] != "terminal" {
+			continue
+		}
 		d, _ := m["d"].(string)
+		start, startOK := m["start"].(float64)
+		end, endOK := m["end"].(float64)
+		if !startOK || !endOK {
+			t.Fatalf("terminal frame lacks byte range: %+v", m)
+		}
+		if int64(start) != expectedOffset {
+			t.Fatalf("terminal start = %.0f, want %d", start, expectedOffset)
+		}
+		if int64(end-start) != int64(len([]byte(d))) {
+			t.Fatalf("terminal range %.0f..%.0f spans %d bytes, payload has %d", start, end, int64(end-start), len([]byte(d)))
+		}
+		expectedOffset = int64(end)
 		got.WriteString(d)
-		if strings.Contains(got.String(), marker) {
-			return // the tab received the channel's live output
+		if !sentExit && !resubscribePending && strings.Contains(got.String(), marker) {
+			if err := conn.WriteJSON(map[string]any{"type": "watch_add", "id": shell.ID}); err != nil {
+				t.Fatalf("replacement watch_add: %v", err)
+			}
+			resubscribePending = true
 		}
 	}
 }
