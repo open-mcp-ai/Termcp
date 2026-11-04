@@ -418,7 +418,7 @@ func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
 		info := s.Info()
-		if info.Status != api.SessionRunning {
+		if info.Status != api.SessionRunning || info.Borrowed {
 			return true
 		}
 		if info.SSHConfig == sshConfig || info.SSHEndpoint == sshConfig || info.Name == sshConfig {
@@ -429,6 +429,60 @@ func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
 	})
 	return found
 }
+
+// FindBorrowed returns the live `use:<host>` container for a host, creating it when
+// there is none (issue #255).
+//
+// THE KEY IS THE HOST, not the session name: a borrowed container is a per-host
+// singleton, so ten callers asking for the same host share one visible record instead
+// of producing ten windows and ten archive rows. A rename by a person would break a
+// name-keyed lookup; the host is the fact the caller actually says.
+//
+// THE CALLER MUST ALREADY HAVE DECIDED that visible is wanted. Creating a container
+// starts a real connection (no primary shell, so nothing runs on the target), which is
+// more than the old short-circuit did - so the MCP layer only calls this after it has
+// taken every refusal path it can.
+func (m *Manager) FindBorrowed(host string, cfg Config) (*Session, error) {
+	if found := m.LiveBorrowed(host); found != nil {
+		return found, nil
+	}
+	cfg.Name = BorrowedSessionName(host)
+	cfg.SSHConfig = host
+	cfg.NoShell = true
+	cfg.Borrowed = true
+	cfg.Mode = api.ModePipe
+	return m.Create(cfg)
+}
+
+// LiveBorrowed returns the live `use:<host>` container without creating one, or nil.
+//
+// IT EXISTS SO A RECORD CAN BE WRITTEN WITHOUT DIALING. Recording a finished command
+// must never be the reason a connection is opened - the command already ran on the
+// pooled transport, and a container started just to hold a row would be a connection
+// nobody asked for. The first run on a host creates the container; later runs find it.
+func (m *Manager) LiveBorrowed(host string) *Session {
+	var found *Session
+	m.sessions.Range(func(_, v any) bool {
+		s := v.(*Session)
+		info := s.Info()
+		if info.Status != api.SessionRunning || !info.Borrowed {
+			return true
+		}
+		if info.SSHConfig == host {
+			found = s
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// BorrowedSessionName is the display name every borrowed container for a host carries.
+//
+// It is a name and not an id: the container is a record a person reads, and
+// "use:prod" says what it is (a connection #237 borrowed) and where (prod) in one
+// token. The `Borrowed` field is what anything programmatic keys on.
+func BorrowedSessionName(host string) string { return "use:" + host }
 
 // MarkAllDead transitions every running session to DEAD (exited) at server
 // shutdown, then persists and notifies. It never finalizes (does not kill

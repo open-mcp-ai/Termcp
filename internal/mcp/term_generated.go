@@ -340,6 +340,10 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 	isChannel := h.Index > 0
 
 	if isChannel {
+		if boolFlag(stmt, "later") {
+			return badRequest(stmt, "`--later` marks a whole session to stop accepting new channels and close when existing work ends.\n"+
+				"`"+stmt.Target+"` is a channel — close it now with `close "+stmt.Target+"`, or defer the session with `close "+h.SessionID+" --later`.")
+		}
 		// `--grace` has no meaning for a channel: closing one closes one SSH channel,
 		// which has no SIGTERM-then-wait protocol. Refusing is better than ignoring it,
 		// because a caller who wrote it expects a deadline that will never exist.
@@ -397,6 +401,36 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 		return badRequest(stmt, "`--force` is gone. `close` stops a session and leaves it readable;\n"+
 			"`rm "+stmt.Target+"` erases it (and needs --force while it is running).")
 	}
+
+	// DEFERRED CLOSE (--later): wait for bounded work to end on its own (#255).
+	if boolFlag(stmt, "later") {
+		sid := sess.Info().ID
+		if s.forwardMgr != nil {
+			if fwList := s.forwardMgr.ListBySession(sid); len(fwList) > 0 {
+				return badRequest(stmt, fmt.Sprintf(
+					"close --later requires a bounded workload (pipe shell or active file transfer). "+
+						"This session holds active port forward %q, which does not end by itself. "+
+						"Close the forward first with `close %s forward %s`, or drop --later to close now.",
+					fwList[0].ForwardID, stmt.Target, fwList[0].ForwardID))
+			}
+		}
+		if err := sess.CloseLater(); err != nil {
+			return badRequest(stmt, err.Error())
+		}
+		slot := envelope.Slot{
+			Code: 200,
+			Headers: map[string]string{
+				"Path":    stmt.Path,
+				"Status":  "closing",
+				"Closing": "true",
+				"Hint": fmt.Sprintf(
+					"session %s will close and archive when its running work finishes; it is no longer accepting new channels",
+					sess.Info().Name),
+			},
+		}
+		return slot
+	}
+
 	args := argsOf("session_id", stmt.Target)
 	if slot, bad := numericFlags(args, stmt, [2]string{"grace", "grace_period"}); bad {
 		return slot

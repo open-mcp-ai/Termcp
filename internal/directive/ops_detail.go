@@ -115,7 +115,8 @@ var ops = []Op{
 		// container. A declared kind is recognised, and the dispatcher's default branch
 		// then answers with what to write instead.
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
-		Flags: []string{"grace:number", "forward-id", "channel"},
+		Flags:     []string{"grace:number", "forward-id", "channel", "later"},
+		Valueless: []string{"later"},
 		RetiredFlags: map[string]string{
 			"force": "--force is gone. `close` stops and keeps the record, `rm` erases it.",
 		},
