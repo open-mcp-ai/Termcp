@@ -13,11 +13,9 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
-// Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
-// only taken by session-level transitions (close/DEAD/terminate, new shells).
-// The manager-assigned callbacks and the per-shell closed flag are atomics and
-// need no lock (see field docs below).
+// NO LOCK HIERARCHY. Session metadata is an immutable snapshot (live); shell
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 // commandLineOf is the display spelling of what a channel was asked to run:
 // the program, plus its arguments when there are any. It is metadata for the
@@ -97,17 +95,16 @@ func (s *Session) CreateChildShellLine(line string, pty bool, rows, cols int, na
 }
 
 func (s *Session) createChildShell(command string, args []string, line, pty bool, rows, cols int, name string) (*ChildShell, error) {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
-
-	s.mu.RLock()
-	running := s.Status == api.SessionRunning
-	s.mu.RUnlock()
+	// NO LOCK IS HELD ACROSS THE CHANNEL OPEN. The open below is an SSH round trip,
+	// and the mutual exclusion this function needs is a state machine the atomics
+	// already express: the flags are checked here, the channel is opened, and the
+	// flags are RE-CHECKED after it exists — a `close --later` that arrived while we
+	// were dialling is then honoured by closing the brand-new channel instead of by
+	// having held a mutex for the length of the network call (AGENTS.md rule 1).
+	running := s.liveStatus() == api.SessionRunning
 	// A DEFERRED CLOSE REFUSES NEW WORK IMMEDIATELY, not when the teardown flag
 	// lands: `close --later` promised this session stops accepting channels, and the
-	// gap between the request and beginClosing must not be a door. Checked under
-	// shellStateMu, the same lock CloseLater takes while it decides, so a pty cannot
-	// be added between "this session has no pty" and "this session refuses work".
+	// gap between the request and beginClosing must not be a door.
 	if s.closing.Load() || s.closeLater.Load() || !running {
 		if s.closeLater.Load() && running {
 			return nil, fmt.Errorf("%w: a deferred close (`close --later`) was requested; this session no longer accepts new channels", ErrClosing)
@@ -164,12 +161,25 @@ func (s *Session) createChildShell(command string, args []string, line, pty bool
 		return nil, fmt.Errorf("create child shell: %w", err)
 	}
 
+	// THE RE-CHECK: a close that was requested while this channel was being opened
+	// wins, and the channel we just made is torn down rather than registered. This is
+	// what the old lock bought, expressed as a state transition instead of a critical
+	// section: the flag is set before the decision to close is made, so an open that
+	// started earlier always sees it here.
+	if s.closing.Load() || s.closeLater.Load() {
+		_ = execSession.Close()
+		return nil, fmt.Errorf("%w: a deferred close (`close --later`) was requested while this channel was opening", ErrClosing)
+	}
+	running = s.liveStatus() == api.SessionRunning
+	if !running {
+		_ = execSession.Close()
+		return nil, fmt.Errorf("session has exited")
+	}
+
 	// Assign the channel number only after the SSH channel exists. Failed opens
 	// do not create a shell and therefore do not consume a locator number; every
-	// successful channel still gets a unique, monotonically increasing number
-	// under shellStateMu.
-	s.nextShellIndex++
-	index := s.nextShellIndex
+	// successful channel still gets a unique, monotonically increasing number.
+	index := int(s.nextShellIndex.Add(1))
 	if name == "" {
 		// Keep the public default name backward-compatible. The stable channel
 		// number used by locators is carried separately in Index; it is not
@@ -512,10 +522,8 @@ func (s *Session) SnapshotShells() []api.Session {
 // the retained shell snapshot (natural exits / transport aborts only) so their
 // tabs survive transport teardown or a restart.
 func (s *Session) ShellsForView() []api.Session {
-	s.mu.RLock()
-	status := s.Status
-	useHost := s.UseHost
-	s.mu.RUnlock()
+	status := s.liveStatus()
+	useHost := s.Session.UseHost
 	if status == api.SessionRunning {
 		live := s.ListChildShells()
 		// A USE CONTAINER'S WORK IS IN THE HISTORY, NOT IN THE LIVE MAP
