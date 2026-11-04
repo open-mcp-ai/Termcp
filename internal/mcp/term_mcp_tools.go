@@ -34,7 +34,7 @@ func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *j
 	if bad != nil {
 		return *bad
 	}
-	if bad := s.checkAgentPeerEffect(ctx, stmt, operationPlan("mcp.tool.invoke", authorization.Evidence{ToolName: name})); bad != nil {
+	if bad := s.checkAgentPeerEffect(ctx, stmt, operationPlan("mcp.open", authorization.Evidence{ToolName: name})); bad != nil {
 		return *bad
 	}
 	if err := s.jrpcReady(ctx, h); err != nil {

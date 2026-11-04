@@ -1,16 +1,28 @@
 package mcp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/authorization"
 )
+
+func policyReviewBody(t *testing.T, out string) map[string]any {
+	t.Helper()
+	var result mcpgo.CallToolResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode tool result: %v", err)
+	}
+	return parseResult(t, &result)
+}
 
 func TestPolicyAskQueuesAndExecutesAfterApproval(t *testing.T) {
 	limit := int64(32)
@@ -30,12 +42,16 @@ func TestPolicyAskQueuesAndExecutesAfterApproval(t *testing.T) {
 	if !strings.Contains(out, "review_pending") {
 		t.Fatalf("ask did not queue: %s", out)
 	}
+	body := policyReviewBody(t, out)
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("ask wrote before approval: %v", err)
 	}
 	pending := h.server.ListPolicyApprovals()
 	if len(pending) != 1 || pending[0].State != approval.Pending || pending[0].Summary == "" {
 		t.Fatalf("pending approvals = %+v", pending)
+	}
+	if body["approval_id"] != pending[0].ID || body["session_id"] != sess.ID {
+		t.Fatalf("review correlation = %#v, pending = %+v", body, pending)
 	}
 	if _, err := h.server.DecidePolicyApproval(pending[0].ID, true, ""); err != nil {
 		t.Fatal(err)
@@ -90,12 +106,23 @@ func TestDSLAskQueuesWholeStatementAndExecutesAfterApproval(t *testing.T) {
 	if !strings.Contains(out, "review_pending") {
 		t.Fatalf("DSL ask did not queue: %s", out)
 	}
+	parts := strings.SplitN(out, "\n\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("DSL review reply has no body: %q", out)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(parts[1]), &body); err != nil {
+		t.Fatalf("decode DSL review reply: %v", err)
+	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("DSL ran before approval: %v", err)
 	}
 	pending := h.server.ListPolicyApprovals()
 	if len(pending) != 1 || pending[0].Kind != approval.Kind("shell.key") {
 		t.Fatalf("DSL pending approvals = %+v", pending)
+	}
+	if body["approval_id"] != pending[0].ID || body["session_id"] != sess.ID {
+		t.Fatalf("DSL review correlation = %#v, pending = %+v", body, pending)
 	}
 	if _, err := h.server.DecidePolicyApproval(pending[0].ID, true, ""); err != nil {
 		t.Fatal(err)

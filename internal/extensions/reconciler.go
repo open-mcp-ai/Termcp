@@ -314,8 +314,8 @@ func (r *Reconciler) probe(ctx context.Context, name, target string) {
 	_, _, _, _, _ = r.bringUp(ctx, ext, st, false)
 }
 
-func (r *Reconciler) probePlan(ctx context.Context, name string, ext *Extension, plan hostPlan) {
-	st := r.state(name)
+func (r *Reconciler) probePlan(ctx context.Context, name, target string, ext *Extension, plan hostPlan) {
+	st := r.stateFor(name, target)
 	if st.name() != name {
 		return
 	}

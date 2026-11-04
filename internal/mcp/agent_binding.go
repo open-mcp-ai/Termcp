@@ -21,6 +21,10 @@ type agentResourceBindings struct {
 
 type agentResourceBindingsKey struct{}
 
+func extensionBindingKey(name, target string) string {
+	return strings.TrimSpace(name) + "\x00" + strings.TrimSpace(target)
+}
+
 func withAgentResourceBindings(ctx context.Context, bindings agentResourceBindings) context.Context {
 	return context.WithValue(ctx, agentResourceBindingsKey{}, bindings)
 }
@@ -59,11 +63,11 @@ func (s *Server) profileAuthorizationBinding(name string) (sshconfig.Authorizati
 	return s.sshConfigs.Binding(canonical)
 }
 
-func (s *Server) extensionAuthorizationBinding(name string) (extensions.AuthorizationBinding, error) {
+func (s *Server) extensionAuthorizationBinding(name, target string) (extensions.AuthorizationBinding, error) {
 	if s.extensions == nil {
 		return extensions.AuthorizationBinding{}, errors.New("extensions are not configured")
 	}
-	return s.extensions.Binding(strings.TrimSpace(name))
+	return s.extensions.Binding(strings.TrimSpace(name), strings.TrimSpace(target))
 }
 
 func (s *Server) loadAgentProfile(ctx context.Context, name string) (string, *sshconfig.Entry, error) {
@@ -113,9 +117,9 @@ func (s *Server) readAgentProfileRaw(ctx context.Context, name string) (string, 
 	return canonical, raw, err
 }
 
-func (s *Server) loadAgentExtension(ctx context.Context, name string) (*extensions.Extension, error) {
+func (s *Server) loadAgentExtension(ctx context.Context, name, target string) (*extensions.Extension, error) {
 	bindings, _ := agentBindingsFromContext(ctx)
-	if expected, ok := bindings.extensions[name]; ok {
+	if expected, ok := bindings.extensions[extensionBindingKey(name, target)]; ok {
 		return s.extensions.LoadBound(expected)
 	}
 	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
@@ -124,26 +128,26 @@ func (s *Server) loadAgentExtension(ctx context.Context, name string) (*extensio
 	return s.extensions.Store().Load(strings.TrimSpace(name))
 }
 
-func (s *Server) acquireAgentExtension(ctx context.Context, name string, wait time.Duration) (extensions.Status, error) {
+func (s *Server) acquireAgentExtension(ctx context.Context, name, target string, wait time.Duration) (extensions.Status, error) {
 	bindings, _ := agentBindingsFromContext(ctx)
-	if expected, ok := bindings.extensions[name]; ok {
+	if expected, ok := bindings.extensions[extensionBindingKey(name, target)]; ok {
 		return s.extensions.AcquireBound(expected, wait)
 	}
 	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
 		return extensions.Status{}, errAgentBindingMissing
 	}
-	return s.extensions.Acquire(name, wait)
+	return s.extensions.AcquireTarget(name, target, wait)
 }
 
-func (s *Server) retryAgentExtension(ctx context.Context, name string) error {
+func (s *Server) retryAgentExtension(ctx context.Context, name, target string) error {
 	bindings, _ := agentBindingsFromContext(ctx)
-	if expected, ok := bindings.extensions[name]; ok {
+	if expected, ok := bindings.extensions[extensionBindingKey(name, target)]; ok {
 		return s.extensions.RetryBound(expected)
 	}
 	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
 		return errAgentBindingMissing
 	}
-	return s.extensions.Retry(name)
+	return s.extensions.RetryTarget(name, target)
 }
 
 func (s *Server) validateAgentExtensionTarget(ctx context.Context, target string) error {

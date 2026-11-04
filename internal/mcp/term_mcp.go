@@ -120,7 +120,7 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 		// A notification has no answer to wait for, so waiting would be a lie.
 		return envelope.Slot{Code: 202, Headers: headers, Body: "sent (a notification has no reply); read frames with `read " + handle + " --frame`"}
 	case "recv":
-		if bad := s.checkAgentPeerEffect(ctx, stmt, authorization.Plan{Requirements: []authorization.Requirement{{Operation: "mcp.read"}, {Operation: "shell.output"}}}); bad != nil {
+		if bad := s.checkAgentPeerEffect(ctx, stmt, authorization.Plan{Requirements: []authorization.Requirement{{Operation: "mcp.open"}, {Operation: "shell.output"}}}); bad != nil {
 			return *bad
 		}
 		return s.mcpRecvFrame(ctx, stmt, handle, win)

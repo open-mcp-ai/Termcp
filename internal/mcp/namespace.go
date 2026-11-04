@@ -22,8 +22,7 @@ const NamespaceHeader = "X-Termcp-Namespace"
 // the context hook to the guard, the list filters and the handlers.
 type callerNSKey struct{}
 
-// withCallerNamespace uses a verified Agent identity when present, otherwise
-// reads the legacy claim off a request and installs it on the
+// withCallerNamespace reads the claim off a request and installs it on the
 // context. It is the only place the header is parsed, so every surface that
 // reaches a session asks the same question of the same value.
 //
@@ -32,9 +31,6 @@ type callerNSKey struct{}
 // would otherwise be handed the default (shared) view, which is the opposite of
 // what it asked for.
 func withCallerNamespace(ctx context.Context, r *http.Request) context.Context {
-	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
-		return context.WithValue(ctx, callerNSKey{}, ns.ForCaller("agent-"+actor.ID))
-	}
 	raw := strings.TrimSpace(r.Header.Get(NamespaceHeader))
 	if raw == "" {
 		return ctx
@@ -58,6 +54,9 @@ const invalidNamespace = "ns:\x00invalid"
 // ordinary (unnamespaced) surfaces — the browser, a stdio bridge, an agent that
 // set no header — and the caller's own for one that claimed it.
 func callerNamespace(ctx context.Context) string {
+	if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
+		return ns.ForCaller("agent-" + actor.ID)
+	}
 	nsValue, _ := ctx.Value(callerNSKey{}).(string)
 	return nsValue
 }

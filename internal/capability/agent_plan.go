@@ -19,9 +19,6 @@ func AgentToolPlan(tool string, args map[string]any) (authorization.Plan, error)
 		if tool == "session_start" {
 			plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "shell.open"})
 		}
-		if getString(args, "command", "") != "" || len(getStringSlice(args, "args")) > 0 {
-			plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "shell.exec"})
-		}
 		return plan, nil
 	case "shell_key":
 		key := strings.ToLower(strings.TrimSpace(getString(args, "key", "")))
@@ -38,16 +35,20 @@ func AgentToolPlan(tool string, args map[string]any) (authorization.Plan, error)
 		if getString(args, "action", "") != "list" {
 			return authorization.Plan{}, fmt.Errorf("unclassified message action")
 		}
-		id = "shell.marks"
+		id = "session.message"
 	case "file_perm", "file_link", "file_fs":
 		action := getString(args, "action", "")
 		valid := map[string]string{"chmod": "file_perm", "chown": "file_perm", "chtimes": "file_perm", "readlink": "file_link", "symlink": "file_link", "link": "file_link", "truncate": "file_fs", "realpath": "file_fs", "statvfs": "file_fs"}
 		if valid[action] != tool {
 			return authorization.Plan{}, fmt.Errorf("unclassified file action %q", action)
 		}
-		id = "file." + action
-	case "file_read", "file_write", "file_replace":
 		id = "file." + strings.TrimPrefix(tool, "file_")
+	case "file_read", "file_write", "file_replace":
+		if tool == "file_replace" {
+			id = "file.write"
+		} else {
+			id = "file." + strings.TrimPrefix(tool, "file_")
+		}
 		e.Forms = []string{"inline"}
 		local := false
 		switch tool {
@@ -63,6 +64,12 @@ func AgentToolPlan(tool string, args map[string]any) (authorization.Plan, error)
 			if err != nil {
 				return authorization.Plan{}, err
 			}
+		case "file_replace":
+			e.Bytes = int64(len(getString(args, "new_text", "")))
+			e.HasBytes = true
+		}
+		if tool == "file_replace" {
+			local = false
 		}
 		if local {
 			e.Forms = []string{"local"}
@@ -83,16 +90,23 @@ func AgentToolPlan(tool string, args map[string]any) (authorization.Plan, error)
 		case "list", "close":
 			id = "forward." + action
 		case "local", "remote", "dynamic":
-			id = "forward.open." + action
+			id = "forward.open"
 		default:
 			return authorization.Plan{}, fmt.Errorf("unclassified forward action")
 		}
 	case "ssh_config":
-		id = "profile." + getString(args, "action", "")
+		action := getString(args, "action", "")
+		if action == "" || action == "get" {
+			action = "list"
+		}
+		id = "profile." + action
 	case "extension":
 		action := getString(args, "action", "")
 		if action == "restart" {
 			action = "retry"
+		}
+		if action == "use" || action == "release" {
+			action = "get"
 		}
 		id = "ext." + action
 	default:

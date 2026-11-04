@@ -13,8 +13,8 @@ func TestConstraintSelectionsSurviveJSONRoundTrip(t *testing.T) {
 		allowed, forbidden Evidence
 	}{
 		{"keys", "shell.key", Constraints{Keys: []string{}}, Constraints{Keys: []string{"tab"}}, Evidence{Keys: []string{"tab"}, Repeat: 1}, Evidence{Keys: []string{"enter"}, Repeat: 1}},
-		{"tool_names", "mcp.tool.invoke", Constraints{ToolNames: []string{}}, Constraints{ToolNames: []string{"status"}}, Evidence{ToolName: "status"}, Evidence{ToolName: "execute"}},
-		{"methods", "cdp.method.invoke", Constraints{Methods: []string{}}, Constraints{Methods: []string{"Page.reload"}}, Evidence{Method: "Page.reload"}, Evidence{Method: "Runtime.evaluate"}},
+		{"tool_names", "mcp.open", Constraints{ToolNames: []string{}}, Constraints{ToolNames: []string{"status"}}, Evidence{ToolName: "status"}, Evidence{ToolName: "execute"}},
+		{"methods", "cdp.open", Constraints{Methods: []string{}}, Constraints{Methods: []string{"Page.reload"}}, Evidence{Method: "Page.reload"}, Evidence{Method: "Runtime.evaluate"}},
 		{"forms", "file.write", Constraints{Forms: []string{}}, Constraints{Forms: []string{"inline"}}, Evidence{Forms: []string{"inline"}}, Evidence{Forms: []string{"local"}}},
 	}
 	for _, tc := range cases {

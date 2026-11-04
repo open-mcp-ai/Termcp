@@ -248,114 +248,67 @@ type Operation struct {
 }
 
 var catalog = []Operation{
-	// Sessions and terminal channels.
+	// The dev capability table is the authoritative operation vocabulary. The
+	// authorization catalog may carry display metadata and constraints, but it
+	// must not invent a second set of narrower or broader operation IDs.
 	{ID: "session.list", Family: "session", Name: "List sessions", Resource: "session.list"},
 	{ID: "session.info", Family: "session", Name: "Inspect sessions", Resource: "session.info"},
 	{ID: "session.start", Family: "session", Name: "Start sessions", Resource: "session.start"},
 	{ID: "session.terminate", Family: "session", Name: "Stop sessions", Resource: "session.terminate"},
 	{ID: "session.delete", Family: "session", Name: "Delete sessions", Resource: "session.delete"},
+	{ID: "session.message", Family: "session", Name: "Read session messages", Resource: "session.message"},
+
 	{ID: "shell.list", Family: "shell", Name: "List channels", Resource: "shell.list"},
 	{ID: "shell.open", Family: "shell", Name: "Open channels", Resource: "shell.open"},
 	{ID: "shell.close", Family: "shell", Name: "Close channels", Resource: "shell.close"},
-	{ID: "shell.exec", Family: "shell", Name: "Start programs", Resource: "shell.open"},
 	{ID: "shell.resize", Family: "shell", Name: "Resize channels", Resource: "shell.resize"},
 	{ID: "shell.output", Family: "shell", Name: "Read output", Resource: "shell.output"},
 	{ID: "shell.input", Family: "shell", Name: "Type input", Resource: "shell.input"},
 	{ID: "shell.key", Family: "shell", Name: "Press keys", Resource: "shell.key",
 		ConstraintKinds: []ConstraintKind{KindKeys, KindRepeatMax}},
-	{ID: "shell.marks", Family: "shell", Name: "Read spans", Resource: "session.message"},
-	{ID: "shell.detect", Family: "shell", Name: "Detect local Termcp shell", Resource: "shell.detect"},
+	{ID: "shell.detect", Family: "shell", Name: "Detect environment", Resource: "shell.detect"},
 	{ID: "shell.reader.register", Family: "shell", Name: "Register readers", Resource: "shell.reader.register"},
 	{ID: "shell.reader.unregister", Family: "shell", Name: "Unregister readers", Resource: "shell.reader.unregister"},
 
-	// Files. Read-only path queries stop borrowing file.write.
+	{ID: "user.notify", Family: "notify", Name: "Notify the operator", Resource: "user.notify"},
+
+	{ID: "forward.list", Family: "forward", Name: "List forwards", Resource: "forward.list"},
+	{ID: "forward.open", Family: "forward", Name: "Open forwards", Resource: "forward.open"},
+	{ID: "forward.close", Family: "forward", Name: "Close forwards", Resource: "forward.close"},
+
 	{ID: "file.read", Family: "file", Name: "Read files", Resource: "file.read",
 		ConstraintKinds: []ConstraintKind{KindForms, KindMaxBytes}},
 	{ID: "file.stat", Family: "file", Name: "Stat files", Resource: "file.stat"},
-	{ID: "file.realpath", Family: "file", Name: "Resolve real paths", Resource: "file.fs"},
-	{ID: "file.readlink", Family: "file", Name: "Read links", Resource: "file.link"},
 	{ID: "file.getwd", Family: "file", Name: "Read working directory", Resource: "file.getwd"},
-	{ID: "file.statvfs", Family: "file", Name: "Read filesystem stats", Resource: "file.fs"},
 	{ID: "file.urls", Family: "file", Name: "Get transfer URLs", Resource: "file.urls"},
 	{ID: "file.write", Family: "file", Name: "Write files", Resource: "file.write",
 		ConstraintKinds: []ConstraintKind{KindForms, KindMaxBytes}},
-	{ID: "file.replace", Family: "file", Name: "Replace file text", Resource: "file.write",
-		ConstraintKinds: []ConstraintKind{KindForms}},
 	{ID: "file.delete", Family: "file", Name: "Delete files", Resource: "file.delete"},
 	{ID: "file.mkdir", Family: "file", Name: "Create directories", Resource: "file.mkdir"},
-	{ID: "file.truncate", Family: "file", Name: "Truncate files", Resource: "file.fs"},
-	{ID: "file.chmod", Family: "file", Name: "Change file modes", Resource: "file.perm"},
-	{ID: "file.chown", Family: "file", Name: "Change file owners", Resource: "file.perm"},
-	{ID: "file.chtimes", Family: "file", Name: "Change file times", Resource: "file.perm"},
-	{ID: "file.symlink", Family: "file", Name: "Create symbolic links", Resource: "file.link"},
-	{ID: "file.link", Family: "file", Name: "Create hard links", Resource: "file.link"},
 	{ID: "file.rename", Family: "file", Name: "Rename files", Resource: "file.rename"},
+	{ID: "file.perm", Family: "file", Name: "Change file permissions", Resource: "file.perm"},
+	{ID: "file.link", Family: "file", Name: "Manage links", Resource: "file.link"},
+	{ID: "file.fs", Family: "file", Name: "Manage filesystem objects", Resource: "file.fs"},
 
-	// Port forwarding.
-	{ID: "forward.list", Family: "forward", Name: "List forwards", Resource: "forward.list"},
-	{ID: "forward.open.local", Family: "forward", Name: "Open local forwards", Resource: "forward.open"},
-	{ID: "forward.open.remote", Family: "forward", Name: "Open remote forwards", Resource: "forward.open"},
-	{ID: "forward.open.dynamic", Family: "forward", Name: "Open dynamic forwards", Resource: "forward.open"},
-	{ID: "forward.close", Family: "forward", Name: "Close forwards", Resource: "forward.close"},
-
-	// External protocol peers.
-	{ID: "mcp.open", Family: "peer", Name: "Open MCP peers", Resource: "mcp.open"},
-	{ID: "mcp.list", Family: "peer", Name: "List MCP peers", Resource: "mcp.open"},
-	{ID: "mcp.info", Family: "peer", Name: "Inspect MCP peers", Resource: "mcp.open"},
-	{ID: "mcp.close", Family: "peer", Name: "Close MCP peers", Resource: "mcp.open"},
-	{ID: "mcp.read", Family: "peer", Name: "Read MCP frames", Resource: "mcp.open"},
-	{ID: "mcp.tools.list", Family: "peer", Name: "List MCP tools", Resource: "mcp.open"},
-	{ID: "mcp.tool.invoke", Family: "peer", Name: "Invoke MCP tools", Resource: "mcp.open",
-		ConstraintKinds: []ConstraintKind{KindToolNames}},
-	{ID: "mcp.raw", Family: "peer", Name: "Send raw MCP frames", Resource: "mcp.open"},
-	{ID: "cdp.open", Family: "peer", Name: "Open CDP peers", Resource: "cdp.open"},
-	{ID: "cdp.list", Family: "peer", Name: "List CDP peers", Resource: "cdp.open"},
-	{ID: "cdp.info", Family: "peer", Name: "Inspect CDP peers", Resource: "cdp.open"},
-	{ID: "cdp.close", Family: "peer", Name: "Close CDP peers", Resource: "cdp.open"},
-	{ID: "cdp.read", Family: "peer", Name: "Read CDP frames", Resource: "cdp.open"},
-	{ID: "cdp.protocol.read", Family: "peer", Name: "Read CDP signatures", Resource: "cdp.open"},
-	{ID: "cdp.attach", Family: "peer", Name: "Attach CDP targets", Resource: "cdp.open"},
-	{ID: "cdp.detach", Family: "peer", Name: "Detach CDP targets", Resource: "cdp.open"},
-	{ID: "cdp.method.invoke", Family: "peer", Name: "Invoke CDP methods", Resource: "cdp.open",
-		ConstraintKinds: []ConstraintKind{KindMethods}},
-	{ID: "cdp.raw", Family: "peer", Name: "Send raw CDP frames", Resource: "cdp.open"},
-	{ID: "jrpc.open", Family: "peer", Name: "Open JSON-RPC peers", Resource: "jrpc.open"},
-	{ID: "jrpc.list", Family: "peer", Name: "List JSON-RPC peers", Resource: "jrpc.open"},
-	{ID: "jrpc.info", Family: "peer", Name: "Inspect JSON-RPC peers", Resource: "jrpc.open"},
-	{ID: "jrpc.close", Family: "peer", Name: "Close JSON-RPC peers", Resource: "jrpc.open"},
-	{ID: "jrpc.read", Family: "peer", Name: "Read JSON-RPC frames", Resource: "jrpc.open"},
-	{ID: "jrpc.method.invoke", Family: "peer", Name: "Invoke JSON-RPC methods", Resource: "jrpc.open",
-		ConstraintKinds: []ConstraintKind{KindMethods}},
-	{ID: "jrpc.raw", Family: "peer", Name: "Send raw JSON-RPC frames", Resource: "jrpc.open"},
-
-	// Background transfers.
-	{ID: "task.list", Family: "task", Name: "List tasks"},
-	{ID: "task.info", Family: "task", Name: "Inspect tasks"},
-	{ID: "task.cancel", Family: "task", Name: "Cancel tasks"},
-
-	// Saved profiles.
 	{ID: "profile.list", Family: "profile", Name: "List profiles", Resource: "profile.list"},
-	{ID: "profile.get", Family: "profile", Name: "View profile summaries", Resource: "profile.list"},
 	{ID: "profile.create", Family: "profile", Name: "Create profiles", Resource: "profile.create", Global: true},
 	{ID: "profile.edit", Family: "profile", Name: "Edit profiles", Resource: "profile.edit", Global: true},
 	{ID: "profile.copy", Family: "profile", Name: "Copy profiles", Resource: "profile.create", Global: true},
 	{ID: "profile.delete", Family: "profile", Name: "Delete profiles", Resource: "profile.delete", Global: true},
 
-	// Extensions. Using one is scoped to its host; authoring is global.
 	{ID: "ext.list", Family: "extension", Name: "List extensions", Resource: "ext.list"},
 	{ID: "ext.get", Family: "extension", Name: "View extensions", Resource: "ext.get"},
-	{ID: "ext.use", Family: "extension", Name: "Use extensions", Resource: "ext.list"},
-	{ID: "ext.release", Family: "extension", Name: "Release extensions", Resource: "ext.list"},
 	{ID: "ext.retry", Family: "extension", Name: "Retry extensions", Resource: "ext.retry"},
 	{ID: "ext.create", Family: "extension", Name: "Create extensions", Resource: "ext.create", Global: true},
 	{ID: "ext.update", Family: "extension", Name: "Update extensions", Resource: "ext.update", Global: true},
 	{ID: "ext.delete", Family: "extension", Name: "Delete extensions", Resource: "ext.delete", Global: true},
 
-	// Shared vocabulary and operator notifications.
-	{ID: "alias.list", Family: "alias", Name: "List aliases"},
-	{ID: "alias.write", Family: "alias", Name: "Write aliases", Global: true},
-	{ID: "alias.delete", Family: "alias", Name: "Delete aliases", Global: true},
-	{ID: "user.notify", Family: "notify", Name: "Notify the operator", Resource: "user.notify"},
+	{ID: "jrpc.open", Family: "peer", Name: "Open JSON-RPC peers", Resource: "jrpc.open",
+		ConstraintKinds: []ConstraintKind{KindMethods}},
+	{ID: "mcp.open", Family: "peer", Name: "Open MCP peers", Resource: "mcp.open",
+		ConstraintKinds: []ConstraintKind{KindToolNames}},
+	{ID: "cdp.open", Family: "peer", Name: "Open CDP peers", Resource: "cdp.open",
+		ConstraintKinds: []ConstraintKind{KindMethods}},
 }
 
 var byID = func() map[string]Operation {
@@ -457,7 +410,7 @@ func ValidateConstraints(op Operation, c Constraints) error {
 			return err
 		}
 		for _, form := range c.Forms {
-			if form != "inline" && form != "local" && form != "pipe" || op.ID == "file.replace" && form != "inline" {
+			if form != "inline" && form != "local" && form != "pipe" {
 				return fmt.Errorf("operation %q does not support form %q", op.ID, form)
 			}
 		}

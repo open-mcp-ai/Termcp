@@ -57,6 +57,23 @@ func (s *Server) submitPolicyApproval(ctx context.Context, sessionID string, pay
 	})
 }
 
+// policyApprovalCorrelation describes the queued request for the caller. The id
+// returned by Submit is enough to find the request, while reading its snapshot
+// supplies the session and optional expiry the common review reply carries.
+func (s *Server) policyApprovalCorrelation(sessionID, id string) reviewPendingFields {
+	corr := reviewPendingFields{ApprovalID: id, SessionID: sessionID}
+	if id == "" {
+		return corr
+	}
+	if q := s.policyApprovalFor(id); q != nil {
+		if req, err := q.Get(id); err == nil {
+			corr.SessionID = req.SessionID
+			corr.ExpiresAt = req.ExpiresAt
+		}
+	}
+	return corr
+}
+
 // ListPolicyApprovals exposes policy asks through the existing WebUI approval
 // worklist without requiring session review mode to be enabled.
 func (s *Server) ListPolicyApprovals() []approval.Request {

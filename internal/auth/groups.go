@@ -40,18 +40,16 @@ type groupPreset struct {
 }
 
 func groupPresets() []groupPreset {
-	viewer := []string{"profile.list", "profile.get", "session.list", "session.info", "shell.list", "ext.list", "task.list", "task.info"}
-	diagnostics := append(slices.Clone(viewer), "shell.output", "shell.marks", "shell.detect", "file.read", "file.stat", "file.realpath", "file.readlink", "file.getwd", "file.statvfs", "file.urls")
-	maintainer := append(slices.Clone(diagnostics), "file.write", "file.replace", "file.mkdir")
+	viewer := []string{"profile.list", "session.list", "session.info", "shell.list", "ext.list"}
+	diagnostics := append(slices.Clone(viewer), "shell.output", "session.message", "file.read", "file.stat", "file.getwd", "file.urls")
+	maintainer := append(slices.Clone(diagnostics), "file.write", "file.mkdir", "file.perm", "file.link", "file.fs")
 	operator := append(slices.Clone(maintainer),
-		"session.start", "session.terminate",
-		"shell.open", "shell.close", "shell.exec", "shell.input", "shell.key", "shell.resize",
-		"shell.reader.register", "shell.reader.unregister",
-		"file.delete", "file.truncate", "file.chmod", "file.chown", "file.chtimes",
-		"file.symlink", "file.link", "file.rename",
-		"forward.list", "forward.open.local", "forward.open.remote", "forward.open.dynamic", "forward.close",
-		"task.cancel", "ext.get", "ext.use", "ext.release", "ext.retry", "user.notify",
-		"alias.list",
+		"session.start", "session.terminate", "session.delete",
+		"shell.open", "shell.close", "shell.input", "shell.key", "shell.resize",
+		"shell.detect", "shell.reader.register", "shell.reader.unregister",
+		"file.delete", "file.rename",
+		"forward.list", "forward.open", "forward.close",
+		"ext.get", "ext.retry", "user.notify",
 	)
 	out := []groupPreset{}
 	for _, spec := range []struct {
@@ -69,14 +67,14 @@ func groupPresets() []groupPreset {
 			policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow}
 		}
 		if spec.id == "diagnostics" {
-			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+			for _, id := range []string{"file.read"} {
 				if _, exists := policy.Actions[id]; exists {
 					policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
 				}
 			}
 		}
 		if spec.id == "file-maintainer" {
-			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+			for _, id := range []string{"file.read", "file.write"} {
 				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
 			}
 		}
@@ -84,7 +82,6 @@ func groupPresets() []groupPreset {
 			for _, id := range []string{"file.read", "file.write"} {
 				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline", "local", "pipe"}}}
 			}
-			policy.Actions["file.replace"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
 		}
 		out = append(out, groupPreset{spec.id, spec.name, spec.english, spec.description, 3, policy})
 	}
@@ -117,7 +114,7 @@ func groupPresetsV1() map[string]groupPreset {
 			policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow}
 		}
 		if spec.id == "file-maintainer" || spec.id == "host-operator" {
-			for _, id := range []string{"file.read", "file.write", "file.replace"} {
+			for _, id := range []string{"file.read", "file.write"} {
 				policy.Actions[id] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}}}
 			}
 		}
