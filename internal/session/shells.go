@@ -58,6 +58,11 @@ func (s *Session) removeChildShell(id string) {
 // argument, and an argument the server cannot use is not a server fault.
 var ErrLabelTaken = errors.New("label already in use")
 
+// ErrClosing is returned when a channel is opened on a session that has been asked
+// to wind down. It is distinct from "session has exited" because the caller's move
+// differs: an exited session is gone, while a closing one is still finishing work.
+var ErrClosing = errors.New("session is closing")
+
 func (s *Session) CreateChildShell(command string, args []string, pty bool, rows, cols int, name string) (*ChildShell, error) {
 	s.shellStateMu.Lock()
 	defer s.shellStateMu.Unlock()
@@ -65,7 +70,15 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 	s.mu.RLock()
 	running := s.Status == api.SessionRunning
 	s.mu.RUnlock()
-	if s.closing.Load() || !running {
+	// A DEFERRED CLOSE REFUSES NEW WORK IMMEDIATELY, not when the teardown flag
+	// lands: `close --later` promised this session stops accepting channels, and the
+	// gap between the request and beginClosing must not be a door. Checked under
+	// shellStateMu, the same lock CloseLater takes while it decides, so a pty cannot
+	// be added between "this session has no pty" and "this session refuses work".
+	if s.closing.Load() || s.closeLater.Load() || !running {
+		if s.closeLater.Load() && running {
+			return nil, fmt.Errorf("%w: a deferred close (`close --later`) was requested; this session no longer accepts new channels", ErrClosing)
+		}
 		return nil, fmt.Errorf("session has exited")
 	}
 
@@ -461,9 +474,39 @@ func (s *Session) SnapshotShells() []api.Session {
 func (s *Session) ShellsForView() []api.Session {
 	s.mu.RLock()
 	status := s.Status
+	borrowed := s.Borrowed
 	s.mu.RUnlock()
 	if status == api.SessionRunning {
-		return s.ListChildShells()
+		live := s.ListChildShells()
+		// A BORROWED CONTAINER'S WORK IS IN THE HISTORY, NOT IN THE LIVE MAP
+		// (issue #255). Its recorded commands have no channel - they ran on a pooled
+		// transport and were written down afterwards - so the live-only rule above
+		// would show an empty window for a session whose entire purpose is to show
+		// what ran. Merging is safe here because a borrowed container's entries are
+		// append-only records that can never be driven: there is no closed-shell tab
+		// to resurrect, which is the reason the live-only rule exists for ordinary
+		// sessions.
+		if borrowed {
+			return mergeShellViews(live, s.SnapshotShells())
+		}
+		return live
 	}
 	return s.SnapshotShells()
+}
+
+// mergeShellViews unions two shell lists by ID, keeping the order of first
+// appearance and letting the later list fill in entries the first does not have.
+func mergeShellViews(a, b []api.Session) []api.Session {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]api.Session, 0, len(a)+len(b))
+	for _, list := range [][]api.Session{a, b} {
+		for _, sh := range list {
+			if seen[sh.ID] {
+				continue
+			}
+			seen[sh.ID] = true
+			out = append(out, sh)
+		}
+	}
+	return out
 }
