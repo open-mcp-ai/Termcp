@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -36,6 +37,12 @@ type ExecSession struct {
 	// forever (issue #219). A one-slot channel is the same mutual exclusion with a
 	// door: whoever wants the token can give up, and teardown can decide not to wait.
 	stdinTok chan struct{}
+	// closeOnce makes Close idempotent. TWO teardown paths reach this struct
+	// independently — session.Terminate's graceful goroutine and Manager.Delete's
+	// finalize — and sync.Once guards only the CALLER's own path, not the struct.
+	// Without this, a deferred close racing an explicit Delete double-closed the
+	// session and raced on extraClosers (issue #255).
+	closeOnce sync.Once
 }
 
 // newStdinToken builds the one-token channel with its token already in place.
@@ -394,20 +401,28 @@ func (es *ExecSession) closeStdin() {
 func (es *ExecSession) SSHClient() *ssh.Client { return es.client }
 
 func (es *ExecSession) Close() error {
-	es.closeStdin()
 	var firstErr error
-	if es.session != nil {
-		if err := es.session.Close(); err != nil {
-			firstErr = err
+	// IDEMPOTENT BY CONSTRUCTION, not by convention. Both teardown paths can run
+	// concurrently (Terminate's goroutine, finalize); the Once makes the second a
+	// no-op, so the read-modify-write of extraClosers below can never overlap
+	// itself. The first error is returned to whichever caller got here first; the
+	// loser sees nil, which is honest — from its point of view nothing failed to
+	// close because there was nothing left to close.
+	es.closeOnce.Do(func() {
+		es.closeStdin()
+		if es.session != nil {
+			if err := es.session.Close(); err != nil {
+				firstErr = err
+			}
 		}
-	}
-	if es.ownClient {
-		if err := es.client.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if es.ownClient {
+			if err := es.client.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
-	}
-	DrainClosers(es.extraClosers)
-	es.extraClosers = nil
+		DrainClosers(es.extraClosers)
+		es.extraClosers = nil
+	})
 	return firstErr
 }
 

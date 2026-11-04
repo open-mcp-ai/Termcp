@@ -107,17 +107,33 @@ func (c *capture) snapshot() ([]byte, int64) {
 	return append([]byte(nil), c.data...), c.total
 }
 
-// runBorrowedHost runs one shell command on a borrowed pooled transport. Nothing is
-// registered; the SSH channel and the pool lease are released on return.
+// runBorrowedHost runs one shell command on a borrowed pooled transport. The SSH
+// channel and the pool lease are released on return; the command itself is recorded
+// against the host's `use:<host>` container so it is visible while it runs (#255).
 func (s *Server) runBorrowedHost(ctx context.Context, host, command string, win termArgs, captureLimit int) (output []byte, total int64, exitCode int, exited bool, waited time.Duration, err error) {
 	started := time.Now()
-	defer func() { waited = time.Since(started) }()
+	defer func() {
+		waited = time.Since(started)
+		// THE RECORD IS WRITTEN ON EVERY EXIT PATH, including the ones that report a
+		// failure: the command ran (or tried to), and "the agent attempted this on
+		// prod and it failed" is exactly the fact a person reading the window needs.
+		// A separate goroutine is not used — the write is one map store, and letting it
+		// race the reply would let a reader see the run without its record.
+		s.recordBorrowedRun(host, command, exitCode, started.UnixMilli())
+	}()
 
 	cli, release, err := s.acquireSSHTransport(ctx, "use:"+host)
 	if err != nil {
 		return nil, 0, -1, false, 0, err
 	}
 	defer release()
+
+	// THE CONTAINER IS CREATED AFTER THE TRANSPORT WORKS. Ordering matters: a host
+	// that cannot be reached must fail here, once, with the dial error - not leave a
+	// `use:<host>` session behind that says running and holds a dead connection.
+	// The pooled lease above is proof the host answers, so the container's own dial
+	// is the cheap second connection to a host known to be up.
+	s.ensureBorrowedContainer(ctx, host)
 
 	ch, err := cli.NewSession()
 	if err != nil {

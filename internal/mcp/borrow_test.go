@@ -34,6 +34,7 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
 	sessMgr := session.NewManager(msgMgr, store, srv)
+	cleanupTestRuntime(t, sessMgr, srv)
 
 	testFilePath := filepath.Join(dir, "hello.txt")
 	if err := os.WriteFile(testFilePath, []byte("short-circuit success"), 0644); err != nil {
@@ -127,8 +128,18 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if runSlot.Headers["Host"] != "internal" {
 		t.Errorf("Host header = %q, want internal", runSlot.Headers["Host"])
 	}
-	if all := sessMgr.ListAll(); len(all) != 0 {
-		t.Fatalf("a short-circuit run registered a session: %+v", all)
+	// VISIBILITY (#255): `run use:<host>` leaves a per-host borrowed container so
+	// an observer (and the WebUI) can see what the agent executed, but marks it
+	// `Borrowed = true` so ordinary reconnects skip it.
+	all := sessMgr.ListAll()
+	if len(all) != 1 {
+		t.Fatalf("run use internal must record into exactly one borrowed container, got %d: %+v", len(all), all)
+	}
+	if !all[0].Borrowed {
+		t.Errorf("borrowed container must carry Borrowed=true, got %+v", all[0])
+	}
+	if all[0].Name != "use:internal" {
+		t.Errorf("borrowed container Name = %q, want use:internal", all[0].Name)
 	}
 
 	// 5. A NON-ZERO EXIT is a failing slot fact, but the TERM request succeeded.
@@ -213,9 +224,10 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 		t.Fatalf("run internal $1 failed: %+v", bareRun.slots)
 	}
 
-	// Still zero sessions
-	if all := sessMgr.ListAll(); len(all) != 0 {
-		t.Fatalf("gated checks leaked a session: %+v", all)
+	// STILL ONE CONTAINER: the bare-name form names the same host, so it records
+	// into the same `use:internal` window rather than creating a second one (#255).
+	if all := sessMgr.ListAll(); len(all) != 1 {
+		t.Fatalf("a second run on the same host must reuse the borrowed container, got %d: %+v", len(all), all)
 	}
 
 	// 10. A COMMAND THAT OUTLIVES THE WINDOW is 504 and says it was stopped: the
@@ -237,8 +249,10 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if hint := timedOut.slots[0].Headers["Hint"]; !strings.Contains(hint, "timeout") {
 		t.Errorf("a stopped run must name the window it ran out of; Hint = %q", hint)
 	}
-	if all := sessMgr.ListAll(); len(all) != 0 {
-		t.Fatalf("a stopped short-circuit run registered a session: %+v", all)
+	// A STOPPED RUN IS STILL RECORDED: the command ran on the host and was stopped,
+	// which is a fact an auditor needs. It does not create a second container.
+	if all := sessMgr.ListAll(); len(all) != 1 {
+		t.Fatalf("a stopped short-circuit run must not create another container, got %d: %+v", len(all), all)
 	}
 
 	// 11. A NON-ZERO EXIT WITH NO OUTPUT still carries the reason in its reply.

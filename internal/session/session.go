@@ -101,6 +101,9 @@ type Config struct {
 	// leave it out while its terminal stays openable by whoever holds its id (see
 	// internal/ns). Empty means an ordinary session.
 	Namespace string
+	// Borrowed marks the per-host container `run use:<host>` records into
+	// (issue #255). It is copied to api.Session and stored on the manifest.
+	Borrowed bool
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -110,6 +113,7 @@ type Session struct {
 	mu            sync.RWMutex
 	shellStateMu  sync.Mutex  // serializes child registration with close/DEAD transition
 	closing       atomic.Bool // blocks new child channels and approval reconfiguration
+	closeLater    atomic.Bool // a deferred close was requested (#255); fulfilled by closeIfLastShellEnded
 	terminateOnce sync.Once
 	deadOnce      sync.Once
 	exitOnce      sync.Once
@@ -231,6 +235,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 			SSHEndpoint:   sshEndpointPublic,
 			DetectedShell: detectedShell,
 			Namespace:     cfg.Namespace,
+			Borrowed:      cfg.Borrowed,
 		},
 		enterCRLF:    enterCRLF,
 		defaultShell: cfg.DefaultShell,
@@ -622,7 +627,13 @@ func normalizeOnExit(p OnExitPolicy) OnExitPolicy {
 // already closing (and is refused) -- a new channel can never be added to a
 // session that this call is about to close.
 func (s *Session) closeIfLastShellEnded() {
-	if s.onExit != OnExitClose {
+	// A DEFERRED CLOSE IS FULFILLED HERE (issue #255). `close <session> --later`
+	// promised "this ends without me touching it again", and the last work item
+	// ending is that promise coming due. It has to be checked BEFORE the OnExit
+	// policy: a session whose OnExit is "keep" is exactly the one a caller defers,
+	// because it would otherwise stay up forever.
+	deferred := s.closeLater.Load()
+	if s.onExit != OnExitClose && !deferred {
 		return
 	}
 	s.shellStateMu.Lock()
@@ -636,9 +647,24 @@ func (s *Session) closeIfLastShellEnded() {
 		return true
 	})
 	s.shellStateMu.Unlock()
-	// A live channel (or a session already going down) means this was not the
-	// end of the session's work; another shell will report its own exit.
-	if live || s.closing.Load() {
+	// A live channel (or a session already going down via Terminate/finalize)
+	// means this was not the end of the session's work.
+	//
+	// CRITICAL CONCURRENCY INVARIANT (AGENTS.md rule 1): `s.terminateOnce` in
+	// Terminate bounds the entry, but two callers running Terminate concurrently
+	// still race on es.Close() and channel state before the winner takes the lock.
+	// `s.closing` set by beginClosing is the early-exit gate that prevents a second
+	// caller from starting another teardown goroutine.
+	if live || (!deferred && s.closing.Load()) {
+		return
+	}
+	if deferred {
+		// Only one deferred teardown fires: clear the bit atomically.
+		if !s.closeLater.CompareAndSwap(true, false) {
+			return
+		}
+		slog.Debug("deferred close: the last shell ended", "session_id", s.ID)
+		s.Terminate(true, 0)
 		return
 	}
 	slog.Debug("one-shot session closing after its last shell exited", "session_id", s.ID)
