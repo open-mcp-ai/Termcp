@@ -311,7 +311,27 @@ func (s *Server) handleSession(sess ssh.Session) {
 		return
 	}
 
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	// AN EXEC REQUEST IS A COMMAND LINE, AND A COMMAND LINE IS THE SHELL'S JOB.
+	//
+	// OpenSSH hands an exec payload to the user's login shell: `login_shell -c
+	// "<payload>"`. That expands pipes, redirects, variables and globs.
+	//
+	// A PTY request, by contrast, is an INTERACTIVE invocation — the user gave an
+	// exact program to attach a terminal to (e.g. bash, vim, powershell.exe).
+	// Wrapping that in `sh -c` puts an MSYS process tree between the PTY and the
+	// command, which on Windows breaks ConPTY process reaping. So the wrapper
+	// applies to PIPE mode only; PTY mode executes the program directly.
+	ps, hasPty := takePTY(sess)
+	var cmd *exec.Cmd
+	if raw := sess.RawCommand(); len(cmdArgs) > 0 && raw != "" && !hasPty {
+		sh, shArgs, extraEnv := shell.NewDetector().CommandLine(raw)
+		cmd = exec.Command(sh, shArgs...)
+		if len(extraEnv) > 0 {
+			cmd.Env = append(append(os.Environ(), sess.Environ()...), extraEnv...)
+		}
+	} else {
+		cmd = exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	}
 
 	// Forward signals from client to local process.
 	//
@@ -352,7 +372,6 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// writes sess.pty.Window for every window-change without holding the session
 	// lock, so reading that struct here would race it. Window changes are applied
 	// by drainWindowChanges plus the library's own drain goroutine.
-	ps, hasPty := takePTY(sess)
 	if !startProcess(cmd, sess, ps, hasPty) {
 		return
 	}

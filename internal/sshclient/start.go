@@ -9,7 +9,15 @@ import (
 
 // startSession sets up pipes, optional PTY, starts the command, and returns an ExecSession.
 // When ownClient is false, error paths close session but not client.
-func startSession(client *ssh.Client, session *ssh.Session, command string, args []string, pty bool, rows, cols int, ownClient bool) (*ExecSession, error) {
+//
+// line selects which of the two SSH exec spellings the caller means: an ARGV
+// (command = program, args = its arguments, each quoted so the remote shell
+// cannot split them) or a COMMAND LINE (passed to the remote shell verbatim,
+// so its pipes, redirects and variables work). Guessing from `len(args)` was
+// wrong: `shell_open command="go version"` with no args is one program name,
+// and the embedded server must fail to find a file by that name, not run a
+// shell line (pinned by TestHandleStartSubShell_CommandWithArgs).
+func startSession(client *ssh.Client, session *ssh.Session, command string, args []string, pty bool, rows, cols int, ownClient, line bool) (*ExecSession, error) {
 	closeClient := func() {
 		if ownClient {
 			client.Close()
@@ -70,6 +78,8 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 		// client never supplies one — a path from the local detector is only valid
 		// when the target is this host, and the client cannot ask which it is.
 		startErr = session.Shell()
+	} else if line {
+		startErr = session.Start(command)
 	} else {
 		startErr = session.Start(shellQuote(trimmed, args))
 	}

@@ -397,7 +397,7 @@ func TestABrokenProgramIsNotOfferedAsAvailable(t *testing.T) {
 	for _, f := range st.Failures {
 		reason += f.Reason + " "
 	}
-	if !strings.Contains(reason, "executable file not found") && !strings.Contains(reason, "no such file") {
+	if !strings.Contains(reason, "executable file not found") && !strings.Contains(reason, "no such file") && !strings.Contains(reason, "command not found") {
 		t.Errorf("the failure should carry the program's own message, got %q", reason)
 	}
 }

@@ -15,6 +15,7 @@ type Detector struct {
 	Getenv   func(string) string
 	Stat     func(string) error
 	GOOS     string
+	ComSpec  string
 }
 
 // NewDetector returns a Detector backed by real OS calls.
@@ -26,7 +27,8 @@ func NewDetector() *Detector {
 			_, err := os.Stat(path)
 			return err
 		},
-		GOOS: runtime.GOOS,
+		GOOS:    runtime.GOOS,
+		ComSpec: os.Getenv("COMSPEC"),
 	}
 }
 
@@ -42,7 +44,41 @@ func (d *Detector) Detect() (path, family, hint string) {
 	return path, "unix", hint
 }
 
+// CommandLine wraps a raw exec-request command line into the invocation a
+// login shell on this platform uses, so loopback answers the exact same
+// question as a remote host: `login_shell -c "<payload>"` — pipes, redirects
+// and variables expand, exactly as OpenSSH specifies.
+//
+// The returned env belongs to THIS shell choice and is for the spawned child
+// ONLY: on Windows, sh.exe (Git/MSYS2) rewrites arguments that look like Unix
+// paths ("/c" → "C:\"), which corrupts the client's words; the MSYS_* vars
+// switch that conversion off for the child alone. Nothing here mutates the
+// termcp process or any other process. Callers with no POSIX shell on PATH get
+// the cmd.exe fallback and a nil env.
+func (d *Detector) CommandLine(command string) (path string, args []string, env []string) {
+	if d.GOOS == "windows" {
+		for _, sh := range []string{"sh.exe", "bash.exe"} {
+			if p, err := d.LookPath(sh); err == nil {
+				return p, []string{"-c", command}, []string{
+					"MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*",
+				}
+			}
+		}
+		p := d.ComSpec
+		if p == "" {
+			p = "cmd.exe"
+		}
+		return p, []string{"/c", command}, nil
+	}
+	p, shArgs, _ := d.detectUnix()
+	if p == "" {
+		return "/bin/sh", []string{"-c", command}, nil
+	}
+	return p, append(append([]string{}, shArgs...), "-c", command), nil
+}
+
 // Argv returns the default shell argv (path + optional args) using the same
+
 // priority as Detect. Use this when spawning a shell, so that the actual
 // process matches what Detect advertises to agents.
 func (d *Detector) Argv() (path string, args []string) {

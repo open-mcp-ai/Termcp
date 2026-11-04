@@ -19,6 +19,16 @@ import (
 // The manager-assigned callbacks and the per-shell closed flag are atomics and
 // need no lock (see field docs below).
 
+// commandLineOf is the display spelling of what a channel was asked to run:
+// the program, plus its arguments when there are any. It is metadata for the
+// Web UI tab and the archive row — never re-parsed into an exec request.
+func commandLineOf(command string, args []string) string {
+	if len(args) == 0 {
+		return command
+	}
+	return strings.Join(append([]string{command}, args...), " ")
+}
+
 // resolveShellCommand applies the connection's default_shell when the caller
 // sends no command of its own. It is the second step of the shell priority
 // chain (caller → profile → server-side detection); an explicit command of any
@@ -63,7 +73,30 @@ var ErrLabelTaken = errors.New("label already in use")
 // differs: an exited session is gone, while a closing one is still finishing work.
 var ErrClosing = errors.New("session is closing")
 
+// CreateChildShell opens a channel whose command is an ARGV: `command` is the
+// program, `args` its arguments. Each element is quoted for the remote shell, so
+// a caller never has to think about that shell's syntax.
 func (s *Session) CreateChildShell(command string, args []string, pty bool, rows, cols int, name string) (*ChildShell, error) {
+	return s.createChildShell(command, args, false, pty, rows, cols, name)
+}
+
+// CreateChildShellLine opens a channel whose command is a COMMAND LINE, handed
+// to the remote shell verbatim: pipes, redirects, variables and globs in it run
+// exactly as they would in `ssh host '<line>'`.
+//
+// It exists because the two spellings are not interchangeable. Quoting a line as
+// if it were an argv element turns `echo a | tr a b` into the program name
+// `echo a | tr a b`, which is not a file; splitting an argv as if it were a line
+// lets the remote shell eat an argument that was meant literally.
+//
+// One channel object serves both: the buffer, the log, the exit watcher and the
+// Web UI tab are identical, which is the point — a run whose command came from a
+// person must be as visible as one typed at the terminal.
+func (s *Session) CreateChildShellLine(line string, pty bool, rows, cols int, name string) (*ChildShell, error) {
+	return s.createChildShell(line, nil, true, pty, rows, cols, name)
+}
+
+func (s *Session) createChildShell(command string, args []string, line, pty bool, rows, cols int, name string) (*ChildShell, error) {
 	s.shellStateMu.Lock()
 	defer s.shellStateMu.Unlock()
 
@@ -120,7 +153,13 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 	// request and is refused there rather than guessed from the client's PATH.
 	command, args = s.resolveShellCommand(command, args)
 
-	execSession, err := sshclient.StartWithClient(sshClient, command, args, pty, rows, cols)
+	var execSession *sshclient.ExecSession
+	var err error
+	if line {
+		execSession, err = sshclient.StartWithClientLine(sshClient, command, pty, rows, cols)
+	} else {
+		execSession, err = sshclient.StartWithClient(sshClient, command, args, pty, rows, cols)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create child shell: %w", err)
 	}
@@ -149,6 +188,7 @@ func (s *Session) CreateChildShell(command string, args []string, pty bool, rows
 		ID:          id,
 		Index:       index,
 		Name:        name,
+		command:     commandLineOf(command, args),
 		execSession: execSession,
 		buf:         buf,
 		done:        make(chan struct{}),
