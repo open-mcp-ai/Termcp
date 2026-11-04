@@ -381,9 +381,14 @@ func TestHandleStartSubShell_CommandWithArgs(t *testing.T) {
 		t.Fatalf("shell_open(command=go, args=[version]) output = %q, want the go version line", out)
 	}
 
-	// A command string with spaces is one token: the embedded server refuses to
-	// spawn it, and its Go exec error (cross-OS consistent wording) names the
-	// whole string — never a shell line that ran.
+	// A command string with spaces is ONE TOKEN: the argv spelling quotes it, so the
+	// remote shell looks for a program literally named `go version` and fails.
+	//
+	// The wording is the SHELL's (`sh: go version: command not found`), not Go's
+	// `executable file not found`: the loopback now runs an exec request through a
+	// login shell exactly as a remote sshd does, which is what makes its answer
+	// match a real host's. The invariant this pins is the one that matters — the
+	// token is named WHOLE and was never evaluated as a shell line.
 	spaceRes, err := s.handleStartSubShell(context.Background(), makeRequest(map[string]any{
 		"session_id": sessionID,
 		"mode":       "pipe",
@@ -396,8 +401,8 @@ func TestHandleStartSubShell_CommandWithArgs(t *testing.T) {
 	if strings.Contains(out, "go version go") {
 		t.Fatalf("spaced command was evaluated as a shell line: %q", out)
 	}
-	if !strings.Contains(out, "executable file not found") {
-		t.Fatalf("spaced command output = %q, want the exec not-found error naming the whole token", out)
+	if !strings.Contains(out, "go version") {
+		t.Fatalf("spaced command output = %q, want an error naming the whole token", out)
 	}
 }
 

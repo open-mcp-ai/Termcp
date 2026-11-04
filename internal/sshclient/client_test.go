@@ -199,10 +199,15 @@ func TestShellQuote(t *testing.T) {
 		want string
 	}{
 		{"echo", []string{"hello"}, `echo hello`},
-		{"echo hello", nil, `"echo hello"`},
-		{"echo", []string{"a b"}, `echo "a b"`},
-		{"echo", []string{`a"b`}, `echo "a\"b"`},
-		{"my command", []string{"arg"}, `"my command" arg`},
+		// shellQuote is the ARGV spelling: a spaced command with no args is ONE
+		// program name, so it is quoted as one token. The line spelling (pipes,
+		// redirects kept) is StartWithClientLine, which does not call this.
+		{"echo hello", nil, `'echo hello'`},
+		{"echo", []string{"a b"}, `echo 'a b'`},
+		{"echo", []string{`a"b`}, `echo 'a"b'`},
+		{"powershell.exe", []string{"-Command", `Write-Output ($_ -f 1)`}, `powershell.exe -Command 'Write-Output ($_ -f 1)'`},
+		{"echo", []string{"it's"}, `echo 'it'\''s'`},
+		{"my command", []string{"arg"}, `'my command' arg`},
 	}
 	for _, tc := range tests {
 		got := shellQuote(tc.cmd, tc.args)

@@ -86,42 +86,19 @@ func (s *Session) CloseLater() error {
 	s.beginClosing()
 
 	// FULFIL IT NOW IF THERE IS NOTHING LEFT TO WAIT FOR. The deferred close is
-	// normally fulfilled by the last shell's exit watcher (closeIfLastShellEnded),
-	// but a session with no channels has no watcher that could ever run: a borrowed
-	// container records finished commands into its history and holds no live shell at
-	// all, so --later on it would hang forever. Same rule, checked at the moment it
-	// is asked rather than only at the moment work ends.
+	// normally fulfilled by the last channel's exit watcher (closeIfLastShellEnded),
+	// but a session holding no live channel has no watcher that could ever run, so
+	// --later on it would hang forever. Same rule, checked at the moment it is asked
+	// rather than only at the moment work ends.
 	if s.noWorkOutstanding() {
 		s.closeIfLastShellEnded()
 	}
 	return nil
 }
 
-// borrowedWork counts commands running on this session's behalf that own no channel
-// — the short-circuit runs a `use:<host>` container records (#255). They are the
-// session's outstanding work for a deferred close, which otherwise has no shell exit
-// to wait for.
-//
-// ATOMIC RATHER THAN A MUTEX: a pure counter with no companion invariant, read as a
-// snapshot by the close decision. The session may terminate while an increment is in
-// flight; that increment lands on a DEAD container, which is what refusing a late
-// command in the MCP layer is for.
-func (s *Session) beginBorrowedWork() { s.borrowedWork.Add(1) }
-
-func (s *Session) endBorrowedWork() {
-	if s.borrowedWork.Add(-1) <= 0 && s.closeLater.Load() {
-		// The last outstanding command ended on a session that was asked to wind
-		// down: the promise is due now.
-		s.closeIfLastShellEnded()
-	}
-}
-
-// noWorkOutstanding reports whether nothing is left that a deferred close would wait
-// for: no live channel and no borrowed command in flight.
+// noWorkOutstanding reports whether no live channel remains, which is the whole of
+// what a deferred close waits for.
 func (s *Session) noWorkOutstanding() bool {
-	if s.borrowedWork.Load() > 0 {
-		return false
-	}
 	s.shellStateMu.Lock()
 	defer s.shellStateMu.Unlock()
 	live := false
@@ -184,9 +161,3 @@ func (s *Session) DeferredCloseRequested() bool {
 func CloseLaterError(err error) bool {
 	return errors.Is(err, ErrUnboundedWorkload)
 }
-
-// BeginBorrowedWork / EndBorrowedWork are the exported half of the counter: the MCP
-// layer brackets a short-circuit run with them so a deferred close on the container
-// waits for the command that owns no channel on it.
-func (s *Session) BeginBorrowedWork() { s.beginBorrowedWork() }
-func (s *Session) EndBorrowedWork()   { s.endBorrowedWork() }

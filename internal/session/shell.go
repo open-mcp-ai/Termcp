@@ -53,6 +53,7 @@ type ChildShell struct {
 	// test, or one restored from a manifest written before Index existed).
 	Index       int
 	Name        string
+	command     string
 	parent      atomic.Pointer[Session] // nil if not yet attached to a session
 	execSession *sshclient.ExecSession
 	buf         *buffer.Buffer
@@ -149,6 +150,7 @@ func (cs *ChildShell) Info() api.Session {
 		ID:        cs.ID,
 		Index:     cs.Index,
 		Name:      cs.Name,
+		Command:   cs.command,
 		Mode:      cs.mode,
 		Status:    cs.statusValue(),
 		Rows:      int(cs.rows.Load()),
