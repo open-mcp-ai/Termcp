@@ -17,6 +17,7 @@ var ErrAuthorizationBindingChanged = errors.New("extension authorization binding
 // and content it resolved to when permission was checked.
 type AuthorizationBinding struct {
 	Name            string                         `json:"name"`
+	Target          string                         `json:"target,omitempty"`
 	TemplateVersion string                         `json:"template_version"`
 	TargetProfile   sshconfig.AuthorizationBinding `json:"target_profile"`
 }
@@ -28,37 +29,43 @@ func templateVersion(raw []byte) string {
 
 // Binding captures the current extension and target profile without acquiring or
 // starting the extension.
-func (r *Reconciler) Binding(name string) (AuthorizationBinding, error) {
+func (r *Reconciler) Binding(name, target string) (AuthorizationBinding, error) {
 	ext, err := r.store.Load(name)
 	if err != nil {
 		return AuthorizationBinding{}, err
 	}
-	raw, err := r.store.ReadRaw(name)
+	t, ok := ext.TargetFor(target)
+	if !ok {
+		return AuthorizationBinding{}, fmt.Errorf("target %q not found in extension %q", target, name)
+	}
+	targetHost := t.Host
+	view := forTarget(ext, targetHost)
+	raw, err := r.store.Template(name)
 	if err != nil {
 		return AuthorizationBinding{}, err
 	}
 	if r.sshConfigs == nil {
 		return AuthorizationBinding{}, errors.New("no ssh config store configured")
 	}
-	canonical, identity, err := r.sshConfigs.ResolveReference(ext.Target, ext.TargetIdentity)
+	canonical, identity, err := r.sshConfigs.ResolveReference(view.Target, view.TargetIdentity)
 	if err != nil {
 		return AuthorizationBinding{}, err
 	}
-	target, err := r.sshConfigs.Binding(canonical)
+	profileBinding, err := r.sshConfigs.Binding(canonical)
 	if err != nil {
 		return AuthorizationBinding{}, err
 	}
-	if target.Identity != identity {
+	if profileBinding.Identity != identity {
 		return AuthorizationBinding{}, ErrAuthorizationBindingChanged
 	}
-	rawAfter, err := r.store.ReadRaw(name)
+	rawAfter, err := r.store.Template(name)
 	if err != nil {
 		return AuthorizationBinding{}, err
 	}
 	if templateVersion(raw) != templateVersion(rawAfter) {
 		return AuthorizationBinding{}, ErrAuthorizationBindingChanged
 	}
-	return AuthorizationBinding{Name: ext.Name, TemplateVersion: templateVersion(raw), TargetProfile: target}, nil
+	return AuthorizationBinding{Name: ext.Name, Target: targetHost, TemplateVersion: templateVersion(raw), TargetProfile: profileBinding}, nil
 }
 
 func (r *Reconciler) loadBound(binding AuthorizationBinding) (*Extension, hostPlan, error) {
@@ -66,7 +73,9 @@ func (r *Reconciler) loadBound(binding AuthorizationBinding) (*Extension, hostPl
 	if err != nil {
 		return nil, hostPlan{}, err
 	}
-	raw, err := r.store.ReadRaw(binding.Name)
+	view := forTarget(ext, binding.Target)
+	ext = &view
+	raw, err := r.store.Template(binding.Name)
 	if err != nil {
 		return nil, hostPlan{}, err
 	}
@@ -104,7 +113,7 @@ func (r *Reconciler) AcquireBound(binding AuthorizationBinding, wait time.Durati
 	if err != nil {
 		return Status{}, err
 	}
-	return r.acquirePlan(binding.Name, ext, plan, wait)
+	return r.acquirePlan(binding.Name, binding.Target, ext, plan, wait)
 }
 
 // RetryBound is the authorized manual retry path.
@@ -117,15 +126,15 @@ func (r *Reconciler) RetryBound(binding AuthorizationBinding) error {
 		return errors.New("extension is disabled; enable it before retrying")
 	}
 	if ext.Lazy() {
-		_, err := r.acquirePlan(binding.Name, ext, plan, 0)
+		_, err := r.acquirePlan(binding.Name, binding.Target, ext, plan, 0)
 		return err
 	}
-	st := r.state(binding.Name)
+	st := r.stateFor(binding.Name, binding.Target)
 	st.want()
 	r.detach(st)
 	st.mark(StatusUnavailable)
 	st.resetRetryBudget()
-	r.startPreparedProbe(r.runCtx(), binding.Name, ext, plan)
+	r.startPreparedProbe(r.runCtx(), binding.Name, binding.Target, ext, plan)
 	return nil
 }
 

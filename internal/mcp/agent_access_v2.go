@@ -104,14 +104,12 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 	}
 	if key := targets.ExtensionArgument; key != "" {
 		name := getString(args, key, "")
-		binding, exists := bindings.extensions[strings.TrimSpace(name)]
-		if !exists {
-			binding, err = s.agentExtensionBinding(p, name)
-			if err != nil {
-				return deny(fmt.Errorf("extension is outside this Agent's host scope: %w", err))
-			}
+		target := getString(args, "target", "")
+		binding, err := s.agentExtensionBinding(p, name, target)
+		if err != nil {
+			return deny(fmt.Errorf("extension is outside this Agent's host scope: %w", err))
 		}
-		bindings.extensions[strings.TrimSpace(name)] = binding
+		bindings.extensions[extensionBindingKey(name, target)] = binding
 	}
 	if targets.NeedsLocal && !s.agentHostAllowed(p, "internal") {
 		return deny(fmt.Errorf("local access requires the internal host"))
@@ -158,14 +156,15 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 		operation := approvalOperation(p, plan)
 		summary := summarizeOperation(tool, args) + " [" + operation + "]"
 		sessionID := targetSessionID(request)
-		if _, err := s.submitPolicyApproval(ctx, sessionID, payload, approval.Kind(operation), summary); err != nil {
+		approvalID, err := s.submitPolicyApproval(ctx, sessionID, payload, approval.Kind(operation), summary)
+		if err != nil {
 			return ctx, toolError(CodeOperationFailed, "%s", err.Error()), false
 		}
 		auth.RecordAudit(ctx, auth.AuditEvent{
 			Action: "mcp.approval.request", TargetType: "mcp_tool", TargetID: tool,
 			Result: "pending", Reason: operation,
 		})
-		return ctx, reviewPendingOperationResult(summary), true
+		return ctx, reviewPendingOperationResult(summary, s.policyApprovalCorrelation(sessionID, approvalID)), true
 	}
 	return ctx, nil, false
 }
@@ -179,16 +178,16 @@ func approvalOperation(p auth.AgentPolicy, plan authorization.Plan) string {
 	return plan.Requirements[0].Operation
 }
 
-func (s *Server) agentExtensionAllowed(p auth.AgentPolicy, name string) bool {
-	_, err := s.agentExtensionBinding(p, name)
+func (s *Server) agentExtensionAllowed(p auth.AgentPolicy, name, target string) bool {
+	_, err := s.agentExtensionBinding(p, name, target)
 	return err == nil
 }
 
-func (s *Server) agentExtensionBinding(p auth.AgentPolicy, name string) (extensions.AuthorizationBinding, error) {
+func (s *Server) agentExtensionBinding(p auth.AgentPolicy, name, target string) (extensions.AuthorizationBinding, error) {
 	if s.extensions == nil {
 		return extensions.AuthorizationBinding{}, errors.New("extensions are not configured")
 	}
-	binding, err := s.extensions.Binding(name)
+	binding, err := s.extensions.Binding(name, target)
 	if err != nil {
 		return extensions.AuthorizationBinding{}, err
 	}
@@ -225,8 +224,8 @@ func (s *Server) agentStatementSession(target string) *session.Session {
 	return found
 }
 
-func agentApprovalSlot(stmt directive.Statement, summary string) *envelope.Slot {
-	result := reviewPendingOperationResult(summary)
+func agentApprovalSlot(stmt directive.Statement, summary string, corr reviewPendingFields) *envelope.Slot {
+	result := reviewPendingOperationResult(summary, corr)
 	return &envelope.Slot{
 		Code:    202,
 		Headers: map[string]string{"Path": stmt.Path},
@@ -262,14 +261,15 @@ func (s *Server) statementPlanStatus(ctx context.Context, p auth.AgentPolicy, pl
 	if sess := s.agentStatementSession(stmt.Target); sess != nil {
 		sessionID = sess.ID
 	}
-	if _, err := s.submitPolicyApproval(ctx, sessionID, payload, approval.Kind(operation), summary); err != nil {
+	approvalID, err := s.submitPolicyApproval(ctx, sessionID, payload, approval.Kind(operation), summary)
+	if err != nil {
 		return nil, fmt.Errorf("cannot queue DSL operation for approval: %w", err)
 	}
 	auth.RecordAudit(ctx, auth.AuditEvent{
 		Action: "mcp.approval.request", TargetType: "dsl",
 		TargetID: strings.TrimSpace(stmt.Kind + " " + stmt.Op), Result: "pending", Reason: operation,
 	})
-	return agentApprovalSlot(stmt, summary), nil
+	return agentApprovalSlot(stmt, summary, s.policyApprovalCorrelation(sessionID, approvalID)), nil
 }
 
 func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, stmt directive.Statement, win termArgs) *envelope.Slot {
@@ -344,23 +344,21 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 	} else {
 		switch stmt.Kind {
 		case "alias":
-			switch stmt.Op {
-			case "ls":
-				id = "alias.list"
-			case "create", "edit":
-				id = "alias.write"
-			case "rm":
-				id = "alias.delete"
-			}
+			return deny(fmt.Errorf("alias management is not an Agent capability"))
 		case "task":
-			switch stmt.Op {
-			case "ls":
-				id = "task.list"
-			case "get":
-				id = "task.info"
-			case "close":
-				id = "task.cancel"
+			// Tasks inherit the host scope of both endpoints. They have no
+			// separate row in the dev capability table.
+			if stmt.Op != "ls" {
+				key := stmt.Key
+				if key == "" {
+					key = stmt.Target
+				}
+				v, err := s.tasks.Get(key)
+				if err == nil && !s.agentTaskViewAllowed(ctx, p, v) {
+					return deny(fmt.Errorf("task is outside this Agent's host scope"))
+				}
 			}
+			return nil
 		default:
 			switch stmt.Op {
 			case "connect", "open", "input", "key", "resize", "notify", "reader", "close", "rm":
@@ -385,7 +383,7 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 			case "read":
 				id = "shell.output"
 			case "span":
-				id = "shell.marks"
+				id = "session.message"
 			case "get":
 				id = "session.info"
 			case "ls":
@@ -396,23 +394,6 @@ func (s *Server) agentStatementCheckV2(ctx context.Context, p auth.AgentPolicy, 
 			}
 		}
 		selectedPlan = operationPlan(id, e)
-	}
-	if stmt.Kind == "task" {
-		if stmt.Op != "ls" {
-			key := stmt.Key
-			if key == "" {
-				key = stmt.Target
-			}
-			v, err := s.tasks.Get(key)
-			if err == nil && !s.agentTaskViewAllowed(ctx, p, v) {
-				return deny(fmt.Errorf("task is outside this Agent's host scope"))
-			}
-		}
-		pending, err := s.statementPlanStatus(ctx, p, selectedPlan, stmt, win)
-		if err != nil {
-			return deny(err)
-		}
-		return pending
 	}
 	if stmt.Target != "" && stmt.Kind != "alias" {
 		ids, _ := splitBatchIDs(stmt.Target)
@@ -492,30 +473,10 @@ func (s *Server) agentPeerPlan(stmt directive.Statement) (authorization.Plan, er
 		}
 	}
 	e := authorization.Evidence{}
-	id := ""
+	id := kind + ".open"
 	switch stmt.Op {
-	case "open":
-		id = kind + ".open"
-		if _, ok := stmt.Flag("target"); ok {
-			id = "cdp.attach"
-		}
-	case "close":
-		id = kind + ".close"
-		if kind == "cdp" && strings.Contains(stmt.Key, "@") {
-			id = "cdp.detach"
-		}
-	case "ls":
-		id = kind + ".list"
-	case "get":
-		id = kind + ".info"
-		if stmt.Key == "protocol" || len(stmt.Args) > 0 && stmt.Args[0] == "protocol" {
-			id = "cdp.protocol.read"
-		}
-		if kind == "mcp" && (stmt.Key == "tools" || len(stmt.Args) > 0 && stmt.Args[0] == "tools") {
-			id = "mcp.tools.list"
-		}
-	case "read":
-		id = kind + ".read"
+	case "open", "close", "ls", "get", "read":
+		// Reaching and using a peer is one capability in the dev model.
 	case "call":
 		payload := unquoteWord(strings.TrimSpace(stmt.Payload))
 		if kind == "mcp" && !strings.HasPrefix(payload, "{") && !strings.HasPrefix(payload, "[") {
@@ -523,13 +484,15 @@ func (s *Server) agentPeerPlan(stmt directive.Statement) (authorization.Plan, er
 			if bad != nil {
 				return authorization.Plan{}, fmt.Errorf("%s", bad.Body)
 			}
-			return operationPlan("mcp.tool.invoke", authorization.Evidence{ToolName: name}), nil
+			return operationPlan(id, authorization.Evidence{ToolName: name}), nil
 		}
 		var value any
 		if err := json.Unmarshal([]byte(payload), &value); err != nil {
 			return authorization.Plan{}, fmt.Errorf("invalid protocol frame")
 		}
 		return frameOperationPlan(kind, value)
+	default:
+		return authorization.Plan{}, fmt.Errorf("unclassified peer action %q", stmt.Op)
 	}
 	return operationPlan(id, e), nil
 }
@@ -563,29 +526,14 @@ func frameOperationPlan(kind string, value any) (authorization.Plan, error) {
 			if name == "" {
 				return plan, fmt.Errorf("tools/call requires a tool name")
 			}
-			return operationPlan("mcp.tool.invoke", authorization.Evidence{ToolName: name}), nil
-		case "tools/list":
-			return operationPlan("mcp.tools.list", authorization.Evidence{}), nil
+			return operationPlan("mcp.open", authorization.Evidence{ToolName: name}), nil
 		default:
-			return operationPlan("mcp.raw", authorization.Evidence{}), nil
+			return operationPlan("mcp.open", authorization.Evidence{}), nil
 		}
 	case "cdp":
-		id := "cdp.method.invoke"
-		switch method {
-		case "":
-			id = "cdp.raw"
-		case "Target.attachToTarget":
-			id = "cdp.attach"
-		case "Target.detachFromTarget":
-			id = "cdp.detach"
-		}
-		return operationPlan(id, authorization.Evidence{Method: method}), nil
+		return operationPlan("cdp.open", authorization.Evidence{Method: method}), nil
 	case "jrpc":
-		id := "jrpc.method.invoke"
-		if method == "" {
-			id = "jrpc.raw"
-		}
-		return operationPlan(id, authorization.Evidence{Method: method}), nil
+		return operationPlan("jrpc.open", authorization.Evidence{Method: method}), nil
 	}
 	return plan, fmt.Errorf("unknown protocol kind")
 }
@@ -636,8 +584,6 @@ func (s *Server) checkAgentCDPFrame(ctx context.Context, stmt directive.Statemen
 	if err != nil {
 		return agentDeniedSlot(stmt, err)
 	}
-	if transient {
-		plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "cdp.attach"}, authorization.Requirement{Operation: "cdp.detach"})
-	}
+	_ = transient // CDP attach/detach are branches of cdp.open.
 	return s.checkAgentPeerEffect(ctx, stmt, plan)
 }

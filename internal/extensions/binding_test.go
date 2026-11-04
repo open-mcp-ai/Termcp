@@ -9,17 +9,17 @@ import (
 
 func TestAuthorizationBindingRejectsTemplateRetarget(t *testing.T) {
 	r := newTestReconcilerIn(t, t.TempDir())
-	ext := Preset(KindCustom)
-	ext.Name = "bound"
-	ext.Kind = KindCustom
-	ext.Target = "internal"
-	ext.Mode = "pipe"
-	ext.Command = "true"
-	ext.Allow = []string{"shell.output"}
+	ext := Extension{
+		Name:    "bound",
+		Target:  "internal",
+		Mode:    "pipe",
+		Command: "true",
+		Allow:   []string{"shell.output"},
+	}
 	if err := r.store.Save(&ext); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := r.Binding(ext.Name)
+	binding, err := r.Binding(ext.Name, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 	}
 	m, cookie, sess := configuredManaged(t)
 	h := m.Wrap(http.NotFoundHandler())
-	created := issueTestCredential(t, m, cookie, sess, "/auth/principals", `{"name":"limited","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"],"repeat_max":1}},"file.realpath":{"effect":"allow"}}}}`)
+	created := issueTestCredential(t, m, cookie, sess, "/auth/principals", `{"name":"limited","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"],"repeat_max":1}},"file.fs":{"effect":"allow"}}}}`)
 	loaded, err := reopenManaged(t, m)
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 	m = loaded
 	h = loaded.Wrap(http.NotFoundHandler())
 	p := stateAgentPolicy(loaded.state, created.Agent.ID)
-	if p.SchemaVersion != 2 || !p.AllowsOperation("file.realpath") || p.AllowsOperation("file.truncate") {
+	if p.SchemaVersion != 2 || !p.AllowsOperation("file.fs") || p.AllowsOperation("file.write") {
 		t.Fatal("fine-grained grants did not round-trip", p)
 	}
 	if c := p.Actions["shell.key"].Constraints; c == nil || c.RepeatMax == nil || *c.RepeatMax != 1 || len(c.Keys) != 1 || c.Keys[0] != "tab" {
@@ -51,7 +51,7 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 		`{"schema_version":2,"host_mode":"all","actions":{"shell.key":{"effect":"allow","constraints":{"unknown":true}}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"session.start":{"effect":"allow","constraints":{"keys":["tab"]}}}}`,
 		`{"schema_version":2,"host_mode":"all","actions":{"file.write":{"effect":"allow","constraints":{"forms":["imaginary"]}}}}`,
-		`{"schema_version":2,"host_mode":"all","actions":{"file.replace":{"effect":"allow","constraints":{"max_bytes":4}}}}`,
+		`{"schema_version":2,"host_mode":"all","actions":{"cdp.open":{"effect":"allow","constraints":{"keys":["tab"]}}}}`,
 		`{"schema_version":2,"host_mode":"selected","hosts":[],"actions":{"ext.create":{"effect":"allow"}}}`,
 		`{"schema_version":2,"host_mode":"selected","hosts":[],"actions":{"ext.create":{"effect":"ask"}}}`,
 		`{"host_mode":"all","actions":{"shell.input":{"effect":"allow"}}}`,
@@ -69,7 +69,7 @@ func TestAgentV2PolicyValidationPersistenceAndDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := managedRequest(t, loaded.Wrap(http.NotFoundHandler()), "GET", "/auth/access", "", cookie, "")
-	if catalog.Code != 200 || !strings.Contains(catalog.Body.String(), `"id":"shell.marks"`) || !strings.Contains(catalog.Body.String(), `"approval_supported":true`) {
+	if catalog.Code != 200 || !strings.Contains(catalog.Body.String(), `"id":"session.message"`) || !strings.Contains(catalog.Body.String(), `"approval_supported":true`) {
 		t.Fatalf("missing action catalog: %d %s", catalog.Code, catalog.Body)
 	}
 }

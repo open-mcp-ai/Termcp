@@ -52,15 +52,9 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
 		return ctx, bad, false
 	}
-	// A SHORT-CIRCUIT TARGET HAS NO SESSION, SO REVIEW HAS NOWHERE TO PUT IT.
-	//
-	// This sits at the ONE admission point rather than in each handler, because the
-	// hole it closes is not about one operation: `write use:prod file /x` reached the
-	// SFTP handler ungated while `connect prod` + `write` was held, so a profile's
-	// default_approval depended on which spelling the caller picked. Every tool that
-	// names a target passes through here, including the ones `term` calls for itself.
+	// A short-circuit target has no session, so review has nowhere to put it.
 	if bad := s.refuseBorrowedReview(targetSessionID(request), toolName); bad != nil {
-		return bad, false
+		return ctx, bad, false
 	}
 	// Review holds the operation for a human. Whether THIS call is reviewable is
 	// the capability's own answer plus the call's action (see kindFor): a

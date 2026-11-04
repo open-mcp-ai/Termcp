@@ -56,7 +56,7 @@ func TestPermissionPresetsKeepRiskyActionsExplicit(t *testing.T) {
 		t.Fatal("initial no-access preset grants an operation", noAccess)
 	}
 	viewer := byID["viewer"].Policy
-	for _, denied := range []string{"shell.output", "shell.input", "shell.key", "file.read", "file.write", "mcp.raw"} {
+	for _, denied := range []string{"shell.output", "shell.input", "shell.key", "file.read", "file.write", "mcp.open"} {
 		if viewer.AllowsOperation(denied) {
 			t.Errorf("viewer grants %s", denied)
 		}
@@ -67,19 +67,19 @@ func TestPermissionPresetsKeepRiskyActionsExplicit(t *testing.T) {
 		t.Fatal("diagnostics preset is not read-only")
 	}
 	operator := byID["host-operator"].Policy
-	for _, id := range []string{"shell.detect", "shell.exec", "shell.input", "shell.key", "session.start", "file.write", "forward.open.local", "alias.list"} {
+	for _, id := range []string{"shell.detect", "shell.input", "shell.key", "session.start", "file.write", "forward.open", "session.delete"} {
 		if !operator.AllowsOperation(id) {
 			t.Errorf("host operator does not include %s", id)
 		}
 	}
-	for _, id := range []string{"profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "mcp.raw", "cdp.raw", "jrpc.raw"} {
+	for _, id := range []string{"profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "mcp.open", "cdp.open", "jrpc.open"} {
 		for _, preset := range presets {
 			if preset.Policy.AllowsOperation(id) {
 				t.Errorf("preset %s implicitly grants high-risk action %s", preset.ID, id)
 			}
 		}
 	}
-	for _, id := range []string{"mcp.raw", "cdp.raw", "jrpc.raw", "profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "ext.delete", "alias.write", "alias.delete"} {
+	for _, id := range []string{"mcp.open", "cdp.open", "jrpc.open", "profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "ext.delete"} {
 		if operator.AllowsOperation(id) {
 			t.Errorf("host operator grants global or raw action %s", id)
 		}

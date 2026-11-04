@@ -74,7 +74,7 @@ func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *
 	req := mcpgo.CallToolRequest{}
 	req.Params.Name = "shell_input"
 	req.Params.Arguments = argsOf("shell_id", target)
-	bad, _ := s.checkAdmission(ctx, "shell_input", req)
+	_, bad, _ := s.checkAdmission(ctx, "shell_input", req)
 	return bad
 }
 

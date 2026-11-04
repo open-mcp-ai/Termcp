@@ -66,7 +66,7 @@ func TestAgentToolCheckCarriesBindingThroughAdmission(t *testing.T) {
 func TestExtensionAuthorizationBindingDetectsTemplateRetarget(t *testing.T) {
 	// Binding behavior is covered in the extensions package; this test pins that
 	// the MCP adapter exposes the same error instead of silently reloading a name.
-	if _, err := (&Server{}).extensionAuthorizationBinding("missing"); err == nil {
+	if _, err := (&Server{}).extensionAuthorizationBinding("missing", ""); err == nil {
 		t.Fatal("unconfigured extensions were accepted")
 	}
 }

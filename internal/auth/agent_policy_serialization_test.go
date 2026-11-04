@@ -11,7 +11,7 @@ import (
 func TestAgentEmptyAllowlistsSurviveAPIAndEncryptedRestart(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	h := m.Wrap(http.NotFoundHandler())
-	body := `{"name":"empty-selections","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":[]}},"mcp.tool.invoke":{"effect":"allow","constraints":{"tool_names":[]}},"cdp.method.invoke":{"effect":"allow","constraints":{"methods":[]}},"file.write":{"effect":"allow","constraints":{"forms":[]}}}}}`
+	body := `{"name":"empty-selections","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":[]}},"mcp.open":{"effect":"allow","constraints":{"tool_names":[]}},"cdp.open":{"effect":"allow","constraints":{"methods":[]}},"file.write":{"effect":"allow","constraints":{"forms":[]}}}}}`
 	w := managedRequest(t, h, "POST", "/auth/groups", body, cookie, session.CSRF)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
@@ -76,8 +76,8 @@ func assertEmptySelectionsDeny(t *testing.T, p AgentPolicy) {
 	t.Helper()
 	for _, req := range []authorization.Requirement{
 		{Operation: "shell.key", Evidence: authorization.Evidence{Keys: []string{"enter"}, Repeat: 1}},
-		{Operation: "mcp.tool.invoke", Evidence: authorization.Evidence{ToolName: "execute"}},
-		{Operation: "cdp.method.invoke", Evidence: authorization.Evidence{Method: "Runtime.evaluate"}},
+		{Operation: "mcp.open", Evidence: authorization.Evidence{ToolName: "execute"}},
+		{Operation: "cdp.open", Evidence: authorization.Evidence{Method: "Runtime.evaluate"}},
 		{Operation: "file.write", Evidence: authorization.Evidence{Forms: []string{"inline"}}},
 	} {
 		if d := authorization.CheckPlan(p.AuthorizationPolicy(), authorization.Plan{Requirements: []authorization.Requirement{req}}); d.Allowed {
@@ -97,7 +97,7 @@ func TestAgentAmbiguousStoredConditionsFailClosedAndCanBeReviewed(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 
 			m, cookie, session := configuredManaged(t)
-			a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"old-policy","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"]}},"file.realpath":{"effect":"allow"}}}}`)
+			a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"old-policy","policy":{"schema_version":2,"host_mode":"all","hosts":[],"actions":{"shell.key":{"effect":"allow","constraints":{"keys":["tab"]}},"file.fs":{"effect":"allow"}}}}`)
 			raw, err := m.vault.ReadAuthentication()
 			if err != nil {
 				t.Fatal(err)
@@ -127,7 +127,7 @@ func TestAgentAmbiguousStoredConditionsFailClosedAndCanBeReviewed(t *testing.T) 
 			if p.AllowsOperation("shell.key") {
 				t.Fatal("ambiguous persisted condition enabled an operation")
 			}
-			if !p.AllowsOperation("file.realpath") {
+			if !p.AllowsOperation("file.fs") {
 				t.Fatal("explicit unconstrained allow changed")
 			}
 			cookie, session, err = loaded.login("admin", testPassword)

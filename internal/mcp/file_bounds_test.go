@@ -51,6 +51,10 @@ func fileBoundGrant(forms []string, limit int64) authorization.Grant {
 		Constraints: &authorization.Constraints{Forms: forms, MaxBytes: &limit}}
 }
 
+func deniedStatus(out string) bool {
+	return statusLineIs(out, "400") || statusLineIs(out, "403")
+}
+
 func TestAgentBoundedFileReadsAcrossMCPTransports(t *testing.T) {
 	for _, transport := range []string{"stream", "sse"} {
 		t.Run(transport, func(t *testing.T) {
@@ -118,8 +122,8 @@ func TestAgentBoundedFileTransfersCheckBothEndpoints(t *testing.T) {
 			// so these permission tests do not depend on parser changes.
 			pipeDestination := " | write " + sess.ID + " file " + strconv.Quote(filepath.ToSlash(destination))
 			for _, suffix := range []string{"", " --length 5", " --length 0"} {
-				if out := v2Term(t, cli, "write "+sess.ID+" file $2 --local-path $1"+suffix, source, destination); !statusLineIs(out, "403") {
-					t.Fatal("upload without sufficient byte evidence passed", out)
+				if out := v2Term(t, cli, "write "+sess.ID+" file $2 --local-path $1"+suffix, source, destination); !statusLineIs(out, "400") {
+					t.Fatalf("removed local-path upload reached execution: %s", out)
 				}
 			}
 			for _, suffix := range []string{"", " --bytes 5", " --bytes 0"} {
@@ -134,15 +138,6 @@ func TestAgentBoundedFileTransfersCheckBothEndpoints(t *testing.T) {
 			if _, err := os.Stat(destination); !os.IsNotExist(err) || len(h.server.tasks.List()) != 0 {
 				t.Fatal("denied transfer started local work", err)
 			}
-			// Upload and download use the exact same range evidence at both ends.
-			out := v2Term(t, cli, "write "+sess.ID+" file $2 --local-path $1 --length 4", source, destination)
-			if !statusLineIs(out, "202") {
-				t.Fatal("bounded upload refused", out)
-			}
-			awaitBoundedTransfer(t, h.server, headerValueOr(out, "Task", ""))
-			if data, err := os.ReadFile(destination); err != nil || string(data) != "ABCD" {
-				t.Fatal("upload exceeded its authorization evidence", string(data), err)
-			}
 			download := filepath.Join(dir, "download.txt")
 			doc := boundedToolDocument(t, h.tool("file_read", argsOf("session_id", sess.ID, "remote_path", source,
 				"mode", "file", "local_path", download, "offset", 2, "length", 4)))
@@ -150,7 +145,7 @@ func TestAgentBoundedFileTransfersCheckBothEndpoints(t *testing.T) {
 			if data, err := os.ReadFile(download); err != nil || string(data) != "CDEF" {
 				t.Fatal("download exceeded its authorization evidence", string(data), err)
 			}
-			out = v2Term(t, cli, "read "+sess.ID+" file $1 --offset 2 --bytes 4"+pipeDestination, source)
+			out := v2Term(t, cli, "read "+sess.ID+" file $1 --offset 2 --bytes 4"+pipeDestination, source)
 			if !statusLineIs(out, "202") {
 				t.Fatal("bounded file pipe refused", out)
 			}
@@ -168,7 +163,7 @@ func TestAgentBoundedFileTransfersCheckBothEndpoints(t *testing.T) {
 				p.Actions[id] = fileBoundGrant([]string{"local", "pipe"}, 3)
 				h.adminRequest("PATCH", "/auth/groups/"+h.groupID, map[string]any{"revision": i + 1, "policy": p}, nil)
 				cli = h.client(transport)
-				if out := v2Term(t, cli, "write "+sess.ID+" file $2 --local-path $1 --length 4", source, destination); !statusLineIs(out, "403") {
+				if out := v2Term(t, cli, "write "+sess.ID+" file $2 --local-path $1 --length 4", source, destination); !deniedStatus(out) {
 					t.Fatalf("%s upload bound was bypassed: %s", id, out)
 				}
 				if out := v2Term(t, cli, "read "+sess.ID+" file $1 --bytes 4"+pipeDestination, source); !statusLineIs(out, "403") {
@@ -183,14 +178,16 @@ func TestAgentBoundedFileTransfersCheckBothEndpoints(t *testing.T) {
 }
 
 func TestAgentInlineWritesCannotHideBytesWithLength(t *testing.T) {
-	p := v2Policy("file.write", "file.replace")
-	p.Actions["file.write"] = fileBoundGrant([]string{"inline"}, 4)
+	p := v2Policy("file.write")
+	p.Actions["file.write"] = fileBoundGrant([]string{"inline"}, 16)
 	h := newV2Harness(t, p)
 	sess := h.session("internal")
 	path := filepath.Join(t.TempDir(), "target.txt")
 	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	p.Actions["file.write"] = fileBoundGrant([]string{"inline"}, 4)
+	h.adminRequest("PATCH", "/auth/groups/"+h.groupID, map[string]any{"revision": 1, "policy": p}, nil)
 	if out := h.tool("file_write", argsOf("session_id", sess.ID, "remote_path", path, "data", "12345", "length", 1)); !strings.Contains(out, "forbidden") {
 		t.Fatal("ignored inline length supplied a false bound", out)
 	}
@@ -198,6 +195,8 @@ func TestAgentInlineWritesCannotHideBytesWithLength(t *testing.T) {
 		t.Fatal("denied inline write modified the file", err)
 	}
 	unused := filepath.Join(t.TempDir(), "unused.txt")
+	p.Actions["file.write"] = fileBoundGrant([]string{"inline"}, 16)
+	h.adminRequest("PATCH", "/auth/groups/"+h.groupID, map[string]any{"revision": 2, "policy": p}, nil)
 	_ = boundedToolDocument(t, h.tool("file_replace", argsOf("session_id", sess.ID, "remote_path", path,
 		"old_text", "original", "new_text", "replaced", "local_path", unused)))
 	if data, err := os.ReadFile(path); err != nil || string(data) != "replaced" {

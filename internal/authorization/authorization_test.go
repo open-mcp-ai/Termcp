@@ -106,21 +106,21 @@ func TestPayloadSizeMustBeProvable(t *testing.T) {
 	}
 }
 
-func TestToolAndMethodAllowlists(t *testing.T) {
+func TestPeerToolAndMethodAllowlists(t *testing.T) {
 	policy := Policy{Actions: map[string]Grant{
-		"mcp.tool.invoke":   {Effect: EffectAllow, Constraints: &Constraints{ToolNames: []string{"status"}}},
-		"cdp.method.invoke": {Effect: EffectAllow, Constraints: &Constraints{Methods: []string{"Page.navigate"}}},
+		"mcp.open": {Effect: EffectAllow, Constraints: &Constraints{ToolNames: []string{"status"}}},
+		"cdp.open": {Effect: EffectAllow, Constraints: &Constraints{Methods: []string{"Page.navigate"}}},
 	}}
 	if decision := CheckPlan(policy, Plan{Requirements: []Requirement{
-		{Operation: "mcp.tool.invoke", Evidence: Evidence{ToolName: "status"}},
-		{Operation: "cdp.method.invoke", Evidence: Evidence{Method: "Page.navigate"}},
+		{Operation: "mcp.open", Evidence: Evidence{ToolName: "status"}},
+		{Operation: "cdp.open", Evidence: Evidence{Method: "Page.navigate"}},
 	}}); !decision.Allowed {
 		t.Fatal("allowed invocation refused", decision.Reason)
 	}
 	for _, bad := range []Requirement{
-		{Operation: "mcp.tool.invoke", Evidence: Evidence{ToolName: "shell"}},
-		{Operation: "mcp.tool.invoke", Evidence: Evidence{}},
-		{Operation: "cdp.method.invoke", Evidence: Evidence{Method: "Runtime.evaluate"}},
+		{Operation: "mcp.open", Evidence: Evidence{ToolName: "shell"}},
+		{Operation: "mcp.open", Evidence: Evidence{}},
+		{Operation: "cdp.open", Evidence: Evidence{Method: "Runtime.evaluate"}},
 	} {
 		if decision := CheckPlan(policy, Plan{Requirements: []Requirement{bad}}); decision.Allowed {
 			t.Fatal("violating invocation passed", bad)
@@ -204,13 +204,13 @@ func TestCatalogMetadataIsCompleteAndRecipesReferenceKnownOperations(t *testing.
 			}
 		}
 	}
-	for _, id := range []string{"shell.input", "shell.key", "shell.exec", "shell.detect"} {
+	for _, id := range []string{"shell.input", "shell.key", "shell.detect"} {
 		op, _ := Lookup(id)
 		if op.Risk == RiskHigh {
 			t.Errorf("core host operation %s is mislabeled high risk", id)
 		}
 	}
-	for _, id := range []string{"mcp.raw", "cdp.raw", "jrpc.raw", "profile.edit", "ext.create"} {
+	for _, id := range []string{"mcp.open", "cdp.open", "jrpc.open", "profile.edit", "ext.create"} {
 		op, _ := Lookup(id)
 		if op.Risk != RiskHigh {
 			t.Errorf("configuration/raw operation %s risk = %q", id, op.Risk)

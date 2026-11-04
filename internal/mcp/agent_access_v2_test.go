@@ -196,7 +196,7 @@ func v2Term(t *testing.T, cli *client.Client, cmd string, args ...string) string
 func TestAgentV2RealTransportsAndEquivalentFileBranches(t *testing.T) {
 	for _, kind := range []string{"stream", "sse"} {
 		t.Run(kind, func(t *testing.T) {
-			p := v2Policy("file.realpath", "file.write", "shell.input", "shell.output", "shell.key", "session.list", "profile.get", "task.info")
+			p := v2Policy("file.fs", "file.write", "shell.input", "shell.output", "shell.key", "session.list", "profile.list")
 			limit := int64(4)
 			p.Actions["file.write"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Forms: []string{"inline"}, MaxBytes: &limit}}
 			repeat := 1
@@ -216,13 +216,16 @@ func TestAgentV2RealTransportsAndEquivalentFileBranches(t *testing.T) {
 			if out := h.tool("file_fs", argsOf("session_id", sess.ID, "remote_path", path, "action", "realpath")); strings.Contains(out, "forbidden") {
 				t.Fatal("specialized realpath refused", out)
 			}
-			for _, cmd := range []string{"get " + sess.ID + " file $1 --op truncate", "write " + sess.ID + " file $1 --op truncate --size 0", "write " + sess.ID + " file $1 --mode 0", "rm " + sess.ID + " file $1"} {
+			for _, cmd := range []string{"write " + sess.ID + " file $1 --op chmod --mode 416", "rm " + sess.ID + " file $1"} {
 				if out := v2Term(t, cli, cmd, path); !strings.HasPrefix(out, "TERM/1 403") {
 					t.Fatalf("ungranted file mutation passed: %s", out)
 				}
 			}
-			if out := h.tool("file_fs", argsOf("session_id", sess.ID, "remote_path", path, "action", "truncate", "size", float64(0))); !strings.Contains(out, "forbidden") {
-				t.Fatal("specialized truncate bypassed permission", out)
+			if out := v2Term(t, cli, "get "+sess.ID+" file $1 --op truncate"); strings.HasPrefix(out, "TERM/1 403") {
+				t.Fatalf("file.fs grant did not cover the merged truncate branch: %s", out)
+			}
+			if out := h.tool("file_perm", argsOf("session_id", sess.ID, "remote_path", path, "action", "chmod", "mode", "0600")); !strings.Contains(out, "forbidden") {
+				t.Fatal("specialized file.perm bypassed permission", out)
 			}
 			if out := v2Term(t, cli, "write "+sess.ID+" file $1 --data 12345", path); !strings.HasPrefix(out, "TERM/1 403") {
 				t.Fatal("oversized write passed", out)
@@ -281,20 +284,20 @@ func TestAgentV2RealTransportsAndEquivalentFileBranches(t *testing.T) {
 }
 
 func TestAgentV2SemanticPlansAndProtocolAllowlists(t *testing.T) {
-	p := v2Policy("session.start", "shell.open", "file.realpath", "mcp.tool.invoke", "mcp.raw", "cdp.method.invoke", "jrpc.method.invoke")
-	p.Actions["mcp.tool.invoke"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{ToolNames: []string{"status"}}}
-	p.Actions["cdp.method.invoke"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Methods: []string{"Page.reload"}}}
-	p.Actions["jrpc.method.invoke"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Methods: []string{"status"}}}
+	p := v2Policy("session.start", "shell.open", "file.fs", "mcp.open", "cdp.open", "jrpc.open")
+	p.Actions["mcp.open"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{ToolNames: []string{"status"}}}
+	p.Actions["cdp.open"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Methods: []string{"Page.reload"}}}
+	p.Actions["jrpc.open"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Methods: []string{"status"}}}
 	for _, tc := range []struct {
 		tool  string
 		args  map[string]any
 		allow bool
 	}{
 		{"session_start", argsOf("ssh_config", "internal"), true},
-		{"session_start", argsOf("ssh_config", "internal", "command", "echo"), false},
-		{"shell_open", argsOf("command", "echo"), false},
+		{"session_start", argsOf("ssh_config", "internal", "command", "echo"), true},
+		{"shell_open", argsOf("command", "echo"), true},
 		{"file_fs", argsOf("action", "realpath"), true},
-		{"file_fs", argsOf("action", "truncate"), false},
+		{"file_fs", argsOf("action", "truncate"), true},
 		{"file_fs", argsOf("action", "new-action"), false},
 		{"unregistered_tool", nil, false},
 	} {
@@ -334,15 +337,31 @@ func TestAgentV2SemanticPlansAndProtocolAllowlists(t *testing.T) {
 }
 
 func TestAgentV2ConnectRequiresAllOperationsBeforeCreating(t *testing.T) {
-	for _, ids := range [][]string{{"session.start"}, {"session.start", "shell.open"}} {
-		t.Run(fmt.Sprint(len(ids)), func(t *testing.T) {
-			h := newV2Harness(t, v2Policy(ids...))
+	for _, tc := range []struct {
+		ids       []string
+		forbidden bool
+	}{
+		{[]string{"session.start"}, true},
+		{[]string{"session.start", "shell.open"}, false},
+	} {
+		t.Run(fmt.Sprint(tc.ids), func(t *testing.T) {
+			h := newV2Harness(t, v2Policy(tc.ids...))
 			args := argsOf("ssh_config", "internal", "mode", "pipe", "command", testShell())
-			if out := h.tool("session_start", args); !strings.Contains(out, "forbidden") {
-				t.Fatal("explicit program bypassed composite permissions", out)
+			out := h.tool("session_start", args)
+			if tc.forbidden {
+				if !strings.Contains(out, "forbidden") {
+					t.Fatal("connection bypassed missing channel permission", out)
+				}
+				if list := h.manager.ListAll(); len(list) != 0 {
+					t.Fatal("refused connection created a session")
+				}
+				return
 			}
-			if list := h.manager.ListAll(); len(list) != 0 {
-				t.Fatal("refused connection created a session")
+			if strings.Contains(out, "forbidden") {
+				t.Fatalf("complete composite permission refused: %s", out)
+			}
+			if list := h.manager.ListAll(); len(list) != 1 {
+				t.Fatalf("permitted connection created %d sessions", len(list))
 			}
 		})
 	}
@@ -351,8 +370,8 @@ func TestAgentV2ConnectRequiresAllOperationsBeforeCreating(t *testing.T) {
 func TestAgentV2ProtocolSendsCheckActualToolAndStdioPlan(t *testing.T) {
 	for _, kind := range []string{"stream", "sse"} {
 		t.Run(kind, func(t *testing.T) {
-			p := v2Policy("mcp.tool.invoke", "mcp.raw", "shell.input", "shell.output", "shell.key")
-			p.Actions["mcp.tool.invoke"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{ToolNames: []string{"status"}}}
+			p := v2Policy("mcp.open", "shell.input", "shell.output", "shell.key")
+			p.Actions["mcp.open"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{ToolNames: []string{"status"}}}
 			n := 1
 			p.Actions["shell.key"] = authorization.Grant{Effect: authorization.EffectAllow, Constraints: &authorization.Constraints{Keys: []string{"tab"}, RepeatMax: &n}}
 			h := newV2Harness(t, p)
