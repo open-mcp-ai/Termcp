@@ -82,6 +82,12 @@ type Capability struct {
 	// table exists to remove: "which operations are special" is one fact, written
 	// once, next to the row it describes.
 	Staged bool
+
+	// ExtensionFrameWrite marks the two shell writes used to inject one JSON-RPC
+	// frame into an extension's own channel. /ext/{name}/stream authorizes
+	// ext.get first and then scopes the post-authorization bypass to the exact
+	// shell returned by AcquireBound.
+	ExtensionFrameWrite bool
 }
 
 // Reviewable reports whether review mode can hold this capability. Only a
@@ -109,8 +115,8 @@ var table = []Capability{
 	{ID: "shell.open", Gate: GateDevice},
 	{ID: "shell.list", Gate: GateOperator, Idempotent: true},
 	{ID: "shell.close", Gate: GateDevice},
-	{ID: "shell.input", Kind: approval.KindShellInput, Gate: GateReview, Staged: true},
-	{ID: "shell.key", Kind: approval.KindShellInput, Gate: GateReview, Staged: true},
+	{ID: "shell.input", Kind: approval.KindShellInput, Gate: GateReview, Staged: true, ExtensionFrameWrite: true},
+	{ID: "shell.key", Kind: approval.KindShellInput, Gate: GateReview, Staged: true, ExtensionFrameWrite: true},
 	{ID: "shell.output", Gate: GateOperator, Idempotent: true},
 	{ID: "shell.resize", Gate: GateDevice},
 	{ID: "shell.detect", Gate: GateOperator, Idempotent: true},

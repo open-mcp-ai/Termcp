@@ -231,7 +231,7 @@ func applyCatalogMetadata() {
 		"forward.open.dynamic": "Run a loopback-only SOCKS proxy through the target connection.",
 		"mcp.tool.invoke":      "Invoke a specific tool on a connected remote MCP server.",
 		"mcp.raw":              "Send an unclassified MCP frame; this is broader than a named tool grant.",
-		"mcp.open":             "Open or control an MCP peer; method constraints identify the tool that may run.",
+		"mcp.open":             "Open or control an MCP peer; tool constraints identify the tools that may run.",
 		"cdp.method.invoke":    "Invoke a specific method on a connected CDP endpoint.",
 		"cdp.raw":              "Send an unclassified CDP frame; this is broader than a specific method grant.",
 		"cdp.open":             "Open or control a CDP peer; method constraints identify the operations that may run.",

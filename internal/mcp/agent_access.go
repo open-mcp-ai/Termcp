@@ -65,6 +65,9 @@ func (s *Server) filterAgentSessions(ctx context.Context, in []api.Session) []ap
 }
 
 func (s *Server) agentToolCheck(ctx context.Context, tool string, request mcpgo.CallToolRequest) (context.Context, *mcpgo.CallToolResult, bool) {
+	if extensionMCPToolAuthorized(ctx, tool, request) {
+		return ctx, nil, false
+	}
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
 		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
