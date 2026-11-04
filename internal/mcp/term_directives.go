@@ -646,6 +646,21 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 			slot := s.slotFromFailure(ctx, stmt, bad)
 			return []envelope.Slot{slot}
 		}
+		// A DEFERRED CLOSE STOPS NEW WORK (issue #255). `close use:<host> --later`
+		// promised the container ends when its running commands do; dispatching one
+		// more command would break that promise silently, because the caller sees a
+		// normal 200 while the window it is writing into is on its way out. Refuse and
+		// name the two ways forward.
+		if c := s.sessMgr.LiveBorrowed(host); c != nil && c.Closing() {
+			slot := s.slotFromFailure(ctx, stmt, &toolFailure{
+				code: CodeConflict,
+				msg: fmt.Sprintf("use:%s is closing: `close --later` was called, so it no longer accepts new commands. "+
+					"Wait for its running work to finish (it archives by itself), or start a fresh one by closing it now with `close %s`.",
+					host, c.ID),
+			})
+			slot.Headers["Path"] = stmt.Path
+			return []envelope.Slot{slot}
+		}
 		captureLimit := win.BytesLimit
 		if _, ok := stmt.Flag("grep"); ok {
 			captureLimit = grepMaxScanBytes

@@ -133,7 +133,14 @@ func (s *Server) runBorrowedHost(ctx context.Context, host, command string, win 
 	// `use:<host>` session behind that says running and holds a dead connection.
 	// The pooled lease above is proof the host answers, so the container's own dial
 	// is the cheap second connection to a host known to be up.
-	s.ensureBorrowedContainer(ctx, host)
+	container := s.ensureBorrowedContainer(ctx, host)
+	// THE COMMAND IS BRACKETED so `close --later` on this container waits for it: the
+	// run owns no channel, so without this counter the deferred close would see an
+	// idle container and terminate it mid-command.
+	if container != nil {
+		container.BeginBorrowedWork()
+		defer container.EndBorrowedWork()
+	}
 
 	ch, err := cli.NewSession()
 	if err != nil {

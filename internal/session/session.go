@@ -114,6 +114,10 @@ type Session struct {
 	shellStateMu  sync.Mutex  // serializes child registration with close/DEAD transition
 	closing       atomic.Bool // blocks new child channels and approval reconfiguration
 	closeLater    atomic.Bool // a deferred close was requested (#255); fulfilled by closeIfLastShellEnded
+	// borrowedWork counts commands running on a `use:<host>` container's behalf that
+	// own no channel (#255). They are the container's outstanding work for a deferred
+	// close, which otherwise has no shell exit to wait for. Pure counter: atomic, no lock.
+	borrowedWork atomic.Int64
 	terminateOnce sync.Once
 	deadOnce      sync.Once
 	exitOnce      sync.Once
