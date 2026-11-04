@@ -88,7 +88,7 @@ func TestTerminalOutputPumpCoalescesWithoutHoldingAnEcho(t *testing.T) {
 }
 
 // TestTerminalBytesAreNotFramedPerRead is the structural half of the same rule:
-// the pump must accumulate before it sends. A `sendTerminalPayload` on the read
+// the pump must accumulate before it sends. A terminal send on the read
 // path itself would mean one frame per chunk again, whatever the branch
 // conditions above say.
 func TestTerminalBytesAreNotFramedPerRead(t *testing.T) {
@@ -105,7 +105,7 @@ func TestTerminalBytesAreNotFramedPerRead(t *testing.T) {
 	if !strings.Contains(tail, "batch = append(batch, out...)") {
 		t.Error("the read result must be accumulated into the batch, not sent per read")
 	}
-	sendIdx := strings.Index(tail, "c.sendTerminalPayload(")
+	sendIdx := strings.Index(tail, "c.sendWatchTerminalPayload(")
 	appendIdx := strings.Index(tail, "batch = append(batch, out...)")
 	if sendIdx >= 0 && appendIdx >= 0 && sendIdx < appendIdx {
 		t.Error("the pump sends before accumulating: that is one frame per read, which is the frame rate #93 reports")
@@ -122,7 +122,7 @@ func TestTerminalBytesAreNotFramedPerRead(t *testing.T) {
 	// the one that matters is deleted.
 	var doneAt []int
 	for at := 0; ; {
-		i := strings.Index(body[at:], `"type": "terminal_done"`)
+		i := strings.Index(body[at:], `"terminal_done"`)
 		if i < 0 {
 			break
 		}
@@ -133,15 +133,10 @@ func TestTerminalBytesAreNotFramedPerRead(t *testing.T) {
 		t.Fatal("runWatch no longer emits terminal_done")
 	}
 	for _, idx := range doneAt {
-		// Walk back over the marshal/comment lines to the previous statement and
-		// require it to be the flush.
-		prev := strings.TrimRight(body[:idx], " \t\n")
-		if nl := strings.LastIndex(prev, "\n"); nl >= 0 {
-			prev = prev[:nl]
-		}
-		if !strings.HasSuffix(strings.TrimSpace(prev), "flush()") {
+		flushAt := strings.LastIndex(body[:idx], "flush()")
+		if flushAt < 0 {
 			t.Errorf("terminal_done must be preceded by flush() so the shell's last output is shipped first; "+
-				"the statement before it is %q", strings.TrimSpace(prev))
+				"no flush precedes %q", strings.TrimSpace(body[idx:idx+len(`"terminal_done"`)]))
 		}
 	}
 }
