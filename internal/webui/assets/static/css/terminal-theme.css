@@ -63,11 +63,13 @@ html[data-terminal-transparent="false"] .shell-terminal-wrap {
 }
 html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm,
 html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm .xterm-screen,
+html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm .xterm-scrollable-element,
 html[data-terminal-transparent="false"] .shell-terminal-wrap .xterm .xterm-viewport {
   background: var(--terminal-background, var(--xterm-background, var(--bg-card))) !important;
 }
 html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm,
 html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm .xterm-screen,
+html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm .xterm-scrollable-element,
 html[data-terminal-transparent="true"] .shell-terminal-wrap .xterm .xterm-viewport {
   background: transparent !important;
 }

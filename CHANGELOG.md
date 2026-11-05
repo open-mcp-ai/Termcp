@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 改进
+
+- **Web UI 终端升级到 xterm.js 6.0.0（原 5.5.0）**。上游把原生滚动条换成了 VS Code 风格的自定义滚动条（`.xterm-scrollable-element` 包裹 `.xterm-screen`），termcp 的终端层随之适配：滚动位置改从 buffer（`viewportY`/`baseY`）读取而非 DOM（`scrollTop` 在 6.0 恒为 0），滚动事件改用官方 `onScroll`，列宽计算按官方 fit 公式预留滑块宽度，滚动条颜色接入主题 token。顺带清了三笔旧账：删除从未被加载的 `addon-fit.js`（fit 由 `fitShellTerminal` 自己做）、删除 6.0 已不存在的 `_core.viewport.syncScrollArea` 调用（×5）、删除失效的 `::-webkit-scrollbar` 规则。vendor 目录补上版本与 SHA-256 说明（`static/xterm/README.md`）与上游 LICENSE；新增根级 `SECURITY.md` 逐条说明五个环境变量的读取时机、是否落盘与失效模式，补齐依赖审计需要的答案。
+
 ### 新增
 
 - **`term` 可以只要 JSON，不要文本（#231）**。回复有两种投影：渲染文本和它的 JSON 双胞胎。`structured_content` 加上后者，新增的 `content:false` 去掉前者，程序化调用方（机器人、CI）于是只为真正解析的那半付费。两者都拒绝是 400：一条要求「一个字节都别回」的命令是打错的请求，不是请求。REST 的 body 本来就是 JSON，所以那边 `content:false` 只去掉可选的 `X-Termcp-Text` 头。
