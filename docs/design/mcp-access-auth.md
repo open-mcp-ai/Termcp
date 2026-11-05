@@ -2,6 +2,8 @@
 
 **实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
 
+**2026-11-05 范围收敛**：OAuth、AgentGrant、多用户和 canonical origin/可信代理延期；桥继续使用认证过的 MCP 探测，但必须修复未认证请求延长 daemon 空闲期的问题。认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+
 状态：Admin/JWT 登录和预设角色入口权限第一版已实现（2026-10-28），Agent token 为 P1，OAuth 仍是未来计划。下文 Agent 接入交互及桥控制端点保留为提案。原盘点日期：2026-10-27，核验对象 `dev@6a8af55` 及当时工作区；npm 启动行为另核对相邻的 Termcp-npm 仓库。
 
 本文细化 [身份与凭据签发机制](auth-issuance.md) 的接入交互。当前决策为 **OAuth 整体延期，简易静态 token 为 P1**。用户首次运行时设置 Admin 主密码，认证密文与主机配置共用现有 Main Key；HTTP 和 daemon 使用同一默认 `.termcp` 数据目录。P1 中用户登录 WebUI、新增 Agent、取得 token 并自行填入 MCP 配置；stdio 读取 token 的能力与之同批交付。

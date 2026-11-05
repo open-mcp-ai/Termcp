@@ -267,8 +267,9 @@ run <channel> $1
 | `GET/POST /auth/groups` | 列出或创建权限组；创建时使用模板或显式 schema 2 策略 |
 | `PATCH /auth/groups/{id}` | 使用 group revision 保存名称、说明、启停与策略；未知字段和条件拒绝 |
 | `POST /auth/groups/{id}/clone`、`POST /auth/groups/{id}/delete-preview`、`DELETE /auth/groups/{id}` | 复制、删除预览和带版本校验的删除；成员必须迁移或明确拒绝 |
-| `GET/POST /auth/principals`、`PATCH /auth/principals/{id}` | 管理主体身份和启停；不接收主体级策略 |
-| `PUT /auth/principals/{id}/group`、`GET/PUT /auth/default-group` | 管理组绑定和缺省组，使用主体或访问状态 revision |
+| `GET/POST /auth/principals`、`PATCH /auth/principals/{id}` | 管理 Agent 身份和启停；读取结果包含凭据、活动请求和后台工作计数；不接收 Agent 级策略 |
+| `PUT /auth/principals/{id}/group`、`GET/PUT /auth/default-group` | 修改 Agent 的权限组和缺省组，使用 Agent 或访问状态 revision |
+| `POST /auth/principals/{id}/delete-preview`、`DELETE /auth/principals/{id}` | 预览并删除 Agent；删除同时撤销全部 token，取消活动请求与后台工作 |
 | `GET/POST /auth/tokens`、`DELETE /auth/tokens/{id}` | 使用 principal_id 管理凭据；不接受 agent_id 别名 |
 
 所有管理端点必须在现有 `Managed.Wrap` 中明确注册/分派，经过管理员会话、Origin 与 CSRF 检查，不让它们落入静态页面 fallback。Agent bearer 只能进入 MCP。`GET /auth/group-presets` 返回五个版本化角色模板；模板是创建时的策略快照，后续目录新增动作不会自动进入已有组。
@@ -325,6 +326,8 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 
 本批实现当前动作策略可配置、可执行、可预览、可审计的完整纵向路径。没有更换 cookie/token，也没有迁移主机加密存储或加密会话。
 
+**2026-11-05 权限目录约束**：动作、条件和预置组以 issue #252 为唯一来源，目标为 46 项能力。当前 #252 正文仍混用 86 项目标和 45 项现状，必须先修正该 issue；在修正前不得按旧清单扩动作、补条件或改预置组。范围决定见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+
 - `internal/authorization` 保存明确语义动作及纯 `CheckPlan`。未列出动作、未知动作、未知条件和条件不满足均拒绝；`ask` 允许进入审批队列。
 - `internal/capability/agent_plan.go` 统一识别内部工具的实际分支和有效参数；MCP Adapter 解析主机、namespace 与资源限制。DSL 的普通操作经原工具 Adapter；run、pipe、peer 等组合/直接调用另做完整预检。`run` 在输入前检查 input、key(enter)、output；建连检查 session.start、shell.open 和显式程序时的 shell.exec。
 - 文件动作分别授权，包括 realpath/readlink/statvfs 与 truncate/chmod/chown/chtimes。读写词面不决定权限。按键 keys/repeat_max、工具 tool_names、方法 methods、文件 forms/max_bytes 可设置；仅 catalog 声明过的条件可以保存。forms 使用 inline、local、pipe；replace 只支持 inline，不接受无法证明的整文件写入大小上限。普通 read file 不新增参数，也不改变已有参数含义；inline 使用既有 8 MiB 上限，local/pipe 只在正长度可证明时通过，否则保守拒绝。详情见 [文件操作权限](file-operation-permissions.md)。
@@ -335,6 +338,6 @@ UI 不提供“允许未来新功能”通配项。现有全选只选当前 cata
 - `/permissions` 提供动作树、参数条件、主机范围、可达面/风险/依赖标签和只读 DSL 预览。预览逐项解释缺少的动作，但不建连、不 acquire、不续租、不创建 task。权限组、主体、默认组、角色入口和凭据变更写入结构化审计；拒绝记录动作与原因且不记录秘密。
 - 策略仍保存在现有认证密文。HTTP 与重新加载都拒绝未知策略字段；schema_version 未识别时校验失败。已有 token 继续动态读取当前策略。
 
-当前没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、词汇分配/子用户组继承。对应控件和不支持的条件不会假装可用。直接协议发送在解析后再次判定，不把一次预检当作可复用的绕过凭据。
+当前没有实现：动作各自的主机子集、profile.fields、ext.names、端口/目的地址条件、外部工具 arguments 字段条件、词汇分配/子用户组继承。这些能力不进入当前 #252 范围，除非修正后的 46 项目录明确列入。对应控件和不支持的条件不会假装可用。直接协议发送在解析后再次判定，不把一次预检当作可复用的绕过凭据。
 
 验证覆盖真实 HTTP/SSE 认证入口、原始与具名工具形式、拒绝前无副作用、别名、主机边界、任务双端、策略持久化和旧策略拒绝。完整测试与 stress 执行结果由本次变更交付记录说明。

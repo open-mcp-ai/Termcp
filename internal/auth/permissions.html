@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh" data-theme-base="auth/ui/">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>权限管理 · Termcp</title>
 {{template "theme-head" .}}
 <style>
@@ -12,7 +12,7 @@
 
 .function-grid.v2{display:block}.operation-family{border-top:1px solid var(--line,#d9d9d9);padding:10px 0}.operation-family summary{cursor:pointer;font-weight:600}.family-toggle{display:flex;align-items:center;gap:8px}.operation-row{padding:8px 0 8px 12px}.operation-row .choice{padding:0}.operation-row code{display:block;font-size:12px;opacity:.65}.operation-conditions{margin:6px 0 0 24px;font-size:12px}.operation-conditions .field{margin-top:8px}.operation-conditions input{width:100%;max-width:340px}.operation-conditions summary{font-weight:400}#policy-mode{font-size:12px}
 
-.group-actions{display:flex;flex-wrap:wrap;gap:8px}.group-search{padding:0 16px 12px}.group-search input{width:100%}.group-editor{padding:16px 28px;border-bottom:1px solid var(--line)}.group-editor form{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:12px;align-items:end}.member-section{margin-bottom:24px}.member-form{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:16px 0}.member-form label{flex:1;min-width:160px}.member-list{display:grid;gap:0}.member-row{display:flex;gap:12px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.member-row select{max-width:220px}.member-row .group-actions{justify-content:end}.operation-family>summary .family-toggle{display:inline-flex}.operation-row input[type=number]{min-height:38px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:8px 10px}dialog{width:min(560px,calc(100vw - 32px));border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);padding:24px}dialog::backdrop{background:rgba(0,0,0,.45)}dialog form{display:grid;gap:16px}dialog .group-actions{justify-content:end}#policy-warning{padding:12px 28px;margin:0}#new-agent-form select{width:100%;margin:8px 0 12px}.token-form{flex-wrap:wrap}.token-form select{width:100%}
+.group-actions{display:flex;flex-wrap:wrap;gap:8px}.group-search{padding:0 16px 12px}.group-search input{width:100%}.group-editor{padding:16px 28px;border-bottom:1px solid var(--line)}.group-editor form{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,1fr) auto;gap:12px;align-items:end}.member-section{margin-bottom:24px}.member-form{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:16px 0}.member-form label{flex:1;min-width:160px}.member-list{display:grid;gap:0}.member-row{display:flex;gap:12px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.member-row select{max-width:220px}.member-row .group-actions{justify-content:end}.operation-family>summary .family-toggle{display:inline-flex}.operation-row input[type=number]{min-height:38px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:8px 10px}dialog{width:min(560px,calc(100vw - 32px));border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);padding:24px}dialog::backdrop{background:var(--overlay-modal,rgb(0 0 0 / 45%))}dialog form{display:grid;gap:16px}dialog .group-actions{justify-content:end}#policy-warning{padding:12px 28px;margin:0}#new-agent-form select{width:100%;margin:8px 0 12px}.token-form{flex-wrap:wrap}.token-form select{width:100%}
 .create-agent-head{display:flex;justify-content:flex-end;margin-bottom:8px}
 @media(max-width:700px){header{flex-wrap:wrap;height:auto;gap:12px;padding:12px 16px}.workspace{display:flex;flex-direction:column;overflow:auto}.workspace aside{border-right:0;border-bottom:1px solid var(--line);max-height:240px;flex:none}.agent-list{display:flex;gap:6px;overflow:auto;min-height:62px}.agent-item{min-width:170px}.detail{min-height:600px;flex:none}.detail-heading{align-items:start;flex-direction:column}.group-editor form{grid-template-columns:1fr}.member-row{align-items:start;flex-direction:column}.member-row .group-actions{justify-content:start}.group-editor{padding:16px 20px}}
 </style>
@@ -170,7 +170,7 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 .auth-permissions .host-choice:hover{background:var(--permission-soft)}
 .auth-permissions .host-choice span{min-width:0;overflow-wrap:anywhere}
 .auth-permissions .host-choice small{margin-top:1px}
-.auth-permissions .access-summary{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.auth-permissions .access-summary{margin:0 0 14px;padding:0 0 12px;border-bottom:1px solid var(--line)}
 .auth-permissions .access-summary h4{font-size:12px;margin:0 0 9px}
 .auth-permissions .summary-list{display:grid;gap:0;margin:0}
 .auth-permissions .summary-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
@@ -226,51 +226,187 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 @media(max-width:840px){.auth-permissions{height:auto;min-height:100dvh;overflow:auto;overflow-x:hidden}.auth-permissions>header{flex-wrap:nowrap;padding-block:10px}.auth-permissions .page-heading,.auth-permissions #feedback,.auth-permissions .workspace{width:calc(100% - 32px)}.auth-permissions .workspace{display:flex;flex-direction:column;grid-template-columns:1fr;overflow:visible}.auth-permissions .workspace>aside{border-right:0;border-bottom:1px solid var(--line);min-height:0;width:100%;max-width:100%;min-width:0}.auth-permissions .agent-list{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:5px;overflow-x:auto;width:100%;max-width:100%;min-width:0;padding-bottom:12px}.auth-permissions .agent-item{margin:0}.auth-permissions .create-agent{max-height:none}.auth-permissions .detail{min-height:0;width:100%;max-width:100%}.auth-permissions .pane,#policy-pane .policy-columns,#policy-pane .action-panel,#policy-pane .scope-panel{overflow:visible}.auth-permissions .permission-toolbar{position:static}.auth-permissions .policy-preview{position:relative}.auth-permissions .save-bar{position:sticky;bottom:0}}
 @media(max-width:780px){.auth-permissions .policy-columns{grid-template-columns:1fr}.auth-permissions .scope-panel{border-left:0;border-top:1px solid var(--line)}.auth-permissions .scope-modes{grid-template-columns:repeat(3,minmax(0,1fr))}.auth-permissions .host-grid{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:14px}.auth-permissions .access-summary{max-width:520px}}
 @media(max-width:620px){.auth-permissions>header{padding:10px 12px;gap:8px}.auth-permissions .brand{font-size:17px}.auth-permissions .page-controls{gap:6px}.auth-permissions .theme-label{display:none}.auth-permissions nav{order:initial;width:auto;overflow:visible}.auth-permissions nav a{min-height:36px;padding-inline:8px}.auth-permissions .page-heading{padding:14px 0 10px;align-items:flex-start;flex-direction:column;gap:10px}.auth-permissions .page-heading form{align-self:stretch}.auth-permissions .role-controls details{width:100%}.auth-permissions .role-controls summary{justify-content:space-between}.auth-permissions .role-controls details>.role-controls{left:0;right:auto;width:100%}.auth-permissions #feedback,.auth-permissions .workspace{width:calc(100% - 24px)}.auth-permissions .workspace{grid-template-columns:1fr}.auth-permissions .detail-heading{padding:16px;flex-direction:column;gap:12px}.auth-permissions .group-actions{justify-content:flex-start}.auth-permissions .tabs{padding:0 12px;overflow-x:auto}.auth-permissions .permission-toolbar{align-items:flex-start;flex-direction:column;gap:8px;padding:14px 16px 10px}.auth-permissions .permission-metrics{width:100%}.auth-permissions .permission-metric{flex:1;min-width:0}.auth-permissions .action-panel,.auth-permissions .scope-panel{padding:16px}.auth-permissions .scope-modes{grid-template-columns:1fr}.auth-permissions .host-grid{grid-template-columns:1fr}.auth-permissions .policy-preview{padding:14px 16px}.auth-permissions .policy-preview-row{display:flex;flex-direction:column;align-items:stretch}.auth-permissions .policy-preview-row label{display:flex}.auth-permissions .policy-preview-row button{width:100%}.auth-permissions .save-bar{flex-wrap:wrap;gap:8px;padding:10px 16px}.auth-permissions .save-bar>div{flex:1 1 100%}.auth-permissions .save-actions{width:auto;margin-left:auto;justify-content:flex-end}.auth-permissions #save-policy{min-width:112px}.auth-permissions .group-editor{padding:16px}.auth-permissions .group-editor form{grid-template-columns:1fr}.auth-permissions .member-row{align-items:flex-start;flex-direction:column}.auth-permissions .token-pane{padding:18px 16px}.auth-permissions .token-form{flex-direction:column;align-items:stretch}.auth-permissions .token-form label{max-width:none}.auth-permissions .token-table{display:block;overflow-x:auto}.auth-permissions .function-grid{grid-template-columns:1fr}.auth-permissions .permission-name{align-items:flex-start;flex-direction:column;gap:2px}.auth-permissions .permission-filter{width:100%;overflow-x:auto}.auth-permissions .permission-filter button{flex:1;white-space:nowrap}}
+.auth-permissions .permission-subject-home,.permission-mobile-subject-detail:empty,.permission-detail-home{display:none}
+.auth-permissions .permission-groups-mobile-toggle{display:flex;border-bottom:1px solid var(--line);background:var(--canvas)}
+.auth-permissions .workspace>aside .permission-mobile-subjects{margin-top:0;border:0;border-top:1px solid var(--line);border-radius:0;background:transparent}
+.auth-permissions .role-controls summary{position:relative}
+.auth-permissions .mcp-help-icon{display:inline-grid;place-items:center;width:16px;height:16px;margin-left:2px;border:1px solid var(--line);border-radius:50%;color:var(--muted);font:600 10px/1 var(--font-mono,ui-monospace,monospace);vertical-align:1px}
+.auth-permissions .mcp-help-icon:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.auth-permissions .mcp-help-tooltip{position:absolute;right:0;top:calc(100% + 8px);z-index:20;width:min(340px,calc(100vw - 48px));padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--paper);color:var(--ink);box-shadow:0 10px 28px var(--shadow-dropdown,rgba(28,36,49,.16));font-size:12px;line-height:1.55;font-weight:450;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity .14s ease,transform .14s ease,visibility .14s;pointer-events:none}
+.auth-permissions .mcp-help-icon:hover~.mcp-help-tooltip,.auth-permissions .mcp-help-icon:focus-visible~.mcp-help-tooltip{opacity:1;visibility:visible;transform:none}
+.permission-group-entry{display:contents}
+.permission-group-body{display:none}
+.permission-mobile-toggle{appearance:none;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:60px;padding:13px 16px;border:0;border-radius:0;background:transparent;text-align:left;color:var(--ink)}
+.permission-mobile-toggle>span{min-width:0}
+.permission-mobile-toggle strong{display:block;font-size:15px;line-height:1.35}
+.permission-mobile-toggle small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.permission-mobile-toggle svg{width:17px;height:17px;flex:none;color:var(--muted);transition:transform .18s ease}
+.permission-mobile-toggle[aria-expanded=true] svg{transform:rotate(180deg)}
+.permission-result-row{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.permission-utility-actions{display:flex;align-items:center;gap:6px;min-width:0}
+.permission-utility-actions button{min-height:34px;padding:4px 9px;font-size:12px}
+.permission-batch{grid-column:1/-1;padding:12px;border:1px solid var(--line);border-radius:7px;background:var(--canvas)}
+.permission-batch-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.permission-batch-check{display:inline-flex;align-items:center;gap:8px;min-height:36px;font-weight:600}
+.permission-batch-count{color:var(--muted);font-size:12px}
+.permission-batch-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+.permission-batch-actions button{min-height:38px;padding:5px 6px;font-size:12px}
+.permission-batch-checkbox{display:inline-grid;place-items:center;width:24px;min-width:24px;height:44px;margin:0;cursor:pointer}
+.permission-row.is-batch .permission-choice.permission-choice-state{grid-template-columns:24px minmax(0,1fr) auto}
+.permission-row.is-batch .permission-copy{min-width:0}
+.permission-mobile-subject-list{display:grid}
+.permission-agent-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:12px 16px 8px;border-top:1px solid var(--line)}
+.permission-agent-tools .search-control{min-width:0}
+.permission-agent-tools input{width:100%;min-height:36px;background:var(--canvas)}
+.permission-agent-tools button{min-height:36px;padding:5px 10px;white-space:nowrap}
+.permission-agent-filter{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;padding:0 16px 12px}
+.permission-agent-filter button{min-height:34px;padding:4px 3px;border-color:transparent;background:transparent;color:var(--muted);font-size:11px;white-space:nowrap}
+.permission-agent-filter button[aria-pressed=true]{border-color:var(--line);background:var(--paper);color:var(--ink)}
+.permission-agent-create-form{display:grid;gap:9px;margin:0 16px 12px;padding:12px;border:1px solid var(--line);border-radius:7px;background:var(--paper)}
+.permission-agent-create-form .group-actions{justify-content:flex-end}
+.permission-mobile-subject-row{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:center;padding:13px 16px;border-top:1px solid var(--line)}
+.permission-mobile-subject-copy{min-width:0}
+.permission-mobile-subject-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.permission-mobile-subject-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px}
+.permission-mobile-subject-controls button{min-width:64px}
+.permission-mobile-subject-row select{width:100%;min-width:0;min-height:36px}
+.permission-mobile-subject-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.permission-mobile-subject-row button{min-height:36px;padding:5px 9px;font-size:12px}
+.permission-mobile-subject-row button.danger{color:var(--error)}
+.permission-mobile-subject-detail{border-top:1px solid var(--line)}
+.auth-permissions .agent-item-chevron{display:none}
+@media(min-width:841px){
+  .auth-permissions .workspace>aside>.permission-groups-mobile-body{display:flex;flex-direction:column;flex:1;min-height:0}
+  .auth-permissions .workspace>aside>.permission-mobile-subjects{display:flex;flex-direction:column;flex:0 1 auto;min-height:0;max-height:52%;overflow:hidden}
+  .auth-permissions .workspace>aside .permission-mobile-subjects-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-bottom:12px}
+}
+@media(max-width:840px){
+  .auth-permissions .workspace{display:block;border:0;background:transparent;overflow:visible}
+  .auth-permissions .workspace>aside{display:block;width:100%;max-width:100%;min-width:0;height:auto;max-height:none!important;border:1px solid var(--line);border-radius:8px;background:var(--paper);overflow:clip}
+  .auth-permissions .permission-groups-mobile-toggle{display:flex;border-bottom:1px solid var(--line)}
+  .permission-groups-mobile-body[hidden],.permission-mobile-subjects-body[hidden]{display:none!important}
+  .auth-permissions .sidebar-head{padding-top:12px}
+  .auth-permissions .agent-list{display:block;overflow:visible;padding:0 12px 12px}
+  .permission-group-entry{display:block;border-top:1px solid var(--line)}
+  .permission-group-entry:first-child{border-top:0}
+  .auth-permissions .agent-item{grid-template-columns:8px minmax(0,1fr) auto;grid-template-areas:"dot title chevron" "dot meta chevron";min-height:64px;margin:0;border:0;border-radius:0;padding:13px 10px}
+  .auth-permissions .agent-item-chevron{display:block;grid-area:chevron;align-self:center;color:var(--muted);transition:transform .18s ease}
+  .auth-permissions .agent-item-chevron svg{display:block;width:17px;height:17px}
+  .auth-permissions .agent-item[aria-expanded=true] .agent-item-chevron{transform:rotate(180deg)}
+  .auth-permissions .agent-item[aria-pressed=true]{background:var(--selected);border-color:transparent}
+  .auth-permissions .agent-item-title{white-space:normal;overflow:visible;text-overflow:clip}
+  .auth-permissions .agent-item small{white-space:normal;overflow:visible}
+  .permission-group-body{display:block;padding:0;border-top:1px solid var(--line);background:var(--paper)}
+  .permission-group-body[hidden]{display:none!important}
+  .auth-permissions .permission-mobile-subjects{display:block;margin-top:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);overflow:clip}
+  .permission-mobile-subjects .permission-mobile-toggle{border-bottom:1px solid var(--line)}
+  .permission-mobile-subjects-body{padding:0}
+  .permission-mobile-subject-detail{padding:0}
+  .permission-mobile-subject-detail .detail{width:100%}
+  .auth-permissions .permission-group-body .detail{min-height:0;width:100%}
+  .auth-permissions .permission-group-body .detail-heading{padding:16px}
+  .auth-permissions .permission-group-body .tabs{padding:0 16px;overflow-x:auto}
+  .auth-permissions .permission-group-body .permission-toolbar{position:static;padding:14px 16px 10px}
+  .auth-permissions .permission-group-body #policy-pane .policy-columns,
+  .auth-permissions .permission-group-body #policy-pane .action-panel,
+  .auth-permissions .permission-group-body #policy-pane .scope-panel,
+  .auth-permissions .permission-group-body .pane{overflow:visible}
+  .auth-permissions .permission-group-body #policy-pane{display:block}
+  .auth-permissions .permission-group-body #select-functions{display:none}
+  .auth-permissions .permission-group-body .save-bar{position:sticky;bottom:0;padding-bottom:max(11px,env(safe-area-inset-bottom))}
+  .auth-permissions .permission-detail-home{display:none}
+}
+@media(max-width:620px){
+  .auth-permissions>header{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand controls" "nav nav";min-height:0;padding:8px 12px;gap:4px 8px}
+  .auth-permissions>header .brand{grid-area:brand}
+  .auth-permissions>header nav{grid-area:nav}
+  .auth-permissions>header .page-controls{grid-area:controls}
+  .auth-permissions .page-heading{padding-top:12px}
+  .auth-permissions .permission-result-row{align-items:flex-start;flex-direction:column}
+  .permission-utility-actions{width:100%}
+  .permission-utility-actions button{flex:1}
+  .permission-mobile-subject-row{grid-template-columns:1fr;align-items:stretch}
+  .permission-mobile-subject-controls{grid-template-columns:minmax(0,1fr) auto}
+  .permission-mobile-subject-row select,.permission-mobile-subject-row button{min-height:44px}
+  .permission-mobile-subject-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .permission-agent-tools{grid-template-columns:1fr}
+  .permission-agent-tools button{min-height:44px}
+  .permission-agent-filter button{min-height:44px;font-size:12px}
+  .auth-permissions .permission-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .auth-permissions .permission-metric{border-left:0;border-top:1px solid var(--line)}
+  .auth-permissions .permission-metric:nth-child(-n+2){border-top:0}
+  .auth-permissions .permission-metric:nth-child(even){border-left:1px solid var(--line)}
+  .auth-permissions .tabs button{flex:1;justify-content:center;min-height:46px}
+  .auth-permissions .permission-filter{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:visible}
+  .auth-permissions .permission-filter button{min-height:44px;padding-inline:2px}
+  .auth-permissions .permission-choice.permission-choice-state{display:flex;flex-direction:column;gap:10px;padding:13px 8px}
+  .auth-permissions .permission-row.is-batch .permission-choice.permission-choice-state{display:grid;grid-template-columns:24px minmax(0,1fr);gap:6px 8px}
+  .auth-permissions .permission-row.is-batch .permission-effect{grid-column:2}
+  .auth-permissions .permission-effect{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}
+  .auth-permissions .permission-effect span{display:grid;place-items:center;min-height:44px;padding:6px 4px;border-left:1px solid var(--line);font-size:12px}
+  .auth-permissions .permission-effect label:first-child span{border-left:0}
+  .auth-permissions .operation-family>summary{min-height:58px;padding-block:11px}
+  .auth-permissions .family-control{gap:6px}
+  .auth-permissions .host-choice{min-height:44px;padding-block:9px}
+  .auth-permissions .save-bar{align-items:stretch;padding-inline:14px}
+  .auth-permissions .save-actions{width:100%;margin-left:0}
+  .auth-permissions .save-actions button{flex:1;min-height:44px}
+  .auth-permissions .mcp-help-tooltip{left:0;right:auto;width:calc(100vw - 48px)}
+  .permission-mobile-toggle{min-height:64px;padding:14px 16px}
+  .permission-batch-actions button{min-height:44px}
+}
 @media(prefers-reduced-motion:reduce){.auth-permissions *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 </style>
 </head>
 <body class="auth-page auth-permissions">
 <header><a class="brand" href="/">Termcp</a><nav aria-label="Breadcrumb"><a class="back-link" href="/"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5"/><path d="M6 8h7"/></svg><span data-text="workspace">工作区</span></a></nav><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div></header>
-<div class="page-heading"><div><h1 data-text="title">权限管理</h1></div><form id="role-form" class="role-controls"><details><summary data-text="instanceAccess">实例访问开关</summary><div class="role-controls"><label><input id="admin-mcp" type="checkbox"><span data-text="adminMCP">管理员 MCP</span></label><label><input id="agent-mcp" type="checkbox"><span data-text="agentMCP">Agent MCP</span></label><button type="submit" data-text="saveRoles">保存开关</button></div></details></form></div>
-<div id="feedback" role="status" aria-live="polite" data-text="intro">选择权限组并配置动作与主机范围，再关联主体和客户端凭据。</div>
+<div class="page-heading"><div><h1 data-text="title">权限管理</h1></div><form id="role-form" class="role-controls"><details><summary><span data-text="instanceAccess">MCP 访问</span><span class="mcp-help-icon" id="mcp-access-help-trigger" tabindex="0" aria-label="MCP 访问说明" aria-describedby="mcp-access-help">?</span><span id="mcp-access-tooltip" class="mcp-help-tooltip" role="tooltip"></span></summary><div class="role-controls"><label><input id="admin-mcp" type="checkbox"><span data-text="adminMCP">管理员 MCP</span></label><label><input id="agent-mcp" type="checkbox"><span data-text="agentMCP">Agent MCP</span></label><button type="submit" data-text="saveRoles">保存开关</button></div></details><span id="mcp-access-help" class="visually-hidden"></span></form></div>
+<div id="feedback" role="status" aria-live="polite" data-text="intro">选择权限组并配置动作与主机范围，再关联Agent和客户端凭据。</div>
 <main class="workspace">
-<aside aria-label="权限组"><div class="sidebar-head"><h2 data-text="groups">权限组</h2><button id="new-agent" type="button" aria-expanded="false" aria-controls="new-agent-form-wrap" data-text="newAgent">新增</button></div><label class="group-search field"><span data-text="searchGroups">筛选权限组</span><input id="group-search" type="text"></label><div id="agent-list" class="agent-list" aria-label="权限组列表"></div><div id="new-agent-form-wrap" class="create-agent" hidden><div class="create-agent-head"><button id="close-new-agent" type="button" data-text="cancel">取消</button></div><form id="new-agent-form"><label class="field"><span data-text="agentName">Agent 名称</span><input id="agent-name" type="text" maxlength="128" required></label><label class="field"><span data-text="preset">角色模板</span><select id="group-preset"></select></label><button class="primary" type="submit" data-text="createAgent">创建并配置权限</button><p id="create-error" class="inline-message" role="alert"></p></form></div></aside>
-<section class="detail"><div id="workspace-empty"><div><h2 data-text="selectAgent">选择一个 Agent</h2><p data-text="emptyHint">从左侧新增 Agent，然后配置功能和主机范围。</p></div></div><div id="detail-heading" class="detail-heading" hidden><div><h2 id="selected-name"></h2><p id="selected-meta" class="status-dot"></p></div><div class="group-actions"><button id="edit-group" class="group-only" type="button" data-text="editGroup">编辑名称</button><button id="clone-group" class="group-only" type="button" data-text="cloneGroup">复制</button><button id="default-group" class="group-only" type="button" data-text="setDefault">设为缺省</button><button id="toggle-agent" type="button"></button><button id="delete-group" class="group-only danger" type="button" data-text="deleteGroup">删除组</button></div></div><section id="group-editor" class="group-editor" hidden><form id="group-details-form"><label class="field"><span data-text="groupName">权限组名称</span><input id="group-name" type="text" required maxlength="128"></label><label class="field"><span data-text="description">说明</span><input id="group-description" type="text" maxlength="2048"></label><button type="submit" data-text="saveDetails">保存名称与说明</button></form></section><section id="clone-editor" class="group-editor" hidden><form id="clone-form"><label class="field"><span data-text="copyName">新组名称</span><input id="clone-name" type="text" required maxlength="128"></label><p data-text="cloneHint">复制当前策略，不复制成员或凭据。</p><button type="submit" data-text="cloneGroup">复制组</button></form></section><div id="tabs" class="tabs" role="tablist" aria-label="权限组配置" hidden><button id="policy-tab" type="button" role="tab" aria-controls="policy-pane" aria-selected="true" data-text="policy">权限配置</button><button id="tokens-tab" type="button" role="tab" aria-controls="tokens-pane" aria-selected="false" data-text="tokens">Tokens</button></div>
+<aside aria-label="权限组"><button id="permission-groups-mobile-toggle" class="permission-mobile-toggle permission-groups-mobile-toggle" type="button" aria-expanded="true" aria-controls="permission-groups-mobile-body"><span><strong data-text="mobileGroups">权限组管理</strong><small id="permission-groups-summary"></small></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div id="permission-groups-mobile-body" class="permission-groups-mobile-body"><div class="sidebar-head"><h2 data-text="groups">权限组</h2><button id="new-agent" type="button" aria-expanded="false" aria-controls="new-agent-form-wrap" data-text="newAgent">新增</button></div><label class="group-search field"><span data-text="searchGroups">筛选权限组</span><input id="group-search" type="text"></label><div id="agent-list" class="agent-list" aria-label="权限组列表"></div><div id="new-agent-form-wrap" class="create-agent" hidden><div class="create-agent-head"><button id="close-new-agent" type="button" data-text="cancel">取消</button></div><form id="new-agent-form"><label class="field"><span data-text="agentName">Agent 名称</span><input id="agent-name" type="text" maxlength="128" required></label><label class="field"><span data-text="preset">角色模板</span><select id="group-preset"></select></label><button class="primary" type="submit" data-text="createAgent">创建并配置权限</button><p id="create-error" class="inline-message" role="alert"></p></form></div></div></aside>
+<div id="permission-subject-home" class="permission-subject-home" aria-hidden="true"></div>
+<section id="permission-mobile-subjects" class="permission-mobile-subjects" aria-label="Agent 管理"><button id="permission-subjects-mobile-toggle" class="permission-mobile-toggle" type="button" aria-expanded="false" aria-controls="permission-subjects-mobile-body"><span><strong data-text="mobileSubjects">Agent 管理</strong><small id="permission-subjects-summary"></small></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div id="permission-subjects-mobile-body" class="permission-mobile-subjects-body" hidden><div class="permission-agent-tools"><label class="field"><span class="visually-hidden" data-text="searchAgents">搜索 Agent</span><input id="permission-agent-search" type="search" autocomplete="off"></label><button id="permission-agent-create-toggle" type="button" data-text="newAgentButton">新增 Agent</button></div><div id="permission-agent-filter" class="permission-agent-filter" role="group" aria-label="Agent 状态"><button type="button" data-agent-filter="all" aria-pressed="true" data-text="allAgents">全部</button><button type="button" data-agent-filter="enabled" aria-pressed="false" data-text="enabledAgents">已启用</button><button type="button" data-agent-filter="disabled" aria-pressed="false" data-text="disabledAgents">已停用</button><button type="button" data-agent-filter="unassigned" aria-pressed="false" data-text="unassignedAgents">待分配</button></div><form id="permission-agent-create-form" class="permission-agent-create-form" hidden><label class="field"><span data-text="agentDisplayName">Agent 名称</span><input id="permission-agent-name" type="text" maxlength="128" required></label><label class="field"><span data-text="permissionGroup">权限组</span><select id="permission-agent-group"></select></label><div class="group-actions"><button type="button" id="permission-agent-create-cancel" data-text="cancel">取消</button><button class="primary" type="submit" data-text="createAgentAction">创建 Agent</button></div><p id="permission-agent-create-error" class="inline-message" role="alert"></p></form><div id="permission-mobile-subject-list" class="permission-mobile-subject-list"></div><div id="permission-mobile-subject-detail" class="permission-mobile-subject-detail"></div></div></section>
+<div id="permission-detail-home" class="permission-detail-home" aria-hidden="true"></div>
+<section class="detail"><div id="workspace-empty"><div><h2 data-text="selectAgent">选择一个 Agent</h2><p data-text="emptyHint">从左侧新增 Agent，然后配置功能和主机范围。</p></div></div><div id="detail-heading" class="detail-heading" hidden><div><h2 id="selected-name"></h2><p id="selected-meta" class="status-dot"></p></div><div class="group-actions"><button id="edit-group" class="group-only" type="button" data-text="editGroup">编辑名称</button><button id="clone-group" class="group-only" type="button" data-text="cloneGroup">复制</button><button id="default-group" class="group-only" type="button" data-text="setDefault">设为缺省</button><button id="toggle-agent" type="button"></button><button id="delete-group" class="group-only danger" type="button" data-text="deleteGroup">删除组</button></div></div><section id="group-editor" class="group-editor" hidden><form id="group-details-form"><label class="field"><span data-text="groupName">权限组名称</span><input id="group-name" type="text" required maxlength="128"></label><label class="field"><span data-text="description">说明</span><input id="group-description" type="text" maxlength="2048"></label><button type="submit" data-text="saveDetails">保存名称与说明</button></form></section><section id="clone-editor" class="group-editor" hidden><form id="clone-form"><label class="field"><span data-text="copyName">新组名称</span><input id="clone-name" type="text" required maxlength="128"></label><p data-text="cloneHint">复制当前策略，不复制 Agent或凭据。</p><button type="submit" data-text="cloneGroup">复制组</button></form></section><div id="tabs" class="tabs" role="tablist" aria-label="权限组配置" hidden><button id="policy-tab" type="button" role="tab" aria-controls="policy-pane" aria-selected="true" data-text="policy">权限配置</button><button id="tokens-tab" type="button" role="tab" aria-controls="tokens-pane" aria-selected="false" data-text="tokens">Tokens</button></div>
 <div id="policy-pane" class="pane" role="tabpanel" aria-labelledby="policy-tab" hidden><p id="policy-warning" class="inline-message" role="status" hidden></p><div class="policy-columns"><section><div class="section-head"><h3 data-text="operationPolicy">动作权限</h3><button id="select-functions" type="button" data-text="selectAll">全选</button></div><p id="policy-mode"></p><div id="function-grid" class="function-grid"></div><p class="policy-note" data-text="terminalNote">终端命令可读写文件和访问网络；这些开关不提供系统沙箱。</p></section><section><div class="section-head"><h3 data-text="hosts">可访问主机</h3><span id="host-count" class="status-dot"></span></div><div id="host-modes" class="scope-modes"><label><input type="radio" name="host-mode" value="all"><span data-text="allHosts">全部主机</span></label><label><input type="radio" name="host-mode" value="selected"><span data-text="selectedHosts">指定主机</span></label><label><input type="radio" name="host-mode" value="none"><span data-text="noHosts">无主机</span></label></div><p id="scope-note"></p><div id="host-picker"><label class="field"><span data-text="searchHosts">筛选主机</span><input id="host-search" type="text"></label><div id="host-grid" class="host-grid"></div></div><p class="policy-note" data-text="globalNote">修改主机配置和管理扩展需要“全部主机”范围。</p></section></div></div>
 <section id="policy-preview" class="policy-preview" hidden><div class="policy-preview-row"><label class="field"><span data-text="previewTitle">只读权限预览</span><textarea id="preview-command" spellcheck="false" placeholder="run &lt;channel&gt; ..."></textarea></label><button id="run-policy-preview" type="button" data-text="previewRun">预览</button></div><pre id="policy-preview-result" aria-live="polite" hidden></pre></section>
 <div id="policy-save-bar" class="save-bar" hidden><div><p id="save-state"></p><p id="policy-error" class="inline-message" role="alert"></p></div><button id="save-policy" class="primary" type="button" data-text="savePolicy">保存权限</button></div>
-<div id="tokens-pane" class="pane token-pane" role="tabpanel" aria-labelledby="tokens-tab" hidden><section id="members-section" class="member-section"><h3 data-text="members">成员</h3><form id="member-form" class="member-form"><label class="field"><span data-text="memberName">主体名称</span><input id="member-name" type="text" maxlength="128" required></label><button type="submit" data-text="addMember">添加主体</button></form><div id="member-list" class="member-list"></div><p id="member-error" class="inline-message" role="alert"></p></section><h3 data-text="credentials">客户端凭据</h3><p data-text="tokenHint">每个客户端可以使用独立 token，撤销时只断开对应连接。</p><form id="token-form" class="token-form"><label id="token-principal-field" class="field"><span data-text="credentialPrincipal">所属主体</span><select id="token-principal"></select></label><label class="field"><span data-text="clientName">客户端名称</span><input id="token-label" type="text" required maxlength="128"></label><button class="primary" type="submit" data-text="issueToken">签发 token</button></form><p id="token-error" class="inline-message" role="alert"></p><section id="token-result" class="token-result" hidden><div class="result-heading"><div><h3 data-text="copyNow">请立即保存配置</h3><p data-text="oneTime">Token 只展示一次，离开页面前请保存。</p></div><button id="dismiss-token" type="button" data-text="savedClose">已保存，关闭</button></div><label class="field"><span data-text="connection">接入方式</span><select id="config-mode"><option value="http">HTTP /stream</option><option value="sse">SSE /sse</option><option value="stdio">stdio → HTTP</option><option value="daemon">daemon stdio</option></select></label><label class="field"><span data-text="configuration">MCP 配置</span><textarea id="token-config" readonly spellcheck="false"></textarea></label><div class="result-actions"><button id="copy-config" type="button" data-text="copyConfig">复制配置</button><span id="copy-state" role="status"></span></div></section><table class="token-table"><thead><tr><th data-text="clientName">客户端名称</th><th data-text="createdAt">创建日期</th><th data-text="actions">操作</th></tr></thead><tbody id="token-list"></tbody></table><p id="tokens-empty" data-text="noTokens" hidden>尚无 token。保存权限后，为客户端签发 token。</p></div>
+<div id="tokens-pane" class="pane token-pane" role="tabpanel" aria-labelledby="tokens-tab" hidden><section id="members-section" class="member-section"><h3 data-text="members">Agents</h3><form id="member-form" class="member-form"><label class="field"><span data-text="memberName">Agent 名称</span><input id="member-name" type="text" maxlength="128" required></label><button type="submit" data-text="addMember">添加 Agent</button></form><div id="member-list" class="member-list"></div><p id="member-error" class="inline-message" role="alert"></p></section><h3 data-text="credentials">客户端凭据</h3><p data-text="tokenHint">每个客户端使用独立 Token，可单独撤销。</p><form id="token-form" class="token-form"><label id="token-principal-field" class="field"><span data-text="credentialPrincipal">所属 Agent</span><select id="token-principal"></select></label><label class="field"><span data-text="clientName">客户端名称</span><input id="token-label" type="text" required maxlength="128"></label><button class="primary" type="submit" data-text="issueToken">签发 token</button></form><p id="token-error" class="inline-message" role="alert"></p><section id="token-result" class="token-result" hidden><div class="result-heading"><div><h3 data-text="copyNow">请立即保存配置</h3><p data-text="oneTime">Token 只展示一次，离开页面前请保存。</p></div><button id="dismiss-token" type="button" data-text="savedClose">已保存，关闭</button></div><label class="field"><span data-text="connection">接入方式</span><select id="config-mode"><option value="http">HTTP /stream</option><option value="sse">SSE /sse</option><option value="stdio">stdio → HTTP</option><option value="daemon">daemon stdio</option></select></label><label class="field"><span data-text="configuration">MCP 配置</span><textarea id="token-config" readonly spellcheck="false"></textarea></label><div class="result-actions"><button id="copy-config" type="button" data-text="copyConfig">复制配置</button><span id="copy-state" role="status"></span></div></section><table class="token-table"><thead><tr><th data-text="clientName">客户端名称</th><th data-text="createdAt">创建日期</th><th data-text="actions">操作</th></tr></thead><tbody id="token-list"></tbody></table><p id="tokens-empty" data-text="noTokens" hidden>尚无 token。保存权限后，为客户端签发 token。</p></div>
 </section></main>
-<dialog id="delete-dialog" aria-labelledby="delete-title"><form id="delete-form"><h2 id="delete-title" data-text="deleteGroup">删除权限组</h2><p id="delete-summary"></p><label id="delete-resolution-field" class="field"><span data-text="resolveMembers">处理现有成员</span><select id="delete-resolution"><option value="deny" data-text="denyMembers">解除绑定并拒绝访问</option><option value="move" data-text="moveMembers">迁移到指定组</option></select></label><label id="delete-replacement-field" class="field" hidden><span data-text="replacementGroup">成员迁移到</span><select id="delete-replacement"></select></label><label id="delete-default-field" class="field" hidden><span data-text="replacementDefault">新的缺省组</span><select id="delete-default"></select></label><p id="delete-error" class="inline-message" role="alert"></p><div class="group-actions"><button id="cancel-delete" type="button" data-text="cancel">取消</button><button id="refresh-delete" type="button" data-text="refreshPreview">重新预览</button><button class="danger" type="submit" data-text="confirmDelete">确认删除</button></div></form></dialog><script nonce="{{.Nonce}}">
+<dialog id="delete-dialog" aria-labelledby="delete-title"><form id="delete-form"><h2 id="delete-title" data-text="deleteGroup">删除权限组</h2><p id="delete-summary"></p><label id="delete-resolution-field" class="field"><span data-text="resolveMembers">处理现有 Agent</span><select id="delete-resolution"><option value="deny" data-text="denyMembers">解除绑定并拒绝访问</option><option value="move" data-text="moveMembers">修改到指定权限组</option></select></label><label id="delete-replacement-field" class="field" hidden><span data-text="replacementGroup">权限组</span><select id="delete-replacement"></select></label><label id="delete-default-field" class="field" hidden><span data-text="replacementDefault">新的缺省组</span><select id="delete-default"></select></label><p id="delete-error" class="inline-message" role="alert"></p><div class="group-actions"><button id="cancel-delete" type="button" data-text="cancel">取消</button><button id="refresh-delete" type="button" data-text="refreshPreview">重新预览</button><button class="danger" type="submit" data-text="confirmDelete">确认删除</button></div></form></dialog>
+<dialog id="delete-agent-dialog" aria-labelledby="delete-agent-title"><form id="delete-agent-form"><h2 id="delete-agent-title" data-text="deleteAgent">删除 Agent</h2><p id="delete-agent-summary"></p><p class="policy-note" data-text="deleteAgentHint"></p><p id="delete-agent-error" class="inline-message" role="alert"></p><div class="group-actions"><button id="cancel-delete-agent" type="button" data-text="cancel">取消</button><button id="refresh-delete-agent" type="button" data-text="refreshPreview">重新预览</button><button class="danger" type="submit" data-text="confirmDelete">确认删除</button></div></form></dialog><script nonce="{{.Nonce}}">
 'use strict';
 const $=id=>document.getElementById(id);
-let lang=/^zh/i.test(navigator.language)?'zh':'en',state=null,roles=null,agents=[],tokens=[],catalog={operations:[],hosts:[]},selected=null,draft=null,original='',tab='policy',revealed=null,busy=false,principals=[],presets=[],defaultGroupID='',accessRevision=0,deletePlan=null;
-const copy={zh:{title:'权限管理',workspace:'工作区',instanceAccess:'实例访问开关',adminMCP:'管理员 MCP',agentMCP:'Agent MCP',saveRoles:'保存开关',intro:'选择权限组并配置动作与主机范围，再关联主体和客户端凭据。',newAgent:'新增',agentName:'Agent 名称',createAgent:'创建并配置权限',selectAgent:'选择一个 Agent',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联成员和客户端凭据。',policy:'权限配置',tokens:'Tokens',operationPolicy:'动作权限',selectAll:'全选',clearAll:'清空',hosts:'可访问主机',allHosts:'全部主机',selectedHosts:'指定主机',noHosts:'无主机',searchHosts:'筛选主机',globalNote:'修改主机配置和管理扩展需要“全部主机”范围。',terminalNote:'终端命令可读写文件和访问网络；这些开关不提供系统沙箱。',savePolicy:'保存权限',tokenHint:'每个客户端可以使用独立 token，撤销时只断开对应连接。',clientName:'客户端名称',issueToken:'签发 token',copyNow:'请立即保存配置',oneTime:'Token 只展示一次，离开页面前请保存。',savedClose:'已保存，关闭',connection:'接入方式',configuration:'MCP 配置',copyConfig:'复制配置',createdAt:'创建日期',actions:'操作',noTokens:'尚无 token。保存权限后，为客户端签发 token。',admin:'管理员（我）',enabled:'已启用',disabled:'已停用',disable:'停用 Agent',enable:'启用 Agent',saved:'已保存',unsaved:'有未保存的权限更改',policySaved:'权限已保存，客户端下次请求按新权限执行。',working:'正在保存…',network:'连接失败，请检查服务是否运行后重试。',revoke:'撤销',revokeConfirm:'撤销此 token 并断开对应客户端连接？',discard:'放弃未保存的权限更改？',saveFirst:'请先保存或关闭当前展示的 token。',copied:'配置已复制',manualCopy:'请手动复制已选中的配置。',created:'权限组已创建，未添加成员或签发凭据。',roleSaved:'实例访问开关已保存。',noneHint:'不允许访问任何主机。',selectedHint:'仅允许勾选的已保存主机；空选即无主机权限。',allHint:'允许访问当前及以后新增的已保存主机。',missing:'已删除或不可用的主机',noMatches:'没有匹配的主机。',globalRemoved:'指定主机模式下已取消“修改主机配置”和“管理扩展”。',tokenSaved:'Token 已签发，请立即保存配置。',loading:'正在加载权限…',adminHint:'管理员身份保留管理权限；此处仅管理管理员的 MCP token。',saveBeforeToken:'请先保存当前权限，再签发 token。'},en:{title:'Permission management',workspace:'Workspace',instanceAccess:'Instance access',adminMCP:'Admin MCP',agentMCP:'Agent MCP',saveRoles:'Save switches',intro:'Choose a group, configure actions and host scope, then associate principals and credentials.',newAgent:'New',agentName:'Agent name',createAgent:'Create and configure',selectAgent:'Select an Agent',emptyHint:'Choose a group to configure actions and host scope, then associate principals and credentials.',policy:'Permissions',tokens:'Tokens',operationPolicy:'Action permissions',selectAll:'Select all',clearAll:'Clear',hosts:'Accessible hosts',allHosts:'All hosts',selectedHosts:'Selected hosts',noHosts:'No hosts',searchHosts:'Filter hosts',globalNote:'Profile changes and extension management require all hosts.',terminalNote:'Terminal commands can access files and networks using the host’s OS permissions.',savePolicy:'Save permissions',tokenHint:'Use a separate token for each client to revoke connections independently.',clientName:'Client name',issueToken:'Issue token',copyNow:'Save this configuration now',oneTime:'The token is shown once. Save it before leaving.',savedClose:'Saved, close',connection:'Connection',configuration:'MCP configuration',copyConfig:'Copy configuration',createdAt:'Created',actions:'Actions',noTokens:'No tokens yet. Save permissions, then issue a client token.',admin:'Administrator (me)',enabled:'Enabled',disabled:'Disabled',disable:'Disable Agent',enable:'Enable Agent',saved:'Saved',unsaved:'Unsaved permission changes',policySaved:'Permissions saved. Subsequent client requests use the new policy.',working:'Saving…',network:'Connection failed. Check the server, then retry.',revoke:'Revoke',revokeConfirm:'Revoke this token and disconnect its clients?',discard:'Discard unsaved permission changes?',saveFirst:'Save or dismiss the displayed token first.',copied:'Configuration copied',manualCopy:'Copy the selected configuration manually.',created:'Group created with no members or credentials.',roleSaved:'Instance access saved.',noneHint:'No hosts are accessible.',selectedHint:'Only checked saved hosts are accessible. An empty selection grants none.',allHint:'Includes current and future saved hosts.',missing:'Deleted or unavailable host',noMatches:'No matching hosts.',globalRemoved:'Profile changes and extension management were deselected for selected hosts.',tokenSaved:'Token issued. Save the configuration now.',loading:'Loading permissions…',adminHint:'Admin retains management permissions. This view manages MCP tokens only.',saveBeforeToken:'Save the current permissions before issuing a token.'}};
+let lang=/^zh/i.test(navigator.language)?'zh':'en',state=null,roles=null,agents=[],tokens=[],catalog={operations:[],hosts:[]},selected=null,draft=null,original='',tab='policy',revealed=null,busy=false,principals=[],presets=[],defaultGroupID='',accessRevision=0,deletePlan=null,principalDeletePlan=null;
+const copy={zh:{title:'权限管理',workspace:'工作区',instanceAccess:'MCP 访问',adminMCP:'管理员 MCP',agentMCP:'Agent MCP',saveRoles:'保存开关',intro:'按权限组配置 Agent 的能力与主机范围。',newAgent:'新增',agentName:'Agent 名称',createAgent:'创建并配置权限',selectAgent:'选择一个 Agent',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联 Agent和客户端凭据。',policy:'权限配置',tokens:'Tokens',operationPolicy:'动作权限',selectAll:'全选',clearAll:'清空',hosts:'可访问主机',allHosts:'全部主机',selectedHosts:'指定主机',noHosts:'无主机',searchHosts:'筛选主机',globalNote:'修改主机配置和管理扩展需要“全部主机”范围。',terminalNote:'终端命令可读写文件和访问网络；这些开关不提供系统沙箱。',savePolicy:'保存权限',tokenHint:'每个客户端使用独立 Token，可单独撤销。',clientName:'客户端名称',issueToken:'签发 token',copyNow:'请立即保存配置',oneTime:'Token 只展示一次，离开页面前请保存。',savedClose:'已保存，关闭',connection:'接入方式',configuration:'MCP 配置',copyConfig:'复制配置',createdAt:'创建日期',actions:'操作',noTokens:'尚无 token。保存权限后，为客户端签发 token。',admin:'管理员（我）',enabled:'已启用',disabled:'已停用',disable:'停用 Agent',enable:'启用 Agent',saved:'已保存',unsaved:'有未保存的权限更改',policySaved:'权限已保存，客户端下次请求按新权限执行。',working:'正在保存…',network:'连接失败，请检查服务是否运行后重试。',revoke:'撤销',revokeConfirm:'撤销此 token 并断开对应客户端连接？',discard:'放弃未保存的权限更改？',saveFirst:'请先保存或关闭当前展示的 token。',copied:'配置已复制',manualCopy:'请手动复制已选中的配置。',created:'权限组已创建，未添加 Agent或签发凭据。',roleSaved:'MCP 访问开关已保存。',noneHint:'不允许访问任何主机。',selectedHint:'仅允许勾选的已保存主机；空选即无主机权限。',allHint:'允许访问当前及以后新增的已保存主机。',missing:'已删除或不可用的主机',noMatches:'没有匹配的主机。',globalRemoved:'指定主机模式下已取消“修改主机配置”和“管理扩展”。',tokenSaved:'Token 已签发，请立即保存配置。',loading:'正在加载权限…',adminHint:'管理员身份保留管理权限；此处仅管理管理员的 MCP token。',saveBeforeToken:'请先保存当前权限，再签发 token。'},en:{title:'Permission management',workspace:'Workspace',instanceAccess:'MCP access',adminMCP:'Admin MCP',agentMCP:'Agent MCP',saveRoles:'Save switches',intro:'Configure Agent capabilities and host scope by permission group.',newAgent:'New',agentName:'Agent name',createAgent:'Create and configure',selectAgent:'Select an Agent',emptyHint:'Choose a group to configure actions and host scope, then associate Agents and credentials.',policy:'Permissions',tokens:'Tokens',operationPolicy:'Action permissions',selectAll:'Select all',clearAll:'Clear',hosts:'Accessible hosts',allHosts:'All hosts',selectedHosts:'Selected hosts',noHosts:'No hosts',searchHosts:'Filter hosts',globalNote:'Profile changes and extension management require all hosts.',terminalNote:'Terminal commands can access files and networks using the host’s OS permissions.',savePolicy:'Save permissions',tokenHint:'Each client uses its own revocable Token.',clientName:'Client name',issueToken:'Issue token',copyNow:'Save this configuration now',oneTime:'The token is shown once. Save it before leaving.',savedClose:'Saved, close',connection:'Connection',configuration:'MCP configuration',copyConfig:'Copy configuration',createdAt:'Created',actions:'Actions',noTokens:'No tokens yet. Save permissions, then issue a client token.',admin:'Administrator (me)',enabled:'Enabled',disabled:'Disabled',disable:'Disable Agent',enable:'Enable Agent',saved:'Saved',unsaved:'Unsaved permission changes',policySaved:'Permissions saved. Subsequent client requests use the new policy.',working:'Saving…',network:'Connection failed. Check the server, then retry.',revoke:'Revoke',revokeConfirm:'Revoke this token and disconnect its clients?',discard:'Discard unsaved permission changes?',saveFirst:'Save or dismiss the displayed token first.',copied:'Configuration copied',manualCopy:'Copy the selected configuration manually.',created:'Group created with no members or credentials.',roleSaved:'MCP access switches saved.',noneHint:'No hosts are accessible.',selectedHint:'Only checked saved hosts are accessible. An empty selection grants none.',allHint:'Includes current and future saved hosts.',missing:'Deleted or unavailable host',noMatches:'No matching hosts.',globalRemoved:'Profile changes and extension management were deselected for selected hosts.',tokenSaved:'Token issued. Save the configuration now.',loading:'Loading permissions…',adminHint:'Admin retains management permissions. This view manages MCP tokens only.',saveBeforeToken:'Save the current permissions before issuing a token.'}};
 Object.assign(copy.zh,{finePolicy:'按实际动作授权，未勾选的动作禁止。',conditions:'参数条件',unlimited:'不限；多个值用英文逗号分隔，[] 表示空集合',recipe:'run 需要输入、Enter 和输出；connect 需要建连及打开通道。新增动作默认禁止。',keys:'允许的按键',repeat_max:'最多重复次数',tool_names:'允许的工具名',methods:'允许的方法',forms:'允许的形式（inline / local / pipe）',max_bytes:'单次最大字节数（未知长度拒绝）',globalNote:'修改共享主机、扩展定义和公共别名需要“全部主机”范围。',globalRemoved:'共享配置写操作已取消勾选。'});
 Object.assign(copy.en,{finePolicy:'Authorize actual operations. Unchecked operations are denied.',conditions:'Parameter conditions',unlimited:'Unrestricted; comma-separated values, [] for an empty set',recipe:'run needs input, Enter and output; connect needs session start and channel open. New operations are denied.',keys:'Allowed keys',repeat_max:'Maximum repeat',tool_names:'Allowed tool names',methods:'Allowed methods',forms:'Allowed forms (inline / local / pipe)',max_bytes:'Maximum bytes per call (unknown size refused)',globalNote:'Shared profile, extension definition and alias changes require all hosts.',globalRemoved:'Shared configuration writes were deselected.'});
 Object.assign(copy.zh,{previewTitle:'只读预览',previewRun:'预览',previewEmpty:'请输入要预览的命令。',previewAllowed:'允许',previewDenied:'拒绝',previewNotRun:'未执行',previewResource:'资源检查',accessDSL:'DSL',accessTool:'工具',accessWebUI:'WebUI',accessInternal:'内部',riskHigh:'高风险',riskElevated:'敏感',requires:'依赖'});
 Object.assign(copy.en,{previewTitle:'Read-only preview',previewRun:'Preview',previewEmpty:'Enter a command to preview.',previewAllowed:'Allowed',previewDenied:'Denied',previewNotRun:'Not executed',previewResource:'Resource check',accessDSL:'DSL',accessTool:'tool',accessWebUI:'WebUI',accessInternal:'internal',riskHigh:'high risk',riskElevated:'sensitive',requires:'requires'});
 Object.assign(copy.zh,{policyReview:'旧权限需要复核',policyReviewNotice:'旧配置中的部分操作已出于安全暂时停用。请逐项确认权限并保存：'});
 Object.assign(copy.en,{policyReview:'Policy review required',policyReviewNotice:'Parts of an older policy were disabled for safety. Review the permissions and save them:'});
-Object.assign(copy.zh,{unassigned:'待分配主体',unassignedHint:'这些主体已解除策略绑定，凭据不能认证。迁移到有效权限组后可以重新使用。',noUnassigned:'没有待分配主体。',groups:'权限组',searchGroups:'筛选权限组',preset:'角色模板',groupName:'权限组名称',agentName:'权限组名称',createAgent:'创建权限组',selectAgent:'选择一个权限组',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联成员和客户端凭据。',intro:'选择权限组配置统一策略，成员身份与凭据各自保留。',created:'权限组已创建，未添加成员或签发凭据。',tokens:'成员与凭据',credentials:'客户端凭据',members:'成员',memberName:'主体名称',addMember:'添加主体',credentialPrincipal:'所属主体',description:'说明',editGroup:'编辑名称',cloneGroup:'复制组',deleteGroup:'删除权限组',setDefault:'设为缺省',isDefault:'缺省组',saveDetails:'保存名称与说明',copyName:'新组名称',cloneHint:'复制当前策略，不复制成员或凭据。',cancel:'取消',confirmDelete:'确认删除',refreshPreview:'重新预览',resolveMembers:'处理现有成员',denyMembers:'解除绑定并拒绝访问',moveMembers:'迁移到指定组',replacementGroup:'成员迁移到',replacementDefault:'新的缺省组',memberCount:'个成员',credentialCount:'个凭据',activeCount:'个活动请求',workCount:'项后台工作',deleteHint:'删除将取消关联凭据的活动请求及后台传输；历史回执和已写入的数据保留。',move:'迁移',followDefault:'跟随缺省组',denyBinding:'拒绝访问',noMembers:'此组尚无主体。添加主体后才能为客户端签发凭据。',disable:'停用组',enable:'启用组',memberDisable:'停用主体',memberEnable:'启用主体',policySaved:'组策略已保存，关联成员的活动访问已撤销，新请求使用当前策略。',noTokens:'尚无客户端凭据。先关联主体，再签发 token。',noGroupMatches:'没有匹配的权限组。'});
-Object.assign(copy.en,{unassigned:'Unassigned principals',unassignedHint:'These principals have no active policy binding. Move them to a valid group to restore access.',noUnassigned:'No unassigned principals.',groups:'Permission groups',searchGroups:'Filter groups',preset:'Role preset',groupName:'Group name',agentName:'Group name',createAgent:'Create group',selectAgent:'Select a permission group',emptyHint:'Choose a group, configure actions and host scope, then associate principals and credentials.',intro:'Groups share policy while principals and credentials retain their identities.',created:'Group created with no members or credentials.',tokens:'Members & credentials',credentials:'Client credentials',members:'Members',memberName:'Principal name',addMember:'Add principal',credentialPrincipal:'Principal',description:'Description',editGroup:'Edit name',cloneGroup:'Clone group',deleteGroup:'Delete group',setDefault:'Make default',isDefault:'Default',saveDetails:'Save name and description',copyName:'New group name',cloneHint:'Copies the policy without members or credentials.',cancel:'Cancel',confirmDelete:'Confirm deletion',refreshPreview:'Refresh preview',resolveMembers:'Existing members',denyMembers:'Unbind and deny access',moveMembers:'Move to another group',replacementGroup:'Move members to',replacementDefault:'New default group',memberCount:'members',credentialCount:'credentials',activeCount:'active requests',workCount:'background operations',deleteHint:'Revokes active credential requests and background transfers. Receipts and already-written data remain.',move:'Move',followDefault:'Follow default group',denyBinding:'Deny access',noMembers:'No principals in this group. Add one before issuing client credentials.',disable:'Disable group',enable:'Enable group',memberDisable:'Disable principal',memberEnable:'Enable principal',policySaved:'Group policy saved. Active member access ended; new requests use the current policy.',noTokens:'No client credentials yet. Associate a principal before issuing a token.',noGroupMatches:'No matching groups.'});
+Object.assign(copy.zh,{unassigned:'待分配 Agent',unassignedHint:'这些Agent已解除策略绑定，凭据不能认证。修改到有效权限组后可以重新使用。',noUnassigned:'没有待分配 Agent。',groups:'权限组',searchGroups:'筛选权限组',preset:'角色模板',groupName:'权限组名称',agentName:'权限组名称',createAgent:'创建权限组',selectAgent:'选择一个权限组',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联 Agent和客户端凭据。',intro:'按权限组配置 Agent 能力，身份与凭据独立保存。',created:'权限组已创建，未添加 Agent或签发凭据。',tokens:'Agent 与凭据',credentials:'客户端凭据',members:'成员',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',description:'说明',editGroup:'编辑名称',cloneGroup:'复制组',deleteGroup:'删除权限组',setDefault:'设为缺省',isDefault:'缺省组',saveDetails:'保存名称与说明',copyName:'新组名称',cloneHint:'复制当前策略，不复制 Agent或凭据。',cancel:'取消',confirmDelete:'确认删除',refreshPreview:'重新预览',resolveMembers:'处理现有 Agent',denyMembers:'解除绑定并拒绝访问',moveMembers:'修改到指定权限组',replacementGroup:'权限组',replacementDefault:'新的缺省组',memberCount:'个成员',credentialCount:'个凭据',activeCount:'个活动请求',workCount:'项后台工作',deleteHint:'删除会撤销关联请求和后台工作；已写入的数据保留。',move:'修改',followDefault:'跟随缺省组',denyBinding:'拒绝访问',noMembers:'此组尚无 Agent。添加 Agent后才能为客户端签发凭据。',disable:'停用组',enable:'启用组',memberDisable:'停用Agent',memberEnable:'启用Agent',policySaved:'组策略已保存，关联 Agent的活动访问已撤销，新请求使用当前策略。',noTokens:'尚无客户端凭据。先关联Agent，再签发 token。',noGroupMatches:'没有匹配的权限组。'});
+Object.assign(copy.en,{unassigned:'Unassigned Agents',unassignedHint:'No active permission group; credentials are unavailable.',noUnassigned:'No unassigned principals.',groups:'Permission groups',searchGroups:'Filter groups',preset:'Role preset',groupName:'Group name',agentName:'Group name',createAgent:'Create group',selectAgent:'Select a permission group',emptyHint:'Choose a group, configure actions and host scope, then associate Agents and credentials.',intro:'Groups share Agent capabilities; identities and credentials stay independent.',created:'Group created with no Agents or credentials.',tokens:'Agents & credentials',credentials:'Client credentials',members:'Agents',memberName:'Agent name',addMember:'Add Agent',credentialPrincipal:'Agent',description:'Description',editGroup:'Edit name',cloneGroup:'Clone group',deleteGroup:'Delete group',setDefault:'Make default',isDefault:'Default',saveDetails:'Save name and description',copyName:'New group name',cloneHint:'Copies the policy without Agents or credentials.',cancel:'Cancel',confirmDelete:'Confirm deletion',refreshPreview:'Refresh preview',resolveMembers:'Existing Agents',denyMembers:'Unbind and deny access',moveMembers:'Move to another group',replacementGroup:'Change Agents to',replacementDefault:'New default group',memberCount:'Agents',credentialCount:'credentials',activeCount:'active requests',workCount:'background operations',deleteHint:'Revokes related requests and background work; written data remains.',move:'Move',followDefault:'Follow default group',denyBinding:'Deny access',noMembers:'No Agents in this group. Add one before issuing client credentials.',disable:'Disable group',enable:'Enable group',memberDisable:'Disable Agent',memberEnable:'Enable Agent',policySaved:'Group policy saved. Active member access ended; new requests use the current policy.',noTokens:'No client credentials yet. Associate an Agent before issuing a token.',noGroupMatches:'No matching groups.'});
 Object.assign(copy.en,{'theme.label':'Theme','theme.loading':'Loading themes…','theme.discoverFailed':'Unable to load themes','theme.loadFailed':'Theme could not be loaded','theme.light':'Light','theme.dark':'Dark','theme.auto':'Auto','theme.cyberpunk':'Cyberpunk','theme.matrix':'Matrix'});
 Object.assign(copy.zh,{'theme.label':'主题','theme.loading':'正在加载主题…','theme.discoverFailed':'无法加载主题，请重试','theme.loadFailed':'无法应用主题，请重试','theme.light':'浅色','theme.dark':'深色','theme.auto':'跟随系统','theme.cyberpunk':'赛博朋克','theme.matrix':'矩阵'});
+Object.assign(copy.zh,{mcpAccessHelpLabel:'MCP 访问说明',mcpAccessHelp:'管理员 MCP 允许管理员凭据访问 MCP；Agent MCP 允许 Agent 凭据访问 MCP。关闭后，对应凭据的 MCP 入口立即失效。',mobileGroups:'权限组管理',mobileSubjects:'Agent 管理',mobileSubjectSummary:'%n 个 Agent · %t 个待分配',mobileSubjectEmpty:'暂无 Agent。',searchAgents:'搜索 Agent',newAgentButton:'新增',agentDisplayName:'Agent 名称',permissionGroup:'权限组',createAgentAction:'创建 Agent',allAgents:'全部',enabledAgents:'已启用',disabledAgents:'已停用',unassignedAgents:'待分配',agentCreated:'Agent 已创建。',agentDeleted:'Agent 已删除。',agentGroupChanged:'Agent 的权限组已修改。',applyGroupChange:'修改',deleteAgent:'删除 Agent',deleteAgentHint:'将删除 Agent 及其全部 Token，并中断进行中的请求和工作。',noAgentMatches:'没有匹配的 Agent。',noEnabledGroup:'没有可用的权限组，请先创建或启用权限组。',missingGroup:'已删除的权限组',credentialSummary:'%n 个 Token',activeSummary:'%n 个活动请求',workSummary:'%n 项后台工作',permissionDetails:'权限设置',membersAndCredentials:'Agent 与凭据',tokens:'Agent 与凭据',members:'Agents',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',memberCount:'个 Agent',memberDisable:'停用 Agent',memberEnable:'启用 Agent',noMembers:'此权限组尚无 Agent。添加后才能签发凭据。',unassigned:'待分配 Agent',unassignedHint:'未绑定有效权限组，凭据当前不可用。',replacementGroup:'权限组',move:'修改',moveMembers:'修改这些 Agent 的权限组',batchStart:'批量设置',batchDone:'完成选择',batchSelectAll:'全选所有权限',batchSelected:'已选择 %n 项',batchHidden:'其中 %n 项被筛选隐藏',batchEmpty:'选择需要批量设置的权限',batchApply:'设为%n',unsavedCount:'已修改 %n 项权限',discardChanges:'放弃更改',discarded:'已放弃未保存的权限更改。',filterDeny:'禁止'});
+Object.assign(copy.en,{mcpAccessHelpLabel:'MCP access help',mcpAccessHelp:'Admin MCP permits administrator-issued credentials to access MCP. Agent MCP permits Agent credentials to access MCP. Turning a switch off immediately disables that credential path.',mobileGroups:'Permission groups',mobileSubjects:'Agent management',mobileSubjectSummary:'%n Agents · %t unassigned',mobileSubjectEmpty:'No Agents.',searchAgents:'Search Agents',newAgentButton:'New',agentDisplayName:'Agent name',permissionGroup:'Permission group',createAgentAction:'Create Agent',allAgents:'All',enabledAgents:'Enabled',disabledAgents:'Disabled',unassignedAgents:'Unassigned',agentCreated:'Agent created.',agentDeleted:'Agent deleted.',agentGroupChanged:'Agent permission group changed.',applyGroupChange:'Change',deleteAgent:'Delete Agent',deleteAgentHint:'Deletes the Agent and all of its Tokens, and cancels active requests and work.',noAgentMatches:'No Agents match this search.',noEnabledGroup:'No permission group is available. Create or enable one first.',missingGroup:'Deleted permission group',credentialSummary:'%n tokens',activeSummary:'%n active requests',workSummary:'%n background operations',permissionDetails:'Permissions',membersAndCredentials:'Agents & credentials',tokens:'Agents & credentials',members:'Agents',memberName:'Agent name',addMember:'Add Agent',credentialPrincipal:'Agent',memberCount:'Agents',memberDisable:'Disable Agent',memberEnable:'Enable Agent',noMembers:'No Agents in this group. Add one before issuing credentials.',unassigned:'Unassigned Agents',unassignedHint:'No active permission group; credentials are unavailable.',replacementGroup:'Permission group',move:'Change',moveMembers:'Change these Agents to another permission group',batchStart:'Batch edit',batchDone:'Finish selection',batchSelectAll:'Select all permissions',batchSelected:'%n selected',batchHidden:'%n hidden by filters',batchEmpty:'Select permissions to update',batchApply:'Set %n',unsavedCount:'%n permission changes',discardChanges:'Discard changes',discarded:'Unsaved permission changes discarded.',filterDeny:'Deny'});
 const t=k=>copy[lang][k]||k;
 function el(tag,text){const n=document.createElement(tag);if(text)n.textContent=text;return n;}
 function feedback(text,tone='info',target){$('feedback').textContent=text;$('feedback').dataset.tone=tone;if(target)$(target).textContent=text;}
-function errorText(text){if(lang!=='zh')return text;return {'a valid Agent name is required':'请输入有效的 Agent 名称，名称前后不能有空格。','token label must contain 1–128 bytes without control characters':'请输入有效的客户端名称，长度不超过 128 字节且不含控制字符。','Agent changed; reload before saving':'此 Agent 已被其他页面修改，请重新加载后再保存。','permissions changed; reload before saving':'实例访问开关已被其他页面修改，请重新加载后再保存。','could not save credentials; reload to check the result':'保存失败，请重新加载确认结果后重试。','profile changes and extension management require all hosts':'修改主机配置和管理扩展需要选择全部主机范围。'}[text]||text;}
+function errorText(text){if(lang!=='zh')return text;return {'a valid Agent name is required':'请输入有效的 Agent 名称，名称前后不能有空格。','token label must contain 1–128 bytes without control characters':'请输入有效的客户端名称，长度不超过 128 字节且不含控制字符。','Agent changed; reload before saving':'此 Agent 已被其他页面修改，请重新加载后再保存。','Agent not found':'Agent 不存在或已经被删除。','permission group is missing or disabled':'权限组不存在或已停用。','Agent deletion inventory changed; preview again':'Agent 或凭据状态已变化，请重新预览后再删除。','permissions changed; reload before saving':'实例访问开关已被其他页面修改，请重新加载后再保存。','could not save credentials; reload to check the result':'保存失败，请重新加载确认结果后重试。','profile changes and extension management require all hosts':'修改主机配置和管理扩展需要选择全部主机范围。'}[text]||text;}
 function fail(error,target){feedback(error instanceof TypeError?t('network'):errorText(error.message),'error',target);}
 async function request(path,options={}){const response=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Termcp-CSRF':state?.csrf||'',...options.headers}});if(response.status===401){location.assign('/login');throw new Error(t('network'));}const data=await response.json();if(!response.ok)throw new Error(data.error||String(response.status));return data;}
 function changed(){return draft&&JSON.stringify(draft)!==original;}
+function dirtyCount(){if(!changed())return 0;const current=draft||{},saved=original?JSON.parse(original):{},ids=new Set([...Object.keys(current.actions||{}),...Object.keys(saved.actions||{})]);let count=0;ids.forEach(id=>{if(JSON.stringify(current.actions?.[id]||null)!==JSON.stringify(saved.actions?.[id]||null))count++;});if(current.host_mode!==saved.host_mode||JSON.stringify(current.hosts||[])!==JSON.stringify(saved.hosts||[]))count++;return count;}
 function safeSwitch(){if(revealed){feedback(t('saveFirst'),'error');return false;}return !changed()||confirm(t('discard'));}
 function setBusy(value){busy=value;$('policy-pane').inert=value;document.querySelectorAll('button').forEach(b=>{b.disabled=value;});updateSave();}
-function updateSave(){const review=agents.find(a=>a.id===selected)?.policy_warnings?.length>0;$('save-policy').disabled=busy||(!changed()&&!review)||!!$('policy-pane').querySelector(':invalid');$('save-state').textContent=t(busy?'working':review?'policyReview':changed()?'unsaved':'saved');}
+function updateSave(){const review=agents.find(a=>a.id===selected)?.policy_warnings?.length>0;const dirty=changed();const editable=selected&&selected!=='admin'&&selected!=='denied';$('save-policy').disabled=busy||(!dirty&&!review)||!!$('policy-pane').querySelector(':invalid');$('save-state').textContent=t(busy?'working':review?'policyReview':dirty?(t('unsavedCount').includes('%n')?t('unsavedCount').replace('%n',String(dirtyCount())):t('unsaved')):'saved');const discard=$('discard-policy');if(discard)discard.hidden=!dirty;const saveBar=$('policy-save-bar');if(saveBar)saveBar.hidden=!editable||(!busy&&!dirty&&!review);}
 function renderLanguage(){document.documentElement.lang=lang;if(typeof syncThemeControl==='function')syncThemeControl();renderPresets();document.title=t('title')+' · Termcp';$('language').value=lang;document.querySelectorAll('[data-text]').forEach(n=>n.textContent=t(n.dataset.text));renderList();if(selected){renderDetail();}else feedback(t('intro'));}
-function renderList(){const list=$('agent-list');list.replaceChildren();const add=(id,name,note)=>{const b=el('button',name);b.type='button';b.className='agent-item';b.setAttribute('aria-pressed',String(selected===id));b.append(el('small',note));b.onclick=()=>select(id);list.append(b);};const query=$('group-search').value.toLowerCase();const shown=agents.filter(g=>g.name.toLowerCase().includes(query));shown.forEach(g=>add(g.id,g.name,(g.id===defaultGroupID?t('isDefault')+' · ':'')+t(g.enabled?'enabled':'disabled')+' · '+g.member_count+' '+t('memberCount')+(g.policy_warnings?.length?' · '+t('policyReview'):'')));if(!shown.length)list.append(el('p',t('noGroupMatches')));add('denied',t('unassigned'),String(principals.filter(p=>p.group_id==='system-deny').length)+' '+t('memberCount'));add('admin',t('admin'),'MCP tokens');}
-function select(id,force=false){if(!force&&id===selected)return;if(!force&&!safeSwitch())return;if(!$('new-agent-form-wrap').hidden)closeNewAgentForm();selected=id;const a=agents.find(a=>a.id===id);draft=a?JSON.parse(JSON.stringify(a.policy)):null;original=JSON.stringify(draft);tab=id==='admin'||id==='denied'?'tokens':'policy';$('group-editor').hidden=true;$('clone-editor').hidden=true;$('policy-error').textContent='';$('token-error').textContent='';$('policy-preview-result').hidden=true;$('policy-preview-result').textContent='';$('preview-command').value='';renderList();renderDetail();feedback(t('intro'));}
-function renderDetail(){const a=agents.find(a=>a.id===selected),admin=selected==='admin',unassigned=selected==='denied';if(!admin&&!unassigned&&!a)return;const special=admin||unassigned;$('workspace-empty').hidden=true;$('detail-heading').hidden=false;$('tabs').hidden=false;$('selected-name').textContent=admin?t('admin'):unassigned?t('unassigned'):a.name;$('selected-meta').textContent=admin?t('adminHint'):unassigned?t('unassignedHint'):[t(a.enabled?'enabled':'disabled'),a.id===defaultGroupID?t('isDefault'):'',a.description||'',a.member_count+' '+t('memberCount'),a.credential_count+' '+t('credentialCount')].filter(Boolean).join(' · ');document.querySelectorAll('.group-only').forEach(b=>b.hidden=special);$('toggle-agent').hidden=special;$('toggle-agent').textContent=t(a?.enabled?'disable':'enable');$('default-group').hidden=special||a.id===defaultGroupID;$('policy-tab').hidden=special;$('policy-preview').hidden=special;$('members-section').hidden=admin;$('member-form').hidden=unassigned;$('token-form').hidden=unassigned;$('token-principal-field').hidden=admin;const warnings=a?.policy_warnings||[];$('policy-warning').hidden=!warnings.length;$('policy-warning').textContent=warnings.length?t('policyReviewNotice')+' '+warnings.join(', '):'';setTab(tab);if(a){renderFunctions();renderHosts();}renderMembers();renderTokens();updateSave();}
-function setTab(value){tab=value;$('policy-tab').setAttribute('aria-selected',String(value==='policy'));$('tokens-tab').setAttribute('aria-selected',String(value==='tokens'));$('policy-pane').hidden=value!=='policy';$('policy-save-bar').hidden=value!=='policy';$('policy-preview').hidden=value!=='policy'||!draft;$('tokens-pane').hidden=value!=='tokens';}
+function renderList(){const list=$('agent-list');list.replaceChildren();const add=(id,name,note)=>{const b=el('button',name);b.type='button';b.className='agent-item';b.setAttribute('aria-pressed',String(selected===id));b.append(el('small',note));b.onclick=()=>select(id);list.append(b);};const query=$('group-search').value.toLowerCase();const shown=agents.filter(g=>g.name.toLowerCase().includes(query));shown.forEach(g=>add(g.id,g.name,(g.id===defaultGroupID?t('isDefault')+' · ':'')+t(g.enabled?'enabled':'disabled')+' · '+g.member_count+' '+t('memberCount')+(g.policy_warnings?.length?' · '+t('policyReview'):'')));if(!shown.length)list.append(el('p',t('noGroupMatches')));}
+function select(id,force=false){if(!force&&id===selected)return;if(!force&&!safeSwitch())return;if(!$('new-agent-form-wrap').hidden)closeNewAgentForm();selected=id;const a=agents.find(a=>a.id===id);draft=a?JSON.parse(JSON.stringify(a.policy)):null;original=JSON.stringify(draft);tab=id==='admin'||id==='denied'?'tokens':'policy';$('group-editor').hidden=true;$('clone-editor').hidden=true;$('policy-error').textContent='';$('token-error').textContent='';$('policy-preview-result').hidden=true;$('policy-preview-result').textContent='';$('preview-command').value='';if(typeof permissionUI!=='undefined'){permissionUI.expanded=id;permissionUI.batch=false;permissionUI.batchSelected.clear();if(id!=='admin'&&id!=='denied')permissionUI.groupsOpen=true;}renderList();renderDetail();feedback(t('intro'));}
+function renderDetail(){const a=agents.find(a=>a.id===selected),admin=selected==='admin',unassigned=selected==='denied';if(!admin&&!unassigned&&!a)return;const special=admin||unassigned;$('workspace-empty').hidden=true;$('detail-heading').hidden=false;$('tabs').hidden=false;$('selected-name').textContent=admin?t('admin'):unassigned?t('unassigned'):a.name;$('selected-meta').textContent=admin?t('adminHint'):unassigned?t('unassignedHint'):[t(a.enabled?'enabled':'disabled'),a.id===defaultGroupID?t('isDefault'):'',a.description||'',a.member_count+' '+t('memberCount'),a.credential_count+' '+t('credentialCount')].filter(Boolean).join(' · ');document.querySelectorAll('.group-only').forEach(b=>b.hidden=special);$('toggle-agent').hidden=special;$('toggle-agent').textContent=t(a?.enabled?'disable':'enable');$('default-group').hidden=special||a.id===defaultGroupID;$('policy-tab').hidden=special;$('policy-preview').hidden=special;$('members-section').hidden=admin;$('member-form').hidden=unassigned;$('token-form').hidden=unassigned;$('token-principal-field').hidden=admin;const warnings=a?.policy_warnings||[];$('policy-warning').hidden=!warnings.length;$('policy-warning').textContent=warnings.length?t('policyReviewNotice')+' '+warnings.join(', '):'';setTab(tab);if(a){renderFunctions();renderHosts();}renderMembers();renderTokens();updateSave();permissionLayoutDetail();}
+function setTab(value){tab=value;$('policy-tab').setAttribute('aria-selected',String(value==='policy'));$('tokens-tab').setAttribute('aria-selected',String(value==='tokens'));$('policy-pane').hidden=value!=='policy';$('policy-preview').hidden=value!=='policy'||!draft;$('tokens-pane').hidden=value!=='tokens';updateSave();}
 function renderFunctions(){$('policy-mode').textContent=t('finePolicy');const grid=$('function-grid');grid.classList.add('v2');grid.replaceChildren();renderOperations(grid);}
 const familyNames={session:['会话','Sessions'],shell:['终端与通道','Terminal channels'],file:['文件','Files'],forward:['端口转发','Port forwarding'],peer:['外部协议','External protocols'],task:['传输任务','Transfer tasks'],profile:['主机配置','Host profiles'],extension:['扩展','Extensions'],alias:['公共别名','Shared aliases'],notify:['通知','Notifications']};
 const actionNames={'session.list':'列出会话','session.info':'查看会话','session.start':'建立连接','session.terminate':'停止会话','session.delete':'删除会话','session.message':'读取会话消息','shell.list':'列出通道','shell.open':'打开通道','shell.close':'关闭通道','shell.resize':'调整终端大小','shell.output':'读取终端输出','shell.input':'发送终端输入','shell.key':'发送按键','shell.detect':'检测环境','shell.reader.register':'注册 reader','shell.reader.unregister':'注销 reader','user.notify':'发送通知','forward.list':'列出转发','forward.open':'创建转发','forward.close':'关闭转发','file.read':'读取文件','file.stat':'读取文件属性','file.getwd':'读取工作目录','file.urls':'获取传输地址','file.write':'写入或替换文件','file.delete':'删除文件','file.mkdir':'创建目录','file.rename':'重命名文件','file.perm':'修改文件权限、所有者或时间','file.link':'管理链接','file.fs':'文件系统操作','profile.list':'列出主机','profile.create':'创建主机配置','profile.edit':'修改主机配置','profile.copy':'复制主机配置','profile.delete':'删除主机配置','ext.list':'列出扩展','ext.get':'查看、使用或释放扩展','ext.retry':'重建扩展','ext.create':'创建扩展定义','ext.update':'修改扩展定义','ext.delete':'删除扩展定义','jrpc.open':'连接并使用 JSON-RPC','mcp.open':'连接并使用 MCP','cdp.open':'连接并使用 CDP'};
@@ -297,8 +433,9 @@ $('select-functions').onclick=()=>{const available=catalog.operations.filter(o=>
 document.querySelectorAll('[name=host-mode]').forEach(input=>input.onchange=()=>{draft.host_mode=input.value;draft.hosts=[];if(input.value!=='all')catalog.operations.filter(o=>o.global).forEach(o=>delete draft.actions[o.id]);renderFunctions();renderHosts();updateSave();});
 function groupMembers(){return principals.filter(p=>selected==='denied'?p.group_id==='system-deny':(p.group_id||defaultGroupID)===selected);}
 function renderPresets(){const select=$('group-preset');select.replaceChildren();presets.forEach(p=>{const o=el('option',lang==='zh'?p.name:p.english);o.value=p.id;select.append(o);});}
-function groupOptions(select,current,includeDefault=false){select.replaceChildren();if(includeDefault){const o=el('option',t('followDefault'));o.value='';select.append(o);}agents.forEach(g=>{const o=el('option',g.name+(g.id===defaultGroupID?' · '+t('isDefault'):''));o.value=g.id;select.append(o);});if(includeDefault){const o=el('option',t('denyBinding'));o.value='system-deny';select.append(o);}select.value=current;}
-function renderMembers(){if(!selected||selected==='admin')return;const list=$('member-list');list.replaceChildren();const members=groupMembers();if(!members.length)list.append(el('p',t(selected==='denied'?'noUnassigned':'noMembers')));const picker=$('token-principal'),previous=picker.value;picker.replaceChildren();members.forEach(p=>{const option=el('option',p.name);option.value=p.id;picker.append(option);const row=el('div');row.className='member-row';const title=el('span',p.name);title.append(el('small',t(p.enabled?'enabled':'disabled')+' · '+p.id.slice(0,10)));const actions=el('div');actions.className='group-actions';const destination=el('select');destination.setAttribute('aria-label',p.name+' '+t('replacementGroup'));groupOptions(destination,p.group_id||'',true);const move=el('button',t('move'));move.type='button';move.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id)+'/group',{method:'PUT',body:JSON.stringify({group_id:destination.value,revision:p.revision})});await reload();renderDetail();feedback(t('saved'),'success');}catch(e){fail(e,'member-error');}finally{setBusy(false);}};const toggle=el('button',t(p.enabled?'memberDisable':'memberEnable'));toggle.type='button';toggle.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id),{method:'PATCH',body:JSON.stringify({enabled:!p.enabled,revision:p.revision})});await reload();renderDetail();}catch(e){fail(e,'member-error');}finally{setBusy(false);}};actions.append(destination,move,toggle);row.append(title,actions);list.append(row);});if(members.some(p=>p.id===previous))picker.value=previous;}
+function groupOptions(select,current,includeDefault=false){select.replaceChildren();if(includeDefault){const o=el('option',t('followDefault'));o.value='';select.append(o);}agents.forEach(g=>{const o=el('option',g.name+(g.id===defaultGroupID?' · '+t('isDefault'):'')+(!g.enabled?' · '+t('disabled'):''));o.value=g.id;o.disabled=!g.enabled&&g.id!==current;select.append(o);});if(includeDefault){const o=el('option',t('denyBinding'));o.value='system-deny';select.append(o);}select.value=current;}
+function agentCreateGroupOptions(select){select.replaceChildren();const defaultGroup=agents.find(g=>g.id===defaultGroupID);if(defaultGroup?.enabled){const option=el('option',t('followDefault')+' · '+defaultGroup.name);option.value='';select.append(option);}agents.filter(g=>g.enabled).forEach(g=>{const option=el('option',g.name+(g.id===defaultGroupID?' · '+t('isDefault'):''));option.value=g.id;select.append(option);});select.disabled=!select.options.length;}
+function renderMembers(){if(!selected||selected==='admin')return;const list=$('member-list');list.replaceChildren();const members=groupMembers();if(!members.length)list.append(el('p',t(selected==='denied'?'noUnassigned':'noMembers')));const picker=$('token-principal'),previous=picker.value;picker.replaceChildren();members.forEach(p=>{const option=el('option',p.name);option.value=p.id;picker.append(option);const row=el('div');row.className='member-row';const title=el('span',p.name);title.append(el('small',t(p.enabled?'enabled':'disabled')+' · '+p.id.slice(0,10)));const actions=el('div');actions.className='group-actions';const destination=el('select');destination.setAttribute('aria-label',p.name+' '+t('replacementGroup'));groupOptions(destination,p.group_id||'',true);const move=el('button',t('move'));move.type='button';move.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id)+'/group',{method:'PUT',body:JSON.stringify({group_id:destination.value,revision:p.revision})});await reload();renderDetail();feedback(t('agentGroupChanged'),'success');}catch(e){fail(e,'member-error');}finally{setBusy(false);}};const toggle=el('button',t(p.enabled?'memberDisable':'memberEnable'));toggle.type='button';toggle.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id),{method:'PATCH',body:JSON.stringify({enabled:!p.enabled,revision:p.revision})});await reload();renderDetail();}catch(e){fail(e,'member-error');}finally{setBusy(false);}};const remove=el('button',t('deleteAgent'));remove.type='button';remove.className='danger';remove.onclick=()=>permissionPreviewAgentDelete(p);actions.append(destination,move,toggle,remove);row.append(title,actions);list.append(row);});if(members.some(p=>p.id===previous))picker.value=previous;}
 $('group-search').oninput=renderList;
 $('member-form').onsubmit=async e=>{e.preventDefault();setBusy(true);try{await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('member-name').value,group_id:selected,issue_token:false})});$('member-form').reset();await reload();renderDetail();feedback(t('saved'),'success');}catch(e){fail(e,'member-error');}finally{setBusy(false);}};
 $('edit-group').onclick=()=>{const g=agents.find(g=>g.id===selected);$('group-editor').hidden=!$('group-editor').hidden;$('clone-editor').hidden=true;$('group-name').value=g.name;$('group-description').value=g.description||'';};
@@ -325,7 +462,7 @@ load();
 'use strict';
 Object.assign(copy.zh,{
   permissionTitle:'权限选择',
-  permissionOverview:'选择实际动作并限定主机边界；未选择的动作默认拒绝。',
+  permissionOverview:'选择允许的动作，并限定可访问主机。',
   permissionGranted:'已授权',
   permissionSensitive:'敏感',
   permissionTotal:'全部动作',
@@ -338,7 +475,7 @@ Object.assign(copy.zh,{
   filterAll:'全部',
   filterGranted:'已授权',
   filterSensitive:'敏感',
-  permissionResult:'当前显示 %n 项',
+  permissionResult:'显示 %n 项，共 %t 项',
   noActionMatches:'没有匹配的动作。调整搜索词或筛选条件后重试。',
   previewOpen:'验证权限',
   previewPresets:'常用预览',
@@ -359,7 +496,7 @@ Object.assign(copy.zh,{
   hostsSelected:'已选 %n 台',
   selectAllHosts:'全选主机',
   clearHosts:'清空',
-  effectiveAccess:'授权摘要',
+  effectiveAccess:'总体预览',
   summaryActions:'可执行动作',
   summaryHosts:'主机范围',
   summarySensitive:'敏感动作',
@@ -370,7 +507,7 @@ Object.assign(copy.zh,{
 });
 Object.assign(copy.en,{
   permissionTitle:'Permission selection',
-  permissionOverview:'Choose concrete actions and limit their host boundary. Unselected actions are denied.',
+  permissionOverview:'Choose allowed actions and their reachable hosts.',
   permissionGranted:'Granted',
   permissionSensitive:'Sensitive',
   permissionTotal:'All actions',
@@ -383,7 +520,7 @@ Object.assign(copy.en,{
   filterAll:'All',
   filterGranted:'Granted',
   filterSensitive:'Sensitive',
-  permissionResult:'%n shown',
+  permissionResult:'%n of %t shown',
   noActionMatches:'No actions match. Adjust the search or filter and try again.',
   previewOpen:'Validate access',
   previewPresets:'Common previews',
@@ -404,7 +541,7 @@ Object.assign(copy.en,{
   hostsSelected:'%n selected',
   selectAllHosts:'Select all hosts',
   clearHosts:'Clear',
-  effectiveAccess:'Access summary',
+  effectiveAccess:'Overview',
   summaryActions:'Available actions',
   summaryHosts:'Host scope',
   summarySensitive:'Sensitive actions',
@@ -422,7 +559,10 @@ const permissionIconPaths={
   sliders:['M4 21v-7','M4 10V3','M12 21v-9','M12 8V3','M20 21v-5','M20 12V3','M1 14h6','M9 8h6','M17 16h6'],
   key:['M15.5 7.5a4.5 4.5 0 1 1-8.8 1.3L3 12.5V17h4.5v-2H10v-2.5h2.2a4.5 4.5 0 0 0 3.3-5Z'],
   shield:['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z','m9 12 2 2 4-4'],
-  close:['M18 6 6 18','m6 6 12 12']
+  close:['M18 6 6 18','m6 6 12 12'],
+  chevron:['m6 9 6 6 6-6'],
+  users:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2','M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z','M22 21v-2a4 4 0 0 0-3-3.87','M16 3.13a4 4 0 0 1 0 7.75'],
+  batch:['M8 6h13','M8 12h13','M8 18h13','M3 6h.01','M3 12h.01','M3 18h.01']
 };
 
 function permissionIcon(name){
@@ -448,8 +588,8 @@ function permissionCreate(tag,className,text){
   return node;
 }
 
-function permissionFormat(key,count){
-  return t(key).replace('%n',String(count));
+function permissionFormat(key,count,total){
+  return t(key).replace('%n',String(count)).replace('%t',String(total));
 }
 
 function permissionAccessLabel(pathName){
@@ -461,8 +601,19 @@ const permissionUI={
   query:'',
   filter:'all',
   openFamilies:new Set(['session','shell','file']),
-  installed:false
+  installed:false,
+  batch:false,
+  batchSelected:new Set(),
+  expanded:null,
+  groupsOpen:true,
+  subjectsOpen:false,
+  agentQuery:'',
+  agentFilter:'all'
 };
+
+function permissionIsMobile(){
+  return window.matchMedia('(max-width: 840px)').matches;
+}
 
 function permissionSetButton(id,key,iconName){
   const button=$(id);
@@ -501,15 +652,28 @@ function permissionDecorateSearch(id,key){
 }
 
 function permissionLocalizeChrome(){
+  document.querySelectorAll('[data-text]').forEach(node=>{
+    node.textContent=t(node.dataset.text);
+  });
   const actionSearch=$('permission-search');
   if(actionSearch)actionSearch.placeholder=t('searchActions');
   const hostSearch=$('host-search');
   if(hostSearch)hostSearch.placeholder=t('searchHosts');
   const groupSearch=$('group-search');
   if(groupSearch)groupSearch.placeholder=t('searchGroups');
+  const helpTrigger=$('mcp-access-help-trigger');
+  if(helpTrigger)helpTrigger.setAttribute('aria-label',t('mcpAccessHelpLabel'));
+  const mcpHelp=$('mcp-access-help');
+  if(mcpHelp)mcpHelp.textContent=t('mcpAccessHelp');
+  const mcpTooltip=$('mcp-access-tooltip');
+  if(mcpTooltip)mcpTooltip.textContent=t('mcpAccessHelp');
   document.querySelectorAll('[data-scope-description]').forEach(node=>{
     node.textContent=t(node.dataset.scopeDescription);
   });
+  document.querySelectorAll('[data-effect-text]').forEach(node=>{
+    node.textContent=t('batchApply').replace('%n',t(node.dataset.effectText));
+  });
+  permissionUpdateBatchControls();
 }
 
 function permissionEnsureStructure(){
@@ -578,9 +742,9 @@ function permissionEnsureStructure(){
   filterBar.setAttribute('aria-label',t('filterAll'));
   [
     ['all','filterAll'],
-    ['granted','filterGranted'],
-    ['approval','filterApproval'],
-    ['risk','filterSensitive']
+    ['allow','effectAllow'],
+    ['deny','filterDeny'],
+    ['ask','filterApproval']
   ].forEach(([value,key],index)=>{
     const button=permissionCreate('button','',t(key));
     button.type='button';
@@ -590,10 +754,51 @@ function permissionEnsureStructure(){
     if(index===0)button.classList.add('is-active');
     filterBar.append(button);
   });
+  const resultRow=permissionCreate('div','permission-result-row');
   const resultCount=permissionCreate('span','',t('permissionResult').replace('%n','0'));
   resultCount.id='permission-result-count';
   resultCount.setAttribute('aria-live','polite');
-  tools.append(searchRow,filterBar,resultCount);
+  const utilityActions=permissionCreate('div','permission-utility-actions');
+  const previewToggle=permissionCreate('button','','');
+  previewToggle.id='preview-toggle';
+  previewToggle.type='button';
+  previewToggle.dataset.text='previewOpen';
+  previewToggle.setAttribute('aria-controls','policy-preview');
+  previewToggle.setAttribute('aria-expanded','false');
+  const batchToggle=permissionCreate('button','','');
+  batchToggle.id='permission-batch-toggle';
+  batchToggle.type='button';
+  batchToggle.dataset.text='batchStart';
+  batchToggle.setAttribute('aria-controls','permission-batch');
+  batchToggle.setAttribute('aria-expanded','false');
+  utilityActions.append(previewToggle,batchToggle);
+  resultRow.append(resultCount,utilityActions);
+
+  const batchPanel=permissionCreate('section','permission-batch');
+  batchPanel.id='permission-batch';
+  batchPanel.hidden=true;
+  const batchHead=permissionCreate('div','permission-batch-head');
+  const batchLabel=permissionCreate('label','permission-batch-check');
+  const batchSelectAll=document.createElement('input');
+  batchSelectAll.id='permission-batch-all';
+  batchSelectAll.type='checkbox';
+  const batchSelectText=permissionCreate('span','',t('batchSelectAll'));
+  batchSelectText.dataset.text='batchSelectAll';
+  batchLabel.append(batchSelectAll,batchSelectText);
+  const batchCount=permissionCreate('span','permission-batch-count','');
+  batchCount.id='permission-batch-count';
+  batchCount.setAttribute('aria-live','polite');
+  batchHead.append(batchLabel,batchCount);
+  const batchActions=permissionCreate('div','permission-batch-actions');
+  [['allow','effectAllow'],['deny','effectDeny'],['ask','effectAsk']].forEach(([effect,key])=>{
+    const button=permissionCreate('button','',t('batchApply').replace('%n',t(key)));
+    button.type='button';
+    button.dataset.batchEffect=effect;
+    button.dataset.effectText=key;
+    batchActions.append(button);
+  });
+  batchPanel.append(batchHead,batchActions);
+  tools.append(searchRow,filterBar,resultRow,batchPanel);
   const grid=$('function-grid');
   grid.before(tools);
 
@@ -648,19 +853,27 @@ function permissionEnsureStructure(){
   const summaryNote=permissionCreate('p','summary-note','');
   summaryNote.id='summary-note';
   summary.append(summaryTitle,list,summaryNote);
-  scopePanel.append(summary);
+  const scopeHead=scopePanel.querySelector('.section-head');
+  if(scopeHead)scopeHead.after(summary);
+  else scopePanel.prepend(summary);
 
   const saveBar=$('policy-save-bar');
   const saveButton=$('save-policy');
   const saveActions=permissionCreate('span','save-actions');
-  const previewToggle=permissionCreate('button','','');
-  previewToggle.id='preview-toggle';
-  previewToggle.type='button';
-  previewToggle.dataset.text='previewOpen';
-  previewToggle.setAttribute('aria-controls','policy-preview');
-  previewToggle.setAttribute('aria-expanded','false');
+  const discardButton=permissionCreate('button','',t('discardChanges'));
+  discardButton.id='discard-policy';
+  discardButton.type='button';
+  discardButton.dataset.text='discardChanges';
+  discardButton.hidden=true;
   saveButton.before(saveActions);
-  saveActions.append(previewToggle,saveButton);
+  saveActions.append(discardButton,saveButton);
+  discardButton.onclick=()=>{
+    if(!changed())return;
+    draft=original?JSON.parse(original):null;
+    permissionUI.batchSelected.clear();
+    renderDetail();
+    feedback(t('discarded'),'info');
+  };
   previewToggle.onclick=()=>{
     const preview=$('policy-preview');
     const open=!preview.classList.contains('is-open');
@@ -707,6 +920,8 @@ function permissionEnsureStructure(){
   permissionDecorateButton('run-policy-preview','shield');
   permissionDecorateButton('policy-tab','sliders');
   permissionDecorateButton('tokens-tab','key');
+  permissionDecorateButton('permission-agent-create-toggle','plus');
+  permissionDecorateSearch('permission-agent-search','searchAgents');
 
   const sidebarHead=document.querySelector('.workspace>aside .sidebar-head');
   const newGroup=$('new-agent');
@@ -751,6 +966,26 @@ function permissionEnsureStructure(){
     });
     renderOperations($('function-grid'));
   };
+  batchToggle.onclick=()=>{
+    permissionUI.batch=!permissionUI.batch;
+    if(!permissionUI.batch)permissionUI.batchSelected.clear();
+    batchToggle.setAttribute('aria-expanded',String(permissionUI.batch));
+    permissionSetButton('permission-batch-toggle',permissionUI.batch?'batchDone':'batchStart','batch');
+    renderOperations($('function-grid'));
+  };
+  batchSelectAll.onchange=()=>{
+    const available=permissionBatchOperations();
+    permissionUI.batchSelected=new Set(batchSelectAll.checked?available.map(operation=>operation.id):[]);
+    renderOperations($('function-grid'));
+  };
+  batchActions.onclick=event=>{
+    const button=event.target.closest('button[data-batch-effect]');
+    if(!button)return;
+    const operations=permissionBatchOperations().filter(operation=>permissionUI.batchSelected.has(operation.id));
+    operations.forEach(operation=>setActionEffect(operation,button.dataset.batchEffect));
+    renderFunctions();
+    updateSave();
+  };
   selectHosts.onclick=()=>{
     const query=$('host-search').value.trim().toLowerCase();
     catalog.hosts.forEach(host=>{
@@ -773,15 +1008,109 @@ function permissionEnsureStructure(){
   $('group-search').addEventListener('input',()=>{
     $('group-search-clear').hidden=!$('group-search').value;
   });
+  $('permission-groups-mobile-toggle').onclick=()=>{
+    permissionUI.groupsOpen=!permissionUI.groupsOpen;
+    $('permission-groups-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.groupsOpen));
+    $('permission-groups-mobile-body').hidden=!permissionUI.groupsOpen;
+  };
+  $('permission-subjects-mobile-toggle').onclick=()=>{
+    permissionUI.subjectsOpen=!permissionUI.subjectsOpen;
+    $('permission-subjects-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.subjectsOpen));
+    $('permission-subjects-mobile-body').hidden=!permissionUI.subjectsOpen;
+    permissionLayoutDetail();
+  };
+  $('permission-agent-search').oninput=event=>{
+    permissionUI.agentQuery=event.target.value;
+    permissionRenderSubjects();
+  };
+  $('permission-agent-filter').onclick=event=>{
+    const button=event.target.closest('button[data-agent-filter]');
+    if(!button)return;
+    permissionUI.agentFilter=button.dataset.agentFilter;
+    permissionRenderSubjects();
+  };
+  $('permission-agent-create-toggle').onclick=()=>{
+    const form=$('permission-agent-create-form');
+    if(!form.hidden){
+      form.hidden=true;
+      return;
+    }
+    agentCreateGroupOptions($('permission-agent-group'));
+    $('permission-agent-create-error').textContent='';
+    form.hidden=false;
+    $('permission-agent-name').focus();
+  };
+  $('permission-agent-create-cancel').onclick=()=>{
+    $('permission-agent-create-form').hidden=true;
+    $('permission-agent-create-form').reset();
+    $('permission-agent-create-error').textContent='';
+    $('permission-agent-create-toggle').focus();
+  };
+  $('permission-agent-create-form').onsubmit=async event=>{
+    event.preventDefault();
+    if(!$('permission-agent-group').options.length){
+      $('permission-agent-create-error').textContent=t('noEnabledGroup');
+      return;
+    }
+    setBusy(true);
+    $('permission-agent-create-error').textContent='';
+    try{
+      await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('permission-agent-name').value,group_id:$('permission-agent-group').value})});
+      $('permission-agent-create-form').reset();
+      $('permission-agent-create-form').hidden=true;
+      await reload();
+      renderDetail();
+      feedback(t('agentCreated'),'success');
+    }catch(error){
+      fail(error,'permission-agent-create-error');
+    }finally{
+      setBusy(false);
+    }
+  };
+  $('cancel-delete-agent').onclick=()=>{
+    $('delete-agent-dialog').close();
+    principalDeletePlan=null;
+  };
+  $('refresh-delete-agent').onclick=()=>{
+    const id=principalDeletePlan?.principal_id;
+    if(!id)return;
+    $('delete-agent-dialog').close();
+    permissionPreviewAgentDelete({id});
+  };
+  $('delete-agent-form').onsubmit=async event=>{
+    event.preventDefault();
+    if(!principalDeletePlan)return;
+    setBusy(true);
+    $('delete-agent-error').textContent='';
+    try{
+      await request('/auth/principals/'+encodeURIComponent(principalDeletePlan.principal_id),{method:'DELETE',body:JSON.stringify({revision:principalDeletePlan.revision,plan_revision:principalDeletePlan.plan_revision})});
+      $('delete-agent-dialog').close();
+      principalDeletePlan=null;
+      await reload();
+      renderDetail();
+      feedback(t('agentDeleted'),'success');
+    }catch(error){
+      fail(error,'delete-agent-error');
+    }finally{
+      setBusy(false);
+    }
+  };
+  const mobileQuery=window.matchMedia('(max-width: 840px)');
+  if(mobileQuery.addEventListener)mobileQuery.addEventListener('change',()=>{
+    permissionUI.expanded=selected;
+    renderList();
+    if(selected)renderDetail();
+  });
 
   permissionUI.installed=true;
   permissionLocalizeChrome();
 }
 
 function permissionMatchesFilter(operation){
-  if(permissionUI.filter==='granted')return ['allow','ask'].includes(draft?.actions?.[operation.id]?.effect);
-  if(permissionUI.filter==='approval')return draft?.actions?.[operation.id]?.effect==='ask';
-  if(permissionUI.filter==='risk')return operation.risk==='high'||operation.risk==='elevated';
+  const effect=draft?.actions?.[operation.id]?.effect||'deny';
+  if(permissionUI.filter==='allow')return effect==='allow';
+  if(permissionUI.filter==='deny')return effect==='deny';
+  if(permissionUI.filter==='ask')return effect==='ask';
   return true;
 }
 
@@ -806,6 +1135,40 @@ function permissionSyncFamily(section){
 function permissionFocusOperation(id){
   const row=document.querySelector('.permission-row[data-operation="'+CSS.escape(id)+'"]');
   row?.querySelector('.permission-effect input:checked, .permission-effect input')?.focus();
+}
+
+function permissionBatchOperations(){
+  return catalog.operations.filter(operation=>!operation.global||draft?.host_mode==='all');
+}
+
+function permissionUpdateBatchControls(){
+  const panel=$('permission-batch');
+  if(!panel)return;
+  const available=permissionBatchOperations();
+  const availableIDs=new Set(available.map(operation=>operation.id));
+  permissionUI.batchSelected.forEach(id=>{
+    if(!availableIDs.has(id))permissionUI.batchSelected.delete(id);
+  });
+  panel.hidden=!permissionUI.batch;
+  const toggle=$('permission-batch-toggle');
+  if(toggle){
+    toggle.setAttribute('aria-expanded',String(permissionUI.batch));
+    permissionSetButton('permission-batch-toggle',permissionUI.batch?'batchDone':'batchStart','batch');
+  }
+  const selected=permissionUI.batchSelected.size;
+  const hidden=available.filter(operation=>permissionUI.batchSelected.has(operation.id)).filter(operation=>!permissionMatchesFilter(operation)||!permissionMatchesQuery(operation,operation.family)).length;
+  const all=$('permission-batch-all');
+  if(all){
+    all.checked=available.length>0&&selected===available.length;
+    all.indeterminate=selected>0&&selected<available.length;
+  }
+  const count=$('permission-batch-count');
+  if(count){
+    count.textContent=selected?permissionFormat('batchSelected',selected)+(hidden?' · '+permissionFormat('batchHidden',hidden):''):t('batchEmpty');
+  }
+  panel.querySelectorAll('[data-batch-effect]').forEach(button=>{
+    button.disabled=busy||selected===0;
+  });
 }
 
 renderOperations=function renderOperationsEnhanced(grid){
@@ -878,6 +1241,7 @@ renderOperations=function renderOperationsEnhanced(grid){
       const selected=effect==='allow';
       row.classList.toggle('is-selected',selected);
       row.classList.toggle('is-approval',effect==='ask');
+      row.classList.toggle('is-batch',permissionUI.batch);
       const choice=permissionCreate('div','permission-choice permission-choice-state');
       const mode=permissionCreate('div','permission-effect');
       mode.setAttribute('role','radiogroup');
@@ -915,7 +1279,24 @@ renderOperations=function renderOperationsEnhanced(grid){
         const rest=dependencies.length>3?' +'+(dependencies.length-3):'';
         content.append(permissionCreate('span','permission-dependency',t('requires')+': '+shown+rest));
       }
-      choice.append(content,mode);
+      if(permissionUI.batch){
+        const batchLabel=permissionCreate('label','permission-batch-checkbox');
+        const batchCheck=document.createElement('input');
+        batchCheck.type='checkbox';
+        batchCheck.className='permission-check';
+        batchCheck.checked=permissionUI.batchSelected.has(operation.id);
+        batchCheck.disabled=!!operation.global&&draft.host_mode!=='all';
+        batchCheck.setAttribute('aria-label',operationName(operation)+' '+t('batchSelected').replace('%n',''));
+        batchCheck.onchange=()=>{
+          if(batchCheck.checked)permissionUI.batchSelected.add(operation.id);
+          else permissionUI.batchSelected.delete(operation.id);
+          permissionUpdateBatchControls();
+        };
+        batchLabel.append(batchCheck);
+        choice.append(batchLabel,content,mode);
+      }else{
+        choice.append(content,mode);
+      }
       row.append(choice);
       if(effect!=='deny'&&operation.constraint_kinds?.length){
         const details=document.createElement('details');
@@ -1014,21 +1395,195 @@ renderHosts=function renderHostsEnhanced(){
   permissionSyncStats();
 };
 
+function permissionLayoutSubjectSection(){
+  const section=$('permission-mobile-subjects');
+  const home=$('permission-subject-home');
+  const aside=document.querySelector('.workspace>aside');
+  const groupsBody=$('permission-groups-mobile-body');
+  if(!section||!home||!aside||!groupsBody)return;
+  if(permissionIsMobile())home.after(section);
+  else groupsBody.after(section);
+}
+
+function permissionDetachDetail(){
+  const detail=document.querySelector('.detail'),home=$('permission-detail-home');
+  if(detail&&home)home.after(detail);
+}
+
+function permissionLayoutDetail(){
+  const detail=document.querySelector('.detail'),home=$('permission-detail-home');
+  if(!detail||!home)return;
+  const mobile=permissionIsMobile();
+  home.after(detail);
+  detail.classList.toggle('is-mobile-detail',mobile);
+  detail.hidden=false;
+  if(!mobile)return;
+  detail.hidden=true;
+  if(selected==='admin'||selected==='denied'){
+    if(permissionUI.subjectsOpen){
+      const host=$('permission-mobile-subject-detail');
+      if(host){
+        host.append(detail);
+        detail.hidden=false;
+      }
+    }
+    return;
+  }
+  if(!selected||permissionUI.expanded!==selected||!permissionUI.groupsOpen)return;
+  const button=[...$('agent-list').querySelectorAll('[data-group-id]')].find(node=>node.dataset.groupId===selected);
+  const entry=button?.closest('.permission-group-entry');
+  const body=entry?.querySelector('.permission-group-body');
+  if(body){
+    body.hidden=false;
+    body.append(detail);
+    detail.hidden=false;
+  }
+}
+
+function permissionAgentDeleteSummary(plan){
+  const group=plan.group_id==='system-deny'?t('unassigned'):plan.group_id?agents.find(item=>item.id===plan.group_id)?.name||plan.group_id:t('followDefault')+' · '+(agents.find(item=>item.id===defaultGroupID)?.name||defaultGroupID);
+  return [
+    plan.name+' · '+group,
+    permissionFormat('credentialSummary',plan.credential_count),
+    permissionFormat('activeSummary',plan.active_requests),
+    permissionFormat('workSummary',plan.active_work)
+  ].join(' · ');
+}
+
+async function permissionPreviewAgentDelete(principal){
+  setBusy(true);
+  $('delete-agent-error').textContent='';
+  try{
+    principalDeletePlan=await request('/auth/principals/'+encodeURIComponent(principal.id)+'/delete-preview',{method:'POST'});
+    $('delete-agent-summary').textContent=permissionAgentDeleteSummary(principalDeletePlan);
+    $('delete-agent-dialog').showModal();
+  }catch(error){
+    fail(error,'delete-agent-error');
+  }finally{
+    setBusy(false);
+  }
+}
+
+function permissionRenderSubjects(){
+  const list=$('permission-mobile-subject-list');
+  if(!list)return;
+  list.replaceChildren();
+  const unassignedCount=principals.filter(principal=>principal.group_id==='system-deny').length;
+  $('permission-subjects-summary').textContent=permissionFormat('mobileSubjectSummary',principals.length,unassignedCount);
+  document.querySelectorAll('[data-agent-filter]').forEach(button=>{
+    button.setAttribute('aria-pressed',String(button.dataset.agentFilter===permissionUI.agentFilter));
+  });
+  const query=permissionUI.agentQuery.trim().toLowerCase();
+  const groupName=principal=>principal.group_id==='system-deny'?t('unassigned'):principal.group_id?agents.find(group=>group.id===principal.group_id)?.name||t('missingGroup'):t('followDefault')+' · '+(agents.find(group=>group.id===defaultGroupID)?.name||defaultGroupID);
+  const matches=principal=>{
+    if(permissionUI.agentFilter==='enabled'&&!principal.enabled)return false;
+    if(permissionUI.agentFilter==='disabled'&&principal.enabled)return false;
+    if(permissionUI.agentFilter==='unassigned'&&principal.group_id!=='system-deny')return false;
+    if(!query)return true;
+    return [principal.name,principal.id,groupName(principal)].join(' ').toLowerCase().includes(query);
+  };
+  const shown=principals.filter(matches).sort((left,right)=>{
+    const leftUnassigned=left.group_id==='system-deny'?0:1;
+    const rightUnassigned=right.group_id==='system-deny'?0:1;
+    return leftUnassigned-rightUnassigned||left.name.localeCompare(right.name);
+  });
+  if(!principals.length)list.append(permissionCreate('p','permission-empty',t('mobileSubjectEmpty')));
+  else if(!shown.length)list.append(permissionCreate('p','permission-empty',t('noAgentMatches')));
+  shown.forEach(principal=>{
+    const row=permissionCreate('div','permission-mobile-subject-row');
+    const copyNode=permissionCreate('div','permission-mobile-subject-copy');
+    copyNode.append(permissionCreate('strong','',principal.name));
+    const tokenCount=Number(principal.credential_count??tokens.filter(token=>token.principal_id===principal.id).length);
+    const activeCount=Number(principal.active_requests||0);
+    const workCount=Number(principal.active_work||0);
+    const details=[groupName(principal),t(principal.enabled?'enabled':'disabled'),permissionFormat('credentialSummary',tokenCount)];
+    if(activeCount)details.push(permissionFormat('activeSummary',activeCount));
+    if(workCount)details.push(permissionFormat('workSummary',workCount));
+    copyNode.append(permissionCreate('small','',details.join(' · ')));
+    const controls=permissionCreate('div','permission-mobile-subject-controls');
+    const destination=document.createElement('select');
+    destination.setAttribute('aria-label',principal.name+' '+t('replacementGroup'));
+    groupOptions(destination,principal.group_id||'',true);
+    const groupButton=permissionCreate('button','',t('applyGroupChange'));
+    groupButton.type='button';
+    groupButton.onclick=async()=>{
+      setBusy(true);
+      try{
+        await request('/auth/principals/'+encodeURIComponent(principal.id)+'/group',{method:'PUT',body:JSON.stringify({group_id:destination.value,revision:principal.revision})});
+        await reload();
+        renderDetail();
+        feedback(t('agentGroupChanged'),'success');
+      }catch(error){
+        feedback(error instanceof TypeError?t('network'):errorText(error.message),'error');
+      }finally{
+        setBusy(false);
+      }
+    };
+    controls.append(destination,groupButton);
+    const actions=permissionCreate('div','permission-mobile-subject-actions');
+    const toggle=permissionCreate('button','',t(principal.enabled?'memberDisable':'memberEnable'));
+    toggle.type='button';
+    toggle.onclick=async()=>{
+      setBusy(true);
+      try{
+        await request('/auth/principals/'+encodeURIComponent(principal.id),{method:'PATCH',body:JSON.stringify({enabled:!principal.enabled,revision:principal.revision})});
+        await reload();
+        renderDetail();
+        feedback(t('saved'),'success');
+      }catch(error){
+        feedback(error instanceof TypeError?t('network'):errorText(error.message),'error');
+      }finally{
+        setBusy(false);
+      }
+    };
+    const remove=permissionCreate('button','',t('deleteAgent'));
+    remove.type='button';
+    remove.className='danger';
+    remove.onclick=()=>permissionPreviewAgentDelete(principal);
+    actions.append(toggle,remove);
+    row.append(copyNode,controls,actions);
+    list.append(row);
+  });
+}
+
 renderList=function renderListEnhanced(){
+  permissionDetachDetail();
   const list=$('agent-list');
   list.replaceChildren();
   const query=$('group-search').value.trim().toLowerCase();
   const shown=agents.filter(group=>group.name.toLowerCase().includes(query));
+  const mobile=permissionIsMobile();
   const add=(id,name,note,kind,isDefault,isDisabled)=>{
+    const entry=permissionCreate('section','permission-group-entry');
     const button=permissionCreate('button','agent-item'+(kind?' is-'+kind:'')+(isDefault?' is-default':'')+(isDisabled?' is-disabled':''));
     button.type='button';
     button.dataset.groupId=id;
     button.setAttribute('aria-pressed',String(selected===id));
+    button.setAttribute('aria-expanded',String(mobile&&permissionUI.expanded===id));
+    button.setAttribute('aria-controls','permission-group-body-'+id);
     button.append(permissionCreate('span','group-status'));
     button.append(permissionCreate('span','agent-item-title',name));
     button.append(permissionCreate('small','',note));
-    button.onclick=()=>select(id);
-    list.append(button);
+    const chevron=permissionCreate('span','agent-item-chevron');
+    chevron.append(permissionIcon('chevron'));
+    button.append(chevron);
+    const body=permissionCreate('div','permission-group-body');
+    body.id='permission-group-body-'+id;
+    body.hidden=!mobile||permissionUI.expanded!==id;
+    button.onclick=()=>{
+      if(!permissionIsMobile()){
+        select(id);
+        return;
+      }
+      if(selected!==id){
+        select(id);
+        return;
+      }
+      permissionUI.expanded=permissionUI.expanded===id?null:id;
+      renderList();
+    };
+    entry.append(button,body);
+    list.append(entry);
   };
   shown.forEach(group=>{
     const flags=[];
@@ -1039,10 +1594,16 @@ renderList=function renderListEnhanced(){
     add(group.id,group.name,flags.join(' · '),'group',group.id===defaultGroupID,!group.enabled);
   });
   if(!shown.length)list.append(permissionCreate('p','permission-empty',t('noGroupMatches')));
-  add('denied',t('unassigned'),principals.filter(principal=>principal.group_id==='system-deny').length+' '+t('memberCount'),'special');
-  add('admin',t('admin'),'MCP tokens','special');
   const groupCount=$('group-count');
   if(groupCount)groupCount.textContent=agents.length+' '+t('groupsUnit');
+  $('permission-groups-summary').textContent=agents.length+' '+t('groupsUnit')+(dirtyCount()?' · '+t('unsaved'):'');
+  $('permission-groups-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.groupsOpen));
+  $('permission-groups-mobile-body').hidden=!permissionUI.groupsOpen;
+  $('permission-subjects-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.subjectsOpen));
+  $('permission-subjects-mobile-body').hidden=!permissionUI.subjectsOpen;
+  permissionLayoutSubjectSection();
+  permissionRenderSubjects();
+  permissionLayoutDetail();
 };
 
 function permissionSyncStats(){
@@ -1057,7 +1618,7 @@ function permissionSyncStats(){
   $('permission-sensitive').textContent=String(sensitive);
   $('permission-approval').textContent=String(approval);
   $('action-count').textContent=granted+' / '+total;
-  $('permission-result-count').textContent=permissionFormat('permissionResult',shown);
+  $('permission-result-count').textContent=permissionFormat('permissionResult',shown,total);
   const availableVisible=catalog.operations.filter(operation=>(!operation.global||draft?.host_mode==='all')&&permissionMatchesFilter(operation)&&permissionMatchesQuery(operation,operation.family));
   const allVisibleGranted=availableVisible.length>0&&availableVisible.every(operation=>draft?.actions?.[operation.id]?.effect==='allow');
   permissionSetButton('select-functions',allVisibleGranted?'clearVisible':'selectVisible','check');
@@ -1068,11 +1629,14 @@ function permissionSyncStats(){
   const note=$('summary-note');
   note.textContent=sensitive?permissionFormat('summarySensitiveCount',sensitive):t('summaryNoSensitive');
   note.classList.toggle('has-risk',sensitive>0);
+  const groupSummary=$('permission-groups-summary');
+  if(groupSummary)groupSummary.textContent=agents.length+' '+t('groupsUnit')+(dirtyCount()?' · '+t('unsaved'):'');
   const state=$('save-state');
   if(state&&draft){
     const review=agents.find(group=>group.id===selected)?.policy_warnings?.length>0;
     state.dataset.state=busy?'busy':review?'review':changed()?'dirty':'saved';
   }
+  permissionUpdateBatchControls();
 }
 
 permissionEnsureStructure();

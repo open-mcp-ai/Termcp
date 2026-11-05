@@ -57,6 +57,24 @@ type tokenInfo struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type principalView struct {
+	agentRecord
+	CredentialCount int `json:"credential_count"`
+	ActiveRequests  int `json:"active_requests"`
+	ActiveWork      int `json:"active_work"`
+}
+
+type principalDeletePreview struct {
+	PrincipalID     string `json:"principal_id"`
+	Name            string `json:"name"`
+	GroupID         string `json:"group_id"`
+	Revision        uint64 `json:"revision"`
+	PlanRevision    uint64 `json:"plan_revision"`
+	CredentialCount int    `json:"credential_count"`
+	ActiveRequests  int    `json:"active_requests"`
+	ActiveWork      int    `json:"active_work"`
+}
+
 func validLabel(s string) bool {
 	return s != "" && s == strings.TrimSpace(s) && len(s) <= 128 && !strings.ContainsFunc(s, unicode.IsControl)
 }
@@ -96,6 +114,30 @@ func credentialState(s managedState) managedState {
 		s.Tokens = map[string]tokenRecord{}
 	}
 	return s
+}
+
+func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalView {
+	view := principalView{agentRecord: a}
+	for id, token := range s.Tokens {
+		if token.PrincipalID != a.ID {
+			continue
+		}
+		view.CredentialCount++
+		view.ActiveRequests += len(m.requests["token:"+id])
+		view.ActiveWork += len(m.background[id])
+	}
+	return view
+}
+
+func principalTokenIDs(s managedState, principalID string) []string {
+	ids := []string{}
+	for id, token := range s.Tokens {
+		if token.PrincipalID == principalID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (m *Managed) issueToken(s *managedState, principal, label string) (tokenRecord, string, error) {
@@ -229,6 +271,7 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 	s := credentialState(m.state)
 	var result any
+	deletedTokenIDs := []string{}
 	beforeAccessRevision := s.AccessRevision
 	targetID := auditTargetID(r.URL.Path)
 	markAuditTarget := func(id string) {
@@ -238,9 +281,9 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/auth/principals" && r.Method == "GET":
-		principals := make([]agentRecord, 0, len(s.Agents))
+		principals := make([]principalView, 0, len(s.Agents))
 		for _, a := range s.Agents {
-			principals = append(principals, a)
+			principals = append(principals, m.principalViewLocked(s, a))
 		}
 		sort.Slice(principals, func(i, j int) bool { return principals[i].CreatedAt.Before(principals[j].CreatedAt) })
 		authJSON(w, 200, map[string]any{"principals": principals, "default_group_id": s.DefaultGroupID, "access_revision": s.AccessRevision})
@@ -314,11 +357,58 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		}
 		result = map[string]any{"token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
 		markAuditTarget(t.ID)
+	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && strings.HasSuffix(r.URL.Path, "/delete-preview") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/principals/"), "/delete-preview")
+		a, ok := s.Agents[id]
+		if !ok || id == "" || strings.Contains(id, "/") {
+			authError(w, 404, "Agent not found")
+			return
+		}
+		view := m.principalViewLocked(s, a)
+		result = principalDeletePreview{
+			PrincipalID:     a.ID,
+			Name:            a.Name,
+			GroupID:         a.GroupID,
+			Revision:        agentRevision(a),
+			PlanRevision:    s.AccessRevision,
+			CredentialCount: view.CredentialCount,
+			ActiveRequests:  view.ActiveRequests,
+			ActiveWork:      view.ActiveWork,
+		}
+		markAuditTarget(a.ID)
+		authJSON(w, 200, result)
+		return
+	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == "DELETE":
+		id := strings.TrimPrefix(r.URL.Path, "/auth/principals/")
+		a, ok := s.Agents[id]
+		if !ok || id == "" || strings.Contains(id, "/") {
+			authError(w, 404, "Agent not found")
+			return
+		}
+		var input struct {
+			Revision     uint64 `json:"revision"`
+			PlanRevision uint64 `json:"plan_revision"`
+		}
+		if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil {
+			authError(w, 400, "Agent deletion confirmation is required")
+			return
+		}
+		if input.Revision != agentRevision(a) || input.PlanRevision != s.AccessRevision {
+			authError(w, 409, "Agent deletion inventory changed; preview again")
+			return
+		}
+		deletedTokenIDs = principalTokenIDs(s, a.ID)
+		for _, tokenID := range deletedTokenIDs {
+			delete(s.Tokens, tokenID)
+		}
+		delete(s.Agents, a.ID)
+		markAuditTarget(a.ID)
+		result = map[string]any{"ok": true, "principal_id": a.ID, "deleted_tokens": len(deletedTokenIDs)}
 	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == "PATCH":
 		id := strings.TrimPrefix(r.URL.Path, "/auth/principals/")
 		a, ok := s.Agents[id]
 		if !ok || strings.Contains(id, "/") {
-			authError(w, 404, "principal not found")
+			authError(w, 404, "Agent not found")
 			return
 		}
 		var input struct {
@@ -330,7 +420,7 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if input.Revision != agentRevision(a) {
-			authError(w, 409, "principal changed; reload before saving")
+			authError(w, 409, "Agent changed; reload before saving")
 			return
 		}
 		a.Enabled = *input.Enabled
@@ -354,6 +444,9 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 	s.AccessRevision++
 	err := m.save(s, false)
 	if err == nil || errors.Is(err, configstore.ErrDurability) {
+		for _, tokenID := range deletedTokenIDs {
+			m.cancelCredentialLocked(tokenID)
+		}
 		m.cancelDeniedTokensLocked()
 		if strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == "PATCH" {
 			principal := strings.TrimPrefix(r.URL.Path, "/auth/principals/")

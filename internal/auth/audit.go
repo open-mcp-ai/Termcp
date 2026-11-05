@@ -234,7 +234,7 @@ func auditAction(r *http.Request) string {
 		return "group.list"
 	case strings.HasSuffix(r.URL.Path, "/clone"):
 		return "group.clone"
-	case strings.HasSuffix(r.URL.Path, "/delete-preview"):
+	case strings.HasPrefix(r.URL.Path, "/auth/groups/") && strings.HasSuffix(r.URL.Path, "/delete-preview"):
 		return "group.delete_preview"
 	case strings.HasPrefix(r.URL.Path, "/auth/groups/") && r.Method == http.MethodPatch:
 		return "group.update"
@@ -246,6 +246,10 @@ func auditAction(r *http.Request) string {
 		return "principal.create"
 	case r.URL.Path == "/auth/principals":
 		return "principal.list"
+	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && strings.HasSuffix(r.URL.Path, "/delete-preview"):
+		return "principal.delete_preview"
+	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && r.Method == http.MethodDelete:
+		return "principal.delete"
 	case strings.HasSuffix(r.URL.Path, "/group"):
 		return "principal.group_bind"
 	case strings.HasPrefix(r.URL.Path, "/auth/principals/"):

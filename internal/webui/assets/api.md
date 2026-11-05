@@ -129,7 +129,7 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/unlock` | POST | Authenticated vault unlock: JSON `password` is the decryption password |
 | `/auth/logout` | POST | Revoke this session, clear Cookie, cancel its active connections |
 | `/auth` | GET | Login and security, login-password change, independent vault unlock and sign-out page |
-| `/permissions` | GET | Manage permission groups, actions, host scope, principals and client credentials |
+| `/permissions` | GET | Manage permission groups, actions, host scope, Agents and their credentials |
 | `/auth/access` | GET | Admin-only operation/condition and saved-host catalog; hosts contain stable `id` and display `name` |
 | `/auth/access/preview` | POST | Admin-only, non-executing authorization plan for one `tool` call or DSL `cmd`; returns per-operation decisions and rejects execution overrides |
 | `/auth/permissions` | GET / PUT | Read or atomically replace role entrance permissions; PUT requires current `revision` and `permissions` |
@@ -139,9 +139,10 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/groups/{id}/delete-preview` | POST | Preview members, credentials, requests and work affected by deletion |
 | `/auth/group-presets` | GET | Versioned role templates |
 | `/auth/default-group` | GET / PUT | Read or change the default group with its current access revision |
-| `/auth/principals` | GET / POST | Create an identity using name and optional group_id; default follows the default group. Credentials require explicit issue_token:true |
-| `/auth/principals/{id}` | PATCH | Update enabled using the principal revision; policy belongs to its group |
-| `/auth/principals/{id}/group` | PUT | Change group binding using group_id and principal revision; empty group_id follows the default |
+| `/auth/principals` | GET / POST | List Agents with credential/request/work counts, or create one using name and optional group_id; default follows the default group. Credentials require explicit issue_token:true |
+| `/auth/principals/{id}` | PATCH / DELETE | Update enabled using the principal revision, or delete after a current preview and plan revision |
+| `/auth/principals/{id}/group` | PUT | Change the permission group using group_id and principal revision; empty group_id follows the default |
+| `/auth/principals/{id}/delete-preview` | POST | Preview the Agent's group, credentials, active requests and background work before deletion |
 | `/auth/tokens` | GET / POST | List or issue credentials using label and optional principal_id; omitted principal_id selects the signed-in Admin |
 | `/auth/tokens/{id}` | DELETE | Revoke this token and cancel its active requests |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
@@ -181,8 +182,10 @@ returns `token` once and `credential` metadata (`id`, `principal_id`, `label`,
 `created_at`). Lists never return secrets or digests. A token has no automatic
 expiry in this version; rotate by issuing another for the same identity, updating
 client configuration, then revoking the old token. Logout/login-password changes
-revoke browser sessions and preserve independent MCP tokens. Disabling a role or
-principal cancels its live token requests. Revoked tokens remain rejected after restart.
+revoke browser sessions and preserve independent MCP tokens. Disabling or deleting
+an Agent cancels its live token requests. Agent deletion also removes every token
+bound to that Agent in the same persisted mutation; revoked or deleted identities
+remain rejected after restart.
 Agent session namespaces derive from verified IDs; caller headers cannot change
 them. Transport and extension-stream session IDs are bound to the verified
 principal and credential that initialized them.
@@ -198,7 +201,7 @@ per-principal policy, upgrade preview, /auth/agents route or agent_id token alia
 Saved unsupported permission data is rejected explicitly.
 
 Create or select a permission group, configure actions and host scope, then add
-principals. A principal belongs to one group or follows the default. The initial
+Agents. An Agent belongs to one group or follows the default. The initial
 default group has actions={} and host_mode=all: host scope alone grants no action.
 Principal creation issues no credential unless issue_token:true is explicit.
 Policy changes require the group's current revision, for example:
@@ -215,7 +218,7 @@ Each grant has one of three effects: `allow`, `deny`, or `ask`. `ask` queues the
 complete, normalized tool call or DSL statement for a human. Session-bound asks
 appear in that session's native review panel; targetless policy asks appear in
 the workspace header's policy-approval list. Approval reloads the credential,
-principal, current group policy and resource bindings before replay.
+Agent, current group policy and resource bindings before replay.
 Host mode is all, selected or none; rename preserves identity and a
 same-name replacement does not inherit it. Operations that change shared
 configuration require all-host scope. Each transfer checks both endpoints.
