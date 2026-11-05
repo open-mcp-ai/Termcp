@@ -415,7 +415,7 @@ func TestTerminalFitUsesModernThemeFontOptions(t *testing.T) {
 	if start < 0 {
 		t.Fatal("missing terminal fit function")
 	}
-	end := strings.Index(source[start:], "/** First wheel")
+	end := strings.Index(source[start:], "/**\n * Terminal bytes arrive")
 	if end < 0 {
 		t.Fatal("missing end of terminal fit function")
 	}
