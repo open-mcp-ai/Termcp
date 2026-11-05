@@ -4,11 +4,13 @@
 
 ## 页面与身份
 
-/permissions 以权限组为主列表，另有独立的 Agent 管理区，管理动作、条件、主机范围、Agent 和凭据。Agent（内部标识仍为 principal）独立保存稳定 ID、启停、权限组绑定和凭据计数；没有 Agent 级动作覆盖。新 Agent 默认跟随缺省组，初始缺省组动作为空、主机范围 all。仅显式 issue_token:true 或单独调用 token API 才签发凭据。
+/permissions 以权限组为主列表，另有独立的 Agent 管理区，管理动作、条件、主机范围、Agent 和 Token。Agent（内部标识仍为 principal）独立保存稳定 ID、启停、权限组绑定和 Token 计数；没有 Agent 级动作覆盖。新 Agent 默认跟随缺省组，初始缺省组动作为空、主机范围 all。仅显式 issue_token:true 或单独调用 token API 才签发 Token。
 
-组内共享策略不会合并 Agent namespace 或 MCP transport owner。管理员身份在人端单独管理，业务权限组不能授予 Admin 角色。Agent 凭据仍只允许 MCP，不能进入 WebUI、REST 或管理面。
+一个 Agent 同时只有一个当前 Token。普通签发在已有当前 Token 时拒绝；轮换通过原子替换完成，旧 Token 立即停止认证并进入历史。当前 Token 显示 ID、创建时间、可选到期时间和最近使用时间；历史记录只用于审计和追踪，可单独清空，不能恢复为有效 Token。UI 不再建立“客户端凭据”子对象，也不要求输入客户端名称。
 
-页面仅显示动作树和当前支持的参数条件；没有 V1 选择器、功能组编辑器或升级入口。权限组与 Agent 各自可折叠，二者生命周期独立。Agent 支持搜索、状态筛选、创建、启停、修改权限组、删除预览与删除；权限组支持名称、复制、启停、缺省引用和删除预览。认证及权限页使用 [共享主题](auth-page-themes.md)。
+组内共享策略不会合并 Agent namespace 或 MCP transport owner。管理员身份在人端单独管理，业务权限组不能授予 Admin 角色。Agent Token 仍只允许 MCP，不能进入 WebUI、REST 或管理面。
+
+页面仅显示动作树和当前支持的参数条件；没有 V1 选择器、功能组编辑器或升级入口。动作分类默认全部收起，只展示会话、终端与通道、文件等一级标题；搜索或切换效果筛选时才自动展开匹配分类。权限组与 Agent 各自可折叠，二者生命周期独立。Agent 支持搜索、状态筛选、创建、启停、修改权限组、删除预览与删除；权限组支持名称、复制、启停、缺省引用和删除预览。认证及权限页使用 [共享主题](auth-page-themes.md)。
 
 ## 执行边界
 

@@ -143,8 +143,10 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/principals/{id}` | PATCH / DELETE | Update enabled using the principal revision, or delete after a current preview and plan revision |
 | `/auth/principals/{id}/group` | PUT | Change the permission group using group_id and principal revision; empty group_id follows the default |
 | `/auth/principals/{id}/delete-preview` | POST | Preview the Agent's group, credentials, active requests and background work before deletion |
-| `/auth/tokens` | GET / POST | List or issue credentials using label and optional principal_id; omitted principal_id selects the signed-in Admin |
-| `/auth/tokens/{id}` | DELETE | Revoke this token and cancel its active requests |
+| `/auth/tokens` | GET / POST | List current and historical Tokens, or issue the one current Token for an optional principal_id; omitted principal_id selects the signed-in Admin. Existing active Token returns 409 |
+| `/auth/tokens/{id}/rotate` | POST | Atomically revoke the active Token and issue its replacement; the old secret stops authenticating before the response |
+| `/auth/tokens/{id}` | DELETE | Revoke the active Token, cancel its requests, and retain the record in history |
+| `/auth/tokens/history` | DELETE | Clear revoked Token history for `principal_id`; the current Token is never removed |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
 
 Anonymous `/auth/status` reports `can_setup=true` only while no login is
@@ -177,15 +179,24 @@ MCP. This entrance policy is separate from the operation policy of each permissi
 MCP clients use `Authorization: Bearer <token>` on every `/stream`, `/sse`, and
 `/message` request. Bearer credentials do not require CSRF headers and never grant
 WebUI, login-security, REST or daemon management access, even when owned by Admin.
-Issuance/list/revocation require an Admin Cookie and CSRF for mutations. Creation
-returns `token` once and `credential` metadata (`id`, `principal_id`, `label`,
-`created_at`). Lists never return secrets or digests. A token has no automatic
-expiry in this version; rotate by issuing another for the same identity, updating
-client configuration, then revoking the old token. Logout/login-password changes
-revoke browser sessions and preserve independent MCP tokens. Disabling or deleting
-an Agent cancels its live token requests. Agent deletion also removes every token
-bound to that Agent in the same persisted mutation; revoked or deleted identities
-remain rejected after restart.
+Issuance/list/rotation/history cleanup require an Admin Cookie and CSRF for
+mutations. Each principal has at most one active Token; ordinary issuance returns
+409 while one exists. Rotation is the only replacement path and returns the new
+`token` once plus current/previous credential metadata. Lists never return
+secrets or digests. Credential metadata includes `id`, `principal_id`, `label`,
+`created_at`, `active`, `status`, `expires_at`, `last_used_at`, and, for
+historical records, `revoked_at` and `replaced_by`. `expires_at` is optional;
+when supplied it must be in the future. `last_used_at` records successful MCP
+admission in the current process and is persisted with the next authentication
+state mutation. Revocation moves the Token to history instead of deleting its
+audit identity. `DELETE /auth/tokens/history?principal_id=...` clears revoked or
+expired records.
+Logout/login-password changes revoke browser sessions and preserve independent
+MCP Tokens. Disabling or deleting an Agent cancels its live Token requests. Agent
+deletion also removes every Token and history record bound to that Agent in the
+same persisted mutation; revoked or deleted identities remain rejected after
+restart. Legacy states containing multiple active Tokens migrate by keeping the
+newest and revoking the others into history.
 Agent session namespaces derive from verified IDs; caller headers cannot change
 them. Transport and extension-stream session IDs are bound to the verified
 principal and credential that initialized them.

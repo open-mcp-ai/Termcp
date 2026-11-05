@@ -20,6 +20,11 @@ import (
 const maxAgents = 256
 const maxTokens = 1024
 
+var (
+	errActiveCredential   = errors.New("principal already has an active MCP token; rotate it instead")
+	errNoActiveCredential = errors.New("principal has no active MCP token")
+)
+
 type agentRecord struct {
 	GroupID   string    `json:"group_id,omitempty"`
 	Revision  uint64    `json:"revision,omitempty"`
@@ -42,26 +47,37 @@ func (a *agentRecord) UnmarshalJSON(raw []byte) error {
 }
 
 type tokenRecord struct {
-	ID          string    `json:"id"`
-	PrincipalID string    `json:"principal_id"`
-	Label       string    `json:"label"`
-	Digest      string    `json:"digest"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	PrincipalID string     `json:"principal_id"`
+	Label       string     `json:"label"`
+	Digest      string     `json:"digest"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ReplacedBy  string     `json:"replaced_by,omitempty"`
 }
 
 // tokenInfo is the only credential representation returned by listing APIs.
 type tokenInfo struct {
-	ID          string    `json:"id"`
-	PrincipalID string    `json:"principal_id"`
-	Label       string    `json:"label"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	PrincipalID string     `json:"principal_id"`
+	Label       string     `json:"label"`
+	CreatedAt   time.Time  `json:"created_at"`
+	Active      bool       `json:"active"`
+	Status      string     `json:"status"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ReplacedBy  string     `json:"replaced_by,omitempty"`
 }
 
 type principalView struct {
 	agentRecord
-	CredentialCount int `json:"credential_count"`
-	ActiveRequests  int `json:"active_requests"`
-	ActiveWork      int `json:"active_work"`
+	CredentialCount       int `json:"credential_count"`
+	ActiveCredentialCount int `json:"active_credential_count"`
+	ActiveRequests        int `json:"active_requests"`
+	ActiveWork            int `json:"active_work"`
 }
 
 type principalDeletePreview struct {
@@ -88,11 +104,33 @@ func validateCredentials(s managedState) error {
 			return errors.New("invalid saved Agent")
 		}
 	}
+	active := map[string]string{}
 	for id, t := range s.Tokens {
 		digest, err := hex.DecodeString(t.Digest)
 		_, agent := s.Agents[t.PrincipalID]
 		if id == "" || id != t.ID || !validLabel(t.Label) || err != nil || len(digest) != 32 || t.CreatedAt.IsZero() || t.PrincipalID != s.Admin.ID && !agent {
 			return errors.New("invalid saved MCP token")
+		}
+		if t.RevokedAt != nil && t.RevokedAt.Before(t.CreatedAt) {
+			return errors.New("invalid saved MCP token revocation")
+		}
+		if t.ExpiresAt != nil && !t.ExpiresAt.After(t.CreatedAt) {
+			return errors.New("invalid saved MCP token expiry")
+		}
+		if t.LastUsedAt != nil && t.LastUsedAt.Before(t.CreatedAt) {
+			return errors.New("invalid saved MCP token last use")
+		}
+		if t.ReplacedBy != "" {
+			replacement, ok := s.Tokens[t.ReplacedBy]
+			if !ok || replacement.PrincipalID != t.PrincipalID {
+				return errors.New("invalid saved MCP token replacement")
+			}
+		}
+		if t.RevokedAt == nil {
+			if previous := active[t.PrincipalID]; previous != "" {
+				return errors.New("principal has more than one active MCP token")
+			}
+			active[t.PrincipalID] = t.ID
 		}
 	}
 	return validateGroupState(s)
@@ -116,13 +154,52 @@ func credentialState(s managedState) managedState {
 	return s
 }
 
+// normalizeTokenUniqueness migrates pre-single-token state. The newest token is
+// retained as the current credential; every older active record is revoked and
+// linked to its replacement so it remains visible in history.
+func normalizeTokenUniqueness(s *managedState, now time.Time) (bool, int) {
+	byPrincipal := map[string][]tokenRecord{}
+	for _, token := range s.Tokens {
+		if tokenActive(token) {
+			byPrincipal[token.PrincipalID] = append(byPrincipal[token.PrincipalID], token)
+		}
+	}
+	changed := false
+	revoked := 0
+	for _, tokens := range byPrincipal {
+		if len(tokens) < 2 {
+			continue
+		}
+		sort.Slice(tokens, func(i, j int) bool {
+			if tokens[i].CreatedAt.Equal(tokens[j].CreatedAt) {
+				return tokens[i].ID < tokens[j].ID
+			}
+			return tokens[i].CreatedAt.After(tokens[j].CreatedAt)
+		})
+		keep := tokens[0]
+		for _, token := range tokens[1:] {
+			revokedAt := now
+			token.RevokedAt = &revokedAt
+			token.ReplacedBy = keep.ID
+			s.Tokens[token.ID] = token
+			changed = true
+			revoked++
+		}
+	}
+	return changed, revoked
+}
+
 func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalView {
 	view := principalView{agentRecord: a}
+	now := m.now().UTC()
 	for id, token := range s.Tokens {
 		if token.PrincipalID != a.ID {
 			continue
 		}
 		view.CredentialCount++
+		if tokenLive(token, now) {
+			view.ActiveCredentialCount++
+		}
 		view.ActiveRequests += len(m.requests["token:"+id])
 		view.ActiveWork += len(m.background[id])
 	}
@@ -140,12 +217,62 @@ func principalTokenIDs(s managedState, principalID string) []string {
 	return ids
 }
 
-func (m *Managed) issueToken(s *managedState, principal, label string) (tokenRecord, string, error) {
+func tokenActive(t tokenRecord) bool {
+	return t.RevokedAt == nil
+}
+
+func tokenLive(t tokenRecord, now time.Time) bool {
+	return tokenActive(t) && (t.ExpiresAt == nil || now.Before(*t.ExpiresAt))
+}
+
+func tokenStatus(t tokenRecord, now time.Time) string {
+	if t.RevokedAt != nil {
+		return "revoked"
+	}
+	if t.ExpiresAt != nil && !now.Before(*t.ExpiresAt) {
+		return "expired"
+	}
+	return "active"
+}
+
+func tokenInfoOf(t tokenRecord, now time.Time) tokenInfo {
+	status := tokenStatus(t, now)
+	return tokenInfo{
+		ID:          t.ID,
+		PrincipalID: t.PrincipalID,
+		Label:       t.Label,
+		CreatedAt:   t.CreatedAt,
+		Active:      status == "active",
+		Status:      status,
+		ExpiresAt:   t.ExpiresAt,
+		LastUsedAt:  t.LastUsedAt,
+		RevokedAt:   t.RevokedAt,
+		ReplacedBy:  t.ReplacedBy,
+	}
+}
+
+func activeTokenFor(s managedState, principalID string) (tokenRecord, bool) {
+	for _, token := range s.Tokens {
+		if token.PrincipalID == principalID && tokenActive(token) {
+			return token, true
+		}
+	}
+	return tokenRecord{}, false
+}
+
+func (m *Managed) principalLabel(s managedState, principal string) string {
+	if principal == s.Admin.ID {
+		return s.Admin.Username
+	}
+	return s.Agents[principal].Name
+}
+
+func (m *Managed) mintToken(s *managedState, principal, label string, expiresAt *time.Time) (tokenRecord, string, error) {
 	if !validLabel(label) {
 		return tokenRecord{}, "", errors.New("token label must contain 1–128 bytes without control characters")
 	}
 	if len(s.Tokens) >= maxTokens {
-		return tokenRecord{}, "", errors.New("MCP token limit reached; revoke an unused token")
+		return tokenRecord{}, "", errors.New("MCP token history limit reached; clear old token history")
 	}
 	if principal != s.Admin.ID {
 		if _, ok := s.Agents[principal]; !ok {
@@ -161,12 +288,68 @@ func (m *Managed) issueToken(s *managedState, principal, label string) (tokenRec
 		return tokenRecord{}, "", err
 	}
 	raw := "tmcp_" + id + "." + secret
-	t := tokenRecord{ID: id, PrincipalID: principal, Label: label, Digest: tokenDigest(raw), CreatedAt: m.now().UTC()}
+	now := m.now().UTC()
+	if expiresAt != nil {
+		expiry := expiresAt.UTC()
+		if !expiry.After(now) {
+			return tokenRecord{}, "", errors.New("token expiry must be in the future")
+		}
+		expiresAt = &expiry
+	}
+	t := tokenRecord{ID: id, PrincipalID: principal, Label: label, Digest: tokenDigest(raw), CreatedAt: now, ExpiresAt: expiresAt}
 	s.Tokens[id] = t
 	return t, raw, nil
 }
 
+func (m *Managed) issueToken(s *managedState, principal, label string, expiresAt *time.Time) (tokenRecord, string, error) {
+	if principal != s.Admin.ID {
+		if _, ok := s.Agents[principal]; !ok {
+			return tokenRecord{}, "", errors.New("Agent does not exist")
+		}
+	}
+	current, hasCurrent := activeTokenFor(*s, principal)
+	if hasCurrent && tokenLive(current, m.now().UTC()) {
+		return tokenRecord{}, "", errActiveCredential
+	}
+	if label == "" {
+		label = m.principalLabel(*s, principal)
+	}
+	next, raw, err := m.mintToken(s, principal, label, expiresAt)
+	if err != nil {
+		return tokenRecord{}, "", err
+	}
+	if hasCurrent {
+		now := m.now().UTC()
+		current.RevokedAt = &now
+		current.ReplacedBy = next.ID
+		s.Tokens[current.ID] = current
+	}
+	return next, raw, nil
+}
+
+func (m *Managed) rotateToken(s *managedState, tokenID, label string, expiresAt *time.Time) (tokenRecord, tokenRecord, string, error) {
+	old, ok := s.Tokens[tokenID]
+	now := m.now().UTC()
+	if !ok || !tokenLive(old, now) {
+		return tokenRecord{}, tokenRecord{}, "", errNoActiveCredential
+	}
+	if label == "" {
+		label = old.Label
+	}
+	next, raw, err := m.mintToken(s, old.PrincipalID, label, expiresAt)
+	if err != nil {
+		return tokenRecord{}, tokenRecord{}, "", err
+	}
+	old.RevokedAt = &now
+	old.ReplacedBy = next.ID
+	s.Tokens[old.ID] = old
+	return old, next, raw, nil
+}
+
 func (m *Managed) tokenActorLocked(t tokenRecord) (Actor, bool) {
+	if !tokenLive(t, m.now().UTC()) {
+		return Actor{}, false
+	}
 	if t.PrincipalID == m.state.Admin.ID {
 		return Actor{ID: m.state.Admin.ID, Username: m.state.Admin.Username, Role: RoleAdmin}, true
 	}
@@ -197,7 +380,7 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 		return nil, nil, 423
 	}
 	t, ok := m.state.Tokens[pair[0]]
-	if !ok || !equalSecret(t.Digest, tokenDigest(raw)) || m.vault.AuthenticationLocked() {
+	if !ok || !tokenLive(t, m.now().UTC()) || !equalSecret(t.Digest, tokenDigest(raw)) || m.vault.AuthenticationLocked() {
 		return nil, nil, 401
 	}
 	actor, ok := m.tokenActorLocked(t)
@@ -227,6 +410,9 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 		ctx = m.withAgentPolicy(ctx, actor.ID, t.ID)
 		ctx = m.withBackgroundWork(ctx, actor.ID, t.ID)
 	}
+	usedAt := m.now().UTC()
+	t.LastUsedAt = &usedAt
+	m.state.Tokens[t.ID] = t
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, id)
 	return ctx, func() {
@@ -290,8 +476,9 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.URL.Path == "/auth/tokens" && r.Method == "GET":
 		tokens := make([]tokenInfo, 0, len(s.Tokens))
+		now := m.now().UTC()
 		for _, t := range s.Tokens {
-			tokens = append(tokens, tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt})
+			tokens = append(tokens, tokenInfoOf(t, now))
 		}
 		sort.Slice(tokens, func(i, j int) bool { return tokens[i].CreatedAt.Before(tokens[j].CreatedAt) })
 		authJSON(w, 200, map[string]any{"tokens": tokens})
@@ -327,20 +514,21 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		markAuditTarget(a.ID)
 		result = map[string]any{"principal": a}
 		if input.IssueToken {
-			t, raw, err := m.issueToken(&s, id, input.Name)
+			t, raw, err := m.issueToken(&s, id, input.Name, nil)
 			if err != nil {
 				authError(w, 400, err.Error())
 				return
 			}
-			result = map[string]any{"principal": a, "token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
+			result = map[string]any{"principal": a, "token": raw, "credential": tokenInfoOf(t, m.now().UTC())}
 			auditDetail(r.Context(), func(draft *auditDraft) {
 				draft.action = "principal.create_with_credential"
 			})
 		}
 	case r.URL.Path == "/auth/tokens" && r.Method == "POST":
 		var input struct {
-			PrincipalID string `json:"principal_id"`
-			Label       string `json:"label"`
+			PrincipalID string     `json:"principal_id"`
+			Label       string     `json:"label"`
+			ExpiresAt   *time.Time `json:"expires_at"`
 		}
 		if decodeJSON(http.MaxBytesReader(w, r.Body, 262144), &input) != nil {
 			authError(w, 400, "invalid token request")
@@ -350,13 +538,47 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		if principal == "" {
 			principal = s.Admin.ID
 		}
-		t, raw, err := m.issueToken(&s, principal, input.Label)
+		t, raw, err := m.issueToken(&s, principal, input.Label, input.ExpiresAt)
 		if err != nil {
-			authError(w, 400, err.Error())
+			status := 400
+			if errors.Is(err, errActiveCredential) {
+				status = 409
+			}
+			authError(w, status, err.Error())
 			return
 		}
-		result = map[string]any{"token": raw, "credential": tokenInfo{t.ID, t.PrincipalID, t.Label, t.CreatedAt}}
+		result = map[string]any{"token": raw, "credential": tokenInfoOf(t, m.now().UTC())}
 		markAuditTarget(t.ID)
+	case strings.HasPrefix(r.URL.Path, "/auth/tokens/") && strings.HasSuffix(r.URL.Path, "/rotate") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/tokens/"), "/rotate")
+		if id == "" || strings.Contains(id, "/") {
+			authError(w, 404, "active token not found")
+			return
+		}
+		var input struct {
+			Label     string     `json:"label"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		}
+		if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil {
+			authError(w, 400, "invalid token rotation request")
+			return
+		}
+		previous, next, raw, err := m.rotateToken(&s, id, input.Label, input.ExpiresAt)
+		if err != nil {
+			status := 400
+			if errors.Is(err, errNoActiveCredential) {
+				status = 404
+			}
+			authError(w, status, err.Error())
+			return
+		}
+		deletedTokenIDs = append(deletedTokenIDs, previous.ID)
+		result = map[string]any{
+			"token":               raw,
+			"credential":          tokenInfoOf(next, m.now().UTC()),
+			"previous_credential": tokenInfoOf(previous, m.now().UTC()),
+		}
+		markAuditTarget(previous.ID)
 	case strings.HasPrefix(r.URL.Path, "/auth/principals/") && strings.HasSuffix(r.URL.Path, "/delete-preview") && r.Method == "POST":
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/principals/"), "/delete-preview")
 		a, ok := s.Agents[id]
@@ -428,13 +650,38 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		s.Agents[id] = a
 		markAuditTarget(a.ID)
 		result = map[string]any{"principal": a}
+	case r.URL.Path == "/auth/tokens/history" && r.Method == "DELETE":
+		principal := r.URL.Query().Get("principal_id")
+		if principal == "" {
+			principal = s.Admin.ID
+		}
+		if principal != s.Admin.ID {
+			if _, ok := s.Agents[principal]; !ok {
+				authError(w, 404, "Agent not found")
+				return
+			}
+		}
+		deleted := 0
+		now := m.now().UTC()
+		for id, token := range s.Tokens {
+			if token.PrincipalID == principal && !tokenLive(token, now) {
+				delete(s.Tokens, id)
+				deleted++
+			}
+		}
+		markAuditTarget(principal)
+		result = map[string]any{"ok": true, "principal_id": principal, "deleted_tokens": deleted}
 	case strings.HasPrefix(r.URL.Path, "/auth/tokens/") && r.Method == "DELETE":
 		id := strings.TrimPrefix(r.URL.Path, "/auth/tokens/")
-		if _, ok := s.Tokens[id]; !ok {
-			authError(w, 404, "token not found")
+		token, ok := s.Tokens[id]
+		if !ok || !tokenActive(token) {
+			authError(w, 404, "active token not found")
 			return
 		}
-		delete(s.Tokens, id)
+		now := m.now().UTC()
+		token.RevokedAt = &now
+		s.Tokens[id] = token
+		deletedTokenIDs = append(deletedTokenIDs, id)
 		markAuditTarget(id)
 		result = map[string]bool{"ok": true}
 	default:

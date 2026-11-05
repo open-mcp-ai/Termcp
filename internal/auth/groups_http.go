@@ -12,11 +12,12 @@ import (
 
 type groupView struct {
 	permissionGroup
-	MemberCount     int  `json:"member_count"`
-	CredentialCount int  `json:"credential_count"`
-	ActiveRequests  int  `json:"active_requests"`
-	ActiveWork      int  `json:"active_work"`
-	IsDefault       bool `json:"is_default"`
+	MemberCount           int  `json:"member_count"`
+	CredentialCount       int  `json:"credential_count"`
+	ActiveCredentialCount int  `json:"active_credential_count"`
+	ActiveRequests        int  `json:"active_requests"`
+	ActiveWork            int  `json:"active_work"`
+	IsDefault             bool `json:"is_default"`
 }
 
 func (m *Managed) groupViewLocked(s managedState, g permissionGroup) groupView {
@@ -26,9 +27,13 @@ func (m *Managed) groupViewLocked(s managedState, g permissionGroup) groupView {
 		wanted[id] = true
 	}
 	out := groupView{permissionGroup: g, MemberCount: len(members), IsDefault: s.DefaultGroupID == g.ID}
+	now := m.now().UTC()
 	for id, token := range s.Tokens {
 		if wanted[token.PrincipalID] {
 			out.CredentialCount++
+			if tokenLive(token, now) {
+				out.ActiveCredentialCount++
+			}
 			out.ActiveRequests += len(m.requests["token:"+id])
 			out.ActiveWork += len(m.background[id])
 		}

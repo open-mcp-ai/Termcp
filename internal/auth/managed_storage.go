@@ -181,11 +181,28 @@ func (m *Managed) loadLocked() error {
 	changed := upgradePresetGroups(&state)
 	changed = repairAmbiguousAgentPolicies(&state) || changed
 	changed = repairRetiredAgentOperations(&state) || changed
+	normalizedTokens, revokedTokens := normalizeTokenUniqueness(&state, m.now().UTC())
+	changed = normalizedTokens || changed
 	if err := validateState(state, false); err != nil {
 		return err
 	}
 	if changed {
-		return m.save(state, false)
+		if err := m.save(state, false); err != nil {
+			return err
+		}
+		if normalizedTokens && m.auditSink != nil {
+			m.auditSink.Record(context.Background(), AuditEvent{
+				Action:           "credential.migrate_single_active",
+				ActorID:          "system",
+				ActorName:        "authentication migration",
+				ActorRole:        RoleAdmin,
+				TargetType:       "credential",
+				AffectedSubjects: revokedTokens,
+				Result:           "success",
+				Reason:           "kept newest active token; revoked older records into history",
+			})
+		}
+		return nil
 	}
 	m.state = state
 	if m.markerDirty {
