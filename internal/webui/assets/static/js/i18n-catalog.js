@@ -16,8 +16,10 @@
 var I18N_CATALOG = {
   en: {
     /* --- page shell --- */
-    'nav.docs': 'Docs',
+    'nav.controls': 'Workspace controls',
     'nav.api.title': 'MCP and HTTP API reference',
+    'settings.title': 'Settings',
+    'settings.hint': 'Appearance, permissions, login security and connections.',
     'nav.nethub': 'Hosts',
     'archive.count': 'Archive: {count} sessions',
     'archive.fold': 'Fold archive',
@@ -532,9 +534,9 @@ var I18N_CATALOG = {
     'review.kind.forwardOpen': 'port forward',
     'review.kind.forwardClose': 'forward close',
     'approvals.title': 'Approvals',
-    'approvals.policyHint': 'Policy requests that are not tied to a terminal session wait here.',
+    'approvals.queueHint': 'Pending requests from terminal sessions and instance policy wait here.',
     'approvals.empty': 'Nothing is waiting for approval.',
-    'notify.policyReviewTip': 'Open policy approvals',
+    'notify.policyReviewTip': 'Open approvals',
 
     /* --- terminal timeline rail --- */
     'rail.label': 'Terminal timeline',
@@ -555,8 +557,10 @@ var I18N_CATALOG = {
   },
   'zh-Hans': {
     /* --- page shell --- */
-    'nav.docs': '文档',
+    'nav.controls': '工作区控件',
     'nav.api.title': 'MCP 与 HTTP API 参考',
+    'settings.title': '设置',
+    'settings.hint': '外观、权限、登录安全与连接设置。',
     'nav.nethub': '主机',
     'archive.count': '归档：{count} 个会话',
     'archive.fold': '收起归档',
@@ -1069,9 +1073,9 @@ var I18N_CATALOG = {
     'review.kind.forwardOpen': '端口转发',
     'review.kind.forwardClose': '关闭转发',
     'approvals.title': '审批',
-    'approvals.policyHint': '不依附终端会话的策略请求会在这里等待裁决。',
+    'approvals.queueHint': '终端会话和实例策略中的待处理请求会在这里等待裁决。',
     'approvals.empty': '当前没有待审批请求。',
-    'notify.policyReviewTip': '打开策略审批',
+    'notify.policyReviewTip': '打开审批',
 
     /* --- terminal timeline rail --- */
     'rail.label': '终端时间轴',
@@ -1092,8 +1096,10 @@ var I18N_CATALOG = {
   },
   'zh-Hant': {
     /* --- page shell --- */
-    'nav.docs': '文件',
+    'nav.controls': '工作區控制項',
     'nav.api.title': 'MCP 與 HTTP API 參考',
+    'settings.title': '設定',
+    'settings.hint': '外觀、權限、登入安全與連線設定。',
     'nav.nethub': '主機',
     'archive.count': '歸檔：{count} 個工作階段',
     'archive.fold': '收合歸檔',
@@ -1606,7 +1612,7 @@ var I18N_CATALOG = {
     'review.kind.forwardOpen': '通訊埠轉送',
     'review.kind.forwardClose': '關閉轉送',
     'approvals.title': '審批',
-    'approvals.policyHint': '不依附終端工作階段的策略請求會在這裡等待裁決。',
+    'approvals.queueHint': '終端工作階段和實例策略中的待處理請求會在這裡等待裁決。',
     'approvals.empty': '目前沒有待審批請求。',
     'notify.policyReviewTip': '開啟策略審批',
 

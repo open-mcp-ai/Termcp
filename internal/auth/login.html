@@ -15,7 +15,7 @@
 <main>
   <header><span class="brand">Termcp</span><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="en">English</option><option value="zh">中文</option></select></div></header>
   <h1 id="title">Sign in</h1>
-  <p id="description" role="status">Checking your account…</p>
+  <p id="description" role="status">Checking login status…</p>
   <p id="message" role="alert" aria-live="assertive"></p>
   <form id="credentials" hidden>
     <label><span data-text="password">Login password</span><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
@@ -69,7 +69,7 @@
     "setup": "Set up Termcp",
     "setupHint": "Set the two local passwords: login opens this workspace; decryption unlocks encrypted configuration data.",
     "loginHint": "Enter the local login password.",
-    "account": "Account",
+    "account": "Login & security",
     "signedIn": "Signed in.",
     "local": "Open Termcp on its own machine, or use SSH port forwarding, to set the first local passwords.",
     "workspace": "Back to workspace",
@@ -77,9 +77,9 @@
     "waiting": "Please wait…",
     "mismatch": "Passwords do not match.",
     "network": "Could not connect. Check that Termcp is running, then try again.",
-    "loading": "Checking your account…",
+    "loading": "Checking login status…",
     "unlockHint": "Sign in, then unlock configurations with the decryption password.",
-    "migrationHint": "Sign in once to migrate the legacy account. Enter its existing decryption password.",
+    "migrationHint": "Sign in once to migrate the legacy login record. Enter its existing decryption password.",
     "changePassword": "Change login password",
     "changeHint": "Changes only the login password and signs out browser sessions. The decryption password and MCP credentials stay unchanged.",
     "currentPassword": "Current password",
@@ -109,7 +109,7 @@
     "setup": "设置 Termcp",
     "setupHint": "设置两份本机密码：登录密码用于进入工作区，解密密码用于解锁加密配置。",
     "loginHint": "请输入本机登录密码。",
-    "account": "账号",
+    "account": "登录与安全",
     "signedIn": "已登录。",
     "local": "请在 Termcp 所在机器打开页面，或通过 SSH 本地转发完成首次密码设置。",
     "workspace": "返回工作区",
@@ -117,9 +117,9 @@
     "waiting": "请稍候…",
     "mismatch": "两次输入的密码不一致。",
     "network": "无法连接，请确认 Termcp 正在运行后重试。",
-    "loading": "正在检查账号…",
+    "loading": "正在检查登录状态…",
     "unlockHint": "先登录，再使用解密密码解锁数据。",
-    "migrationHint": "首次登录将迁移旧账号的校验记录，请输入原解密密码。",
+    "migrationHint": "首次登录将迁移旧登录校验记录，请输入原解密密码。",
     "changePassword": "修改登录密码",
     "changeHint": "只修改登录密码并退出浏览器会话。解密密码与 MCP 凭据保持不变。",
     "currentPassword": "当前密码",

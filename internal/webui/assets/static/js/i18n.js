@@ -187,18 +187,17 @@ function setLangMenuOpen(open) {
 function toggleLangMenu() { setLangMenuOpen(!_langMenuOpen); }
 function closeLangMenu() { setLangMenuOpen(false); }
 
-/* Only one header menu is ever open.
- *
- *  All three (theme, language, clients) hang off the same header and share one
- *  rung of the ladder, so their order among themselves is DOM order and a menu
- *  opened later could land under one opened earlier. Ranking them would be a
- *  ladder that encodes a mistake; the mistake is having two open. Opening one
- *  closes the rest, which is also what the reader meant by the second click. */
+/* Only one top-level header menu is open. Theme, language and clients live
+ * inside Settings and may expand without closing that parent. */
 function closeHeaderMenus(except) {
   if (except !== 'lang') closeLangMenu();
-  ['theme-switch', 'clients-menu', 'approval-menu'].forEach(function (id) {
+  ['theme-switch', 'clients-menu', 'approval-menu', 'settings-menu'].forEach(function (id) {
     if (except === id) return;
     var d = document.getElementById(id);
+    if ((id === 'approval-menu' || id === 'settings-menu') && d) {
+      var active = document.getElementById(except === 'lang' ? 'lang-menu' : except);
+      if (active && active.closest && active.closest('#' + id)) return;
+    }
     if (d && d.open) d.open = false;
   });
 }

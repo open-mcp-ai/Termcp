@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// TestOnlyOneHeaderMenuIsOpenAtATime pins the rule that keeps the three header
-// menus from covering each other.
+// TestOnlyOneHeaderMenuIsOpenAtATime pins the rule that keeps top-level header
+// menus from covering each other, while allowing theme/language/clients to live
+// inside the Settings menu without closing that parent.
 //
 // The theme switch, the language menu and the clients panel are all children of
 // the header and share one rung of the z-ladder (--z-dropdown), so which of them
@@ -51,6 +52,10 @@ func TestOnlyOneHeaderMenuIsOpenAtATime(t *testing.T) {
 			t.Errorf("%s opens a header menu without closing the others: a menu opened "+
 				"while another is up renders underneath it", f)
 		}
+	}
+	i18n := readAssetLF(t, "static/js/i18n.js")
+	if !strings.Contains(i18n, "active.closest('#' + id)") {
+		t.Error("a nested clients/language menu must not close its Settings parent")
 	}
 }
 

@@ -140,6 +140,24 @@ func TestLoginPageExposesOnlyLoginAndDecryptionPasswords(t *testing.T) {
 	}
 }
 
+func TestManagedAuthPageUsesLoginSecurityLanguage(t *testing.T) {
+	for _, forbidden := range []string{
+		`"account": "Account"`,
+		`"account": "账号"`,
+		"Checking your account…",
+		"正在检查账号…",
+	} {
+		if strings.Contains(loginHTML, forbidden) {
+			t.Errorf("login page retains account terminology %q", forbidden)
+		}
+	}
+	for _, want := range []string{`"account": "Login & security"`, `"account": "登录与安全"`} {
+		if !strings.Contains(loginHTML, want) {
+			t.Errorf("login page lacks %q", want)
+		}
+	}
+}
+
 func TestManagedPagesKeepFallbackWhenThemesAreUnavailable(t *testing.T) {
 	for _, assets := range []fs.FS{nil, fstest.MapFS{"api.md": &fstest.MapFile{Data: []byte("docs only")}}} {
 		m := &Managed{}
@@ -175,6 +193,24 @@ func TestPermissionPageKeepsPreviewPresetsAndIndependentScrollPanes(t *testing.T
 	} {
 		if !strings.Contains(permissionsHTML, want) {
 			t.Errorf("permissions page lacks %q", want)
+		}
+	}
+}
+
+func TestPermissionPageHasOneContextualBackLinkAndMobileColumnReset(t *testing.T) {
+	for _, gone := range []string{`href="/permissions" aria-current="page"`, `<a href="/auth" data-text="account"`} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("permissions page retains duplicate global navigation %q", gone)
+		}
+	}
+	for _, want := range []string{
+		`class="back-link"`,
+		`.auth-permissions .workspace{display:flex;flex-direction:column;grid-template-columns:1fr`,
+		`.auth-permissions .workspace>aside{`,
+		`width:100%;max-width:100%;min-width:0`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions responsive shell lacks %q", want)
 		}
 	}
 }

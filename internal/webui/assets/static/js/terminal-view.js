@@ -825,8 +825,8 @@ function setReviewSheetOpen(win, open) {
  *
  *  One person is enough: whoever turns review on is the reviewer. Counting
  *  approvers is left to a future permission model, because termcp cannot prove
- *  who an approver is until accounts exist — a threshold over claimed names
- *  would look like security without being any.
+ *  who an approver is before distinct principals exist — a threshold over
+ *  claimed names would look like security without being any.
  */
 function applyReviewToggle(win, tg) {
   var sid = win._parentSid;

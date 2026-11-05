@@ -56,14 +56,20 @@ func TestApprovalUIIsWired(t *testing.T) {
 		t.Error("index.html must load approval.js")
 	}
 	appr := readAssetLF(t, "static/js/approval.js")
-	// There is one worklist: session-bound decisions stay in the terminal, while
-	// the header list contains only policy requests that have no session window.
+	// There is one global worklist plus the per-session view. The header is the
+	// complete queue, including requests whose terminal window is currently open.
 	if !strings.Contains(appr, "function installPolicyApprovalMenu()") ||
 		!strings.Contains(appr, `id="policy-approval-list"`) {
-		t.Error("approval.js must expose the global worklist for unbound policy approvals")
+		t.Error("approval.js must expose the global approval worklist")
 	}
-	if !strings.Contains(appr, "it.request.session_id === 'policy'") {
-		t.Error("the global worklist must exclude approvals already owned by a session window")
+	if strings.Contains(appr, "it.request.session_id === 'policy'") {
+		t.Error("the global worklist must include pending requests from every session")
+	}
+	if strings.Contains(appr, "settings-links") || strings.Contains(appr, "mountApprovalSettings") {
+		t.Error("the approval panel must not own workspace settings")
+	}
+	if !strings.Contains(index, `static/js/settings.js`) {
+		t.Error("index.html must load the separate settings menu")
 	}
 	if !strings.Contains(appr, "function openPolicyApprovalMenu(") {
 		t.Error("approval notifications need an entrance to the unbound policy worklist")
@@ -306,6 +312,9 @@ func TestApprovalCountLivesOnTheLockAndNotOnThePaneTabs(t *testing.T) {
 	paint := between(t, js, "function applyApprovalCounts() {", "\n}")
 	if !strings.Contains(paint, "num.textContent = String(n)") {
 		t.Error("applyApprovalCounts must write the lock count's number as well as its visibility")
+	}
+	if !strings.Contains(js, "window._approvalTotal = totalCount") || !strings.Contains(paint, "window._approvalTotal") {
+		t.Error("the header approval badge must count every pending request, not only policy asks")
 	}
 	// And it must paint the lock, not a tab.
 	if !strings.Contains(paint, ".shell-review-count") {
@@ -593,6 +602,41 @@ func TestReviewModeIsASmallSwitchNotABigButton(t *testing.T) {
 	// And the JS drives the checkbox, not a label string.
 	if !strings.Contains(js, "tg.checked = !!on") {
 		t.Error("applyApprovalMode must set the checkbox, not its text")
+	}
+}
+
+func TestWorkspaceHeaderHasApprovalMCPAndSettingsEntries(t *testing.T) {
+	appr := readAssetLF(t, "static/js/approval.js")
+	if strings.Contains(appr, "settings-links") || strings.Contains(appr, "settings-menu") {
+		t.Error("approval.js still mixes settings into the approval queue")
+	}
+	settings := readAssetLF(t, "static/js/settings.js")
+	for _, want := range []string{
+		`id = 'settings-menu'`,
+		`id="settings-links"`,
+		`move('theme-switch', 'settings-theme')`,
+		`move('clients-menu', 'settings-clients')`,
+	} {
+		if !strings.Contains(settings, want) {
+			t.Errorf("settings.js lacks %s", want)
+		}
+	}
+	index := readAssetLF(t, "index.html")
+	if !strings.Contains(index, `class="api-nav-link"`) || !strings.Contains(index, "MCP / API") {
+		t.Error("the top-level MCP / API link must be restored")
+	}
+	auth := readAssetLF(t, "static/js/auth-session.js")
+	if !strings.Contains(auth, `getElementById('settings-links')`) ||
+		strings.Contains(auth, "header.appendChild(permissions)") {
+		t.Error("managed permissions/login-security links must live in Settings, not the header")
+	}
+	if !strings.Contains(auth, "登录与安全") || !strings.Contains(auth, "Login & security") {
+		t.Error("the managed security entry must be named Login & security")
+	}
+	storage := readAssetLF(t, "static/js/config-storage.js")
+	if !strings.Contains(storage, `getElementById('settings-links')`) ||
+		strings.Contains(storage, "_configStorageApiLink") {
+		t.Error("configuration encryption must live in Settings, not the header")
 	}
 }
 

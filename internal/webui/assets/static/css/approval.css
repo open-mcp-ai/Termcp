@@ -63,13 +63,13 @@
     font: 700 0.67rem/17px var(--font-mono);
     text-align: center; font-variant-numeric: tabular-nums;
   }
-  .policy-approval-panel { width: min(520px, calc(100vw - 24px)); }
-  .policy-approval-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 8px 4px; }
+  .policy-approval-panel { display: flex; flex-direction: column; width: min(520px, calc(100vw - 24px)); max-height: min(72vh, 680px); padding: 0; overflow: hidden; }
+  .policy-approval-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 12px 8px; }
   .policy-approval-head strong { display: block; color: var(--text-primary); font-size: 0.9rem; }
   .policy-approval-head p { margin: 3px 0 0; color: var(--text-muted); font-size: 0.72rem; line-height: 1.45; }
   .policy-approval-head button { flex: 0 0 auto; padding: 4px 7px; }
   .policy-approval-head svg { display: block; }
-  #policy-approval-list { padding: 4px 8px 8px; }
+  #policy-approval-list { min-height: 0; overflow-y: auto; padding: 4px 10px 10px; }
   .policy-approval-empty { padding: 22px 12px; color: var(--text-muted); text-align: center; font-size: 0.82rem; }
   /* Touch: the approver decides from a phone, so the buttons need real height,
      and they go back side by side — a narrow screen has no room to waste on a
@@ -79,6 +79,11 @@
     .approval-row .approval-actions { flex-direction: row; }
     .approval-row .approval-actions .btn { min-height: 40px; flex: 1; }
     .approval-chip { font-size: 0.78rem; padding: 4px 8px; }
+  }
+  @media (max-width: 600px) {
+    .policy-approval-panel { position: fixed; top: 58px; right: 8px; left: 8px; width: auto; max-height: calc(100dvh - 68px); }
+    .policy-approval-head { padding: 10px 10px 7px; }
+    #policy-approval-list { padding: 4px 8px 8px; }
   }
   .err { color: var(--danger); font-size: 0.85rem; margin: 0 0 8px; }
   .conn-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }

@@ -239,11 +239,14 @@ func TestTheWindowIsATimerNotAWalkTick(t *testing.T) {
 	const window = 150 * time.Millisecond
 	lazyExt(t, r, "timed", "150ms")
 
+	// The idle timer starts inside Acquire, before it returns the channel. Start
+	// the clock first so the lower-bound assertion cannot fail on the setup time
+	// between arming the timer and returning to the test.
+	start := time.Now()
 	st, err := r.Acquire("timed", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	for {
 		// NOTHING HERE TRIGGERS THE WALK. If the deadline is only honoured by the
 		// sweep, this test cannot pass: the first walk is seconds away.

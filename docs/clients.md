@@ -114,9 +114,9 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 ## 认证
 
-默认使用 managed 本机密码认证：第一次在本机访问 `/login` 只设置登录密码与解密密码，不再输入用户名，之后登录获得 HttpOnly JWT Cookie。顶部账号入口 `/auth` 可进入账号和权限管理。登录校验记录、keyring、identity 和 EDK 位于 `<data-dir>/local-state/state.json`，加密正文按对象身份和代际保存在 `local-state/objects/`。浏览器会话不跨重启恢复。
+默认使用 managed 本机密码认证：第一次在本机访问 `/login` 只设置登录密码与解密密码，不再输入用户名，之后登录获得 HttpOnly JWT Cookie。顶部“登录与安全”入口 `/auth` 可进入登录设置和权限管理。登录校验记录、keyring、identity 和 EDK 位于 `<data-dir>/local-state/state.json`，加密正文按对象身份和代际保存在 `local-state/objects/`。浏览器会话不跨重启恢复。
 
-登录密码只认证浏览器会话；保险库锁定时，登录后再在 `/auth` 输入解密密码。Agent token 不承担解锁，423 表示需要完成保险库解锁或中断重封续跑。账号页改密码只改变登录密码并撤销浏览器登录；配置加密页改密码只重封 EDK，不改变登录密码、正文或 MCP token。旧布局验证后迁移并清理源文件，旧明文主机仍由用户选择是否转换。
+登录密码只认证浏览器会话；保险库锁定时，登录后再在 `/auth` 输入解密密码。Agent token 不承担解锁，423 表示需要完成保险库解锁或中断重封续跑。“登录与安全”页改密码只改变登录密码并撤销浏览器登录；配置加密页改密码只重封 EDK，不改变登录密码、正文或 MCP token。旧布局验证后迁移并清理源文件，旧明文主机仍由用户选择是否转换。
 
 托管模式写请求使用 `/auth/status` 返回的 CSRF 值，通过 `X-Termcp-CSRF` 发送；内置
 WebUI 自动处理。首次设置只接受 loopback 连接及 loopback Host；远程部署可先通过

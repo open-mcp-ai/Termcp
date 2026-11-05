@@ -116,7 +116,7 @@ Neither password nor a plaintext key is stored.
 `<data-dir>/local-state/state.json` is the single commit point for login bootstrap,
 keyring protection, identity references and detached EDKs. Host ciphertext remains in `ssh_configs/<host>/<generation>.enc`. Immutable
 catalog/auth bodies live in `local-state/objects/<object-id>/<generation>.enc`. The private
-account/policy/token state is an encrypted object in that store. Browser session
+login/policy/token state is an encrypted object in that store. Browser session
 keys and logins are process-local; a restart always requires browser sign-in.
 
 | Managed route | Method | Behavior |
@@ -128,7 +128,7 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/password` | POST | Change only the login password: `current_password`, `new_password`, `confirmation`; revoke browser sessions and preserve MK/EDKs/MCP credentials |
 | `/auth/unlock` | POST | Authenticated vault unlock: JSON `password` is the decryption password |
 | `/auth/logout` | POST | Revoke this session, clear Cookie, cancel its active connections |
-| `/auth` | GET | Account, login-password change, independent vault unlock and sign-out page |
+| `/auth` | GET | Login and security, login-password change, independent vault unlock and sign-out page |
 | `/permissions` | GET | Manage permission groups, actions, host scope, principals and client credentials |
 | `/auth/access` | GET | Admin-only operation/condition and saved-host catalog; hosts contain stable `id` and display `name` |
 | `/auth/access/preview` | POST | Admin-only, non-executing authorization plan for one `tool` call or DSL `cmd`; returns per-operation decisions and rejects execution overrides |
@@ -146,7 +146,7 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/tokens/{id}` | DELETE | Revoke this token and cancel its active requests |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
 
-Anonymous `/auth/status` reports `can_setup=true` only while no account is
+Anonymous `/auth/status` reports `can_setup=true` only while no login is
 configured and the request passes the loopback peer/Host checks. Once configured,
 `can_setup` is always `false`.
 
@@ -157,7 +157,7 @@ UI then directs the owner to `/auth` and `POST /auth/unlock`. Status returns
 `authenticated` and `locked` separately, plus `vault_ready`,
 `migration_required`, and `encryption_initialized`. Business requests while the
 vault needs unlocking/resuming return HTTP 423; only
-account/logout/login-password/unlock operations remain available. Agent tokens
+login-and-security/logout/login-password/unlock operations remain available. Agent tokens
 do not unlock MKs.
 
 `POST /api/config-storage/password` changes only the configuration password,
@@ -175,7 +175,7 @@ claims. `admin` retains Web/API management access; `agent` can only be allowed
 MCP. This entrance policy is separate from the operation policy of each permission group.
 MCP clients use `Authorization: Bearer <token>` on every `/stream`, `/sse`, and
 `/message` request. Bearer credentials do not require CSRF headers and never grant
-WebUI, account, REST or daemon management access, even when owned by Admin.
+WebUI, login-security, REST or daemon management access, even when owned by Admin.
 Issuance/list/revocation require an Admin Cookie and CSRF for mutations. Creation
 returns `token` once and `credential` metadata (`id`, `principal_id`, `label`,
 `created_at`). Lists never return secrets or digests. A token has no automatic
