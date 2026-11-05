@@ -138,7 +138,7 @@ HTTP 直连的配置示意如下；外层字段由宿主 adapter 渲染，不能
 
 宿主启动本地桥并不等于能在远端启动服务。远端配置不应使用 `daemon stdio --host <远端地址>`。managed 模式的自动启动仅支持本机 loopback；显式远端 URL 只连接，不拉起进程。配置生成还要保留 HTTPS、代理路径前缀和非默认端口。
 
-目前 `api.html` 一律按页面 hostname/port 生成 `daemon stdio`，且不保留 HTTPS/路径前缀。这是实施时需要一起替换的配置生成规则，不能直接在旧模板中补上一个 token 就算完成。
+权限页生成的配置保留页面当前的 HTTPS origin、反向代理路径前缀和端口。`stdio` 与 `daemon stdio` 都把完整 `/prefix/stream` URL 作为 endpoint；桥在 initialize 前使用同一前缀下的 `/auth/mcp` 做认证保活。
 
 ### 3.3 全新安装：npx / daemon stdio
 

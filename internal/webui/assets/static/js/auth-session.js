@@ -1,7 +1,25 @@
 function initManagedSession() {
   'use strict';
+  /* auth deployment path: preserve reverse-proxy mount for authentication routes. */
+  function authBasePath() {
+    var pathname = location.pathname || '/';
+    if (pathname.slice(-11) === '/index.html') pathname = pathname.slice(0, -11);
+    else if (pathname !== '/') {
+      var slash = pathname.lastIndexOf('/');
+      pathname = slash < 0 ? '' : pathname.slice(0, slash);
+    }
+    return pathname === '/' ? '' : pathname;
+  }
+  function authPath(path) {
+    var value = String(path == null ? '' : path);
+    if (!value || value.charAt(0) !== '/') return value;
+    var base = authBasePath();
+    if (!base || value === base || value.indexOf(base + '/') === 0) return value;
+    return base + value;
+  }
+  /* end auth deployment path */
   var original = window.fetch.bind(window);
-  var context = original('/auth/status', { cache: 'no-store' }).then(function (response) {
+  var context = original(authPath('/auth/status'), { cache: 'no-store' }).then(function (response) {
     if (!response.ok) return null;
     return response.json();
   }).catch(function () { return null; });
@@ -16,8 +34,8 @@ function initManagedSession() {
         request = new Request(request, { headers: headers });
       }
       return original(request).then(function (response) {
-        if (state && state.mode === 'managed' && response.status === 423) location.assign('/auth');
-        if (state && state.mode === 'managed' && (response.status === 401 || response.headers.get('X-Termcp-Reauthenticate') === '1')) location.assign('/login');
+        if (state && state.mode === 'managed' && response.status === 423) location.assign(authPath('/auth'));
+        if (state && state.mode === 'managed' && (response.status === 401 || response.headers.get('X-Termcp-Reauthenticate') === '1')) location.assign(authPath('/login'));
         return response;
       });
     });
@@ -49,13 +67,13 @@ function initManagedSession() {
       if (document.getElementById('managed-permissions-link')) return;
       var permissions = document.createElement('a');
       permissions.id = 'managed-permissions-link';
-      permissions.href = '/permissions';
+      permissions.href = authPath('/permissions');
       permissions.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="7" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg><span></span>';
       permissions.className = 'api-nav-link settings-link app-menu-item settings-permissions';
       permissions.lastElementChild.textContent = /^zh/i.test(navigator.language) ? '权限管理' : 'Permissions';
       var link = document.createElement('a');
       link.id = 'managed-security-link';
-      link.href = '/auth';
+      link.href = authPath('/auth');
       link.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.5" r="2.5"/><path d="M3.5 13c.6-2.2 2.1-3.3 4.5-3.3s3.9 1.1 4.5 3.3"/></svg><span></span>';
       link.setAttribute('aria-label', /^zh/i.test(navigator.language) ? '登录与安全' : 'Login and security');
       link.className = 'api-nav-link settings-link app-menu-item settings-security';

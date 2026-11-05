@@ -704,7 +704,7 @@ Agent 的“只允许 MCP”是**业务访问面**；本表列出的自身 renew
 
 MCP transport session 绑定 grant 和角色；每条消息的认证 grant 必须一致，不能只有角色相同就复用别人的 transport session。namespace、clientInfo、MCP session ID 和 loopback 均不能代替认证。
 
-stdio 的 keepalive/探活也必须保持 agent 身份：目前桥握手前探测 `/api/daemon`，未建立 session 时还请求 `/api/version` 保活；不能继续携带人的凭据。首期改为上表精确的 bridge-context/presence 控制端点，不向宿主流中额外注入 initialize/ping；需要 daemon 详情和 stop 的人端 CLI 单独认证。不能为了让桥探活方便，把 `/api/daemon` 或所有 `/api/*` 全面放行给 Agent。
+stdio 的 keepalive/探活也必须保持 Agent 身份：桥在 initialize 前使用保留部署前缀的 `/auth/mcp` 保活，成功认证后才计入 daemon 活动；缺失或已撤销 Token 的请求不能延长空闲期。当前不新增 bridge-context/presence 控制端点，也不向 MCP stdout 注入额外 initialize/ping。需要 daemon 详情和 stop 的人端 CLI 单独认证，不能把 `/api/daemon` 或所有 `/api/*` 放给 Agent。
 
 ## 12. 迁移和交付顺序
 

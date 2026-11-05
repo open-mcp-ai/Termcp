@@ -102,6 +102,44 @@ func TestIdleWatcherActivityResetsCountdown(t *testing.T) {
 	}
 }
 
+// Main composes authentication outside the watcher. A rejected request must
+// never reach enter(), otherwise an invalid bridge token can keep a daemon
+// alive while establishing no MCP presence.
+func TestRejectedAuthenticationDoesNotFeedIdleCountdown(t *testing.T) {
+	fired := make(chan struct{})
+	w := NewIdleWatcher(200*time.Millisecond, func() { close(fired) })
+	protected := w.Track(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {}))
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer valid" {
+			rw.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		protected.ServeHTTP(rw, r)
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	for range 12 {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/auth/mcp", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer revoked")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		select {
+		case <-fired:
+			return
+		default:
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("rejected authentication kept the idle countdown alive")
+}
+
 func TestIdleWatcherDisabled(t *testing.T) {
 	ts, fired := newIdleServer(t, 0, func(http.ResponseWriter, *http.Request) {})
 

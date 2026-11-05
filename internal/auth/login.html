@@ -148,7 +148,28 @@
 
 function t(key){return copy[lang][key]||key;}
   window.t=t;
+  /* auth deployment path: preserve reverse-proxy mount for authentication routes. */
+  function authBasePath() {
+    var pathname = location.pathname || '/';
+    if (pathname.slice(-11) === '/index.html') pathname = pathname.slice(0, -11);
+    else if (pathname !== '/') {
+      var slash = pathname.lastIndexOf('/');
+      pathname = slash < 0 ? '' : pathname.slice(0, slash);
+    }
+    return pathname === '/' ? '' : pathname;
+  }
+  function authPath(path) {
+    var value = String(path == null ? '' : path);
+    if (!value || value.charAt(0) !== '/') return value;
+    var base = authBasePath();
+    if (!base || value === base || value.indexOf(base + '/') === 0) return value;
+    return base + value;
+  }
+  /* end auth deployment path */
   function render(){
+    $('permissions-page').href=authPath('/permissions');
+    $('return-workspace').href=authPath('/');
+    $('encryption-settings').href=authPath('/')+'?config-encryption=1';
     document.documentElement.lang=lang;$('language').value=lang;if(typeof syncThemeControl==='function')syncThemeControl();
     document.querySelectorAll('[data-text]').forEach(function(el){el.textContent=t(el.dataset.text);});
     if(!state){$('description').textContent=t('loading');return;}
@@ -163,14 +184,14 @@ function t(key){return copy[lang][key]||key;}
     $('vault-unlock-section').hidden=!auth||!state.locked;$('vault-ready-note').hidden=!auth||state.locked;
     ['permissions-page','return-workspace','encryption-settings'].forEach(function(id){$(id).hidden=!auth||state.locked;});
   }
-  function request(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Termcp-CSRF':state&&state.csrf||''},options.headers||{});return fetch(path,options).then(function(r){return r.json().then(function(data){if(!r.ok)throw new Error(data.error||String(r.status));return data;});});}
+  function request(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Termcp-CSRF':state&&state.csrf||''},options.headers||{});return fetch(authPath(path),options).then(function(r){return r.json().then(function(data){if(!r.ok)throw new Error(data.error||String(r.status));return data;});});}
   function failed(e){$('message').textContent=e instanceof TypeError?t('network'):e.message;$('message').scrollIntoView({block:'nearest'});}
   function load(){return request('/auth/status').then(function(data){state=data;render();}).catch(failed);}
   $('language').onchange=function(){lang=this.value;render();};
-  $('credentials').onsubmit=function(e){e.preventDefault();$('message').textContent='';var setup=!state.configured,needsDecryption=setup||!!state.migration_required;if(setup&&$('password').value!==$('confirm').value){$('message').textContent=t('mismatch');return;}if(setup&&$('config-password').value!==$('config-confirm').value){$('message').textContent=t('mismatch');return;}$('submit').disabled=true;$('submit').textContent=t('waiting');var body={password:$('password').value};if(needsDecryption)body.config_password=$('config-password').value;request(setup?'/auth/setup':'/auth/login',{method:'POST',body:JSON.stringify(body)}).then(function(data){location.replace(setup?'/auth':data.locked?'/auth':'/');}).catch(function(e){failed(e);$('submit').disabled=false;render();});};
-  $('logout').onclick=function(){this.disabled=true;request('/auth/logout',{method:'POST'}).then(function(){location.replace('/login');}).catch(function(e){$('logout').disabled=false;failed(e);});};
-  $('change-password').onsubmit=function(e){e.preventDefault();$('message').textContent='';if($('new-password').value!==$('new-confirm').value){$('message').textContent=t('mismatch');return;}var button=this.querySelector('button');button.disabled=true;request('/auth/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value,confirmation:$('new-confirm').value})}).then(function(){location.replace('/login');}).catch(failed).finally(function(){button.disabled=false;});};
-  $('vault-unlock-form').onsubmit=function(e){e.preventDefault();$('message').textContent='';$('unlock-error').textContent='';var button=this.querySelector('button');button.disabled=true;request('/auth/unlock',{method:'POST',body:JSON.stringify({password:$('vault-password').value})}).then(function(){$('vault-password').value='';location.replace('/');}).catch(function(error){failed(error);$('unlock-error').textContent=$('message').textContent;}).finally(function(){button.disabled=false;});};
+  $('credentials').onsubmit=function(e){e.preventDefault();$('message').textContent='';var setup=!state.configured,needsDecryption=setup||!!state.migration_required;if(setup&&$('password').value!==$('confirm').value){$('message').textContent=t('mismatch');return;}if(setup&&$('config-password').value!==$('config-confirm').value){$('message').textContent=t('mismatch');return;}$('submit').disabled=true;$('submit').textContent=t('waiting');var body={password:$('password').value};if(needsDecryption)body.config_password=$('config-password').value;request(setup?'/auth/setup':'/auth/login',{method:'POST',body:JSON.stringify(body)}).then(function(data){location.replace(authPath(setup?'/auth':data.locked?'/auth':'/'));}).catch(function(e){failed(e);$('submit').disabled=false;render();});};
+  $('logout').onclick=function(){this.disabled=true;request('/auth/logout',{method:'POST'}).then(function(){location.replace(authPath('/login'));}).catch(function(e){$('logout').disabled=false;failed(e);});};
+  $('change-password').onsubmit=function(e){e.preventDefault();$('message').textContent='';if($('new-password').value!==$('new-confirm').value){$('message').textContent=t('mismatch');return;}var button=this.querySelector('button');button.disabled=true;request('/auth/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value,confirmation:$('new-confirm').value})}).then(function(){location.replace(authPath('/login'));}).catch(failed).finally(function(){button.disabled=false;});};
+  $('vault-unlock-form').onsubmit=function(e){e.preventDefault();$('message').textContent='';$('unlock-error').textContent='';var button=this.querySelector('button');button.disabled=true;request('/auth/unlock',{method:'POST',body:JSON.stringify({password:$('vault-password').value})}).then(function(){$('vault-password').value='';location.replace(authPath('/'));}).catch(function(error){failed(error);$('unlock-error').textContent=$('message').textContent;}).finally(function(){button.disabled=false;});};
   render();load();
 })();
 </script>

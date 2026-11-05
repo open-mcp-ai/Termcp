@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"time"
 )
 
@@ -131,14 +132,16 @@ func (b *bridge) keepAliveLoop() {
 	}
 }
 
-// presenceURL is the keep-alive target: the instance root's version endpoint,
-// a session-free GET that counts as ordinary activity for an idle countdown.
+// presenceURL is the authenticated MCP presence probe. It keeps the endpoint's
+// deployment prefix and replaces the final MCP path segment with /auth/mcp.
+// The server places this probe behind authentication but inside its idle
+// watcher, so only a valid MCP credential extends the countdown.
 func presenceURL(endpoint string) string {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return endpoint
 	}
-	u.Path, u.RawQuery, u.Fragment = "/api/version", "", ""
+	u.Path, u.RawPath, u.RawQuery, u.Fragment = path.Join(path.Dir(u.Path), "auth/mcp"), "", "", ""
 	return u.String()
 }
 
