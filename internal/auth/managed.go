@@ -120,7 +120,7 @@ type sessionClaims struct {
 	jwt.RegisteredClaims
 }
 
-// Managed owns accounts and MCP credentials encrypted by the shared vault.
+// Managed owns the local owner login and MCP credentials encrypted by the shared vault.
 // Browser logins are memory-only and bound to this run. No OAuth is implemented.
 type Managed struct {
 	// MCPIdleTimeout is set by the server before serving requests.

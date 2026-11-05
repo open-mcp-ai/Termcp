@@ -313,7 +313,7 @@
 /* Rounded, quiet desktop surfaces; layout and breakpoints stay shared. */
 .page-backdrop { display: none; }
 .app-header { box-shadow: 0 1px 3px var(--shadow-soft); }
-.app-header h1 { font-weight: 650; letter-spacing: -.025em; }
+  .app-header h1 { font-size: 1.25rem; font-weight: 650; letter-spacing: -.025em; }
 .workspace-sessions, #sec-entries-body, .modal { border-radius: 12px; box-shadow: 0 4px 18px var(--shadow-card); }
 .workspace-sessions .section-header { border-bottom: 1px solid var(--border-subtle); font-weight: 600; }
 .conn-tile.entry-card { border-radius: 9px; }

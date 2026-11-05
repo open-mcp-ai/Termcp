@@ -1,10 +1,10 @@
 /**
  * Review mode in the browser: the pending queue and the count that surfaces it.
  *
- * Session-bound decisions stay in that session's terminal panel. Requests with
- * no session to own them use the header worklist, so a policy ask such as
- * `session.list` cannot become undecidable. Both surfaces render the same
- * request rows and call the same decision endpoint.
+ * Session-bound decisions remain available in that session's terminal panel. The
+ * header worklist also shows every pending request, so an operator has one place
+ * to see the whole queue; both surfaces render the same rows and call the same
+ * decision endpoint.
  *
  * The chips show a named key rather than the byte it produces, because the whole
  * point of approving a key is that a human can see what it does. The names come
@@ -43,18 +43,19 @@ function approvalChipsHtml(keys) {
  *  request serves both the panel and the badges. */
 function keepApprovalCounts(approvals) {
   var perSession = {};
-  var policyCount = 0;
+  var totalCount = 0;
   (approvals || []).forEach(function (it) {
     var req = it.request || {};
-    if (req.state !== 'pending' || !req.session_id) return;
+    if (req.state !== 'pending') return;
+    totalCount += 1;
+    if (!req.session_id) return;
     if (req.session_id === 'policy') {
-      policyCount += 1;
       return;
     }
     perSession[req.session_id] = (perSession[req.session_id] || 0) + 1;
   });
   window._approvalCounts = perSession;
-  window._policyApprovalCount = policyCount;
+  window._approvalTotal = totalCount;
   applyApprovalCounts();
 }
 
@@ -72,7 +73,7 @@ function refreshApprovalCounts() {
  *  session tab bar (the only signal a minimized window has) and the session tile. */
 function applyApprovalCounts() {
   var counts = window._approvalCounts || {};
-  var policyCount = window._policyApprovalCount || 0;
+  var policyCount = window._approvalTotal || 0;
   var policyBadge = document.getElementById('approval-count');
   if (policyBadge) {
     policyBadge.hidden = !policyCount;
@@ -174,10 +175,9 @@ function loadReviewQueue(win) {
     });
 }
 
-/** installPolicyApprovalMenu adds the unbound-policy worklist to the native
- *  header. It is created here rather than in index.html so the page shell stays
- *  below its payload budget. The trigger stays visible so an operator can
- *  verify the empty queue; only the red count is hidden at zero. */
+/** installPolicyApprovalMenu adds the approval queue entry to the native header.
+ *  It is created here rather than in index.html so the page shell stays below
+ *  its payload budget. Settings are a separate top-level menu. */
 function installPolicyApprovalMenu() {
   var existing = document.getElementById('approval-menu');
   if (existing) return existing;
@@ -193,9 +193,10 @@ function installPolicyApprovalMenu() {
       '<span class="approval-header-count" id="approval-count" hidden>0</span>' +
     '</summary>' +
     '<div class="clients-panel policy-approval-panel">' +
-      '<div class="policy-approval-head"><div><strong data-i18n="approvals.title">Approvals</strong><p data-i18n="approvals.policyHint">Policy requests that are not tied to a terminal session wait here.</p></div>' +
+      '<div class="policy-approval-head"><div><strong data-i18n="approvals.title">Approvals</strong><p data-i18n="approvals.queueHint">Pending requests from terminal sessions and instance policy wait here.</p></div>' +
         '<button type="button" id="policy-approval-refresh" class="btn" title="Refresh" data-i18n-title="common.refresh" data-i18n-aria="common.refresh"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2.5V5h-2.5"/></svg></button>' +
-      '</div><p id="policy-approval-error" class="err" hidden></p><div id="policy-approval-list"></div>' +
+      '</div>' +
+      '<p id="policy-approval-error" class="err" hidden></p><div id="policy-approval-list"></div>' +
       '<div id="policy-approval-empty" class="policy-approval-empty" data-i18n="approvals.empty">Nothing is waiting for approval.</div>' +
     '</div>';
   var anchor = document.getElementById('clients-menu');
@@ -204,9 +205,9 @@ function installPolicyApprovalMenu() {
   return menu;
 }
 
-/** loadPolicyApprovals fills the one native worklist for requests that have no
- *  terminal session. Session-bound policy asks stay exclusively in that
- *  session's review panel; this menu must not duplicate them. */
+/** loadPolicyApprovals fills the one native worklist with every pending request.
+ *  Session windows keep their local review panel, but the header queue is the
+ *  complete view an operator can open from anywhere. */
 function loadPolicyApprovals() {
   var menu = installPolicyApprovalMenu();
   var list = document.getElementById('policy-approval-list');
@@ -225,7 +226,7 @@ function loadPolicyApprovals() {
     .then(function (j) {
       var all = j.approvals || [];
       var mine = all.filter(function (it) {
-        return it.request && it.request.session_id === 'policy' && it.request.state === 'pending';
+        return it.request && it.request.state === 'pending';
       });
       list.innerHTML = mine.map(renderApprovalItem).join('');
       empty.hidden = mine.length > 0;

@@ -175,7 +175,7 @@
      same list as --font-sans with the TC faces moved in front, kept in
      tokens.css so both stacks cannot drift apart. */
   body.lang-hant { font-family: var(--font-sans-hant); }
-  .app-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+  .app-header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
   /* Build version beside the wordmark, filled in from GET /api/version. Left
      margin, not a space, so a failed fetch leaves no gap after the wordmark. */
   .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }

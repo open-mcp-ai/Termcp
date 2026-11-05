@@ -243,7 +243,7 @@ func TestEveryThemeStylesTheClientsPanel(t *testing.T) {
 		   Palette and appearance chunks (tokens, theme, workspace) are the theme's
 		   own business and are deliberately not checked: their whole point is to
 		   differ. */
-		for _, file := range []string{"base.css", "approval.css", "terminal.css", "timeline.css"} {
+		for _, file := range []string{"base.css", "approval.css", "settings.css", "terminal.css", "timeline.css"} {
 			sharedPath := "static/css/" + file
 			if _, err := fs.Stat(Assets(), sharedPath); err != nil {
 				continue

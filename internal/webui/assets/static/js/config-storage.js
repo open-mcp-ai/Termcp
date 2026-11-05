@@ -7,8 +7,9 @@ var _configStorageChanging = false;
 
 var _configStorageHeader = document.createElement('div');
 _configStorageHeader.id = 'config-storage-header-root';
-var _configStorageApiLink = document.querySelector('.app-header-nav .api-nav-link');
-_configStorageApiLink.parentNode.insertBefore(_configStorageHeader, _configStorageApiLink);
+_configStorageHeader.className = 'settings-config';
+var _configStorageSettings = document.getElementById('settings-links');
+if (_configStorageSettings) _configStorageSettings.appendChild(_configStorageHeader);
 _configStorageHeader.innerHTML =
   '<button type="button" class="encryption-btn" id="config-storage-open" title="Configuration encryption" data-i18n-title="storage.open" aria-label="Configuration encryption" data-i18n-aria="storage.open">' +
   '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.2 7V5.2a2.8 2.8 0 015.6 0V7"/></svg>' +

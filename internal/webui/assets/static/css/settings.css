@@ -1,0 +1,72 @@
+  /* Workspace settings are one top-level menu, separate from approvals and the
+     MCP/API reference link. The nested controls keep their native semantics. */
+  .settings-menu { position: relative; display: inline-flex; }
+  .settings-panel {
+    display: flex; flex-direction: column;
+    width: min(360px, calc(100vw - 24px)); max-height: min(76vh, 680px);
+    padding: 0; overflow: hidden;
+  }
+  .settings-head { padding: 12px 12px 9px; border-bottom: 1px solid var(--border-subtle); }
+  .settings-head strong { display: block; color: var(--text-primary); font-size: 0.9rem; }
+  .settings-head p { margin: 3px 0 0; color: var(--text-muted); font-size: 0.75rem; line-height: 1.45; }
+  .settings-links { display: grid; gap: 3px; min-height: 0; padding: 7px; overflow-y: auto; }
+  .settings-links > * { min-width: 0; }
+  .settings-links .settings-theme { order: 1; }
+  .settings-links .settings-lang { order: 2; }
+  .settings-links .settings-link.settings-permissions { order: 3; }
+  .settings-links .settings-link.settings-security { order: 4; }
+  .settings-links .settings-config { order: 5; }
+  .settings-links .settings-clients { order: 6; }
+  .settings-links .settings-link,
+  .settings-links .clients-btn,
+  .settings-links .encryption-btn,
+  .settings-links .theme-btn,
+  .settings-links .lang-btn {
+    display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: flex-start; gap: 8px;
+    padding: 7px 9px; border: 0; border-radius: 6px; background: transparent;
+    color: var(--text-secondary); font: 500 0.78rem/1.3 var(--font-sans); text-align: left;
+  }
+  .settings-links .settings-link:hover,
+  .settings-links .clients-btn:hover,
+  .settings-links .encryption-btn:hover,
+  .settings-links .theme-btn:hover,
+  .settings-links .lang-btn:hover {
+    background: var(--bg-card-hover); color: var(--text-primary); text-decoration: none;
+  }
+  .settings-links .settings-link > svg,
+  .settings-links .encryption-btn > svg { flex: 0 0 auto; display: block; }
+  .settings-links .encryption-btn { height: auto; }
+  .settings-links .encryption-btn span { display: inline; }
+  .settings-links .settings-link:focus-visible,
+  .settings-links .clients-btn:focus-visible,
+  .settings-links .encryption-btn:focus-visible,
+  .settings-links .theme-btn:focus-visible,
+  .settings-links .lang-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .settings-links .clients-menu { display: block; width: 100%; }
+  .settings-links .clients-panel {
+    position: static; width: 100%; max-height: 190px; margin: 2px 0 5px;
+    box-shadow: none; border-color: var(--border-subtle); background: var(--bg-card);
+  }
+  .settings-links .clients-label { display: inline; }
+  .settings-links .theme-menu,
+  .settings-links .lang-menu { position: static; width: 100%; min-width: 0; max-width: none; margin-top: 4px; }
+  .settings-links .theme-switch,
+  .settings-links .lang-switch { display: block; width: 100%; }
+  .settings-links .theme-label,
+  .settings-links .theme-current,
+  .settings-links .lang-current,
+  .settings-links .lang-caret { display: inline; }
+
+  @media (pointer: coarse) and (hover: none) {
+    .settings-links .settings-link,
+    .settings-links .clients-btn,
+    .settings-links .encryption-btn,
+    .settings-links .theme-btn,
+    .settings-links .lang-btn { min-height: 44px; }
+  }
+  @media (max-width: 600px) {
+    .settings-panel {
+      position: fixed; top: 58px; right: 8px; left: 8px;
+      width: auto; max-height: calc(100dvh - 68px);
+    }
+  }
