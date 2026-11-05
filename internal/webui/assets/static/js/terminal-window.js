@@ -9,9 +9,20 @@ function setWindowLinkState(win, state) {
   var el = win.querySelector('.shell-link-state');
   if (!el) return;
   el.className = 'shell-link-state ' + state;
-  var tip = state === 'is-dead' ? t('session.dead.badgeTitle')
-    : state === 'is-connecting' ? t('tab.connecting')
-    : t('session.status.running');
+  var tip;
+  if (state === 'is-dead') {
+    el.setAttribute('data-i18n-title', 'session.dead.badgeTitle');
+    el.setAttribute('data-i18n-aria', 'session.dead.badgeTitle');
+    tip = t('session.dead.badgeTitle');
+  } else if (state === 'is-connecting') {
+    el.setAttribute('data-i18n-title', 'tab.connecting');
+    el.setAttribute('data-i18n-aria', 'tab.connecting');
+    tip = t('tab.connecting');
+  } else {
+    el.setAttribute('data-i18n-title', 'session.status.running');
+    el.setAttribute('data-i18n-aria', 'session.status.running');
+    tip = t('session.status.running');
+  }
   el.title = tip;
   el.setAttribute('role', 'img');
   el.setAttribute('aria-label', tip);

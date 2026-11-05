@@ -136,8 +136,18 @@ func TestTheDockIsOneRowWideAndTwoRowsNarrow(t *testing.T) {
 	if !strings.Contains(narrow, ".sessdock-actions { margin-left: auto; }") {
 		t.Error("with the strip on its own line, the window controls need the auto margin to reach the right edge")
 	}
-	if !strings.Contains(narrow, ".sessdock-empty { left: 10px") {
-		t.Error("the empty note must clear the batch group on a wide screen and not on a narrow one")
+	/* The bar must not rely on the MIDDLE of the row to push the controls right.
+	 *
+	 * The empty note used to be that middle: it was the flexible element, so deleting
+	 * it slid the window controls left, next to the batch keys. The pinning is now a
+	 * property of the controls themselves, at both widths — the base rule carries the
+	 * auto margin too, and the note is not drawn at all. */
+	wide := between(t, css, ".sessdock-actions {", "}")
+	if !strings.Contains(wide, "margin-left: auto") {
+		t.Error("the wide layout must pin its window controls with the auto margin, not with whatever the strip leaves over")
+	}
+	if !strings.Contains(css, ".sessdock-empty {\n  display: none;") {
+		t.Error("the empty note is suppressed: a sentence across the dock said nothing the empty strip does not")
 	}
 }
 

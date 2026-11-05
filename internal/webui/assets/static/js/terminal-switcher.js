@@ -148,6 +148,60 @@ function reapplyWindowLanguage(win) {
   if (collapseBtn) {
     collapseBtn.title = win.classList.contains('shell-window-collapsed') ? t('win.expand') : t('win.collapse');
   }
+  /* The header's own controls are written from t() at creation and carry no
+     data-i18n hook, so applyI18n cannot reach them: the connections drawer and
+     the batch tick kept their old language until the window was rebuilt. */
+  var drawerBtn = win.querySelector('.shell-window-drawer-btn');
+  if (drawerBtn) {
+    drawerBtn.title = t('win.aria.connections');
+    drawerBtn.setAttribute('aria-label', t('win.aria.connections'));
+  }
+  var tickIcon = win.querySelector('.shell-header-icon-btn');
+  if (tickIcon) {
+    tickIcon.title = t('win.aria.select');
+    tickIcon.setAttribute('aria-label', t('win.aria.select'));
+  }
+  /* The DEAD badge in the title says the session is over, in text written once
+     at badge creation. Same fix: rewrite from t() in place. */
+  var deadBadge = win.querySelector('.shell-dead-badge');
+  if (deadBadge) {
+    deadBadge.title = t('session.dead.badgeTitle');
+    deadBadge.textContent = t('session.dead.badge');
+  }
+  /* Every ended channel's marker line inside its terminal: the marker lives in
+     the xterm buffer, which no DOM i18n pass can reach, so each channel's last
+     line is rewritten in place (see reapplyEndedMarker for the guards that keep
+     it from touching real output). */
+  Object.keys(win._channels || {}).forEach(function (cid) {
+    var ch = win._channels[cid];
+    if (ch && typeof reapplyEndedMarker === 'function') reapplyEndedMarker(ch);
+  });
+  /* The link-state dot's title encodes the state (dead/connecting/running),
+     which is session vocabulary written from setWindowLinkState. Re-derive it
+     from the class rather than storing a key: the class IS the state. */
+  var dot = win.querySelector('.shell-link-state');
+  if (dot && typeof setWindowLinkState === 'function') {
+    var stateClass = Array.prototype.find.call(dot.classList, function (c) { return c.indexOf('is-') === 0; });
+    if (stateClass) setWindowLinkState(win, stateClass);
+  }
+  /* Channel tab chips carry a state whose ended tooltip is session vocabulary;
+     their text is painted by shellStatusPaint from ch.statusState. Repaint from
+     that recorded state rather than leaving yesterday's language on the chip. */
+  Object.keys(win._channels || {}).forEach(function (cid) {
+    var ch = win._channels[cid];
+    if (ch && ch.statusState && typeof shellStatusPaint === 'function') shellStatusPaint(ch, ch.statusState);
+  });
+  /* The transcript rail's accessible name and every label it can be showing
+     (the hover pop, the open detail card, the cells' aria-labels) are t()-
+     written from the layout in hand. railGeometryChanged forces the repaint and
+     re-measures; a rail that is not mounted is simply absent. */
+  var rail = win.querySelector('.term-rail');
+  if (rail) {
+    rail.setAttribute('aria-label', t('rail.label'));
+    if (typeof railGeometryChanged === 'function' && win._activeChannelSid) {
+      try { railGeometryChanged(win, win._activeChannelSid); } catch (e) {}
+    }
+  }
   /* No `_syncSwitcherAffordance` call: the header glyph used to change meaning at
      the touch breakpoint (a switch menu on mobile, decoration on desktop), so a
      rotate had to repaint its role and title. It is a tick everywhere now, and a
@@ -159,6 +213,14 @@ function reapplyWindowLanguage(win) {
      (not re-applying the mode) keeps a stale mode label from surviving the
      switch without refetching the queue. */
   paintReviewLabels(win);
+  /* An OPEN review panel shows rows whose buttons, chips and empty hint are
+     rendered HTML written from t() at queue-load time. paintReviewLabels only
+     covers the lock and the switch; the queue itself needs the reload, or the
+     Accept/Reject rows keep the previous language until the next event. */
+  var sheet = win.querySelector('.shell-review-sheet');
+  if (sheet && !sheet.hidden && typeof loadReviewQueue === 'function') {
+    try { loadReviewQueue(win); } catch (e) {}
+  }
 }
 
 /* Language switch: replay every open window in place, so no window is rebuilt

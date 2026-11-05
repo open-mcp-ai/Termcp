@@ -769,3 +769,69 @@ function paintSessionTileWindowMarkers() {
    flag would be cleared right after being set and the gesture would be armed
    twice. */
 armPermissionRequest();
+
+// ---- list filter box (shared by the three columns) ----
+
+/* The grid filter box, shared by hosts, extensions and the archive.
+ *
+ * Built once per column and kept (`ensureGridSearch` returns early afterwards),
+ * so the box's text and hooks must be written for a language switch as well as
+ * for its first paint: a value painted once from t() freezes in that language —
+ * the same freeze the archive's dead badge shipped with. The placeholder and
+ * the aria-label both carry data-i18n hooks, which applyI18n rewrites on every
+ * switch.
+ *
+ * `onChange` receives the trimmed, lowercased needle. The caller owns filtering:
+ * render functions already repaint from in-memory snapshots, so a keystroke
+ * repaints the list without a round trip.
+ *
+ * Reuses .archive-search styling so the three columns read as one control, and
+ * hides itself when the list it filters has nothing in it yet — a filter over an
+ * empty list is chrome, not a tool. */
+function ensureGridSearch(grid, storageKey, placeholderKey, initialPlaceholder, onChange) {
+  var panel = grid && grid.parentElement;
+  if (!panel) return;
+  var existing = document.querySelector('.grid-search[data-grid-search-for="' + grid.id + '"]');
+  if (existing) return;
+  var wrap = document.createElement('div');
+  wrap.className = 'archive-search grid-search';
+  wrap.setAttribute('data-grid-search-for', grid.id);
+  var input = document.createElement('input');
+  input.type = 'search';
+  input.className = 'archive-search-input';
+  input.setAttribute('data-i18n-placeholder', placeholderKey);
+  input.setAttribute('data-i18n-aria', placeholderKey);
+  input.placeholder = initialPlaceholder || t(placeholderKey);
+  input.setAttribute('aria-label', initialPlaceholder || t(placeholderKey));
+  input.value = window[storageKey] || '';
+  input.addEventListener('input', function () {
+    window[storageKey] = String(input.value || '').trim().toLowerCase();
+    onChange(window[storageKey]);
+    /* Repainting the list rebuilds the grid, which can rebuild this box's
+       siblings — but the box itself is kept, so the caret survives. Restore the
+       caret to the end anyway: focus was lost to the repaint. */
+    var again = document.querySelector('.grid-search[data-grid-search-for="' + grid.id + '"] .archive-search-input');
+    if (again) {
+      again.focus();
+      var end = again.value.length;
+      try { again.setSelectionRange(end, end); } catch (e) {}
+    }
+  });
+  /* A click inside the filter box must never bubble to a parent that has its own
+     action: the extensions filter sits on an expandable bar whose background
+     clicks toggle the section shut, and typing or clicking inside the field would
+     fold the plate while an author is trying to filter it. */
+  wrap.addEventListener('click', function (e) { e.stopPropagation(); });
+  wrap.appendChild(input);
+  panel.insertBefore(wrap, grid);
+  applyI18n(wrap);
+}
+
+/** True when the filter box for `grid` holds a needle. `ensureGridSearch` builds
+ *  the box, this reads it — a render function should not have to know which
+ *  element the box lives on. */
+function gridSearchNeedle(grid) {
+  if (!grid) return '';
+  var box = document.querySelector('.grid-search[data-grid-search-for="' + grid.id + '"] .archive-search-input');
+  return box ? String(box.value || '').trim().toLowerCase() : '';
+}

@@ -27,9 +27,6 @@ func TestArchiveRendersRowsNotCards(t *testing.T) {
 	for _, want := range []string{
 		`'archive-row'`,
 		`archive-row-name`,
-		/* The name is the rename control, so it is a button: an archived session has
-		   no dock tab to right-click (issue #160). */
-		`archive-row-rename`,
 		`class="archive-row-age"`,
 		/* The row is the thing the batch component ticks, and it is keyed by the
 		   session's ID. A name is a label: two archived sessions can share one (a
@@ -48,6 +45,9 @@ func TestArchiveRendersRowsNotCards(t *testing.T) {
 		"sess-status-ic",
 		"sess-lock",
 		"sess-x",
+		/* The name is a label, not a control: a ledger's identity column is not a
+		   row of hidden rename triggers (see the rename test below). */
+		"archive-row-rename",
 	} {
 		if strings.Contains(fn, unwanted) {
 			t.Errorf("archive rows must not grow the card's %q back", unwanted)
@@ -1232,37 +1232,36 @@ func stripJSComments(src string) string {
 	return src
 }
 
-// TestAnArchivedRowCanBeRenamedFromItsName pins issue #160's reachability claim.
+// TestAnArchivedRowNameIsNotAControl pins the archive name's shape.
 //
-// Renaming an archived session used to have one path: right-click its tab in the
-// dock. The dock lists RUNNING sessions only, so an archived one usually has no tab
-// at all — and a right-click has no meaning on the phone this page is mostly used
-// from. The server has always accepted the rename (`PATCH /api/sessions/{id}` works
-// on a DEAD session); only the way in was missing.
-//
-// The assertions are about the WIRING, not the markup: a name that is not a control,
-// or one wired to a second implementation of the PATCH, would both pass a screenshot.
-func TestAnArchivedRowCanBeRenamedFromItsName(t *testing.T) {
+// The name used to be a <button> whose click renamed the session (issue #160's
+// reachability fix). That made the ledger's identity column a row of hidden
+// triggers: every name on screen was a control, a click aimed at the row's own
+// open target could land on the rename instead, and scanning a list is not
+// operating one. The rename still exists where a name is edited on purpose — a
+// running session's window title and its dock tab's right-click menu — and a
+// dead session's record is addressable by id for everything else.
+func TestAnArchivedRowNameIsNotAControl(t *testing.T) {
 	sessions := readAssetLF(t, "static/js/sessions.js")
 
-	// The name is a control rather than a span, so a keyboard reaches it too.
-	if !strings.Contains(sessions, `class="archive-row-name archive-row-rename"`) {
-		t.Fatal("the archive row's name is not a rename control; an archived session has no other way in")
+	// The name is a plain span carrying the display label: nothing clickable,
+	// no rename hint tooltip, no second prompt path behind it.
+	if !strings.Contains(sessions, `'<span class="archive-row-name">' + escapeHtml(label) + '</span>'`) {
+		t.Fatal("the archive row's name must be a plain label span, not a rename control")
 	}
-	// It calls the ONE rename implementation, the same one the tab menu uses: a
-	// second prompt + PATCH would be a second set of rules for the same edit.
-	body := between(t, sessions, "querySelector('.archive-row-rename')", "\n    });")
-	if !strings.Contains(body, "renameSessionById(s)") {
-		t.Errorf("the name click must go through renameSessionById, got:\n%s", body)
+	// The rename wiring left with the button: no listener keyed to the old class,
+	// and no click-through rename on the row.
+	if strings.Contains(sessions, "archive-row-rename") {
+		t.Error("the archive row still wires a rename control; the name is a label now")
 	}
-	// And it must not fall through to the row's own handler, which opens the
-	// transcript: renaming a session and then finding its terminal behind the prompt
-	// is the bug this guard exists for.
-	if !strings.Contains(body, "stopPropagation()") {
-		t.Errorf("the rename click must stop propagating to the row's open handler:\n%s", body)
+	// The row keeps its own open handler: clicking a row still opens the
+	// transcript read-only, with no rename detour to swallow the click.
+	body := between(t, sessions, "function renderArchiveRows(", "\n}\n")
+	if !strings.Contains(body, "focusSessionWindow(s.name || '', sid, null, { readOnly: true })") {
+		t.Error("the archive row's open target is gone")
 	}
 	// The dock tab's menu keeps its item: a session WITH a window is still renamed
-	// there, and the two entries must not drift into different behaviour.
+	// there, and removing the ledger's copy must not drift that one.
 	if !strings.Contains(readAssetLF(t, "static/js/shell-windows.js"), "renameSessionById(s)") {
 		t.Error("the tab menu's rename went away; a session with a window loses its entry too")
 	}

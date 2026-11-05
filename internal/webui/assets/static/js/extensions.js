@@ -119,7 +119,46 @@ function renderExtensionGrid(rows) {
   _extRows = rows || [];
   var grid = document.getElementById('ext-grid');
   if (!grid) return;
-  var list = _extRows.slice().sort(extRowOrder);
+  if (_extRows.length) {
+    ensureGridSearch(grid, '_extFilter', 'ext.search.placeholder', t('ext.search.placeholder'), function () {
+      renderExtensionGrid(_extRows || []);
+    });
+    /* The filter box lives on the HEADER, right of the vertical divider hairline
+       (.ext-head-actions border-left), alongside the action buttons:
+       - Left of the hairline: [glyph + title] ... [cyberpunk gauge] [count + caret]
+       - Right of the hairline: [filter box] [new] [batch verbs] [invert]
+       Keeping the filter inside .ext-head-actions puts it on the action side of the
+       divider and leaves the gauge sitting directly beside the count it reports. */
+    var box = document.querySelector('.grid-search[data-grid-search-for="ext-grid"]');
+    var headActions = document.getElementById('ext-head-actions');
+    if (box && headActions && box.parentElement !== headActions) {
+      headActions.insertBefore(box, headActions.firstChild);
+    }
+    if (box) box.classList.add('grid-search-inhead');
+    var headTail = document.getElementById('ext-head-tail');
+    var foldBtn = document.getElementById('sec-exts');
+    /* The tail (count + caret) folds the column, as it did while it sat inside
+       the trigger. Bound once — the guard keeps a grid repaint from stacking
+       handlers. The filter box inside the bar stops propagation itself (its
+       input events bubble to the trigger otherwise, folding while typing). */
+    if (headTail && !headTail._foldWired) {
+      headTail._foldWired = true;
+      headTail.addEventListener('click', function () {
+        if (foldBtn) foldBtn.click();
+      });
+      headTail.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (foldBtn) foldBtn.click(); }
+      });
+    }
+  }
+  var extNeedle = gridSearchNeedle(grid);
+  var list = _extRows.slice().sort(extRowOrder).filter(function (ext) {
+    if (!extNeedle) return true;
+    var facts = [ext.name, ext.status, extStatusLabel(ext.status), ext.target];
+    if (ext.needs && ext.needs.length) facts = facts.concat(ext.needs);
+    if (ext.targets && ext.targets.length) facts = facts.concat(ext.targets);
+    return facts.some(function (v) { return v && String(v).toLowerCase().indexOf(extNeedle) >= 0; });
+  });
   /* The column is permanent in the markup (.ext-on is on the frame from the
      start), so an empty list is laid out exactly like a full one and the empty
      state is where the first extension is created from — a panel that
@@ -661,7 +700,16 @@ function paintExtensionWindow(win, name) {
      is this panel's own label instead. */
   setWindowLinkState(win, row.status === 'available' ? 'is-live' : 'is-idle');
   var dot = win.querySelector('.shell-link-state');
-  if (dot) { dot.title = extStatusLabel(row.status); dot.setAttribute('aria-label', extStatusLabel(row.status)); }
+  if (dot) {
+    dot.title = extStatusLabel(row.status);
+    dot.setAttribute('aria-label', extStatusLabel(row.status));
+    /* setWindowLinkState stamps session vocabulary on the dot's i18n hooks; an
+       extension is not a session, and the shared language switch would rewrite
+       the tip from them. The panel's own word beside the dot already names the
+       state in translated text, so the dot's hooks go with the tip. */
+    dot.removeAttribute('data-i18n-title');
+    dot.removeAttribute('data-i18n-aria');
+  }
   var word = win.querySelector('.ext-status-word');
   if (word) word.textContent = extStatusLabel(row.status);
   var meta = win.querySelector('.ext-status-meta');
