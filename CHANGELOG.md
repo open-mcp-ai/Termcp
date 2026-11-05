@@ -508,6 +508,10 @@
 
 ## v0.2.9-rc.2 — 2026-11-06
 
+### 改进
+
+- **Web UI 终端升级到 xterm.js 6.0.0（原 5.5.0）**。上游把原生滚动条换成了 VS Code 风格的自定义滚动条（`.xterm-scrollable-element` 包裹 `.xterm-screen`），termcp 的终端层随之适配：滚动位置改从 buffer（`viewportY`/`baseY`）读取而非 DOM（`scrollTop` 在 6.0 恒为 0），滚动事件改用官方 `onScroll`，列宽计算按官方 fit 公式预留滑块宽度，滚动条颜色接入主题 token。顺带清了三笔旧账：删除从未被加载的 `addon-fit.js`（fit 由 `fitShellTerminal` 自己做）、删除 6.0 已不存在的 `_core.viewport.syncScrollArea` 调用（×5）、删除失效的 `::-webkit-scrollbar` 规则。vendor 目录只留上游发行文件与 LICENSE，校验和与升级说明写进 `docs/xterm.md`；新增根级 `SECURITY.md` 逐条说明五个环境变量的读取时机、是否落盘与失效模式，补齐依赖审计需要的答案。
+
 ### 新增
 
 - **URL 扩展是一个真正的 MCP 对端，不再是一条哑管道**。`create ext --url` 以前把远端 MCP 服务器包成一条终端通道：要 `open`、要自己拼帧、要认 `TERM/1` 信封，等于让调用方重写一遍 MCP 客户端。现在它挂载成一个 peer，`ls ext` 第 4 列直接印出 peer 地址（`<session> mcp:1`），不必先 `open` 就能 `get <peer> tools`、`call <peer> <tool> {args}`；回复是工具的原始文本，没有信封、没有帧、没有 id 要管。`open ext` 的答复也从整份模板改成摘要（`--all` 仍给全文）。删除或关闭扩展时 peer 立刻 404。
