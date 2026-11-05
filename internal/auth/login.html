@@ -6,9 +6,9 @@
   <title>Sign in · Termcp</title>
 {{template "theme-head" .}}
   <style>
-    *{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.5 var(--font-sans);height:auto;min-height:100dvh;display:grid;place-items:center;padding:32px 20px}main{width:100%;max-width:420px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:48px}.brand{font-weight:650;font-size:20px;letter-spacing:-.02em}select{border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:6px;font:inherit;font-size:13px}h1{font-size:30px;line-height:1.2;letter-spacing:-.025em;margin:0 0 12px}p{color:var(--muted);margin:0 0 28px}form{display:grid;gap:20px}label{display:grid;gap:8px;font-size:14px;font-weight:550}input[type=text],input[type=password]{width:100%;min-height:46px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:inherit}input{caret-color:var(--accent)}button,.workspace{min-height:44px;border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:550;cursor:pointer}button{background:var(--accent);color:var(--button-ink)}button:hover{filter:brightness(.92)}button:disabled{opacity:.6;cursor:wait}button.secondary{background:var(--paper);color:var(--ink);border:1px solid var(--line)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}#message{min-height:24px;margin:20px 0 0;font-size:14px;color:var(--error);overflow-wrap:anywhere}.workspace{display:block;text-align:center;text-decoration:none;color:var(--accent);border:1px solid var(--line);margin-top:28px}fieldset{border:0;border-top:1px solid var(--line);padding:24px 0 0;margin:28px 0 0}legend{font-weight:600;padding:0 8px 0 0}fieldset label{display:flex;align-items:center;gap:10px;margin:12px 0;font-weight:400}input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}#master-password-details{margin-top:28px;border-top:1px solid var(--line);padding-top:20px}#master-password-details summary{font-weight:550;cursor:pointer}#change-password fieldset{margin:0;border:0;padding-top:16px}#change-password fieldset label{display:grid;gap:8px}#change-password p{font-size:14px;margin:12px 0 20px}#unlock-choice{display:flex;align-items:center;gap:10px;font-weight:400}[hidden]{display:none!important}::selection{background:var(--selected);color:var(--ink)}@media(max-width:480px){header{margin-bottom:36px}body{place-items:start center;padding-top:40px}}
+    *{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.5 var(--font-sans);height:auto;min-height:100dvh;display:grid;place-items:center;padding:32px 20px}main{width:100%;max-width:420px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:48px}.brand{font-weight:650;font-size:20px;letter-spacing:-.02em}select{border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);padding:6px;font:inherit;font-size:13px}h1{font-size:30px;line-height:1.2;letter-spacing:-.025em;margin:0 0 12px}p{color:var(--muted);margin:0 0 28px}form{display:grid;gap:20px}label{display:grid;gap:8px;font-size:14px;font-weight:550}input[type=password]{width:100%;min-height:46px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:inherit}input{caret-color:var(--accent)}button,.workspace{min-height:44px;border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:550;cursor:pointer}button{background:var(--accent);color:var(--button-ink)}button:hover{filter:brightness(.92)}button:disabled{opacity:.6;cursor:wait}button.secondary{background:var(--paper);color:var(--ink);border:1px solid var(--line)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}#message{min-height:24px;margin:20px 0 0;font-size:14px;color:var(--error);overflow-wrap:anywhere}.workspace{display:block;text-align:center;text-decoration:none;color:var(--accent);border:1px solid var(--line);margin-top:28px}fieldset{border:0;border-top:1px solid var(--line);padding:24px 0 0;margin:28px 0 0}legend{font-weight:600;padding:0 8px 0 0}fieldset label{display:flex;align-items:center;gap:10px;margin:12px 0;font-weight:400}#master-password-details{margin-top:28px;border-top:1px solid var(--line);padding-top:20px}#master-password-details summary{font-weight:550;cursor:pointer}#change-password fieldset{margin:0;border:0;padding-top:16px}#change-password fieldset label{display:grid;gap:8px}#change-password p{font-size:14px;margin:12px 0 20px}[hidden]{display:none!important}::selection{background:var(--selected);color:var(--ink)}@media(max-width:480px){header{margin-bottom:36px}body{place-items:start center;padding-top:40px}}
   main.account-view{max-width:760px}#message:not(:empty){position:sticky;top:12px;background:var(--paper);padding:12px 16px;border:1px solid var(--error);border-radius:8px;z-index:5}#change-password fieldset{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}#change-password p{grid-column:1/-1}@media(max-width:700px){#change-password fieldset{grid-template-columns:1fr}}
-#vault-unlock-section{margin:24px 0;padding:24px;border:1px solid var(--border,var(--line));border-radius:8px}#vault-title{font-size:22px;margin:0 0 12px}#vault-unlock-section p{margin:8px 0 16px}.unlock-remember{display:flex;align-items:center;gap:10px}#unlock-error:empty{display:none}#unlock-error{color:var(--error)}dialog{max-width:520px;border:1px solid var(--border,var(--line));border-radius:12px;padding:28px;background:var(--paper);color:var(--ink)}dialog::backdrop{background:rgb(0 0 0 / .35)}dialog h2{margin:0 0 14px;font-size:24px}dialog p{line-height:1.7}#message:empty{display:none}
+#vault-unlock-section{margin:24px 0;padding:24px;border:1px solid var(--border,var(--line));border-radius:8px}#vault-title{font-size:22px;margin:0 0 12px}#vault-unlock-section p{margin:8px 0 16px}#unlock-error:empty{display:none}#unlock-error{color:var(--error)}#message:empty{display:none}
 </style>
 </head>
 <body class="auth-page auth-login">
@@ -18,25 +18,23 @@
   <p id="description" role="status">Checking your account…</p>
   <p id="message" role="alert" aria-live="assertive"></p>
   <form id="credentials" hidden>
-    <label><span data-text="username">Username</span><input id="username" name="username" type="text" autocomplete="username" maxlength="128" required></label>
-    <label><span data-text="password">Password</span><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
-    <label id="confirmation" hidden><span data-text="confirm">Confirm password</span><input id="confirm" type="password" autocomplete="new-password" maxlength="1024"></label>
-    <label id="previous-config" hidden><span data-text="previousConfig">Previous configuration password (if different)</span><input id="config-password" type="password" autocomplete="off" maxlength="1024"></label>
-    <label id="unlock-choice" hidden><input id="automatic-unlock" type="checkbox"><span data-text="automaticUnlock">Allow automatic unlock on this device when available</span></label>
+    <label><span data-text="password">Login password</span><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+    <label id="confirmation" hidden><span data-text="confirmLogin">Confirm login password</span><input id="confirm" type="password" autocomplete="new-password" maxlength="1024"></label>
+    <label id="decryption" hidden><span data-text="decryptionPassword">Decryption password</span><input id="config-password" type="password" autocomplete="off" minlength="8" maxlength="1024"></label>
+    <label id="decryption-confirmation" hidden><span data-text="confirmDecryption">Confirm decryption password</span><input id="config-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="1024"></label>
     <button id="submit" type="submit">Sign in</button>
   </form>
   <section id="account" hidden>
     <section id="vault-unlock-section" hidden aria-labelledby="vault-title">
       <h2 id="vault-title" data-text="vaultTitle">解锁加密配置</h2>
-      <p data-text="vaultHint">账号已登录。请输入独立的配置加密密码以解锁数据。</p>
+      <p data-text="vaultHint">已登录。请输入解密密码以解锁加密配置。</p>
       <form id="vault-unlock-form">
-        <label><span data-text="configPassword">配置加密密码</span><input id="vault-password" type="password" autocomplete="off" required maxlength="1024"></label>
-        <label class="unlock-remember"><input id="vault-automatic" type="checkbox"><span data-text="automaticUnlock">允许系统自动解锁</span></label>
+        <label><span data-text="decryptionPassword">Decryption password</span><input id="vault-password" type="password" autocomplete="off" required maxlength="1024"></label>
         <button type="submit" data-text="unlockVault">解锁配置</button>
         <p id="unlock-error" role="alert"></p>
       </form>
     </section>
-    <p id="vault-ready-note" data-text="vaultReady">配置保险库已解锁。登录密码与配置加密密码分别管理。</p>
+    <p id="vault-ready-note" data-text="vaultReady">配置保险库已解锁。登录密码与解密密码分别管理。</p>
     <a id="encryption-settings" class="workspace" href="/?config-encryption=1" data-text="encryptionSettings">配置加密设置</a>
 
     <a class="workspace" id="permissions-page" href="/permissions" data-text="permissionsPage">权限管理</a>
@@ -48,13 +46,12 @@
         <label><span data-text="newPassword">New password</span><input id="new-password" type="password" autocomplete="new-password" required minlength="8" maxlength="1024"></label>
         <label><span data-text="confirm">Confirm password</span><input id="new-confirm" type="password" autocomplete="new-password" required minlength="8" maxlength="1024"></label>
       </fieldset>
-      <button type="submit" data-text="changePassword">Change master password</button>
+      <button type="submit" data-text="changePassword">Change login password</button>
     </form></details>
     <a class="workspace" id="return-workspace" href="/" data-text="workspace">Back to workspace</a>
     <button id="logout" class="secondary" type="button" style="width:100%;margin-top:16px" data-text="logout">Sign out</button>
   </section>
 
-<dialog id="initial-password-notice" aria-labelledby="initial-title"><h2 id="initial-title" data-text="initialTitle">账户已创建</h2><p id="initial-description" data-text="initialHint">注册时，登录密码和配置加密密码使用了同一次输入。两份密码相互独立，之后可以分别修改。</p><form method="dialog"><button type="submit" data-text="understood">我知道了</button></form></dialog>
 </main>
 <script nonce="{{.Nonce}}">
 (function(){
@@ -63,45 +60,35 @@
   var lang=/^zh/i.test(navigator.language)?'zh':'en',state=null;
   var copy={
   "en": {
-    "username": "Username",
     "password": "Login password",
-    "confirm": "Confirm password",
+    "confirmLogin": "Confirm login password",
+    "confirm": "Confirm new login password",
+    "decryptionPassword": "Decryption password",
+    "confirmDecryption": "Confirm decryption password",
     "signIn": "Sign in",
-    "setup": "Create admin account",
-    "setupHint": "Create the account. This input initially sets two independent passwords: login and configuration encryption.",
-    "loginHint": "Use your admin account to open this workspace.",
+    "setup": "Set up Termcp",
+    "setupHint": "Set the two local passwords: login opens this workspace; decryption unlocks encrypted configuration data.",
+    "loginHint": "Enter the local login password.",
     "account": "Account",
-    "signedIn": "Signed in as ",
-    "local": "Open Termcp on its own machine, or use SSH port forwarding, to create the first admin account.",
-    "roles": "Role access",
-    "adminMCP": "Admin can use MCP",
-    "agentMCP": "Agent can use MCP",
-    "save": "Save permissions",
+    "signedIn": "Signed in.",
+    "local": "Open Termcp on its own machine, or use SSH port forwarding, to set the first local passwords.",
     "workspace": "Back to workspace",
     "logout": "Sign out",
     "waiting": "Please wait…",
     "mismatch": "Passwords do not match.",
-    "minPassword": "Use at least 8 characters for your password.",
     "network": "Could not connect. Check that Termcp is running, then try again.",
-    "saved": "Permissions saved.",
     "loading": "Checking your account…",
-    "previousConfig": "Existing configuration password",
-    "automaticUnlock": "Allow automatic unlock on this device when available",
-    "unlockHint": "Sign in, then unlock configurations with the configuration password.",
-    "migrationHint": "Sign in once to migrate the legacy account. Configuration passwords remain independent.",
+    "unlockHint": "Sign in, then unlock configurations with the decryption password.",
+    "migrationHint": "Sign in once to migrate the legacy account. Enter its existing decryption password.",
     "changePassword": "Change login password",
-    "changeHint": "Changes only the login password and signs out browser sessions. Configuration encryption and MCP credentials stay unchanged.",
+    "changeHint": "Changes only the login password and signs out browser sessions. The decryption password and MCP credentials stay unchanged.",
     "currentPassword": "Current password",
     "newPassword": "New password",
     "vaultTitle": "Unlock configurations",
-    "vaultHint": "You are signed in. Enter the independent configuration encryption password to unlock data.",
-    "configPassword": "Configuration encryption password",
+    "vaultHint": "You are signed in. Enter the decryption password to unlock encrypted configuration data.",
     "unlockVault": "Unlock configurations",
-    "vaultReady": "The configuration vault is unlocked. Login and encryption passwords are managed separately.",
+    "vaultReady": "The configuration vault is unlocked. Login and decryption passwords are managed separately.",
     "encryptionSettings": "Configuration encryption settings",
-    "initialTitle": "Account created",
-    "initialHint": "Registration used the same input to set the login and configuration passwords. They are independent and can be changed separately.",
-    "understood": "Understood",
     "theme.label": "Theme",
     "theme.loading": "Loading themes…",
     "theme.discoverFailed": "Unable to load themes",
@@ -113,45 +100,35 @@
     "theme.matrix": "Matrix"
   },
   "zh": {
-    "username": "用户名",
     "password": "登录密码",
-    "confirm": "确认密码",
+    "confirmLogin": "确认登录密码",
+    "confirm": "确认新登录密码",
+    "decryptionPassword": "解密密码",
+    "confirmDecryption": "确认解密密码",
     "signIn": "登录",
-    "setup": "设置管理员",
-    "setupHint": "设置管理员账号。同一次输入用于初始化登录密码和配置加密密码，之后各自独立修改。",
-    "loginHint": "使用管理员账号进入工作区。",
+    "setup": "设置 Termcp",
+    "setupHint": "设置两份本机密码：登录密码用于进入工作区，解密密码用于解锁加密配置。",
+    "loginHint": "请输入本机登录密码。",
     "account": "账号",
-    "signedIn": "当前账号：",
-    "local": "请在 Termcp 所在机器打开页面，或通过 SSH 本地转发完成首次设置。",
-    "roles": "角色访问权限",
-    "adminMCP": "允许管理员使用 MCP",
-    "agentMCP": "允许 Agent 使用 MCP",
-    "save": "保存权限",
+    "signedIn": "已登录。",
+    "local": "请在 Termcp 所在机器打开页面，或通过 SSH 本地转发完成首次密码设置。",
     "workspace": "返回工作区",
     "logout": "退出登录",
     "waiting": "请稍候…",
     "mismatch": "两次输入的密码不一致。",
-    "minPassword": "密码至少需要 8 个字符。",
     "network": "无法连接，请确认 Termcp 正在运行后重试。",
-    "saved": "权限已保存。",
     "loading": "正在检查账号…",
-    "previousConfig": "已有配置加密密码",
-    "automaticUnlock": "在此设备支持时允许自动解锁",
-    "unlockHint": "先登录账号，再使用配置加密密码解锁数据。",
-    "migrationHint": "首次登录将迁移旧账号的校验记录，保留原配置加密密码。",
+    "unlockHint": "先登录，再使用解密密码解锁数据。",
+    "migrationHint": "首次登录将迁移旧账号的校验记录，请输入原解密密码。",
     "changePassword": "修改登录密码",
-    "changeHint": "只修改登录密码并退出浏览器会话。配置加密密码与 MCP 凭据保持不变。",
+    "changeHint": "只修改登录密码并退出浏览器会话。解密密码与 MCP 凭据保持不变。",
     "currentPassword": "当前密码",
     "newPassword": "新密码",
     "vaultTitle": "解锁加密配置",
-    "vaultHint": "账号已登录。请输入独立的配置加密密码以解锁数据。",
-    "configPassword": "配置加密密码",
+    "vaultHint": "已登录。请输入解密密码以解锁加密配置。",
     "unlockVault": "解锁配置",
-    "vaultReady": "配置保险库已解锁。登录密码与配置加密密码分别管理。",
+    "vaultReady": "配置保险库已解锁。登录密码与解密密码分别管理。",
     "encryptionSettings": "配置加密设置",
-    "initialTitle": "账户已创建",
-    "initialHint": "注册时，登录密码和配置加密密码使用了同一次输入。两份密码相互独立，之后可以分别修改。",
-    "understood": "我知道了",
     "theme.label": "主题",
     "theme.loading": "正在加载主题…",
     "theme.discoverFailed": "无法加载主题，请重试",
@@ -175,26 +152,25 @@ function t(key){return copy[lang][key]||key;}
     document.documentElement.lang=lang;$('language').value=lang;if(typeof syncThemeControl==='function')syncThemeControl();
     document.querySelectorAll('[data-text]').forEach(function(el){el.textContent=t(el.dataset.text);});
     if(!state){$('description').textContent=t('loading');return;}
-    var setup=!state.configured,auth=state.authenticated;
+    var setup=!state.configured,auth=state.authenticated,needsDecryption=setup||!!state.migration_required;
     $('title').textContent=t(auth?'account':setup?'setup':'signIn');document.title=$('title').textContent+' · Termcp';
     document.querySelector('main').classList.toggle('account-view',!!auth);
-    $('description').textContent=auth?t('signedIn')+state.actor.username:setup?(state.can_setup?t('setupHint'):t('local')):t(state.migration_required?'migrationHint':state.locked?'unlockHint':'loginHint');
-    $('previous-config').hidden=auth||!state.encryption_initialized||!(setup||state.migration_required);$('unlock-choice').hidden=auth||!(setup||state.migration_required);
+    $('description').textContent=auth?t('signedIn'):setup?(state.can_setup?t('setupHint'):t('local')):t(state.migration_required?'migrationHint':state.locked?'unlockHint':'loginHint');
     $('credentials').hidden=auth||(setup&&!state.can_setup);$('account').hidden=!auth;$('confirmation').hidden=!setup;
-    $('confirm').required=setup;$('password').autocomplete=setup?'new-password':'current-password';$('password').minLength=setup?8:1;$('submit').textContent=t(setup?'setup':'signIn');
+    $('confirm').required=setup;$('decryption').hidden=auth||!needsDecryption;$('decryption-confirmation').hidden=auth||!setup;
+    $('config-password').required=needsDecryption;$('config-confirm').required=setup;
+    $('password').autocomplete=setup?'new-password':'current-password';$('password').minLength=setup?8:1;$('submit').textContent=t(setup?'setup':'signIn');
     $('vault-unlock-section').hidden=!auth||!state.locked;$('vault-ready-note').hidden=!auth||state.locked;
     ['permissions-page','return-workspace','encryption-settings'].forEach(function(id){$(id).hidden=!auth||state.locked;});
-    if(auth&&new URLSearchParams(location.search).has('created')&&state.initial_passwords_shared&&!$('initial-password-notice').open){$('initial-password-notice').showModal();history.replaceState(null,'','/auth');}
-
   }
   function request(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Termcp-CSRF':state&&state.csrf||''},options.headers||{});return fetch(path,options).then(function(r){return r.json().then(function(data){if(!r.ok)throw new Error(data.error||String(r.status));return data;});});}
   function failed(e){$('message').textContent=e instanceof TypeError?t('network'):e.message;$('message').scrollIntoView({block:'nearest'});}
   function load(){return request('/auth/status').then(function(data){state=data;render();}).catch(failed);}
   $('language').onchange=function(){lang=this.value;render();};
-  $('credentials').onsubmit=function(e){e.preventDefault();$('message').textContent='';var setup=!state.configured;if(setup&&$('password').value!==$('confirm').value){$('message').textContent=t('mismatch');return;}$('submit').disabled=true;$('submit').textContent=t('waiting');request(setup?'/auth/setup':'/auth/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,config_password:$('config-password').value,automatic_unlock:$('automatic-unlock').checked})}).then(function(data){location.replace(setup?'/auth?created=1':data.locked?'/auth':'/');}).catch(function(e){failed(e);$('submit').disabled=false;render();});};
+  $('credentials').onsubmit=function(e){e.preventDefault();$('message').textContent='';var setup=!state.configured,needsDecryption=setup||!!state.migration_required;if(setup&&$('password').value!==$('confirm').value){$('message').textContent=t('mismatch');return;}if(setup&&$('config-password').value!==$('config-confirm').value){$('message').textContent=t('mismatch');return;}$('submit').disabled=true;$('submit').textContent=t('waiting');var body={password:$('password').value};if(needsDecryption)body.config_password=$('config-password').value;request(setup?'/auth/setup':'/auth/login',{method:'POST',body:JSON.stringify(body)}).then(function(data){location.replace(setup?'/auth':data.locked?'/auth':'/');}).catch(function(e){failed(e);$('submit').disabled=false;render();});};
   $('logout').onclick=function(){this.disabled=true;request('/auth/logout',{method:'POST'}).then(function(){location.replace('/login');}).catch(function(e){$('logout').disabled=false;failed(e);});};
   $('change-password').onsubmit=function(e){e.preventDefault();$('message').textContent='';if($('new-password').value!==$('new-confirm').value){$('message').textContent=t('mismatch');return;}var button=this.querySelector('button');button.disabled=true;request('/auth/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value,confirmation:$('new-confirm').value})}).then(function(){location.replace('/login');}).catch(failed).finally(function(){button.disabled=false;});};
-  $('vault-unlock-form').onsubmit=function(e){e.preventDefault();$('message').textContent='';$('unlock-error').textContent='';var button=this.querySelector('button');button.disabled=true;request('/auth/unlock',{method:'POST',body:JSON.stringify({password:$('vault-password').value,automatic_unlock:$('vault-automatic').checked})}).then(function(){$('vault-password').value='';location.replace('/');}).catch(function(error){failed(error);$('unlock-error').textContent=$('message').textContent;}).finally(function(){button.disabled=false;});};
+  $('vault-unlock-form').onsubmit=function(e){e.preventDefault();$('message').textContent='';$('unlock-error').textContent='';var button=this.querySelector('button');button.disabled=true;request('/auth/unlock',{method:'POST',body:JSON.stringify({password:$('vault-password').value})}).then(function(){$('vault-password').value='';location.replace('/');}).catch(function(error){failed(error);$('unlock-error').textContent=$('message').textContent;}).finally(function(){button.disabled=false;});};
   render();load();
 })();
 </script>

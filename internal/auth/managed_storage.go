@@ -178,10 +178,9 @@ func (m *Managed) loadLocked() error {
 	if state.Version != managedStateVersion {
 		return errors.New("unsupported permission state version")
 	}
-	changed := repairAmbiguousAgentPolicies(&state)
-	if upgradePresetGroups(&state) {
-		changed = true
-	}
+	changed := upgradePresetGroups(&state)
+	changed = repairAmbiguousAgentPolicies(&state) || changed
+	changed = repairRetiredAgentOperations(&state) || changed
 	if err := validateState(state, false); err != nil {
 		return err
 	}
@@ -227,6 +226,16 @@ func (m *Managed) save(state managedState, initial bool) error {
 
 func (m *Managed) setup(username, password string) error {
 	return m.setupWithOptions(username, password, "", false)
+}
+
+// setupWithPasswords creates the fixed local owner from the only two secrets the
+// managed UI collects: the login password and the configuration decryption
+// password. No username or automatic-unlock choice participates in setup.
+func (m *Managed) setupWithPasswords(loginPassword, decryptionPassword string) error {
+	if err := configstore.ValidatePassword(decryptionPassword, decryptionPassword); err != nil {
+		return err
+	}
+	return m.setupWithOptions(localAdminName, loginPassword, decryptionPassword, false)
 }
 
 func (m *Managed) setupWithOptions(username, password, previous string, automatic bool) error {
@@ -283,7 +292,7 @@ func (m *Managed) unlockForLogin(username, password, previous string, automatic 
 	m.mu.Unlock()
 	if legacy != nil && !sealed {
 		old := credentialState(*legacy)
-		if !equalSecret(username, old.Admin.Username) || !equalSecret(password, old.Admin.Password) {
+		if username != "" && !equalSecret(username, old.Admin.Username) || !equalSecret(password, old.Admin.Password) {
 			return configstore.ErrAuthentication
 		}
 		if err := m.vault.PrepareAuthentication(password, previous, automatic, m.providers...); err != nil {
@@ -318,7 +327,7 @@ func (m *Managed) unlockForLogin(username, password, previous string, automatic 
 	}
 	m.mu.Lock()
 	err := m.loadLocked()
-	if err == nil && !equalSecret(username, m.state.Admin.Username) {
+	if err == nil && username != "" && !equalSecret(username, m.state.Admin.Username) {
 		err = configstore.ErrAuthentication
 	}
 	m.mu.Unlock()

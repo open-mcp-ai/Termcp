@@ -90,7 +90,7 @@ func TestIndependentPasswordsAndAuthenticatedLockedVault(t *testing.T) {
 	if w := managedRequest(t, h, "GET", "/auth/status", "", cookie, ""); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"authenticated":true`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"locked":true`)) {
 		t.Fatal("missing authenticated/locked state", w.Body.String())
 	}
-	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+loginPassword+`"}`, cookie, session.CSRF); w.Code != 400 || !strings.Contains(w.Body.String(), "matches the login account") {
+	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+loginPassword+`"}`, cookie, session.CSRF); w.Code != 400 || !strings.Contains(w.Body.String(), "matches the login password") {
 		t.Fatalf("login password unlocked an independent vault or lacked the diagnostic: %d %s", w.Code, w.Body.String())
 	}
 	if w := managedRequest(t, h, "POST", "/auth/unlock", `{"password":"`+configPassword+`"}`, cookie, session.CSRF); w.Code != 200 {
@@ -134,7 +134,7 @@ func TestIndependentLoginPasswordCanChangeWhileVaultLocked(t *testing.T) {
 	if _, _, err = m.login("admin", replacement); err != nil {
 		t.Fatal(err)
 	}
-	if err = m.UnlockVault(testPassword, false); err != nil {
+	if err = m.UnlockVault(testPassword); err != nil {
 		t.Fatal("old configuration password stopped working", err)
 	}
 }

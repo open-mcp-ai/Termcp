@@ -35,6 +35,7 @@ integration surface for AI agents. Pick one transport depending on client suppor
 |-----------|------|-------|
 | SSE | `GET /sse` + `POST /message` | Configure only `/sse`; JSON-RPC goes over `/message` |
 | Streamable HTTP | `/stream` | Single endpoint; used by Open WebUI and similar |
+| Extension MCP | `POST /ext/{name}/stream` | Proxies one extension's JSON-RPC frames. The first response returns `Mcp-Session-Id`; later POST/DELETE requests must carry it under the same credential |
 | stdio (bridge) | local subprocess | Stdio-only clients: `termcp stdio` relays stdin/stdout to one of the two HTTP endpoints above; `termcp daemon stdio` brings the instance up first. See the README's *Option C* |
 
 MCP tool arguments, results, and error codes are described by the tool schemas from
@@ -94,31 +95,38 @@ is handed the discovered bind address instead.
 
 ## 3. Authentication
 
-Default startup uses managed Admin authentication. Open `/login` from the same
-machine (or through SSH local forwarding) to set up the first Admin. Setup checks
-both a loopback peer and loopback Host. Subsequent logins issue an HttpOnly,
-SameSite=Lax JWT Cookie named `termcp_session`; HTTPS requests set Secure.
-The login password and configuration encryption password are independent. First
-registration uses the same input to initialize both. The login verifier is salted
-Argon2id; configuration passwords directly derive the MK through a separate salt
-and the existing Argon2id keyring. Optional OS/ENV KEKs wrap that same MK for
-automatic vault unlocking. Neither password nor a plaintext key is stored.
+Default startup uses managed local-password authentication. Open `/login` from
+the same machine (or through SSH local forwarding) to set the two passwords.
+Setup checks both a loopback peer and loopback Host. The local identity is fixed;
+there is no username field and no username participates in authentication.
+Subsequent logins issue an HttpOnly, SameSite=Lax JWT Cookie named
+`termcp_session`; HTTPS requests set Secure.
+
+The only user-supplied secrets are:
+
+- **login password**: verifies the browser session through a salted Argon2id record;
+- **decryption password**: proves and derives the configuration MK through an
+  independent salt and Argon2id keyring.
+
+The managed setup and login APIs do not accept an automatic-unlock choice or a
+third migration password. Existing provider-protected stores remain readable for
+compatibility, but the managed auth UI operates with the two explicit passwords.
+Neither password nor a plaintext key is stored.
 
 `<data-dir>/local-state/state.json` is the single commit point for login bootstrap,
 keyring protection, identity references and detached EDKs. Host ciphertext remains in `ssh_configs/<host>/<generation>.enc`. Immutable
 catalog/auth bodies live in `local-state/objects/<object-id>/<generation>.enc`. The private
 account/policy/token state is an encrypted object in that store. Browser session
 keys and logins are process-local; a restart always requires browser sign-in.
-Automatic vault unlocking is independent of browser authentication.
 
 | Managed route | Method | Behavior |
 | --- | --- | --- |
 | `/login`, `/setup` | GET | First-run setup or sign-in page |
 | `/auth/status` | GET | Session status and CSRF token; anonymous callers receive a short-lived prelogin Cookie |
-| `/auth/setup` | POST | One-time local Admin creation; JSON `username`/`password`, at least 8 password characters |
-| `/auth/login` | POST | Admin login; same JSON shape |
+| `/auth/setup` | POST | One-time setup of the two local passwords: `password` and `config_password`, each at least 8 characters |
+| `/auth/login` | POST | Login by `password`; optional `config_password` only for legacy migration |
 | `/auth/password` | POST | Change only the login password: `current_password`, `new_password`, `confirmation`; revoke browser sessions and preserve MK/EDKs/MCP credentials |
-| `/auth/unlock` | POST | Authenticated vault unlock: JSON `password` is the configuration password; optional `automatic_unlock` rebinds provider protection |
+| `/auth/unlock` | POST | Authenticated vault unlock: JSON `password` is the decryption password |
 | `/auth/logout` | POST | Revoke this session, clear Cookie, cancel its active connections |
 | `/auth` | GET | Account, login-password change, independent vault unlock and sign-out page |
 | `/permissions` | GET | Manage permission groups, actions, host scope, principals and client credentials |
@@ -138,15 +146,19 @@ Automatic vault unlocking is independent of browser authentication.
 | `/auth/tokens/{id}` | DELETE | Revoke this token and cancel its active requests |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
 
-Setup/legacy migration accepts optional `config_password` to prove an existing
-configuration password without replacing it with the login password. Modern
-login can succeed while the vault remains locked. The UI then directs the owner
-to `/auth` and `POST /auth/unlock`. Status returns `authenticated` and `locked`
-separately, plus `vault_ready`, `migration_required`, `encryption_initialized` and
-an informational `initial_passwords_shared` flag. That flag never links future
-password changes. Business requests while the vault needs unlocking/resuming
-return HTTP 423; only account/logout/login-password/unlock operations remain
-available. Agent tokens do not unlock MKs.
+Anonymous `/auth/status` reports `can_setup=true` only while no account is
+configured and the request passes the loopback peer/Host checks. Once configured,
+`can_setup` is always `false`.
+
+Setup requires both explicit passwords. Legacy migration accepts
+`config_password` as the existing decryption password without replacing it with
+the login password. Modern login can succeed while the vault remains locked; the
+UI then directs the owner to `/auth` and `POST /auth/unlock`. Status returns
+`authenticated` and `locked` separately, plus `vault_ready`,
+`migration_required`, and `encryption_initialized`. Business requests while the
+vault needs unlocking/resuming return HTTP 423; only
+account/logout/login-password/unlock operations remain available. Agent tokens
+do not unlock MKs.
 
 `POST /api/config-storage/password` changes only the configuration password,
 rewrapping all committed EDKs in the global state without replacing body files or
@@ -172,7 +184,8 @@ client configuration, then revoking the old token. Logout/login-password changes
 revoke browser sessions and preserve independent MCP tokens. Disabling a role or
 principal cancels its live token requests. Revoked tokens remain rejected after restart.
 Agent session namespaces derive from verified IDs; caller headers cannot change
-them. Transport session IDs are bound to the credential that initialized them.
+them. Transport and extension-stream session IDs are bound to the verified
+principal and credential that initialized them.
 Agent operation and host checks are described below; these do not provide an
 operating-system sandbox.
 OAuth is future work. `--disable-auth` explicitly selects open mode.

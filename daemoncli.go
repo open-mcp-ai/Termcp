@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -10,9 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 )
+
+var errManagedLoginNeedsTerminal = errors.New("managed login requires an interactive terminal")
 
 // runDaemonBrief is the bare subcommand's output: the actions only, with a
 // pointer at the detailed help behind `termcp daemon --help`. It explains and
@@ -63,11 +68,19 @@ func runDaemonHelp(w io.Writer) {
 	fmt.Fprintln(w, "                          default): where an instance listens and where every")
 	fmt.Fprintln(w, "                          action and the bridge address it. A wildcard bind")
 	fmt.Fprintln(w, "                          such as 0.0.0.0 or :: is reached through loopback.")
+	fmt.Fprintln(w, "  --daemon-url            (status, stop) full management origin. Cleartext HTTP")
+	fmt.Fprintln(w, "                          is allowed only for loopback; remote endpoints must")
+	fmt.Fprintln(w, "                          use https://. Redirects are refused.")
 	fmt.Fprintln(w, "  --auth-token, --auth-hash")
 	fmt.Fprintln(w, "                          credential presented to the endpoint, matching what")
 	fmt.Fprintln(w, "                          the instance expects ($TERMCP_AUTH_TOKEN /")
 	fmt.Fprintln(w, "                          $TERMCP_AUTH_HASH); a hash-configured instance also")
-	fmt.Fprintln(w, "                          accepts the hash string itself.")
+	fmt.Fprintln(w, "                          accepts the hash string itself. This is the legacy")
+	fmt.Fprintln(w, "                          shared credential; managed MCP tokens cannot manage")
+	fmt.Fprintln(w, "                          the daemon.")
+	fmt.Fprintln(w, "                          status/stop against a managed instance prompt for")
+	fmt.Fprintln(w, "                          the local login password, then the decryption password")
+	fmt.Fprintln(w, "                          while the configuration vault is locked.")
 	fmt.Fprintln(w, "  --idle-timeout          (start, stdio) how long the launched instance may sit")
 	fmt.Fprintln(w, "                          idle before exiting on its own: 30s by default for")
 	fmt.Fprintln(w, "                          stdio, none for start; 0 disables.")
@@ -94,7 +107,8 @@ func runDaemonHelp(w io.Writer) {
 	fmt.Fprintln(w, "  termcp stdio <http(s) URL>   any endpoint, e.g. a remote instance")
 	fmt.Fprintln(w, "  termcp daemon stdio sse      combined, the same instance, over SSE")
 	fmt.Fprintln(w, "Only an endpoint on the --host/--port instance combines with the daemon")
-	fmt.Fprintln(w, "action. The bridge presents the same --auth-token / --auth-hash credential.")
+	fmt.Fprintln(w, "action. Managed bridges present --mcp-token; legacy bridges present")
+	fmt.Fprintln(w, "--auth-token or --auth-hash.")
 }
 
 // runDaemonManagement implements the daemon stop and status actions; both
@@ -102,11 +116,29 @@ func runDaemonHelp(w io.Writer) {
 func runDaemonManagement(cfg *config.Config, stop bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	url := daemon.BaseURL(cfg.Host, cfg.Port)
+	url, err := daemon.ManagementURL(cfg.Host, cfg.Port, cfg.DaemonURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+		os.Exit(2)
+	}
 	if stop {
-		res, err := daemon.StopEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
+		res, err := daemon.StopEndpointURL(ctx, url, daemon.ManagementCredential(cfg))
+		if errors.Is(err, daemon.ErrAuthenticationRequired) {
+			session, loginErr := promptManagedAdminSession(url)
+			if loginErr == nil {
+				sessionCtx, sessionCancel := context.WithTimeout(context.Background(), 20*time.Second)
+				res, err = daemon.StopEndpointURLWithSession(sessionCtx, url, session)
+				sessionCancel()
+			} else if !errors.Is(loginErr, daemon.ErrManagedAuthentication) {
+				fmt.Fprintf(os.Stderr, "daemon: %v\n", loginErr)
+			}
+		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+			if errors.Is(err, daemon.ErrAuthenticationRequired) {
+				fmt.Fprintf(os.Stderr, "daemon: %s\n", daemonManagementAuthHint(url, cfg))
+			} else {
+				fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+			}
 			os.Exit(1)
 		}
 		switch {
@@ -120,7 +152,16 @@ func runDaemonManagement(cfg *config.Config, stop bool) {
 		}
 		return
 	}
-	rep := daemon.InspectEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
+	rep := daemon.InspectEndpointURL(ctx, url, daemon.ManagementCredential(cfg))
+	if rep.Unauthorized {
+		if session, err := promptManagedAdminSession(url); err == nil {
+			sessionCtx, sessionCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			rep = daemon.InspectEndpointURLWithSession(sessionCtx, url, session)
+			sessionCancel()
+		} else if !errors.Is(err, daemon.ErrManagedAuthentication) {
+			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+		}
+	}
 	switch {
 	case rep.Info.Daemon:
 		fmt.Println("termcp daemon: running")
@@ -135,7 +176,7 @@ func runDaemonManagement(cfg *config.Config, stop bool) {
 	case rep.Unauthorized:
 		fmt.Println("termcp daemon: running")
 		fmt.Printf("  url:     %s\n", url)
-		fmt.Println("  note:    authentication is required for details (pass --auth-token or --auth-hash)")
+		fmt.Printf("  note:    %s\n", daemonManagementAuthHint(url, cfg))
 	case rep.Termcp:
 		// A manually started instance serves the endpoint but has no
 		// background lifecycle to report.
@@ -150,6 +191,56 @@ func runDaemonManagement(cfg *config.Config, stop bool) {
 	default:
 		fmt.Println("termcp daemon: not running")
 	}
+}
+
+func promptManagedAdminSession(baseURL string) (daemon.ManagedAdminSession, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return daemon.ManagedAdminSession{}, errManagedLoginNeedsTerminal
+	}
+	statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	login, err := daemon.BeginManagedLoginURL(statusCtx, baseURL)
+	statusCancel()
+	if err != nil {
+		return daemon.ManagedAdminSession{}, err
+	}
+	status := login.Status()
+	if !status.Configured {
+		return daemon.ManagedAdminSession{}, errors.New("managed local passwords are not configured; finish /login setup first")
+	}
+	password, err := promptSecret("Login password: ")
+	if err != nil {
+		return daemon.ManagedAdminSession{}, err
+	}
+	configPassword := ""
+	if status.Locked {
+		configPassword, err = promptSecret("Decryption password: ")
+		if err != nil {
+			return daemon.ManagedAdminSession{}, err
+		}
+		if configPassword == "" {
+			return daemon.ManagedAdminSession{}, errors.New("decryption password is required while the configuration vault is locked")
+		}
+	}
+	loginCtx, loginCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer loginCancel()
+	return login.Login(loginCtx, password, configPassword)
+}
+
+func promptSecret(label string) (string, error) {
+	fmt.Fprint(os.Stderr, label)
+	value, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+func daemonManagementAuthHint(baseURL string, cfg *config.Config) string {
+	if cfg.AuthToken != "" || cfg.AuthHash != "" {
+		return fmt.Sprintf("the instance at %s rejected the legacy credential. If it uses managed authentication, run status or stop in an interactive terminal to enter the local login password, plus the decryption password while the vault is locked; MCP tokens cannot manage the daemon. Otherwise check --auth-token or --auth-hash (or the matching environment variables)", baseURL)
+	}
+	return fmt.Sprintf("authentication is required at %s to inspect or stop the daemon. Managed instances prompt in an interactive terminal for the local login password, plus the decryption password while the vault is locked; legacy instances require --auth-token or --auth-hash. MCP tokens are MCP-only", baseURL)
 }
 
 // termcp's two MCP HTTP endpoints, and where the stdio bridge lands by default.

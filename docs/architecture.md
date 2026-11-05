@@ -2,7 +2,7 @@
 
 ## 零、HTTP 入口与认证中间件
 
-默认使用 `internal/auth.Managed`：首次本机设置管理员，注册时由同一次输入初始化两份独立密码。登录密码以独立 salt 的 Argon2id 校验记录保存；配置密码直接派生 MK，系统/ENV KEK 为可选的自动解锁路径。JWT 签名密钥、浏览器会话和 CSRF 只在本次进程内存中，重启后需要重新登录。
+默认使用 `internal/auth.Managed`：首次本机设置只收集登录密码和解密密码，不输入用户名，也不选择自动解锁。登录密码以独立 salt 的 Argon2id 校验记录保存；解密密码直接派生 MK。系统/ENV KEK 只为已有存储保留兼容。JWT 签名密钥、浏览器会话和 CSRF 只在本次进程内存中，重启后需要重新登录。
 
 `local-state/state.json` 是 keyring、登录 bootstrap、identity、EDK 与代际引用的统一提交点；主机密文正文保留在 `ssh_configs/<host>/<generation>.enc`；仅 catalog/auth 正文位于 `local-state/objects/<object-id>/<generation>.enc`。每个对象仍有独立随机 DEK。改登录密码只更新校验记录并撤销浏览器会话；改配置密码集中重封 EDK，不替换正文文件或浏览器登录。已登录但保险库锁定时，只开放账号/解锁等必要操作，MCP 和业务入口返回 423。详见 [Local state 与独立密码](design/local-state-and-passwords.md)。
 

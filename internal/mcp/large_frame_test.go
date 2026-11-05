@@ -45,7 +45,7 @@ func TestRecvFrameHonoursCallersBytesLimit(t *testing.T) {
 	}
 
 	// Reset the cursor to retry the same frame with a larger window.
-	s.setRecvCursor(handle, 0)
+	s.setRecvCursor(t.Context(), handle, 0)
 
 	// 2. With BytesLimitSet to 2 MiB, the frame must be delivered.
 	win := termArgs{BytesLimitSet: true, BytesLimit: 2 * 1024 * 1024}

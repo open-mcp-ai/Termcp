@@ -13,13 +13,13 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 ## Managed MCP tokens
 
-首次运行先打开 `/login` 设置管理员；在 `/permissions` 权限管理页选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；管理员也可以为自己签发 token。页面提供带 token 的配置片段和只读 DSL 权限预览。下文不含凭据的示例需补充相应 header/env，或用于显式旧共享认证/开放模式。
+首次运行先打开 `/login` 设置本机的登录密码与解密密码；在 `/permissions` 权限管理页选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；管理员也可以为自己签发 token。页面提供带 token 的配置片段和只读 DSL 权限预览。下文不含凭据的示例需补充相应 header/env，或用于显式旧共享认证/开放模式。
 
 - HTTP `/stream` 和 SSE `/sse`：每个请求携带 `Authorization: Bearer <token>`（SSE 的 `/message` 请求也需要）。
 - stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
 - 远端实例使用 `stdio <完整 HTTP(S) URL>`。`daemon stdio` 用于本机实例；自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
 - 服务端仅保存摘要，不能再次查看原 token。轮换时为同一主体增发、更新客户端、确认成功后撤销旧 token。撤销一枚 token 不影响其他 token；停用主体或权限组会断开受影响 token 的连接。
-- 未配置自动解锁时，daemon 重启后需要管理员先登录解锁；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
+- daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
 
 ## 按客户端接入
 
@@ -114,17 +114,15 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 ## 认证
 
-默认使用 Admin 托管认证：第一次在本机访问 `/login` 设置用户名与密码，之后登录获得
-HttpOnly JWT Cookie。顶部账号入口 `/auth` 可保存预设角色的 MCP 访问权限并退出登录。
-登录密码和配置加密密码是两份独立密码，只在注册时由同一次输入初始化。登录校验记录、keyring、identity 和 EDK 位于 `<data-dir>/local-state/state.json`，加密正文按对象身份和代际保存在 `local-state/objects/`。浏览器会话不跨重启恢复；可选系统/ENV 托管只自动解锁数据，不自动登录。
+默认使用 managed 本机密码认证：第一次在本机访问 `/login` 只设置登录密码与解密密码，不再输入用户名，之后登录获得 HttpOnly JWT Cookie。顶部账号入口 `/auth` 可进入账号和权限管理。登录校验记录、keyring、identity 和 EDK 位于 `<data-dir>/local-state/state.json`，加密正文按对象身份和代际保存在 `local-state/objects/`。浏览器会话不跨重启恢复。
 
-没有自动解锁时，先登录账号，再在 `/auth` 输入配置加密密码。Agent token 不承担解锁，423 表示需要完成保险库解锁或中断重封续跑。账号页改密码只改变登录密码并撤销浏览器登录；配置加密页改密码只重封 EDK，不改变登录密码、正文或 MCP token。旧布局验证后迁移并清理源文件，旧明文主机仍由用户选择是否转换。
+登录密码只认证浏览器会话；保险库锁定时，登录后再在 `/auth` 输入解密密码。Agent token 不承担解锁，423 表示需要完成保险库解锁或中断重封续跑。账号页改密码只改变登录密码并撤销浏览器登录；配置加密页改密码只重封 EDK，不改变登录密码、正文或 MCP token。旧布局验证后迁移并清理源文件，旧明文主机仍由用户选择是否转换。
 
 托管模式写请求使用 `/auth/status` 返回的 CSRF 值，通过 `X-Termcp-CSRF` 发送；内置
 WebUI 自动处理。首次设置只接受 loopback 连接及 loopback Host；远程部署可先通过
 SSH 本地转发设置。`/api.md` 仍公开。API-only 构建同样提供必要的登录/设置入口。
 
-当前已实现 Admin 登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、三种效果（禁止/允许/需审批）、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。OAuth、多个权限组继承和专属词汇尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
+当前已实现本机密码登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、三种效果（禁止/允许/需审批）、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。OAuth、多个权限组继承和专属词汇尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
 
 显式传入 `--auth-token` / `--auth-hash` 时，继续使用旧共享凭据模式，行为如下：
 
@@ -226,8 +224,8 @@ claude mcp add termcp -- termcp daemon stdio
 - 后台实例是**完整的 Termcp**：在浏览器打开它的 URL（默认 `http://127.0.0.1:18765`），就能旁观 Agent 正在驱动的同一批会话——Web UI、REST 与 HTTP MCP 都与桥并行可用。
 - 桥在前台运行：逐行读 stdin，把每条 MCP 消息转发到端点（默认 `/stream`；走 `/sse` 时桥打开事件流并向流中给出的消息端点 POST），服务端回复（含通知）写回 stdout。状态行走 stderr；stdout 只承载 MCP 消息。整批写入后立刻关闭 stdin（脚本，而不是交互式客户端）也能在退出前取回全部回复。
 - **它拉起的实例在空闲 30 秒后自行退出**——无连接、无请求（`--idle-timeout 10m` 调整，`--idle-timeout 0` 关闭；裸 `termcp daemon start` 起的实例不受此限：除非你传 `--idle-timeout`，它运行到被停止）。正在运行的桥算活动：在它的 MCP 会话存在之前，桥用轻量心跳把倒计时往外推；会话建立后由它建立的那条长连接接管——桥附着期间实例保持存活，桥退出后倒计时重新开始。心跳间隔跟随实例**上报**的倒计时（`GET /api/daemon` 带该值），所以一个先前以 `--idle-timeout 6s` 启动的实例也能被它顶住，而不只是跑 30 秒默认值的那种。
-- 它的日志是 `<data-dir>/termcp.log`（追加写，不轮转）。`termcp daemon status` 汇报 pid / URL / 版本 / 日志路径且不重置倒计时；`termcp daemon stop` 请求守护实例优雅停机（`POST /api/daemon/stop`）——手动实例必须在它被启动的地方停止。面对带认证的端点时，给管理命令传同一个凭据。
-- 认证贯穿每条命令：管理与桥都出示配置的凭据——明文 token（`--auth-token` / `$TERMCP_AUTH_TOKEN`），或只保留了哈希时用哈希串本身（`--auth-hash` / `$TERMCP_AUTH_HASH`），哈希配置的实例接受后者。两种形式都是机密；拉起动作（`termcp daemon start`、`termcp daemon stdio`）会把同一个凭据交给后台实例。
+- 它的日志是 `<data-dir>/termcp.log`（追加写，不轮转）。`termcp daemon status` 汇报 pid / URL / 版本 / 日志路径且不重置倒计时；`termcp daemon stop` 请求守护实例优雅停机（`POST /api/daemon/stop`）——手动实例必须在它被启动的地方停止。面对旧共享认证端点时，给管理命令传同一凭据。
+- 认证按入口区分：managed 模式的 MCP token 只进入 MCP，不能查看或停止 daemon；`daemon status` / `daemon stop` 会在交互终端中无回显询问本机登录密码，金库锁定时再询问解密密码。显式旧共享模式继续使用明文 token（`--auth-token` / `$TERMCP_AUTH_TOKEN`）或哈希串（`--auth-hash` / `$TERMCP_AUTH_HASH`）管理 daemon，桥也接受这些旧凭据。拉起动作会把旧共享凭据交给后台实例，但绝不会把 `TERMCP_MCP_TOKEN` 写成服务端认证。
 
 ## 速查
 

@@ -130,7 +130,56 @@ func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Sta
 	return r.instanceStatusFor(name, targetHost, sid, shellID), nil
 }
 
-func (r *Reconciler) acquirePlan(name, target string, ext *Extension, plan hostPlan, wait time.Duration) (Status, error) {
+// AcquireFresh always creates a caller-owned channel, including for a resident
+// extension. It is used by transports that need one isolated protocol session
+// per authenticated caller.
+func (r *Reconciler) AcquireFresh(name, target string, wait time.Duration) (Status, error) {
+	ext, err := r.store.Load(name)
+	if err != nil {
+		return Status{}, err
+	}
+	tDecl, ok := ext.TargetFor(target)
+	if !ok {
+		targets := ext.EffectiveTargets()
+		if len(targets) > 1 && strings.TrimSpace(target) == "" {
+			names := make([]string, 0, len(targets))
+			for _, t := range targets {
+				names = append(names, t.Host)
+			}
+			return Status{}, fmt.Errorf("extension %q declares multiple targets (%s): specify target", name, strings.Join(names, ", "))
+		}
+		if strings.TrimSpace(target) != "" {
+			return Status{}, fmt.Errorf("extension %q has no target %q", name, target)
+		}
+		return Status{}, fmt.Errorf("extension %q has no targets configured", name)
+	}
+	targetHost := tDecl.Host
+	view := forTarget(ext, targetHost)
+	st, ok := r.Status(name)
+	if !ok {
+		return Status{}, fmt.Errorf("extension %q not found", name)
+	}
+	if !ext.IsEnabled() {
+		return st, nil
+	}
+	limit, err := ext.IdleTimeoutDuration()
+	if err != nil {
+		return Status{}, err
+	}
+	state := r.stateFor(name, targetHost)
+	if view.Lazy() {
+		state.want()
+		state.setIdleLimit(limit)
+	}
+	sid, shellID, _, _, err := r.bringUp(context.Background(), &view, state, true)
+	if err != nil {
+		got, _ := r.Status(name)
+		return got, nil
+	}
+	return r.instanceStatusFor(name, targetHost, sid, shellID), nil
+}
+
+func (r *Reconciler) acquirePlan(name, target string, ext *Extension, plan hostPlan, fresh, reportFailure bool, wait time.Duration) (Status, error) {
 	st, ok := r.Status(name)
 	if !ok {
 		return Status{}, fmt.Errorf("extension %q not found", name)
@@ -143,17 +192,22 @@ func (r *Reconciler) acquirePlan(name, target string, ext *Extension, plan hostP
 		return Status{}, err
 	}
 	state := r.stateFor(name, target)
-	if !ext.Lazy() {
+	if !fresh && !ext.Lazy() {
 		state.want()
 		r.startPreparedProbe(r.runCtx(), name, target, ext, plan)
 		return r.await(name, wait)
 	}
 
-	state.want()
-	state.setIdleLimit(limit)
-	sid, shellID, _, _, err := r.bringUpPlan(context.Background(), ext, plan, state, true)
+	if ext.Lazy() {
+		state.want()
+		state.setIdleLimit(limit)
+	}
+	sid, shellID, _, _, err := r.bringUpPlan(context.Background(), ext, plan, state, fresh)
 	if err != nil {
 		got, _ := r.Status(name)
+		if reportFailure {
+			return got, err
+		}
 		return got, nil
 	}
 	return r.instanceStatusFor(name, target, sid, shellID), nil
@@ -239,7 +293,7 @@ func (r *Reconciler) bringUpPlan(ctx context.Context, ext *Extension, plan hostP
 	if fresh {
 		label = ""
 		if plan.shell {
-			label = st.nextLabel(ext)
+			label = st.nextLabel(ext, !ext.Lazy())
 			shell, cerr := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, label)
 			if cerr != nil {
 				r.fail(st, "start", cerr.Error())
@@ -298,13 +352,18 @@ func (r *Reconciler) bringUpPlan(ctx context.Context, ext *Extension, plan hostP
 	return sess.ID, shellID, "", "", nil
 }
 
-// nextLabel names an instance's channel. The label has to be unique inside the
-// session (#188 refuses a duplicate), and it is what a human reading `ls <session>`
-// sees, so the first instance keeps the extension's own name and the rest count up
-// from there. The counter never goes back, for the reason it exists.
-func (st *extState) nextLabel(ext *Extension) string {
+// nextLabel names a caller-owned instance channel. The label has to be unique
+// inside the session (#188 refuses a duplicate), and it is what a human reading
+// `ls <session>` sees. A resident extension already reserves its bare name for
+// the primary channel, so its first caller-owned channel starts at #2. The
+// counter never goes back, for the reason it exists.
+func (st *extState) nextLabel(ext *Extension, primaryReserved bool) string {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if primaryReserved && st.labels == 0 {
+		// A resident extension's primary channel already owns the bare name.
+		st.labels = 1
+	}
 	st.labels++
 	if st.labels == 1 {
 		return ext.Name

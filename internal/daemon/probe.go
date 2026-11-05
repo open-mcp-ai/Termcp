@@ -52,13 +52,19 @@ func IsProbe(r *http.Request) bool {
 // reads the credential-free /api.md, so no token is involved and nothing but
 // documentation state is touched.
 func IsServing(ctx context.Context, host string, port int) bool {
+	return IsServingURL(ctx, BaseURL(host, port))
+}
+
+// IsServingURL reports whether a termcp instance answers at an
+// already-validated management origin.
+func IsServingURL(ctx context.Context, baseURL string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL(host, port)+"/api.md", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api.md", nil)
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(markProbe(req))
+	resp, err := managementHTTPClient().Do(markProbe(req))
 	if err != nil {
 		return false
 	}

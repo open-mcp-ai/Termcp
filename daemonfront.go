@@ -71,7 +71,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
 				os.Exit(1)
 			}
-			fmt.Fprintln(out, "  note: authentication is required for details (pass --auth-token or --auth-hash)")
+			fmt.Fprintf(out, "  note: %s\n", daemonManagementAuthHint(daemon.BaseURL(cfg.Host, cfg.Port), cfg))
 		case !res.Info.Daemon && res.Info.PID > 0:
 			fmt.Fprintln(out, "  note: the instance was started manually, so it has no idle countdown; stop it where it was started")
 		case res.Info.Log != "":
@@ -88,7 +88,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 		// countdown), which needs no pings at all.
 		keepAlive := bridgeKeepAlive(ensureDaemon, idleTimeoutArg, idleTimeout)
 		if targetOnLocalInstance(cfg, target.URL) {
-			rep := daemon.InspectEndpoint(ctx, cfg.Host, cfg.Port, daemon.Credential(cfg))
+			rep := daemon.InspectEndpoint(ctx, cfg.Host, cfg.Port, daemon.ManagementCredential(cfg))
 			if !ensureDaemon {
 				// The bridge never starts anything on its own: say so plainly when
 				// nothing answers, instead of failing mid-handshake. A custom
@@ -121,8 +121,8 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 }
 
 // stdioBridge relays the process's stdio MCP stream to the target endpoint,
-// presenting whichever credential the configuration holds (see
-// daemon.Credential).
+// presenting whichever credential the configuration holds for MCP access (see
+// daemon.BridgeCredential).
 //
 // namespace is a legacy caller claim sent on every request. Managed Agent
 // tokens establish their namespace from the verified identity instead; multiple
@@ -141,7 +141,7 @@ func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, k
 	return mcpbridge.Run(ctx, mcpbridge.Config{
 		URL:       target.URL,
 		SSE:       target.SSE,
-		Token:     daemon.Credential(cfg),
+		Token:     daemon.BridgeCredential(cfg),
 		Headers:   headers,
 		KeepAlive: keepAlive,
 		In:        os.Stdin,

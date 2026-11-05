@@ -20,6 +20,7 @@ termcp <subcommand> [action] [flags]
 | `--mcp-manage-ssh-configs` | `false` | 允许 MCP 工具创建/编辑/删除 SSH 配置（凭据永不暴露）。 |
 | `--auth-token` | *(未设)* | 显式选择旧共享 token 模式（或 `$TERMCP_AUTH_TOKEN`），每个客户端——API、MCP、浏览器——都要出示。与 `--auth-hash` 互斥；未设置两者时默认进入 Admin/JWT 托管认证。 |
 | `--auth-hash` | *(未设)* | token 的加盐 SHA-256（`sha256-<salt_hex>-<digest_hex>`），服务端不保存明文（或 `$TERMCP_AUTH_HASH`）。用 `termcp --gen-auth-hash` 生成。哈希配置的实例也接受哈希串本身作为凭据——`termcp daemon` 管理与 `termcp stdio` 只拿到哈希也能用——因此把哈希当机密对待。与 `--auth-token` 互斥。 |
+| `--daemon-url` | *(未设)* | 仅用于 `daemon status` / `daemon stop` 的完整管理 origin（或 `$TERMCP_DAEMON_URL`）。缺省由 `--host`/`--port` 组成 loopback HTTP。明文 HTTP 只允许 loopback；远端必须显式 `https://`。不接受 URL 路径、查询或 fragment，且管理请求不会跟随重定向。 |
 | `--disable-auth` | `false` | **刻意**关掉 HTTP 认证，包括非 loopback 绑定（或 `$TERMCP_DISABLE_AUTH_TOKEN=1`）。请配合 loopback 端口，只让本机调用者可达。与 `--auth-token`/`--auth-hash` 同时给出是错误，而不是某个参数静默胜出。 |
 | `--idle-timeout` | `30s / 不限` | 守护实例在无任何连接或请求时可自行退出前的时长，如 `10m`；`0` 关闭。默认：`termcp daemon stdio` 拉起的实例 30s，`termcp daemon start` 拉起的实例不限时。 |
 | `--namespace` | 空（实例所有者） | 仅 stdio 桥：声明调用方命名空间（字母/数字/`-_.`，最长 64），桥发的每个请求都带 `X-Termcp-Namespace`。实例侧于是只列出/接受这个命名空间里的会话，多个 bridge 接到同一实例时互不干扰。空 = 今天的全局视图。名字非法在启动时就被拒，不会留到第一条请求才失败。 |
@@ -121,8 +122,8 @@ termcp <subcommand> [action] [flags]
 | `daemon` | 管理在 `--host`/`--port` 应答的实例；不带动作时列出动作，`termcp daemon --help` 展开完整参数与细节。 |
 | `daemon start` | 确保后台实例在跑：复用端点上应答的东西（手动起的实例也算），否则拉起一个分离实例并等它就绪。它运行到被停止——除非传 `--idle-timeout`，否则没有空闲倒计时。 |
 | `daemon stdio` | 与 `start` 相同，然后留在前台当该实例的 stdio 桥（可选端点值紧跟动作：`termcp daemon stdio sse`）。它拉起的实例在没有桥连接时开始倒计时。 |
-| `daemon stop` | 请求后台实例优雅停机；只有守护实例接受——手动实例会被指回它被启动的地方。 |
-| `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。它是被动查询，它自己的请求不计入空闲倒计时，所以询问不会让它汇报的实例活着。 |
+| `daemon stop` | 请求后台实例优雅停机；只有守护实例接受——手动实例会被指回它被启动的地方。managed 实例在交互终端中输入本机登录密码后执行，保险库锁定时再输入解密密码；legacy 实例使用 `--auth-token` / `--auth-hash`。远端管理端点必须通过 `--daemon-url https://…` 指定。 |
+| `daemon status` | 汇报实例的 pid / URL / 版本 / 日志路径。它是被动查询，它自己的请求不计入空闲倒计时，所以询问不会让它汇报的实例活着。远端管理端点同样要求显式 HTTPS。 |
 | `config-storage status` | 只读检查 `--data-dir` 下的主机配置存储；识别当前 `local-state` 与旧文件布局，能自动解锁时报告 catalog revision 与密文 profile 数，否则明确显示锁定状态。 |
 | `config-storage verify-password` | 从终端或 stdin 读取配置加密密码，只验证当前布局中的密码槽；不获取 daemon 写锁、不改变持久状态。 |
 | `config-storage rotate-key` | 仅为不含密码派生的旧密钥环保留兼容入口；密码派生存储会拒绝执行，并要求在 WebUI 用“当前密码、新密码、确认新密码”修改主密钥。 |
@@ -147,7 +148,7 @@ Main Key --认证加密--> EDK
 随机 DEK --认证加密--> 配置正文
 ```
 
-当前密钥保护、identity 和 EDK 集中到 `local-state/state.json`，正文保存在 `local-state/objects/`。以下 `keys/config.keys`、`store.enc` 路径仅描述旧布局与迁移兼容。登录密码与配置密码分别修改；登录后若收到 423，先在 `/auth` 用配置密码解锁。
+当前密钥保护、identity 和 EDK 集中到 `local-state/state.json`，正文保存在 `local-state/objects/`。以下 `keys/config.keys`、`store.enc` 路径仅描述旧布局与迁移兼容。登录密码与解密密码分别修改；登录后若收到 423，先在 `/auth` 用解密密码解锁。
 
 `keys/config.keys` 旧格式只保存 KDF 参数、随机 salt、认证校验信息和可选的系统/ENV 自动
 解锁封装，不保存密码或明文 Main Key。密码至少 8 个 Unicode 字符，最多 1024 个

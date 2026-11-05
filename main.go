@@ -104,6 +104,7 @@ func main() {
 	flag.StringVar(&cfg.MCPToken, "mcp-token", cfg.MCPToken, "Client-only MCP bearer token for stdio (or $TERMCP_MCP_TOKEN)")
 	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
 	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
+	flag.StringVar(&cfg.DaemonURL, "daemon-url", cfg.DaemonURL, "Client-only daemon management origin for status/stop; remote endpoints require https:// (or $TERMCP_DAEMON_URL)")
 	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
@@ -368,7 +369,7 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	} else if cfg.DisableAuth {
 		slog.Warn("HTTP authentication: DISABLED on purpose (--disable-auth / $" + config.EnvDisableAuth + "); anyone who can reach this port can drive every session")
 	} else if cfg.ManagedAuth() {
-		slog.Info("HTTP authentication: managed admin login; open /login (first-run setup is local only)")
+		slog.Info("HTTP authentication: managed local-password login; open /login (first-run setup is local only)")
 	}
 
 	slog.Info("MCP HTTP:")

@@ -130,6 +130,30 @@ func TestApplyEnv_BlankEnvCleared(t *testing.T) {
 	}
 }
 
+func TestApplyEnv_DaemonURL(t *testing.T) {
+	t.Setenv(EnvDaemonURL, "https://termcp.example")
+	cfg := Default()
+	cfg.ApplyEnv()
+	if cfg.DaemonURL != "https://termcp.example" {
+		t.Fatalf("DaemonURL = %q", cfg.DaemonURL)
+	}
+	cfg.DaemonURL = "https://flag.example"
+	cfg.ApplyEnv()
+	if cfg.DaemonURL != "https://flag.example" {
+		t.Fatal("environment overwrote explicit daemon URL")
+	}
+}
+
+func TestValidate_DaemonURLIsClientOnly(t *testing.T) {
+	cfg := Default()
+	cfg.DataDir = t.TempDir()
+	cfg.DaemonURL = "https://termcp.example"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "client-only") {
+		t.Fatalf("Validate error = %v", err)
+	}
+}
+
 func TestApplyEnv_DisableAuthFromEnv(t *testing.T) {
 	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " on "} {
 		t.Setenv(EnvDisableAuth, v)

@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/authorization"
 	"github.com/open-mcp-ai/termcp/internal/configstore"
@@ -250,19 +252,299 @@ func TestUpgradePresetGroupsRefreshesOnlyUnmodifiedShippedPolicy(t *testing.T) {
 	}
 	gotOperator := state.Groups[operator.ID]
 	if gotOperator.PresetVersion != presets["host-operator"].Version ||
-		!gotOperator.Policy.AllowsOperation("shell.detect") ||
-		!reflect.DeepEqual(gotOperator.Policy, presets["host-operator"].Policy) {
+		!gotOperator.Policy.AllowsOperation("shell.input") ||
+		!gotOperator.Policy.AllowsOperation("session.start") ||
+		!gotOperator.Policy.AllowsOperation("file.write") {
 		t.Fatalf("host operator was not refreshed: %+v", gotOperator)
+	}
+	for _, id := range []string{"file.perm", "file.link", "file.fs", "shell.detect"} {
+		if gotOperator.Policy.AllowsOperation(id) {
+			t.Errorf("v1 host operator gained unapproved action %s", id)
+		}
 	}
 	if gotOperator.Revision != operator.Revision+1 || state.AccessRevision != 13 {
 		t.Fatal("preset refresh did not advance policy revisions")
 	}
 	gotV2 := state.Groups[v2Operator.ID]
-	if gotV2.PresetVersion != presets["diagnostics"].Version || !reflect.DeepEqual(gotV2.Policy, presets["diagnostics"].Policy) {
+	if gotV2.PresetVersion != presets["diagnostics"].Version ||
+		!gotV2.Policy.AllowsOperation("shell.output") ||
+		!gotV2.Policy.AllowsOperation("file.read") ||
+		gotV2.Policy.AllowsOperation("file.write") {
 		t.Fatalf("v2 built-in preset was not refreshed: %+v", gotV2)
 	}
 	gotMaintainer := state.Groups[maintainer.ID]
 	if !reflect.DeepEqual(gotMaintainer, maintainer) {
 		t.Fatal("preset refresh overwrote an administrator-edited group")
+	}
+}
+
+func TestUpgradePresetGroupsRefreshesRetiredV3Vocabulary(t *testing.T) {
+	legacy := groupPresetsV3()["file-maintainer"]
+	group := permissionGroup{
+		ID: "preset-" + legacy.ID, Name: legacy.Name, Description: legacy.Description,
+		Enabled: true, Revision: 7, PresetID: legacy.ID, PresetVersion: legacy.Version,
+		Policy: clonePolicy(legacy.Policy),
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{group.ID: group},
+		AccessRevision: 12,
+	}
+
+	if !upgradePresetGroups(&state) {
+		t.Fatal("retired v3 preset was not upgraded")
+	}
+	current := groupPresets()
+	var currentMaintainer groupPreset
+	for _, preset := range current {
+		if preset.ID == legacy.ID {
+			currentMaintainer = preset
+			break
+		}
+	}
+	got := state.Groups[group.ID]
+	if got.PresetVersion != currentMaintainer.Version ||
+		!got.Policy.AllowsOperation("file.write") ||
+		!got.Policy.AllowsOperation("file.mkdir") {
+		t.Fatalf("retired v3 preset was not refreshed: %+v", got)
+	}
+	for _, id := range []string{"file.realpath", "file.readlink", "file.statvfs", "file.perm", "file.link", "file.fs"} {
+		if _, exists := got.Policy.Actions[id]; exists {
+			t.Errorf("retired or widening operation %s survived the preset upgrade", id)
+		}
+	}
+	if got.Revision != group.Revision+1 || state.AccessRevision != 13 {
+		t.Fatal("preset upgrade did not advance policy revisions")
+	}
+}
+
+func TestUpgradePresetGroupsTranslatesPreRebaseV3HostOperator(t *testing.T) {
+	legacy := groupPresetsV3()["host-operator"]
+	group := permissionGroup{
+		ID: "preset-" + legacy.ID, Name: legacy.Name, Description: legacy.Description,
+		Enabled: true, Revision: 7, PresetID: legacy.ID, PresetVersion: legacy.Version,
+		Policy: clonePolicy(legacy.Policy),
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{group.ID: group},
+		AccessRevision: 12,
+	}
+	if !upgradePresetGroups(&state) {
+		t.Fatal("pre-rebase v3 host operator was not upgraded")
+	}
+	got := state.Groups[group.ID]
+	for _, id := range []string{"file.perm", "file.link", "file.fs", "forward.open", "ext.get"} {
+		if !got.Policy.AllowsOperation(id) {
+			t.Errorf("equivalent translated operation %s was lost", id)
+		}
+		if !slices.Contains(got.PolicyWarnings, id) {
+			t.Errorf("translated operation %s lacks a review warning", id)
+		}
+	}
+	for _, retired := range []string{"file.chmod", "file.chown", "file.chtimes", "file.truncate", "file.symlink", "file.readlink", "ext.use", "ext.release"} {
+		if _, exists := got.Policy.Actions[retired]; exists {
+			t.Errorf("retired operation %s survived", retired)
+		}
+	}
+}
+
+func TestUpgradePresetGroupsPreservesDevV3ConsolidatedPolicy(t *testing.T) {
+	for _, presetID := range []string{"file-maintainer", "host-operator"} {
+		t.Run(presetID, func(t *testing.T) {
+			legacy := groupPresetsV3Dev()[presetID]
+			group := permissionGroup{
+				ID: "preset-" + legacy.ID, Name: legacy.Name, Description: legacy.Description,
+				Enabled: true, Revision: 7, PresetID: legacy.ID, PresetVersion: legacy.Version,
+				Policy: clonePolicy(legacy.Policy),
+			}
+			state := managedState{
+				Groups:         map[string]permissionGroup{group.ID: group},
+				AccessRevision: 12,
+			}
+
+			if !upgradePresetGroups(&state) {
+				t.Fatal("dev v3 preset was not upgraded")
+			}
+			got := state.Groups[group.ID]
+			if got.PresetVersion != currentPresetVersion(presetID) || got.PolicyVocabulary != permissionPolicyVocabularyVersion {
+				t.Fatalf("preset markers = version %d vocabulary %d", got.PresetVersion, got.PolicyVocabulary)
+			}
+			for operation := range legacy.Policy.Actions {
+				if !got.Policy.AllowsOperation(operation) {
+					t.Errorf("dev v3 operation %s was lost", operation)
+				}
+			}
+			if !got.Policy.AllowsOperation("file.link") {
+				t.Fatal("dev v3 file.link grant was lost")
+			}
+		})
+	}
+}
+
+func TestPresetUpgradeDoesNotRecreateDeletedGroups(t *testing.T) {
+	legacy := groupPresetsV3Dev()["viewer"]
+	group := permissionGroup{
+		ID: "preset-" + legacy.ID, Name: legacy.Name, Description: legacy.Description,
+		Enabled: true, Revision: 7, PresetID: legacy.ID, PresetVersion: legacy.Version,
+		Policy: clonePolicy(legacy.Policy),
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{group.ID: group},
+		AccessRevision: 12,
+	}
+	if !upgradePresetGroups(&state) {
+		t.Fatal("retained preset was not upgraded")
+	}
+	if _, exists := state.Groups["preset-file-maintainer"]; exists {
+		t.Fatal("preset upgrade recreated a group the administrator deleted")
+	}
+}
+
+func TestEditedRetiredPresetDropsBroadenedOperations(t *testing.T) {
+	legacy := groupPresetsV3()["host-operator"]
+	legacy.Policy.Actions["profile.create"] = authorization.Grant{Effect: authorization.EffectAllow}
+	for _, operation := range []string{"cdp.open", "jrpc.open", "mcp.open"} {
+		legacy.Policy.Actions[operation] = authorization.Grant{Effect: authorization.EffectAllow}
+	}
+	group := permissionGroup{
+		ID: "preset-" + legacy.ID, Name: legacy.Name, Description: legacy.Description,
+		Enabled: true, Revision: 7, PresetID: legacy.ID, PresetVersion: legacy.Version,
+		Policy: legacy.Policy,
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{group.ID: group},
+		AccessRevision: 12,
+	}
+
+	if upgradePresetGroups(&state) {
+		t.Fatal("edited preset was replaced wholesale")
+	}
+	if !repairRetiredAgentOperations(&state) {
+		t.Fatal("edited retired preset was not repaired")
+	}
+	got := state.Groups[group.ID]
+	for _, operation := range []string{"cdp.open", "ext.get", "file.link", "file.write", "jrpc.open", "mcp.open", "profile.list"} {
+		if _, exists := got.Policy.Actions[operation]; exists {
+			t.Errorf("broadened legacy operation %s survived", operation)
+		}
+	}
+	if !got.Policy.AllowsOperation("profile.create") {
+		t.Fatal("administrator's current-vocabulary edit was removed")
+	}
+	if got.PresetVersion != currentPresetVersion(legacy.ID) {
+		t.Fatalf("preset version = %d, want current", got.PresetVersion)
+	}
+	for _, operation := range []string{"cdp.open", "ext.get", "file.link", "file.write", "jrpc.open", "mcp.open", "profile.list"} {
+		if !slices.Contains(got.PolicyWarnings, operation) {
+			t.Errorf("missing review warning for %s", operation)
+		}
+	}
+}
+
+func TestCustomLegacyPolicyDropsWidenedOperationIDs(t *testing.T) {
+	policy := EmptyAgentPolicy()
+	for _, operation := range []string{"file.read", "file.write", "profile.list", "ext.get"} {
+		policy.Actions[operation] = authorization.Grant{Effect: authorization.EffectAllow}
+	}
+	group := permissionGroup{
+		ID: "custom-legacy", Name: "custom legacy", Description: "custom", Enabled: true,
+		Revision: 3, CreatedAt: time.Unix(1, 0).UTC(), Policy: policy,
+	}
+	state := managedState{
+		Groups:         map[string]permissionGroup{group.ID: group},
+		AccessRevision: 12,
+	}
+	if !repairRetiredAgentOperations(&state) {
+		t.Fatal("custom legacy policy was not repaired")
+	}
+	got := state.Groups[group.ID]
+	if !got.Policy.AllowsOperation("file.read") {
+		t.Fatal("unchanged operation was removed")
+	}
+	for _, operation := range []string{"file.write", "profile.list", "ext.get"} {
+		if got.Policy.AllowsOperation(operation) {
+			t.Errorf("widened operation %s survived", operation)
+		}
+		if !slices.Contains(got.PolicyWarnings, operation) {
+			t.Errorf("missing warning for %s", operation)
+		}
+	}
+	if got.PolicyVocabulary != permissionPolicyVocabularyVersion {
+		t.Fatalf("policy vocabulary = %d, want current", got.PolicyVocabulary)
+	}
+}
+
+func TestLegacyV3PresetLoadsAfterRebase(t *testing.T) {
+	m, _, _ := configuredManaged(t)
+	const groupID = "preset-file-maintainer"
+	legacy := groupPresetsV3()["file-maintainer"]
+	mutateManagedState(t, m, func(state map[string]any) {
+		groups := state["groups"].(map[string]any)
+		group := groups[groupID].(map[string]any)
+		raw, err := json.Marshal(legacy.Policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var policy map[string]any
+		if err = json.Unmarshal(raw, &policy); err != nil {
+			t.Fatal(err)
+		}
+		group["policy"] = policy
+		group["preset_version"] = legacy.Version
+	})
+
+	loaded, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatalf("legacy v3 preset prevented managed startup: %v", err)
+	}
+	got := loaded.state.Groups[groupID]
+	if got.PresetVersion != currentPresetVersion(legacy.ID) {
+		t.Fatalf("preset version = %d, want current", got.PresetVersion)
+	}
+	if _, exists := got.Policy.Actions["file.realpath"]; exists {
+		t.Fatal("retired v3 operation survived startup")
+	}
+	if !got.Policy.AllowsOperation("file.read") {
+		t.Fatal("current file-maintainer grants were not loaded")
+	}
+}
+
+func TestDevV3PresetLoadsAfterRebaseWithoutPermissionLoss(t *testing.T) {
+	m, _, _ := configuredManaged(t)
+	legacy := groupPresetsV3Dev()
+	groupIDs := []string{"preset-file-maintainer", "preset-host-operator"}
+	mutateManagedState(t, m, func(state map[string]any) {
+		groups := state["groups"].(map[string]any)
+		for _, groupID := range groupIDs {
+			presetID := strings.TrimPrefix(groupID, "preset-")
+			raw, err := json.Marshal(legacy[presetID].Policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policy map[string]any
+			if err = json.Unmarshal(raw, &policy); err != nil {
+				t.Fatal(err)
+			}
+			group := groups[groupID].(map[string]any)
+			group["policy"] = policy
+			group["preset_version"] = legacy[presetID].Version
+			group["policy_vocabulary"] = 0
+		}
+	})
+
+	loaded, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatalf("dev v3 preset prevented managed startup: %v", err)
+	}
+	for _, groupID := range groupIDs {
+		got := loaded.state.Groups[groupID]
+		if got.PresetVersion != currentPresetVersion(got.PresetID) {
+			t.Fatalf("%s preset version = %d, want current", groupID, got.PresetVersion)
+		}
+		if got.PolicyVocabulary != permissionPolicyVocabularyVersion {
+			t.Fatalf("%s policy vocabulary = %d, want current", groupID, got.PolicyVocabulary)
+		}
+		if !got.Policy.AllowsOperation("file.link") {
+			t.Fatalf("%s lost dev v3 file.link", groupID)
+		}
 	}
 }

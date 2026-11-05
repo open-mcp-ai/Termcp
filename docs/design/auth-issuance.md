@@ -4,7 +4,7 @@
 
 状态：Admin 初始化、JWT Cookie、可撤销会话及预设角色入口权限第一版已实现（2026-10-28）；本文其他 Agent/Grant、逐操作权限和换证细节仍为设计提案。原始设计日期：2026-10-27，核验基线 `dev@6a8af55`。
 
-第一版实现位于 `internal/auth/managed.go`、`managed_http.go`：默认数据目录的 `auth.enc` 加密保存 Admin 身份、独立随机签名密钥、会话和角色入口权限；`auth.json` 只有版本标记，Admin 主密码通过现有 Argon2id 密钥环验证并解锁同一 Main Key。登录页 `/login`，账号及权限页 `/auth`；会话有效期 24 小时，退出撤销对应 SID 并关闭该会话的活动 WebSocket；无自动解锁时重启后先登录。入口权限修改使用 revision 比较后保存，对新请求立即生效。当前不签发 Agent token，不代表本文完整 Agent 业务策略已实现。
+第一版实现位于 `internal/auth/managed.go`、`managed_http.go`：默认数据目录的 `auth.enc` 加密保存固定本机 Admin 身份、独立随机签名密钥、会话和角色入口权限；`auth.json` 只有版本标记。用户只设置登录密码与配置解密密码：前者由独立 Argon2id verifier 校验，后者通过现有 Argon2id 密钥环验证并解锁同一 Main Key。登录页 `/login`，账号及权限页 `/auth`；会话有效期 24 小时，退出撤销对应 SID 并关闭该会话的活动 WebSocket；重启后先登录，锁定时再输入解密密码。入口权限修改使用 revision 比较后保存，对新请求立即生效。当前不签发 Agent token，不代表本文完整 Agent 业务策略已实现。
 
 认证存储升级已实现，见 [Admin 主密码与共享 Main Key](auth-storage-encryption.md)：认证与主机配置共用同一密钥环。账号与配置页面统一改主密码并撤销全部会话；此前独立认证密钥环提案已被取代。
 
@@ -389,7 +389,7 @@ Agent 的 MCP transport session 在 `initialize` 时也要绑定认证得到的 
 ### 4.1 正常登录
 
 1. 打开 `/login`。登录页及最小静态资源公开，不含业务数据；公开 `/api.md` 的规则保留。
-2. 页面获取受限的预登录会话和 CSRF challenge，用户输入首次设置的 Admin 账号和密码。
+2. 页面获取受限的预登录会话和 CSRF challenge，用户只输入登录密码；首次设置再输入独立的解密密码。
 3. `POST /auth/human/login` 验证持久化的 Admin 凭据、预登录 challenge、来源与速率限制。请求体和请求头不写日志；登录成功后销毁预登录状态并签发 human 会话；短期访问/续期双凭据属于后文候选方案，不作为本阶段必需实现。
 4. 服务端通过 `Set-Cookie` 交付凭据。JSON 只返回角色、到期时间、CSRF token 等安全元数据，不回显 Cookie 或登录密钥。
 5. 页面返回登录前目标；返回地址只接受本站相对路径，拒绝协议、双斜线或跨站重定向。
@@ -398,7 +398,7 @@ Agent 的 MCP transport session 在 `initialize` 时也要绑定认证得到的 
 
 ### 4.2 首次安装与找回
 
-用户第一次运行程序时设置 Admin 账号和主密码。主密码通过现有 Argon2id 密钥环验证，并派生与主机配置共用的 Main Key；认证状态加密保存到默认 `.termcp/auth.enc`，不保存明文密码。系统/ENV 自动解锁可选；没有自动解锁时通过登录一次完成解锁。旧明文账号在验证后迁移，配置密码不同时还需原配置密码。
+用户第一次运行程序时只设置登录密码与配置解密密码，不输入用户名。登录密码使用独立的 Argon2id verifier；解密密码通过现有 Argon2id 密钥环验证，并派生与主机配置共用的 Main Key。认证状态加密保存到默认 data-dir，不保存明文密码。managed 登录/设置 UI 不提供第三个迁移密码或自动解锁选择；旧明文账号在验证后迁移。
 
 HTTP 和 daemon 使用同一份落地配置与权限记录，不按启动方式创建两套 Admin。首次设置成功后关闭初始化入口；配置损坏或读取失败不能自动重新初始化。stdio 的 stdin 只承载 MCP，不能在该通道读取设置密码；首次设置须通过用户可见的入口完成。
 

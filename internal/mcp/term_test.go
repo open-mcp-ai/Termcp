@@ -664,7 +664,7 @@ func TestMCPRecvCursorIsDroppedOnClose(t *testing.T) {
 	// that cost two CI rounds: spawning `echo '{…}'` fails under powershell, and typing
 	// it at a "pty" assumes a terminal that echoes, which Windows does not always give.
 	// The frame-reading half is covered by TestMCPRecvCursorUsesRawByteSpan.
-	s.setRecvCursor(h, 7)
+	s.setRecvCursor(t.Context(), h, 7)
 
 	if out := termText(t, s, map[string]any{"cmd": "close " + h}); !statusLineIs(out, "204") {
 		t.Fatalf("close: %s", out)

@@ -154,13 +154,14 @@ func (m *Managed) saveWithLogin(state managedState, c *loginCredential) error {
 	return m.writeMarker()
 }
 
-// UnlockVault proves the independent configuration password. It neither changes
-// the login verifier nor invalidates current browser identities.
-func (m *Managed) UnlockVault(password string, automatic bool) error {
+// UnlockVault proves the independent configuration decryption password. It
+// neither changes the login verifier nor invalidates current browser identities.
+func (m *Managed) UnlockVault(password string) error {
 	m.passwordMu.Lock()
 	defer m.passwordMu.Unlock()
-	return m.unlockVault(password, automatic)
+	return m.unlockVault(password, false)
 }
+
 func (m *Managed) unlockVault(password string, automatic bool) error {
 	if err := m.vault.UnlockAuthentication(password, m.providers...); err != nil {
 		return err

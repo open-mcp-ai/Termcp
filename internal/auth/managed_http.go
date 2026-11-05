@@ -126,6 +126,9 @@ func requestSurface(r *http.Request) string {
 	case "/api/daemon", "/api/daemon/stop":
 		return "daemon"
 	}
+	if strings.HasPrefix(r.URL.Path, "/ext/") && strings.HasSuffix(r.URL.Path, "/stream") {
+		return "mcp"
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") {
 		return "api"
 	}
@@ -332,12 +335,11 @@ func (m *Managed) status(w http.ResponseWriter, r *http.Request) {
 	migration := m.credential == nil && (m.legacy != nil || m.sealed)
 	locked := m.sealed && (m.state.Version == 0 || m.vault.AuthenticationLocked())
 	existing := m.vault.AuthenticationInitialized()
-	initialShared := m.credential != nil && m.credential.InitialPasswordsShared
 	m.mu.Unlock()
 	id, session, err := m.requestSession(r)
 	if err == nil {
 		_ = id
-		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": locked, "vault_ready": !locked, "initial_passwords_shared": initialShared})
+		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": locked, "vault_ready": !locked})
 		return
 	}
 	if len(r.Header.Values("Authorization")) > 0 {
@@ -350,7 +352,7 @@ func (m *Managed) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: preloginCookie, Value: csrf, Path: "/auth/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: 600})
-	authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": false, "can_setup": localSetup(r), "csrf": csrf, "migration_required": migration, "locked": locked, "encryption_initialized": existing})
+	authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": false, "can_setup": !configured && localSetup(r), "csrf": csrf, "migration_required": migration, "locked": locked, "encryption_initialized": existing})
 }
 
 func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {
@@ -390,24 +392,26 @@ func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Username        string `json:"username"`
-		Password        string `json:"password"`
-		ConfigPassword  string `json:"config_password"`
-		AutomaticUnlock bool   `json:"automatic_unlock"`
+		Password       string `json:"password"`
+		ConfigPassword string `json:"config_password"`
 	}
 	if err := decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input); err != nil {
 		authError(w, 400, "invalid login request")
 		return
 	}
 	if r.URL.Path == "/auth/setup" {
-		err := m.setupWithOptions(input.Username, input.Password, input.ConfigPassword, input.AutomaticUnlock)
+		err := m.setupWithPasswords(input.Password, input.ConfigPassword)
 		if errors.Is(err, errInitialized) {
 			authError(w, 409, err.Error())
 			return
 		}
 		if err != nil {
 			if errors.Is(err, configstore.ErrAuthentication) || errors.Is(err, configstore.ErrPasswordRequired) {
-				authError(w, 400, "Enter the existing configuration encryption password; it remains independent of the login password.")
+				authError(w, 400, "Enter the existing configuration decryption password; it remains independent of the login password.")
+				return
+			}
+			if errors.Is(err, configstore.ErrPasswordInvalid) || errors.Is(err, configstore.ErrPasswordConfirmation) {
+				authError(w, 400, "Set a login password and a decryption password with at least 8 characters.")
 				return
 			}
 			// Filesystem errors must never expose the configuration path or contents.
@@ -420,22 +424,19 @@ func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	token, session, err := m.loginWithOptions(input.Username, input.Password, input.ConfigPassword, input.AutomaticUnlock)
+	token, session, err := m.loginWithPassword(input.Password, input.ConfigPassword)
 	if err != nil {
 		var pathErr *os.PathError
 		if errors.As(err, &pathErr) {
 			authError(w, 503, "Legacy account cleanup or login metadata access failed. Check local file permissions and retry.")
 			return
 		}
-		authError(w, 401, "Could not sign in. Check the username and login password; legacy migration may also require the configuration password.")
+		authError(w, 401, "Could not sign in. Check the login password; legacy migration may also require the configuration decryption password.")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: int(SessionLifetime.Seconds()), Expires: session.ExpiresAt})
 	http.SetCookie(w, &http.Cookie{Name: preloginCookie, Path: "/auth/", MaxAge: -1, HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode})
-	m.mu.Lock()
-	initialShared := m.credential != nil && m.credential.InitialPasswordsShared
-	m.mu.Unlock()
-	authJSON(w, 200, map[string]any{"actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": m.NeedsUnlock(), "initial_passwords_shared": r.URL.Path == "/auth/setup" && initialShared})
+	authJSON(w, 200, map[string]any{"actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": m.NeedsUnlock()})
 }
 
 func (m *Managed) password(w http.ResponseWriter, r *http.Request) {
@@ -519,22 +520,21 @@ func (m *Managed) unlock(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.loginGate.Unlock()
 	var input struct {
-		Password  string `json:"password"`
-		Automatic bool   `json:"automatic_unlock"`
+		Password string `json:"password"`
 	}
 	if decodeJSON(http.MaxBytesReader(w, r.Body, 8192), &input) != nil {
 		authError(w, 400, "invalid unlock request")
 		return
 	}
-	if err := m.UnlockVault(input.Password, input.Automatic); err != nil {
+	if err := m.UnlockVault(input.Password); err != nil {
 		m.mu.Lock()
 		credential := m.credential
 		m.mu.Unlock()
 		if credential != nil && m.verifyLoginPassword(credential.PasswordHash, input.Password) {
-			authError(w, 400, "That password matches the login account, but not the configuration encryption key. Login and configuration passwords are independent; changing the login password does not change configuration encryption. Use Configuration encryption settings with both passwords when they need to match.")
+			authError(w, 400, "That password matches the login password, but not the configuration decryption password. They are independent.")
 			return
 		}
-		authError(w, 400, "Configuration unlock failed. Check the configuration password and encrypted data.")
+		authError(w, 400, "Configuration unlock failed. Check the decryption password and encrypted data.")
 		return
 	}
 	authJSON(w, 200, map[string]bool{"ok": true, "locked": false})

@@ -60,7 +60,7 @@ func TestManagedLogoutClosesActiveWebSocket(t *testing.T) {
 		}
 		return response
 	}
-	response = post("/auth/setup", []byte(`{"username":"test-admin","password":"sample-password-for-tests"}`), state.CSRF)
+	response = post("/auth/setup", []byte(`{"password":"sample-password-for-tests","config_password":"sample-password-for-tests"}`), state.CSRF)
 	if response.StatusCode != 200 {
 		response.Body.Close()
 		t.Fatalf("setup: %d", response.StatusCode)

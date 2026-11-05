@@ -9,10 +9,12 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,6 +56,38 @@ func BaseURL(host string, port int) string {
 	return "http://" + net.JoinHostPort(ConnectHost(host), strconv.Itoa(port))
 }
 
+// ManagementURL validates and normalizes the origin used for daemon
+// management. Cleartext HTTP is accepted only for literal loopback endpoints;
+// an explicitly supplied URL may use HTTPS for a remote endpoint.
+func ManagementURL(host string, port int, explicit string) (string, error) {
+	raw := strings.TrimSpace(explicit)
+	if raw == "" {
+		raw = BaseURL(host, port)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil {
+		return "", fmt.Errorf("%w: expected an http(s) origin", ErrUnsafeManagementURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("%w: expected an http(s) origin", ErrUnsafeManagementURL)
+	}
+	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return "", fmt.Errorf("%w: daemon management requires an origin without a path, query, or fragment", ErrUnsafeManagementURL)
+	}
+	if u.Scheme == "http" && !loopbackManagementHost(u.Hostname()) {
+		return "", fmt.Errorf("%w: refusing to send local Admin credentials over cleartext HTTP to %s; use an explicit https:// origin for a remote endpoint", ErrUnsafeManagementURL, u.Host)
+	}
+	return u.Scheme + "://" + u.Host, nil
+}
+
+func loopbackManagementHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 // InstanceInfo is what an instance reports about itself at GET /api/daemon.
 // Every management action is built on this probe, so pid, version, daemon
 // identity and the effective idle countdown all arrive over HTTP.
@@ -84,44 +118,133 @@ type EndpointReport struct {
 	Info         InstanceInfo // zero when the probe was not answered
 }
 
-// Credential is the bearer value this client can present: the plaintext
-// token, or — when only a hash is configured — the hash string itself, which
-// a hash-configured instance accepts.
-func Credential(cfg *config.Config) string {
-	if cfg.MCPToken != "" {
-		return cfg.MCPToken
-	}
+// ErrAuthenticationRequired reports that the daemon management endpoint
+// rejected the supplied credential.
+var ErrAuthenticationRequired = errors.New("daemon authentication required")
+
+// ErrUnsafeManagementURL reports an endpoint that cannot safely receive local
+// Admin credentials.
+var ErrUnsafeManagementURL = errors.New("unsafe daemon management URL")
+
+// ManagementCredential is the legacy shared credential used to inspect or stop
+// the daemon: the plaintext token, or — when only a hash is configured — the
+// hash string itself. Managed MCP tokens are deliberately excluded because
+// they only grant MCP access.
+func ManagementCredential(cfg *config.Config) string {
 	if cfg.AuthToken != "" {
 		return cfg.AuthToken
 	}
 	return cfg.AuthHash
 }
 
+// BridgeCredential selects the credential a stdio MCP bridge presents. A
+// managed MCP token takes precedence there; daemon management never does.
+func BridgeCredential(cfg *config.Config) string {
+	if cfg.MCPToken != "" {
+		return cfg.MCPToken
+	}
+	return ManagementCredential(cfg)
+}
+
+type endpointAuthorizer func(*http.Request)
+
+var errManagementRedirect = errors.New("daemon management redirect refused")
+
+func managementHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errManagementRedirect
+		},
+	}
+}
+
+func managementHostPort(baseURL string) (string, int, bool) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return "", 0, false
+	}
+	port := 80
+	if u.Scheme == "https" {
+		port = 443
+	}
+	if raw := u.Port(); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return "", 0, false
+		}
+		port = parsed
+	}
+	return u.Hostname(), port, true
+}
+
+func bearerAuthorizer(credential string) endpointAuthorizer {
+	return func(req *http.Request) {
+		if credential != "" {
+			req.Header.Set("Authorization", "Bearer "+credential)
+		}
+	}
+}
+
+func sessionAuthorizer(session ManagedAdminSession) endpointAuthorizer {
+	return func(req *http.Request) {
+		req.AddCookie(&http.Cookie{Name: managedSessionCookie, Value: session.cookie})
+		req.Header.Set("X-Termcp-CSRF", session.csrf)
+	}
+}
+
 // InspectEndpoint asks the endpoint what instance answers there, purely over
-// HTTP: GET /api/daemon, with the configured credential (see Credential) when
-// there is one — never through process tables. When the probe is rejected, or
-// the instance predates it, the credential-free /api.md fingerprint still
-// identifies a Termcp instance; without a usable credential its details
-// simply stay unknown.
+// HTTP: GET /api/daemon, with the configured management credential when there
+// is one — never through process tables. When the probe is rejected, or the
+// instance predates it, the credential-free /api.md fingerprint still
+// identifies a Termcp instance; without a usable credential its details simply
+// stay unknown.
 func InspectEndpoint(ctx context.Context, host string, port int, credential string) EndpointReport {
+	return InspectEndpointURL(ctx, BaseURL(host, port), credential)
+}
+
+// InspectEndpointURL inspects an already-validated management origin.
+func InspectEndpointURL(ctx context.Context, baseURL, credential string) EndpointReport {
+	baseURL, err := ManagementURL("", 0, baseURL)
+	if err != nil {
+		return EndpointReport{}
+	}
+	return inspectEndpoint(ctx, baseURL, bearerAuthorizer(credential))
+}
+
+// InspectEndpointWithSession inspects a managed instance with an Admin session.
+func InspectEndpointWithSession(ctx context.Context, host string, port int, session ManagedAdminSession) EndpointReport {
+	return InspectEndpointURLWithSession(ctx, BaseURL(host, port), session)
+}
+
+// InspectEndpointURLWithSession inspects a managed instance at an
+// already-validated management origin.
+func InspectEndpointURLWithSession(ctx context.Context, baseURL string, session ManagedAdminSession) EndpointReport {
+	baseURL, err := ManagementURL("", 0, baseURL)
+	if err != nil {
+		return EndpointReport{}
+	}
+	return inspectEndpoint(ctx, baseURL, sessionAuthorizer(session))
+}
+
+func inspectEndpoint(ctx context.Context, baseURL string, authorize endpointAuthorizer) EndpointReport {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL(host, port)+apiDaemonPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+apiDaemonPath, nil)
 	if err != nil {
 		return EndpointReport{}
 	}
 	markProbe(req)
-	if credential != "" {
-		req.Header.Set("Authorization", "Bearer "+credential)
+	if authorize != nil {
+		authorize(req)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := managementHTTPClient().Do(req)
 	if err != nil {
 		return EndpointReport{}
 	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusLocked:
 		resp.Body.Close()
-		if IsServing(ctx, host, port) {
+		if IsServingURL(ctx, baseURL) {
 			return EndpointReport{Termcp: true, Unauthorized: true}
 		}
 		return EndpointReport{}
@@ -136,7 +259,7 @@ func InspectEndpoint(ctx context.Context, host string, port int, credential stri
 	resp.Body.Close()
 	// Not the probe payload; the public docs fingerprint still proves a termcp
 	// instance — one that predates the probe.
-	if IsServing(ctx, host, port) {
+	if IsServingURL(ctx, baseURL) {
 		return EndpointReport{Termcp: true}
 	}
 	return EndpointReport{}
@@ -155,9 +278,38 @@ type StopResult struct {
 // answering. An instance started manually (not as a daemon) has no stop route
 // and is reported through NotDaemon instead of being hunted down as a process.
 func StopEndpoint(ctx context.Context, host string, port int, credential string) (StopResult, error) {
-	rep := InspectEndpoint(ctx, host, port, credential)
+	return StopEndpointURL(ctx, BaseURL(host, port), credential)
+}
+
+// StopEndpointURL stops an instance at an already-validated management origin.
+func StopEndpointURL(ctx context.Context, baseURL, credential string) (StopResult, error) {
+	baseURL, err := ManagementURL("", 0, baseURL)
+	if err != nil {
+		return StopResult{}, err
+	}
+	return stopEndpoint(ctx, baseURL, bearerAuthorizer(credential))
+}
+
+// StopEndpointWithSession stops a managed instance using an authenticated
+// Admin browser session.
+func StopEndpointWithSession(ctx context.Context, host string, port int, session ManagedAdminSession) (StopResult, error) {
+	return StopEndpointURLWithSession(ctx, BaseURL(host, port), session)
+}
+
+// StopEndpointURLWithSession stops an instance at an already-validated
+// management origin using an authenticated Admin browser session.
+func StopEndpointURLWithSession(ctx context.Context, baseURL string, session ManagedAdminSession) (StopResult, error) {
+	baseURL, err := ManagementURL("", 0, baseURL)
+	if err != nil {
+		return StopResult{}, err
+	}
+	return stopEndpoint(ctx, baseURL, sessionAuthorizer(session))
+}
+
+func stopEndpoint(ctx context.Context, baseURL string, authorize endpointAuthorizer) (StopResult, error) {
+	rep := inspectEndpoint(ctx, baseURL, authorize)
 	if rep.Unauthorized {
-		return StopResult{}, fmt.Errorf("the instance at %s requires authentication: pass its token with --auth-token (or --auth-hash), or stop it where it was started", BaseURL(host, port))
+		return StopResult{}, fmt.Errorf("%w: the instance at %s requires authentication", ErrAuthenticationRequired, baseURL)
 	}
 	if !rep.Termcp {
 		return StopResult{}, nil
@@ -165,21 +317,25 @@ func StopEndpoint(ctx context.Context, host string, port int, credential string)
 	if !rep.Info.Daemon {
 		return StopResult{NotDaemon: true, PID: rep.Info.PID}, nil
 	}
-	url := BaseURL(host, port) + apiDaemonStopPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	stopURL := baseURL + apiDaemonStopPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
 	if err != nil {
 		return StopResult{}, err
 	}
-	if credential != "" {
-		req.Header.Set("Authorization", "Bearer "+credential)
+	if authorize != nil {
+		authorize(req)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := managementHTTPClient().Do(req)
 	if err != nil {
 		return StopResult{}, fmt.Errorf("ask the instance to stop: %w", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return StopResult{}, fmt.Errorf("%s answered %s", url, resp.Status)
+		return StopResult{}, fmt.Errorf("%s answered %s", stopURL, resp.Status)
+	}
+	host, port, ok := managementHostPort(baseURL)
+	if !ok {
+		return StopResult{}, fmt.Errorf("%w: invalid management origin", ErrUnsafeManagementURL)
 	}
 	deadline := time.Now().Add(stopTimeout)
 	for time.Now().Before(deadline) {
@@ -192,7 +348,7 @@ func StopEndpoint(ctx context.Context, host string, port int, credential string)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return StopResult{}, fmt.Errorf("the instance at %s did not stop within %s", BaseURL(host, port), stopTimeout)
+	return StopResult{}, fmt.Errorf("the instance at %s did not stop within %s", baseURL, stopTimeout)
 }
 
 // EnsureResult reports what Ensure found or started.
@@ -213,7 +369,7 @@ type EnsureResult struct {
 // daemon default).
 func Ensure(ctx context.Context, cfg *config.Config, idleTimeout string) (EnsureResult, error) {
 	url := BaseURL(cfg.Host, cfg.Port)
-	if rep := InspectEndpoint(ctx, cfg.Host, cfg.Port, Credential(cfg)); rep.Termcp {
+	if rep := InspectEndpoint(ctx, cfg.Host, cfg.Port, ManagementCredential(cfg)); rep.Termcp {
 		return EnsureResult{Info: rep.Info, Unauthorized: rep.Unauthorized}, nil
 	}
 	// Something that is not termcp is holding the port; a spawned child would
@@ -234,7 +390,7 @@ func Ensure(ctx context.Context, cfg *config.Config, idleTimeout string) (Ensure
 
 	deadline := time.Now().Add(readyTimeout)
 	for {
-		rep := InspectEndpoint(ctx, cfg.Host, cfg.Port, Credential(cfg))
+		rep := InspectEndpoint(ctx, cfg.Host, cfg.Port, ManagementCredential(cfg))
 		if rep.Termcp {
 			// A concurrent front-end may have won the race to serve this
 			// endpoint; its instance is just as good as ours.

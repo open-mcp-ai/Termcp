@@ -131,7 +131,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 				fail(500, "could not create group")
 				return
 			}
-			group := permissionGroup{ID: id, Name: in.Name, Description: in.Description, Enabled: true, Revision: 1, CreatedAt: m.now().UTC(), Policy: policy, PresetID: in.PresetID, PresetVersion: presetVersion}
+			group := permissionGroup{ID: id, Name: in.Name, Description: in.Description, Enabled: true, Revision: 1, CreatedAt: m.now().UTC(), Policy: policy, PolicyVocabulary: permissionPolicyVocabularyVersion, PresetID: in.PresetID, PresetVersion: presetVersion}
 			s.Groups[id] = group
 			markAuditTarget(group.ID)
 			result = map[string]any{"group": m.groupViewLocked(s, group)}
@@ -261,6 +261,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			group.Revision = 1
 			group.CreatedAt = m.now().UTC()
 			group.Policy = clonePolicy(group.Policy)
+			group.PolicyVocabulary = permissionPolicyVocabularyVersion
 			group.PolicyWarnings = slices.Clone(group.PolicyWarnings)
 			s.Groups[id] = group
 			markAuditTarget(group.ID)
@@ -305,6 +306,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				group.Policy = clonePolicy(*in.Policy)
+				group.PolicyVocabulary = permissionPolicyVocabularyVersion
 				group.PolicyWarnings = nil
 			}
 			if in.Enabled != nil {

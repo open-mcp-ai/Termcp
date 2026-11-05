@@ -60,7 +60,7 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 		return data
 	}
 	csrf = call("GET", "/auth/status", "")["csrf"].(string)
-	csrf = call("POST", "/auth/setup", `{"username":"test-admin","password":"synthetic-transport-password"}`)["csrf"].(string)
+	csrf = call("POST", "/auth/setup", `{"password":"synthetic-transport-password","config_password":"synthetic-transport-password"}`)["csrf"].(string)
 	first := call("POST", "/auth/principals", `{"name":"agent A","issue_token":true}`)
 	token := first["token"].(string)
 	principal := first["principal"].(map[string]any)["id"].(string)

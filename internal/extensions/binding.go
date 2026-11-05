@@ -113,7 +113,17 @@ func (r *Reconciler) AcquireBound(binding AuthorizationBinding, wait time.Durati
 	if err != nil {
 		return Status{}, err
 	}
-	return r.acquirePlan(binding.Name, binding.Target, ext, plan, wait)
+	return r.acquirePlan(binding.Name, binding.Target, ext, plan, ext.Lazy(), false, wait)
+}
+
+// AcquireBoundFresh is AcquireBound with a caller-owned channel even when the
+// extension is resident.
+func (r *Reconciler) AcquireBoundFresh(binding AuthorizationBinding, wait time.Duration) (Status, error) {
+	ext, plan, err := r.loadBound(binding)
+	if err != nil {
+		return Status{}, err
+	}
+	return r.acquirePlan(binding.Name, binding.Target, ext, plan, true, true, wait)
 }
 
 // RetryBound is the authorized manual retry path.
@@ -126,7 +136,7 @@ func (r *Reconciler) RetryBound(binding AuthorizationBinding) error {
 		return errors.New("extension is disabled; enable it before retrying")
 	}
 	if ext.Lazy() {
-		_, err := r.acquirePlan(binding.Name, binding.Target, ext, plan, 0)
+		_, err := r.acquirePlan(binding.Name, binding.Target, ext, plan, true, false, 0)
 		return err
 	}
 	st := r.stateFor(binding.Name, binding.Target)
