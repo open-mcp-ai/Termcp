@@ -7,10 +7,20 @@ and not obfuscated by us.
 
 ## Contents
 
-| File | Upstream package | Version | SHA-256 |
-|---|---|---|---|
-| `xterm.js` | `@xterm/xterm` (`lib/xterm.js`) | **6.0.0** | `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972` |
-| `xterm.css` | `@xterm/xterm` (`css/xterm.css`) | **6.0.0** | `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6` |
+Upstream release: `@xterm/xterm@6.0.0`
+
+| | |
+|---|---|
+| tarball | `https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz` |
+| tarball SHA-1 (npm `dist.shasum`) | `93637b0f2ee3a70718b5746a27c9c506af16745b` |
+| tarball integrity (npm `dist.integrity`) | `sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==` |
+
+Files copied out of that tarball, unmodified:
+
+| File | Upstream path | SHA-256 |
+|---|---|---|
+| `xterm.js` | `package/lib/xterm.js` | `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972` |
+| `xterm.css` | `package/css/xterm.css` | `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6` |
 
 Only the core package is vendored: the UI fits the terminal itself
 (`fitShellTerminal` in `static/js/ui-socket.js`), so `@xterm/addon-fit` is not
@@ -28,10 +38,17 @@ needed and is not shipped.
 
 ## Verify
 
+Two independent checks, so a reader can pick whichever they trust:
+
 ```sh
+# 1. The upstream tarball itself is the published release
+curl -sLO https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz
+sha1sum xterm-6.0.0.tgz     # 93637b0f2ee3a70718b5746a27c9c506af16745b
+
+# 2. The two files here are byte-identical to the ones inside it
+tar -xzf xterm-6.0.0.tgz
+sha256sum package/lib/xterm.js package/css/xterm.css
 sha256sum internal/webui/assets/static/xterm/xterm.js internal/webui/assets/static/xterm/xterm.css
-# compare against the npm tarball of the same version:
-#   https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz
 ```
 
 ## 6.0.0 integration notes
