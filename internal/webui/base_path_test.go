@@ -151,3 +151,100 @@ func TestAssetsRouteAbsoluteURLsThroughAPIPath(t *testing.T) {
 		t.Error("index.html must keep the API docs link")
 	}
 }
+
+func TestAuthPagesResolveRoutesAgainstDeploymentPrefix(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; cannot exercise the auth path resolver")
+	}
+	start := "/* auth deployment path:"
+	end := "/* end auth deployment path */"
+	authSession := readAssetLF(t, "static/js/auth-session.js")
+	helpers := between(t, authSession, start, end) + "\n" + end
+
+	for _, path := range []string{"../auth/login.html", "../auth/permissions.html"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(raw)
+		other := between(t, body, start, end) + "\n" + end
+		if strings.Join(strings.Fields(other), " ") != strings.Join(strings.Fields(helpers), " ") {
+			t.Errorf("%s carries a different auth deployment path resolver", path)
+		}
+	}
+
+	script := `
+const fs = require('fs');
+const vm = require('vm');
+const helpers = fs.readFileSync(process.argv[2], 'utf8');
+function run(pathname, expr) {
+  const sandbox = { location: { pathname: pathname }, console };
+  vm.createContext(sandbox);
+  vm.runInContext(helpers, sandbox);
+  return vm.runInContext(expr, sandbox);
+}
+let bad = 0;
+function check(name, got, want) {
+  if (got !== want) { console.log('FAIL ' + name + ': ' + JSON.stringify(got) + ' != ' + JSON.stringify(want)); bad++; }
+}
+check('root login', run('/login', "authPath('/auth/status')"), '/auth/status');
+check('root permissions', run('/permissions', "authPath('/auth/login')"), '/auth/login');
+check('sub login', run('/termcp/login', "authPath('/auth/status')"), '/termcp/auth/status');
+check('sub permissions', run('/termcp/permissions', "authPath('/auth/tokens')"), '/termcp/auth/tokens');
+check('nested mount', run('/a/b/termcp/permissions', "authPath('/stream')"), '/a/b/termcp/stream');
+check('root trailing slash', run('/termcp/', "authPath('/permissions')"), '/termcp/permissions');
+check('idempotent', run('/termcp/login', "authPath('/termcp/auth/status')"), '/termcp/auth/status');
+check('relative untouched', run('/termcp/login', "authPath('next')"), 'next');
+console.log(bad === 0 ? 'AUTH PATH OK' : bad + ' failure(s)');
+process.exit(bad === 0 ? 0 : 1);
+`
+	tmp := t.TempDir()
+	helperPath := filepath.Join(tmp, "auth-path.js")
+	if err := os.WriteFile(helperPath, []byte(helpers), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(tmp, "probe.js")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, scriptPath, helperPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("auth path probe failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "AUTH PATH OK") {
+		t.Fatalf("auth path probe reported failures:\n%s", out)
+	}
+
+	for _, want := range []string{
+		"authPath('/auth/status')",
+		"authPath('/permissions')",
+		"authPath('/auth')",
+		"authPath('/login')",
+	} {
+		if !strings.Contains(authSession, want) {
+			t.Errorf("auth-session.js does not route %q through the deployment prefix", want)
+		}
+	}
+	for _, path := range []string{"../auth/login.html", "../auth/permissions.html"} {
+		raw, _ := os.ReadFile(path)
+		body := string(raw)
+		if !strings.Contains(body, "fetch(authPath(path)") {
+			t.Errorf("%s does not route authentication requests through authPath", path)
+		}
+		if strings.Contains(body, "fetch(path,options)") {
+			t.Errorf("%s retains a root-relative authentication fetch", path)
+		}
+	}
+	permissionsRaw, _ := os.ReadFile("../auth/permissions.html")
+	permissions := string(permissionsRaw)
+	for _, want := range []string{
+		"location.origin+authPath(mode==='sse'?'/sse':'/stream')",
+		"args.push('stdio',location.origin+authPath('/stream'))",
+		"location.replace(authPath('/login'))",
+	} {
+		if !strings.Contains(permissions, want) {
+			t.Errorf("permissions.html does not preserve the deployment prefix in %q", want)
+		}
+	}
+}

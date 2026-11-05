@@ -585,7 +585,17 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		}
 		watcher := daemon.NewIdleWatcher(timeout, func() { gracefulShutdown("idle timeout") })
 		watcher.Exempt = daemon.IsProbe
-		mainSrv.Handler = watcher.Track(mainSrv.Handler)
+		// Authenticate first, then track. A rejected request is not presence:
+		// otherwise a bridge pinging with a bad/revoked token can keep the
+		// instance alive while never establishing an MCP session.
+		switch {
+		case verifier != nil:
+			mainSrv.Handler = auth.Middleware(verifier, watcher.Track(mux))
+		case managed != nil:
+			mainSrv.Handler = managed.Wrap(watcher.Track(mux))
+		default:
+			mainSrv.Handler = watcher.Track(mux)
+		}
 		slog.Info("daemon instance active", "pid", os.Getpid(), "idle_timeout", timeout)
 	}
 

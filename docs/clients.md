@@ -17,7 +17,7 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 - HTTP `/stream` 和 SSE `/sse`：每个请求携带 `Authorization: Bearer <token>`（SSE 的 `/message` 请求也需要）。
 - stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
-- 远端实例使用 `stdio <完整 HTTP(S) URL>`。`daemon stdio` 用于本机实例；自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
+- 远端实例或反向代理部署使用 `stdio <完整 HTTP(S) URL>`；`daemon stdio` 也接收完整 endpoint，因此会保留 HTTPS、端口和 `/termcp` 一类部署前缀。自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
 - 服务端仅保存摘要，不能再次查看原 Token。轮换使用原子替换，旧 Token 立即失效；撤销会移入历史，清空历史不会影响当前 Token。停用 Agent 或权限组会断开受影响 Token 的连接。
 - daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
 

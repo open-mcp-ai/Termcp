@@ -42,16 +42,16 @@
 
 ### 2. 认证页面部署前缀（[#265](https://github.com/open-mcp-ai/Termcp/issues/265)）
 
-- 认证页面、`auth-session.js`、设置菜单和 Token 配置生成必须使用部署前缀；
-- 反向代理挂载到 `/termcp/` 时，不能请求根路径 `/auth/status` 或生成丢失前缀的 MCP URL；
-- 不通过新增 canonical origin 配置解决此问题，只沿用相对路径和现有的 `apiPath()` 解析合同。
+- [x] 认证页面、`auth-session.js`、设置菜单和 Token 配置生成使用当前部署前缀；
+- [x] 反向代理挂载到 `/termcp/` 时，认证请求、跳转和生成的 MCP URL 均留在挂载点内；
+- [x] 不新增 canonical origin 配置；页面从自身 URL 推导前缀，根路径输出保持原样。
 
 ### 3. 桥的认证保活（[#265](https://github.com/open-mcp-ai/Termcp/issues/265)）
 
-- Bridge 在 MCP session 建立前，使用认证成功的 MCP 入口保活；
-- 被拒绝的 `/api/version` 或 `/auth/*` 请求不得延长 daemon 空闲期限；
-- 当前 `/auth/mcp` 可继续作为最小探测，不强制新增完整 bridge-context；
-- 不把 PID、日志、主机列表或其他 Agent 信息暴露给 Agent Token。
+- [x] Bridge 在 MCP session 建立前使用保留部署前缀的 `/auth/mcp` 保活；
+- [x] idle watcher 位于认证之后，缺失、错误或已撤销 Token 的请求不能延长 daemon 空闲期限；
+- [x] 当前 `/auth/mcp` 继续作为最小探测，没有新增 bridge-context 或 presence 端点；
+- [x] 探测响应不暴露 PID、日志、主机列表或其他 Agent 信息。
 
 ### 4. 权限管理
 

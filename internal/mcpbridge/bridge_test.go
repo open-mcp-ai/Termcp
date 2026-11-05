@@ -167,16 +167,16 @@ func newSSEEndpoint(t *testing.T) (string, *mcpserver.MCPServer) {
 }
 
 // An attached-but-silent bridge is a client presence: until it has an MCP
-// session it pings the instance's version endpoint (so an idle countdown
-// under it cannot fire), and stops once the session stream takes over.
+// session it pings the authenticated MCP probe (so an idle countdown under it
+// cannot fire), and stops once the session stream takes over.
 func TestKeepAlivePingsUntilSessionStarts(t *testing.T) {
 	srv := newEchoServer(t)
 	stream := mcpserver.NewStreamableHTTPServer(srv)
 	var hits atomic.Int64
 	var unauthenticated atomic.Bool
 	mux := http.NewServeMux()
-	mux.Handle("/stream", stream)
-	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/termcp/stream", stream)
+	mux.HandleFunc("/termcp/auth/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sekrit" {
 			unauthenticated.Store(true)
 		}
@@ -186,7 +186,7 @@ func TestKeepAlivePingsUntilSessionStarts(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	h := startBridge(t, Config{URL: ts.URL + "/stream", Token: "sekrit", KeepAlive: 30 * time.Millisecond})
+	h := startBridge(t, Config{URL: ts.URL + "/termcp/stream", Token: "sekrit", KeepAlive: 30 * time.Millisecond})
 
 	// No stdin messages yet: only the pings prove the bridge is attached.
 	deadline := time.Now().Add(3 * time.Second)
@@ -208,6 +208,21 @@ func TestKeepAlivePingsUntilSessionStarts(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if after := hits.Load(); after != before {
 		t.Errorf("pings continued after the session started: %d -> %d", before, after)
+	}
+}
+
+func TestPresenceURLPreservesDeploymentPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		want     string
+	}{
+		{"http://127.0.0.1:18765/stream", "http://127.0.0.1:18765/auth/mcp"},
+		{"https://example.test/termcp/stream?x=1", "https://example.test/termcp/auth/mcp"},
+		{"https://example.test/a/b/termcp/sse", "https://example.test/a/b/termcp/auth/mcp"},
+	} {
+		if got := presenceURL(tc.endpoint); got != tc.want {
+			t.Errorf("presenceURL(%q) = %q, want %q", tc.endpoint, got, tc.want)
+		}
 	}
 }
 
