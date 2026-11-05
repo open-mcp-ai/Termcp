@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -112,6 +113,32 @@ func TestRetiredPermissionStateIsRejectedWithoutMigration(t *testing.T) {
 			t.Fatal("retired principal-local policy was accepted")
 		}
 	})
+}
+
+func TestRetiredOperationGrantsDoNotPreventManagedStartup(t *testing.T) {
+	m, _, _ := configuredManaged(t)
+	const groupID = "preset-file-maintainer"
+	mutateManagedState(t, m, func(state map[string]any) {
+		groups := state["groups"].(map[string]any)
+		group := groups[groupID].(map[string]any)
+		actions := group["policy"].(map[string]any)["actions"].(map[string]any)
+		actions["file.realpath"] = map[string]any{"effect": "allow"}
+	})
+
+	loaded, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatalf("retired operation prevented managed startup: %v", err)
+	}
+	p := loaded.state.Groups[groupID].Policy
+	if _, exists := p.Actions["file.realpath"]; exists {
+		t.Fatal("retired operation grant survived startup")
+	}
+	if !p.AllowsOperation("file.read") {
+		t.Fatal("repair removed unrelated current grants")
+	}
+	if !slices.Contains(loaded.state.Groups[groupID].PolicyWarnings, "file.realpath") {
+		t.Fatal("retired operation was not surfaced for review")
+	}
 }
 
 func writeManagedState(t *testing.T, m *Managed, state managedState) {

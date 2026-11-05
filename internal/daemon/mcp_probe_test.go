@@ -17,8 +17,11 @@ func TestMCPClientCredentialNeverBecomesDaemonCredential(t *testing.T) {
 	t.Setenv(config.EnvMCPToken, "synthetic-client-credential")
 	cfg := config.Default()
 	cfg.MCPToken = "synthetic-client-credential"
-	if !cfg.ManagedAuth() || Credential(cfg) != cfg.MCPToken {
+	if !cfg.ManagedAuth() || ManagementCredential(cfg) != "" {
 		t.Fatal("client token selected server legacy mode")
+	}
+	if BridgeCredential(cfg) != cfg.MCPToken {
+		t.Fatal("bridge did not select the MCP client token")
 	}
 	for _, kv := range childEnv(cfg) {
 		if strings.HasPrefix(strings.ToUpper(kv), config.EnvMCPToken+"=") || strings.Contains(kv, cfg.MCPToken) {
@@ -27,6 +30,15 @@ func TestMCPClientCredentialNeverBecomesDaemonCredential(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(ChildArgs(cfg, "30s"), " "), cfg.MCPToken) {
 		t.Fatal("client token leaked into daemon argv")
+	}
+}
+
+func TestExplicitLegacyCredentialWinsDaemonManagement(t *testing.T) {
+	cfg := config.Default()
+	cfg.AuthToken = "synthetic-legacy-credential"
+	cfg.MCPToken = "synthetic-mcp-credential"
+	if got := ManagementCredential(cfg); got != cfg.AuthToken {
+		t.Fatalf("daemon credential = %q, want the explicit legacy credential", got)
 	}
 }
 

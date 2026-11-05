@@ -128,7 +128,7 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 		// The cursor has to go with the handle: handles are minted monotonically
 		// (jrpcHandleSeq), so a reopened channel never reuses this key and the map
 		// would grow by one entry per channel the process ever opened.
-		s.dropRecvCursor(handle)
+		s.dropRecvCursor(ctx, handle)
 		return envelope.Slot{Code: 204, Headers: headers}
 	}
 	return badRequest(stmt, "unknown mcp subcommand: "+sub)
@@ -166,7 +166,7 @@ func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, han
 	// handle could not leave when its own window expired: it waited out the first
 	// caller's whole poll loop. The token is a one-slot channel so the waiter can
 	// select against ctx.Done() and report its own deadline instead.
-	reader := s.recvReader(handle)
+	reader := s.recvReader(ctx, handle)
 	select {
 	case <-reader:
 	case <-ctx.Done():
@@ -189,7 +189,7 @@ func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, han
 // readAgain asks for another read because the frame it took was answered on the
 // caller's behalf (a sub-MCP's sampling request) rather than delivered.
 func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement, handle string, win termArgs) (envelope.Slot, bool) {
-	from := s.recvCursor(handle)
+	from := s.recvCursor(ctx, handle)
 	// A whole frame has to fit the window, or a single large reply could never be
 	// delivered: the window is a cap on what one recv will consider, not a
 	// statement about how long a frame may be.
@@ -293,7 +293,7 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 	for next < from+rawLen && int(next-from) < len(body) && strings.IndexByte(" \t\r\n", body[next-from]) >= 0 {
 		next++
 	}
-	s.setRecvCursor(handle, next)
+	s.setRecvCursor(ctx, handle, next)
 
 	// A SUB-MCP'S SAMPLING REQUEST IS ANSWERED HERE, NOT RETURNED TO THE CALLER.
 	//
@@ -484,21 +484,31 @@ func recvWindow(win termArgs) time.Duration {
 // makes it undeliverable. 1 MiB is far past any legitimate frame and still a bound.
 const minRecvWindow = 1 << 20
 
-// recvCursor and setRecvCursor keep one read position per channel.
+// recvCursor and setRecvCursor keep one read position per logical stream.
 //
-// Keyed by handle without the server's own offset bookkeeping: two callers reading
-// the same channel is a race the protocol does not describe, and serialising here
-// means neither silently loses a frame to the other's window.
+// The logical key includes the verified principal, credential, extension stream
+// session and handle, so two extension callers cannot consume one another's frames.
 //
 // recvReader returns the one-token gate that gives a handle one reader at a time,
 // creating it on first use. The token is in the channel when the gate is free.
-func (s *Server) recvReader(handle string) chan struct{} {
-	if v, ok := s.recvReaders.Load(handle); ok {
+func streamResourceKey(ctx context.Context, handle string) string {
+	actor, _ := auth.ActorFromContext(ctx)
+	credential := auth.CredentialIDFromContext(ctx)
+	session := mcpStreamSessionFromContext(ctx)
+	if actor.ID == "" && credential == "" && session == "" {
+		return handle
+	}
+	return actor.ID + "\x00" + credential + "\x00" + session + "\x00" + handle
+}
+
+func (s *Server) recvReader(ctx context.Context, handle string) chan struct{} {
+	key := streamResourceKey(ctx, handle)
+	if v, ok := s.recvReaders.Load(key); ok {
 		return v.(chan struct{})
 	}
 	tok := make(chan struct{}, 1)
 	tok <- struct{}{}
-	actual, _ := s.recvReaders.LoadOrStore(handle, tok)
+	actual, _ := s.recvReaders.LoadOrStore(key, tok)
 	return actual.(chan struct{})
 }
 
@@ -518,8 +528,8 @@ func (s *Server) lineLock(handle string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-func (s *Server) recvCursor(handle string) int64 {
-	v, ok := s.recvCursors.Load(handle)
+func (s *Server) recvCursor(ctx context.Context, handle string) int64 {
+	v, ok := s.recvCursors.Load(streamResourceKey(ctx, handle))
 	if !ok {
 		return 0
 	}
@@ -528,16 +538,32 @@ func (s *Server) recvCursor(handle string) int64 {
 }
 
 // dropRecvCursor forgets a closed handle's read position.
-func (s *Server) dropRecvCursor(handle string) {
-	s.recvCursors.Delete(handle)
+func (s *Server) dropRecvCursor(ctx context.Context, handle string) {
+	key := streamResourceKey(ctx, handle)
+	s.recvCursors.Delete(key)
 	// The reader gate goes too: handles are minted monotonically, so a reopened
 	// channel never reuses this key and the map would grow by one entry per channel
 	// the process ever opened.
-	s.recvReaders.Delete(handle)
+	s.recvReaders.Delete(key)
 }
 
-func (s *Server) setRecvCursor(handle string, at int64) {
-	s.recvCursors.Store(handle, at)
+// dropMCPStreamSession removes cursor/reader state for every authenticated key
+// that names this extension protocol session.
+func (s *Server) dropMCPStreamSession(session, handle string) {
+	suffix := "\x00" + session + "\x00" + handle
+	for _, state := range []*sync.Map{&s.recvCursors, &s.recvReaders} {
+		state.Range(func(key, _ any) bool {
+			if name, ok := key.(string); ok && strings.HasSuffix(name, suffix) {
+				state.Delete(key)
+			}
+			return true
+		})
+	}
+	s.lineLocks.Delete(handle)
+}
+
+func (s *Server) setRecvCursor(ctx context.Context, handle string, at int64) {
+	s.recvCursors.Store(streamResourceKey(ctx, handle), at)
 }
 
 // notAFrame says what the buffer holds when nothing in it parsed as a value, so a

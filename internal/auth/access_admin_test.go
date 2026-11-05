@@ -66,10 +66,24 @@ func TestPermissionPresetsKeepRiskyActionsExplicit(t *testing.T) {
 		diagnostics.AllowsOperation("shell.input") || diagnostics.AllowsOperation("file.write") {
 		t.Fatal("diagnostics preset is not read-only")
 	}
+	maintainer := byID["file-maintainer"].Policy
+	if !maintainer.AllowsOperation("file.write") || !maintainer.AllowsOperation("file.mkdir") {
+		t.Fatal("file maintainer lacks inline file maintenance")
+	}
+	for _, id := range []string{"file.perm", "file.link", "file.fs", "file.delete", "file.rename"} {
+		if maintainer.AllowsOperation(id) {
+			t.Errorf("file maintainer implicitly grants high-risk action %s", id)
+		}
+	}
 	operator := byID["host-operator"].Policy
-	for _, id := range []string{"shell.detect", "shell.input", "shell.key", "session.start", "file.write", "forward.open", "session.delete"} {
+	for _, id := range []string{"shell.detect", "shell.input", "shell.key", "session.start", "file.write", "file.perm", "file.delete", "file.rename", "forward.open", "session.delete"} {
 		if !operator.AllowsOperation(id) {
 			t.Errorf("host operator does not include %s", id)
+		}
+	}
+	for _, id := range []string{"file.link", "file.fs"} {
+		if operator.AllowsOperation(id) {
+			t.Errorf("host operator implicitly grants merged high-risk action %s", id)
 		}
 	}
 	for _, id := range []string{"profile.create", "profile.edit", "profile.delete", "ext.create", "ext.update", "mcp.open", "cdp.open", "jrpc.open"} {

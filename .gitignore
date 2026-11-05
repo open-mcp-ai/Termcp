@@ -30,7 +30,7 @@ docs/superpowers/
 # other program
 templates/
 .env
-
+.swp
 # Local-only changelog (not for git)
 /CHANGELOG.local.md
 

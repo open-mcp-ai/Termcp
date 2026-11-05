@@ -60,7 +60,7 @@ func TestConfigurationPasswordRouteKeepsLoginPasswordIndependent(t *testing.T) {
 		}
 		return response
 	}
-	response := post("/auth/setup", `{"username":"test-admin","password":"sample-password-for-tests"}`)
+	response := post("/auth/setup", `{"password":"sample-password-for-tests","config_password":"sample-password-for-tests"}`)
 	if response.StatusCode != 200 {
 		response.Body.Close()
 		t.Fatalf("setup: %d", response.StatusCode)
@@ -98,7 +98,7 @@ func TestConfigurationPasswordRouteKeepsLoginPasswordIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = post("/auth/login", `{"username":"test-admin","password":"sample-password-for-tests"}`)
+	response = post("/auth/login", `{"password":"sample-password-for-tests"}`)
 	response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatal("configuration password change replaced the login password")

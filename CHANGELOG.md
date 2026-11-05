@@ -48,6 +48,15 @@ Configuration password diagnostics now read the current `local-state` keyring as
 - **SFTP 引擎按会话复用，不再每次文件操作重新握手（#244）**。文件操作原来每次 `sftp.NewClient` 一次、返回时关掉：SSH 开通道、请求 subsystem、SFTP INIT/VERSION，三个往返在发出第一个字节之前花掉。在 350ms RTT 的链路上量得引擎 526ms、894 字节上传 879ms——issue 报的 KB 级文件里，握手是墙钟时间的大头，且与传多少数据无关。现在一个会话一个引擎（`internal/sftpengine`），会话 DEAD 时随它回收；MCP 文件工具与 Web UI 文件面板共用同一个实例，所以一次预览和一次 `read … file` 不再各开一条 subsystem。借用主机的 transport 是请求级租约，仍然每次自开自关，否则下一个调用会拿到一条已释放的连接。交出去的是共享视图，`Close` 是空操作，所以十来个 handler 里现有的 `defer sftpCli.Close()` 不用改，也关不掉别人的引擎。**没修的部分**：写文件本身的五个请求（open/write/close/rename + 一次 stat）是一次原子写的价格；issue 怀疑的「按 chunk 一次往返」在 32 KiB 以下从未发生，894 字节一直就是一个 WRITE（已测）。大文件要算往返就得走上传 URL 或 scp，不是控制通道。
 - **加密配置支持密码轮换**。配置页用“当前密码、新密码、确认新密码”重封各主机与 catalog 的 EDK，配置正文密文不变；中断后可用新密码续跑，旧密码只在完整发布后失效。`termcp config-storage rotate-key` 仅保留给旧 provider-only 存储。
 
+### 修复
+
+权限预置迁移现在按 version + 精确策略指纹识别 rebase-前 v3、dev-v3 与 v4，未修改的 dev 预置不丢授权；旧词表只迁移能证明等价的合并动作，文件维护组不再隐式获得 chmod、truncate 或 link。编辑过的预置与自定义旧组会移除未知或语义扩大的动作并写入 `policy_warnings`。`/auth/status` 的 `can_setup` 在配置完成后固定为 false。
+
+`TERMCP_MCP_TOKEN` 不再覆盖 daemon 管理的显式 `--auth-token` / `--auth-hash`；managed daemon 的 `status` / `stop` 现在可在交互终端登录 Admin 后管理实例，MCP token 仍只用于 MCP。新增 `--daemon-url`：远端管理必须显式 HTTPS，明文 HTTP 仅允许 loopback，管理请求拒绝重定向。
+
+`POST /ext/{name}/stream` 现在为每个 verified principal + credential + `Mcp-Session-Id` 分配独立扩展 channel，并串行化同一 session 的帧。Agent 请求会在写第一字节前同时检查 `ext.get`、`shell.input`、`shell.key(enter)`、回复所需的 `shell.output` 和主机范围；DELETE 只释放自己的 session。
+
+managed 认证流程已收敛为本机登录密码和解密密码两项输入。首次设置不再要求用户名、已有配置密码或自动解锁选择；登录只校验登录密码，保险库锁定时再单独输入解密密码。已有自定义用户名和 provider 保护的加密状态仍可兼容读取。
 
 ## v0.2.9-rc.1 — 2026-11-02
 

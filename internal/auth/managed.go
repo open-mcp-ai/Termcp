@@ -23,6 +23,7 @@ const (
 	RoleAgent       Role = "agent"
 	SessionCookie        = "termcp_session"
 	SessionLifetime      = 24 * time.Hour
+	localAdminName       = "admin"
 )
 
 // Actor is constructed from verified credentials, never from request arguments.
@@ -171,6 +172,24 @@ func (m *Managed) login(username, password string) (string, sessionRecord, error
 	return m.loginWithOptions(username, password, "", false)
 }
 
+// loginWithPassword authenticates the single local owner by password. The
+// username remains stored for audit and backward compatibility but is not a
+// user-supplied credential.
+func (m *Managed) loginWithPassword(password, decryptionPassword string) (string, sessionRecord, error) {
+	m.mu.Lock()
+	username := ""
+	switch {
+	case m.credential != nil:
+		username = m.credential.Actor.Username
+	case m.legacy != nil:
+		username = m.legacy.Admin.Username
+	default:
+		username = m.state.Admin.Username
+	}
+	m.mu.Unlock()
+	return m.loginWithOptions(username, password, decryptionPassword, false)
+}
+
 func (m *Managed) loginWithOptions(username, password, previous string, automatic bool) (string, sessionRecord, error) {
 	m.passwordMu.Lock()
 	defer m.passwordMu.Unlock()
@@ -178,7 +197,7 @@ func (m *Managed) loginWithOptions(username, password, previous string, automati
 	configured := m.sealed || m.legacy != nil
 	m.mu.Unlock()
 	if !configured {
-		return "", sessionRecord{}, errors.New("set up the admin account first")
+		return "", sessionRecord{}, errors.New("set up the local passwords first")
 	}
 	credential, _, err := m.readLoginCredential()
 	if err != nil {

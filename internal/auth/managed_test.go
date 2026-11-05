@@ -109,7 +109,7 @@ func TestManagedFirstRunLoginRestartLogout(t *testing.T) {
 	if err := json.Unmarshal(status.Body.Bytes(), &pre); err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("POST", "http://127.0.0.1:18765/auth/setup", strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	r := httptest.NewRequest("POST", "http://127.0.0.1:18765/auth/setup", strings.NewReader(`{"password":"`+testPassword+`","config_password":"`+testPassword+`"}`))
 	r.RemoteAddr = "127.0.0.1:12345"
 	r.Header.Set("Origin", "http://127.0.0.1:18765")
 	r.Header.Set("X-Termcp-CSRF", pre.CSRF)
@@ -176,6 +176,169 @@ func TestManagedFirstRunLoginRestartLogout(t *testing.T) {
 	}
 	if _, _, err := again.verify(cookie.Value); err == nil {
 		t.Fatal("restart resurrected logged-out session")
+	}
+}
+
+func TestPasswordOnlyManagedSetupAndLogin(t *testing.T) {
+	m := openManaged(t)
+	const loginPassword = "synthetic-local-login-password"
+	const decryptionPassword = "synthetic-local-decryption-password"
+	if err := m.setupWithPasswords(loginPassword, decryptionPassword); err != nil {
+		t.Fatal(err)
+	}
+	if m.state.Admin.Username != localAdminName {
+		t.Fatalf("stored username = %q, want fixed local identity", m.state.Admin.Username)
+	}
+
+	status := managedRequest(t, m.Wrap(http.NotFoundHandler()), "GET", "/auth/status", "", "", "")
+	var public struct {
+		Configured bool `json:"configured"`
+		CanSetup   bool `json:"can_setup"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &public); err != nil {
+		t.Fatal(err)
+	}
+	if !public.Configured || public.CanSetup {
+		t.Fatalf("configured=%v can_setup=%v", public.Configured, public.CanSetup)
+	}
+
+	cookie, session, err := m.loginWithPassword(loginPassword, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, active, err := m.verify(cookie); err != nil || active.Actor.Username != localAdminName {
+		t.Fatalf("password-only login actor = %+v, err = %v", active.Actor, err)
+	}
+
+	reopened, err := reopenManaged(t, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.NeedsUnlock() {
+		t.Fatal("password-only setup unexpectedly inherited automatic unlock")
+	}
+	cookie, session, err = reopened.loginWithPassword(loginPassword, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.NeedsUnlock() {
+		t.Fatal("login password unexpectedly unlocked configuration data")
+	}
+	if err = reopened.UnlockVault(decryptionPassword); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.NeedsUnlock() {
+		t.Fatal("decryption password did not unlock the vault")
+	}
+	h := reopened.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	if w := managedRequest(t, h, "GET", "/api/sessions", "", cookie, session.CSRF); w.Code != 204 {
+		t.Fatalf("business request after decryption = %d", w.Code)
+	}
+}
+
+func TestPasswordOnlySetupRequiresDecryptionPassword(t *testing.T) {
+	for _, decryptionPassword := range []string{"", "short"} {
+		t.Run("decryption password "+decryptionPassword, func(t *testing.T) {
+			m := openManaged(t)
+			err := m.setupWithPasswords(testPassword, decryptionPassword)
+			if !errors.Is(err, configstore.ErrPasswordInvalid) {
+				t.Fatalf("setup error = %v, want configstore.ErrPasswordInvalid", err)
+			}
+			if m.Configured() {
+				t.Fatal("invalid decryption password configured the managed account")
+			}
+		})
+	}
+}
+
+func TestAuthStatusCanSetupReflectsConfigurationAndLocality(t *testing.T) {
+	m := openManaged(t)
+	h := m.Wrap(http.NotFoundHandler())
+	status := func(remoteAddr string) (bool, bool) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "http://127.0.0.1:18765/auth/status", nil)
+		r.RemoteAddr = remoteAddr
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: %d %s", w.Code, w.Body.String())
+		}
+		var body struct {
+			Configured bool `json:"configured"`
+			CanSetup   bool `json:"can_setup"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Configured, body.CanSetup
+	}
+
+	if configured, canSetup := status("127.0.0.1:12345"); configured || !canSetup {
+		t.Fatal("unconfigured loopback status did not offer setup")
+	}
+	if configured, canSetup := status("192.0.2.1:12345"); configured || canSetup {
+		t.Fatal("unconfigured remote status offered setup")
+	}
+	if err := m.setupWithPasswords(testPassword, testPassword); err != nil {
+		t.Fatal(err)
+	}
+	if configured, canSetup := status("127.0.0.1:12345"); !configured || canSetup {
+		t.Fatal("configured loopback status still offered setup")
+	}
+	if configured, canSetup := status("192.0.2.1:12345"); !configured || canSetup {
+		t.Fatal("configured remote status offered setup")
+	}
+}
+
+func TestPasswordOnlyHTTPLogin(t *testing.T) {
+	m := openManaged(t)
+	const loginPassword = "synthetic-http-login-password"
+	const decryptionPassword = "synthetic-http-decryption-password"
+	if err := m.setupWithPasswords(loginPassword, decryptionPassword); err != nil {
+		t.Fatal(err)
+	}
+	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	status := managedRequest(t, h, "GET", "/auth/status", "", "", "")
+	var pre struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &pre); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "http://127.0.0.1:18765/auth/login", strings.NewReader(`{"password":"`+loginPassword+`"}`))
+	r.RemoteAddr = "127.0.0.1:12345"
+	r.Header.Set("Origin", "http://127.0.0.1:18765")
+	r.Header.Set("X-Termcp-CSRF", pre.CSRF)
+	for _, cookie := range status.Result().Cookies() {
+		r.AddCookie(cookie)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("password-only login: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), loginPassword) || strings.Contains(w.Body.String(), decryptionPassword) {
+		t.Fatal("login response leaked a password")
+	}
+}
+
+func TestPasswordOnlyLoginUsesStoredIdentity(t *testing.T) {
+	m := openManaged(t)
+	const loginPassword = "synthetic-custom-login-password"
+	const decryptionPassword = "synthetic-custom-decryption-password"
+	if err := m.setupWithOptions("legacy-owner", loginPassword, decryptionPassword, false); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _, err := m.loginWithPassword(loginPassword, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, session, err := m.verify(cookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Actor.Username != "legacy-owner" {
+		t.Fatalf("stored identity = %q", session.Actor.Username)
 	}
 }
 
@@ -258,7 +421,7 @@ func TestManagedCSRFAndCredentialPrecedence(t *testing.T) {
 			}
 		})
 	}
-	if w := managedRequest(t, h, "POST", "/auth/login", `{"username":"admin","password":"`+testPassword+`","role":"admin"}`, "", ""); w.Code != 403 {
+	if w := managedRequest(t, h, "POST", "/auth/login", `{"password":"`+testPassword+`"}`, "", ""); w.Code != 403 {
 		t.Fatalf("login without prelogin CSRF: %d", w.Code)
 	}
 }
@@ -314,14 +477,14 @@ func TestManagedSetupLocalAndExclusive(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w.Code
 	}
-	body := `{"username":"admin","password":"` + testPassword + `"}`
+	body := `{"password":"` + testPassword + `","config_password":"` + testPassword + `"}`
 	if code := post("192.0.2.1:1234", "127.0.0.1:18765", body); code != 403 {
 		t.Fatalf("remote setup: %d", code)
 	}
 	if code := post("127.0.0.1:1234", "other.example:18765", body); code != 403 {
 		t.Fatalf("rebound setup host: %d", code)
 	}
-	if code := post("127.0.0.1:1234", "127.0.0.1:18765", `{"username":"admin","password":"`+testPassword+`","role":"agent"}`); code != 400 {
+	if code := post("127.0.0.1:1234", "127.0.0.1:18765", `{"password":"`+testPassword+`","config_password":"`+testPassword+`","role":"agent"}`); code != 400 {
 		t.Fatalf("client-selected role: %d", code)
 	}
 	var wg sync.WaitGroup

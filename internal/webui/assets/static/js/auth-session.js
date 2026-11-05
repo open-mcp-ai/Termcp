@@ -31,8 +31,8 @@ function initManagedSession() {
       note.id = 'managed-independent-password-note';
       note.className = 'conn-check-hint';
       note.textContent = /^zh/i.test(navigator.language)
-        ? '此处仅修改配置加密密码，不修改登录密码。系统托管仅用于自动解锁配置。'
-        : 'This changes only the configuration encryption password. Login passwords are independent; system protection enables optional automatic vault unlocking.';
+        ? '此处仅修改解密密码，不修改登录密码。'
+        : 'This changes only the decryption password. The login password is independent.';
       form.insertBefore(note, form.firstChild);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', explainIndependentPassword, { once: true });
@@ -41,7 +41,7 @@ function initManagedSession() {
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(openEncryptionSettings,0);},{once:true});else setTimeout(openEncryptionSettings,0);
     var link = document.createElement('a');
     link.href = '/auth';
-    link.textContent = state.actor.username;
+    link.textContent = /^zh/i.test(navigator.language) ? '账号' : 'Account';
     link.setAttribute('aria-label', /^zh/i.test(navigator.language) ? '账号与退出登录' : 'Account and sign out');
     link.className = 'api-nav-link';
     var header = document.querySelector('.app-header-nav') || document.querySelector('header');

@@ -21,21 +21,24 @@ package mcp
 //     answers inside the response to a call and does not initiate. A GET therefore
 //     says so (405 + a sentence) instead of holding a socket open that could never
 //     carry anything.
-//   - No `Mcp-Session-Id`. The extension's identity IS the session, so there is no
-//     state for an id to name. A client that echoes one back is not refused — the
-//     header is simply not needed, and inventing one would promise isolation this
-//     endpoint does not provide.
+//   - No shared resident channel. A successful POST allocates an isolated
+//     extension instance and returns a random `Mcp-Session-Id`; every later frame
+//     must present that id under the same authenticated principal and credential.
+//     DELETE releases only that caller's instance.
 //   - No MCP semantics. Every frame is forwarded verbatim and the peer's answer is
 //     returned verbatim, which is what makes `initialize` honest: the serverInfo the
 //     client reads is the extension's, not ours.
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -62,7 +65,23 @@ const (
 	// not a payload: 8 MiB is far past any real tools/call argument and small
 	// enough that a stuck upload cannot exhaust memory.
 	extMCPMaxBody = 8 << 20
+	// extMCPLeaseIdle bounds a protocol session that outlives the client process
+	// without an explicit DELETE.
+	extMCPLeaseIdle = 30 * time.Minute
 )
+
+const extMCPSessionHeader = "Mcp-Session-Id"
+
+type extMCPLease struct {
+	id      string
+	owner   string
+	name    string
+	status  extensions.Status
+	request sync.Mutex
+	timerMu sync.Mutex
+	timer   *time.Timer
+	lastUse time.Time
+}
 
 // ExtMCPHandler serves one extension's MCP server over streamable HTTP.
 //
@@ -88,13 +107,7 @@ func (s *Server) ExtMCPHandler() http.Handler {
 				"never sends a message on its own, so there is no server-initiated stream to listen on. "+
 				"POST your JSON-RPC frames to this same URL.", http.StatusMethodNotAllowed)
 		case http.MethodDelete:
-			// MCP uses DELETE to end a session. Here the session is the extension's
-			// channel, and closing it is what `close ext` does — but doing that from
-			// an HTTP request would let any client evict an instance another caller is
-			// using. The endpoint therefore reports success without closing anything,
-			// which is truthful: the client's own session state (of which we keep none)
-			// is gone.
-			w.WriteHeader(http.StatusNoContent)
+			s.extMCPDelete(w, r, name)
 		default:
 			w.Header().Set("Allow", "POST, DELETE")
 			http.Error(w, "an MCP endpoint takes POST (JSON-RPC) and DELETE (end of session)", http.StatusMethodNotAllowed)
@@ -132,7 +145,7 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 
-	binding, err := s.authorizeExtensionMCP(r.Context(), name)
+	binding, err := s.authorizeExtensionMCP(r.Context(), name, frameID(frame) != "")
 	if err != nil {
 		auth.RecordAudit(r.Context(), auth.AuditEvent{
 			Action: "mcp.ext.authorize", TargetType: "extension", TargetID: name,
@@ -142,19 +155,11 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 
-	// THE EXTENSION IS RESOLVED FIRST, because the reply to a bad name should be a
-	// fact about the name rather than a frame that went nowhere.
-	var st extensions.Status
-	if binding != nil {
-		st, err = s.extensions.AcquireBound(*binding, extMCPStartWait)
-	} else {
-		st, err = s.extensions.Acquire(name, extMCPStartWait)
-	}
+	lease, err := s.extMCPLeaseForRequest(w, r, name, binding)
 	if err != nil {
-		http.Error(w, "extension "+name+": "+err.Error(), http.StatusNotFound)
 		return
 	}
-	shellID := st.ShellID
+	shellID := lease.status.ShellID
 	if shellID == "" {
 		// A template with no channel (a read-only file window, a forwards-only
 		// tunnel) has no MCP server to talk to. Naming which shape it is beats
@@ -178,18 +183,27 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		}
 		ctx = withExtensionMCPExecution(ctx, info.Namespace, shellID)
 	}
+	ctx = withMCPStreamSession(ctx, lease.id)
+	lease.request.Lock()
+	defer lease.request.Unlock()
+	s.touchExtMCPLease(lease)
 	stmt := directive.Statement{Op: "mcp", Kind: "mcp", Target: shellID}
 	win := termArgs{TimeoutSet: true, TimeoutSeconds: extMCPCallWindow}
+	line := s.lineLock(shellID)
+	line.Lock()
 
 	if id := frameID(frame); id != "" {
 		if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", shellID, "text", frame)); fail != nil {
+			line.Unlock()
 			s.extMCPFail(w, ctx, stmt, fail)
 			return
 		}
 		if _, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", shellID, "key", "enter")); fail != nil {
+			line.Unlock()
 			s.extMCPFail(w, ctx, stmt, fail)
 			return
 		}
+		line.Unlock()
 		slot := s.mcpAwaitReply(ctx, stmt, shellID, id, win, map[string]string{})
 		s.extMCPWriteSlot(w, r, slot)
 		return
@@ -198,14 +212,201 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 	// A notification has no answer, and waiting for one would hold the client's
 	// request open until the window expired to report nothing.
 	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", shellID, "text", frame)); fail != nil {
+		line.Unlock()
 		s.extMCPFail(w, ctx, stmt, fail)
 		return
 	}
 	if _, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", shellID, "key", "enter")); fail != nil {
+		line.Unlock()
 		s.extMCPFail(w, ctx, stmt, fail)
 		return
 	}
+	line.Unlock()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) extMCPDelete(w http.ResponseWriter, r *http.Request, name string) {
+	if len(r.Header.Values(extMCPSessionHeader)) == 0 {
+		http.Error(w, "DELETE requires one Mcp-Session-Id header", http.StatusBadRequest)
+		return
+	}
+	session, ok := extMCPSessionID(r)
+	if !ok {
+		http.Error(w, "DELETE requires one Mcp-Session-Id header", http.StatusBadRequest)
+		return
+	}
+	value, found := s.extMCPLeases.Load(session)
+	if !found {
+		http.Error(w, "MCP session is unknown or already ended", http.StatusNotFound)
+		return
+	}
+	lease := value.(*extMCPLease)
+	if lease.owner != extMCPOwner(r.Context()) {
+		http.Error(w, "MCP session belongs to a different credential", http.StatusForbidden)
+		return
+	}
+	if lease.name != name {
+		http.Error(w, "MCP session belongs to a different extension", http.StatusNotFound)
+		return
+	}
+	s.removeExtMCPLease(lease)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) extMCPLeaseForRequest(w http.ResponseWriter, r *http.Request, name string, binding *extensions.AuthorizationBinding) (*extMCPLease, error) {
+	session, ok := extMCPSessionID(r)
+	if !ok {
+		http.Error(w, "ambiguous Mcp-Session-Id", http.StatusBadRequest)
+		return nil, fmt.Errorf("ambiguous extension MCP session")
+	}
+	owner := extMCPOwner(r.Context())
+	if session != "" {
+		value, found := s.extMCPLeases.Load(session)
+		if !found {
+			http.Error(w, "MCP session is unknown or expired; initialize again", http.StatusNotFound)
+			return nil, fmt.Errorf("unknown extension MCP session")
+		}
+		lease := value.(*extMCPLease)
+		if lease.owner != owner {
+			http.Error(w, "MCP session belongs to a different credential", http.StatusForbidden)
+			return nil, fmt.Errorf("extension MCP session owner mismatch")
+		}
+		if lease.name != name {
+			http.Error(w, "MCP session belongs to a different extension", http.StatusNotFound)
+			return nil, fmt.Errorf("extension MCP session name mismatch")
+		}
+		w.Header().Set(extMCPSessionHeader, lease.id)
+		return lease, nil
+	}
+
+	var st extensions.Status
+	var err error
+	if binding != nil {
+		st, err = s.extensions.AcquireBoundFresh(*binding, extMCPStartWait)
+	} else {
+		st, err = s.extensions.AcquireFresh(name, "", extMCPStartWait)
+	}
+	if err != nil {
+		http.Error(w, "extension "+name+": "+err.Error(), http.StatusNotFound)
+		return nil, err
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		id, err := newExtMCPSessionID()
+		if err != nil {
+			http.Error(w, "could not create an MCP session", http.StatusInternalServerError)
+			return nil, err
+		}
+		lease := &extMCPLease{id: id, owner: owner, name: name, status: st, lastUse: time.Now()}
+		if _, loaded := s.extMCPLeases.LoadOrStore(id, lease); loaded {
+			continue
+		}
+		s.scheduleExtMCPLeaseExpiry(lease)
+		w.Header().Set(extMCPSessionHeader, id)
+		return lease, nil
+	}
+	if st.ShellID != "" {
+		_, _ = s.extensions.Release(name, st.ShellID)
+	}
+	http.Error(w, "could not allocate a unique MCP session", http.StatusInternalServerError)
+	return nil, fmt.Errorf("extension MCP session id collision")
+}
+
+func extMCPSessionID(r *http.Request) (string, bool) {
+	values := r.Header.Values(extMCPSessionHeader)
+	if len(values) > 1 {
+		return "", false
+	}
+	if len(values) == 0 {
+		return "", true
+	}
+	value := strings.TrimSpace(values[0])
+	if len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") {
+		return "", false
+	}
+	return value, true
+}
+
+func extMCPOwner(ctx context.Context) string {
+	actor, _ := auth.ActorFromContext(ctx)
+	return actor.ID + "\x00" + auth.CredentialIDFromContext(ctx)
+}
+
+func newExtMCPSessionID() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func (s *Server) scheduleExtMCPLeaseExpiry(lease *extMCPLease) {
+	lease.timerMu.Lock()
+	defer lease.timerMu.Unlock()
+	lease.timer = time.AfterFunc(extMCPLeaseIdle, func() {
+		s.expireExtMCPLease(lease)
+	})
+}
+
+func (s *Server) touchExtMCPLease(lease *extMCPLease) {
+	lease.timerMu.Lock()
+	defer lease.timerMu.Unlock()
+	lease.lastUse = time.Now()
+	if lease.timer != nil {
+		lease.timer.Reset(extMCPLeaseIdle)
+	}
+}
+
+func (s *Server) expireExtMCPLease(lease *extMCPLease) {
+	lease.request.Lock()
+	lease.timerMu.Lock()
+	remaining := extMCPLeaseIdle - time.Since(lease.lastUse)
+	if remaining > 0 && lease.timer != nil {
+		lease.timer.Reset(remaining)
+		lease.timerMu.Unlock()
+		lease.request.Unlock()
+		return
+	}
+	if lease.timer != nil {
+		lease.timer.Stop()
+		lease.timer = nil
+	}
+	lease.timerMu.Unlock()
+	detached := s.detachExtMCPLease(lease)
+	lease.request.Unlock()
+	if detached {
+		s.releaseExtMCPLease(lease)
+	}
+}
+
+func (s *Server) removeExtMCPLease(lease *extMCPLease) {
+	lease.request.Lock()
+	lease.timerMu.Lock()
+	if lease.timer != nil {
+		lease.timer.Stop()
+		lease.timer = nil
+	}
+	lease.timerMu.Unlock()
+	detached := s.detachExtMCPLease(lease)
+	lease.request.Unlock()
+	if detached {
+		s.releaseExtMCPLease(lease)
+	}
+}
+
+func (s *Server) detachExtMCPLease(lease *extMCPLease) bool {
+	if _, loaded := s.extMCPLeases.LoadAndDelete(lease.id); !loaded {
+		return false
+	}
+	if lease.status.ShellID != "" {
+		s.dropMCPStreamSession(lease.id, lease.status.ShellID)
+	}
+	return true
+}
+
+func (s *Server) releaseExtMCPLease(lease *extMCPLease) {
+	if s.extensions != nil && lease.status.ShellID != "" {
+		_, _ = s.extensions.Release(lease.name, lease.status.ShellID)
+	}
 }
 
 // authorizeExtensionMCP resolves the extension before it is started. A verified
@@ -214,7 +415,7 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 // Approval-required ext.get is refused here because a raw MCP frame cannot be
 // safely replayed into a later JSON-RPC response; the Agent can use the normal
 // extension/DSL surface, whose whole operation is replayable.
-func (s *Server) authorizeExtensionMCP(ctx context.Context, name string) (*extensions.AuthorizationBinding, error) {
+func (s *Server) authorizeExtensionMCP(ctx context.Context, name string, needsReply bool) (*extensions.AuthorizationBinding, error) {
 	p, restricted, err := auth.PolicyFromContext(ctx)
 	if !restricted {
 		if actor, ok := auth.ActorFromContext(ctx); ok && actor.Role == auth.RoleAgent {
@@ -225,7 +426,15 @@ func (s *Server) authorizeExtensionMCP(ctx context.Context, name string) (*exten
 	if err != nil {
 		return nil, err
 	}
-	decision, err := evaluateAgentPlan(p, operationPlan(capability.ExtGet, authorization.Evidence{}))
+	plan := authorization.Plan{Requirements: []authorization.Requirement{
+		{Operation: capability.ExtGet},
+		{Operation: "shell.input"},
+		{Operation: "shell.key", Evidence: authorization.Evidence{Keys: []string{"enter"}, Repeat: 1}},
+	}}
+	if needsReply {
+		plan.Requirements = append(plan.Requirements, authorization.Requirement{Operation: "shell.output"})
+	}
+	decision, err := evaluateAgentPlan(p, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +442,7 @@ func (s *Server) authorizeExtensionMCP(ctx context.Context, name string) (*exten
 		return nil, fmt.Errorf("Agent permission denied: %s", decision.Reason)
 	}
 	if decision.NeedsApproval {
-		return nil, fmt.Errorf("ext.get requires approval; this direct MCP frame cannot be resumed after approval. Allow ext.get for this endpoint, or use the termcp MCP peer/DSL surface whose whole call can be replayed")
+		return nil, fmt.Errorf("the direct extension MCP frame requires approval; it cannot be resumed after approval. Allow ext.get, shell.input, shell.key (enter), and shell.output when a reply is expected, or use the termcp MCP peer/DSL surface whose whole call can be replayed")
 	}
 	binding, err := s.agentExtensionBinding(p, name, "")
 	if err != nil {

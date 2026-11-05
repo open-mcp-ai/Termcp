@@ -20,6 +20,7 @@ const (
 	EnvAuthToken = "TERMCP_AUTH_TOKEN"
 	EnvAuthHash  = "TERMCP_AUTH_HASH"
 	EnvMCPToken  = "TERMCP_MCP_TOKEN"
+	EnvDaemonURL = "TERMCP_DAEMON_URL"
 )
 
 // EnvDisableAuth turns HTTP authentication off from the environment. It is the
@@ -40,6 +41,7 @@ type Config struct {
 	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
 	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
 	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)
+	DaemonURL           string // client-only daemon management origin ($TERMCP_DAEMON_URL); not a server listen address
 }
 
 // ManagedAuth is the default. Explicit legacy credentials or --disable-auth
@@ -109,6 +111,9 @@ func (c *Config) ApplyEnv() {
 	if c.AuthHash == "" {
 		c.AuthHash = strings.TrimSpace(os.Getenv(EnvAuthHash))
 	}
+	if c.DaemonURL == "" {
+		c.DaemonURL = strings.TrimSpace(os.Getenv(EnvDaemonURL))
+	}
 	if !c.DisableAuth && envTruthy(os.Getenv(EnvDisableAuth)) {
 		c.DisableAuth = true
 	}
@@ -145,6 +150,9 @@ func (c *Config) Validate() error {
 	}
 	if c.AuthToken != "" && c.AuthHash != "" {
 		return fmt.Errorf("auth-token and auth-hash are mutually exclusive")
+	}
+	if c.DaemonURL != "" {
+		return fmt.Errorf("daemon-url is client-only; use it with daemon status/stop, not a server process")
 	}
 	// Disabling auth is a deliberate operator decision, so it never silently
 	// wins: supplying credentials *and* asking for no auth is a configuration

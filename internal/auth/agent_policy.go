@@ -76,29 +76,34 @@ func clonePolicy(p AgentPolicy) AgentPolicy {
 	return p
 }
 
+func cloneGrant(grant authorization.Grant) authorization.Grant {
+	if grant.Constraints == nil {
+		return grant
+	}
+	clone := *grant.Constraints
+	clone.Keys = slices.Clone(clone.Keys)
+	clone.ToolNames = slices.Clone(clone.ToolNames)
+	clone.Methods = slices.Clone(clone.Methods)
+	clone.Forms = slices.Clone(clone.Forms)
+	if clone.RepeatMax != nil {
+		n := *clone.RepeatMax
+		clone.RepeatMax = &n
+	}
+	if clone.MaxBytes != nil {
+		n := *clone.MaxBytes
+		clone.MaxBytes = &n
+	}
+	grant.Constraints = &clone
+	return grant
+}
+
 func mapsClone(in map[string]authorization.Grant) map[string]authorization.Grant {
 	if in == nil {
 		return nil
 	}
 	out := make(map[string]authorization.Grant, len(in))
 	for id, grant := range in {
-		if grant.Constraints != nil {
-			clone := *grant.Constraints
-			clone.Keys = slices.Clone(clone.Keys)
-			clone.ToolNames = slices.Clone(clone.ToolNames)
-			clone.Methods = slices.Clone(clone.Methods)
-			clone.Forms = slices.Clone(clone.Forms)
-			if clone.RepeatMax != nil {
-				n := *clone.RepeatMax
-				clone.RepeatMax = &n
-			}
-			if clone.MaxBytes != nil {
-				n := *clone.MaxBytes
-				clone.MaxBytes = &n
-			}
-			grant.Constraints = &clone
-		}
-		out[id] = grant
+		out[id] = cloneGrant(grant)
 	}
 	return out
 }
@@ -228,7 +233,7 @@ func (m *Managed) accessCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].Name < hosts[j].Name })
 	authJSON(w, 200, map[string]any{
-		"catalog_version":    3,
+		"catalog_version":    4,
 		"approval_supported": true,
 		"operations":         authorization.Catalog(),
 		"recipes":            authorization.Recipes(),

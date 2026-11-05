@@ -1,6 +1,6 @@
 # Termcp 权限配置清单
 
-> 本表对应当前 `authorization.Catalog()`（catalog version 3，共 45 项），并同步列出现有五个预置权限组。权限界面中未选择动作按禁止处理；本文不替代服务端校验。
+> 本表对应当前 `authorization.Catalog()`（catalog version 4，共 45 项），并同步列出现有五个预置权限组。权限界面中未选择动作按禁止处理；本文不替代服务端校验。
 
 ## 权限效果
 
@@ -126,11 +126,11 @@
 
 | 模板 | 名称 | 版本 | 允许动作数 | 主机范围 | 说明 |
 | --- | --- | ---: | ---: | --- | --- |
-| `no-access` | 未授权 / No access | 3 | 0 | `all` | 业务动作默认禁止；主机范围本身不授予操作权限。 |
-| `viewer` | 资源观察 / Viewer | 3 | 5 | `all` | 查看安全摘要和状态，不读取终端输出或文件正文。 |
-| `diagnostics` | 只读诊断 / Diagnostics reader | 3 | 11 | `all` | 读取已分配资源的输出和文件内容，需要已有的可达会话。 |
-| `file-maintainer` | 文件维护 / File maintainer | 3 | 16 | `all` | 允许文件读写和目录维护；不授予终端执行、网络转发或全局配置管理。 |
-| `host-operator` | 主机运维 / Host operator | 3 | 35 | `all` | 允许连接主机、操作终端、常用文件、转发和已配置扩展；不授予凭据配置。 |
+| `no-access` | 未授权 / No access | 5 | 0 | `all` | 业务动作默认禁止；主机范围本身不授予操作权限。 |
+| `viewer` | 资源观察 / Viewer | 5 | 5 | `all` | 查看安全摘要和状态，不读取终端输出或文件正文。 |
+| `diagnostics` | 只读诊断 / Diagnostics reader | 5 | 11 | `all` | 读取已分配资源的输出和文件内容，需要已有的可达会话。 |
+| `file-maintainer` | 文件维护 / File maintainer | 5 | 13 | `all` | 允许文件读写和目录维护；不授予终端执行、权限/链接/文件系统变更、网络转发或全局配置管理。 |
+| `host-operator` | 主机运维 / Host operator | 5 | 33 | `all` | 允许连接主机、操作终端、常用文件、显式属性修改、转发和已配置扩展；不授予凭据配置。 |
 
 ### 未授权 / No access (`no-access`)
 
@@ -171,9 +171,6 @@
 - `file.urls`（allow）
 - `file.write`（allow；forms=inline）
 - `file.mkdir`（allow）
-- `file.perm`（allow）
-- `file.link`（allow）
-- `file.fs`（allow）
 - `profile.list`（allow）
 - `ext.list`（allow）
 
@@ -204,8 +201,6 @@
 - `file.mkdir`（allow）
 - `file.rename`（allow）
 - `file.perm`（allow）
-- `file.link`（allow）
-- `file.fs`（allow）
 - `forward.list`（allow）
 - `forward.open`（allow）
 - `forward.close`（allow）
@@ -236,6 +231,6 @@
 - `shell.input`、`shell.key`、`session.start`、`shell.open` 等终端基础动作仍需显式授权；预设“主机运维”会授予它们。
 - 终端动作本身不是操作系统沙箱。获得 shell 权限后，远端命令仍可能绕开单独关闭的文件操作。
 - `mcp.open`、`cdp.open`、`jrpc.open` 可通过工具名或方法 allowlist 缩小到指定调用；这些约束由服务端核验。
-- `POST /ext/{name}/stream` 对 Agent 先核验 `ext.get` 和扩展目标主机，并使用授权时冻结的模板/主机绑定启动；`ext.get=ask` 时该原始帧入口要求改用可重放的 Termcp MCP peer/DSL 入口。
+- `POST /ext/{name}/stream` 对 Agent 在任何字节写入前核验 `ext.get`、`shell.input`、`shell.key(enter)`、需要回复时的 `shell.output` 和扩展目标主机，并使用授权时冻结的模板/主机绑定启动。首次响应返回 `Mcp-Session-Id`；后续帧必须由同一 verified principal + credential 使用该 session。DELETE 只释放该 session 的独立 channel。
 - 文件 `forms`、`max_bytes`，按键 `keys`、`repeat_max`，以及工具/方法 allowlist 都是服务端可验证条件；无法证明的约束应保守拒绝。
 - 预设组只提供初始策略快照。管理员可以在组级策略中修改。

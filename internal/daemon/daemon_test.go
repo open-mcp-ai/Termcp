@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -160,6 +161,7 @@ func TestChildArgs(t *testing.T) {
 
 func TestChildEnv(t *testing.T) {
 	t.Setenv(config.EnvAuthToken, "inherited-old")
+	t.Setenv(config.EnvDaemonURL, "https://management.example")
 	env := childEnv(&config.Config{AuthToken: "resolved-new", DisableAuth: false})
 	var tokenEntries []string
 	for _, kv := range env {
@@ -175,6 +177,11 @@ func TestChildEnv(t *testing.T) {
 	}
 	if slices.Contains(env, config.EnvDisableAuth+"=1") {
 		t.Errorf("disable-auth set although the config does not ask for it")
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(strings.ToUpper(kv), config.EnvDaemonURL+"=") {
+			t.Errorf("client-only daemon URL leaked into the server environment: %q", kv)
+		}
 	}
 }
 
@@ -195,6 +202,43 @@ func TestConnectHost(t *testing.T) {
 	}
 	if got := BaseURL("0.0.0.0", 18765); got != "http://127.0.0.1:18765" {
 		t.Errorf("BaseURL wildcard = %q", got)
+	}
+}
+
+func TestManagementURLRequiresLoopbackHTTPOrExplicitHTTPS(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		port     int
+		explicit string
+		want     string
+		wantErr  bool
+	}{
+		{name: "loopback default", host: "127.0.0.1", port: 18765, want: "http://127.0.0.1:18765"},
+		{name: "wildcard reaches loopback", host: "0.0.0.0", port: 18765, want: "http://127.0.0.1:18765"},
+		{name: "localhost cleartext", explicit: "http://localhost:18765", want: "http://localhost:18765"},
+		{name: "remote cleartext", host: "192.0.2.10", port: 18765, wantErr: true},
+		{name: "remote explicit cleartext", explicit: "http://192.0.2.10:18765", wantErr: true},
+		{name: "remote https", explicit: "https://termcp.example", want: "https://termcp.example"},
+		{name: "trailing slash", explicit: "https://termcp.example/", want: "https://termcp.example"},
+		{name: "userinfo", explicit: "https://user:pass@termcp.example", wantErr: true},
+		{name: "path", explicit: "https://termcp.example/proxy", wantErr: true},
+		{name: "query", explicit: "https://termcp.example?target=remote", wantErr: true},
+		{name: "unsupported scheme", explicit: "ftp://termcp.example", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ManagementURL(test.host, test.port, test.explicit)
+			if test.wantErr {
+				if !errors.Is(err, ErrUnsafeManagementURL) {
+					t.Fatalf("ManagementURL error = %v", err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("ManagementURL = %q, %v; want %q", got, err, test.want)
+			}
+		})
 	}
 }
 

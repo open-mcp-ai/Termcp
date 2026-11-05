@@ -54,6 +54,7 @@ func childEnv(cfg *config.Config) []string {
 		config.EnvMCPToken + "=",
 		config.EnvAuthHash + "=",
 		config.EnvDisableAuth + "=",
+		config.EnvDaemonURL + "=",
 	})
 	env = append(env, EnvChild+"=1")
 	if cfg.AuthToken != "" {

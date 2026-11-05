@@ -28,6 +28,7 @@ type callerNSKey struct{}
 // Agent namespace rule would otherwise refuse the exact shell the adapter just
 // acquired on the Agent's behalf.
 type extensionMCPExecutionKey struct{}
+type mcpStreamSessionKey struct{}
 
 type extensionMCPExecution struct {
 	namespace string
@@ -44,6 +45,15 @@ func withExtensionMCPExecution(ctx context.Context, namespace, shellID string) c
 func extensionMCPExecutionFromContext(ctx context.Context) (extensionMCPExecution, bool) {
 	execution, ok := ctx.Value(extensionMCPExecutionKey{}).(extensionMCPExecution)
 	return execution, ok && execution.shellID != "" && execution.namespace != ""
+}
+
+func withMCPStreamSession(ctx context.Context, session string) context.Context {
+	return context.WithValue(ctx, mcpStreamSessionKey{}, session)
+}
+
+func mcpStreamSessionFromContext(ctx context.Context) string {
+	session, _ := ctx.Value(mcpStreamSessionKey{}).(string)
+	return session
 }
 
 // withCallerNamespace reads the claim off a request and installs it on the

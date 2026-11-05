@@ -193,6 +193,22 @@ func TestDaemonHelpLevels(t *testing.T) {
 	if !strings.Contains(full.String(), "Parameters that influence") {
 		t.Error("detailed help misses the parameters section")
 	}
+	if !strings.Contains(full.String(), "managed MCP tokens cannot manage") {
+		t.Error("detailed help does not distinguish MCP and daemon credentials")
+	}
+}
+
+func TestDaemonManagementAuthHintMatchesTheSelectedMode(t *testing.T) {
+	managed := config.Default()
+	baseURL := daemon.BaseURL(managed.Host, managed.Port)
+	if hint := daemonManagementAuthHint(baseURL, managed); !strings.Contains(hint, "login password") || !strings.Contains(hint, "decryption password") || !strings.Contains(hint, "MCP tokens are MCP-only") {
+		t.Fatalf("managed hint = %q", hint)
+	}
+	legacy := config.Default()
+	legacy.AuthToken = "synthetic-token"
+	if hint := daemonManagementAuthHint(baseURL, legacy); !strings.Contains(hint, "rejected the legacy credential") || !strings.Contains(hint, "local login password") || !strings.Contains(hint, "decryption password") {
+		t.Fatalf("legacy hint = %q", hint)
+	}
 }
 
 func TestFindAction(t *testing.T) {

@@ -21,7 +21,7 @@ func TestASecondRecvLeavesWhenItsOwnWindowEnds(t *testing.T) {
 	const handle = "test:1"
 
 	// Simulate a reader holding the token (inside its poll loop).
-	first := s.recvReader(handle)
+	first := s.recvReader(t.Context(), handle)
 	<-first
 	defer func() { first <- struct{}{} }()
 
@@ -41,5 +41,22 @@ func TestASecondRecvLeavesWhenItsOwnWindowEnds(t *testing.T) {
 	}
 	if hint := slot.Headers["Hint"]; !strings.Contains(hint, "gave up waiting") {
 		t.Fatalf("unexpected hint header: %q", hint)
+	}
+}
+
+func TestExtensionStreamsDoNotShareReaderOrCursor(t *testing.T) {
+	s := &Server{}
+	const handle = "same-shell"
+	first := withMCPStreamSession(t.Context(), "session-a")
+	second := withMCPStreamSession(t.Context(), "session-b")
+
+	firstReader := s.recvReader(first, handle)
+	secondReader := s.recvReader(second, handle)
+	if firstReader == secondReader {
+		t.Fatal("different extension sessions shared a reader gate")
+	}
+	s.setRecvCursor(first, handle, 17)
+	if got := s.recvCursor(second, handle); got != 0 {
+		t.Fatalf("cursor leaked across extension sessions: %d", got)
 	}
 }

@@ -32,6 +32,9 @@ type Server struct {
 	baseURL      string // http://host:port, set from Start()
 	// MCP session IDs are bound to the verified principal and credential.
 	transportOwners sync.Map
+	// extMCPLeases owns one isolated extension channel and reader/writer state
+	// per authenticated /ext/{name}/stream session.
+	extMCPLeases sync.Map // session id -> *extMCPLease
 
 	docsFS     fs.FS // embedded agent docs, set via SetDocsFS
 	NoInternal bool  // when true, hide and refuse the built-in loopback profile
@@ -80,7 +83,7 @@ type Server struct {
 	// A caller reads one frame at a time out of a growing stream, and the position
 	// it reached is the only thing that stops the next call from re-reading the
 	// first frame or skipping the ones in between. Independent entries, so sync.Map.
-	recvCursors sync.Map // handle string -> int64
+	recvCursors sync.Map // principal/credential/session/handle key -> int64
 
 	// recvReaders gives a handle one reader at a time, held for the WHOLE read
 	// (#183).
@@ -91,11 +94,13 @@ type Server struct {
 	// cannot survive — two `id:3` and no `id:4` leaves the client waiting for an
 	// answer another reader already consumed.
 	//
-	// Per HANDLE, because a recv can wait out the caller's whole window.
+	// Per logical stream (principal + credential + transport session + handle),
+	// because a recv can wait out the caller's whole window and different
+	// extension sessions must not consume one another's replies.
 	// A TOKEN, NOT A MUTEX (issue #224): Mutex.Lock takes no context, so a second
 	// recv could not leave when its own window expired. The one-slot channel is the
 	// same exclusivity with a door.
-	recvReaders sync.Map // handle string -> chan struct{}
+	recvReaders sync.Map // logical stream key -> chan struct{}
 
 	// lineLocks serialises the two writes that make ONE line on a channel (#212).
 	//

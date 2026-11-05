@@ -82,9 +82,9 @@
 
 ## 安装
 
-默认启动后访问 `/login` 设置管理员。注册时用同一次输入初始化两份独立密码：登录密码与配置加密密码，后续分别修改。登录校验记录、密钥保护、identity 引用及各对象 EDK 集中提交到 `<data-dir>/local-state/state.json`；主机密文正文保留在 `ssh_configs/<主机>/`，仅 catalog/auth 正文位于 `local-state/objects/`，每个对象独立使用随机 DEK。配置密码直接派生实例 MK，系统/ENV KEK 提供可选自动解锁，浏览器登录与保险库解锁分别管理。
+默认启动后访问 `/login` 设置两份本机密码：登录密码与解密密码，后续分别修改；不输入用户名。登录校验记录、密钥保护、identity 引用及各对象 EDK 集中提交到 `<data-dir>/local-state/state.json`；主机密文正文保留在 `ssh_configs/<主机>/`，仅 catalog/auth 正文位于 `local-state/objects/`，每个对象独立使用随机 DEK。解密密码直接派生实例 MK，浏览器登录与保险库解锁分别管理。
 
-在 `/permissions` 选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；复制生成的 HTTP/SSE 或 stdio 配置即可接入。页面可只读预览 DSL 请求缺少哪些动作。Token 仅展示一次，摘要保存在加密私有状态中；stdio 使用 `TERMCP_MCP_TOKEN`。未启用自动解锁时，重启后先登录，再在 `/auth` 输入配置加密密码解锁。OAuth 仍为未来计划。
+在 `/permissions` 选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；复制生成的 HTTP/SSE 或 stdio 配置即可接入。页面可只读预览 DSL 请求缺少哪些动作。Token 仅展示一次，摘要保存在加密私有状态中；stdio 使用 `TERMCP_MCP_TOKEN`。重启后先登录，再在 `/auth` 输入解密密码解锁。OAuth 仍为未来计划。
 
 ### 0 · AI 安装
 

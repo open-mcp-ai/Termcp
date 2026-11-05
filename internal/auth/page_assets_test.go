@@ -127,6 +127,19 @@ func TestManagedPagesShareNonceProtectedThemeShell(t *testing.T) {
 	}
 }
 
+func TestLoginPageExposesOnlyLoginAndDecryptionPasswords(t *testing.T) {
+	for _, forbidden := range []string{`id="username"`, `automatic-unlock`, `previous-config`, `vault-automatic`} {
+		if strings.Contains(loginHTML, forbidden) {
+			t.Errorf("login page retains obsolete credential field %q", forbidden)
+		}
+	}
+	for _, want := range []string{`id="password"`, `id="config-password"`, `id="vault-password"`, `id="decryption-confirmation"`} {
+		if !strings.Contains(loginHTML, want) {
+			t.Errorf("login page is missing %q", want)
+		}
+	}
+}
+
 func TestManagedPagesKeepFallbackWhenThemesAreUnavailable(t *testing.T) {
 	for _, assets := range []fs.FS{nil, fstest.MapFS{"api.md": &fstest.MapFile{Data: []byte("docs only")}}} {
 		m := &Managed{}

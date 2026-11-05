@@ -62,6 +62,7 @@ func newV2Harness(t *testing.T, p auth.AgentPolicy) *v2Harness {
 	mux.Handle("/stream", s.StreamableHTTPHandler())
 	mux.Handle("/sse", s.SSEHandler())
 	mux.Handle("/message", s.MessageHandler())
+	mux.Handle("/ext/{name}/stream", s.ExtMCPHandler())
 	ts := httptest.NewServer(account.Wrap(mux))
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
@@ -71,7 +72,7 @@ func newV2Harness(t *testing.T, p auth.AgentPolicy) *v2Harness {
 	}
 	h.adminRequest("GET", "/auth/status", nil, &status)
 	h.csrf = status.CSRF
-	h.adminRequest("POST", "/auth/setup", map[string]any{"username": "test-admin", "password": "synthetic-v2-password"}, &status)
+	h.adminRequest("POST", "/auth/setup", map[string]any{"password": "synthetic-v2-password", "config_password": "synthetic-v2-password"}, &status)
 	h.csrf = status.CSRF
 	var created struct {
 		Token string `json:"token"`
