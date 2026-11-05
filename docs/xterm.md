@@ -23,7 +23,10 @@ Files copied out of that tarball, unmodified:
 |---|---|---|
 | `internal/webui/assets/static/xterm/xterm.js` | `package/lib/xterm.js` | `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972` |
 | `internal/webui/assets/static/xterm/xterm.css` | `package/css/xterm.css` | `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6` |
-| `internal/webui/assets/static/xterm/LICENSE` | `package/LICENSE` | upstream MIT license |
+
+Only those two runtime files are vendored. Documentation and license text live
+here instead, because everything under `internal/webui/assets/` is embedded into
+the binary and served at guessed URLs nobody links to.
 
 Only the core package is vendored. The Web UI implements its own grid fitting
 (`fitShellTerminal` in `internal/webui/assets/static/js/ui-socket.js`), so
@@ -53,7 +56,6 @@ sha1sum xterm-6.0.0.tgz     # matches 93637b0f2ee3a70718b5746a27c9c506af16745b
 tar -xzf xterm-6.0.0.tgz
 cmp internal/webui/assets/static/xterm/xterm.js package/lib/xterm.js
 cmp internal/webui/assets/static/xterm/xterm.css package/css/xterm.css
-cmp internal/webui/assets/static/xterm/LICENSE package/LICENSE
 ```
 
 ## 6.0.0 integration notes
@@ -86,7 +88,37 @@ What that changed for termcp's UI code (all in
 
 ## Upgrading
 
-Download the target `@xterm/xterm` npm tarball, copy `package/lib/xterm.js`,
-`package/css/xterm.css` and `package/LICENSE` to
-`internal/webui/assets/static/xterm/`, and update the checksums in this file.
-Re-read the DOM notes before a major bump.
+Download the target `@xterm/xterm` npm tarball, copy `package/lib/xterm.js` and
+`package/css/xterm.css` to `internal/webui/assets/static/xterm/`, and update the
+checksums and the license text in this file. Re-read the DOM notes before a
+major bump.
+
+## License
+
+xterm.js is MIT-licensed. The notice is reproduced here, as the MIT terms
+require it to accompany copies of the software; the runtime assets embed no
+license file of their own.
+
+```
+Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
