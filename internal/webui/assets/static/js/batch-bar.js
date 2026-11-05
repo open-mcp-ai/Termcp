@@ -101,12 +101,21 @@ function createBatchBar(cfg) {
     var noneSelected = n === 0;
     invert.disabled = all.length === 0;
     invert.classList.toggle('all-checked', allSelected);
-    var label;
-    if (allSelected) label = t('section.batch.clearSelection');
-    else if (noneSelected) label = t('section.batch.selectAll');
-    else label = t('section.batch.invert');
+    /* The label depends on the SELECTION, so it cannot be one fixed catalog key
+       on the markup. Writing the value alone left the static data-i18n-* hooks
+       pointing at a different key, and applyI18n then overwrote the dynamic label
+       with that key's text on every language switch — the key and the value were
+       two writers for one string. Stamping the hook to the key actually used keeps
+       one writer: the hook now names what the current state says. Literal keys per
+       branch, so the catalog orphan scan sees every one of them. */
+    var label, key;
+    if (allSelected) { key = 'section.batch.clearSelection'; label = t('section.batch.clearSelection'); }
+    else if (noneSelected) { key = 'section.batch.selectAll'; label = t('section.batch.selectAll'); }
+    else { key = 'section.batch.invert'; label = t('section.batch.invert'); }
     invert.title = label;
     invert.setAttribute('aria-label', label);
+    invert.setAttribute('data-i18n-title', key);
+    invert.setAttribute('data-i18n-aria', key);
   }
 
   /* The verb and the menu answer disabled while nothing is ticked: an always-live

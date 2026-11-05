@@ -26,6 +26,10 @@ func SetAssetsDir(dir string) {
 	assetsDirMu.Lock()
 	defer assetsDirMu.Unlock()
 	assetsDir = dir
+	// The ETag cache is keyed by path only; a new override directory serves
+	// different bytes under the same paths, so the old hashes must not survive
+	// the switch (tests repoint this freely).
+	clearAssetETags()
 }
 
 // SetThemesDir configures application resources independently of the data dir.
@@ -34,6 +38,7 @@ func SetThemesDir(dir string) {
 	assetsDirMu.Lock()
 	defer assetsDirMu.Unlock()
 	themesDir = dir
+	clearAssetETags()
 }
 
 // Assets returns the asset FS rooted at the assets directory. Besides the

@@ -38,5 +38,6 @@ templates/
 .zcode/
 
 # Agent scratch space (local tooling, not part of the project)
+/.pi/
 /.pi-tools/
 /.pi-tmp/

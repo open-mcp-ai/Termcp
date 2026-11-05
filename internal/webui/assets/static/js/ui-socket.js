@@ -205,16 +205,6 @@ function connectUIWebSocket() {
             }
             shellStatusSet(win2, j.id, 'ended');
             showTerminalEndedMarker(win2, ch2);
-          } else if (!win2._streamDone) {
-            win2._streamDone = true;
-            try {
-              win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m', function () {
-                shellTermScrollToBottomIfStuck(win2._term, true);
-              });
-            } catch (e2) {
-              try { win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m'); } catch (e3) {}
-              shellTermScrollToBottomIfStuck(win2._term, true);
-            }
           }
         }
       } else if (j.type === 'shell_activity') {
@@ -363,11 +353,21 @@ function shellStatusPaint(ch, state) {
   else if (state === 'ai') { label = t('channel.state.ai'); tip = label; }
   else if (state === 'running') { label = t('channel.state.running'); tip = label; }
   else if (state === 'done') { label = t('channel.state.done'); tip = label; }
-  else { label = t('channel.endedTab'); tip = t('session.ended'); }
+  else {
+    label = t('channel.endedTab');
+    tip = t('session.ended');
+    el.setAttribute('data-i18n-title', 'session.ended');
+  }
   el.textContent = label;
   el.className = 'shell-channel-tab-state shell-state-' + state;
   el.style.display = '';
   el.title = tip;
+  /* Only the ended chip's tooltip has a catalog key: the live states' tips are
+     their own label, which is already translated when the chip is painted, and
+     stamping a data-i18n hook on them would need one key per state. The ended
+     tip is the sentence a reader hunts for (“会话已结束”), so it gets the hook
+     and follows a language switch even while the chip sits untouched. */
+  if (state !== 'ended') el.removeAttribute('data-i18n-title');
   /* The page-level reaction is derived from these same states, so it is
      repainted here rather than pushed twice for one event. Guarded because this
      function is extracted and executed on its own by the status-machine test. */

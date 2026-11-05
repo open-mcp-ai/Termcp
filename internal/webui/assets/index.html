@@ -39,17 +39,6 @@
           <button type="button" class="lang-opt" data-lang="zh-Hant" onclick="chooseLang('zh-Hant')">繁中</button>
         </span>
       </span>
-      <!-- Who is connected to this instance (MCP clients and Web UI tabs). A
-           details/summary like the theme switch beside it: the content is a small
-           list that is only interesting on demand, and closing it needs no JS.
-           No count badge: the number of clients is a question the panel answers
-           when it is opened, and a badge that is usually 0 or 1 is one more thing
-           in the header asking to be read. The label is the whole trigger, and it
-           is the first thing to go on a narrow header (see workspace.css). -->
-      <details class="clients-menu" id="clients-menu">
-        <summary class="clients-btn" data-i18n-title="clients.label" title="Connected clients"><span class="clients-icon" aria-hidden="true"></span><span class="clients-label" data-i18n="clients.label">Clients</span></summary>
-        <div class="clients-panel"><div id="clients-body" role="list"></div><p id="clients-empty" class="clients-empty" data-i18n="clients.empty">Nothing connected yet.</p></div>
-      </details>
       <a href="api.html" class="api-nav-link" title="MCP and HTTP API reference" data-i18n-title="nav.api.title" aria-label="MCP and HTTP API reference" data-i18n-aria="nav.api.title">
         <svg class="api-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M2.25 2.5h3.1c1.13 0 2.05.92 2.05 2.05v8.2c-.5-.62-1.22-.98-2.05-.98h-3.1z"/>
@@ -201,14 +190,16 @@
                    further problem of being the densest possible mark at 22px. -->
               <span class="nethub-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="8" height="8" rx="1.5"/><path d="M4 14.5v1.5M14.5 4H16"/></svg></span>
               <span class="nethub-label" id="ext-head-label" data-i18n="nav.extensions">Extensions</span>
-              <!-- The cyberpunk capacity meter, between title and count: the theme
-                   renames this column 义体容量, so the number is a capacity and gets a
-                   long energy track across the free space before it. The base sheet
-                   hides it; only the cyberpunk theme lays it out — a theme may restyle
-                   a column, never owe it structure. -->
-              <span class="ext-capacity-track" id="ext-capacity-track" aria-hidden="true">
-                <span class="ext-capacity-fill"></span>
-              </span>
+            </button>
+            <!-- Cyberpunk capacity gauge between filter and count; base sheet hides
+                 it, see .ext-head-tail for the pinning. -->
+            <span class="ext-capacity-track" id="ext-capacity-track" aria-hidden="true">
+              <span class="ext-capacity-fill"></span>
+            </span>
+            </button>
+            <!-- Count + caret live outside the trigger, in a tail group pinned right:
+                 see .ext-head-tail in workspace.css for why. -->
+            <span class="ext-head-tail" id="ext-head-tail" role="button" tabindex="0" aria-label="Extensions" data-i18n-aria="nav.extensions">
               <!-- The count rides the header, the way the archive's does. It
                    belongs HERE rather than on a line of its own above the cards:
                    a separate readout said "Extensions:" directly under a header
@@ -221,7 +212,7 @@
                    the state an author needs to see before creating the first one. -->
               <span class="ext-count-badge" id="ext-count">0</span>
               <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
-            </button>
+            </span>
             <div class="ext-head-actions" id="ext-head-actions" onclick="event.stopPropagation()">
               <!-- FLAT keys on the header bar, right-aligned as ONE group.
                    There is no "enter selection mode" here: every extension card is
@@ -473,6 +464,16 @@
         <span class="archive-tick-count is-empty" id="dock-toggle-count">0</span>
       </div>
       <div class="sessdock-actions" id="session-tabbar-actions"></div>
+      <!-- Who is connected to this instance (MCP clients and Web UI tabs).
+           Moved to the far-right end of the bottom dock bar: icon only (no text
+           label), opens an upward-popping list whose width hugs the content. -->
+      <details class="clients-menu" id="clients-menu">
+        <summary class="clients-btn" data-i18n-title="clients.label" title="Connected clients">
+          <span class="clients-icon" aria-hidden="true"></span>
+          <span class="clients-label" data-i18n="clients.label" style="display:none">Clients</span>
+        </summary>
+        <div class="clients-panel"><div id="clients-body" role="list"></div><p id="clients-empty" class="clients-empty" data-i18n="clients.empty">Nothing connected yet.</p></div>
+      </details>
     </div>
   </div>
 

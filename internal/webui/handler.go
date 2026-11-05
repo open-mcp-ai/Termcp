@@ -24,25 +24,33 @@ func embeddedStaticServer() http.Handler {
 	return noCacheForEmbeddedAssets(markdownContentType(http.FileServer(http.FS(Assets()))))
 }
 
-// noCacheForEmbeddedAssets marks the embedded UI assets no-cache. Embedded files
-// carry no modification time, so http.FileServer sends no Last-Modified and no
-// ETag — a response with neither a validator nor a freshness directive leaves
-// the browser heuristically caching a stylesheet from a PREVIOUS binary, which
-// then paints the new markup with old rules until a hard refresh. The embed
-// lives in memory and is cheap to resend, so every load simply refetches.
+// noCacheForEmbeddedAssets marks the embedded UI assets no-cache, and answers
+// conditional requests with a strong ETag (issue #264). Embedded files carry no
+// modification time, so http.FileServer sends no Last-Modified and no ETag — a
+// response with neither a validator nor a freshness directive leaves the browser
+// heuristically caching a stylesheet from a PREVIOUS binary, which then paints
+// the new markup with old rules until a hard refresh.
+//
+// The ETag closes both ends of that: no-cache plus a validator is the standard
+// "revalidate" contract — the browser rechecks every load, and an unchanged
+// asset answers 304 without resending the body. Over a remote link that turns a
+// full ~1.1 MB reload into one short round trip per file.
 func noCacheForEmbeddedAssets(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cacheControl := "no-cache"
 		if strings.HasPrefix(r.URL.Path, "/themes/") {
 			// Theme imports must refresh even when an editor saves twice in one
-			// second: Last-Modified cannot distinguish those disk versions.
-			cacheControl = "no-store"
+			// second: Last-Modified cannot distinguish those disk versions, and
+			// neither can a content hash. The file stays no-store and every
+			// conditional header is stripped before the FileServer sees it.
+			w.Header().Set("Cache-Control", "no-store")
 			r = r.Clone(r.Context())
 			r.Header.Del("If-Modified-Since")
 			r.Header.Del("If-None-Match")
+			next.ServeHTTP(w, r)
+			return
 		}
-		w.Header().Set("Cache-Control", cacheControl)
-		next.ServeHTTP(w, r)
+		w.Header().Set("Cache-Control", "no-cache")
+		serveWithETag(w, r, next)
 	})
 }
 

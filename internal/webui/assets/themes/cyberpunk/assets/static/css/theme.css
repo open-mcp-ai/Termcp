@@ -335,23 +335,37 @@
 /* Cyberware capacity: the LONG HUD bar on the extensions header.
  *
  * The theme renames this column 义体容量 (nav.extensions), so the number against it is
- * a capacity and gets a segmented energy track behind it. The bar fills the header's
- * free space — between the title and the count — which is why it is `flex: 1 1 auto`
- * here: a short bar floating in a wide header reads as decoration, while a track that
- * spans the row reads as the gauge the number is reporting from.
+ * a capacity and gets a segmented energy track behind it. The track is a child of the
+ * header BAR (not of the fold trigger), so it sits between the filter box and the
+ * count: `flex: 1 1 auto` makes it span that free space, because a short bar floating
+ * in a wide header reads as decoration while a track spanning the row reads as the
+ * gauge the number is reporting from. Inside the trigger it could not do that — it
+ * landed left of the filter box, i.e. on the wrong side of the title's own controls.
  *
  * The base sheet hides the track; this is the only sheet that lays it out. Same rule
  * as everywhere else in this theme: restyle a column, never owe it structure. */
+.ext-head-bar .ext-capacity-track,
 .ext-capacity-track {
   display: block;
+  /* A LONG track again: it spans every pixel between the title and the count.
+     The filter box that once stranded it mid-bar now lives right of the divider
+     inside the action cluster, so the gauge is free to stretch without pushing
+     anything around — and a track that spans the row reads as the gauge the
+     number is reporting from, which is the whole point of the shape. It ends 4px
+     before the count: [======gauge======] 8/∞ is one readout. */
   flex: 1 1 auto; height: 9px; min-width: 80px;
-  margin: 0 10px 0 6px;
+  margin: 0 4px 0 6px;
   background: rgba(0, 0, 0, .55);
   border: 1px solid var(--accent-border);
   box-shadow: inset 0 0 6px rgba(0, 0, 0, .8), 0 0 4px var(--accent-surface);
   position: relative; overflow: hidden;
 }
-.ext-capacity-fill {
+/* The stretching gauge consumes the row's slack itself, so the tail gives its own
+   auto margin up here: two pushes would split the slack and float the count away
+   from the gauge's end. In the themes without a gauge the tail keeps its push
+   (see the base sheet). */
+.ext-head-bar .ext-head-tail { margin-left: 0; }
+.ext-capacity-track .ext-capacity-fill {
   display: block; height: 100%;
   /* Segmented, the way a capacity gauge is drawn: solid bars with gaps, not a smooth
      fill. The pattern IS the look. */

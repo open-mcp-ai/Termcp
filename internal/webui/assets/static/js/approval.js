@@ -101,9 +101,16 @@ function applyApprovalCounts() {
     var n = (sid && counts[sid]) || 0;
     var badge = tab.querySelector('.session-tab-review');
     if (!badge) return;
-    badge.hidden = !n;
-    badge.textContent = String(n);
-    tab.classList.toggle('has-review', !!n);
+    /* Guarded writes: this runs after every refresh of the tab strip (and the
+       refresh itself runs several times per arrangement click), so an
+       unconditional assignment churns hidden/textContent on every pass — a
+       replace-and-reinsert the strip renders as a flicker even with zero new
+       output. */
+    var hide = !n;
+    if (badge.hidden !== hide) badge.hidden = hide;
+    var text = String(n);
+    if (badge.textContent !== text) badge.textContent = text;
+    if (tab.classList.contains('has-review') !== !!n) tab.classList.toggle('has-review', !!n);
   });
   document.querySelectorAll('.conn-tile.sess-tile').forEach(function (tile) {
     var n = counts[tile.getAttribute('data-sid')] || 0;

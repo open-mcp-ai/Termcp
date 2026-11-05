@@ -351,12 +351,28 @@ function renderConnGrid(connections, bannerMsg) {
   var grid = document.getElementById('conn-grid');
   if (!grid) return;
   setLoadBanner(document.getElementById('conn-load-banner'), bannerMsg);
+  /* The filter box exists once the column has something to filter. It is built
+     here (not in index.html) because both list columns and the archive share one
+     builder — see ensureGridSearch — and the archive could not afford markup. */
+  if ((connections || []).length) {
+    ensureGridSearch(grid, '_connFilter', 'hosts.search.placeholder', t('hosts.search.placeholder'), function () {
+      renderConnGrid(window._lastConnections || [], connBannerText());
+    });
+  }
+  var connNeedle = gridSearchNeedle(grid);
   grid.innerHTML = '';
   renderNodeRail(connections);
   (connections || []).sort(function(a, b) {
     if (a.kind === 'internal') return -1;
     if (b.kind === 'internal') return 1;
     return (a.name || '').localeCompare(b.name || '');
+  }).filter(function (c) {
+    /* Matching every fact the card shows: a filter that only read the name would
+       answer "everything" exactly when two hosts are easiest to confuse — the
+       same profile on a different port, or one machine under two names. */
+    if (!connNeedle) return true;
+    return [c.name, nodeProtocol(c), nodeAddress(c), c.kind]
+      .some(function (v) { return v && String(v).toLowerCase().indexOf(connNeedle) >= 0; });
   }).forEach(function (c) {
     var tile = document.createElement('div');
     var info = nodeSessionInfo(c.name);

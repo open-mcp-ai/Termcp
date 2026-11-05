@@ -724,9 +724,10 @@
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
 
-  /* Connected clients (clients.js): a header dropdown like the theme switch
-     beside it. The panel is bounded and scrolls, because the number of tabs and
-     agents attached to one instance is not something the page controls. */
+  /* Connected clients (clients.js). The trigger lives at the far-right end of
+     the bottom dock bar, so the panel opens UPWARD (a menu anchored below the
+     viewport-bottom bar would open off-screen) and hugs its content: rows are
+     as wide as the longest line, capped, never a fixed slab. */
   .clients-menu { position: relative; display: inline-flex; }
   .clients-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; font-size: 0.8rem; list-style: none; }
   .clients-btn::-webkit-details-marker { display: none; }
@@ -735,7 +736,14 @@
   .clients-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .clients-icon { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-surface); }
   .clients-label { white-space: nowrap; }
-  .clients-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--z-dropdown); width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-card-hover); }
+  /* Width: fit the CONTENT, with bounds. `max-content` sizes the panel to its
+     widest line; `min-width` keeps the empty hint from collapsing to a sliver;
+     `max-width` caps it when a client name or user-agent runs long (long lines
+     wrap inside the rows, which is what `word-break` on the text classes is
+     there for). The old rule was a fixed `width: min(340px, …)`: a panel that
+     is always 340px wide no matter what it holds — that is the slab the
+     trigger was moved out of the header for. */
+  .clients-panel { position: absolute; bottom: calc(100% + 6px); top: auto; right: 0; z-index: var(--z-dropdown); width: max-content; min-width: 150px; max-width: min(300px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-card-hover); }
   .clients-row { display: flex; gap: 8px; padding: 7px 8px; border-radius: 7px; }
   .clients-row + .clients-row { border-top: 1px solid var(--border-subtle); }
   .clients-badge { flex-shrink: 0; align-self: flex-start; padding: 1px 5px; border-radius: 4px; font-size: 0.62rem; font-weight: 700; letter-spacing: .04em; }
