@@ -30,12 +30,13 @@
 
 ### 1. Token 生命周期
 
-- 同一 principal 的普通签发拒绝已有有效 Token 的情形；
-- 新增原子 rotate：新 Token 持久化成功时旧 Token 同时失效；
-- 旧 Token 立即停止认证，并取消其活动请求和后台工作；
-- 增加 `expires_at`、`last_used_at`、撤销状态或等价审计记录；
-- 重启后保持有效、过期和撤销状态；
-- UI 显示活动凭据状态、最近使用时间，并提供轮换与撤销。
+- [x] 同一 principal 的普通签发拒绝已有有效 Token 的情形；
+- [x] 新增原子 rotate：新 Token 持久化成功时旧 Token 同时失效；
+- [x] 旧 Token 立即停止认证，并取消其活动请求和后台工作；
+- [x] 撤销记录保留 `revoked_at` / `replaced_by` 历史，并支持按 principal 清空历史；
+- [x] 重启后保持有效和撤销状态；
+- [x] UI 显示当前 Token、轮换、撤销和可清理的历史记录；
+- [x] API 支持可选 `expires_at`，成功 MCP 准入更新 `last_used_at`；两者显示在权限页当前/历史 Token 元数据中。
 
 详细语义由 [#253](https://github.com/open-mcp-ai/Termcp/issues/253) 继续跟踪。
 

@@ -238,6 +238,26 @@ func TestPermissionPageHasMobileGroupAccordionAndDraftControls(t *testing.T) {
 	}
 }
 
+func TestPermissionFamiliesStartCollapsed(t *testing.T) {
+	for _, want := range []string{
+		`openFamilies:new Set()`,
+		`section.open=permissionUI.openFamilies.has(family)`,
+		`section.open=permissionUI.query||permissionUI.filter!=='all'||permissionUI.openFamilies.has(family)`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permission families do not start collapsed: missing %q", want)
+		}
+	}
+	for _, gone := range []string{
+		`openFamilies:new Set(['session','shell','file'])`,
+		`section.open=['session','shell','file'].includes(family)`,
+	} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("permission families still open by default: %q", gone)
+		}
+	}
+}
+
 func TestPermissionPageExplainsMCPAccessSwitches(t *testing.T) {
 	for _, want := range []string{
 		`<span data-text="instanceAccess">MCP 访问</span>`,
@@ -275,7 +295,7 @@ func TestPermissionPageProvidesCompleteAgentManagement(t *testing.T) {
 		`scopeHead.after(summary)`,
 		`effectiveAccess:'总体预览'`,
 		`unassignedHint:'未绑定有效权限组，凭据当前不可用。'`,
-		`tokenHint:'每个客户端使用独立 Token，可单独撤销。'`,
+		`tokenHint:'每个 Agent 只有一个当前 Token；轮换后旧 Token 立即失效并进入历史。'`,
 		`applyGroupChange:'修改'`,
 	} {
 		if !strings.Contains(permissionsHTML, want) {
@@ -293,6 +313,30 @@ func TestPermissionPageProvidesCompleteAgentManagement(t *testing.T) {
 	}
 	if !strings.Contains(permissionsHTML, `subjectsOpen:false`) || strings.Contains(permissionsHTML, `permissionUI.subjectsOpen=true`) {
 		t.Error("Agent management must start collapsed")
+	}
+}
+
+func TestPermissionPageUsesOneCurrentTokenWithHistory(t *testing.T) {
+	for _, want := range []string{
+		`currentToken.id='current-token'`,
+		`rotateToken.id='rotate-token'`,
+		`revokeToken.id='revoke-token'`,
+		`clearHistory.id='clear-token-history'`,
+		`currentTokenTitle.dataset.text='currentToken'`,
+		`historyTitle.dataset.text='tokenHistory'`,
+		`tokenHeaders[0].dataset.text='tokenID'`,
+		`tokenHeaders[2].dataset.text='revokedAt'`,
+		`token.active`,
+		`current.expires_at`,
+		`current.last_used_at`,
+		`token.replaced_by`,
+		`/auth/tokens/'+encodeURIComponent(current.id)+'/rotate'`,
+		`/auth/tokens/history?principal_id=`,
+		`tokenLabelField.hidden=true`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions token lifecycle UI lacks %q", want)
+		}
 	}
 }
 

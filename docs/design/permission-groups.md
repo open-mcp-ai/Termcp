@@ -10,7 +10,7 @@
 
 - 主体保留 ID、Name、Enabled、Revision、CreatedAt 和 GroupID。
 - 权限组保存 ID、名称、说明、启停、Revision、V2 动作策略、待复核操作及模板来源版本。
-- token 仍指向 PrincipalID，只保存摘要。组名、组 ID 和模板都不会变成人端 RoleAdmin。
+- token 仍指向 PrincipalID，只保存摘要。每个 PrincipalID 同时只有一个有效 token；轮换原子撤销旧 token，历史记录可清理但不能重新启用。组名、组 ID 和模板都不会变成人端 RoleAdmin。
 - 一个主体当前绑定一个组；GroupID 为空时使用实例缺省组。没有逐 Agent 动作覆盖或多组继承。
 - 组不存在/被停用时凭据拒绝认证。删除选择“拒绝访问”会绑定虚拟 system-deny，不能因缺省组较宽而自动恢复权限。页面的“待分配主体”可将其重新绑定。
 
@@ -52,11 +52,11 @@ version 3 曾同时表示 rebase-前词表和 dev 的合并词表，因此迁移
 | POST /auth/groups/{id}/delete-preview | 返回组 revision、访问数据 plan_revision、成员 ID 和影响数量。 |
 | DELETE /auth/groups/{id} | 校验预览版本；有成员时明确 move/deny；删除缺省时必须提供新缺省组。 |
 | GET /auth/group-presets | 五个版本化角色模板及明确动作、条件。 |
-| GET/POST /auth/principals | 列出 Agent（含凭据/活动请求/后台工作计数），或创建并绑定到有效组；默认不签发 token。 |
+| GET/POST /auth/principals | 列出 Agent（含 Token/活动请求/后台工作计数），或创建并绑定到有效组；默认不签发 token。 |
 | PATCH /auth/principals/{id} | 带 Agent revision 更新 enabled；不接收 Agent 直接策略。 |
 | PUT /auth/principals/{id}/group | 带 Agent revision 修改权限组，空字符串表示跟随缺省。 |
 | POST /auth/principals/{id}/delete-preview | 返回 Agent revision、AccessRevision 及凭据、活动请求、后台工作影响。 |
-| DELETE /auth/principals/{id} | 校验 Agent 和 preview revision；原子删除 Agent 及其全部 token，取消活动请求与后台工作。 |
+| DELETE /auth/principals/{id} | 校验 Agent 和 preview revision；原子删除 Agent 及其当前/历史 token，取消活动请求与后台工作。 |
 | GET/PUT /auth/default-group | 使用 AccessRevision 修改缺省引用，影响未显式绑定主体。 |
 
 改变 Agent、凭据、组或缺省引用会递增 AccessRevision，使旧删除预览失效。组策略更新会使相关 Agent 修订变化，防止陈旧的兼容客户端覆盖新策略。

@@ -357,6 +357,20 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 }
 @media(prefers-reduced-motion:reduce){.auth-permissions *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 </style>
+<style>
+.current-token{margin:16px 0 22px;padding:14px 16px;border:1px solid var(--line);border-radius:7px;background:var(--canvas)}
+.current-token-head,.token-history-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.current-token-head h3,.token-history-head h3{margin:0}
+.current-token-copy{min-width:0}
+.current-token-copy p{margin:4px 0 0;font-family:var(--font-mono,ui-monospace,monospace);font-size:12px;overflow-wrap:anywhere}
+.token-history-head{align-items:center;margin:22px 0 8px}
+.token-history-head button{min-height:32px;padding:4px 10px}
+#token-form{max-width:560px}
+#token-form #token-principal-field{max-width:none;flex:1}
+.token-table code{font-family:var(--font-mono,ui-monospace,monospace);font-size:12px}
+.token-table th:nth-child(2),.token-table td:nth-child(2){width:190px}
+@media(max-width:620px){.current-token-head{flex-direction:column}.current-token-head .group-actions{width:100%}.current-token-head .group-actions button{flex:1}.token-history-head{align-items:flex-start;flex-direction:column}}
+</style>
 </head>
 <body class="auth-page auth-permissions">
 <header><a class="brand" href="/">Termcp</a><nav aria-label="Breadcrumb"><a class="back-link" href="/"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5"/><path d="M6 8h7"/></svg><span data-text="workspace">工作区</span></a></nav><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div></header>
@@ -391,10 +405,16 @@ Object.assign(copy.en,{'theme.label':'Theme','theme.loading':'Loading themes…'
 Object.assign(copy.zh,{'theme.label':'主题','theme.loading':'正在加载主题…','theme.discoverFailed':'无法加载主题，请重试','theme.loadFailed':'无法应用主题，请重试','theme.light':'浅色','theme.dark':'深色','theme.auto':'跟随系统','theme.cyberpunk':'赛博朋克','theme.matrix':'矩阵'});
 Object.assign(copy.zh,{mcpAccessHelpLabel:'MCP 访问说明',mcpAccessHelp:'管理员 MCP 允许管理员凭据访问 MCP；Agent MCP 允许 Agent 凭据访问 MCP。关闭后，对应凭据的 MCP 入口立即失效。',mobileGroups:'权限组管理',mobileSubjects:'Agent 管理',mobileSubjectSummary:'%n 个 Agent · %t 个待分配',mobileSubjectEmpty:'暂无 Agent。',searchAgents:'搜索 Agent',newAgentButton:'新增',agentDisplayName:'Agent 名称',permissionGroup:'权限组',createAgentAction:'创建 Agent',allAgents:'全部',enabledAgents:'已启用',disabledAgents:'已停用',unassignedAgents:'待分配',agentCreated:'Agent 已创建。',agentDeleted:'Agent 已删除。',agentGroupChanged:'Agent 的权限组已修改。',applyGroupChange:'修改',deleteAgent:'删除 Agent',deleteAgentHint:'将删除 Agent 及其全部 Token，并中断进行中的请求和工作。',noAgentMatches:'没有匹配的 Agent。',noEnabledGroup:'没有可用的权限组，请先创建或启用权限组。',missingGroup:'已删除的权限组',credentialSummary:'%n 个 Token',activeSummary:'%n 个活动请求',workSummary:'%n 项后台工作',permissionDetails:'权限设置',membersAndCredentials:'Agent 与凭据',tokens:'Agent 与凭据',members:'Agents',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',memberCount:'个 Agent',memberDisable:'停用 Agent',memberEnable:'启用 Agent',noMembers:'此权限组尚无 Agent。添加后才能签发凭据。',unassigned:'待分配 Agent',unassignedHint:'未绑定有效权限组，凭据当前不可用。',replacementGroup:'权限组',move:'修改',moveMembers:'修改这些 Agent 的权限组',batchStart:'批量设置',batchDone:'完成选择',batchSelectAll:'全选所有权限',batchSelected:'已选择 %n 项',batchHidden:'其中 %n 项被筛选隐藏',batchEmpty:'选择需要批量设置的权限',batchApply:'设为%n',unsavedCount:'已修改 %n 项权限',discardChanges:'放弃更改',discarded:'已放弃未保存的权限更改。',filterDeny:'禁止'});
 Object.assign(copy.en,{mcpAccessHelpLabel:'MCP access help',mcpAccessHelp:'Admin MCP permits administrator-issued credentials to access MCP. Agent MCP permits Agent credentials to access MCP. Turning a switch off immediately disables that credential path.',mobileGroups:'Permission groups',mobileSubjects:'Agent management',mobileSubjectSummary:'%n Agents · %t unassigned',mobileSubjectEmpty:'No Agents.',searchAgents:'Search Agents',newAgentButton:'New',agentDisplayName:'Agent name',permissionGroup:'Permission group',createAgentAction:'Create Agent',allAgents:'All',enabledAgents:'Enabled',disabledAgents:'Disabled',unassignedAgents:'Unassigned',agentCreated:'Agent created.',agentDeleted:'Agent deleted.',agentGroupChanged:'Agent permission group changed.',applyGroupChange:'Change',deleteAgent:'Delete Agent',deleteAgentHint:'Deletes the Agent and all of its Tokens, and cancels active requests and work.',noAgentMatches:'No Agents match this search.',noEnabledGroup:'No permission group is available. Create or enable one first.',missingGroup:'Deleted permission group',credentialSummary:'%n tokens',activeSummary:'%n active requests',workSummary:'%n background operations',permissionDetails:'Permissions',membersAndCredentials:'Agents & credentials',tokens:'Agents & credentials',members:'Agents',memberName:'Agent name',addMember:'Add Agent',credentialPrincipal:'Agent',memberCount:'Agents',memberDisable:'Disable Agent',memberEnable:'Enable Agent',noMembers:'No Agents in this group. Add one before issuing credentials.',unassigned:'Unassigned Agents',unassignedHint:'No active permission group; credentials are unavailable.',replacementGroup:'Permission group',move:'Change',moveMembers:'Change these Agents to another permission group',batchStart:'Batch edit',batchDone:'Finish selection',batchSelectAll:'Select all permissions',batchSelected:'%n selected',batchHidden:'%n hidden by filters',batchEmpty:'Select permissions to update',batchApply:'Set %n',unsavedCount:'%n permission changes',discardChanges:'Discard changes',discarded:'Unsaved permission changes discarded.',filterDeny:'Deny'});
+Object.assign(copy.zh,{intro:'按权限组配置 Agent 能力，身份与 Token 独立保存。',emptyHint:'从左侧选择权限组，配置动作与主机范围，再管理 Agent 与 Token。',credentialCount:'个 Token',tokens:'MCP Token',credentials:'MCP Token',tokenHint:'每个 Agent 只有一个当前 Token；轮换后旧 Token 立即失效并进入历史。',currentToken:'当前 Token',noCurrentToken:'此 Agent 尚未签发 Token。',rotateToken:'轮换 Token',rotateConfirm:'轮换会立即使当前 Token 失效并生成新 Token。继续？',clearTokenHistory:'清空历史',clearTokenHistoryConfirm:'清空当前 Agent 的全部历史 Token 记录？',tokenHistory:'Token 历史',tokenHistoryEmpty:'暂无历史 Token。',tokenID:'Token ID',revokedAt:'失效日期',tokenActive:'当前使用',tokenRevoked:'已失效',issueToken:'签发 Token',tokenSaved:'Token 已签发，请立即保存配置。',tokenRotated:'Token 已轮换，旧 Token 已失效并进入历史。',tokenRevokedNotice:'Token 已撤销并移入历史。',tokenHistoryCleared:'Token 历史已清空。',activeTokenExists:'已有当前 Token，请轮换',noTokens:'此 Agent 暂无 Token。',revokeConfirm:'撤销当前 Token 并断开使用它的连接？',created:'权限组已创建，未添加 Agent 或签发 Token。',cloneHint:'复制当前策略，不复制 Agent 或 Token。',noMembers:'此权限组尚无 Agent。添加后才能签发 Token。',adminHint:'管理员身份保留管理权限；此处管理管理员自己的 MCP Token。',saveBeforeToken:'请先保存当前权限，再签发 Token。'});
+Object.assign(copy.en,{intro:'Configure Agent capabilities by permission group. Identity and Tokens are stored independently.',emptyHint:'Choose a group to configure actions and host scope, then manage Agents and Tokens.',credentialCount:'Tokens',tokens:'MCP Token',credentials:'MCP Token',tokenHint:'Each Agent has one current Token. Rotation invalidates the old Token and moves it to history.',currentToken:'Current Token',noCurrentToken:'This Agent has no Token yet.',rotateToken:'Rotate Token',rotateConfirm:'Rotation immediately invalidates the current Token and creates a new one. Continue?',clearTokenHistory:'Clear history',clearTokenHistoryConfirm:'Clear every historical Token for this Agent?',tokenHistory:'Token history',tokenHistoryEmpty:'No historical Tokens.',tokenID:'Token ID',revokedAt:'Invalidated',tokenActive:'Current',tokenRevoked:'Revoked',issueToken:'Issue Token',tokenSaved:'Token issued. Save the configuration now.',tokenRotated:'Token rotated. The previous Token is invalid and now in history.',tokenRevokedNotice:'Token revoked and moved to history.',tokenHistoryCleared:'Token history cleared.',activeTokenExists:'Current Token exists. Rotate it instead.',noTokens:'This Agent has no Token.',revokeConfirm:'Revoke the current Token and disconnect its connections?',created:'Group created with no Agents or Tokens.',cloneHint:'Copies the policy without Agents or Tokens.',noMembers:'No Agents in this group. Add one before issuing a Token.',adminHint:'Admin retains management permissions. This view manages the Admin MCP Token.',saveBeforeToken:'Save the current permissions before issuing a Token.'});
+Object.assign(copy.zh,{currentTokenSummary:'%n 个当前 Token',historyTokenSummary:'%n 个历史 Token'});
+Object.assign(copy.en,{currentTokenSummary:'%n current Tokens',historyTokenSummary:'%n historical Tokens'});
+Object.assign(copy.zh,{neverExpires:'永久有效',expiresAt:'有效期至 %s',lastUsedAt:'最近使用 %s',neverUsed:'尚未使用',tokenExpired:'已过期'});
+Object.assign(copy.en,{neverExpires:'Never expires',expiresAt:'Expires %s',lastUsedAt:'Last used %s',neverUsed:'Never used',tokenExpired:'Expired'});
 const t=k=>copy[lang][k]||k;
 function el(tag,text){const n=document.createElement(tag);if(text)n.textContent=text;return n;}
 function feedback(text,tone='info',target){$('feedback').textContent=text;$('feedback').dataset.tone=tone;if(target)$(target).textContent=text;}
-function errorText(text){if(lang!=='zh')return text;return {'a valid Agent name is required':'请输入有效的 Agent 名称，名称前后不能有空格。','token label must contain 1–128 bytes without control characters':'请输入有效的客户端名称，长度不超过 128 字节且不含控制字符。','Agent changed; reload before saving':'此 Agent 已被其他页面修改，请重新加载后再保存。','Agent not found':'Agent 不存在或已经被删除。','permission group is missing or disabled':'权限组不存在或已停用。','Agent deletion inventory changed; preview again':'Agent 或凭据状态已变化，请重新预览后再删除。','permissions changed; reload before saving':'实例访问开关已被其他页面修改，请重新加载后再保存。','could not save credentials; reload to check the result':'保存失败，请重新加载确认结果后重试。','profile changes and extension management require all hosts':'修改主机配置和管理扩展需要选择全部主机范围。'}[text]||text;}
+function errorText(text){if(lang!=='zh')return text;return {'a valid Agent name is required':'请输入有效的 Agent 名称，名称前后不能有空格。','token label must contain 1–128 bytes without control characters':'请输入有效的 Token 名称，长度不超过 128 字节且不含控制字符。','principal already has an active MCP token; rotate it instead':'此 Agent 已有当前 Token，请使用轮换。','principal has no active MCP token':'此 Agent 没有可轮换的当前 Token。','active token not found':'当前 Token 不存在或已经失效。','MCP token history limit reached; clear old token history':'Token 数量已达上限，请先清空历史记录。','Agent changed; reload before saving':'此 Agent 已被其他页面修改，请重新加载后再保存。','Agent not found':'Agent 不存在或已经被删除。','permission group is missing or disabled':'权限组不存在或已停用。','Agent deletion inventory changed; preview again':'Agent 或 Token 状态已变化，请重新预览后再删除。','permissions changed; reload before saving':'实例访问开关已被其他页面修改，请重新加载后再保存。','could not save credentials; reload to check the result':'保存失败，请重新加载确认结果后重试。','profile changes and extension management require all hosts':'修改主机配置和管理扩展需要选择全部主机范围。'}[text]||text;}
 function fail(error,target){feedback(error instanceof TypeError?t('network'):errorText(error.message),'error',target);}
 async function request(path,options={}){const response=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Termcp-CSRF':state?.csrf||'',...options.headers}});if(response.status===401){location.assign('/login');throw new Error(t('network'));}const data=await response.json();if(!response.ok)throw new Error(data.error||String(response.status));return data;}
 function changed(){return draft&&JSON.stringify(draft)!==original;}
@@ -414,7 +434,7 @@ const actionDescriptions={'session.message':'读取会话消息或状态跨度�
 function operationName(op){if(lang!=='zh')return op.name;if(actionNames[op.id])return actionNames[op.id];const [kind,act]=op.id.split('.');return kind.toUpperCase()+' · '+({open:'建立连接',list:'列出连接',info:'查看连接',close:'关闭连接',read:'读取帧',raw:'发送自定义协议帧（广泛权限）'}[act]||op.name);}
 function setActionEffect(op,effect){if(effect==='deny'||!effect){delete draft.actions[op.id];return;}const previous=draft.actions[op.id];draft.actions[op.id]=previous?Object.assign(previous,{effect}):{effect};}
 function grantAction(op,enabled){setActionEffect(op,enabled?'allow':'deny');}
-function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=['session','shell','file'].includes(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
+function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=permissionUI.openFamilies.has(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
 function renderHosts(){document.querySelectorAll('[name=host-mode]').forEach(n=>n.checked=n.value===draft.host_mode);$('host-count').textContent=draft.host_mode==='selected'?String(draft.hosts.length):'';$('scope-note').textContent=t(draft.host_mode==='all'?'allHint':draft.host_mode==='none'?'noneHint':'selectedHint');$('host-picker').hidden=draft.host_mode!=='selected';const list=$('host-grid');list.replaceChildren();const query=$('host-search').value.toLowerCase();const hosts=[...catalog.hosts,...draft.hosts.filter(id=>!catalog.hosts.some(h=>h.id===id)).map(id=>({id,name:t('missing')+' · '+id.slice(0,8)}))].filter(h=>h.name.toLowerCase().includes(query));hosts.forEach(h=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.value=h.id;input.checked=draft.hosts.includes(h.id);label.append(input,el('span',h.name));input.onchange=()=>{draft.hosts=input.checked?[...draft.hosts,h.id]:draft.hosts.filter(id=>id!==h.id);$('host-count').textContent=String(draft.hosts.length);updateSave();};list.append(label);});if(!hosts.length)list.append(el('p',t('noMatches')));}
 function renderTokens(){const members=new Set(groupMembers().map(p=>p.id));const list=tokens.filter(c=>selected==='admin'?c.principal_id===state.actor.id:members.has(c.principal_id));$('tokens-empty').hidden=list.length>0;$('token-list').replaceChildren();list.forEach(c=>{const row=el('tr'),name=el('td',c.label);const principal=principals.find(p=>p.id===c.principal_id);name.append(el('small',(principal?principal.name+' · ':'')+c.id.slice(0,10)));row.append(name,el('td',new Date(c.created_at).toLocaleDateString(lang)));const cell=el('td'),button=el('button',t('revoke'));button.type='button';button.className='danger';button.onclick=async()=>{if(!confirm(t('revokeConfirm')))return;setBusy(true);try{await request('/auth/tokens/'+encodeURIComponent(c.id),{method:'DELETE'});if(revealed?.credential.id===c.id)clearRevealed();await reload();feedback(t('saved'),'success');}catch(e){fail(e,'token-error');}finally{setBusy(false);}};cell.append(button);row.append(cell);$('token-list').append(row);});}
 async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens')]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;renderList();renderMembers();renderTokens();}
@@ -600,7 +620,7 @@ function permissionAccessLabel(pathName){
 const permissionUI={
   query:'',
   filter:'all',
-  openFamilies:new Set(['session','shell','file']),
+  openFamilies:new Set(),
   installed:false,
   batch:false,
   batchSelected:new Set(),
@@ -922,6 +942,129 @@ function permissionEnsureStructure(){
   permissionDecorateButton('tokens-tab','key');
   permissionDecorateButton('permission-agent-create-toggle','plus');
   permissionDecorateSearch('permission-agent-search','searchAgents');
+
+  const tokenLabel=$('token-label');
+  const tokenLabelField=tokenLabel?.closest('label');
+  if(tokenLabelField)tokenLabelField.hidden=true;
+  if(tokenLabel)tokenLabel.disabled=true;
+  const currentToken=permissionCreate('section','current-token');
+  currentToken.id='current-token';
+  currentToken.hidden=true;
+  const currentTokenHead=permissionCreate('div','current-token-head');
+  const currentTokenCopy=permissionCreate('div','current-token-copy');
+  const currentTokenTitle=permissionCreate('h3','',t('currentToken'));
+  currentTokenTitle.dataset.text='currentToken';
+  const currentTokenMeta=permissionCreate('p','','');
+  currentTokenMeta.id='current-token-meta';
+  currentTokenCopy.append(currentTokenTitle,currentTokenMeta);
+  const currentTokenActions=permissionCreate('div','group-actions');
+  const rotateToken=permissionCreate('button','',t('rotateToken'));
+  rotateToken.id='rotate-token';
+  rotateToken.type='button';
+  rotateToken.dataset.text='rotateToken';
+  const revokeToken=permissionCreate('button','danger',t('revoke'));
+  revokeToken.id='revoke-token';
+  revokeToken.type='button';
+  revokeToken.dataset.text='revoke';
+  currentTokenActions.append(rotateToken,revokeToken);
+  currentTokenHead.append(currentTokenCopy,currentTokenActions);
+  currentToken.append(currentTokenHead);
+  $('token-form').before(currentToken);
+  const historyHead=permissionCreate('div','token-history-head');
+  const historyTitle=permissionCreate('h3','',t('tokenHistory'));
+  historyTitle.dataset.text='tokenHistory';
+  const clearHistory=permissionCreate('button','',t('clearTokenHistory'));
+  clearHistory.id='clear-token-history';
+  clearHistory.type='button';
+  clearHistory.dataset.text='clearTokenHistory';
+  historyHead.append(historyTitle,clearHistory);
+  const tokenTable=$('token-list').closest('table');
+  tokenTable.before(historyHead);
+  const tokenHeaders=tokenTable.querySelectorAll('th');
+  if(tokenHeaders[0])tokenHeaders[0].dataset.text='tokenID';
+  if(tokenHeaders[1])tokenHeaders[1].dataset.text='createdAt';
+  if(tokenHeaders[2])tokenHeaders[2].dataset.text='revokedAt';
+  $('token-principal').onchange=()=>renderTokens();
+  $('token-form').onsubmit=async event=>{
+    event.preventDefault();
+    const principal=$('token-principal').value||(selected==='admin'?state.actor.id:'');
+    if(!principal){
+      feedback(t('noMembers'),'error','token-error');
+      return;
+    }
+    if(tokens.some(token=>token.principal_id===principal&&token.active)){
+      feedback(t('activeTokenExists'),'error','token-error');
+      return;
+    }
+    if(revealed||changed()){
+      feedback(t(revealed?'saveFirst':'saveBeforeToken'),'error','token-error');
+      return;
+    }
+    setBusy(true);
+    $('token-error').textContent='';
+    try{
+      revealed=await request('/auth/tokens',{method:'POST',body:JSON.stringify({principal_id:selected==='admin'?'':principal})});
+      renderConfig();
+      await reload();
+      feedback(t('tokenSaved'),'success');
+    }catch(error){
+      fail(error,'token-error');
+    }finally{
+      setBusy(false);
+      renderTokens();
+    }
+  };
+  rotateToken.onclick=async()=>{
+    const current=tokens.find(token=>token.principal_id===($('token-principal').value||state.actor.id)&&token.active);
+    if(!current||!confirm(t('rotateConfirm')))return;
+    setBusy(true);
+    $('token-error').textContent='';
+    try{
+      revealed=await request('/auth/tokens/'+encodeURIComponent(current.id)+'/rotate',{method:'POST',body:'{}'});
+      renderConfig();
+      await reload();
+      feedback(t('tokenRotated'),'success');
+    }catch(error){
+      fail(error,'token-error');
+    }finally{
+      setBusy(false);
+      renderTokens();
+    }
+  };
+  revokeToken.onclick=async()=>{
+    const current=tokens.find(token=>token.principal_id===($('token-principal').value||state.actor.id)&&token.active);
+    if(!current||!confirm(t('revokeConfirm')))return;
+    setBusy(true);
+    $('token-error').textContent='';
+    try{
+      await request('/auth/tokens/'+encodeURIComponent(current.id),{method:'DELETE'});
+      if(revealed?.credential?.id===current.id)clearRevealed();
+      await reload();
+      feedback(t('tokenRevokedNotice'),'success');
+    }catch(error){
+      fail(error,'token-error');
+    }finally{
+      setBusy(false);
+      renderTokens();
+    }
+  };
+  clearHistory.onclick=async()=>{
+    const principal=$('token-principal').value||(selected==='admin'?state.actor.id:'');
+    const history=tokens.filter(token=>token.principal_id===principal&&!token.active);
+    if(!principal||!history.length||!confirm(t('clearTokenHistoryConfirm')))return;
+    setBusy(true);
+    $('token-error').textContent='';
+    try{
+      await request('/auth/tokens/history?principal_id='+encodeURIComponent(principal),{method:'DELETE'});
+      await reload();
+      feedback(t('tokenHistoryCleared'),'success');
+    }catch(error){
+      fail(error,'token-error');
+    }finally{
+      setBusy(false);
+      renderTokens();
+    }
+  };
 
   const sidebarHead=document.querySelector('.workspace>aside .sidebar-head');
   const newGroup=$('new-agent');
@@ -1493,10 +1636,13 @@ function permissionRenderSubjects(){
     const row=permissionCreate('div','permission-mobile-subject-row');
     const copyNode=permissionCreate('div','permission-mobile-subject-copy');
     copyNode.append(permissionCreate('strong','',principal.name));
-    const tokenCount=Number(principal.credential_count??tokens.filter(token=>token.principal_id===principal.id).length);
+    const principalTokens=tokens.filter(token=>token.principal_id===principal.id);
+    const activeTokenCount=Number(principal.active_credential_count??principalTokens.filter(token=>token.active).length);
+    const historyTokenCount=Math.max(0,Number(principal.credential_count??principalTokens.length)-activeTokenCount);
     const activeCount=Number(principal.active_requests||0);
     const workCount=Number(principal.active_work||0);
-    const details=[groupName(principal),t(principal.enabled?'enabled':'disabled'),permissionFormat('credentialSummary',tokenCount)];
+    const details=[groupName(principal),t(principal.enabled?'enabled':'disabled'),permissionFormat('currentTokenSummary',activeTokenCount)];
+    if(historyTokenCount)details.push(permissionFormat('historyTokenSummary',historyTokenCount));
     if(activeCount)details.push(permissionFormat('activeSummary',activeCount));
     if(workCount)details.push(permissionFormat('workSummary',workCount));
     copyNode.append(permissionCreate('small','',details.join(' · ')));
@@ -1639,6 +1785,59 @@ function permissionSyncStats(){
   permissionUpdateBatchControls();
 }
 
+renderTokens=function renderTokensEnhanced(){
+  const members=groupMembers();
+  const picker=$('token-principal');
+  if(selected!=='admin'&&picker.value&&!members.some(principal=>principal.id===picker.value))picker.value='';
+  if(selected!=='admin'&&!picker.value&&members[0])picker.value=members[0].id;
+  const principal=selected==='admin'?state.actor.id:picker.value;
+  const current=tokens.find(token=>token.principal_id===principal&&token.active);
+  const history=tokens.filter(token=>token.principal_id===principal&&!token.active).sort((left,right)=>String(right.created_at).localeCompare(String(left.created_at)));
+  const issue=$('token-form').querySelector('button[type=submit]');
+  if(issue){
+    issue.disabled=busy||!principal||!!current;
+    issue.dataset.text=current?'activeTokenExists':'issueToken';
+    issue.textContent=t(issue.dataset.text);
+  }
+  picker.disabled=busy||(!members.length&&selected!=='admin');
+  const currentSection=$('current-token');
+  currentSection.hidden=!principal;
+  const meta=$('current-token-meta');
+  const principalName=selected==='admin'?t('admin'):principals.find(item=>item.id===principal)?.name||principal;
+  meta.textContent=current
+    ?[
+      principalName,
+      current.id,
+      t('createdAt')+' '+new Date(current.created_at).toLocaleString(lang),
+      current.expires_at?t('expiresAt').replace('%s',new Date(current.expires_at).toLocaleString(lang)):t('neverExpires'),
+      current.last_used_at?t('lastUsedAt').replace('%s',new Date(current.last_used_at).toLocaleString(lang)):t('neverUsed')
+    ].join(' · ')
+    :t('noCurrentToken');
+  $('rotate-token').hidden=!current;
+  $('revoke-token').hidden=!current;
+  $('clear-token-history').disabled=busy||!history.length;
+  const table=$('token-list').closest('table');
+  table.hidden=!history.length;
+  $('token-list').replaceChildren();
+  history.forEach(token=>{
+    const row=el('tr');
+    const id=el('td');
+    id.append(el('code',token.id));
+    if(token.replaced_by)id.append(el('small','→ '+token.replaced_by));
+    const invalidated=token.revoked_at
+      ?new Date(token.revoked_at).toLocaleString(lang)
+      :token.expires_at
+        ?t('tokenExpired')+' · '+new Date(token.expires_at).toLocaleString(lang)
+        :t('tokenRevoked');
+    row.append(id,el('td','',new Date(token.created_at).toLocaleString(lang)),el('td','',invalidated));
+    $('token-list').append(row);
+  });
+  const empty=$('tokens-empty');
+  empty.hidden=!!current||history.length>0;
+  empty.textContent=principal?t('noTokens'):t('noMembers');
+  if(!history.length&&principal)empty.textContent=current?t('tokenHistoryEmpty'):t('noTokens');
+};
+
 permissionEnsureStructure();
 if(permissionUI.installed){
   const originalUpdateSave=updateSave;
@@ -1655,6 +1854,7 @@ if(permissionUI.installed){
     renderHosts();
   };
   renderList();
+  renderTokens();
   permissionLocalizeChrome();
 }
 </script>{{template "theme-script" .}}</body></html>

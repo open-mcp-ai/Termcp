@@ -38,7 +38,7 @@ func (m *Managed) withBackgroundWork(ctx context.Context, principal, credential 
 		}
 		a, ok := m.state.Agents[principal]
 		token, exists := m.state.Tokens[credential]
-		if !ok || !a.Enabled || !exists || token.PrincipalID != principal {
+		if !ok || !a.Enabled || !exists || token.PrincipalID != principal || !tokenLive(token, m.now().UTC()) {
 			return nil, errors.New("credential access has ended")
 		}
 		if agentRevision(a) != revision || m.state.Revision != roleRevision {

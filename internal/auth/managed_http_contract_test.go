@@ -41,6 +41,8 @@ func TestManagedAuthManagementRoutesRejectWrongCredentialShape(t *testing.T) {
 		{"PUT", "/auth/principals/missing/group"},
 		{"GET", "/auth/tokens"},
 		{"POST", "/auth/tokens"},
+		{"POST", "/auth/tokens/missing/rotate"},
+		{"DELETE", "/auth/tokens/history"},
 		{"DELETE", "/auth/tokens/missing"},
 	}
 
@@ -113,6 +115,8 @@ func TestManagedAuthReadAndWriteRoutesReachHandlersOnlyAfterAdmission(t *testing
 		{"POST", "/auth/principals/missing/delete-preview", ``},
 		{"DELETE", "/auth/principals/missing", `{}`},
 		{"POST", "/auth/tokens", `{}`},
+		{"POST", "/auth/tokens/missing/rotate", `{}`},
+		{"DELETE", "/auth/tokens/history", ""},
 		{"DELETE", "/auth/tokens/missing", ""},
 		{"PUT", "/auth/permissions", `{}`},
 		{"POST", "/auth/access/preview", `{}`},

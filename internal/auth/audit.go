@@ -258,6 +258,10 @@ func auditAction(r *http.Request) string {
 		return "credential.issue"
 	case r.URL.Path == "/auth/tokens":
 		return "credential.list"
+	case r.URL.Path == "/auth/tokens/history" && r.Method == http.MethodDelete:
+		return "credential.history_clear"
+	case strings.HasPrefix(r.URL.Path, "/auth/tokens/") && strings.HasSuffix(r.URL.Path, "/rotate") && r.Method == http.MethodPost:
+		return "credential.rotate"
 	case strings.HasPrefix(r.URL.Path, "/auth/tokens/"):
 		return "credential.revoke"
 	case r.URL.Path == "/auth/permissions":

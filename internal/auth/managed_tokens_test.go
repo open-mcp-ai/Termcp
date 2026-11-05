@@ -60,6 +60,22 @@ func issueTestCredential(t *testing.T, m *Managed, cookie string, session sessio
 	return out
 }
 
+func rotateTestCredential(t *testing.T, m *Managed, cookie string, session sessionRecord, current issuedCredential) issuedCredential {
+	t.Helper()
+	w := managedRequest(t, m.Wrap(http.NotFoundHandler()), "POST", "/auth/tokens/"+current.Credential.ID+"/rotate", `{}`, cookie, session.CSRF)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
+	}
+	var out issuedCredential
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Token == "" || out.Agent.ID != "" || out.Credential.PrincipalID != current.Credential.PrincipalID {
+		t.Fatalf("unexpected rotation response: %+v", out)
+	}
+	return out
+}
+
 func bearerRequest(h http.Handler, method, path, token, cookie string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "http://127.0.0.1:18765"+path, nil)
 	r.Header.Set("Authorization", "Bearer "+token)
@@ -74,7 +90,7 @@ func bearerRequest(h http.Handler, method, path, token, cookie string) *httptest
 func TestMCPCredentialsIdentityPersistenceAndPurpose(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"Build agent"}`)
-	second := issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"principal_id":"`+a.Agent.ID+`","label":"second client"}`)
+	second := rotateTestCredential(t, m, cookie, session, a)
 	admin := issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"label":"admin client"}`)
 	check := func(token string, want Actor) {
 		t.Helper()
@@ -92,11 +108,13 @@ func TestMCPCredentialsIdentityPersistenceAndPurpose(t *testing.T) {
 		}
 	}
 	agent := Actor{ID: a.Agent.ID, Username: a.Agent.Name, Role: RoleAgent}
-	check(a.Token, agent)
 	check(second.Token, agent)
+	if w := bearerRequest(m.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", a.Token, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated token accepted: %d", w.Code)
+	}
 	check(admin.Token, Actor{ID: m.state.Admin.ID, Username: "admin", Role: RoleAdmin})
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
-	for _, token := range []string{a.Token, admin.Token} {
+	for _, token := range []string{second.Token, admin.Token} {
 		for _, path := range []string{"/api/daemon", "/api/daemon/stop", "/auth/principals", "/auth/tokens", "/auth/permissions", "/auth/password", "/api/sessions", "/api/approvals", "/api/approvals/fake/approve", "/"} {
 			if w := bearerRequest(h, "POST", path, token, cookie); w.Code != 403 {
 				t.Fatalf("bearer escaped MCP: %s %d", path, w.Code)
@@ -116,8 +134,11 @@ func TestMCPCredentialsIdentityPersistenceAndPurpose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := bearerRequest(m2.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", a.Token, ""); w.Code != 200 {
+	if w := bearerRequest(m2.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", second.Token, ""); w.Code != 200 {
 		t.Fatalf("restart lost token: %d", w.Code)
+	}
+	if w := bearerRequest(m2.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", a.Token, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("restart revived rotated token: %d", w.Code)
 	}
 	raw, err := os.ReadFile(configstore.LocalStatePath(filepath.Dir(m.path)))
 	if err != nil {
@@ -139,9 +160,10 @@ func TestMCPCredentialsIdentityPersistenceAndPurpose(t *testing.T) {
 func TestMCPCredentialRevocationDisablesOnlyItsConnections(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"agent"}`)
-	b := issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"principal_id":"`+a.Agent.ID+`","label":"next token"}`)
+	b := rotateTestCredential(t, m, cookie, session, a)
+	other := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"other agent"}`)
 	contexts := map[string]context.Context{}
-	for _, issued := range []issuedCredential{a, b} {
+	for _, issued := range []issuedCredential{b, other} {
 		r := httptest.NewRequest("GET", "http://127.0.0.1:18765/sse", nil)
 		r.Header.Set("Authorization", "Bearer "+issued.Token)
 		ctx, done, code := m.admitToken(r)
@@ -152,35 +174,43 @@ func TestMCPCredentialRevocationDisablesOnlyItsConnections(t *testing.T) {
 		contexts[issued.Token] = ctx
 	}
 	h := m.Wrap(http.NotFoundHandler())
-	if w := managedRequest(t, h, "DELETE", "/auth/tokens/"+a.Credential.ID, "", cookie, session.CSRF); w.Code != 200 {
+	if w := managedRequest(t, h, "DELETE", "/auth/tokens/"+b.Credential.ID, "", cookie, session.CSRF); w.Code != 200 {
 		t.Fatal(w.Code)
 	}
-	if contexts[a.Token].Err() == nil || contexts[b.Token].Err() != nil {
+	if contexts[b.Token].Err() == nil || contexts[other.Token].Err() != nil {
 		t.Fatal("revocation affected wrong connection")
 	}
-	if w := bearerRequest(h, "POST", "/stream", a.Token, ""); w.Code != 401 {
+	if w := bearerRequest(h, "POST", "/stream", b.Token, ""); w.Code != 401 {
 		t.Fatal("revoked token accepted")
 	}
+	d := issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"principal_id":"`+a.Agent.ID+`"}`)
+	r := httptest.NewRequest("GET", "http://127.0.0.1:18765/sse", nil)
+	r.Header.Set("Authorization", "Bearer "+d.Token)
+	ctx, done, code := m.admitToken(r)
+	if code != 0 {
+		t.Fatal(code)
+	}
+	defer done()
 	if w := managedRequest(t, h, "PATCH", "/auth/principals/"+a.Agent.ID, `{"revision":1,"enabled":false}`, cookie, session.CSRF); w.Code != 200 {
 		t.Fatal(w.Code)
 	}
-	if contexts[b.Token].Err() == nil {
+	if ctx.Err() == nil || contexts[other.Token].Err() != nil {
 		t.Fatal("disabled Agent connection survived")
 	}
-	if w := bearerRequest(h, "POST", "/stream", b.Token, ""); w.Code != 401 {
+	if w := bearerRequest(h, "POST", "/stream", d.Token, ""); w.Code != 401 {
 		t.Fatal("disabled Agent accepted")
 	}
 	if w := managedRequest(t, h, "PATCH", "/auth/principals/"+a.Agent.ID, `{"revision":2,"enabled":true}`, cookie, session.CSRF); w.Code != 200 {
 		t.Fatal(w.Code)
 	}
-	if w := bearerRequest(h, "GET", "/auth/mcp", b.Token, ""); w.Code != 200 {
+	if w := bearerRequest(h, "GET", "/auth/mcp", d.Token, ""); w.Code != 200 {
 		t.Fatal("enable changed identity or token")
 	}
 	// Password changes invalidate web sessions, while independent MCP credentials survive.
 	if err := m.ChangePassword(testPassword, "next-synthetic-password", "next-synthetic-password"); err != nil {
 		t.Fatal(err)
 	}
-	if w := bearerRequest(h, "GET", "/auth/mcp", b.Token, ""); w.Code != 200 {
+	if w := bearerRequest(h, "GET", "/auth/mcp", d.Token, ""); w.Code != 200 {
 		t.Fatal("master password change invalidated MCP token")
 	}
 	reopened, err := reopenManaged(t, m)
@@ -190,7 +220,7 @@ func TestMCPCredentialRevocationDisablesOnlyItsConnections(t *testing.T) {
 	if w := bearerRequest(reopened.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", a.Token, ""); w.Code != 401 {
 		t.Fatal("restart resurrected revoked token")
 	}
-	if w := bearerRequest(reopened.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", b.Token, ""); w.Code != 200 {
+	if w := bearerRequest(reopened.Wrap(http.NotFoundHandler()), "GET", "/auth/mcp", d.Token, ""); w.Code != 200 {
 		t.Fatal("restart lost replacement token")
 	}
 

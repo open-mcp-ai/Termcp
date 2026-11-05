@@ -90,7 +90,7 @@ OAuth 的“客户端”特指实现授权能力的 MCP 宿主、SDK 或后续�
 2. 人把 token 写入该 Agent 的 MCP 注册配置，优先通过宿主支持的环境变量或凭据引用注入；无法引用时，配置文件必须仅当前用户可读写。
 3. Agent 重启、模型新建对话、MCP transport 重连或浏览器刷新都不改变身份，因为客户端继续发送同一个 token；服务端用持久化的 verifier 恢复 grant。
 4. token 到期或被撤销后，Termcp 返回 `401`。人在人端签发替代 token，更新客户端配置并重启/重载 MCP 宿主。服务端不能替客户端修改这份配置。
-5. 轮换时应允许新旧 token 短暂重叠，确认新配置可用后再撤销旧 token；不能把同一静态 token 设成永久有效来消除迁移操作。
+5. 轮换使用原子替换：新 Token 持久化时旧 Token 同时失效。默认不提供双 Token 重叠窗口；不能把同一静态 token 设成永久有效来消除迁移操作。
 
 静态 token 的优点是兼容性高、重启后无需再次配对；缺点是没有短期 bearer 的轮换窗口，一旦被复制，在撤销前都可重放。它必须和以下限制一起使用：独立 Agent grant、硬到期时间、立即撤销、服务端只存 verifier、日志和工具结果不返回 token、错误信息不回显 token、远端只走 HTTPS。需要无感轮换或更强泄露控制时，再升级到 5.3 节的 CredentialProvider/桥模式。
 
@@ -135,7 +135,7 @@ Credential
 3. OAuth 授权页由人批准创建或关联 Agent Principal/AgentGrant，宿主通过标准协议领取凭据。简单宿主使用后续 WebUI 新增 Agent 分支，Termcp 只显示一次高熵静态 token，以 verifier 持久化并映射到稳定 `principal_id + grant_id`。
 4. Admin 只把该 Agent 的 token 配置到对应的 MCP 宿主或通过 `termcp stdio` 注入。不能把 Admin session、登录密钥或 Admin API token 配给 Agent。
 5. 每次请求产生可信 `ActorContext{principal_id, actor_kind, roles, grant_id, auth_method}`。入口过滤器据此允许 Agent 只进入 MCP 业务面，允许 Admin 使用 WebUI/REST/WS 并管理 Agent；权限层不读取 `clientInfo`、namespace 或客户端自报 role。
-6. Token 到期或撤销后返回 `401`。Admin 签发替代 token，新旧 token 可短暂重叠；同一 Agent Principal 可以拥有多枚轮换 token，但它们共享一个身份。
+6. Token 撤销后返回 `401`。Admin 使用原子轮换生成替代 Token，旧 Token 立即失效并保留为不可用历史；任意时刻同一 Agent Principal 最多只有一枚有效 Token。
 
 多用户和多 Agent 只需要扩展这张模型，不重写业务鉴权：
 
@@ -378,7 +378,7 @@ raw token
 - token 是**认证凭据**，`principal_id` 才是稳定身份。
 - token 可以用来找身份，但 token 文本本身不是身份 ID，不能直接作为用户名、资源 owner 或审计主体。
 - 权限不写死在 token 中。每次请求仍从当前 AgentGrant、角色和策略解析；修改策略或撤销 grant 后，同一 token 的下一次请求立即使用新结果。
-- 同一 Agent 可以轮换多枚 token，新旧 token 都引用同一个 `principal_id`；停用旧 token 只撤销对应凭据，不改变 Agent 身份。
+- 同一 Agent 的轮换 Token 共用同一个 `principal_id`，但新 Token 提交时旧 Token 同时失效；历史记录只用于审计和追踪，不改变 Agent 身份。
 - 要区分两个 Agent，必须签发两枚引用不同 Principal 的 token。共享 token 只能得到一个共享 Agent 身份。
 - 服务端只持久化 token verifier，并记录 token ID、所属 Principal、audience、签发者、到期与撤销时间。日志和审计使用 token ID 或 Principal ID，不记录原始 token。
 

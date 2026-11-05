@@ -124,8 +124,8 @@ func TestGroupLifecyclePreviewConflictAndExplicitDeny(t *testing.T) {
 	if plan.MemberCount != 1 {
 		t.Fatal("preview omitted bound members")
 	}
-	// Issuing another token invalidates the deletion inventory version.
-	issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"principal_id":"`+a.Agent.ID+`","label":"second"}`)
+	// Rotating the active token changes the credential inventory version.
+	rotated := rotateTestCredential(t, m, cookie, session, a)
 	body, _ := json.Marshal(map[string]any{"revision": plan.Revision, "plan_revision": plan.PlanRevision, "resolution": "deny"})
 	if w := managedRequest(t, h, "DELETE", "/auth/groups/"+g.ID, string(body), cookie, session.CSRF); w.Code != 409 {
 		t.Fatal("stale deletion preview accepted", w.Code)
@@ -136,7 +136,7 @@ func TestGroupLifecyclePreviewConflictAndExplicitDeny(t *testing.T) {
 	if w := managedRequest(t, h, "DELETE", "/auth/groups/"+g.ID, string(body), cookie, session.CSRF); w.Code != 200 {
 		t.Fatal("confirmed delete failed", w.Code, w.Body)
 	}
-	if w := bearerRequest(checkNoBusinessHandler(t, m), "POST", "/stream", a.Token, ""); w.Code != 401 {
+	if w := bearerRequest(checkNoBusinessHandler(t, m), "POST", "/stream", rotated.Token, ""); w.Code != 401 {
 		t.Fatal("deleted group left an effective orphan credential", w.Code)
 	}
 	loaded, err := reopenManaged(t, m)

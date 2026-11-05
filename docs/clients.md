@@ -13,12 +13,12 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 
 ## Managed MCP tokens
 
-首次运行先打开 `/login` 设置本机的登录密码与解密密码；在 `/permissions` 权限管理页选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；管理员也可以为自己签发 token。页面提供带 token 的配置片段和只读 DSL 权限预览。下文不含凭据的示例需补充相应 header/env，或用于显式旧共享认证/开放模式。
+首次运行先打开 `/login` 设置本机的登录密码与解密密码；在 `/permissions` 权限管理页选择或新建权限组，配置动作和主机范围，再添加 Agent 并签发 MCP Token；管理员也可以为自己签发 Token。一个 Agent 同时只有一个当前 Token，轮换会使旧 Token 立即失效并进入可清理历史。页面提供带 Token 的配置片段和只读 DSL 权限预览。下文不含凭据的示例需补充相应 header/env，或用于显式旧共享认证/开放模式。
 
 - HTTP `/stream` 和 SSE `/sse`：每个请求携带 `Authorization: Bearer <token>`（SSE 的 `/message` 请求也需要）。
 - stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
 - 远端实例使用 `stdio <完整 HTTP(S) URL>`。`daemon stdio` 用于本机实例；自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
-- 服务端仅保存摘要，不能再次查看原 token。轮换时为同一主体增发、更新客户端、确认成功后撤销旧 token。撤销一枚 token 不影响其他 token；停用主体或权限组会断开受影响 token 的连接。
+- 服务端仅保存摘要，不能再次查看原 Token。轮换使用原子替换，旧 Token 立即失效；撤销会移入历史，清空历史不会影响当前 Token。停用 Agent 或权限组会断开受影响 Token 的连接。
 - daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
 
 ## 按客户端接入

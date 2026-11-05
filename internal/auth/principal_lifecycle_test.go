@@ -12,10 +12,10 @@ import (
 func TestAgentDeletePreviewCascadePersistenceAndRecreate(t *testing.T) {
 	m, cookie, session := configuredManaged(t)
 	first := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"delete-me"}`)
-	second := issueTestCredential(t, m, cookie, session, "/auth/tokens", `{"principal_id":"`+first.Agent.ID+`","label":"second"}`)
+	second := rotateTestCredential(t, m, cookie, session, first)
 
 	stream := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18765/sse", nil)
-	stream.Header.Set("Authorization", "Bearer "+first.Token)
+	stream.Header.Set("Authorization", "Bearer "+second.Token)
 	ctx, done, code := m.admitToken(stream)
 	if code != 0 {
 		t.Fatalf("admit token: %d", code)
