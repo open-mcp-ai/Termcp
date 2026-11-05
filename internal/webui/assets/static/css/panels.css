@@ -1,3 +1,219 @@
 /* Dynamic panel markup reads inherited terminal tokens rather than a palette. */
+.shell-tab-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 16px;
+}
+.shell-tab-panel[hidden],
+.shell-terminal-wrap[hidden] { display: none !important; }
+.shell-panel-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.shell-panel-title {
+  color: var(--term-fg-soft);
+  font-size: .82rem;
+  font-weight: 600;
+}
+.shell-panel-file-title { margin-bottom: 8px; }
+.shell-panel-icon-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--term-border-4);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--term-fg-faint-2);
+  cursor: pointer;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.shell-panel-head .shell-fw-refresh-btn { margin-left: auto; }
+.shell-panel-icon-btn:hover,
+.shell-panel-icon-btn:focus-visible {
+  border-color: var(--term-border-hover);
+  background: var(--term-white-06);
+  color: var(--term-fg);
+}
+.shell-panel-icon-btn-accent {
+  border-color: var(--term-success-5);
+  color: var(--term-success);
+}
+.shell-panel-icon-btn-accent:hover,
+.shell-panel-icon-btn-accent:focus-visible {
+  border-color: var(--term-success);
+  background: var(--term-success-deep);
+  color: var(--term-success);
+}
+.shell-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.shell-fw-list {
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+  background: var(--term-panel);
+  color: var(--term-fg-mid);
+  font-size: .78rem;
+}
+.shell-panel-empty {
+  padding: 16px;
+  color: var(--term-fg-muted);
+  text-align: center;
+}
+.shell-panel-message {
+  padding: 8px;
+  color: var(--term-fg-muted);
+}
+.shell-panel-message.is-error { color: var(--term-danger); }
+.shell-fw-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--term-border-2);
+  transition: background .1s;
+}
+.shell-fw-row:last-child { border-bottom: 0; }
+.shell-fw-row:hover { background: var(--term-hover); }
+.shell-fw-direction {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: .65rem;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+}
+.shell-fw-direction.is-local { color: var(--term-success); }
+.shell-fw-direction.is-dynamic { color: var(--term-accent); }
+.shell-fw-direction.is-remote { color: var(--term-warning); }
+.shell-fw-endpoint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: .78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-fw-listen { color: var(--term-fg-muted); }
+.shell-fw-arrow { color: var(--term-border-4); }
+.shell-fw-target { color: var(--term-fg-mid); }
+.shell-fw-del-btn {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--term-border-4);
+  cursor: pointer;
+  font-size: .68rem;
+}
+.shell-fw-del-btn:hover,
+.shell-fw-del-btn:focus-visible {
+  border-color: var(--term-danger);
+  color: var(--term-danger);
+}
+.shell-file-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  margin-bottom: 6px;
+  overflow: hidden;
+  border: 1px solid var(--term-border-4);
+}
+.shell-file-toolbar-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: var(--term-surface);
+  color: var(--term-fg-faint-4);
+  cursor: pointer;
+}
+.shell-file-toolbar-btn + .shell-file-toolbar-btn,
+.shell-file-toolbar-btn.shell-file-upload-btn {
+  border-left: 1px solid var(--term-border-4);
+}
+.shell-file-toolbar .shell-file-up { border-right: 1px solid var(--term-border-4); }
+.shell-file-toolbar-btn:hover,
+.shell-file-toolbar-btn:focus-visible {
+  background: var(--term-hover);
+  color: var(--term-fg);
+}
+.shell-file-path {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  outline: none;
+  background: var(--term-bg);
+  color: var(--term-fg-dim);
+  font-family: var(--font-mono);
+  font-size: .78rem;
+}
+.shell-file-listing {
+  border: 1px solid var(--term-border-4);
+  background: var(--term-bg);
+  color: var(--term-fg-dim);
+  font-family: var(--font-mono);
+  font-size: .78rem;
+}
+.shell-file-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: .85rem;
+  font-weight: 600;
+}
+.shell-file-detail-name { word-break: break-all; }
+.shell-file-detail-meta {
+  margin-bottom: 2px;
+  color: var(--term-fg-muted);
+  font-size: .75rem;
+}
+.shell-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--term-border);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.shell-file-row:hover { background: var(--term-hover); }
+.shell-file-icon { flex: 0 0 auto; }
+.shell-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-file-size {
+  flex: 0 0 auto;
+  margin-right: 2px;
+  color: var(--term-fg-muted);
+  font-size: .7rem;
+}
+.shell-file-ctx-menu[hidden],
+.file-ctx-item[hidden],
+.shell-file-upload-input[hidden] { display: none !important; }
 .shell-tab-panel .shell-fw-refresh-btn:hover, .shell-tab-panel .shell-ntf-refresh-btn:hover { color: var(--term-fg); border-color: var(--term-border-hover); }
 .shell-tab-panel .shell-fw-del-btn:hover, .shell-tab-panel .shell-ntf-del-btn:hover { color: var(--term-danger); border-color: var(--term-danger); }

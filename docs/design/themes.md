@@ -13,6 +13,17 @@
   and `matrix` uses fluorescent green, bold pixel typography, square plates and
   hard offset shadows. Matrix bundles Pixelify Sans for the UI; terminal output
   retains the shared CJK-safe monospace stack at a heavier weight.
+- The selected theme entry imports the shared `static/css/app.css` contract.
+  Requests for that manifest at a themed URL are served from the current shared
+  cascade definition, so a stale themed copy cannot hide or reorder newly added
+  shared chunks.
+- Shared components consume stable roles (`.app-control`, `.app-menu-trigger`,
+  `.app-menu-panel`, `.app-menu-item`) and the `--ui-*` custom properties.
+  Themes supply appearance once; adding a new settings or approval component
+  must not require a matching selector in every theme.
+- Legacy role classes (`.btn`, `.lang-btn`, `.theme-btn`, `.lang-menu`) remain on
+  compatible controls as fallbacks, so themes written before the role contract
+  continue to shape new controls without modification.
 - The existing static file server discovers folders at request time. No new
   REST, MCP, WebSocket endpoint or dedicated HTTP route; no theme index file.
 - Selection happens in the Web UI, persists in `termcp.theme` browser storage,
@@ -40,6 +51,9 @@
 - [x] Add terminal configuration, opaque defaults, font refitting and live updates.
 - [x] Verify live discovery, fallback and legacy overrides, switching races and
   failures, persistence, terminal state, no-webui builds, and browser rendering.
+- [x] Canonicalize themed stylesheet manifests, add stable component roles and
+  shape/typography/depth variables, and remove visual inline styles from dynamic
+  terminal panels.
 
 ## Theme package
 
@@ -54,10 +68,51 @@ themes/example/
     icons/background.svg
 ```
 
-An entry may import `./assets/static/css/app.css`. That manifest and its missing
-chunks fall back to shared assets, retaining relative imports within the chosen
-theme. File precedence does not change ordinary CSS specificity/cascade rules.
-No JavaScript or HTML copy is required in a theme package.
+The theme entry imports `./assets/static/css/app.css`. That themed manifest URL
+serves the current shared manifest in canonical cascade order, while its
+relative imports resolve theme-owned `tokens.css`, `theme.css`, `workspace.css`
+and other chunks when present. A stale manifest in a theme package can therefore
+neither omit nor reorder a newly added shared chunk. A theme should normally
+contain only its palette, typography, artwork and appearance rules; it does not
+need to copy the shared chunks. File precedence does not change ordinary CSS
+specificity/cascade rules. No JavaScript or HTML copy is required in a theme
+package.
+
+### Shared component contract
+
+Theme files should not target feature-specific classes such as `.settings-btn`,
+`.policy-approval-panel`, or a future menu name. Shared markup exposes four
+stable roles:
+
+| Role | Use |
+| --- | --- |
+| `app-control` | Buttons, links, summaries and other compact interactive controls. |
+| `app-menu-trigger` | The control that opens a popover or `<details>` panel. |
+| `app-menu-panel` | The popover surface containing menu items or a compact settings view. |
+| `app-menu-item` | A row inside a menu or settings panel. |
+
+The role classes are wiring, not the palette. Shape, type voice and depth come
+from these CSS custom properties, declared by the shared tokens and optionally
+overridden by a theme:
+
+| Property | Meaning |
+| --- | --- |
+| `--ui-control-radius` | Shared control corner radius. |
+| `--ui-control-border-width` | Shared control border width. |
+| `--ui-control-font-family` | Control and menu-item type family. |
+| `--ui-control-font-size`, `--ui-control-font-weight`, `--ui-control-line-height` | Control type scale. |
+| `--ui-control-text-transform`, `--ui-control-letter-spacing` | Control voice. |
+| `--ui-panel-radius`, `--ui-panel-border-width` | Popover surface geometry. |
+| `--ui-panel-shadow` | Complete popover shadow expression. |
+| `--ui-menu-item-radius` | Menu-row corner radius. |
+
+The shared defaults work without any theme override. Old themes that provide
+only the legacy classes retain their existing look; themes that adopt the
+variables make every future role-based component inherit the same language.
+Shared component CSS may use semantic color variables or role variables, but
+must not introduce literal colors. Dynamic JavaScript may change state,
+position, visibility and measurements; static colors, borders, radii,
+typography and hover states belong in CSS.
 
 ### UI copy
 

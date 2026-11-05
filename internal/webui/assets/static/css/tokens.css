@@ -88,6 +88,20 @@
   --shadow-card: rgba(28, 36, 49, .09);
   --shadow-card-hover: rgba(28, 36, 49, .09);
   --shadow-modal: rgba(28, 36, 49, .09);
+  /* Stable component-role contract. Themes may change these once; shared
+     components do not need to know their business-specific class names. */
+  --ui-control-radius: 7px;
+  --ui-control-border-width: 1px;
+  --ui-control-font-family: var(--font-sans);
+  --ui-control-font-size: .82rem;
+  --ui-control-font-weight: 500;
+  --ui-control-line-height: 1.3;
+  --ui-control-text-transform: none;
+  --ui-control-letter-spacing: normal;
+  --ui-panel-radius: 10px;
+  --ui-panel-border-width: 1px;
+  --ui-panel-shadow: 0 8px 28px var(--shadow-dropdown);
+  --ui-menu-item-radius: 5px;
   --live-glow: transparent;
   /* Typography. No webfont is loaded: these are names of fonts already on the
      machine, and the browser falls back per glyph. The order is intentional and

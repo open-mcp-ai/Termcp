@@ -238,7 +238,7 @@
 .shell-link-state {
   width: 6px; height: 6px; flex: 0 0 auto; align-self: center;
   border-radius: 50%; background: var(--term-fg-faint-2);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.08);
+  box-shadow: 0 0 0 1px var(--glow-white-10);
 }
 .shell-link-state.is-connecting { background: var(--term-warning); animation: shellStatePulse 1.8s ease-in-out infinite; }
 .shell-link-state.is-live { background: var(--term-accent); box-shadow: 0 0 7px rgba(var(--cyan-rgb), .42); }

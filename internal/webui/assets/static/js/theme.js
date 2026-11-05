@@ -370,7 +370,7 @@ function loadThemeChoices() {
     ['auto'].concat(ids).forEach(function (id) {
       var button = document.createElement('button');
       button.type = 'button';
-      button.className = 'theme-option';
+      button.className = 'theme-option app-menu-item';
       button.setAttribute('data-theme-choice', id);
       button.addEventListener('click', function () {
         status.textContent = themeText('theme.loading');
@@ -389,6 +389,10 @@ function loadThemeChoices() {
 function initThemeControls() {
   var picker = document.getElementById('theme-switch');
   if (!picker) return;
+  var trigger = picker.querySelector('summary');
+  var panel = picker.querySelector('.theme-menu');
+  if (trigger) trigger.classList.add('app-control', 'app-menu-trigger');
+  if (panel) panel.classList.add('app-menu-panel');
   syncThemeAssets();
   syncThemeControl();
   setThemeTerminalConfig({});

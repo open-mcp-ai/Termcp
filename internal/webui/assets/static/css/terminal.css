@@ -993,7 +993,7 @@
   /* File context menu (dark, matches shell-window). Same rung as the other
      pointer-anchored menu above: both are menus, and two menus never need to
      outrank each other. */
-  .shell-file-ctx-menu { display:none; position:fixed; z-index:var(--z-popover); background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
+  .shell-file-ctx-menu { display:block; position:fixed; z-index:var(--z-popover); background:var(--term-panel); border:1px solid var(--term-border-4); border-radius:6px; box-shadow:0 4px 16px var(--term-black-4); min-width:150px; padding:4px 0; }
   .file-ctx-item { padding:6px 14px; cursor:pointer; font-size:0.8rem; color:var(--term-fg); white-space:nowrap; }
   .file-ctx-item:hover { background:var(--term-current); color:var(--term-fg-white); }
   .file-ctx-item.file-ctx-danger { color:var(--term-danger-2); }
