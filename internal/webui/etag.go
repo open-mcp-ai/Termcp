@@ -23,11 +23,10 @@ import (
 	"sync"
 )
 
-// assetETags caches one ETag per asset path. The embed cannot change while the
-// process runs, and an --assets override directory is read at startup, so a
-// hash computed once stays valid for the process's life; SetAssetsDir and
-// SetThemesDir clear the cache so a directory change (tests swap them freely)
-// cannot answer 304 with the previous directory's bytes.
+// assetETags caches one ETag per embedded asset path. Embedded bytes cannot
+// change while the process runs. External --assets files are hashed on every
+// request so an edit with the same size and modification time still refreshes.
+// SetAssetsDir and SetThemesDir clear the cache when directories change.
 //
 // sync.Map, per the concurrency rules: keyed lookups with no cross-key
 // invariant. LoadOrStore is not needed — a recomputed duplicate hash is
@@ -50,17 +49,19 @@ func clearAssetETags() {
 // ok is false when fsPath is not a readable file (directories, missing files),
 // which the caller answers by falling through to the FileServer.
 func assetETag(fsPath string) (etag string, ok bool) {
-	if cached, hit := assetETags.Load(fsPath); hit {
-		return cached.(string), true
-	}
 	f, err := Assets().Open(fsPath)
 	if err != nil {
 		return "", false
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || info.IsDir() {
+	if err != nil || !info.Mode().IsRegular() {
 		return "", false
+	}
+	if info.ModTime().IsZero() {
+		if cached, hit := assetETags.Load(fsPath); hit {
+			return cached.(string), true
+		}
 	}
 	content, err := io.ReadAll(f)
 	if err != nil {
@@ -68,7 +69,9 @@ func assetETag(fsPath string) (etag string, ok bool) {
 	}
 	sum := sha256.Sum256(content)
 	etag = `"` + hex.EncodeToString(sum[:8]) + `"`
-	assetETags.Store(fsPath, etag)
+	if info.ModTime().IsZero() {
+		assetETags.Store(fsPath, etag)
+	}
 	return etag, true
 }
 
@@ -78,18 +81,20 @@ func assetETag(fsPath string) (etag string, ok bool) {
 // path), which the caller answers by falling through to the FileServer.
 func urlToAssetPath(urlPath string) (fsPath string, ok bool) {
 	clean := path.Clean("/" + urlPath)
-	if clean == "/." {
-		clean = "/"
+	if strings.Contains(clean, "\x00") || !strings.HasPrefix(urlPath, "/") {
+		return "", false
 	}
-	if strings.Contains(clean, "\x00") {
+	// Let FileServer own canonical-path redirects, including /index.html.
+	if strings.HasSuffix(urlPath, "/index.html") ||
+		(clean != urlPath && clean+"/" != urlPath) {
 		return "", false
 	}
 	rel := strings.TrimPrefix(clean, "/")
 	if rel == "" {
 		return "index.html", true
 	}
-	if strings.HasSuffix(clean, "/") {
-		return rel + "index.html", true
+	if strings.HasSuffix(urlPath, "/") {
+		return path.Join(rel, "index.html"), true
 	}
 	return rel, true
 }
@@ -127,8 +132,8 @@ func etagMatches(ifNoneMatch, etag string) bool {
 // content hash would prevent).
 //
 // A matching If-None-Match answers 304 carrying ETag and Cache-Control and no
-// body — the FileServer is never invoked, so the reload costs a stat-free cache
-// hit and zero bytes. A miss stamps the ETag onto the 200 and lets the
+// body — the FileServer is never invoked, so the reload sends zero body bytes.
+// A miss stamps the ETag onto the 200 and lets the
 // FileServer serve; the embed's zero ModTime means the FileServer adds no
 // competing validator, so the stamped ETag is the only one on the wire.
 func serveWithETag(w http.ResponseWriter, r *http.Request, next http.Handler) {
