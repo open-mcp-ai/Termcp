@@ -187,12 +187,12 @@ function installPolicyApprovalMenu() {
   menu.className = 'clients-menu approval-menu';
   menu.id = 'approval-menu';
   menu.innerHTML =
-    '<summary class="clients-btn approval-btn" title="Policy approvals" data-i18n-title="approvals.title" aria-label="Policy approvals" data-i18n-aria="approvals.title">' +
+    '<summary class="clients-btn approval-btn lang-btn app-control app-menu-trigger" title="Policy approvals" data-i18n-title="approvals.title" aria-label="Policy approvals" data-i18n-aria="approvals.title">' +
       '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75l5.25 2.5v4.2c0 3.05-2.25 5.15-5.25 5.8-3-.65-5.25-2.75-5.25-5.8v-4.2z"/><path d="M5.5 7.9l1.65 1.65 3.4-3.45"/></svg>' +
       '<span class="clients-label" data-i18n="approvals.title">Approvals</span>' +
       '<span class="approval-header-count" id="approval-count" hidden>0</span>' +
     '</summary>' +
-    '<div class="clients-panel policy-approval-panel">' +
+    '<div class="clients-panel policy-approval-panel lang-menu app-menu-panel">' +
       '<div class="policy-approval-head"><div><strong data-i18n="approvals.title">Approvals</strong><p data-i18n="approvals.queueHint">Pending requests from terminal sessions and instance policy wait here.</p></div>' +
         '<button type="button" id="policy-approval-refresh" class="btn" title="Refresh" data-i18n-title="common.refresh" data-i18n-aria="common.refresh"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2.5V5h-2.5"/></svg></button>' +
       '</div>' +

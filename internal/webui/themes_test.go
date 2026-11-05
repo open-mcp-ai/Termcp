@@ -181,6 +181,27 @@ func TestBuiltInThemeImportsResolve(t *testing.T) {
 	}
 }
 
+func TestThemeManifestUsesCurrentSharedCascadeOrder(t *testing.T) {
+	themes := t.TempDir()
+	writeAssetFile(t, themes, "legacy/theme.css", `@import url("./assets/static/css/app.css");`)
+	writeAssetFile(t, themes, "legacy/assets/static/css/app.css", `@import url("base.css");`)
+	f := testThemeFS(t, themes, "")
+
+	shared, err := fs.ReadFile(f, "static/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"cyberpunk", "default-light", "default-dark", "matrix", "legacy"} {
+		manifest, err := fs.ReadFile(f, "themes/"+id+"/assets/static/css/app.css")
+		if err != nil {
+			t.Fatalf("%s manifest: %v", id, err)
+		}
+		if string(manifest) != string(shared) {
+			t.Errorf("%s served a forked manifest; an old theme can hide or reorder newly added shared chunks", id)
+		}
+	}
+}
+
 func TestBuiltInThemeCopyUsesCatalogKeysAndPlaceholders(t *testing.T) {
 	f := testThemeFS(t, t.TempDir(), "")
 	base := loadCatalogs(t)

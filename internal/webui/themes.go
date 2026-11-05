@@ -77,6 +77,18 @@ func (t themeFS) Open(name string) (fs.File, error) {
 	if rel == "theme.css" {
 		return openThemeSources(t.entrySources(id))
 	}
+	// Theme entries historically import ./assets/static/css/app.css. Serving a
+	// theme's own manifest lets an old copy reorder or omit chunks that were
+	// added later; cyberpunk's stale manifest, for example, reloaded base.css
+	// after settings.css and moved the mobile settings panel off-screen. The
+	// manifest is structural, not visual. Serve the current shared manifest at
+	// the themed URL so its relative imports still resolve theme-owned
+	// tokens/theme/workspace files, while every shared chunk remains present in
+	// canonical cascade order. Theme files therefore need no update when a new
+	// shared chunk is added.
+	if rel == "assets/static/css/app.css" {
+		return t.sharedThemeManifest()
+	}
 	sources := []themeSource{
 		{t.externalAssets, name}, {t.externalThemes, id + "/" + rel}, {t.embedded, name},
 	}
@@ -87,6 +99,21 @@ func (t themeFS) Open(name string) (fs.File, error) {
 		sources = append(sources, themeSource{t.embedded, logical})
 	}
 	return openThemeSources(sources)
+}
+
+func (t themeFS) sharedThemeManifest() (fs.File, error) {
+	data, err := fs.ReadFile(t.base, "static/css/app.css")
+	if err != nil {
+		return nil, err
+	}
+	text := string(data)
+	return &themeDataFile{
+		Reader: strings.NewReader(text),
+		info: themeDataInfo{
+			name: "app.css",
+			size: int64(len(text)),
+		},
+	}, nil
 }
 
 func (t themeFS) themeDirectory() (fs.File, error) {
@@ -172,6 +199,26 @@ func (d themeDirInfo) IsDir() bool                { return true }
 func (d themeDirInfo) Sys() any                   { return nil }
 func (d themeDirInfo) Type() fs.FileMode          { return fs.ModeDir }
 func (d themeDirInfo) Info() (fs.FileInfo, error) { return d, nil }
+
+type themeDataInfo struct {
+	name string
+	size int64
+}
+
+func (d themeDataInfo) Name() string       { return d.name }
+func (d themeDataInfo) Size() int64        { return d.size }
+func (d themeDataInfo) Mode() fs.FileMode  { return 0444 }
+func (d themeDataInfo) ModTime() time.Time { return time.Time{} }
+func (d themeDataInfo) IsDir() bool        { return false }
+func (d themeDataInfo) Sys() any           { return nil }
+
+type themeDataFile struct {
+	*strings.Reader
+	info fs.FileInfo
+}
+
+func (f *themeDataFile) Stat() (fs.FileInfo, error) { return f.info, nil }
+func (f *themeDataFile) Close() error               { return nil }
 
 type themeDir struct {
 	info    themeDirInfo

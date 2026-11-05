@@ -1,11 +1,11 @@
-.theme-switch { position: relative; flex-shrink: 0; font-family: var(--font-sans); }
-.theme-btn { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-size: .82rem; list-style: none; }
+.theme-switch { position: relative; flex-shrink: 0; font-family: var(--ui-control-font-family, var(--font-sans)); }
+.theme-btn { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: var(--ui-control-border-width, 1px) solid var(--border-subtle); border-radius: var(--ui-control-radius, 7px); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-size: var(--ui-control-font-size, .82rem); list-style: none; }
 .theme-btn::-webkit-details-marker { display: none; }
 .theme-btn:hover { background: var(--bg-card-hover); }
 .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #theme-current { color: var(--accent); font-size: .75rem; }
-.theme-menu { position: absolute; z-index: var(--z-dropdown); top: calc(100% + 6px); right: 0; min-width: 190px; max-width: min(320px, 85vw); padding: 6px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-elevated); box-shadow: 0 8px 28px var(--shadow-dropdown); }
-.theme-option { display: block; width: 100%; border: none; border-radius: 5px; background: transparent; color: var(--text-primary); padding: 9px 10px; text-align: left; font: inherit; font-size: .82rem; cursor: pointer; overflow-wrap: anywhere; }
+.theme-menu { position: absolute; z-index: var(--z-dropdown); top: calc(100% + 6px); right: 0; min-width: 190px; max-width: min(320px, 85vw); padding: 6px; border: var(--ui-panel-border-width, 1px) solid var(--border-subtle); border-radius: var(--ui-panel-radius, 10px); background: var(--bg-elevated); box-shadow: var(--ui-panel-shadow, 0 8px 28px var(--shadow-dropdown)); }
+.theme-option { display: block; width: 100%; border: none; border-radius: var(--ui-menu-item-radius, 5px); background: transparent; color: var(--text-primary); padding: 9px 10px; text-align: left; font-family: var(--ui-control-font-family, var(--font-sans)); font-size: var(--ui-control-font-size, .82rem); font-weight: var(--ui-control-font-weight, 500); line-height: var(--ui-control-line-height, 1.3); text-transform: var(--ui-control-text-transform, none); letter-spacing: var(--ui-control-letter-spacing, normal); cursor: pointer; overflow-wrap: anywhere; }
 .theme-option:hover, .theme-option:focus-visible { background: var(--bg-card-hover); outline: none; }
 .theme-option[aria-pressed="true"] { background: var(--accent-surface); color: var(--accent); font-weight: 600; }
 .theme-status { margin: 0; padding: 0 8px; max-width: 260px; color: var(--text-muted); font-size: .75rem; }

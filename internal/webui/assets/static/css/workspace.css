@@ -2030,7 +2030,7 @@
   #sec-entries-body {
     left: 0;
     border-right: 1px solid var(--border-subtle); border-radius: 0 14px 14px 0;
-    box-shadow: 12px 0 44px rgba(0, 0, 0, .62), inset -1px 0 0 rgba(var(--cyan-rgb), .1);
+    box-shadow: 12px 0 44px var(--shadow-drawer), inset -1px 0 0 var(--glow-white-10);
     padding-left: calc(12px + env(safe-area-inset-left, 0px));
     transform: translateX(-100%); visibility: hidden;
     transition: transform .22s ease;
@@ -2038,7 +2038,7 @@
   .extpanel-body {
     right: 0;
     border-left: 1px solid var(--border-subtle); border-radius: 14px 0 0 14px;
-    box-shadow: -12px 0 44px rgba(0, 0, 0, .62), inset 1px 0 0 rgba(var(--cyan-rgb), .1);
+    box-shadow: -12px 0 44px var(--shadow-drawer), inset 1px 0 0 var(--glow-white-10);
     padding-right: calc(12px + env(safe-area-inset-right, 0px));
     transform: translateX(100%); visibility: hidden;
     transition: transform .22s ease;

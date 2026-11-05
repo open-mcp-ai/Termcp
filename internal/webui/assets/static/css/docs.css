@@ -4,7 +4,7 @@
     .app-header {
       display: flex; align-items: center; gap: 12px;
       padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card);
-      box-shadow: 0 1px 0 rgba(27,31,36,.04);
+      box-shadow: 0 1px 0 var(--shadow-soft);
     }
     /* Home link back to the Web UI. flex-shrink:0 keeps it whole while the title gives way. */
     .app-header-back {
@@ -29,7 +29,7 @@
     .lead { color: var(--text-secondary); margin-top: 0; }
     .card {
       background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px;
-      padding: 16px 18px; margin: 12px 0 16px; box-shadow: 0 1px 0 rgba(27,31,36,.04);
+      padding: 16px 18px; margin: 12px 0 16px; box-shadow: 0 1px 0 var(--shadow-soft);
     }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
     .meta {

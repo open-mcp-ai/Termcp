@@ -77,6 +77,18 @@
   --shadow-card: rgba(2, 8, 3, .65);
   --shadow-card-hover: rgba(2, 8, 3, .7);
   --shadow-modal: rgba(2, 8, 3, .75);
+  --ui-control-radius: 0;
+  --ui-control-border-width: 2px;
+  --ui-control-font-family: var(--font-sans);
+  --ui-control-font-size: .86rem;
+  --ui-control-font-weight: 700;
+  --ui-control-line-height: 1.3;
+  --ui-control-text-transform: none;
+  --ui-control-letter-spacing: .02em;
+  --ui-panel-radius: 0;
+  --ui-panel-border-width: 2px;
+  --ui-panel-shadow: var(--matrix-shadow);
+  --ui-menu-item-radius: 0;
   --live-glow: rgba(var(--green-rgb), .35);
   --font-sans: "Termcp Matrix Pixel", var(--font-mono);
   --font-sans-hant: "Termcp Matrix Pixel", var(--font-mono);
