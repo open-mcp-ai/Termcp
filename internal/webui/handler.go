@@ -21,15 +21,15 @@ import (
 // It reads through Assets(), so an operator-supplied --assets directory overrides the embedded copy
 // file by file and a file the directory does not contain is served from the embed.
 func embeddedStaticServer() http.Handler {
-	return noCacheForEmbeddedAssets(markdownContentType(http.FileServer(http.FS(Assets()))))
+	assets := Assets()
+	return noCacheForEmbeddedAssets(staticAssetETagHandler(assets, markdownContentType(http.FileServer(http.FS(assets)))))
 }
 
-// noCacheForEmbeddedAssets marks the embedded UI assets no-cache. Embedded files
-// carry no modification time, so http.FileServer sends no Last-Modified and no
-// ETag — a response with neither a validator nor a freshness directive leaves
-// the browser heuristically caching a stylesheet from a PREVIOUS binary, which
-// then paints the new markup with old rules until a hard refresh. The embed
-// lives in memory and is cheap to resend, so every load simply refetches.
+// noCacheForEmbeddedAssets marks the UI assets no-cache and gives the ETag
+// middleware a chance to add a content validator. The latter matters because
+// embedded files carry no modification time; without a validator the browser
+// can heuristically reuse a stylesheet from a previous binary and paint the new
+// markup with old rules.
 func noCacheForEmbeddedAssets(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cacheControl := "no-cache"
