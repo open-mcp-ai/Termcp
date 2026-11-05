@@ -183,7 +183,7 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 		}
 		a, ok := s.Agents[parts[0]]
 		if !ok {
-			fail(404, "principal not found")
+			fail(404, "Agent not found")
 			return
 		}
 		var in struct {
@@ -195,12 +195,13 @@ func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if in.Revision != agentRevision(a) {
-			fail(409, "principal changed; reload before saving")
+			fail(409, "Agent changed; reload before saving")
 			return
 		}
 		if in.GroupID != "" && in.GroupID != deniedGroupID {
-			if _, ok := s.Groups[in.GroupID]; !ok {
-				fail(400, "permission group is missing")
+			group, ok := s.Groups[in.GroupID]
+			if !ok || !group.Enabled {
+				fail(400, "permission group is missing or disabled")
 				return
 			}
 		}

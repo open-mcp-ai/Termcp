@@ -2,6 +2,8 @@
 
 **实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
 
+**2026-11-05 范围收敛**：AgentGrant、多用户/RoleBinding、OAuth、canonical origin/可信代理、退出所有设备和密码恢复不进入当前实现。权限目录以 #252 为唯一来源，认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+
 状态：Admin 初始化、JWT Cookie、可撤销会话及预设角色入口权限第一版已实现（2026-10-28）；本文其他 Agent/Grant、逐操作权限和换证细节仍为设计提案。原始设计日期：2026-10-27，核验基线 `dev@6a8af55`。
 
 第一版实现位于 `internal/auth/managed.go`、`managed_http.go`：默认数据目录的 `auth.enc` 加密保存固定本机 Admin 身份、独立随机签名密钥、会话和角色入口权限；`auth.json` 只有版本标记。用户只设置登录密码与配置解密密码：前者由独立 Argon2id verifier 校验，后者通过现有 Argon2id 密钥环验证并解锁同一 Main Key。登录页 `/login`，账号及权限页 `/auth`；会话有效期 24 小时，退出撤销对应 SID 并关闭该会话的活动 WebSocket；重启后先登录，锁定时再输入解密密码。入口权限修改使用 revision 比较后保存，对新请求立即生效。当前不签发 Agent token，不代表本文完整 Agent 业务策略已实现。

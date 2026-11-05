@@ -215,6 +215,87 @@ func TestPermissionPageHasOneContextualBackLinkAndMobileColumnReset(t *testing.T
 	}
 }
 
+func TestPermissionPageHasMobileGroupAccordionAndDraftControls(t *testing.T) {
+	for _, want := range []string{
+		`id="permission-groups-mobile-toggle"`,
+		`id="permission-mobile-subjects"`,
+		`batchToggle.id='permission-batch-toggle'`,
+		`data-batch-effect`,
+		`discardButton.id='discard-policy'`,
+		`permissionCreate('button','',t('discardChanges'))`,
+		`['deny','filterDeny']`,
+		`function permissionLayoutDetail()`,
+		`id="permission-subject-home"`,
+		`function permissionLayoutSubjectSection()`,
+		`function permissionRenderSubjects()`,
+		`max-height:none!important`,
+		`.auth-permissions .permission-groups-mobile-toggle{display:flex`,
+		`@media(max-width:840px)`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions mobile shell lacks %q", want)
+		}
+	}
+}
+
+func TestPermissionPageExplainsMCPAccessSwitches(t *testing.T) {
+	for _, want := range []string{
+		`<span data-text="instanceAccess">MCP 访问</span>`,
+		`aria-describedby="mcp-access-help"`,
+		`id="mcp-access-help" class="visually-hidden"`,
+		`id="mcp-access-help-trigger"`,
+		`id="mcp-access-tooltip"`,
+		`mcpAccessHelp:'管理员 MCP 允许管理员凭据访问 MCP`,
+		`.mcp-help-icon:hover~.mcp-help-tooltip`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions page lacks MCP access explanation %q", want)
+		}
+	}
+	if strings.Contains(permissionsHTML, `class="mcp-help-copy"`) {
+		t.Error("expanded MCP access panel repeats the tooltip copy")
+	}
+	if strings.Contains(permissionsHTML, `summary:hover .mcp-help-tooltip`) {
+		t.Error("MCP tooltip is still triggered by the whole summary hover")
+	}
+}
+
+func TestPermissionPageProvidesCompleteAgentManagement(t *testing.T) {
+	for _, want := range []string{
+		`data-text="mobileSubjects">Agent 管理`,
+		`id="permission-agent-search"`,
+		`id="permission-agent-filter"`,
+		`id="permission-agent-create-form"`,
+		`id="delete-agent-dialog"`,
+		`function permissionPreviewAgentDelete(principal)`,
+		`/delete-preview`,
+		`{method:'DELETE',body:JSON.stringify({revision:principalDeletePlan.revision,plan_revision:principalDeletePlan.plan_revision})}`,
+		`.workspace>aside .permission-mobile-subjects-body{flex:1 1 auto;min-height:0;overflow-y:auto`,
+		`.permission-mobile-subject-actions{display:grid;grid-template-columns:repeat(2`,
+		`scopeHead.after(summary)`,
+		`effectiveAccess:'总体预览'`,
+		`unassignedHint:'未绑定有效权限组，凭据当前不可用。'`,
+		`tokenHint:'每个客户端使用独立 Token，可单独撤销。'`,
+		`applyGroupChange:'修改'`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions page lacks Agent management contract %q", want)
+		}
+	}
+	if strings.Contains(permissionsHTML, "主体") {
+		t.Error("permissions page retains user-facing 主体 terminology")
+	}
+	if strings.Contains(permissionsHTML, `addSpecial('admin'`) {
+		t.Error("permissions page retains the single-user Admin management entry")
+	}
+	if !strings.Contains(permissionsHTML, `leftUnassigned-rightUnassigned`) {
+		t.Error("permissions page does not place unassigned Agents first")
+	}
+	if !strings.Contains(permissionsHTML, `subjectsOpen:false`) || strings.Contains(permissionsHTML, `permissionUI.subjectsOpen=true`) {
+		t.Error("Agent management must start collapsed")
+	}
+}
+
 func TestPermissionCreatePanelCanCloseFromButtonKeyboardAndToggle(t *testing.T) {
 	for _, want := range []string{
 		`id="close-new-agent"`,

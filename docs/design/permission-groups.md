@@ -1,5 +1,7 @@
 # 权限组：当前实现合同
 
+**2026-11-05 范围更新**：权限目录、动作数量和预置组以 [#252](https://github.com/open-mcp-ai/Termcp/issues/252) 修正后的 46 项清单为准。下文 45 项是当前代码快照，不是最终目标。完整边界见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+
 状态：2026-11-02 已在工作区实现，尚未合并。对应 #232 的 G01–G05、O01、P01–P03、S01 与 O02。审批回放和 #196/#197 的词汇/多组继承仍不属于本批范围。
 
 ## 身份、组和凭据
@@ -50,12 +52,14 @@ version 3 曾同时表示 rebase-前词表和 dev 的合并词表，因此迁移
 | POST /auth/groups/{id}/delete-preview | 返回组 revision、访问数据 plan_revision、成员 ID 和影响数量。 |
 | DELETE /auth/groups/{id} | 校验预览版本；有成员时明确 move/deny；删除缺省时必须提供新缺省组。 |
 | GET /auth/group-presets | 五个版本化角色模板及明确动作、条件。 |
-| GET/POST /auth/principals | 列出主体，或创建并绑定到有效组；默认不签发 token。 |
-| PATCH /auth/principals/{id} | 带主体 revision 更新 enabled；不接收主体直接策略。 |
-| PUT /auth/principals/{id}/group | 带主体 revision 修改绑定，空字符串表示跟随缺省。 |
+| GET/POST /auth/principals | 列出 Agent（含凭据/活动请求/后台工作计数），或创建并绑定到有效组；默认不签发 token。 |
+| PATCH /auth/principals/{id} | 带 Agent revision 更新 enabled；不接收 Agent 直接策略。 |
+| PUT /auth/principals/{id}/group | 带 Agent revision 修改权限组，空字符串表示跟随缺省。 |
+| POST /auth/principals/{id}/delete-preview | 返回 Agent revision、AccessRevision 及凭据、活动请求、后台工作影响。 |
+| DELETE /auth/principals/{id} | 校验 Agent 和 preview revision；原子删除 Agent 及其全部 token，取消活动请求与后台工作。 |
 | GET/PUT /auth/default-group | 使用 AccessRevision 修改缺省引用，影响未显式绑定主体。 |
 
-改变成员、凭据、组或缺省引用会递增 AccessRevision，使旧删除预览失效。组策略更新会使相关主体修订变化，防止陈旧的兼容客户端覆盖新策略。
+改变 Agent、凭据、组或缺省引用会递增 AccessRevision，使旧删除预览失效。组策略更新会使相关 Agent 修订变化，防止陈旧的兼容客户端覆盖新策略。
 
 ## 预置的边界
 
@@ -67,11 +71,11 @@ version 3 曾同时表示 rebase-前词表和 dev 的合并词表，因此迁移
 
 ## 唯一管理入口
 
-策略只通过 /auth/groups 管理，主体只通过 /auth/principals 管理。创建主体默认不签发凭据；显式 issue_token:true 可同时签发。/auth/tokens 使用 principal_id，管理员凭据不绑定业务组。旧 /auth/agents、agent_id、逐主体策略和升级预览不保留别名或兼容实现。
+策略只通过 /auth/groups 管理，Agent 只通过 /auth/principals 管理。创建 Agent 默认不签发凭据；显式 issue_token:true 可同时签发。/auth/tokens 使用 principal_id，管理员凭据不绑定业务组。旧 /auth/agents、agent_id、逐 Agent 策略和升级预览不保留别名或兼容实现。
 
 ## 请求与后台工作撤权
 
-组策略、启停、成员迁移、缺省变化、删除和 token 撤销，在持久提交成功后取消受影响 token 的活动请求。持久失败时保留原实时状态；持久性告警按既有“提交已可见”合同收权。
+组策略、启停、Agent 权限组修改、缺省变化、删除和 token 撤销，在持久提交成功后取消受影响 token 的活动请求。持久失败时保留原实时状态；持久性告警按既有“提交已可见”合同收权。
 
 upload/download/copy 在真实传输启动点向服务端认证 context 登记后台工作，绑定已验证主体和凭据。登记与撤权共用认证锁，已撤销请求无法再登记新工作；正常响应结束不影响独立后台生命周期。工作完成时注销；停用/删除/撤 token 会发取消并关闭传输客户端，以中断阻塞 I/O。
 
@@ -81,7 +85,7 @@ SSE 的 HTTP 202 与实际 message 分开处理：登记检查 message 的存活
 
 ## 页面
 
-/permissions 左侧显示权限组与缺省标记，右侧分别提供动作/主机策略、成员与凭据。新建使用角色模板，不自动添加成员或签发 token。名称/说明、复制、启停、设缺省均有真实接口；删除使用受保护的预览确认对话框，选择成员迁移或拒绝，以及必要的新缺省组。
+/permissions 左侧显示权限组、缺省标记和独立的 Agent 管理区，右侧分别提供动作/主机策略、Agent 与凭据。新建权限组使用角色模板，不自动添加 Agent 或签发 token。Agent 管理支持搜索、状态筛选、创建、启停、修改权限组和删除预览。删除权限组使用受保护的预览确认对话框，选择 Agent 改绑或拒绝，以及必要的新缺省组。
 
 旧丢失空白名单的策略仍按拒绝修复，复核提示保存在组上；明确保存组策略后清理提示。页面与登录/设置/账号共用工作区主题，支持四个内置主题、auto、外部本地主题及后备配色；资源与 CSP 合同见 [认证页面主题](auth-page-themes.md)。
 
