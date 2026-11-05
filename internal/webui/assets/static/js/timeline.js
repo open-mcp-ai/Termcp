@@ -735,6 +735,18 @@ function railBindScroll(win, sid) {
   railUnbindScroll(st);
   st.scrollBound = sid;
   var term = railTermFor(win, sid);
+  /* xterm 6 moved scrolling off `.xterm-viewport` onto a VS Code-style scrollable
+     element wrapped around `.xterm-screen`, so a DOM 'scroll' listener on the
+     viewport never fires there. The official `onScroll` event is the portable
+     signal; the viewport listener stays as the fallback for 5.x builds. */
+  if (term && typeof term.onScroll === 'function') {
+    try {
+      st.unsubs.push(term.onScroll(function () {
+        railRepaintWindow(win, sid);
+        railEnsureWindow(win, sid);
+      }));
+    } catch (e) {}
+  }
   var vp = term && term.element && term.element.querySelector('.xterm-viewport');
   if (vp) {
     var onScroll = function () {

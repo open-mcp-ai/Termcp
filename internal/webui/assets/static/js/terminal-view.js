@@ -145,13 +145,13 @@ function createChannelTab(win, sessionId, opt) {
   inst.style.visibility = 'hidden';
   term.open(inst);
   // Show the "back to latest" button when the user scrolls this channel away from the tail.
-  var _vp = term.element && term.element.querySelector('.xterm-viewport');
-  if (_vp) {
-    _vp.addEventListener('scroll', function () {
+  // xterm 6 moved scrolling off .xterm-viewport (VS Code-style scrollable element
+  // around .xterm-screen); use the official onScroll event instead of DOM listeners.
+  if (typeof term.onScroll === 'function') {
+    term.onScroll(function () {
       if (win._activeChannelSid === sessionId) updateTermScrollButton(win);
-    }, { passive: true });
+    });
   }
-  attachXtermViewportScrollbarGuard(term);
   attachTermBrowserChordShield(term);
 
   // Store channel state. A readOnly-history channel renders already-exited
@@ -375,7 +375,7 @@ function _dropChannelView(win, sessionId) {
   ch.lineKind = 0;
   ch.statusState = '';
 
-  // Dispose xterm
+  // Dispose xterm (its subscriptions, including onScroll, go with it)
   try {
     if (ch.fitRo) { ch.fitRo.unobserve(ch.instEl); }
   } catch(e) {}
@@ -1046,7 +1046,7 @@ function updateTermScrollButton(win) {
   var ch = win._activeChannelSid && win._channels && win._channels[win._activeChannelSid];
   var term = ch ? ch.term : null;
   if (!term) { fab.classList.remove('visible'); return; }
-  fab.classList.toggle('visible', !xtermViewportNearBottom(term, 64));
+  fab.classList.toggle('visible', !xtermViewportNearBottom(term, 2));
 }
 
 /** Read resolved CSS colors so both new and existing xterms use one palette. */
@@ -1070,6 +1070,12 @@ function termcpXtermTheme() {
     var value = css.getPropertyValue('--xterm-' + properties[key]).trim();
     colors[key] = value || defaults[key];
   });
+  // xterm 6: custom scrollbar slider colours so the slider matches the glass border.
+  var sbBase = css.getPropertyValue('--term-border-4').trim() || 'rgba(110, 226, 255, .25)';
+  var sbHover = css.getPropertyValue('--term-fg-faint').trim() || 'rgba(110, 226, 255, .55)';
+  colors.scrollbarSliderBackground = sbBase;
+  colors.scrollbarSliderHoverBackground = sbHover;
+  colors.scrollbarSliderActiveBackground = sbHover;
   // The wrap owns the tint in transparent mode, keeping one alpha layer behind
   // the text. Opaque mode lets xterm paint the same solid surface as its window.
   colors.background = _themeTerminal.transparent ? 'rgba(0, 0, 0, 0)' :
