@@ -138,6 +138,15 @@ type jrpcHandle struct {
 // dialling from this process, is the thing that would be a new capability, in the sense
 // of one the target host's own network never granted.
 func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, sessionID, rawURL string) envelope.Slot {
+	return s.jrpcOpenWithHeaders(ctx, stmt, op, sessionID, rawURL, nil)
+}
+
+// jrpcOpenWithHeaders is jrpcOpen plus per-peer request headers, which is what an
+// MCP extension's `--headers` need (issue #271). An extension declaring
+// `--headers '{"Authorization":"Bearer ..."}'` used to be driven through a local
+// relay process on a pipe channel, because this function had nowhere to put a
+// credential; now it takes them and the extension is mounted as a real peer.
+func (s *Server) jrpcOpenWithHeaders(ctx context.Context, stmt directive.Statement, op, sessionID, rawURL string, headers map[string]string) envelope.Slot {
 	if sessionID == "" {
 		return badRequest(stmt, op+" open needs a session first: "+op+" open <session> <url>\n"+
 			"A gateway URL names a port on the network of the machine the session points at, "+
@@ -196,7 +205,7 @@ func (s *Server) jrpcOpen(ctx context.Context, stmt directive.Statement, op, ses
 		}
 		rawURL = resolved
 	}
-	ch, err := jrpc.Open(ctx, rawURL, dial)
+	ch, err := jrpc.OpenWithHeaders(ctx, rawURL, dial, headers)
 	if err != nil {
 		return envelope.Slot{Code: 400, Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeConnectionFailed},
 			Body: "transport: " + err.Error()}
