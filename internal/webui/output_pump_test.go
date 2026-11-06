@@ -30,11 +30,11 @@ func TestTerminalOutputPumpCoalescesWithoutHoldingAnEcho(t *testing.T) {
 	// producer stopped being ahead of us; without a branch on it, either nothing
 	// is batched (one frame per read — the original bug) or an echo waits out a
 	// timer (the regression this guards).
-	if !strings.Contains(body, "shell.HasMoreOutput(rid)") {
+	if !strings.Contains(body, "HasMoreOutput(ent.rid)") {
 		t.Error("the output pump no longer consults HasMoreOutput: without it there is no way to tell a " +
 			"burst from a finished echo, so either every chunk ships alone (#93) or an echo waits on a timer")
 	}
-	caughtUp := between(t, body, "case !shell.HasMoreOutput(rid)", ":")
+	caughtUp := between(t, body, "case !shell.HasMoreOutput(ent.rid)", ":")
 	if !strings.Contains(caughtUp, "terminalFlushMinGap") {
 		t.Errorf("the caught-up branch must flush once the min-gap has elapsed: an echo whose bytes have all "+
 			"arrived is what a person is waiting on; got %q", caughtUp)
