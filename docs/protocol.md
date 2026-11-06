@@ -7,6 +7,12 @@ Termcp collapses what would otherwise be dozens of MCP tool schemas into **one
 tool** and carries capability inside the conversation turns. The wire
 language it speaks is **`TERM/1`**.
 
+The implementation lives in [`termcp/term`](../term/term.go), and its
+dependency list is the promise: `go list -deps ./term` names no `internal/`
+package, no session, no socket and no clock. Parsing a line and rendering an
+envelope are the whole of it — an implementation of TERM/1 does not have to be
+this server. `go doc ./term` is the API companion to this document.
+
 This document is the reference for the protocol as implemented in v0.2.8.
 The running instance is always the authoritative source:
 - Empty `cmd` → human-readable guide

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/open-mcp-ai/termcp/internal/fsutil"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
@@ -266,7 +266,7 @@ func (s *Store) SaveTemplate(name string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(p, data); err != nil {
+	if err := fsutil.WriteFileAtomic(p, data); err != nil {
 		return err
 	}
 	// A template that now renders into something invalid is rolled back. A template
@@ -274,9 +274,9 @@ func (s *Store) SaveTemplate(name string, data []byte) error {
 	// and Load reports it by naming the holes.
 	if _, err := s.Load(name); err != nil && !isMissingValues(err) {
 		if existed {
-			_ = writeFileAtomic(p, before)
+			_ = fsutil.WriteFileAtomic(p, before)
 		} else {
-			_ = retryFS(func() error { return os.Remove(p) })
+			_ = fsutil.Retry(func() error { return os.Remove(p) })
 		}
 		return err
 	}
@@ -384,7 +384,7 @@ func (s *Store) writeValues(name string, values map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("encoding values: %w", err)
 	}
-	if err := writeFileAtomic(p, data); err != nil {
+	if err := fsutil.WriteFileAtomic(p, data); err != nil {
 		return err
 	}
 	s.notifyChange(name)
@@ -514,7 +514,7 @@ func (s *Store) saveLocked(e *Extension) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
-	return writeFileAtomic(p, data)
+	return fsutil.WriteFileAtomic(p, data)
 }
 
 // Delete removes an extension and its directory. A missing one is not an error: the
@@ -537,65 +537,17 @@ func (s *Store) Delete(name string) error {
 // removeLocked deletes one template's file and the directory that held it. The
 // caller holds s.mu and owns the change notification.
 func (s *Store) removeLocked(p string) error {
-	if err := retryFS(func() error { return os.Remove(p) }); err != nil && !os.IsNotExist(err) {
+	if err := fsutil.Retry(func() error { return os.Remove(p) }); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	// The values go with it. Leaving them behind would let a later extension of the
 	// same name inherit a stranger's hosts — and a host list is the one thing here a
 	// user cannot re-derive from the template.
-	_ = retryFS(func() error { return os.Remove(filepath.Join(filepath.Dir(p), LocalFileName)) })
+	_ = fsutil.Retry(func() error { return os.Remove(filepath.Join(filepath.Dir(p), LocalFileName)) })
 	// Best effort: leftover empty dirs are harmless, but a directory holding an
 	// unrelated file must not be swept away by a delete.
 	_ = os.Remove(filepath.Dir(p))
 	return nil
-}
-
-// writeFileAtomic writes through a temp file and renames it into place, so no reader
-// ever sees a partial template. 0600 because an extension can name private paths and
-// a command line.
-func writeFileAtomic(p string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-ext-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return retryFS(func() error { return os.Rename(tmpPath, p) })
-}
-
-// fsRetryAttempts and fsRetryDelay cover the window in which another goroutine holds
-// a template open for reading. On Windows, syscall.Open does not pass
-// FILE_SHARE_DELETE, so a rename or remove while a reader holds the handle fails with
-// a sharing violation rather than waiting. The reconciler re-reads every template on a
-// timer while an agent or the Web UI can save one, so this race is reachable in normal
-// use. Both handles are transient, so a brief retry turns it back into the atomic swap
-// it is everywhere else; on POSIX the first attempt already succeeded.
-const (
-	fsRetryAttempts = 20
-	fsRetryDelay    = 25 * time.Millisecond
-)
-
-func retryFS(op func() error) error {
-	var err error
-	for i := 0; i < fsRetryAttempts; i++ {
-		if err = op(); err == nil {
-			return nil
-		}
-		time.Sleep(fsRetryDelay)
-	}
-	return err
 }
 
 // holeWord names what a template asks for, for the error a wrong value name gets.
