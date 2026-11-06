@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/open-mcp-ai/termcp/internal/directive"
 	"github.com/open-mcp-ai/termcp/internal/envelope"
@@ -33,10 +34,33 @@ import (
 // THE KEY IS THE SESSION AND THE NAME, because that is what a second `open ext`
 // on the same extension resolves to: the peer is per instance, and an instance is
 // a (session, extension name) pair.
-var (
-	extPeersMu sync.Mutex
-	extPeers   = map[string]*jrpcHandle{}
-)
+//
+// THE TABLE IS A sync.Map AND EACH ENTRY IS ITS OWN SINGLE-FLIGHT. One key is one
+// independent entry with no invariant spanning keys, which is the shape sync.Map
+// is for. The open it guards is a network handshake — a dial, an `initialize`, a
+// `tools/list` — and that is exactly what must not sit under a lock: a peer that
+// accepts the connection and then stalls in userspace would hold the lock forever
+// and queue every other extension behind it. So the creator publishes an entry
+// with an unclosed `ready` channel, dials with nothing held, and closes it; a
+// concurrent ask for the same key finds that entry and waits on the channel (or
+// on its own ctx), then reads the result. That is also what makes a repeated
+// `open ext` return the peer already mounted instead of dialling a second one.
+var extPeers sync.Map // key string -> *extPeerEntry
+
+// extPeerEntry is one in-flight or completed mount.
+//
+// handle/err are written by the creator BEFORE close(ready) and are read only
+// after <-ready, so the channel close is the happens-before edge and no field
+// needs a lock of its own.
+type extPeerEntry struct {
+	ready  chan struct{}
+	handle *jrpcHandle
+	err    string
+	// abandoned is set by a release that arrived while this mount was still in
+	// flight. The creator reads it after close(ready) and closes whatever it
+	// opened, because nobody else can reach that handle any more.
+	abandoned atomic.Bool
+}
 
 func extPeerKey(sessionID, name string) string { return sessionID + "\x00" + name }
 
@@ -55,13 +79,60 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 			Body: "extension " + name + " needs a running session to reach its endpoint through"}, true
 	}
 	key := extPeerKey(sessionID, name)
-	extPeersMu.Lock()
-	if h, ok := extPeers[key]; ok && h != nil && h.ch != nil {
-		extPeersMu.Unlock()
-		return h, peerKey(h.sessionID, h.kind, h.index), envelope.Slot{}, true
-	}
-	extPeersMu.Unlock()
+	for {
+		if v, ok := extPeers.Load(key); ok {
+			entry := v.(*extPeerEntry)
+			select {
+			case <-entry.ready:
+			case <-ctx.Done():
+				return nil, "", envelope.Slot{Code: 504, Headers: map[string]string{"Error-Code": CodeConnectionFailed},
+					Body: "still connecting to " + name + "'s endpoint when this call gave up; the mount is in flight and a retry will join it"}, true
+			}
+			if entry.err != "" {
+				extPeers.CompareAndDelete(key, entry)
+				return nil, "", envelope.Slot{Code: 502, Headers: map[string]string{"Error-Code": CodeConnectionFailed},
+					Body: entry.err}, true
+			}
+			if entry.handle != nil {
+				h := entry.handle
+				return h, peerKey(h.sessionID, h.kind, h.index), envelope.Slot{}, true
+			}
+			return nil, "", envelope.Slot{}, true
+		}
 
+		entry := &extPeerEntry{ready: make(chan struct{})}
+		if _, loaded := extPeers.LoadOrStore(key, entry); loaded {
+			continue // another caller published first; join its entry
+		}
+		// THIS CALLER IS THE CREATOR. Nothing is held while the endpoint is dialled:
+		// the entry is already visible to joiners, and they wait on its channel.
+		h, handle, slot, _ := s.dialExtPeer(ctx, ext, sessionID, name)
+		entry.handle = h
+		if h == nil {
+			entry.err = slot.Body
+		}
+		close(entry.ready)
+		if entry.abandoned.Load() {
+			// A release ran while this was dialling: it could not wait without
+			// capping its own latency on a network handshake, so it marked the
+			// entry and left the cleanup here, where the handle is now known.
+			if h != nil && h.ch != nil {
+				s.closeExtPeer(h)
+			}
+			return nil, "", envelope.Slot{Code: 409, Headers: map[string]string{"Error-Code": CodeConflict},
+				Body: name + " was released while its endpoint was being opened; nothing is mounted"}, true
+		}
+		if h == nil {
+			extPeers.CompareAndDelete(key, entry)
+			return nil, "", slot, true
+		}
+		return h, handle, slot, true
+	}
+}
+
+// dialExtPeer performs the mount itself: the open, the handle lookup and the
+// registry entry. It is called by exactly one caller per key, with no lock held.
+func (s *Server) dialExtPeer(ctx context.Context, ext *extensions.Extension, sessionID, name string) (*jrpcHandle, string, envelope.Slot, bool) {
 	// The open itself goes through the same path a hand-written `open <session> mcp
 	// <url>` does, so admission, the capability door, the handshake and the tool
 	// listing are not re-implemented here — they are the peer layer's, unchanged.
@@ -77,35 +148,56 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 	jrpcChannelsMu.Lock()
 	h := jrpcChannels[handle]
 	jrpcChannelsMu.Unlock()
-	if h == nil {
-		return nil, "", slot, true
-	}
-	extPeersMu.Lock()
-	extPeers[key] = h
-	extPeersMu.Unlock()
 	return h, handle, slot, true
 }
 
 // unmountExtPeer closes the peer mounted for one extension instance and forgets it.
+//
+// IT NEVER WAITS ON THE MOUNT. A release is a lifecycle operation and the mount it
+// might collide with is a network handshake: waiting there would put an unbounded
+// external event on the release path, which is how a stuck peer turns "close this
+// extension" into a hung request. A mount still in flight is marked abandoned and
+// the creator closes what it opened.
 func (s *Server) unmountExtPeer(sessionID, name string) {
 	key := extPeerKey(sessionID, name)
-	extPeersMu.Lock()
-	h := extPeers[key]
-	delete(extPeers, key)
-	extPeersMu.Unlock()
-	if h != nil && h.ch != nil {
-		jrpcChannelsMu.Lock()
-		delete(jrpcChannels, peerKey(h.sessionID, h.kind, h.index))
-		jrpcChannelsMu.Unlock()
-		_ = h.ch.Close()
+	v, ok := extPeers.Load(key)
+	if !ok {
+		return
 	}
+	entry := v.(*extPeerEntry)
+	select {
+	case <-entry.ready:
+	default:
+		entry.abandoned.Store(true)
+		extPeers.CompareAndDelete(key, entry)
+		return
+	}
+	if !extPeers.CompareAndDelete(key, entry) {
+		return
+	}
+	if entry.handle != nil {
+		s.closeExtPeer(entry.handle)
+	}
+}
+
+// closeExtPeer drops a mounted peer from the registry and closes its connection.
+func (s *Server) closeExtPeer(h *jrpcHandle) {
+	if h == nil || h.ch == nil {
+		return
+	}
+	jrpcChannelsMu.Lock()
+	delete(jrpcChannels, peerKey(h.sessionID, h.kind, h.index))
+	jrpcChannelsMu.Unlock()
+	_ = h.ch.Close()
 }
 
 // extPeerHandleOf reports the peer mounted for an extension instance, if any.
 func (s *Server) extPeerHandleOf(sessionID, name string) string {
-	extPeersMu.Lock()
-	h := extPeers[extPeerKey(sessionID, name)]
-	extPeersMu.Unlock()
+	v, ok := extPeers.Load(extPeerKey(sessionID, name))
+	if !ok {
+		return ""
+	}
+	h := v.(*extPeerEntry).handle
 	if h == nil {
 		return ""
 	}

@@ -1243,21 +1243,32 @@ func (s *Server) directiveExtensionRelease(ctx context.Context, stmt directive.S
 
 // releaseExtPeers closes the peers mounted for one extension name, optionally
 // narrowed to the instance a channel handle belongs to.
+//
+// THE SCAN IS A SNAPSHOT, AND THE CLOSES HAPPEN OUTSIDE IT. Range holds no lock,
+// and closing a peer is a network operation — so the keys are collected first and
+// the unmounting runs afterwards, one entry at a time.
 func (s *Server) releaseExtPeers(name, handle string) {
-	extPeersMu.Lock()
 	type doomed struct{ sessionID, name string }
 	var list []doomed
-	for key, h := range extPeers {
-		sessionID, _, _ := strings.Cut(key, "\x00")
+	extPeers.Range(func(k, v any) bool {
+		key, _ := k.(string)
 		if !strings.HasSuffix(key, "\x00"+name) {
-			continue
+			return true
 		}
-		if handle != "" && h != nil && peerKey(h.sessionID, h.kind, h.index) != handle {
-			continue
+		entry, _ := v.(*extPeerEntry)
+		if entry == nil {
+			return true
 		}
+		if handle != "" {
+			h := entry.handle
+			if h == nil || peerKey(h.sessionID, h.kind, h.index) != handle {
+				return true
+			}
+		}
+		sessionID, _, _ := strings.Cut(key, "\x00")
 		list = append(list, doomed{sessionID: sessionID, name: name})
-	}
-	extPeersMu.Unlock()
+		return true
+	})
 	for _, d := range list {
 		s.unmountExtPeer(d.sessionID, d.name)
 	}
