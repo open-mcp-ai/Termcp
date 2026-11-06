@@ -1166,6 +1166,28 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if handle := shortHandle(doc); handle != "" {
 		slot.Headers["Handle"] = handle
 	}
+	// An extension whose template declares an endpoint is an MCP server, and termcp
+	// speaks MCP natively (issue #271): mount it as a real peer and hand back the
+	// peer's address, not a pipe channel. A caller that previously had to type the
+	// handshake, then `tools/list`, then a hand-built `tools/call` frame and match
+	// ids off a byte stream now types `call <peer> <tool> {…}` and reads text.
+	if sessID, _ := doc["session_id"].(string); sessID != "" {
+		if ext, err := s.extensions.Store().Load(name); err == nil && strings.TrimSpace(ext.URL) != "" {
+			_, peerHandle, peerSlot, ok := s.mountExtPeer(ctx, ext, sessID, name)
+			if ok && peerSlot.Code >= 400 {
+				return peerSlot
+			}
+			if peerHandle != "" {
+				slot.Headers["Handle"] = peerHandle
+				slot.Body = strings.TrimRight(slot.Body, "\n") + "\n" + extPeerNote(peerHandle)
+				// The peer's own discovery text names the tools it advertises; the
+				// extension document cannot, because it describes a template.
+				if body := strings.TrimSpace(peerSlot.Body); body != "" {
+					slot.Body += "\n" + body + "\n"
+				}
+			}
+		}
+	}
 	return slot
 }
 
@@ -1202,8 +1224,36 @@ func (s *Server) directiveExtensionRelease(ctx context.Context, stmt directive.S
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
+	// THE PEER GOES WITH THE INSTANCE. An endpoint extension's peer is this
+	// package's, not the reconciler's, so releasing the instance has to close it
+	// here or a closed extension would keep a live MCP session and a registry entry
+	// (issue #271). Every instance of the name is released when no channel is named,
+	// which is what the release itself just did.
+	s.releaseExtPeers(name, handle)
 	doc, _ := toolResultMap(res)
 	return generatedSlot(stmt, win, compactDocument(doc))
+}
+
+// releaseExtPeers closes the peers mounted for one extension name, optionally
+// narrowed to the instance a channel handle belongs to.
+func (s *Server) releaseExtPeers(name, handle string) {
+	extPeersMu.Lock()
+	type doomed struct{ sessionID, name string }
+	var list []doomed
+	for key, h := range extPeers {
+		sessionID, _, _ := strings.Cut(key, "\x00")
+		if !strings.HasSuffix(key, "\x00"+name) {
+			continue
+		}
+		if handle != "" && h != nil && peerKey(h.sessionID, h.kind, h.index) != handle {
+			continue
+		}
+		list = append(list, doomed{sessionID: sessionID, name: name})
+	}
+	extPeersMu.Unlock()
+	for _, d := range list {
+		s.unmountExtPeer(d.sessionID, d.name)
+	}
 }
 
 // extensionCapability maps an extension action onto its capability.
@@ -1763,6 +1813,15 @@ func (s *Server) extensionListing(res *mcpgo.CallToolResult, all bool) string {
 			// extension (an SFTP-only window) has no channel and reports its
 			// session, which is exactly the address a file read takes.
 			handle = s.addressOf(getString(item, "session_id", ""), shell)
+		} else if peer := s.extPeerHandleOf(getString(item, "session_id", ""), name); peer != "" {
+			// AN ENDPOINT EXTENSION HAS NO CHANNEL BUT DOES HAVE AN ADDRESS (issue #271).
+			//
+			// It is mounted as a real MCP peer, so the thing a caller types next is
+			// `call <session> mcp:1 <tool> {…}` — and this column is the one place a
+			// caller that lost its context can recover that address. Falling back to the
+			// bare session id left the column claiming a handle that no `call` accepts,
+			// so the only way back was to run `open ext` again.
+			handle = peer
 		}
 		notes := strings.ReplaceAll(getString(item, "notes", ""), "\n", " ")
 		if len(notes) > 60 {
