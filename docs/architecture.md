@@ -59,6 +59,17 @@ reply := srv.Term(ctx, "ls session", nil)   // 拿到 TERM/1 信封
 
 `Headless` 省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
 
+于是有四种组合，各有各的用途：
+
+| 形态 | 怎么得到 | 适用 |
+|---|---|---|
+| 完整版 | `make build` | 人 + agent 共用一台实例 |
+| 运行时无 UI | `termcp --headless` | 一个二进制既能给 web 也能只给 agent |
+| 编译期无 UI（termcp-headless） | `make build-api` → `dist/termcp-api-*` | 镜像要小、永远不给 web 用 |
+| 库（SDK） | `import "termcp/core"`，`NoListener: true` | 嵌进别的 Go 程序，连端口都不要 |
+
+第三种就是 issue 里说的 `termcp-headless`：产物名带 `api` 后缀，可与完整版并存于 `dist/`。它和 `--headless` 不重复——一个减的是**二进制**，一个减的是**装配**。
+
 协议层的稳定性承诺跟着协议版本走，不跟模块版本走：改一行的含义、改状态码、改 locator 指代什么是 breaking change；加一条指令、一个 flag、一个 helper 不是。
 
 ### 内部运行时
