@@ -109,3 +109,169 @@ catches a test that only passes after some other test has run (failures print a
 seed — rerun with `go test -shuffle=<seed>` to confirm). For packages that touch
 the filesystem, run two copies concurrently in separate shells — that is what a
 second CI job does to your assumptions.
+
+## Waiting is a state, not a duration
+
+The two flaky failures this section was written for both came from the same
+mistake, and it is worth naming before the rules: **a test waited for a duration
+and called it a state.**
+
+```
+--- FAIL: TestARefusedReadKeepsTheBytesItRefused   (windows)
+    the read should have been refused for its charset, got:
+    TERM/1 204 No Content
+    Content-Range: bytes */0
+    Waited: 2000ms
+```
+
+The test started PowerShell, asked it to write four bytes, and read with
+`timeout: 2`. On a loaded Windows runner PowerShell needed more than two seconds
+to get to the write, so `read` correctly answered "nothing yet" — and the test
+read that as "the charset refusal is broken".
+
+```
+--- FAIL: TestAClosedChannelExplainsItself   (ubuntu)
+    a closed channel should refuse the read
+```
+
+That one polls for the extension to drop its channel, then polls the channel
+itself. The second loop treats *any* `IsError` as success and *every* non-error
+as "not yet" — but a `read` on a channel that is closing answers `204 No
+Content`, which is not an error either. The loop cannot tell "the channel is
+still open" from "the channel is closed and has nothing to say", so it spins
+until its deadline.
+
+Neither is a product bug. Both are a test asserting on a **return value that
+means something different from what the test assumes**, and using a **fixed
+duration as a proxy for a state**.
+
+### Rule 1: a small `timeout` is a request, not a guarantee
+
+`term(..., "timeout": N)` bounds how long the server waits. It does not promise
+the thing you are waiting for happens inside N. On a shared runner, a process
+starting up (PowerShell, a login shell, a cold `sh`) can take seconds before it
+produces its first byte.
+
+So never put two things in one call:
+
+```go
+// WRONG: "the bytes arrived" and "the encoding was refused" are different claims,
+// and the first one is not guaranteed inside the timeout.
+first := read(ch, timeout=2)
+if !strings.Contains(first, "not valid UTF-8") { t.Fatal(...) }
+
+// RIGHT: wait for the bytes as its own step, then assert on what they were.
+require.Eventually(t, func() bool {
+    return !strings.Contains(read(ch, timeout=1), "204 No Content")
+}, 30*time.Second, 100*time.Millisecond, "the command never produced output")
+first := read(ch, timeout=5)
+if !strings.Contains(first, "not valid UTF-8") { t.Fatal(...) }
+```
+
+The deadline belongs in the poll, and the `timeout` in the call should be
+small, because it is how long a *single* probe waits, not how long the test is
+willing to.
+
+### The deadline is a hang detector, not a budget
+
+This distinction is what makes a poll survive both a laptop and a shared runner,
+and it is worth stating because "60 seconds" looks like a performance guess:
+
+- **A budget** says "this should finish within N". It encodes an assumption about
+  machine speed, so every faster or slower machine is a bug report waiting.
+- **A hang detector** says "if this has not happened in N, something is broken
+  rather than slow". It only bounds how long a *failure* takes to report.
+
+A poll loop is insensitive to machine speed **by construction**: it returns on the
+first iteration that observes the state, so a slow machine costs extra iterations
+and nothing else. The deadline only decides how long to wait before declaring the
+state unreachable — 60s for a subprocess to print four bytes is not a budget, it
+is the point past which "slow" stops being a credible explanation.
+
+That property is testable, and proving it is cheaper than arguing about it. Slow
+the producer down deliberately and watch the test still pass at its normal speed:
+
+```go
+// Temporarily: make the command take 4 seconds to produce its first byte.
+write := "sh -c " + `"sleep 4; printf 'ÖÐÎÄ'; sleep 30"`
+```
+
+With the poll, the test finishes in ~0.5s (it returns the moment the byte
+arrives). With the old single `read` + `timeout: 2`, the same test fails with the
+exact CI symptom — `204 No Content`, `Waited: 2000ms`. If slowing the producer
+makes your test slower rather than just differently-timed, it is waiting on a
+duration; if it fails, it never had a way to wait at all.
+
+Absolute timeouts are the same trade. `-timeout 1800s` on CI and `600s` in
+`make test` are not "CI is three times slower" as a fact about the world; they
+are two different points past which a run is assumed wedged, chosen wide enough
+that a legitimately slow runner is not mistaken for a hang.
+
+### Rule 2: know what each status means before polling on it
+
+A poll loop needs a predicate that is true for exactly one state. Before writing
+one, check the meanings:
+
+| what you get | what it means | is it "done"? |
+|---|---|---|
+| `204 No Content` | nothing was available in the window | **no** — the channel may be open or closed |
+| `404` + `idle`/`closed` | the channel is gone | yes |
+| `IsError` | the tool refused | depends on *why* |
+
+`TestAClosedChannelExplainsItself` polled on "not an error", which `204` also
+satisfies. Poll on the state you actually want (`get ext <name>` reports whether
+the channel is still assigned), or match the status text, and let the deadline
+prove the failure.
+
+### Rule 3: sleep only between probes, never as the wait itself
+
+`time.Sleep` inside a polling loop is a backoff. `time.Sleep` standing in for
+"and by now it will have happened" is the flake. The repo has 22 sites sleeping
+50ms and 14 sleeping 20ms; most are backoff and fine, but any of them that is
+followed by a bare assertion rather than a check is a bug waiting for a slow
+runner. If you cannot write the check, you do not have a test — you have a
+stopwatch.
+
+## A source-text assertion is not a test of behaviour
+
+Four test files under `internal/webui` read their own package's `.go` files and
+match substrings (`readGoSource`). They exist because some invariants are about
+*structure*: "the pump accumulates before it sends", "this lock is not held
+across a send". A behavioural test cannot see those.
+
+They are still fragile in a specific way, and it bit this repo during a
+refactor:
+
+```
+marker "case !shell.HasMoreOutput(rid)" not found; lines that do:
+    case !shell.HasMoreOutput(ent.rid) && ...
+```
+
+The behaviour was identical — the variable holding the reader id was renamed
+from a parameter to a field on the entry — and the test failed anyway.
+
+So when you write one:
+
+- Match on **semantics, not spelling**. Prefer a marker that names the decision
+  (`"HasMoreOutput("`, `"flush()"`) over one that includes a local variable.
+- Say in the failure message **what invariant is being protected and why**, so
+  the next person can tell "I broke it" from "I renamed something".
+- Never use a source-text assertion where a behavioural one is possible. These
+  are for the cases where the property is genuinely about code shape.
+
+## A flake is a defect in the test, and it is in scope
+
+CI runs this suite on three operating systems on every PR. A test that fails
+one run in twenty does not cost one re-run: it teaches everyone to re-run red,
+which is how a real failure gets merged.
+
+So when a test flakes:
+
+1. **Reproduce it locally first** — `-count=10`, then `-cpu=1,2,4 -count=2`
+   (see `make test-stress`). A flake you cannot reproduce still needs the log
+   line that would have told you what the state was; add it.
+2. **Find which assumption was wrong**, and fix that. Adding a retry around a
+   broken assumption hides it and moves the failure to a slower machine.
+3. **Do not raise a timeout to make a flake go away.** If the only way a test
+   passes is by waiting longer, it is asserting on timing rather than on state —
+   see Rule 1.
