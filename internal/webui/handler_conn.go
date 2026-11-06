@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/term/locator"
@@ -22,10 +23,26 @@ type connectionSummary struct {
 	Host        string `json:"host,omitempty"`
 	User        string `json:"user,omitempty"`
 	Port        int    `json:"port,omitempty"`
+	// Masked says the address and user on this row have been replaced by the fixed
+	// mask. The port is an int, so it cannot carry a mask itself: the flag is what
+	// tells the client to print one instead of the number it did not receive. A
+	// row that is masked but still says `:2222` is not masked.
+	Masked bool `json:"masked,omitempty"`
 	// DefaultApproval is the profile's review default for new sessions. It is
 	// served on the list so the card can show the flag without a second fetch.
-	DefaultApproval bool `json:"default_approval"`
-	Temporary       bool `json:"temporary"`
+	DefaultApproval bool   `json:"default_approval"`
+	Temporary       bool   `json:"temporary"`
+	Storage         string `json:"storage"`
+	// Unloaded marks a profile whose bytes are present but unreadable because the
+	// key that seals it is not loaded. It travels as a flag, not as prose: the
+	// sentence the user reads belongs to the user's language, and the server does
+	// not know it.
+	Unloaded bool `json:"key_unloaded,omitempty"`
+	// NotActivated marks a profile whose key IS loaded but whose second layer is
+	// off. It is a different state with a different fix — insert the key, versus
+	// activate the host — and reporting both as "locked" left the person guessing
+	// which of the two they were looking at.
+	NotActivated bool `json:"not_activated,omitempty"`
 }
 
 // errSSHConfigRequired is what an omitted ssh_config resolves to, on every
@@ -33,6 +50,31 @@ type connectionSummary struct {
 // fmt.Errorf at the return site) so a caller — the handler writing the status
 // code, a test — can recognise the condition without matching the string.
 var errSSHConfigRequired = errors.New("ssh_config is required")
+
+/* maskFixedWidth is the fixed-width dot mask (§10.2). It does not reflect the real
+ * length: a mask that grew with the address would leak how long the host name is,
+ * which is the one thing masking is supposed to stop mattering.
+ */
+const maskFixedWidth = "••••••"
+
+// maskConnection replaces the address and user with the fixed mask. It is the only
+// place that does it, so "masked" means the same thing on every route.
+func maskConnection(cs *connectionSummary) {
+	if cs.Kind != sshconfig.KindRemote {
+		return
+	}
+	if cs.Host != "" {
+		cs.Host = maskFixedWidth
+	}
+	if cs.User != "" {
+		cs.User = maskFixedWidth
+	}
+	/* The port goes too. It is not identity by itself, but `:2222` narrows down
+	   which machine this is, and a masked row that leaks it is a row that only
+	   looks masked. Zero, not a sentinel: `Masked` is what the client reads. */
+	cs.Port = 0
+	cs.Masked = true
+}
 
 func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) {
 	if h.SSH == nil {
@@ -44,10 +86,36 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	/* Masking is a display-layer setting: ?reveal=true is the human asking to see
+	   the real values, and it changes nothing about storage or connectivity. */
+	masked := h.SSH.Masked() && r.URL.Query().Get("reveal") != "true"
 	var list []connectionSummary
 	for _, n := range names {
-		ent, err := h.SSH.Load(n)
+		/* One call, not two: the mode is a fact loading already established (it has
+		   to know whether an encrypted generation answers for this name), and asking
+		   `StorageMode` afterwards re-derived it with another directory listing and
+		   a stat — per host, on every list. Measured on 1000 hosts, that second look
+		   was 600 µs of the 2400 µs a listing cost. */
+		ent, mode, err := h.SSH.LoadWithMode(n)
 		if err != nil {
+			/* An encrypted host whose key is not loaded cannot be read, but it must
+			   still appear on the list: the operator has to see WHICH hosts are
+			   shut, and the AI needs a structured list with an honest storage mode
+			   rather than the whole inventory disappearing. Plaintext hosts are
+			   unaffected. */
+			if mode == sshconfig.StorageEncrypted {
+				/* Which of the two locks is shut decides which sentence the card
+				   prints, so the flag is set from the error the store actually
+				   returned rather than assumed from the storage mode. */
+				inactive := sshconfig.IsNotActivated(err)
+				list = append(list, connectionSummary{
+					Name:         n,
+					Kind:         sshconfig.KindRemote,
+					Storage:      mode,
+					Unloaded:     !inactive,
+					NotActivated: inactive,
+				})
+			}
 			continue
 		}
 		if h.NoInternal && ent.Kind == sshconfig.KindInternal {
@@ -55,6 +123,10 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		}
 		cs := summarizeConnection(n, ent)
 		cs.Temporary = h.SSH.IsTemporary(n)
+		cs.Storage = mode
+		if masked {
+			maskConnection(&cs)
+		}
 		list = append(list, cs)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": list})
@@ -88,6 +160,34 @@ func (h *Handler) handleGetConnection(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
+			return
+		}
+		/* A key that is not loaded is a state the operator changes in the keychain
+		   panel, not a request the client can fix: answer with a code the UI
+		   translates. */
+		if errors.Is(err, configstore.ErrKeyNotLoaded) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "key_locked",
+				"error": "This host is encrypted and the key that seals it is not loaded.",
+			})
+			return
+		}
+		/* Plugged in but not activated: a different action, so a different code. */
+		if errors.Is(err, configstore.ErrNotActivated) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "host_not_activated",
+				"error": "This host is encrypted and not activated. Activate it first, with its key's passphrase if it has one.",
+			})
+			return
+		}
+		/* The profile exists and is beyond recovery: no key will ever open it.
+		   Answering 404 sends the operator looking for a missing file instead of
+		   the one action that helps — delete it. */
+		if sshconfig.IsOrphanedCiphertext(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "config_encryption_orphaned",
+				"error": "This host was encrypted with a key that has been deleted.",
+			})
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -152,7 +252,44 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 			h.Sessions.RenameSSHConfig(from, name)
 		}
 	}
-	if err := h.SSH.SaveWithOptions(name, body, temporary); err != nil {
+	// Per-profile encryption intent from the connection form. Absent means "use
+	// the store preference", which is what the API and older clients send.
+	mode := sshconfig.SaveMode{Temporary: temporary}
+	if values, ok := r.URL.Query()["encrypt"]; ok {
+		if len(values) != 1 {
+			http.Error(w, "encrypt must be true or false", http.StatusBadRequest)
+			return
+		}
+		want, parseErr := strconv.ParseBool(values[0])
+		if parseErr != nil {
+			http.Error(w, "encrypt must be true or false", http.StatusBadRequest)
+			return
+		}
+		mode.Encrypt = &want
+	}
+	/* Which key seals this host, when the form offers a choice. A named key is an
+	   explicit "encrypt with this one", so it also settles the encrypt question
+	   above; the id is validated by the store, which refuses a key it does not
+	   have or one that is not loaded. */
+	if values, ok := r.URL.Query()["key"]; ok {
+		if len(values) != 1 {
+			http.Error(w, "key must be one key id", http.StatusBadRequest)
+			return
+		}
+		keyID, err := configStorageKeyID(values[0])
+		if err != nil {
+			writeConfigStorageError(w, err)
+			return
+		}
+		mode.KeyID = keyID
+	}
+	if err := h.SSH.SaveWithMode(name, body, mode); err != nil {
+		if errors.Is(err, configstore.ErrKeyNotLoaded) || errors.Is(err, configstore.ErrKeyNotFound) ||
+			errors.Is(err, configstore.ErrNotActivated) || errors.Is(err, configstore.ErrPassphraseRequired) ||
+			errors.Is(err, configstore.ErrKeyRequired) {
+			writeConfigStorageError(w, err)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -318,6 +455,21 @@ func (h *Handler) handleDeleteConnection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := h.SSH.Delete(name); err != nil {
+		if errors.Is(err, configstore.ErrKeyNotLoaded) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "key_locked",
+				"error": "This host is encrypted and the key that seals it is not loaded.",
+			})
+			return
+		}
+		/* Plugged in but not activated: a different action, so a different code. */
+		if errors.Is(err, configstore.ErrNotActivated) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "host_not_activated",
+				"error": "This host is encrypted and not activated. Activate it first, with its key's passphrase if it has one.",
+			})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

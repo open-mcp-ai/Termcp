@@ -200,7 +200,17 @@ func Resolve(sessMgr *session.Manager, msgMgr *message.Manager, id string) (*Sou
 
 	// Locator channel form (:N): the target is that specific shell.
 	if shellIdx > 0 {
+		// THE SESSION PART IS A REF, NOT ONLY AN ID (issue #320): `run web:1` wrote the name
+		// the session was created with, and this branch answered `session "web" not found`
+		// while `read web:1` — one layer up — resolved it.
 		sess := sessMgr.Get(id)
+		if sess == nil {
+			if resolved, candidates := sessMgr.Resolve(id); resolved != nil {
+				sess = resolved
+			} else if len(candidates) > 1 {
+				return nil, errf(ErrInvalid, "%d sessions match %q: use more of the id, or the name they were given", len(candidates), id)
+			}
+		}
 		if sess == nil {
 			return nil, errf(ErrSessionNotFound, "session %q not found", id)
 		}

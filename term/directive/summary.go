@@ -21,6 +21,26 @@ package directive
 // Each line is the answer to "what does this flag take, and what happens if I get it
 // wrong", not a restatement of the flag's name.
 var flagSummaries = map[string]map[string]string{
+	"open": {
+		"argv":        "command and arguments; put this last, or later flags may become program arguments",
+		"pty":         "allocate a terminal even with --argv; a PTY does not report a command exit code",
+		"pipe":        "open a pipe (the default with --argv) instead of an interactive terminal",
+		"name":        "label the new channel; the label must not already be in use",
+		"on-exit":     "pipe process exit: keep its output readable (default) or close the channel",
+		"rows":        "terminal height in rows",
+		"cols":        "terminal width in columns",
+		"size":        "terminal geometry as rows x columns, e.g. 24x80",
+		"local-port":  "listening port of a forward; 0 picks a free port for local and dynamic forwards only",
+		"remote-host": "destination host for a local or remote forward",
+		"remote-port": "destination port for a local or remote forward",
+		"bind-host":   "local forward: address to listen on here (default 127.0.0.1)",
+		"local-host":  "remote forward: address to listen on at the target (default 127.0.0.1)",
+		"remote":      "forward from a listener on the target instead of on this host",
+		"dynamic":     "create a local SOCKS5 listener on loopback",
+		"target":      "CDP: attach to the tab with this target ID on the named connection",
+		"channel":     "open ext: start this declared channel of the template instead of the default one",
+		"all":         "open ext: return the full template instead of the short description",
+	},
 	"read": {
 		"from-line":  "start at a complete line; returned lines keep their real numbers",
 		"tail":       "the last N lines of the window instead of the first",
@@ -47,6 +67,12 @@ var flagSummaries = map[string]map[string]string{
 		"reader":   "registered reader id to consume from; keeps its own cursor independent of the default reader",
 		"mode":     "on a file read: text (default), hex for bytes, or file to download to a local_path",
 		"wait":     "spend the whole timeout on an empty window instead of ending it when the stream goes quiet (valueless)",
+		"verify":   "read the bytes back and compare their sha256 to what was written",
+		"depth":    "on a directory read: levels to walk, 1 by default and 5 at most; a SEARCH defaults to 5",
+		"limit":    "on a directory read: entries to return, 200 by default and 2000 at most",
+		"name":     "search FILE NAMES: a glob matched against the base name at any depth (`*.log`)",
+		"glob":     "limit which files --grep searches (`*.go`); a pattern with `/` matches the full path",
+		"context":  "lines kept around each match, like grep -C: 0 by default and 5 at most",
 	},
 }
 
@@ -77,12 +103,23 @@ var summaryExamples = map[string]string{
 	"key":     "key a1f3:1 enter                              # submit what was typed",
 	"send":    "send a1f3:1 {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
 	"call":    `call a1f3:1 mcp:1 ping {"a":1}                 # a tool on a mounted peer`,
-	"open":    "open a1f3:1 --pty --argv bash                 # a second channel on a session",
+	"open":    "open a1f3 --pty --argv bash                   # a second channel on a session",
 	"connect": "connect internal --name build                 # a session, then `ls` shows it",
 	"close":   "close a1f3:1                                  # one channel; the session stays",
 	"write":   `write a1f3:1 file app.log --data "line\n"     # append bytes to a file`,
 	"get":     "get a1f3:1 file app.log --tail 20             # read part of a file",
 	"ls":      "ls                                           # everything this instance holds",
+	// THE REST OF THE VOCABULARY, because an error is exactly where a caller who does not
+	// know the shape ends up (issue #317): a verb with no example sent nothing at all, so
+	// `run --bogus` was told "unknown flag" and left to guess the right line.
+	"rm":     "rm a1f3 --dry-run                            # what would be erased; drop the flag to do it",
+	"create": "create host prod --host 10.0.0.5 --user deploy   # a saved profile",
+	"edit":   "edit host prod --port 2222                    # change one field",
+	"help":   "help run --all                               # the whole page for one verb",
+	"notify": `notify --level warn "deploy needs a key"      # reach the human in the Web UI`,
+	"reader": "reader a1f3:1 --register                      # a cursor from now, no replay",
+	"resize": "resize a1f3:1 --rows 40 --cols 120             # a pty follows the size",
+	"span":   "span a1f3:1 --from 120 --to 480               # bytes between two cursors",
 }
 
 // SummaryExample returns the worked example for a verb, if it has one.

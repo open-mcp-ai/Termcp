@@ -205,6 +205,18 @@ func channelIndexWord(word string) (string, bool) {
 	return w, true
 }
 
+// SplitHandleSession returns the session part of an address: `a1f3:2` -> `a1f3`.
+//
+// IT EXISTS SO A REFUSAL CAN NAME THE CALLER'S OWN SESSION. `close a1f3:1 --all` is
+// refused with "write `close a1f3`", and the id there must be the one in the target,
+// not a guess from splitting on ':' at each call site — a session id that contains a
+// colon would make that guess wrong.
+func SplitHandleSession(target string) string {
+	return locator.SplitHandle(strings.TrimSpace(target)).SessionID
+}
+
+// NamesAChannel reports whether every entry of a (possibly comma-separated) target
+// names a channel.
 func NamesAChannel(target string) bool {
 	entries := strings.Split(target, ",")
 	for _, entry := range entries {
