@@ -1087,6 +1087,11 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	if err := setFlagJSONObject(args, stmt, "headers", "headers"); err != nil {
 		return badRequest(stmt, err.Error())
 	}
+	/* --termcp-tool names the peer tool that speaks TERM/1 (#274). It is a plain
+	   string because it is a name, and a name is not a shape to validate here:
+	   whether the peer actually has that tool is answered by the peer, at mount,
+	   where the answer can be reported rather than guessed. */
+	setFlagString(args, stmt, "termcp-tool", "termcp_tool")
 	setFlagList(args, stmt, "allow", "allow")
 	setFlagList(args, stmt, "paths", "paths")
 	/* --forwards declares tunnels, and a tunnel is a structure rather than a
@@ -1184,13 +1189,17 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	// it: the summary drops the abstract half only when the concrete one is present.
 	var peerHandle string
 	var peerSlot envelope.Slot
+	// The mount's own session id, kept so the declaration recorded with the
+	// mount can be looked up again for the note below without re-deriving it
+	// from the peer address.
+	var peerSession string
 	if sessID, _ := doc["session_id"].(string); sessID != "" {
 		if ext, err := s.extensions.Store().Load(name); err == nil && strings.TrimSpace(ext.URL) != "" {
 			_, handle, slot, ok := s.mountExtPeer(ctx, ext, sessID, name)
 			if ok && slot.Code >= 400 {
 				return slot
 			}
-			peerHandle, peerSlot = handle, slot
+			peerHandle, peerSlot, peerSession = handle, slot, sessID
 		}
 	}
 	slot := generatedSlot(stmt, win, compactDocument(extDocSummary(doc, peerHandle, boolFlag(stmt, "all"))))
@@ -1200,6 +1209,11 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if peerHandle != "" {
 		slot.Headers["Handle"] = peerHandle
 		slot.Body = strings.TrimRight(slot.Body, "\n") + "\n" + extPeerNote(peerHandle)
+		// The declaration, when there is one, belongs here: it changes what the
+		// caller can type at this peer, so it has to arrive with the handle.
+		if note := extTermcpNote(name, s.extTermcpOf(peerSession, name)); note != "" {
+			slot.Body += note + "\n"
+		}
 		// The peer's own discovery text names the tools it advertises; the
 		// extension document cannot, because it describes a template.
 		if body := strings.TrimSpace(peerSlot.Body); body != "" {
