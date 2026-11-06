@@ -19,11 +19,12 @@
 <style>
 body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permission-soft:var(--selected);--permission-divider:var(--line)}
 .auth-permissions .brand,.auth-permissions h1,.auth-permissions h2,.auth-permissions h3,.auth-permissions h4{letter-spacing:normal}
-.auth-permissions>header{min-height:60px;padding:0 24px;gap:18px;flex-wrap:nowrap}
+.auth-permissions>header{min-height:60px;padding:0 24px;gap:12px;flex-wrap:nowrap}
 .auth-permissions nav{gap:4px}
 .auth-permissions nav a{min-height:34px;display:inline-flex;align-items:center;padding:0 10px;border-radius:5px;color:var(--muted);font-weight:500}
-.auth-permissions .back-link{gap:6px}
+.auth-permissions .back-link{justify-content:center;width:30px;height:30px;min-height:30px;padding:0;border-radius:6px;color:var(--muted)}
 .auth-permissions .back-link svg{display:block;flex:none}
+.auth-permissions .back-link:hover{background:var(--selected);color:var(--accent)}
 .auth-permissions .page-controls{margin-left:auto}
 .auth-permissions nav a:hover{background:var(--canvas);text-decoration:none;color:var(--ink)}
 .auth-permissions nav a[aria-current]{background:var(--selected);color:var(--ink)}
@@ -317,7 +318,7 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
   .auth-permissions .permission-detail-home{display:none}
 }
 @media(max-width:620px){
-  .auth-permissions>header{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand controls" "nav nav";min-height:0;padding:8px 12px;gap:4px 8px}
+  .auth-permissions>header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"nav brand controls";min-height:0;padding:8px 12px;gap:4px 8px}
   .auth-permissions>header .brand{grid-area:brand}
   .auth-permissions>header nav{grid-area:nav}
   .auth-permissions>header .page-controls{grid-area:controls}
@@ -371,9 +372,130 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 .token-table th:nth-child(2),.token-table td:nth-child(2){width:190px}
 @media(max-width:620px){.current-token-head{flex-direction:column}.current-token-head .group-actions{width:100%}.current-token-head .group-actions button{flex:1}.token-history-head{align-items:flex-start;flex-direction:column}}
 </style>
+<style>
+.auth-permissions .workspace{grid-template-columns:296px minmax(0,1fr)}
+.auth-permissions .workspace>aside{padding:10px 10px 0;background:var(--permission-rail);overflow:hidden}
+.auth-permissions #permission-groups-mobile-toggle,.auth-permissions #permission-subjects-mobile-toggle{display:none!important}
+.auth-permissions .workspace-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.auth-permissions .workspace-nav-button{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:9px;min-height:58px;padding:8px 9px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);text-align:left}
+.auth-permissions .workspace-nav-button:hover{background:var(--paper);color:var(--ink)}
+.auth-permissions .workspace-nav-button[aria-selected=true]{border-color:var(--accent);background:var(--paper);color:var(--ink)}
+.auth-permissions .workspace-nav-icon{display:grid;place-items:center;width:22px;height:22px;color:currentColor}
+.auth-permissions .workspace-nav-icon svg{display:block;width:18px;height:18px}
+.auth-permissions .workspace-nav-copy{min-width:0}
+.auth-permissions .workspace-nav-copy strong{display:block;font-size:13px;line-height:1.3}
+.auth-permissions .workspace-nav-copy small{display:block;margin-top:2px;overflow:hidden;color:var(--muted);font-size:10px;line-height:1.3;text-overflow:ellipsis;white-space:nowrap}
+.auth-permissions #permission-groups-mobile-body,.auth-permissions #permission-mobile-subjects{display:flex;flex:1;flex-direction:column;min-height:0;margin:0;border:0;border-radius:0;background:transparent;overflow:hidden}
+.auth-permissions #permission-mobile-subjects{max-height:none!important}
+.auth-permissions #permission-groups-mobile-body .sidebar-head{padding:14px 6px 9px}
+.auth-permissions #permission-groups-mobile-body .group-search{padding:0 6px 10px}
+.auth-permissions #permission-groups-mobile-body .agent-list{padding:0 2px 10px}
+.auth-permissions #permission-mobile-subjects .permission-agent-tools{padding:14px 6px 8px;border-top:0}
+.auth-permissions #permission-mobile-subjects .permission-agent-filter{padding:0 6px 10px}
+.auth-permissions #permission-subjects-mobile-body{display:flex;flex:1;flex-direction:column;min-height:0}
+.auth-permissions #permission-mobile-subject-list{display:grid;align-content:start;gap:4px;min-height:0;padding:0 2px 10px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.auth-permissions .agent-nav-item{display:grid;grid-template-columns:8px minmax(0,1fr) auto;grid-template-areas:"dot title chevron" "dot meta chevron";gap:3px 10px;width:100%;min-height:62px;padding:10px 9px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;color:var(--ink)}
+.auth-permissions .agent-nav-item:hover{border-color:var(--line);background:var(--paper)}
+.auth-permissions .agent-nav-item[aria-current=true]{border-color:var(--accent);background:var(--paper)}
+.auth-permissions .agent-nav-dot{grid-area:dot;width:7px;height:7px;margin-top:5px;border-radius:50%;background:var(--good)}
+.auth-permissions .agent-nav-item[data-enabled=false] .agent-nav-dot{background:var(--error)}
+.auth-permissions .agent-nav-item[data-group-state=unassigned] .agent-nav-dot{background:var(--warning,var(--muted))}
+.auth-permissions .agent-nav-name{grid-area:title;min-width:0;overflow:hidden;font-size:13px;font-weight:650;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+.auth-permissions .agent-nav-meta{grid-area:meta;min-width:0;overflow:hidden;color:var(--muted);font-size:11px;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+.auth-permissions .agent-nav-chevron{grid-area:chevron;align-self:center;width:16px;height:16px;color:var(--muted);transform:rotate(-90deg)}
+.auth-permissions #permission-agent-create-form{margin:0 2px 10px}
+.auth-permissions .permission-agent-form-note{margin:0;color:var(--muted);font-size:11px;line-height:1.45}
+.auth-permissions .permission-agent-default-note{display:flex;align-items:flex-start;gap:7px;margin:0 6px 10px;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--muted);font-size:11px;line-height:1.45}
+.auth-permissions .permission-agent-default-note svg{flex:none;width:15px;height:15px;margin-top:1px;color:var(--accent)}
+.auth-permissions .detail{overflow:hidden}
+.auth-permissions #agent-detail{height:100%;min-height:0}
+.auth-permissions #agent-detail-content{display:flex;flex:1;flex-direction:column;min-height:0}
+.auth-permissions .agent-detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:22px 24px 16px;border-bottom:1px solid var(--line)}
+.auth-permissions .agent-detail-title{display:flex;align-items:center;gap:9px;min-width:0}
+.auth-permissions .agent-detail-title h2{min-width:0;overflow-wrap:anywhere;font-size:22px;line-height:1.3}
+.auth-permissions .agent-status-badge{display:inline-flex;align-items:center;min-height:23px;padding:0 8px;border:1px solid currentColor;border-radius:999px;font-size:10px;font-weight:700;line-height:1;white-space:nowrap}
+.auth-permissions .agent-status-badge[data-state=enabled]{color:var(--good)}
+.auth-permissions .agent-status-badge[data-state=disabled]{color:var(--error)}
+.auth-permissions #agent-detail-meta{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+.auth-permissions .agent-detail-columns{display:grid;grid-template-columns:minmax(0,1fr) 280px;flex:1;min-height:0;overflow:hidden}
+.auth-permissions .agent-detail-main,.auth-permissions .agent-detail-rail{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.auth-permissions .agent-detail-main{padding:0 24px 24px}
+.auth-permissions .agent-detail-rail{padding:0 20px 24px;border-left:1px solid var(--line);background:var(--canvas)}
+.auth-permissions .agent-section{padding:20px 0;border-bottom:1px solid var(--line)}
+.auth-permissions .agent-section:last-child{border-bottom:0}
+.auth-permissions .agent-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:13px}
+.auth-permissions .agent-section-head h3{margin:0;font-size:15px;line-height:1.35}
+.auth-permissions .agent-section-head p{margin:4px 0 0;font-size:12px;line-height:1.5}
+.auth-permissions .agent-group-form{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:10px;align-items:end}
+.auth-permissions .agent-group-form select{width:100%;min-width:0}
+.auth-permissions .agent-group-form button{min-height:38px;white-space:nowrap}
+.auth-permissions .agent-group-current{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--muted);font-size:12px;line-height:1.45}
+.auth-permissions .agent-group-current strong{color:var(--ink);font-weight:650}
+.auth-permissions .agent-facts{margin:0}
+.auth-permissions .agent-fact{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
+.auth-permissions .agent-fact:last-child{border-bottom:0}
+.auth-permissions .agent-fact dt{color:var(--muted);font-size:11px}
+.auth-permissions .agent-fact dd{min-width:0;margin:0;overflow-wrap:anywhere;color:var(--ink);font-size:12px;font-weight:600;text-align:right}
+.auth-permissions .agent-fact code{font:500 10px/1.45 var(--font-mono,ui-monospace,monospace)}
+.auth-permissions .agent-activity{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.auth-permissions .agent-activity-item{min-width:0;padding:10px 8px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.auth-permissions .agent-activity-item strong{display:block;color:var(--ink);font-size:18px;line-height:1.2;font-variant-numeric:tabular-nums}
+.auth-permissions .agent-activity-item span{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.3}
+.auth-permissions .agent-token-current{margin-top:2px;background:var(--paper)}
+.auth-permissions .agent-token-current .agent-facts{padding:0 12px}
+.auth-permissions .agent-token-actions{display:flex;justify-content:flex-end;gap:7px;padding:10px 12px 12px;border-top:1px solid var(--line)}
+.auth-permissions .agent-token-empty{margin:0;padding:16px;border:1px dashed var(--line);border-radius:6px;background:var(--canvas);font-size:12px}
+.auth-permissions #agent-token-result{margin-top:14px}
+.auth-permissions .agent-token-history{margin-top:18px}
+.auth-permissions .agent-token-history-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:7px}
+.auth-permissions .agent-token-history-head h3{margin:0;font-size:13px}
+.auth-permissions .agent-token-history table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left}
+.auth-permissions .agent-token-history th{color:var(--muted);font-size:10px;font-weight:550}
+.auth-permissions .agent-token-history th,.auth-permissions .agent-token-history td{padding:8px 6px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;font-size:11px}
+.auth-permissions .agent-token-history th:last-child,.auth-permissions .agent-token-history td:last-child{width:130px;text-align:right}
+.auth-permissions #agent-delete{color:var(--error)}
+.auth-permissions .agent-empty-detail{display:grid;place-items:center;flex:1;padding:32px;text-align:center}
+.auth-permissions .agent-empty-detail h2{font-size:20px}
+.auth-permissions .agent-empty-detail p{max-width:48ch}
+.auth-permissions .group-agents-pane{padding:22px 24px 28px;overflow-y:auto}
+.auth-permissions .group-agents-head{align-items:flex-start;margin:0 0 12px}
+.auth-permissions .group-agent-list{display:grid;gap:0;border-top:1px solid var(--line)}
+.auth-permissions .group-agent-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:3px 11px;align-items:center;padding:14px 2px;border-bottom:1px solid var(--line)}
+.auth-permissions .group-agent-dot{width:7px;height:7px;border-radius:50%;background:var(--good)}
+.auth-permissions .group-agent-row[data-enabled=false] .group-agent-dot{background:var(--error)}
+.auth-permissions .group-agent-copy{min-width:0}
+.auth-permissions .group-agent-name{display:block;overflow:hidden;color:var(--ink);font-size:13px;font-weight:650;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}
+.auth-permissions .group-agent-meta{display:block;margin-top:3px;color:var(--muted);font-size:11px;line-height:1.45}
+.auth-permissions .group-agent-meta code{font:500 10px/1.4 var(--font-mono,ui-monospace,monospace)}
+.auth-permissions .group-agent-view{min-height:32px;padding:4px 9px;font-size:12px;white-space:nowrap}
+.auth-permissions .group-agent-empty{margin:0;padding:28px 16px;border-bottom:1px solid var(--line);text-align:center}
+@media(max-width:1240px){.auth-permissions .workspace{grid-template-columns:270px minmax(0,1fr)}.auth-permissions .agent-detail-columns{grid-template-columns:minmax(0,1fr) 250px}}
+@media(max-width:980px){.auth-permissions #agent-detail{height:auto;overflow:visible}.auth-permissions #agent-detail-content{display:block;height:auto;min-height:0}.auth-permissions .agent-detail-columns{grid-template-columns:1fr;overflow:visible}.auth-permissions .agent-detail-rail{border-top:1px solid var(--line);border-left:0}.auth-permissions .agent-detail-main,.auth-permissions .agent-detail-rail{overflow:visible}.auth-permissions .agent-detail{overflow:visible}}
+@media(max-width:840px){
+  .auth-permissions .workspace{display:flex;flex-direction:column}
+  .auth-permissions .workspace>aside{padding:10px;border:1px solid var(--line);border-radius:8px;overflow:visible}
+  .auth-permissions .workspace-nav{position:sticky;top:0;z-index:6;background:var(--permission-rail)}
+  .auth-permissions #permission-groups-mobile-body,.auth-permissions #permission-mobile-subjects{overflow:visible}
+  .auth-permissions #permission-mobile-subject-list{max-height:320px;overflow-y:auto}
+  .auth-permissions #agent-detail{overflow:visible}
+  .auth-permissions .agent-detail-heading{padding:18px 16px 14px;flex-direction:column;gap:12px}
+  .auth-permissions .agent-detail-main,.auth-permissions .agent-detail-rail{padding-right:16px;padding-left:16px}
+  .auth-permissions .agent-detail-columns{display:block}
+  .auth-permissions .group-agents-pane{padding:18px 16px 22px}
+}
+@media(max-width:620px){
+  .auth-permissions .workspace-nav-button{grid-template-columns:18px minmax(0,1fr);min-height:54px;padding:7px}
+  .auth-permissions .workspace-nav-icon{width:18px;height:18px}
+  .auth-permissions .workspace-nav-copy strong{font-size:12px}
+  .auth-permissions .agent-group-form{grid-template-columns:1fr}
+  .auth-permissions .agent-activity{grid-template-columns:1fr}
+  .auth-permissions .agent-detail-title{align-items:flex-start;flex-wrap:wrap}
+  .auth-permissions .agent-token-history table{display:block;overflow-x:auto}
+}
+</style>
 </head>
 <body class="auth-page auth-permissions">
-<header><a class="brand" href="/">Termcp</a><nav aria-label="Breadcrumb"><a class="back-link" href="/"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5"/><path d="M6 8h7"/></svg><span data-text="workspace">工作区</span></a></nav><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div></header>
+<header><nav aria-label="Breadcrumb"><a id="workspace-back" class="back-link" href="/" title="返回工作区" aria-label="返回工作区"><svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7L8 2.5 13.5 7"/><path d="M3.75 6.5V13h8.5V6.5"/></svg></a></nav><a class="brand" href="/">Termcp</a><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div></header>
 <div class="page-heading"><div><h1 data-text="title">权限管理</h1></div><form id="role-form" class="role-controls"><details><summary><span data-text="instanceAccess">MCP 访问</span><span class="mcp-help-icon" id="mcp-access-help-trigger" tabindex="0" aria-label="MCP 访问说明" aria-describedby="mcp-access-help">?</span><span id="mcp-access-tooltip" class="mcp-help-tooltip" role="tooltip"></span></summary><div class="role-controls"><label><input id="admin-mcp" type="checkbox"><span data-text="adminMCP">管理员 MCP</span></label><label><input id="agent-mcp" type="checkbox"><span data-text="agentMCP">Agent MCP</span></label><button type="submit" data-text="saveRoles">保存开关</button></div></details><span id="mcp-access-help" class="visually-hidden"></span></form></div>
 <div id="feedback" role="status" aria-live="polite" data-text="intro">选择权限组并配置动作与主机范围，再关联Agent和客户端凭据。</div>
 <main class="workspace">
@@ -381,11 +503,22 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 <div id="permission-subject-home" class="permission-subject-home" aria-hidden="true"></div>
 <section id="permission-mobile-subjects" class="permission-mobile-subjects" aria-label="Agent 管理"><button id="permission-subjects-mobile-toggle" class="permission-mobile-toggle" type="button" aria-expanded="false" aria-controls="permission-subjects-mobile-body"><span><strong data-text="mobileSubjects">Agent 管理</strong><small id="permission-subjects-summary"></small></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div id="permission-subjects-mobile-body" class="permission-mobile-subjects-body" hidden><div class="permission-agent-tools"><label class="field"><span class="visually-hidden" data-text="searchAgents">搜索 Agent</span><input id="permission-agent-search" type="search" autocomplete="off"></label><button id="permission-agent-create-toggle" type="button" data-text="newAgentButton">新增 Agent</button></div><div id="permission-agent-filter" class="permission-agent-filter" role="group" aria-label="Agent 状态"><button type="button" data-agent-filter="all" aria-pressed="true" data-text="allAgents">全部</button><button type="button" data-agent-filter="enabled" aria-pressed="false" data-text="enabledAgents">已启用</button><button type="button" data-agent-filter="disabled" aria-pressed="false" data-text="disabledAgents">已停用</button><button type="button" data-agent-filter="unassigned" aria-pressed="false" data-text="unassignedAgents">待分配</button></div><form id="permission-agent-create-form" class="permission-agent-create-form" hidden><label class="field"><span data-text="agentDisplayName">Agent 名称</span><input id="permission-agent-name" type="text" maxlength="128" required></label><label class="field"><span data-text="permissionGroup">权限组</span><select id="permission-agent-group"></select></label><div class="group-actions"><button type="button" id="permission-agent-create-cancel" data-text="cancel">取消</button><button class="primary" type="submit" data-text="createAgentAction">创建 Agent</button></div><p id="permission-agent-create-error" class="inline-message" role="alert"></p></form><div id="permission-mobile-subject-list" class="permission-mobile-subject-list"></div><div id="permission-mobile-subject-detail" class="permission-mobile-subject-detail"></div></div></section>
 <div id="permission-detail-home" class="permission-detail-home" aria-hidden="true"></div>
-<section class="detail"><div id="workspace-empty"><div><h2 data-text="selectAgent">选择一个 Agent</h2><p data-text="emptyHint">从左侧新增 Agent，然后配置功能和主机范围。</p></div></div><div id="detail-heading" class="detail-heading" hidden><div><h2 id="selected-name"></h2><p id="selected-meta" class="status-dot"></p></div><div class="group-actions"><button id="edit-group" class="group-only" type="button" data-text="editGroup">编辑名称</button><button id="clone-group" class="group-only" type="button" data-text="cloneGroup">复制</button><button id="default-group" class="group-only" type="button" data-text="setDefault">设为缺省</button><button id="toggle-agent" type="button"></button><button id="delete-group" class="group-only danger" type="button" data-text="deleteGroup">删除组</button></div></div><section id="group-editor" class="group-editor" hidden><form id="group-details-form"><label class="field"><span data-text="groupName">权限组名称</span><input id="group-name" type="text" required maxlength="128"></label><label class="field"><span data-text="description">说明</span><input id="group-description" type="text" maxlength="2048"></label><button type="submit" data-text="saveDetails">保存名称与说明</button></form></section><section id="clone-editor" class="group-editor" hidden><form id="clone-form"><label class="field"><span data-text="copyName">新组名称</span><input id="clone-name" type="text" required maxlength="128"></label><p data-text="cloneHint">复制当前策略，不复制 Agent或凭据。</p><button type="submit" data-text="cloneGroup">复制组</button></form></section><div id="tabs" class="tabs" role="tablist" aria-label="权限组配置" hidden><button id="policy-tab" type="button" role="tab" aria-controls="policy-pane" aria-selected="true" data-text="policy">权限配置</button><button id="tokens-tab" type="button" role="tab" aria-controls="tokens-pane" aria-selected="false" data-text="tokens">Tokens</button></div>
+<section class="detail"><div id="workspace-empty"><div><h2 data-text="selectAgent">选择一个 Agent</h2><p data-text="emptyHint">从左侧新增 Agent，然后配置功能和主机范围。</p></div></div><div id="detail-heading" class="detail-heading" hidden><div><h2 id="selected-name"></h2><p id="selected-meta" class="status-dot"></p></div><div class="group-actions"><button id="edit-group" class="group-only" type="button" data-text="editGroup">编辑名称</button><button id="clone-group" class="group-only" type="button" data-text="cloneGroup">复制</button><button id="default-group" class="group-only" type="button" data-text="setDefault">设为缺省</button><button id="toggle-agent" type="button"></button><button id="delete-group" class="group-only danger" type="button" data-text="deleteGroup">删除组</button></div></div><section id="group-editor" class="group-editor" hidden><form id="group-details-form"><label class="field"><span data-text="groupName">权限组名称</span><input id="group-name" type="text" required maxlength="128"></label><label class="field"><span data-text="description">说明</span><input id="group-description" type="text" maxlength="2048"></label><button type="submit" data-text="saveDetails">保存名称与说明</button></form></section><section id="clone-editor" class="group-editor" hidden><form id="clone-form"><label class="field"><span data-text="copyName">新组名称</span><input id="clone-name" type="text" required maxlength="128"></label><p data-text="cloneHint">复制当前策略，不复制 Agent。</p><button type="submit" data-text="cloneGroup">复制组</button></form></section><div id="tabs" class="tabs" role="tablist" aria-label="权限组配置" hidden><button id="policy-tab" type="button" role="tab" aria-controls="policy-pane" aria-selected="true" data-text="policy">权限配置</button><button id="group-agents-tab" type="button" role="tab" aria-controls="group-agents-pane" aria-selected="false" data-text="groupAgentsPanel">组内 Agent</button></div>
 <div id="policy-pane" class="pane" role="tabpanel" aria-labelledby="policy-tab" hidden><p id="policy-warning" class="inline-message" role="status" hidden></p><div class="policy-columns"><section><div class="section-head"><h3 data-text="operationPolicy">动作权限</h3><button id="select-functions" type="button" data-text="selectAll">全选</button></div><p id="policy-mode"></p><div id="function-grid" class="function-grid"></div><p class="policy-note" data-text="terminalNote">终端命令可读写文件和访问网络；这些开关不提供系统沙箱。</p></section><section><div class="section-head"><h3 data-text="hosts">可访问主机</h3><span id="host-count" class="status-dot"></span></div><div id="host-modes" class="scope-modes"><label><input type="radio" name="host-mode" value="all"><span data-text="allHosts">全部主机</span></label><label><input type="radio" name="host-mode" value="selected"><span data-text="selectedHosts">指定主机</span></label><label><input type="radio" name="host-mode" value="none"><span data-text="noHosts">无主机</span></label></div><p id="scope-note"></p><div id="host-picker"><label class="field"><span data-text="searchHosts">筛选主机</span><input id="host-search" type="text"></label><div id="host-grid" class="host-grid"></div></div><p class="policy-note" data-text="globalNote">修改主机配置和管理扩展需要“全部主机”范围。</p></section></div></div>
 <section id="policy-preview" class="policy-preview" hidden><div class="policy-preview-row"><label class="field"><span data-text="previewTitle">只读权限预览</span><textarea id="preview-command" spellcheck="false" placeholder="run &lt;channel&gt; ..."></textarea></label><button id="run-policy-preview" type="button" data-text="previewRun">预览</button></div><pre id="policy-preview-result" aria-live="polite" hidden></pre></section>
 <div id="policy-save-bar" class="save-bar" hidden><div><p id="save-state"></p><p id="policy-error" class="inline-message" role="alert"></p></div><button id="save-policy" class="primary" type="button" data-text="savePolicy">保存权限</button></div>
-<div id="tokens-pane" class="pane token-pane" role="tabpanel" aria-labelledby="tokens-tab" hidden><section id="members-section" class="member-section"><h3 data-text="members">Agents</h3><form id="member-form" class="member-form"><label class="field"><span data-text="memberName">Agent 名称</span><input id="member-name" type="text" maxlength="128" required></label><button type="submit" data-text="addMember">添加 Agent</button></form><div id="member-list" class="member-list"></div><p id="member-error" class="inline-message" role="alert"></p></section><h3 data-text="credentials">客户端凭据</h3><p data-text="tokenHint">每个客户端使用独立 Token，可单独撤销。</p><form id="token-form" class="token-form"><label id="token-principal-field" class="field"><span data-text="credentialPrincipal">所属 Agent</span><select id="token-principal"></select></label><label class="field"><span data-text="clientName">客户端名称</span><input id="token-label" type="text" required maxlength="128"></label><button class="primary" type="submit" data-text="issueToken">签发 token</button></form><p id="token-error" class="inline-message" role="alert"></p><section id="token-result" class="token-result" hidden><div class="result-heading"><div><h3 data-text="copyNow">请立即保存配置</h3><p data-text="oneTime">Token 只展示一次，离开页面前请保存。</p></div><button id="dismiss-token" type="button" data-text="savedClose">已保存，关闭</button></div><label class="field"><span data-text="connection">接入方式</span><select id="config-mode"><option value="http">HTTP /stream</option><option value="sse">SSE /sse</option><option value="stdio">stdio → HTTP</option><option value="daemon">daemon stdio</option></select></label><label class="field"><span data-text="configuration">MCP 配置</span><textarea id="token-config" readonly spellcheck="false"></textarea></label><div class="result-actions"><button id="copy-config" type="button" data-text="copyConfig">复制配置</button><span id="copy-state" role="status"></span></div></section><table class="token-table"><thead><tr><th data-text="clientName">客户端名称</th><th data-text="createdAt">创建日期</th><th data-text="actions">操作</th></tr></thead><tbody id="token-list"></tbody></table><p id="tokens-empty" data-text="noTokens" hidden>尚无 token。保存权限后，为客户端签发 token。</p></div>
+<div id="group-agents-pane" class="pane group-agents-pane" role="tabpanel" aria-labelledby="group-agents-tab" hidden>
+  <section id="members-section" class="member-section">
+    <div class="section-head group-agents-head">
+      <div class="section-title-block">
+        <h3 data-text="groupAgentsPanel">组内 Agent</h3>
+        <p class="section-caption" data-text="groupAgentsHint">只显示当前权限组中的 Agent。</p>
+      </div>
+      <span id="group-agent-count" class="section-count">0</span>
+    </div>
+    <div id="member-list" class="member-list group-agent-list"></div>
+  </section>
+</div>
 </section></main>
 <dialog id="delete-dialog" aria-labelledby="delete-title"><form id="delete-form"><h2 id="delete-title" data-text="deleteGroup">删除权限组</h2><p id="delete-summary"></p><label id="delete-resolution-field" class="field"><span data-text="resolveMembers">处理现有 Agent</span><select id="delete-resolution"><option value="deny" data-text="denyMembers">解除绑定并拒绝访问</option><option value="move" data-text="moveMembers">修改到指定权限组</option></select></label><label id="delete-replacement-field" class="field" hidden><span data-text="replacementGroup">权限组</span><select id="delete-replacement"></select></label><label id="delete-default-field" class="field" hidden><span data-text="replacementDefault">新的缺省组</span><select id="delete-default"></select></label><p id="delete-error" class="inline-message" role="alert"></p><div class="group-actions"><button id="cancel-delete" type="button" data-text="cancel">取消</button><button id="refresh-delete" type="button" data-text="refreshPreview">重新预览</button><button class="danger" type="submit" data-text="confirmDelete">确认删除</button></div></form></dialog>
 <dialog id="delete-agent-dialog" aria-labelledby="delete-agent-title"><form id="delete-agent-form"><h2 id="delete-agent-title" data-text="deleteAgent">删除 Agent</h2><p id="delete-agent-summary"></p><p class="policy-note" data-text="deleteAgentHint"></p><p id="delete-agent-error" class="inline-message" role="alert"></p><div class="group-actions"><button id="cancel-delete-agent" type="button" data-text="cancel">取消</button><button id="refresh-delete-agent" type="button" data-text="refreshPreview">重新预览</button><button class="danger" type="submit" data-text="confirmDelete">确认删除</button></div></form></dialog><script nonce="{{.Nonce}}">
@@ -418,8 +551,8 @@ Object.assign(copy.zh,{previewTitle:'只读预览',previewRun:'预览',previewEm
 Object.assign(copy.en,{previewTitle:'Read-only preview',previewRun:'Preview',previewEmpty:'Enter a command to preview.',previewAllowed:'Allowed',previewDenied:'Denied',previewNotRun:'Not executed',previewResource:'Resource check',accessDSL:'DSL',accessTool:'tool',accessWebUI:'WebUI',accessInternal:'internal',riskHigh:'high risk',riskElevated:'sensitive',requires:'requires'});
 Object.assign(copy.zh,{policyReview:'旧权限需要复核',policyReviewNotice:'旧配置中的部分操作已出于安全暂时停用。请逐项确认权限并保存：'});
 Object.assign(copy.en,{policyReview:'Policy review required',policyReviewNotice:'Parts of an older policy were disabled for safety. Review the permissions and save them:'});
-Object.assign(copy.zh,{unassigned:'待分配 Agent',unassignedHint:'这些Agent已解除策略绑定，凭据不能认证。修改到有效权限组后可以重新使用。',noUnassigned:'没有待分配 Agent。',groups:'权限组',searchGroups:'筛选权限组',preset:'角色模板',groupName:'权限组名称',agentName:'权限组名称',createAgent:'创建权限组',selectAgent:'选择一个权限组',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联 Agent和客户端凭据。',intro:'按权限组配置 Agent 能力，身份与凭据独立保存。',created:'权限组已创建，未添加 Agent或签发凭据。',tokens:'Agent 与凭据',credentials:'客户端凭据',members:'成员',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',description:'说明',editGroup:'编辑名称',cloneGroup:'复制组',deleteGroup:'删除权限组',setDefault:'设为缺省',isDefault:'缺省组',saveDetails:'保存名称与说明',copyName:'新组名称',cloneHint:'复制当前策略，不复制 Agent或凭据。',cancel:'取消',confirmDelete:'确认删除',refreshPreview:'重新预览',resolveMembers:'处理现有 Agent',denyMembers:'解除绑定并拒绝访问',moveMembers:'修改到指定权限组',replacementGroup:'权限组',replacementDefault:'新的缺省组',memberCount:'个成员',credentialCount:'个凭据',activeCount:'个活动请求',workCount:'项后台工作',deleteHint:'删除会撤销关联请求和后台工作；已写入的数据保留。',move:'修改',followDefault:'跟随缺省组',denyBinding:'拒绝访问',noMembers:'此组尚无 Agent。添加 Agent后才能为客户端签发凭据。',disable:'停用组',enable:'启用组',memberDisable:'停用Agent',memberEnable:'启用Agent',policySaved:'组策略已保存，关联 Agent的活动访问已撤销，新请求使用当前策略。',noTokens:'尚无客户端凭据。先关联Agent，再签发 token。',noGroupMatches:'没有匹配的权限组。'});
-Object.assign(copy.en,{unassigned:'Unassigned Agents',unassignedHint:'No active permission group; credentials are unavailable.',noUnassigned:'No unassigned principals.',groups:'Permission groups',searchGroups:'Filter groups',preset:'Role preset',groupName:'Group name',agentName:'Group name',createAgent:'Create group',selectAgent:'Select a permission group',emptyHint:'Choose a group, configure actions and host scope, then associate Agents and credentials.',intro:'Groups share Agent capabilities; identities and credentials stay independent.',created:'Group created with no Agents or credentials.',tokens:'Agents & credentials',credentials:'Client credentials',members:'Agents',memberName:'Agent name',addMember:'Add Agent',credentialPrincipal:'Agent',description:'Description',editGroup:'Edit name',cloneGroup:'Clone group',deleteGroup:'Delete group',setDefault:'Make default',isDefault:'Default',saveDetails:'Save name and description',copyName:'New group name',cloneHint:'Copies the policy without Agents or credentials.',cancel:'Cancel',confirmDelete:'Confirm deletion',refreshPreview:'Refresh preview',resolveMembers:'Existing Agents',denyMembers:'Unbind and deny access',moveMembers:'Move to another group',replacementGroup:'Change Agents to',replacementDefault:'New default group',memberCount:'Agents',credentialCount:'credentials',activeCount:'active requests',workCount:'background operations',deleteHint:'Revokes related requests and background work; written data remains.',move:'Move',followDefault:'Follow default group',denyBinding:'Deny access',noMembers:'No Agents in this group. Add one before issuing client credentials.',disable:'Disable group',enable:'Enable group',memberDisable:'Disable Agent',memberEnable:'Enable Agent',policySaved:'Group policy saved. Active member access ended; new requests use the current policy.',noTokens:'No client credentials yet. Associate an Agent before issuing a token.',noGroupMatches:'No matching groups.'});
+Object.assign(copy.zh,{unassigned:'待分配 Agent',unassignedHint:'这些Agent已解除策略绑定，凭据不能认证。修改到有效权限组后可以重新使用。',noUnassigned:'没有待分配 Agent。',groups:'权限组',searchGroups:'筛选权限组',preset:'角色模板',groupName:'权限组名称',agentName:'权限组名称',createAgent:'创建权限组',selectAgent:'选择一个权限组',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联 Agent和客户端凭据。',intro:'按权限组配置 Agent 能力，身份与凭据独立保存。',created:'权限组已创建，未添加 Agent或签发凭据。',tokens:'Agent 与凭据',credentials:'客户端凭据',members:'成员',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',description:'说明',editGroup:'编辑名称',cloneGroup:'复制组',deleteGroup:'删除权限组',setDefault:'设为缺省',isDefault:'缺省组',saveDetails:'保存名称与说明',copyName:'新组名称',cloneHint:'复制当前策略，不复制组内 Agent。',cancel:'取消',confirmDelete:'确认删除',refreshPreview:'重新预览',resolveMembers:'处理现有 Agent',denyMembers:'解除绑定并拒绝访问',moveMembers:'修改到指定权限组',replacementGroup:'权限组',replacementDefault:'新的缺省组',memberCount:'个成员',credentialCount:'个凭据',activeCount:'个活动请求',workCount:'项后台工作',deleteHint:'删除会撤销关联请求和后台工作；已写入的数据保留。',move:'修改',followDefault:'跟随缺省组',denyBinding:'拒绝访问',noMembers:'此组尚无 Agent。添加 Agent后才能为客户端签发凭据。',disable:'停用组',enable:'启用组',memberDisable:'停用Agent',memberEnable:'启用Agent',policySaved:'组策略已保存，关联 Agent的活动访问已撤销，新请求使用当前策略。',noTokens:'尚无客户端凭据。先关联Agent，再签发 token。',noGroupMatches:'没有匹配的权限组。'});
+Object.assign(copy.en,{unassigned:'Unassigned Agents',unassignedHint:'No active permission group; credentials are unavailable.',noUnassigned:'No unassigned principals.',groups:'Permission groups',searchGroups:'Filter groups',preset:'Role preset',groupName:'Group name',agentName:'Group name',createAgent:'Create group',selectAgent:'Select a permission group',emptyHint:'Choose a group, configure actions and host scope, then associate Agents and credentials.',intro:'Groups share Agent capabilities; identities and credentials stay independent.',created:'Group created with no Agents or credentials.',tokens:'Agents & credentials',credentials:'Client credentials',members:'Agents',memberName:'Agent name',addMember:'Add Agent',credentialPrincipal:'Agent',description:'Description',editGroup:'Edit name',cloneGroup:'Clone group',deleteGroup:'Delete group',setDefault:'Make default',isDefault:'Default',saveDetails:'Save name and description',copyName:'New group name',cloneHint:'Copies the policy without Agents in this group.',cancel:'Cancel',confirmDelete:'Confirm deletion',refreshPreview:'Refresh preview',resolveMembers:'Existing Agents',denyMembers:'Unbind and deny access',moveMembers:'Move to another group',replacementGroup:'Change Agents to',replacementDefault:'New default group',memberCount:'Agents',credentialCount:'credentials',activeCount:'active requests',workCount:'background operations',deleteHint:'Revokes related requests and background work; written data remains.',move:'Move',followDefault:'Follow default group',denyBinding:'Deny access',noMembers:'No Agents in this group. Add one before issuing client credentials.',disable:'Disable group',enable:'Enable group',memberDisable:'Disable Agent',memberEnable:'Enable Agent',policySaved:'Group policy saved. Active member access ended; new requests use the current policy.',noTokens:'No client credentials yet. Associate an Agent before issuing a token.',noGroupMatches:'No matching groups.'});
 Object.assign(copy.en,{'theme.label':'Theme','theme.loading':'Loading themes…','theme.discoverFailed':'Unable to load themes','theme.loadFailed':'Theme could not be loaded','theme.light':'Light','theme.dark':'Dark','theme.auto':'Auto','theme.cyberpunk':'Cyberpunk','theme.matrix':'Matrix'});
 Object.assign(copy.zh,{'theme.label':'主题','theme.loading':'正在加载主题…','theme.discoverFailed':'无法加载主题，请重试','theme.loadFailed':'无法应用主题，请重试','theme.light':'浅色','theme.dark':'深色','theme.auto':'跟随系统','theme.cyberpunk':'赛博朋克','theme.matrix':'矩阵'});
 Object.assign(copy.zh,{mcpAccessHelpLabel:'MCP 访问说明',mcpAccessHelp:'管理员 MCP 允许管理员凭据访问 MCP；Agent MCP 允许 Agent 凭据访问 MCP。关闭后，对应凭据的 MCP 入口立即失效。',mobileGroups:'权限组管理',mobileSubjects:'Agent 管理',mobileSubjectSummary:'%n 个 Agent · %t 个待分配',mobileSubjectEmpty:'暂无 Agent。',searchAgents:'搜索 Agent',newAgentButton:'新增',agentDisplayName:'Agent 名称',permissionGroup:'权限组',createAgentAction:'创建 Agent',allAgents:'全部',enabledAgents:'已启用',disabledAgents:'已停用',unassignedAgents:'待分配',agentCreated:'Agent 已创建。',agentDeleted:'Agent 已删除。',agentGroupChanged:'Agent 的权限组已修改。',applyGroupChange:'修改',deleteAgent:'删除 Agent',deleteAgentHint:'将删除 Agent 及其全部 Token，并中断进行中的请求和工作。',noAgentMatches:'没有匹配的 Agent。',noEnabledGroup:'没有可用的权限组，请先创建或启用权限组。',missingGroup:'已删除的权限组',credentialSummary:'%n 个 Token',activeSummary:'%n 个活动请求',workSummary:'%n 项后台工作',permissionDetails:'权限设置',membersAndCredentials:'Agent 与凭据',tokens:'Agent 与凭据',members:'Agents',memberName:'Agent 名称',addMember:'添加 Agent',credentialPrincipal:'所属 Agent',memberCount:'个 Agent',memberDisable:'停用 Agent',memberEnable:'启用 Agent',noMembers:'此权限组尚无 Agent。添加后才能签发凭据。',unassigned:'待分配 Agent',unassignedHint:'未绑定有效权限组，凭据当前不可用。',replacementGroup:'权限组',move:'修改',moveMembers:'修改这些 Agent 的权限组',batchStart:'批量设置',batchDone:'完成选择',batchSelectAll:'全选所有权限',batchSelected:'已选择 %n 项',batchHidden:'其中 %n 项被筛选隐藏',batchEmpty:'选择需要批量设置的权限',batchApply:'设为%n',unsavedCount:'已修改 %n 项权限',discardChanges:'放弃更改',discarded:'已放弃未保存的权限更改。',filterDeny:'禁止'});
@@ -430,6 +563,96 @@ Object.assign(copy.zh,{currentTokenSummary:'%n 个当前 Token',historyTokenSumm
 Object.assign(copy.en,{currentTokenSummary:'%n current Tokens',historyTokenSummary:'%n historical Tokens'});
 Object.assign(copy.zh,{neverExpires:'永久有效',expiresAt:'有效期至 %s',lastUsedAt:'最近使用 %s',neverUsed:'尚未使用',tokenExpired:'已过期'});
 Object.assign(copy.en,{neverExpires:'Never expires',expiresAt:'Expires %s',lastUsedAt:'Last used %s',neverUsed:'Never used',tokenExpired:'Expired'});
+Object.assign(copy.zh,{
+  groupsWorkspace:'权限组',
+  agentsWorkspace:'Agent 管理',
+  groupWorkspaceSummaryOne:'%n 组',
+  groupWorkspaceSummary:'%n 组',
+  agentWorkspaceSummaryOne:'%n Agent',
+  agentWorkspaceSummary:'%n Agent',
+  credentialSummaryOne:'%n 个 Token',
+  credentialSummaryMany:'%n 个 Token',
+  newAgentHeading:'新增 Agent',
+  createAgentDefaultHint:'Agent 创建后进入缺省组，之后可在右侧详情中调整。',
+  defaultGroupNote:'新 Agent 默认进入 %s。创建后可在右侧“权限组”中调整。',
+  agentCreatedDefaultGroup:'Agent 已创建并加入 %s。',
+  agentDetailEmpty:'暂无 Agent。创建后可在这里管理权限组、Token 与活动状态。',
+  agentGroupSection:'权限组',
+  agentGroupHint:'决定此 Agent 的业务动作与主机范围。',
+  agentGroupSave:'应用权限组',
+  agentTokenSection:'MCP Token',
+  agentTokenHint:'每个 Agent 只有一个当前 Token；轮换后旧 Token 进入历史。',
+  agentIdentity:'身份',
+  agentActivity:'活动',
+  agentIDLabel:'Agent ID',
+  agentCreatedLabel:'创建时间',
+  agentStateLabel:'状态',
+  agentTokensMetric:'Token',
+  agentRequestsMetric:'活动请求',
+  agentWorkMetric:'后台工作',
+  agentNoCurrentToken:'此 Agent 尚未签发 Token。',
+  agentNoTokenHistory:'暂无历史 Token。',
+  addMemberDefault:'添加至缺省组',
+  memberDefaultHint:'新 Agent 默认加入缺省组；添加后会打开它的详情，便于继续签发 Token。',
+  currentGroupLabel:'当前权限组',
+  defaultGroupValue:'缺省组',
+  groupAssignmentSaved:'Agent 的权限组已更新。',
+  unassignedAgentState:'待分配',
+  activeTokenMetric:'当前 Token',
+  lastUsedLabel:'最近使用',
+  expiresLabel:'有效期',
+  groupAgentsPanel:'组内 Agent',
+  groupAgentsHint:'只显示当前权限组中的 Agent；创建和权限组调整在 Agent 管理中完成。',
+  groupAgentsEmpty:'此权限组暂无 Agent。',
+  groupAgentsManage:'前往 Agent 管理创建或调整归属。',
+  viewAgent:'查看 Agent',
+  backWorkspace:'返回工作区'
+});
+Object.assign(copy.en,{
+  groupsWorkspace:'Permission groups',
+  agentsWorkspace:'Agent management',
+  groupWorkspaceSummaryOne:'%n group',
+  groupWorkspaceSummary:'%n groups',
+  agentWorkspaceSummaryOne:'%n Agent',
+  agentWorkspaceSummary:'%n Agents',
+  credentialSummaryOne:'%n Token',
+  credentialSummaryMany:'%n Tokens',
+  newAgentHeading:'New Agent',
+  createAgentDefaultHint:'New Agents join the default group. Change the group later in the detail pane.',
+  defaultGroupNote:'New Agents join %s by default. Change the group in the detail pane after creation.',
+  agentCreatedDefaultGroup:'Agent created in %s.',
+  agentDetailEmpty:'No Agents yet. Create one to manage its group, Token, and activity here.',
+  agentGroupSection:'Permission group',
+  agentGroupHint:'Defines this Agent’s permitted actions and host scope.',
+  agentGroupSave:'Apply group',
+  agentTokenSection:'MCP Token',
+  agentTokenHint:'Each Agent has one current Token. Rotation moves the previous Token to history.',
+  agentIdentity:'Identity',
+  agentActivity:'Activity',
+  agentIDLabel:'Agent ID',
+  agentCreatedLabel:'Created',
+  agentStateLabel:'Status',
+  agentTokensMetric:'Tokens',
+  agentRequestsMetric:'Active requests',
+  agentWorkMetric:'Background work',
+  agentNoCurrentToken:'This Agent has no Token yet.',
+  agentNoTokenHistory:'No historical Tokens.',
+  addMemberDefault:'Add to default group',
+  memberDefaultHint:'New Agents join the default group. After creation, their detail opens so you can issue a Token.',
+  currentGroupLabel:'Current group',
+  defaultGroupValue:'Default group',
+  groupAssignmentSaved:'Agent permission group updated.',
+  unassignedAgentState:'Unassigned',
+  activeTokenMetric:'Current Token',
+  lastUsedLabel:'Last used',
+  expiresLabel:'Expires',
+  groupAgentsPanel:'Agents in this group',
+  groupAgentsHint:'Shows only Agents currently in this group. Create Agents and change their group in Agent management.',
+  groupAgentsEmpty:'No Agents in this permission group.',
+  groupAgentsManage:'Create or reassign Agents in Agent management.',
+  viewAgent:'View Agent',
+  backWorkspace:'Return to workspace'
+});
 const t=k=>copy[lang][k]||k;
 function el(tag,text){const n=document.createElement(tag);if(text)n.textContent=text;return n;}
 function feedback(text,tone='info',target){$('feedback').textContent=text;$('feedback').dataset.tone=tone;if(target)$(target).textContent=text;}
@@ -438,14 +661,14 @@ function fail(error,target){feedback(error instanceof TypeError?t('network'):err
 async function request(path,options={}){const response=await fetch(authPath(path),{...options,headers:{'Content-Type':'application/json','X-Termcp-CSRF':state?.csrf||'',...options.headers}});if(response.status===401){location.assign(authPath('/login'));throw new Error(t('network'));}const data=await response.json();if(!response.ok)throw new Error(data.error||String(response.status));return data;}
 function changed(){return draft&&JSON.stringify(draft)!==original;}
 function dirtyCount(){if(!changed())return 0;const current=draft||{},saved=original?JSON.parse(original):{},ids=new Set([...Object.keys(current.actions||{}),...Object.keys(saved.actions||{})]);let count=0;ids.forEach(id=>{if(JSON.stringify(current.actions?.[id]||null)!==JSON.stringify(saved.actions?.[id]||null))count++;});if(current.host_mode!==saved.host_mode||JSON.stringify(current.hosts||[])!==JSON.stringify(saved.hosts||[]))count++;return count;}
-function safeSwitch(){if(revealed){feedback(t('saveFirst'),'error');return false;}return !changed()||confirm(t('discard'));}
+function safeSwitch(){return !changed()||confirm(t('discard'));}
 function setBusy(value){busy=value;$('policy-pane').inert=value;document.querySelectorAll('button').forEach(b=>{b.disabled=value;});updateSave();}
 function updateSave(){const review=agents.find(a=>a.id===selected)?.policy_warnings?.length>0;const dirty=changed();const editable=selected&&selected!=='admin'&&selected!=='denied';$('save-policy').disabled=busy||(!dirty&&!review)||!!$('policy-pane').querySelector(':invalid');$('save-state').textContent=t(busy?'working':review?'policyReview':dirty?(t('unsavedCount').includes('%n')?t('unsavedCount').replace('%n',String(dirtyCount())):t('unsaved')):'saved');const discard=$('discard-policy');if(discard)discard.hidden=!dirty;const saveBar=$('policy-save-bar');if(saveBar)saveBar.hidden=!editable||(!busy&&!dirty&&!review);}
 function renderLanguage(){document.documentElement.lang=lang;if(typeof syncThemeControl==='function')syncThemeControl();renderPresets();document.title=t('title')+' · Termcp';$('language').value=lang;document.querySelectorAll('[data-text]').forEach(n=>n.textContent=t(n.dataset.text));renderList();if(selected){renderDetail();}else feedback(t('intro'));}
 function renderList(){const list=$('agent-list');list.replaceChildren();const add=(id,name,note)=>{const b=el('button',name);b.type='button';b.className='agent-item';b.setAttribute('aria-pressed',String(selected===id));b.append(el('small',note));b.onclick=()=>select(id);list.append(b);};const query=$('group-search').value.toLowerCase();const shown=agents.filter(g=>g.name.toLowerCase().includes(query));shown.forEach(g=>add(g.id,g.name,(g.id===defaultGroupID?t('isDefault')+' · ':'')+t(g.enabled?'enabled':'disabled')+' · '+g.member_count+' '+t('memberCount')+(g.policy_warnings?.length?' · '+t('policyReview'):'')));if(!shown.length)list.append(el('p',t('noGroupMatches')));}
-function select(id,force=false){if(!force&&id===selected)return;if(!force&&!safeSwitch())return;if(!$('new-agent-form-wrap').hidden)closeNewAgentForm();selected=id;const a=agents.find(a=>a.id===id);draft=a?JSON.parse(JSON.stringify(a.policy)):null;original=JSON.stringify(draft);tab=id==='admin'||id==='denied'?'tokens':'policy';$('group-editor').hidden=true;$('clone-editor').hidden=true;$('policy-error').textContent='';$('token-error').textContent='';$('policy-preview-result').hidden=true;$('policy-preview-result').textContent='';$('preview-command').value='';if(typeof permissionUI!=='undefined'){permissionUI.expanded=id;permissionUI.batch=false;permissionUI.batchSelected.clear();if(id!=='admin'&&id!=='denied')permissionUI.groupsOpen=true;}renderList();renderDetail();feedback(t('intro'));}
-function renderDetail(){const a=agents.find(a=>a.id===selected),admin=selected==='admin',unassigned=selected==='denied';if(!admin&&!unassigned&&!a)return;const special=admin||unassigned;$('workspace-empty').hidden=true;$('detail-heading').hidden=false;$('tabs').hidden=false;$('selected-name').textContent=admin?t('admin'):unassigned?t('unassigned'):a.name;$('selected-meta').textContent=admin?t('adminHint'):unassigned?t('unassignedHint'):[t(a.enabled?'enabled':'disabled'),a.id===defaultGroupID?t('isDefault'):'',a.description||'',a.member_count+' '+t('memberCount'),a.credential_count+' '+t('credentialCount')].filter(Boolean).join(' · ');document.querySelectorAll('.group-only').forEach(b=>b.hidden=special);$('toggle-agent').hidden=special;$('toggle-agent').textContent=t(a?.enabled?'disable':'enable');$('default-group').hidden=special||a.id===defaultGroupID;$('policy-tab').hidden=special;$('policy-preview').hidden=special;$('members-section').hidden=admin;$('member-form').hidden=unassigned;$('token-form').hidden=unassigned;$('token-principal-field').hidden=admin;const warnings=a?.policy_warnings||[];$('policy-warning').hidden=!warnings.length;$('policy-warning').textContent=warnings.length?t('policyReviewNotice')+' '+warnings.join(', '):'';setTab(tab);if(a){renderFunctions();renderHosts();}renderMembers();renderTokens();updateSave();permissionLayoutDetail();}
-function setTab(value){tab=value;$('policy-tab').setAttribute('aria-selected',String(value==='policy'));$('tokens-tab').setAttribute('aria-selected',String(value==='tokens'));$('policy-pane').hidden=value!=='policy';$('policy-preview').hidden=value!=='policy'||!draft;$('tokens-pane').hidden=value!=='tokens';updateSave();}
+function select(id,force=false){if(!force&&id===selected)return;if(!force&&!safeSwitch())return;if(!$('new-agent-form-wrap').hidden)closeNewAgentForm();selected=id;const a=agents.find(a=>a.id===id);draft=a?JSON.parse(JSON.stringify(a.policy)):null;original=JSON.stringify(draft);tab=id==='denied'?'members':'policy';$('group-editor').hidden=true;$('clone-editor').hidden=true;$('policy-error').textContent='';$('policy-preview-result').hidden=true;$('policy-preview-result').textContent='';$('preview-command').value='';if(typeof permissionUI!=='undefined'){permissionUI.expanded=id;permissionUI.batch=false;permissionUI.batchSelected.clear();if(id!=='admin'&&id!=='denied')permissionUI.groupsOpen=true;}renderList();renderDetail();feedback(t('intro'));}
+function renderDetail(){const a=agents.find(a=>a.id===selected),admin=selected==='admin',unassigned=selected==='denied';if(!admin&&!unassigned&&!a)return;const special=admin||unassigned;$('workspace-empty').hidden=true;$('detail-heading').hidden=false;$('tabs').hidden=false;$('selected-name').textContent=admin?t('admin'):unassigned?t('unassigned'):a.name;$('selected-meta').textContent=admin?t('adminHint'):unassigned?t('unassignedHint'):[t(a.enabled?'enabled':'disabled'),a.id===defaultGroupID?t('isDefault'):'',a.description||'',a.member_count+' '+t('memberCount')].filter(Boolean).join(' · ');document.querySelectorAll('.group-only').forEach(b=>b.hidden=special);$('toggle-agent').hidden=special;$('toggle-agent').textContent=t(a?.enabled?'disable':'enable');$('default-group').hidden=special||a.id===defaultGroupID;$('policy-tab').hidden=special;$('policy-preview').hidden=special;$('members-section').hidden=admin;const warnings=a?.policy_warnings||[];$('policy-warning').hidden=!warnings.length;$('policy-warning').textContent=warnings.length?t('policyReviewNotice')+' '+warnings.join(', '):'';setTab(tab);if(a){renderFunctions();renderHosts();}renderMembers();updateSave();permissionLayoutDetail();}
+function setTab(value){tab=value;$('policy-tab').setAttribute('aria-selected',String(value==='policy'));$('group-agents-tab').setAttribute('aria-selected',String(value==='members'));$('policy-pane').hidden=value!=='policy';$('policy-preview').hidden=value!=='policy'||!draft;$('group-agents-pane').hidden=value!=='members';updateSave();}
 function renderFunctions(){$('policy-mode').textContent=t('finePolicy');const grid=$('function-grid');grid.classList.add('v2');grid.replaceChildren();renderOperations(grid);}
 const familyNames={session:['会话','Sessions'],shell:['终端与通道','Terminal channels'],file:['文件','Files'],forward:['端口转发','Port forwarding'],peer:['外部协议','External protocols'],task:['传输任务','Transfer tasks'],profile:['主机配置','Host profiles'],extension:['扩展','Extensions'],alias:['公共别名','Shared aliases'],notify:['通知','Notifications']};
 const actionNames={'session.list':'列出会话','session.info':'查看会话','session.start':'建立连接','session.terminate':'停止会话','session.delete':'删除会话','session.message':'读取会话消息','shell.list':'列出通道','shell.open':'打开通道','shell.close':'关闭通道','shell.resize':'调整终端大小','shell.output':'读取终端输出','shell.input':'发送终端输入','shell.key':'发送按键','shell.detect':'检测环境','shell.reader.register':'注册 reader','shell.reader.unregister':'注销 reader','user.notify':'发送通知','forward.list':'列出转发','forward.open':'创建转发','forward.close':'关闭转发','file.read':'读取文件','file.stat':'读取文件属性','file.getwd':'读取工作目录','file.urls':'获取传输地址','file.write':'写入或替换文件','file.delete':'删除文件','file.mkdir':'创建目录','file.rename':'重命名文件','file.perm':'修改文件权限、所有者或时间','file.link':'管理链接','file.fs':'文件系统操作','profile.list':'列出主机','profile.create':'创建主机配置','profile.edit':'修改主机配置','profile.copy':'复制主机配置','profile.delete':'删除主机配置','ext.list':'列出扩展','ext.get':'查看、使用或释放扩展','ext.retry':'重建扩展','ext.create':'创建扩展定义','ext.update':'修改扩展定义','ext.delete':'删除扩展定义','jrpc.open':'连接并使用 JSON-RPC','mcp.open':'连接并使用 MCP','cdp.open':'连接并使用 CDP'};
@@ -456,7 +679,7 @@ function grantAction(op,enabled){setActionEffect(op,enabled?'allow':'deny');}
 function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=permissionUI.openFamilies.has(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
 function renderHosts(){document.querySelectorAll('[name=host-mode]').forEach(n=>n.checked=n.value===draft.host_mode);$('host-count').textContent=draft.host_mode==='selected'?String(draft.hosts.length):'';$('scope-note').textContent=t(draft.host_mode==='all'?'allHint':draft.host_mode==='none'?'noneHint':'selectedHint');$('host-picker').hidden=draft.host_mode!=='selected';const list=$('host-grid');list.replaceChildren();const query=$('host-search').value.toLowerCase();const hosts=[...catalog.hosts,...draft.hosts.filter(id=>!catalog.hosts.some(h=>h.id===id)).map(id=>({id,name:t('missing')+' · '+id.slice(0,8)}))].filter(h=>h.name.toLowerCase().includes(query));hosts.forEach(h=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.value=h.id;input.checked=draft.hosts.includes(h.id);label.append(input,el('span',h.name));input.onchange=()=>{draft.hosts=input.checked?[...draft.hosts,h.id]:draft.hosts.filter(id=>id!==h.id);$('host-count').textContent=String(draft.hosts.length);updateSave();};list.append(label);});if(!hosts.length)list.append(el('p',t('noMatches')));}
 function renderTokens(){const members=new Set(groupMembers().map(p=>p.id));const list=tokens.filter(c=>selected==='admin'?c.principal_id===state.actor.id:members.has(c.principal_id));$('tokens-empty').hidden=list.length>0;$('token-list').replaceChildren();list.forEach(c=>{const row=el('tr'),name=el('td',c.label);const principal=principals.find(p=>p.id===c.principal_id);name.append(el('small',(principal?principal.name+' · ':'')+c.id.slice(0,10)));row.append(name,el('td',new Date(c.created_at).toLocaleDateString(lang)));const cell=el('td'),button=el('button',t('revoke'));button.type='button';button.className='danger';button.onclick=async()=>{if(!confirm(t('revokeConfirm')))return;setBusy(true);try{await request('/auth/tokens/'+encodeURIComponent(c.id),{method:'DELETE'});if(revealed?.credential.id===c.id)clearRevealed();await reload();feedback(t('saved'),'success');}catch(e){fail(e,'token-error');}finally{setBusy(false);}};cell.append(button);row.append(cell);$('token-list').append(row);});}
-async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens')]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;renderList();renderMembers();renderTokens();}
+async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens')]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;renderList();renderMembers();}
 function clearRevealed(){revealed=null;$('token-config').value='';$('token-result').hidden=true;$('copy-state').textContent='';}
 function renderConfig(){if(!revealed)return;const mode=$('config-mode').value;let entry;if(mode==='http'||mode==='sse')entry={url:location.origin+authPath(mode==='sse'?'/sse':'/stream'),headers:{Authorization:'Bearer '+revealed.token}};else{const args=['-y','@open-mcp-ai/termcp'];if(mode==='daemon')args.push('daemon');args.push('stdio',location.origin+authPath('/stream'));entry={command:'npx',args,env:{TERMCP_MCP_TOKEN:revealed.token}};}$('token-config').value=JSON.stringify({mcpServers:{termcp:entry}},null,2);$('token-result').hidden=false;}
 function closeNewAgentForm(){const wrap=$('new-agent-form-wrap');if(wrap.hidden)return;wrap.hidden=true;$('new-agent').setAttribute('aria-expanded','false');$('new-agent-form').reset();$('create-error').textContent='';$('new-agent').focus();}
@@ -466,7 +689,6 @@ $('new-agent-form-wrap').addEventListener('keydown',event=>{if(event.key==='Esca
 $('new-agent-form').onsubmit=async e=>{e.preventDefault();if(!safeSwitch())return;setBusy(true);$('create-error').textContent='';try{const result=await request('/auth/groups',{method:'POST',body:JSON.stringify({name:$('agent-name').value,preset_id:$('group-preset').value})});await reload();setBusy(false);closeNewAgentForm();select(result.group.id,true);feedback(t('created'),'success');}catch(error){fail(error,'create-error');}finally{setBusy(false);}};
 $('save-policy').onclick=async()=>{if($('policy-pane').querySelector(':invalid'))return;const a=agents.find(a=>a.id===selected);setBusy(true);$('policy-error').textContent='';try{const result=await request('/auth/groups/'+encodeURIComponent(a.id),{method:'PATCH',body:JSON.stringify({policy:draft,revision:a.revision})});agents=agents.map(old=>old.id===a.id?result.group:old);draft=JSON.parse(JSON.stringify(result.group.policy));original=JSON.stringify(draft);await reload();renderDetail();feedback(t('policySaved'),'success');}catch(error){fail(error,'policy-error');}finally{setBusy(false);}};
 $('toggle-agent').onclick=async()=>{const a=agents.find(a=>a.id===selected);setBusy(true);try{await request('/auth/groups/'+encodeURIComponent(a.id),{method:'PATCH',body:JSON.stringify({enabled:!a.enabled,revision:a.revision})});await reload();renderDetail();feedback(t('saved'),'success');}catch(error){fail(error,'policy-error');}finally{setBusy(false);}};
-$('token-form').onsubmit=async e=>{e.preventDefault();if(selected!=='admin'&&!$('token-principal').value){feedback(t('noMembers'),'error','token-error');return;}if(revealed){feedback(t('saveFirst'),'error','token-error');return;}if(changed()){feedback(t('saveBeforeToken'),'error','token-error');return;}setBusy(true);$('token-error').textContent='';try{revealed=await request('/auth/tokens',{method:'POST',body:JSON.stringify({principal_id:selected==='admin'?'':$('token-principal').value,label:$('token-label').value})});renderConfig();await reload();$('token-form').reset();feedback(t('tokenSaved'),'success');}catch(error){fail(error,'token-error');}finally{setBusy(false);}};
 $('role-form').onsubmit=async e=>{e.preventDefault();setBusy(true);try{const admin=roles.permissions.admin.filter(p=>p!=='mcp');if($('admin-mcp').checked)admin.push('mcp');roles=await request('/auth/permissions',{method:'PUT',body:JSON.stringify({revision:roles.revision,permissions:{admin,agent:$('agent-mcp').checked?['mcp']:[]}})});feedback(t('roleSaved'),'success');}catch(error){fail(error);}finally{setBusy(false);}};
 $('select-functions').onclick=()=>{const available=catalog.operations.filter(o=>!o.global||draft.host_mode==='all');const clear=available.every(o=>draft.actions[o.id]?.effect==='allow');available.forEach(o=>grantAction(o,!clear));renderFunctions();updateSave();};
 document.querySelectorAll('[name=host-mode]').forEach(input=>input.onchange=()=>{draft.host_mode=input.value;draft.hosts=[];if(input.value!=='all')catalog.operations.filter(o=>o.global).forEach(o=>delete draft.actions[o.id]);renderFunctions();renderHosts();updateSave();});
@@ -474,15 +696,53 @@ function groupMembers(){return principals.filter(p=>selected==='denied'?p.group_
 function renderPresets(){const select=$('group-preset');select.replaceChildren();presets.forEach(p=>{const o=el('option',lang==='zh'?p.name:p.english);o.value=p.id;select.append(o);});}
 function groupOptions(select,current,includeDefault=false){select.replaceChildren();if(includeDefault){const o=el('option',t('followDefault'));o.value='';select.append(o);}agents.forEach(g=>{const o=el('option',g.name+(g.id===defaultGroupID?' · '+t('isDefault'):'')+(!g.enabled?' · '+t('disabled'):''));o.value=g.id;o.disabled=!g.enabled&&g.id!==current;select.append(o);});if(includeDefault){const o=el('option',t('denyBinding'));o.value='system-deny';select.append(o);}select.value=current;}
 function agentCreateGroupOptions(select){select.replaceChildren();const defaultGroup=agents.find(g=>g.id===defaultGroupID);if(defaultGroup?.enabled){const option=el('option',t('followDefault')+' · '+defaultGroup.name);option.value='';select.append(option);}agents.filter(g=>g.enabled).forEach(g=>{const option=el('option',g.name+(g.id===defaultGroupID?' · '+t('isDefault'):''));option.value=g.id;select.append(option);});select.disabled=!select.options.length;}
-function renderMembers(){if(!selected||selected==='admin')return;const list=$('member-list');list.replaceChildren();const members=groupMembers();if(!members.length)list.append(el('p',t(selected==='denied'?'noUnassigned':'noMembers')));const picker=$('token-principal'),previous=picker.value;picker.replaceChildren();members.forEach(p=>{const option=el('option',p.name);option.value=p.id;picker.append(option);const row=el('div');row.className='member-row';const title=el('span',p.name);title.append(el('small',t(p.enabled?'enabled':'disabled')+' · '+p.id.slice(0,10)));const actions=el('div');actions.className='group-actions';const destination=el('select');destination.setAttribute('aria-label',p.name+' '+t('replacementGroup'));groupOptions(destination,p.group_id||'',true);const move=el('button',t('move'));move.type='button';move.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id)+'/group',{method:'PUT',body:JSON.stringify({group_id:destination.value,revision:p.revision})});await reload();renderDetail();feedback(t('agentGroupChanged'),'success');}catch(e){fail(e,'member-error');}finally{setBusy(false);}};const toggle=el('button',t(p.enabled?'memberDisable':'memberEnable'));toggle.type='button';toggle.onclick=async()=>{setBusy(true);try{await request('/auth/principals/'+encodeURIComponent(p.id),{method:'PATCH',body:JSON.stringify({enabled:!p.enabled,revision:p.revision})});await reload();renderDetail();}catch(e){fail(e,'member-error');}finally{setBusy(false);}};const remove=el('button',t('deleteAgent'));remove.type='button';remove.className='danger';remove.onclick=()=>permissionPreviewAgentDelete(p);actions.append(destination,move,toggle,remove);row.append(title,actions);list.append(row);});if(members.some(p=>p.id===previous))picker.value=previous;}
+function renderMembers(){
+  if(!selected||selected==='admin')return;
+  const list=$('member-list');
+  if(!list)return;
+  list.replaceChildren();
+  const members=groupMembers().slice().sort((left,right)=>left.name.localeCompare(right.name));
+  const count=$('group-agent-count');
+  if(count)count.textContent=String(members.length);
+  if(!members.length){
+    const empty=permissionCreate('div','group-agent-empty');
+    empty.append(
+      permissionCreate('p','',t('groupAgentsEmpty')),
+      permissionCreate('p','status-dot',t('groupAgentsManage'))
+    );
+    list.append(empty);
+    return;
+  }
+  members.forEach(principal=>{
+    const row=permissionCreate('div','group-agent-row');
+    row.dataset.enabled=String(principal.enabled);
+    const dot=permissionCreate('span','group-agent-dot');
+    const copyNode=permissionCreate('div','group-agent-copy');
+    copyNode.append(permissionCreate('strong','group-agent-name',principal.name));
+    const meta=permissionCreate('span','group-agent-meta');
+    meta.append(
+      document.createTextNode(t(principal.enabled?'enabled':'disabled')+' · '),
+      permissionCreate('code','',principal.id.slice(0,12))
+    );
+    copyNode.append(meta);
+    const view=permissionCreate('button','group-agent-view',t('viewAgent'));
+    view.type='button';
+    view.dataset.text='viewAgent';
+    view.onclick=()=>{
+      permissionUI.selectedAgent=principal.id;
+      permissionSwitchManagementView('agents',true);
+    };
+    row.append(dot,copyNode,view);
+    list.append(row);
+  });
+}
 $('group-search').oninput=renderList;
-$('member-form').onsubmit=async e=>{e.preventDefault();setBusy(true);try{await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('member-name').value,group_id:selected,issue_token:false})});$('member-form').reset();await reload();renderDetail();feedback(t('saved'),'success');}catch(e){fail(e,'member-error');}finally{setBusy(false);}};
 $('edit-group').onclick=()=>{const g=agents.find(g=>g.id===selected);$('group-editor').hidden=!$('group-editor').hidden;$('clone-editor').hidden=true;$('group-name').value=g.name;$('group-description').value=g.description||'';};
 $('group-details-form').onsubmit=async e=>{e.preventDefault();const g=agents.find(g=>g.id===selected);setBusy(true);try{await request('/auth/groups/'+encodeURIComponent(g.id),{method:'PATCH',body:JSON.stringify({revision:g.revision,name:$('group-name').value,description:$('group-description').value})});await reload();$('group-editor').hidden=true;renderDetail();feedback(t('saved'),'success');}catch(e){fail(e,'policy-error');}finally{setBusy(false);}};
 $('clone-group').onclick=()=>{const g=agents.find(g=>g.id===selected);$('clone-editor').hidden=!$('clone-editor').hidden;$('group-editor').hidden=true;$('clone-name').value=g.name+(lang==='zh'?' 副本':' copy');};
 $('clone-form').onsubmit=async e=>{e.preventDefault();if(!safeSwitch())return;const g=agents.find(g=>g.id===selected);setBusy(true);try{const out=await request('/auth/groups/'+encodeURIComponent(g.id)+'/clone',{method:'POST',body:JSON.stringify({name:$('clone-name').value})});await reload();select(out.group.id,true);feedback(t('created'),'success');}catch(e){fail(e,'policy-error');}finally{setBusy(false);}};
 $('default-group').onclick=async()=>{setBusy(true);try{await request('/auth/default-group',{method:'PUT',body:JSON.stringify({group_id:selected,revision:accessRevision})});await reload();renderDetail();feedback(t('saved'),'success');}catch(e){fail(e,'policy-error');}finally{setBusy(false);}};
-async function previewDelete(){const g=agents.find(g=>g.id===selected);deletePlan=await request('/auth/groups/'+encodeURIComponent(g.id)+'/delete-preview',{method:'POST'});$('delete-summary').textContent=g.name+' · '+deletePlan.member_count+' '+t('memberCount')+' · '+deletePlan.credential_count+' '+t('credentialCount')+' · '+deletePlan.active_requests+' '+t('activeCount')+' · '+deletePlan.active_work+' '+t('workCount')+'. '+t('deleteHint');$('delete-resolution-field').hidden=!deletePlan.member_count;$('delete-default-field').hidden=!deletePlan.is_default;const options=agents.filter(x=>x.id!==g.id&&x.enabled);for(const id of ['delete-replacement','delete-default']){$(id).replaceChildren();options.forEach(x=>{const o=el('option',x.name);o.value=x.id;$(id).append(o);});}$('delete-resolution').value='deny';$('delete-replacement-field').hidden=true;$('delete-error').textContent='';}
+async function previewDelete(){const g=agents.find(g=>g.id===selected);deletePlan=await request('/auth/groups/'+encodeURIComponent(g.id)+'/delete-preview',{method:'POST'});$('delete-summary').textContent=g.name+' · '+deletePlan.member_count+' '+t('memberCount')+' · '+deletePlan.active_requests+' '+t('activeCount')+' · '+deletePlan.active_work+' '+t('workCount')+'. '+t('deleteHint');$('delete-resolution-field').hidden=!deletePlan.member_count;$('delete-default-field').hidden=!deletePlan.is_default;const options=agents.filter(x=>x.id!==g.id&&x.enabled);for(const id of ['delete-replacement','delete-default']){$(id).replaceChildren();options.forEach(x=>{const o=el('option',x.name);o.value=x.id;$(id).append(o);});}$('delete-resolution').value='deny';$('delete-replacement-field').hidden=true;$('delete-error').textContent='';}
 $('delete-group').onclick=async()=>{if(!safeSwitch())return;setBusy(true);try{await previewDelete();$('delete-dialog').showModal();}catch(e){fail(e,'policy-error');}finally{setBusy(false);}};
 $('delete-resolution').onchange=()=>{$('delete-replacement-field').hidden=$('delete-resolution').value!=='move';};
 $('cancel-delete').onclick=()=>{$('delete-dialog').close();deletePlan=null;};
@@ -490,11 +750,10 @@ $('refresh-delete').onclick=async()=>{setBusy(true);try{await reload();await pre
 $('delete-form').onsubmit=async e=>{e.preventDefault();if(!deletePlan)return;setBusy(true);try{await request('/auth/groups/'+encodeURIComponent(deletePlan.group_id),{method:'DELETE',body:JSON.stringify({revision:deletePlan.revision,plan_revision:deletePlan.plan_revision,resolution:$('delete-resolution').value,replacement_group_id:$('delete-replacement').value,default_group_id:deletePlan.is_default?$('delete-default').value:''})});$('delete-dialog').close();deletePlan=null;selected=null;draft=null;original='';await reload();select(defaultGroupID,true);feedback(t('saved'),'success');}catch(e){fail(e,'delete-error');}finally{setBusy(false);}};
 function renderPolicyPreview(result){const lines=[result.approval_required?t('permissionApproval'):result.allowed?t('previewAllowed'):t('previewDenied'),t('previewNotRun')];if(result.reason)lines.push(result.reason);(result.requirements||[]).forEach(r=>{const name=lang==='zh'?(actionNames[r.operation]||r.name):r.name;const state=r.approval?'['+t('permissionApproval')+']':r.allowed?'['+t('previewAllowed')+']':'['+t('previewDenied')+']';lines.push(state+' '+r.operation+' · '+name+(r.reason?' · '+r.reason:''))});if(result.resource_error)lines.push(t('previewResource')+': '+result.resource_error);const box=$('policy-preview-result');box.textContent=lines.join('\n');box.hidden=false;}
 async function runPolicyPreview(cmd){cmd=String(cmd||'');if(!cmd.trim()){feedback(t('previewEmpty'),'error');return;}setBusy(true);try{renderPolicyPreview(await request('/auth/access/preview',{method:'POST',body:JSON.stringify({policy:draft,cmd})}));}catch(error){fail(error);}finally{setBusy(false);}}
-$('policy-tab').onclick=()=>setTab('policy');$('tokens-tab').onclick=()=>{setTab('tokens');renderConfig();};$('host-search').oninput=renderHosts;$('config-mode').onchange=renderConfig;$('dismiss-token').onclick=clearRevealed;$('language').onchange=e=>{lang=e.target.value;renderLanguage();};
+$('policy-tab').onclick=()=>setTab('policy');$('group-agents-tab').onclick=()=>setTab('members');$('host-search').oninput=renderHosts;$('language').onchange=e=>{lang=e.target.value;renderLanguage();};
 $('run-policy-preview').onclick=()=>runPolicyPreview($('preview-command').value);
-$('copy-config').onclick=async()=>{try{await navigator.clipboard.writeText($('token-config').value);$('copy-state').textContent=t('copied');}catch{$('token-config').select();$('copy-state').textContent=t('manualCopy');}};
-window.addEventListener('beforeunload',e=>{if(changed()||revealed){e.preventDefault();e.returnValue='';}});
-async function load(){renderLanguage();feedback(t('loading'));setBusy(true);try{state=await request('/auth/status');if(!state.authenticated){location.replace(authPath('/login'));return;}const data=await Promise.all([request('/auth/access'),request('/auth/permissions'),request('/auth/group-presets')]);catalog=data[0];roles=data[1];presets=data[2].presets;renderPresets();$('admin-mcp').checked=roles.permissions.admin.includes('mcp');$('agent-mcp').checked=roles.permissions.agent.includes('mcp');await reload();if(agents.length)select(agents[0].id,true);feedback(t('intro'));$('config-mode').querySelector('[value=daemon]').hidden=!/^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(location.hostname);}catch(error){fail(error);}finally{setBusy(false);}}
+window.addEventListener('beforeunload',e=>{if(changed()){e.preventDefault();e.returnValue='';}});
+async function load(){renderLanguage();feedback(t('loading'));setBusy(true);try{state=await request('/auth/status');if(!state.authenticated){location.replace(authPath('/login'));return;}const data=await Promise.all([request('/auth/access'),request('/auth/permissions'),request('/auth/group-presets')]);catalog=data[0];roles=data[1];presets=data[2].presets;renderPresets();$('admin-mcp').checked=roles.permissions.admin.includes('mcp');$('agent-mcp').checked=roles.permissions.agent.includes('mcp');await reload();if(agents.length&&(!permissionUI||permissionUI.view==='groups'))select(agents[0].id,true);feedback(t('intro'));}catch(error){fail(error);}finally{setBusy(false);}}
 load();
 </script>
 <script nonce="{{.Nonce}}">
@@ -601,7 +860,10 @@ const permissionIconPaths={
   close:['M18 6 6 18','m6 6 12 12'],
   chevron:['m6 9 6 6 6-6'],
   users:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2','M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z','M22 21v-2a4 4 0 0 0-3-3.87','M16 3.13a4 4 0 0 1 0 7.75'],
-  batch:['M8 6h13','M8 12h13','M8 18h13','M3 6h.01','M3 12h.01','M3 18h.01']
+  batch:['M8 6h13','M8 12h13','M8 18h13','M3 6h.01','M3 12h.01','M3 18h.01'],
+  power:['M12 2v10','M18.36 6.64a9 9 0 1 1-12.73 0'],
+  trash:['M3 6h18','M8 6V4h8v2','M19 6l-1 14H6L5 6','M10 11v5','M14 11v5'],
+  copy:['M8 8h11v11H8z','M5 16H3V3h13v2']
 };
 
 function permissionIcon(name){
@@ -631,6 +893,10 @@ function permissionFormat(key,count,total){
   return t(key).replace('%n',String(count)).replace('%t',String(total));
 }
 
+function permissionCount(count,oneKey,manyKey){
+  return t(count===1?oneKey:manyKey).replace('%n',String(count));
+}
+
 function permissionAccessLabel(pathName){
   const keys={dsl:'accessDSL',tool:'accessTool',webui:'accessWebUI',internal:'accessInternal'};
   return t(keys[pathName]||'accessInternal');
@@ -647,7 +913,10 @@ const permissionUI={
   groupsOpen:true,
   subjectsOpen:false,
   agentQuery:'',
-  agentFilter:'all'
+  agentFilter:'all',
+  view:'groups',
+  selectedAgent:null,
+  agentRevealed:null
 };
 
 function permissionIsMobile(){
@@ -665,6 +934,7 @@ function permissionSetButton(id,key,iconName){
   }else{
     button.replaceChildren(label);
   }
+  button.dataset.permissionDecorated='true';
 }
 
 function permissionDecorateButton(id,iconName){
@@ -694,6 +964,11 @@ function permissionLocalizeChrome(){
   document.querySelectorAll('[data-text]').forEach(node=>{
     node.textContent=t(node.dataset.text);
   });
+  const workspaceBack=$('workspace-back');
+  if(workspaceBack){
+    workspaceBack.title=t('backWorkspace');
+    workspaceBack.setAttribute('aria-label',t('backWorkspace'));
+  }
   const actionSearch=$('permission-search');
   if(actionSearch)actionSearch.placeholder=t('searchActions');
   const hostSearch=$('host-search');
@@ -958,10 +1233,11 @@ function permissionEnsureStructure(){
   permissionDecorateButton('preview-toggle','shield');
   permissionDecorateButton('run-policy-preview','shield');
   permissionDecorateButton('policy-tab','sliders');
-  permissionDecorateButton('tokens-tab','key');
+  permissionDecorateButton('group-agents-tab','users');
   permissionDecorateButton('permission-agent-create-toggle','plus');
   permissionDecorateSearch('permission-agent-search','searchAgents');
 
+  if($('token-form')){
   const tokenLabel=$('token-label');
   const tokenLabelField=tokenLabel?.closest('label');
   if(tokenLabelField)tokenLabelField.hidden=true;
@@ -1084,15 +1360,14 @@ function permissionEnsureStructure(){
       renderTokens();
     }
   };
+  }
 
   const sidebarHead=document.querySelector('.workspace>aside .sidebar-head');
   const newGroup=$('new-agent');
   if(sidebarHead&&newGroup){
     const actions=permissionCreate('span','sidebar-actions');
-    const count=permissionCreate('span','group-count','0 '+t('groupsUnit'));
-    count.id='group-count';
     newGroup.before(actions);
-    actions.append(count,newGroup);
+    actions.append(newGroup);
   }
   const groupSearch=$('group-search').closest('label');
   if(groupSearch)permissionDecorateSearch('group-search','searchGroups');
@@ -1197,7 +1472,6 @@ function permissionEnsureStructure(){
       form.hidden=true;
       return;
     }
-    agentCreateGroupOptions($('permission-agent-group'));
     $('permission-agent-create-error').textContent='';
     form.hidden=false;
     $('permission-agent-name').focus();
@@ -1210,14 +1484,10 @@ function permissionEnsureStructure(){
   };
   $('permission-agent-create-form').onsubmit=async event=>{
     event.preventDefault();
-    if(!$('permission-agent-group').options.length){
-      $('permission-agent-create-error').textContent=t('noEnabledGroup');
-      return;
-    }
     setBusy(true);
     $('permission-agent-create-error').textContent='';
     try{
-      await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('permission-agent-name').value,group_id:$('permission-agent-group').value})});
+      await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('permission-agent-name').value})});
       $('permission-agent-create-form').reset();
       $('permission-agent-create-form').hidden=true;
       await reload();
@@ -1762,10 +2032,6 @@ renderList=function renderListEnhanced(){
   const groupCount=$('group-count');
   if(groupCount)groupCount.textContent=agents.length+' '+t('groupsUnit');
   $('permission-groups-summary').textContent=agents.length+' '+t('groupsUnit')+(dirtyCount()?' · '+t('unsaved'):'');
-  $('permission-groups-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.groupsOpen));
-  $('permission-groups-mobile-body').hidden=!permissionUI.groupsOpen;
-  $('permission-subjects-mobile-toggle').setAttribute('aria-expanded',String(permissionUI.subjectsOpen));
-  $('permission-subjects-mobile-body').hidden=!permissionUI.subjectsOpen;
   permissionLayoutSubjectSection();
   permissionRenderSubjects();
   permissionLayoutDetail();
@@ -1857,23 +2123,782 @@ renderTokens=function renderTokensEnhanced(){
   if(!history.length&&principal)empty.textContent=current?t('tokenHistoryEmpty'):t('noTokens');
 };
 
+function permissionDefaultGroupName(){
+  return agents.find(group=>group.id===defaultGroupID)?.name||defaultGroupID||t('defaultGroupValue');
+}
+
+function permissionAgentByID(id){
+  return principals.find(principal=>principal.id===id)||null;
+}
+
+function permissionAgentGroupLabel(principal,short=false){
+  if(!principal)return '';
+  if(principal.group_id==='system-deny')return t('unassignedAgentState');
+  if(!principal.group_id)return (short?t('defaultGroupValue'):t('followDefault'))+' · '+permissionDefaultGroupName();
+  return agents.find(group=>group.id===principal.group_id)?.name||t('missingGroup');
+}
+
+function permissionSortedAgents(){
+  return [...principals].sort((left,right)=>{
+    const leftUnassigned=left.group_id==='system-deny'?0:1;
+    const rightUnassigned=right.group_id==='system-deny'?0:1;
+    return leftUnassigned-rightUnassigned||left.name.localeCompare(right.name);
+  });
+}
+
+function permissionDefaultGroupNote(){
+  return t('defaultGroupNote').replace('%s',permissionDefaultGroupName());
+}
+
+function permissionWorkspaceButton(id,key,iconName,controls,selected){
+  const button=permissionCreate('button','workspace-nav-button');
+  button.id=id;
+  button.type='button';
+  button.setAttribute('role','tab');
+  button.setAttribute('aria-selected',String(selected));
+  button.setAttribute('aria-controls',controls);
+  const icon=permissionCreate('span','workspace-nav-icon');
+  icon.append(permissionIcon(iconName));
+  const copyNode=permissionCreate('span','workspace-nav-copy');
+  const title=permissionCreate('strong','',t(key));
+  title.dataset.text=key;
+  const summary=permissionCreate('small','','');
+  summary.id=id+'-summary';
+  copyNode.append(title,summary);
+  button.append(icon,copyNode);
+  return button;
+}
+
+function permissionInstallAgentWorkspace(){
+  if($('management-view-tabs'))return;
+  const workspace=document.querySelector('main.workspace');
+  const aside=workspace?.querySelector(':scope > aside');
+  const groupPanel=$('permission-groups-mobile-body');
+  const agentPanel=$('permission-mobile-subjects');
+  const groupDetail=workspace?.querySelector(':scope > section.detail');
+  if(!workspace||!aside||!groupPanel||!agentPanel||!groupDetail)return;
+
+  groupDetail.id='group-detail';
+  groupDetail.classList.add('group-detail');
+  groupPanel.after(agentPanel);
+  agentPanel.hidden=true;
+  groupPanel.setAttribute('role','tabpanel');
+  groupPanel.setAttribute('aria-labelledby','management-groups-tab');
+  agentPanel.setAttribute('role','tabpanel');
+  agentPanel.setAttribute('aria-labelledby','management-agents-tab');
+
+  const tabs=permissionCreate('nav','workspace-nav');
+  tabs.id='management-view-tabs';
+  tabs.setAttribute('role','tablist');
+  tabs.setAttribute('aria-label',t('title'));
+  tabs.append(
+    permissionWorkspaceButton('management-groups-tab','groupsWorkspace','shield','permission-groups-mobile-body',true),
+    permissionWorkspaceButton('management-agents-tab','agentsWorkspace','users','permission-mobile-subjects',false)
+  );
+  aside.prepend(tabs);
+
+  const body=$('permission-subjects-mobile-body');
+  body.hidden=false;
+  body.replaceChildren();
+
+  const tools=permissionCreate('div','permission-agent-tools');
+  const searchLabel=permissionCreate('label','field');
+  const searchCaption=permissionCreate('span','visually-hidden',t('searchAgents'));
+  searchCaption.dataset.text='searchAgents';
+  const search=document.createElement('input');
+  search.id='permission-agent-search';
+  search.type='search';
+  search.autocomplete='off';
+  search.placeholder=t('searchAgents');
+  searchLabel.append(searchCaption,search);
+  const createToggle=permissionCreate('button','','');
+  createToggle.id='permission-agent-create-toggle';
+  createToggle.type='button';
+  tools.append(searchLabel,createToggle);
+
+  const filters=permissionCreate('div','permission-agent-filter');
+  filters.id='permission-agent-filter';
+  filters.setAttribute('role','group');
+  filters.setAttribute('aria-label',t('mobileSubjects'));
+  [['all','allAgents'],['enabled','enabledAgents'],['disabled','disabledAgents'],['unassigned','unassignedAgents']].forEach(([value,key])=>{
+    const button=permissionCreate('button','',t(key));
+    button.type='button';
+    button.dataset.agentFilter=value;
+    button.dataset.text=key;
+    button.setAttribute('aria-pressed',String(value==='all'));
+    filters.append(button);
+  });
+
+  const note=permissionCreate('div','permission-agent-default-note');
+  note.id='permission-agent-default-note';
+  note.append(permissionIcon('shield'),permissionCreate('span','',permissionDefaultGroupNote()));
+
+  const form=permissionCreate('form','permission-agent-create-form');
+  form.id='permission-agent-create-form';
+  form.hidden=true;
+  const heading=permissionCreate('h3','',t('newAgentHeading'));
+  heading.dataset.text='newAgentHeading';
+  const hint=permissionCreate('p','permission-agent-form-note',t('createAgentDefaultHint'));
+  hint.dataset.text='createAgentDefaultHint';
+  const nameLabel=permissionCreate('label','field');
+  const nameCaption=permissionCreate('span','',t('agentDisplayName'));
+  nameCaption.dataset.text='agentDisplayName';
+  const nameInput=document.createElement('input');
+  nameInput.id='permission-agent-name';
+  nameInput.type='text';
+  nameInput.maxLength=128;
+  nameInput.required=true;
+  nameLabel.append(nameCaption,nameInput);
+  const actions=permissionCreate('div','group-actions');
+  const cancel=permissionCreate('button','',t('cancel'));
+  cancel.id='permission-agent-create-cancel';
+  cancel.type='button';
+  cancel.dataset.text='cancel';
+  const submit=permissionCreate('button','primary',t('createAgentAction'));
+  submit.type='submit';
+  submit.dataset.text='createAgentAction';
+  actions.append(cancel,submit);
+  const error=permissionCreate('p','inline-message','');
+  error.id='permission-agent-create-error';
+  error.setAttribute('role','alert');
+  form.append(heading,hint,nameLabel,actions,error);
+
+  const list=permissionCreate('div','permission-mobile-subject-list');
+  list.id='permission-mobile-subject-list';
+  list.setAttribute('aria-label',t('mobileSubjects'));
+  body.append(tools,filters,note,form,list);
+
+  const detail=permissionCreate('section','detail agent-detail');
+  detail.id='agent-detail';
+  detail.hidden=true;
+  detail.innerHTML=`
+    <div id="agent-detail-empty" class="agent-empty-detail" hidden>
+      <div>
+        <h2 data-text="agentsWorkspace">Agent 管理</h2>
+        <p data-text="agentDetailEmpty"></p>
+        <button id="agent-empty-create" class="primary" type="button" data-text="newAgentButton"></button>
+      </div>
+    </div>
+    <div id="agent-detail-content">
+      <div class="agent-detail-heading">
+        <div>
+          <div class="agent-detail-title"><h2 id="agent-detail-name"></h2><span id="agent-detail-status" class="agent-status-badge"></span></div>
+          <p id="agent-detail-meta"></p>
+        </div>
+        <div class="group-actions">
+          <button id="agent-detail-toggle" type="button"></button>
+          <button id="agent-detail-delete" class="danger" type="button" data-text="deleteAgent"></button>
+        </div>
+      </div>
+      <div class="agent-detail-columns">
+        <div class="agent-detail-main">
+          <section class="agent-section">
+            <div class="agent-section-head">
+              <div><h3 data-text="agentGroupSection"></h3><p data-text="agentGroupHint"></p></div>
+            </div>
+            <form id="agent-group-form" class="agent-group-form">
+              <label class="field"><span data-text="permissionGroup"></span><select id="agent-group-select"></select></label>
+              <button class="primary" type="submit" data-text="agentGroupSave"></button>
+            </form>
+            <div class="agent-group-current"><span data-text="currentGroupLabel"></span><strong id="agent-current-group"></strong></div>
+            <p id="agent-group-error" class="inline-message" role="alert"></p>
+          </section>
+          <section class="agent-section" id="agent-token-section">
+            <div class="agent-section-head">
+              <div><h3 data-text="agentTokenSection"></h3><p data-text="agentTokenHint"></p></div>
+              <button id="agent-issue-token" class="primary" type="button" data-text="issueToken"></button>
+            </div>
+            <section id="agent-token-current" class="current-token agent-token-current" hidden>
+              <dl class="agent-facts">
+                <div class="agent-fact"><dt data-text="tokenID"></dt><dd><code id="agent-token-id"></code></dd></div>
+                <div class="agent-fact"><dt data-text="createdAt"></dt><dd id="agent-token-created"></dd></div>
+                <div class="agent-fact"><dt data-text="lastUsedLabel"></dt><dd id="agent-token-last-used"></dd></div>
+                <div class="agent-fact"><dt data-text="expiresLabel"></dt><dd id="agent-token-expires"></dd></div>
+              </dl>
+              <div class="agent-token-actions">
+                <button id="agent-rotate-token" type="button" data-text="rotateToken"></button>
+                <button id="agent-revoke-token" class="danger" type="button" data-text="revoke"></button>
+              </div>
+            </section>
+            <p id="agent-token-empty" class="agent-token-empty" data-text="agentNoCurrentToken"></p>
+            <section id="agent-token-result" class="token-result" hidden>
+              <div class="result-heading">
+                <div><h3 data-text="copyNow"></h3><p data-text="oneTime"></p></div>
+                <button id="agent-dismiss-token" type="button" data-text="savedClose"></button>
+              </div>
+              <label class="field"><span data-text="connection"></span><select id="agent-config-mode"><option value="http">HTTP /stream</option><option value="sse">SSE /sse</option><option value="stdio">stdio → HTTP</option><option value="daemon">daemon stdio</option></select></label>
+              <label class="field"><span data-text="configuration"></span><textarea id="agent-token-config" readonly spellcheck="false"></textarea></label>
+              <div class="result-actions"><button id="agent-copy-config" type="button" data-text="copyConfig"></button><span id="agent-copy-state" role="status"></span></div>
+            </section>
+            <div class="agent-token-history">
+              <div class="agent-token-history-head"><h3 data-text="tokenHistory"></h3><button id="agent-clear-history" type="button" data-text="clearTokenHistory"></button></div>
+              <table><thead><tr><th data-text="tokenID"></th><th data-text="createdAt"></th><th data-text="revokedAt"></th></tr></thead><tbody id="agent-token-history-body"></tbody></table>
+              <p id="agent-token-history-empty" class="agent-token-empty" data-text="agentNoTokenHistory"></p>
+            </div>
+            <p id="agent-token-error" class="inline-message" role="alert"></p>
+          </section>
+        </div>
+        <div class="agent-detail-rail">
+          <section class="agent-section">
+            <div class="agent-section-head"><div><h3 data-text="agentIdentity"></h3></div></div>
+            <dl class="agent-facts">
+              <div class="agent-fact"><dt data-text="agentIDLabel"></dt><dd><code id="agent-id"></code></dd></div>
+              <div class="agent-fact"><dt data-text="agentCreatedLabel"></dt><dd id="agent-created"></dd></div>
+              <div class="agent-fact"><dt data-text="agentStateLabel"></dt><dd id="agent-state"></dd></div>
+            </dl>
+          </section>
+          <section class="agent-section">
+            <div class="agent-section-head"><div><h3 data-text="agentActivity"></h3></div></div>
+            <div class="agent-activity">
+              <div class="agent-activity-item"><strong id="agent-metric-tokens">0</strong><span data-text="agentTokensMetric"></span></div>
+              <div class="agent-activity-item"><strong id="agent-metric-requests">0</strong><span data-text="agentRequestsMetric"></span></div>
+              <div class="agent-activity-item"><strong id="agent-metric-work">0</strong><span data-text="agentWorkMetric"></span></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>`;
+  groupDetail.after(detail);
+
+  permissionSetButton('permission-agent-create-toggle','newAgentButton','plus');
+  permissionSetButton('agent-detail-toggle','disable','power');
+  permissionSetButton('agent-detail-delete','deleteAgent','trash');
+  permissionSetButton('agent-issue-token','issueToken','key');
+  permissionSetButton('agent-copy-config','copyConfig','copy');
+  $('agent-config-mode').querySelector('[value=daemon]').hidden=!/^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(location.hostname);
+  permissionLocalizeChrome();
+}
+
+function permissionAgentConfig(revealed, mode){
+  const entry=mode==='http'||mode==='sse'
+    ?{url:location.origin+authPath(mode==='sse'?'/sse':'/stream'),headers:{Authorization:'Bearer '+revealed.token}}
+    :(()=>{
+      const args=['-y','@open-mcp-ai/termcp'];
+      if(mode==='daemon')args.push('daemon');
+      args.push('stdio',location.origin+authPath('/stream'));
+      return {command:'npx',args,env:{TERMCP_MCP_TOKEN:revealed.token}};
+    })();
+  return JSON.stringify({mcpServers:{termcp:entry}},null,2);
+}
+
+function permissionCurrentAgentToken(){
+  const principal=permissionAgentByID(permissionUI.selectedAgent);
+  if(!principal)return null;
+  return tokens.find(token=>token.principal_id===principal.id&&token.active)||null;
+}
+
+function permissionRenderAgentConfig(){
+  if(!permissionUI.agentRevealed)return;
+  const mode=$('agent-config-mode').value;
+  $('agent-token-config').value=permissionAgentConfig(permissionUI.agentRevealed,mode);
+  $('agent-token-result').hidden=false;
+}
+
+function permissionRenderAgentTokens(principal){
+  const current=permissionCurrentAgentToken();
+  const history=tokens
+    .filter(token=>token.principal_id===principal.id&&!token.active)
+    .sort((left,right)=>String(right.created_at).localeCompare(String(left.created_at)));
+  const currentBox=$('agent-token-current');
+  const empty=$('agent-token-empty');
+  const issue=$('agent-issue-token');
+  currentBox.hidden=!current;
+  empty.hidden=!!current;
+  issue.hidden=!!current;
+  issue.disabled=busy;
+  if(current){
+    $('agent-token-id').textContent=current.id;
+    $('agent-token-created').textContent=new Date(current.created_at).toLocaleString(lang);
+    $('agent-token-last-used').textContent=current.last_used_at?new Date(current.last_used_at).toLocaleString(lang):t('neverUsed');
+    $('agent-token-expires').textContent=current.expires_at?new Date(current.expires_at).toLocaleString(lang):t('neverExpires');
+  }else{
+    $('agent-token-id').textContent='';
+    $('agent-token-created').textContent='';
+    $('agent-token-last-used').textContent='';
+    $('agent-token-expires').textContent='';
+  }
+  $('agent-rotate-token').hidden=!current;
+  $('agent-revoke-token').hidden=!current;
+  $('agent-clear-history').disabled=busy||history.length===0;
+  const body=$('agent-token-history-body');
+  body.replaceChildren();
+  history.forEach(token=>{
+    const row=el('tr');
+    const id=el('td');
+    id.append(el('code',token.id));
+    if(token.replaced_by)id.append(el('small','→ '+token.replaced_by));
+    const invalidated=token.revoked_at
+      ?new Date(token.revoked_at).toLocaleString(lang)
+      :token.expires_at
+        ?t('tokenExpired')+' · '+new Date(token.expires_at).toLocaleString(lang)
+        :t('tokenRevoked');
+    row.append(id,el('td','',new Date(token.created_at).toLocaleString(lang)),el('td','',invalidated));
+    body.append(row);
+  });
+  body.closest('table').hidden=!history.length;
+  $('agent-token-history-empty').hidden=history.length>0;
+  if(permissionUI.agentRevealed){
+    $('agent-token-result').hidden=false;
+    permissionRenderAgentConfig();
+  }else{
+    $('agent-token-result').hidden=true;
+    $('agent-token-config').value='';
+    $('agent-copy-state').textContent='';
+  }
+}
+
+function permissionAgentGroupOptions(select,current){
+  select.replaceChildren();
+  const follow=el('option',t('defaultGroupValue')+' · '+permissionDefaultGroupName());
+  follow.value='';
+  select.append(follow);
+  agents.forEach(group=>{
+    if(group.id===defaultGroupID)return;
+    const option=el('option',group.name+(!group.enabled?' · '+t('disabled'):''));
+    option.value=group.id;
+    option.disabled=!group.enabled&&group.id!==current;
+    select.append(option);
+  });
+  if(current===defaultGroupID){
+    const option=el('option',t('defaultGroupValue')+' · '+permissionDefaultGroupName());
+    option.value=defaultGroupID;
+    select.append(option);
+  }else if(current&&current!=='system-deny'&&!agents.some(group=>group.id===current)){
+    const option=el('option',t('missingGroup')+' · '+current.slice(0,10));
+    option.value=current;
+    select.append(option);
+  }
+  const denied=el('option',t('denyBinding'));
+  denied.value='system-deny';
+  select.append(denied);
+  select.value=current;
+}
+
+function permissionRenderAgentDetail(){
+  const detail=$('agent-detail');
+  if(!detail)return;
+  const principal=permissionAgentByID(permissionUI.selectedAgent);
+  $('agent-detail-empty').hidden=!!principal;
+  $('agent-detail-content').hidden=!principal;
+  if(!principal)return;
+
+  const groupLabel=permissionAgentGroupLabel(principal);
+  $('agent-detail-name').textContent=principal.name;
+  $('agent-detail-status').textContent=t(principal.enabled?'enabled':'disabled');
+  $('agent-detail-status').dataset.state=principal.enabled?'enabled':'disabled';
+  $('agent-detail-meta').textContent=[
+    groupLabel,
+    permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+    principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
+  ].filter(Boolean).join(' · ');
+  permissionSetButton('agent-detail-toggle',principal.enabled?'memberDisable':'memberEnable','power');
+  $('agent-detail-toggle').disabled=busy;
+  $('agent-detail-delete').disabled=busy;
+
+  const groupSelect=$('agent-group-select');
+  permissionAgentGroupOptions(groupSelect,principal.group_id||'');
+  $('agent-current-group').textContent=groupLabel;
+  $('agent-group-error').textContent='';
+  $('agent-group-form').querySelector('button[type=submit]').disabled=busy;
+
+  $('agent-id').textContent=principal.id;
+  $('agent-created').textContent=new Date(principal.created_at).toLocaleString(lang);
+  $('agent-state').textContent=t(principal.enabled?'enabled':'disabled');
+  $('agent-metric-tokens').textContent=String(principal.credential_count||0);
+  $('agent-metric-requests').textContent=String(principal.active_requests||0);
+  $('agent-metric-work').textContent=String(principal.active_work||0);
+  permissionRenderAgentTokens(principal);
+}
+
+function permissionRenderAgentNavigation(){
+  const list=$('permission-mobile-subject-list');
+  if(!list)return;
+  const sorted=permissionSortedAgents();
+  if(permissionUI.selectedAgent&&!permissionAgentByID(permissionUI.selectedAgent)){
+    permissionUI.selectedAgent=sorted[0]?.id||null;
+  }
+  const agentSummary=$('management-agents-tab-summary');
+  if(agentSummary)agentSummary.textContent=permissionCount(principals.length,'agentWorkspaceSummaryOne','agentWorkspaceSummary');
+  const groupSummary=$('management-groups-tab-summary');
+  if(groupSummary)groupSummary.textContent=permissionCount(agents.length,'groupWorkspaceSummaryOne','groupWorkspaceSummary');
+  const note=$('permission-agent-default-note');
+  if(note?.lastElementChild)note.lastElementChild.textContent=permissionDefaultGroupNote();
+  document.querySelectorAll('[data-agent-filter]').forEach(button=>{
+    button.setAttribute('aria-pressed',String(button.dataset.agentFilter===permissionUI.agentFilter));
+  });
+  const query=permissionUI.agentQuery.trim().toLowerCase();
+  const shown=sorted.filter(principal=>{
+    if(permissionUI.agentFilter==='enabled'&&!principal.enabled)return false;
+    if(permissionUI.agentFilter==='disabled'&&principal.enabled)return false;
+    if(permissionUI.agentFilter==='unassigned'&&principal.group_id!=='system-deny')return false;
+    if(!query)return true;
+    return [principal.name,principal.id,permissionAgentGroupLabel(principal)].join(' ').toLowerCase().includes(query);
+  });
+  list.replaceChildren();
+  if(!principals.length){
+    const empty=permissionCreate('div','permission-empty');
+    empty.append(permissionCreate('p','',t('mobileSubjectEmpty')));
+    list.append(empty);
+  }else if(!shown.length){
+    list.append(permissionCreate('p','permission-empty',t('noAgentMatches')));
+  }
+  shown.forEach(principal=>{
+    const button=permissionCreate('button','agent-nav-item');
+    button.type='button';
+    button.dataset.enabled=String(principal.enabled);
+    if(principal.group_id==='system-deny')button.dataset.groupState='unassigned';
+    button.setAttribute('aria-current',String(principal.id===permissionUI.selectedAgent));
+    button.setAttribute('aria-label',principal.name+' · '+permissionAgentGroupLabel(principal));
+    const dot=permissionCreate('span','agent-nav-dot');
+    const name=permissionCreate('span','agent-nav-name',principal.name);
+    const meta=[
+      permissionAgentGroupLabel(principal,true),
+      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany')
+    ].join(' · ');
+    const metadata=permissionCreate('span','agent-nav-meta',meta);
+    const chevron=permissionCreate('span','agent-nav-chevron');
+    chevron.append(permissionIcon('chevron'));
+    button.append(dot,name,metadata,chevron);
+    button.onclick=()=>permissionSelectAgent(principal.id);
+    list.append(button);
+  });
+}
+
+function permissionSyncManagementView(){
+  const agentView=permissionUI.view==='agents';
+  const groupPanel=$('permission-groups-mobile-body');
+  const agentPanel=$('permission-mobile-subjects');
+  const groupDetail=$('group-detail');
+  const agentDetail=$('agent-detail');
+  if(groupPanel)groupPanel.hidden=agentView;
+  if(agentPanel)agentPanel.hidden=!agentView;
+  if(groupDetail)groupDetail.hidden=agentView;
+  if(agentDetail)agentDetail.hidden=!agentView;
+  $('management-groups-tab')?.setAttribute('aria-selected',String(!agentView));
+  $('management-agents-tab')?.setAttribute('aria-selected',String(agentView));
+  if(agentView){
+    if(!permissionUI.selectedAgent){
+      permissionUI.selectedAgent=permissionSortedAgents()[0]?.id||null;
+    }
+    permissionRenderAgentNavigation();
+    permissionRenderAgentDetail();
+  }else if(selected){
+    renderDetail();
+  }
+}
+
+function permissionSwitchManagementView(view,force=false){
+  if(view===permissionUI.view){
+    permissionSyncManagementView();
+    return;
+  }
+  if(!force&&revealed){
+    feedback(t('saveFirst'),'error');
+    return;
+  }
+  if(!force&&permissionUI.agentRevealed){
+    feedback(t('saveFirst'),'error');
+    return;
+  }
+  if(!force&&changed()&&!confirm(t('discard')))return;
+  permissionUI.view=view;
+  if(view==='agents'&&!permissionUI.selectedAgent){
+    permissionUI.selectedAgent=permissionSortedAgents()[0]?.id||null;
+  }
+  permissionSyncManagementView();
+}
+
+function permissionSelectAgent(id){
+  if(permissionUI.agentRevealed&&permissionUI.selectedAgent!==id){
+    feedback(t('saveFirst'),'error');
+    return;
+  }
+  if(!permissionAgentByID(id))return;
+  permissionUI.selectedAgent=id;
+  permissionUI.view='agents';
+  permissionRenderAgentNavigation();
+  permissionSyncManagementView();
+}
+
+function permissionCloseAgentCreateForm(reset=true){
+  const form=$('permission-agent-create-form');
+  if(!form)return;
+  form.hidden=true;
+  if(reset)form.reset();
+  $('permission-agent-create-error').textContent='';
+  permissionSetButton('permission-agent-create-toggle','newAgentButton','plus');
+  $('permission-agent-create-toggle').setAttribute('aria-expanded','false');
+}
+
+function permissionOpenAgentCreateForm(){
+  permissionSwitchManagementView('agents');
+  if(permissionUI.view!=='agents')return;
+  const form=$('permission-agent-create-form');
+  form.hidden=false;
+  permissionSetButton('permission-agent-create-toggle','cancel','close');
+  $('permission-agent-create-toggle').setAttribute('aria-expanded','true');
+  $('permission-agent-create-error').textContent='';
+  $('permission-agent-name').focus();
+}
+
+function permissionWireAgentWorkspace(){
+  $('management-groups-tab').onclick=()=>permissionSwitchManagementView('groups');
+  $('management-agents-tab').onclick=()=>permissionSwitchManagementView('agents');
+  $('management-view-tabs').onkeydown=event=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    const tabs=[$('management-groups-tab'),$('management-agents-tab')];
+    let index=event.key==='End'?tabs.length-1:event.key==='Home'?0:tabs.indexOf(document.activeElement);
+    if(event.key==='ArrowLeft')index=(index+tabs.length-1)%tabs.length;
+    if(event.key==='ArrowRight')index=(index+1)%tabs.length;
+    tabs[index].focus();
+    tabs[index].click();
+  };
+
+  $('permission-agent-search').oninput=event=>{
+    permissionUI.agentQuery=event.target.value;
+    permissionRenderAgentNavigation();
+  };
+  $('permission-agent-filter').onclick=event=>{
+    const button=event.target.closest('button[data-agent-filter]');
+    if(!button)return;
+    permissionUI.agentFilter=button.dataset.agentFilter;
+    permissionRenderAgentNavigation();
+  };
+  $('permission-agent-create-toggle').onclick=()=>{
+    if(!$('permission-agent-create-form').hidden){
+      permissionCloseAgentCreateForm();
+      return;
+    }
+    permissionOpenAgentCreateForm();
+  };
+  $('permission-agent-create-cancel').onclick=()=>permissionCloseAgentCreateForm();
+  $('agent-empty-create').onclick=permissionOpenAgentCreateForm;
+  $('permission-agent-create-form').onsubmit=async event=>{
+    event.preventDefault();
+    const name=$('permission-agent-name').value;
+    setBusy(true);
+    $('permission-agent-create-error').textContent='';
+    try{
+      const result=await request('/auth/principals',{method:'POST',body:JSON.stringify({name})});
+      permissionCloseAgentCreateForm();
+      permissionUI.selectedAgent=result.principal.id;
+      await reload();
+      permissionSwitchManagementView('agents',true);
+      feedback(t('agentCreatedDefaultGroup').replace('%s',permissionDefaultGroupName()),'success');
+    }catch(error){
+      fail(error,'permission-agent-create-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+
+  $('agent-group-form').onsubmit=async event=>{
+    event.preventDefault();
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(!principal)return;
+    setBusy(true);
+    $('agent-group-error').textContent='';
+    try{
+      const result=await request('/auth/principals/'+encodeURIComponent(principal.id)+'/group',{method:'PUT',body:JSON.stringify({group_id:$('agent-group-select').value,revision:principal.revision})});
+      permissionUI.selectedAgent=result.principal.id;
+      await reload();
+      feedback(t('groupAssignmentSaved'),'success');
+    }catch(error){
+      fail(error,'agent-group-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+
+  $('agent-detail-toggle').onclick=async()=>{
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(!principal)return;
+    setBusy(true);
+    try{
+      await request('/auth/principals/'+encodeURIComponent(principal.id),{method:'PATCH',body:JSON.stringify({enabled:!principal.enabled,revision:principal.revision})});
+      await reload();
+      feedback(t('saved'),'success');
+    }catch(error){
+      fail(error);
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+  $('agent-detail-delete').onclick=()=>{
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(principal)permissionPreviewAgentDelete(principal);
+  };
+
+  $('agent-issue-token').onclick=async()=>{
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(!principal||permissionCurrentAgentToken())return;
+    setBusy(true);
+    $('agent-token-error').textContent='';
+    try{
+      permissionUI.agentRevealed=await request('/auth/tokens',{method:'POST',body:JSON.stringify({principal_id:principal.id})});
+      await reload();
+      permissionRenderAgentConfig();
+      feedback(t('tokenSaved'),'success');
+    }catch(error){
+      fail(error,'agent-token-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentTokens(principal);
+    }
+  };
+  $('agent-rotate-token').onclick=async()=>{
+    const current=permissionCurrentAgentToken();
+    if(!current||!confirm(t('rotateConfirm')))return;
+    setBusy(true);
+    $('agent-token-error').textContent='';
+    try{
+      permissionUI.agentRevealed=await request('/auth/tokens/'+encodeURIComponent(current.id)+'/rotate',{method:'POST',body:'{}'});
+      await reload();
+      permissionRenderAgentConfig();
+      feedback(t('tokenRotated'),'success');
+    }catch(error){
+      fail(error,'agent-token-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+  $('agent-revoke-token').onclick=async()=>{
+    const current=permissionCurrentAgentToken();
+    if(!current||!confirm(t('revokeConfirm')))return;
+    setBusy(true);
+    $('agent-token-error').textContent='';
+    try{
+      await request('/auth/tokens/'+encodeURIComponent(current.id),{method:'DELETE'});
+      if(permissionUI.agentRevealed?.credential?.id===current.id)permissionUI.agentRevealed=null;
+      await reload();
+      feedback(t('tokenRevokedNotice'),'success');
+    }catch(error){
+      fail(error,'agent-token-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+  $('agent-clear-history').onclick=async()=>{
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(!principal)return;
+    const history=tokens.filter(token=>token.principal_id===principal.id&&!token.active);
+    if(!history.length||!confirm(t('clearTokenHistoryConfirm')))return;
+    setBusy(true);
+    $('agent-token-error').textContent='';
+    try{
+      await request('/auth/tokens/history?principal_id='+encodeURIComponent(principal.id),{method:'DELETE'});
+      await reload();
+      feedback(t('tokenHistoryCleared'),'success');
+    }catch(error){
+      fail(error,'agent-token-error');
+    }finally{
+      setBusy(false);
+      permissionRenderAgentDetail();
+    }
+  };
+  $('agent-config-mode').onchange=permissionRenderAgentConfig;
+  $('agent-dismiss-token').onclick=()=>{
+    permissionUI.agentRevealed=null;
+    $('agent-token-result').hidden=true;
+    $('agent-token-config').value='';
+    $('agent-copy-state').textContent='';
+  };
+  $('agent-copy-config').onclick=async()=>{
+    try{
+      await navigator.clipboard.writeText($('agent-token-config').value);
+      $('agent-copy-state').textContent=t('copied');
+    }catch{
+      $('agent-token-config').select();
+      $('agent-copy-state').textContent=t('manualCopy');
+    }
+  };
+
+  const memberForm=$('member-form');
+  const memberSection=$('members-section');
+  if(memberForm&&memberSection&&!$('member-default-note')){
+    const note=permissionCreate('p','policy-note',t('memberDefaultHint'));
+    note.id='member-default-note';
+    note.dataset.text='memberDefaultHint';
+    memberSection.querySelector('h3')?.after(note);
+    const submit=memberForm.querySelector('button[type=submit]');
+    if(submit){
+      submit.textContent=t('addMemberDefault');
+      submit.dataset.text='addMemberDefault';
+    }
+  }
+  if(memberForm){
+    memberForm.onsubmit=async event=>{
+      event.preventDefault();
+      setBusy(true);
+      $('member-error').textContent='';
+      try{
+        const result=await request('/auth/principals',{method:'POST',body:JSON.stringify({name:$('member-name').value})});
+        memberForm.reset();
+        permissionUI.selectedAgent=result.principal.id;
+        await reload();
+        permissionSwitchManagementView('agents',true);
+        feedback(t('agentCreatedDefaultGroup').replace('%s',permissionDefaultGroupName()),'success');
+      }catch(error){
+        fail(error,'member-error');
+      }finally{
+        setBusy(false);
+        permissionRenderAgentDetail();
+      }
+    };
+  }
+
+  window.addEventListener('beforeunload',event=>{
+    if(!permissionUI.agentRevealed)return;
+    event.preventDefault();
+    event.returnValue='';
+  });
+}
+
+permissionInstallAgentWorkspace();
 permissionEnsureStructure();
+permissionWireAgentWorkspace();
 if(permissionUI.installed){
+  permissionDetachDetail=function(){};
+  permissionLayoutDetail=function(){};
+  permissionLayoutSubjectSection=function(){};
+  permissionRenderSubjects=permissionRenderAgentNavigation;
+
   const originalUpdateSave=updateSave;
   updateSave=function updateSaveEnhanced(){
     originalUpdateSave();
     permissionSyncStats();
   };
+  const originalRenderList=renderList;
+  renderList=function renderListWithWorkspace(){
+    originalRenderList();
+    permissionSyncManagementView();
+  };
+  const originalSelect=select;
+  select=function selectGroupView(id,force=false){
+    permissionUI.view='groups';
+    return originalSelect(id,force);
+  };
   const originalRenderLanguage=renderLanguage;
   renderLanguage=function renderLanguageEnhanced(){
     originalRenderLanguage();
     permissionLocalizeChrome();
+    permissionRenderAgentNavigation();
+    permissionRenderAgentDetail();
+    permissionSyncManagementView();
   };
   $('host-search').oninput=()=>{
     renderHosts();
   };
   renderList();
   renderTokens();
+  permissionRenderAgentNavigation();
+  permissionSyncManagementView();
   permissionLocalizeChrome();
 }
 </script>{{template "theme-script" .}}</body></html>
