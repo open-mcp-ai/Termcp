@@ -1123,7 +1123,7 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 		return generatedSlot(stmt, win, s.extensionListing(res, boolFlag(stmt, "all")))
 	}
 	doc, _ := toolResultMap(res)
-	return generatedSlot(stmt, win, compactDocument(doc))
+	return generatedSlot(stmt, win, compactDocument(extDocSummary(doc, "", boolFlag(stmt, "all"))))
 }
 
 // directiveExtensionUse is `open ext <name>`: the ask that starts an on-demand
@@ -1162,30 +1162,37 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	doc, _ := toolResultMap(res)
-	slot := generatedSlot(stmt, win, compactDocument(doc))
-	if handle := shortHandle(doc); handle != "" {
-		slot.Headers["Handle"] = handle
-	}
 	// An extension whose template declares an endpoint is an MCP server, and termcp
 	// speaks MCP natively (issue #271): mount it as a real peer and hand back the
 	// peer's address, not a pipe channel. A caller that previously had to type the
 	// handshake, then `tools/list`, then a hand-built `tools/call` frame and match
 	// ids off a byte stream now types `call <peer> <tool> {…}` and reads text.
+	//
+	// The mount happens BEFORE the document is rendered, because the peer's address
+	// is what the caller acts on and the template's notes say the same thing without
+	// it: the summary drops the abstract half only when the concrete one is present.
+	var peerHandle string
+	var peerSlot envelope.Slot
 	if sessID, _ := doc["session_id"].(string); sessID != "" {
 		if ext, err := s.extensions.Store().Load(name); err == nil && strings.TrimSpace(ext.URL) != "" {
-			_, peerHandle, peerSlot, ok := s.mountExtPeer(ctx, ext, sessID, name)
-			if ok && peerSlot.Code >= 400 {
-				return peerSlot
+			_, handle, slot, ok := s.mountExtPeer(ctx, ext, sessID, name)
+			if ok && slot.Code >= 400 {
+				return slot
 			}
-			if peerHandle != "" {
-				slot.Headers["Handle"] = peerHandle
-				slot.Body = strings.TrimRight(slot.Body, "\n") + "\n" + extPeerNote(peerHandle)
-				// The peer's own discovery text names the tools it advertises; the
-				// extension document cannot, because it describes a template.
-				if body := strings.TrimSpace(peerSlot.Body); body != "" {
-					slot.Body += "\n" + body + "\n"
-				}
-			}
+			peerHandle, peerSlot = handle, slot
+		}
+	}
+	slot := generatedSlot(stmt, win, compactDocument(extDocSummary(doc, peerHandle, boolFlag(stmt, "all"))))
+	if handle := shortHandle(doc); handle != "" {
+		slot.Headers["Handle"] = handle
+	}
+	if peerHandle != "" {
+		slot.Headers["Handle"] = peerHandle
+		slot.Body = strings.TrimRight(slot.Body, "\n") + "\n" + extPeerNote(peerHandle)
+		// The peer's own discovery text names the tools it advertises; the
+		// extension document cannot, because it describes a template.
+		if body := strings.TrimSpace(peerSlot.Body); body != "" {
+			slot.Body += "\n" + body + "\n"
 		}
 	}
 	return slot
