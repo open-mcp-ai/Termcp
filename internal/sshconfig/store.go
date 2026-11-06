@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/open-mcp-ai/termcp/internal/fsutil"
 )
 
 // ErrNotFound reports that a named ssh config does not exist. Callers can
@@ -221,7 +223,7 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 			return err
 		}
-		if err := writeFileAtomic(p, data); err != nil {
+		if err := fsutil.WriteFileAtomic(p, data); err != nil {
 			return err
 		}
 		s.notifyChange()
@@ -254,7 +256,7 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(p, data); err != nil {
+	if err := fsutil.WriteFileAtomic(p, data); err != nil {
 		return err
 	}
 	delete(s.temporary, name)
@@ -298,31 +300,6 @@ func (s *Store) internalOverridePath() string {
 // writeFileAtomic writes data through a temp file and renames it into place, so
 // a crash cannot leave a half-written config behind. The file is 0600: profiles
 // hold credentials.
-func writeFileAtomic(p string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-cfg-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, p); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Rename moves a remote config directory to a new validated name.
 func (s *Store) Rename(oldName, newName string) error {
 	oldName = strings.TrimSpace(oldName)

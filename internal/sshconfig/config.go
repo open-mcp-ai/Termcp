@@ -2,10 +2,11 @@ package sshconfig
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
