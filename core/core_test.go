@@ -8,7 +8,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -548,4 +551,141 @@ type stubCaps struct {
 func (c *stubCaps) Handle(_ context.Context, st term.Statement) []term.Slot {
 	c.reached.Add(1)
 	return []term.Slot{{Code: 500, Body: "the entrance should have refused this before it reached a handler: " + st.Op + "\n"}}
+}
+
+// Issue dogfooding check: an alias created via /api/term MUST persist to disk in
+// cfg.DataDir/aliases/<name>.toml so it outlives the process.
+func TestCoreWiresDataDirToMCPAliasStore(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dataDir
+	cfg.Headless = true
+	srv, err := New(Options{Config: cfg, Version: "test"})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/term", strings.NewReader(`{"cmd":"create alias foo 'ls'"}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create alias returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	savedFile := filepath.Join(dataDir, "aliases", "foo.toml")
+	data, err := os.ReadFile(savedFile)
+	if err != nil {
+		t.Fatalf("expected alias file at %s, but read failed: %v", savedFile, err)
+	}
+	if !strings.Contains(string(data), "ls") {
+		t.Fatalf("alias file does not contain expansion: %s", string(data))
+	}
+}
+
+// DOGFOOD: created through one instance, invoked through another.
+//
+// The store is only reachable if core hands the MCP server its data directory —
+// a save that answers 204 and writes nothing is the failure this test exists for —
+// and the invocation path reads the store through a different door than `ls alias`
+// does, so "it is listed" is not the same question as "it runs".
+func TestASavedAliasOutlivesTheInstance(t *testing.T) {
+	dataDir := t.TempDir()
+
+	post := func(srv *Server, body string) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/api/term", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	instance := func() *Server {
+		cfg := config.Default()
+		cfg.DataDir = dataDir
+		cfg.Headless = true
+		srv, err := New(Options{Config: cfg, Version: "test"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return srv
+	}
+
+	first := instance()
+	if code, body := post(first, `{"cmd":"create alias saved 'ls'"}`); code != http.StatusOK {
+		t.Fatalf("create alias: %d %s", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "aliases", "saved.toml")); err != nil {
+		t.Fatalf("the alias was not written to the data dir: %v", err)
+	}
+
+	// A SECOND instance is the restart: same data dir, nothing shared in memory.
+	second := instance()
+	if code, body := post(second, `{"cmd":"saved"}`); code != http.StatusOK {
+		t.Fatalf("a saved alias did not run on a fresh instance: %d %s", code, body)
+	}
+}
+
+/* The listener does not wait for yesterday's sessions (issue #353).
+ *
+ * Restoring the registry from disk is one manifest read and one fsync per session,
+ * so a data dir with a few dozen archived sessions kept the socket closed for
+ * seconds — and an MCP client whose handshake times out in 8s reported "0 tools"
+ * against an instance that was only still reading. The order is now: bind, answer,
+ * restore. This test holds the restore open and asserts the instance is serving and
+ * reporting `restoring` while it is still in progress — a state, not a sleep.
+ */
+func TestServingStartsBeforeTheHistoryIsRestored(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	// The web UI is what publishes the state, so this test keeps it: the probe a
+	// client reads is GET /api/daemon.
+	srv, err := New(Options{Config: cfg, Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { srv.Close("test done") })
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	open := func() { releaseOnce.Do(func() { close(release) }) }
+	// A failure below must not leave the restore blocked, or the cleanup's Close
+	// would wait out its bound for a reason the test created.
+	t.Cleanup(open)
+	restored := make(chan struct{})
+	srv.restoreSessions = func() error {
+		defer close(restored)
+		/* Bounded, not open-ended: a Start that waits for this (the bug this test is
+		   about) must fail the assertions below rather than hang the run. */
+		select {
+		case <-release:
+		case <-time.After(3 * time.Second):
+		}
+		return nil
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Start returned while the restore is still blocked: the door is open.
+	if !srv.Restoring() {
+		t.Fatal("the instance reports itself fully loaded while the restore is still running")
+	}
+	// It answers, which is the property the issue is about — a client handshake
+	// must not depend on the restore.
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/daemon", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/daemon while restoring = %d; want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"restoring":true`) {
+		t.Errorf("the probe does not publish the restoring state: %s", rec.Body.String())
+	}
+
+	open()
+	select {
+	case <-restored:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore never finished after it was released")
+	}
+	// The flag clears on its own once the work is done.
+	for srv.Restoring() {
+		time.Sleep(10 * time.Millisecond)
+	}
 }
