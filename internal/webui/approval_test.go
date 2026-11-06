@@ -615,7 +615,6 @@ func TestWorkspaceHeaderHasApprovalMCPAndSettingsEntries(t *testing.T) {
 		`id = 'settings-menu'`,
 		`id="settings-links"`,
 		`move('theme-switch', 'settings-theme')`,
-		`move('clients-menu', 'settings-clients')`,
 	} {
 		if !strings.Contains(settings, want) {
 			t.Errorf("settings.js lacks %s", want)

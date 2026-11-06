@@ -204,7 +204,12 @@ func TestPermissionPageHasOneContextualBackLinkAndMobileColumnReset(t *testing.T
 		}
 	}
 	for _, want := range []string{
+		`id="workspace-back"`,
 		`class="back-link"`,
+		`aria-label="返回工作区"`,
+		`<path d="M2.5 7L8 2.5 13.5 7"/>`,
+		`backWorkspace:'返回工作区'`,
+		`grid-template-areas:"nav brand controls"`,
 		`.auth-permissions .workspace{display:flex;flex-direction:column;grid-template-columns:1fr`,
 		`.auth-permissions .workspace>aside{`,
 		`width:100%;max-width:100%;min-width:0`,
@@ -212,6 +217,14 @@ func TestPermissionPageHasOneContextualBackLinkAndMobileColumnReset(t *testing.T
 		if !strings.Contains(permissionsHTML, want) {
 			t.Errorf("permissions responsive shell lacks %q", want)
 		}
+	}
+	if strings.Contains(permissionsHTML, `<span data-text="workspace">工作区</span>`) {
+		t.Error("permissions page still renders the old text breadcrumb instead of the icon-only back control")
+	}
+	backAt := strings.Index(permissionsHTML, `id="workspace-back"`)
+	brandAt := strings.Index(permissionsHTML, `class="brand"`)
+	if backAt < 0 || brandAt < 0 || backAt > brandAt {
+		t.Error("workspace back control must appear before the Termcp wordmark, matching api.html")
 	}
 }
 
@@ -316,26 +329,99 @@ func TestPermissionPageProvidesCompleteAgentManagement(t *testing.T) {
 	}
 }
 
-func TestPermissionPageUsesOneCurrentTokenWithHistory(t *testing.T) {
+func TestPermissionPageSeparatesAgentWorkspaceAndUsesDefaultGroup(t *testing.T) {
 	for _, want := range []string{
-		`currentToken.id='current-token'`,
-		`rotateToken.id='rotate-token'`,
-		`revokeToken.id='revoke-token'`,
-		`clearHistory.id='clear-token-history'`,
-		`currentTokenTitle.dataset.text='currentToken'`,
-		`historyTitle.dataset.text='tokenHistory'`,
-		`tokenHeaders[0].dataset.text='tokenID'`,
-		`tokenHeaders[2].dataset.text='revokedAt'`,
+		`id='management-view-tabs'`,
+		`permissionWorkspaceButton('management-groups-tab','groupsWorkspace','shield'`,
+		`permissionWorkspaceButton('management-agents-tab','agentsWorkspace','users'`,
+		`detail.id='agent-detail'`,
+		`agent-nav-item`,
+		`function permissionRenderAgentDetail()`,
+		`function permissionRenderAgentNavigation()`,
+		`function permissionSwitchManagementView(view,force=false)`,
+		`function permissionAgentGroupOptions(select,current)`,
+		`id="agent-group-select"`,
+		`id="agent-token-current"`,
+		`permissionSwitchManagementView('agents',true)`,
+		`body:JSON.stringify({name})`,
+		`memberDefaultHint:'新 Agent 默认加入缺省组`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions Agent workspace lacks %q", want)
+		}
+	}
+	for _, gone := range []string{
+		`name:$('member-name').value,group_id:selected`,
+		`group_id:$('permission-agent-group').value`,
+	} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("Agent creation can still bind to the selected permission group: %q", gone)
+		}
+	}
+}
+
+func TestPermissionAgentDetailProvidesBoundedScrolling(t *testing.T) {
+	for _, want := range []string{
+		`.auth-permissions #agent-detail-content{display:flex;flex:1;flex-direction:column;min-height:0`,
+		`.auth-permissions .agent-detail-columns{display:grid;grid-template-columns:minmax(0,1fr) 280px;flex:1;min-height:0;overflow:hidden`,
+		`.auth-permissions #agent-detail-content{display:block;height:auto;min-height:0}`,
+		`.auth-permissions .agent-detail-columns{grid-template-columns:1fr;overflow:visible}`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("Agent detail scroll contract lacks %q", want)
+		}
+	}
+}
+
+func TestPermissionGroupPaneOnlyListsCurrentAgents(t *testing.T) {
+	for _, want := range []string{
+		`id="group-agents-tab"`,
+		`data-text="groupAgentsPanel"`,
+		`id="group-agents-pane"`,
+		`id="group-agent-count"`,
+		`id="member-list"`,
+		`function renderMembers()`,
+		`group-agent-row`,
+		`group-agent-view`,
+		`permissionSwitchManagementView('agents',true)`,
+		`groupAgentsEmpty:'此权限组暂无 Agent。'`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permission-group Agent pane lacks %q", want)
+		}
+	}
+	for _, gone := range []string{
+		`id="tokens-tab"`,
+		`id="tokens-pane"`,
+		`id="member-form"`,
+		`id="token-form"`,
+		`id="token-result"`,
+		`id="token-list"`,
+		`id="tokens-empty"`,
+	} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("permission-group Agent pane still renders token or creation UI %q", gone)
+		}
+	}
+}
+
+func TestPermissionAgentDetailUsesOneCurrentTokenWithHistory(t *testing.T) {
+	for _, want := range []string{
+		`id="agent-token-current"`,
+		`id="agent-token-id"`,
+		`id="agent-rotate-token"`,
+		`id="agent-revoke-token"`,
+		`id="agent-clear-history"`,
+		`id="agent-token-history-body"`,
 		`token.active`,
 		`current.expires_at`,
 		`current.last_used_at`,
 		`token.replaced_by`,
 		`/auth/tokens/'+encodeURIComponent(current.id)+'/rotate'`,
 		`/auth/tokens/history?principal_id=`,
-		`tokenLabelField.hidden=true`,
 	} {
 		if !strings.Contains(permissionsHTML, want) {
-			t.Errorf("permissions token lifecycle UI lacks %q", want)
+			t.Errorf("Agent detail token lifecycle UI lacks %q", want)
 		}
 	}
 }

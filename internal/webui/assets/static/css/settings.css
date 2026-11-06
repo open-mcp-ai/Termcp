@@ -2,6 +2,7 @@
      MCP/API reference link. The nested controls keep their native semantics. */
   .settings-menu { position: relative; display: inline-flex; }
   .settings-panel {
+    top: calc(100% + 6px); bottom: auto;
     display: flex; flex-direction: column;
     width: min(360px, calc(100vw - 24px)); max-height: min(76vh, 680px);
     padding: 0; overflow: hidden;
@@ -16,7 +17,6 @@
   .settings-links .settings-link.settings-permissions { order: 3; }
   .settings-links .settings-link.settings-security { order: 4; }
   .settings-links .settings-config { order: 5; }
-  .settings-links .settings-clients { order: 6; }
   .settings-links .app-control,
   .settings-links .app-menu-item {
     display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: flex-start; gap: 8px;

@@ -1,6 +1,6 @@
 /** installSettingsMenu owns the workspace preference menu. It is deliberately
  * separate from approval.js: approvals are an operational queue, while theme,
- * language, permissions, login security, encryption and connected clients are settings. */
+ * language, permissions, login security and encryption are settings. */
 (function installSettingsMenu() {
   function mount() {
     if (document.getElementById('settings-menu')) return;
@@ -39,7 +39,6 @@
       language.classList.add('settings-lang');
       document.getElementById('settings-links').appendChild(language);
     }
-    move('clients-menu', 'settings-clients');
 
     // Three top-level entries, in the requested order.
     var approval = document.getElementById('approval-menu');
