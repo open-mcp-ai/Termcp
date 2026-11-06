@@ -472,7 +472,7 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 
 	chk2, _ := s.sftpClient(sessionID)
 	defer chk2.Close()
-	f, err := chk2.ReadFile(target, 0, 0, "text", "", "")
+	f, err := chk2.ReadFile(target, 0, 0, "text", "", "", false, false)
 	if err != nil {
 		t.Fatalf("the approved write did not happen: %v", err)
 	}
@@ -690,8 +690,8 @@ func TestHeldOperationReportsCorrelationFields(t *testing.T) {
 	if reqs[0].ExpiresAt > 0 && body["expires_at"] != float64(reqs[0].ExpiresAt) {
 		t.Errorf("expires_at = %v, want %d", body["expires_at"], reqs[0].ExpiresAt)
 	}
-	if msg, _ := body["message"].(string); !strings.Contains(msg, "do not poll") || !strings.Contains(msg, "resubmit") {
-		t.Errorf("the correlation fields must not soften the no-retry rule: %q", msg)
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "human decides") || !strings.Contains(msg, "resubmitting queues another") {
+		t.Errorf("the correlation fields must explain the human decision and resubmission effect: %q", msg)
 	}
 }
 

@@ -180,6 +180,10 @@ func (s *Server) directiveInfo(ctx context.Context, stmt directive.Statement, wi
 	writeKV(&b, "status", string(info.Status))
 	writeKV(&b, "ssh_config", dash(info.SSHConfig))
 	writeKV(&b, "endpoint", dash(info.SSHEndpoint))
+	// WHAT SHELL IS ON THE OTHER SIDE (issue #208.1). A caller writing the next command
+	// has to know whether `ls -la` means a listing or a PowerShell alias failure, and
+	// until now the only way to find out was to run something and read the error.
+	writeKV(&b, "shell_family", dash(info.DetectedShell))
 	if info.ExitCode != nil {
 		writeKV(&b, "exit_code", fmt.Sprint(*info.ExitCode))
 	}
@@ -336,6 +340,10 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 	isChannel := h.Index > 0
 
 	if isChannel {
+		if boolFlag(stmt, "later") {
+			return badRequest(stmt, "`--later` marks a whole session to stop accepting new channels and close when existing work ends.\n"+
+				"`"+stmt.Target+"` is a channel — close it now with `close "+stmt.Target+"`, or defer the session with `close "+h.SessionID+" --later`.")
+		}
 		// `--grace` has no meaning for a channel: closing one closes one SSH channel,
 		// which has no SIGTERM-then-wait protocol. Refusing is better than ignoring it,
 		// because a caller who wrote it expects a deadline that will never exist.
@@ -372,6 +380,9 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 		// the channel: handles are minted monotonically, so nothing ever reclaims the
 		// entry and a long-lived instance grows one per channel it ever opened.
 		s.dropRecvCursor(stmt.Target)
+		// The learned quiet threshold goes with the channel too: it describes a
+		// process that no longer exists.
+		s.dropQuietTracker(stmt.Target)
 		return closedSlot(stmt, stmt.Target, name)
 	}
 
@@ -390,6 +401,36 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 		return badRequest(stmt, "`--force` is gone. `close` stops a session and leaves it readable;\n"+
 			"`rm "+stmt.Target+"` erases it (and needs --force while it is running).")
 	}
+
+	// DEFERRED CLOSE (--later): wait for bounded work to end on its own (#255).
+	if boolFlag(stmt, "later") {
+		sid := sess.Info().ID
+		if s.forwardMgr != nil {
+			if fwList := s.forwardMgr.ListBySession(sid); len(fwList) > 0 {
+				return badRequest(stmt, fmt.Sprintf(
+					"close --later requires a bounded workload (pipe shell or active file transfer). "+
+						"This session holds active port forward %q, which does not end by itself. "+
+						"Close the forward first with `close %s forward %s`, or drop --later to close now.",
+					fwList[0].ForwardID, stmt.Target, fwList[0].ForwardID))
+			}
+		}
+		if err := sess.CloseLater(); err != nil {
+			return badRequest(stmt, err.Error())
+		}
+		slot := envelope.Slot{
+			Code: 200,
+			Headers: map[string]string{
+				"Path":    stmt.Path,
+				"Status":  "closing",
+				"Closing": "true",
+				"Hint": fmt.Sprintf(
+					"session %s will close and archive when its running work finishes; it is no longer accepting new channels",
+					sess.Info().Name),
+			},
+		}
+		return slot
+	}
+
 	args := argsOf("session_id", stmt.Target)
 	if slot, bad := numericFlags(args, stmt, [2]string{"grace", "grace_period"}); bad {
 		return slot
@@ -649,7 +690,7 @@ func (s *Server) directiveForward(ctx context.Context, stmt directive.Statement,
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	doc, _ := toolResultMap(res)
 	return generatedSlot(stmt, win, compactDocument(doc))
@@ -708,6 +749,17 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if slot, bad := stringFlags(args, stmt, [2]string{"encoding", "charset"}); bad {
 		return slot
 	}
+	// --raw IS THE SAME FLAG THE CHANNEL READ USES, and on a file read it says the reply
+	// is TEXT, not a value: no \n escaping (issue #248). It was declared for `read`, so
+	// `read <session> file <path> --raw` parsed and was dropped, which is the one shape
+	// this project refuses to ship — a flag accepted and ignored answers a different
+	// question than the one asked.
+	if boolFlag(stmt, "raw") {
+		args["raw"] = true
+	}
+	if boolFlag(stmt, "lines") {
+		args["lines"] = true
+	}
 	if slot, bad := stringFlags(args, stmt,
 		[2]string{"target", "target"},
 		[2]string{"link-path", "link_path"},
@@ -760,7 +812,7 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	doc, ok := toolResultMap(res)
 	if !ok {
@@ -939,7 +991,7 @@ func (s *Server) directiveHost(ctx context.Context, stmt directive.Statement, wi
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	if action == "list" {
 		// The profile listing is a set of names, one per line: copy-pasteable into
@@ -1054,12 +1106,15 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 	if boolFlag(stmt, "enabled") {
 		args["enabled"] = true
 	}
+	if boolFlag(stmt, "resident") {
+		args["resident"] = true
+	}
 	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	if held := reviewPendingFrom(res); held != nil {
-		return envelope.Slot{Code: 202, Headers: map[string]string{"Path": stmt.Path}, Body: *held}
+		return held.slot(stmt.Path)
 	}
 	if action == "list" {
 		// The boot manifest: one extension per line, with its state and handle, so
@@ -1068,7 +1123,7 @@ func (s *Server) directiveExtension(ctx context.Context, stmt directive.Statemen
 		return generatedSlot(stmt, win, s.extensionListing(res, boolFlag(stmt, "all")))
 	}
 	doc, _ := toolResultMap(res)
-	return generatedSlot(stmt, win, compactDocument(doc))
+	return generatedSlot(stmt, win, compactDocument(extDocSummary(doc, "", boolFlag(stmt, "all"))))
 }
 
 // directiveExtensionUse is `open ext <name>`: the ask that starts an on-demand
@@ -1107,9 +1162,38 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
 	doc, _ := toolResultMap(res)
-	slot := generatedSlot(stmt, win, compactDocument(doc))
+	// An extension whose template declares an endpoint is an MCP server, and termcp
+	// speaks MCP natively (issue #271): mount it as a real peer and hand back the
+	// peer's address, not a pipe channel. A caller that previously had to type the
+	// handshake, then `tools/list`, then a hand-built `tools/call` frame and match
+	// ids off a byte stream now types `call <peer> <tool> {…}` and reads text.
+	//
+	// The mount happens BEFORE the document is rendered, because the peer's address
+	// is what the caller acts on and the template's notes say the same thing without
+	// it: the summary drops the abstract half only when the concrete one is present.
+	var peerHandle string
+	var peerSlot envelope.Slot
+	if sessID, _ := doc["session_id"].(string); sessID != "" {
+		if ext, err := s.extensions.Store().Load(name); err == nil && strings.TrimSpace(ext.URL) != "" {
+			_, handle, slot, ok := s.mountExtPeer(ctx, ext, sessID, name)
+			if ok && slot.Code >= 400 {
+				return slot
+			}
+			peerHandle, peerSlot = handle, slot
+		}
+	}
+	slot := generatedSlot(stmt, win, compactDocument(extDocSummary(doc, peerHandle, boolFlag(stmt, "all"))))
 	if handle := shortHandle(doc); handle != "" {
 		slot.Headers["Handle"] = handle
+	}
+	if peerHandle != "" {
+		slot.Headers["Handle"] = peerHandle
+		slot.Body = strings.TrimRight(slot.Body, "\n") + "\n" + extPeerNote(peerHandle)
+		// The peer's own discovery text names the tools it advertises; the
+		// extension document cannot, because it describes a template.
+		if body := strings.TrimSpace(peerSlot.Body); body != "" {
+			slot.Body += "\n" + body + "\n"
+		}
 	}
 	return slot
 }
@@ -1147,8 +1231,47 @@ func (s *Server) directiveExtensionRelease(ctx context.Context, stmt directive.S
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)
 	}
+	// THE PEER GOES WITH THE INSTANCE. An endpoint extension's peer is this
+	// package's, not the reconciler's, so releasing the instance has to close it
+	// here or a closed extension would keep a live MCP session and a registry entry
+	// (issue #271). Every instance of the name is released when no channel is named,
+	// which is what the release itself just did.
+	s.releaseExtPeers(name, handle)
 	doc, _ := toolResultMap(res)
 	return generatedSlot(stmt, win, compactDocument(doc))
+}
+
+// releaseExtPeers closes the peers mounted for one extension name, optionally
+// narrowed to the instance a channel handle belongs to.
+//
+// THE SCAN IS A SNAPSHOT, AND THE CLOSES HAPPEN OUTSIDE IT. Range holds no lock,
+// and closing a peer is a network operation — so the keys are collected first and
+// the unmounting runs afterwards, one entry at a time.
+func (s *Server) releaseExtPeers(name, handle string) {
+	type doomed struct{ sessionID, name string }
+	var list []doomed
+	extPeers.Range(func(k, v any) bool {
+		key, _ := k.(string)
+		if !strings.HasSuffix(key, "\x00"+name) {
+			return true
+		}
+		entry, _ := v.(*extPeerEntry)
+		if entry == nil {
+			return true
+		}
+		if handle != "" {
+			h := entry.handle
+			if h == nil || peerKey(h.sessionID, h.kind, h.index) != handle {
+				return true
+			}
+		}
+		sessionID, _, _ := strings.Cut(key, "\x00")
+		list = append(list, doomed{sessionID: sessionID, name: name})
+		return true
+	})
+	for _, d := range list {
+		s.unmountExtPeer(d.sessionID, d.name)
+	}
 }
 
 // extensionCapability maps an extension action onto its capability.
@@ -1371,14 +1494,12 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	// submitting a job reads an eaten command as a successful one.
 	b.WriteString("                               into the TERMINAL: whoever owns the input reads it\n")
 	b.WriteString("                               (a program waiting for an answer TAKES your line).\n")
-	// THE INTERFACE IS IMPRECISE, AND THAT IS THE INTERFACE. A caller that wants a
-	// precise state (did it run? is something in the foreground?) is asking the terminal
-	// for something a person at the same screen never had either — they read the screen.
-	// Saying so here costs two lines and prevents the whole class of "the reply does not
-	// tell me" reports about a pty.
-	b.WriteString("                               A terminal is not precise: the bytes in the reply\n")
-	b.WriteString("                               ARE the state — read them as you would a screen.\n")
-	b.WriteString("                               `help run` has what that means for the reply.\n")
+	// State the missing signal, then the practical reading: a pty reports bytes,
+	// while pipe mode also reports process exit.
+	b.WriteString("                               A terminal has no exit signal for the command\n")
+	b.WriteString("                               inside it, so its reply is an output sample:\n")
+	b.WriteString("                               read it as you would a screen, or use a pipe\n")
+	b.WriteString("                               (--argv) when you need an observable exit.\n")
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
 	b.WriteString("  long-running command you want to watch between calls.\n")
@@ -1387,14 +1508,14 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
 
 	b.WriteString("cmd = the DSL.  sh = a shell command.\n")
-	b.WriteString("cmd holds directives only. sh never appears in cmd — it enters as a value through\n")
-	b.WriteString("args ($1, $2) or vars ($NAME). cmd supports &&, ||, ;, and &.\n")
-	// A CREDENTIAL HAS TO HAVE SOMEWHERE TO GO THAT IS NOT THE LOG, and the caller has to
-	// know it exists before it types the password into args. One line, where the two
-	// other value channels are named.
-	b.WriteString("A value that must not be written to the server log goes in secrets ($NAME too);\n")
-	b.WriteString("a password belongs there, never typed into cmd or args. The remote shell still\n")
-	b.WriteString("echoes what it runs — that is the channel's transcript.\n")
+	b.WriteString("cmd is parsed by the directive grammar, so shell text reaches it as one\n")
+	b.WriteString("value through args ($1, $2) or vars ($NAME), for the remote shell to parse.\n")
+	b.WriteString("cmd supports &&, ||, ;, and &.\n")
+	// State where each value flows: the server log records the DSL call, while the
+	// remote process may echo its input into the channel transcript.
+	b.WriteString("A credential goes in secrets, which records names only. cmd, args and vars are\n")
+	b.WriteString("recorded verbatim in the server log, so a password in one of them is written\n")
+	b.WriteString("down. The remote shell echoes what it runs — the channel is the other copy.\n")
 	b.WriteString("  run a1f3:1 $1   args: [\"make && test\"]   one sh line, operators live\n")
 	b.WriteString("  run a1f3:1 $1 && notify done             two cmd directives\n\n")
 
@@ -1710,6 +1831,15 @@ func (s *Server) extensionListing(res *mcpgo.CallToolResult, all bool) string {
 			// extension (an SFTP-only window) has no channel and reports its
 			// session, which is exactly the address a file read takes.
 			handle = s.addressOf(getString(item, "session_id", ""), shell)
+		} else if peer := s.extPeerHandleOf(getString(item, "session_id", ""), name); peer != "" {
+			// AN ENDPOINT EXTENSION HAS NO CHANNEL BUT DOES HAVE AN ADDRESS (issue #271).
+			//
+			// It is mounted as a real MCP peer, so the thing a caller types next is
+			// `call <session> mcp:1 <tool> {…}` — and this column is the one place a
+			// caller that lost its context can recover that address. Falling back to the
+			// bare session id left the column claiming a handle that no `call` accepts,
+			// so the only way back was to run `open ext` again.
+			handle = peer
 		}
 		notes := strings.ReplaceAll(getString(item, "notes", ""), "\n", " ")
 		if len(notes) > 60 {

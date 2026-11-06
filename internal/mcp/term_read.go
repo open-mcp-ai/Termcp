@@ -49,16 +49,23 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 	// The check runs FIRST, before the window and before any tool call, because the
 	// refusal must consume nothing: a rejected call that already moved the cursor
 	// has answered by side effect.
-	for _, peerOnly := range []struct{ flag, where string }{
-		{"since", "`read <session> cdp|mcp|jrpc --since N` (the frames that arrived after N)"},
-		{"at", "`read <session> cdp|mcp|jrpc --at FRAME [--offset B] [--bytes N]` (one frame's bytes)"},
-		{"bytes", "`read <session> cdp|mcp|jrpc --at FRAME --bytes N` (how much of that one frame)"},
+	for _, notOnChannel := range []struct{ flag, where, scope string }{
+		{"since", "`read <session> cdp|mcp|jrpc --since N` (the frames that arrived after N)", "a peer's frame log"},
+		{"at", "`read <session> cdp|mcp|jrpc --at FRAME [--offset B] [--bytes N]` (one frame's bytes)", "a peer's frame log"},
+		{"bytes", "`read <session> cdp|mcp|jrpc --at FRAME --bytes N` (how much of that one frame)", "a peer's frame log"},
+		// --mode AND --lines ARE FILE-READ FLAGS, for the same reason and with the same
+		// failure mode: they are declared on `read`, so a channel read parses them and
+		// then has nowhere to apply them. A caller who wrote `read <channel> --mode hex`
+		// asked for bytes and would have been handed text — the answer would look right
+		// and be the wrong projection.
+		{"mode", "`read <session> file <path> --mode text|hex|file` (how to render a file)", "a file read"},
+		{"lines", "`read <session> file <path> --lines` (number the lines of a file)", "a file read"},
 	} {
-		if stmt.FlagState(peerOnly.flag) == directive.FlagAbsent {
+		if stmt.FlagState(notOnChannel.flag) == directive.FlagAbsent {
 			continue
 		}
-		return badRequest(stmt, "`--"+peerOnly.flag+"` is for a peer's frame log, not a channel: use "+
-			peerOnly.where+". A channel is a byte stream; page it with `--cursor` / `--offset`.")
+		return badRequest(stmt, "`--"+notOnChannel.flag+"` is for "+notOnChannel.scope+
+			", not a channel: use "+notOnChannel.where+". A channel is a byte stream; page it with `--cursor` / `--offset`.")
 	}
 	// bytes_limit 0 means "hand back the channel, consume nothing". readSlotAfter
 	// honours it; this path has to as well, or the one directive whose whole point
@@ -77,6 +84,18 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 	// and the filter therefore has to run before the window rather than after it.
 	if _, ok := stmt.Flag("grep"); ok {
 		return s.readGrep(ctx, stmt, win)
+	}
+	// THE TARGET IS NORMALISED TO A REAL SHELL ID HERE, ONCE (issue #247).
+	//
+	// Every path below hands this value to `shell_output`, which resolves ids and
+	// nothing else — so a name-addressed channel (`dogfood:1`) or a name-addressed
+	// session (`dogfood`) reached the tool as an unknown id and answered
+	// `session "dogfood" not found`. Resolving here rather than in each tool keeps
+	// one spelling rule for the whole verb, and the same resolver the other
+	// directives use (`requireShell` / `sessionByName`) so a name means the same
+	// thing everywhere.
+	if cs, bad := s.requireShell(stmt.Target); bad == nil && cs != nil {
+		stmt.Target = cs.ID
 	}
 	args := argsOf("shell_id", stmt.Target)
 	// --offset IS THE SAME BYTE POSITION AS --cursor, and on a channel read it used to
@@ -110,7 +129,32 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 	if v, ok := stmt.Flag("encoding"); ok {
 		args["charset"] = v
 	}
-	slot, _ := s.readSlot(ctx, stmt, win, args, 0)
+	// A TAIL READ ON A LIVE PIPE MUST NOT ANSWER BEFORE THE COMMAND DOES.
+	//
+	// `read <channel>` waits — the plain path spends the caller's window on the pipe's
+	// exit — while `--tail`/`--from-line` took a different branch that scanned the buffer
+	// immediately. So the same channel answered the same question two ways: the plain
+	// read returned the whole output after a second, and
+	//
+	//	read <pipe> --tail 20        ->  204 No Content, Waited: 0ms
+	//
+	// which is byte-identical to "the command printed nothing". The workaround in the
+	// issue (`Start-Sleep 10; read --tail 20`) exists because of this branch (#245).
+	//
+	// PIPE ONLY, and deliberately not a pty: a pty's shell outlives every command, so
+	// "wait for completion" has no ending there and every glance at the screen would cost
+	// the whole window. A pty tail is a snapshot on purpose; `run` and the plain cursor
+	// read are the paths that wait. `timeout:0` still means "do not wait" for either,
+	// because awaitExit returns at once for a zero limit.
+	waited := time.Duration(0)
+	if s.completionWait(stmt.Target) &&
+		(stmt.FlagState("tail") != directive.FlagAbsent || stmt.FlagState("from-line") != directive.FlagAbsent) {
+		start, _ := s.outputSizeFor(stmt.Target)
+		began := time.Now()
+		s.awaitExit(ctx, stmt.Target, win, start)
+		waited = time.Since(began)
+	}
+	slot, _ := s.readSlot(ctx, stmt, win, args, waited)
 	return slot
 }
 
@@ -328,9 +372,20 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 	if limit <= 0 {
 		return false
 	}
+	// THE THRESHOLD IS READ ONCE, AT ENTRY.
+	//
+	// A gap observed during this wait must not shorten this wait: the command that
+	// produced it may still have a chunk coming, and ending on the evidence of the
+	// first two chunks is exactly the truncation the threshold exists to avoid. What
+	// was learned here is for the NEXT command on this channel, which is the whole
+	// point of a per-channel learner — the second `run` is cheaper than the first.
+	tracker := s.quietTracker(handle)
+	quiet := tracker.threshold()
+	tracker.noteUsed(quiet)
 	deadline := time.Now().Add(limit)
 	last := start
 	var still time.Time
+	var prevChunk time.Time
 	ticker := time.NewTicker(ptyPoll)
 	defer ticker.Stop()
 	for {
@@ -347,6 +402,10 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 		}
 		switch {
 		case now != last:
+			if !prevChunk.IsZero() {
+				tracker.observe(time.Since(prevChunk))
+			}
+			prevChunk = time.Now()
 			last, still = now, time.Time{}
 			// THE REPLY CANNOT GROW, SO WAITING BUYS NOTHING.
 			//
@@ -367,7 +426,7 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 		default:
 			if still.IsZero() {
 				still = time.Now()
-			} else if time.Since(still) >= ptyQuiet {
+			} else if time.Since(still) >= quiet {
 				return false
 			}
 		}

@@ -129,10 +129,19 @@ function paintArchiveTrigger(n) {
   if (!btn) return;
   var open = !!document.querySelector('.workspace-frame:not(.ext-collapsed)');
   var count = n === undefined ? 0 : n;
+  /* Same one-writer rule as the batch bar's invert key: the label depends on the
+     column's state, so the static data-i18n hooks on the markup (sec.archive) were
+     a second, disagreeing writer that applyI18n re-imposed on every switch. The
+     hook is stamped to the key this paint used, so a later switch reproduces THIS
+     state's wording instead of the markup's. */
+  var key = open ? 'archive.fold'
+    : (count ? 'archive.count' : 'archive.expand');
   btn.title = open
     ? t('archive.fold')
     : (count ? t('archive.count', { count: count }) : t('archive.expand'));
   btn.setAttribute('aria-label', btn.title);
+  btn.setAttribute('data-i18n-title', key);
+  btn.setAttribute('data-i18n-aria', key);
 }
 
 /* The cards are repainted from socket frames by sessions.js, so the rail follows

@@ -45,7 +45,7 @@ func startReconciler(t *testing.T) *Reconciler {
 	// The in-process MCP bridge is what an extension with a url runs on its
 	// channel (production registers it at startup, see main.go), so every test
 	// that drives the extension layer gets the same server an instance has.
-	mcpbridge.RegisterBuiltin(srv)
+	mcpbridge.RegisterBuiltin(srv, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}

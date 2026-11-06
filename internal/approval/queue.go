@@ -25,6 +25,13 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
+var (
+	ErrNotApproved             = errors.New("approval request is not approved")
+	ErrExecutionAlreadyStarted = errors.New("approval execution has already started")
+	ErrExecutionNotRunning     = errors.New("approval execution is not running")
+	ErrInvalidExecutionState   = errors.New("invalid approval execution state")
+)
+
 // Queue holds the pending requests for one session. A session's shells share
 // one queue, which matches the scope of the approval switch: turning approval
 // mode on for a session covers every shell in it.
@@ -365,9 +372,20 @@ func (q *Queue) cancelPending(reason string) []Request {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var out []Request
+	now := clock.Now()
 	for _, r := range q.byID {
 		if r.State == Pending {
 			q.resolveLocked(r, Cancelled, "", reason)
+			out = append(out, r.clone())
+			continue
+		}
+		// Approval and execution are separate. Closing the gate cannot undo an
+		// approval that already started, but it must not leave a running
+		// execution looking live after its session is gone.
+		if r.State == Approved && r.Execution != nil && r.Execution.State == ExecutionRunning {
+			r.Execution.State = ExecutionUnknown
+			r.Execution.FinishedAt = now
+			r.Execution.Error = reason
 			out = append(out, r.clone())
 		}
 	}
@@ -412,6 +430,77 @@ func (q *Queue) Wait(id string) (Request, error) {
 	case <-timer.C:
 		return q.expire(id)
 	}
+}
+
+// BeginExecution records that replaying an approved request has started. It
+// does not notify listeners: the approval itself was already announced, and an
+// intermediate "running" update would only flicker in the reviewer UI.
+func (q *Queue) BeginExecution(id string) (Request, error) {
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State != Approved {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrNotApproved
+	}
+	if r.Execution != nil {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrExecutionAlreadyStarted
+	}
+	r.Execution = &Execution{
+		State:     ExecutionRunning,
+		StartedAt: clock.Now(),
+	}
+	snap := r.clone()
+	q.mu.Unlock()
+	return snap, nil
+}
+
+// FinishExecution records the terminal result of replaying an approved
+// request. Shell input may end submitted (bytes written) or failed; non-shell
+// operations may end succeeded or failed. Unknown is valid for either kind
+// when the executor cannot trust the observation.
+func (q *Queue) FinishExecution(id string, state ExecutionState, detail string) (Request, error) {
+	if state != ExecutionSubmitted && state != ExecutionSucceeded &&
+		state != ExecutionFailed && state != ExecutionUnknown {
+		return Request{}, ErrInvalidExecutionState
+	}
+
+	q.mu.Lock()
+	r, ok := q.byID[id]
+	if !ok {
+		q.mu.Unlock()
+		return Request{}, ErrNotFound
+	}
+	if r.State != Approved || r.Execution == nil || r.Execution.State != ExecutionRunning {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrExecutionNotRunning
+	}
+	isShellInput := r.Kind == "" || r.Kind == KindShellInput
+	if isShellInput && state == ExecutionSucceeded {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrInvalidExecutionState
+	}
+	if !isShellInput && state == ExecutionSubmitted {
+		snap := r.clone()
+		q.mu.Unlock()
+		return snap, ErrInvalidExecutionState
+	}
+	r.Execution.State = state
+	r.Execution.FinishedAt = clock.Now()
+	r.Execution.Error = strings.TrimSpace(detail)
+	snap := r.clone()
+	q.mu.Unlock()
+
+	q.notify(snap)
+	return snap, nil
 }
 
 // expire transitions a still-pending request whose deadline passed. It reports

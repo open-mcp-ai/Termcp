@@ -632,7 +632,7 @@ Bidirectional real-time channel.
 
 | type | Fields | Meaning |
 |------|--------|---------|
-| `watch_add` | `id` | Subscribe to terminal output |
+| `watch_add` | `id` | Subscribe to terminal output and request a `watch_ready` acknowledgement |
 | `watch_remove` | `id` | Unsubscribe |
 | `input` | `id`, `d`(string), `nl` | Send keystrokes (dropped for a session in review mode — see §11) |
 | `resize` | `id`, `rows`, `cols` | Change PTY size |
@@ -642,7 +642,9 @@ Bidirectional real-time channel.
 | type | Fields | Meaning |
 |------|--------|---------|
 | `sessions` | `sessions` | Session list (on connect and on change) |
-| `terminal` | `id`, `d`(string) | Terminal output chunk |
+| `watch_ready` | `id`, `cursor` | Subscription accepted; `cursor` is the first absolute byte offset that may appear in subsequent terminal frames |
+| `watch_error` | `id`, `error` | Subscription rejected; no terminal output will be sent for this `watch_add` |
+| `terminal` | `id`, `d`(string), `start`, `end` | Terminal output chunk covering the half-open absolute byte range `[start,end)` |
 | `shell_activity` | `shell_id`, `src`(`api`\|`ai`), `submit` | A shell received input, and from where |
 | `ui_notify` | `title`, `message`, `level`, `session_id`, `duration_seconds` | User-facing notification (MCP `notify_user`) |
 | `approval` | session, request | Approval queue changed (see §11) |
@@ -676,10 +678,18 @@ instead: an echo-window heuristic fails both ways, holding real output from a
 fast command (`ls`) and letting a slow echo through on a laggy link. A silence
 of a few seconds is reported as "finished" on top of that, since a byte stream
 offers no better a signal that a command returned.
-| `terminal_done` | `id` | Shell exited |
+| `terminal_done` | `id`, `cursor` | Shell exited after all output through the absolute offset `cursor` |
 
 > Terminal I/O `id` values are shell IDs; session IDs are only for connection-level
 > REST resources.
+
+`watch_ready` is ordered before the first `terminal` frame for that
+subscription. A client that needs both retained history and live output sends
+`watch_add`, waits for `watch_ready`, reads history ending at
+`watch_ready.cursor`, and buffers subsequent terminal frames until that history
+has been applied. `[start,end)` ranges make overlap, duplication and gaps
+detectable; clients must not infer continuity from frame timing or payload
+text.
 
 ### `GET /api/shells/{id}/output-range`
 
@@ -920,7 +930,10 @@ Response 202:
 {
   "ok": true,
   "approved": false,
-  "review_pending": true
+  "review_pending": true,
+  "approval_id": "9f0c…",          // present once the command line is queued
+  "session_id": "3f2a…",
+  "expires_at": 1790130035403
 }
 ```
 
@@ -1468,11 +1481,23 @@ Response 200:
 }
 ```
 
+### `GET /api/approvals/{id}`
+
+Returns one approval request, including its `execution` object once replay has
+started. Use this after a lost decision response: it is a read and never repeats
+the approval decision or its side effects. Unknown ids return `404`.
+
 ### `POST /api/approvals/{id}/approve` · `POST /api/approvals/{id}/reject`
 
 ```
 Request: {}                       // a decision needs no body
-Response 200: { "request": { … } }
+Response 200: {
+  "request": {
+    …,
+    "execution": { "state": "submitted|succeeded", "started_at": 1790129915403,
+                   "finished_at": 1790129916410 }
+  }
+}
 ```
 
 A rejection may carry `{"reason": "…"}`. No name is sent: the decision is the
@@ -1491,8 +1516,50 @@ Semantics:
   it does not depend on a caller having entered `Wait`. A late approve is
   refused with `409` and executes nothing.
 - An approved request is executed by the deciding call. If the write fails, the
-  response says so (`409`) rather than reporting success.
+  response says so (`409`) with the same request shape and
+  `execution.state=failed`, rather than reporting success.
 - `404` unknown id; `409` already decided or execution failed.
+
+### Execution result
+
+Approval state and execution state are separate. `request.state=approved` says a
+human granted permission; it does not prove replay succeeded.
+
+```
+"execution": {
+  "state": "running|submitted|succeeded|failed|unknown",
+  "started_at": 1790129915403,
+  "finished_at": 1790129916410,
+  "error": "optional executor failure"
+}
+```
+
+- `running`: replay started and has not recorded a final result yet.
+- `submitted`: shell input bytes were handed to the shell. This is **not**
+  command completion and says nothing about the command's exit code.
+- `succeeded`: a non-shell operation (file operation or port forward) completed.
+- `failed`: the executor reported failure. This does not imply that a partially
+  applied operation had no effect.
+- `unknown`: the client lost the response or cannot trust either outcome. A lost
+  HTTP response must be treated as unknown, never as failure or success.
+- If the session or approval queue closes while replay is still `running`, the
+  execution becomes `unknown`; the approved decision remains recorded.
+
+The execution object is also present in `GET /api/approvals` once replay starts,
+so a client that lost the decision response can recover the recorded result.
+
+When review is reached through the single `term` command surface, the outer
+`TERM/1 202 Accepted` response keeps the human-readable message as its body and
+also carries correlation headers:
+
+```text
+Approval-ID: 9f0c…
+Session-ID: 3f2a…
+Expires-At: 1790130035403
+```
+
+These are status headers, not decision capability or polling instructions. An
+MCP host may use them to correlate the held operation with `/api/approvals`.
 
 > **What is approved.** The request records the *input string*, not a parsed
 > command. `type <channel> "rm -rf / ; ls"` is one request covering two commands.
@@ -1769,8 +1836,25 @@ credential sits.
 There is **no `kind` field**. What an extension does is what it declares: `command`
 (a program on a pipe channel), `url` (an HTTP MCP endpoint relayed by termcp),
 `paths` (a read-only SFTP window), `mode = "pty"` (a terminal), or `forwards`
-(tunnels). A template that declares none of these is refused, because an empty
-container can never do anything.
+(tunnels). These are not alternatives: one template may declare a `command` **and**
+`forwards`, and the tunnels come up and go down with that same session, so a program
+on a remote host that also needs a port does not need two extensions that know
+nothing about each other. `local`, `remote` and `dynamic` entries mix freely in one
+list. (`url` is the one exception: the relay runs inside termcp, so an endpoint
+template still requires an internal target.)
+
+Three consequences of declaring `forwards` are not visible in the field:
+
+- **It changes when the extension runs.** With none it is lazy — dialled only on a
+  caller's ask and reclaimed after `idle_timeout`. With one it is resident from
+  startup, because a listener has no "use" moment to start it.
+- **Order is identity.** A forward is tracked by its position across reconciler
+  walks, so reordering the list is not cosmetic.
+- **A partial failure is kept.** A failure at entry 3 does not undo entries 1-2:
+  they stay listening and recorded, and the retry targets only the one that failed.
+  A failed tunnel therefore does not take the session down — the extension reports
+  `failures[]`, is still usable for everything else it declares, and "some forwards
+  failed" is not "the extension is broken".
 
 A legacy template uses `target = "profile"` and top-level `[[forward]]`. A
 multi-host template instead uses repeated `[[targets]]` entries, each with its own
@@ -1976,14 +2060,17 @@ Response 200:
 <!-- BEGIN termdoc: args -->
 | `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
 | `timeout` | Seconds to look (default 2; a pipe returns as soon as its process exits). 60 is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait |
-| `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply |
+| `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.
+Two paths read `0` as "name the object, consume nothing" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).
+A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default 8192 rather than none; a `mcp recv` never reads with a window under 1048576, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`). |
 | `lines_limit` | Lines per slot (default 200; `0` = no line limit). 2000 is the size to stay under, not a wall: a longer tail is allowed, and said so in the reply |
 | `total_bytes_limit` | Cap for the whole reply (default 32768). 32768 is the size to stay under, not a wall — this is YOUR budget for one reply, so set it as high as you are willing to read |
-| `on_time_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `on_bytes_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `on_lines_overflow` | `truncate` (default) or `fold` (return no bytes this time) |
 | `learn_mode` | Attach each directive's usage line once per reply |
+| `dry_run` | Parse and validate `cmd` without executing. Substitutes `$1`/`$NAME` and expands aliases, then stops before dispatch: connects to nothing, creates no sessions, produces no audit spans, and bounds no wait. Each statement reports `Verdict: valid-syntax` or `invalid`. Secrets are never echoed in `Expanded:`. **Off by default** |
 | `structured_content` | Also send the JSON projection as `structuredContent`. **Off by default**: the two projections carry the same bytes, so the JSON copy is a duplicate a human sees on every call. Pass `true` for a client that reads structured content |
+| `content` | Send the rendered text projection. **On by default**. `content:false` with `structured_content:true` answers with `structuredContent` only; `content:false` alone is refused, because a reply with neither projection carries nothing |
 | `args` | Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets` |
 | `vars` | Named values for `$NAME` in `cmd`. The same mechanism as `args` under another spelling — the position decides the insertion, never which table named the value — so a `$NAME` that is the whole payload and a `$1` that is the whole payload behave identically. Every name must be referenced by cmd: an unused entry is refused before anything runs, and so is a `$NAME` this table does not define. **These values ARE recorded in the server log**, which is what makes the log a faithful record of the call: a value that must not be written down belongs in `secrets` instead |
 | `secrets` | Named values for `$NAME` in `cmd`, expanded exactly like `vars` and refused on the same rules (unused names, undefined names, one name in both tables). The ONE difference is the record: the server log names which secrets were passed and never writes their values, while `vars` is logged verbatim. That is the whole mechanism — there is no pattern matching and no guessing, because a redactor that recognises `-p` and misses `--password` is worse than none: it reports safety it does not have. So a caller that does not want a value on disk says so by where it puts it. Note that a secret expanded into a command line is still echoed back by the remote shell, and that echo is the channel's own transcript — the terminal cannot be asked to hide what it printed |
@@ -1992,12 +2079,17 @@ Response 200:
 The window parameters are identical to the tool's, with the same names and the
 same defaults — they bound what comes back, never what the command does.
 
-`structured_only` is not a window: the windows bound how much of a body comes
-back, this declines a duplicate of the body that did come back. It exists because
-the two projections (rendered text and JSON) carry the same bytes, which is a
-rounding error on a listing and most of the reply on a large read — exactly where
-the windows were meant to protect the caller from paying for output it did not ask
-for. A caller moving a big payload turns it on; one reading `ls` need not.
+`content` and `structured_content` are two switches over the same rule: a reply has
+two projections, and each one is sent only if asked for. `content` is on by default
+(rendered text) and `structured_content` is off by default (its JSON twin), so a
+normal call sends one projection. A program consumer that parses the JSON declines
+the duplicate with `content:false`; combined with `structured_content:true` it gets
+the JSON alone. Asking for NEITHER is a 400, because a reply that carries no bytes
+is a mistake spelled as a request.
+
+REST always returns the JSON envelope as its body — the text is the optional extra
+there — so on that entrance `content:false` omits the `X-Termcp-Text` header and
+never empties the reply. One rule, two entrances.
 
 **Statements.** `;` separates statements and each gets its own slot: `help; ls`
 answers twice. `&&` and `|` stay inside one statement (that is one command).

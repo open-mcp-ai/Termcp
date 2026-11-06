@@ -239,11 +239,17 @@ func TestTheWindowIsATimerNotAWalkTick(t *testing.T) {
 	const window = 150 * time.Millisecond
 	lazyExt(t, r, "timed", "150ms")
 
+	// THE CLOCK STARTS BEFORE THE ACQUIRE, NOT AFTER IT. The window begins at the
+	// instance's lastUse, which Acquire sets partway through its own work; taking the
+	// measurement afterwards made `elapsed` shorter than the window by exactly the
+	// acquire, so under package-wide load the timer read as "closed early" while it
+	// had honoured its deadline. Starting here keeps `start <= lastUse`, which is the
+	// direction the assertion below needs.
+	start := time.Now()
 	st, err := r.Acquire("timed", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	for {
 		// NOTHING HERE TRIGGERS THE WALK. If the deadline is only honoured by the
 		// sweep, this test cannot pass: the first walk is seconds away.
@@ -397,7 +403,7 @@ func TestABrokenProgramIsNotOfferedAsAvailable(t *testing.T) {
 	for _, f := range st.Failures {
 		reason += f.Reason + " "
 	}
-	if !strings.Contains(reason, "executable file not found") && !strings.Contains(reason, "no such file") {
+	if !strings.Contains(reason, "executable file not found") && !strings.Contains(reason, "no such file") && !strings.Contains(reason, "command not found") {
 		t.Errorf("the failure should carry the program's own message, got %q", reason)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -65,6 +64,8 @@ var uiUpgrader = websocket.Upgrader{
 	},
 }
 
+var errWSControlUnavailable = errors.New("websocket control channel unavailable")
+
 type wsClientMsg struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -78,6 +79,10 @@ type wsClientMsg struct {
 type wsWatchEntry struct {
 	cancel context.CancelFunc
 	rid    int
+	// exited is the handoff signal: closed by the pump as it returns, waited on by
+	// whoever replaced it. It is how a new generation knows the previous one can no
+	// longer put a frame on the wire.
+	exited chan struct{}
 }
 
 // uiWS is one browser tab: session list + terminal streams + input/resize (no per-keystroke HTTP).
@@ -87,8 +92,13 @@ type uiWS struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	send   chan []byte
-	mu     sync.Mutex
-	watch  map[string]*wsWatchEntry
+	// THE WATCH TABLE HAS ONE OWNER (see wswatch.go). It is a plain map because
+	// only watchOwner touches it; everyone else sends on watchOps. There is no
+	// mutex here on purpose: the handoff between a pump and its replacement waits
+	// for that pump to exit, and a lock held across that wait would let one stuck
+	// socket stall every operation on the tab (issue #219).
+	watchOps  chan watchOp
+	watchDone chan struct{}
 	// viewerID is this tab's own row in the viewer registry. Each frame marks it
 	// so the page can count the clients besides itself — every open page is a
 	// viewer, so without the mark a lone tab always counted as one client.
@@ -99,9 +109,9 @@ var errWSSessionNotFound = errors.New("session not found")
 
 // watchCount reports how many sessions this tab is currently streaming.
 func (c *uiWS) watchCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.watch)
+	n := 0
+	c.watchRequest(func(t *watchTable) { n = len(t.entries) })
+	return n
 }
 
 // getTerminalShell looks up a shell channel by shell_id.
@@ -129,13 +139,18 @@ func (h *Handler) handleWebUIWS(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	c := &uiWS{
-		h:      h,
-		conn:   wsConn,
-		ctx:    ctx,
-		cancel: cancel,
-		send:   make(chan []byte, wsSendBuf),
-		watch:  make(map[string]*wsWatchEntry),
+		h:         h,
+		conn:      wsConn,
+		ctx:       ctx,
+		cancel:    cancel,
+		send:      make(chan []byte, wsSendBuf),
+		watchOps:  make(chan watchOp),
+		watchDone: make(chan struct{}),
 	}
+	// The watch table's owner starts first: every later operation on it, including
+	// the count the viewer registry asks for lazily below, is a request to this
+	// goroutine.
+	go c.watchOwner()
 	// Who is watching: the tab is registered for the life of its socket, and its
 	// watched-session count is read at list time rather than captured here.
 	viewerID := c.h.viewerHub().add(r.RemoteAddr, r.UserAgent(), c.watchCount)
@@ -286,7 +301,9 @@ func (c *uiWS) readPump() {
 		switch strings.TrimSpace(msg.Type) {
 		case "watch_add":
 			if id := strings.TrimSpace(msg.ID); id != "" {
-				_ = c.addWatch(id)
+				if err := c.addWatch(id); err != nil {
+					c.sendWatchError(id, err)
+				}
 			}
 		case "watch_remove":
 			if id := strings.TrimSpace(msg.ID); id != "" {

@@ -1054,14 +1054,30 @@ _sessionRegions.forEach(function (region) {
   header.setAttribute('aria-expanded', String(!collapsed));
   body.classList.toggle('collapsed', collapsed);
   if (target && target !== body) target.classList.toggle('is-folded', collapsed);
-  header.addEventListener('click', function (e) {
-    if (e.target.closest('.icon-btn')) return;
+  var fold = function (e) {
+    if (e && e.target && e.target.closest && e.target.closest('.icon-btn')) return;
     var collapsed = header.getAttribute('aria-expanded') === 'false';
     header.setAttribute('aria-expanded', String(collapsed));  // toggle: now expanded
     body.classList.toggle('collapsed', !collapsed);
     if (target && target !== body) target.classList.toggle('is-folded', !collapsed);
     localStorage.setItem('termcp.section.' + key, collapsed ? 'expanded' : 'collapsed');
-  });
+  };
+  header.addEventListener('click', fold);
+  /* The extensions bar carries more than the trigger now: the filter box and the
+     count tail are siblings of the button inside .ext-head-bar, so clicks in the
+     bar's free space used to fall between handlers and do nothing — the fold had
+     stopped working everywhere except the title word. The bar is the fold surface,
+     exactly as it was while the trigger filled it. Two clicks must not stack on
+     one press: the bar ignores clicks that the trigger or the tail have already
+     handled (both bubble through it), and the filter box and the action keys stop
+     propagation themselves, so typing and batch keys stay out of the toggle. */
+  var bar = header.parentElement;
+  if (bar && bar.classList.contains('ext-head-bar')) {
+    bar.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('#sec-exts, #ext-head-tail')) return;
+      fold(e);
+    });
+  }
   /* The extension trigger is a real <button>, so Enter and Space already click it;
      the hosts trigger is a plain element and needs the shim. */
   if (header.tagName !== 'BUTTON') {

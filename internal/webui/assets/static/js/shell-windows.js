@@ -173,16 +173,56 @@ function dockTabForSid(sid) {
 
 /** Is this window the one the reader is looking at right now?
  *
- *  Active means: on screen (not minimized, not hidden, not collapsed to its header),
- *  the top window in its layout, and the page itself is not in a background tab.
- *  Anything less is "somewhere else", and a tab for it has something to report. */
+ *  Watched means: on screen (not minimized, not hidden, not collapsed to its
+ *  header) and the page itself is not in a background tab. Anything less is
+ *  "somewhere else", and a tab for it has something to report.
+ *
+ *  THE TWO LAYOUTS ANSWER "ON SCREEN" DIFFERENTLY, and that difference is the
+ *  whole point of this predicate:
+ *
+ *    - FLOATING: windows overlap. Exactly one is legible, so `win-active` (the
+ *      raised one) is the right question. A buried window's output is genuinely
+ *      news the reader has not seen.
+ *
+ *    - TILED: the grid exists so that every pane is visible AT THE SAME TIME.
+ *      `pane-active` marks the pane that owns the KEYBOARD, not the one the eye
+ *      can see — they are different questions and conflating them made a pane
+ *      sitting in plain sight report its own output as unseen. Reproduced on a
+ *      live instance: a `blackbox` session beside a second pane, both fully
+ *      visible in the grid, the second holding the keyboard. One output frame
+ *      and the visible `blackbox` tab started pulsing; it pulsed forever,
+ *      because the only way to clear the mark was to take the keyboard away
+ *      from the pane the operator was typing in. Tiled panes are therefore all
+ *      watched, with one exception: a MAXIMIZED pane (`.pane-maxed`) covers its
+ *      neighbours, so those neighbours are as buried as any floating window.
+ *
+ *  Being on screen is measured from the DOM (`offsetParent` / `getClientRects`),
+ *  not from a class: a collapsed header, a `display:none` ancestor and a window
+ *  moved off-grid all mean the same thing to the reader — the terminal is not
+ *  there to look at. */
 function dockWindowWatched(win) {
   if (!win || !win.parentNode) return false;
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
   if (win.classList.contains('win-minimized') || win.classList.contains('win-hidden')) return false;
   if (win.classList.contains('shell-window-collapsed')) return false;
-  if (isTiledWin(win)) return win.classList.contains('pane-active');
+  if (isTiledWin(win)) {
+    /* A maximized pane is the only tiled thing that hides its neighbours. */
+    var maxed = document.querySelector('.shell-window.pane-maxed');
+    if (maxed && maxed !== win) return false;
+    return winHasPixels(win);
+  }
   return win.classList.contains('win-active');
+}
+
+/** Does this element actually occupy pixels on screen?
+ *
+ *  `getClientRects()` is empty for a `display:none` ancestor, for a zero-sized
+ *  box and for a detached node — one question, one answer, with no reliance on a
+ *  class name a future layout change might rename. (`offsetParent` would answer
+ *  "hidden" for every `position:fixed` element too, which is a different bug.) */
+function winHasPixels(el) {
+  if (!el || !el.getClientRects) return false;
+  return el.getClientRects().length > 0;
 }
 
 /** dockNoteOutput is called for every terminal frame that reached a window.
@@ -277,7 +317,16 @@ function dockEntries() {
     if (ta !== tb) return ta < tb ? -1 : 1;
     return String(a.sid) < String(b.sid) ? -1 : 1;
   });
-  return bare.concat(entries);
+  /* A dial in flight is a WINDOW with no session, so it cannot sort by
+     created_at. It used to be prefixed here (bare.concat) — the left end of the
+     bar — and the moment the connection landed the entry gained created_at and
+     fell to the sorted tail: the tab teleported from first to last on the
+     frame the reader was watching for. It is APPENDED instead: the dial is the
+     newest thing on the bar, the same slot the session it becomes will hold,
+     so connecting moves nothing. (This is also what the sort's own comment
+     always said — "it is the newest thing on the bar" — the concat just
+     contradicted it.) */
+  return entries.concat(bare);
 }
 
 /** The dock key of an open window, or '' when the dock has no tab for it.
@@ -481,32 +530,46 @@ function refreshSessionTabbar() {
     tab._win = w || null;
     /* The label and the tooltip are the SESSION's, not the window's: a tab for a
        session started elsewhere has no window to read, and the same session must
-       read the same whether or not this page happens to hold its window. */
+       read the same whether or not this page happens to hold its window.
+       Guarded writes: this refresh runs several times per arrangement click
+       (directly, and again through the pane/container MutationObservers), and
+       assigning textContent unconditionally tears the text node out and puts a
+       new one back — a strip-wide replace the eye reads as a flicker even with
+       no new output. */
     var label = entry.session ? sessionDockLabel(entry.session) : sessionTabLabel(w);
-    tab.querySelector('.session-tab-label').textContent = label;
-    tab.title = label;
+    var labelEl = tab.querySelector('.session-tab-label');
+    if (labelEl && labelEl.textContent !== label) labelEl.textContent = label;
+    if (tab.title !== label) tab.title = label;
     /* "Active" is about the SESSION, not about which of its panels happens to be
        on top: a session split across panels is one tab, and looking at any of
        them is looking at that session. dockKeyForWindow answers that — every panel
        is keyed by the session it shows. */
     var tabActive = !!w && !!topWin && dockKeyForWindow(topWin) === entry.key;
-    tab.classList.toggle('active', tabActive);
-    tab.setAttribute('aria-selected', tabActive ? 'true' : 'false');
+    /* classList.toggle with a force argument still writes the class attribute when
+       the presence does not change, and this loop runs several times per
+       arrangement click. Reading first keeps an unchanged tab byte-identical, so
+       the strip is not style-invalidated for news it does not carry. */
+    if (tab.classList.contains('active') !== tabActive) tab.classList.toggle('active', tabActive);
+    var selVal = tabActive ? 'true' : 'false';
+    if (tab.getAttribute('aria-selected') !== selVal) tab.setAttribute('aria-selected', selVal);
     /* A window-less entry is still a session with a state, so the tab says which:
        no window here is a fact about the page, not about the session. */
-    tab.classList.toggle('is-windowless', !w);
+    if (tab.classList.contains('is-windowless') !== !w) tab.classList.toggle('is-windowless', !w);
     /* More than one panel: say so, because the press will open a menu instead of
        raising a window — a tab that asks a question with no sign it will is a
        surprise. Hidden on the ordinary one-window session. */
     var panelsEl = tab.querySelector('.session-tab-panels');
     if (panelsEl) {
       var panelCount = entry.panels || 0;
-      panelsEl.hidden = panelCount < 2;
+      var panelsHidden = panelCount < 2;
+      if (panelsEl.hidden !== panelsHidden) panelsEl.hidden = panelsHidden;
       if (panelCount > 1) {
-        panelsEl.textContent = String(panelCount);
+        var countText = String(panelCount);
+        if (panelsEl.textContent !== countText) panelsEl.textContent = countText;
         /* Rendered from t() at paint time, like the label: the tooltip follows a
            language switch on the next rebuild instead of needing its own hook. */
-        panelsEl.title = t('dock.panels.tip');
+        var countTip = t('dock.panels.tip');
+        if (panelsEl.title !== countTip) panelsEl.title = countTip;
       }
     }
     /* The rebuild reads the fresh set rather than trusting the class it left behind:
@@ -526,21 +589,41 @@ function refreshSessionTabbar() {
        of the rule lives in this loop: the snapshot is the one thing every session
        passes through. */
     if (entry.sid && !w) _dockFresh[entry.sid] = true;
-    tab.classList.toggle('is-fresh', !!(entry.sid && _dockFresh[entry.sid]));
-    if (!w) tab.setAttribute('data-sid', entry.sid);
-    else tab.removeAttribute('data-sid');
+    var tabFresh = !!(entry.sid && _dockFresh[entry.sid]);
+    if (tab.classList.contains('is-fresh') !== tabFresh) tab.classList.toggle('is-fresh', tabFresh);
+    if (!w) {
+      if (tab.getAttribute('data-sid') !== entry.sid) tab.setAttribute('data-sid', entry.sid);
+    } else if (tab.getAttribute('data-sid') !== null) {
+      tab.removeAttribute('data-sid');
+    }
     /* The batch component owns both the mode and the ticked set, and paints the
        ticked class over the grid it was handed (this strip). All this loop does is
        expose the key the component indexes by and show the empty tick slot while
        the mode is on — the slot itself must exist in the DOM at all times, or the
        tab's width would change under the pointer the moment selection starts. */
-    tab.setAttribute('data-win-id', entry.key);
+    if (tab.getAttribute('data-win-id') !== entry.key) tab.setAttribute('data-win-id', entry.key);
     /* The tick is always visible on every tab: there is no mode to reveal it in,
        and a glyph that appeared and disappeared would change the tab's width under
        the pointer whenever a selection started or ended. */
     order.push(tab);
   });
-  order.forEach(function (t) { scroll.appendChild(t); });
+  /* Reorder ONLY when the strip differs. appendChild on a node that is already
+     in the DOM removes and re-inserts it, so the previous unconditional pass
+     churned every tab on every refresh — and this refresh runs SIX times per
+     arrangement click (directly, plus the pane-grid, container and visibility
+     observers), which is why the strip flickered on layout changes even when
+     no terminal produced output. With the guard, an arrangement click that
+     does not add, remove or reorder tabs performs no strip writes at all;
+     a real change still lands because the loop above creates/moves nodes
+     before this comparison runs. */
+  var kids = scroll.children;
+  var stripDiffers = kids.length !== order.length;
+  if (!stripDiffers) {
+    for (var i = 0; i < order.length; i++) {
+      if (kids[i] !== order[i]) { stripDiffers = true; break; }
+    }
+  }
+  if (stripDiffers) order.forEach(function (t) { scroll.appendChild(t); });
   /* The bar's keys read the list that was just rendered, so they are refreshed
      here rather than on a timer: a count painted from a previous frame is exactly
      the bug this ordering prevents. */
@@ -1136,8 +1219,18 @@ window.addEventListener('resize', closeSessionTabMenu);
   }).observe(c, { childList: true });
 })();
 
+/* THE DEFAULT MUST BE ASSIGNED BEFORE THE KEY IS BUILT. The builder below is an
+   IIFE that runs while this file is being parsed; `var` hoists the declaration
+   but not the value, so a `var _paneStrategy = 'auto'` placed after it leaves
+   the builder reading undefined. The symptom was a key with no word in it:
+   every row failed the comparison, nothing was marked current, and the label
+   stayed empty — and the stored preference was silently lost as well, because
+   the later assignment overwrote whatever the builder had read from
+   localStorage. */
+var _paneStrategy = 'auto';        // auto | cols | rows | pairs (iTerm2-style arrangements)
+
 // Fixed right-side window controls, separated from the dock strip by its border:
-// eye (show/hide) · layout toggle (float<->tile, highlighted while tiled) · strategy select.
+// eye (show/hide) · layout toggle (float<->tile, highlighted while tiled) · arrangement menu.
 (function () {
   var actions = document.getElementById('session-tabbar-actions');
   if (!actions) return;
@@ -1152,7 +1245,11 @@ window.addEventListener('resize', closeSessionTabMenu);
     broom.title = t('dock.closeArchived.title');
     broom.setAttribute('aria-label', t('dock.closeArchived.title'));
     broom.disabled = true;
-    broom.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5l5 5"/><path d="M12.2 6.8l5 5"/><path d="M4 20l7.5-7.5a1.6 1.6 0 012.3 0l.7.7a1.6 1.6 0 010 2.3L7 23"/><path d="M11 9l4 4"/></svg>';
+    /* The archive's own glyph — the stratified stack — not a broom. This key
+       closes the archived windows that are OPEN, which is the same object the
+       archive column draws, so it speaks the column's vocabulary instead of
+       introducing a cleaning metaphor the page uses nowhere else. */
+    broom.innerHTML = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 12.8h9.6v2H3.2z"/><path d="M4.4 8.6h7.2v4.2H4.4z"/><path d="M5.6 4.4h4.8v4.2H5.6z"/><path d="M6.8 1.2h2.4v3.2H6.8z"/></svg>';
     broom.addEventListener('click', function (e) { e.preventDefault(); closeArchivedWindows(); });
     /* The broom belongs to the dock strip, not the arrangement controls. Keep it
        immediately before their vertical divider: the space it cleans up is in the
@@ -1178,27 +1275,122 @@ window.addEventListener('resize', closeSessionTabMenu);
     actions.appendChild(tile);
     updateTileToggleButton();
   }
+  /* The arrangement key is a menu, not a <select>. A native select drops the
+     operating system's own list — a white slab with system chrome — into a bar
+     built from the terminal's palette, and it looks like nothing else in the
+     page. It also cannot show which choice is current while closed without a
+     label wide enough for the widest one, and the bar has no width to spare.
+     So the trigger shows the current choice and the list is markup, drawn with
+     the same panel and row rules as the header's language menu (.lang-menu /
+     .lang-opt); only the trigger is shaped like the keys beside it. */
   if (!document.getElementById('session-tabbar-strategy')) {
-    var sel = document.createElement('select');
-    sel.id = 'session-tabbar-strategy';
-    sel.className = 'session-tabbar-select';
-    sel.setAttribute('data-i18n-title', 'pane.strategy.title');
-    sel.innerHTML = '<option value="auto" data-i18n="pane.strategy.auto">Auto</option><option value="cols" data-i18n="pane.strategy.cols">Columns</option><option value="rows" data-i18n="pane.strategy.rows">Rows</option><option value="pairs" data-i18n="pane.strategy.pairs">2 cols</option>';
-    applyI18n(sel);
+    var wrap = document.createElement('span');
+    wrap.className = 'session-tabbar-strategy';
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.id = 'session-tabbar-strategy';
+    trigger.className = 'session-tabbar-select';
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('data-i18n-title', 'pane.strategy.title');
+    var label = document.createElement('span');
+    label.id = 'session-tabbar-strategy-label';
+    var caret = document.createElement('span');
+    caret.className = 'session-tabbar-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    trigger.appendChild(label);
+    trigger.appendChild(caret);
+
+    var menu = document.createElement('span');
+    menu.className = 'lang-menu session-tabbar-menu hidden';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML =
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="auto" data-i18n="pane.strategy.auto">Auto</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="cols" data-i18n="pane.strategy.cols">Columns</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="rows" data-i18n="pane.strategy.rows">Rows</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="pairs" data-i18n="pane.strategy.pairs">2 cols</button>';
+    var opts = menu.querySelectorAll('.lang-opt');
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].addEventListener('click', function () {
+        choosePaneStrategy(this.getAttribute('data-strategy'));
+      });
+    }
+    if (typeof applyI18n === 'function') applyI18n(menu);
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    actions.appendChild(wrap);
+
     try {
       var saved = localStorage.getItem('termcp_pane_strategy');
-      if (saved) sel.value = saved;
-      _paneStrategy = sel.value;
+      if (saved) _paneStrategy = saved;
     } catch (e) {}
-    sel.addEventListener('change', function () {
-      _paneStrategy = sel.value;
-      _paneColFr = [];
-      try { localStorage.setItem('termcp_pane_strategy', sel.value); } catch (e) {}
-      applyPaneGrid();
+    paintPaneStrategy();
+
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setPaneStrategyOpen(!_paneStrategyOpen);
     });
-    actions.appendChild(sel);
+    /* One menu at a time, and only this one closes on an outside click: the
+       header's own menus live under .app-header and never overlap the dock. */
+    document.addEventListener('click', function (e) {
+      if (!_paneStrategyOpen) return;
+      if (e.target.closest && e.target.closest('.session-tabbar-strategy')) return;
+      setPaneStrategyOpen(false);
+    });
+    /* Escape closes it, like every other menu in the page. Registered on the
+       document, which is where a real key press lands — the key event bubbles
+       from the focused element up through document to window, so a document
+       listener sees it whatever has focus. */
+    document.addEventListener('keydown', function (e) {
+      if (!_paneStrategyOpen || e.key !== 'Escape') return;
+      setPaneStrategyOpen(false);
+      try { trigger.focus(); } catch (err) {}
+    });
   }
 })();
+
+/** Whether the arrangement menu is showing. Kept beside the element it drives
+ *  rather than in localStorage: an open menu is a transient, not a preference. */
+var _paneStrategyOpen = false;
+
+function setPaneStrategyOpen(open) {
+  var menu = document.querySelector('.session-tabbar-menu');
+  var trigger = document.getElementById('session-tabbar-strategy');
+  if (!menu || !trigger) return;
+  _paneStrategyOpen = !!open;
+  menu.classList.toggle('hidden', !_paneStrategyOpen);
+  trigger.setAttribute('aria-expanded', _paneStrategyOpen ? 'true' : 'false');
+}
+
+/** Draw the trigger and the checked row from _paneStrategy. Both the closed
+ *  trigger and the open list must agree with the arrangement actually applied,
+ *  so there is one function that reads the variable rather than two call sites
+ *  that could drift. */
+function paintPaneStrategy() {
+  var label = document.getElementById('session-tabbar-strategy-label');
+  if (!label) return;
+  var opts = document.querySelectorAll('.session-tabbar-menu .lang-opt');
+  for (var i = 0; i < opts.length; i++) {
+    var on = opts[i].getAttribute('data-strategy') === _paneStrategy;
+    opts[i].classList.toggle('active', on);
+    opts[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    /* The trigger's word IS the chosen row's word, read from the row rather
+       than translated again: one key, one rendering, so the closed key and the
+       open list cannot disagree — and switching language needs no second pass. */
+    if (on) label.textContent = opts[i].textContent;
+  }
+}
+
+/** Apply one arrangement. The stored value is written before the grid is laid
+ *  out, so a reload restores what is on screen rather than the previous shape. */
+function choosePaneStrategy(value) {
+  _paneStrategy = value;
+  _paneColFr = [];
+  try { localStorage.setItem('termcp_pane_strategy', value); } catch (e) {}
+  paintPaneStrategy();
+  setPaneStrategyOpen(false);
+  applyPaneGrid();
+}
 
 /** Toggle button reflects the current mode: grid icon when floating, float icon when tiled; active (blue) while tiled. */
 function updateTileToggleButton() {
@@ -1216,7 +1408,6 @@ function updateTileToggleButton() {
 var _layoutMode = 'float';        // 'float' | 'tile'
 var _paneActiveWin = null;        // highlighted pane in tile mode
 var _paneMaxedWin = null;         // pane temporarily filling the grid
-var _paneStrategy = 'auto';        // auto | cols | rows | pairs (iTerm2-style arrangements)
 var _paneColFr = [];               // grid column ratios (unitless fr)
 var _autoTileArmed = true;        // re-arms when floating count drops to/below threshold
 var AUTO_TILE_THRESHOLD = 0;      // 0 disables auto-tiling; panes are entered manually only
@@ -1239,6 +1430,25 @@ function isTiledWin(win) { return !!(win && win.parentNode && win.parentNode.id 
 function tileWindow(win) {
   if (isTiledWin(win) || !win.classList.contains('shell-window')) return;
   win._floatRect = { left: win.style.left, top: win.style.top, width: win.style.width, height: win.style.height };
+  /* The grid owns geometry from here on. A .win-fullscreen pane inside the grid
+     is a contradiction: the class says "the stylesheet decides my box" (inset 0,
+     100vw/100dvh, z-index of the fullscreen rung), while the grid says "I decide
+     your cell". The class lingers from a window that went full-screen on a narrow
+     viewport, and it POISONED the whole layout: the grid cell could not shrink it
+     (100vw inline-free width came from the fullscreen rule), its z-index beat its
+     neighbours', and refreshSessionTabbar counted it as a fullscreen window —
+     which hid the page header while tiled. Save the narrow-viewport rect before
+     dropping the class, exactly like applyWindowViewportMode does, so untile can
+     put the window back the way the operator had it. */
+  if (win.classList.contains('win-fullscreen')) {
+    win._desktopRect = {
+      left: win.style.left,
+      top: win.style.top,
+      width: win.style.width,
+      height: win.style.height
+    };
+    win.classList.remove('win-fullscreen');
+  }
   win.classList.add('tiled');
   paneGridEl().appendChild(win);
   setActivePane(win, false);
@@ -1255,6 +1465,17 @@ function untileWindow(win) {
   win.style.height = r.height || '';
   shellWindowsEl().appendChild(win);
   bringShellWindowToFront(win);
+  /* The restored inline rect describes a DESKTOP floating window. On a narrow
+     viewport that geometry would beat the fullscreen media query (inline styles
+     win the cascade), leaving a 640x480 box hanging off a phone screen. The
+     viewport-mode pass re-evaluates and restores fullscreen when the viewport is
+     narrow — the same call every floating window gets on a resize. */
+  applyWindowViewportMode(win);
+  /* The pane stopped being a pane; if the grid still names it active, that name
+     now points outside the grid and applyPaneGrid's guard would silently pick a
+     different pane while _paneActiveWin stayed stale. Clear it here where the
+     demotion happens, not in whoever notices next. */
+  if (_paneActiveWin === win) _paneActiveWin = null;
   _fitWinSoon(win);
 }
 
@@ -1333,15 +1554,39 @@ function _fitWinSoon(win) {
       var mobile = isMobileViewport();
       if (mobile !== _wasMobileViewport) {
         _wasMobileViewport = mobile;
+        /* Crossing into a narrow viewport drops tile mode: arrangement controls
+           are hidden on mobile (the buttons are meaningless when every terminal
+           is full-screen, leaving ~180px slivers of text in a grid) and leaving
+           tile active would strand the operator in a grid with no visible toggle
+           back. Untiling restores the floating container, and the loop below
+           immediately promotes every restored window to .win-fullscreen. */
+        if (mobile && _layoutMode === 'tile') {
+          setLayoutMode('float');
+        }
         allShellWins().forEach(function (w) {
           if (isTiledWin(w)) return;
           if (mobile) {
             applyWindowViewportMode(w);
           } else {
-            /* Leaving mobile: drop full-screen and re-seat the window as a
-               floating one, since it has no inline geometry to fall back on. */
+            /* Leaving narrow: drop full-screen and re-seat the window as a
+               floating one. The window's own desktop rect is restored when one
+               was remembered (applyWindowViewportMode saved it before clearing
+               inline styles): a window the operator moved and sized on the
+               desktop returns to THAT place, not to a fresh cascade. A window
+               opened while narrow has no memory, so it is centred as any new
+               desktop window is. Either way it ends up draggable and clamped
+               into the now-wider viewport. */
             w.classList.remove('win-fullscreen');
-            if (!w._maxed) positionShellWindowFromClick(w, null);
+            if (!w._maxed) {
+              if (w._desktopRect && w._desktopRect.width) {
+                ['left', 'top', 'width', 'height'].forEach(function (key) {
+                  w.style[key] = w._desktopRect[key];
+                });
+                clampShellWindowIntoContainer(w);
+              } else {
+                positionShellWindowFromClick(w, null);
+              }
+            }
           }
         });
       } else if (mobile) {
@@ -1371,6 +1616,36 @@ function openPaneWorkspace() {
 }
 
 function setLayoutMode(mode) {
+  /* An empty tiling is a TRAP, not a mode: the workspace overlay would open
+     (z-index of the workspace rung, pointer-events on) over the whole page with
+     not one pane inside it, and every click on the main page would land on the
+     grid instead of the connection form, the extensions, the archive — all of
+     it. The close-the-last-pane observer cannot save this case either, because
+     nothing changes while the overlay sits there empty: no childList mutation
+     ever fires. So "tile" with zero windows simply refuses: the mode stays
+     float, the preference is not persisted, and the strip keeps its windows.
+     Toggling the button with nothing to arrange is a no-op, which is also what
+     it looks like. */
+  if (mode === 'tile' && allShellWins().length === 0) {
+    updateTileToggleButton();
+    return;
+  }
+  /* The arrangement CONTROLS are hidden on a narrow viewport (the buttons are
+     meaningless when every terminal is the full-screen layer), so a mode that
+     arrives while narrow has no visible way back — and a tile preference saved
+     on the desktop would restore itself on the phone with the toggle gone. The
+     viewport owns the answer here: narrow means one terminal on screen, so
+     requests to tile are answered with float instead of an unreachable grid.
+     (applyWindowViewportMode and the resize handler already keep every window
+     fullscreen while narrow; this only stops the layout state from disagreeing
+     with what the reader can see.) */
+  if (mode === 'tile' && isNarrowViewport()) {
+    _layoutMode = 'float';
+    try { localStorage.setItem('termcp_layout_mode', 'float'); } catch (e) {}
+    document.body.classList.remove('tile-mode');
+    updateTileToggleButton();
+    return;
+  }
   _layoutMode = mode === 'tile' ? 'tile' : 'float';
   try { localStorage.setItem('termcp_layout_mode', _layoutMode); } catch (e) {}
   document.body.classList.toggle('tile-mode', _layoutMode === 'tile');
@@ -1410,15 +1685,7 @@ var _winsHidden = false;
 
 /** Last viewport mode seen, so the resize handler can tell a rotate (same mode,
  *  new size) from a breakpoint crossing (mode flip). Seeded on first load. */
-var _wasMobileViewport = (function () {
-  if (!window.matchMedia) return false;
-  try {
-    return window.matchMedia('(pointer: coarse)').matches &&
-           window.matchMedia('(hover: none)').matches;
-  } catch (e) {
-    return false;
-  }
-})();
+var _wasMobileViewport = isNarrowViewport();
 
 /* Layout changes move windows between containers. Reapply the global hide
    choice after each move: floats hide individually, panes hide with their
@@ -1485,6 +1752,10 @@ function syncDockDepth() {
    data-i18n key and is repainted by applyI18n, but the row may also have been
    rebuilt with it absent, so the refresh is the one pass that settles both. */
 onLangChange(refreshSessionTabbar);
+/* The arrangement key's word is copied from its own menu row (see
+   paintPaneStrategy), so a language switch has to re-copy it — applyI18n
+   rewrites the rows it can see, and this brings the closed trigger along. */
+if (typeof onLangChange === 'function') onLangChange(paintPaneStrategy);
 
 // Keep the grid recomputed as panes are added/removed.
 (function () {
@@ -1515,7 +1786,9 @@ onLangChange(refreshSessionTabbar);
 
 // Restore last mode preference on load; keep the toggle button and tab bar in
 // sync so a restored "tile" preference is reflected before the first window opens.
-try { if (localStorage.getItem('termcp_layout_mode') === 'tile') _layoutMode = 'tile'; } catch (e) {}
+// A narrow viewport never restores tile: the arrangement controls are hidden
+// there, and the restored grid would be unreachable — see setLayoutMode.
+try { if (localStorage.getItem('termcp_layout_mode') === 'tile' && !isNarrowViewport()) _layoutMode = 'tile'; } catch (e) {}
 updateTileToggleButton();
 refreshSessionTabbar();
 
@@ -1622,14 +1895,24 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
-/** True on touch-first devices (phones, tablets) in any orientation.
+/** The page's one definition of "narrow": a viewport the desktop window model
+ *  does not fit.
  *
- *  Deliberately NOT a width query: a phone in landscape is ~844px wide, which
- *  fails `max-width: 768px` and would leave it with a desktop floating window.
- *  Touch capability is the real signal, and it is orientation-independent.
- *  The `no-touch` escape hatch lets a narrow desktop window stay in floating
- *  mode, where a mouse-driven UI is still the right model. */
-function isMobileViewport() {
+ *  Width leads: at or below 768px — the same breakpoint the stylesheet's narrow
+ *  blocks use — a floating 640x480 window is either clipped or leaves no room to
+ *  read, so the window becomes the screen. Height joins it for the touch phone
+ *  held sideways: ~844px wide clears the width test but only ~390px tall, and a
+ *  desktop box that tall is a sliver; touch capability is the gate there, so a
+ *  short DESKTOP strip (a half-screen terminal beside an editor) keeps its
+ *  draggable window and a mouse. The `no-touch` escape hatch lives in the CSS
+ *  blocks, not here — this predicate is what the JS asks, and it must agree with
+ *  the stylesheet it drives.
+ *
+ *  Deliberately NOT a device query alone: pointer capability never changes while
+ *  the window is open, so a device-only test made the mode blind to the resize
+ *  it exists to answer (a phone unfolded to tablet width kept its full-screen
+ *  window; a desktop window dragged narrow never got one). */
+function isTouchDevice() {
   if (!window.matchMedia) return false;
   try {
     return window.matchMedia('(pointer: coarse)').matches &&
@@ -1637,6 +1920,19 @@ function isMobileViewport() {
   } catch (e) {
     return false;
   }
+}
+
+function isNarrowViewport() {
+  var w = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 0;
+  var h = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
+  if (w > 0 && w <= 768) return true;
+  return h > 0 && h <= 520 && isTouchDevice();
+}
+
+/** Kept as the name every caller and test knows. It IS the narrow test: the
+ *  full-screen window is a property of the viewport, not of the device. */
+function isMobileViewport() {
+  return isNarrowViewport();
 }
 
 /** Mobile shows one terminal filling the viewport (RFC: full-screen layer).
@@ -1651,6 +1947,17 @@ function applyWindowViewportMode(win) {
   if (!isMobileViewport()) {
     win.classList.remove('win-fullscreen');
     return;
+  }
+  /* Save the desktop geometry before clearing inline styles, so leaving narrow
+     viewport can restore the exact size and position the operator arranged
+     instead of cascading to the centre line again. */
+  if (win.style.width && win.style.height) {
+    win._desktopRect = {
+      left: win.style.left,
+      top: win.style.top,
+      width: win.style.width,
+      height: win.style.height
+    };
   }
   win.classList.add('win-fullscreen');
   win.style.width = '';

@@ -540,10 +540,23 @@ func TestExtensionCountRidesTheHeader(t *testing.T) {
 	if !strings.Contains(head, `id="ext-head-label"`) {
 		t.Error("the header must keep the column's title")
 	}
-	// It rides the trigger, so it is inside the fold button, not loose in the bar.
+	// The count lives in the header's TAIL group, outside the fold trigger: the
+	// trigger now holds only the glyph and the title word, because the filter box
+	// rides immediately beside the title (and an <input> cannot live in a <button>).
+	// Keeping the count inside the trigger would drag it left, next to the title.
 	fold := between(t, index, `class="ext-fold-btn"`, "</button>")
-	if !strings.Contains(fold, `id="ext-count"`) {
-		t.Error("the count belongs INSIDE the fold trigger, so pressing it folds the column")
+	if strings.Contains(fold, `id="ext-count"`) {
+		t.Error("the count must not ride inside the fold trigger: with the filter beside the title it would " +
+			"be dragged left instead of staying at the bar's right end")
+	}
+	tail := between(t, index, `id="ext-head-tail"`, "</span>")
+	if !strings.Contains(tail, `id="ext-count"`) {
+		t.Error("the count belongs in the tail group at the bar's right end")
+	}
+	// The tail still folds the column, as it did while it sat inside the trigger.
+	ext0 := readAssetLF(t, "static/js/extensions.js")
+	if !strings.Contains(ext0, "headTail.addEventListener('click'") {
+		t.Error("the tail group must fold the column on click, or the readout stops acting like part of the trigger")
 	}
 	// Nothing may reintroduce the separate readout line.
 	body := between(t, index, `id="sec-exts-body"`, "</div>")
@@ -569,18 +582,85 @@ func TestExtensionCountRidesTheHeader(t *testing.T) {
 		t.Error("ext.empty.text is retired: nothing references it any more")
 	}
 
-	// EXACTLY ONE auto margin in the row. The shared `.nethub-caret` rule carries
-	// `margin-left: auto` too, so leaving both in place splits the free space and puts
-	// the badge mid-bar with a hole before the caret (measured: badge at 768, caret at
-	// 1174, in a 1032px bar). The badge carries the push; the caret must not.
+	// The filter box lives INSIDE the action cluster, first after the divider
+	// hairline: [title] … [gauge] [count ▾] │ [filter] [verbs]. The readout stays
+	// left of the divider with the title; the filter leads the verbs on the action
+	// side, so it cannot sit between the gauge and the number the gauge reports.
 	css := readAssetLF(t, "static/css/workspace.css")
-	badge := between(t, css, ".ext-head-bar .ext-count-badge {", "}")
-	if !strings.Contains(badge, "margin-left: auto") {
-		t.Error("the count badge carries the row's single auto margin")
+	box := between(t, css, ".archive-search.grid-search-inhead {", "}")
+	if strings.Contains(box, "margin-left: auto") {
+		t.Error("the filter box must not carry an auto margin inside the action cluster: it would fight the " +
+			"cluster's own pinning and strand the verbs off the right edge")
 	}
-	if !strings.Contains(css, ".ext-head-bar .nethub-caret { margin-left: 0; }") {
-		t.Error("the caret's own `margin-left: auto` must be suppressed here, or the free space " +
-			"splits between it and the badge and the count drifts into the middle of the bar")
+
+	// EXACTLY ONE auto margin per theme. Outside cyberpunk the tail group carries
+	// it; under cyberpunk the gauge takes the push (so it hugs the count) and the
+	// tail gives its up. A second margin anywhere splits the slack and floats the
+	// readout mid-bar.
+	tailCSS := between(t, css, ".ext-head-tail {", "}")
+	if !strings.Contains(tailCSS, "margin-left: auto") {
+		t.Error("the tail group pins the right-hand cluster in the non-gauge themes")
+	}
+	badge := between(t, css, ".ext-head-bar .ext-count-badge {", "}")
+	if strings.Contains(badge, "margin-left: auto") {
+		t.Error("the count badge must not carry an auto margin: the tail group owns the push")
+	}
+	actions := between(t, css, ".ext-head-actions {", "}")
+	if strings.Contains(actions, "margin-left: auto") {
+		t.Error("the action cluster must not carry a second auto margin: it would split the slack with the " +
+			"tail group and strand the filter box in the middle of the bar")
+	}
+
+	cyber := readAssetLF(t, "themes/cyberpunk/assets/static/css/theme.css")
+	track := between(t, cyber, ".ext-head-bar .ext-capacity-track,", "}")
+	if !strings.Contains(track, "flex: 1 1 auto") {
+		t.Error("the cyberpunk gauge must span the row's free space (`flex: 1 1 auto`)")
+	}
+	if !strings.Contains(track, "margin: 0 4px 0 6px") {
+		t.Error("the gauge must end tightly against the count (4px gap) while spanning from the title")
+	}
+	if !strings.Contains(cyber, ".ext-head-bar .ext-head-tail { margin-left: 0; }") {
+		t.Error("under cyberpunk the tail must give up its auto margin, or the slack splits in two")
+	}
+}
+
+// TestExtensionHeaderFoldsFromTheWholeBar pins the fold surface after the header
+// grew a filter box.
+//
+// The trigger used to fill the bar, so every click in the bar folded the column.
+// With the filter box and the count tail as siblings inside .ext-head-bar, the
+// trigger is title-sized and clicks in the bar's free space fell between
+// handlers: the fold looked broken everywhere except the title word. The bar is
+// the fold surface again — and three exclusions keep that from becoming a
+// double-toggle or an accidental fold while typing:
+//
+//   - the bar ignores clicks the trigger or the tail already handled (both bubble
+//     through it, and each toggles once on its own);
+//   - the filter box stops its own clicks, so clicking into the field never folds
+//     the plate the reader is filtering;
+//   - the action cluster stops its own clicks in the markup.
+func TestExtensionHeaderFoldsFromTheWholeBar(t *testing.T) {
+	conn := readAssetLF(t, "static/js/conn-form.js")
+	// The fold is one function reused by both surfaces.
+	if !strings.Contains(conn, "var fold = function (e) {") {
+		t.Fatal("the fold handler must be one named function: two copies would drift")
+	}
+	if !strings.Contains(conn, "header.addEventListener('click', fold);") {
+		t.Error("the trigger must still fold on click")
+	}
+	barBind := between(t, conn, "if (bar && bar.classList.contains('ext-head-bar')) {", "\n  }\n")
+	if !strings.Contains(barBind, "bar.addEventListener('click'") {
+		t.Error("the whole header bar must fold: the trigger is title-sized now, so clicks in the bar's free " +
+			"space would otherwise do nothing")
+	}
+	if !strings.Contains(barBind, "#sec-exts, #ext-head-tail") {
+		t.Error("the bar must skip clicks the trigger and the tail already handled, or one press toggles twice")
+	}
+
+	util := readAssetLF(t, "static/js/util.js")
+	builder := between(t, util, "function ensureGridSearch(", "\n}\n")
+	if !strings.Contains(builder, "wrap.addEventListener('click'") || !strings.Contains(builder, "stopPropagation") {
+		t.Error("the filter box must stop its own clicks: the extensions filter sits on a foldable bar")
 	}
 }
 
@@ -609,12 +689,22 @@ func TestTheCapacityMeterIsAThemeRestyle(t *testing.T) {
 				"a column, never owe it structure", id)
 		}
 	}
-	// Between title and count: the bar is the gauge the number reads from.
+	// After the title AND after the filter box (which the tests assert elsewhere):
+	// the gauge reads from the free space between the filter and the count. Inside
+	// the fold trigger it landed on the wrong side of the filter — between title
+	// and search — which reads as part of the trigger instead of the bar's gauge.
 	if i, j := strings.Index(head, `id="ext-head-label"`), strings.Index(head, `id="ext-capacity-track"`); i < 0 || j < 0 || i > j {
 		t.Error("the capacity bar sits AFTER the title and BEFORE the count it explains")
 	}
 	if i, j := strings.Index(head, `id="ext-capacity-track"`), strings.Index(head, `id="ext-count"`); i < 0 || j < 0 || i > j {
 		t.Error("the count must follow the bar: the bar is the gauge, the number is the reading")
+	}
+	// And it must NOT be inside the fold button: the button now ends right after
+	// the title, so anything still in it sits left of the filter box.
+	fold := between(t, index, `class="ext-fold-btn"`, "</button>")
+	if strings.Contains(fold, `id="ext-capacity-track"`) {
+		t.Error("the capacity bar must not live inside the fold trigger: there it lands between the title " +
+			"and the filter box instead of spanning the space between filter and count")
 	}
 	// The bar is decoration; the number beside it is what a reader needs.
 	if !strings.Contains(head, `id="ext-capacity-track" aria-hidden="true"`) {

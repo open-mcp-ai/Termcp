@@ -36,7 +36,7 @@ func TestWindowArgumentTypesAreRefused(t *testing.T) {
 		{"lines_limit array", map[string]any{"lines_limit": []any{1}}, "lines_limit must be a number"},
 		{"learn_mode string", map[string]any{"learn_mode": "yes"}, "learn_mode must be true or false"},
 		{"overflow typo", map[string]any{"on_bytes_overflow": "trunc"}, "must be one of truncate, fold"},
-		{"overflow wrong type", map[string]any{"on_time_overflow": 1}, "must be a string"},
+		{"overflow wrong type", map[string]any{"on_lines_overflow": 1}, "must be a string"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -85,6 +86,37 @@ func listableSessions(in []api.Session, callerNS string) []api.Session {
 //
 // Accepted: a raw session id, a termcp:// session locator, a termcp:// shell
 // locator (its session part), or a raw shell id (both the root and child shells
+// sessionByName resolves a display name to exactly one session, or explains the
+// ambiguity (issue #247).
+//
+// Three answers, and all three are useful: one match is the session; no match is nil
+// with no error, so the caller's own not-found message still names what it was given;
+// several matches is a refusal listing the candidates, because every candidate is
+// reachable by id and choosing for the caller is how a `close` lands on the wrong one.
+func (s *Server) sessionByName(name string) (*session.Session, *mcpgo.CallToolResult) {
+	matches := s.sessMgr.SessionsNamed(name)
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	}
+	ids := make([]string, 0, len(matches))
+	running := 0
+	for _, m := range matches {
+		info := m.Info()
+		ids = append(ids, info.ID)
+		if info.Status == api.SessionRunning {
+			running++
+		}
+	}
+	sort.Strings(ids)
+	return nil, toolError(CodeInvalidArgument, "%s", fmt.Sprintf(
+		"%d sessions are named %q, so the name does not say which one: %s. "+
+			"Address one by id, or give the next one a distinct --name (`connect <host> --name web`).",
+		len(matches), name, strings.Join(ids, ", ")))
+}
+
 // are stored with their parent, so a shell id names its container).
 //
 // Callers must use the RETURNED session's ID. Echoing the argument back would
@@ -104,6 +136,13 @@ func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.Call
 		if sess := s.sessMgr.Get(h.SessionID); sess != nil {
 			return sess, nil
 		}
+	}
+	// A NAME ADDRESSES A SESSION (issue #247), and an ambiguous name is refused
+	// rather than guessed: Name defaults to the profile name, so "internal" names
+	// every loopback session nobody labelled. Picking one would let `close internal`
+	// kill a session the caller was not looking at, and the reply would say success.
+	if sess, bad := s.sessionByName(sessionID); bad != nil || sess != nil {
+		return sess, bad
 	}
 	if looksLikeResourceLocator(sessionID) {
 		p, err := parseResourceURL(sessionID)
@@ -346,8 +385,19 @@ func (s *Server) sftpClient(target string) (*sftp.Client, *mcpgo.CallToolResult)
 	return cli, nil
 }
 
-// sftpClientContext resolves a session (or borrowed host, #237) and creates an
-// SFTP client over it. The caller closes the SFTP client and invokes release.
+// sftpClientContext resolves a session (or borrowed host, #237) and returns an SFTP
+// client over it. The caller closes the SFTP client and invokes release.
+//
+// A SESSION'S ENGINE IS REUSED; A BORROWED HOST'S IS NOT (issue #244). The reuse is what
+// removes three round trips — channel open, subsystem request, INIT/VERSION — from every
+// file operation. A borrowed host keeps the old per-call engine because its transport
+// lease is request-scoped: caching one would hand a later call a transport that has
+// already been released, which is a correctness bug traded for a latency win.
+//
+// The shared Client's Close is a no-op (see sftp.Shared), so every existing
+// `defer sftpCli.Close()` in the handlers stays correct without knowing which kind it
+// got. That is deliberate: the alternative was editing twelve handlers and trusting each
+// one to remember which branch it was on.
 func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcpgo.CallToolResult) {
 	var sshCli *ssh.Client
 	var release func()
@@ -365,12 +415,21 @@ func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Cl
 			return nil, nil, toolError(code, "%s", err.Error())
 		}
 	} else {
-		_, client, bad := s.sshClientForSession(target)
+		sess, client, bad := s.sshClientForSession(target)
 		if bad != nil {
 			return nil, nil, bad
 		}
 		sshCli = client
 		release = func() {}
+		// The canonical session id, not the caller's spelling: `read <id> file` and
+		// `read <name> file` name the same session and must share one engine, and the
+		// DEAD hook that evicts it is called with this id.
+		view, err := s.sftpEngines.Get(sess.ID, sshCli)
+		if err != nil {
+			release()
+			return nil, nil, toolError(CodeOperationFailed, "%s", fmt.Sprintf("SFTP: %v", err))
+		}
+		return view, release, nil
 	}
 
 	cli, err := sftp.NewClient(sshCli)
@@ -449,6 +508,25 @@ func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallT
 	// next command" holds for all of them. Locators were consumed above, so the
 	// `:<N>` reaching this point belongs to a short handle.
 	if h := locator.SplitHandle(shellID); h.Index > 0 {
+		// `web:1` addresses channel 1 of the session NAMED web (issue #247), so the
+		// name resolves before the id does — the id branch below is unchanged, and a
+		// name that matches several sessions is refused by sessionByName rather than
+		// guessed.
+		if byName, bad := s.sessionByName(h.SessionID); bad != nil {
+			return nil, bad
+		} else if byName != nil {
+			if byName.Info().Status != api.SessionRunning {
+				return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is still readable with `read`", byName.ID, byName.Info().Status))
+			}
+			cs, err := s.shellFromIndex(byName, h.Index)
+			if err != nil {
+				return nil, toolError(CodeShellNotFound, "%s", err.Error())
+			}
+			if cs == nil {
+				return nil, toolError(CodeShellNotFound, "%s", fmt.Sprintf("Session '%s' has no shell", byName.ID))
+			}
+			return cs, nil
+		}
 		if sess := s.sessMgr.Get(h.SessionID); sess != nil {
 			if sess.Info().Status != api.SessionRunning {
 				return nil, toolError(CodeSessionNotFound, "%s", fmt.Sprintf("Session '%s' is closed (status %s); its output is still readable with `read`", sess.ID, sess.Info().Status))

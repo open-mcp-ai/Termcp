@@ -110,16 +110,23 @@ type termArgs struct {
 	BytesLimit      int
 	LinesLimit      int
 	TotalBytesLimit int
-	OnTimeOverflow  string
 	OnBytesOverflow string
 	OnLinesOverflow string
 	LearnMode       bool
+
+	// DryRun stops after parse and expansion, before dispatch (#241). See
+	// dryRunSlots for what that guarantees and what it deliberately does not.
+	DryRun bool
 
 	// StructuredContent also sends the reply as the JSON projection, on top of the
 	// rendered text. It is off by default because the two carry the SAME bytes and
 	// the text is the copy a caller usually reads, so the JSON twin is a duplicate
 	// paid for on every call. See envelope.Reply.StructuredContent.
 	StructuredContent bool
+	// Content suppresses the rendered text projection on the MCP wire when the
+	// caller asks for structuredContent only. False is the zero-value default and
+	// preserves the existing behavior; so the inverse travels with the reply.
+	NoText bool
 
 	// Vars holds values substituted into cmd at AST parse time, by variable name.
 	//
@@ -255,9 +262,64 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	}
 	t := s.executeTerm(ctx, cmd, win)
+	// EVERY 2xx SLOT INHERITS THE CALLER'S WINDOW UNLESS IT SAYS IT ALREADY DID.
+	//
+	// `bytes_limit`/`lines_limit` are documented as an argument of the tool, not of one
+	// directive — but applying them was each handler's own job, done through
+	// generatedSlot for the paths that remembered. The paths that did not (a peer's
+	// tools/list, `cdp protocol`, `ls task`, `help <node>`) answered with the whole
+	// body however small a window the caller asked for, so the same argument meant
+	// "a budget" for a listing and "not consulted" for the listing next to it.
+	//
+	// Enforcing it HERE, at the one place both entrances pass through, is what makes it
+	// the tool's contract rather than a rule each new directive has to be told: a slot
+	// built by a directive that never heard of the window is still cut, and a slot that
+	// deliberately is not (a streamed read with a cursor, a frame that must stay whole)
+	// says so once, at the place that decided it.
+	slots := applySlotWindows(t.slots, win)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(t.slots), StructuredContent: win.StructuredContent}
+	return envelope.Reply{Slots: t.applyTotalCap(slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
+}
+
+// applySlotWindows caps every 2xx slot that has not already been shaped to the
+// caller's window, with the same policy (and the same honesty headers) a generated
+// reply gets.
+//
+// WHY IT IS SHAPED LIKE generatedSlot: a caller that reads `ls host` and `ls task`
+// before and after this guard should not be able to tell which one went through a
+// helper. The `Truncated` header, the `bytes */N` content range and the 206 status
+// are the reply's account of what it withheld, so the account is produced in one
+// place and reads the same everywhere.
+func applySlotWindows(slots []envelope.Slot, win termArgs) []envelope.Slot {
+	for i, slot := range slots {
+		// A FAILURE IS NOT A WINDOW'S TO CUT: a refusal that stops mid-sentence is a
+		// refusal the caller cannot act on, and the bytes a diagnosis costs are the
+		// reason it was worth returning. total_bytes_limit still bounds the reply.
+		// ONLY A 200 IS CONTENT: a 202 receipt names a transfer, a 204/206 already
+		// reports its own truncation, and a 4xx/5xx is a diagnosis — cutting any of them
+		// would answer a different question than the one asked (a 202 receipt cut to 100
+		// bytes is a receipt nobody can act on).
+		if slot.Code != 200 || slot.Body == "" {
+			continue
+		}
+		body, code, cut, total := capGeneratedCounted(slot.Body, win)
+		// A slot that already went through a window is 206/204 with its own headers, and
+		// re-running the cap on it finds nothing further to withhold (200, cut 0). Acting
+		// on that would overwrite the 206 with a 200 and erase the truncation the reply
+		// had already reported — so the question is only ever "is there anything to cut?"
+		if code == 200 && cut == 0 {
+			continue
+		}
+		slot.Body = body
+		slot.Code = code
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		noteTruncated(slot.Headers, code, cut, total, win)
+		slots[i] = slot
+	}
+	return slots
 }
 
 // executeTerm parses cmd and runs it, accumulating the reply.
@@ -273,12 +335,35 @@ func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) term
 		// case must keep falling through to the normal parse-error teaching below.
 		stmt, resolved, cycle := aliases.expandErrorCycle(err)
 		if resolved {
+			if win.DryRun {
+				return termReply{win: win, slots: s.dryRunSlots([]directive.Statement{stmt}, win)}
+			}
 			return s.runStatements(ctx, []directive.Statement{stmt}, win)
 		}
 		if len(cycle) > 0 {
-			return termReply{win: win, slots: []envelope.Slot{aliasCycleSlot(directive.Statement{Path: cmd}, cycle)}}
+			slot := aliasCycleSlot(directive.Statement{Path: cmd}, cycle)
+			if win.DryRun {
+				if slot.Headers == nil {
+					slot.Headers = map[string]string{}
+				}
+				slot.Headers["Dry-Run"] = "true"
+				slot.Headers["Verdict"] = "invalid"
+			}
+			return termReply{win: win, slots: []envelope.Slot{slot}}
 		}
-		return termReply{win: win, slots: []envelope.Slot{s.parseErrorSlot(err)}}
+		// A PARSE FAILURE IN A DRY RUN IS STILL A DRY RUN: the caller asked to be told
+		// whether this line is valid, and the answer is no. The existing refusal keeps
+		// its body (it is the teaching text that fixes the mistake) and gains the two
+		// headers that say which question it answered (#241).
+		slot := s.parseErrorSlot(err)
+		if win.DryRun {
+			if slot.Headers == nil {
+				slot.Headers = map[string]string{}
+			}
+			slot.Headers["Dry-Run"] = "true"
+			slot.Headers["Verdict"] = "invalid"
+		}
+		return termReply{win: win, slots: []envelope.Slot{slot}}
 	}
 	// An empty cmd is the "I just woke up" call: it must be legal, cheap, and
 	// information-dense, never an error.
@@ -321,7 +406,7 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// reached through an alias expansion never passes the caller's parse, and that is
 	// the path a substituted value would take into the terminal.
 	if _, name, found := controlByteInShell(stmts); found {
-		return termReply{win: win, slots: []envelope.Slot{{
+		ctrlSlot := envelope.Slot{
 			Code: 400,
 			Headers: map[string]string{
 				"Error-Code": "raw_control_byte",
@@ -331,9 +416,32 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 				"To press a key, name it: `key <channel> ctrl-c` (`help key` lists the names).\n"+
 				"If the byte is DATA — a path, a file's contents — send it to a destination no terminal reads: "+
 				"`--data`, a Path, a frame. Those arrive as written.", name),
-		}}}
+		}
+		// THE CONTROL BYTE IS A DEFECT THIS LINE HAS, SO A DRY RUN REPORTS IT AS ONE
+		// (#241). It is caught before dispatch, which is exactly the boundary a
+		// preview draws; answering a real refusal while withholding the two headers
+		// would leave a harness unable to tell "checked and rejected" from "not
+		// checked at all".
+		if win.DryRun {
+			ctrlSlot.Headers["Dry-Run"] = "true"
+			ctrlSlot.Headers["Verdict"] = "invalid"
+		}
+		return termReply{win: win, slots: []envelope.Slot{ctrlSlot}}
 	}
 	out := termReply{win: win, seenUsage: map[string]bool{}, previousOK: true}
+
+	// DRY RUN STOPS HERE, before the group loop below reaches any directive
+	// (#241). Everything that had to happen to answer "is this valid" has
+	// happened already — parse, substitution, alias expansion and the control-byte
+	// funnel above — so the only thing left to skip is the dispatch itself.
+	//
+	// It is one branch at the funnel rather than a flag threaded into every
+	// directive, because a directive that forgot to read the flag would execute: the
+	// safety of a preview cannot depend on twenty call sites remembering it.
+	if win.DryRun {
+		out.slots = s.dryRunSlots(stmts, win)
+		return out
+	}
 
 	// GROUPS ARE THE UNIT OF CONCURRENCY. `a & b` is two statements that run
 	// together; `a & b; c` is a parallel pair followed by a sequential one.
@@ -541,19 +649,32 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	// common error of all.
 	body := derr.Msg
 	if derr.AfterPayload != "" {
-		// The failing statement followed a directive whose payload goes to a
-		// terminal, so the most likely cause is a `;` the caller meant as SHELL
-		// sequencing. Naming the fix beats naming the directive table: the caller
-		// did not misspell a directive, they wrote a shell command line in a slot
-		// that holds one directive.
-		// NO `&&` SUGGESTION. That advice is now wrong twice over: `&&` separates
-		// DIRECTIVES, so `run h:1 pwd && whoami` reads `whoami` as a directive name
-		// and fails the same way. A shell line goes through args, full stop.
-		body += fmt.Sprintf("\nHINT: %q follows a `%s`, whose payload is ONE VARIABLE REFERENCE. `;` and `&&` in\n"+
-			"cmd are termcp syntax — `;` separates statements and `&&` gates the next one — so a\n"+
-			"shell command line with its own operators belongs in args:\n"+
-			"  cmd: \"%s <channel> $1\"   args: [\"pwd; whoami\"]   or   args: [\"make && echo ok\"]",
-			derr.Op, derr.AfterPayload, derr.AfterPayload)
+		if strings.Contains(derr.AfterPayload, " --argv") {
+			// The operator that separated the statements ended the `--argv` word list,
+			// and the remainder became a directive. Name the exact operator (`;`, `&`,
+			// `&&`) so the diagnosis is true for the line the caller actually wrote.
+			opName := derr.TrailingSep
+			if opName == "" {
+				opName = ";"
+			}
+			body += fmt.Sprintf("\nHINT: `%s` ended at `%s`; `%s` is termcp syntax, not part of --argv.\n"+
+				"To run a shell command line, pass it as one argument to a shell:\n"+
+				"  open <session> --argv sh -c $1   args: [\"echo OUT; exit 7\"]",
+				derr.AfterPayload, opName, opName)
+		} else {
+			// The failing statement followed a directive whose payload goes to a
+			// terminal, so the most likely cause is a `;` the caller meant as SHELL
+			// sequencing. Naming the fix beats naming the directive table: the caller
+			// did not misspell the directive, they wrote shell text in a slot holding
+			// one variable reference.
+			// NO `&&` SUGGESTION. That advice is wrong here: `&&` separates DIRECTIVES,
+			// and a shell line goes through args, full stop.
+			body += fmt.Sprintf("\nHINT: %q follows a `%s`, whose payload is ONE VARIABLE REFERENCE. `;` and `&&` in\n"+
+				"cmd are termcp syntax — `;` separates statements and `&&` gates the next one — so a\n"+
+				"shell command line with its own operators belongs in args:\n"+
+				"  cmd: \"%s <channel> $1\"   args: [\"pwd; whoami\"]   or   args: [\"make && echo ok\"]",
+				derr.Op, derr.AfterPayload, derr.AfterPayload)
+		}
 	}
 	if derr.Parsed > 0 {
 		body += fmt.Sprintf("\nnothing was executed, including the %d statement(s) before this one: a cmd is parsed in full before any of it runs", derr.Parsed)
@@ -609,6 +730,12 @@ type termReply struct {
 // empty, and every field the caller needs is in structuredContent.
 func toolResult(reply envelope.Reply) *mcpgo.CallToolResult {
 	result := mcpgo.NewToolResultText(reply.Text())
+	if reply.NoText {
+		// A structured-only caller gets NO text content. `content` is allowed to be
+		// empty in the tool-result schema, and leaving the rendering in would bill the
+		// duplicate the caller explicitly declined.
+		result.Content = nil
+	}
 	result.IsError = reply.IsError()
 	/* The JSON twin is built only when it was asked for. Structured() renders every
 	   slot a second time, and on a large reply that render is the cost the default
@@ -685,7 +812,6 @@ func defaultTermArgs() termArgs {
 		BytesLimit:      defaultBytesLimit,
 		LinesLimit:      defaultLinesLimit,
 		TotalBytesLimit: defaultTotalBytesLimit,
-		OnTimeOverflow:  "truncate",
 		OnBytesOverflow: "truncate",
 		OnLinesOverflow: "truncate",
 	}

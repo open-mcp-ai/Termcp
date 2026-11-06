@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -36,6 +36,12 @@ type ExecSession struct {
 	// forever (issue #219). A one-slot channel is the same mutual exclusion with a
 	// door: whoever wants the token can give up, and teardown can decide not to wait.
 	stdinTok chan struct{}
+	// closeOnce makes Close idempotent. TWO teardown paths reach this struct
+	// independently — session.Terminate's graceful goroutine and Manager.Delete's
+	// finalize — and sync.Once guards only the CALLER's own path, not the struct.
+	// Without this, a deferred close racing an explicit Delete double-closed the
+	// session and raced on extraClosers (issue #255).
+	closeOnce sync.Once
 }
 
 // newStdinToken builds the one-token channel with its token already in place.
@@ -214,7 +220,21 @@ func StartWithClient(client *ssh.Client, command string, args []string, pty bool
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
-	return startSession(client, session, command, args, pty, rows, cols, false)
+	return startSession(client, session, command, args, pty, rows, cols, false, false)
+}
+
+// StartWithClientLine creates an ExecSession that hands a COMMAND LINE to the
+// remote shell verbatim. Use this when the caller already typed shell syntax
+// (pipes, redirects, variables, globs) rather than an argv pair.
+func StartWithClientLine(client *ssh.Client, line string, pty bool, rows, cols int) (*ExecSession, error) {
+	if client == nil {
+		return nil, fmt.Errorf("nil ssh Client")
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("new session: %w", err)
+	}
+	return startSession(client, session, line, nil, pty, rows, cols, false, true)
 }
 
 // StartWithChain creates an ExecSession on a freshly-built SSH client (the chain
@@ -238,7 +258,7 @@ func StartWithChain(ctx context.Context, client *ssh.Client, closers []io.Closer
 		DrainClosers(closers)
 		return nil, fmt.Errorf("new session: %w", err)
 	}
-	es, err := startSession(client, session, command, args, pty, rows, cols, true)
+	es, err := startSession(client, session, command, args, pty, rows, cols, true, false)
 	if err != nil {
 		DrainClosers(closers)
 		return nil, err
@@ -394,20 +414,28 @@ func (es *ExecSession) closeStdin() {
 func (es *ExecSession) SSHClient() *ssh.Client { return es.client }
 
 func (es *ExecSession) Close() error {
-	es.closeStdin()
 	var firstErr error
-	if es.session != nil {
-		if err := es.session.Close(); err != nil {
-			firstErr = err
+	// IDEMPOTENT BY CONSTRUCTION, not by convention. Both teardown paths can run
+	// concurrently (Terminate's goroutine, finalize); the Once makes the second a
+	// no-op, so the read-modify-write of extraClosers below can never overlap
+	// itself. The first error is returned to whichever caller got here first; the
+	// loser sees nil, which is honest — from its point of view nothing failed to
+	// close because there was nothing left to close.
+	es.closeOnce.Do(func() {
+		es.closeStdin()
+		if es.session != nil {
+			if err := es.session.Close(); err != nil {
+				firstErr = err
+			}
 		}
-	}
-	if es.ownClient {
-		if err := es.client.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if es.ownClient {
+			if err := es.client.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
-	}
-	DrainClosers(es.extraClosers)
-	es.extraClosers = nil
+		DrainClosers(es.extraClosers)
+		es.extraClosers = nil
+	})
 	return firstErr
 }
 
@@ -421,6 +449,16 @@ func (es *ExecSession) CloseSessionOnly() error {
 }
 
 func shellQuote(command string, args []string) string {
+	// ARGV SPELLING ONLY. command is the program, args are its arguments, and each
+	// element is quoted so the remote shell cannot split one into several.
+	//
+	// A caller holding a COMMAND LINE (pipes, redirects, variables ready to parse)
+	// does not come here at all: it uses StartWithClientLine, which sends the line
+	// verbatim. No quoting rule preserves both meanings, so the caller says which
+	// one it means instead of this function guessing.
+	if len(args) == 0 {
+		return quoteIfNeeded(command)
+	}
 	parts := []string{quoteIfNeeded(command)}
 	for _, a := range args {
 		parts = append(parts, quoteIfNeeded(a))
@@ -429,10 +467,27 @@ func shellQuote(command string, args []string) string {
 }
 
 func quoteIfNeeded(s string) string {
-	if strings.ContainsAny(s, " \t\n\"'\\$|&;<>(){}[]*?#~`") {
-		return strconv.Quote(s)
+	// POSIX SINGLE QUOTES, the same choice every SSH client library makes
+	// (Python's shlex.quote, Go's pkg/shlex). Inside single quotes the shell
+	// expands NOTHING — no $VAR, no backtick, no pipe — so an argv element that
+	// contains shell metacharacters arrives at the program byte-for-byte.
+	//
+	// strconv.Quote (C-style double quotes) was used here while this server still
+	// bypassed the login shell and re-split the line itself, so its escaping only
+	// had to satisfy that private round-trip. Once an exec request is executed BY
+	// a shell — which is what SSH actually specifies — double quotes leak: a
+	// PowerShell ScriptBlock passed as one argv element contains `$_`, and a POSIX
+	// shell inside double quotes substitutes it with the shell's own variable.
+	//
+	// The one escape a single-quoted string cannot contain is another single
+	// quote: end the quote, splice one in escaped, reopen.
+	if !strings.ContainsAny(s, " \t\n\r\"'\\$`|&;<>(){}[]*?#~!") || s == "" {
+		if s == "" {
+			return `''`
+		}
+		return s
 	}
-	return s
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // defaultPTYModes returns standard terminal modes for PTY sessions.

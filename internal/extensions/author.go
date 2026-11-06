@@ -94,9 +94,16 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 	if hasOpt(args, "idle_timeout") {
 		// THE ZERO VALUE IS "BACK TO THE DEFAULT", not "never": an empty string is
 		// how an author says "I am no longer choosing", and the default is the
-		// documented behaviour. "Never reap" is not on offer — an instance nobody
-		// ever closes is the thing this field exists to prevent.
+		// documented behaviour. "Never reap" is spelled `resident = true`, because a
+		// numeric window whose zero means "forever" is a value standing in for a
+		// decision (issue #227).
 		ext.IdleTimeout = strings.TrimSpace(optString(args, "idle_timeout", ""))
+	}
+	if hasOpt(args, "resident") {
+		if _, ok := args["resident"].(bool); !ok {
+			return fmt.Errorf("resident must be true or false, got %v", args["resident"])
+		}
+		ext.Resident = optBool(args, "resident", false)
 	}
 	if hasOpt(args, "enabled") {
 		if _, ok := args["enabled"].(bool); !ok {

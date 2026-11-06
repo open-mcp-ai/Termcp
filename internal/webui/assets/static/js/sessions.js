@@ -21,6 +21,52 @@
  *  drives. */
 var _sessionRegions = [{ dead: true, ids: new Set(), gridId: 'archive-grid' }];
 
+/* THE ARCHIVE FILTER, kept here rather than on the input.
+ *
+ * It has to outlive a repaint: the archive is rebuilt from scratch on every
+ * session snapshot (a session ending, a rename, another tab's delete), and an
+ * input's own value would be thrown away with the row it was typed above. Holding
+ * the query in a module variable is what makes a filter survive the push that
+ * happens while someone is reading the result. */
+var _archiveFilter = '';
+
+/* archiveRowMatches reports whether an archived session answers the filter.
+ *
+ * IT MATCHES EVERY FACT THE ROW SHOWS, not just the name. The reason someone
+ * reaches for this box is that two sessions look alike — the same profile dialled
+ * twice, the same command run against two hosts — so matching only the name would
+ * answer "everything" exactly when the archive is hardest to read. The host, the
+ * command and the id are on the row for the same reason, so they are searchable
+ * for the same reason. */
+function archiveRowMatches(s, needle) {
+  if (!needle) return true;
+  var parts = [sessionCardName(s), s.ssh_config, s.ssh_endpoint, s.command, s.id, s.reason];
+  if (s.shells && s.shells.length && typeof s.shells[0].exit_code === 'number') {
+    parts.push('exit ' + s.shells[0].exit_code);
+  }
+  for (var i = 0; i < parts.length; i++) {
+    var v = parts[i];
+    if (v && String(v).toLowerCase().indexOf(needle) >= 0) return true;
+  }
+  return false;
+}
+
+/* ensureArchiveSearch puts the filter box above the ledger, once.
+ *
+ * IT IS BUILT HERE RATHER THAN IN index.html, and that is a budget decision, not
+ * a style one: index.html is capped by a test and has a handful of bytes left, so
+ * a new element in the document would fail the build.
+ *
+ * The box itself comes from ensureGridSearch (util.js), which hosts and
+ * extensions use too: three columns that filter the same way must not carry three
+ * copies of the same node, or the hooks and the caret handling drift apart. This
+ * function only names the archive's own storage slot, catalog key and repaint. */
+function ensureArchiveSearch(grid) {
+  ensureGridSearch(grid, '_archiveFilter', 'archive.search.placeholder', t('archive.search.placeholder'), function () {
+    renderSessionGrid('');
+  });
+}
+
 /* The ticked sessions, in the order the grid shows them.
  *
  *  The component keys cards by whatever `nameAttr` names, and this column hands it
@@ -31,8 +77,7 @@ var _sessionRegions = [{ dead: true, ids: new Set(), gridId: 'archive-grid' }];
  *  only the LAST of a duplicated name, so a delete or an export acted on a record
  *  the user never pointed at.
  *
- *  A name is a label. It is renameable, it is not unique, and the archive holds
- *  records, not labels. */
+ *  A name is a label. It is not unique, and the archive holds records, not labels. */
 function archivedSessionsFor(ids) {
   var snap = sessionsWithPending();
   var byId = {};
@@ -784,7 +829,7 @@ function compareArchiveRows(a, b) {
  *
  *  The archive is a ledger: it answers "what already happened" and is read in
  *  passing, so the expensive card anatomy — a terminal glyph, a lamp, a lock, a
- *  rename control, a copy control — is the wrong shape for it. What one row
+ *  copy control — is the wrong shape for it. What one row
  *  needs is enough to recognise the session (its name), enough to judge it (when
  *  it ended) and a way to act on it (tick, or open it read-only).
  *
@@ -793,8 +838,16 @@ function compareArchiveRows(a, b) {
 function renderArchiveRows(region, all) {
   var grid = document.getElementById(region.gridId);
   if (!grid) return;
+  ensureArchiveSearch(grid);
   grid.innerHTML = '';
   var rows = all.filter(function (s) { return s && s.id && isDeadSession(s) === region.dead; });
+  /* THE FILTER IS APPLIED BEFORE THE SORT, so the two never disagree about what the
+     ledger holds: sorting a filtered set and filtering a sorted one produce the same
+     order, and doing it in this one place keeps every caller (a snapshot, a rename,
+     a delete) filtered without each remembering to. */
+  if (region.dead && _archiveFilter) {
+    rows = rows.filter(function (s) { return archiveRowMatches(s, _archiveFilter); });
+  }
   /* ListAll walks a sync.Map, so its order is random and reshuffles on every
      frame — a ledger whose rows move under the pointer is not a ledger. Sorted by
      the moment each session ended, newest first. */
@@ -802,10 +855,17 @@ function renderArchiveRows(region, all) {
   if (rows.length === 0) {
     /* An empty archive says what it holds rather than showing a blank strip: the
        column is collapsed by default, so the one time it is opened with nothing
-       in it is the one time the sentence has to carry its own meaning. */
+       in it is the one time the sentence has to carry its own meaning.
+
+       A FILTER WITH NO HITS IS A DIFFERENT SENTENCE from an empty archive, and
+       saying "nothing here" over a full archive would read as data loss. */
     var empty = document.createElement('div');
     empty.className = 'sess-plate-empty archive-empty';
-    empty.textContent = window._lastSessionsSnapshot ? t('archive.empty.hint') : '';
+    if (region.dead && _archiveFilter) {
+      empty.textContent = t('archive.search.empty');
+    } else {
+      empty.textContent = window._lastSessionsSnapshot ? t('archive.empty.hint') : '';
+    }
     grid.appendChild(empty);
     if (typeof paintArchiveRail === 'function') paintArchiveRail();
     return;
@@ -864,15 +924,7 @@ function renderArchiveRows(region, all) {
     row.innerHTML =
       '<input type="checkbox" class="archive-row-tick" tabindex="-1" aria-hidden="true">' +
       '<span class="archive-row-main">' +
-        /* THE NAME IS THE RENAME CONTROL, and it is the only one an archived
-           session has: the dock lists running sessions only, so an archived row has
-           no tab to right-click, and the session plate's cards — whose name-click
-           used to rename — are gone. Clicking the name therefore renames, which is
-           the same gesture the window title now carries, and the same
-           renameSessionById behind it. It is a <button> so the keyboard reaches it
-           and the row's own "open" click does not swallow it. */
-        '<button type="button" class="archive-row-name archive-row-rename" title="' +
-          escapeHtml(t('session.rename.hint')) + '">' + escapeHtml(label) + '</button>' +
+        '<span class="archive-row-name">' + escapeHtml(label) + '</span>' +
         '<span class="archive-row-meta">' +
           (endpoint ? '<span class="archive-row-chip">' + escapeHtml(endpoint) + '</span>' : '') +
           (cmd ? '<span class="archive-row-cmd">' + escapeHtml(cmd) + '</span>' : '') +
@@ -921,14 +973,6 @@ function renderArchiveRows(region, all) {
          transcript as the click bubbles. */
       if (e.target && e.target.closest && e.target.closest('.archive-row-del')) return;
       activate();
-    });
-    var rename = row.querySelector('.archive-row-rename');
-    if (rename) rename.addEventListener('click', function (e) {
-      /* Both, or the row's open handler runs as the click bubbles: renaming a
-         session must not also open its transcript behind the prompt. */
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof renameSessionById === 'function') renameSessionById(s);
     });
     var del = row.querySelector('.archive-row-del');
     if (del) del.addEventListener('click', function (e) {
@@ -1017,17 +1061,29 @@ function setWindowDeadBadge(win) {
   win._deadBadgeAdded = true;
   var st = document.createElement('span');
   st.className = 'shell-dead-badge';
+  /* i18n hooks, not just a painted string: the badge is created once per window,
+     and the text it was born with was whatever language the page spoke then. The
+     hooks let every later applyI18n pass — and the language switch's
+     reapplyWindowLanguage — rewrite it, instead of the badge keeping the
+     language of the moment it appeared (which read as a hard-coded string). */
+  st.setAttribute('data-i18n', 'session.dead.badge');
+  st.setAttribute('data-i18n-title', 'session.dead.badgeTitle');
   st.title = t('session.dead.badgeTitle');
   st.textContent = t('session.dead.badge');
   title.appendChild(st);
 }
 
-/** Append the terminal-end marker to one channel at most once. This is the single
- *  choke point for the "ended" state: every path that observes a session/shell exiting
- *  (live terminal_done frame, live window flipping to DEAD, or a freshly opened
- *  DEAD/read-only channel after its history is restored) calls this once. It is gated
- *  on ch.endedMarkPrinted, so the marker renders exactly once per channel no matter
- *  how many events fire. */
+/** Render the terminal-end marker on one channel at most once.
+ *
+ *  The marker belongs IN the terminal — it reads as the last line of the session's
+ *  own output, which is what it is — so it is written with term.writeln, exactly
+ *  as it always was. What changed is that the buffer cells it produced are no
+ *  longer treated as immutable: the printed line is recorded on the channel, and
+ *  a language switch rewrites that one line in place (see reapplyEndedMarker).
+ *  Without that, a user who opened an archived session and then switched languages
+ *  saw "[会话已结束]" frozen in the old language, which read as a hardcoded string.
+ *
+ *  Idempotent per channel (gated on ch.endedMarkPrinted). */
 function showTerminalEndedMarker(win, ch) {
   if (!ch || ch.endedMarkPrinted) return;
   ch.endedMarkPrinted = true;
@@ -1038,16 +1094,78 @@ function showTerminalEndedMarker(win, ch) {
     var sid = ch.tabEl.getAttribute('data-chsid');
     if (sid) shellStatusSet(win, sid, 'ended');
   }
-  if (ch.term) {
-    try {
-      ch.term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m', function () {
-        shellTermScrollToBottomIfStuck(ch.term, true);
-      });
-    } catch (e) {
-      try { ch.term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m'); } catch (e2) {}
+  if (!ch.term) return;
+  var text = t('term.ended');
+  ch.endedMarkerText = text;
+  try {
+    ch.term.writeln('\r\n\x1b[33m' + text + '\x1b[0m', function () {
       shellTermScrollToBottomIfStuck(ch.term, true);
+    });
+  } catch (e) {
+    try { ch.term.writeln('\r\n\x1b[33m' + text + '\x1b[0m'); } catch (e2) {}
+    shellTermScrollToBottomIfStuck(ch.term, true);
+  }
+}
+
+/** Rewrite the already-printed end marker in the language now in force.
+ *
+ *  The marker is a line in xterm's buffer, so this is the only way it can follow a
+ *  language switch: the buffer is addressed directly rather than re-printed (a
+ *  second writeln would leave the old line above the new one).
+ *
+ *  Two guards keep this from eating real output:
+ *   - The marker must still be the LAST non-empty line. Output that arrived after
+ *     it (a late frame) means the sentinel is no longer the tail, and overwriting
+ *     whatever is at that row would corrupt the transcript.
+ *   - That last line must still read as a previously printed marker. If it does not
+ *     match any language's text, something else owns the row and is left alone.
+ *
+ *  The rewrite is ANSI: save cursor, jump to the marker's viewport row, erase the
+ *  line, print the new text, restore cursor. Nothing else in the buffer moves. */
+function reapplyEndedMarker(ch) {
+  if (!ch || !ch.endedMarkPrinted || !ch.term) return false;
+  var term = ch.term;
+  var buf = term.buffer && term.buffer.active;
+  if (!buf || typeof buf.getLine !== 'function') return false;
+  var y = -1;
+  for (var i = buf.length - 1; i >= 0; i--) {
+    var line = buf.getLine(i);
+    if (!line) continue;
+    var str = line.translateToString(true);
+    if (str && str.trim()) { y = i; break; }
+  }
+  if (y < 0) return false;
+  var current = buf.getLine(y).translateToString(true).trim();
+  /* Only a row that still holds a marker in SOME language may be rewritten. The
+     catalog is the list of legitimate values; anything else is the session's own
+     output and must not be touched. */
+  if (!isEndedMarkerText(current)) return false;
+  var next = t('term.ended');
+  if (current === next) return true;
+  var row = y - buf.baseY + 1;
+  if (row < 1 || row > term.rows) return false;
+  try {
+    term.write('\x1b7\x1b[' + row + ';1H\x1b[2K\x1b[33m' + next + '\x1b[0m\x1b8');
+  } catch (e) { return false; }
+  ch.endedMarkerText = next;
+  return true;
+}
+
+/** True when the string is the end marker in any language the catalog knows.
+ *
+ *  I18N_CATALOG is a plain script-level var (i18n-catalog.js loads before this),
+ *  so the scan is direct; the t() fallback covers a future rename of that var. */
+function isEndedMarkerText(str) {
+  if (!str) return false;
+  var langs = (typeof I18N_CATALOG === 'object' && I18N_CATALOG) || null;
+  if (langs) {
+    for (var lang in langs) {
+      if (!Object.prototype.hasOwnProperty.call(langs, lang)) continue;
+      var val = langs[lang] && langs[lang]['term.ended'];
+      if (typeof val === 'string' && val.trim() === str) return true;
     }
   }
+  return str === t('term.ended');
 }
 
 /**

@@ -303,9 +303,30 @@ func describeTarget(t *cdpSession) string {
 	return describeTargetFields(t.Type, t.Title, t.URL)
 }
 
+// describeTargetFields renders one target as a line a caller can scan, and BOUNDS the
+// url (issue #249.3).
+//
+// A devtools url carries the page's whole query string, so one tracking-heavy page can
+// be a kilobyte on its own and the table stops being a table: the entries no longer line
+// up and a small `bytes_limit` cuts the LIST rather than the url that caused it. The
+// prefix is what identifies a page in practice; the rest is there when the caller asks
+// for the target by id.
+//
+// The url is not dropped, only shortened, and the shortening is visible ("…"), so a
+// caller that needs the full value knows to get it from the target instead of mistaking
+// a truncated url for the real one.
 func describeTargetFields(typ, title, url string) string {
 	if title == "" {
 		title = "(untitled)"
+	}
+	if len(url) > targetURLPreview {
+		// Never cut inside a UTF-8 sequence: half a character reads as mojibake and
+		// makes the whole row look corrupt.
+		cut := targetURLPreview
+		for cut > 0 && !utf8.ValidString(url[:cut]) {
+			cut--
+		}
+		url = url[:cut] + "…"
 	}
 	line := title + " — " + url
 	if typ != "" && typ != "page" {
@@ -313,6 +334,13 @@ func describeTargetFields(typ, title, url string) string {
 	}
 	return line
 }
+
+// targetURLPreview is how much of a target's url one listing row shows.
+//
+// 120 is about a terminal line and comfortably past the part that identifies a page
+// (scheme + host + path). It is a rendering bound, not a security one: the whole url is
+// still reachable through the target's own page.
+const targetURLPreview = 120
 
 // cdpTargetInfo asks for one target's description (used right after an attach, so
 // the child handle is not an opaque id in the reply).
@@ -576,7 +604,10 @@ func (s *Server) cdpEvents(ctx context.Context, stmt directive.Statement, h *jrp
 		b.WriteString(fmt.Sprintf("\n(the window holds the newest %d frames; %d older ones were dropped. --since is a cursor, not an archive.)",
 			stats.Size, stats.Dropped))
 	}
-	_ = win
+	// win is deliberately not consulted HERE: the page is a count of frames, and a
+	// frame is an indivisible unit, so cutting this body mid-frame would hand back a
+	// JSON fragment. The byte window still applies — the reply-level guard caps any
+	// 200 body the directive did not already shape (issue #209).
 	return envelope.Slot{Code: 200, Headers: headers, Body: b.String()}
 }
 

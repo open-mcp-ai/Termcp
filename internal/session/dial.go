@@ -104,6 +104,45 @@ func remoteClientConfig(r *RemoteSSH) (*ssh.ClientConfig, error) {
 	})
 }
 
+// authSummary describes WHAT TERMCP TRIED, for the one error where the answer is not in
+// the message: "unable to authenticate, attempted methods [none password]" names the
+// methods and nothing else, so a caller cannot tell a wrong password from a wrong user,
+// a key that did not parse, or a profile whose `user` was never filled in (issue #249.4).
+//
+// IT NAMES SOURCES, NEVER SECRETS. `password` and `private_key` are reported as
+// "set"/"absent" — the reason this line exists is diagnosis, and a message that carries
+// the credential into a log is a worse bug than the one it explains. The key's source is
+// the profile, because that is the file the caller would go and edit.
+//
+// Host, port and user are printed because they are the three fields a hand-edited
+// config.toml gets wrong, and every one of them is visible in `ls host` anyway.
+func authSummary(r *RemoteSSH) string {
+	if r == nil {
+		return ""
+	}
+	user := strings.TrimSpace(r.User)
+	if user == "" {
+		user = "(empty — the profile has no `user`)"
+	}
+	key := "absent"
+	if strings.TrimSpace(r.PrivateKey) != "" {
+		key = "set (from the profile's `private_key`)"
+		if strings.TrimSpace(r.KeyPassphrase) != "" {
+			key += ", with a passphrase"
+		}
+	}
+	pw := "absent"
+	if r.Password != "" {
+		pw = "set"
+	}
+	verify := "known_hosts"
+	if r.TrustUnknownHost {
+		verify = "not verified (`trust_unknown_host = true`)"
+	}
+	return fmt.Sprintf("tried user %q at %s with password %s, private_key %s, host key %s",
+		user, remoteDialAddr(r), pw, key, verify)
+}
+
 // buildChainClient establishes the SSH client for r, recursing through r.Jump
 // bastions (ProxyJump). The bastion's *ssh.Client.Dial opens a direct-tcpip
 // channel to the next hop; the SSH handshake to each hop runs over that channel.
@@ -135,7 +174,7 @@ func buildChainClient(ctx context.Context, r *RemoteSSH) (*ssh.Client, []io.Clos
 		}
 		client, err := sshclient.Handshake(ctx, conn, addr, cfg)
 		if err != nil {
-			return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
+			return nil, nil, fmt.Errorf("ssh handshake %s: %w (%s)", addr, err, authSummary(r))
 		}
 		return client, nil, nil
 	}
@@ -154,7 +193,7 @@ func buildChainClient(ctx context.Context, r *RemoteSSH) (*ssh.Client, []io.Clos
 	if err != nil {
 		bastion.Close()
 		sshclient.DrainClosers(subClosers)
-		return nil, nil, fmt.Errorf("ssh handshake %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("ssh handshake %s: %w (%s)", addr, err, authSummary(r))
 	}
 	closers := append(subClosers, io.Closer(bastion))
 	return client, closers, nil

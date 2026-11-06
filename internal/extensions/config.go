@@ -51,14 +51,10 @@ type Extension struct {
 	// Identity. Name is the TOML-encoded file's directory name, not a TOML key,
 	// so it is never stored inside the file it names.
 	Name string `toml:"-"`
-	// THERE IS NO kind FIELD, and its absence is a decision. It used to be a label
-	// — "mcp", "skill", "prompt" — that changed nothing at runtime: capabilities
-	// come from what the template declares (command, url, paths, forwards, mode),
-	// Validate never checked it, and PresetNotes already chose the recipe by the
-	// declared shape rather than the label. A field that only misleads a reader into
-	// thinking there are three kinds of extension, when there is one, is worse than
-	// no field: it makes an agent pick a category instead of writing down what it
-	// wants to happen.
+	// CAPABILITIES COME FROM WHAT THE TEMPLATE DECLARES, never from a label:
+	// command, url, paths, forwards and mode are the whole vocabulary. A template
+	// says what it wants to happen rather than which category it belongs to, which
+	// is why there is no classification field to fill in.
 	Target string `toml:"target,omitempty"` // legacy single-target profile name, or "internal"
 	// Targets defines the hosts this extension runs on. When provided, each entry
 	// names a host and its host-specific forwards, allowing different targets to bind
@@ -95,13 +91,26 @@ type Extension struct {
 	// IdleTimeout closes the channel after this long with nothing asked of it.
 	//
 	// IT APPLIES TO THE EXTENSIONS THE RECONCILER STARTS ON DEMAND — every enabled
-	// template that declares no forward — and is ignored for one that does: a
-	// listener has no caller whose absence could mean "idle", so a template with a
-	// tunnel is up from startup and stays up (issue #183).
+	// template that is neither resident nor declares a forward — and is ignored for
+	// one that is: a listener has no caller whose absence could mean "idle", so a
+	// resident template is up from startup and stays up (issues #183, #227).
 	//
 	// A string rather than a time.Duration so the file reads the way the flag does
 	// ("10m", "90s"). Empty means DefaultIdleTimeout.
 	IdleTimeout string `toml:"idle_timeout,omitempty"`
+
+	// Resident keeps this extension up for as long as termcp runs, instead of
+	// starting it on demand and reaping it after IdleTimeout.
+	//
+	// THIS IS A DIFFERENT REASON FROM A FORWARD, and it used to have no way to be
+	// said (issue #227). A template that declares a forward is resident because a
+	// listener has no "use" moment to start it; a template with no forward can still
+	// have a duty nobody calls in for — an MCP server holding a WebSocket so it can
+	// push events, a poller writing into a log — and for that one every legal
+	// IdleTimeout eventually killed it, silently, with the only workaround being a
+	// semantic lie like `idle_timeout = "87600h"`. Resident says what those templates
+	// meant: it is started at boot and restarted when it exits.
+	Resident bool `toml:"resident,omitempty"`
 
 	// Capability restriction. Both are whitelists; an empty value means
 	// unrestricted, so a terminal that wants the full surface simply lists nothing.
@@ -206,10 +215,14 @@ func (e *Extension) TargetFor(host string) (TargetDecl, bool) {
 }
 
 // Lazy reports whether the reconciler waits for a caller before bringing this
-// extension up. It does, unless the template declares a forward: a tunnel is a
-// service with no "use" moment to start it, so it is established at startup and
-// kept (issue #183).
+// extension up. It does not when the template is resident, and it does not when it
+// declares a forward: a tunnel is a service with no "use" moment to start it, so it
+// is established at startup and kept (issue #183). `resident = true` is the same
+// promise for a template whose duty is not a listener (issue #227).
 func (e *Extension) Lazy() bool {
+	if e.Resident {
+		return false
+	}
 	targets := e.EffectiveTargets()
 	if len(targets) == 0 {
 		return len(e.Forwards) == 0
@@ -391,16 +404,18 @@ func (e *Extension) Validate() error {
 		if err := validEndpointURL(e.URL); err != nil {
 			return err
 		}
-		// The relay runs inside termcp, so the endpoint is reached from this host
-		// and the channel has to be the in-memory one. On a remote target the name
-		// would be looked up on a machine that has never heard of it, and the
-		// failure would read as a missing command rather than as a template asking
-		// the wrong host to do the work.
-		for _, t := range e.EffectiveTargets() {
-			if !sshconfig.IsInternalName(t.Host) {
-				return fmt.Errorf("url requires target = \"internal\": the relay runs inside termcp, so the endpoint is reached from this host (not from %q)", t.Host)
-			}
-		}
+		// THE TARGET OF A url EXTENSION IS THE MACHINE THE CONNECTION LEAVES FROM (#233).
+		//
+		// When target = "internal", requests leave from this process's own network, so
+		// `http://127.0.0.1:8080` reaches this host's loopback.
+		//
+		// When target names a remote host (e.g. `target = "prod-box"`), requests leave
+		// from THAT host's network: the in-process bridge dials inside that host's SSH
+		// connection. A URL naming 127.0.0.1 then reaches the remote host's loopback,
+		// and private network addresses (10.x, 192.168.x) are resolved from its side.
+		// No port forward is needed on this machine, no listening port is bound, and
+		// two extensions reaching the same remote service cannot collide.
+		//
 		// The relay speaks HTTP; there is no channel for a pty to own.
 		if e.Mode != "" && e.Mode != "pipe" {
 			return fmt.Errorf("url requires mode=pipe (the bridge speaks a line protocol, not a terminal)")
@@ -412,9 +427,9 @@ func (e *Extension) Validate() error {
 		}
 	}
 	// AN EXTENSION MUST EXPLICITLY DECLARE AT LEAST ONE CAPABILITY.
-	// We no longer rely on kind as a gate: an author (or AI) must declare what the
-	// extension actually does (a command, an mcp url, exposed file paths, port forwards,
-	// or an interactive pty shell). Declaring none of these is an empty useless container.
+	// An author must declare what the extension actually does (a command, an mcp url,
+	// exposed file paths, port forwards, or an interactive pty shell). Declaring none
+	// of these is an empty container.
 	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || e.Mode == "pty"
 	for _, t := range e.Targets {
 		if len(t.Forwards) > 0 {
@@ -428,6 +443,9 @@ func (e *Extension) Validate() error {
 		if err := e.Forwards[i].Validate(); err != nil {
 			return fmt.Errorf("forward #%d: %w", i+1, err)
 		}
+	}
+	if e.Resident && strings.TrimSpace(e.IdleTimeout) != "" {
+		return fmt.Errorf("resident = true and idle_timeout are alternatives: a resident extension is up from startup and stays up, so an idle collection window has nothing to apply to (remove idle_timeout or drop resident = true)")
 	}
 	if _, err := e.IdleTimeoutDuration(); err != nil {
 		return err

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
 
@@ -41,9 +43,21 @@ func TestAClosedChannelExplainsItself(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	res := termCall(t, s, map[string]any{"cmd": "read " + shellID + " --tail 1", "timeout": 2})
-	if !res.IsError {
-		t.Fatal("a closed channel should refuse the read")
+	// Wait for the channel itself to observe the closure, not just the extension's
+	// state map: CloseChildShell is asynchronous, so a read fired the microsecond the
+	// extension removed the id can catch the shell before its dead transition lands
+	// and answer 204 (empty output) rather than 404 (closed).
+	var res *mcpgo.CallToolResult
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		res = termCall(t, s, map[string]any{"cmd": "read " + shellID + " --tail 1", "timeout": 1})
+		if res.IsError {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the closed channel never refused the read: %v", resultText(res))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	text := resultText(res)
 	if !strings.Contains(text, "idle") && !strings.Contains(text, "closed") {

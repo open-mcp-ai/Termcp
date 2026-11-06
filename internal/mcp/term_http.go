@@ -102,8 +102,13 @@ func replyStatus(reply envelope.Reply) int {
 // and a header cannot carry newlines, so the rendering is escaped.
 func writeEnvelope(w http.ResponseWriter, status int, reply envelope.Reply) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if text := reply.Text(); text != "" {
-		w.Header().Set("X-Termcp-Text", escapeHeader(text))
+	// `content:false` declines the rendered projection. Over REST the body is the
+	// JSON one and this header is the rendering, so the same flag drops the header
+	// rather than emptying the reply — one rule, both entrances.
+	if !reply.NoText {
+		if text := reply.Text(); text != "" {
+			w.Header().Set("X-Termcp-Text", escapeHeader(text))
+		}
 	}
 	w.WriteHeader(status)
 	structured := reply.Structured()

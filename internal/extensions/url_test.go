@@ -250,7 +250,7 @@ func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 		URL:     "https://mcp.example.com/mcp",
 		Headers: map[string]string{"X-Api-Key": "sekrit", "X-Tenant": "acme"},
 	}
-	cmd, args := bridgeCommand(e)
+	cmd, args := bridgeCommand(e, "")
 	if cmd != "termcp-mcp-bridge" {
 		t.Errorf("command = %q, want the built-in relay", cmd)
 	}
@@ -265,31 +265,41 @@ func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 	}
 	// Running it twice must produce the identical argv: the headers are a map,
 	// and a walk that rendered them in a different order would look like an edit.
-	if _, again := bridgeCommand(e); strings.Join(again, "\x00") != strings.Join(args, "\x00") {
+	if _, again := bridgeCommand(e, ""); strings.Join(again, "\x00") != strings.Join(args, "\x00") {
 		t.Errorf("rendering is not stable: %v then %v", args, again)
 	}
 }
 
-// An endpoint is reached from termcp's own host, so the channel has to be the
-// in-memory one. A remote target would look the relay's name up on a machine
-// that has never heard of it, and the failure would read as a missing command.
-func TestURLTemplateRequiresInternalTarget(t *testing.T) {
+// THE TARGET OF A url TEMPLATE IS THE MACHINE THE CONNECTION LEAVES FROM (#233),
+// so any profile is accepted: the relay always runs on the loopback channel, and a
+// remote target rides in the argv as `--via`, which makes 127.0.0.1 mean THAT
+// host's loopback. What used to be refused — a remote target — is now the point.
+func TestURLTargetNamesTheEgressMachine(t *testing.T) {
 	e := &Extension{
 		Name: "remote-http", Target: "somewhere", Mode: "pipe",
 		URL: "https://mcp.example.com/mcp",
 	}
 	e.Normalize()
-	err := e.Validate()
-	if err == nil || !strings.Contains(err.Error(), "requires target") {
-		t.Fatalf("err = %v, want a refusal about the target", err)
+	if err := e.Validate(); err != nil {
+		t.Fatalf("a remote target is the egress machine and must validate: %v", err)
 	}
 
-	// The reserved loopback profile is what it accepts — spellings included, since
-	// the name is the only thing that decides which channel the relay runs on.
-	e.Target = " Internal "
-	e.Normalize()
-	if err := e.Validate(); err != nil {
-		t.Fatalf("internal (however spelled) should be accepted: %v", err)
+	// A remote target travels as --via; the loopback one does not need it.
+	if _, args := bridgeCommand(e, "somewhere"); len(args) < 3 || args[1] != "--via" || args[2] != "somewhere" {
+		t.Fatalf("a remote target must ride as --via, got %v", args)
+	}
+	if _, args := bridgeCommand(e, ""); len(args) != 1 || args[0] != e.URL {
+		t.Fatalf("an internal target must not carry --via, got %v", args)
+	}
+
+	// The loopback spelling is still accepted, in every casing — the name is what
+	// decides whether --via is needed at all.
+	for _, spell := range []string{"internal", " Internal ", "INTERNAL"} {
+		e.Target = spell
+		e.Normalize()
+		if err := e.Validate(); err != nil {
+			t.Fatalf("internal (spelled %q) should be accepted: %v", spell, err)
+		}
 	}
 }
 
@@ -336,7 +346,7 @@ func TestURLTemplateAvailableWithoutAnExternalBinary(t *testing.T) {
 	if got.Command != "" {
 		t.Errorf("Command = %q, want empty for a URL template", got.Command)
 	}
-	cmd, args := bridgeCommand(got)
+	cmd, args := bridgeCommand(got, "")
 	if cmd != "termcp-mcp-bridge" || len(args) == 0 || args[0] != mcpURL {
 		t.Fatalf("the plan does not run the relay against the URL: %q %v", cmd, args)
 	}

@@ -103,9 +103,10 @@ var ErrClosed = errors.New("the channel is closed")
 //     searched rather than popped: "the first frame with no id" is a filter, and a
 //     channel can only be drained.
 type Channel struct {
-	url       string
-	transport Transport
-	client    *http.Client
+	url          string
+	transport    Transport
+	client       *http.Client
+	extraHeaders http.Header
 
 	// callGate serialises calls: one call at a time, which is what a request/response
 	// peer wants and what keeps each reply matched to its request.
@@ -236,6 +237,14 @@ const (
 // it would make `mcp open url` mean "connect from termcp" for some callers and
 // "connect from the host" for others, with nothing in the request to tell them apart.
 func Open(ctx context.Context, rawURL string, dial DialFunc) (*Channel, error) {
+	return OpenWithHeaders(ctx, rawURL, dial, nil)
+}
+
+// OpenWithHeaders is Open plus custom HTTP/WS request headers (issue #271):
+// an MCP extension declaring `--headers '{"Authorization":"Bearer ..."}'` supplies
+// its credentials here so they ride on every streamable-HTTP POST, listening GET,
+// and WebSocket dial without wrapping the server in a local bridge.
+func OpenWithHeaders(ctx context.Context, rawURL string, dial DialFunc, headers map[string]string) (*Channel, error) {
 	if dial == nil {
 		return nil, fmt.Errorf("no dialer: a gateway reaches its peer through the session's SSH connection, so a session is required")
 	}
@@ -243,12 +252,21 @@ func Open(ctx context.Context, rawURL string, dial DialFunc) (*Channel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not a URL: %s", rawURL)
 	}
+	var extra http.Header
+	if len(headers) > 0 {
+		extra = make(http.Header)
+		for k, v := range headers {
+			extra.Set(k, v)
+		}
+	}
 	c := &Channel{
-		url:      rawURL,
-		callGate: make(chan struct{}, 1),
-		wait:     make(map[string]chan Framed),
-		done:     make(chan struct{}),
-		log:      newFrameLog(maxEvents*8, 8<<20),
+		url:          rawURL,
+		transport:    WS,
+		extraHeaders: extra,
+		callGate:     make(chan struct{}, 1),
+		wait:         make(map[string]chan Framed),
+		done:         make(chan struct{}),
+		log:          newFrameLog(maxEvents*8, 8<<20),
 	}
 	c.evCond = sync.NewCond(&c.evMu)
 	// The default transport dials from this process. Replacing its DialContext is the
@@ -266,7 +284,7 @@ func Open(ctx context.Context, rawURL string, dial DialFunc) (*Channel, error) {
 		c.transport = WS
 		d := *websocket.DefaultDialer
 		d.NetDialContext = dial
-		conn, _, err := d.DialContext(ctx, rawURL, nil)
+		conn, _, err := d.DialContext(ctx, rawURL, extra)
 		if err != nil {
 			return nil, fmt.Errorf("dial %s: %w", rawURL, err)
 		}
@@ -808,6 +826,9 @@ func (c *Channel) readSSEStream(ctx context.Context, sessionID string) {
 		if err != nil {
 			return
 		}
+		for k, v := range c.extraHeaders {
+			req.Header[k] = v
+		}
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Mcp-Session-Id", sessionID)
 		resp, err := c.client.Do(req)
@@ -918,6 +939,9 @@ func (c *Channel) httpPost(ctx context.Context, frame map[string]any) (*http.Res
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range c.extraHeaders {
+		req.Header[k] = v
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")

@@ -143,7 +143,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 				// carrying Op+Rest, which is what lets the caller resolve it.
 				if derr, ok := err.(*Error); ok {
 					derr.Parsed = len(out.Statements)
-					derr.AfterPayload = trailingPayloadOp(out.Statements)
+					derr.AfterPayload, derr.TrailingSep = trailingPayloadInfo(out.Statements, part.cond)
 				}
 				return nil, err
 			}
@@ -252,19 +252,28 @@ func flattenCond(stmt *syntax.Stmt) []condPart {
 // and the `;` the shell would have accepted is the thing that ended the payload. The
 // reply can say so, but only if the parser leaves a mark here — the failing
 // statement is a bare word (`whoami`) and carries no trace of what preceded it.
-func trailingPayloadOp(stmts []Statement) string {
+func trailingPayloadInfo(stmts []Statement, currentCond string) (name, sep string) {
 	if len(stmts) == 0 {
-		return ""
+		return "", ""
 	}
-	n := stmts[len(stmts)-1].Op
-	op, known := Lookup(n)
+	last := stmts[len(stmts)-1]
+	sep = ";"
+	if last.Background {
+		sep = "&"
+	} else if currentCond != "" {
+		sep = currentCond
+	}
+	op, known := Lookup(last.Op)
 	if !known {
-		return ""
+		return "", sep
 	}
 	if op.hasPayload() {
-		return op.Name
+		return op.Name, sep
 	}
-	return ""
+	if op.takesRestValue(last) {
+		return op.Name + " --" + op.RestValue[0], sep
+	}
+	return "", sep
 }
 
 // parserRefs lists every reference the grammar reports, plus the ones it cannot report.

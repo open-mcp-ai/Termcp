@@ -419,6 +419,10 @@ func TestServer_PtySession(t *testing.T) {
 // ptyExitCommand returns a command line that exits with the given status, and
 // the status it should report.
 func ptyExitCommand(code int) string {
+	// The command runs THROUGH the detected login shell now (see handleSession), so
+	// this is also the check that a native program's status survives the wrapper:
+	// `pwsh -Command 'cmd.exe /c exit 42'` answers 1 unless the line ends in
+	// `exit $LASTEXITCODE`, which CommandLine appends for that family.
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("cmd.exe /c exit %d", code)
 	}

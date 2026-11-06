@@ -40,6 +40,10 @@ function setupShellOnDataUserGate(win, term) {
 /**
  * xterm registers mousedown on the root .xterm and always calls preventDefault() — that cancels the
  * browser default for scrollbar thumb/track. Events from the viewport bubble .xterm → stop there in the gutter only.
+ *
+ * xterm 6 draws its own scrollbar inside .xterm-scrollable-element and handles its own pointer
+ * events, so the native-scrollbar workaround no longer has a target. It is kept because it is
+ * cheap and harmless, and because the scrollbar overlay still sits at the viewport's right edge.
  */
 function attachXtermViewportScrollbarGuard(term) {
   try {
@@ -205,16 +209,6 @@ function connectUIWebSocket() {
             }
             shellStatusSet(win2, j.id, 'ended');
             showTerminalEndedMarker(win2, ch2);
-          } else if (!win2._streamDone) {
-            win2._streamDone = true;
-            try {
-              win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m', function () {
-                shellTermScrollToBottomIfStuck(win2._term, true);
-              });
-            } catch (e2) {
-              try { win2._term.writeln('\r\n\x1b[33m' + t('term.ended') + '\x1b[0m'); } catch (e3) {}
-              shellTermScrollToBottomIfStuck(win2._term, true);
-            }
           }
         }
       } else if (j.type === 'shell_activity') {
@@ -363,11 +357,21 @@ function shellStatusPaint(ch, state) {
   else if (state === 'ai') { label = t('channel.state.ai'); tip = label; }
   else if (state === 'running') { label = t('channel.state.running'); tip = label; }
   else if (state === 'done') { label = t('channel.state.done'); tip = label; }
-  else { label = t('channel.endedTab'); tip = t('session.ended'); }
+  else {
+    label = t('channel.endedTab');
+    tip = t('session.ended');
+    el.setAttribute('data-i18n-title', 'session.ended');
+  }
   el.textContent = label;
   el.className = 'shell-channel-tab-state shell-state-' + state;
   el.style.display = '';
   el.title = tip;
+  /* Only the ended chip's tooltip has a catalog key: the live states' tips are
+     their own label, which is already translated when the chip is painted, and
+     stamping a data-i18n hook on them would need one key per state. The ended
+     tip is the sentence a reader hunts for (“会话已结束”), so it gets the hook
+     and follows a language switch even while the chip sits untouched. */
+  if (state !== 'ended') el.removeAttribute('data-i18n-title');
   /* The page-level reaction is derived from these same states, so it is
      repainted here rather than pushed twice for one event. Guarded because this
      function is extracted and executed on its own by the status-machine test. */
@@ -792,14 +796,43 @@ function scheduleShellRemoteResize(win, term, termEl, optSid) {
 }
 
 /**
- * Fit columns to .xterm-viewport width (scrollbar-aware), align cell size with .xterm-screen; when syncRemote, queue PTY resize over WebSocket.
+ * Fit columns to the box xterm can actually paint in, then queue a PTY resize.
+ *
+ * xterm 6 wraps `.xterm-screen` in `.xterm-scrollable-element` and draws its scrollbar as an
+ * overlay inside that wrapper, so the scrollbar no longer shrinks the viewport: the wrapper's
+ * client width is the full box and the overlay covers the last ~14px of it. Reserving that
+ * gutter here (the same 14px the official fit addon uses) is what keeps the last column of text
+ * from sitting underneath the slider. Older builds shrink `.xterm-viewport` instead, so its
+ * client width is used when the wrapper is absent.
  * @returns {boolean} true if term.resize ran (grid changed).
  */
+/**
+ * Width the xterm scrollbar overlay covers on the right of its wrapper.
+ *
+ * Read from the live element rather than assumed: the overlay is hidden (`pointer-events: none`,
+ * opacity 0) when there is nothing to scroll, and a hidden element still reports its width, so
+ * measuring it is stable in both states. Falls back to the 14px default xterm's own fit addon uses.
+ */
+function scrollableGutterWidth(scrollable) {
+  var sb = scrollable && scrollable.querySelector('.scrollbar.vertical');
+  var w = sb ? sb.offsetWidth : 0;
+  return w > 0 ? w : 14;
+}
+
 function fitShellTerminal(term, container, win, syncRemote) {
   if (!container || !container.isConnected || !term) return false;
-  var vp = term.element && term.element.querySelector('.xterm-viewport');
+  var root = term.element;
+  var scrollable = root && root.querySelector('.xterm-scrollable-element');
+  var vp = root && root.querySelector('.xterm-viewport');
   var w = container.clientWidth;
-  if (vp && vp.clientWidth > 0) w = vp.clientWidth;
+  if (scrollable) {
+    var sbW = scrollableGutterWidth(scrollable);
+    var inner = scrollable.clientWidth;
+    if (inner > 0) w = inner;
+    w -= sbW;
+  } else if (vp && vp.clientWidth > 0) {
+    w = vp.clientWidth;
+  }
   var h = container.clientHeight;
   if (w <= 0 || h <= 0) return false;
   var options = term.options || {};
@@ -854,26 +887,6 @@ function fitShellTerminal(term, container, win, syncRemote) {
   return changed;
 }
 
-
-/** First wheel (capture) or first viewport scroll: syncScrollArea — cold start can desync native scroll from buffer. */
-function attachXtermViewportFirstInteractionSync(term) {
-  try {
-    var el = term && term.element;
-    if (!el || el._termcpFirstInteractionSync) return;
-    el._termcpFirstInteractionSync = true;
-    var kick = function () {
-      try {
-        var c = term._core;
-        if (c && c.viewport && typeof c.viewport.syncScrollArea === 'function') {
-          c.viewport.syncScrollArea();
-        }
-      } catch (e) {}
-    };
-    el.addEventListener('wheel', kick, { passive: true, capture: true, once: true });
-    var vp = el.querySelector('.xterm-viewport');
-    if (vp) vp.addEventListener('scroll', kick, { passive: true, once: true });
-  } catch (e0) {}
-}
 
 /**
  * Terminal bytes arrive as a JSON string; xterm wants a Uint8Array.
@@ -950,17 +963,17 @@ function bootstrapShellFullHistory(sessionId, term) {
   return one().catch(function () { return Promise.resolve(); });
 }
 
-/** True if xterm viewport is at/near bottom — used only before following new output with scrollToBottom. */
-function xtermViewportNearBottom(term, marginPx) {
-  marginPx = marginPx == null ? 48 : marginPx;
+/** True if the terminal is at/near the live tail — used only before following new output.
+ *
+ * Reads xterm's buffer model (`viewportY` / `baseY`), not the DOM: xterm 6 moved scrolling onto
+ * a custom scrollable element, where `.xterm-viewport.scrollTop/scrollHeight` stay frozen at zero.
+ * Both fields are line counts, so the margin is in rows. */
+function xtermViewportNearBottom(term, marginRows) {
+  marginRows = marginRows == null ? 2 : marginRows;
   try {
-    var el = term && term.element && term.element.querySelector('.xterm-viewport');
-    if (!el) return true;
-    var sh = el.scrollHeight;
-    var ch = el.clientHeight;
-    var st = el.scrollTop;
-    if (sh <= ch + 2) return true;
-    return st + ch >= sh - marginPx;
+    var buf = term && term.buffer && term.buffer.active;
+    if (!buf) return true;
+    return buf.viewportY >= buf.baseY - marginRows;
   } catch (e) {
     return true;
   }
@@ -969,18 +982,17 @@ function xtermViewportNearBottom(term, marginPx) {
 /** After remote writes: scroll to bottom only if user was already at bottom (sticky tail). */
 function shellTermScrollToBottomIfStuck(term, flush) {
   if (!term) return;
-  if (!xtermViewportNearBottom(term, 64)) return;
+  if (!xtermViewportNearBottom(term, 2)) return;
   shellTermScrollToBottom(term, flush);
 }
 
-/** The sticky-tail check, coalesced to at most one run per animation frame per
- *  terminal.
+/**
+ * The sticky-tail check, coalesced to at most one run per animation frame per
+ * terminal.
  *
- * `xtermViewportNearBottom` reads scrollHeight/clientHeight/scrollTop, so
- *  calling it once per write forces a layout flush per chunk — and a burst of
- *  output arrives as several writes inside one task. The frame is the right
- *  granularity anyway: the user sees at most one painted scroll position per
- *  frame, so checking more often than that can only cost work. */
+ * The buffer read is cheap, but a burst of output arrives as several writes
+ * inside one task and the user sees at most one painted scroll position per
+ * frame, so checking more often than that can only cost work. */
 function shellTermScrollToBottomSoon(term) {
   if (!term) return;
   if (term._stbSoonRaf) return;
@@ -990,27 +1002,15 @@ function shellTermScrollToBottomSoon(term) {
   });
 }
 
-/** Scroll to buffer bottom using xterm APIs only (do not set viewport scrollTop — it desyncs from the renderer). */
+/** Scroll to buffer bottom through the public API. */
 function shellTermScrollToBottom(term, flush) {
   if (!term) return;
   function apply() {
-    try {
-      var core = term._core;
-      if (core && core.viewport && typeof core.viewport.syncScrollArea === 'function') {
-        core.viewport.syncScrollArea();
-      }
-    } catch (e0) {}
     try {
       if (typeof term.scrollToBottom === 'function') {
         term.scrollToBottom();
       }
     } catch (e) {}
-    try {
-      var core2 = term._core;
-      if (core2 && core2.viewport && typeof core2.viewport.syncScrollArea === 'function') {
-        core2.viewport.syncScrollArea();
-      }
-    } catch (e1) {}
   }
   function applyTwice() {
     apply();
@@ -1031,8 +1031,8 @@ function shellTermScrollToBottom(term, flush) {
 }
 
 /**
- * After chunked history paint: align viewport scroll metrics + one PTY sync.
- * ResizeObserver is not active during bootstrap — registering fit/resize while term.write streams history desyncs native scroll from xterm's buffer.
+ * After chunked history paint: fit once so the grid matches the box the history
+ * was laid out for, then let the renderer settle before the PTY resize is sent.
  */
 function shellTermSyncViewportAfterBufferChange(term, termEl, win) {
   if (!term) return;
@@ -1040,19 +1040,10 @@ function shellTermSyncViewportAfterBufferChange(term, termEl, win) {
   try { shellTermScrollToBottom(term, true); } catch (e1) {}
   requestAnimationFrame(function () {
     try {
-      var c = term._core;
-      if (c && c.viewport && typeof c.viewport.syncScrollArea === 'function') c.viewport.syncScrollArea();
-    } catch (e2) {}
-    try {
       if (typeof term.refresh === 'function') term.refresh(0, term.rows - 1);
     } catch (e3) {}
     requestAnimationFrame(function () {
-      try {
-        var c2 = term._core;
-        if (c2 && c2.viewport && typeof c2.viewport.syncScrollArea === 'function') c2.viewport.syncScrollArea();
-      } catch (e4) {}
       try { fitShellTerminal(term, termEl, win, true); } catch (e5) {}
-      attachXtermViewportFirstInteractionSync(term);
     });
   });
 }

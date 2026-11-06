@@ -134,10 +134,12 @@ var termArgDecls = []termArgDecl{
 			"Work that outlives a call belongs on something that outlives it: `open <session> --argv <cmd>` (a pipe reports its exit), a pipeline (a copy answers with a task you poll).", maxWaitSeconds),
 	},
 	{
-		Name:    "bytes_limit",
-		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Bytes of the slice; 0 = channel only, else at least %d. Default %d; %d is the size to stay under.", minWindowBytes, defaultBytesLimit, windowBytesMax),
-		DocNote: fmt.Sprintf("Bytes per slot (default %d; `0` = the channel only, no bytes, otherwise at least %d — a window narrower than one character cannot return one). %d is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply", defaultBytesLimit, minWindowBytes, windowBytesMax),
+		Name: "bytes_limit",
+		Kind: argNumber,
+		Desc: fmt.Sprintf("Bytes of the slice; 0 = channel only, else at least %d. Default %d; %d is the size to stay under.", minWindowBytes, defaultBytesLimit, windowBytesMax),
+		DocNote: fmt.Sprintf("Bytes per slot (default %d; `0` = the channel only, no bytes, otherwise at least %d — a window narrower than one character cannot return one). %d is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.\n"+
+			"Two paths read `0` as \"name the object, consume nothing\" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).\n"+
+			"A FRAME IS EXEMPT FROM THE WINDOW, because half a frame is not a smaller answer: `read <peer> --frame` and `call <peer>` inline a frame when it fits and answer a receipt (`Frame: N`, decodable with `read <peer> --at N`) when it does not, with `0` meaning the default %d rather than none; a `mcp recv` never reads with a window under %d, so a smaller number is raised to it. Everywhere else this is the per-slot ceiling and a reply that exceeded it says so (`Truncated`, `Content-Range`).", defaultBytesLimit, minWindowBytes, windowBytesMax, defaultBytesLimit, minRecvWindow),
 		Def:     defaultBytesLimit,
 		DefText: strconv.Itoa(defaultBytesLimit),
 		Min:     0,
@@ -176,19 +178,10 @@ var termArgDecls = []termArgDecl{
 			"More is another look: `read <channel> --cursor <n>`.", windowBytesMax),
 	},
 	{
-		Name:    "on_time_overflow",
-		Kind:    argEnum,
-		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
-		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
-		Def:     "truncate",
-		DefText: "truncate",
-	},
-	{
 		Name:    "on_bytes_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
+		Desc:    "truncate = show part, fold = withhold it.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -197,7 +190,7 @@ var termArgDecls = []termArgDecl{
 		Name:    "on_lines_overflow",
 		Kind:    argEnum,
 		Enum:    []string{"truncate", "fold"},
-		Desc:    "truncate = show part, fold = withhold and read it yourself.",
+		Desc:    "truncate = show part, fold = withhold it.",
 		DocNote: "`truncate` (default) or `fold` (return no bytes this time)",
 		Def:     "truncate",
 		DefText: "truncate",
@@ -207,6 +200,21 @@ var termArgDecls = []termArgDecl{
 		Kind:    argBool,
 		Desc:    "Add a 'usage' header line. Default: false.",
 		DocNote: "Attach each directive's usage line once per reply",
+		Def:     false,
+		DefText: "false",
+	},
+	{
+		Name: "dry_run",
+		Kind: argBool,
+		// PREVIEW ONLY (#241).
+		//
+		// Parse cmd, expand $1/$NAME and aliases, validate statement grammar, then
+		// stop BEFORE dispatch. Connects to nothing, writes no stdin, sends no
+		// bytes, creates no session, and records no audit span. It is a static health
+		// check for a caller or a benchmark harness, answering each statement's
+		// expanded form with Verdict: valid-syntax or invalid.
+		Desc:    "Preview: parse, expand, validate cmd, then stop before dispatch. No bytes sent. Default: false.",
+		DocNote: "Parse and validate `cmd` without executing. Substitutes `$1`/`$NAME` and expands aliases, then stops before dispatch: connects to nothing, creates no sessions, produces no audit spans, and bounds no wait. Each statement reports `Verdict: valid-syntax` or `invalid`. Secrets are never echoed in `Expanded:`. **Off by default**",
 		Def:     false,
 		DefText: "false",
 	},
@@ -228,15 +236,30 @@ var termArgDecls = []termArgDecl{
 		// text instead; `content_only` was the same intent spelled backwards, which
 		// made "no duplicate" the thing you had to ask for. One positive flag with the
 		// quiet default says what it does: pass true and you get the JSON twin.
-		Desc:    "Also send structuredContent. Default: false.",
+		Desc:    "Include JSON projection. Default: false.",
 		DocNote: "Also send the JSON projection as `structuredContent`. **Off by default**: the two projections carry the same bytes, so the JSON copy is a duplicate a human sees on every call. Pass `true` for a client that reads structured content",
 		Def:     false,
 		DefText: "false",
 	},
 	{
+		Name: "content",
+		Kind: argBool,
+		// THE OTHER DIRECTION OF THE SAME SWITCH, and the reason it is separate: a
+		// program consumer (a bot, a CI job) parses structuredContent and never reads
+		// the rendering, so it pays for a duplicate on every call. `content:false`
+		// declines that half.
+		//
+		// Declining BOTH is refused: a call that asks for neither projection has
+		// declined every byte of the reply, which is a mistake spelled as a request.
+		Desc:    "Include text. Default: true.",
+		DocNote: "Send the rendered text projection. **On by default**. `content:false` with `structured_content:true` answers with `structuredContent` only; `content:false` alone is refused, because a reply with neither projection carries nothing",
+		Def:     true,
+		DefText: "true",
+	},
+	{
 		Name:    "args",
 		Kind:    argStringArray,
-		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable, leave only the reference in cmd. DSL and shell are never mixed.",
+		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable and leave only the reference in cmd, which is parsed as DSL.",
 		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",
@@ -346,7 +369,6 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	collect(readNumberArg(args, "bytes_limit", &bytesLimit))
 	collect(readNumberArg(args, "lines_limit", &linesLimit))
 	collect(readNumberArg(args, "total_bytes_limit", &totalLimit))
-	collect(readEnumArg(args, "on_time_overflow", &w.OnTimeOverflow))
 	collect(readEnumArg(args, "on_bytes_overflow", &w.OnBytesOverflow))
 	collect(readEnumArg(args, "on_lines_overflow", &w.OnLinesOverflow))
 	collect(readBoolArg(args, "learn_mode", &w.LearnMode))
@@ -392,6 +414,20 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	if err := readBoolArg(args, "structured_content", &w.StructuredContent); err != nil {
 		return termArgs{}, err
 	}
+	if err := readBoolArg(args, "dry_run", &w.DryRun); err != nil {
+		return termArgs{}, err
+	}
+	// `content` declines the OTHER half. A program consumer that parses structuredContent
+	// never reads the rendering, so it pays for a duplicate it discards; declining both
+	// projections is refused rather than answered with nothing at all.
+	content := true
+	if err := readBoolArg(args, "content", &content); err != nil {
+		return termArgs{}, err
+	}
+	if !content && !w.StructuredContent {
+		return termArgs{}, &directive.Error{Msg: "content:false with structured_content:false asks for a reply that carries no bytes at all: both projections are declined. Send `structured_content:true` for the JSON form alone, or leave `content` on"}
+	}
+	w.NoText = !content
 	vars, derr := readNamedArg(args, "vars")
 	if derr != nil {
 		return termArgs{}, derr

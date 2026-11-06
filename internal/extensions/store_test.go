@@ -81,7 +81,8 @@ func TestStoreSaveRejectsInvalid(t *testing.T) {
 }
 
 // TestStoreForwardNormalization pins the conventional defaults: a local forward
-// reaches localhost on the target, a remote forward binds all interfaces.
+// reaches localhost on the target, a remote forward binds all interfaces. A single
+// template may mix all three forward kinds.
 func TestStoreForwardNormalization(t *testing.T) {
 	s := newTestStore(t)
 	ext := &Extension{
@@ -105,6 +106,25 @@ func TestStoreForwardNormalization(t *testing.T) {
 	// caller makes with --local-host, not something a missing field decides.
 	if got.Forwards[1].LocalHost != "127.0.0.1" {
 		t.Errorf("remote forward default LocalHost = %q, want 127.0.0.1", got.Forwards[1].LocalHost)
+	}
+
+	// A stdio MCP server plus a tunnel in ONE template: this is the shape #235 says
+	// the help text never mentions, and it must stay supported rather than merely
+	// happening.
+	mixed := Extension{Name: "mixed", Target: "mac", Mode: "pipe", Command: "example-mcp-server", Forwards: []ForwardDecl{
+		{Kind: ForwardLocal, LocalPort: 8443, RemoteHost: "127.0.0.1", RemotePort: 443},
+		{Kind: ForwardRemote, LocalPort: 8080, RemoteHost: "127.0.0.1", RemotePort: 80},
+		{Kind: ForwardDynamic, LocalPort: 1080},
+	}}
+	if err := mixed.Validate(); err != nil {
+		t.Fatalf("an MCP server with mixed forward kinds must validate: %v", err)
+	}
+	if mixed.Lazy() {
+		t.Error("a template with forwards must be resident, not lazy")
+	}
+	mixed.Normalize()
+	if mixed.Forwards[0].RemoteHost != "127.0.0.1" || mixed.Forwards[1].LocalHost != "127.0.0.1" {
+		t.Errorf("mixed forward defaults not normalized: %+v", mixed.Forwards)
 	}
 }
 

@@ -42,11 +42,36 @@ func TestAPtyOpenWaitsForTheShellToSpeak(t *testing.T) {
 // would be a lie — `--argv sleep 30` prints nothing for thirty seconds by design.
 func TestAPipeOpenDoesNotWait(t *testing.T) {
 	s := newTestServer(t)
+
+	// THE BOUND IS RELATIVE, NOT ABSOLUTE (see docs/agents/testing.md).
+	//
+	// An absolute budget here measures the machine, not the rule: `connect --argv`
+	// has to create a session and start a process, which is ~220ms on a laptop and
+	// can be several times that on a loaded runner — so a fixed 300ms says "the
+	// pipe open waited" when what it really measured was a slow machine. The rule
+	// is that a pipe open does not wait for OUTPUT, and that is what the comparison
+	// below isolates: the same open is performed twice, once in each mode, and the
+	// pipe must not be the slower of the two.
+	//
+	// `cat` prints nothing until it is written to, so if the open waited for output
+	// it would sit out the whole ready budget. A pty open, which legitimately does
+	// wait for its shell to answer, is the yardstick.
+	ptyStart := time.Now()
+	pty := openPty(t, s)
+	ptyElapsed := time.Since(ptyStart)
+	defer termText(t, s, map[string]any{"cmd": "close " + pty})
+
 	start := time.Now()
 	h := openPipe(t, s, "cat")
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
-	if elapsed := time.Since(start); elapsed > shellReadyBudget {
-		t.Fatalf("a pipe open waited %v for output that a pipe does not need to produce", elapsed)
+	elapsed := time.Since(start)
+
+	// Generous slack: process startup dominates both numbers and varies run to run,
+	// so this asks only that the pipe did not wait out a ready budget ON TOP of the
+	// same startup the pty paid for.
+	if elapsed > ptyElapsed+shellReadyBudget {
+		t.Fatalf("a pipe open waited %v where the same pty open took %v: a pipe does not wait for output",
+			elapsed, ptyElapsed)
 	}
 
 	// And its input still arrives: a pipe buffers, so the bytes are there when the

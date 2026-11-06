@@ -146,9 +146,25 @@
   .session-tabbar-tile { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; white-space: nowrap; }
   .session-tabbar-tile:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
   .session-tabbar-tile.active { background: var(--term-accent); border-color: var(--term-accent); color: var(--term-bg); }
-  .session-tabbar-select { height: 26px; padding: 0 4px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; }
+  /* The arrangement key. It wears the dock's key anatomy (26px, square, surface
+     plate) and drops the same panel as the header's language menu — the native
+     <select> it replaces dropped the OS's list into a terminal-palette bar. */
+  .session-tabbar-strategy { position: relative; display: inline-flex; align-items: center; }
+  .session-tabbar-select { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px; border: 1px solid var(--term-border-2); border-radius: 0; background: var(--term-surface); color: var(--term-fg-muted); cursor: pointer; font-size: 11px; font-family: inherit; }
   .session-tabbar-select:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
-  .session-tabbar-select option { color: var(--term-fg); }
+  .session-tabbar-select[aria-expanded="true"] { color: var(--term-fg-white); border-color: var(--term-border-hover); background: var(--term-bg); }
+  /* A caret, so the key reads as a menu rather than a button that happens to
+     change the layout. Drawn with borders: no glyph to load, and it inherits
+     currentColor through hover and expanded states. */
+  .session-tabbar-caret { width: 0; height: 0; flex-shrink: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: .7; }
+  /* The panel opens UPWARD. The dock is the page's last row, so a list dropping
+     below the trigger would open off the bottom of the window — which is why
+     the connected-clients panel beside it is bottom-anchored too, and why this
+     overrides .lang-menu's downward default instead of inheriting it. */
+  .session-tabbar-menu { top: auto; bottom: calc(100% + 4px); right: 0; left: auto;
+    /* .lang-menu casts its shadow downward, which is right for a list that drops
+       below its trigger and wrong for one that rises above it. */
+    box-shadow: 0 -8px 24px var(--shadow-dropdown); }
   .shell-window { position: fixed; width: 640px; height: 480px; min-width: 320px; min-height: 240px; background: var(--term-bg); border-radius: 8px; box-shadow: 0 8px 32px var(--term-black-4); border: 1px solid var(--term-border); display: flex; flex-direction: column; overflow: hidden; z-index: var(--z-window); }
   .shell-window-header { display: flex; justify-content: space-between; align-items: stretch; gap: 0; padding: 0 8px 0 0; border-bottom: 1px solid var(--term-border); background: var(--term-surface); cursor: move; user-select: none; flex-shrink: 0; z-index: var(--z-win-header); min-height: 34px; flex-wrap: nowrap; }
   .shell-window-title-cluster { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 8px; }
@@ -301,16 +317,13 @@
     50% { opacity: 1; transform: scaleX(1); }
   }
   .shell-terminal-wrap .xterm { height: 100%; min-height: 0; }
-  /* xterm appends .xterm-screen after .xterm-viewport (siblings). The screen layer stacks on top
-     of the viewport and otherwise blocks the native scrollbar. Inset the screen so the gutter
-     receives pointer events (scrollbar drag / track click). */
+  /* xterm 6 wraps the screen in `.xterm-scrollable-element` and draws the scrollbar as an
+     overlay inside that wrapper, so the screen must fill the wrap and nothing may be absolutely
+     positioned (a positioned screen collapses the wrapper to zero height). Column fitting
+     reserves the scrollbar gutter in JS instead — see fitShellTerminal. */
   .shell-terminal-wrap .xterm .xterm-screen {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    right: 14px;
-    width: auto;
+    width: 100%;
+    height: 100%;
   }
   /* Glass chrome and a translucent terminal.
 
@@ -340,22 +353,16 @@
 .shell-window-footer, .shell-window-footer .shell-channel-tabs { background: transparent; }
   .shell-terminal-wrap .xterm,
   .shell-terminal-wrap .xterm .xterm-viewport,
+  .shell-terminal-wrap .xterm .xterm-scrollable-element,
   .shell-terminal-wrap .xterm .xterm-screen {
     background: transparent !important;
   }
   .shell-terminal-wrap .xterm .xterm-viewport {
     background-color: transparent !important;
-    scrollbar-color: var(--term-border-4) transparent;
   }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--term-border-4);
-    border-radius: 4px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-  }
-  .shell-terminal-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--term-fg-faint); background-clip: content-box; }
+  /* xterm 6 paints its own scrollbar (`.xterm-scrollable-element > .scrollbar > .slider`) and
+     colours it from the terminal theme; the old native-scrollbar rules targeted a viewport that
+     no longer scrolls. The equivalent colours live in termcpXtermTheme(). */
   /* Floating "back to latest output" button (offset upward so it never covers the
      bottom-right resize grip, and leftward so it clears the rail's reserved column
      — the button belongs to the terminal's own box, and the rail occupies its right

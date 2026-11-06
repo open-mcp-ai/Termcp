@@ -89,8 +89,8 @@ var ops = []Op{
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "ext"},
 		Flags: []string{"pipe", "pty", "argv", "name", "on-exit:enum=keep,close", "rows:number", "cols:number",
 			"size:geometry", "bind-host", "remote-host", "remote-port:number", "local-port:number",
-			"local-host", "dynamic", "remote", "target"},
-		Valueless: []string{"pipe", "pty", "dynamic", "remote"},
+			"local-host", "dynamic", "remote", "target", "all"},
+		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
 		Usage:     "open <session> [--argv <cmd> [--pty]]   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
@@ -102,7 +102,7 @@ var ops = []Op{
 		Detail:    lsDetail},
 	{Name: "get", Core: true, Kind: KindFlags, Target: true,
 		Kinds: []string{"file", "host", "ext", "protocol", "cdp", "mcp", "jrpc", "task"},
-		Flags: []string{"op"},
+		Flags: []string{"op", "all"},
 		// `get <s> cdp:1 protocol <Domain>` and `get <s> mcp:1 tools <name>`: the
 		// word after the key is a NAME the peer understands, not grammar of ours.
 		DataArgs: 1,
@@ -115,7 +115,8 @@ var ops = []Op{
 		// container. A declared kind is recognised, and the dispatcher's default branch
 		// then answers with what to write instead.
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
-		Flags: []string{"grace:number", "forward-id", "channel"},
+		Flags:     []string{"grace:number", "forward-id", "channel", "later"},
+		Valueless: []string{"later"},
 		RetiredFlags: map[string]string{
 			"force": "--force is gone. `close` stops and keeps the record, `rm` erases it.",
 		},
@@ -157,9 +158,9 @@ var ops = []Op{
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
 		Flags: []string{"cursor:number", "since:number", "at:number", "offset:number", "bytes:number",
-			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "grep", "grep-limit:number",
-			"frame", "encoding"},
-		Valueless: []string{"raw", "frame"},
+			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
+			"frame", "encoding", "mode"},
+		Valueless: []string{"raw", "lines", "frame"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N] [--grep RE]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
@@ -196,16 +197,9 @@ var ops = []Op{
 			"default-shell", "default-mode", "default-approval",
 			"jump-host", "jump-user", "jump-port", "jump-password", "jump-private-key", "jump-key-passphrase",
 			"source", "target", "targets", "command", "args", "url", "headers", "allow", "paths",
-			"notes", "enabled", "forwards", "link-path", "mode", "op", "idle-timeout",
+			"notes", "enabled", "resident", "forwards", "link-path", "mode", "op", "idle-timeout",
 			"template", "values"},
-		// THE LABEL IS RETIRED, NOT MERELY IGNORED. An extension used to take a
-		// --kind (mcp/skill/prompt) that changed nothing at runtime: what it does is
-		// already in --command, --url, --paths, --forwards and --mode. Accepting the
-		// flag and dropping it would let a caller believe they had chosen a behaviour.
-		RetiredFlags: map[string]string{
-			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
-		},
-		Valueless: []string{"trust-unknown-host", "default-approval", "enabled"},
+		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "create host|ext|alias <name> [flags]   |   create <session> file <path> [--target <path-it-points-at> [--op link]]",
 		Detail:    createDetail + "\n\n" + hostFileFormat},
@@ -216,11 +210,8 @@ var ops = []Op{
 			"default-shell", "default-mode", "default-approval",
 			"jump-host", "jump-user", "jump-port", "jump-password", "jump-private-key", "jump-key-passphrase",
 			"target", "targets", "command", "args", "url", "headers", "allow", "paths", "notes", "enabled",
-			"forwards", "restart", "idle-timeout", "template", "values"},
-		RetiredFlags: map[string]string{
-			"kind": "--kind is gone: an extension is what it declares. Use --command (or --url) for an MCP server, --paths for a read-only file window, --mode pty for a terminal.",
-		},
-		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "restart"},
+			"forwards", "restart", "resident", "idle-timeout", "template", "values"},
+		Valueless: []string{"trust-unknown-host", "default-approval", "enabled", "restart", "resident"},
 		RestValue: []string{"args"},
 		Usage:     "edit host|ext|alias <name> [flags]",
 		Detail:    editDetail},
@@ -272,8 +263,9 @@ const notifyDetail = `Toasts + a system notification on every open Web UI page; 
 session's card. Call it BEFORE asking the human for anything — password, sudo,
 MFA, passphrase, confirmation, approval, a choice, interactive input — and when
 a long task ends or fails. Blocking asks: --level warn|error --sticky. Once you
-have asked, WAIT: never poll, guess or fake an answer. A reply with no open page
-was delivered to nobody, so say the ask in your own reply too. Defaults: --level
+have asked, wait for the person's reply: a toast has no acknowledgement signal, so
+polling cannot tell you whether anyone has seen it. A reply with no open page was
+delivered to nobody, so say the ask in your own reply too. Defaults: --level
 info; the toast lasts 10 seconds unless --sticky.
 
 PUT THE ACTION IN --title. The OS notification layer collapses long text: only the
@@ -286,7 +278,7 @@ DELIVERED IS NOT ACKNOWLEDGED. The reply's delivered count is how many open page
 the toast reached. It does not mean a human looked: Do Not Disturb, a collapsed
 notification group and a locked screen all leave delivered at 1 while nobody has
 read anything. There is no acknowledgement to wait on. If the answer matters,
-also say it in your own reply, which reaches the human wherever they actually are.
+say it in your own reply too, which reaches the human wherever they are.
 
 --for N is the toast's lifetime in seconds; --sticky overrides it to "until
 dismissed". A sticky toast is the right choice for a blocking ask: it stays on the
@@ -386,11 +378,9 @@ link's time, not in milliseconds, and a call that waited for it would be killed
 partway by whatever watchdog is in front of you. get task <id> waits, and
 reports progress while it runs.
 
-| ANYWHERE ELSE IS REFUSED, and the reason is that it already means something one
-layer down: inside a payload it belongs to the REMOTE SHELL. run h:1 $1 with args
-["ls | wc -l"] is a shell pipeline. Only read | write is a termcp pipeline, so
-every other pairing is an error naming the rule rather than a guess about which of
-the two you meant.
+| belongs to the next layer: inside a shell payload, run h:1 $1 with args
+["ls | wc -l"] sends the pipeline to the remote shell. read | write connects
+two termcp file streams. The same symbol serves each grammar at its own layer.
 
 --grep RE FILTERS BEFORE THE WINDOW, AND THE DIFFERENCE MATTERS. The pattern runs
 over this daemon's own transcript — the command already finished, its bytes are
@@ -546,9 +536,10 @@ clock every other directive uses.`
 //   - A pty is a terminal. Whatever runs inside it is the shell's child, not
 //     ours, and a terminal does not report "the command inside me finished".
 //     There is no signal to wait for, so `run` on a pty waits for the OUTPUT to
-//     stop: half a second without a new byte ends the wait. Only a command that
-//     has printed nothing yet has no output to watch, and that wait runs to the
-//     caller's window.
+//     stop: half a second without a new byte ends the wait — or less, once this
+//     channel has measured its own prompt and found it answers faster. Only a
+//     command that has printed nothing yet has no output to watch, and that wait
+//     runs to the caller's window.
 //
 // That is why an empty reply on a pty is not evidence the command produced
 // nothing — it is evidence nothing arrived within the window. Raising `timeout`
@@ -614,6 +605,10 @@ therefore waits for the stream to go STILL — half a second without a new byte
 ends the wait, longer than a pipe needs because a prompt repaints itself — and
 falls back to timeout seconds (default 2) only while the command has printed
 nothing at all, where there is nothing else to watch.
+
+The half second is a STARTING bet, not a constant: a channel that has shown its
+chunks arriving closer together stops paying for a slower shell elsewhere, down to
+a quarter second. It never waits longer than the half second, whatever it sees.
 
 The reply says WHICH of the two happened, because the difference is the whole
 question: Completion: quiet means the stream went quiet (the ordinary ending — the
@@ -713,9 +708,10 @@ A flag value is ONE word for the same reason: a value that needs a space is quot
 unquoted > or | is the shell's, and it would end the value where the shell grammar
 says so rather than where you did. A command line belongs in args.
 
-THE PAYLOAD IS A VARIABLE, NEVER A LINE. run and input take exactly one reference
+THE PAYLOAD IS A VARIABLE, NOT A LINE. run and input take exactly one reference
 ($1, $2, ${10}, or $NAME) and nothing else; the shell text is the value that
-reference carries:
+reference carries. cmd parses directives, while the channel's shell parses this
+payload — keeping the two grammars separate prevents operators being read twice:
 
   cmd: "run h:1 $1"                   args: ["cd /app && make test"]
   cmd: "run h:1 $1"                   args: ["pwd; whoami; date"]
@@ -750,11 +746,12 @@ args: ["make -j8 > /tmp/build.log 2>&1 &"].
 $0 is refused (args is 1-based), and ${N} is the unambiguous spelling at 10 or
 more. Named values ($NAME) and positional ones ($1) are ONE channel under two
 spellings: the POSITION decides how a value is inserted, never which table named it,
-so a $NAME that is the whole payload behaves exactly like a $1 that is. What differs
-between the tables is the RECORD, not the insertion — args and vars are written to the
-server log, secrets is not. (This paragraph used to say vars was "wrong for a command
-line" and quoted the value as data; it was true before the two tables were merged, and
-it contradicted the argument's own documentation for as long as it survived.)
+so a $NAME that is the whole payload behaves exactly like a $1 that is. The tables
+differ only in what is RECORDED: args and vars go to the server log verbatim, and
+secrets records the names alone. (This paragraph used to say vars was "wrong for a
+command line" and quoted the value as data; it was true before the two tables were
+merged, and it contradicted the argument's own documentation for as long as it
+survived.)
 
 EVERY VALUE YOU PASS HAS TO BE NAMED SOMEWHERE IN cmd, and this is checked before
 anything runs. A value nothing references is refused rather than dropped: the
@@ -774,6 +771,12 @@ belongs to the reconciler, which is what keeps it trimmed to the template. So op
 
   open ext boxfs      the extension starts if it is not running, and the reply carries
                       session_id, shell_id and the template's notes
+
+An extension's notes are its operating instructions, and the longest run to a page of
+protocol prose. So this reply is a SUMMARY: the notes stop at their first paragraph and
+a long capability list becomes a count, because what a caller acts on here is the handle
+and the tools, not an essay. '--all' prints the template whole, and
+'get ext <name> --all' is the same document.
 
 An extension that declares no forward is started ON DEMAND. Every call is answered with
 an instance of its own: one that has been silent for the whole idle_timeout is nobody's
@@ -1024,9 +1027,9 @@ const createDetail = `Create saved configuration. It outlives every session and 
   create ext myserver --target internal --command npx --args '-y' 'some-server'
   create alias ll 'ls a1f3'
 
-WRITES ARE GATED. An instance started without --mcp-manage-ssh-configs refuses host
-writes with 403 and names that flag. Do not retry or reword: the switch is not
-something a call can turn on.`
+WRITES ARE GATED. Host writes depend on startup configuration: an instance started
+without --mcp-manage-ssh-configs answers 403 and names that flag, because only the
+operator can enable it. Read-only host operations stay available either way.`
 
 const editDetail = `Change saved configuration.
 
@@ -1079,7 +1082,8 @@ THE TEXT IS A VALUE, like run's command line: a payload here is one reference, s
 anything the terminal should receive — a key sequence, a ;, a quote — travels as
 the value rather than being read as directive syntax.
 
-So pair an input with an explicit enter, or do not use input for a command:
+input only types bytes; the foreground program decides what they mean. run types
+its payload and presses enter, while separate input and key calls suit a TUI:
 
   input h $1; key h enter       type the line, then run it
   key h enter --repeat 2        enter twice (a TUI that confirms with a blank line)
@@ -1104,7 +1108,7 @@ const fileDetail = `Actions and the flags each one uses.
   stat|delete          --remote-path
   mkdir|urls|getwd     --remote-path            (getwd ignores it)
   rename               --from-path --to-path
-  read                 --remote-path --offset --length [--mode text|hex|file]
+  read                 --remote-path --offset --length [--mode text|hex|file] [--raw|--lines]
   write                --remote-path --data --mode text|hex|file
                        --offset is the write position; --length caps it
   replace              --remote-path --old-text --new-text
@@ -1120,7 +1124,10 @@ you read it. Files over 16 MiB are refused: exact replace is an edit, not a copy
 
 --mode MEANS TWO DIFFERENT THINGS, by action. For read and write it is a STRING:
 text, hex, or file ("file" on read means "write the bytes to local_path", which is
-the download half of the API and not reachable from this directive). For
+the download half of the API and not reachable from this directive). Text mode
+escapes newlines so its data fits in one value; --raw preserves them, and --lines
+numbers them from the file's own first line. A NUL byte in a text read is refused
+as binary with the two modes that do work. For
 --action perm --op chmod it is a NUMBER, and the number is DECIMAL, not octal:
 0644 is 420 and 0755 is 493. Writing "0644" there does not fail — it is parsed as
 the decimal value 644, which sets a different (and surprising) permission set, so
@@ -1201,6 +1208,31 @@ template keeps the values, which is what makes an upgrade safe.
 --paths is the path whitelist; a path outside it is refused even when the
 capability is allowed. --forwards declares tunnels that come up and go down with
 the session, as a JSON array of {kind, local_port, remote_host, remote_port}.
+THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
+  - ONE TEMPLATE CAN CARRY BOTH. A forwards list beside --command (or --paths, or
+    --mode pty) is not two extensions: the program runs on the target, the tunnels
+    come up on that same session, and they live and die together. Mixing local,
+    remote and dynamic entries in one list is allowed.
+  - WITH --url, --target NAMES THE MACHINE THE CONNECTION LEAVES FROM. The relay
+    always runs on the loopback channel, but its HTTP requests are dialled from
+    --target's network: with --target internal, http://127.0.0.1:8080 is THIS
+    machine's loopback; with --target prod-box it is prod-box's loopback, reached
+    inside that host's SSH connection. So a remote MCP server needs no tunnel, no
+    --forwards entry and no local port — write the URL as the far host would see it.
+  - ADDING A FORWARD CHANGES WHEN IT RUNS. Without one the extension is lazy:
+    nothing starts until a caller uses it, and it is reclaimed after idle_timeout.
+    With one it is resident from startup and never reclaimed, because a listener
+    has no "use" moment.
+  - RESIDENT WITHOUT FORWARDS (--resident). A template with no tunnel can still
+    carry an unasked-for background duty — an MCP server maintaining a WebSocket
+    to push webhooks, a continuous log sink — that idle collection would kill.
+    --resident starts it at daemon boot, keeps it up, and restarts it if it exits.
+    --resident and --idle-timeout are mutually exclusive.
+  - ORDER IS IDENTITY, AND A PARTIAL FAILURE IS KEPT. Entry i is tracked as entry i
+    across walks, so reordering the list is not cosmetic. A failure at entry 3 does
+    not undo entries 1-2: they stay listening and are recorded, the retry targets
+    only the one that failed, and the extension stays usable for everything the
+    tunnel was not for.
 
 --args is an ARGV WORD LIST, the same grammar --argv uses for pipe/pty: quoting is
 the shell's, and an argument may contain a comma or a space. It takes the REST of
@@ -1225,26 +1257,25 @@ bottom; a name not shown is still addressable, so nothing is out of reach.
 Only a status of available has handles: probing is a connection attempt in
 flight, unavailable has last_failure and next_retry, disabled is parked by its
 author. Take the handle from the LATEST listing after a restart — a restarted
-extension gets a new shell_id. A call the template did not whitelist is a
-forbidden error, not a transient one: do not retry it and do not look for a way
-around it; if you need a capability it does not expose, say so to the user.
+extension gets a new shell_id.
 
-Extensions SHARE the connection: one session serves every enabled extension that
-dials the same host with the same capability set, each driving its own shell_id.
-So several extensions can report the same session_id and different shell_ids —
-address terminal work by shell_id. For the same reason, NEVER close, terminate or
-delete an extension's session: it would take down more than the one you are
-looking at. termcp restarts a dead extension on its own; take the new handle.
+A call the template did not whitelist is refused: the whitelist declares what this
+extension may do, and termcp checks each call against it. Rewording cannot grant a
+missing capability; the author must add it — say so to the user.
+
+Extensions can share one connection when they dial the same host with the same
+capability set; each still has its own shell_id. Several may report one session_id,
+so address terminal work by shell_id. Closing the shared session ends every
+extension on that connection. A dead extension restarts on its own, and the LATEST
+listing carries its new handle.
 
 A template that declares --command: the handle is the SHELL running the server.
 Drive it the way any channel is driven — call <handle> <frame> to write one and wait
 for its reply, or read <handle> --frame to take the next frame off the stream.
 Frames can arrive in pieces — a result with partial_tail_bytes > 0 is an unfinished
-frame, so keep reading the same cursor until a complete JSON object is in hand;
-never parse a partial frame. Only a JSON-RPC message is a frame (an object with id
-or method, or an array of them), so a line of the server's own output that happens
-to hold JSON is reported rather than returned. The server's logs come on stderr, so
-read them with --stream e and they never splice into a frame. Handshake:
+frame, and a partial object has not delivered its fields yet. A frame is a JSON-RPC
+message (object with id or method, or an array); other server output is reported as
+text. Server logs come on stderr; --stream e reads that separate stream. Handshake:
 initialize, then notifications/initialized, then tools/list.
 
 A template that declares --paths: a read-only window onto remote files. It has NO

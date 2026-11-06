@@ -113,9 +113,15 @@
   display: flex; align-items: center; gap: 0;
 }
 /* The trigger is a bare key now: the bar around it owns the border, so this must
-   not draw a second one, and it takes the room the keys do not. */
+   not draw a second one. It holds the glyph and the title word only, and is sized
+   to that content — the filter box rides immediately to its right, beside the
+   title, which is where a reader looks for it. The count and the fold caret are
+   NOT in here any more: they live in `.ext-head-tail` at the bar's right end, so
+   the readout stays where it belongs instead of being dragged left next to the
+   title. (An <input> also cannot live inside a <button> — the button would
+   swallow its keystrokes and fold the column on every character.) */
 .ext-head-bar .ext-fold-btn {
-  flex: 1 1 auto; min-width: 0; height: 100%;
+  flex: 0 0 auto; min-width: 0; height: 100%;
   display: flex; align-items: center; gap: 8px;
   padding: 0 10px;
   border: 0; background: transparent; color: inherit; cursor: pointer;
@@ -126,25 +132,39 @@
 .ext-head-bar .ext-fold-btn:focus-visible {
   outline: none; box-shadow: inset 0 0 0 2px var(--accent-ring);
 }
-/* The column's count, on the header trigger beside its title.
+/* The tail group: the count and the fold caret, together at the bar's right end,
+   between the filter box and the action keys.
+ *
+ * They were inside the fold trigger while it filled the bar. With the filter box
+ * beside the title the trigger is content-sized, and a count inside it would sit
+ * next to the title — the readout drifting left on every window. As a sibling
+ * group this row has ONE auto margin (here), which pins the readout and the caret
+ * to the right edge whatever the middle of the bar does.
+ *
+ * `role=button` + a click handler that presses the real trigger: the pair used to
+ * fold the column because they were inside the button, and that behaviour is kept
+ * rather than silently dropped. */
+.ext-head-tail {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  /* Pushes the right-hand cluster (tail, divider, actions) to the bar's end in
+     the themes WITHOUT the gauge. Cyberpunk moves the push onto the gauge instead
+     — one visible auto margin per theme, or the slack splits in two and the
+     readout drifts off the right edge. */
+  margin-left: auto;
+  padding: 0 6px; height: 100%;
+  cursor: pointer; user-select: none;
+}
+.ext-head-tail:focus-visible {
+  outline: none; box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+/* The column's count, beside the caret in the tail group.
  *
  * It used to be a line of its own above the cards, labelled "Extensions:" — directly
  * under a header that already says "Extensions", which is the same word twice, one
- * row apart. On the header the number belongs to the title, and the body is left to
- * the cards. The archive's count rides its own header the same way.
- *
- * EXACTLY ONE auto margin may sit in this row, and this is it. The shared
- * `.nethub-caret` rule also carries `margin-left: auto` (it is the last item in the
- * hosts and archive headers), so leaving both in place would split the free space
- * between them: measured, the badge sat at 768 while the caret sat at 1174, with a
- * 388px hole in a 1032px bar. Suppressing the caret's push here and letting the badge
- * carry it keeps the pair together at the far end.
- *
- * There is no `[hidden]` sibling fallback, unlike the archive's: this badge never
- * hides — "no extensions" is the state an author needs to see before creating the
- * first one — so the box that carries the push is always laid out. */
+ * row apart. On the header the number belongs to the column, and the body is left
+ * to the cards. The archive's count rides its own header the same way. */
 .ext-head-bar .ext-count-badge {
-  flex: 0 0 auto; margin-left: auto;
+  flex: 0 0 auto; margin-left: 0;
   min-width: 18px; padding: 1px 5px;
   border: 1px solid var(--accent-border); border-radius: 0;
   background: var(--accent-surface); color: var(--accent);
@@ -172,9 +192,6 @@
   border-left: 1px solid var(--border-subtle);
   height: 60%;
 }
-/* Grows to push the group rightwards, so the keys sit against the bar's end
-   whatever the trigger's width turns out to be. */
-.ext-head-actions { margin-left: auto; }
 /* The batch toolbar, stripped of the row box it had when it was a band under the
    title: no padding, no divider, no bottom margin — the bar around it is the box
    now. */
@@ -266,7 +283,7 @@
    the same rotation language as every other fold on this page. */
 .workspace-exts.is-folded .ext-head-actions { display: none; }
 .workspace-exts.is-folded .section-body { display: none; }
-.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts.is-folded .ext-head-tail .nethub-caret { transform: rotate(180deg); }
 .workspace-exts .nethub-caret { transition: transform .2s ease; }
 
 /* Folded, the body is GONE. The shared .section-body.collapsed rule in base.css
@@ -279,7 +296,7 @@
 .workspace-exts.is-folded .ext-head-actions { display: none; }
 /* The caret points the way the plate will move — the same rotation language every
    other fold on this page uses. */
-.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts.is-folded .ext-head-tail .nethub-caret { transform: rotate(180deg); }
 .workspace-exts .nethub-caret { transition: transform .2s ease; }
 
 .workspace-exts .section-body {
@@ -408,19 +425,42 @@
 .sessdock-batch .archive-tick-count { margin-left: 2px; }
 /* The broom sits INSIDE the dock bar, immediately before the window-controls
    cluster — so the vertical divider still marks where arrangement controls begin.
-   No margin of its own: the tab strip absorbs the slack (`.sessdock-tabs` is
-   `flex: 1 1 auto`), which is what puts the broom at the strip's right edge, just
-   left of the line. */
+   It carries its own auto margin: the tab strip's flex once did this job, but the
+   strip is empty whenever no window is open, and an empty strip flexes to zero —
+   which left the broom stranded beside the batch keys while the controls cluster
+   pinned itself to the right edge. Its own auto margin pairs it with the cluster,
+   so both sit at the right edge at any tab count. */
+#dock-close-archived { margin-left: auto; }
 .sessdock-actions {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--term-border-2);
-  /* Pinned right by the strip's growth, not by `margin-left: auto`: with the
-     batch group ordered to the left end, auto margin on both sides would centre
-     this cluster whenever the batch group is empty. The strip absorbs the slack,
-     so the controls sit at the edge whether or not a key is showing. */
+  /* The cluster pins itself to the right edge by default (a fallback for the
+     moment before the JS injects the broom, and for any view with no dock).
+     When #dock-close-archived IS present, that element's margin-left: auto pushes
+     both of them together: the rule below clears this one, so the two keys
+     don't split the slack and strand the broom in the middle of the bar. */
+  margin-left: auto;
 }
+#dock-close-archived ~ .sessdock-actions {
+  margin-left: 0;
+}
+/* The connected-clients trigger, at the bar's far-right end (after the window
+ * controls). It wears the dock's key anatomy rather than the header's: same 26px
+ * height as the arrangement controls beside it, square corners, surface plate.
+ * The label span stays in the markup (the i18n engine and the tooltip rewrite it)
+ * but is not drawn — the trigger is the status dot and its title, and “连接者”
+ * was a word the bar never had room to explain. */
+.sessdock .clients-menu { flex: 0 0 auto; display: inline-flex; align-items: center; }
+.sessdock .clients-btn {
+  height: 26px; width: 26px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--term-border-2); border-radius: 0;
+  background: var(--term-surface); color: var(--term-fg-muted);
+}
+.sessdock .clients-btn:hover { color: var(--term-fg-white); border-color: var(--term-border-hover); }
+.sessdock .clients-label { display: none; }
 /* Empty dock: nothing live is a legal state, and the bar stays rather than
    vanish — it is the page's one place the sessions are listed, so a bar that
    removed itself would leave nothing to say "nothing is running" with. "Empty"
@@ -429,33 +469,25 @@
    note follows the entry count rather than the window count.
    The note is a LABEL, never a key: there is nothing behind it to open, so
    dressing it as a control would promise a list that does not exist. */
-/* The empty note, BETWEEN the batch group and the window controls.
+/* THE EMPTY NOTE IS NOT DRAWN, at any width.
  *
- * It was absolutely positioned across `left: 58px; right: 10px` — full width minus
- * a hard-coded guess at the batch group — which ran it under the window controls at
- * the right end. With no windows open the dock still shows its batch group, its
- * count and its actions cluster, so the note's last words overlapped the X key. Both
- * halves of that guess were wrong: the batch group's width is not a constant (the
- * count appears and disappears inside it), and the note has no reason to reach the
- * right edge at all. It is a sentence standing in for the tabs, so it belongs where
- * the tabs are.
+ * It said "No open windows" across the dock, and both readings of that were wrong.
+ * On a phone the strip is the full width of a two-row bar, so the sentence took a
+ * whole line to say what an empty strip already shows. On a desktop it was a line
+ * of faint mono text in a band that is otherwise keys — decoration in the one row
+ * the user is scanning for controls.
  *
- * In the flow now, in the strip's own slot: `flex: 1 1 auto` where the strip would
- * be, still clear of both key groups, and `min-width: 0` so a long translation
- * ellipsises rather than pushing the controls off the edge. The strip is removed
- * from the flow while this note is up, so nothing has to share the slot. */
+ * The reason it could not simply be removed was the layout: it was the flexible
+ * element that pushed the window controls to the right edge, so deleting it pulled
+ * them left, beside the batch keys. That dependency is gone — `.sessdock-actions`
+ * carries `margin-left: auto` and pins itself to the edge (see above).
+ *
+ * The node still exists and is still painted/removed by paintSessdockEmpty, so the
+ * row's state remains observable in the DOM (the strip's own display is toggled
+ * there too) and the accessible name of an empty dock is not a lie. Only its paint
+ * is suppressed. */
 .sessdock-empty {
-  /* `1 1 auto` against the strip's `1 1 auto` splits the row between an empty
-     tablist and the note. Basis 0 makes the note claim everything the keys leave,
-     which is the strip's own share — the note stands IN FOR the strip here. */
-  flex: 1 1 0%;
-  min-width: 0;
-  display: flex; align-items: center;
-  padding: 0 4px;
-  pointer-events: none;
-  font: 600 .66rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
-  color: var(--text-faint);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: none;
 }
 
 /* ---- The workspace row on a narrow screen -----------------------------
@@ -1255,6 +1287,65 @@
    bars are the same kind of control: a handful of flat verbs over a list that is
    always tickable. Sharing the chip class is what keeps the two from drifting —
    the reason this file no longer has a `.archive-tools` vocabulary of its own. */
+.archive-search {
+  /* The box sits ABOVE the toolbar rather than inside it. The toolbar is four
+     flat verbs sized to their own content; a text field wants every pixel the
+     column has, and putting it in that flex row would leave a filter you can
+     barely read a word in. */
+  flex: 0 0 auto;
+  padding: 0 10px 8px;
+}
+/* When the box rides the extension header bar (beside the column's title): a
+   compact inline field with a fixed width, one small gap from the trigger, and
+   no vertical padding — the bar is its box. It must not grow: the action keys
+   to its right keep their place, and a filter that ate the free space would
+   shove them out from under the pointer. */
+.archive-search.grid-search-inhead {
+  flex: 0 0 auto;
+  width: 170px;
+  /* INSIDE the action cluster, first thing after the divider hairline. It does
+     not carry an auto margin here: the cluster itself is pinned right by the
+     gauge (cyberpunk) or the tail (other themes), so the box just leads the
+     verbs at a fixed gap. */
+  margin-left: 0;
+  padding: 0;
+}
+/* Folded, the box goes with the body and the action keys: it filters a list that
+   is not on screen, and the folded bar is meant to shrink back to its trigger. */
+.workspace-exts.is-folded .grid-search-inhead { display: none; }
+.archive-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  /* Height and radius follow .ext-key so the box and the verbs below it read as
+     one control group rather than a form field that wandered into a toolbar. */
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: .78rem;
+}
+.archive-search-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+/* A search field the user cannot clear is a trap: the list looks empty and the
+   only way out is to select the text and delete it by hand. Native [type=search]
+   supplies the control on some engines and not others, so the affordance is
+   made explicit here rather than left to whichever engine opened the page. */
+.archive-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  cursor: pointer;
+}
 .archive-keys {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 6px;
@@ -1357,22 +1448,12 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font: 500 .74rem var(--font-mono); color: var(--text-primary);
 }
-/* The name is a BUTTON (it renames), so it has to stop looking like one: a row is
-   scanned, not operated. It keeps the text metrics exactly, drops the chrome, and
-   grows the underline + accent only when pointed at or focused — the same
-   affordance the window title uses, because it is the same control. */
-.archive-row-rename {
-  appearance: none; -webkit-appearance: none;
-  margin: 0; padding: 0; border: 0; background: none;
-  text-align: left; cursor: pointer;
-  border-bottom: 1px solid transparent;
-}
-.archive-row-rename:hover,
-.archive-row-rename:focus-visible {
-  color: var(--accent);
-  border-bottom-color: currentColor;
-  outline: none;
-}
+/* The name is a LABEL, not a control: a row is scanned, not operated. It was a
+   button whose click renamed the session, which made the ledger's identity column
+   a row of hidden triggers — an accidental click on the name while aiming for the
+   row's open target (or the tick beside it) opened a rename prompt instead. The
+   rename still exists where a name is EDITED on purpose: a running session's
+   window title and its dock tab's right-click menu. */
 /* Under the name: where it ran, and what it ran. The profile is a chip because it
    is a name from a fixed set (a connection), and the command is loose text because
    it is arbitrary — one is scannable at a glance, the other only when looked at. */
@@ -1525,7 +1606,7 @@
    the same rotation language as every other fold on this page. */
 .workspace-exts.is-folded .ext-head-actions { display: none; }
 .workspace-exts.is-folded .section-body { display: none; }
-.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts.is-folded .ext-head-tail .nethub-caret { transform: rotate(180deg); }
 .workspace-exts .nethub-caret { transition: transform .2s ease; }
 
 /* Folded, the body is GONE. The shared .section-body.collapsed rule in base.css
@@ -1538,7 +1619,7 @@
 .workspace-exts.is-folded .ext-head-actions { display: none; }
 /* The caret points the way the plate will move — the same rotation language every
    other fold on this page uses. */
-.workspace-exts.is-folded .ext-fold-btn .nethub-caret { transform: rotate(180deg); }
+.workspace-exts.is-folded .ext-head-tail .nethub-caret { transform: rotate(180deg); }
 .workspace-exts .nethub-caret { transition: transform .2s ease; }
 
 /* duplicate removed; see rule near line 262 */
@@ -2086,9 +2167,21 @@
      is no longer absorbing the slack. */
   .sessdock-batch { order: 0; }
   .sessdock-actions { margin-left: auto; }
-  /* The note stands in for row 1, which now starts at the bar's left padding
-     because the batch group has moved below it. */
-  .sessdock-empty { left: 10px; top: 4px; }
+
+  /* Window arrangement controls (tile toggle, strategy select, hide/show eye)
+     are meaningless on narrow viewports: terminals fill the screen as the
+     full-screen layer (.win-fullscreen), so tiling or splitting them into cells
+     leaves unreadable slivers of text (390px split in two is ~180px per pane).
+     The session tabs remain so the operator can switch between sessions, but the
+     desktop arrangement buttons are hidden. The close-archived key stays. */
+  .session-tabbar-tile,
+  /* The whole arrangement control, not only its trigger: its menu is a child of
+     the wrapper, and hiding the trigger alone would leave an open panel
+     reachable at a width where it can arrange nothing. */
+  .session-tabbar-strategy,
+  .session-tabbar-toggle {
+    display: none !important;
+  }
 }
 
 /* Extremely narrow: the keys give up their labels and keep their glyphs.
