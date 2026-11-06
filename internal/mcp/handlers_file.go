@@ -232,71 +232,69 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 	return jsonResult(m), nil
 }
 
-func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
+// withFileSession resolves `session_id`, borrows that session's SFTP engine and
+// hands it to fn.
+//
+// The handlers in this file open with the same lines: read the session, refuse
+// an empty one, borrow the engine, and give back both the engine and the
+// transport lease. Only the operation after that differs. Writing the set-up
+// once is not about the line count — a handler that lost one of the two
+// defers would leak a transport lease for the life of the connection, and the
+// way to make that impossible is to have one place that writes them.
+func (s *Server) withFileSession(ctx context.Context, args map[string]any,
+	fn func(cli *filesftp.Client) (*mcpgo.CallToolResult, error)) (*mcpgo.CallToolResult, error) {
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
 	if sessionID == "" {
 		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
 	}
-	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
-	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
+	cli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
-	defer sftpCli.Close()
+	defer cli.Close()
 	defer releaseTransport()
-	if err := sftpCli.RemoveFile(remotePath); err != nil {
-		return fileErr(err, remotePath), nil
-	}
-	return successResult(), nil
+	return fn(cli)
+}
+
+func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcpgo.CallToolResult, error) {
+		remotePath := getString(request.GetArguments(), "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
+		}
+		if err := cli.RemoveFile(remotePath); err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return successResult(), nil
+	})
 }
 
 func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	fromPath := getString(args, "from_path", "")
-	toPath := getString(args, "to_path", "")
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-	if fromPath == "" || toPath == "" {
-		return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
-	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	if err := sftpCli.RenameFile(fromPath, toPath); err != nil {
-		return fileErr(err, fromPath), nil
-	}
-	return successResult(), nil
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcpgo.CallToolResult, error) {
+		args := request.GetArguments()
+		fromPath := getString(args, "from_path", "")
+		toPath := getString(args, "to_path", "")
+		if fromPath == "" || toPath == "" {
+			return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
+		}
+		if err := cli.RenameFile(fromPath, toPath); err != nil {
+			return fileErr(err, fromPath), nil
+		}
+		return successResult(), nil
+	})
 }
 
 func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
-	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	if err := sftpCli.MakeDir(remotePath); err != nil {
-		return fileErr(err, remotePath), nil
-	}
-	return successResult(), nil
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcpgo.CallToolResult, error) {
+		remotePath := getString(request.GetArguments(), "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
+		}
+		if err := cli.MakeDir(remotePath); err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return successResult(), nil
+	})
 }
 
 func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -595,25 +593,14 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolReque
 
 // handleFileGetwd returns the remote working directory via SSH/SFTP.
 func (s *Server) handleFileGetwd(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	dir, err := sftpCli.Getwd()
-	if err != nil {
-		// No caller path is involved: the working directory is the server's own.
-		return fileErr(err, ""), nil
-	}
-	return jsonResult(map[string]any{"directory": dir}), nil
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcpgo.CallToolResult, error) {
+		dir, err := cli.Getwd()
+		if err != nil {
+			// No caller path is involved: the working directory is the server's own.
+			return fileErr(err, ""), nil
+		}
+		return jsonResult(map[string]any{"directory": dir}), nil
+	})
 }
 
 // fileErr turns a filesystem failure into the tool error that describes it.
