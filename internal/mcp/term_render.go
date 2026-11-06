@@ -284,6 +284,24 @@ func (s *Server) extensionListing(res *mcp.CallToolResult, all bool) string {
 			notes = notes[:60] + "…"
 		}
 		b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n", name, dash(state), dash(handle), notes))
+		// THE LIST ANSWERS "HOW DO I USE IT", not only "what is installed". A handle
+		// has three shapes and they are not interchangeable — `mcp:1` takes `get … tools`
+		// and `call … <tool>`, a bare `:1` takes a raw frame, a session takes a channel
+		// index — so a column that prints the address and stops leaves the caller to
+		// guess which of the three it is holding. That guess is where 14 of 17 address
+		// mistakes in #356 happened, and every one of them was an address COPIED FROM AN
+		// EARLIER `ls ext` and no longer valid.
+		//
+		// ONLY A ROW WITH A LIVE ADDRESS GETS THE LINE. An unmounted extension's next
+		// call is `open ext <name>`, which is the name already in the row: printing it
+		// again on forty rows would bury the rows that do carry something to copy. The
+		// rule the line exists for is "this address is live, take it from here", and a
+		// dash is not an address.
+		if isLiveHandle(handle) {
+			if next := extNextCall(handle); next != "" {
+				b.WriteString("    → " + next + "\n")
+			}
+		}
 	}
 	if b.Len() == 0 {
 		return "(no extensions installed)\n"
@@ -291,7 +309,41 @@ func (s *Server) extensionListing(res *mcp.CallToolResult, all bool) string {
 	if hidden > 0 {
 		b.WriteString(fmt.Sprintf("(%d more not shown; `ls ext --all` lists every extension)\n", hidden))
 	}
+	// ONE REAL ADDRESS, COPIED FROM WHAT THIS REPLY JUST PRINTED. Placeholders
+	// (`<peer>`, `<session>`) teach that an address is a shape to fill in; it is a
+	// live value that drifts, and the callers who got it wrong copied an index from an
+	// earlier `open ext` rather than inventing one (#356). A tail line that is already
+	// a working call is worth more than a sentence about one.
+	if sum := s.lsExtSummary(items); sum != "" {
+		b.WriteString(sum)
+	}
 	return b.String()
+}
+
+// lsExtSummary is the "start here" tail: the first address this listing printed,
+// already written as a call, plus the one fact a reader of an address column needs.
+func (s *Server) lsExtSummary(items []any) string {
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		handle := getString(item, "session_id", "")
+		if shell := getString(item, "shell_id", ""); shell != "" {
+			handle = s.addressOf(getString(item, "session_id", ""), shell)
+		} else if peer := s.extPeerHandleOf(getString(item, "session_id", ""), getString(item, "name", "")); peer != "" {
+			handle = peer
+		}
+		if !isLiveHandle(handle) {
+			continue
+		}
+		next := "call " + handle + " '<frame>'"
+		if strings.Contains(handle, " mcp:") {
+			next = "get " + handle + " tools"
+		}
+		return "\nnext: " + next + "   (an address is live: re-run `ls ext` after opening or closing one)\n"
+	}
+	return ""
 }
 
 // addressOf turns a session id and a channel id into the address the rest of the
@@ -494,14 +546,13 @@ func peerLines(sessions []api.Session) string {
 	for _, sess := range sessions {
 		want[sess.ID] = true
 	}
-	jrpcChannelsMu.Lock()
-	handles := make([]*jrpcHandle, 0, len(jrpcChannels))
-	for _, h := range jrpcChannels {
-		if want[h.sessionID] {
+	var handles []*jrpcHandle
+	jrpcChannels.Range(func(_, v any) bool {
+		if h := v.(*jrpcHandle); want[h.sessionID] {
 			handles = append(handles, h)
 		}
-	}
-	jrpcChannelsMu.Unlock()
+		return true
+	})
 	if len(handles) == 0 {
 		return ""
 	}
@@ -543,4 +594,39 @@ func (s *Server) streamLen(cs *session.ChildShell) int64 {
 		return m
 	}
 	return n
+}
+
+// isLiveHandle reports whether this column holds an address that can be used right now.
+func isLiveHandle(handle string) bool {
+	return handle != "" && handle != "-" && handle != "…"
+}
+
+// extNextCall derives the call a handle invites, from the handle alone.
+//
+// MECHANICAL, NOT CONFIGURED: every extension already reports what it is — a peer
+// address, a channel index, or a session — and the three shapes have three different
+// next calls. Asking each template to describe itself would be a second source of
+// truth for a fact the state already holds, and the one template that forgot to answer
+// would be the one a caller is stuck on.
+func extNextCall(handle string) string {
+	switch {
+	case strings.Contains(handle, " mcp:") || strings.Contains(handle, " jrpc:") || strings.Contains(handle, " cdp:"):
+		kind := "mcp"
+		if i := strings.Index(handle, " jrpc:"); i >= 0 {
+			kind = "jrpc"
+		} else if i := strings.Index(handle, " cdp:"); i >= 0 {
+			kind = "cdp"
+		}
+		if kind == "mcp" {
+			return "get " + handle + " tools   ·   call " + handle + " <tool> {…}"
+		}
+		if kind == "cdp" {
+			return "ls " + handle + "   ·   call " + handle + " {method}"
+		}
+		return "call " + handle + " '<json-rpc frame>'   (a pipe: it answers only after the peer handshakes)"
+	case strings.Contains(handle, ":"):
+		return "call " + handle + " '<json-rpc frame>'   (a pipe: handshake first; idle closes it and the index can drift)"
+	default:
+		return "run " + handle + " <idx> $1   ·   read " + handle + " <idx> --tail 40"
+	}
 }
