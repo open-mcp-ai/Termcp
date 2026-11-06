@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
-	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // TestAliasTableIsSafeUnderConcurrency pins that the alias table can be written and

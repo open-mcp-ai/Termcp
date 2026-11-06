@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // The summary is what a caller reads instead of the page, so it has to be the thing

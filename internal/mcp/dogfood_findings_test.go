@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // A TARGET THAT NAMES NOTHING MUST SAY SO, NOT ANSWER ABOUT A DIFFERENT COLLECTION.

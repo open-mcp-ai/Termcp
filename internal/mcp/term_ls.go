@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
-	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // directiveLS is the one listing verb, for every collection in the tree.

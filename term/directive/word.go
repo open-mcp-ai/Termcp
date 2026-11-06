@@ -33,7 +33,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
-	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // DetectRawControl scans a command line for raw control bytes that the terminal

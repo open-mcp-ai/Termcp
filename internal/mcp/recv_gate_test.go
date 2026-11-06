@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // TestASecondRecvLeavesWhenItsOwnWindowEnds pins that the per-handle reader gate can

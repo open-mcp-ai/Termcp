@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // TestDryRunStopsBeforeDispatch pins issue #241's acceptance list. It is written

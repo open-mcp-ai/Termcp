@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
-	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sftp"
