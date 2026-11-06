@@ -30,6 +30,39 @@
 
 ## 一、整体分层
 
+### 可被外部 import 的三层
+
+仓库里有一个**对外契约层**，它在 `internal/` 之外，因此别的 Go 项目可以直接引用：
+
+```
+termcp/term     TERM/1 协议本体：DSL 解析、指令注册表、信封、地址。
+                纯函数层——不认识会话，不开 socket，不读文件，不看时钟。
+                go list -deps ./term 里没有一条 internal/ 路径。
+termcp/core     运行时装配：会话、shell、存储、转发、扩展、MCP 服务面、
+                可选 Web UI。core.New(core.Options{...}) 起一个实例。
+termcp/config   实例设置（Config），命令行与库调用共用同一份。
+termcp/cmd      只剩 flag/env → Config → core.New 的装配。
+```
+
+`termcp/core` 有两种用法，区别只在要不要端口：
+
+```go
+// 二进制走这条：绑 cfg.Host:cfg.Port，一直服务到关停。
+srv, _ := core.New(core.Options{Config: cfg})
+defer srv.Close("done")
+srv.Start()
+
+// 嵌入方走这条：不绑端口，但 MCP 面与 REST 面都在，经 Term 直接调用。
+srv, _ := core.New(core.Options{Config: cfg, NoListener: true, Headless: true})
+reply := srv.Term(ctx, "ls session", nil)   // 拿到 TERM/1 信封
+```
+
+`Headless` 省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
+
+协议层的稳定性承诺跟着协议版本走，不跟模块版本走：改一行的含义、改状态码、改 locator 指代什么是 breaking change；加一条指令、一个 flag、一个 helper 不是。
+
+### 内部运行时
+
 Termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑四个平行入口**——Web UI（人）、AI Agent 的两种接入方式——MCP 与 REST（两者是同一套 `term` 指令空间的两种传输，实例自带 `{}` 引导与 `help` 表，不需要另写教程）、WebSocket（实时终端 I/O）。它们操作同一批会话，互不冲突。
 
 ```

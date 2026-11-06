@@ -35,6 +35,7 @@ type Config struct {
 	LogLevel            string // log verbosity: debug|info|warn|error (default: "info")
 	NoInternal          bool   // disable the built-in loopback SSH profile
 	MCPManageSSHConfigs bool   // enable the profile write actions (create/edit/copy/delete) (default: false)
+	Headless            bool   // serve no browser UI: the MCP tool surface and POST /api/term remain (default: false)
 	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
 	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
 	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)

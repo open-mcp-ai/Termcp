@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/config"
 )
 
 // The test binary doubles as a helper process: TestMain intercepts the marker
