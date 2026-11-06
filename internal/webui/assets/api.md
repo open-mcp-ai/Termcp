@@ -632,7 +632,7 @@ Bidirectional real-time channel.
 
 | type | Fields | Meaning |
 |------|--------|---------|
-| `watch_add` | `id` | Subscribe to terminal output |
+| `watch_add` | `id` | Subscribe to terminal output and request a `watch_ready` acknowledgement |
 | `watch_remove` | `id` | Unsubscribe |
 | `input` | `id`, `d`(string), `nl` | Send keystrokes (dropped for a session in review mode — see §11) |
 | `resize` | `id`, `rows`, `cols` | Change PTY size |
@@ -642,7 +642,9 @@ Bidirectional real-time channel.
 | type | Fields | Meaning |
 |------|--------|---------|
 | `sessions` | `sessions` | Session list (on connect and on change) |
-| `terminal` | `id`, `d`(string) | Terminal output chunk |
+| `watch_ready` | `id`, `cursor` | Subscription accepted; `cursor` is the first absolute byte offset that may appear in subsequent terminal frames |
+| `watch_error` | `id`, `error` | Subscription rejected; no terminal output will be sent for this `watch_add` |
+| `terminal` | `id`, `d`(string), `start`, `end` | Terminal output chunk covering the half-open absolute byte range `[start,end)` |
 | `shell_activity` | `shell_id`, `src`(`api`\|`ai`), `submit` | A shell received input, and from where |
 | `ui_notify` | `title`, `message`, `level`, `session_id`, `duration_seconds` | User-facing notification (MCP `notify_user`) |
 | `approval` | session, request | Approval queue changed (see §11) |
@@ -676,10 +678,18 @@ instead: an echo-window heuristic fails both ways, holding real output from a
 fast command (`ls`) and letting a slow echo through on a laggy link. A silence
 of a few seconds is reported as "finished" on top of that, since a byte stream
 offers no better a signal that a command returned.
-| `terminal_done` | `id` | Shell exited |
+| `terminal_done` | `id`, `cursor` | Shell exited after all output through the absolute offset `cursor` |
 
 > Terminal I/O `id` values are shell IDs; session IDs are only for connection-level
 > REST resources.
+
+`watch_ready` is ordered before the first `terminal` frame for that
+subscription. A client that needs both retained history and live output sends
+`watch_add`, waits for `watch_ready`, reads history ending at
+`watch_ready.cursor`, and buffers subsequent terminal frames until that history
+has been applied. `[start,end)` ranges make overlap, duplication and gaps
+detectable; clients must not infer continuity from frame timing or payload
+text.
 
 ### `GET /api/shells/{id}/output-range`
 
@@ -920,7 +930,10 @@ Response 202:
 {
   "ok": true,
   "approved": false,
-  "review_pending": true
+  "review_pending": true,
+  "approval_id": "9f0c…",          // present once the command line is queued
+  "session_id": "3f2a…",
+  "expires_at": 1790130035403
 }
 ```
 
@@ -1468,11 +1481,23 @@ Response 200:
 }
 ```
 
+### `GET /api/approvals/{id}`
+
+Returns one approval request, including its `execution` object once replay has
+started. Use this after a lost decision response: it is a read and never repeats
+the approval decision or its side effects. Unknown ids return `404`.
+
 ### `POST /api/approvals/{id}/approve` · `POST /api/approvals/{id}/reject`
 
 ```
 Request: {}                       // a decision needs no body
-Response 200: { "request": { … } }
+Response 200: {
+  "request": {
+    …,
+    "execution": { "state": "submitted|succeeded", "started_at": 1790129915403,
+                   "finished_at": 1790129916410 }
+  }
+}
 ```
 
 A rejection may carry `{"reason": "…"}`. No name is sent: the decision is the
@@ -1491,8 +1516,50 @@ Semantics:
   it does not depend on a caller having entered `Wait`. A late approve is
   refused with `409` and executes nothing.
 - An approved request is executed by the deciding call. If the write fails, the
-  response says so (`409`) rather than reporting success.
+  response says so (`409`) with the same request shape and
+  `execution.state=failed`, rather than reporting success.
 - `404` unknown id; `409` already decided or execution failed.
+
+### Execution result
+
+Approval state and execution state are separate. `request.state=approved` says a
+human granted permission; it does not prove replay succeeded.
+
+```
+"execution": {
+  "state": "running|submitted|succeeded|failed|unknown",
+  "started_at": 1790129915403,
+  "finished_at": 1790129916410,
+  "error": "optional executor failure"
+}
+```
+
+- `running`: replay started and has not recorded a final result yet.
+- `submitted`: shell input bytes were handed to the shell. This is **not**
+  command completion and says nothing about the command's exit code.
+- `succeeded`: a non-shell operation (file operation or port forward) completed.
+- `failed`: the executor reported failure. This does not imply that a partially
+  applied operation had no effect.
+- `unknown`: the client lost the response or cannot trust either outcome. A lost
+  HTTP response must be treated as unknown, never as failure or success.
+- If the session or approval queue closes while replay is still `running`, the
+  execution becomes `unknown`; the approved decision remains recorded.
+
+The execution object is also present in `GET /api/approvals` once replay starts,
+so a client that lost the decision response can recover the recorded result.
+
+When review is reached through the single `term` command surface, the outer
+`TERM/1 202 Accepted` response keeps the human-readable message as its body and
+also carries correlation headers:
+
+```text
+Approval-ID: 9f0c…
+Session-ID: 3f2a…
+Expires-At: 1790130035403
+```
+
+These are status headers, not decision capability or polling instructions. An
+MCP host may use them to correlate the held operation with `/api/approvals`.
 
 > **What is approved.** The request records the *input string*, not a parsed
 > command. `type <channel> "rm -rf / ; ls"` is one request covering two commands.

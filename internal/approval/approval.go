@@ -39,6 +39,35 @@ const (
 	Cancelled State = "cancelled"
 )
 
+// ExecutionState reports what happened after an approval was granted. It is
+// deliberately separate from State: approval may succeed while execution
+// fails, and shell input is submitted rather than completed.
+type ExecutionState string
+
+const (
+	// ExecutionRunning means the approved operation has started and no final
+	// execution result has been recorded yet.
+	ExecutionRunning ExecutionState = "running"
+	// ExecutionSubmitted means shell input bytes were handed to the shell. It
+	// does not mean the resulting command completed or succeeded.
+	ExecutionSubmitted ExecutionState = "submitted"
+	// ExecutionSucceeded means a non-shell approved operation completed.
+	ExecutionSucceeded ExecutionState = "succeeded"
+	// ExecutionFailed means the executor reported failure. It does not imply
+	// that a partially performed operation had no effect.
+	ExecutionFailed ExecutionState = "failed"
+	// ExecutionUnknown means the caller cannot trust either success or failure.
+	ExecutionUnknown ExecutionState = "unknown"
+)
+
+// Execution is the structured outcome of replaying an approved request.
+type Execution struct {
+	State      ExecutionState `json:"state"`
+	StartedAt  int64          `json:"started_at"` // Unix ms
+	FinishedAt int64          `json:"finished_at,omitempty"`
+	Error      string         `json:"error,omitempty"`
+}
+
 // Terminal reports whether no further transition is possible.
 func (s State) Terminal() bool { return s != Pending }
 
@@ -164,6 +193,9 @@ type Request struct {
 	// Reason carries the rejection reason or the cancellation cause.
 	Reason string `json:"reason,omitempty"`
 
+	// Execution is nil until an approved request begins execution.
+	Execution *Execution `json:"execution,omitempty"`
+
 	// done is closed exactly once when the request reaches a terminal state.
 	// It is the signal Wait blocks on, so an approval is observed immediately
 	// instead of on the next poll tick.
@@ -188,6 +220,10 @@ func (r *Request) clone() Request {
 	// Payload is copied too: a shallow copy of a slice shares the backing array,
 	// so a caller mutating what it got back would edit the queued operation.
 	c.Payload = append([]byte(nil), r.Payload...)
+	if r.Execution != nil {
+		execution := *r.Execution
+		c.Execution = &execution
+	}
 	c.done = nil
 	return c
 }
