@@ -168,8 +168,16 @@ func TestAPtyTailDoesNotWait(t *testing.T) {
 	// them, so on a loaded machine one glance can land before the echo — which is a
 	// timing artefact, not the defect this test is about. Each read is still timed: the
 	// assertion is that looking never costs the caller's window.
+	//
+	// THE DEADLINE IS A HANG DETECTOR, NOT A BUDGET (docs/agents/testing.md). This was
+	// 20 iterations of 50ms — about one second — and a shell whose profile takes 836ms
+	// to load (measured on this machine) reaches the echo right around the end of it, so
+	// a loaded runner reported the product as broken when it had merely not started yet.
+	// The loop still returns on the first observation, so a slow machine costs extra
+	// iterations and nothing else; only a failure gets slower to report.
+	deadline := time.Now().Add(30 * time.Second)
 	var got string
-	for i := 0; i < 20; i++ {
+	for time.Now().Before(deadline) {
 		began := time.Now()
 		got = termText(t, s, map[string]any{"cmd": "read " + h + " --tail 5", "timeout": 5})
 		if elapsed := time.Since(began); elapsed > 2*time.Second {
@@ -180,7 +188,7 @@ func TestAPtyTailDoesNotWait(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Errorf("the pty tail lost its content:\n%s", got)
+	t.Errorf("the pty tail never showed the echo within 30s:\n%s", got)
 }
 
 // timeout:0 KEEPS MEANING "DO NOT WAIT" ON EVERY READ PATH.
