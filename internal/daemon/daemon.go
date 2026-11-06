@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/config"
 )
 
 // EnvChild marks a spawned process as a daemon child: it turns on the idle
