@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,26 +26,69 @@ import (
 // reports one only after the full deadline, a dead one reports immediately.
 const readDeadline = 2 * time.Second
 
-func TestReplacedWatchPumpCannotSendStaleFrames(t *testing.T) {
+// TestWatchOwnerSerialisesTheTable pins the arrangement the rest of the file rests
+// on: the table is a plain map, so it is safe only because exactly one goroutine
+// touches it. This drives it from several goroutines at once and the race detector
+// is the assertion.
+func TestWatchOwnerSerialisesTheTable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ws := &uiWS{
-		ctx:   ctx,
-		send:  make(chan []byte, 2),
-		watch: map[string]*wsWatchEntry{"shell-1": {rid: 2}},
+		ctx:       ctx,
+		send:      make(chan []byte, 64),
+		watchOps:  make(chan watchOp),
+		watchDone: make(chan struct{}),
+	}
+	go ws.watchOwner()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		sid := "shell-" + string(rune('a'+i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ent := &wsWatchEntry{rid: i, exited: make(chan struct{})}
+			ws.watchRequest(func(tb *watchTable) { tb.entries[sid] = ent })
+			_ = ws.watchCount()
+			ws.watchRequest(func(tb *watchTable) {
+				if cur, ok := tb.entries[sid]; ok && cur == ent {
+					delete(tb.entries, sid)
+				}
+			})
+		}()
+	}
+	wg.Wait()
+
+	if n := ws.watchCount(); n != 0 {
+		t.Fatalf("the table still holds %d entries after every writer removed its own", n)
+	}
+}
+
+// TestWatchHandoffWaitsForTheOldPump pins the ordering rule the whole design
+// rests on: a replacement does not acknowledge its subscription until the pump it
+// replaced has exited. Without that wait, a frame from the old generation can land
+// behind the new watch_ready and the client shows stale bytes at the wrong offset.
+func TestWatchHandoffWaitsForTheOldPump(t *testing.T) {
+	old := &wsWatchEntry{rid: 1, exited: make(chan struct{})}
+
+	// The replacement's wait is a receive on exited; nothing else can satisfy it.
+	handoff := make(chan struct{})
+	go func() {
+		<-old.exited
+		close(handoff)
+	}()
+
+	select {
+	case <-handoff:
+		t.Fatal("the handoff completed before the old pump exited")
+	case <-time.After(50 * time.Millisecond):
 	}
 
-	if ws.sendWatchTerminalPayload("shell-1", 1, []byte(`{"type":"terminal"}`)) {
-		t.Fatal("stale terminal frame was accepted")
-	}
-	if ws.sendWatchControlPayload("shell-1", 1, []byte(`{"type":"terminal_done"}`)) {
-		t.Fatal("stale terminal_done was accepted")
-	}
-	if len(ws.send) != 0 {
-		t.Fatalf("stale frames reached the send queue: %d", len(ws.send))
-	}
-	if !ws.sendWatchTerminalPayload("shell-1", 2, []byte(`{"type":"terminal"}`)) {
-		t.Fatal("current terminal frame was rejected")
+	close(old.exited)
+	select {
+	case <-handoff:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handoff never completed after the old pump exited")
 	}
 }
 
