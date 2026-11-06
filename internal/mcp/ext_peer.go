@@ -56,6 +56,10 @@ type extPeerEntry struct {
 	ready  chan struct{}
 	handle *jrpcHandle
 	err    string
+	// termcp carries the verified (or refused) `termcp_tool` declaration (#274).
+	// It lives with the mount because it is a fact about this peer's tool list,
+	// which is only knowable after the handshake.
+	termcp termcpToolCheck
 	// abandoned is set by a release that arrived while this mount was still in
 	// flight. The creator reads it after close(ready) and closes whatever it
 	// opened, because nobody else can reach that handle any more.
@@ -110,6 +114,12 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 		entry.handle = h
 		if h == nil {
 			entry.err = slot.Body
+		} else {
+			// THE DECLARATION IS CHECKED ONCE, AT MOUNT. Doing it per call would
+			// put a second round trip in front of every command, and a downstream
+			// that changed its tool list mid-life is a deployment event the next
+			// mount will see.
+			entry.termcp = s.checkTermcpTool(ctx, ext, h)
 		}
 		close(entry.ready)
 		if entry.abandoned.Load() {
@@ -202,6 +212,16 @@ func (s *Server) extPeerHandleOf(sessionID, name string) string {
 		return ""
 	}
 	return peerKey(h.sessionID, h.kind, h.index)
+}
+
+// extTermcpOf reports the verified declaration for a mounted peer, so `open ext`
+// and the status listing can say whether this downstream can be routed to.
+func (s *Server) extTermcpOf(sessionID, name string) termcpToolCheck {
+	v, ok := extPeers.Load(extPeerKey(sessionID, name))
+	if !ok {
+		return termcpToolCheck{}
+	}
+	return v.(*extPeerEntry).termcp
 }
 
 // extPeerNote renders the paragraph an `open ext` reply carries so an agent knows

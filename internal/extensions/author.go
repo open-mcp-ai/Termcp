@@ -74,6 +74,13 @@ func ApplyArgs(ext *Extension, args map[string]any, update bool) error {
 		}
 		ext.Headers = v
 	}
+	// --termcp-tool names the downstream tool that speaks TERM/1 (#274). Empty is
+	// meaningful and not the same as absent on update: clearing it is how an
+	// operator takes back a declaration that turned out to be wrong, so the field
+	// follows the same present-but-empty rule as the rest.
+	if hasOpt(args, "termcp_tool") {
+		ext.TermcpTool = strings.TrimSpace(optString(args, "termcp_tool", ""))
+	}
 	if hasOpt(args, "allow") {
 		v, err := optStringSlice(args, "allow")
 		if err != nil {
