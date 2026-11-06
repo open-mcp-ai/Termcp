@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestARefusedReadKeepsTheBytesItRefused pins issue #200.
@@ -47,16 +48,37 @@ func TestARefusedReadKeepsTheBytesItRefused(t *testing.T) {
 		t.Fatalf("could not open a pipe channel; reply was:\n%s", opened)
 	}
 
-	first := termText(t, s, map[string]any{"cmd": "read " + ch, "timeout": float64(2)})
+	// WAIT FOR THE BYTES AS A STEP OF ITS OWN, AND GIVE IT ITS OWN DEADLINE
+	// (see docs/agents/testing.md, "Waiting is a state, not a duration").
+	//
+	// `read` answers 204 when nothing was available inside ITS window. On a loaded
+	// Windows runner, PowerShell takes seconds to start and write those four bytes,
+	// so one 2-second read says "nothing yet" — and the older version of this test
+	// read that as "the charset refusal is broken". That is the flake: a bounded
+	// probe was being asked to carry an unbounded process start.
+	deadline := time.Now().Add(60 * time.Second)
+	var first string
+	for {
+		probe := termText(t, s, map[string]any{"cmd": "read " + ch, "timeout": float64(1)})
+		if !strings.Contains(probe, "204 No Content") {
+			first = probe
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the command produced no output within 60s, so the refusal cannot be observed")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// The refusal has to name the remedy, or there is nothing to test.
 	if !strings.Contains(first, "not valid UTF-8") {
 		t.Fatalf("the read should have been refused for its charset, got:\n%s", first)
 	}
-	// The refusal has to name the remedy, or there is nothing to test.
 	if !strings.Contains(first, "gbk") {
 		t.Fatalf("the refusal should name the charset it recognised, got:\n%s", first)
 	}
 
-	second := termText(t, s, map[string]any{"cmd": "read " + ch + " --encoding gbk", "timeout": float64(2)})
+	second := termText(t, s, map[string]any{"cmd": "read " + ch + " --encoding gbk", "timeout": float64(60)})
 	if strings.Contains(second, "204 No Content") {
 		t.Fatalf("the refused window was consumed, so the remedy the refusal named cannot work:\n%s", second)
 	}

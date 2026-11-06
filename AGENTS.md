@@ -101,6 +101,28 @@ fresh runner, and dirty state from other tests or processes. Never hardcode a
 shared absolute path; `t.TempDir()` is the default. See
 `docs/agents/testing.md`.
 
+**WAITING IS A STATE, NOT A DURATION.** The recurring CI flakes in this repo are
+not slow machines, they are tests that waited for a length of time and called it
+a state: a `read` bounded at 2s asked to carry a subprocess's startup, and a poll
+loop that treated `204 No Content` — which means "nothing yet", not "gone" — as
+evidence about lifecycle. Both were green locally and red on a loaded runner.
+Three rules follow, and they are what to check before writing any wait:
+
+- A `timeout` bounds the call, not the event. Put the deadline in a poll loop and
+  keep the per-call timeout small. That deadline is a HANG DETECTOR, not a budget:
+  a poll returns on the first observation, so a slow machine costs extra iterations
+  and nothing else, and the deadline only bounds how long a *failure* takes to
+  report. Prove it by slowing the producer down — the test should still finish at
+  its normal speed, not take the delay.
+- Learn what every status means before polling on it. `204` is the absence of
+  bytes and says nothing about whether the channel is open.
+- Never raise a timeout to make a flake pass. If longer waiting is the only fix,
+  the test asserts on timing instead of on state.
+
+A flake is a defect in the test and is in scope: reproduce it (`-count`, `-cpu`),
+fix the wrong assumption, and do not paper over it with a retry.
+
+
 ## Driving Termcp's MCP tools
 
 Working in this repo usually means driving Termcp itself. The reference is the
