@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // TestExtMCPForwardsThePeersFrameVerbatim pins issue #234's central promise: the

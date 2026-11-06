@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
-	"github.com/open-mcp-ai/termcp/internal/locator"
+	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
