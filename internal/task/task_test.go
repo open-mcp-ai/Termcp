@@ -93,6 +93,18 @@ func TestAwaitOnAFinishedTaskDoesNotWait(t *testing.T) {
 
 // TestZeroTimeoutIsAPeek pins that timeout 0 asks rather than waits — the same
 // rule the terminal's reads follow.
+//
+// THE TASK NEVER FINISHES, which is what makes the bound mean something: nothing
+// calls Finish, so `Await(…, 0)` must return the running view immediately. An
+// implementation that treated 0 as "use the default window" would block for that
+// window instead, and an implementation that treated it as "wait for completion"
+// would hang the test outright.
+//
+// The bound is therefore generous on purpose (see docs/agents/testing.md): it has
+// to sit below any plausible default window and above any plausible scheduling
+// delay on a loaded runner. 50ms was neither — it could not distinguish "waited a
+// window" from "the goroutine had not been scheduled yet", and would have failed
+// with "timeout 0 waited 61ms" on a busy machine while the product was correct.
 func TestZeroTimeoutIsAPeek(t *testing.T) {
 	m := NewManager()
 	tk := m.Start(Upload, "s1", "/remote/x", "/local/x", func() {})
@@ -100,8 +112,11 @@ func TestZeroTimeoutIsAPeek(t *testing.T) {
 	if _, err := m.Await(context.Background(), tk.ID(), 0); err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
-		t.Fatalf("timeout 0 waited %v", elapsed)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("timeout 0 waited %v, so the peek turned into a wait", elapsed)
+	}
+	if got, _ := m.Await(context.Background(), tk.ID(), 0); got.Status != Running {
+		t.Fatalf("the peek must report the task as it is; got %q", got.Status)
 	}
 }
 
