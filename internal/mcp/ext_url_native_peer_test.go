@@ -198,3 +198,52 @@ func TestExtURLExtensionAddressIsRecoverable(t *testing.T) {
 		t.Fatalf("recovered address does not answer:\n%s", call)
 	}
 }
+
+// TestOpenExtSummaryFoldsNotesWithoutAll pins that the operating essay is folded
+// by default and restored by `--all` (issue #271).
+func TestOpenExtSummaryFoldsNotesWithoutAll(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var env map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		id := env["id"]
+		w.Header().Set("Content-Type", "application/json")
+		switch env["method"] {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
+				"protocolVersion": "2024-11-05",
+				"serverInfo":      map[string]any{"name": "m", "version": "1"},
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+			}})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"tools": []any{}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	s := newExtensionTestServer(t)
+	if got := termText(t, s, map[string]any{"cmd": `create ext fold --target internal --url ` + srv.URL}); !strings.HasPrefix(got, "TERM/1 200") {
+		t.Fatalf("create failed: %s", got)
+	}
+
+	// Default `open ext` on a MOUNTED PEER: the template's abstract notes are
+	// replaced by the peer's concrete instructions (real handle, real syntax),
+	// and the full prose stays behind `--all`.
+	openDefault := termText(t, s, map[string]any{"cmd": "open ext fold", "timeout": 10})
+	if !strings.Contains(openDefault, "full notes under --all") {
+		t.Errorf("default open ext kept the template's notes instead of deferring to the peer note:\n%s", openDefault)
+	}
+	if strings.Contains(openDefault, "do not write JSON-RPC frames") {
+		t.Errorf("default open ext repeated the notes' abstract peer warning:\n%s", openDefault)
+	}
+	if !strings.Contains(openDefault, "not a pipe: no handshake") {
+		t.Errorf("default open ext missing the concrete peer note:\n%s", openDefault)
+	}
+
+	// With `--all`: the full notes prose is present.
+	openAll := termText(t, s, map[string]any{"cmd": "open ext fold --all", "timeout": 10})
+	if !strings.Contains(openAll, "This session is kept warm") {
+		t.Errorf("open ext --all missing full notes body:\n%s", openAll)
+	}
+}

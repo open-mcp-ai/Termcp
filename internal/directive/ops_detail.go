@@ -89,8 +89,8 @@ var ops = []Op{
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "ext"},
 		Flags: []string{"pipe", "pty", "argv", "name", "on-exit:enum=keep,close", "rows:number", "cols:number",
 			"size:geometry", "bind-host", "remote-host", "remote-port:number", "local-port:number",
-			"local-host", "dynamic", "remote", "target"},
-		Valueless: []string{"pipe", "pty", "dynamic", "remote"},
+			"local-host", "dynamic", "remote", "target", "all"},
+		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
 		Usage:     "open <session> [--argv <cmd> [--pty]]   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
@@ -102,7 +102,7 @@ var ops = []Op{
 		Detail:    lsDetail},
 	{Name: "get", Core: true, Kind: KindFlags, Target: true,
 		Kinds: []string{"file", "host", "ext", "protocol", "cdp", "mcp", "jrpc", "task"},
-		Flags: []string{"op"},
+		Flags: []string{"op", "all"},
 		// `get <s> cdp:1 protocol <Domain>` and `get <s> mcp:1 tools <name>`: the
 		// word after the key is a NAME the peer understands, not grammar of ours.
 		DataArgs: 1,
@@ -771,6 +771,12 @@ belongs to the reconciler, which is what keeps it trimmed to the template. So op
 
   open ext boxfs      the extension starts if it is not running, and the reply carries
                       session_id, shell_id and the template's notes
+
+An extension's notes are its operating instructions, and the longest run to a page of
+protocol prose. So this reply is a SUMMARY: the notes stop at their first paragraph and
+a long capability list becomes a count, because what a caller acts on here is the handle
+and the tools, not an essay. '--all' prints the template whole, and
+'get ext <name> --all' is the same document.
 
 An extension that declares no forward is started ON DEMAND. Every call is answered with
 an instance of its own: one that has been silent for the whole idle_timeout is nobody's

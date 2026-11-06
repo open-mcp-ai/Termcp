@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -119,4 +120,52 @@ func extPeerNote(handle string) string {
 	b.WriteString("  get " + handle + " tools            list its tools and their parameters\n")
 	b.WriteString("  call " + handle + " <tool> {…}      call one and get its text back\n")
 	return b.String()
+}
+
+// extDocSummary is the summary view of an extension document (issue #271).
+//
+// The template's notes are the operating instructions, and the longest ones run to
+// thirty lines of prose about a protocol the caller reads once. Printing them whole
+// on every `open ext` buried the two lines that matter — the handle and the tools —
+// under an essay, so a caller paid ~450 tokens to be re-told what a peer is.
+//
+// A notes block is written in paragraphs, and the first paragraph is the summary by
+// construction: it is what the prose opens with. The rest is the detail a caller
+// asks for by name with `--all`, which is the same split `ls ext` already makes.
+// Empty fields are dropped: `command: ` for an endpoint extension is not
+// information, it is the renderer printing a key it never checked.
+func extDocSummary(doc map[string]any, peerHandle string, all bool) map[string]any {
+	if all || len(doc) == 0 {
+		return doc
+	}
+	out := make(map[string]any, len(doc))
+	for k, v := range doc {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if peerHandle != "" {
+		// THE PEER'S OWN NOTE REPLACES THE TEMPLATE'S (issue #271).
+		//
+		// A mounted endpoint extension answers below with `call <handle> <tool>`,
+		// spelled with this session's real address. The template's notes say the
+		// same thing in the abstract, so keeping both told the caller twice that
+		// there is no handshake to write, and the second telling had no handle in
+		// it. The abstract half is what `--all` is for.
+		out["notes"] = "(full notes under --all; concrete peer syntax follows below)"
+	} else if notes, ok := out["notes"].(string); ok {
+		if idx := strings.Index(notes, "\n\n"); idx > 0 {
+			out["notes"] = strings.TrimRight(notes[:idx], "\n") +
+				"\n(add --all for the rest of the notes)"
+		}
+	}
+	if allow, ok := out["allow"].([]any); ok && len(allow) > 3 {
+		// The capability list is the template's permission surface, not the answer
+		// to `open ext`: a caller driving the extension does not act on it, and it
+		// is the widest block left after the notes fold. A count keeps the shape
+		// visible; `--all` lists the entries.
+		out["allow"] = fmt.Sprintf("%d capabilities (--all to list)", len(allow))
+	}
+	return out
 }
