@@ -1265,27 +1265,118 @@ window.addEventListener('resize', closeSessionTabMenu);
     actions.appendChild(tile);
     updateTileToggleButton();
   }
+  /* The arrangement key is a menu, not a <select>. A native select drops the
+     operating system's own list — a white slab with system chrome — into a bar
+     built from the terminal's palette, and it looks like nothing else in the
+     page. It also cannot show which choice is current while closed without a
+     label wide enough for the widest one, and the bar has no width to spare.
+     So the trigger shows the current choice and the list is markup, drawn with
+     the same panel and row rules as the header's language menu (.lang-menu /
+     .lang-opt); only the trigger is shaped like the keys beside it. */
   if (!document.getElementById('session-tabbar-strategy')) {
-    var sel = document.createElement('select');
-    sel.id = 'session-tabbar-strategy';
-    sel.className = 'session-tabbar-select';
-    sel.setAttribute('data-i18n-title', 'pane.strategy.title');
-    sel.innerHTML = '<option value="auto" data-i18n="pane.strategy.auto">Auto</option><option value="cols" data-i18n="pane.strategy.cols">Columns</option><option value="rows" data-i18n="pane.strategy.rows">Rows</option><option value="pairs" data-i18n="pane.strategy.pairs">2 cols</option>';
-    applyI18n(sel);
+    var wrap = document.createElement('span');
+    wrap.className = 'session-tabbar-strategy';
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.id = 'session-tabbar-strategy';
+    trigger.className = 'session-tabbar-select';
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('data-i18n-title', 'pane.strategy.title');
+    var label = document.createElement('span');
+    label.id = 'session-tabbar-strategy-label';
+    var caret = document.createElement('span');
+    caret.className = 'session-tabbar-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    trigger.appendChild(label);
+    trigger.appendChild(caret);
+
+    var menu = document.createElement('span');
+    menu.className = 'lang-menu session-tabbar-menu hidden';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML =
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="auto" data-i18n="pane.strategy.auto">Auto</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="cols" data-i18n="pane.strategy.cols">Columns</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="rows" data-i18n="pane.strategy.rows">Rows</button>' +
+      '<button type="button" class="lang-opt" role="menuitemradio" data-strategy="pairs" data-i18n="pane.strategy.pairs">2 cols</button>';
+    var opts = menu.querySelectorAll('.lang-opt');
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].addEventListener('click', function () {
+        choosePaneStrategy(this.getAttribute('data-strategy'));
+      });
+    }
+    if (typeof applyI18n === 'function') applyI18n(menu);
+    wrap.appendChild(trigger);
+    wrap.appendChild(menu);
+    actions.appendChild(wrap);
+
     try {
       var saved = localStorage.getItem('termcp_pane_strategy');
-      if (saved) sel.value = saved;
-      _paneStrategy = sel.value;
+      if (saved) _paneStrategy = saved;
     } catch (e) {}
-    sel.addEventListener('change', function () {
-      _paneStrategy = sel.value;
-      _paneColFr = [];
-      try { localStorage.setItem('termcp_pane_strategy', sel.value); } catch (e) {}
-      applyPaneGrid();
+    paintPaneStrategy();
+
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setPaneStrategyOpen(!_paneStrategyOpen);
     });
-    actions.appendChild(sel);
+    /* One menu at a time, and only this one closes on an outside click: the
+       header's own menus live under .app-header and never overlap the dock. */
+    document.addEventListener('click', function (e) {
+      if (!_paneStrategyOpen) return;
+      if (e.target.closest && e.target.closest('.session-tabbar-strategy')) return;
+      setPaneStrategyOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (!_paneStrategyOpen || e.key !== 'Escape') return;
+      setPaneStrategyOpen(false);
+      try { trigger.focus(); } catch (err) {}
+    });
   }
 })();
+
+/** Whether the arrangement menu is showing. Kept beside the element it drives
+ *  rather than in localStorage: an open menu is a transient, not a preference. */
+var _paneStrategyOpen = false;
+
+function setPaneStrategyOpen(open) {
+  var menu = document.querySelector('.session-tabbar-menu');
+  var trigger = document.getElementById('session-tabbar-strategy');
+  if (!menu || !trigger) return;
+  _paneStrategyOpen = !!open;
+  menu.classList.toggle('hidden', !_paneStrategyOpen);
+  trigger.setAttribute('aria-expanded', _paneStrategyOpen ? 'true' : 'false');
+}
+
+/** Draw the trigger and the checked row from _paneStrategy. Both the closed
+ *  trigger and the open list must agree with the arrangement actually applied,
+ *  so there is one function that reads the variable rather than two call sites
+ *  that could drift. */
+function paintPaneStrategy() {
+  var label = document.getElementById('session-tabbar-strategy-label');
+  if (!label) return;
+  var opts = document.querySelectorAll('.session-tabbar-menu .lang-opt');
+  for (var i = 0; i < opts.length; i++) {
+    var on = opts[i].getAttribute('data-strategy') === _paneStrategy;
+    opts[i].classList.toggle('active', on);
+    opts[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    /* The trigger's word IS the chosen row's word, read from the row rather
+       than translated again: one key, one rendering, so the closed key and the
+       open list cannot disagree — and switching language needs no second pass. */
+    if (on) label.textContent = opts[i].textContent;
+  }
+}
+
+/** Apply one arrangement. The stored value is written before the grid is laid
+ *  out, so a reload restores what is on screen rather than the previous shape. */
+function choosePaneStrategy(value) {
+  _paneStrategy = value;
+  _paneColFr = [];
+  try { localStorage.setItem('termcp_pane_strategy', value); } catch (e) {}
+  paintPaneStrategy();
+  setPaneStrategyOpen(false);
+  applyPaneGrid();
+}
 
 /** Toggle button reflects the current mode: grid icon when floating, float icon when tiled; active (blue) while tiled. */
 function updateTileToggleButton() {

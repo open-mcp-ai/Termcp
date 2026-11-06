@@ -2175,7 +2175,10 @@
      The session tabs remain so the operator can switch between sessions, but the
      desktop arrangement buttons are hidden. The close-archived key stays. */
   .session-tabbar-tile,
-  .session-tabbar-select,
+  /* The whole arrangement control, not only its trigger: its menu is a child of
+     the wrapper, and hiding the trigger alone would leave an open panel
+     reachable at a width where it can arrange nothing. */
+  .session-tabbar-strategy,
   .session-tabbar-toggle {
     display: none !important;
   }

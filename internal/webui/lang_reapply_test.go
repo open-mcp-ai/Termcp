@@ -496,7 +496,7 @@ func TestArrangementControlsAreDesktopOnly(t *testing.T) {
 	if end := strings.Index(narrow, "/* Extremely narrow"); end > 0 {
 		narrow = narrow[:end]
 	}
-	for _, sel := range []string{".session-tabbar-tile,", ".session-tabbar-select,", ".session-tabbar-toggle {"} {
+	for _, sel := range []string{".session-tabbar-tile,", ".session-tabbar-strategy,", ".session-tabbar-toggle {"} {
 		if !strings.Contains(narrow, sel) {
 			t.Errorf("the narrow block must hide the arrangement key %q: it cannot arrange anything on a phone", sel)
 		}
