@@ -1219,8 +1219,18 @@ window.addEventListener('resize', closeSessionTabMenu);
   }).observe(c, { childList: true });
 })();
 
+/* THE DEFAULT MUST BE ASSIGNED BEFORE THE KEY IS BUILT. The builder below is an
+   IIFE that runs while this file is being parsed; `var` hoists the declaration
+   but not the value, so a `var _paneStrategy = 'auto'` placed after it leaves
+   the builder reading undefined. The symptom was a key with no word in it:
+   every row failed the comparison, nothing was marked current, and the label
+   stayed empty — and the stored preference was silently lost as well, because
+   the later assignment overwrote whatever the builder had read from
+   localStorage. */
+var _paneStrategy = 'auto';        // auto | cols | rows | pairs (iTerm2-style arrangements)
+
 // Fixed right-side window controls, separated from the dock strip by its border:
-// eye (show/hide) · layout toggle (float<->tile, highlighted while tiled) · strategy select.
+// eye (show/hide) · layout toggle (float<->tile, highlighted while tiled) · arrangement menu.
 (function () {
   var actions = document.getElementById('session-tabbar-actions');
   if (!actions) return;
@@ -1327,6 +1337,10 @@ window.addEventListener('resize', closeSessionTabMenu);
       if (e.target.closest && e.target.closest('.session-tabbar-strategy')) return;
       setPaneStrategyOpen(false);
     });
+    /* Escape closes it, like every other menu in the page. Registered on the
+       document, which is where a real key press lands — the key event bubbles
+       from the focused element up through document to window, so a document
+       listener sees it whatever has focus. */
     document.addEventListener('keydown', function (e) {
       if (!_paneStrategyOpen || e.key !== 'Escape') return;
       setPaneStrategyOpen(false);
@@ -1394,7 +1408,6 @@ function updateTileToggleButton() {
 var _layoutMode = 'float';        // 'float' | 'tile'
 var _paneActiveWin = null;        // highlighted pane in tile mode
 var _paneMaxedWin = null;         // pane temporarily filling the grid
-var _paneStrategy = 'auto';        // auto | cols | rows | pairs (iTerm2-style arrangements)
 var _paneColFr = [];               // grid column ratios (unitless fr)
 var _autoTileArmed = true;        // re-arms when floating count drops to/below threshold
 var AUTO_TILE_THRESHOLD = 0;      // 0 disables auto-tiling; panes are entered manually only
@@ -1739,6 +1752,10 @@ function syncDockDepth() {
    data-i18n key and is repainted by applyI18n, but the row may also have been
    rebuilt with it absent, so the refresh is the one pass that settles both. */
 onLangChange(refreshSessionTabbar);
+/* The arrangement key's word is copied from its own menu row (see
+   paintPaneStrategy), so a language switch has to re-copy it — applyI18n
+   rewrites the rows it can see, and this brings the closed trigger along. */
+if (typeof onLangChange === 'function') onLangChange(paintPaneStrategy);
 
 // Keep the grid recomputed as panes are added/removed.
 (function () {

@@ -51,6 +51,34 @@ func TestTheArrangementKeyIsAMenuNotANativeSelect(t *testing.T) {
 		t.Errorf("_paneStrategy is assigned in %d places; the menu and the stored value must both feed it", n)
 	}
 
+	// THE DEFAULT MUST BE ASSIGNED BEFORE THE BUILDER RUNS, and this is the bug
+	// that shipped: `var` hoists the declaration but not the value, so with
+	// `var _paneStrategy = 'auto'` placed after the dock's builder IIFE, the
+	// builder read undefined, no row matched, nothing was marked current, and
+	// the key rendered with no word in it at all. The stored preference was lost
+	// too, because the later assignment overwrote what the builder had read.
+	//
+	// The position is the assertion: a source test is the only kind that can see
+	// it, since the markup is correct either way and the failure only appears
+	// when the whole file is parsed in order.
+	// Anchored at a line start: the prose above this check also contains the
+	// declaration, and a bare substring search matched the comment instead of the
+	// code — which made the check pass while the bug was still present.
+	decl := strings.Index(js, "\nvar _paneStrategy = 'auto';")
+	builder := strings.Index(js, "if (!document.getElementById('session-tabbar-strategy')) {")
+	if decl < 0 {
+		t.Fatal("_paneStrategy has no default; the key would render empty")
+	}
+	if builder >= 0 && decl > builder {
+		t.Error("_paneStrategy's default is assigned after the dock's builder runs, so the builder paints from undefined and the key renders with no word")
+	}
+	// The trigger's word comes from the chosen row, so a language switch must
+	// re-copy it: applyI18n rewrites the rows, and the closed trigger has to
+	// follow or it keeps the language it was built in.
+	if !strings.Contains(js, "onLangChange(paintPaneStrategy)") {
+		t.Error("nothing repaints the arrangement key on a language switch; the closed trigger would keep the old language")
+	}
+
 	// The panel opens UPWARD: the dock is the page's last row, so a list dropping
 	// below the trigger would open off the bottom of the window.
 	css := readAssetLF(t, "static/css/terminal.css")
