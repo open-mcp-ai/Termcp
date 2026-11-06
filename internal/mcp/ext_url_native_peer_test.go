@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestExtURLMountsAsNativeMCPPeer pins route 2 (issue #271):
@@ -245,5 +249,86 @@ func TestOpenExtSummaryFoldsNotesWithoutAll(t *testing.T) {
 	openAll := termText(t, s, map[string]any{"cmd": "open ext fold --all", "timeout": 10})
 	if !strings.Contains(openAll, "This session is kept warm") {
 		t.Errorf("open ext --all missing full notes body:\n%s", openAll)
+	}
+}
+
+// TestConcurrentMountPerformsOneHandshake pins the single-flight rule (issue #271).
+//
+// The mount is a network handshake, so it cannot sit under a lock: a peer that
+// accepts the connection and then stalls in userspace would hold that lock and
+// queue every other extension behind it. The price of not holding one is that two
+// concurrent asks both find nothing mounted — so the entry is published before the
+// dial and the second ask joins it. Without that, each ask dials its own peer, the
+// last one wins the table slot, and every earlier connection leaks.
+//
+// The mount is driven directly, not through `open ext`: the reconciler serialises
+// an extension's instances, so the term surface would never race itself and the
+// test would pass on the broken code too. It also releases the peer first, because
+// a mount that is already up is answered from the table without dialling.
+func TestConcurrentMountPerformsOneHandshake(t *testing.T) {
+	var handshakes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var env map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		id := env["id"]
+		w.Header().Set("Content-Type", "application/json")
+		switch env["method"] {
+		case "initialize":
+			handshakes.Add(1)
+			// Hold the handshake open so every racing ask is already inside the
+			// mount when it completes; a fast reply would let them serialise.
+			time.Sleep(50 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
+				"protocolVersion": "2024-11-05",
+				"serverInfo":      map[string]any{"name": "m", "version": "1"},
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+			}})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"tools": []any{}}})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
+		}
+	}))
+	defer srv.Close()
+
+	s := newExtensionTestServer(t)
+	if got := termText(t, s, map[string]any{"cmd": `create ext once --target internal --url ` + srv.URL}); !strings.HasPrefix(got, "TERM/1 200") {
+		t.Fatalf("create failed: %s", got)
+	}
+	open := termText(t, s, map[string]any{"cmd": "open ext once", "timeout": 15})
+	sessID := ""
+	for _, line := range strings.Split(open, "\n") {
+		if v, ok := strings.CutPrefix(line, "session_id: "); ok {
+			sessID = strings.TrimSpace(v)
+		}
+	}
+	if sessID == "" {
+		t.Fatalf("no session_id in open reply:\n%s", open)
+	}
+	ext, err := s.extensions.Store().Load("once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The instance (and its session) stays up; only the mounted peer goes away, so
+	// the racing asks all have to dial.
+	s.unmountExtPeer(sessID, "once")
+	handshakes.Store(0)
+
+	const askers = 8
+	var wg sync.WaitGroup
+	wg.Add(askers)
+	for i := 0; i < askers; i++ {
+		go func() {
+			defer wg.Done()
+			_, handle, slot, ok := s.mountExtPeer(context.Background(), ext, sessID, "once")
+			if !ok || slot.Code >= 400 || handle == "" {
+				t.Errorf("mount failed: code=%d body=%q", slot.Code, slot.Body)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := handshakes.Load(); n != 1 {
+		t.Fatalf("%d concurrent mounts performed %d handshakes; they must share one", askers, n)
 	}
 }
