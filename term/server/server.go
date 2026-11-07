@@ -116,11 +116,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// float64, which is what a term argument reader expects. An empty body is
 		// legal and means the same thing as an empty call: the guide.
 		if err := dec.Decode(&args); err != nil && err.Error() != "EOF" {
-			WriteEnvelope(w, http.StatusBadRequest, envelope.Reply{Slots: []envelope.Slot{{
-				Code:    http.StatusBadRequest,
-				Headers: map[string]string{"Error-Code": "invalid_argument"},
-				Body:    "request body must be a JSON object of term arguments: " + err.Error(),
-			}}})
+			WriteEnvelope(w, http.StatusBadRequest, envelope.Reply{Slots: []envelope.Slot{
+				envelope.InvalidArgument("request body must be a JSON object of term arguments: " + err.Error()),
+			}})
 			return
 		}
 	}

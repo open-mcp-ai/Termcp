@@ -163,11 +163,7 @@ func badRequest(stmt directive.Statement, body string) envelope.Slot {
 // exists. There is no Path header to attach, and inventing one would echo a
 // position the caller never wrote.
 func badRequestNoPath(body string) envelope.Slot {
-	return envelope.Slot{
-		Code:    400,
-		Headers: map[string]string{"Error-Code": CodeInvalidArgument},
-		Body:    body,
-	}
+	return envelope.InvalidArgument(body)
 }
 
 // ptrSlot is the address of a slot, for the helpers whose caller must return a

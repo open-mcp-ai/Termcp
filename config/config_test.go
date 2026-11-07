@@ -256,3 +256,31 @@ func TestEveryTaggedFieldIsReachableFromBothEntrances(t *testing.T) {
 		t.Error("--themes-dir is still missing: ThemesDir had a field, a resolver and no way to set it")
 	}
 }
+
+// TestBindTakesDefaultsFromTheStruct documents the ordering the whole design rests
+// on: defaults come from the field values AT THE MOMENT Bind runs. So a caller sets
+// up its config first and binds second — `config.Default()`, adjust, then Bind.
+//
+// It is a test rather than a comment because the failure is silent in the other
+// direction: binding first and adjusting afterwards leaves --help advertising the
+// old default while every programmatic reader sees the new one, and nothing in the
+// call itself looks wrong.
+func TestBindTakesDefaultsFromTheStruct(t *testing.T) {
+	cfg := Default()
+	cfg.Port = 12345
+	cfg.Host = "10.0.0.1"
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	Bind(fs, cfg)
+
+	port := fs.Lookup("port")
+	if port == nil {
+		t.Fatal("--port was not registered")
+	}
+	if port.DefValue != "12345" {
+		t.Errorf("--port default is %q, want the struct's 12345: defaults must be read when Bind runs", port.DefValue)
+	}
+	if host := fs.Lookup("host"); host == nil || host.DefValue != "10.0.0.1" {
+		t.Errorf("--host default does not match the struct: %v", host)
+	}
+}

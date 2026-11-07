@@ -32,6 +32,19 @@ import (
 // budget simply does not apply one. Leaving them unread here keeps this method
 // honest about the one thing it is: the line's entry point.
 //
+// # Who calls it, and who does not
+//
+// THIS PROJECT'S OWN REST AND MCP ENTRANCES DO NOT. They go through
+// internal/mcp.executeTerm, which adds alias expansion, dry runs, the window
+// parameters and structured content — capability-layer work that has no place in a
+// protocol package. The overlap between the two is the guide and the syntax-error
+// envelope, and that overlap is deliberate rather than an unfinished merge: an
+// embedder that has no aliases and no windows should not have to re-derive those
+// two answers, and one that has them must apply its own machinery around this call.
+//
+// So when these two drift apart, the question is not "why not one function" but
+// "which of the two rules was supposed to be shared". The answer is the two above.
+//
 // It does not apply review, admission or isolation. Those are decisions about a
 // capability, and they belong to the Handler (or to a RequestContext hook on the
 // transport), not to the language.
@@ -73,7 +86,7 @@ func (t *Term) Guide() Reply {
 	hasHelp := false
 	for _, op := range t.grammar.Ops() {
 		if op.Name == "help" {
-		hasHelp = true
+			hasHelp = true
 		}
 		// Usage is the one line the vocabulary declares; an Op built without it
 		// still has to be listed, or the verb is invisible to the reader.
