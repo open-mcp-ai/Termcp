@@ -1,6 +1,8 @@
 package config
 
 import (
+	"flag"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -101,19 +103,22 @@ func TestApplyEnv_PopulatesAuthFromEnv(t *testing.T) {
 	t.Setenv(EnvAuthToken, "env-token")
 	t.Setenv(EnvAuthHash, "env-hash")
 	cfg := Default()
-	cfg.ApplyEnv()
+	applyEnv(t, cfg)
 	if cfg.AuthToken != "env-token" || cfg.AuthHash != "env-hash" {
 		t.Fatalf("ApplyEnv did not read env: token=%q hash=%q", cfg.AuthToken, cfg.AuthHash)
 	}
 }
 
+// The flag wins because the user TYPED it, which is the question ApplyEnv asks
+// now. It used to ask "is the field non-empty", and that answer cannot tell an
+// explicit empty value from an unset one — so `--auth-token ""` was silently
+// refilled from the environment while the operator watched it disappear.
 func TestApplyEnv_FlagValueWins(t *testing.T) {
 	t.Setenv(EnvAuthToken, "env-token")
 	cfg := Default()
-	cfg.AuthToken = "flag-token" // set by flag.Parse before ApplyEnv's callers run
-	cfg.ApplyEnv()
+	applyEnv(t, cfg, "--auth-token", "flag-token")
 	if cfg.AuthToken != "flag-token" {
-		t.Fatalf("ApplyEnv overwrote flag value: got %q", cfg.AuthToken)
+		t.Fatalf("ApplyEnv overwrote a typed flag: got %q", cfg.AuthToken)
 	}
 }
 
@@ -121,7 +126,7 @@ func TestApplyEnv_BlankEnvCleared(t *testing.T) {
 	t.Setenv(EnvAuthToken, "   ")
 	t.Setenv(EnvAuthHash, "")
 	cfg := Default()
-	cfg.ApplyEnv()
+	applyEnv(t, cfg)
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
 		t.Fatalf("blank env should be ignored, got token=%q hash=%q", cfg.AuthToken, cfg.AuthHash)
 	}
@@ -131,7 +136,7 @@ func TestApplyEnv_DisableAuthFromEnv(t *testing.T) {
 	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " on "} {
 		t.Setenv(EnvDisableAuth, v)
 		cfg := Default()
-		cfg.ApplyEnv()
+		applyEnv(t, cfg)
 		if !cfg.DisableAuth {
 			t.Errorf("%s=%q should enable DisableAuth", EnvDisableAuth, v)
 		}
@@ -144,7 +149,7 @@ func TestApplyEnv_DisableAuthFalsyValuesIgnored(t *testing.T) {
 	for _, v := range []string{"", "0", "false", "no", "off", "   "} {
 		t.Setenv(EnvDisableAuth, v)
 		cfg := Default()
-		cfg.ApplyEnv()
+		applyEnv(t, cfg)
 		if cfg.DisableAuth {
 			t.Errorf("%s=%q must not enable DisableAuth", EnvDisableAuth, v)
 		}
@@ -180,5 +185,74 @@ func TestValidate_DisableAuthConflictsWithHash(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth-hash") {
 		t.Fatalf("error should name the conflicting setting, got: %v", err)
+	}
+}
+
+// applyEnv runs the real sequence: register the flags, parse none of them, then
+// fill from the environment. Tests that only care about the environment use this;
+// the ones about precedence parse an argument.
+func applyEnv(t *testing.T, cfg *Config, args ...string) {
+	t.Helper()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	Bind(fs, cfg)
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse %v: %v", args, err)
+	}
+	if err := ApplyEnv(fs, cfg); err != nil {
+		t.Fatalf("ApplyEnv: %v", err)
+	}
+}
+
+// TestEnvDoesNotOverrideATypedFlag pins the precedence that replaced "non-empty
+// wins": what matters is whether the operator SAID something, not whether the
+// value happens to be zero. `--port 0` and an empty --auth-token are both
+// answers, and an environment variable must not overwrite them.
+func TestEnvDoesNotOverrideATypedFlag(t *testing.T) {
+	t.Setenv("TERMCP_PORT", "9999")
+	t.Setenv(EnvAuthToken, "env-token")
+	cfg := Default()
+	applyEnv(t, cfg, "--port", "0", "--auth-token", "")
+	if cfg.Port != 0 {
+		t.Errorf("--port 0 was overwritten by the environment: got %d", cfg.Port)
+	}
+	if cfg.AuthToken != "" {
+		t.Errorf("an explicitly empty --auth-token was overwritten: got %q", cfg.AuthToken)
+	}
+}
+
+// TestEveryTaggedFieldIsReachableFromBothEntrances is the drift check that the
+// old three-table arrangement could not have. A field with a flag tag must also
+// have an env tag or be one of the documented exceptions, and Bind must register
+// every flag tag it finds — including ThemesDir, which had a field and no
+// entrance at all.
+func TestEveryTaggedFieldIsReachableFromBothEntrances(t *testing.T) {
+	// The three directory settings read their own variable inside their
+	// resolver, because each also has a home-directory fallback.
+	ownResolver := map[string]bool{"DataDir": true, "AssetsDir": true, "ThemesDir": true}
+
+	cfg := Default()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	Bind(fs, cfg)
+
+	registered := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) { registered[f.Name] = true })
+
+	v := reflect.ValueOf(cfg).Elem()
+	ty := v.Type()
+	for i := 0; i < ty.NumField(); i++ {
+		f := ty.Field(i)
+		name := f.Tag.Get("flag")
+		if name == "" {
+			continue
+		}
+		if !registered[name] {
+			t.Errorf("%s declares --%s but Bind did not register it", f.Name, name)
+		}
+		if f.Tag.Get("env") == "" && !ownResolver[f.Name] {
+			t.Errorf("%s has --%s but no env tag and no resolver: an operator can set it and a service cannot", f.Name, name)
+		}
+	}
+	if !registered["themes-dir"] {
+		t.Error("--themes-dir is still missing: ThemesDir had a field, a resolver and no way to set it")
 	}
 }

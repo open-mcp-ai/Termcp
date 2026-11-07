@@ -14,6 +14,11 @@ const EnvDataDir = "TERMCP_DATA_DIR"
 // EnvAssetsDir overrides the default external assets directory when set.
 const EnvAssetsDir = "TERMCP_ASSETS_DIR"
 
+// EnvThemesDir overrides the default external theme directory when set. It
+// joined late: the field existed, its resolver existed, and neither the flag nor
+// the variable did — see bind.go for how the three were kept apart.
+const EnvThemesDir = "TERMCP_THEMES_DIR"
+
 // EnvAuthToken / EnvAuthHash configure HTTP authentication from the
 // environment. Flags take precedence over these when both are set.
 const (
@@ -28,18 +33,23 @@ const EnvDisableAuth = "TERMCP_DISABLE_AUTH_TOKEN"
 
 // Config holds all runtime configuration for the server.
 type Config struct {
-	Host                string // HTTP server bind address (default: "127.0.0.1" = loopback; use 0.0.0.0 for all interfaces)
-	Port                int    // HTTP server port, must be 1-65535 (default: 18765)
-	DataDir             string // persistent storage directory; empty means default ($TERMCP_DATA_DIR or ~/.termcp)
-	AssetsDir           string // external static assets directory; files there override the embedded UI/docs (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)
-	ThemesDir           string // external theme directory served alongside the assets; empty means the embed's own themes
-	LogLevel            string // log verbosity: debug|info|warn|error (default: "info")
-	NoInternal          bool   // disable the built-in loopback SSH profile
-	MCPManageSSHConfigs bool   // enable the profile write actions (create/edit/copy/delete) (default: false)
-	Headless            bool   // serve no browser UI: the MCP tool surface and POST /api/term remain (default: false)
-	AuthToken           string // plaintext HTTP auth token ($TERMCP_AUTH_TOKEN); mutually exclusive with AuthHash
-	AuthHash            string // salted SHA-256 token hash ($TERMCP_AUTH_HASH); generate with `termcp --gen-auth-hash`
-	DisableAuth         bool   // force HTTP authentication off (--disable-auth / $TERMCP_DISABLE_AUTH_TOKEN)
+	Host string `flag:"host" env:"TERMCP_HOST" usage:"HTTP bind address (127.0.0.1 = loopback default; 0.0.0.0 = all interfaces)"`
+	Port int    `flag:"port" env:"TERMCP_PORT" usage:"HTTP server port"`
+	// DataDir, AssetsDir and ThemesDir have no env tag: each one's environment
+	// variable is read by its own resolver (DefaultDataDir and the two beside it),
+	// because they also have a documented fallback to a path under the user's home.
+	// An env tag here would be a second way to say the same thing, and the two
+	// would drift exactly like the flags did.
+	DataDir             string `flag:"data-dir" usage:"Data directory for JSON storage (default: $TERMCP_DATA_DIR or ~/.termcp)"`
+	AssetsDir           string `flag:"assets" usage:"External static assets directory: files there override the embedded Web UI and docs; missing files fall back to the embed (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)"`
+	ThemesDir           string `flag:"themes-dir" usage:"External theme directory served alongside the assets (default: $TERMCP_THEMES_DIR or ~/.termcp/themes)"`
+	LogLevel            string `flag:"log-level" env:"TERMCP_LOG_LEVEL" usage:"Log verbosity: debug|info|warn|error"`
+	NoInternal          bool   `flag:"no-internal" env:"TERMCP_NO_INTERNAL" usage:"Disable the built-in loopback SSH profile (no internal connection)"`
+	MCPManageSSHConfigs bool   `flag:"mcp-manage-ssh-configs" env:"TERMCP_MCP_MANAGE_SSH_CONFIGS" usage:"Enable the profile write actions of the 'profile' directive (create/edit/copy/delete) over MCP (off by default; passwords/keys are never exposed)"`
+	Headless            bool   `flag:"headless" env:"TERMCP_HEADLESS" usage:"Serve no browser UI: the MCP tool surface, POST /api/term and the agent docs remain. This is what 'go build -tags no_webui' compiles in, selectable at run time."`
+	AuthToken           string `flag:"auth-token" env:"TERMCP_AUTH_TOKEN" usage:"HTTP authentication token (or $TERMCP_AUTH_TOKEN)"`
+	AuthHash            string `flag:"auth-hash" env:"TERMCP_AUTH_HASH" usage:"Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')"`
+	DisableAuth         bool   `flag:"disable-auth" env:"TERMCP_DISABLE_AUTH_TOKEN" usage:"Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured."`
 }
 
 // Default returns a Config with sensible defaults.
@@ -83,6 +93,9 @@ func DefaultAssetsDir() (string, error) {
 
 // DefaultThemesDir is an application resource directory, independent of DataDir.
 func DefaultThemesDir() (string, error) {
+	if env := strings.TrimSpace(os.Getenv(EnvThemesDir)); env != "" {
+		return filepath.Clean(env), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
@@ -90,32 +103,10 @@ func DefaultThemesDir() (string, error) {
 	return filepath.Join(home, ".termcp", "themes"), nil
 }
 
-// ApplyEnv fills unset auth fields from the corresponding environment
-// variables. The caller should invoke this after parsing flags: a non-empty
-// flag value therefore wins over the environment.
-func (c *Config) ApplyEnv() {
-	if c.AuthToken == "" {
-		c.AuthToken = strings.TrimSpace(os.Getenv(EnvAuthToken))
-	}
-	if c.AuthHash == "" {
-		c.AuthHash = strings.TrimSpace(os.Getenv(EnvAuthHash))
-	}
-	if !c.DisableAuth && envTruthy(os.Getenv(EnvDisableAuth)) {
-		c.DisableAuth = true
-	}
-}
-
-// envTruthy reports whether an environment variable was set to an affirmative
-// value. "0", "false", "no" and "off" (any case) mean "not set" so that
-// `TERMCP_DISABLE_AUTH_TOKEN=0` cannot surprise an operator into an open server.
-func envTruthy(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
+// ApplyEnv moved to bind.go: environment variables are read from the struct's
+// env tags, so a field cannot have a flag and forget its variable (or the
+// reverse) any more. config.ApplyEnv(fs, cfg) is the replacement, and it must
+// run AFTER flag.Parse so "did the user type it" is a question with an answer.
 
 // Validate checks that all fields are within valid ranges. A non-loopback
 // listener must be protected by an auth token or hash; loopback-only binds
