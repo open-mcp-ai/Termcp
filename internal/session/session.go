@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/buffer"
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -20,6 +19,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
+	"github.com/open-mcp-ai/termcp/internal/uid"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 	"golang.org/x/crypto/ssh"
 )
@@ -175,7 +175,10 @@ type Session struct {
 // staying collision-free in practice; storage.validateID accepts it (lowercase
 // hex is within [a-zA-Z0-9_-]).
 func newResourceID() string {
-	return uuid.New().String()[:12]
+	// Six bytes, twelve hex characters. The previous spelling sliced a UUID
+	// string, which kept its dash — an id that is 11 hex characters and one
+	// separator, for no reason a reader could recover.
+	return uid.Hex(6)
 }
 
 // New creates and starts a new Session.

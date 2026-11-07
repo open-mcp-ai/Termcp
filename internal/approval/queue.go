@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/open-mcp-ai/termcp/internal/uid"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
 )
@@ -134,7 +134,7 @@ func (q *Queue) Submit(sub Submission) (string, error) {
 
 	now := clock.Now()
 	r := &Request{
-		ID:        uuid.NewString(),
+		ID:        uid.UUID(),
 		SessionID: q.session,
 		ShellID:   sub.ShellID,
 		Source:    sub.Source,
