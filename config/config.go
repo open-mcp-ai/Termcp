@@ -108,13 +108,15 @@ func DefaultThemesDir() (string, error) {
 // reverse) any more. config.ApplyEnv(fs, cfg) is the replacement, and it must
 // run AFTER flag.Parse so "did the user type it" is a question with an answer.
 
-// Validate checks that all fields are within valid ranges. A non-loopback
-// listener must be protected by an auth token or hash; loopback-only binds
-// retain the convenient unauthenticated development default.
-func (c *Config) Validate() error {
-	if c.Port < 1 || c.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535, got %d", c.Port)
-	}
+// ValidateInstance checks the settings an instance needs no matter how it is
+// reached: where it stores things, how it logs, and that its credentials do not
+// contradict each other.
+//
+// IT SAYS NOTHING ABOUT A PORT, because a port is a property of LISTENING. The
+// split exists because a program that never binds one was being forced to invent
+// a free port it does not use — which is the symptom of asking a construction
+// question that only the serve step can answer.
+func (c *Config) ValidateInstance() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir must not be empty")
 	}
@@ -136,6 +138,23 @@ func (c *Config) Validate() error {
 		case c.AuthHash != "":
 			return fmt.Errorf("auth is disabled (--disable-auth / $%s) but --auth-hash / $%s is also set; remove one of them", EnvDisableAuth, EnvAuthHash)
 		}
+	}
+	return nil
+}
+
+// Validate checks what BINDING a port requires on top of the instance settings: a
+// usable port, and a non-loopback address that is protected by credentials.
+//
+// A non-loopback listener must be protected by an auth token or hash;
+// loopback-only binds retain the convenient unauthenticated development default.
+func (c *Config) Validate() error {
+	if err := c.ValidateInstance(); err != nil {
+		return err
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", c.Port)
+	}
+	if c.DisableAuth {
 		return nil
 	}
 	if isNonLoopbackBind(c.Host) && c.AuthToken == "" && c.AuthHash == "" {

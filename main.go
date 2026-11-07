@@ -331,8 +331,18 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		srv.Close("signal")
 	}()
 
+	// TWO CALLS, and the split is the point: Start brings the surfaces up and
+	// returns; Listen binds the port and blocks. This binary wants both. A program
+	// that only wants the command language — an embedder, a test — calls the first
+	// and does not ask for the second, which is how it gets an instance without a
+	// port. That replaced Options.NoListener, one flag that decided for everyone
+	// which half of Start to skip, and skipped the MCP docs registration with it.
 	if err := srv.Start(); err != nil {
 		slog.Error("failed to start server", "err", err)
+		os.Exit(1)
+	}
+	if err := srv.Listen(); err != nil {
+		slog.Error("server stopped with an error", "err", err)
 		os.Exit(1)
 	}
 }

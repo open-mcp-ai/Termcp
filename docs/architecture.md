@@ -38,36 +38,53 @@
 termcp/term     TERM/1 协议本体：DSL 解析、指令注册表、信封、地址。
                 纯函数层——不认识会话，不开 socket，不读文件，不看时钟。
                 go list -deps ./term 里没有一条 internal/ 路径。
+termcp/term/server
+                协议的传输层：HTTP 入口与信封的线上形态。它把 term 变成一个
+                能对外服务的服务器，但仍然只认 Handler 接口，不认识会话。
+                自定义词表 + 一个 Handler + 这一层 = 一个 TERM/1 服务器。
 termcp/core     运行时装配：会话、shell、存储、转发、扩展、MCP 服务面、
                 可选 Web UI。core.New(core.Options{...}) 起一个实例。
 termcp/config   实例设置（Config），命令行与库调用共用同一份。
-termcp/cmd      只剩 flag/env → Config → core.New 的装配。
+根包 main      只剩 flag/env → Config → core.New 的装配。
 ```
 
-`termcp/core` 有两种用法，区别只在要不要端口：
+`term` 与 `term/server` 分两层是有原因的：**它们回答不同的问题**。前者是"这行文本是什么意思"，
+后者是"怎么把它送到网络上"。一个只想加自己动词的调用方需要后者但不需要 core 的会话、
+存储与转发；反过来，一个只用协议做解析的调用方（`termcp_tool` 声明的校验就是）连后者都不该拖进来。
+
+`termcp/core` 有两种用法，区别只在**调哪几个方法**，不在一个开关：
 
 ```go
-// 二进制走这条：绑 cfg.Host:cfg.Port，一直服务到关停。
+// 二进制走这条：Start 装配，Listen 绑端口并阻塞到关停。
 srv, _ := core.New(core.Options{Config: cfg})
 defer srv.Close("done")
 srv.Start()
+srv.Listen()
 
-// 嵌入方走这条：不绑端口，但 MCP 面与 REST 面都在，经 Term 直接调用。
+// 嵌入方走这条：只 Start，不 Listen。不绑端口，但 MCP 面与 REST 面都在。
 cfg.Headless = true
-srv, _ := core.New(core.Options{Config: cfg, NoListener: true})
+srv, _ := core.New(core.Options{Config: cfg})
+defer srv.Close("done")
+srv.Start()
 reply := srv.Term(ctx, "ls session", nil)   // 拿到 TERM/1 信封
+// 或者把 srv.Handler() 挂到自己的 mux 上
 ```
+
+**为什么不是 `NoListener: true`。** 那曾经是一个布尔，把 `Start` 切成两半，而切错了地方：它名义上只说"不要开 socket"，实际把 `mcp.Start` 一起跳过了——那个调用注册 agent 读的 `learn-api` 文档提示并解析 baseURL，和端口毫无关系。于是最需要自我描述的形态（无端口、无 UI、进程内驱动）恰恰是唯一拿不到文档的形态。
+
+一个问题一个方法，就不会切错：`Start` 把所有面（SSH、MCP、扩展、`ready`）拉起来并返回；`Listen` 绑定并阻塞。"不监听"＝不调那一步，不是一个字段在替所有人决定跳过 `Start` 的哪一半。端口校验也跟着挪进了 `Listen`——没绑过端口的实例不该因为一个用不到的端口号被拒绝。
 
 `Headless` 是 `config.Config` 的字段，不是 `core.Options` 的：它描述的是这个实例是什么，和 `Host`、`DataDir` 同一类，所以设置它的地方只有一处。`core.New` 读它，同时也在这里应用 `AssetsDir` 与 `ThemesDir`——调用方不需要、也不应该去动 `webui` 的包级变量。它省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
 
-于是有四种组合，各有各的用途：
+于是有五种组合，各有各的用途：
 
 | 形态 | 怎么得到 | 适用 |
 |---|---|---|
 | 完整版 | `make build` | 人 + agent 共用一台实例 |
 | 运行时无 UI | `termcp --headless` | 一个二进制既能给 web 也能只给 agent |
 | 编译期无 UI（termcp-headless） | `make build-api` → `dist/termcp-api-*` | 镜像要小、永远不给 web 用 |
-| 库（SDK） | `import "termcp/core"`，`NoListener: true` | 嵌进别的 Go 程序，连端口都不要 |
+| 库（SDK） | `import "termcp/core"`，只 `Start()` 不 `Listen()` | 嵌进别的 Go 程序，连端口都不要 |
+| 自定义协议服务器 | `import "termcp/term"` + `termcp/term/server` | 词表是自己的，只写动词 |
 
 第三种就是 issue 里说的 `termcp-headless`：产物名带 `api` 后缀，可与完整版并存于 `dist/`。它和 `--headless` 不重复——一个减的是**二进制**，一个减的是**装配**。
 
