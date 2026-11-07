@@ -9,11 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/config"
 	"github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/term"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/server"
 )
 
 // newInstance builds a headless instance rooted in a temp dir, and — this is the
@@ -448,4 +452,100 @@ func TestListenAfterCloseIsRefused(t *testing.T) {
 	if err := srv.Listen(); err == nil {
 		t.Fatal("Listen succeeded on a released instance; it would serve requests against a stopped reconciler and a closed store")
 	}
+}
+
+// TestTheEntranceRulesAreIdenticalAcrossTheTwoFaces is the cut-surface check the
+// extraction promised and never proved.
+//
+// The two faces answered a syntax error differently: the embedder's carried
+// `syntax_error`, termcp's own REST entrance carried `invalid_argument` — two names
+// for one situation, with twelve tests pinning the product's and none comparing
+// them. A caller switching on the error code had to know which server it was
+// talking to, which is the "two descriptions of one protocol" failure the split
+// existed to remove.
+//
+// So: one input, both faces, and the answers must match wherever the PROTOCOL owns
+// the reply rather than the capability layer. The inputs below never reach a
+// Handler, which is what makes the comparison legitimate — the two faces have
+// different handlers on purpose and agree by contract on refusals this early.
+//
+// THE GUIDE IS DELIBERATELY NOT COMPARED. Both must answer 200 to an empty call;
+// the text is the product's on one face and the embedder's generated list on the
+// other.
+func TestTheEntranceRulesAreIdenticalAcrossTheTwoFaces(t *testing.T) {
+	var caps stubCaps
+	embedder := httptest.NewServer(server.New(server.Options{
+		Term: term.New(directive.NewGrammar([]directive.Op{
+			{Name: "greet", Usage: "greet <name>"},
+		}), term.WithHandler(&caps)),
+	}))
+	t.Cleanup(embedder.Close)
+
+	product := newInstance(t)
+	productFace := httptest.NewServer(product.Handler())
+	t.Cleanup(productFace.Close)
+
+	cases := []struct{ name, body string }{
+		{"malformed JSON body", `{"cmd":`},
+		{"cmd of the wrong type", `{"cmd":42}`},
+		{"syntax error", `{"cmd":"x &&"}`},
+		{"unknown directive", `{"cmd":"nosuchdirective x"}`},
+	}
+	for _, tc := range cases {
+		statuses := map[string]int{}
+		codes := map[string]string{}
+		for _, entry := range []struct{ face, url string }{
+			{"embedder", embedder.URL},
+			{"product", productFace.URL + "/api/term"},
+		} {
+			resp, err := http.Post(entry.url, "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("%s/%s: post: %v", tc.name, entry.face, err)
+			}
+			var slot struct {
+				Code    int    `json:"code"`
+				ErrorCD string `json:"Error-Code"`
+				Usage   string `json:"Usage"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&slot)
+			resp.Body.Close()
+			statuses[entry.face] = resp.StatusCode
+			codes[entry.face] = slot.ErrorCD
+			if slot.Code < 400 {
+				t.Errorf("%s/%s: %q is not a refusal, got code %d", tc.name, entry.face, tc.body, slot.Code)
+			}
+			// An unknown verb answers with a list of verbs on BOTH faces. The lists
+			// differ — each names its own vocabulary — so the assertion is that the
+			// help exists, not that it matches. A face that names the problem without
+			// the remedy is the half-answer this compares.
+			if tc.name == "unknown directive" && slot.Usage == "" {
+				t.Errorf("%s/%s: an unknown directive carries no verb list", tc.name, entry.face)
+			}
+		}
+		if statuses["embedder"] != statuses["product"] {
+			t.Errorf("%s: HTTP status differs — embedder %d, product %d",
+				tc.name, statuses["embedder"], statuses["product"])
+		}
+		if codes["embedder"] != codes["product"] {
+			t.Errorf("%s: Error-Code differs — embedder %q, product %q. One situation must not have two names; a caller cannot tell which server it reached.",
+				tc.name, codes["embedder"], codes["product"])
+		}
+	}
+	if n := caps.reached.Load(); n != 0 {
+		t.Errorf("the embedder's handler was consulted %d times for inputs that must be refused at the entrance", n)
+	}
+}
+
+// stubCaps is a capability layer that must never be consulted by the refusals
+// above. It counts the calls it did get: asserting on the code alone would pass if
+// a request slid past the entrance and came back a 500, which is exactly the
+// failure being ruled out — a refusal that is not refused at the entrance is a
+// different answer from the protocol's.
+type stubCaps struct {
+	reached atomic.Int64
+}
+
+func (c *stubCaps) Handle(_ context.Context, st term.Statement) []term.Slot {
+	c.reached.Add(1)
+	return []term.Slot{{Code: 500, Body: "the entrance should have refused this before it reached a handler: " + st.Op + "\n"}}
 }

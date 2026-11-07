@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 新功能
+
+- **`termcp/term` 与 `termcp/term/server` 可被外部 Go 程序直接引用**：写一个 `Handler`、声明自己的词表，就能得到一个 TERM/1 服务器——解析、`&&`/`||` 短路、`208`、slot 对齐、信封、空调用向导全部由协议层提供。`go list -deps ./term` 里没有任何 `internal/` 路径。
+- **`termcp/config` 从结构体标签生成命令行与环境变量**：`config.Bind` 注册 flag，`config.ApplyEnv` 按"用户是否显式传入"填 env（`flag.Visit` 判定，`--port 0` 与 `--auth-token ""` 不再被环境变量覆盖）。顺带补上一直没有入口的 `--themes-dir` / `$TERMCP_THEMES_DIR` 与 `$TERMCP_MCP_MANAGE_SSH_CONFIGS`。
+- **`termcp/core` 可作为库嵌入**：`core.New` 装配，`Start` 拉起全部服务面（含 MCP 文档提示），`Listen` 才绑定端口并阻塞。不绑定端口＝不调用 `Listen`，不再是一个布尔开关。
+
+### 修复
+
+- **不监听端口的实例拿不到 MCP 文档提示**：`mcp.Start`（解析 baseURL、注册 `learn-api`）曾被放在绑定端口的分支里，所以"无端口、无 UI、进程内驱动"这种形态恰恰缺文档。
+- **`Close` 从不关闭 HTTP server**：二进制靠进程退出掩盖了它，嵌入方 `Close` 之后端口仍被占用、无法重绑。
+- **从未 `Listen` 的实例 `Close` 不释放任何资源**：reconciler 继续探测、store 不关闭。
+- **每次关停白等 5 秒**：`SSEServer.Shutdown` 收集完会话就丢弃，然后无条件阻塞到 context 超时。改为关闭各会话的流并等待会话真正清空（有界）。正常关停从 5.0s 降到约 60ms，端口冲突启动失败从 6.5s 降到约 1.5s。
+- **语法错误的 `Error-Code` 在不同入口不一致**：termcp 自己的 REST/MCP 面返回 `invalid_argument`，而基于 `termcp/term` 自建入口的项目会拿到 `syntax_error`——一个在项目与文档里都不再出现的名字。同一个协议里同一个情形有两个名字，调用方必须知道自己在跟哪个服务器说话。现在统一为 `invalid_argument`，并由 `term.SyntaxReply` 提供，两面对照有测试钉住。
+- **`502`/`504` 的 reason phrase 缺失**：这两个码会被返回，但渲染表里没有，于是状态行印出 `TERM/1 502 Status`。
+
+### 文档
+
+- 逐条机械核对全部文档的 flag、仓库路径、HTTP 路由、`TERMCP_*` 环境变量与状态码；修正 `208 Not Run`→`Already Reported`、`500 Internal Error`→`Internal Server Error`、`internal/locator`→`term/locator`、审批 scope 少列 4 个、`--headless`/`--themes-dir` 缺失、README 重复行，以及 `AGENTS.md` 里仍在教 `shell_input`/`shell_key`/`shell_output` 的整节（这些自单工具化起就不是 MCP 工具了）。
+- 删除两份与仓库无关的文档：`docs/agents/domain.md`（指引的 `CONTEXT.md`/`docs/adr/` 在本仓库不存在）、`docs/webui-i18n-prompt.md`（已完成任务的交付提示词）。
 
 ## v0.2.9-rc.2 — 2026-11-06
 
