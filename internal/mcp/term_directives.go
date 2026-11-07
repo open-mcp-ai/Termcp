@@ -627,6 +627,14 @@ func (s *Server) sessionForStatement(stmt directive.Statement) *session.Session 
 // returns the moment the channel closes; on a pty there is no such signal, so it
 // waits out the caller's time window and returns what the terminal produced.
 func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+	// RECURSIVE ROUTING (#274) COMES FIRST, because it answers a different
+	// question from the paths below: does the TARGET name a downstream that
+	// speaks this protocol? Only an extension that declared `termcp_tool` and
+	// passed verification does, so an ordinary session, channel or borrowed host
+	// never reaches here and nothing below changes for them.
+	if slots, routed := s.termcpRoute(ctx, stmt, win); routed {
+		return slots
+	}
 	// SHORT-CIRCUIT BORROWED HOST EXECUTION (#237): `run use:<host> $1`.
 	// If the target is a borrowed host (bare host name or `use:<host>`), execute
 	// directly through the transport pool without creating a session in the registry.
