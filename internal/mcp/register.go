@@ -9,7 +9,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/task"
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // New creates and configures the MCP server with all tools registered.
@@ -51,33 +51,33 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		opt(s)
 	}
 
-	mcpServer := mcpgo.NewServer("termcp", version, mcpServerInstructions, mcpgo.Hooks{
+	mcpServer := mcp.NewServer("termcp", version, mcpServerInstructions, mcp.Hooks{
 		// Who is attached. The transport registers a session before the client has
 		// said anything, so the register hook can only record the session object;
 		// the client's name arrives with initialize.
-		OnRegisterSession: []func(ctx context.Context, session mcpgo.Session){
-			func(_ context.Context, session mcpgo.Session) {
+		OnRegisterSession: []func(ctx context.Context, session mcp.Session){
+			func(_ context.Context, session mcp.Session) {
 				s.connections.add(session)
 				s.notifyConnectionsChanged()
 			},
 		},
-		OnUnregisterSession: []func(ctx context.Context, session mcpgo.Session){
-			func(_ context.Context, session mcpgo.Session) {
+		OnUnregisterSession: []func(ctx context.Context, session mcp.Session){
+			func(_ context.Context, session mcp.Session) {
 				s.connections.remove(session)
 				s.notifyConnectionsChanged()
 			},
 		},
-		OnAfterInitialize: []func(ctx context.Context, req *mcpgo.InitializeRequest, res *mcpgo.InitializeResult){
-			func(ctx context.Context, _ *mcpgo.InitializeRequest, _ *mcpgo.InitializeResult) {
+		OnAfterInitialize: []func(ctx context.Context, req *mcp.InitializeRequest, res *mcp.InitializeResult){
+			func(ctx context.Context, _ *mcp.InitializeRequest, _ *mcp.InitializeResult) {
 				// The caller's namespace claim arrives on the initialize request's
 				// context, which is how a per-request fact is tied to the session row.
-				if session := mcpgo.SessionFromContext(ctx); session != nil {
+				if session := mcp.SessionFromContext(ctx); session != nil {
 					s.connections.noteNamespace(session.SessionID(), callerNamespace(ctx))
 				}
 			},
 		},
-		OnAfterListTools: []func(ctx context.Context, req *mcpgo.ListToolsRequest, res *mcpgo.ListToolsResult){
-			func(ctx context.Context, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
+		OnAfterListTools: []func(ctx context.Context, req *mcp.ListToolsRequest, res *mcp.ListToolsResult){
+			func(ctx context.Context, _ *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
 				s.decorateTools(ctx, result)
 			},
 		},
@@ -92,8 +92,8 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	// Both transports lift the request's own origin into the context, so a tools/list
 	// answer can name the address that client actually reached — and the caller's
 	// namespace claim, which is what scopes its sessions.
-	s.sseServer = mcpgo.NewSSEServer(mcpServer, mcpgo.WithSSEContextFunc(withRequestContext))
+	s.sseServer = mcp.NewSSEServer(mcpServer, mcp.WithSSEContextFunc(withRequestContext))
 	// Streamable HTTP (MCP spec): mount at /stream for clients such as Open WebUI.
-	s.streamServer = mcpgo.NewStreamableHTTPServer(mcpServer, mcpgo.WithHTTPContextFunc(withRequestContext))
+	s.streamServer = mcp.NewStreamableHTTPServer(mcpServer, mcp.WithHTTPContextFunc(withRequestContext))
 	return s
 }

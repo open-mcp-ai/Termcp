@@ -15,7 +15,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
@@ -59,15 +59,15 @@ func newTestServer(t *testing.T) *Server {
 	return s
 }
 
-func makeRequest(args map[string]any) mcpgo.CallToolRequest {
-	return mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{
+func makeRequest(args map[string]any) mcp.CallToolRequest {
+	return mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
 			Arguments: args,
 		},
 	}
 }
 
-func parseResult(t *testing.T, result *mcpgo.CallToolResult) map[string]any {
+func parseResult(t *testing.T, result *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	text := result.Content[0].Text
 	var m map[string]any
@@ -983,7 +983,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 	})
 
 	t.Run("unknown action rejected", func(t *testing.T) {
-		calls := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+		calls := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
 			"file_perm": s.handleFilePerm,
 			"file_link": s.handleFileLinkOp,
 			"file_fs":   s.handleFileFsOp,
@@ -1008,7 +1008,7 @@ func TestGroupDispatch(t *testing.T) {
 	s := newTestServer(t)
 
 	// unknown actions rejected on every unified tool
-	dispatchers := map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
+	dispatchers := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
 		"message":    s.handleMessageOps,
 		"forward":    s.handleForwardOps,
 		"ssh_config": s.handleSSHConfigOps,

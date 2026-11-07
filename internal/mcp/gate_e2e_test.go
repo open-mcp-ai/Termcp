@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
 )
@@ -122,7 +122,7 @@ func TestGatedToolsAllHoldUnderReview(t *testing.T) {
 }
 
 // dispatch calls the tool the way the MCP server would, admission included.
-func dispatch(t *testing.T, s *Server, tool string, args map[string]any) *mcpgo.CallToolResult {
+func dispatch(t *testing.T, s *Server, tool string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	res, err := s.call(context.Background(), tool, args)
 	if err != nil {

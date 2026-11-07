@@ -472,11 +472,3 @@ type ListToolsResult struct {
 	Tools      []Tool `json:"tools"`
 	NextCursor string `json:"nextCursor,omitempty"`
 }
-
-// --- mcp-go compatibility aliases ---
-//
-// Three names differ from the spec's vocabulary because the code that used the
-// previous library wrote them that way. Keeping the spelling means the migration
-// is an import swap rather than a rename hunt; the aliases are one line each and
-// can be retired once the call sites are touched anyway.
-const LATEST = ProtocolVersion

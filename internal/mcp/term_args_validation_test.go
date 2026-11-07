@@ -20,7 +20,7 @@ import (
 //
 // The checks run in parseTermArgs, which is the ONE path both entrances share —
 // the MCP transport goes through handleTerm and POST /api/term calls Term directly,
-// so a rule that lived only in mcp-go's schema validator would cover one of them.
+// so a rule that lived only in the schema validator would cover one of them.
 
 // A mistyped window value is refused, naming the argument and what it wants.
 func TestWindowArgumentTypesAreRefused(t *testing.T) {

@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // call is the one way a tool is invoked, whether the caller is the MCP server
@@ -17,12 +17,12 @@ import (
 //
 // The parameters take the same JSON shape the wire carries, so what a test sends
 // is what a model sends.
-func (s *Server) call(ctx context.Context, tool string, args map[string]any) (*mcpgo.CallToolResult, error) {
+func (s *Server) call(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
 	h := s.handlerFor(tool)
 	if h == nil {
 		return toolError(CodeInvalidArgument, "%s", "unknown tool "+tool), nil
 	}
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Name = tool
 	req.Params.Arguments = args
 	return withLogging(tool, h, s)(ctx, req)

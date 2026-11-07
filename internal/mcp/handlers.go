@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
@@ -21,7 +21,7 @@ import (
 	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
-func validateStartParams(args map[string]any) (*mcpgo.CallToolResult, error) {
+func validateStartParams(args map[string]any) (*mcp.CallToolResult, error) {
 	mode := strings.TrimSpace(getString(args, "mode", "pty"))
 	if mode == "" {
 		mode = "pty"
@@ -93,7 +93,7 @@ func listableSessions(in []api.Session, callerNS string) []api.Session {
 // with no error, so the caller's own not-found message still names what it was given;
 // several matches is a refusal listing the candidates, because every candidate is
 // reachable by id and choosing for the caller is how a `close` lands on the wrong one.
-func (s *Server) sessionByName(name string) (*session.Session, *mcpgo.CallToolResult) {
+func (s *Server) sessionByName(name string) (*session.Session, *mcp.CallToolResult) {
 	matches := s.sessMgr.SessionsNamed(name)
 	switch len(matches) {
 	case 0:
@@ -122,7 +122,7 @@ func (s *Server) sessionByName(name string) (*session.Session, *mcpgo.CallToolRe
 // Callers must use the RETURNED session's ID. Echoing the argument back would
 // leak a locator into fields that are later used as ids — a forward stores its
 // SessionID for the DEAD cascade, and a locator there never matches the real id.
-func (s *Server) requireSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
+func (s *Server) requireSession(sessionID string) (*session.Session, *mcp.CallToolResult) {
 	if sess := s.sessMgr.Get(sessionID); sess != nil {
 		return sess, nil
 	}
@@ -226,7 +226,7 @@ func splitBatchIDs(v string) (ids []string, isBatch bool) {
 // a locator that no longer resolves) never aborts the rest — the caller sees
 // exactly which entries succeeded. The result echoes the argument text; op
 // receives the resolved raw id (a locator entry resolves to its session).
-func (s *Server) batchSessionResult(ids []string, op func(id string) error) *mcpgo.CallToolResult {
+func (s *Server) batchSessionResult(ids []string, op func(id string) error) *mcp.CallToolResult {
 	results := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		sess, bad := s.requireSession(id)
@@ -259,7 +259,7 @@ func (s *Server) batchSessionResult(ids []string, op func(id string) error) *mcp
 // status, not transport liveness: a pipe session whose command exited cleanly is
 // DEAD while its SSH client is still open until Delete, and it must be refused
 // exactly like a terminated, disconnected, or restored one.
-func (s *Server) requireRunningSession(sessionID string) (*session.Session, *mcpgo.CallToolResult) {
+func (s *Server) requireRunningSession(sessionID string) (*session.Session, *mcp.CallToolResult) {
 	sess, bad := s.requireSession(sessionID)
 	if bad != nil {
 		return nil, bad
@@ -273,7 +273,7 @@ func (s *Server) requireRunningSession(sessionID string) (*session.Session, *mcp
 // sshClientForSession resolves a running session and returns its live SSH client.
 // Closed (DEAD) sessions — whether just terminated or restored after a restart —
 // return session_not_running so SFTP/forward internals never see a dead transport.
-func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.Client, *mcpgo.CallToolResult) {
+func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.Client, *mcp.CallToolResult) {
 	sess, bad := s.requireRunningSession(sessionID)
 	if bad != nil {
 		return nil, nil, bad
@@ -296,7 +296,7 @@ func (s *Server) sshClientForSession(sessionID string) (*session.Session, *ssh.C
 // An SSH connection that has already gone away answers here rather than at the far
 // end of a five-second TCP timeout: the caller is told the session is not running,
 // which is the true reason and the one it can act on.
-func (s *Server) dialerForSession(name string) (jrpc.DialFunc, *mcpgo.CallToolResult) {
+func (s *Server) dialerForSession(name string) (jrpc.DialFunc, *mcp.CallToolResult) {
 	sess, bad := s.resolveTunnelSession(name)
 	if bad != nil {
 		return nil, bad
@@ -330,7 +330,7 @@ func (s *Server) dialerForSession(name string) (jrpc.DialFunc, *mcpgo.CallToolRe
 // Two running links to the same host is genuinely ambiguous — they can differ in jump
 // host, proxy or user — and answering with either would silently pick a network the
 // caller did not choose. That case names both ids and lets the caller say which.
-func (s *Server) resolveTunnelSession(name string) (*session.Session, *mcpgo.CallToolResult) {
+func (s *Server) resolveTunnelSession(name string) (*session.Session, *mcp.CallToolResult) {
 	if sess, bad := s.requireSession(name); bad == nil {
 		return sess, nil
 	}
@@ -364,7 +364,7 @@ func (s *Server) resolveTunnelSession(name string) (*session.Session, *mcpgo.Cal
 
 // sshClientOnly is sshClientForSession without the session record, for callers that
 // need the transport and not the metadata.
-func (s *Server) sshClientOnly(sessionID string) (*ssh.Client, *mcpgo.CallToolResult) {
+func (s *Server) sshClientOnly(sessionID string) (*ssh.Client, *mcp.CallToolResult) {
 	_, cli, bad := s.sshClientForSession(sessionID)
 	return cli, bad
 }
@@ -372,7 +372,7 @@ func (s *Server) sshClientOnly(sessionID string) (*ssh.Client, *mcpgo.CallToolRe
 // sftpClient preserves the session-only helper used by tests and callers that
 // already own the session lifecycle. Production directives use sftpClientContext
 // so a borrowed transport lease can be released alongside the SFTP channel.
-func (s *Server) sftpClient(target string) (*sftp.Client, *mcpgo.CallToolResult) {
+func (s *Server) sftpClient(target string) (*sftp.Client, *mcp.CallToolResult) {
 	cli, release, bad := s.sftpClientContext(context.Background(), target)
 	if bad != nil {
 		return nil, bad
@@ -398,7 +398,7 @@ func (s *Server) sftpClient(target string) (*sftp.Client, *mcpgo.CallToolResult)
 // `defer sftpCli.Close()` in the handlers stays correct without knowing which kind it
 // got. That is deliberate: the alternative was editing twelve handlers and trusting each
 // one to remember which branch it was on.
-func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcpgo.CallToolResult) {
+func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcp.CallToolResult) {
 	var sshCli *ssh.Client
 	var release func()
 	if host, borrowed := s.parseBorrowedHost(target); borrowed {
@@ -454,7 +454,7 @@ func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Cl
 // transient error instead of "this session is closed". Reading is not affected —
 // shell_output resolves through resolveOutputSource, which is allowed to serve a
 // DEAD session from its persisted log.
-func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcpgo.CallToolResult) {
+func (s *Server) requireShell(shellID string) (*session.ChildShell, *mcp.CallToolResult) {
 	if cs := s.sessMgr.GetChildShell(shellID); cs != nil {
 		if sess := s.sessMgr.Get(cs.ParentSessionID()); sess != nil {
 			if status := sess.Info().Status; status != api.SessionRunning {
@@ -614,7 +614,7 @@ func (s *Server) resolveSSHFromArgs(args map[string]any) (string, *sshconfig.Ent
 // tell which shells took the bytes and which refused. `results` is always
 // present, even for one entry, because a batch that silently degraded to a single
 // result would be indistinguishable from a single call.
-func (s *Server) batchShellResult(ids []string, op func(id string) (map[string]any, *mcpgo.CallToolResult)) *mcpgo.CallToolResult {
+func (s *Server) batchShellResult(ids []string, op func(id string) (map[string]any, *mcp.CallToolResult)) *mcp.CallToolResult {
 	results := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		entry := map[string]any{"shell_id": id}
@@ -642,7 +642,7 @@ func (s *Server) batchShellResult(ids []string, op func(id string) (map[string]a
 // Deliberately not toolResultText: that one substitutes a fallback sentence for an
 // empty reply, which is right when reporting a failed operation and wrong here — a
 // batch entry with no message would claim an error it cannot describe.
-func errorReplyText(res *mcpgo.CallToolResult) string {
+func errorReplyText(res *mcp.CallToolResult) string {
 	if res == nil {
 		return ""
 	}

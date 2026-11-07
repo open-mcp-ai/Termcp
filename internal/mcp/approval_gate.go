@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -109,7 +109,7 @@ type gatedPayload struct {
 // arguments, so the executor replays the operation by invoking the same handler.
 // That is what keeps one implementation of every file and forward operation:
 // nothing here knows how to write a file or open a port.
-func (s *Server) gateOperation(ctx context.Context, request mcpgo.CallToolRequest, tool, sessionID string) (*mcpgo.CallToolResult, bool) {
+func (s *Server) gateOperation(ctx context.Context, request mcp.CallToolRequest, tool, sessionID string) (*mcp.CallToolResult, bool) {
 	if approvedContext(ctx) {
 		return nil, false
 	}
@@ -218,7 +218,7 @@ func reviewPendingDocument(msg string, corr reviewPendingFields) map[string]any 
 	return fields
 }
 
-func reviewPendingReply(msg string, corr reviewPendingFields) *mcpgo.CallToolResult {
+func reviewPendingReply(msg string, corr reviewPendingFields) *mcp.CallToolResult {
 	return jsonResult(reviewPendingDocument(msg, corr))
 }
 
@@ -226,7 +226,7 @@ func reviewPendingReply(msg string, corr reviewPendingFields) *mcpgo.CallToolRes
 // intercepted. The summary is echoed back so the agent can tell which of its calls
 // is now waiting: unlike a command line, none of these operations left a trace
 // anywhere the agent can read later.
-func reviewPendingOperationResult(summary string, corr reviewPendingFields) *mcpgo.CallToolResult {
+func reviewPendingOperationResult(summary string, corr reviewPendingFields) *mcp.CallToolResult {
 	return reviewPendingReply(fmt.Sprintf("Submitted for review: %s. %s", summary, reviewWaitTail), corr)
 }
 
@@ -262,7 +262,7 @@ func (s *Server) ExecuteApprovedOperation(req approval.Request) error {
 		p.Args["session_id"] = req.SessionID
 	}
 
-	call := mcpgo.CallToolRequest{}
+	call := mcp.CallToolRequest{}
 	call.Params.Name = p.Tool
 	call.Params.Arguments = p.Args
 
@@ -288,7 +288,7 @@ func (s *Server) ExecuteApprovedOperation(req approval.Request) error {
 //
 // So the message is unwrapped when it is that envelope, and passed through
 // untouched when it is not (an unknown shape must still be shown, not swallowed).
-func toolResultText(res *mcpgo.CallToolResult) string {
+func toolResultText(res *mcp.CallToolResult) string {
 	var b strings.Builder
 	for _, c := range res.Content {
 		if c.Text == "" {

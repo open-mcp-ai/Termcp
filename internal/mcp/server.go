@@ -15,14 +15,14 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/task"
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
-	mcpServer    *mcpgo.Server
-	sseServer    *mcpgo.SSEServer
-	streamServer *mcpgo.StreamableHTTPServer
+	mcpServer    *mcp.Server
+	sseServer    *mcp.SSEServer
+	streamServer *mcp.StreamableHTTPServer
 	sessMgr      *session.Manager
 	msgMgr       *message.Manager
 	sshConfigs   *sshconfig.Store
@@ -41,8 +41,8 @@ type Server struct {
 	uiNotify func(level, title, message, sessionID string, durationSec int) int
 
 	// connections tracks the MCP clients currently attached (see connections.go).
-	// It is fed by mcp-go's session hooks, which is the only place a client
-	// attaching or detaching is observable.
+	// It is fed by the mcp package's session hooks, which is the only place a
+	// client attaching or detaching is observable.
 	connections *connRegistry
 
 	// tasks tracks the asynchronous file transfers this process started (#158).
@@ -147,6 +147,19 @@ func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, 
 func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 	s.extensions = r
 }
+
+// MCP exposes the protocol endpoint itself, so an embedder can register its own
+// tools and prompts on the same server termcp's are on.
+//
+// It returns *mcp.Server, which lives outside internal/ and is already the
+// registration surface (AddTool, AddPrompt, OnMethod, Use). Exposing it is how
+// an integration adds a tool without termcp growing a plugin system: there is
+// nothing to wrap, because the object that takes registrations is public.
+//
+// The returned server is the live one. Registering after Start is safe for
+// tools registered before a client's first tools/list, and is what an embedder
+// doing setup in New-then-Start order does naturally.
+func (s *Server) MCP() *mcp.Server { return s.mcpServer }
 
 // SSEHandler exposes the MCP SSE endpoint for mounting on a shared mux.
 func (s *Server) SSEHandler() http.Handler {

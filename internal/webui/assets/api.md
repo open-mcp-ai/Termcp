@@ -1648,8 +1648,8 @@ now?". Two lists, because they are two different things:
   its `initialize` request and are empty when it announced nothing (the MCP spec
   makes `clientInfo` optional); `namespace` is the claim it made with
   `X-Termcp-Namespace`, when it made one; `session_id` is the transport session
-  id, not a termcp session id. Rows come from mcp-go's session hooks, so a row
-  exists exactly as long as the client holds a live MCP session.
+  id, not a termcp session id. Rows come from the protocol layer's session
+  hooks, so a row exists exactly as long as the client holds a live MCP session.
 - `webui` — browser tabs holding the Web UI socket: the address they came from
   (port stripped), their user agent, how many sessions they are streaming, and
   when they attached. A closed tab disappears. Plain HTTP callers are not listed:

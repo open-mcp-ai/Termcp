@@ -3,13 +3,13 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // handleMessageOps is the low-frequency transcript entry point: it lists the
 // spans of a shell's byte log. The bytes are read through shell_output, so
 // there is no payload-fetching action.
-func (s *Server) handleMessageOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleMessageOps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	switch getString(request.GetArguments(), "action", "") {
 	case "list":
 		return s.handleListMessages(ctx, request)
@@ -19,7 +19,7 @@ func (s *Server) handleMessageOps(ctx context.Context, request mcpgo.CallToolReq
 }
 
 // handleForwardOps is the low-frequency port-forward entry point.
-func (s *Server) handleForwardOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleForwardOps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := getString(request.GetArguments(), "action", "")
 	switch action {
 	case "local":
@@ -41,7 +41,7 @@ func (s *Server) handleForwardOps(ctx context.Context, request mcpgo.CallToolReq
 // management. The write-capable schema is installed by
 // s.ManageSSHConfigs, which --mcp-manage-ssh-configs turns on: an instance that
 // does not manage profiles answers list only.
-func (s *Server) handleSSHConfigOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleSSHConfigOps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := getString(request.GetArguments(), "action", "")
 	switch action {
 	case "list":

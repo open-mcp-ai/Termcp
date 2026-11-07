@@ -5,14 +5,14 @@ import (
 	"log/slog"
 	"runtime/debug"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // withPanicRecovery turns a panicking tool handler into a failed tool result.
 //
 // A panic in a tool handler is a bug in termcp, and without this it is not a
 // failed tool call - it is the end of the process. The tool handler runs on a
-// goroutine that mcp-go owns (the streamable-HTTP and SSE servers dispatch
+// goroutine the transport owns (the streamable-HTTP and SSE servers dispatch
 // requests from their own goroutine), so a panic there is not contained by any
 // HTTP handler's recover and no deferred cleanup above it runs: every session,
 // every browser tab and the daemon's own HTTP listener die with it. That blast
@@ -20,7 +20,7 @@ import (
 //
 // It is a middleware rather than mcpserver.WithRecovery() because the two disagree
 // about what a client should see. WithRecovery returns a plain Go error, which
-// mcp-go converts into a JSON-RPC protocol error (code -32603) carrying the panic
+// layer converts into a JSON-RPC protocol error (code -32603) carrying the panic
 // value as its message. That bypasses the error_code contract every other failure
 // in this server follows (see toolError), so a client that branches on error_code
 // - which is what the field is for - has nothing to branch on, and the panic value
@@ -42,9 +42,9 @@ import (
 //
 // The tool name is included in both, since a panic report without it cannot be
 // located.
-func withPanicRecovery() mcpgo.Middleware {
-	return func(next mcpgo.ToolHandler) mcpgo.ToolHandler {
-		return func(ctx context.Context, request mcpgo.CallToolRequest) (result *mcpgo.CallToolResult, err error) {
+func withPanicRecovery() mcp.Middleware {
+	return func(next mcp.ToolHandler) mcp.ToolHandler {
+		return func(ctx context.Context, request mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 			defer func() {
 				r := recover()
 				if r == nil {

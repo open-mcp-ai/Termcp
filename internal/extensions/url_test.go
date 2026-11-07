@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
@@ -455,15 +455,15 @@ func startStreamableEchoEndpoint(t *testing.T) string {
 	// The echo server is built from THIS project's mcp package, which also makes
 	// the test an interoperability check: termcp's client against a server that
 	// speaks the same protocol without sharing an implementation.
-	srv := mcpgo.NewServer("exttest", "0.0.1", "", mcpgo.Hooks{})
+	srv := mcp.NewServer("exttest", "0.0.1", "", mcp.Hooks{})
 	srv.AddTool(
-		mcpgo.NewTool("echo", mcpgo.WithString("text"), mcpgo.WithRequired("text")),
-		func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		mcp.NewTool("echo", mcp.WithString("text"), mcp.WithRequired("text")),
+		func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			text, _ := req.GetArguments()["text"].(string)
-			return mcpgo.NewToolResultText("echo:" + text), nil
+			return mcp.NewToolResultText("echo:" + text), nil
 		},
 	)
-	ts := httptest.NewServer(mcpgo.NewStreamableHTTPServer(srv))
+	ts := httptest.NewServer(mcp.NewStreamableHTTPServer(srv))
 	// Registered in this order so they run the other way round (t.Cleanup is
 	// LIFO): the opened streams are cut first, and only then is the server closed,
 	// which otherwise waits on the very connection a live session holds open.

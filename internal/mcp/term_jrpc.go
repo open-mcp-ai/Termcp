@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
 	"github.com/open-mcp-ai/termcp/internal/ns"
@@ -579,7 +579,7 @@ func (s *Server) jrpcReady(ctx context.Context, h *jrpcHandle) error {
 				"jsonrpc": "2.0",
 				"method":  "initialize",
 				"params": map[string]any{
-					"protocolVersion": mcpgo.LATEST,
+					"protocolVersion": mcp.ProtocolVersion,
 					"capabilities":    map[string]any{},
 					"clientInfo":      map[string]any{"name": "termcp", "version": "jrpc"},
 				},

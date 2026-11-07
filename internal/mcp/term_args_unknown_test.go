@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestAnUnknownArgumentIsRefusedByName pins the rule that keeps a deleted parameter
@@ -103,7 +103,7 @@ func sampleValueFor(kind argKind) any {
 // source may keep its own identifiers.
 func TestTheToolSaysChannelNotHandle(t *testing.T) {
 	s := New(nil, nil, nil, nil, "test")
-	var term *mcpgo.Tool
+	var term *mcp.Tool
 	tools := listTools(t, s, originContext("http://127.0.0.1:18765"))
 	for i := range tools {
 		if tools[i].Name == termToolName {

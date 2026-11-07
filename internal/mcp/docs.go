@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Agent-facing documentation surface: one MCP prompt, no MCP resources.
@@ -69,11 +69,11 @@ func (s *Server) docURLFor(ctx context.Context, p string) string {
 // playbook that points the agent at this instance's own API reference.
 func (s *Server) registerLearnAPIPrompt() {
 	s.mcpServer.AddPrompt(
-		mcpgo.NewPrompt("learn-api",
-			mcpgo.WithPromptDescription("Load this instance's HTTP API reference and report what termcp can do. Use before scripting against termcp over REST."),
-			mcpgo.WithArgument("task", mcpgo.ArgumentDescription{Description: "Optional concrete task to plan once the API is loaded"}),
+		mcp.NewPrompt("learn-api",
+			mcp.WithPromptDescription("Load this instance's HTTP API reference and report what termcp can do. Use before scripting against termcp over REST."),
+			mcp.WithArgument("task", mcp.ArgumentDescription{Description: "Optional concrete task to plan once the API is loaded"}),
 		),
-		func(ctx context.Context, req mcpgo.GetPromptRequest) (*mcpgo.GetPromptResult, error) {
+		func(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			// Resolved per request: a client that reached this instance by a LAN
 			// name, a proxy or a tunnel is handed the address it can actually open.
 			apiURL := s.docURLFor(ctx, "api.md")
@@ -98,11 +98,11 @@ func (s *Server) registerLearnAPIPrompt() {
 			}
 			b.WriteString("Prefer MCP tools when the client has them; use REST when it does not.")
 
-			return &mcpgo.GetPromptResult{
+			return &mcp.GetPromptResult{
 				Description: "termcp API learning prompt",
-				Messages: []mcpgo.PromptMessage{{
-					Role:    mcpgo.RoleUser,
-					Content: mcpgo.NewTextContent(b.String()),
+				Messages: []mcp.PromptMessage{{
+					Role:    mcp.RoleUser,
+					Content: mcp.NewTextContent(b.String()),
 				}},
 			}, nil
 		})

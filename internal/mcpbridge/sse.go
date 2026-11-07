@@ -59,7 +59,7 @@ func readEvents(r io.Reader, onEvent func(event string, data []byte)) error {
 
 // startServerStream opens the listening GET stream once a session id exists:
 // it is the carrier for server-initiated messages (notifications, sampling
-// requests). Opening it before initialize would make mcp-go mint a second
+// requests). Opening it before initialize would make the peer mint a second
 // session instead of attaching to this one.
 func (b *bridge) startServerStream(sessionID string) {
 	b.sessMu.Lock()

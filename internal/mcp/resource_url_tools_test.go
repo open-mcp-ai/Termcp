@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -459,7 +459,7 @@ func TestLocatorArgumentEchoesCanonicalIDs(t *testing.T) {
 		{"message", map[string]any{"action": "list", "session_id": base, "shell_id": base + ":2"}, []string{"session_id", "shell_id"}},
 	}
 	for _, c := range calls {
-		var res *mcpgo.CallToolResult
+		var res *mcp.CallToolResult
 		var err error
 		switch c.what {
 		case "shell_list":
@@ -632,7 +632,7 @@ func TestFileToolURLsUseResolvedSessionID(t *testing.T) {
 
 	for _, tc := range []struct {
 		what   string
-		handle func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
+		handle func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
 	}{
 		{"file_stat", s.handleFileStat},
 		{"file_urls", s.handleGetFileURLs},

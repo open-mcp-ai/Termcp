@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
@@ -47,7 +47,7 @@ func TestAClosedChannelExplainsItself(t *testing.T) {
 	// state map: CloseChildShell is asynchronous, so a read fired the microsecond the
 	// extension removed the id can catch the shell before its dead transition lands
 	// and answer 204 (empty output) rather than 404 (closed).
-	var res *mcpgo.CallToolResult
+	var res *mcp.CallToolResult
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		res = termCall(t, s, map[string]any{"cmd": "read " + shellID + " --tail 1", "timeout": 1})

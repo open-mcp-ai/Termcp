@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	sessionHeader  = "Mcp-Session-Id" // set by mcp-go on the initialize reply; required afterwards
+	sessionHeader  = "Mcp-Session-Id" // set on the initialize reply; required afterwards
 	cleanupTimeout = 5 * time.Second
 )
 
@@ -287,7 +287,7 @@ func (b *bridge) forwardSSE(msg []byte) {
 
 // relayBody writes one streamable-HTTP POST reply to stdout. Replies arrive
 // either as a single JSON object or as an SSE stream: once any notification
-// has been delivered to this session, mcp-go answers every POST with
+// has been delivered to this session, the peer answers every POST with
 // text/event-stream.
 func (b *bridge) relayBody(resp *http.Response) error {
 	switch ct := resp.Header.Get("Content-Type"); {

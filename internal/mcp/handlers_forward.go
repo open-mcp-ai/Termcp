@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleLocalForward(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	bindHost := getString(args, "bind_host", "")
@@ -46,7 +46,7 @@ func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolR
 	}), nil
 }
 
-func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleRemoteForward(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	localHost := getString(args, "local_host", "127.0.0.1")
@@ -83,7 +83,7 @@ func (s *Server) handleRemoteForward(ctx context.Context, request mcpgo.CallTool
 	}), nil
 }
 
-func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleDynamicForward(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	bindHost := getString(args, "bind_host", "")
@@ -110,7 +110,7 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcpgo.CallToo
 	return jsonResult(map[string]any{"local_port": fw.ListenAddr, "forward_id": fw.ForwardID}), nil
 }
 
-func (s *Server) handleListForwards(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleListForwards(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.forwardMgr == nil {
 		return jsonResult(map[string]any{"forwards": []any{}}), nil
 	}
@@ -122,7 +122,7 @@ func (s *Server) handleListForwards(ctx context.Context, request mcpgo.CallToolR
 	return jsonResult(map[string]any{"forwards": arr}), nil
 }
 
-func (s *Server) handleCloseForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleCloseForward(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	forwardID := getString(args, "forward_id", "")
 	if forwardID == "" {

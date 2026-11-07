@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-func (s *Server) handleListSessions(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleListSessions(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	all := s.sessMgr.ListAll()
 	return jsonResult(map[string]any{"sessions": listableSessions(all, callerNamespace(ctx))}), nil
 }
 
-func (s *Server) handleGetSessionInfo(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleGetSessionInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 
@@ -24,10 +24,10 @@ func (s *Server) handleGetSessionInfo(ctx context.Context, request mcpgo.CallToo
 	}
 	info := sess.Info()
 	data, _ := json.Marshal(info)
-	return mcpgo.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(string(data)), nil
 }
 
-func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleTerminateSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 	force := getBool(args, "force", false)
@@ -60,7 +60,7 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcpgo.CallT
 	return successResult(), nil
 }
 
-func (s *Server) handleDeleteSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleDeleteSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 
