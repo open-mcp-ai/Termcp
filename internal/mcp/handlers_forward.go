@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 func (s *Server) handleLocalForward(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
-	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // termCall drives the single entry the way a model would, with the same JSON

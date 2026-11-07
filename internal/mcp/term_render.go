@@ -6,9 +6,9 @@ import (
 	"strings"
 	"unicode"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"

@@ -9,16 +9,16 @@ import (
 	"sort"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
-	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sftp"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 func validateStartParams(args map[string]any) (*mcpgo.CallToolResult, error) {
@@ -648,8 +648,8 @@ func errorReplyText(res *mcpgo.CallToolResult) string {
 	}
 	var parts []string
 	for _, c := range res.Content {
-		if t, ok := c.(mcpgo.TextContent); ok && t.Text != "" {
-			parts = append(parts, t.Text)
+		if c.Text != "" {
+			parts = append(parts, c.Text)
 		}
 	}
 	if len(parts) == 0 {

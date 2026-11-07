@@ -214,8 +214,7 @@ func New(opts Options) (*Server, error) {
 	)
 	s.extensions.NoInternal = cfg.NoInternal
 
-	s.mcp = mcp.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version,
-		mcp.WithHTTPServer(s.httpSrv))
+	s.mcp = mcp.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
 	// The embedded docs feed the `learn-api` prompt. In a no_webui build they are
 	// the only asset left, which is deliberate: an instance that serves an HTTP
 	// API should be able to hand an agent its reference for that API.
@@ -408,7 +407,20 @@ func (s *Server) Start() error {
 		return nil
 	}
 
-	go func() { s.serveErr <- s.mcp.Start(s.addr) }()
+	// The MCP surface is mounted on the shared mux, so this server is the only
+	// listener: Start resolves the address the docs prompt advertises, then one
+	// ListenAndServe carries every route (MCP, REST, Web UI) on that mux.
+	//
+	// It used to be the SSE transport that blocked here, with WithHTTPServer
+	// handing it s.httpSrv — so the whole instance was served by a dependency's
+	// Serve call. Now that the transports are handlers, serving is this server's
+	// own job, which is also what makes `Handler()` (embedding, tests) and
+	// ListenAndServe two ways of running the same thing.
+	if err := s.mcp.Start(s.addr); err != nil {
+		s.finish()
+		return err
+	}
+	go func() { s.serveErr <- s.httpSrv.ListenAndServe() }()
 
 	select {
 	case err := <-s.serveErr:

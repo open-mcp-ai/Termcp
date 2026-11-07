@@ -7,17 +7,17 @@ import (
 	"os/exec"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/clock"
-	"github.com/open-mcp-ai/termcp/term/directive"
-	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

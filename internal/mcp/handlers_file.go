@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 	pkgsftp "github.com/pkg/sftp"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"

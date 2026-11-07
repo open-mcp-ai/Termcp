@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/open-mcp-ai/termcp/internal/capability"
-	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/internal/encoding"
-	"github.com/open-mcp-ai/termcp/term/envelope"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // refuseBorrowedReview enforces a host profile's default review policy on
@@ -242,6 +242,7 @@ func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, 
 	}
 	return slot
 }
+
 // The filters used to be parsed in grepBorrowed, which is downstream of the
 // execution: a typo in `--grep` answered 400 with `Output-Bytes: 20` and
 // `Status: exited`, i.e. the 400 was a lie — the command had already run and its

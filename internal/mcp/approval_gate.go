@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -291,12 +291,13 @@ func (s *Server) ExecuteApprovedOperation(req approval.Request) error {
 func toolResultText(res *mcpgo.CallToolResult) string {
 	var b strings.Builder
 	for _, c := range res.Content {
-		if t, ok := c.(mcpgo.TextContent); ok {
-			if b.Len() > 0 {
-				b.WriteString("; ")
-			}
-			b.WriteString(t.Text)
+		if c.Text == "" {
+			continue
 		}
+		if b.Len() > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(c.Text)
 	}
 	if b.Len() == 0 {
 		return "the approved operation failed"

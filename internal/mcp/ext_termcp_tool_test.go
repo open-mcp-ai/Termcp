@@ -104,10 +104,10 @@ func TestATermcpToolDeclarationIsVerifiedNotTrusted(t *testing.T) {
 			want: "takes no arguments",
 		},
 		{
-			name: "no schema to check",
+			name:  "no schema to check",
 			tools: []any{map[string]any{"name": "term"}},
-			tool: "term",
-			want: "no input schema",
+			tool:  "term",
+			want:  "no input schema",
 		},
 		{
 			name:   "no declaration means an ordinary peer",

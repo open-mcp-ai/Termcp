@@ -3,8 +3,6 @@ package mcp
 import (
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
 )
@@ -23,7 +21,7 @@ import (
 func TestParseReadParamsDefaults(t *testing.T) {
 	p, bad := parseReadParams(map[string]any{})
 	if bad != nil {
-		t.Fatalf("empty arguments were rejected: %s", bad.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("empty arguments were rejected: %s", bad.Content[0].Text)
 	}
 	if !p.StripAnsi {
 		t.Error("strip_ansi defaults to true: raw ANSI escapes are not what a caller wants by default")
@@ -60,7 +58,7 @@ func TestParseReadParamsValues(t *testing.T) {
 		"tail_lines": float64(3),
 	})
 	if bad != nil {
-		t.Fatalf("valid arguments were rejected: %s", bad.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("valid arguments were rejected: %s", bad.Content[0].Text)
 	}
 	// RequireUTF8 is set by the parser, not by the caller: this surface's reply is
 	// JSON, and encoding/json would otherwise substitute U+FFFD for bytes it cannot
@@ -110,7 +108,7 @@ func TestParseReadParamsRanges(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, bad := parseReadParams(c.args)
 			if c.ok && bad != nil {
-				t.Errorf("rejected a valid value: %s", bad.Content[0].(mcpgo.TextContent).Text)
+				t.Errorf("rejected a valid value: %s", bad.Content[0].Text)
 			}
 			if !c.ok && bad == nil {
 				t.Error("accepted a value outside the documented range")

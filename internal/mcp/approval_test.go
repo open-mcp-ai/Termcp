@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/capability"
 )
@@ -267,8 +265,8 @@ func TestDisablingReviewDiscardsStagedText(t *testing.T) {
 // requests, or review mode is decorative.
 func TestApprovalToolIsNotRegistered(t *testing.T) {
 	s := newTestServer(t)
-	for _, tool := range s.mcpServer.ListTools() {
-		if tool.Tool.Name == "approval" {
+	for _, tool := range s.mcpServer.Tools() {
+		if tool.Name == "approval" {
 			t.Fatal("the approval tool must not exist: an agent that can approve itself is not gated")
 		}
 	}
@@ -312,7 +310,7 @@ func TestHeldOperationReturnsCorrelationFields(t *testing.T) {
 func TestReviewPendingReplyWithoutQueuedRequestOmitsCorrelationFields(t *testing.T) {
 	res := reviewPendingReply("Held for review: send the ending key.", reviewPendingFields{})
 	var body map[string]any
-	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &body); err != nil {
 		t.Fatal(err)
 	}
 	for _, field := range []string{"approval_id", "session_id", "expires_at"} {

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
-	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
 
 // extPeers maps an extension instance to the MCP peer mounted for it (issue #271).

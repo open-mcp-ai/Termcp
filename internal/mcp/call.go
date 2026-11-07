@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // call is the one way a tool is invoked, whether the caller is the MCP server

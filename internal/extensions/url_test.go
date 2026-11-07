@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
 )
@@ -453,15 +452,18 @@ func TestNotesFollowTheTemplateShape(t *testing.T) {
 // stays open for the session's lifetime, and Close waits on it.
 func startStreamableEchoEndpoint(t *testing.T) string {
 	t.Helper()
-	srv := mcpserver.NewMCPServer("exttest", "0.0.1")
+	// The echo server is built from THIS project's mcp package, which also makes
+	// the test an interoperability check: termcp's client against a server that
+	// speaks the same protocol without sharing an implementation.
+	srv := mcpgo.NewServer("exttest", "0.0.1", "", mcpgo.Hooks{})
 	srv.AddTool(
-		mcpgo.NewTool("echo", mcpgo.WithString("text", mcpgo.Required())),
+		mcpgo.NewTool("echo", mcpgo.WithString("text"), mcpgo.WithRequired("text")),
 		func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			text, _ := req.GetArguments()["text"].(string)
 			return mcpgo.NewToolResultText("echo:" + text), nil
 		},
 	)
-	ts := httptest.NewServer(mcpserver.NewStreamableHTTPServer(srv))
+	ts := httptest.NewServer(mcpgo.NewStreamableHTTPServer(srv))
 	// Registered in this order so they run the other way round (t.Cleanup is
 	// LIFO): the opened streams are cut first, and only then is the server closed,
 	// which otherwise waits on the very connection a live session holds open.

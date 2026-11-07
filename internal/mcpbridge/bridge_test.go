@@ -13,8 +13,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 const initMessage = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"bridgetest","version":"0.0.1"}}}`
@@ -128,12 +127,14 @@ func hasID(n float64) func(map[string]any) bool {
 	return func(m map[string]any) bool { return m["id"] == n }
 }
 
-// newEchoServer returns a real mcp-go server with one echo tool.
-func newEchoServer(t *testing.T) *mcpserver.MCPServer {
+// newEchoServer returns a real MCP server with one echo tool, built from this
+// project's mcp package: the bridge is a CLIENT of it, so sharing no code with the
+// server side is what makes this an interoperability check rather than a mirror.
+func newEchoServer(t *testing.T) *mcpgo.Server {
 	t.Helper()
-	srv := mcpserver.NewMCPServer("bridgetest", "0.0.1")
+	srv := mcpgo.NewServer("bridgetest", "0.0.1", "", mcpgo.Hooks{})
 	srv.AddTool(
-		mcpgo.NewTool("echo", mcpgo.WithString("text", mcpgo.Required())),
+		mcpgo.NewTool("echo", mcpgo.WithString("text"), mcpgo.WithRequired("text")),
 		func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			text, _ := req.GetArguments()["text"].(string)
 			return mcpgo.NewToolResultText("echo:" + text), nil
@@ -144,20 +145,20 @@ func newEchoServer(t *testing.T) *mcpserver.MCPServer {
 
 // newMCPEndpoint serves a real mcp-go streamable-HTTP server with one tool,
 // and returns its /stream URL the way termcp mounts it.
-func newMCPEndpoint(t *testing.T) (string, *mcpserver.MCPServer) {
+func newMCPEndpoint(t *testing.T) (string, *mcpgo.Server) {
 	t.Helper()
 	srv := newEchoServer(t)
-	ts := httptest.NewServer(mcpserver.NewStreamableHTTPServer(srv))
+	ts := httptest.NewServer(mcpgo.NewStreamableHTTPServer(srv))
 	t.Cleanup(ts.Close)
 	return ts.URL + "/stream", srv
 }
 
 // newSSEEndpoint serves a real mcp-go SSE server with one tool at the paths
 // termcp mounts: GET /sse for the event stream, POST /message for JSON-RPC.
-func newSSEEndpoint(t *testing.T) (string, *mcpserver.MCPServer) {
+func newSSEEndpoint(t *testing.T) (string, *mcpgo.Server) {
 	t.Helper()
 	srv := newEchoServer(t)
-	sse := mcpserver.NewSSEServer(srv)
+	sse := mcpgo.NewSSEServer(srv)
 	mux := http.NewServeMux()
 	mux.Handle("GET /sse", sse.SSEHandler())
 	mux.Handle("POST /message", sse.MessageHandler())
@@ -171,7 +172,7 @@ func newSSEEndpoint(t *testing.T) (string, *mcpserver.MCPServer) {
 // under it cannot fire), and stops once the session stream takes over.
 func TestKeepAlivePingsUntilSessionStarts(t *testing.T) {
 	srv := newEchoServer(t)
-	stream := mcpserver.NewStreamableHTTPServer(srv)
+	stream := mcpgo.NewStreamableHTTPServer(srv)
 	var hits atomic.Int64
 	var unauthenticated atomic.Bool
 	mux := http.NewServeMux()
@@ -336,7 +337,7 @@ func TestServerNotificationsReachClient(t *testing.T) {
 	h.send(initMessage)
 	h.waitFor(5*time.Second, hasID(1))
 
-	mcpSrv.SendNotificationToAllClients("notifications/files/updated", map[string]any{"uri": "test://watch"})
+	mcpSrv.NotifyAll(context.Background(), "notifications/files/updated", map[string]any{"uri": "test://watch"})
 	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 
 	var sawNotification, sawReply bool
@@ -554,7 +555,7 @@ func TestSSEServerNotificationsReachClient(t *testing.T) {
 	h.send(initMessage)
 	h.waitFor(5*time.Second, hasID(1))
 
-	mcpSrv.SendNotificationToAllClients("notifications/files/updated", map[string]any{"uri": "test://watch"})
+	mcpSrv.NotifyAll(context.Background(), "notifications/files/updated", map[string]any{"uri": "test://watch"})
 	h.waitFor(5*time.Second, func(m map[string]any) bool {
 		return m["method"] == "notifications/files/updated"
 	})

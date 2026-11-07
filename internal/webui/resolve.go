@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // resolveResponse is the body of GET /api/resolve. Only the fields meaningful

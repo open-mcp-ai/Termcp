@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 func decodeToolError(t *testing.T, result *mcpgo.CallToolResult) (code, message string) {
@@ -17,7 +17,7 @@ func decodeToolError(t *testing.T, result *mcpgo.CallToolResult) (code, message 
 	if len(result.Content) != 1 {
 		t.Fatalf("expected exactly one content block, got %d", len(result.Content))
 	}
-	tc, ok := result.Content[0].(mcpgo.TextContent)
+	tc, ok := result.Content[0], true
 	if !ok {
 		t.Fatalf("expected text content, got %T", result.Content[0])
 	}

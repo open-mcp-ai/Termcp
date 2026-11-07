@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -73,7 +73,7 @@ func resultText(res *mcpgo.CallToolResult) string {
 	if len(res.Content) == 0 {
 		return ""
 	}
-	if tc, ok := res.Content[0].(mcpgo.TextContent); ok {
+	if tc, ok := res.Content[0], true; ok {
 		return tc.Text
 	}
 	return ""

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/term/directive"
-	"github.com/open-mcp-ai/termcp/term/envelope"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // runDirective dispatches one parsed statement onto the existing handlers.

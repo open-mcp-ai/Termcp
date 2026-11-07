@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // handleMessageOps is the low-frequency transcript entry point: it lists the

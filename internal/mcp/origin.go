@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // originKey carries the request's origin ("scheme://host") from the transport's

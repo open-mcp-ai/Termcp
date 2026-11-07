@@ -114,7 +114,7 @@ var ops = []Op{
 		// becomes a stray positional argument and the statement still reaches the
 		// container. A declared kind is recognised, and the dispatcher's default branch
 		// then answers with what to write instead.
-		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
+		Kinds:     []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
 		Flags:     []string{"grace:number", "forward-id", "channel", "later"},
 		Valueless: []string{"later"},
 		RetiredFlags: map[string]string{

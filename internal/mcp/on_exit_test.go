@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
@@ -62,7 +60,7 @@ func TestOneShotSessionArchivesItselfWhenTheCommandEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if startRes.IsError {
-		t.Fatalf("session_start failed: %s", startRes.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("session_start failed: %s", startRes.Content[0].Text)
 	}
 	sm := parseResult(t, startRes)
 	sid, _ := sm["session_id"].(string)
@@ -84,9 +82,9 @@ func TestOneShotSessionArchivesItselfWhenTheCommandEnds(t *testing.T) {
 	}
 	if readRes.IsError {
 		t.Fatalf("reading a one-shot session's output after it archived failed: %s",
-			readRes.Content[0].(mcpgo.TextContent).Text)
+			readRes.Content[0].Text)
 	}
-	if txt := readRes.Content[0].(mcpgo.TextContent).Text; !strings.Contains(txt, oneShotMarker) {
+	if txt := readRes.Content[0].Text; !strings.Contains(txt, oneShotMarker) {
 		t.Errorf("archived session lost its output (want %q): %s", oneShotMarker, txt)
 	}
 }
@@ -119,7 +117,7 @@ func TestOneShotDefaultKeepsTheContainerRunning(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		infoRes, _ := s.handleGetSessionInfo(context.Background(), makeRequest(map[string]any{"session_id": sid}))
-		txt := infoRes.Content[0].(mcpgo.TextContent).Text
+		txt := infoRes.Content[0].Text
 		if strings.Contains(txt, `"status":"exited"`) {
 			t.Fatalf("a default (on_exit=keep) session archived itself: %s", txt)
 		}
@@ -132,7 +130,7 @@ func TestOneShotDefaultKeepsTheContainerRunning(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	infoRes, _ := s.handleGetSessionInfo(context.Background(), makeRequest(map[string]any{"session_id": sid}))
-	if txt := infoRes.Content[0].(mcpgo.TextContent).Text; !strings.Contains(txt, `"status":"running"`) {
+	if txt := infoRes.Content[0].Text; !strings.Contains(txt, `"status":"running"`) {
 		t.Fatalf("on_exit=keep must leave the container running after its shell exits, got: %s", txt)
 	}
 }
@@ -154,7 +152,7 @@ func TestSessionStartRejectsAnUnknownOnExit(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("an unknown on_exit was accepted")
 	}
-	if txt := res.Content[0].(mcpgo.TextContent).Text; !strings.Contains(txt, "on_exit") {
+	if txt := res.Content[0].Text; !strings.Contains(txt, "on_exit") {
 		t.Errorf("the refusal does not name the offending argument: %s", txt)
 	}
 }

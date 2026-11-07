@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 type toolHandler = func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
@@ -312,8 +312,8 @@ func truncate(s string, maxLen int) string {
 
 func extractOutputPreview(result *mcpgo.CallToolResult) string {
 	for _, c := range result.Content {
-		if tc, ok := c.(mcpgo.TextContent); ok && tc.Text != "" {
-			return tc.Text
+		if c.Text != "" {
+			return c.Text
 		}
 	}
 	return ""

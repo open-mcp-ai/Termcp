@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -163,7 +161,7 @@ func TestFromLine_PastTheEndFailsLoudly(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("from_line past the end must be an error, not a wrong window")
 	}
-	if !strings.Contains(res.Content[0].(mcpgo.TextContent).Text, "out of range") {
+	if !strings.Contains(res.Content[0].Text, "out of range") {
 		t.Errorf("error should say the line is out of range: %v", res.Content[0])
 	}
 }
