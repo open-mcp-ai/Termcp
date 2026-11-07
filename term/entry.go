@@ -25,6 +25,10 @@ type Term struct {
 	grammar *Grammar
 	handler Handler
 	opts    Options
+	// guide, when set, replaces the generated empty-call answer. An embedder whose
+	// product has its own onboarding text sets it; one that does not gets the
+	// generated list of its own verbs.
+	guide func() Reply
 }
 
 // Option configures a Term at construction.
@@ -35,6 +39,14 @@ func WithHandler(h Handler) Option { return func(t *Term) { t.handler = h } }
 
 // WithOptions sets the evaluation's own knobs.
 func WithOptions(o Options) Option { return func(t *Term) { t.opts = o } }
+
+// WithGuide replaces the answer to an empty call.
+//
+// The generated one lists the Grammar's verbs, which is right for a server whose
+// vocabulary is all there is to say. A product that wants to introduce itself
+// first — what this endpoint is for, which of its verbs a caller should reach for
+// — passes its own.
+func WithGuide(f func() Reply) Option { return func(t *Term) { t.guide = f } }
 
 // New builds a Term over a vocabulary.
 //
