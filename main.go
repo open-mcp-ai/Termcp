@@ -74,17 +74,11 @@ func logHTTPMain(base string, port int, lanIPv4 []string) {
 
 func main() {
 	cfg := config.Default()
-	flag.StringVar(&cfg.Host, "host", cfg.Host, "HTTP bind address (127.0.0.1 = loopback default; 0.0.0.0 = all interfaces)")
-	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
-	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Data directory for JSON storage (default: $TERMCP_DATA_DIR or ~/.termcp)")
-	flag.StringVar(&cfg.AssetsDir, "assets", cfg.AssetsDir, "External static assets directory: files there override the embedded Web UI and docs; missing files fall back to the embed (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)")
-	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log verbosity: debug|info|warn|error")
-	flag.BoolVar(&cfg.NoInternal, "no-internal", cfg.NoInternal, "Disable the built-in loopback SSH profile (no internal connection)")
-	flag.BoolVar(&cfg.Headless, "headless", cfg.Headless, "Serve no browser UI: the MCP tool surface, POST /api/term and the agent docs remain. This is what `go build -tags no_webui` compiles in, selectable at run time.")
-	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable the profile write actions of the `profile` directive (create/edit/copy/delete) over MCP (off by default; passwords/keys are never exposed)")
-	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
-	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
-	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
+	// THE SERVER'S OWN FLAGS COME FROM THE STRUCT (config.Bind). They used to be
+	// twenty hand-written flag.XVar lines, which is one more list to keep in step
+	// with the struct and the environment — and it did not stay in step: ThemesDir
+	// had a field and no flag at all.
+	config.Bind(flag.CommandLine, cfg)
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
 	var showVersion bool
@@ -136,7 +130,12 @@ func main() {
 		}
 		return
 	}
-	cfg.ApplyEnv()
+	// Environment variables fill what the operator did not type. AFTER the parse,
+	// because "was this flag given" is the question, and only the FlagSet knows.
+	if err := config.ApplyEnv(flag.CommandLine, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	if args := flag.Args(); len(args) > 0 {
 		if sub, ok := findSubcommand(args[0]); ok {
