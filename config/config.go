@@ -32,6 +32,7 @@ type Config struct {
 	Port                int    // HTTP server port, must be 1-65535 (default: 18765)
 	DataDir             string // persistent storage directory; empty means default ($TERMCP_DATA_DIR or ~/.termcp)
 	AssetsDir           string // external static assets directory; files there override the embedded UI/docs (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)
+	ThemesDir           string // external theme directory served alongside the assets; empty means the embed's own themes
 	LogLevel            string // log verbosity: debug|info|warn|error (default: "info")
 	NoInternal          bool   // disable the built-in loopback SSH profile
 	MCPManageSSHConfigs bool   // enable the profile write actions (create/edit/copy/delete) (default: false)

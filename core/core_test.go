@@ -25,7 +25,11 @@ func newInstance(t *testing.T) *Server {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 	cfg.NoInternal = false
-	srv, err := New(Options{Config: cfg, Version: "test", NoListener: true, Headless: true})
+	// Headless and the asset dirs are Config fields, not Options: they describe
+	// the instance, so an embedder sets them where every other setting lives and
+	// core.New applies them. No Options field to keep in sync.
+	cfg.Headless = true
+	srv, err := New(Options{Config: cfg, Version: "test", NoListener: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

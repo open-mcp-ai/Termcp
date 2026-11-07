@@ -15,7 +15,6 @@ import (
 	"github.com/open-mcp-ai/termcp/config"
 	"github.com/open-mcp-ai/termcp/core"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
-	"github.com/open-mcp-ai/termcp/internal/webui"
 )
 
 // Build metadata. Release builds override these with -ldflags (the Makefile's
@@ -266,11 +265,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "assets %q is not a directory\n", cfg.AssetsDir)
 		os.Exit(1)
 	}
-	// Must run before any consumer reads Assets(): the MCP docs FS and the Web UI
-	// static server both resolve through it.
-	webui.SetAssetsDir(cfg.AssetsDir)
+	// The themes directory is optional in the same way, and resolved here because
+	// only the CLI knows a user's home layout. core applies both to the asset FS.
 	if uiThemesDir, err := config.DefaultThemesDir(); err == nil {
-		webui.SetThemesDir(uiThemesDir)
+		cfg.ThemesDir = uiThemesDir
 	} else {
 		fmt.Fprintf(os.Stderr, "cannot resolve themes dir: %v\n", err)
 		os.Exit(1)
@@ -288,15 +286,6 @@ func main() {
 	runServer(cfg, idleTimeoutArg, idleTimeout, isDaemonChild)
 }
 
-// runServer is the serving half of the command: it builds the runtime - auth,
-// logging, the internal sshd, the storage and managers, the MCP server and the
-// Web UI - wires the parts that have to know about each other, and then serves
-// until a signal or a daemon idle countdown asks it to stop.
-//
-// It is separate from main because the two halves have different failure models.
-// main only classifies the command line and prints to stderr; from here on the
-// flags are already accepted, so messages go through slog and a startup failure
-// exits the process - there is nothing sensible left to fall back to.
 // runServer is the serving half of the command: it hands the configuration to
 // core, which builds the runtime, and then serves until a signal or a daemon
 // idle countdown asks it to stop.
@@ -317,7 +306,6 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	srv, err := core.New(core.Options{
 		Config:         cfg,
 		Version:        versionString(),
-		Headless:       cfg.Headless,
 		DaemonChild:    isDaemonChild,
 		IdleTimeout:    idleTimeout,
 		IdleTimeoutSet: idleTimeoutArg != "",
@@ -349,4 +337,3 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		os.Exit(1)
 	}
 }
-

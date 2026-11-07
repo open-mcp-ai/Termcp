@@ -53,11 +53,12 @@ defer srv.Close("done")
 srv.Start()
 
 // 嵌入方走这条：不绑端口，但 MCP 面与 REST 面都在，经 Term 直接调用。
-srv, _ := core.New(core.Options{Config: cfg, NoListener: true, Headless: true})
+cfg.Headless = true
+srv, _ := core.New(core.Options{Config: cfg, NoListener: true})
 reply := srv.Term(ctx, "ls session", nil)   // 拿到 TERM/1 信封
 ```
 
-`Headless` 省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
+`Headless` 是 `config.Config` 的字段，不是 `core.Options` 的：它描述的是这个实例是什么，和 `Host`、`DataDir` 同一类，所以设置它的地方只有一处。`core.New` 读它，同时也在这里应用 `AssetsDir` 与 `ThemesDir`——调用方不需要、也不应该去动 `webui` 的包级变量。它省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
 
 于是有四种组合，各有各的用途：
 
