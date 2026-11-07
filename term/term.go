@@ -1,34 +1,58 @@
 // Package term is TERM/1: the protocol itself, with no runtime behind it.
 //
-// Three things live here, and they are deliberately the only three:
+// # The two calls you need
 //
-//   - the directive language — parse a `cmd` line into a *File, and the
-//     registry that says which verbs, targets and flags exist;
-//   - the reply envelope — a Slot/Reply rendered as an HTTP-style answer
-//     (status line, headers, body), including the range and truncation rules;
+//	file, err := term.Parse("ls session; run a:1 $1")   // DSL text -> statements
+//	if err != nil { ... }                               // the error teaches the shape
+//	reply := term.Execute(ctx, file, myCapabilities, term.Options{})
+//	fmt.Print(reply.Text())                             // a TERM/1 envelope
+//
+// Parse is the language. Execute is the sequencing: && and || gating, & groups
+// that run together, one slot per statement, and 208 for a branch that was not
+// taken. Both are protocol rules, so neither is something a caller should have to
+// re-derive — getting slot alignment wrong is invisible until a caller maps slot 3
+// back to the wrong statement.
+//
+// # The capability layer is one method
+//
+//	type myCapabilities struct{}
+//	func (c *myCapabilities) Handle(ctx context.Context, st term.Statement) []term.Slot
+//
+// That is the whole obligation. st arrives parsed: Op, Target, Kind, Key, Args,
+// Flags (with the three states a flag really has), Payload, Path, Cond. Return the
+// slots the statement produced — a slice because a verb may address several
+// objects at once, and collapsing that would break the alignment above.
+//
+// Handle must be safe for concurrent use: Execute runs an & group in parallel.
+//
+// # What is here besides those two
+//
+//   - the registry — Lookup, Ops, Names, and the per-verb flag and usage tables
+//     that `help` and the error messages are generated from;
+//   - the reply envelope — Slot and Reply rendered as an HTTP-style answer, with
+//     the range and truncation rules;
 //   - addresses — termcp:// locators and `<session>:<index>` handles.
 //
-// Nothing in this package knows what a session is, opens a socket, reads a
-// file, or looks at a clock. Given a line it returns an AST or a syntax
-// error; given an AST and a handler supplied by the caller it evaluates in
-// order. That is what makes it reusable: an implementation of TERM/1 does not
-// have to be this project's server, and this project's server does not have to
-// be the only thing that parses it.
+// Nothing in this package knows what a session is, opens a socket, reads a file,
+// or looks at a clock. `go list -deps ./term` names no internal package.
 //
-// # For callers who want one import path
+// # Where to look for a worked example
 //
-// The implementation is split three ways (directive, envelope, locator) so each
-// can be read on its own; this file renames the useful parts so a caller can
-// write term.Parse and term.Slot without choosing between them. Both spellings
-// are public and neither is going away — these are type aliases, not wrappers,
-// so a value produced by term/directive is a term.File.
+// The server in internal/mcp is exactly this shape: its capability handler is
+// alias expansion plus the directive dispatch, and everything else it does with a
+// batch comes from Execute. Read `capabilityHandler` in internal/mcp/term_exec.go
+// for the two-function version of the interface above.
 //
 // # Stability
 //
 // The semantics here are the protocol's, so they follow the protocol version
-// rather than the module's. Changing what a line means, what a status code
-// means, or what a locator denotes is a breaking change and needs a version
-// bump in the docs; adding a verb, a flag or a helper is not.
+// rather than the module's. Changing what a line means, what a status code means,
+// or what a locator denotes is a breaking change and needs a version bump in the
+// docs; adding a verb, a flag or a helper is not.
+//
+// The subpackages (directive, envelope, locator) are the implementation and are
+// public for reading; these aliases are type aliases, not wrappers, so a value
+// produced by term/directive IS a term.File and there is no conversion to drift.
 package term
 
 import (
