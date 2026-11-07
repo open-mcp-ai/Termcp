@@ -6,12 +6,42 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/charmbracelet/ssh"
 	"golang.org/x/sys/windows"
 )
 
 func setPtySysProcAttr(cmd *exec.Cmd) {}
+
+// setPipeSysProcAttr keeps a pipe child from opening a console window.
+//
+// The daemon is started with DETACHED_PROCESS (internal/daemon), so it has no
+// console to inherit. Windows then allocates a NEW console for any console-subsystem
+// child, and on Windows 11 — where the default terminal is Windows Terminal — that
+// console is handed to a visible window whose title is the child's path. Every local
+// pipe session therefore popped a window that looked like the program's fault and was
+// a property of how its parent was launched (#278).
+//
+// CREATE_NO_WINDOW ONLY, NOT SysProcAttr.HideWindow. HideWindow is
+// STARTF_USESHOWWINDOW + SW_HIDE and applies to the child's own first window, so it
+// would hide a GUI child too — `--argv notepad` would open an invisible Notepad.
+// CREATE_NO_WINDOW suppresses the console window and leaves application windows alone.
+//
+// The PTY path is deliberately untouched: ConPTY allocates a pseudo console, so the
+// child never had a real console window to begin with, and setPtySysProcAttr is empty
+// on Windows (its SysProcAttr is nil there). Adding the flag would be a no-op that
+// reads like it does something.
+func setPipeSysProcAttr(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	// |= rather than =. Nothing sets these flags on the pipe path today — the cmd is a
+	// bare exec.Command and setPtySysProcAttr runs only in the PTY branch — so an
+	// assignment would work now and break silently later, the day someone adds a
+	// process group here for a Windows process-tree kill.
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+}
 
 // waitChild waits for the child and returns its exit code.
 //

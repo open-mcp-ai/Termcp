@@ -10,6 +10,7 @@
 
 ### 修复
 
+- **Windows 上每条本地 pipe 会话都弹出一个控制台窗口**（#278）：守护进程以 `DETACHED_PROCESS` 启动，没有控制台可继承，内核于是为每个 console 子进程新分配一个控制台；Windows 11 默认终端是 Windows Terminal，新控制台被转交成可见窗口，标题是子进程路径。pipe 分支现在用 `CREATE_NO_WINDOW`（只关控制台窗口，不影响 `--argv notepad` 这类 GUI 子进程的窗口）；PTY 分支不变，ConPTY 本来就没有真控制台窗口。
 - **不监听端口的实例拿不到 MCP 文档提示**：`mcp.Start`（解析 baseURL、注册 `learn-api`）曾被放在绑定端口的分支里，所以"无端口、无 UI、进程内驱动"这种形态恰恰缺文档。
 - **`Close` 从不关闭 HTTP server**：二进制靠进程退出掩盖了它，嵌入方 `Close` 之后端口仍被占用、无法重绑。
 - **从未 `Listen` 的实例 `Close` 不释放任何资源**：reconciler 继续探测、store 不关闭。
