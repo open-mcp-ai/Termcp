@@ -839,7 +839,7 @@ func checkPayloadType(st Statement, holes *sentinelTable, op Op) error {
 		Msg: op.Name + " takes a VARIABLE, not a command line: its payload must be exactly one reference " +
 			"($1, $2 … or $NAME), and the shell text goes in that value.\n" +
 			"Writing the line directly is refused because the payload would then be read by two languages " +
-			"at once: `" + firstLine(holes.spell(raw)) + "` is a shell pipeline to one reader and a termcp directive to " +
+			"at once: `" + refusalFirstLine(holes.spell(raw)) + "` is a shell pipeline to one reader and a termcp directive to " +
 			"the other, and neither reading is a guess worth making.\n" +
 			"Use: " + op.Name + " <channel> $1   with args: [\"the command line\"]",
 		Usage: op.Usage,
@@ -866,8 +866,11 @@ func isSingleRef(s string) bool {
 	return true
 }
 
-// firstLine keeps a refusal short enough to read.
-func firstLine(s string) string {
+// refusalFirstLine keeps a refusal short enough to read. The byte budget is
+// deliberate and is NOT the same rule as internal/mcp's firstLineOf, which trims a
+// peer's description to 100 runes: a refusal is held to 60 bytes because it is
+// printed inside another sentence, while a description is a row of a table.
+func refusalFirstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
 	}

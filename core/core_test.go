@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -316,11 +317,29 @@ func TestAnEmbedderAddsAToolToTheSameEndpoint(t *testing.T) {
 // running leaves the port claimed — and then cannot explain why its own next bind
 // fails.
 func TestCloseReleasesThePort(t *testing.T) {
-	// Ask the OS for a free port, then hand it to the instance: hardcoding one
-	// races every other test on a shared runner.
+	// PROBE-THEN-BIND IS A RACE, so the whole handshake is retried rather than
+	// trusted. The port is free when it is probed, and the OS may hand it to another
+	// process before the instance asks for it — on a shared runner that is a
+	// spurious red, not a defect. A handful of attempts turns it into a slower
+	// green; the assertion itself is untouched.
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := closeReleasesThePort(t); err != nil {
+			lastErr = err
+			continue
+		}
+		return
+	}
+	t.Fatalf("5 attempts could not keep a probed port long enough to test with: %v", lastErr)
+}
+
+// closeReleasesThePort is one attempt: bind a free port through an instance, close,
+// and prove the port is claimable again.
+func closeReleasesThePort(t *testing.T) error {
+	t.Helper()
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("probing for a free port: %v", err)
+		return fmt.Errorf("probing for a free port: %w", err)
 	}
 	port := probe.Addr().(*net.TCPAddr).Port
 	probe.Close()
@@ -332,17 +351,20 @@ func TestCloseReleasesThePort(t *testing.T) {
 	cfg.Headless = true
 	srv, err := New(Options{Config: cfg, Version: "test"})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		return fmt.Errorf("New: %w", err)
 	}
 	if err := srv.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
+		return fmt.Errorf("Start: %w", err)
 	}
+	defer srv.Close("test done")
 
 	done := make(chan error, 1)
 	go func() { done <- srv.Listen() }()
 
 	// WAIT FOR THE SOCKET, not for a duration: the state is "connections are
-	// accepted", and the deadline only bounds how long a failure takes to report.
+	// accepted", and the deadline only bounds how long a failure takes to report. An
+	// error from Listen arrives on the same loop, so a lost port fails fast instead
+	// of burning the deadline.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		conn, derr := net.Dial("tcp", srv.Addr())
@@ -350,8 +372,13 @@ func TestCloseReleasesThePort(t *testing.T) {
 			conn.Close()
 			break
 		}
+		select {
+		case lerr := <-done:
+			return fmt.Errorf("Listen never bound %s: %w", srv.Addr(), lerr)
+		default:
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Listen never bound %s: %v", srv.Addr(), derr)
+			return fmt.Errorf("Listen never bound %s: %w", srv.Addr(), derr)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -360,18 +387,19 @@ func TestCloseReleasesThePort(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("Listen returned %v, want nil after Close", err)
+			return fmt.Errorf("Listen returned %v, want nil after Close", err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatal("Close did not make Listen return")
+		return fmt.Errorf("Close did not make Listen return")
 	}
 
 	// The claim: the port is free again, immediately.
 	ln, err := net.Listen("tcp", srv.Addr())
 	if err != nil {
-		t.Fatalf("the port is still claimed after Close: %v", err)
+		return fmt.Errorf("the port is still claimed after Close: %w", err)
 	}
 	ln.Close()
+	return nil
 }
 
 // TestCloseFinishesAnInstanceThatNeverListened covers the other half of who owns
@@ -397,4 +425,27 @@ func TestCloseFinishesAnInstanceThatNeverListened(t *testing.T) {
 	}
 	// And asking twice still must not panic or double-release.
 	srv.Close("again")
+}
+
+// TestListenAfterCloseIsRefused closes the window between the two release paths.
+// Close finishes an instance that is not serving, on the assumption that Listen is
+// not about to start; if it does anyway, the caller gets a server bound on a
+// released store and every request hits a stopped reconciler. The check lives in
+// Listen after the flag is claimed, so it does not depend on which side ran first.
+func TestListenAfterCloseIsRefused(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Headless = true
+	srv, err := New(Options{Config: cfg, Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	srv.Close("test done")
+
+	if err := srv.Listen(); err == nil {
+		t.Fatal("Listen succeeded on a released instance; it would serve requests against a stopped reconciler and a closed store")
+	}
 }

@@ -460,6 +460,20 @@ func (s *Server) Listen() error {
 	if !s.listening.CompareAndSwap(false, true) {
 		return errors.New("core: Listen called twice on one instance")
 	}
+	// A CLOSED INSTANCE DOES NOT OPEN ITS PORT — and this has to be checked AFTER
+	// the flag, not before it. Close sets shutdown and then asks whether anything is
+	// listening; whoever claims the flag must re-read shutdown, or the two can
+	// interleave into a server bound on a released store. Checking shutdown first
+	// only narrows the window: Close could still run between that read and this CAS,
+	// decide nobody is listening, finish, and leave this call to start serving.
+	//
+	// The finish here is what keeps the hand-off complete: in the interleaving where
+	// Close saw the flag already claimed, it deliberately did not release, so this
+	// path must. finish is idempotent, so the other interleaving costs nothing.
+	if s.shutdown.Load() {
+		s.finish()
+		return errors.New("core: Listen after Close; this instance is already released")
+	}
 
 	// The MCP surface is mounted on the shared mux, so this server is the only
 	// listener: one ListenAndServe carries every route (MCP, REST, Web UI) on that

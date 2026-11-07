@@ -38,6 +38,24 @@ type Slot struct {
 	Body string
 }
 
+// InvalidArgument is the slot for a request that was refused before anything was
+// attempted: the body of a POST that is not the tool's argument object, a `cmd`
+// that is not a string, an option out of its domain.
+//
+// IT HAS NO Path HEADER, and that is the whole reason it is a named constructor
+// rather than a literal at each call site. A reply normally echoes the statement it
+// answers; a refusal this early has no statement, and inventing one would print a
+// position the caller never wrote. Two entrances now need exactly this shape —
+// termcp's own argument screen and term/server's body reader — and a literal in each
+// is how the same answer starts arriving with two different error codes.
+func InvalidArgument(body string) Slot {
+	return Slot{
+		Code:    400,
+		Headers: map[string]string{"Error-Code": "invalid_argument"},
+		Body:    body,
+	}
+}
+
 // canonicalReason is the phrase for every code the tool can return. Keeping the
 // table here (rather than relying on net/http's) means the wire format does not
 // change if the standard library renames a phrase.
