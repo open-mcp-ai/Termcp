@@ -158,6 +158,15 @@ type Extension struct {
 	Forwards []ForwardDecl `toml:"forward,omitempty"`
 }
 
+// Fingerprint summarizes the fields this template runs from, as a comparable
+// string. It is the reconciler's answer to "is this a different template", and it
+// is exported because the MCP layer needs the same answer for a different
+// question: whether the peer it mounted was dialled from the template the file
+// describes NOW (issue #282). Two callers, one definition — a peer that decided
+// for itself which fields matter would drift from the instance the reconciler
+// rebuilds, which is exactly the disagreement #282 was.
+func (e *Extension) Fingerprint() string { return fingerprint(e) }
+
 // IsEnabled reports whether the reconciler should push this extension toward
 // available. Absence of the key means yes.
 func (e *Extension) IsEnabled() bool {

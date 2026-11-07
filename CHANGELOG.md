@@ -10,6 +10,7 @@
 
 ### 修复
 
+- **`edit ext` 改掉 `url`/`headers` 之后，挂载的 peer 还是旧的**（#282）：peer 表按「会话 + 扩展名」索引，而 `edit ext` 重建的是实例、会话 id 不变，于是下一次 `open ext` 取回了用旧 header 拨号的 mount。而 `jrpc.Channel` 在拨号时就把 header 快照进了连接，活着的 channel 在原理上也看不到新值——凭据改了等于没改，除非先 `close ext`。现在每次挂载都比对模板指纹（`extensions.Fingerprint`，与 reconciler 判断「这是不是另一个模板」共用同一份定义），指纹不同就释放旧 mount 再拨。`edit ext` 的回复因此也不再自相矛盾：它说旧实例被换掉了，递回的就真是新地址（`mcp:2`），而不是刚被它宣判死亡的那个。
 - **Windows 上每条本地 pipe 会话都弹出一个控制台窗口**（#278）：守护进程以 `DETACHED_PROCESS` 启动，没有控制台可继承，内核于是为每个 console 子进程新分配一个控制台；Windows 11 默认终端是 Windows Terminal，新控制台被转交成可见窗口，标题是子进程路径。pipe 分支现在用 `CREATE_NO_WINDOW`（只关控制台窗口，不影响 `--argv notepad` 这类 GUI 子进程的窗口）；PTY 分支不变，ConPTY 本来就没有真控制台窗口。
 - **不监听端口的实例拿不到 MCP 文档提示**：`mcp.Start`（解析 baseURL、注册 `learn-api`）曾被放在绑定端口的分支里，所以"无端口、无 UI、进程内驱动"这种形态恰恰缺文档。
 - **`Close` 从不关闭 HTTP server**：二进制靠进程退出掩盖了它，嵌入方 `Close` 之后端口仍被占用、无法重绑。

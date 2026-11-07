@@ -64,7 +64,14 @@ func TestCloseChannelDoesNotTearDownSession(t *testing.T) {
 	}
 
 	// 6. ARCHIVE: s2's output is still readable via read, NOT 404!
-	readBack := termText(t, s, map[string]any{"cmd": "read " + h2 + " --tail 5"})
+	//
+	// ASK FOR THE LINE, NOT FOR A WINDOW THAT HAPPENS TO CONTAIN IT. `--tail 5`
+	// assumed IN_S2 was still among the last five lines, but the shell paints its
+	// banner AFTER running the command — how many lines follow IN_S2 depends on how
+	// fast that shell started, so a loaded machine pushes it out of the window while
+	// the archive itself is intact. `--grep` filters before the window, so the
+	// assertion is about the archived bytes rather than about the banner's length.
+	readBack := termText(t, s, map[string]any{"cmd": "read " + h2 + " --grep IN_S2"})
 	if strings.HasPrefix(readBack, "TERM/1 404") {
 		t.Fatalf("closed channel output was destroyed (got 404):\n%s", readBack)
 	}
