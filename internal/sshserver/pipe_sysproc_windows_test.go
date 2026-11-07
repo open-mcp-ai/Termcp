@@ -6,10 +6,13 @@
 // They assert the flags handed to CreateProcess. Whether a window appears is Windows
 // kernel and terminal behaviour, a layer no unit test can reach: the same flag
 // suppresses the window under a detached parent and is invisible under a console
-// parent. The effect is checked by hand — start an instance with no console, open a
-// pipe extension, confirm no window titled with the child's path appears. Note that
-// conhost.exe still shows up in Task Manager afterwards: the console is still
-// allocated, it simply has no window.
+// parent. The effect was checked by hand, before and after, on the path that
+// reproduces it: `daemon start` (DETACHED_PROCESS) then
+// `open <session> --pipe --argv ping ...`. Before the fix a WindowsTerminal window
+// appeared, titled with the child's path (`C:\Program Files\Git\usr\bin\sh.exe`);
+// after it, the list of titled windows is unchanged. Note that conhost.exe still
+// shows up in Task Manager afterwards: the console is still allocated, it simply has
+// no window.
 //
 // The build tag keeps these off ubuntu and macos. It does NOT mean CI misses them:
 // .github/workflows/test.yml runs the suite on windows-latest too.
