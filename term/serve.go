@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Serve is the protocol's own entry point: one argument object in, one envelope
@@ -65,7 +66,15 @@ func (t *Term) Serve(ctx context.Context, args map[string]any) Reply {
 	}
 	file, err := t.Parse(line, Subst{})
 	if err != nil {
-		return syntaxReply(err)
+		reply := SyntaxReply(err)
+		// A CALLER WHO MISSED THE VERB NEEDS THE VERBS. termcp's own entrance answers
+		// an unknown directive with the whole table, and an embedder's should answer
+		// with its own — that is the same help, not a copy of this project's list,
+		// which would name verbs the server does not have.
+		if len(reply.Slots) == 1 && reply.Slots[0].Headers["Error-Code"] == "unknown_directive" {
+			reply.Slots[0].Headers["Usage"] = t.verbList()
+		}
+		return reply
 	}
 	return t.Run(ctx, file)
 }
@@ -109,26 +118,67 @@ func (t *Term) Guide() Reply {
 	return Reply{Slots: []Slot{{Code: 200, Body: string(b)}}}
 }
 
-// syntaxReply turns a parse error into the slot a caller reads.
+// SyntaxReply turns a parse error into the slot a caller reads, and is exported
+// because a server that keeps its own entrance still has to answer a syntax error
+// the same way this one does.
 //
-// The usage line rides along when the parser knew one, because a refusal that
-// only says "no" makes the caller guess at the shape that would have worked.
-func syntaxReply(err error) Reply {
+// THE ERROR CODE IS `invalid_argument`, NOT `syntax_error`. This function used to
+// invent the latter, which meant the two entrances of one protocol disagreed about
+// the same line: termcp's own REST and MCP surface answer `invalid_argument` (twelve
+// tests pin it, and it is what a caller switching on the code expects), while an
+// embedder built on this package answered a name that appears nowhere else in the
+// project or its documentation. A second vocabulary for one situation is worse than
+// no vocabulary: a caller has to guess which server it is talking to.
+//
+// The usage line rides along when the parser knew one, because a refusal that only
+// says "no" makes the caller guess at the shape that would have worked.
+func SyntaxReply(err error) Reply {
 	slot := Slot{
 		Code:    400,
-		Headers: map[string]string{"Error-Code": "syntax_error"},
+		Headers: map[string]string{"Error-Code": ParseErrorCode(nil, err)},
 		Body:    err.Error(),
 	}
 	var derr *Error
-	if errors.As(err, &derr) {
-		if derr.Usage != "" {
-			slot.Headers["Usage"] = derr.Usage
-		}
-		if derr.Op != "" {
-			slot.Headers["Directive"] = derr.Op
-		}
+	if errors.As(err, &derr) && derr.Usage != "" {
+		slot.Headers["Usage"] = derr.Usage
 	}
 	return Reply{Slots: []Slot{slot}}
+}
+
+// ParseErrorCode names a parse failure for a caller that branches on the answer.
+//
+// TWO NAMES, NOT ONE, AND THE SPLIT MATTERS TO A CALLER: a line whose first word is
+// not a verb it knows needs a different shape, while a line that is malformed in
+// its arguments needs a different argument. Both are 400 — the status was never
+// where the distinction lived.
+//
+// IT LIVES HERE SO THE TWO ENTRANCES CANNOT ANSWER DIFFERENTLY. It used to be
+// `internal/mcp`'s private classification, which meant an embedder's entrance called
+// every parse failure `invalid_argument` — including "unknown directive", which is
+// the one case with an obvious remedy (list the verbs). A test comparing the two
+// faces on one input each is what surfaced it.
+//
+// A nil Grammar means the DefaultGrammar, matching Grammar.Lookup's own rule; that
+// is what a caller with no vocabulary of its own is asking about.
+func ParseErrorCode(g *Grammar, err error) string {
+	var derr *Error
+	if !errors.As(err, &derr) || derr.Op == "" {
+		return "invalid_argument"
+	}
+	if _, known := g.Lookup(derr.Op); !known {
+		return "unknown_directive"
+	}
+	return "invalid_argument"
+}
+
+// verbList is the one-line index of this vocabulary, for the reply that has to say
+// "that is not a verb you can use here".
+func (t *Term) verbList() string {
+	names := make([]string, 0, 16)
+	for _, op := range t.grammar.Ops() {
+		names = append(names, op.Name)
+	}
+	return strings.Join(names, " | ")
 }
 
 // cmdArg reads the command line out of a tool's arguments.

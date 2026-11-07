@@ -246,3 +246,34 @@ func TestReplyStatusSplitsRequestFromCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnknownVerbAnswersWithThisServersOwnVerbs is the second half of the
+// unknown-directive rule. Naming the failure is only half an answer; the caller
+// needs the shape that would have worked. termcp's own entrance has always replied
+// with its directive table, and an embedder's must reply with ITS table — copying
+// this project's list would name verbs the server does not have, which is the same
+// defect as a guide that recommends a `help` verb it never declared.
+func TestAnUnknownVerbAnswersWithThisServersOwnVerbs(t *testing.T) {
+	g := directive.NewGrammar([]directive.Op{
+		{Name: "greet", Usage: "greet <name>"},
+		{Name: "wave", Usage: "wave"},
+	})
+	ts := newShell(t, server.Options{Term: term.New(g, term.WithHandler(caps{}))})
+
+	_, out, _ := post(t, ts, `{"cmd":"nosuchverb x"}`)
+	usage, _ := out["Usage"].(string)
+	if usage == "" {
+		t.Fatalf("an unknown verb got no list of the verbs that exist: %v", out)
+	}
+	for _, want := range []string{"greet", "wave"} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("the verb list is missing %q: %q", want, usage)
+		}
+	}
+	// And it is THIS server's vocabulary, not termcp's.
+	for _, never := range []string{"connect", "session", "shell"} {
+		if strings.Contains(usage, never) {
+			t.Errorf("the verb list mentions %q, which this server does not declare: %q", never, usage)
+		}
+	}
+}

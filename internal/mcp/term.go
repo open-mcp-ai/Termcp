@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/term"
 
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
@@ -466,13 +467,12 @@ func directiveTable() string {
 
 // errorCodeFor classifies a directive error.
 func errorCodeFor(derr *directive.Error) string {
-	if derr.Op == "" {
-		return CodeInvalidArgument
-	}
-	if _, known := directive.Lookup(derr.Op); !known {
-		return "unknown_directive"
-	}
-	return CodeInvalidArgument
+	// The classification is the protocol's, not this server's: term.ParseErrorCode is
+	// what an embedder's entrance calls, so this one calling it too is what makes
+	// "this build" and "a program built on this build" answer a caller identically.
+	// When it was duplicated here, the two disagreed about unknown directives — the
+	// one case where the reply could have named the verbs instead.
+	return term.ParseErrorCode(nil, derr)
 }
 
 // termReply accumulates the slots of one call and applies the total byte cap.
