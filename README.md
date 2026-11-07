@@ -156,7 +156,6 @@ LAN IP; from another container on the same network as `http://termcp:18765/strea
 | [`docs/protocol.md`](./docs/protocol.md) | `TERM/1` specification: wire format, status codes, headers, the 19 directives, the three gates. |
 | [`docs/capabilities.md`](./docs/capabilities.md) | The full capability surface and the security model. |
 | [`docs/api.md`](./docs/api.md) | REST endpoints, WebSocket frames, locator resolution. |
-| [`docs/capabilities.md`](./docs/capabilities.md) | Full capability surface and the security model. |
 | [`docs/architecture.md`](./docs/architecture.md) | Session kernel, entrances, storage. |
 | [`docs/design/`](./docs/design) | Design records: Web UI, resource model, session storage, font stack, mobile terminal. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes. |

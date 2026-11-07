@@ -219,3 +219,39 @@ func structuredKeys(m map[string]any) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestEveryDocumentedCodeHasAReasonPhrase pins the vocabulary in docs/protocol.md
+// §2 to the table that renders it.
+//
+// The list below IS that section: a code the protocol documents but this table
+// does not know renders as `TERM/1 502 Status`, which looks like a decision and is
+// the absence of one. Two codes were in exactly that state (502 and 504) because
+// nothing compared the document to the table — the replies still carried the right
+// number, so tests that asserted on the code passed while the human-readable half
+// of the status line was noise.
+func TestEveryDocumentedCodeHasAReasonPhrase(t *testing.T) {
+	documented := []struct {
+		code   int
+		reason string
+	}{
+		{200, "OK"},
+		{202, "Accepted"},
+		{204, "No Content"},
+		{206, "Partial Content"},
+		{208, "Already Reported"},
+		{400, "Bad Request"},
+		{403, "Forbidden"},
+		{404, "Not Found"},
+		{409, "Conflict"},
+		{413, "Payload Too Large"},
+		{422, "Unprocessable"},
+		{500, "Internal Server Error"},
+		{502, "Bad Gateway"},
+		{504, "Gateway Timeout"},
+	}
+	for _, d := range documented {
+		if got := reasonFor(d.code); got != d.reason {
+			t.Errorf("%d should render %q, got %q — either the table lost it or docs/protocol.md is describing a code this build cannot phrase", d.code, d.reason, got)
+		}
+	}
+}

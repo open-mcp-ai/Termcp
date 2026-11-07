@@ -16,6 +16,8 @@ termcp <subcommand> [action] [flags]
 | `--data-dir` | `~/.termcp` | 持久化目录（会话、SSH 配置、转录）。自动创建。可用 `$TERMCP_DATA_DIR` 覆盖。 |
 | `--log-level` | `info` | 日志级别：`debug` / `info` / `warn` / `error`。`debug` 打印所有 MCP 工具调用；失败的工具调用与会话创建错误无论级别都记在 `warn`/`error`。 |
 | `--no-internal` | `false` | 禁用内置的 loopback SSH profile。 |
+| `--headless` | `false` | 不装配浏览器 UI：MCP 工具面、`POST /api/term` 与 agent 文档保留。与 `make build-api`（`-tags no_webui`）互补：那个减的是**二进制**，这个减的是**运行期装配**。 |
+| `--themes-dir` | `~/.termcp/themes` | 自定义主题根目录（或 `$TERMCP_THEMES_DIR`）。目录里每个子目录是一个主题。 |
 | `--assets` | `~/.termcp/assets` | Web UI 与文档的外置静态资源目录。目录里存在的文件覆盖内嵌副本，不存在的回落到内嵌；目录不存在等于什么都没发生。可用 `$TERMCP_ASSETS_DIR` 覆盖。覆盖是**按文件**的：`app.css` 现在是 manifest，`@import` 掉 `static/css/` 下的分块，所以通过覆盖目录换肤意味着覆盖整个 `static/css` 目录——一个只导入内嵌分块的 manifest 会让未被覆盖的部分恢复成内嵌外观。 |
 | `--mcp-manage-ssh-configs` | `false` | 允许 MCP 工具创建/编辑/删除 SSH 配置（凭据永不暴露）。 |
 | `--auth-token` | *(未设)* | HTTP 认证的静态 token（或 `$TERMCP_AUTH_TOKEN`）。每个客户端——API、MCP、浏览器——都要出示。与 `--auth-hash` 互斥。 |
@@ -35,7 +37,7 @@ termcp <subcommand> [action] [flags]
 浏览器首次打开就走这条路，所以深色系统的用户不会再先看到一页浅色。想固定
 下来就选具体主题，此后系统配色不再影响它。`cyberpunk` 保留原 dev 外观。
 
-自定义主题放在 `~/.termcp/themes/<主题名>/`，该目录不随 `--data-dir` 改变。
+自定义主题放在 `~/.termcp/themes/<主题名>/`（可用 `--themes-dir` / `$TERMCP_THEMES_DIR` 改根目录），该目录不随 `--data-dir` 改变。
 每个主题必须有 `theme.css`，可以携带 `assets/` 下的 CSS、图片、字体等文件：
 
 ```text

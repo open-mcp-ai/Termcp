@@ -54,6 +54,12 @@ var canonicalReason = map[int]string{
 	413: "Payload Too Large",
 	422: "Unprocessable",
 	500: "Internal Server Error",
+	// 502 and 504 are REACHED (a peer that cannot be dialled, a downstream that
+	// does not answer) and were missing from this table, so those replies rendered
+	// the status line `TERM/1 502 Status` — a word that means "we did not decide
+	// which default to use", printed where the protocol promises a reason phrase.
+	502: "Bad Gateway",
+	504: "Gateway Timeout",
 }
 
 // headerOrder is the render order, and the reason a reply is reproducible: the

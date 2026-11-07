@@ -55,7 +55,7 @@ st.Size()                  // LogSize → total
   下一次 append 打开句柄时截掉残尾再写，不会写歪
 - 索引是**建议性**的（与 `log.jsonl` 同级）：损坏只影响按行寻址的效率，不动字节本身
 
-消费方：`shell_output(from_line=...)`、`message(action=list)` 的 `from_line`/`to_line`/`total_lines`。
+消费方：`read ... --from-line N`，以及 `call <peer> message {action:"list"}` 的 `from_line`/`to_line`/`total_lines`。
 
 ## log.stdio
 
@@ -65,7 +65,7 @@ st.Size()                  // LogSize → total
 - 写入与字节同一 sink 请求，**索引在字节之后**（仓库铁律）：crash 丢记录 → 该段回落按 stdout 读（e 集合缩小），不会误判；残缺尾（size%8≠0）打开时截断。
 - **pty 无记录**：终端在源头合并 stderr，Stderr reader 永远无数据。
 - 它是**传输层**索引：回答"这段字节从哪个管道来"；谁在操作（业务层）看 `log.jsonl`，行边界看 `log.lines`。
-- 消费方：`shell_output(stream="o"|"e")` 过滤读。
+- 消费方：`read <target> --stream o|e` 过滤读。
 
 ## log.jsonl
 
