@@ -152,6 +152,12 @@ const (
 // declares become ways in. The slice is copied, so the caller keeps its own.
 func NewGrammar(ops []Op) *Grammar { return directive.NewGrammar(ops) }
 
+// DefaultGrammar is the vocabulary this build ships, indexed once. A program that
+// brings its own verbs does not need it; a tool that has to read a line written
+// for termcp — a docs generator, a syntax checker, an embedder parsing before it
+// decides — needs the vocabulary those lines were written in.
+func DefaultGrammar() *Grammar { return directive.DefaultGrammar }
+
 // The reply envelope.
 type (
 	// Slot is one answer: a status code, headers and a body.
