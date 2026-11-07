@@ -92,12 +92,6 @@ type Options struct {
 	// one without inventing a free port, waiting for a bind, and hoping.
 	NoListener bool
 
-	// Headless omits the browser UI entirely: no static assets, no /api/sessions,
-	// no WebSocket. The MCP tool surface and POST /api/term remain, which is
-	// everything an agent needs. Ignored (and reported as such by Start) in a
-	// `no_webui` build, where the UI is not compiled in at all.
-	Headless bool
-
 	// DaemonChild marks an instance launched by `termcp daemon`, which changes
 	// two things: GET /api/daemon reports the idle countdown, and the idle
 	// watcher may end the process. A library embedder leaves this false.
@@ -202,6 +196,16 @@ func New(opts Options) (*Server, error) {
 	s.sshStore = sshconfig.NewStore(cfg.DataDir)
 	s.forwardMgr = forward.NewForwardManager()
 
+	// THE ASSET DIRECTORIES ARE APPLIED HERE, from Config, rather than expected of
+	// the caller: the line below reads webui.Assets() for the MCP docs FS, so a
+	// caller that configured Config.AssetsDir and called New would otherwise get
+	// the embedded bytes — a silently wrong answer to a question it asked
+	// correctly. Setting it once here is what makes the field a setting instead of
+	// a global the caller must remember to poke first.
+	// ponytail: process-wide, so two instances in one program share one override.
+	webui.SetAssetsDir(cfg.AssetsDir)
+	webui.SetThemesDir(cfg.ThemesDir)
+
 	s.addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	s.mux = http.NewServeMux()
 	s.httpSrv = &http.Server{Addr: s.addr, Handler: s.mux}
@@ -252,7 +256,7 @@ func New(opts Options) (*Server, error) {
 // Split out so the headless decision is one readable branch instead of a dozen
 // conditionals scattered through New.
 func (s *Server) wireUI() {
-	if s.opts.Headless {
+	if s.cfg.Headless {
 		// The browser UI is gone, the agent-facing document is not: it is the only
 		// hand-written reference for the transport layer (endpoints, bodies, cursor
 		// semantics, auth), and `help` cannot cover it because `help` describes the
