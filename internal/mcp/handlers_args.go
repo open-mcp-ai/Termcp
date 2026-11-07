@@ -3,7 +3,7 @@ package mcp
 import (
 	"encoding/json"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 func getString(args map[string]any, key, def string) string {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {

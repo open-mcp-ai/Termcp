@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Agent-facing documentation surface: one MCP prompt, no MCP resources.
@@ -71,7 +71,7 @@ func (s *Server) registerLearnAPIPrompt() {
 	s.mcpServer.AddPrompt(
 		mcpgo.NewPrompt("learn-api",
 			mcpgo.WithPromptDescription("Load this instance's HTTP API reference and report what termcp can do. Use before scripting against termcp over REST."),
-			mcpgo.WithArgument("task", mcpgo.ArgumentDescription("Optional concrete task to plan once the API is loaded")),
+			mcpgo.WithArgument("task", mcpgo.ArgumentDescription{Description: "Optional concrete task to plan once the API is loaded"}),
 		),
 		func(ctx context.Context, req mcpgo.GetPromptRequest) (*mcpgo.GetPromptResult, error) {
 			// Resolved per request: a client that reached this instance by a LAN

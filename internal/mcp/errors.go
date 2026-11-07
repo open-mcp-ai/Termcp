@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -99,7 +99,7 @@ func toolError(code, format string, args ...any) *mcpgo.CallToolResult {
 	}
 	return &mcpgo.CallToolResult{
 		IsError: true,
-		Content: []mcpgo.Content{
+		Content: []mcpgo.TextContent{
 			mcpgo.NewTextContent(string(payload)),
 		},
 	}

@@ -3,9 +3,9 @@ package mcp
 import (
 	"fmt"
 
-	"github.com/open-mcp-ai/termcp/term/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // Resource URL (termcp://...) support. Parsing lives in internal/locator, which

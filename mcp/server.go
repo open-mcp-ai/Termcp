@@ -103,10 +103,9 @@ type Server struct {
 	// uses would be an implementation nobody verifies against a moving spec.
 	inbound map[string]InboundHandler
 
-	sessions   sync.Map // session id -> Session
-	seq        atomic.Uint64
-	closed     atomic.Bool
-	toolChange atomic.Bool
+	sessions sync.Map // session id -> Session
+	seq      atomic.Uint64
+	closed   atomic.Bool
 }
 
 // NewServer builds a protocol endpoint.
@@ -158,24 +157,6 @@ func (s *Server) Use(m Middleware) {
 // rather than answered with a half-truth.
 func (s *Server) OnMethod(method string, h InboundHandler) {
 	s.inbound[method] = h
-}
-
-// SetToolListChanged records that the tool list can change at runtime, so the
-// initialize answer advertises the notification a client would wait for.
-func (s *Server) SetToolListChanged(v bool) { s.toolChange.Store(v) }
-
-// Sessions returns the attached sessions, in id order so a caller that renders
-// them produces a stable list.
-func (s *Server) Sessions() []Session {
-	out := make([]Session, 0, 8)
-	s.sessions.Range(func(_, v any) bool {
-		if sess, ok := v.(Session); ok {
-			out = append(out, sess)
-		}
-		return true
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].SessionID() < out[j].SessionID() })
-	return out
 }
 
 // registerSession records a new session and fires the hook.
@@ -309,7 +290,9 @@ func (s *Server) dispatch(ctx context.Context, req *Request, sess Session) (any,
 func (s *Server) initialize(ctx context.Context, p *InitializeRequest, sess Session) *InitializeResult {
 	caps := ServerCapabilities{}
 	if len(s.tools) > 0 {
-		caps.Tools = &ListChangedCapability{ListChanged: s.toolChange.Load()}
+		// listChanged is not claimed: a tool list that never changes cannot send the
+		// notification a client would then wait for.
+		caps.Tools = &ListChangedCapability{}
 	}
 	if len(s.prompts) > 0 {
 		caps.Prompts = &ListChangedCapability{}

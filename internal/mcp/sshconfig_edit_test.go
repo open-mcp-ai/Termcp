@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
@@ -38,7 +36,7 @@ func edit(t *testing.T, s *Server, args map[string]any) {
 		t.Fatalf("handleEditSSHConfig returned a transport error: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("edit was rejected: %s", res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("edit was rejected: %s", res.Content[0].Text)
 	}
 }
 

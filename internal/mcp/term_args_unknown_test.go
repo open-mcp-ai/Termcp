@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestAnUnknownArgumentIsRefusedByName pins the rule that keeps a deleted parameter

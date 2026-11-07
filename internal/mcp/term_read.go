@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/pkg/api"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 	"github.com/open-mcp-ai/termcp/term/locator"
-	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 // directiveRead reads a window of a stream, honouring the three axes.

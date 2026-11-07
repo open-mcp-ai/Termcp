@@ -82,12 +82,6 @@ func WithSSEContextFunc(f func(context.Context, *http.Request) context.Context) 
 	return func(s *SSEServer) { s.contextFunc = f }
 }
 
-// WithSSEBasePath sets the prefix the endpoint event advertises, for a deployment
-// served under a path.
-func WithSSEBasePath(p string) SSEOption {
-	return func(s *SSEServer) { s.basePath = strings.TrimSuffix(p, "/") }
-}
-
 // NewSSEServer builds the legacy SSE transport.
 func NewSSEServer(srv *Server, opts ...SSEOption) *SSEServer {
 	s := &SSEServer{
@@ -154,7 +148,7 @@ func (s *SSEServer) SSEHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 
 		// The endpoint event, first and only once.
-		endpoint := fmt.Sprintf("%s%s?%s=%s", s.basePath, s.messagePath, sseSessionParam, sess.SessionID())
+		endpoint := fmt.Sprintf("%s?%s=%s", s.messagePath, sseSessionParam, sess.SessionID())
 		if err := writeSSEFrame(w, flusher, "endpoint", []byte(endpoint)); err != nil {
 			return
 		}

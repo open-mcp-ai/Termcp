@@ -3,7 +3,7 @@ package mcp
 import (
 	"fmt"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 

@@ -27,10 +27,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/term/directive"
-	"github.com/open-mcp-ai/termcp/term/envelope"
 	"github.com/open-mcp-ai/termcp/internal/task"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // pipeCopy runs `read … | write …` as one background task.

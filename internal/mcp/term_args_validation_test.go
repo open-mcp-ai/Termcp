@@ -161,11 +161,11 @@ func TestAbsentWindowArgumentsStillDefault(t *testing.T) {
 // If these drift, a client validates against a rule the server does not apply.
 func TestSchemaPublishesTheDeclaredBounds(t *testing.T) {
 	s := newTestServer(t)
-	tool, ok := s.mcpServer.ListTools()["term"]
+	tool, ok := s.mcpServer.Tool("term")
 	if !ok {
 		t.Fatal("the term tool is not registered")
 	}
-	props := tool.Tool.InputSchema.Properties
+	props := tool.InputSchema.Properties
 	for _, name := range []string{"timeout", "bytes_limit", "lines_limit", "total_bytes_limit"} {
 		raw, ok := props[name]
 		if !ok {

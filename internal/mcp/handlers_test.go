@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
@@ -69,7 +69,7 @@ func makeRequest(args map[string]any) mcpgo.CallToolRequest {
 
 func parseResult(t *testing.T, result *mcpgo.CallToolResult) map[string]any {
 	t.Helper()
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].Text
 	var m map[string]any
 	if err := json.Unmarshal([]byte(text), &m); err != nil {
 		t.Fatalf("failed to parse result: %v, text: %s", err, text)
@@ -163,7 +163,7 @@ func testReadOutputUntilCount(t *testing.T, s *Server, shellID, marker string, w
 			t.Fatal(err)
 		}
 		if readResult.IsError {
-			t.Fatalf("unexpected error: %s", readResult.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("unexpected error: %s", readResult.Content[0].Text)
 		}
 		readM := parseResult(t, readResult)
 		output += readM["output"].(string)
@@ -182,7 +182,7 @@ func testRunLine(t *testing.T, s *Server, shellID, text string) {
 		t.Fatal(err)
 	}
 	if sendResult.IsError {
-		t.Fatalf("send_input error: %s", sendResult.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("send_input error: %s", sendResult.Content[0].Text)
 	}
 	keyReq := makeRequest(map[string]any{"shell_id": shellID, "key": "enter"})
 	keyResult, err := s.handlePressKey(context.Background(), keyReq)
@@ -190,7 +190,7 @@ func testRunLine(t *testing.T, s *Server, shellID, text string) {
 		t.Fatal(err)
 	}
 	if keyResult.IsError {
-		t.Fatalf("press_key error: %s", keyResult.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("press_key error: %s", keyResult.Content[0].Text)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestHandleDetectShell_Auto(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
 	}
 
 	m := parseResult(t, result)
@@ -258,7 +258,7 @@ func TestHandleStartSession_EmptyCommandOK(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
 	}
 	m := parseResult(t, result)
 	if m["session_id"] == nil {
@@ -295,7 +295,7 @@ func TestHandleStartSession_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
 	}
 
 	m := parseResult(t, result)
@@ -524,7 +524,7 @@ func TestHandleSendInput_ReturnsImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sendResult.IsError {
-		t.Fatalf("unexpected error: %s", sendResult.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("unexpected error: %s", sendResult.Content[0].Text)
 	}
 	elapsed := time.Since(start)
 	// 4 seconds: a handler that blocked on the shell would be gated by the shell
@@ -701,7 +701,7 @@ func TestHandleStartSubShell_ModeIsPerShell(t *testing.T) {
 	var listed struct {
 		Shells []api.Session `json:"shells"`
 	}
-	if err := json.Unmarshal([]byte(listRes.Content[0].(mcpgo.TextContent).Text), &listed); err != nil {
+	if err := json.Unmarshal([]byte(listRes.Content[0].Text), &listed); err != nil {
 		t.Fatal(err)
 	}
 	modes := map[string]api.SessionMode{}
@@ -780,7 +780,7 @@ func TestHandleReadOutput_InvalidTimeout(t *testing.T) {
 		})
 		result, _ := s.handleReadOutput(context.Background(), req)
 		if result.IsError {
-			t.Fatalf("timeout %v is a window, not an error: %s", timeout, result.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("timeout %v is a window, not an error: %s", timeout, result.Content[0].Text)
 		}
 	}
 
@@ -908,7 +908,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		if res.IsError {
-			t.Fatalf("chmod error: %s", res.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("chmod error: %s", res.Content[0].Text)
 		}
 		fi, err := os.Stat(path)
 		if err != nil {
@@ -937,7 +937,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 		})
 		zeroRes, _ := s.handleFilePerm(context.Background(), zero)
 		if zeroRes.IsError {
-			t.Fatalf("chmod 000 should be accepted: %s", zeroRes.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("chmod 000 should be accepted: %s", zeroRes.Content[0].Text)
 		}
 		fi, err = os.Stat(path)
 		if err != nil {
@@ -955,7 +955,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 		})
 		rmRes, _ := s.handleFilePerm(context.Background(), rm)
 		if rmRes.IsError {
-			t.Fatalf("restore chmod failed: %s", rmRes.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("restore chmod failed: %s", rmRes.Content[0].Text)
 		}
 	})
 
@@ -970,7 +970,7 @@ func TestHandleFileOpsDispatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		if res.IsError {
-			t.Fatalf("realpath error: %s", res.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("realpath error: %s", res.Content[0].Text)
 		}
 		m := parseResult(t, res)
 		gotPath, ok := m["canonical_path"].(string)
@@ -1036,7 +1036,7 @@ func TestGroupDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.IsError {
-		t.Fatalf("list should work after upgrade: %s", res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("list should work after upgrade: %s", res.Content[0].Text)
 	}
 
 	// forward(action=list) on empty registry
@@ -1064,7 +1064,7 @@ func TestGroupDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if msgRes.IsError {
-		t.Fatalf("message list error: %s", msgRes.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("message list error: %s", msgRes.Content[0].Text)
 	}
 	mm := parseResult(t, msgRes)
 	if _, ok := mm["spans"].([]any); !ok {

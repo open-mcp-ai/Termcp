@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // maxNotifyMessageLen caps the message shown in the Web UI toast.

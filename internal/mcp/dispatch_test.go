@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/internal/forward"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // TestNamedKindNeverFallsThroughToTheContainer pins the difference between "close

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
+	"github.com/open-mcp-ai/termcp/internal/transcript"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
-	"github.com/open-mcp-ai/termcp/internal/transcript"
 )
 
 // pipe and pty — the two primitives, as directives.

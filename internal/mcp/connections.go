@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Connection is one MCP client currently attached to this instance.
@@ -65,7 +65,7 @@ type connRegistry struct {
 // itself, so the read path asks the session — which is also why this holds the
 // object and not a snapshot.
 type connEntry struct {
-	session     mcpserver.ClientSession
+	session     mcpgo.Session
 	namespace   string
 	connectedAt time.Time
 	seq         uint64
@@ -77,7 +77,7 @@ func newConnRegistry() *connRegistry {
 
 // add records a newly registered session. It runs before the client has said
 // anything, so only the session itself is known here.
-func (r *connRegistry) add(s mcpserver.ClientSession) {
+func (r *connRegistry) add(s mcpgo.Session) {
 	if s == nil || s.SessionID() == "" {
 		return
 	}
@@ -94,7 +94,7 @@ func (r *connRegistry) add(s mcpserver.ClientSession) {
 }
 
 // remove forgets a session that went away.
-func (r *connRegistry) remove(s mcpserver.ClientSession) {
+func (r *connRegistry) remove(s mcpgo.Session) {
 	if s == nil {
 		return
 	}
@@ -161,10 +161,8 @@ func (r *connRegistry) list() []Connection {
 			ConnectedAt: e.connectedAt.Format(time.RFC3339),
 			seq:         e.seq,
 		}
-		if withInfo, ok := e.session.(mcpserver.SessionWithClientInfo); ok {
-			info := withInfo.GetClientInfo()
-			c.Name, c.Version = info.Name, info.Version
-		}
+		info := e.session.GetClientInfo()
+		c.Name, c.Version = info.Name, info.Version
 		out = append(out, c)
 	}
 

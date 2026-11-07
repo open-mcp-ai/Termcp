@@ -5,8 +5,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // withPanicRecovery turns a panicking tool handler into a failed tool result.
@@ -43,8 +42,8 @@ import (
 //
 // The tool name is included in both, since a panic report without it cannot be
 // located.
-func withPanicRecovery() mcpserver.ServerOption {
-	return mcpserver.WithToolHandlerMiddleware(func(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
+func withPanicRecovery() mcpgo.Middleware {
+	return func(next mcpgo.ToolHandler) mcpgo.ToolHandler {
 		return func(ctx context.Context, request mcpgo.CallToolRequest) (result *mcpgo.CallToolResult, err error) {
 			defer func() {
 				r := recover()
@@ -65,9 +64,8 @@ func withPanicRecovery() mcpserver.ServerOption {
 					"termcp hit an internal error handling %s; the request was not completed. "+
 						"This is a bug in termcp, not a problem with the arguments - "+
 						"retrying the same call is unlikely to help. Stack trace is in the server log.", name)
-				err = nil
 			}()
 			return next(ctx, request)
 		}
-	})
+	}
 }

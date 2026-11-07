@@ -1,8 +1,7 @@
 package mcp
 
 import (
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	mcpgo "github.com/open-mcp-ai/termcp/mcp"
 )
 
 // registerTermTools declares the single terminal entry, which is the whole
@@ -13,7 +12,7 @@ import (
 // (term_args.go), the same table docs/api.md's parameter table and the tests read.
 // Adding an argument is one entry in that table, and the schema, the doc and the
 // parser's default all move together.
-func registerTermTools(mcpServer *mcpserver.MCPServer, s *Server) {
+func registerTermTools(mcpServer *mcpgo.Server, s *Server) {
 	opts := []mcpgo.ToolOption{
 		// Four default booleans on every tool carry no termcp information and cost
 		// ~80 bytes; the annotation block is empty on purpose.

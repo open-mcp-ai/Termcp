@@ -38,10 +38,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/internal/encoding"
-	"github.com/open-mcp-ai/termcp/term/envelope"
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // cdpSession is one attached target: the sessionId plus what a caller needs to
