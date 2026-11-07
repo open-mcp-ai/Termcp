@@ -55,6 +55,11 @@ func newSSEClient(id string, out chan []byte) *client {
 type sseSessionEntry struct {
 	client *client
 	out    chan []byte
+	// done ends this session's stream. Shutdown closes it instead of waiting for
+	// the GET request's own context, which is the client's deadline and may never
+	// come: a caller asking the server to stop should not be told "wait for a
+	// client that has nothing to do with you".
+	done chan struct{}
 }
 
 // SSEServer is the legacy SSE transport: GET /sse plus POST /message.
@@ -71,6 +76,9 @@ type SSEServer struct {
 	mu       sync.Mutex
 	sessions map[string]*sseSessionEntry
 	closed   bool
+	// stopped is closed by the first Shutdown, so a second one returns instead of
+	// waiting for a state that has already been reached.
+	stopped chan struct{}
 }
 
 // SSEOption customises the SSE transport.
@@ -119,7 +127,8 @@ func (s *SSEServer) SSEHandler() http.Handler {
 			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		s.sessions[sess.SessionID()] = &sseSessionEntry{client: sess, out: out}
+		s.sessions[sess.SessionID()] = &sseSessionEntry{client: sess, out: out, done: make(chan struct{})}
+		entry := s.sessions[sess.SessionID()]
 		s.mu.Unlock()
 
 		ctx := r.Context()
@@ -158,6 +167,8 @@ func (s *SSEServer) SSEHandler() http.Handler {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-entry.done:
 				return
 			case <-keepAlive.C:
 				if err := writeSSEComment(w, flusher); err != nil {
@@ -219,21 +230,63 @@ func (s *SSEServer) MessageHandler() http.Handler {
 	})
 }
 
-// Shutdown ends every session and refuses new ones.
+// Shutdown ends every session and refuses new ones. It waits for the streams to
+// actually end, bounded by ctx.
+//
+// IT USED TO ALWAYS WAIT THE FULL TIMEOUT. The body collected the sessions, threw
+// them away (`_ = sessions`), and then blocked on `<-ctx.Done()` — so Shutdown's
+// cost was the timeout whether there were zero sessions or a hundred, and every
+// clean stop of every instance paid five seconds for a shutdown with nothing to
+// shut down. The state that call is about is "the sessions are gone"; a duration
+// is a guess at when that happens, and here it was a guess of five seconds.
 func (s *SSEServer) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
-	sessions := make([]*sseSessionEntry, 0, len(s.sessions))
+	if s.stopped == nil {
+		s.stopped = make(chan struct{})
+	}
+	if len(s.sessions) == 0 {
+		select {
+		case <-s.stopped:
+		default:
+			close(s.stopped)
+		}
+		s.mu.Unlock()
+		return nil
+	}
+	// Collect, then close, then wait: closing under the lock would race a session
+	// that is removing itself for the same reason.
+	dones := make([]chan struct{}, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		sessions = append(sessions, sess)
+		dones = append(dones, sess.done)
 	}
 	s.mu.Unlock()
-	// Closing the answer channel would race with a producer; the streams end
-	// through ctx, which is the GET request's own deadline. Waiting here is what
-	// makes Shutdown mean "the sessions are gone", not "a flag is set".
-	_ = sessions
-	<-ctx.Done()
-	return nil
+
+	for _, done := range dones {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+
+	// Poll the map rather than sleep on the timeout: a stream that ended on its own
+	// has already removed itself, and this returns as soon as that happened.
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		s.mu.Lock()
+		left := len(s.sessions)
+		s.mu.Unlock()
+		if left == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
 }
 
 // writeSSEFrame writes one `event:`/`data:` frame and flushes it.

@@ -18,13 +18,17 @@
 //
 //	srv, err := core.New(core.Options{Config: cfg})
 //	if err != nil { return err }
-//	defer srv.Close()
-//	return srv.Start()          // binds cfg.Host:cfg.Port
+//	defer srv.Close("done")
+//	if err := srv.Start(); err != nil { return err }   // brings the instance up
+//	return srv.Listen()                                // binds cfg.Host:cfg.Port
 //
-// Or in-process, with no listener at all:
+// Or in-process, with no listener at all — the difference is WHICH CALLS YOU
+// MAKE, not a flag:
 //
-//	srv, err := core.New(core.Options{Config: cfg, NoListener: true})
-//	...
+//	srv, err := core.New(core.Options{Config: cfg})
+//	if err != nil { return err }
+//	defer srv.Close("done")
+//	if err := srv.Start(); err != nil { return err }
 //	reply := srv.Term(ctx, "ls session", nil)   // the TERM/1 envelope
 //
 // The second form is the point of the exercise: an embedder that already has a
@@ -82,16 +86,6 @@ type Options struct {
 	// binary passes its ldflags value; an embedder passes its own.
 	Version string
 
-	// NoListener runs the instance without binding a port. The MCP and REST
-	// surfaces still exist and are reachable through Term and the handlers on
-	// Server, but nothing is served. Start then only starts the background
-	// machinery and returns.
-	//
-	// This is the SDK form. It exists because an embedder usually already has a
-	// transport, and an instance that insists on a port cannot be used inside
-	// one without inventing a free port, waiting for a bind, and hoping.
-	NoListener bool
-
 	// DaemonChild marks an instance launched by `termcp daemon`, which changes
 	// two things: GET /api/daemon reports the idle countdown, and the idle
 	// watcher may end the process. A library embedder leaves this false.
@@ -129,9 +123,11 @@ type Server struct {
 
 	uiEnabled bool
 
-	started  atomic.Bool
-	shutdown atomic.Bool
-	once     sync.Once
+	started   atomic.Bool
+	listening atomic.Bool
+	finished  atomic.Bool
+	shutdown  atomic.Bool
+	once      sync.Once
 	// ready is closed once the background machinery is up, so an embedder can
 	// wait for "usable" without polling or sleeping. Start closes it before it
 	// blocks, which is the first moment Term can answer.
@@ -144,24 +140,20 @@ type Server struct {
 }
 
 // New builds an instance and its dependencies, but does not serve. Nothing here
-// opens a listening socket; Start does that (and only when a listener is
-// wanted), so a construction error is always a configuration error and never a
-// half-started server.
+// opens a listening socket; Listen does that, so a construction error is always a
+// configuration error and never a half-started server.
+//
+// THE PORT IS NOT CHECKED HERE. Whether a port is bound is now a question about
+// a CALL (Listen), not about a field, so validating it at construction would
+// reject a perfectly good instance on behalf of a step nobody asked for. The port
+// is checked by Listen, which is the only code that needs it.
 func New(opts Options) (*Server, error) {
 	if opts.Config == nil {
 		return nil, errors.New("core: Options.Config is required")
 	}
 	cfg := opts.Config
-	// A port is only a constraint when something is going to bind it. With
-	// NoListener there is no listener to validate, and demanding one would force
-	// every embedder to invent a free port it never uses — the exact thing
-	// NoListener exists to avoid.
-	if !opts.NoListener {
-		if err := cfg.Validate(); err != nil {
-			return nil, err
-		}
-	} else if cfg.DataDir == "" {
-		return nil, errors.New("core: Config.DataDir is required")
+	if err := cfg.ValidateInstance(); err != nil {
+		return nil, err
 	}
 	if opts.Version == "" {
 		opts.Version = "dev"
@@ -324,7 +316,10 @@ func (s *Server) Embedded() bool { return s.uiEnabled }
 // running Start in a goroutine calls this instead of sleeping: "the server is
 // up" is a state, not a duration.
 //
-// It returns nil immediately if Start has already reached that point.
+// After a Start that returned nil it answers immediately — Start is synchronous
+// now, so this is a belt for callers that launch it in a goroutine rather than a
+// requirement. It stays because those callers exist and because "has anything
+// gone wrong yet" deserves an answer that is not a sleep.
 func (s *Server) WaitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
@@ -365,11 +360,13 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	return s.mcp.Term(ctx, cmd, args)
 }
 
-// Start brings the instance up and, unless NoListener was set, serves until the
-// server stops. It returns nil for a clean shutdown and an error otherwise.
+// Start brings the instance up: the internal SSH transport, the MCP surface
+// (including the documentation prompt), the extension reconciler, and the
+// readiness signal. It returns as soon as the instance can answer Term.
 //
-// Start blocks: an embedder that wants a background instance should run it in a
-// goroutine, the same way the binary does.
+// It opens no socket. That is Listen's job, and it is a separate call precisely so
+// that "I do not want a port" is expressed by not making that call rather than by
+// a flag that decides for everyone what building the instance means.
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return errors.New("core: instance already started")
@@ -391,6 +388,16 @@ func (s *Server) Start() error {
 	}
 
 	s.logSurfaces()
+
+	// THE MCP SURFACE COMES UP HERE, WITH THE OTHER SURFACES, because it is not a
+	// socket. This call resolves the base URL the documentation prompt advertises
+	// and registers that prompt — work an embedder needs and a port has nothing to
+	// do with. It used to sit inside the listening branch, so an instance that never
+	// bound a port served MCP without its docs (see Listen's comment).
+	if err := s.mcp.Start(s.addr); err != nil {
+		s.finish()
+		return err
+	}
 
 	if err := s.extensions.Start(context.Background()); err != nil {
 		return fmt.Errorf("core: starting extension reconciler: %w", err)
@@ -414,26 +421,55 @@ func (s *Server) Start() error {
 		slog.Info("daemon instance active", "pid", os.Getpid(), "idle_timeout", timeout)
 	}
 
-	if s.opts.NoListener {
-		slog.Info("listening: no (NoListener); drive this instance through Term or Handler")
-		<-s.stopCh
-		s.finish()
-		return nil
+	return nil
+}
+
+// Listen binds the configured address and serves until the instance stops. It
+// returns nil for a clean shutdown and an error otherwise.
+//
+// Listen blocks: an embedder that wants a background instance should run it in a
+// goroutine, the same way the binary does.
+//
+// THE DECISION TO SERVE LIVES HERE, NOT IN A FLAG. This used to be
+// Options.NoListener, one boolean cutting Start into two shapes, and the cut was
+// wrong in both directions: the flag that meant "do not open a socket" also
+// skipped mcp.Start, which registers the documentation prompt and resolves the
+// base URL — neither of which has anything to do with binding a port. So an SDK
+// instance served MCP without its docs, and the log line the operator read said
+// "listening: no" about a call that was never going to happen. Now the surfaces
+// come up in Start and only the bind is a separate step, which a caller declines
+// by not taking it.
+//
+// A program that never calls Listen has no address to advertise, and Addr keeps
+// reporting what Config names. That is a statement about the configuration, not a
+// promise that something is listening: the code that opens the socket is the same
+// code that could say otherwise, and it is this function.
+func (s *Server) Listen() error {
+	if !s.started.Load() {
+		return errors.New("core: Listen requires Start, which brings the surfaces up")
+	}
+	// The port is validated HERE, at the one point its value is a constraint, so
+	// that an instance which is never bound is not rejected for a port it never uses.
+	//
+	// BEFORE the flag is claimed: a Listen that failed on its arguments left the
+	// instance marked as serving, and Close then deferred the release to a server
+	// loop that never started — reconciler probing and store open, forever.
+	if err := s.cfg.Validate(); err != nil {
+		return err
+	}
+	if !s.listening.CompareAndSwap(false, true) {
+		return errors.New("core: Listen called twice on one instance")
 	}
 
 	// The MCP surface is mounted on the shared mux, so this server is the only
-	// listener: Start resolves the address the docs prompt advertises, then one
-	// ListenAndServe carries every route (MCP, REST, Web UI) on that mux.
+	// listener: one ListenAndServe carries every route (MCP, REST, Web UI) on that
+	// mux.
 	//
 	// It used to be the SSE transport that blocked here, with WithHTTPServer
 	// handing it s.httpSrv — so the whole instance was served by a dependency's
 	// Serve call. Now that the transports are handlers, serving is this server's
 	// own job, which is also what makes `Handler()` (embedding, tests) and
 	// ListenAndServe two ways of running the same thing.
-	if err := s.mcp.Start(s.addr); err != nil {
-		s.finish()
-		return err
-	}
 	go func() { s.serveErr <- s.httpSrv.ListenAndServe() }()
 
 	select {
@@ -446,6 +482,15 @@ func (s *Server) Start() error {
 		slog.Info("server stopped")
 		return nil
 	case <-s.stopCh:
+		// Close does not wait for Listen, and an unaddressed http.Server is a
+		// listener. Without this the graceful stop is a no-op on the socket, the
+		// port stays claimed, and the process that only meant to embed termcp cannot
+		// explain why. It runs HERE rather than in finish because this is the call
+		// that is serving, and it is bounded for the same reason: a handler wedged on
+		// the network must not turn a shutdown into a hang.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.httpSrv.Shutdown(ctx)
 		s.finish()
 		slog.Info("server stopped")
 		return nil
@@ -455,12 +500,28 @@ func (s *Server) Start() error {
 // Close is the one exit path: a signal, the daemon countdown, an embedder's
 // defer, and a stop request all land here, and the first one wins. reason is
 // only for the log.
+//
+// It does not wait. That is what makes it usable from a request handler — the
+// daemon's stop endpoint calls it and must be able to answer first — and the cost
+// is that Close returning says the instance was ASKED to stop, not that it has
+// stopped. Who releases the resources depends on whether anyone is blocked on that
+// answer:
+//
+//	Listen running   Listen observes stopCh, shuts the socket down, finishes
+//	Listen absent    Close finishes, because nothing else is left to notice
+//
+// Without the second half an instance that was started and never served would keep
+// its reconciler probing and its store open after Close returned — a shutdown that
+// looks complete and is not.
 func (s *Server) Close(reason string) {
 	s.once.Do(func() {
 		s.shutdown.Store(true)
 		slog.Info("shutting down", "reason", reason)
-		// Unblock Start if it is waiting.
+		// Unblock Listen if it is waiting.
 		close(s.stopCh)
+		if !s.listening.Load() {
+			s.finish()
+		}
 	})
 }
 
@@ -468,7 +529,14 @@ func (s *Server) Close(reason string) {
 // the reconciler stops probing, sessions are marked DEAD (retaining history),
 // the transports close, and only then are the logs closed so the last bytes are
 // durable.
+//
+// Guarded rather than documented-as-once, because the two owners above are
+// different goroutines and a double Close is already legal.
 func (s *Server) finish() {
+	if !s.finished.CompareAndSwap(false, true) {
+		return
+	}
+
 	if s.extensions != nil {
 		s.extensions.Stop()
 	}

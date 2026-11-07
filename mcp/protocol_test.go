@@ -486,3 +486,77 @@ func TestAnInboundHandlerCanReturnAnError(t *testing.T) {
 		t.Fatalf("the handler's own error did not reach the client: %s", out)
 	}
 }
+
+// TestShutdownDoesNotWaitOutItsTimeout is the regression for a shutdown that cost
+// five seconds whether it had anything to do or not: the old body collected the
+// sessions, discarded them, and blocked on the context's deadline. A clean stop of
+// an instance that never saw a client paid the full timeout for nothing.
+//
+// The assertion is a STATE, not a duration: Shutdown returns with the deadline
+// still in the future. A slow machine reaches the same state a few milliseconds
+// later and still passes; the broken version reaches it only by exhausting the
+// deadline, which is the one thing being ruled out.
+func TestShutdownDoesNotWaitOutItsTimeout(t *testing.T) {
+	srv := newTestServer(t)
+	sse := NewSSEServer(srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sse.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown with no sessions returned %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("Shutdown exhausted its deadline with no sessions to end: it waited for a duration instead of for the state")
+	}
+}
+
+// TestShutdownEndsAnOpenStream is the other half: with a live stream, Shutdown has
+// to actually end it. The stream ends when the server says so — waiting for the
+// client's own context is waiting for someone else's decision.
+func TestShutdownEndsAnOpenStream(t *testing.T) {
+	srv := newTestServer(t)
+	sse := NewSSEServer(srv)
+	ts := httptest.NewServer(sse.SSEHandler())
+	defer ts.Close()
+
+	// No deadline on the request: this stream must end because Shutdown closed it,
+	// not because the client gave up. A test context would be the thing ending it.
+	resp, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// Read the endpoint event, which is how we know the session is registered.
+	buf := make([]byte, 4096)
+	seen := ""
+	for !strings.Contains(seen, "event: endpoint") {
+		n, rerr := resp.Body.Read(buf)
+		seen += string(buf[:n])
+		if rerr != nil {
+			t.Fatalf("no endpoint event before the stream ended: %v (%q)", rerr, seen)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sse.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown returned %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("Shutdown never got the stream to end")
+	}
+
+	// The claim, observed from the client: the stream is over.
+	// A read that blocks here would mean the handler is still running, so bound it
+	// with the response's own deadline rather than a sleep.
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n == 0 || rerr != nil {
+			if rerr == nil {
+				t.Fatal("the stream ended without an error")
+			}
+			return // EOF: the server closed it.
+		}
+	}
+}
