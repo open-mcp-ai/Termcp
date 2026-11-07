@@ -104,8 +104,11 @@ type Server struct {
 	inbound map[string]InboundHandler
 
 	sessions sync.Map // session id -> Session
-	seq      atomic.Uint64
-	closed   atomic.Bool
+	// cancels maps (session, request id) onto the CancelFunc of the call in flight.
+	// See cancel.go: a cancel that names a finished call finds nothing and is dropped.
+	cancels sync.Map
+	seq     atomic.Uint64
+	closed  atomic.Bool
 }
 
 // NewServer builds a protocol endpoint.
@@ -159,16 +162,22 @@ func (s *Server) OnMethod(method string, h InboundHandler) {
 	s.inbound[method] = h
 }
 
-// registerSession records a new session and fires the hook.
-func (s *Server) registerSession(ctx context.Context, sess Session) {
+// RegisterSession records a new session and fires the hook.
+//
+// IT IS EXPORTED BECAUSE THE TRANSPORTS ARE AN INTERFACE NOW (#328). The streamable
+// transport needs exactly three things from whatever it is serving — register, unregister,
+// answer — and spelling that as a method set is what lets a second backend (an
+// extension's own MCP server) reuse the whole transport instead of growing a second,
+// subtly different copy of session handling, body limits and status codes.
+func (s *Server) RegisterSession(ctx context.Context, sess Session) {
 	s.sessions.Store(sess.SessionID(), sess)
 	for _, fn := range s.hooks.OnRegisterSession {
 		fn(ctx, sess)
 	}
 }
 
-// unregisterSession drops a session and fires the hook.
-func (s *Server) unregisterSession(ctx context.Context, sess Session) {
+// UnregisterSession drops a session and fires the hook.
+func (s *Server) UnregisterSession(ctx context.Context, sess Session) {
 	s.sessions.Delete(sess.SessionID())
 	for _, fn := range s.hooks.OnUnregisterSession {
 		fn(ctx, sess)
@@ -218,7 +227,25 @@ func (s *Server) Handle(ctx context.Context, raw []byte, sess Session) []byte {
 	// A frame with no id is a notification: no answer is sent, ever.
 	isNotification := IDString(req.ID) == ""
 
-	result, rpcErr := s.dispatch(WithSessionContext(ctx, sess), &req, sess)
+	// EVERY REQUEST IS CANCELLABLE WHILE IT RUNS. The ctx handed to dispatch is the
+	// one notifications/cancelled reaches, so a client that gives up on a long call
+	// stops the work instead of leaving it running with nobody listening (issue #327).
+	// A notification is not: there is nothing to answer, so there is nothing to
+	// cancel.
+	callCtx := WithSessionContext(ctx, sess)
+	// A SESSION IS OPTIONAL FOR A CALLER THAT DRIVES Handle DIRECTLY (an embeddable
+	// server, a test): the transports always pass one, but the dispatch path does not
+	// require it, and a nil would be a panic at the first SessionID call.
+	if !isNotification && IDString(req.ID) != "" && sess != nil {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithCancel(callCtx)
+		// DEFERRED, SO EVERY RETURN PATH UNWINDS: a refused frame, a handler error and
+		// a panic inside dispatch (recovered in callTool) all reach here.
+		defer cancel()
+		defer s.registerCancel(sess.SessionID(), IDString(req.ID), cancel)()
+	}
+
+	result, rpcErr := s.dispatch(callCtx, &req, sess)
 	if isNotification {
 		return nil
 	}
@@ -270,7 +297,14 @@ func (s *Server) dispatch(ctx context.Context, req *Request, sess Session) (any,
 		}
 		return s.getPrompt(ctx, &p)
 
-	case "notifications/initialized", "notifications/cancelled", "notifications/roots/list_changed":
+	case "notifications/cancelled":
+		// NOT "nothing to do". A cancel names a request id, and the call it names is
+		// running right now on another goroutine; dropping the frame is what made a
+		// cancelled 60-second read keep going (issue #327).
+		s.handleCancelled(ctx, req.Params, SessionFromContext(ctx))
+		return nil, nil
+
+	case "notifications/initialized", "notifications/roots/list_changed":
 		return nil, nil
 
 	default:
@@ -296,6 +330,24 @@ func (s *Server) initialize(ctx context.Context, p *InitializeRequest, sess Sess
 	}
 	if len(s.prompts) > 0 {
 		caps.Prompts = &ListChangedCapability{}
+	}
+	// COMPLETION IS CLAIMED ONLY WHEN IT IS ANSWERED. The capability is a promise: a
+	// client that sees it will send completion/complete and expect argument
+	// suggestions. Advertising it because the method exists in the table would be
+	// claiming a surface nobody wired.
+	if _, ok := s.inbound["completion/complete"]; ok {
+		caps.Completions = &struct{}{}
+	}
+	// RESOURCES ARE THE SAME RULE, and they are not a re-opening of the "resources are
+	// out of scope" decision: that one was about a single-tool server needing a second
+	// way to reach the same commands. What an embedder can now register is a read-only
+	// PUBLICATION surface (issue #355's guide), and a client that never asks for it pays
+	// nothing. Claiming it without a handler would be the failure this project refuses
+	// everywhere else.
+	_, hasList := s.inbound["resources/list"]
+	_, hasRead := s.inbound["resources/read"]
+	if hasList && hasRead {
+		caps.Resources = &ResourcesCapability{}
 	}
 	res := &InitializeResult{
 		ProtocolVersion: ProtocolVersion,

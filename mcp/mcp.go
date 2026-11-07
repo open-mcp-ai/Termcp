@@ -21,9 +21,16 @@
 //
 // # What is deliberately absent
 //
-// Resources (URI templates), sampling, elicitation, tasks, schema validation and
-// the annotation vocabulary. Adding one is a small change when something needs
-// it — the point is that the absence is a decision rather than an oversight.
+// Sampling, elicitation, tasks, resource templates, subscriptions, schema
+// validation and the annotation vocabulary. Adding one is a small change when
+// something needs it — the point is that the absence is a decision rather than an
+// oversight.
+//
+// RESOURCES ARE PARTLY HERE, and only as a REGISTRATION SURFACE: OnMethod accepts
+// resources/list and resources/read, and the capability is advertised from what is
+// registered. What stays absent is the part with no producer — templates, subscribe,
+// and update notifications — because a server that claims them and never sends one
+// leaves the client waiting.
 //
 // # Compatibility
 //
@@ -188,6 +195,15 @@ type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema ToolInputSchema `json:"inputSchema"`
+	// Title is the spec's optional display name: a client renders it where a human
+	// reads, and Description where a model does. It is separate from the annotation
+	// object's own Title because the spec has both, and a client may read either.
+	Title string `json:"title,omitempty"`
+	// OutputSchema describes StructuredContent, when the tool produces one. Raw so a
+	// server can pass its own document through without this package modelling JSON
+	// Schema: the schema is the producer's claim about its own output, and re-encoding
+	// it here would be a second opinion.
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 	// Annotations is the spec's optional display hints. Passed through as given.
 	Annotations *ToolAnnotation `json:"annotations,omitempty"`
 }
@@ -246,6 +262,29 @@ func NewTool(name string, opts ...ToolOption) Tool {
 // WithDescription sets the tool's description.
 func WithDescription(s string) ToolOption {
 	return func(t *Tool) { t.Description = s }
+}
+
+// WithTitle sets the tool's display name, which is what a person-facing client
+// renders. It is not a substitute for the description: a model reads the description,
+// a human reads the title, and a tool that sets one and not the other shows up in one
+// of the two places unnamed.
+func WithTitle(s string) ToolOption {
+	return func(t *Tool) { t.Title = s }
+}
+
+// WithOutputSchema declares the shape of this tool's StructuredContent.
+//
+// It is passed through verbatim: the tool that produces the structure is the only
+// thing that knows its shape, and a server re-encoding it here would drift. A tool
+// with no StructuredContent must not set one — a schema describing output that never
+// arrives is worse than no schema, because a client validates against it.
+func WithOutputSchema(schema string) ToolOption {
+	return func(t *Tool) {
+		if strings.TrimSpace(schema) == "" {
+			return
+		}
+		t.OutputSchema = json.RawMessage(schema)
+	}
 }
 
 // WithToolAnnotation attaches the annotation object.
@@ -451,6 +490,25 @@ type Implementation struct {
 type ServerCapabilities struct {
 	Tools   *ListChangedCapability `json:"tools,omitempty"`
 	Prompts *ListChangedCapability `json:"prompts,omitempty"`
+	// Completions is advertised when the server answers completion/complete. It is an
+	// empty object in the spec — the presence of the key IS the claim — and it is set
+	// from the registered handler rather than by hand, so the capability cannot be
+	// announced by a build that does not implement it.
+	Completions *struct{} `json:"completions,omitempty"`
+	// Resources is advertised when the server answers resources/list. Same rule: the
+	// key is the promise, and it is filled in only when handlers exist for it.
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+}
+
+// ResourcesCapability says which resource features this server offers.
+//
+// Subscribe is not modelled on purpose: nothing here can push a resource update, and
+// a client that subscribes to a server which never sends one waits for ever. Absent
+// means "list and read only", which is exactly what an embedder that registers the two
+// handlers gets.
+type ResourcesCapability struct {
+	// ListChanged is claimed only when the server can send the notification.
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
 // ListChangedCapability is the only capability field this project sets.
