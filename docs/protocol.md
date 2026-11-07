@@ -13,8 +13,8 @@ package, no session, no socket and no clock. Parsing a line and rendering an
 envelope are the whole of it — an implementation of TERM/1 does not have to be
 this server. `go doc ./term` is the API companion to this document.
 
-This document is the reference for the protocol as implemented in v0.2.8.
-The running instance is always the authoritative source:
+This document is the reference for the protocol the running instance speaks.
+The instance is always the authoritative source:
 - Empty `cmd` → human-readable guide
 - `help` → directive table
 - `help <directive>` → one directive's full manual
@@ -42,7 +42,8 @@ TERM/1 <Status-Code> <Reason-Phrase>
 
 Language models already possess strong priors on HTTP status codes and headers.
 Re-using that prior reduces hallucination: an agent that sees `206 Partial Content`
-knows there is more to read; an agent that sees `208 Not Run` knows the branch was
+knows there is more to read; an agent that sees `208 Already Reported` knows the
+branch was
 skipped by short-circuit evaluation.
 
 ---
@@ -57,14 +58,16 @@ The protocol uses a strict subset of HTTP status codes, mapped to execution outc
 | `202` | `Accepted` | Execution deferred; queued for human review or running asynchronously. |
 | `204` | `No Content` | Command succeeded and delivered zero bytes. **Body is always empty**; diagnostic reasons (e.g. why no frame matched) ride in the `Hint` header. |
 | `206` | `Partial Content` | Successful slice of a larger stream. Accompanied by a `Content-Range` header. |
-| `208` | `Not Run` | Statement was skipped due to short-circuit logic (e.g. right side of `&&` after a failure). The slot is preserved so position maps 1:1 to the input AST. |
+| `208` | `Already Reported` | Statement was skipped due to short-circuit logic (e.g. right side of `&&` after a failure). The slot is preserved so position maps 1:1 to the input AST. |
 | `400` | `Bad Request` | Syntax error, unrecognized directive, missing required flag, or invalid flag combination. Refused before execution begins. |
 | `403` | `Forbidden` | Operation blocked by session whitelist (`allow` / `paths`) or review policy. |
 | `404` | `Not Found` | Target session, channel, file, extension, or host does not exist. |
 | `409` | `Conflict` | Resource conflict (e.g. creating an extension or host with a name already taken). |
 | `413` | `Payload Too Large` | Single frame exceeds the transport window limit. |
-| `500` | `Internal Error` | Unexpected backend or driver failure. |
-| `502` | `Bad Gateway` | Remote peer, upstream SSH server, or forwarded port unreachable. |
+| `422` | `Unprocessable` | The request was well formed and named a real thing, but that thing is not configured for this operation. |
+| `500` | `Internal Server Error` | Unexpected backend or driver failure. |
+| `502` | `Bad Gateway` | Remote peer or upstream SSH server unreachable. |
+| `504` | `Gateway Timeout` | The peer or upstream was reachable and did not answer in time. |
 
 ---
 
@@ -131,8 +134,8 @@ All operations route through 19 top-level directives:
 1. **Parsed, never evaluated.** The `cmd` DSL uses `mvdan.cc/sh/v3/syntax` for lexical analysis. Quotes, escapes, and subshells reach the target execution environment byte-for-byte; Termcp never interpolates variables into the grammar.
 2. **Values never become syntax.** `$1`, `$NAME`, and `$SECRETS` can only occupy value slots. If a variable is placed where a verb, flag name, or channel index belongs, it is rejected with a `400` error before any statement runs.
 3. **Atomic parsing.** A compound line (`cmd1 ; cmd2 && cmd3`) is parsed in its entirety before statement 1 executes. A syntax error at position 3 prevents position 1 from running.
-4. **Slot alignment.** Every statement in a compound command produces exactly one slot in the envelope. Short-circuited statements produce `208 Not Run` slots so slot index matches AST node index.
-5. **Constant MCP surface.** Adding, removing, or hot-reloading extensions never changes the `tools/list` schema. The tool definition stays **1 tool, 13 arguments, 2,580 bytes**. Capability expansion happens entirely in the data channel.
+4. **Slot alignment.** Every statement in a compound command produces exactly one slot in the envelope. Short-circuited statements produce `208 Already Reported` slots so slot index matches AST node index.
+5. **Constant MCP surface.** Adding, removing, or hot-reloading extensions never changes the `tools/list` schema. The surface stays one tool with a fixed argument set. Capability expansion happens entirely in the data channel — including extension tools, which are declarations inside a reply rather than new schemas. Ask the instance's `tools/list` for the set; a number written down here would be a second answer that drifts.
 6. **No silent parameter drop.** Every accepted flag must change the behavior or be rejected with `400`. The third state (accepted and ignored) is forbidden.
 
 ---
