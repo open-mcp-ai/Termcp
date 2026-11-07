@@ -47,7 +47,7 @@ func (r *recorder) calls() []string {
 // the batch, and every later index would silently refer to the wrong statement —
 // the failure mode that makes a caller stop trusting the whole reply.
 func TestExecuteKeepsOneSlotPerStatement(t *testing.T) {
-	file, err := Parse("run a:1 $1 && run a:1 $1; ls session")
+	file, err := parseTestLine("run a:1 $1 && run a:1 $1; ls session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestExecuteKeepsOneSlotPerStatement(t *testing.T) {
 		}
 		return 200
 	})
-	reply := Execute(context.Background(), file, r, Options{})
+	reply := New(testGrammar(), WithHandler(r)).Run(context.Background(), file)
 
 	if len(reply.Slots) != 3 {
 		t.Fatalf("got %d slots for 3 statements: %s", len(reply.Slots), reply.Text())
@@ -83,11 +83,11 @@ func TestExecuteKeepsOneSlotPerStatement(t *testing.T) {
 // right side only when the left failed.
 func TestExecuteOrRunsOnlyAfterFailure(t *testing.T) {
 	r := newRecorder(func(Statement) int { return 200 })
-	file, err := Parse("ls session || ls task")
+	file, err := parseTestLine("ls session || ls task")
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply := Execute(context.Background(), file, r, Options{})
+	reply := New(testGrammar(), WithHandler(r)).Run(context.Background(), file)
 	if len(reply.Slots) != 2 {
 		t.Fatalf("got %d slots, want 2", len(reply.Slots))
 	}
@@ -97,7 +97,7 @@ func TestExecuteOrRunsOnlyAfterFailure(t *testing.T) {
 
 	// And when the left fails, the right runs.
 	r2 := newRecorder(func(Statement) int { return 500 })
-	reply2 := Execute(context.Background(), file, r2, Options{})
+	reply2 := New(testGrammar(), WithHandler(r2)).Run(context.Background(), file)
 	if reply2.Slots[1].Code != 500 {
 		t.Fatalf("`||` after a failure must run, got %d", reply2.Slots[1].Code)
 	}
@@ -141,11 +141,11 @@ func TestExecuteRunsABackgroundGroupButKeepsOrder(t *testing.T) {
 		}
 		line += "ls session &"
 	}
-	file, err := Parse(line)
+	file, err := parseTestLine(line)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply := Execute(context.Background(), file, r, Options{})
+	reply := New(testGrammar(), WithHandler(r)).Run(context.Background(), file)
 	if len(reply.Slots) != n {
 		t.Fatalf("got %d slots for %d statements", len(reply.Slots), n)
 	}
@@ -162,11 +162,11 @@ func TestExecuteRunsABackgroundGroupButKeepsOrder(t *testing.T) {
 // introduce a name, so repeating it on the second use is noise.
 func TestExecuteLearnModeNamesEachDirectiveOnce(t *testing.T) {
 	r := newRecorder(nil)
-	file, err := Parse("ls session; ls task; get session")
+	file, err := parseTestLine("ls session; ls task; get session")
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply := Execute(context.Background(), file, r, Options{LearnMode: true})
+	reply := New(testGrammar(), WithHandler(r), WithOptions(Options{LearnMode: true})).Run(context.Background(), file)
 	if len(reply.Slots) != 3 {
 		t.Fatalf("got %d slots", len(reply.Slots))
 	}
@@ -189,11 +189,11 @@ func TestExecuteHandsTheStatementOverWhole(t *testing.T) {
 	r := newRecorder(nil)
 	r.answer = func(st Statement) int { got = st; return 200 }
 
-	file, err := Parse(`run a:1 --tail 5 $1`)
+	file, err := parseTestLine(`run a:1 --tail 5 $1`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	Execute(context.Background(), file, r, Options{})
+	New(testGrammar(), WithHandler(r)).Run(context.Background(), file)
 
 	if got.Op != "run" || got.Target != "a:1" {
 		t.Fatalf("op=%q target=%q", got.Op, got.Target)
@@ -209,15 +209,36 @@ func TestExecuteHandsTheStatementOverWhole(t *testing.T) {
 // TestExecuteOfNothingIsAnEmptyReply pins the "where am I" call: an empty line is
 // legal and produces no slots, not one placeholder.
 func TestExecuteOfNothingIsAnEmptyReply(t *testing.T) {
-	file, err := Parse("")
+	file, err := parseTestLine("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !file.Empty {
 		t.Fatal("an empty line should parse as Empty")
 	}
-	reply := Execute(context.Background(), file, newRecorder(nil), Options{})
+	reply := New(testGrammar(), WithHandler(newRecorder(nil))).Run(context.Background(), file)
 	if len(reply.Slots) != 0 {
 		t.Fatalf("got %d slots from an empty line", len(reply.Slots))
 	}
+}
+
+// testGrammar is a vocabulary of three verbs, and it is the point: these tests
+// exercise the language, so they declare their own words rather than borrow this
+// build's table. A caller that embeds TERM/1 has nothing else available.
+func testGrammar() *Grammar {
+	return NewGrammar([]Op{
+		{Name: "ls", Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true,
+			Usage: "ls   |   ls <thing>"},
+		{Name: "get", Kind: KindFlags, Target: true,
+			Usage: "get <thing>"},
+		{Name: "run", Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
+			PayloadType: PayloadVar, Flags: []string{"tail:number", "grep"},
+			Usage: "run <channel> [--tail N] $1"},
+	})
+}
+
+// parseTestLine and the New(...).Run(...) below are what the protocol surface
+// looks like from the outside: one configured Term, two methods.
+func parseTestLine(src string) (*File, error) {
+	return New(testGrammar()).Parse(src, Subst{})
 }

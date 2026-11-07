@@ -49,13 +49,16 @@ type Options struct {
 	LearnMode bool
 }
 
-// Execute runs every statement, in order, and returns one reply.
+// executeGrammar runs every statement, in order, and returns one reply. It is what
+// Term.Run calls; the vocabulary only changes which usage line LearnMode attaches,
+// so an embedder that adds verbs gets its own text instead of silence.
 //
-// The guarantee is the protocol's: len(reply.Slots) == len(file.Statements), in
-// the same order. A statement skipped by `&&` or `||` still produces its slot, it
-// just says 208 — which is what lets a caller map slot i back to the statement it
-// wrote without counting.
-func Execute(ctx context.Context, file *File, h Handler, opts Options) Reply {
+// The guarantee is the protocol's: one slot per statement, in the same order. A
+// statement skipped by `&&` or `||` still produces its slot, it just says 208 —
+// which is what lets a caller map slot i back to the statement it wrote without
+// counting. A statement that produced several slots (a batch target) breaks that
+// arithmetic, which is why Handler returns a slice.
+func executeGrammar(ctx context.Context, file *File, h Handler, opts Options, g *Grammar) Reply {
 	if file == nil {
 		return Reply{}
 	}
@@ -65,7 +68,7 @@ func Execute(ctx context.Context, file *File, h Handler, opts Options) Reply {
 
 	for _, group := range groups(file.Statements) {
 		if len(group) == 1 {
-			slots := runSequential(ctx, h, group[0], previousOK, opts, seen)
+			slots := runSequential(ctx, h, group[0], previousOK, opts, seen, g)
 			out.Slots = append(out.Slots, slots...)
 			previousOK = allOK(slots)
 			continue
@@ -75,7 +78,7 @@ func Execute(ctx context.Context, file *File, h Handler, opts Options) Reply {
 		// gating on it would either serialize them (changing what `&` means) or
 		// pick an arbitrary winner. `&&` between statements that run together is
 		// meaningless, and the honest reading is to run both.
-		slots := runParallel(ctx, h, group, opts)
+		slots := runParallel(ctx, h, group, opts, g)
 		out.Slots = append(out.Slots, slots...)
 		// The group's outcome is the AND of its members: a following `&&` should
 		// see a failure inside the group, not only the last statement's.
@@ -85,7 +88,7 @@ func Execute(ctx context.Context, file *File, h Handler, opts Options) Reply {
 }
 
 // runSequential runs one statement under the `&&`/`||` gate.
-func runSequential(ctx context.Context, h Handler, st Statement, previousOK bool, opts Options, seen map[string]bool) []Slot {
+func runSequential(ctx context.Context, h Handler, st Statement, previousOK bool, opts Options, seen map[string]bool, g *Grammar) []Slot {
 	if st.Cond == "&&" && !previousOK {
 		return []Slot{skipped(st, "&&", "the previous statement failed")}
 	}
@@ -97,7 +100,7 @@ func runSequential(ctx context.Context, h Handler, st Statement, previousOK bool
 		// THE HEADER CARRIES THE USAGE LINE, not the verb: a caller that has just
 		// learned the name still needs its shape. It is read from the registry
 		// rather than from the statement so the two cannot disagree.
-		if op, ok := Lookup(st.Op); ok && op.Usage != "" {
+		if op, ok := g.Lookup(st.Op); ok && op.Usage != "" {
 			if slots[0].Headers == nil {
 				slots[0].Headers = map[string]string{}
 			}
@@ -115,7 +118,7 @@ func runSequential(ctx context.Context, h Handler, st Statement, previousOK bool
 // The slots are collected per position rather than appended as they finish:
 // completion order is not statement order, and a reply whose slots are shuffled
 // breaks the one guarantee Execute makes.
-func runParallel(ctx context.Context, h Handler, group []Statement, opts Options) []Slot {
+func runParallel(ctx context.Context, h Handler, group []Statement, opts Options, g *Grammar) []Slot {
 	results := make([][]Slot, len(group))
 	var wg sync.WaitGroup
 	for i, st := range group {
@@ -132,7 +135,7 @@ func runParallel(ctx context.Context, h Handler, group []Statement, opts Options
 			// A parallel member cannot dedup against its neighbours without a lock
 			// around state the sequential path also writes, and repeating a usage
 			// line is the honest outcome: they really did run twice.
-			if op, ok := Lookup(group[i].Op); ok && op.Usage != "" {
+			if op, ok := g.Lookup(group[i].Op); ok && op.Usage != "" {
 				if slots[0].Headers == nil {
 					slots[0].Headers = map[string]string{}
 				}

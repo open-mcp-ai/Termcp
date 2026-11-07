@@ -436,31 +436,79 @@ type File struct {
 	Empty bool
 }
 
-// byName indexes ops, under their canonical name and every synonym.
+// Grammar is the directive vocabulary a parse runs against.
 //
-// One map rather than a second lookup: a synonym has to be indistinguishable
-// from the real name everywhere a directive is resolved, and the parse, the
-// capability check and the alias expansion all go through Lookup.
-var byName = func() map[string]Op {
-	m := make(map[string]Op, len(ops))
-	for _, op := range ops {
-		m[op.Name] = op
+// It is a VALUE, not a global, for one reason: a program that adds its own verbs
+// must not have to edit this package, and two programs in one process must not
+// have to agree about what a verb means. Everything the parser knows about a
+// verb — how its words are cut, what its target names, which flags it takes — is
+// declared here, so "the vocabulary" and "the parse" cannot disagree.
+//
+// The zero value is not usable; take DefaultGrammar and append, or build one from
+// your own Ops. Grammar keeps its index private so a caller cannot add a verb
+// through one field and forget the other — the only way in is NewGrammar.
+type Grammar struct {
+	ops    []Op
+	byName map[string]Op
+}
+
+// NewGrammar indexes a vocabulary, under each verb's canonical name and every
+// synonym. The caller's slice is copied, so later edits to it change nothing.
+func NewGrammar(ops []Op) *Grammar {
+	g := &Grammar{
+		ops:    append([]Op(nil), ops...),
+		byName: make(map[string]Op, len(ops)),
+	}
+	for _, op := range g.ops {
+		g.byName[op.Name] = op
 		for _, alt := range op.AlsoKnownAs {
-			m[alt] = op
+			g.byName[alt] = op
 		}
 	}
-	return m
-}()
+	return g
+}
 
-// Ops returns the table, in help order.
-func Ops() []Op { return ops }
+// DefaultGrammar is the vocabulary this build ships, indexed once.
+var DefaultGrammar = NewGrammar(ops)
 
-// Lookup returns a directive's grammar, under its canonical name or any of its
+// Ops returns the vocabulary, in help order. It is a copy: a caller that appends
+// to the result must not be able to reach into the table every parse shares.
+func (g *Grammar) Ops() []Op {
+	if g == nil {
+		return nil
+	}
+	return append([]Op(nil), g.ops...)
+}
+
+// Names lists the verbs, sorted, for a help listing that cannot drift from the
+// table.
+func (g *Grammar) Names() []string {
+	if g == nil {
+		return nil
+	}
+	out := make([]string, 0, len(g.ops))
+	for _, op := range g.ops {
+		out = append(out, op.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Lookup returns a verb's grammar, under its canonical name or any of its
 // synonyms (`extensions` for `ext`).
-func Lookup(name string) (Op, bool) {
-	op, ok := byName[name]
+func (g *Grammar) Lookup(name string) (Op, bool) {
+	if g == nil {
+		g = DefaultGrammar
+	}
+	op, ok := g.byName[name]
 	return op, ok
 }
+
+// The package-level forms answer from DefaultGrammar, which is what a caller that
+// never mentioned a Grammar means.
+func Ops() []Op                  { return DefaultGrammar.Ops() }
+func Names() []string            { return DefaultGrammar.Names() }
+func Lookup(n string) (Op, bool) { return DefaultGrammar.Lookup(n) }
 
 // unusedNames lists the caller's values that cmd never referenced, sorted.
 func unusedNames(sub Subst, used usage) []string {

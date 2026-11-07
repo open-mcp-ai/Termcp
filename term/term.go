@@ -1,17 +1,41 @@
 // Package term is TERM/1: the protocol itself, with no runtime behind it.
 //
-// # The two calls you need
+// # One object, two methods
 //
-//	file, err := term.Parse("ls session; run a:1 $1")   // DSL text -> statements
-//	if err != nil { ... }                               // the error teaches the shape
-//	reply := term.Execute(ctx, file, myCapabilities, term.Options{})
-//	fmt.Print(reply.Text())                             // a TERM/1 envelope
+//	t := term.New(myVerbs, term.WithHandler(myCapabilities{}))
+//	file, err := t.Parse("deploy prod $1", term.Subst{Pos: []string{"make release"}})
+//	if err != nil { ... }                 // the error teaches the shape
+//	reply := t.Run(ctx, file)
+//	fmt.Print(reply.Text())               // a TERM/1 envelope
 //
-// Parse is the language. Execute is the sequencing: && and || gating, & groups
+// myVerbs is a *Grammar the caller built: a vocabulary is a required argument to
+// New, because what a Term can parse must be exactly what its own program means.
+//
+// Parse is the language and Run is the sequencing: && and || gating, & groups
 // that run together, one slot per statement, and 208 for a branch that was not
 // taken. Both are protocol rules, so neither is something a caller should have to
 // re-derive — getting slot alignment wrong is invisible until a caller maps slot 3
 // back to the wrong statement.
+//
+// They are methods on one value rather than two package functions because the
+// vocabulary a line is parsed against and the layer that answers it must be the
+// same object's: passing a grammar to Parse and a handler to Run separately would
+// let a caller wire a line against one table and answer it from another.
+//
+// # Review is the caller's, between the two calls
+//
+// Parse hands back the whole plan — every statement, including the branches && and
+// || would skip — so a gate is a few lines where the caller already is:
+//
+//	file, err := t.Parse(src, sub)
+//	if err != nil { return err }            // syntax is decided before anything runs
+//	if !allowed(file.Statements) {          // your policy, your question, once
+//		return refusal
+//	}
+//	reply := t.Run(ctx, file)
+//
+// It is not an interface here on purpose: a Reviewer would be one type with one
+// implementation, and the statements are already in hand.
 //
 // # The capability layer is one method
 //
@@ -23,12 +47,32 @@
 // slots the statement produced — a slice because a verb may address several
 // objects at once, and collapsing that would break the alignment above.
 //
-// Handle must be safe for concurrent use: Execute runs an & group in parallel.
+// Handle must be safe for concurrent use: Run executes an & group in parallel.
+//
+// # Your own verbs
+//
+// # Your own verbs
+//
+// The vocabulary is an argument, never a default: a program that embeds TERM/1
+// has its own verbs, and termcp's are one table among many. An Op is only a
+// declaration — how its words are cut, what its target names, which flags it
+// takes — and the parser enforces what it declares:
+//
+//	g := term.NewGrammar([]term.Op{
+//		{Name: "deploy", Kind: term.KindPayload, Target: true, Usage: "deploy <env> $1"},
+//	})
+//	t := term.New(g, term.WithHandler(myCaps{}))
+//
+// The table this build ships is not in this package. It is termcp's application
+// data — its resources, its address shapes, the prose of its help pages — and it
+// lives where the capability layer that answers those verbs lives, so that a
+// caller reading `term` sees the language and nothing else.
 //
 // # What is here besides those two
 //
-//   - the registry — Lookup, Ops, Names, and the per-verb flag and usage tables
-//     that `help` and the error messages are generated from;
+//   - the vocabulary type — Grammar and the Op, Kind and TargetKind declarations
+//     a verb is made of, which is all `help` and every error message is generated
+//     from; the table itself is the caller's;
 //   - the reply envelope — Slot and Reply rendered as an HTTP-style answer, with
 //     the range and truncation rules;
 //   - addresses — termcp:// locators and `<session>:<index>` handles.
@@ -40,8 +84,8 @@
 //
 // The server in internal/mcp is exactly this shape: its capability handler is
 // alias expansion plus the directive dispatch, and everything else it does with a
-// batch comes from Execute. Read `capabilityHandler` in internal/mcp/term_exec.go
-// for the two-function version of the interface above.
+// batch comes from Run. Read `capabilityHandler` in internal/mcp/term_exec.go for
+// the two-function version of the interface above.
 //
 // # Stability
 //
@@ -70,6 +114,9 @@ type (
 	// Op is one entry of the directive registry: its verb, kinds, flags and
 	// the usage text both `help` and the error messages are generated from.
 	Op = directive.Op
+	// Grammar is a verb vocabulary: what a parse accepts and how it cuts each
+	// verb's words.
+	Grammar = directive.Grammar
 	// Kind says what a verb does (core, file, channel, …).
 	Kind = directive.Kind
 	// TargetKind says what a verb's target names.
@@ -82,42 +129,28 @@ type (
 	Subst = directive.Subst
 )
 
-// Parse turns one line into statements, or into a syntax error that teaches the
-// working shape. It does not evaluate: this is a parser, and the caller decides
-// what each verb does.
-//
-// This is the protocol's front door. ParseLocator is the address reader beside
-// it, kept under a different name because two functions called Parse in one
-// package would be a coin flip at every call site.
-func Parse(src string) (*File, error) { return directive.Parse(src) }
+// The verb declarations a Grammar is made of. A caller that adds a verb needs
+// these names: an Op is only meaningful with a Kind (how the words after the
+// target are cut) and, where the target is checked, a TargetKind.
+const (
+	KindFlags       = directive.KindFlags
+	KindPayload     = directive.KindPayload
+	KindInterpreted = directive.KindInterpreted
 
-// ParseWithSubst is Parse with the variable holes filled first.
-func ParseWithSubst(src string, sub Subst) (*File, error) {
-	return directive.ParseWithSubst(src, sub)
-}
+	// PayloadVar is the PayloadType of a verb whose payload must be exactly one
+	// variable reference. It is what keeps the directive language and the shell
+	// apart: `run h:1 ls -la` would be read by both parsers at once.
+	PayloadVar = directive.PayloadVar
 
-// Lookup finds a verb in the registry; Ops lists them all; Names lists their
-// names. `help` is generated from the same table these read.
-func Lookup(name string) (Op, bool) { return directive.Lookup(name) }
-func Ops() []Op                     { return directive.Ops() }
-func Names() []string               { return directive.Names() }
+	TargetAny     = directive.TargetAny
+	TargetChannel = directive.TargetChannel
+	TargetSession = directive.TargetSession
+	TargetChain   = directive.TargetChain
+)
 
-// FlagSummary, HasSummaries and SummaryExample answer what a flag means,
-// straight from the registry, so the help text cannot drift from the parser.
-func FlagSummary(op, flag string) (string, bool)       { return directive.FlagSummary(op, flag) }
-func HasSummaries(op string) bool                      { return directive.HasSummaries(op) }
-func SummaryExample(op string) (string, bool)          { return directive.SummaryExample(op) }
-func NodeNote(name string) (string, bool)              { return directive.NodeNote(name) }
-func DetectRawControl(src string) (byte, string, bool) { return directive.DetectRawControl(src) }
-func SplitArgv(raw string) (string, []string, error)   { return directive.SplitArgv(raw) }
-func SessionTargetProblem(op Op, target string) string {
-	return directive.SessionTargetProblem(op, target)
-}
-func ChannelTargetProblem(op Op, target string) string {
-	return directive.ChannelTargetProblem(op, target)
-}
-func ChannelIndex(word string) (string, bool) { return directive.ChannelIndex(word) }
-func NamesAChannel(target string) bool        { return directive.NamesAChannel(target) }
+// NewGrammar indexes a vocabulary: each verb's own name and every synonym it
+// declares become ways in. The slice is copied, so the caller keeps its own.
+func NewGrammar(ops []Op) *Grammar { return directive.NewGrammar(ops) }
 
 // The reply envelope.
 type (

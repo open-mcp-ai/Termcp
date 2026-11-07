@@ -84,7 +84,7 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// nothing read, so the line ran sequentially while reading as parallel. A silent
 	// semantic reversal is worse than a refusal, which is why this is implemented
 	// rather than rejected.
-	// THE SEQUENCING RULES ARE THE PROTOCOL'S, so they live in term.Execute and are
+	// THE SEQUENCING RULES ARE THE PROTOCOL'S, so they live in term.Run and are
 	// not repeated here (#273). What this method keeps is everything that is NOT
 	// sequencing: the control-byte funnel above, the dry-run branch above, and the
 	// handler below, which is the capability layer — alias expansion plus the
@@ -93,8 +93,16 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// The split matters beyond tidiness: a program that wants TERM/1 without this
 	// server now implements term.Handler and gets &&/||/&/208 for free, instead of
 	// re-deriving rules that are easy to get subtly wrong.
-	reply := term.Execute(ctx, &term.File{Statements: stmts}, &capabilityHandler{s: s, win: win},
-		term.Options{LearnMode: win.LearnMode})
+	//
+	// THE TERM IS BUILT HERE, per call, because both of its parts are per call: the
+	// handler closes over this call's window, and LearnMode comes from the same
+	// place. Construction is a struct literal, not an allocation worth avoiding.
+	t := term.New(
+		directive.DefaultGrammar,
+		term.WithHandler(&capabilityHandler{s: s, win: win}),
+		term.WithOptions(term.Options{LearnMode: win.LearnMode}),
+	)
+	reply := t.Run(ctx, &term.File{Statements: stmts})
 	out.slots = reply.Slots
 	return out
 }
