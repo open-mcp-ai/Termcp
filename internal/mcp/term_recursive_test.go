@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/open-mcp-ai/termcp/term"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // termcpDownstream is a stub that speaks TERM/1 through one MCP tool, and
@@ -181,7 +182,7 @@ func TestALoopStopsAtTheHopLimit(t *testing.T) {
 	termText(t, s, map[string]any{"cmd": "open ext gw", "timeout": 15})
 
 	ctx := withHops(t.Context(), maxTermcpHops)
-	file, err := term.ParseWithSubst("run gw $1", term.Subst{Pos: []string{"anything"}})
+	file, err := term.New(directive.DefaultGrammar).Parse("run gw $1", term.Subst{Pos: []string{"anything"}})
 	if err != nil {
 		t.Fatal(err)
 	}

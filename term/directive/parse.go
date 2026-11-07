@@ -41,9 +41,7 @@ import (
 // deliberate: `run h make && echo ok` is one command whose result the caller
 // wants (and one reply slot), whereas `run a:1 'x'; run b:1 'y'` asks two
 // questions and gets two slots.
-func Parse(src string) (*File, error) {
-	return ParseWithSubst(src, Subst{})
-}
+func Parse(src string) (*File, error) { return ParseGrammar(src, Subst{}, nil) }
 
 // ParseWithSubst reads cmd into statements, with the caller's values filled in at
 // the two places they can appear: shell syntax, and the directive's own arguments.
@@ -83,6 +81,14 @@ func Parse(src string) (*File, error) {
 // mistake: a caller that notices an unused value learns which one it never referenced,
 // and nothing has run yet when it is told.
 func ParseWithSubst(src string, sub Subst) (*File, error) {
+	return ParseGrammar(src, sub, nil)
+}
+
+// ParseGrammar is Parse against a caller's vocabulary. A nil grammar means the
+// one this build ships, so a caller that adds verbs passes its own and every
+// rule that reads a verb — payload shape, target kind, flag domains, the
+// right-of-| check — resolves through that table instead.
+func ParseGrammar(src string, sub Subst, g *Grammar) (*File, error) {
 	if strings.TrimSpace(src) == "" {
 		if names := unusedNames(sub, usage{}); len(names) > 0 {
 			return nil, &Error{Msg: unusedMessage(sub, names, true)}
@@ -100,7 +106,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 	// enclosing double-quote owns them) are collected in a single walk over one AST.
 	// Running two parses over the same source text only introduced the possibility of
 	// them seeing different things.
-	raw, refs := analyzeSource(src)
+	raw, refs := analyzeSource(src, g)
 	substituted, sentinels, used, err := substitute(src, sub, raw, refs)
 	if err != nil {
 		return nil, &Error{Msg: "cannot parse cmd: " + err.Error()}
@@ -135,7 +141,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 		// with opaque tokens BEFORE this parse, so a `&&` inside a value is part of
 		// that token and cannot appear here as an operator.
 		for _, part := range flattenCond(stmt) {
-			parsed, ok, err := parseStatement(src, part.stmt, sentinels)
+			parsed, ok, err := parseStatement(src, part.stmt, sentinels, g)
 			if err != nil {
 				// The first failure wins: a cmd is one instruction, and reporting the
 				// rest of a broken instruction teaches nothing. A directive the caller
@@ -143,7 +149,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 				// carrying Op+Rest, which is what lets the caller resolve it.
 				if derr, ok := err.(*Error); ok {
 					derr.Parsed = len(out.Statements)
-					derr.AfterPayload, derr.TrailingSep = trailingPayloadInfo(out.Statements, part.cond)
+					derr.AfterPayload, derr.TrailingSep = trailingPayloadInfo(out.Statements, part.cond, g)
 				}
 				return nil, err
 			}
@@ -156,7 +162,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 			parsed.Background = part.stmt.Background
 
 			// WHAT THE PAYLOAD IS, BEFORE IT STOPS BEING A REFERENCE.
-			if op, known := Lookup(parsed.Op); known {
+			if op, known := g.Lookup(parsed.Op); known {
 				if err := checkPayloadType(parsed, sentinels, op); err != nil {
 					if derr, ok := err.(*Error); ok {
 						derr.Parsed = len(out.Statements)
@@ -173,7 +179,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 			// "got \"__hole_…\"" — every numeric, enum and geometry flag was
 			// unreachable through a reference, and the caller was told their 3 was not
 			// a number.
-			if op, known := Lookup(filled.Op); known {
+			if op, known := g.Lookup(filled.Op); known {
 				if err := checkParamDomains(filled, op); err != nil {
 					if derr, ok := err.(*Error); ok {
 						derr.Parsed = len(out.Statements)
@@ -181,7 +187,7 @@ func ParseWithSubst(src string, sub Subst) (*File, error) {
 					return nil, err
 				}
 			}
-			if err := checkTargetKindAfterSubst(filled); err != nil {
+			if err := checkTargetKindAfterSubst(filled, g); err != nil {
 				if derr, ok := err.(*Error); ok {
 					derr.Parsed = len(out.Statements)
 				}
@@ -252,7 +258,7 @@ func flattenCond(stmt *syntax.Stmt) []condPart {
 // and the `;` the shell would have accepted is the thing that ended the payload. The
 // reply can say so, but only if the parser leaves a mark here — the failing
 // statement is a bare word (`whoami`) and carries no trace of what preceded it.
-func trailingPayloadInfo(stmts []Statement, currentCond string) (name, sep string) {
+func trailingPayloadInfo(stmts []Statement, currentCond string, g *Grammar) (name, sep string) {
 	if len(stmts) == 0 {
 		return "", ""
 	}
@@ -263,7 +269,7 @@ func trailingPayloadInfo(stmts []Statement, currentCond string) (name, sep strin
 	} else if currentCond != "" {
 		sep = currentCond
 	}
-	op, known := Lookup(last.Op)
+	op, known := g.Lookup(last.Op)
 	if !known {
 		return "", sep
 	}
@@ -300,7 +306,7 @@ func trailingPayloadInfo(stmts []Statement, currentCond string) (name, sep strin
 // an arithmetic node cannot be in one tree and its `$1` in another. A source that
 // does not parse yields nil for both; the real parse in ParseWithSubst then reports
 // the syntax error where it belongs.
-func analyzeSource(src string) ([]span, []ref) {
+func analyzeSource(src string, g *Grammar) ([]span, []ref) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 	if err != nil {
 		return nil, nil
@@ -350,7 +356,7 @@ func analyzeSource(src string) ([]span, []ref) {
 		// statement holding two directives, so walking file.Stmts alone would leave
 		// the second operand without a span.
 		for _, part := range flattenCond(stmt) {
-			spans = append(spans, statementRawSpans(src, part.stmt)...)
+			spans = append(spans, statementRawSpans(src, part.stmt, g)...)
 		}
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].start < refs[j].start })
@@ -407,7 +413,7 @@ func insideRange(ranges [][2]int, start, end int) bool {
 // IT MIRRORS parseStatement'S THREE KINDS, because a span that disagrees with the
 // parser about where a payload starts is worse than no span at all: the value would
 // be spliced into the wrong bytes.
-func statementRawSpans(src string, stmt *syntax.Stmt) []span {
+func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 	call := leadCall(stmt.Cmd)
 	if call == nil || len(call.Args) == 0 {
 		return nil
@@ -416,7 +422,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt) []span {
 	if !ok {
 		return nil
 	}
-	op, known := Lookup(name)
+	op, known := g.Lookup(name)
 	if !known {
 		return nil
 	}
@@ -594,8 +600,8 @@ func isWholeReference(v string) bool {
 // anything runs is the whole point — but a substituted target has no value yet when
 // the parser sees it. Running the check in both places keeps the early refusal for a
 // literal target and closes the hole for one that came from args.
-func checkTargetKindAfterSubst(st Statement) error {
-	op, known := Lookup(st.Op)
+func checkTargetKindAfterSubst(st Statement, g *Grammar) error {
+	op, known := g.Lookup(st.Op)
 	if !known || !op.Target || st.Target == "" {
 		return nil
 	}
@@ -880,8 +886,8 @@ func firstLine(s string) string {
 // called `write`, and on Linux that program exists (it messages another user's
 // terminal). The two meanings cannot be told apart from the character, only from the
 // verb, so the verb is what this checks and what the error names.
-func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes *sentinelTable) (Statement, bool, error) {
-	left, ok, err := parseStatement(src, bin.X, holes)
+func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes *sentinelTable, g *Grammar) (Statement, bool, error) {
+	left, ok, err := parseStatement(src, bin.X, holes, g)
 	if err != nil {
 		return Statement{}, false, err
 	}
@@ -894,7 +900,7 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 	// Naming the rule is the answer to the one they did.
 	if call := leadCall(bin.Y.Cmd); call != nil && len(call.Args) > 0 {
 		if word, ok := literalWord(src, call.Args[0]); ok {
-			if _, known := Lookup(word); !known {
+			if _, known := g.Lookup(word); !known {
 				return Statement{}, false, &Error{
 					Op: left.Op,
 					Msg: "`" + word + "` is not a directive, and the right side of a termcp `|` must be one: " +
@@ -906,7 +912,7 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 			}
 		}
 	}
-	right, ok, err := parseStatement(src, bin.Y, holes)
+	right, ok, err := parseStatement(src, bin.Y, holes, g)
 	if err != nil {
 		return Statement{}, false, err
 	}
@@ -961,7 +967,7 @@ func borrowedHostTarget(op string) bool {
 // directive at all (an assignment, a redirection-only command) — those are left
 // for the next statement rather than reported, because `cmd` is a shell string
 // and a caller may legitimately begin with something else.
-func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable) (Statement, bool, error) {
+func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Grammar) (Statement, bool, error) {
 	call := leadCall(stmt.Cmd)
 	if call == nil || len(call.Args) == 0 {
 		return Statement{}, false, nil
@@ -972,7 +978,7 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable) (Statem
 		// e.g. "$X" as the directive: not a directive this parser can name.
 		return Statement{}, false, nil
 	}
-	op, known := Lookup(name)
+	op, known := g.Lookup(name)
 	if !known {
 		// A caller that typed a name this build does not have is exactly who a
 		// usage line helps, so the error carries the whole table rather than
@@ -1003,7 +1009,7 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable) (Statem
 	if bin, isPipe := stmt.Cmd.(*syntax.BinaryCmd); isPipe &&
 		(bin.Op == syntax.Pipe || bin.Op == syntax.PipeAll) &&
 		!op.hasPayload() && len(op.RestValue) == 0 {
-		return parsePipeline(src, stmt, bin, holes)
+		return parsePipeline(src, stmt, bin, holes, g)
 	}
 
 	// The statement's body ends at the command, not at the `;`/newline that

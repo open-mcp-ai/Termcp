@@ -27,7 +27,6 @@ package directive
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -606,17 +605,6 @@ func shellWords(raw string) ([]string, error) {
 		words = append(words, wordLiteral(raw, w))
 	}
 	return words, nil
-}
-
-// Names lists the directive names, sorted, for a help listing that cannot drift
-// from the table.
-func Names() []string {
-	out := make([]string, 0, len(ops))
-	for _, op := range ops {
-		out = append(out, op.Name)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // hasPayload reports whether this directive takes bytes after its target at all.
