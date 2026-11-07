@@ -3,8 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"sync"
 
+	"github.com/open-mcp-ai/termcp/term"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -84,131 +84,19 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// nothing read, so the line ran sequentially while reading as parallel. A silent
 	// semantic reversal is worse than a refusal, which is why this is implemented
 	// rather than rejected.
-	for _, group := range partitionGroups(stmts) {
-		if len(group) == 1 {
-			slots := s.runStatementSequential(ctx, &out, group[0], win)
-			out.slots = append(out.slots, slots...)
-			continue
-		}
-		// PARALLEL: every statement in the group starts together, and the reply waits
-		// for all of them. Slots are emitted in the ORIGINAL order, because a caller
-		// reads them positionally — collecting them by completion order would make the
-		// reply order depend on which command happened to finish first.
-		results := make([][]envelope.Slot, len(group))
-		var wg sync.WaitGroup
-		for i, stmt := range group {
-			wg.Add(1)
-			go func(i int, stmt directive.Statement) {
-				defer wg.Done()
-				results[i] = s.runStatementSlots(ctx, stmt, win)
-			}(i, stmt)
-		}
-		wg.Wait()
-		for _, slots := range results {
-			out.slots = append(out.slots, slots...)
-		}
-	}
-
+	// THE SEQUENCING RULES ARE THE PROTOCOL'S, so they live in term.Execute and are
+	// not repeated here (#273). What this method keeps is everything that is NOT
+	// sequencing: the control-byte funnel above, the dry-run branch above, and the
+	// handler below, which is the capability layer — alias expansion plus the
+	// directive dispatch.
+	//
+	// The split matters beyond tidiness: a program that wants TERM/1 without this
+	// server now implements term.Handler and gets &&/||/&/208 for free, instead of
+	// re-deriving rules that are easy to get subtly wrong.
+	reply := term.Execute(ctx, &term.File{Statements: stmts}, &capabilityHandler{s: s, win: win},
+		term.Options{LearnMode: win.LearnMode})
+	out.slots = reply.Slots
 	return out
-}
-
-// partitionGroups groups statements by concurrency: consecutive Background
-// statements, plus the first non-background statement that closes the batch, form
-// one group. A trailing run of background statements is a group of its own — the
-// caller asked for fire-and-forget, and waiting for a non-existent follower would
-// hang the reply.
-func partitionGroups(stmts []directive.Statement) [][]directive.Statement {
-	var groups [][]directive.Statement
-	var cur []directive.Statement
-	for _, st := range stmts {
-		cur = append(cur, st)
-		if !st.Background {
-			groups = append(groups, cur)
-			cur = nil
-		}
-	}
-	if len(cur) > 0 {
-		groups = append(groups, cur)
-	}
-	return groups
-}
-
-// runStatementSlots expands, dispatches and annotates one statement. It is the
-// concurrency-safe half: it writes nothing shared, which is what lets a parallel
-// group call it from several goroutines.
-func (s *Server) runStatementSlots(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
-	expanded, cycle := aliases.Expand(stmt)
-	if cycle != nil {
-		return []envelope.Slot{aliasCycleSlot(stmt, cycle)}
-	}
-	slots := s.runDirective(ctx, expanded, win)
-	if win.LearnMode && len(slots) > 0 {
-		// A parallel group has no single reply to dedup against, so usage is attached
-		// directly. Two identical directives in one parallel batch would repeat their
-		// usage line, which is the honest outcome: they ran twice.
-		if slots[0].Headers == nil {
-			slots[0].Headers = map[string]string{}
-		}
-		slots[0].Headers["Usage"] = expanded.Op
-	}
-	return slots
-}
-
-// runStatementSequential runs one statement in command order, applying the
-// `&&`/`||` gate and the unknown-directive hint. Only this path touches reply
-// state (previousOK, seenUsage, lastRan), which is why the parallel path cannot
-// reuse it.
-func (s *Server) runStatementSequential(ctx context.Context, out *termReply, stmt directive.Statement, win termArgs) []envelope.Slot {
-	if stmt.Cond == "&&" && !out.previousOK {
-		return []envelope.Slot{skippedSlot(stmt, "&&", "the previous statement failed")}
-	}
-	if stmt.Cond == "||" && out.previousOK {
-		return []envelope.Slot{skippedSlot(stmt, "||", "the previous statement succeeded")}
-	}
-	expanded, cycle := aliases.Expand(stmt)
-	if cycle != nil {
-		return []envelope.Slot{aliasCycleSlot(stmt, cycle)}
-	}
-	slots := s.runDirective(ctx, expanded, win)
-	if win.LearnMode && len(slots) > 0 {
-		if slots[0].Headers == nil {
-			slots[0].Headers = map[string]string{}
-		}
-		s.addUsage(out, expanded, slots[0].Headers)
-	}
-	out.previousOK = slotsAllOK(slots)
-	return slots
-}
-
-// slotsAllOK reports whether every slot a statement produced is 2xx.
-//
-// "Every" rather than "the first": a directive may answer with several slots, and a
-// chain that gated on only one of them would call a partial failure a success.
-func slotsAllOK(slots []envelope.Slot) bool {
-	for _, sl := range slots {
-		if sl.Code >= 300 {
-			return false
-		}
-	}
-	return true
-}
-
-// skippedSlot is the reply for a statement the condition short-circuited.
-//
-// The code is 208 rather than 204 on purpose: 204 says "done, nothing to say", which
-// is also what a successful close answers, and a caller could not tell a statement it
-// skipped from one that ran. 208 is outside the 2xx-a-directive-normally-returns
-// range without being an error — the caller's chain worked as written, one branch
-// simply was not taken.
-func skippedSlot(stmt directive.Statement, op, why string) envelope.Slot {
-	return envelope.Slot{
-		Code: 208,
-		Headers: map[string]string{
-			"Path":       stmt.Path,
-			"Error-Code": "short_circuited",
-		},
-		Body: "not run: `" + op + "` and " + why,
-	}
 }
 
 // controlByteInShell reports the first raw control byte sitting in a region the
@@ -239,3 +127,21 @@ func controlByteInShell(stmts []directive.Statement) (b byte, name string, found
 // parseErrorSlot renders a directive-level failure as one slot, so a bad
 // statement can sit beside a good one without taking the whole call down.
 //
+// capabilityHandler is this server as term.Handler: the capability layer.
+//
+// It owns exactly the two things that are about capabilities rather than
+// sequencing — alias expansion (stored aliases are data this project keeps) and
+// the directive dispatch (what each verb does) — and hands everything else to
+// term.Execute.
+type capabilityHandler struct {
+	s   *Server
+	win termArgs
+}
+
+func (h *capabilityHandler) Handle(ctx context.Context, st directive.Statement) []envelope.Slot {
+	expanded, cycle := aliases.Expand(st)
+	if cycle != nil {
+		return []envelope.Slot{aliasCycleSlot(st, cycle)}
+	}
+	return h.s.runDirective(ctx, expanded, h.win)
+}
