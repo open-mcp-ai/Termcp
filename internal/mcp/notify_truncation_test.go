@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestATruncatedToastSaysItWasTruncated is the third finding in issue #204's review.
@@ -26,8 +26,8 @@ func TestATruncatedToastSaysItWasTruncated(t *testing.T) {
 	}
 	long := strings.Repeat("x", maxNotifyMessageLen+250)
 
-	res, err := s.handleNotifyUser(context.Background(), mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{Arguments: map[string]any{"message": long}},
+	res, err := s.handleNotifyUser(context.Background(), mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Arguments: map[string]any{"message": long}},
 	})
 	if err != nil {
 		t.Fatalf("handleNotifyUser: %v", err)

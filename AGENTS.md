@@ -54,7 +54,7 @@ Go 标准库把并发能力做成了可直接使用的积木：`sync/atomic` 提
 **边界（保留锁的两种情形）：**
 
 - **多个字段必须一起改变、且没有更好的原子表达时，短锁是正确的工具**。写清它保护哪个不变量，并让临界区只含内存操作。`storage.Store`、`extension.Store` 的跨文件事务属于此类。
-- **第三方库与用户回调不在你的控制下**：`mcp-go`、`charmbracelet/ssh` 内部如何加锁、是否阻塞、是否反向回调，你无法保证，也无法保证它们不会与你的锁形成 AB-BA。所以锁内只做本次快照，出锁后再调外部接口（参见 `connRegistry.list()` 与 `approval.Queue.notify()` 的做法）。
+- **第三方库与用户回调不在你的控制下**：`charmbracelet/ssh`、`pkg/sftp` 内部如何加锁、是否阻塞、是否反向回调，你无法保证，也无法保证它们不会与你的锁形成 AB-BA。所以锁内只做本次快照，出锁后再调外部接口（参见 `connRegistry.list()` 与 `approval.Queue.notify()` 的做法）。
 
 ## Agent skills
 

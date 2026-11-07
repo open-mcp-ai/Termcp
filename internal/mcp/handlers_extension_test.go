@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -69,7 +69,7 @@ func extensionError(t *testing.T, s *Server, args map[string]any) map[string]any
 	return parseResult(t, res)
 }
 
-func resultText(res *mcpgo.CallToolResult) string {
+func resultText(res *mcp.CallToolResult) string {
 	if len(res.Content) == 0 {
 		return ""
 	}

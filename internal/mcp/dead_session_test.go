@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -35,7 +35,7 @@ func waitForExited(t *testing.T, s *Server, sid string, timeout time.Duration) b
 }
 
 // assertErrorCode fails unless res is an error result whose error_code is want.
-func assertErrorCode(t *testing.T, res *mcpgo.CallToolResult, want, what string) {
+func assertErrorCode(t *testing.T, res *mcp.CallToolResult, want, what string) {
 	t.Helper()
 	if !res.IsError {
 		t.Fatalf("%s: expected an error result, got %s", what, res.Content[0].Text)

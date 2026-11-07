@@ -8,7 +8,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"github.com/open-mcp-ai/termcp/internal/session"
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
@@ -177,7 +177,7 @@ func compactDocument(doc map[string]any) string {
 // listFromDoc renders a named list inside a handler's JSON reply as one entry per
 // line: the shape a caller copies into the next command.
 
-func listFromDoc(res *mcpgo.CallToolResult, listKey, field string) string {
+func listFromDoc(res *mcp.CallToolResult, listKey, field string) string {
 	doc, ok := toolResultMap(res)
 	if !ok {
 		return toolResultText(res)
@@ -234,7 +234,7 @@ func listFromDoc(res *mcpgo.CallToolResult, listKey, field string) string {
 // pastes — so a caller that copies this row can act on it directly instead of
 // calling `get ext` to translate.
 
-func (s *Server) extensionListing(res *mcpgo.CallToolResult, all bool) string {
+func (s *Server) extensionListing(res *mcp.CallToolResult, all bool) string {
 	doc, ok := toolResultMap(res)
 	if !ok {
 		return toolResultText(res)

@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -20,7 +20,7 @@ import (
 	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
-func (s *Server) handleStartSession(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleStartSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	command := getString(args, "command", "")
 	toolArgs := getStringSlice(args, "args")
@@ -158,7 +158,7 @@ func profileShellExists(ent *sshconfig.Entry) error {
 	return nil
 }
 
-func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleSendInput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	text := getString(args, "text", "")
@@ -170,7 +170,7 @@ func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequ
 	   reply shape exactly — an agent that types into one shell must not start
 	   reading a results array. */
 	if ids, isBatch := splitBatchIDs(shellID); isBatch {
-		return s.batchShellResult(ids, func(id string) (map[string]any, *mcpgo.CallToolResult) {
+		return s.batchShellResult(ids, func(id string) (map[string]any, *mcp.CallToolResult) {
 			shell, bad := s.requireShell(id)
 			if bad != nil {
 				return nil, bad
@@ -201,7 +201,7 @@ func (s *Server) handleSendInput(ctx context.Context, request mcpgo.CallToolRequ
 // writeShellInput is the single-shell write shared by the one-id and batch
 // paths, so the two cannot drift: the offset/line bookkeeping, the review stage
 // and the AI tagging are identical whether one shell is addressed or ten.
-func (s *Server) writeShellInput(ctx context.Context, shell *session.ChildShell, text string) (map[string]any, *mcpgo.CallToolResult) {
+func (s *Server) writeShellInput(ctx context.Context, shell *session.ChildShell, text string) (map[string]any, *mcp.CallToolResult) {
 	result := map[string]any{"success": true}
 	sessID := shell.ParentSessionID()
 	if offset, err := s.sessMgr.OutputSize(sessID, shell.ID); err == nil {
@@ -246,7 +246,7 @@ func (s *Server) writeShellInput(ctx context.Context, shell *session.ChildShell,
 	return result, nil
 }
 
-func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handlePressKey(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	key := getString(args, "key", "")
@@ -258,7 +258,7 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 	// The batch form carries over to keys for the same reason it exists on
 	// shell_input: ending ten command lines is one action, not ten round trips.
 	if ids, isBatch := splitBatchIDs(shellID); isBatch {
-		return s.batchShellResult(ids, func(id string) (map[string]any, *mcpgo.CallToolResult) {
+		return s.batchShellResult(ids, func(id string) (map[string]any, *mcp.CallToolResult) {
 			shell, bad := s.requireShell(id)
 			if bad != nil {
 				return nil, bad
@@ -283,7 +283,7 @@ func (s *Server) handlePressKey(ctx context.Context, request mcpgo.CallToolReque
 
 // pressShellKey is the single-shell key press shared by the one-id and batch
 // paths.
-func (s *Server) pressShellKey(ctx context.Context, shell *session.ChildShell, key string, repeat int) (map[string]any, *mcpgo.CallToolResult) {
+func (s *Server) pressShellKey(ctx context.Context, shell *session.ChildShell, key string, repeat int) (map[string]any, *mcp.CallToolResult) {
 	if s.reviewHolds(shell) {
 		// The ending key commits whatever text this shell staged, so the queue holds
 		// one complete command line. With nothing staged the key alone is the unit:
@@ -353,7 +353,7 @@ func (s *Server) shellCorrelationOf(shell *session.ChildShell, id string) review
 // The two cases need opposite next steps, so they get opposite messages: staged
 // text still needs its ending key, queued text must not be retried (reviewWaitTail
 // says so) and is checked later through the shell's output.
-func reviewPendingResult(queued bool, corr reviewPendingFields) *mcpgo.CallToolResult {
+func reviewPendingResult(queued bool, corr reviewPendingFields) *mcp.CallToolResult {
 	return jsonResult(reviewFields(queued, corr))
 }
 
@@ -367,7 +367,7 @@ func reviewMessage(queued bool) string {
 		" Read the shell's output later to see whether it ran."
 }
 
-func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleStartSubShell(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	parentID := getString(args, "session_id", "")
 	name := getString(args, "name", "")
@@ -402,7 +402,7 @@ func (s *Server) handleStartSubShell(_ context.Context, request mcpgo.CallToolRe
 	return jsonResult(map[string]any{"shell_id": cs.ID, "session_id": sess.ID, "name": cs.Name, "index": cs.Index, "stderr": stderrReceipt(mode)}), nil
 }
 
-func (s *Server) handleListSubshells(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleListSubshells(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	parentID := getString(args, "session_id", "")
 
@@ -421,7 +421,7 @@ func (s *Server) handleListSubshells(_ context.Context, request mcpgo.CallToolRe
 //
 // shell_id accepts everything requireShell accepts (raw id, session id, or a
 // termcp:// locator); the close acts on the resolved shell, not the argument.
-func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleCloseShell(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	if shellID == "" {
@@ -457,7 +457,7 @@ func (s *Server) handleCloseShell(_ context.Context, request mcpgo.CallToolReque
 // process. A directive that names a channel is asking for the channel to end, and a
 // silent success that leaves everything running is the failure this whole change
 // exists to remove. The tab's behaviour stays where it belongs, in the Web UI route.
-func (s *Server) handleArchiveShell(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleArchiveShell(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	shellID := getString(args, "shell_id", "")
 	if shellID == "" {
@@ -488,7 +488,7 @@ func (s *Server) handleArchiveShell(_ context.Context, request mcpgo.CallToolReq
 //
 // Every response carries start_offset/end_offset/total_bytes/has_more so the
 // caller can page the stream without server-side state.
-func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleReadOutput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	id := getString(args, "shell_id", "")
 	if id == "" {
@@ -533,7 +533,7 @@ func (s *Server) handleReadOutput(ctx context.Context, request mcpgo.CallToolReq
 // resolveOutputSource maps an id onto the unified output stream (raw shell id,
 // session id, or termcp:// locator). Resolution lives in the transcript
 // package; this wrapper only maps its typed errors onto the tool vocabulary.
-func (s *Server) resolveOutputSource(id string) (*transcript.Source, *mcpgo.CallToolResult) {
+func (s *Server) resolveOutputSource(id string) (*transcript.Source, *mcp.CallToolResult) {
 	src, err := transcript.Resolve(s.sessMgr, s.msgMgr, id)
 	if err != nil {
 		return nil, toolResultForErr(err)
@@ -543,7 +543,7 @@ func (s *Server) resolveOutputSource(id string) (*transcript.Source, *mcpgo.Call
 
 // toolResultForErr maps a transcript read error onto the tool's error-code
 // vocabulary, so the shared read path can stay transport-neutral.
-func toolResultForErr(err error) *mcpgo.CallToolResult {
+func toolResultForErr(err error) *mcp.CallToolResult {
 	var te *transcript.Error
 	if errors.As(err, &te) {
 		switch te.Kind {
@@ -570,7 +570,7 @@ type readParams = transcript.Params
 // caller that sends something outside the documented domain gets told why
 // instead of silently getting a different read. The blocking timeout is the one
 // surface-specific range (the Web UI has no waiting reads).
-func parseReadParams(args map[string]any) (readParams, *mcpgo.CallToolResult) {
+func parseReadParams(args map[string]any) (readParams, *mcp.CallToolResult) {
 	p := readParams{
 		StripAnsi: getBool(args, "strip_ansi", true),
 		// This surface's reply becomes JSON, and encoding/json replaces bytes it
@@ -684,7 +684,7 @@ func windowResult(w transcript.Window, src *transcript.Source) map[string]any {
 	return result
 }
 
-func (s *Server) handleResizePty(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleResizePty(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "shell_id", "")
 	rows := int(getFloat64(args, "rows", 24))
@@ -706,7 +706,7 @@ func (s *Server) handleResizePty(ctx context.Context, request mcpgo.CallToolRequ
 // This replaced a per-message index. The transcript is one byte stream per shell,
 // so "what happened" is a list of spans rather than a list of payloads — the
 // payloads all live in log.bin and are read through shell_output.
-func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleListMessages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
 	shellID := getString(args, "shell_id", "")
@@ -802,7 +802,7 @@ func (s *Server) handleListMessages(ctx context.Context, request mcpgo.CallToolR
 // session. Reading a shell's log is legal after the session ends — that is what
 // keeps DEAD sessions useful — so a read path must not inherit the write path's
 // status check. A shell the session does not know at all is still an error.
-func (s *Server) resolveShellIDForRead(sess *session.Session, shellID string) (string, *mcpgo.CallToolResult) {
+func (s *Server) resolveShellIDForRead(sess *session.Session, shellID string) (string, *mcp.CallToolResult) {
 	// Live and retained shells are both in the session's own map.
 	if cs := sess.GetChildShell(shellID); cs != nil {
 		return cs.ID, nil
@@ -857,7 +857,7 @@ func (s *Server) resolveShellIDForRead(sess *session.Session, shellID string) (s
 	return "", toolError(CodeShellNotFound, "%s", session.ShellIndexOutOfRangeError(sess.ID, idx, sess.LiveShellCount()).Error())
 }
 
-func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleRegisterReader(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "shell_id", "")
 
@@ -893,7 +893,7 @@ func (s *Server) handleRegisterReader(ctx context.Context, request mcpgo.CallToo
 	return jsonResult(result), nil
 }
 
-func (s *Server) handleUnregisterReader(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleUnregisterReader(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "shell_id", "")
 	readerID := int(getFloat64(args, "reader_id", 0))

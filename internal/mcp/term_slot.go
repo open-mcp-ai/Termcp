@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 	"github.com/open-mcp-ai/termcp/term/directive"
@@ -316,7 +316,7 @@ func (v *reviewPendingView) slot(path string) envelope.Slot {
 // same ones the reply body carries; the outer TERM slot repeats them as headers
 // (Approval-ID, Session-ID, Expires-At) so a host can pair a held reply with
 // /api/approvals without parsing the body.
-func reviewPendingFrom(res *mcpgo.CallToolResult) *reviewPendingView {
+func reviewPendingFrom(res *mcp.CallToolResult) *reviewPendingView {
 	doc, ok := toolResultMap(res)
 	if !ok {
 		return nil
@@ -338,7 +338,7 @@ func reviewPendingFrom(res *mcpgo.CallToolResult) *reviewPendingView {
 }
 
 // toolResultMap parses a handler reply's JSON body.
-func toolResultMap(res *mcpgo.CallToolResult) (map[string]any, bool) {
+func toolResultMap(res *mcp.CallToolResult) (map[string]any, bool) {
 	if res == nil || len(res.Content) == 0 {
 		return nil, false
 	}
@@ -358,7 +358,7 @@ func toolResultMap(res *mcpgo.CallToolResult) (map[string]any, bool) {
 // reads: decoding the raw content would return the envelope as if it were text,
 // and — worse — the dedicated error_code would be lost, turning every refusal
 // into a generic operation_failed (a 500) instead of the 403 it is.
-func failureFromResult(res *mcpgo.CallToolResult) *toolFailure {
+func failureFromResult(res *mcp.CallToolResult) *toolFailure {
 	if res == nil {
 		return &toolFailure{code: CodeOperationFailed, msg: "the operation failed without a reason"}
 	}

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/config"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // newInstance builds a headless, listener-less instance rooted in a temp dir.
@@ -124,4 +126,52 @@ func TestCloseIsIdempotent(t *testing.T) {
 	srv := newInstance(t)
 	srv.Close("first")
 	srv.Close("second") // must not panic on a closed channel
+}
+
+// TestAnEmbedderAddsAToolToTheSameEndpoint is what MCP() is for: an integration
+// registers its own tool on the instance's protocol endpoint, and a client of
+// that endpoint can then call it.
+//
+// It goes over HTTP rather than calling the registry directly, because the
+// claim is not "the map has an entry" — it is that a tool registered through
+// the public surface is reachable on the transport termcp already serves.
+func TestAnEmbedderAddsAToolToTheSameEndpoint(t *testing.T) {
+	srv := newInstance(t)
+
+	srv.MCP().AddTool(
+		mcp.NewTool("embedder_ping", mcp.WithDescription("registered by the embedder")),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("pong from the embedder"), nil
+		},
+	)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"c","version":"1"}}}`
+	resp, err := http.Post(ts.URL+"/stream", "application/json", strings.NewReader(init))
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("initialize handed out no session id")
+	}
+
+	call := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"embedder_ping","arguments":{}}}`
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/stream", strings.NewReader(call))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	defer resp2.Body.Close()
+	body, _ := io.ReadAll(resp2.Body)
+
+	if !strings.Contains(string(body), "pong from the embedder") {
+		t.Fatalf("a tool registered through MCP() was not reachable on /stream: %s", body)
+	}
 }

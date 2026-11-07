@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
@@ -225,7 +225,7 @@ func readCmd(args map[string]any) (cmd string, present bool, derr *directive.Err
 // drifted apart once already (issue #131 P0-3): each call site had its own copy of
 // "absent means the guide", and the loose getter they shared folded "not a string"
 // into it. Term is the one reader.
-func (s *Server) handleTerm(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleTerm(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return toolResult(s.Term(ctx, "", request.GetArguments())), nil
 }
 
@@ -580,12 +580,12 @@ func argsOf(pairs ...any) map[string]any {
 // and a directive that only inspected the error would report the refusal as a
 // 204 success — the operation never ran, and the caller was told it did. Every
 // directive routes through here for exactly that reason.
-func (s *Server) callTool(ctx context.Context, tool string, args map[string]any) (*mcpgo.CallToolResult, *toolFailure) {
+func (s *Server) callTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, *toolFailure) {
 	h := s.handlerFor(tool)
 	if h == nil {
 		return nil, &toolFailure{code: "unknown_directive", msg: "no handler for " + tool}
 	}
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Name = tool
 	req.Params.Arguments = args
 	// THE PAYLOAD OF AN INNER CALL IS NOT LOGGED. It is a copy of the line the outer

@@ -13,14 +13,14 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/encoding"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // refuseBorrowedReview enforces a host profile's default review policy on
 // operations the capability table marks reviewable.
-func (s *Server) refuseBorrowedReview(target, tool string) *mcpgo.CallToolResult {
+func (s *Server) refuseBorrowedReview(target, tool string) *mcp.CallToolResult {
 	host, borrowed := s.parseBorrowedHost(target)
 	if !borrowed || s.sshConfigs == nil {
 		return nil
@@ -40,8 +40,8 @@ func (s *Server) refuseBorrowedReview(target, tool string) *mcpgo.CallToolResult
 
 // checkBorrowedRunAdmission sends a short-circuit run through the same capability
 // admission exit used by every handler.
-func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *mcpgo.CallToolResult {
-	req := mcpgo.CallToolRequest{}
+func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *mcp.CallToolResult {
+	req := mcp.CallToolRequest{}
 	req.Params.Name = "shell_input"
 	req.Params.Arguments = argsOf("shell_id", target)
 	bad, _ := s.checkAdmission(ctx, "shell_input", req)

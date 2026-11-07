@@ -3,7 +3,7 @@ package mcp
 import (
 	"fmt"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
@@ -15,8 +15,8 @@ import (
 // client that renders text has already asked for something the caller declined to
 // pay for. The tool result stays valid either way — content is allowed to be
 // empty, and every field the caller needs is in structuredContent.
-func toolResult(reply envelope.Reply) *mcpgo.CallToolResult {
-	result := mcpgo.NewToolResultText(reply.Text())
+func toolResult(reply envelope.Reply) *mcp.CallToolResult {
+	result := mcp.NewToolResultText(reply.Text())
 	if reply.NoText {
 		// A structured-only caller gets NO text content. `content` is allowed to be
 		// empty in the tool-result schema, and leaving the rendering in would bill the
@@ -86,6 +86,6 @@ func (t termReply) applyTotalCap(slots []envelope.Slot) []envelope.Slot {
 }
 
 // termSlotResult wraps one slot as a tool result.
-func termSlotResult(slot envelope.Slot) *mcpgo.CallToolResult {
+func termSlotResult(slot envelope.Slot) *mcp.CallToolResult {
 	return toolResult(envelope.Reply{Slots: []envelope.Slot{slot}})
 }

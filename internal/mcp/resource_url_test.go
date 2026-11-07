@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestResourceURLStartSessionEndToEnd: "termcp://internal" as ssh_config in
@@ -700,7 +700,7 @@ func TestEveryHandleDoorAgrees(t *testing.T) {
 }
 
 // textOf renders a tool error result for test messages.
-func textOf(res *mcpgo.CallToolResult) string {
+func textOf(res *mcp.CallToolResult) string {
 	if res == nil || len(res.Content) == 0 {
 		return "<nil>"
 	}

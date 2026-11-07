@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/term/directive"
@@ -21,7 +21,7 @@ import (
 
 // termCall drives the single entry the way a model would, with the same JSON
 // argument shape the wire carries.
-func termCall(t *testing.T, s *Server, args map[string]any) *mcpgo.CallToolResult {
+func termCall(t *testing.T, s *Server, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	res, err := s.call(context.Background(), "term", args)
 	if err != nil {
@@ -987,7 +987,7 @@ func TestTermPayloadIsNotRewritten(t *testing.T) {
 // The single entry is one tool, and its schema is the budget it must fit in.
 func TestTermIsTheOnlyEntryAndFitsItsBudget(t *testing.T) {
 	s := New(nil, nil, nil, nil, "test")
-	var term *mcpgo.Tool
+	var term *mcp.Tool
 	tools := listTools(t, s, originContext("http://127.0.0.1:18765"))
 	for i := range tools {
 		if tools[i].Name == termToolName {

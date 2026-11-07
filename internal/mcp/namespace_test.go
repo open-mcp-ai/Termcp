@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -149,7 +149,7 @@ func TestGuardRefusesForeignNamespace(t *testing.T) {
 	s := newTestServer(t)
 	alice := namespaceSession(t, s, "alice")
 
-	check := func(t *testing.T, ctx context.Context, tool string, args map[string]any) *mcpgo.CallToolResult {
+	check := func(t *testing.T, ctx context.Context, tool string, args map[string]any) *mcp.CallToolResult {
 		t.Helper()
 		return (toolGuard{server: s}).check(ctx, tool, lookupGate(tool), makeRequest(args))
 	}

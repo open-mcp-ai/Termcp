@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 type captureHandler struct {
@@ -89,15 +89,15 @@ func attrValue(r slog.Record, key string) (slog.Value, bool) {
 
 func TestWithLogging_PassesThroughResultAndError(t *testing.T) {
 	ctx := context.Background()
-	wantResult := mcpgo.NewToolResultText("payload")
+	wantResult := mcp.NewToolResultText("payload")
 	wantErr := errors.New("boom")
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return wantResult, wantErr
 	}
 
 	wrapped := withLogging("test_tool", h, nil)
-	gotResult, gotErr := wrapped(ctx, mcpgo.CallToolRequest{})
+	gotResult, gotErr := wrapped(ctx, mcp.CallToolRequest{})
 
 	if gotResult != wantResult {
 		t.Fatalf("result not preserved: got %v, want %v", gotResult, wantResult)
@@ -126,10 +126,10 @@ func TestCaptureHandlerIgnoresOtherGoroutines(t *testing.T) {
 	slog.Debug("child shell created", "shell_id", "s1")
 	slog.Info("something unrelated")
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
-	if _, err := withLogging("session_start", h, nil)(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := withLogging("session_start", h, nil)(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("wrapped returned error: %v", err)
 	}
 
@@ -145,12 +145,12 @@ func TestCaptureHandlerIgnoresOtherGoroutines(t *testing.T) {
 func TestWithLogging_LogsEntryAndExitAtInfo(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("test_tool", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("wrapped returned error: %v", err)
 	}
 
@@ -183,12 +183,12 @@ func TestWithLogging_LogsErrorOnGoError(t *testing.T) {
 	cap := withCapturedLogger(t)
 
 	wantErr := errors.New("kaboom")
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return nil, wantErr
 	}
 	wrapped := withLogging("test_tool", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); !errors.Is(err, wantErr) {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); !errors.Is(err, wantErr) {
 		t.Fatalf("expected wantErr passthrough, got %v", err)
 	}
 
@@ -212,12 +212,12 @@ func TestWithLogging_LogsErrorOnGoError(t *testing.T) {
 func TestWithLogging_LogsWarnOnIsErrorResult(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultError("invalid arg"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultError("invalid arg"), nil
 	}
 	wrapped := withLogging("test_tool", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
 
@@ -244,12 +244,12 @@ func TestWithLogging_LogsWarnOnIsErrorResult(t *testing.T) {
 func TestWithLogging_ExtractsSessionAndReaderIDs(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("test_tool", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc-123",
 		"reader_id":  float64(7),
@@ -286,12 +286,12 @@ func TestWithLogging_ExtractsSessionAndReaderIDs(t *testing.T) {
 func TestWithLogging_OmitsAbsentSessionAndReaderIDs(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("test_tool", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("wrapped returned error: %v", err)
 	}
 
@@ -311,12 +311,12 @@ func TestWithLogging_OmitsAbsentSessionAndReaderIDs(t *testing.T) {
 func TestWithLogging_ExtractsTextParam(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("shell_input", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc-123",
 		"text":       "echo hello world",
@@ -344,12 +344,12 @@ func TestWithLogging_ExtractsTextParam(t *testing.T) {
 func TestWithLogging_ExtractsCommandParam(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("session_start", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"command":    "ssh",
@@ -377,12 +377,12 @@ func TestWithLogging_ExtractsCommandParam(t *testing.T) {
 func TestWithLogging_ExtractsModeParam(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("session_start", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"mode":       "pipe",
@@ -406,12 +406,12 @@ func TestWithLogging_ExtractsModeParam(t *testing.T) {
 func TestWithLogging_ExtractsRowsAndCols(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("session_start", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"rows":       float64(40),
@@ -439,12 +439,12 @@ func TestWithLogging_ExtractsRowsAndCols(t *testing.T) {
 func TestWithLogging_ExtractsTimeoutAndShellKey(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("press_key", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"shell_id": "sh-1",
 		"timeout":  float64(3.5),
@@ -481,12 +481,12 @@ func TestWithLogging_ExtractsTimeoutAndShellKey(t *testing.T) {
 func TestWithLogging_ExtractsForceAndGracePeriod(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("terminate_session", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id":   "abc",
 		"force":        true,
@@ -516,12 +516,12 @@ func TestWithLogging_ExtractsForceAndGracePeriod(t *testing.T) {
 func TestWithLogging_ExtractsArgsParam(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("session_start", h, nil)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"command":    "ping",
@@ -546,8 +546,8 @@ func TestWithLogging_ExtractsArgsParam(t *testing.T) {
 func TestWithLogging_TruncatesArgsOver10(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("session_start", h, nil)
 
@@ -556,7 +556,7 @@ func TestWithLogging_TruncatesArgsOver10(t *testing.T) {
 		raw[i] = "arg"
 	}
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"command":    "cmd",
@@ -582,12 +582,12 @@ func TestWithLogging_TruncatesArgsOver10(t *testing.T) {
 func TestWithLogging_LogsOutputPreviewOnExit(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("hello from process"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("hello from process"), nil
 	}
 	wrapped := withLogging("read_output", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("wrapped returned error: %v", err)
 	}
 
@@ -606,12 +606,12 @@ func TestWithLogging_TruncatesLongOutputPreview(t *testing.T) {
 	cap := withCapturedLogger(t)
 
 	longOutput := strings.Repeat("y", 250)
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText(longOutput), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText(longOutput), nil
 	}
 	wrapped := withLogging("read_output", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("wrapped returned error: %v", err)
 	}
 
@@ -633,14 +633,14 @@ func TestWithLogging_TruncatesLongOutputPreview(t *testing.T) {
 func TestWithLogging_TruncatesLongText(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return mcpgo.NewToolResultText("ok"), nil
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ok"), nil
 	}
 	wrapped := withLogging("shell_input", h, nil)
 
 	longText := strings.Repeat("x", 250)
 
-	req := mcpgo.CallToolRequest{}
+	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"session_id": "abc",
 		"text":       longText,
@@ -677,8 +677,8 @@ func TestPanicRecovery_ToolErrorForClientAndStackForLog(t *testing.T) {
 	cap := withCapturedLogger(t)
 
 	s := newTestServer(t)
-	s.mcpServer.AddTool(mcpgo.NewTool("zz_boom"), withLogging("zz_boom",
-		func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	s.mcpServer.AddTool(mcp.NewTool("zz_boom"), withLogging("zz_boom",
+		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			panic("sentinel-panic-value")
 		}, s))
 

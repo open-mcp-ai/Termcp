@@ -3,7 +3,7 @@ package mcp
 import (
 	"encoding/json"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 func getString(args map[string]any, key, def string) string {
@@ -38,13 +38,13 @@ func getFloat64(args map[string]any, key string, def float64) float64 {
 	return def
 }
 
-func jsonResult(data map[string]any) *mcpgo.CallToolResult {
+func jsonResult(data map[string]any) *mcp.CallToolResult {
 	b, _ := json.Marshal(data)
-	return mcpgo.NewToolResultText(string(b))
+	return mcp.NewToolResultText(string(b))
 }
 
-func successResult() *mcpgo.CallToolResult {
-	return mcpgo.NewToolResultText(`{"success":true}`)
+func successResult() *mcp.CallToolResult {
+	return mcp.NewToolResultText(`{"success":true}`)
 }
 
 func getStringSlice(args map[string]any, key string) []string {

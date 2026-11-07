@@ -60,7 +60,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
 	"github.com/open-mcp-ai/termcp/internal/logansi"
-	"github.com/open-mcp-ai/termcp/internal/mcp"
+	mcpi "github.com/open-mcp-ai/termcp/internal/mcp"
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -68,6 +68,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 	"github.com/open-mcp-ai/termcp/internal/webui"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
@@ -128,7 +129,7 @@ type Server struct {
 	sshSrv     *sshserver.Server
 	forwardMgr *forward.ForwardManager
 	extensions *extensions.Reconciler
-	mcp        *mcp.Server
+	mcp        *mcpi.Server
 	webui      *webui.Handler
 	verifier   *auth.Verifier
 
@@ -214,7 +215,7 @@ func New(opts Options) (*Server, error) {
 	)
 	s.extensions.NoInternal = cfg.NoInternal
 
-	s.mcp = mcp.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
+	s.mcp = mcpi.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
 	// The embedded docs feed the `learn-api` prompt. In a no_webui build they are
 	// the only asset left, which is deliberate: an instance that serves an HTTP
 	// API should be able to hand an agent its reference for that API.
@@ -337,6 +338,15 @@ func (s *Server) Addr() string { return s.addr }
 // its own listener instead of letting termcp open one. Returns the same mux the
 // instance serves when it does listen, including the auth middleware.
 func (s *Server) Handler() http.Handler { return s.httpSrv.Handler }
+
+// MCP exposes the MCP protocol endpoint, so an embedder can register its own
+// tools and prompts alongside termcp's.
+//
+// This is the integration point that is an object rather than a hook: *mcp.Server
+// already has AddTool, AddPrompt, OnMethod and Use, so there is no plugin
+// interface to design and nothing new to promise. Register before Start for the
+// common case; registering later is visible to clients on their next tools/list.
+func (s *Server) MCP() *mcp.Server { return s.mcp.MCP() }
 
 // Term runs one command line through the instance and returns the TERM/1
 // envelope, exactly as POST /api/term and the `term` tool do.

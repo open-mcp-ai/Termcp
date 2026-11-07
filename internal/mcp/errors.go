@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -84,7 +84,7 @@ const (
 // The dedicated field lets agents branch on the failure kind (the moral
 // equivalent of a typed error) without parsing prose. Only failed results
 // carry it; success results keep their normal payload.
-func toolError(code, format string, args ...any) *mcpgo.CallToolResult {
+func toolError(code, format string, args ...any) *mcp.CallToolResult {
 	msg := format
 	if len(args) > 0 {
 		msg = fmt.Sprintf(format, args...)
@@ -97,10 +97,10 @@ func toolError(code, format string, args ...any) *mcpgo.CallToolResult {
 		// json.Marshal of two strings cannot fail; keep a safe fallback.
 		payload = []byte(fmt.Sprintf(`{"error_code":%q,"error":"failed to encode tool error"}`, CodeInternalError))
 	}
-	return &mcpgo.CallToolResult{
+	return &mcp.CallToolResult{
 		IsError: true,
-		Content: []mcpgo.TextContent{
-			mcpgo.NewTextContent(string(payload)),
+		Content: []mcp.TextContent{
+			mcp.NewTextContent(string(payload)),
 		},
 	}
 }

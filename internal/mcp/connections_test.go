@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // The client list answers "who is connected to this instance?" (issue #99), and the
@@ -27,7 +27,7 @@ import (
 func openStreamableSession(t *testing.T, url, namespace, name, version string) string {
 	t.Helper()
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` +
-		mcpgo.LATEST + `","capabilities":{},"clientInfo":{"name":"` + name + `","version":"` + version + `"}}}`
+		mcp.ProtocolVersion + `","capabilities":{},"clientInfo":{"name":"` + name + `","version":"` + version + `"}}}`
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -178,11 +178,11 @@ func TestConnRegistryIsSafeUnderConcurrentUse(t *testing.T) {
 	<-done
 }
 
-// fakeSession is the minimum mcp-go session the registry touches.
+// fakeSession is the minimum Session the registry touches.
 type fakeSession struct{ id string }
 
 func (f fakeSession) SessionID() string { return f.id }
-func (f fakeSession) GetClientInfo() mcpgo.Implementation {
-	return mcpgo.Implementation{}
+func (f fakeSession) GetClientInfo() mcp.Implementation {
+	return mcp.Implementation{}
 }
 func (f fakeSession) Notify(ctx context.Context, method string, params any) error { return nil }
