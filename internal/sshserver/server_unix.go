@@ -15,6 +15,11 @@ func setPtySysProcAttr(cmd *exec.Cmd) {
 	}
 }
 
+// setPipeSysProcAttr has no counterpart on POSIX: a child does not acquire a
+// terminal window by being started from a process without a controlling one. The
+// empty body is what lets the call site stay platform-free.
+func setPipeSysProcAttr(cmd *exec.Cmd) {}
+
 // waitChild waits for the child and returns its exit code. ptyChild only matters
 // on Windows, where pty.Start hands the child's lifecycle to ConPTY (see
 // server_windows.go). On Unix pty.Start is plain c.Start, so exec.Cmd owns the
