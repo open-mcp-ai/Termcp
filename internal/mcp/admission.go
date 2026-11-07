@@ -104,13 +104,17 @@ func targetSessionID(request mcp.CallToolRequest) string {
 // in the caller's own vocabulary (the tool name), while the decision was made on
 // the capability.
 func refuseSession(sess *session.Session, capID, toolName string) *mcp.CallToolResult {
+	return refuseSessionOn(sess, capID, toolName, "")
+}
+
+func refuseSessionOn(sess *session.Session, capID, toolName, extName string) *mcp.CallToolResult {
 	if sess == nil {
 		return nil
 	}
 	if sess.Restriction().Allows(capID) {
 		return nil
 	}
-	return toolError(CodeForbidden, "%s", session.ForbiddenTool(toolName))
+	return toolError(CodeForbidden, "%s", session.ForbiddenToolOn(toolName, extName, capID))
 }
 
 // nsRefusal is the namespace refusal, naming what the caller is rather than what

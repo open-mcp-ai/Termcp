@@ -249,7 +249,11 @@ func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 		URL:     "https://mcp.example.com/mcp",
 		Headers: map[string]string{"X-Api-Key": "sekrit", "X-Tenant": "acme"},
 	}
-	cmd, args := bridgeCommand(e, "")
+	ch, ok := e.ChannelNamed("")
+	if !ok {
+		t.Fatal("the url template has no channel")
+	}
+	cmd, args := bridgeCommand(e, ch, "")
 	if cmd != "termcp-mcp-bridge" {
 		t.Errorf("command = %q, want the built-in relay", cmd)
 	}
@@ -264,7 +268,7 @@ func TestBridgeCommandRendersURLAndHeaders(t *testing.T) {
 	}
 	// Running it twice must produce the identical argv: the headers are a map,
 	// and a walk that rendered them in a different order would look like an edit.
-	if _, again := bridgeCommand(e, ""); strings.Join(again, "\x00") != strings.Join(args, "\x00") {
+	if _, again := bridgeCommand(e, ch, ""); strings.Join(again, "\x00") != strings.Join(args, "\x00") {
 		t.Errorf("rendering is not stable: %v then %v", args, again)
 	}
 }
@@ -284,10 +288,14 @@ func TestURLTargetNamesTheEgressMachine(t *testing.T) {
 	}
 
 	// A remote target travels as --via; the loopback one does not need it.
-	if _, args := bridgeCommand(e, "somewhere"); len(args) < 3 || args[1] != "--via" || args[2] != "somewhere" {
+	tch, ok := e.ChannelNamed("")
+	if !ok {
+		t.Fatal("the url template has no channel")
+	}
+	if _, args := bridgeCommand(e, tch, "somewhere"); len(args) < 3 || args[1] != "--via" || args[2] != "somewhere" {
 		t.Fatalf("a remote target must ride as --via, got %v", args)
 	}
-	if _, args := bridgeCommand(e, ""); len(args) != 1 || args[0] != e.URL {
+	if _, args := bridgeCommand(e, tch, ""); len(args) != 1 || args[0] != e.URL {
 		t.Fatalf("an internal target must not carry --via, got %v", args)
 	}
 
@@ -345,7 +353,11 @@ func TestURLTemplateAvailableWithoutAnExternalBinary(t *testing.T) {
 	if got.Command != "" {
 		t.Errorf("Command = %q, want empty for a URL template", got.Command)
 	}
-	cmd, args := bridgeCommand(got, "")
+	gch, gok := got.ChannelNamed("")
+	if !gok {
+		t.Fatal("the stored url template has no channel")
+	}
+	cmd, args := bridgeCommand(got, gch, "")
 	if cmd != "termcp-mcp-bridge" || len(args) == 0 || args[0] != mcpURL {
 		t.Fatalf("the plan does not run the relay against the URL: %q %v", cmd, args)
 	}

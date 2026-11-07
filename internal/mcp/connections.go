@@ -3,6 +3,7 @@ package mcp
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/mcp"
@@ -47,15 +48,14 @@ type Connection struct {
 // register/unregister hooks carry the Session, so this keeps its own small map
 // fed by those.
 type connRegistry struct {
-	mu    sync.Mutex
-	seq   uint64
-	conns map[string]*connEntry
-	// pending holds facts learned before the session was registered. The
-	// streamable transport answers initialize *first* and registers the session
-	// after, so the namespace claim — which rides the initialize request —
-	// arrives before there is a row to put it on. Without this the claim was
-	// dropped and every client looked unnamespaced.
-	pending map[string]string
+	// NO MUTEX. Every operation touches one session id: one store when it registers,
+	// one delete when it leaves, one lookup for its namespace claim. The order the
+	// panel shows is a monotonic counter, which is an atomic by itself. The two maps
+	// therefore need no shared lock, and the one place they meet — registration
+	// consuming a pending claim — is a single LoadAndDelete on that session's key.
+	seq     atomic.Uint64
+	conns   sync.Map // sessionID string -> *connEntry
+	pending sync.Map // sessionID string -> namespace claimed before registration
 }
 
 // connEntry keeps the session object rather than a copy of its fields.
@@ -66,14 +66,26 @@ type connRegistry struct {
 // itself, so the read path asks the session — which is also why this holds the
 // object and not a snapshot.
 type connEntry struct {
-	session     mcp.Session
-	namespace   string
+	session mcp.Session
+	// namespace is written once at registration and again if the claim arrives
+	// later (the SSE transport registers before initialize), so it is an atomic
+	// pointer: a reader building the panel never sees a half-written string, and
+	// nothing has to be held while the session's own methods are called.
+	namespace   atomic.Pointer[string]
 	connectedAt time.Time
 	seq         uint64
 }
 
+// ns reads the entry's namespace, empty when none was claimed.
+func (e *connEntry) ns() string {
+	if p := e.namespace.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
 func newConnRegistry() *connRegistry {
-	return &connRegistry{conns: make(map[string]*connEntry), pending: make(map[string]string)}
+	return &connRegistry{}
 }
 
 // add records a newly registered session. It runs before the client has said
@@ -82,16 +94,21 @@ func (r *connRegistry) add(s mcp.Session) {
 	if s == nil || s.SessionID() == "" {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.seq++
-	r.conns[s.SessionID()] = &connEntry{
+	id := s.SessionID()
+	e := &connEntry{
 		session:     s,
-		namespace:   r.pending[s.SessionID()],
 		connectedAt: time.Now().UTC(),
-		seq:         r.seq,
+		seq:         r.seq.Add(1),
 	}
-	delete(r.pending, s.SessionID())
+	// THE CLAIM ARRIVED FIRST ON THE STREAMABLE TRANSPORT: initialize is answered
+	// before the session registers, so the namespace is waiting on this id and is
+	// taken here in one atomic step.
+	if v, ok := r.pending.LoadAndDelete(id); ok {
+		if ns, _ := v.(string); ns != "" {
+			e.namespace.Store(&ns)
+		}
+	}
+	r.conns.Store(id, e)
 }
 
 // remove forgets a session that went away.
@@ -99,9 +116,7 @@ func (r *connRegistry) remove(s mcp.Session) {
 	if s == nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.conns, s.SessionID())
+	r.conns.Delete(s.SessionID())
 }
 
 // noteNamespace records the namespace the client claimed in its initialize
@@ -123,19 +138,17 @@ func (r *connRegistry) noteNamespace(sessionID, namespace string) {
 	if sessionID == "" || namespace == "" {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e := r.conns[sessionID]; e != nil {
-		e.namespace = namespace
+	if v, ok := r.conns.Load(sessionID); ok {
+		v.(*connEntry).namespace.Store(&namespace)
 		return
 	}
 	// ponytail: hard cap instead of a sweeper; three in flight is already more
 	// than any real client count, and the cost of being wrong is one missing
 	// namespace label, not a wrong one.
-	if len(r.pending) >= 64 {
-		r.pending = make(map[string]string)
+	if n := r.pendingCount(); n >= 64 {
+		r.pending.Range(func(k, _ any) bool { r.pending.Delete(k); return true })
 	}
-	r.pending[sessionID] = namespace
+	r.pending.Store(sessionID, namespace)
 }
 
 // list returns every live connection, oldest first.
@@ -148,18 +161,17 @@ func (r *connRegistry) list() []Connection {
 	// Snapshot the rows under the lock, but call external methods (the session's
 	// SessionID and GetClientInfo) OUTSIDE it. Calling into third-party interfaces
 	// inside our mutex risks foreign locking or stalls locking us out.
-	r.mu.Lock()
-	entries := make([]connEntry, 0, len(r.conns))
-	for _, e := range r.conns {
-		entries = append(entries, *e)
-	}
-	r.mu.Unlock()
+	var entries []*connEntry
+	r.conns.Range(func(_, v any) bool {
+		entries = append(entries, v.(*connEntry))
+		return true
+	})
 
 	out := make([]Connection, 0, len(entries))
 	for _, e := range entries {
 		c := Connection{
 			SessionID:   e.session.SessionID(),
-			Namespace:   e.namespace,
+			Namespace:   e.ns(),
 			ConnectedAt: e.connectedAt.Format(time.RFC3339),
 			seq:         e.seq,
 		}
@@ -186,9 +198,16 @@ func (r *connRegistry) list() []Connection {
 
 // count reports how many clients are attached, without building the slice.
 func (r *connRegistry) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.conns)
+	n := 0
+	r.conns.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+// pendingCount is how many namespace claims are waiting for their registration.
+func (r *connRegistry) pendingCount() int {
+	n := 0
+	r.pending.Range(func(_, _ any) bool { n++; return true })
+	return n
 }
 
 // Connections lists the MCP clients currently attached to this instance,
