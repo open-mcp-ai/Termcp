@@ -12,9 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
-
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -264,26 +261,6 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 	}
 	s.setRecvCursor(handle, next)
 
-	// A SUB-MCP'S SAMPLING REQUEST IS ANSWERED HERE, NOT RETURNED TO THE CALLER.
-	//
-	// `sampling/createMessage` is the one request that flows the other way: the
-	// server being driven asks the client's model to generate something. A sub-MCP
-	// started on a shell channel has no model, so it asks its host — and this is the
-	// host. Returning that frame to the caller instead would leave the sub-MCP
-	// blocked on an answer nobody was going to write, and the caller reading a
-	// request it did not ask for.
-	//
-	// Forwarding is transparent on purpose: the caller asked for one frame and gets
-	// one frame, after the round trip to the Agent has happened underneath. The
-	// answer is written back to the sub-MCP's stdin and the cursor moves past it.
-	if handled, slot := s.forwardSubMCPSampling(ctx, stmt, handle, frame); handled {
-		if slot != nil {
-			return *slot, false
-		}
-		// Answered and written back: read again, so this recv still delivers a frame.
-		return envelope.Slot{}, true
-	}
-
 	return envelope.Slot{
 		Code:    200,
 		Headers: map[string]string{"Path": stmt.Path, "Content-Range": envelope.ContentRange(start, end-1, end)},
@@ -331,89 +308,6 @@ func frameID(frame string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(*env.ID))
-}
-
-// forwardSubMCPSampling answers an inbound `sampling/createMessage` from a sub-MCP
-// by asking the Agent that is driving this server, and writes the result back.
-//
-// handled=false means the frame is not a sampling request and the caller should
-// treat it normally. handled=true with a non-nil slot means the round trip failed
-// and that slot is the reply; handled=true with a nil slot means the answer was
-// written back and the caller should keep reading.
-//
-// The Agent session is taken from the CONTEXT, not from a stored handle: this runs
-// inside the tool call the Agent made, so ctx carries exactly the client that is
-// waiting for the reply. A stored session would be wrong as soon as two Agents
-// drive the same daemon.
-func (s *Server) forwardSubMCPSampling(ctx context.Context, stmt directive.Statement, handle, frame string) (bool, *envelope.Slot) {
-	var req struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Method  string          `json:"method"`
-		Params  json.RawMessage `json:"params"`
-	}
-	if err := json.Unmarshal([]byte(frame), &req); err != nil {
-		return false, nil // not JSON we understand; let the caller see it
-	}
-	if req.Method != "sampling/createMessage" {
-		return false, nil
-	}
-	// No id: a notification, not a request. Nothing to answer.
-	if len(req.ID) == 0 || string(req.ID) == "null" {
-		return false, nil
-	}
-
-	var params mcpgo.CreateMessageParams
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		// Malformed params: answer the sub-MCP with a JSON-RPC error rather than
-		// leaving it blocked on a request that will never be answered.
-		return true, s.replyToSubMCP(ctx, stmt, handle, req.ID, nil, "invalid sampling params: "+err.Error())
-	}
-
-	target := mcpserver.ClientSessionFromContext(ctx)
-	if target == nil {
-		return true, s.replyToSubMCP(ctx, stmt, handle, req.ID, nil,
-			"no Agent session on this call; a sub-MCP's sampling request can only be forwarded while an Agent is driving the tool call")
-	}
-
-	// Method is a PROMOTED field, so it cannot be set in the literal under the
-	// module's Go version; assign it after construction.
-	createReq := mcpgo.CreateMessageRequest{CreateMessageParams: params}
-	createReq.Method = "sampling/createMessage"
-	res, err := s.ForwardSampling(ctx, target, createReq)
-	if err != nil {
-		return true, s.replyToSubMCP(ctx, stmt, handle, req.ID, nil, err.Error())
-	}
-	return true, s.replyToSubMCP(ctx, stmt, handle, req.ID, res, "")
-}
-
-// replyToSubMCP writes a JSON-RPC answer back to the sub-MCP's stdin.
-//
-// A nil result produces an error object, which is what the sub-MCP is waiting for
-// either way: silence would leave its request outstanding forever.
-func (s *Server) replyToSubMCP(ctx context.Context, stmt directive.Statement, handle string, id json.RawMessage, res *mcpgo.CreateMessageResult, errMsg string) *envelope.Slot {
-	answer := map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id)}
-	if errMsg != "" {
-		answer["error"] = map[string]any{"code": -32603, "message": errMsg}
-	} else {
-		answer["result"] = res
-	}
-	payload, err := json.Marshal(answer)
-	if err != nil {
-		slot := envelope.Slot{Code: 500, Headers: map[string]string{
-			"Path": stmt.Path, "Error-Code": "sampling_answer_unencodable",
-		}, Body: "could not encode the sampling answer: " + err.Error()}
-		return &slot
-	}
-	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", string(payload))); fail != nil {
-		slot := s.slotFromFailure(ctx, stmt, fail)
-		return &slot
-	}
-	if _, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter")); fail != nil {
-		slot := s.slotFromFailure(ctx, stmt, fail)
-		return &slot
-	}
-	return nil
 }
 
 // How often one recv looks again, while it waits.
