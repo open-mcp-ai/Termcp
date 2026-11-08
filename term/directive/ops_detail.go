@@ -167,17 +167,17 @@ var ops = []Op{
 		Usage:  "span <channel>",
 		Detail: spanDetail},
 	{Name: "reader", Kind: KindFlags, Target: true, Flags: []string{"drop"}, TargetKind: TargetChain,
-		Usage: "reader <session> <index>   |   reader <session> <index> --drop <id>"},
+		Usage: "reader <session> <index>   |   reader <session> <index> --drop <id>", Detail: readerDetail},
 
 	// --- bytes in and out of a node ---
 
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
-		Flags: []string{"cursor:number", "since:number", "at:number", "offset:number", "bytes:number",
+		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
 			"frame", "encoding", "mode"},
 		Valueless: []string{"raw", "lines", "frame"},
-		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N] [--grep RE]   |   " +
+		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
 			"read <session> <index> | write <session> file <path>",
@@ -269,6 +269,31 @@ thing that needs to stop.`
 
 // spanDetail decodes the one-letter statuses, which are terse by design (they are
 // written to log.jsonl for every status change) and unreadable without this.
+// readerDetail states the registration protocol, which the usage line cannot.
+//
+// The usage line offers two forms and says nothing about what a reader IS, so the
+// caller has to know that the reply's id is the thing `--drop` takes, that a reader
+// can be dropped again, and that dropping one is not a tidy-up but the way to stop
+// paying for bytes nobody reads. Issue #286 asked for exactly this page.
+const readerDetail = `A reader is a second cursor on one channel: it consumes from its own position and
+returns an id, so two consumers can read the same output without stealing each other's
+bytes. The default reader ('read <channel>') is the cursor that moves; a reader is how
+a watcher, a bridge or a summariser follows along without disturbing it.
+
+  reader <channel>              register one; the reply is its id (200, body 'reader N')
+  reader <channel> --drop <id>  unregister it; the reply is 204
+
+  read <channel> --reader <id>  read the new bytes since this reader's last read
+
+DROPPING IS NOT HOUSEKEEPING. A registered reader holds the bytes it has not read yet,
+and a reader nobody drains is a buffer that grows until the channel closes. Drop it as
+soon as the consumer stops; 'reader <channel> --drop' with no id is refused rather than
+treated as a registration, because a typo that leaves a resource behind is the one kind
+of typo that must not be quiet.
+
+A reader cannot be re-registered by name: the id is the only handle, and the channel
+reports its live readers through 'span'.`
+
 const spanDetail = `Session output index: time, byte range, line range and line start per
 span, so a window can be read by position instead of by streaming.
 

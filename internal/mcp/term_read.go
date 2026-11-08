@@ -114,8 +114,17 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 		[2]string{"offset", "offset"},
 		[2]string{"from-line", "from_line"},
 		[2]string{"tail", "tail_lines"},
+		[2]string{"reader", "reader_id"},
 	); bad {
 		return slot
+	}
+	// A REGISTERED READER IS A CURSOR THE CALLER NAMED (issue #286). `reader <channel>`
+	// answers with an id and the buffer keeps a position for it; without this the id had
+	// no consumer on this surface, so registering one was a way to pin the compaction
+	// watermark and never read anything. Absent stays absent: reader_id 0 IS the default
+	// reader, and sending it explicitly would be a different request from saying nothing.
+	if stmt.FlagState("reader") == directive.FlagAbsent {
+		delete(args, "reader_id")
 	}
 	if v, ok := stmt.Flag("stream"); ok {
 		args["stream"] = v
