@@ -224,7 +224,7 @@ func TestPeerAddressRefusals(t *testing.T) {
 	defer termText(t, s, map[string]any{"cmd": "close " + first})
 	// The mcp peer has to BE an mcp peer: opening one against the DevTools endpoint is
 	// exactly the misconfiguration `open` now refuses (502, nothing handed back), so
-	// borrowing that URL here would make this test depend on the old behaviour.
+	// reusing that URL here would make this test depend on the old behaviour.
 	mcpSrv := toolListPeer(t)
 	mcpPeer := handleFrom(t, termText(t, s, map[string]any{"cmd": "open internal mcp ws" + strings.TrimPrefix(mcpSrv.URL, "http")}))
 	defer termText(t, s, map[string]any{"cmd": "close " + mcpPeer})

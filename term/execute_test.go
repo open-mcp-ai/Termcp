@@ -223,7 +223,7 @@ func TestExecuteOfNothingIsAnEmptyReply(t *testing.T) {
 }
 
 // testGrammar is a vocabulary of three verbs, and it is the point: these tests
-// exercise the language, so they declare their own words rather than borrow this
+// exercise the language, so they declare their own words rather than reuse this
 // build's table. A caller that embeds TERM/1 has nothing else available.
 func testGrammar() *Grammar {
 	return NewGrammar([]Op{

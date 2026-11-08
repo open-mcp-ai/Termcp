@@ -24,7 +24,7 @@ var ErrUnknownKey = errors.New("unknown key")
 type unknownKeyError struct{ key string }
 
 func (e *unknownKeyError) Error() string {
-	return fmt.Sprintf("unknown key %q; supported: enter, tab, esc, up, down, left, right, backspace, delete, home, end, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+u, ctrl+w", e.key)
+	return fmt.Sprintf("unknown key %q; supported: enter, tab, esc (or escape), up, down, left, right, backspace, delete, home, end, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+u, ctrl+w", e.key)
 }
 func (e *unknownKeyError) Is(target error) bool { return target == ErrUnknownKey }
 

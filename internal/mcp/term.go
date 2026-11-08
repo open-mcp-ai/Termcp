@@ -102,10 +102,11 @@ type termArgs struct {
 	// exists: `bytes_limit` has a default, so the number in this struct is never zero
 	// and "the caller asked for 200 bytes" is indistinguishable from "nobody asked".
 	//
-	// A pipeline is where that difference decides behaviour: `read ... | write ...`
-	// copies the WHOLE span by default, and only truncates to `bytes_limit` when the
-	// caller actually named one. Reading the default as a request would silently cut
-	// every copy to 200 bytes and report success.
+	// A PIPELINE IS NOT ONE OF ITS READERS (#290). `read ... | write ...` moves bytes
+	// without them entering the caller's context, so there is no reply here for a
+	// window to bound: how many bytes move is the caller's explicit `--bytes` /
+	// `--offset`. It used to truncate the copy to `bytes_limit` when one was named,
+	// which produced a corrupt destination that still reported 100% done.
 	BytesLimitSet   bool
 	BytesLimit      int
 	LinesLimit      int

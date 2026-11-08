@@ -12,12 +12,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// parseBorrowedHost recognizes short-circuit connection targets (#237).
+// parseUseHost recognizes short-circuit connection targets (#237).
 //
 // `use <host>`, `use:<host>` and `connect <host>` are explicit locators; a bare
 // configured host name is the concise form. An explicit locator always names the
 // profile; for a bare name, an existing session id wins to preserve old behavior.
-func (s *Server) parseBorrowedHost(raw string) (string, bool) {
+func (s *Server) parseUseHost(raw string) (string, bool) {
 	t := strings.Trim(strings.TrimSpace(raw), "`\"'")
 	for _, prefix := range []string{"use:", "connect:", "use ", "connect "} {
 		if host, ok := strings.CutPrefix(t, prefix); ok {
@@ -40,12 +40,12 @@ func (s *Server) parseBorrowedHost(raw string) (string, bool) {
 	return "", false
 }
 
-// Acquire acquires an SSH client for a session or a borrowed host.
-// Session targets carry a no-op release; borrowed targets hold a pool lease that
+// Acquire acquires an SSH client for a session or a `use` host.
+// Session targets carry a no-op release; `use` targets hold a pool lease that
 // the caller must release after the operation completes.
 func (s *Server) acquireSSHTransport(ctx context.Context, target string) (*ssh.Client, func(), error) {
-	host, borrowed := s.parseBorrowedHost(target)
-	if !borrowed {
+	host, isUse := s.parseUseHost(target)
+	if !isUse {
 		sess := s.sessMgr.Get(target)
 		if sess == nil {
 			return nil, nil, fmt.Errorf("session %q not found", target)
@@ -69,7 +69,7 @@ func (s *Server) acquireSSHTransport(ctx context.Context, target string) (*ssh.C
 				// answer has to say so: `use:nosuchhost` used to answer 500
 				// operation_failed, which reads as an outage and invites a retry that
 				// cannot succeed. The same error also answers `read`/`write`/`get`.
-				return nil, nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles; a profile name is also accepted without the `use:` prefix", sshconfig.ErrNotFound, host)
+				return nil, nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles; a profile name is also accepted without the `use` prefix", sshconfig.ErrNotFound, host)
 			}
 			return nil, nil, err
 		}

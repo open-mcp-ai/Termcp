@@ -1406,6 +1406,15 @@ func (s *Server) directiveHelp(stmt directive.Statement, win termArgs) envelope.
 				if note, ok := directive.NodeNote(stmt.Args[0]); ok {
 					body += "\n" + note + "\n"
 				}
+				// A KIND IS A CHILD, NOT A VERB, SO ITS PAGE IS NOT REACHABLE THIS WAY
+				// ON ITS OWN. `forward`, `mcp`, `cdp` and `jrpc` are what `open` makes,
+				// and each has a page that the usage lines cannot imply. They live in
+				// kindDetails; reading it here means `help forward` answers with the 54
+				// lines that say which flag belongs to which direction, instead of five
+				// usage lines and nothing else.
+				if page, ok := directive.KindDetail(stmt.Args[0]); ok {
+					body += "\n" + page + "\n"
+				}
 				return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path},
 					Body: body}
 			}
@@ -1518,7 +1527,7 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	// THE SHORT-CIRCUIT FORM, one line after the channel form so the two are read
 	// together: most calls are one command whose only product is its output, and
 	// connect + run + close both costs two extra turns and leaves an archive tile.
-	b.WriteString("  run use:<host> $1            or, with no session at all: borrows a pooled\n")
+	b.WriteString("  run use:<host> $1            or, with no session at all: uses a pooled\n")
 	b.WriteString("                               connection, runs one command, answers with its\n")
 	b.WriteString("                               output and exit code, registers nothing.\n")
 	// THE ONE LINE THAT PREVENTS THE WHOLE CLASS OF `run` MISREADING: the bytes go to
@@ -1535,7 +1544,7 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
 	b.WriteString("  long-running command you want to watch between calls.\n")
-	b.WriteString("  For one non-interactive command, `run use:<host> $1` borrows the pooled\n")
+	b.WriteString("  For one non-interactive command, `run use:<host> $1` uses the pooled\n")
 	b.WriteString("  connection and leaves no session/archive entry; connect only when you need\n")
 	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
 

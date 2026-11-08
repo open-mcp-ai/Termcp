@@ -82,14 +82,14 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 		t.Fatalf("session list leaked a session: %+v", all)
 	}
 
-	// 3. Write using short-circuit borrowed host
+	// 3. Write using short-circuit `use` host
 	writeTargetFile := filepath.Join(dir, "written.txt")
-	writeReply := s.executeTerm(context.Background(), "write internal file "+filepath.ToSlash(writeTargetFile)+" --data 'written by borrowed transport'", termArgs{BytesLimit: 1 << 20})
+	writeReply := s.executeTerm(context.Background(), "write internal file "+filepath.ToSlash(writeTargetFile)+" --data 'written by use transport'", termArgs{BytesLimit: 1 << 20})
 	if len(writeReply.slots) != 1 || writeReply.slots[0].Code != 200 {
 		t.Fatalf("write failed: %+v", writeReply.slots)
 	}
 	content, err := os.ReadFile(writeTargetFile)
-	if err != nil || string(content) != "written by borrowed transport" {
+	if err != nil || string(content) != "written by use transport" {
 		t.Fatalf("written file content mismatch: %q, err: %v", string(content), err)
 	}
 	// `--dry-run` is a session-removal preview, not an ignored file flag. The rm
@@ -107,11 +107,11 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 		t.Fatalf("session list leaked a session after write: %+v", all)
 	}
 
-	// 4. A SHORT-CIRCUIT COMMAND runs on the same borrowed transport, and leaves no
+	// 4. A SHORT-CIRCUIT COMMAND runs on the same `use` transport, and leaves no
 	// session behind either. This is the half that used to be missing: `run use:<host>
 	// $1` answered shell_not_found because the target was only ever resolved as a
 	// channel handle.
-	runReply := s.executeTerm(context.Background(), "run use internal $1", termArgs{Args: []string{"echo borrowed-run-ok"}, BytesLimit: 1 << 20, TimeoutSeconds: 10})
+	runReply := s.executeTerm(context.Background(), "run use internal $1", termArgs{Args: []string{"echo use-run-ok"}, BytesLimit: 1 << 20, TimeoutSeconds: 10})
 	if len(runReply.slots) != 1 {
 		t.Fatalf("expected 1 slot for run use internal, got %d", len(runReply.slots))
 	}
@@ -119,7 +119,7 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if runSlot.Code != 200 {
 		t.Fatalf("run use internal returned HTTP %d: %s", runSlot.Code, runSlot.Body)
 	}
-	if !strings.Contains(runSlot.Body, "borrowed-run-ok") {
+	if !strings.Contains(runSlot.Body, "use-run-ok") {
 		t.Errorf("run output %q missing the command's output", runSlot.Body)
 	}
 	if runSlot.Headers["Exit-Code"] != "0" {
@@ -128,27 +128,30 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if runSlot.Headers["Host"] != "internal" {
 		t.Errorf("Host header = %q, want internal", runSlot.Headers["Host"])
 	}
-	// VISIBILITY (#255): `run use:<host>` leaves a per-host borrowed container so
+	// VISIBILITY (#255): `run use:<host>` leaves a per-host use container so
 	// an observer (and the WebUI) can see what the agent executed, but marks it
-	// `Borrowed = true` so ordinary reconnects skip it.
+	// `UseHost = true` so ordinary reconnects skip it.
 	all := sessMgr.ListAll()
 	if len(all) != 1 {
-		t.Fatalf("run use internal must record into exactly one borrowed container, got %d: %+v", len(all), all)
+		t.Fatalf("run use internal must record into exactly one use container, got %d: %+v", len(all), all)
 	}
-	if !all[0].Borrowed {
-		t.Errorf("borrowed container must carry Borrowed=true, got %+v", all[0])
+	if !all[0].UseHost {
+		t.Errorf("use container must carry UseHost=true, got %+v", all[0])
 	}
 	if all[0].Name != "use:internal" {
-		t.Errorf("borrowed container Name = %q, want use:internal", all[0].Name)
+		t.Errorf("use container Name = %q, want use:internal", all[0].Name)
 	}
 
-	// 5. A NON-ZERO EXIT is a failing slot fact, but the TERM request succeeded.
+	// 5. A NON-ZERO EXIT is a failing slot fact, but the TERM request succeeded. The
+	// CODE IS NOT 200: a command that printed nothing has no bytes to hand back, so the
+	// reply is 204 with the facts in headers — which is exactly what the same command
+	// answers on a channel. 200 here was this road's own rendering, not a promise.
 	command := "sh -c 'exit 3'"
 	if runtime.GOOS == "windows" {
 		command = "cmd.exe /c exit 3"
 	}
 	fail := s.runWithArgs("run use internal $1", command)
-	if len(fail.slots) != 1 || fail.slots[0].Code != 200 {
+	if len(fail.slots) != 1 || fail.slots[0].Code/100 != 2 {
 		t.Fatalf("a non-zero child exit must keep the request 2xx, got %+v", fail.slots)
 	}
 	if fail.slots[0].Headers["Exit-Code"] != "3" || fail.slots[0].Headers["Error-Code"] != "command_failed" {
@@ -227,47 +230,67 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	// STILL ONE CONTAINER: the bare-name form names the same host, so it records
 	// into the same `use:internal` window rather than creating a second one (#255).
 	if all := sessMgr.ListAll(); len(all) != 1 {
-		t.Fatalf("a second run on the same host must reuse the borrowed container, got %d: %+v", len(all), all)
+		t.Fatalf("a second run on the same host must reuse the use container, got %d: %+v", len(all), all)
 	}
 
-	// 10. A COMMAND THAT OUTLIVES THE WINDOW is 504 and says it was stopped: the
-	// process did not exit, and a short-circuit run has nowhere to keep it, so it was
-	// closed. A 200 here would read as "ran and printed nothing".
+	// 10. A COMMAND THAT OUTLIVES THE WINDOW ANSWERS THE SAME WAY A CHANNEL RUN DOES:
+	// 2xx, `Still-Running: true`, and a live channel. It used to answer 504 with
+	// `Status: stopped`, because this road killed the process — it killed the process
+	// because it handed back no handle to it, and it handed back no handle because the
+	// reply was rendered here instead of by the code every other run goes through. The
+	// answer to "the window expired" now depends on the command, not on which spelling
+	// reached the host: a still-running process is a fact, not an error.
+	// SILENT AND PORTABLE. A console's own output is GBK here, which the UTF-8 guard
+	// refuses unless the caller asks for it, so the command must print nothing — and
+	// `> nul` is not a device on every platform this suite runs on: it creates a file
+	// named `nul` in the working directory. Start-Sleep says nothing and exists where
+	// this test runs on Windows.
 	slow := `sh -c 'sleep 5'`
 	if runtime.GOOS == "windows" {
-		slow = `cmd.exe /c ping -n 6 127.0.0.1`
+		slow = `powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Seconds 5"`
 	}
 	timedOut := s.executeTerm(context.Background(), "run use internal $1", termArgs{Args: []string{slow}, BytesLimit: 1 << 20, TimeoutSeconds: 0.2})
-	if len(timedOut.slots) != 1 || timedOut.slots[0].Code != 504 {
-		t.Fatalf("a run that outlived its window should answer 504, got %+v", timedOut.slots)
+	if len(timedOut.slots) != 1 || timedOut.slots[0].Code/100 != 2 {
+		t.Fatalf("a run that outlived its window is not an error, got %+v", timedOut.slots)
 	}
-	if timedOut.slots[0].Headers["Status"] != "stopped" {
-		t.Errorf("Status header = %q, want stopped", timedOut.slots[0].Headers["Status"])
+	if got := timedOut.slots[0].Headers["Still-Running"]; got != "true" {
+		t.Errorf("Still-Running = %q, want true: the window expired while the command was running", got)
 	}
-	// The caller has to learn WHY and WHAT to do, not only that the run stopped:
-	// `Status: stopped` with no sentence left the reason to be guessed.
-	if hint := timedOut.slots[0].Headers["Hint"]; !strings.Contains(hint, "timeout") {
-		t.Errorf("a stopped run must name the window it ran out of; Hint = %q", hint)
+	// THE HANDLE IS WHY THE PROCESS MAY KEEP RUNNING: the caller can read it, or close
+	// it, with the same verbs a session's channel uses.
+	slowChannel := timedOut.slots[0].Headers["Channel"]
+	if slowChannel == "" {
+		t.Fatalf("a still-running short-circuit run must name its channel: %+v", timedOut.slots[0].Headers)
 	}
-	// A STOPPED RUN IS STILL RECORDED: the command ran on the host and was stopped,
-	// which is a fact an auditor needs. It does not create a second container.
+	if strings.TrimSpace(timedOut.slots[0].Headers["Status"]) != "" {
+		t.Errorf("a running command must not report a status: %+v", timedOut.slots[0].Headers)
+	}
+	// It is the container's channel, so it is visible where the container is.
 	if all := sessMgr.ListAll(); len(all) != 1 {
-		t.Fatalf("a stopped short-circuit run must not create another container, got %d: %+v", len(all), all)
+		t.Fatalf("a running short-circuit run must not create another container, got %d: %+v", len(all), all)
+	}
+	if cs := sessMgr.GetChildShell(slowChannel); cs == nil {
+		t.Errorf("the channel named in the reply is not in the registry: %q", slowChannel)
+	} else {
+		cs.TerminateShell() // leave nothing running behind this test
 	}
 
-	// 11. A NON-ZERO EXIT WITH NO OUTPUT still carries the reason in its reply.
+	// 11. A NON-ZERO EXIT WITH NO OUTPUT carries its reason in the headers, not in a
+	// sentence: a channel run answers the same command with the same 204, and the facts
+	// that matter (did it exit, with what) are Exit-Code, Error-Code and Status. The
+	// prose this used to add was a second way of saying what the headers already say.
 	emptyFail := s.runWithArgs("run use internal $1", `sh -c 'exit 7'`)
 	if runtime.GOOS == "windows" {
 		emptyFail = s.runWithArgs("run use internal $1", "cmd.exe /c exit 7")
 	}
-	if len(emptyFail.slots) != 1 || emptyFail.slots[0].Code != 200 {
+	if len(emptyFail.slots) != 1 || emptyFail.slots[0].Code/100 != 2 {
 		t.Fatalf("a non-zero child exit must keep the request 2xx, got %+v", emptyFail.slots)
 	}
 	if emptyFail.slots[0].Headers["Error-Code"] != "command_failed" || emptyFail.slots[0].Headers["Exit-Code"] != "7" {
 		t.Errorf("failing slot facts missing from response: %+v", emptyFail.slots[0])
 	}
-	if strings.TrimSpace(emptyFail.slots[0].Body) == "" {
-		t.Errorf("a failure with no output must explain itself; reply = %+v", emptyFail.slots[0])
+	if emptyFail.slots[0].Headers["Status"] != "exited" {
+		t.Errorf("a finished command must say it exited: %+v", emptyFail.slots[0].Headers)
 	}
 
 	// 12. A BAD FILTER IS REFUSED BEFORE THE COMMAND RUNS. The 400 used to arrive

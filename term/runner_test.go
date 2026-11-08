@@ -28,7 +28,7 @@ func (r *recorder) Handle(ctx context.Context, st term.Statement) []term.Slot {
 }
 
 // vocabulary is what a program embedding TERM/1 writes: its own verbs, declared
-// here, with nothing borrowed from termcp. That is the whole shape — a grammar is
+// here, with nothing `use` from termcp. That is the whole shape — a grammar is
 // an argument to New, never a default.
 func vocabulary() *term.Grammar {
 	return term.NewGrammar([]term.Op{
