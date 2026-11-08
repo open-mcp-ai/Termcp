@@ -213,6 +213,8 @@ func auditTargetType(path string) string {
 		return "role_policy"
 	case path == "/auth/default-group":
 		return "default_group"
+	case path == "/auth/oauth":
+		return "oauth_configuration"
 	default:
 		return "authentication"
 	}

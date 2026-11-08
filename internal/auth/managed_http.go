@@ -20,11 +20,15 @@ var loginHTML string
 //go:embed permissions.html
 var permissionsHTML string
 
+//go:embed oauth.html
+var oauthHTML string
+
 //go:embed page_theme.html
 var pageThemeHTML string
 
 var loginTemplate = template.Must(template.New("login").Parse(loginHTML + pageThemeHTML))
 var permissionsTemplate = template.Must(template.New("permissions").Parse(permissionsHTML + pageThemeHTML))
+var oauthTemplate = template.Must(template.New("oauth").Parse(oauthHTML + pageThemeHTML))
 
 const preloginCookie = "termcp_prelogin"
 
@@ -144,6 +148,9 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 		auditSink := m.auditSink
 		m.mu.Unlock()
 		r = r.WithContext(withAuditSink(r.Context(), auditSink))
+		if m.ServeOAuthMetadata(w, r) {
+			return
+		}
 		if r.URL.Path == "/auth/agents" || strings.HasPrefix(r.URL.Path, "/auth/agents/") {
 			http.NotFound(w, r)
 			return
@@ -172,7 +179,11 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 			ctx, done, status := m.admitToken(r)
 			if status != 0 {
 				if status == http.StatusUnauthorized {
-					w.Header().Set("WWW-Authenticate", `Bearer realm="termcp-mcp"`)
+					if challenge := m.oauthChallenge(r, true); challenge != "" {
+						w.Header().Set("WWW-Authenticate", challenge)
+					} else {
+						w.Header().Set("WWW-Authenticate", `Bearer realm="termcp-mcp"`)
+					}
 				}
 				authError(w, status, "MCP credential is invalid, disabled, or not allowed at this entrance")
 				return
@@ -202,6 +213,11 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 			if r.Method == "GET" && !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/auth/") && requestSurface(r) != "mcp" {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 			} else {
+				if requestSurface(r) == "mcp" {
+					if challenge := m.oauthChallenge(r, false); challenge != "" {
+						w.Header().Set("WWW-Authenticate", challenge)
+					}
+				}
 				authError(w, 401, "sign in or supply an MCP bearer token")
 			}
 			return
@@ -235,6 +251,16 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 		}
 		r = r.WithContext(ctx)
 		switch {
+		case r.URL.Path == "/auth/oauth":
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			if unsafeMethod(r.Method) {
+				m.audited(w, r, "oauth.update", m.oauthSettings)
+			} else {
+				m.oauthSettings(w, r)
+			}
 		case r.URL.Path == "/auth/unlock" && r.Method == "POST":
 			m.unlock(w, r)
 		case r.URL.Path == "/auth/mcp":
@@ -296,6 +322,8 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 			m.audited(w, r, auditAction(r), m.password)
 		case r.URL.Path == "/permissions" && (r.Method == "GET" || r.Method == "HEAD"):
 			m.page(w, r)
+		case r.URL.Path == "/oauth" && (r.Method == "GET" || r.Method == "HEAD"):
+			m.page(w, r)
 		case r.URL.Path == "/auth" && r.Method == "GET":
 			m.page(w, r)
 		default:
@@ -317,6 +345,8 @@ func (m *Managed) page(w http.ResponseWriter, r *http.Request) {
 		page := loginTemplate
 		if r.URL.Path == "/permissions" {
 			page = permissionsTemplate
+		} else if r.URL.Path == "/oauth" {
+			page = oauthTemplate
 		}
 		_ = page.Execute(w, struct {
 			Nonce  string
@@ -336,10 +366,11 @@ func (m *Managed) status(w http.ResponseWriter, r *http.Request) {
 	locked := m.sealed && (m.state.Version == 0 || m.vault.AuthenticationLocked())
 	existing := m.vault.AuthenticationInitialized()
 	m.mu.Unlock()
+	oauthEnabled := m.OAuthEnabled()
 	id, session, err := m.requestSession(r)
 	if err == nil {
 		_ = id
-		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": locked, "vault_ready": !locked})
+		authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": true, "actor": session.Actor, "csrf": session.CSRF, "expires_at": session.ExpiresAt, "locked": locked, "vault_ready": !locked, "oauth_enabled": oauthEnabled})
 		return
 	}
 	if len(r.Header.Values("Authorization")) > 0 {
@@ -352,7 +383,7 @@ func (m *Managed) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: preloginCookie, Value: csrf, Path: "/auth/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: 600})
-	authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": false, "can_setup": !configured && localSetup(r), "csrf": csrf, "migration_required": migration, "locked": locked, "encryption_initialized": existing})
+	authJSON(w, 200, map[string]any{"mode": "managed", "configured": configured, "authenticated": false, "can_setup": !configured && localSetup(r), "csrf": csrf, "migration_required": migration, "locked": locked, "encryption_initialized": existing, "oauth_enabled": oauthEnabled})
 }
 
 func (m *Managed) signIn(w http.ResponseWriter, r *http.Request) {

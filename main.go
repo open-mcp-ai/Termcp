@@ -85,6 +85,16 @@ func printVersion(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
+func mcpConnectionCountsByPrincipal(conns []mcpmod.Connection) map[string]int {
+	counts := make(map[string]int)
+	for _, connection := range conns {
+		if connection.PrincipalID != "" {
+			counts[connection.PrincipalID]++
+		}
+	}
+	return counts
+}
+
 func logHTTPMain(base string, port int, lanIPv4 []string) {
 	slog.Info(base + "/")
 	for _, ip := range lanIPv4 {
@@ -514,7 +524,20 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		}
 		return out
 	}
-	mcpSrv.SetConnectionsListener(webuiH.NotifyClientsChanged)
+	mcpSrv.SetConnectionsListener(func() {
+		if managed != nil {
+			managed.SetMCPConnectionCounts(mcpConnectionCountsByPrincipal(mcpSrv.Connections()))
+		}
+		webuiH.NotifyClientsChanged()
+	})
+	if managed != nil {
+		managed.SetMCPConnectionInvalidator(func(principalID, credentialID string) {
+			// Authority changes execute while Managed holds its state lock. Keep
+			// transport unregistration off that lock; the registry callback will
+			// publish the new count when the session is actually gone.
+			go mcpSrv.InvalidateConnections(principalID, credentialID)
+		})
+	}
 
 	if verifier != nil {
 		mainSrv.Handler = auth.Middleware(verifier, mux)

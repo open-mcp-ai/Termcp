@@ -18,9 +18,18 @@ import (
 // the answer can live and disagree.
 const NamespaceHeader = "X-Termcp-Namespace"
 
+// ClientModeHeader is display metadata supplied by a bridge. It is not an
+// authentication or authorization input; identity always comes from the
+// verified Actor attached by the auth middleware.
+const ClientModeHeader = "X-Termcp-Client-Mode"
+
+const ClientModeStdioBridge = "stdio-bridge"
+
 // callerNSKey carries the namespace a transport established for a caller, from
 // the context hook to the guard, the list filters and the handlers.
 type callerNSKey struct{}
+type mcpTransportKey struct{}
+type mcpClientModeKey struct{}
 
 // extensionMCPExecutionKey marks only the inner shell calls made by the
 // /ext/{name}/stream adapter after ext.get and the extension binding have been
@@ -33,6 +42,30 @@ type mcpStreamSessionKey struct{}
 type extensionMCPExecution struct {
 	namespace string
 	shellID   string
+}
+
+func withMCPTransport(ctx context.Context, transport string) context.Context {
+	return context.WithValue(ctx, mcpTransportKey{}, transport)
+}
+
+func mcpTransportFromContext(ctx context.Context) string {
+	transport, _ := ctx.Value(mcpTransportKey{}).(string)
+	return transport
+}
+
+func mcpClientModeFromContext(ctx context.Context) string {
+	mode, _ := ctx.Value(mcpClientModeKey{}).(string)
+	return mode
+}
+
+func withMCPTransportHandler(next http.Handler, transport string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := withMCPTransport(r.Context(), transport)
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get(ClientModeHeader)), ClientModeStdioBridge) {
+			ctx = context.WithValue(ctx, mcpClientModeKey{}, ClientModeStdioBridge)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func withExtensionMCPExecution(ctx context.Context, namespace, shellID string) context.Context {

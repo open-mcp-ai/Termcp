@@ -84,7 +84,7 @@
 
 默认启动后访问 `/login` 设置两份本机密码：登录密码与解密密码，后续分别修改；不输入用户名。登录校验记录、密钥保护、identity 引用及各对象 EDK 集中提交到 `<data-dir>/local-state/state.json`；主机密文正文保留在 `ssh_configs/<主机>/`，仅 catalog/auth 正文位于 `local-state/objects/`，每个对象独立使用随机 DEK。解密密码直接派生实例 MK，浏览器登录与保险库解锁分别管理。
 
-在 `/permissions` 选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；复制生成的 HTTP/SSE 或 stdio 配置即可接入。页面可只读预览 DSL 请求缺少哪些动作。Token 仅展示一次，摘要保存在加密私有状态中；stdio 使用 `TERMCP_MCP_TOKEN`。重启后先登录，再在 `/auth` 输入解密密码解锁。OAuth 仍为未来计划。
+在 `/permissions` 选择或新建权限组，配置动作和主机范围，再添加主体并签发 MCP token；复制生成的 HTTP/SSE 或 stdio 配置即可接入。页面可只读预览 DSL 请求缺少哪些动作。Token 仅展示一次，摘要保存在加密私有状态中；stdio 使用 `TERMCP_MCP_TOKEN`。重启后先登录，再在 `/auth` 输入解密密码解锁。外部 OAuth Authorization Server 可通过 Termcp 的 resource-server 模式保护远程 MCP，在**权限管理 → OAuth 接入**中配置，保存即生效并加密持久化，无需 OAuth 启动参数或环境变量；Termcp 自有授权服务器和 DCR 仍未实现。详见 [`docs/design/oauth-resource-server.md`](./docs/design/oauth-resource-server.md)。
 
 ### 0 · AI 安装
 

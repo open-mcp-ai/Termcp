@@ -1,6 +1,6 @@
 # 多 stdio 与单 daemon 的协商：决策及遗漏项
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
+**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；stdio OAuth、自有授权服务和本文下方 P1/候选端点仍不代表已实现，以实现文档和 API 文档为准。
 
 **2026-11-05 范围收敛**：不新增 AgentGrant、多用户或 canonical origin/可信代理。Bridge 继续使用认证成功的 MCP 探测；必须保证未认证请求不能延长 daemon 空闲期限。相关开发由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
 

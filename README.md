@@ -96,7 +96,11 @@ configure actions and host scope, add a principal and issue its MCP token. The p
 can preview a DSL request without executing it and explain missing grants. Tokens are shown once;
 only their digests persist in encrypted private state. stdio uses
 `TERMCP_MCP_TOKEN`. After restart, sign in and unlock at
-`/auth` before MCP clients reconnect. OAuth remains future work.
+`/auth` before MCP clients reconnect. An external OAuth authorization server
+can also protect Termcp through the resource-server mode. Configure it in
+**Permissions → OAuth connections**; settings are encrypted and apply immediately,
+with no OAuth startup flags or environment variables. Termcp-owned authorization and DCR remain future work. See
+[`docs/design/oauth-resource-server.md`](./docs/design/oauth-resource-server.md).
 
 ### 0 · AI install
 

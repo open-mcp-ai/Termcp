@@ -165,18 +165,18 @@ func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 
 // SSEHandler exposes the MCP SSE endpoint for mounting on a shared mux.
 func (s *Server) SSEHandler() http.Handler {
-	return s.sseServer.SSEHandler()
+	return withMCPTransportHandler(s.sseServer.SSEHandler(), ConnectionTransportSSE)
 }
 
 // MessageHandler exposes the MCP JSON-RPC message endpoint for mounting on a shared mux.
 func (s *Server) MessageHandler() http.Handler {
-	return s.authenticatedTransport(s.sseServer.MessageHandler(), true)
+	return s.authenticatedTransport(withMCPTransportHandler(s.sseServer.MessageHandler(), ConnectionTransportSSE), true)
 }
 
 // StreamableHTTPHandler exposes the MCP streamable-HTTP endpoint (POST/GET/DELETE on one path).
 // Mount at "/stream" (or another path with a matching wrapper); clients use e.g. http://host:port/stream.
 func (s *Server) StreamableHTTPHandler() http.Handler {
-	return s.authenticatedTransport(s.streamServer, false)
+	return s.authenticatedTransport(withMCPTransportHandler(s.streamServer, ConnectionTransportStreamableHTTP), false)
 }
 
 // Start begins serving MCP over SSE on the given address.

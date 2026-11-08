@@ -78,4 +78,11 @@ func (m *Managed) cancelCredentialLocked(id string) {
 	for _, cancel := range m.background[id] {
 		cancel()
 	}
+	if m.mcpConnectionInvalidator != nil {
+		principalID := ""
+		if token, ok := m.state.Tokens[id]; ok {
+			principalID = token.PrincipalID
+		}
+		m.mcpConnectionInvalidator(principalID, id)
+	}
 }

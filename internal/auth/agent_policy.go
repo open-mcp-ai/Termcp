@@ -155,19 +155,32 @@ func (m *Managed) ApprovalContextForCredential(ctx context.Context, principalID,
 		return nil, errors.New("configuration vault is locked")
 	}
 	t, ok := m.state.Tokens[credentialID]
-	if !ok || t.PrincipalID != principalID {
+	if ok && t.PrincipalID == principalID {
+		actor, valid := m.tokenActorLocked(t)
+		if !valid || actor.Role != RoleAgent {
+			return nil, errors.New("approval principal is disabled")
+		}
+		permitted := slices.Contains(m.state.Permissions[RoleAgent], "mcp")
+		if !permitted {
+			return nil, errors.New("Agent MCP access is disabled")
+		}
+		ctx = m.withAgentPolicy(ctx, actor.ID, credentialID)
+		ctx = m.withBackgroundWork(ctx, actor.ID, credentialID)
+		ctx = context.WithValue(ctx, actorKey{}, actor)
+		ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
+		return ctx, nil
+	}
+	session, ok := m.oauthSessions[credentialID]
+	if !ok || session.principal != principalID || !session.expires.After(m.now().UTC()) {
 		return nil, errors.New("approval credential is unavailable")
 	}
-	actor, ok := m.tokenActorLocked(t)
-	if !ok || actor.Role != RoleAgent {
+	agent, ok := m.state.Agents[principalID]
+	if !ok || !agent.Enabled || !slices.Contains(m.state.Permissions[RoleAgent], "mcp") {
 		return nil, errors.New("approval principal is disabled")
 	}
-	permitted := slices.Contains(m.state.Permissions[RoleAgent], "mcp")
-	if !permitted {
-		return nil, errors.New("Agent MCP access is disabled")
-	}
-	ctx = m.withAgentPolicy(ctx, actor.ID, credentialID)
-	ctx = m.withBackgroundWork(ctx, actor.ID, credentialID)
+	actor := Actor{ID: agent.ID, Username: agent.Name, Role: RoleAgent}
+	ctx = m.withOAuthAgentPolicy(ctx, actor.ID, credentialID)
+	ctx = m.withOAuthBackgroundWork(ctx, actor.ID, credentialID, session.expires)
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
 	return ctx, nil

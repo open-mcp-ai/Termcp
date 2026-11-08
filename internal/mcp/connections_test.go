@@ -163,7 +163,15 @@ func TestConnRegistryIsSafeUnderConcurrentUse(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			s.connections.add(fakeSession{id: "s1"})
+			owner := connectionOwner{
+				PrincipalID:  "agent-1",
+				AgentName:    "agent one",
+				CredentialID: "credential-1",
+				Transport:    ConnectionTransportStreamableHTTP,
+				ClientMode:   ClientModeStdioBridge,
+			}
+			s.connections.add(fakeSession{id: "s1"}, owner)
+			s.connections.noteOwner("s1", owner)
 			s.connections.noteNamespace("s1", "ns:alice")
 			s.connections.list()
 			s.connections.count()

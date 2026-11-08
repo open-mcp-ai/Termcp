@@ -139,15 +139,18 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/groups/{id}/delete-preview` | POST | Preview members, credentials, requests and work affected by deletion |
 | `/auth/group-presets` | GET | Versioned role templates |
 | `/auth/default-group` | GET / PUT | Read or change the default group with its current access revision |
-| `/auth/principals` | GET / POST | List Agents with credential/request/work counts, or create one using name and optional group_id; default follows the default group. Credentials require explicit issue_token:true |
+| `/auth/principals` | GET / POST | List Agents with credential, live MCP connection, request, and work counts, or create one using name and optional group_id; default follows the default group. Credentials require explicit issue_token:true |
 | `/auth/principals/{id}` | PATCH / DELETE | Update enabled using the principal revision, or delete after a current preview and plan revision |
 | `/auth/principals/{id}/group` | PUT | Change the permission group using group_id and principal revision; empty group_id follows the default |
-| `/auth/principals/{id}/delete-preview` | POST | Preview the Agent's group, credentials, active requests and background work before deletion |
+| `/auth/principals/{id}/delete-preview` | POST | Preview the Agent's group, credentials, live MCP connections, active requests and background work before deletion |
 | `/auth/tokens` | GET / POST | List current and historical Tokens, or issue the one current Token for an optional principal_id; omitted principal_id selects the signed-in Admin. Existing active Token returns 409 |
 | `/auth/tokens/{id}/rotate` | POST | Atomically revoke the active Token and issue its replacement; the old secret stops authenticating before the response |
 | `/auth/tokens/{id}` | DELETE | Revoke the active Token, cancel its requests, and retain the record in history |
 | `/auth/tokens/history` | DELETE | Clear revoked Token history for `principal_id`; the current Token is never removed |
+| `/oauth` | GET / HEAD | Admin OAuth settings page, also linked from Permissions |
+| `/auth/oauth` | GET / PUT | Read or save external OAuth settings in encrypted account state; PUT requires the current settings revision and CSRF |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
+| `/.well-known/oauth-protected-resource` | GET | RFC 9728 protected-resource metadata; root and path-specific `/stream` and `/sse` forms |
 
 Anonymous `/auth/status` reports `can_setup=true` only while no login is
 configured and the request passes the loopback peer/Host checks. Once configured,
@@ -199,10 +202,25 @@ restart. Legacy states containing multiple active Tokens migrate by keeping the
 newest and revoking the others into history.
 Agent session namespaces derive from verified IDs; caller headers cannot change
 them. Transport and extension-stream session IDs are bound to the verified
-principal and credential that initialized them.
+principal and credential that initialized them. `/auth/principals` exposes
+`active_mcp_connections` as the number of live MCP sessions owned by that
+verified principal; it is distinct from `active_requests`, which counts
+in-flight HTTP work. The value is process-local and disappears on restart.
 Agent operation and host checks are described below; these do not provide an
 operating-system sandbox.
-OAuth is future work. `--disable-auth` explicitly selects open mode.
+OAuth resource-server mode is available for external authorization servers.
+Configure it at `/permissions` → `/oauth`; the settings are encrypted and apply
+immediately without OAuth flags or environment variables. `GET /auth/oauth`
+returns `settings` with `enabled`, `revision`, `issuer`, `resource`, `jwks_url`,
+`agent_claim`, and `scope`. `PUT /auth/oauth` replaces these values using the
+current revision; stale updates return 409. Changes end old OAuth requests and
+connections while static tokens remain valid.
+It provides Protected Resource Metadata, an RFC 6750 `resource_metadata`
+challenge, JWKS JWT verification, issuer/audience/resource/scope checks, and a
+`termcp_agent_id` claim mapped to an existing Agent. It does not implement a
+Termcp-owned authorization server, `/authorize`, `/token`, refresh-token
+issuance, DCR, or CIMD; those remain with the external authorization server.
+`--disable-auth` explicitly selects open mode.
 
 ### Agent permission groups
 
@@ -1929,12 +1947,17 @@ Response 200:
 Reports who is attached to this instance — the question "who is driving it right
 now?". Two lists, because they are two different things:
 
-- `mcp` — MCP clients (agents). `name`/`version` are what the client announced in
-  its `initialize` request and are empty when it announced nothing (the MCP spec
-  makes `clientInfo` optional); `namespace` is the claim it made with
-  `X-Termcp-Namespace`, when it made one; `session_id` is the transport session
-  id, not a termcp session id. Rows come from mcp-go's session hooks, so a row
-  exists exactly as long as the client holds a live MCP session.
+- `mcp` — MCP clients (agents). `principal_id`, `agent_name`, and
+  `credential_id` come from verified authentication and never from client
+  metadata; `credential_id` is the token record ID, not the bearer secret.
+  `name`/`version` are what the client announced in its `initialize` request and
+  are empty when it announced nothing (the MCP spec makes `clientInfo`
+  optional); `transport` identifies `streamable_http` or `sse`; `client_mode`
+  is optional display metadata (`stdio-bridge` for a stdio bridge);
+  `namespace` is the claim it made with `X-Termcp-Namespace`, when it made one;
+  `session_id` is the transport session id, not a termcp session id. Rows come
+  from mcp-go's session hooks, so a row exists exactly as long as the client
+  holds a live MCP session.
 - `webui` — browser tabs holding the Web UI socket: the address they came from
   (port stripped), their user agent, how many sessions they are streaming, and
   when they attached. A closed tab disappears. Plain HTTP callers are not listed:
@@ -1951,7 +1974,9 @@ Response 200:
 {
   "mcp": [
     { "session_id": "7f3c...", "name": "claude-ai", "version": "0.1.0",
-      "namespace": "ns:alice", "connected_at": "2026-10-17T08:12:04Z" }
+      "principal_id": "agent-…", "agent_name": "alice", "credential_id": "credential-…",
+      "transport": "streamable_http", "client_mode": "stdio-bridge",
+      "namespace": "ns:agent-…", "connected_at": "2026-10-17T08:12:04Z" }
   ],
   "webui": [
     { "id": "1", "addr": "10.0.0.5", "user_agent": "Mozilla/5.0 ...",

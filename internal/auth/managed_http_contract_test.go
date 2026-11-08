@@ -20,6 +20,9 @@ func TestManagedAuthManagementRoutesRejectWrongCredentialShape(t *testing.T) {
 		{"POST", "/auth/logout"},
 		{"GET", "/auth"},
 		{"GET", "/permissions"},
+		{"GET", "/oauth"},
+		{"GET", "/auth/oauth"},
+		{"PUT", "/auth/oauth"},
 		{"GET", "/auth/access"},
 		{"POST", "/auth/access/preview"},
 		{"GET", "/auth/permissions"},
@@ -50,7 +53,7 @@ func TestManagedAuthManagementRoutesRejectWrongCredentialShape(t *testing.T) {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			anonymous := managedRequest(t, h, route.method, route.path, "", "", "")
 			wantAnonymous := http.StatusUnauthorized
-			if route.method == http.MethodGet && (route.path == "/auth" || route.path == "/permissions") {
+			if route.method == http.MethodGet && (route.path == "/auth" || route.path == "/permissions" || route.path == "/oauth") {
 				wantAnonymous = http.StatusSeeOther
 			}
 			if anonymous.Code != wantAnonymous {
@@ -88,8 +91,10 @@ func TestManagedAuthReadAndWriteRoutesReachHandlersOnlyAfterAdmission(t *testing
 		"/auth/principals",
 		"/auth/tokens",
 		"/auth/permissions",
+		"/auth/oauth",
 		"/auth",
 		"/permissions",
+		"/oauth",
 	} {
 		t.Run("GET "+path, func(t *testing.T) {
 			w := managedRequest(t, h, http.MethodGet, path, "", cookie, "")

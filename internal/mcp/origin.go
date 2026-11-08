@@ -42,14 +42,19 @@ func withRequestOrigin(ctx context.Context, r *http.Request) context.Context {
 	return ctx
 }
 
-// withRequestContext is what both transports install: the request's origin and
-// its namespace claim, in one function. mcp-go's context hook is a single slot
-// per transport (WithHTTPContextFunc replaces rather than stacks), so the two
-// derivations are composed here instead of being passed one after the other —
-// the second call would silently drop the first, which is a failure mode with no
-// symptom until a caller asks where this instance is or which namespace it owns.
+// withRequestContext is what both transports install: the request's origin, its
+// namespace claim, and the optional display-only client mode, in one function.
+// mcp-go's context hook is a single slot per transport (WithHTTPContextFunc
+// replaces rather than stacks), so the derivations are composed here instead of
+// being passed one after the other — the second call would silently drop the
+// first, which is a failure mode with no symptom until a caller asks where this
+// instance is, which namespace it owns, or how the bridge is described.
 func withRequestContext(ctx context.Context, r *http.Request) context.Context {
-	return withCallerNamespace(withRequestOrigin(ctx, r), r)
+	ctx = withCallerNamespace(withRequestOrigin(ctx, r), r)
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get(ClientModeHeader)), ClientModeStdioBridge) {
+		ctx = context.WithValue(ctx, mcpClientModeKey{}, ClientModeStdioBridge)
+	}
+	return ctx
 }
 
 // originFor resolves the origin to advertise to this particular caller: the

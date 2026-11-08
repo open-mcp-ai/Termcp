@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -112,6 +113,7 @@ type managedState struct {
 	Groups         map[string]permissionGroup `json:"groups,omitempty"`
 	DefaultGroupID string                     `json:"default_group_id,omitempty"`
 	AccessRevision uint64                     `json:"access_revision,omitempty"`
+	OAuth          OAuthSettings              `json:"oauth,omitempty"`
 }
 
 type sessionClaims struct {
@@ -121,7 +123,9 @@ type sessionClaims struct {
 }
 
 // Managed owns the local owner login and MCP credentials encrypted by the shared vault.
-// Browser logins are memory-only and bound to this run. No OAuth is implemented.
+// Browser logins are memory-only and bound to this run. OAuth is supported only
+// as an external authorization-server resource profile; this type does not issue
+// OAuth codes or tokens.
 type Managed struct {
 	// MCPIdleTimeout is set by the server before serving requests.
 	MCPIdleTimeout  time.Duration
@@ -148,6 +152,13 @@ type Managed struct {
 	webSigningKey   string
 	verifyLoginHash func(string, string) bool // configured before serving
 	webBootID       string                    // memory-only; vault unlock does not restore browser identity
+	// mcpConnectionCounts is a volatile snapshot updated by the composition
+	// root when the MCP connection registry changes. It is deliberately not
+	// persisted: a live transport ends with the process.
+	mcpConnectionCounts      atomic.Pointer[map[string]int]
+	mcpConnectionInvalidator func(principalID, credentialID string)
+	oauth                    *oauthVerifier
+	oauthSessions            map[string]oauthSession
 }
 
 func randomSecret() (string, error) {

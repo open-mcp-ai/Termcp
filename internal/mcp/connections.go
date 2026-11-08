@@ -1,12 +1,26 @@
 package mcp
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
+
+const (
+	ConnectionTransportStreamableHTTP = "streamable_http"
+	ConnectionTransportSSE            = "sse"
+)
+
+type connectionOwner struct {
+	PrincipalID  string
+	AgentName    string
+	CredentialID string
+	Transport    string
+	ClientMode   string
+}
 
 // Connection is one MCP client currently attached to this instance.
 //
@@ -24,6 +38,16 @@ type Connection struct {
 	// MCP spec allows: clientInfo is optional.
 	Name    string `json:"name"`
 	Version string `json:"version"`
+	// PrincipalID, AgentName and CredentialID come from the authenticated
+	// request, never from clientInfo or namespace. CredentialID is the stable
+	// token record ID, never the bearer secret or its digest.
+	PrincipalID  string `json:"principal_id,omitempty"`
+	AgentName    string `json:"agent_name,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+	// Transport is termcp's HTTP transport kind. ClientMode is optional display
+	// metadata supplied by a bridge and is never used for authorization.
+	Transport  string `json:"transport,omitempty"`
+	ClientMode string `json:"client_mode,omitempty"`
 	// Namespace is the caller's namespace claim, when it made one. Empty is the
 	// instance owner, which is the ordinary case.
 	Namespace string `json:"namespace,omitempty"`
@@ -54,7 +78,12 @@ type connRegistry struct {
 	// session after successful initialization"), so the namespace claim — which
 	// rides the initialize request — arrives before there is a row to put it on.
 	// Without this the claim was dropped and every client looked unnamespaced.
-	pending map[string]string
+	pending map[string]pendingConnection
+}
+
+type pendingConnection struct {
+	namespace string
+	owner     connectionOwner
 }
 
 // connEntry keeps the mcp-go session object rather than a copy of its fields.
@@ -67,26 +96,33 @@ type connRegistry struct {
 type connEntry struct {
 	session     mcpserver.ClientSession
 	namespace   string
+	owner       connectionOwner
 	connectedAt time.Time
 	seq         uint64
 }
 
 func newConnRegistry() *connRegistry {
-	return &connRegistry{conns: make(map[string]*connEntry), pending: make(map[string]string)}
+	return &connRegistry{conns: make(map[string]*connEntry), pending: make(map[string]pendingConnection)}
 }
 
 // add records a newly registered session. It runs before the client has said
 // anything, so only the session itself is known here.
-func (r *connRegistry) add(s mcpserver.ClientSession) {
+func (r *connRegistry) add(s mcpserver.ClientSession, owner connectionOwner) {
 	if s == nil || s.SessionID() == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	pending := r.pending[s.SessionID()]
+	if owner.PrincipalID == "" {
+		owner = pending.owner
+	}
+	namespace := pending.namespace
 	r.seq++
 	r.conns[s.SessionID()] = &connEntry{
 		session:     s,
-		namespace:   r.pending[s.SessionID()],
+		namespace:   namespace,
+		owner:       owner,
 		connectedAt: time.Now().UTC(),
 		seq:         r.seq,
 	}
@@ -101,6 +137,7 @@ func (r *connRegistry) remove(s mcpserver.ClientSession) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.conns, s.SessionID())
+	delete(r.pending, s.SessionID())
 }
 
 // noteNamespace records the namespace the client claimed in its initialize
@@ -127,13 +164,36 @@ func (r *connRegistry) noteNamespace(sessionID, namespace string) {
 		e.namespace = namespace
 		return
 	}
-	// ponytail: hard cap instead of a sweeper; three in flight is already more
-	// than any real client count, and the cost of being wrong is one missing
-	// namespace label, not a wrong one.
-	if len(r.pending) >= 64 {
-		r.pending = make(map[string]string)
+	pending := r.pending[sessionID]
+	pending.namespace = namespace
+	r.storePendingLocked(sessionID, pending)
+}
+
+// noteOwner records verified identity facts that can arrive after mcp-go has
+// registered the session. The owner is copied under the lock; readers never
+// consult mcp-go's request context or trust client-supplied identity fields.
+func (r *connRegistry) noteOwner(sessionID string, owner connectionOwner) {
+	if sessionID == "" || owner.PrincipalID == "" {
+		return
 	}
-	r.pending[sessionID] = namespace
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e := r.conns[sessionID]; e != nil {
+		e.owner = owner
+		return
+	}
+	pending := r.pending[sessionID]
+	pending.owner = owner
+	r.storePendingLocked(sessionID, pending)
+}
+
+func (r *connRegistry) storePendingLocked(sessionID string, pending pendingConnection) {
+	// Hard cap instead of a sweeper: an entry is only created by an initialize
+	// and consumed by registration. Anything left is a dropped initializer.
+	if len(r.pending) >= 64 {
+		r.pending = make(map[string]pendingConnection)
+	}
+	r.pending[sessionID] = pending
 }
 
 // list returns every live connection, oldest first.
@@ -156,10 +216,15 @@ func (r *connRegistry) list() []Connection {
 	out := make([]Connection, 0, len(entries))
 	for _, e := range entries {
 		c := Connection{
-			SessionID:   e.session.SessionID(),
-			Namespace:   e.namespace,
-			ConnectedAt: e.connectedAt.Format(time.RFC3339),
-			seq:         e.seq,
+			SessionID:    e.session.SessionID(),
+			Namespace:    e.namespace,
+			PrincipalID:  e.owner.PrincipalID,
+			AgentName:    e.owner.AgentName,
+			CredentialID: e.owner.CredentialID,
+			Transport:    e.owner.Transport,
+			ClientMode:   e.owner.ClientMode,
+			ConnectedAt:  e.connectedAt.Format(time.RFC3339),
+			seq:          e.seq,
 		}
 		if withInfo, ok := e.session.(mcpserver.SessionWithClientInfo); ok {
 			info := withInfo.GetClientInfo()
@@ -198,6 +263,26 @@ func (s *Server) Connections() []Connection {
 		return []Connection{}
 	}
 	return s.connections.list()
+}
+
+// InvalidateConnections removes live MCP sessions belonging to a revoked
+// credential or disabled Agent. The auth layer only knows token records; this
+// method translates that authority change into mcp-go unregister events so the
+// Web UI and active counts observe the same lifecycle as a transport disconnect.
+func (s *Server) InvalidateConnections(principalID, credentialID string) {
+	if s == nil || s.mcpServer == nil || principalID == "" && credentialID == "" {
+		return
+	}
+	for _, connection := range s.Connections() {
+		matches := credentialID != "" && connection.CredentialID == credentialID
+		if credentialID == "" {
+			matches = principalID != "" && connection.PrincipalID == principalID
+		}
+		if !matches {
+			continue
+		}
+		s.mcpServer.UnregisterSession(context.Background(), connection.SessionID)
+	}
 }
 
 // SetConnectionsListener installs a callback fired whenever a client attaches or

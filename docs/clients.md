@@ -19,7 +19,19 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 - stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
 - 远端实例或反向代理部署使用 `stdio <完整 HTTP(S) URL>`；`daemon stdio` 也接收完整 endpoint，因此会保留 HTTPS、端口和 `/termcp` 一类部署前缀。自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
 - 服务端仅保存摘要，不能再次查看原 Token。轮换使用原子替换，旧 Token 立即失效；撤销会移入历史，清空历史不会影响当前 Token。停用 Agent 或权限组会断开受影响 Token 的连接。
-- daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。OAuth 不在此版本实现。
+- daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。外部 OAuth Authorization Server 可通过 resource-server 模式保护 MCP；Termcp 自有授权服务器不在此版本实现。
+
+### Claude Code / Codex OAuth
+
+准备好外部 Authorization Server 后，在**权限管理 → OAuth 接入**
+（`/permissions` → `/oauth`）填写授权服务器、Termcp 公开访问地址和 JWKS 地址。
+保存即生效，配置加密保存并在重启后保留；无需增加启动参数或环境变量。Termcp 会发布
+Protected Resource Metadata，验证 access token 的签名、issuer、audience/resource、
+scope 和 `termcp_agent_id`，然后把请求映射到现有 Agent 权限组。外部 Authorization
+Server 负责 Claude/Codex 的 DCR/CIMD、PKCE、授权页面、access token 和 refresh token。
+
+客户端使用公开的 Streamable HTTP URL，例如 `https://termcp.example.com/stream`。
+完整配置、claim 和限制见 [`design/oauth-resource-server.md`](./design/oauth-resource-server.md)。
 
 ## 按客户端接入
 
@@ -122,7 +134,7 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 WebUI 自动处理。首次设置只接受 loopback 连接及 loopback Host；远程部署可先通过
 SSH 本地转发设置。`/api.md` 仍公开。API-only 构建同样提供必要的登录/设置入口。
 
-当前已实现本机密码登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、三种效果（禁止/允许/需审批）、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。OAuth、多个权限组继承和专属词汇尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
+当前已实现本机密码登录、角色入口权限、权限组/主体/凭据生命周期和逐操作 MCP 策略。权限管理页支持预置模板、三种效果（禁止/允许/需审批）、动作与参数条件、主机范围、主体绑定、token 签发/撤销、只读 DSL 预览和结构化审计。Cookie 写请求需要 CSRF，显式 MCP Bearer 不需要；Agent bearer 只能进入 MCP。外部 OAuth Authorization Server 的 resource-server 模式已支持；多个权限组继承、AgentGrant 和 Termcp 自有授权服务器尚未实现。无凭据 MCP 连接不能访问托管实例。未配置的 stdio daemon 有 10 分钟的初始化宽限，桥会报告设置地址并结束失败的接入，不在 MCP stdin 读取密码。手动 `daemon start` 默认常驻。
 
 显式传入 `--auth-token` / `--auth-hash` 时，继续使用旧共享凭据模式，行为如下：
 

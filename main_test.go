@@ -10,6 +10,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
+	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
 )
 
 func TestBuildLogHandlerWritesManualInstanceLog(t *testing.T) {
@@ -270,6 +271,18 @@ func TestBridgeKeepAlive(t *testing.T) {
 		if got != c.want {
 			t.Errorf("bridgeKeepAlive(%v, %q, %v) = %v, want %v", c.ensure, c.arg, c.timeout, got, c.want)
 		}
+	}
+}
+
+func TestMCPConnectionCountsByPrincipal(t *testing.T) {
+	counts := mcpConnectionCountsByPrincipal([]mcpmod.Connection{
+		{PrincipalID: "agent-a", CredentialID: "token-a"},
+		{PrincipalID: "agent-a", CredentialID: "token-a"},
+		{PrincipalID: "agent-b", CredentialID: "token-b"},
+		{PrincipalID: "", CredentialID: "browser-session"},
+	})
+	if counts["agent-a"] != 2 || counts["agent-b"] != 1 || len(counts) != 2 {
+		t.Fatalf("connection counts = %#v, want agent-a=2 and agent-b=1", counts)
 	}
 }
 

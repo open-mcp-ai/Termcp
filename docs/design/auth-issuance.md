@@ -1,6 +1,6 @@
 # 人与 Agent 的身份与凭据签发机制
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
+**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；本文下方保留的自有 OAuth 授权服务器/P1 候选端点不代表已经实现，以实现文档和 API 文档为准。
 
 **2026-11-05 范围收敛**：AgentGrant、多用户/RoleBinding、OAuth、canonical origin/可信代理、退出所有设备和密码恢复不进入当前实现。权限目录以 #252 为唯一来源，认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
 

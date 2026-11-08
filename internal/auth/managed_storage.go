@@ -141,6 +141,9 @@ func validateState(s managedState, legacy bool) error {
 		}
 		return nil
 	}
+	if _, err := normalizeOAuthSettings(s.OAuth); err != nil {
+		return err
+	}
 	return validateCredentials(s)
 }
 
@@ -205,6 +208,7 @@ func (m *Managed) loadLocked() error {
 		return nil
 	}
 	m.state = state
+	m.applyOAuthSettingsLocked()
 	if m.markerDirty {
 		if err := m.writeMarker(); err != nil {
 			return err
@@ -230,6 +234,7 @@ func (m *Managed) save(state managedState, initial bool) error {
 		return err
 	}
 	m.state = state
+	m.applyOAuthSettingsLocked()
 	m.sealed = true
 	m.legacy = nil
 	if err != nil {

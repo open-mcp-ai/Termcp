@@ -216,3 +216,5 @@ Windows DPAPI 或 Linux Secret Service。系统 provider 不可用不影响密�
 ### MCP 客户端凭据
 
 `--mcp-token <token>` / `TERMCP_MCP_TOKEN` 用于 `stdio`、`daemon stdio` 连接 managed 实例。建议放在 MCP 配置的 `env` 中。它与旧服务端 `--auth-token` / `--auth-hash` 互斥，不会配置或覆盖 daemon 的服务端认证，也不会传入子 daemon。先在权限管理页配置权限组和主体并签发 token；令牌不能初始化管理员或解锁 Main Key。
+
+OAuth 接入在**权限管理 → OAuth 接入**（`/oauth`）配置，保存后立即生效并加密持久化，无需 OAuth 启动参数或环境变量。详见 [OAuth 配置](design/oauth-resource-server.md)。

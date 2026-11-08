@@ -1,6 +1,6 @@
 # MCP 接入方式盘点与认证交互
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。本文下方保留原方案讨论，其中 P1/候选端点不代表额外已实现能力；以实现文档和 API 文档为准。OAuth 仍未实现。
+**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；本文下方保留的自有授权服务、stdio OAuth 和 P1/候选端点不代表额外已实现能力，以实现文档和 API 文档为准。
 
 **2026-11-05 范围收敛**：OAuth、AgentGrant、多用户和 canonical origin/可信代理延期；桥继续使用认证过的 MCP 探测，但必须修复未认证请求延长 daemon 空闲期的问题。认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
 

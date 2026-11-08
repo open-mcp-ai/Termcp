@@ -3,16 +3,44 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/auth"
 )
 
-type transportOwner struct{ principal, credential string }
+type transportOwner struct {
+	principal    string
+	credential   string
+	principalID  string
+	agentName    string
+	credentialID string
+	transport    string
+	clientMode   string
+}
 
-func (s *Server) rememberTransport(ctx context.Context, id string) {
+func (s *Server) rememberTransport(ctx context.Context, id string) connectionOwner {
 	if actor, ok := auth.ActorFromContext(ctx); ok && id != "" {
-		s.transportOwners.Store(id, transportOwner{actor.ID, auth.CredentialIDFromContext(ctx)})
+		credential := auth.CredentialIDFromContext(ctx)
+		credentialID := strings.TrimPrefix(credential, "token:")
+		owner := transportOwner{
+			principal:    actor.ID,
+			credential:   credential,
+			principalID:  actor.ID,
+			agentName:    actor.Username,
+			credentialID: credentialID,
+			transport:    mcpTransportFromContext(ctx),
+			clientMode:   mcpClientModeFromContext(ctx),
+		}
+		s.transportOwners.Store(id, owner)
+		return connectionOwner{
+			PrincipalID:  owner.principalID,
+			AgentName:    owner.agentName,
+			CredentialID: owner.credentialID,
+			Transport:    owner.transport,
+			ClientMode:   owner.clientMode,
+		}
 	}
+	return connectionOwner{}
 }
 
 // authenticatedTransport prevents a valid credential from adopting another
@@ -39,5 +67,9 @@ func (s *Server) authenticatedTransport(next http.Handler, sse bool) http.Handle
 
 func (s *Server) transportOwnedBy(id, principal, credential string) bool {
 	owner, ok := s.transportOwners.Load(id)
-	return ok && owner.(transportOwner) == (transportOwner{principal: principal, credential: credential})
+	if !ok {
+		return false
+	}
+	t := owner.(transportOwner)
+	return t.principal == principal && t.credential == credential
 }

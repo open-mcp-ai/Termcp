@@ -85,8 +85,8 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 			// namespace claim arrives in that same request's context.
 			OnRegisterSession: []mcpserver.OnRegisterSessionHookFunc{
 				func(ctx context.Context, session mcpserver.ClientSession) {
-					s.rememberTransport(ctx, session.SessionID())
-					s.connections.add(session)
+					owner := s.rememberTransport(ctx, session.SessionID())
+					s.connections.add(session, owner)
 					s.notifyConnectionsChanged()
 				},
 			},
@@ -103,8 +103,10 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 					// which is how a per-request fact (the namespace claim) is tied
 					// to a session-level row.
 					if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
-						s.rememberTransport(ctx, session.SessionID())
+						owner := s.rememberTransport(ctx, session.SessionID())
+						s.connections.noteOwner(session.SessionID(), owner)
 						s.connections.noteNamespace(session.SessionID(), callerNamespace(ctx))
+						s.notifyConnectionsChanged()
 					}
 				},
 			},

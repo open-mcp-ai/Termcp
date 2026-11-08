@@ -76,19 +76,21 @@ type principalView struct {
 	agentRecord
 	CredentialCount       int `json:"credential_count"`
 	ActiveCredentialCount int `json:"active_credential_count"`
+	ActiveMCPConnections  int `json:"active_mcp_connections"`
 	ActiveRequests        int `json:"active_requests"`
 	ActiveWork            int `json:"active_work"`
 }
 
 type principalDeletePreview struct {
-	PrincipalID     string `json:"principal_id"`
-	Name            string `json:"name"`
-	GroupID         string `json:"group_id"`
-	Revision        uint64 `json:"revision"`
-	PlanRevision    uint64 `json:"plan_revision"`
-	CredentialCount int    `json:"credential_count"`
-	ActiveRequests  int    `json:"active_requests"`
-	ActiveWork      int    `json:"active_work"`
+	PrincipalID          string `json:"principal_id"`
+	Name                 string `json:"name"`
+	GroupID              string `json:"group_id"`
+	Revision             uint64 `json:"revision"`
+	PlanRevision         uint64 `json:"plan_revision"`
+	CredentialCount      int    `json:"credential_count"`
+	ActiveMCPConnections int    `json:"active_mcp_connections"`
+	ActiveRequests       int    `json:"active_requests"`
+	ActiveWork           int    `json:"active_work"`
 }
 
 func validLabel(s string) bool {
@@ -141,6 +143,45 @@ func tokenDigest(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SetMCPConnectionCounts publishes a fresh, immutable snapshot of live MCP
+// sessions keyed by verified principal ID. The caller is the composition root,
+// which can observe the MCP registry without making auth depend on internal/mcp.
+func (m *Managed) SetMCPConnectionCounts(counts map[string]int) {
+	if m == nil {
+		return
+	}
+	snapshot := make(map[string]int, len(counts))
+	for principalID, count := range counts {
+		if principalID != "" && count > 0 {
+			snapshot[principalID] = count
+		}
+	}
+	m.mcpConnectionCounts.Store(&snapshot)
+}
+
+// SetMCPConnectionInvalidator wires authority changes to the MCP transport.
+// The callback runs while auth state is locked, so the composition root must
+// only schedule the transport cleanup and must not call back into Managed.
+func (m *Managed) SetMCPConnectionInvalidator(fn func(principalID, credentialID string)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mcpConnectionInvalidator = fn
+}
+
+func (m *Managed) activeMCPConnections(principalID string) int {
+	if m == nil || principalID == "" {
+		return 0
+	}
+	snapshot := m.mcpConnectionCounts.Load()
+	if snapshot == nil {
+		return 0
+	}
+	return (*snapshot)[principalID]
+}
+
 func credentialState(s managedState) managedState {
 	s.Groups = cloneGroups(s.Groups)
 	s.Agents = maps.Clone(s.Agents)
@@ -190,7 +231,10 @@ func normalizeTokenUniqueness(s *managedState, now time.Time) (bool, int) {
 }
 
 func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalView {
-	view := principalView{agentRecord: a}
+	view := principalView{
+		agentRecord:          a,
+		ActiveMCPConnections: m.activeMCPConnections(a.ID),
+	}
 	now := m.now().UTC()
 	for id, token := range s.Tokens {
 		if token.PrincipalID != a.ID {
@@ -366,12 +410,15 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 		return nil, nil, 401
 	}
 	parts := strings.Fields(values[0])
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 256 {
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 8192 {
 		return nil, nil, 401
 	}
 	raw := parts[1]
+	if !strings.HasPrefix(raw, "tmcp_") {
+		return m.admitOAuthToken(r, raw)
+	}
 	pair := strings.Split(strings.TrimPrefix(raw, "tmcp_"), ".")
-	if !strings.HasPrefix(raw, "tmcp_") || len(pair) != 2 {
+	if len(pair) != 2 {
 		return nil, nil, 401
 	}
 	m.mu.Lock()
@@ -429,6 +476,17 @@ func (m *Managed) admitToken(r *http.Request) (context.Context, context.CancelFu
 // cancelDeniedTokensLocked also handles global role policy changes.
 func (m *Managed) cancelDeniedTokensLocked() {
 	ids := map[string]bool{}
+	for id, token := range m.state.Tokens {
+		if tokenActive(token) {
+			ids[id] = true
+		}
+	}
+	now := m.now().UTC()
+	for id, session := range m.oauthSessions {
+		if !session.expires.After(now) {
+			m.cancelOAuthSessionLocked(id)
+		}
+	}
 	for key := range m.requests {
 		if strings.HasPrefix(key, "token:") {
 			ids[strings.TrimPrefix(key, "token:")] = true
@@ -588,14 +646,15 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		}
 		view := m.principalViewLocked(s, a)
 		result = principalDeletePreview{
-			PrincipalID:     a.ID,
-			Name:            a.Name,
-			GroupID:         a.GroupID,
-			Revision:        agentRevision(a),
-			PlanRevision:    s.AccessRevision,
-			CredentialCount: view.CredentialCount,
-			ActiveRequests:  view.ActiveRequests,
-			ActiveWork:      view.ActiveWork,
+			PrincipalID:          a.ID,
+			Name:                 a.Name,
+			GroupID:              a.GroupID,
+			Revision:             agentRevision(a),
+			PlanRevision:         s.AccessRevision,
+			CredentialCount:      view.CredentialCount,
+			ActiveMCPConnections: view.ActiveMCPConnections,
+			ActiveRequests:       view.ActiveRequests,
+			ActiveWork:           view.ActiveWork,
 		}
 		markAuditTarget(a.ID)
 		authJSON(w, 200, result)

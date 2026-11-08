@@ -21,6 +21,7 @@ func TestAgentDeletePreviewCascadePersistenceAndRecreate(t *testing.T) {
 		t.Fatalf("admit token: %d", code)
 	}
 	defer done()
+	m.SetMCPConnectionCounts(map[string]int{first.Agent.ID: 2})
 
 	sink := &captureAuditSink{}
 	m.SetAuditSink(sink)
@@ -33,8 +34,25 @@ func TestAgentDeletePreviewCascadePersistenceAndRecreate(t *testing.T) {
 	if err := json.Unmarshal(previewResponse.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if preview.PrincipalID != first.Agent.ID || preview.CredentialCount != 2 || preview.ActiveRequests != 1 || preview.ActiveWork != 0 {
+	if preview.PrincipalID != first.Agent.ID || preview.CredentialCount != 2 || preview.ActiveMCPConnections != 2 || preview.ActiveRequests != 1 || preview.ActiveWork != 0 {
 		t.Fatalf("unexpected preview: %+v", preview)
+	}
+
+	listResponse := managedRequest(t, h, http.MethodGet, "/auth/principals", "", cookie, "")
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list Agents: %d %s", listResponse.Code, listResponse.Body)
+	}
+	var listed struct {
+		Principals []struct {
+			ID                   string `json:"id"`
+			ActiveMCPConnections int    `json:"active_mcp_connections"`
+		} `json:"principals"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Principals) != 1 || listed.Principals[0].ID != first.Agent.ID || listed.Principals[0].ActiveMCPConnections != 2 {
+		t.Fatalf("active MCP connection count missing from Agent list: %+v", listed.Principals)
 	}
 
 	stale := `{"revision":` + "99" + `,"plan_revision":` + jsonNumber(preview.PlanRevision) + `}`

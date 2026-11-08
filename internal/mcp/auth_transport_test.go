@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +34,9 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _, _, _ := newTestServerWithHistory(t)
+	account.SetMCPConnectionInvalidator(func(principalID, credentialID string) {
+		go s.InvalidateConnections(principalID, credentialID)
+	})
 	mux := http.NewServeMux()
 	mux.Handle("/stream", s.StreamableHTTPHandler())
 	mux.Handle("/sse", s.SSEHandler())
@@ -66,6 +71,7 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	principal := first["principal"].(map[string]any)["id"].(string)
 	second := call("POST", "/auth/principals", `{"name":"agent B","issue_token":true}`)
 	other := second["token"].(string)
+	credential := first["credential"].(map[string]any)["id"].(string)
 	networkCtx, networkCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer networkCancel()
 	request := func(method, path, body, credential, session string) *http.Response {
@@ -76,6 +82,7 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 		r.Header.Set("Accept", "application/json, text/event-stream")
 		r.Header.Set("Mcp-Session-Id", session)
 		r.Header.Set(NamespaceHeader, "pretend-to-be-another-agent")
+		r.Header.Set(ClientModeHeader, ClientModeStdioBridge)
 		resp, err := http.DefaultClient.Do(r)
 		if err != nil {
 			t.Fatal(err)
@@ -90,6 +97,35 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	if resp.StatusCode != 200 || sid == "" {
 		t.Fatalf("initialize: %d", resp.StatusCode)
 	}
+	connections := waitForConnections(t, s, 1)
+	if got := connections[0]; got.SessionID != sid || got.PrincipalID != principal ||
+		got.AgentName != "agent A" || got.CredentialID != credential ||
+		got.Transport != ConnectionTransportStreamableHTTP || got.ClientMode != ClientModeStdioBridge {
+		t.Fatalf("attributed streamable connection = %+v", got)
+	}
+	rawConnectionJSON, _ := json.Marshal(connections)
+	sum := sha256.Sum256([]byte(token))
+	digest := hex.EncodeToString(sum[:])
+	if strings.Contains(string(rawConnectionJSON), token) || strings.Contains(string(rawConnectionJSON), digest) {
+		t.Fatalf("connection listing exposed bearer material: %s", rawConnectionJSON)
+	}
+
+	// The same current Token may hold multiple independent MCP sessions. Count
+	// sessions, not tokens: two bridges sharing one Agent token are still two
+	// live connections.
+	resp = request("POST", "/stream", init, token, "")
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	secondSID := resp.Header.Get("Mcp-Session-Id")
+	if resp.StatusCode != 200 || secondSID == "" || secondSID == sid {
+		t.Fatalf("second initialize: status=%d session=%q", resp.StatusCode, secondSID)
+	}
+	connections = waitForConnections(t, s, 2)
+	if connections[0].PrincipalID != principal || connections[1].PrincipalID != principal ||
+		connections[0].CredentialID != credential || connections[1].CredentialID != credential {
+		t.Fatalf("multi-session attribution = %+v", connections)
+	}
+
 	ping := `{"jsonrpc":"2.0","id":2,"method":"ping"}`
 	resp = request("POST", "/stream", ping, other, sid)
 	resp.Body.Close()
@@ -101,7 +137,7 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatal("owner lost stream session")
 	}
-	if got := s.Connections(); len(got) != 1 || got[0].Namespace != "ns:agent-"+principal {
+	if got := s.Connections(); len(got) != 2 || got[0].Namespace != "ns:agent-"+principal || got[1].Namespace != "ns:agent-"+principal {
 		t.Fatalf("identity namespace: %+v", got)
 	}
 	// The real stdio bridge uses the same Bearer credential on every request.
@@ -150,7 +186,13 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	if msg.StatusCode != 202 {
 		t.Fatalf("SSE initialize: %d", msg.StatusCode)
 	}
-	credential := first["credential"].(map[string]any)["id"].(string)
+	sseConnection := waitForConnection(t, s, func(connection Connection) bool {
+		return connection.Transport == ConnectionTransportSSE
+	})
+	if sseConnection.PrincipalID != principal || sseConnection.AgentName != "agent A" ||
+		sseConnection.CredentialID != credential || sseConnection.ClientMode != ClientModeStdioBridge {
+		t.Fatalf("attributed SSE connection = %+v", sseConnection)
+	}
 	call("DELETE", "/auth/tokens/"+credential, "")
 	finished := make(chan struct{})
 	go func() { _, _ = io.Copy(io.Discard, reader); close(finished) }()
@@ -159,9 +201,44 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("revoked SSE connection survived")
 	}
+	waitForCredentialAbsent(t, s, credential)
 	resp = request("POST", "/stream", ping, other, "")
 	resp.Body.Close()
 	if resp.StatusCode == 401 {
 		t.Fatal("other Agent was revoked")
 	}
+}
+
+func waitForConnection(t *testing.T, s *Server, match func(Connection) bool) Connection {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, connection := range s.Connections() {
+			if match(connection) {
+				return connection
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for MCP connection; live=%+v", s.Connections())
+	return Connection{}
+}
+
+func waitForCredentialAbsent(t *testing.T, s *Server, credentialID string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		found := false
+		for _, connection := range s.Connections() {
+			if connection.CredentialID == credentialID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("revoked credential %q still has live MCP connections: %+v", credentialID, s.Connections())
 }
