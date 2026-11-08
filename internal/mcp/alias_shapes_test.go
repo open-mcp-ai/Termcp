@@ -34,13 +34,21 @@ func TestAliasesRunEveryShapeTheyAllow(t *testing.T) {
 		// `;` gives the parser two statements, and the recovery path refused
 		// anything that was not exactly one. BOTH legs have to run: a reply from the
 		// first alone looks like success.
+		//
+		// The markers are the two Path headers the alias body produces, counted: a
+		// host name is whatever this machine has (`windows` passed here, failed on
+		// macOS), and an alias listed by `ls alias` is whatever earlier tests left
+		// behind. Counting `Path: ls alias` and `Path: ls host` says exactly one
+		// thing — both legs ran — and nothing about the machine.
 		define("two", "ls alias; ls host")
 		got := termText(t, s, map[string]any{"cmd": "two"})
 		if !strings.HasPrefix(got, "TERM/1 2") {
 			t.Fatalf("a two-statement alias must run both legs:\n%s", got)
 		}
-		if !strings.Contains(got, "alias") || !strings.Contains(got, "windows") {
-			t.Fatalf("only one leg of a two-statement alias ran:\n%s", got)
+		for _, leg := range []string{"Path: ls alias", "Path: ls host"} {
+			if n := strings.Count(got, leg); n != 1 {
+				t.Fatalf("only one leg of a two-statement alias ran (%q appears %d times):\n%s", leg, n, got)
+			}
 		}
 	})
 
