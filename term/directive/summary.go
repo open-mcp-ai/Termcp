@@ -36,6 +36,7 @@ var flagSummaries = map[string]map[string]string{
 		"at":         "page inside one frame, named by its number",
 		"offset":     "byte offset inside the frame named by --at",
 		"bytes":      "page size for --at (4 KB default)",
+		"reader":     "registered reader id to consume from; keeps its own cursor independent of the default reader",
 		"mode":       "on a file read: text (default), hex for bytes, or file to download to a local_path",
 	},
 }
