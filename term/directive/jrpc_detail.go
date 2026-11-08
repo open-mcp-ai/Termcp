@@ -15,20 +15,20 @@ what the peer receives, and what it answers is what you get back. That is the
 whole contract, and it is why any peer that speaks the envelope works — an LSP
 server, a private RPC, a device.
 
-  jrpc open <session> <url>  ws:// wss:// http:// https:// — scheme picks transport
+  open <session> jrpc <url>  ws:// wss:// http:// https:// — scheme picks transport
                              the session decides WHICH network the URL names
-  jrpc call <handle> '<frame>'   send, wait for the answer with that id
-  jrpc send <handle> '<frame>'   send, do not wait (a notification takes no answer)
-  jrpc recv <handle>             read a frame that arrived while a call was waiting
-  jrpc close <handle>
+  call <session> jrpc:1 '<frame>'   send, wait for the answer with that id
+  call <session> jrpc:1 --send '<frame>'   send, do not wait (a notification takes no answer)
+  read <session> jrpc:1          a frame that arrived while a call was waiting
+  close <session> jrpc:1
 
 The frame is the REST of the line. Quote it. An id is filled in for you when the
-frame has none, so call <handle> '{"method":"x"}' is enough.
+frame has none, so call <session> jrpc:1 '{"method":"x"}' is enough.
 
 EVENTS. Frames that arrive while a call is waiting and do not carry its id are
 kept, not dropped: a peer that interleaves events with answers (DevTools does)
-does not lose them. recv takes one. On a SOCKET they accumulate between calls; on
-HTTP there is nothing between calls, so recv answers 204 and says so.
+does not lose them. read takes one. On a SOCKET they accumulate between calls; on
+HTTP there is nothing between calls, so read answers 204 and says so.
 
 No handshake, no session header, no method table: those belong to a protocol, and
 this is the layer under one. Use mcp for an MCP server and cdp for a browser,
