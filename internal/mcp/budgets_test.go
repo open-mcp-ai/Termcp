@@ -17,6 +17,13 @@ import (
 //
 // The budget stays at its shipped value in production. Only the tests move it, and they
 // move it here, once, rather than in the tests that happen to be slow today.
+// treeHelperArg marks this test binary as the session's program: TestMain sees the
+// argument, prints its own pid and then sits still, which is what a program that
+// ignores a closed channel looks like. Defined here rather than beside the Windows
+// test that uses it, because TestMain is compiled on every platform and a constant
+// behind a build tag is a build failure on the other two.
+const treeHelperArg = "-tree-kill-helper"
+
 func TestMain(m *testing.M) {
 	// The test binary doubles as a helper process for the tests that need a program
 	// which outlives its parent: TestClosingAChannelEndsItsProcessTree runs this same

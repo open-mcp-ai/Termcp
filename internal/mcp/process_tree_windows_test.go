@@ -12,11 +12,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// treeHelperArg marks this test binary as the session's program: TestMain sees the
-// argument, prints its own pid and then sits still, which is what a program that
-// ignores a closed channel looks like.
-const treeHelperArg = "-tree-kill-helper"
-
 // TestClosingAChannelEndsItsProcessTree pins #293 at the surface the report used.
 //
 // `close <channel>` answered 204 while the remote program kept running. A closed SSH
