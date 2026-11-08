@@ -1,749 +1,99 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN" data-theme="dark">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>termcp</title>
-  <link rel="icon" type="image/svg+xml" href="icons/terminal-shell.svg" data-theme-asset="icons/terminal-shell.svg">
-  <link rel="stylesheet" href="static/xterm/xterm.css">
-  <link id="termcp-theme" rel="stylesheet" href="themes/default-light/theme.css">
-  <link rel="stylesheet" href="static/css/theme-boot.css">
-  <script src="static/theme-boot.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Termcp · 终端工作台</title>
+<link rel="stylesheet" href="/static/xterm/xterm.css">
+<link rel="stylesheet" href="css/app.css">
+<script>
+/* Apply persisted theme before paint to avoid a flash. */
+(function(){try{var t=localStorage.getItem('termcp2.theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){document.documentElement.setAttribute('data-theme','light');}}catch(e){}})();
+</script>
+<script src="/static/xterm/xterm.js"></script>
 </head>
 <body>
-  <!-- Drop-in Blackwall artwork: replace icons/blackwall.svg without touching the
-       page layer. The fixed layer never participates in layout or input, and
-       stays below the app surfaces while translucent plates let it show through. -->
-  <div class="page-backdrop" aria-hidden="true"></div>
-  <header class="app-header">
-    <h1>termcp<span class="app-version" id="app-version" title="termcp -version"></span></h1>
-    <nav class="app-header-nav" aria-label="Docs" data-i18n-aria="nav.docs">
-      <!-- Trigger + menu. The trigger is shaped like the API link beside it
-           (same border, radius and blue label) and shows the language in use;
-           the menu below it marks that same choice. -->
-      <details class="theme-switch" id="theme-switch">
-        <summary class="theme-btn" data-i18n-title="theme.label" title="Theme"><span aria-hidden="true">◐</span> <span class="theme-label" data-i18n="theme.label">Theme</span><span class="theme-current" id="theme-current"></span></summary>
-        <div class="theme-menu"><div id="theme-options" class="theme-options"></div><p id="theme-status" class="theme-status" role="status"></p></div>
-      </details>
-      <span class="lang-switch">
-        <button type="button" id="lang-btn" class="lang-btn" aria-haspopup="true" aria-expanded="false"
-                aria-label="Language" data-i18n-aria="lang.label" onclick="toggleLangMenu()">
-          <span class="lang-icon" aria-hidden="true"></span>
-          <span class="lang-current" id="lang-current">Auto</span>
-          <svg class="lang-caret" viewBox="0 0 12 8" width="9" height="9" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M1 2l5 4 5-4"/></svg>
-        </button>
-        <span class="lang-menu hidden" id="lang-menu" aria-label="Language" data-i18n-aria="lang.label">
-          <button type="button" class="lang-opt" data-lang="auto" onclick="chooseLang('auto')" data-i18n="lang.auto">Auto</button>
-          <button type="button" class="lang-opt" data-lang="en" onclick="chooseLang('en')">ENG</button>
-          <button type="button" class="lang-opt" data-lang="zh-Hans" onclick="chooseLang('zh-Hans')">简中</button>
-          <button type="button" class="lang-opt" data-lang="zh-Hant" onclick="chooseLang('zh-Hant')">繁中</button>
-        </span>
-      </span>
-      <a href="api.html" class="api-nav-link" title="MCP and HTTP API reference" data-i18n-title="nav.api.title" aria-label="MCP and HTTP API reference" data-i18n-aria="nav.api.title">
-        <svg class="api-nav-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M2.25 2.5h3.1c1.13 0 2.05.92 2.05 2.05v8.2c-.5-.62-1.22-.98-2.05-.98h-3.1z"/>
-          <path d="M13.75 2.5h-3.1c-1.13 0-2.05.92-2.05 2.05v8.2c.5-.62 1.22-.98 2.05-.98h3.1z"/>
-          <path d="M8 4.55v8.2"/>
-        </svg>
-        <span class="api-nav-label">MCP / API</span>
-      </a>
-    </nav>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-term" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="2" y1="20" x2="22" y2="20"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-min" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="i-chev-down" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></symbol>
+  <symbol id="i-chev-right" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></symbol>
+  <symbol id="i-chev-left" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo"><svg class="ic"><use href="#i-term"/></svg></div>
+      <span class="brand-name">termcp</span>
+      <span class="badge-dev" id="versionBadge">…</span>
+    </div>
+    <div class="search" id="globalSearch">
+      <svg class="ic"><use href="#i-search"/></svg>
+      <input id="searchInput" placeholder="搜索主机或会话…" autocomplete="off">
+      <span class="kbd">/</span>
+    </div>
+    <div class="top-actions">
+      <button class="iconbtn" id="approvalBtn" title="审阅队列"><svg class="ic"><use href="#i-shield"/></svg><span class="cnt" id="approvalCount" hidden>0</span></button>
+      <button class="iconbtn" id="notifyBtn" title="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+      <div class="vdiv"></div>
+      <button class="iconbtn" id="themeToggle" title="切换主题"><svg class="ic" id="themeIcon"><use href="#i-sun"/></svg></button>
+      <a class="btn-api" href="/api.html" target="_blank" rel="noopener"><svg class="ic sm"><use href="#i-book"/></svg>MCP / API</a>
+    </div>
   </header>
-  <div class="dock">
-    <!-- Both banners live in the page column rather than inside a section body.
-         Their sections can be collapsed (a state persisted in localStorage, so it
-         can stay collapsed forever) and the entries section is additionally a
-         fixed drawer on touch that slides off-screen. A message written into
-         either container after a failure would be hidden exactly when it matters:
-         a dropped WebSocket or a failed connect is the one thing the user needs
-         to read. -->
-    <div id="conn-load-banner" class="conn-load-banner" role="status"></div>
-    <div id="session-load-banner" class="conn-load-banner" role="status" style="display:none"></div>
-    <!-- The host drawer: closed by default, fixed when open, and out of the flow
-         entirely (display: contents on its wrapper), so it is a sibling of the
-         layout frame rather than a child of it — a fixed element inside a
-         grid/backdrop context would resolve against that ancestor instead of the
-         viewport. -->
-    <div class="workspace-frame ext-on">
-      <!-- NetHub is the page's control layer: the machines Termcp can dial are
-           the page's left column, not a drawer. Collapsing it leaves a rail of
-           status lamps rather than nothing, so "which machines can I reach" is
-           never a question the page stops answering. Below 800px the same element
-           is the fixed drawer it always was; the sidebar and the rail are the two
-           desktop states of one node, switched by .nethub-collapsed on the frame. -->
-      <aside class="nethub" id="nethub">
-        <button type="button" class="nethub-btn" id="open-host-drawer" title="Hosts" data-i18n-title="nav.nethub" aria-label="Hosts" data-i18n-aria="nav.nethub" aria-controls="sec-entries-body" aria-expanded="true" onclick="event.stopPropagation()">
-          <img class="nethub-icon" src="icons/cyber_hex_cluster_wireframe.svg" data-theme-asset="icons/cyber_hex_cluster_wireframe.svg" alt="" width="32" height="32">
-          <span class="nethub-label" data-i18n="nav.nethub">Hosts</span>
-          <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
-        </button>
-        <div class="nethub-rail" id="nethub-rail" role="list" aria-label="Hosts" data-i18n-aria="nav.nethub"></div>
-        <div class="nethub-body" id="sec-entries-body">
-        <div class="drawer-toolbar" role="toolbar">
-          <!-- One row, two states. Collapsed: the list-checks key spans the
-               toolbar and a card click connects. Pressed: it squares off at the
-               row's left edge — the ticked count rides its face — the dashed
-               select-all key sits right of it, and card clicks tick instead. The
-               dropdown carries export (a download: the file leaves the server)
-               and delete. Pressing the switch again restores and clears. -->
-          <button type="button" class="nethub-select-toggle" id="nethub-select-toggle" aria-pressed="false" title="Batch select" data-i18n-title="nethub.batch.selectTitle" aria-label="Batch select" data-i18n-aria="nethub.batch.select" onclick="event.stopPropagation()">
-            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1"/><path d="M3.1 4.1l1.1 1.1 2.2-2.4"/><path d="M9.5 4h5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 12h5"/></svg>
-            <span class="nethub-toggle-count" id="nethub-toggle-count" hidden>0</span>
-          </button>
-          <button type="button" class="nethub-batch-icon" id="nethub-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria" onclick="event.stopPropagation()">
-            <svg class="ic-hollow" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
-            <svg class="ic-solid" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
-          </button>
-          <div class="nethub-open-split" id="nethub-open-split">
-            <!-- The plate is an inner box on purpose: it carries the shared
-                 clip-path, and a clip cuts DESCENDANTS too. With the menu
-                 inside the clipped element it was sliced off the moment it
-                 opened, so the menu is a sibling of this plate below. -->
-            <div class="nethub-open-plate">
-              <button type="button" class="batch-open-main" id="nethub-batch-open" title="Open a session for each selected host" data-i18n-title="nethub.batch.openTitle" aria-label="Open selected hosts" data-i18n-aria="nethub.batch.openTitle">
-                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5.14v13.72c0 .8.88 1.29 1.56.86l10.8-6.86a1.03 1.03 0 000-1.72L9.56 4.28A1.03 1.03 0 008 5.14z" fill="currentColor"/></svg>
-              </button>
-              <button type="button" class="batch-open-caret" id="nethub-open-caret" aria-haspopup="menu" aria-expanded="false" title="More actions" data-i18n-title="nethub.batch.more" aria-label="More actions" data-i18n-aria="nethub.batch.more">
-                <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
-              </button>
-            </div>
-            <!-- Anchored to the split itself (top: 100%), so it follows the key
-                 wherever the row puts it — no hardcoded offset to drift. -->
-            <div class="nethub-open-menu" id="nethub-open-menu" role="menu" aria-label="Batch actions" data-i18n-aria="nethub.batch.menuAria" hidden>
-              <button type="button" class="nethub-menu-item" id="nethub-menu-export" role="menuitem" title="Export Config" data-i18n-title="conn.batch.export">
-                <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-                <span data-i18n="conn.batch.export">Export Config</span>
-              </button>
-              <button type="button" class="nethub-menu-item nethub-menu-danger" id="nethub-menu-delete" role="menuitem" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected hosts" data-i18n-aria="nethub.batch.deleteTitle">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
-                <span data-i18n="common.delete">Delete</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <!-- A CHEVRON ON THE OUTER EDGE, not an X in the corner.
-             *
-             * The X sat at the drawer's top inner corner, which on a phone is a
-             * spot the thumb reaches last — and it said "dismiss this", the same
-             * gesture as a dialog's close, for a panel that is only being put away.
-             * This drawer slides in from the LEFT, so the way back out is a left-
-             * pointing chevron on the left edge, outboard of the panel body: the
-             * shape and the side both say which way it goes, and it sits where a
-             * swipe would start. -->
-        <button type="button" class="drawer-close drawer-close-left" title="Collapse" data-i18n-title="common.collapse" aria-label="Collapse hosts drawer" data-i18n-aria="common.collapse" onclick="event.stopPropagation(); window.termcpToggleEntriesDrawer && window.termcpToggleEntriesDrawer(false)">
-          <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M7.6 2.2L3.8 6l3.8 3.8"/></svg>
-        </button>
-        <div id="conn-grid" class="conn-grid"></div>
-        <!-- The column's two fixed bottom actions share one row: creating and
-             importing are the two ways a profile enters the list, so they read
-             as a pair rather than as an add button with a stranger beside it. -->
-        <div class="drawer-add-row">
-          <div class="drawer-add drawer-add-grow" id="conn-add" role="button" tabindex="0" title="Add Host" data-i18n-title="conn.aria.add" aria-label="Add Host" data-i18n-aria="conn.aria.add">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-            <span class="drawer-add-label" data-i18n="nethub.add">Add host</span>
-          </div>
-          <button type="button" class="drawer-add drawer-import" id="conn-import-open" title="Import Config" data-i18n-title="conn.batch.import" aria-label="Import Config" data-i18n-aria="conn.batch.import">
-            <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-          </button>
-        </div>
-      </div>
-      </aside>
-      <!-- The centre stage, wearing the SESSIONS PLATE's body (a section header
-           over a .conn-grid) around the EXTENSION panel's own toolbar and keys.
-           That is the point of this layout: the plate is the frame a user already
-           learns for a list of cards, and the extensions keep every button they
-           had — the batch switch, select-all, the split key with its export and
-           delete menu, and the New / Import pair at the bottom. Only the outer
-           box changed, so nothing an operator knows how to press moved. -->
-      <div class="workspace-panel workspace-sessions workspace-exts" id="ext-plate">
-        <!-- The plate's own trigger, in the HOSTS column's shape (.nethub-btn):
-             glyph, label, caret. Point the caret and the plate folds away, which
-             is what every other foldable column on this page already does.
 
-             The batch keys ride the same bar, to the right of the fold trigger,
-             rather than a toolbar of their own underneath. They act on the cards
-             BELOW them, so on the bar they read as that list's own controls; as a
-             separate row they were a band of chrome between the title and the
-             thing it titles. The wrapper stops its clicks from reaching the fold
-             trigger, so ticking a card's batch switch never collapses the plate. -->
-        <div class="ext-head">
-          <!-- ONE bar, not a bar plus a cluster beside it. The title trigger and
-               the batch keys are the same row of the same box: the trigger is the
-               bar's leading cell, the keys follow it inside the border, and the
-               whole thing is 50px tall like every other column's trigger. Putting
-               the keys OUTSIDE the trigger's box is what looked wrong — they read
-               as a separate floating cluster that happened to be right-aligned,
-               rather than as controls of this column.
-
-               The wrapper carries .nethub-btn's dressing (border, height, focus
-               ring) and the trigger inside it is a bare button: a control cannot
-               be nested in a button, so the look moves up one level and the
-               behaviour stays on the real key. -->
-          <div class="nethub-btn ext-head-bar" role="group" aria-labelledby="ext-head-label">
-            <button type="button" class="ext-fold-btn" id="sec-exts" aria-expanded="true" aria-controls="sec-exts-body" title="Extensions" data-i18n-title="nav.extensions">
-              <!-- The plate's original glyph: two OVERLAPPING squares with registration marks
-                   at the outer corners. It says "a thing plugged into another thing",
-                   which is what an extension is, and what this column showed before
-                   the header was rebuilt. It was swapped for a 2x2 grid of equal
-                   squares during that rebuild — a shape that reads as "a grid of
-                   items", i.e. the LIST rather than what lives in it, and it had the
-                   further problem of being the densest possible mark at 22px. -->
-              <span class="nethub-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="8" height="8" rx="1.5"/><path d="M4 14.5v1.5M14.5 4H16"/></svg></span>
-              <span class="nethub-label" id="ext-head-label" data-i18n="nav.extensions">Extensions</span>
-            </button>
-            <!-- Cyberpunk capacity gauge between filter and count; base sheet hides
-                 it, see .ext-head-tail for the pinning. -->
-            <span class="ext-capacity-track" id="ext-capacity-track" aria-hidden="true">
-              <span class="ext-capacity-fill"></span>
-            </span>
-            </button>
-            <!-- Count + caret live outside the trigger, in a tail group pinned right:
-                 see .ext-head-tail in workspace.css for why. -->
-            <span class="ext-head-tail" id="ext-head-tail" role="button" tabindex="0" aria-label="Extensions" data-i18n-aria="nav.extensions">
-              <!-- The count rides the header, the way the archive's does. It
-                   belongs HERE rather than on a line of its own above the cards:
-                   a separate readout said "Extensions:" directly under a header
-                   that already says "Extensions", which is the same word twice,
-                   one row apart. On the header it is the number that belongs to
-                   the title, and the column body is left to the cards.
-
-                   It is permanent, unlike the archive's: that one hides at zero
-                   because an empty archive says nothing, while "no extensions" is
-                   the state an author needs to see before creating the first one. -->
-              <span class="ext-count-badge" id="ext-count">0</span>
-              <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
-            </span>
-            <div class="ext-head-actions" id="ext-head-actions" onclick="event.stopPropagation()">
-              <!-- FLAT keys on the header bar, right-aligned as ONE group.
-                   There is no "enter selection mode" here: every extension card is
-                   tickable all the time, so a switch that exists only to make cards
-                   clickable would be chrome standing between the user and the list.
-
-                   The order is fixed from the RIGHT, which is what keeps the bar
-                   still: invert is the rightmost key and never moves, so pressing
-                   it cannot shift anything the pointer is about to reach. The keys
-                   that answer a selection appear to its LEFT and grow leftwards —
-                   a bar that grew at its right end would slide its own controls
-                   out from under the cursor on every tick.
-
-                   Add is a split key (the hosts column's .nethub-open-split): the
-                   key itself creates one, its caret drops a menu whose item is the
-                   file import. Creating is the common case, so it is the face;
-                   importing a set is the other door, one click behind it. -->
-              <button type="button" class="ext-key ext-key-danger" id="ext-batch-delete" title="Delete selected" data-i18n-title="ext.batch.deleteTitle" aria-label="Delete selected extensions" data-i18n-aria="ext.batch.deleteAria" hidden>
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
-                <span data-i18n="common.delete">Delete</span>
-              </button>
-              <button type="button" class="ext-key" id="ext-batch-export" title="Export selected" data-i18n-title="ext.batch.exportTitle" aria-label="Export selected extensions" data-i18n-aria="ext.batch.exportTitle" hidden>
-                <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-                <span data-i18n="ext.batch.export">Export</span>
-              </button>
-              <div class="nethub-open-split ext-add-split" id="ext-add-split">
-                <div class="nethub-open-plate">
-                  <button type="button" class="batch-open-main ext-key" id="ext-add" title="New extension" data-i18n-title="ext.add.title" aria-label="New extension" data-i18n-aria="ext.add.title">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-                    <span data-i18n="ext.add.label">New</span>
-                  </button>
-                  <button type="button" class="batch-open-caret" id="ext-add-caret" aria-haspopup="menu" aria-expanded="false" title="More ways to add" data-i18n-title="ext.add.more" aria-label="More ways to add" data-i18n-aria="ext.add.more">
-                    <svg viewBox="0 0 12 8" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 2l5 4 5-4"/></svg>
-                  </button>
-                </div>
-                <div class="nethub-open-menu" id="ext-add-menu" role="menu" aria-label="Add an extension" data-i18n-aria="ext.add.menuAria" hidden>
-                  <button type="button" class="nethub-menu-item" id="ext-menu-import" role="menuitem" title="Import extensions" data-i18n-title="ext.batch.import">
-                    <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8.5v-7"/><path d="M4 4.5l3-3 3 3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-                    <span data-i18n="ext.batch.importLabel">Import from file</span>
-                  </button>
-                </div>
-              </div>
-              <!-- Rightmost and never moves: this is the key whose press changes
-                   the bar, so nothing to its right may shift either. -->
-              <button type="button" class="ext-key ext-key-icon" id="ext-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria">
-                <svg class="ic-hollow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
-                <svg class="ic-solid" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="section-body" id="sec-exts-body">
-          <!-- The plate's own inscription: two lines that sit UNDER the cards as a
-               watermark on the panel, so an otherwise empty surface is not a blank
-               rectangle.
-
-               It lives in the BODY, not in the empty state, and that is the whole
-               point: the empty placeholder used to come and go with the list, which
-               made the column one height while empty and another once a card arrived.
-               The paper here never changes — it is the surface the cards are laid on,
-               present at zero extensions and at fifty. The body's own `min-height`
-               (inherited from .workspace-sessions) is what holds the panel steady, so
-               the inscription cannot affect layout at all.
-
-               `aria-hidden`, because it is decoration: a reader who is told the column
-               has 0 extensions does not need a slogan, and a screen reader announcing
-               it before every list would be noise. The words are translated anyway so
-               that a sighted reader in any locale gets prose, not English. -->
-          <p class="ext-inscription" id="ext-inscription" aria-hidden="true">
-            <span class="ext-inscription-line" data-i18n="ext.inscription.a"></span>
-            <span class="ext-inscription-line" data-i18n="ext.inscription.b"></span>
-          </p>
-          <div id="ext-grid" class="conn-grid"></div>
-        </div>
-      </div>
-      <!-- The right column wears the EXTENSIONS PANEL's frame: a trigger key, a
-           body that folds away, and a rail of lamps while it is folded. What it
-           holds is the ARCHIVE — the sessions that are over. The frame is the
-           original one, because it is this page's vocabulary for "a column you
-           put away", and the archive is exactly that kind of column: read, not
-           driven, and consulted rather than worked in. Below 800px the same
-           element becomes the drawer its trigger opens. -->
-      <!-- The archive wears the HOSTS column's frame, key for key: the same
-           .nethub-btn trigger with its glyph, label and caret, the same .nethub-rail
-           while folded, the same .nethub-body plate. That is not decoration. The
-           page already teaches one shape for "a column you put away", and a second
-           one for the only other foldable column would make the reader learn the
-           same idea twice — and notice that the two do not quite match.
-           The only difference is what fills the rail: hosts show a lamp per
-           machine because each can be up or down, while every archived session is
-           in the same state (over), so this rail shows the COUNT instead. -->
-      <aside class="nethub extpanel" id="extpanel">
-        <!-- The header is MIRRORED, and that is what makes the two columns read
-             as one pair rather than as two copies. The hosts column sits on the
-             left edge, so its glyph and label hug that edge and its caret is the
-             inboard item at the right; this column sits on the right edge, so the
-             same order would put the caret against the screen's edge — the one
-             spot a disclosure control must not occupy. Instead the caret leads,
-             inboard, and the glyph and label follow it outwards, so the two
-             headers are reflections of each other across the page.
-
-             The DOM order carries the order in the desktop row; the narrow layout
-             re-mirrors it back (see the media block in workspace.css), because
-             there both triggers collapse to glyph-only keys that stack side by
-             side rather than facing each other across a column. -->
-        <!-- This is a BUTTON ROLE on a div, not a <button>, and that is what makes
-             the nested invert key work. A <button> swallows clicks on its
-             descendants: the browser dispatches the press to the button itself, so
-             a <button> or <span role=button> inside one never receives its own
-             click — pressing invert folded the whole column shut instead of
-             inverting, and no amount of stopPropagation could help because the
-             inner element was never the target. A div with role="button" leaves its
-             descendants clickable, so the invert key gets its own press and stops
-             it from reaching the trigger.
-             Everything else — the class, the ARIA, the Enter/Space handling — is
-             unchanged; `nethub-btn` was always a style, not an element. -->
-        <div class="nethub-btn" id="extpanel-toggle" role="button" tabindex="0" title="Archive" data-i18n-title="sec.archive" aria-label="Archive" data-i18n-aria="sec.archive" aria-controls="extpanel-body" aria-expanded="true">
-          <span class="nethub-caret" aria-hidden="true"><svg viewBox="0 0 12 8" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2l5 4 5-4"/></svg></span>
-          <!-- The count sits IMMEDIATELY after the caret, before the glyph, so DOM
-               order is visual order and the CSS does not have to reorder four
-               items to say so. It also puts the auto margin on a neighbour that
-               is always laid out: the badge is `hidden` (display: none) while the
-               archive is empty, and an auto margin on a display:none box moves
-               nothing — which is why the whole group used to stay pinned to the
-               LEFT of a 260px header with 173px of empty plate to its right. -->
-          <span class="archive-count-badge" id="extpanel-count" hidden>0</span>
-          <!-- The archive's glyph: a STACK OF LAYERS, narrowing upward.
-                 *
-                 * It was a lidded box — a storage crate, which says "a place things are
-                 * put" and nothing about what is inside. The archive holds sessions that
-                 * are OVER: finished, ordered by time, read downward. A stratified stack
-                 * reads as exactly that (accumulated layers, the newest on top), and it
-                 * is the shape the cyberpunk theme's own name for this column asks for:
-                 * 神舆 is a tower of stored minds in that setting, and the same three
-                 * strata read as a tower there without changing the drawing.
-                 *
-                 * Deliberately not a clock, a tombstone or a trash can: time is already
-                 * legible from the rows' own ages, nothing here is dead in a funerary
-                 * sense, and the column is not a bin — deleting is one key inside it. -->
-            <span class="nethub-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 12.8h9.6v2H3.2z"/><path d="M4.4 8.6h7.2v4.2H4.4z"/><path d="M5.6 4.4h4.8v4.2H5.6z"/><path d="M6.8 1.2h2.4v3.2H6.8z"/></svg></span>
-          <span class="nethub-label" data-i18n="sec.archive">Archive</span>
-        </div>
-        <div class="nethub-rail" id="extpanel-rail" role="list" aria-label="Archive" data-i18n-aria="sec.archive"></div>
-        <!-- Two classes, and both are load-bearing. `nethub-body` gives it the
-             hosts column's ceiling and column layout; `extpanel-body` is what the
-             NARROW rules select on to turn this element into a fixed drawer that
-             slides in from the right. It shipped with only the first, so below
-             800px the drawer rules never matched: the body stayed a static 2px
-             column inside the header row, and pressing the trigger opened nothing
-             visible while locking the page scroll behind it. -->
-        <div class="nethub-body extpanel-body" id="extpanel-body">
-          <!-- The archive's way out: a RIGHT-pointing chevron on the right edge,
-               because this drawer slides in from the right. Same reasoning as the
-               hosts drawer's — see the comment there. -->
-          <button type="button" class="drawer-close drawer-close-right" title="Collapse" data-i18n-title="common.collapse" aria-label="Collapse archive drawer" data-i18n-aria="common.collapse" onclick="event.stopPropagation(); window.termcpToggleArchive && window.termcpToggleArchive(false)">
-            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.4 2.2L8.2 6l-3.8 3.8"/></svg>
-          </button>
-          <!-- The archive's keys, FLAT: invert, export, delete — the three verbs
-               an archived session has. There is no selection-mode switch, and that
-               is a deliberate difference from the hosts column rather than an
-               inconsistency: the hosts switch exists to separate "click connects"
-               from "click ticks", and connecting is the thing you do there most.
-               Nothing in the archive connects. Its only direct action is opening a
-               transcript read-only, so the tick target is an explicit checkbox on
-               each row and a row click always opens. With no mode to enter there is
-               nothing for a switch to switch, and a giant key whose only job is to
-               make other things clickable would be chrome in front of a list that
-               is already clickable.
-               Export and delete appear only while something is ticked: an archive
-               is consulted rarely, and two dead keys parked on a rarely-used
-               toolbar are two keys that look broken. -->
-          <!-- The toolbar is ALWAYS THERE. Left to right: the count, the two
-               verbs, then invert.
-               *
-               * It used to appear only once something was ticked, so the row was
-               absent exactly when a reader was deciding what to do with the ledger.
-               The verbs are now DISABLED instead: "not now" rather than "not here",
-               and the count beside them says why they are dim.
-               *
-               * Invert TRAILS. It acts on the list, not on the selection, so it sits
-               after the pair whose target it must never be mistaken for. -->
-          <div class="archive-keys" role="toolbar">
-            <span class="archive-tick-count" id="archive-toggle-count">0</span>
-            <button type="button" class="ext-key ext-key-icon" id="archive-batch-export" title="Export transcripts" data-i18n-title="archive.batch.exportTitle" aria-label="Export selected transcripts" data-i18n-aria="archive.batch.exportTitle">
-              <svg viewBox="0 0 14 14" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-            </button>
-            <button type="button" class="ext-key ext-key-icon ext-key-danger" id="archive-batch-delete" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected archived sessions" data-i18n-aria="section.batch.deleteSelectedAria">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
-            </button>
-            <button type="button" class="ext-key ext-key-icon" id="archive-sel-invert" title="Invert selection" data-i18n-title="section.batch.invert" aria-label="Invert selection" data-i18n-aria="section.batch.invert">
-              <svg class="ic-hollow" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
-              <svg class="ic-solid" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
-            </button>
-          </div>
-          <div id="archive-grid" class="conn-grid"></div>
-        </div>
-      </aside>
-    </div>
+  <div class="body">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main" id="main">
+      <div class="session-tabs" id="sessionTabs"></div>
+      <div class="workspace" id="workspace"></div>
+    </main>
+    <aside class="inspector" id="inspector"></aside>
   </div>
 
-  <!-- The session dock: the list of sessions, pinned to the bottom of the
-       viewport. It holds ONE tab per RUNNING SESSION plus one per window that has
-       no session behind it (a dial in flight, an extension's status card), plus the
-       pane-layout keys. It used to list only the windows this page had opened,
-       which made every session an agent started over MCP — and every session whose
-       window was closed here — invisible on the page. Sessions that are over live in
-       the archive column on the right; a subsystem's own connection lives in the
-       extension column. Its height is published as --dock-h so the tiled overlay
-       insets itself by it instead of being covered. -->
-  <!-- The dock: TWO rows, and the split is what makes the batch keys possible.
-       One row could not hold a tab strip wide enough to be readable plus the
-       window controls plus the verbs that act on a selection — measured on a
-       390px phone, the tabs were down to 106px between them. Row 1 is the tabs,
-       at the bar's full width; row 2 is the keys.
-       The whole dock is published as --dock-h so the tiled overlay insets itself
-       by it instead of being covered. -->
-  <div class="sessdock" id="sessdock">
-    <div class="sessdock-bar" id="sessdock-bar">
-      <!-- Row 1: the list, and only the list. The bare-row note is built by
-           refreshSessionTabbar and sits INSIDE this row rather than beside it,
-           because at this width there is no beside. -->
-      <div class="sessdock-tabs" id="session-tabs-scroll" role="tablist"></div>
-      <!-- Row 2: three zones. The batch verbs at the LEFT end, the window
-           controls at the RIGHT, and empty space between. They used to share one
-           right-hand cluster, so unfolding the batch row pushed the window
-           controls sideways — a key that moves when you press its neighbour is the
-           one thing a batch control must not do.
+  <footer class="statusbar" id="statusbar"></footer>
+</div>
 
-           There is no selection-mode switch here, for the same reason the archive
-           has none: every tab carries its own tick (the monitor glyph), so a tab
-           click still raises its window and the tick has its own target. A switch
-           whose only job is to make things clickable is chrome in front of a list
-           that is already clickable. -->
-      <div class="sessdock-batch" id="dock-batch">
-        <button type="button" class="ext-key ext-key-icon" id="dock-sel-invert" title="Select all" data-i18n-title="section.batch.selectAll" aria-label="Select all or clear selection" data-i18n-aria="section.batch.selectAllAria">
-          <svg class="ic-hollow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.4l4.6 4.6L19 7.2"/></svg>
-          <svg class="ic-solid" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.3 6.9L9.4 17.8l-5.7-5.7 1.4-1.4 4.3 4.3 9.5-9.5z" fill="currentColor"/></svg>
-        </button>
-        <!-- MINIMIZE / RESTORE act on the WINDOW, not the session: see shell-windows.js. -->
-        <button type="button" class="ext-key ext-key-icon" id="dock-min-ticked" title="Minimize selected windows" data-i18n-title="dock.minimize.title" aria-label="Minimize selected windows" data-i18n-aria="dock.minimize.title" disabled><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-        <button type="button" class="ext-key ext-key-icon" id="dock-restore-ticked" title="Restore selected windows" data-i18n-title="dock.restore.title" aria-label="Restore selected windows" data-i18n-aria="dock.restore.title" disabled><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="5" width="14" height="14"/></svg></button>
-        <!-- CLOSE, not delete. The page offers no way to erase a session: closing
-             stops and archives it, and erasing lives in the archive column, where
-             the record being destroyed is the thing on screen. Shown only once
-             something is ticked, like every other answer key on this page. -->
-        <button type="button" class="ext-key ext-key-icon ext-key-danger" id="dock-close-ticked" title="Stop and archive selected" data-i18n-title="dock.close.title" aria-label="Stop and archive selected" data-i18n-aria="dock.close.title" disabled>
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-        <span class="archive-tick-count is-empty" id="dock-toggle-count">0</span>
-      </div>
-      <div class="sessdock-actions" id="session-tabbar-actions"></div>
-      <!-- Who is connected to this instance (MCP clients and Web UI tabs).
-           Moved to the far-right end of the bottom dock bar: icon only (no text
-           label), opens an upward-popping list whose width hugs the content. -->
-      <details class="clients-menu" id="clients-menu">
-        <summary class="clients-btn" data-i18n-title="clients.label" title="Connected clients">
-          <span class="clients-icon" aria-hidden="true"></span>
-          <span class="clients-label" data-i18n="clients.label" style="display:none">Clients</span>
-        </summary>
-        <div class="clients-panel"><div id="clients-body" role="list"></div><p id="clients-empty" class="clients-empty" data-i18n="clients.empty">Nothing connected yet.</p></div>
-      </details>
-    </div>
-  </div>
+<div class="modal-root" id="modalRoot"></div>
+<div class="toast-root" id="toastRoot"></div>
 
-  <div id="modal-forward" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-h">
-        <h2 id="modal-forward-title" data-i18n="modal.forward.title">New Forwarding</h2>
-        <button type="button" id="modal-forward-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-forward-err" class="err" style="display:none"></p>
-        <label for="fw-direction" data-i18n="modal.forward.direction">Direction</label>
-        <select id="fw-direction">
-          <option value="local" data-i18n="modal.forward.dir.local">Local (ssh -L)</option>
-          <option value="remote" data-i18n="modal.forward.dir.remote">Remote (ssh -R)</option>
-          <option value="dynamic" data-i18n="modal.forward.dir.dynamic">SOCKS5 (ssh -D)</option>
-        </select>
-        <p class="conn-field-hint">
-          <span id="fw-dir-hint-local" data-i18n="modal.forward.dirHint.local">local listen → remote target</span>
-          <span id="fw-dir-hint-remote" style="display:none" data-i18n="modal.forward.dirHint.remote">remote listen → local target</span>
-          <span id="fw-dir-hint-dynamic" style="display:none" data-i18n="modal.forward.dirHint.dynamic">SOCKS5 → any target</span>
-        </p>
-        <div id="fw-target-fields-modal">
-          <label for="fw-remote-host" data-i18n="modal.forward.targetHost">Target host</label>
-          <input type="text" id="fw-remote-host" placeholder="e.g. localhost" data-i18n-placeholder="modal.forward.targetHostPlaceholder" autocomplete="off">
-          <label for="fw-remote-port" data-i18n="modal.forward.targetPort">Target port</label>
-          <input type="number" id="fw-remote-port" placeholder="port" data-i18n-placeholder="modal.forward.targetPortPlaceholder" min="1" max="65535">
-        </div>
-        <label for="fw-local-host" data-i18n="modal.forward.listenHost">Listen host</label>
-        <input type="text" id="fw-local-host" placeholder="e.g. 127.0.0.1" data-i18n-placeholder="modal.forward.listenHostPlaceholder" autocomplete="off">
-        <label for="fw-local-port" id="fw-local-port-label" data-i18n="modal.forward.listenPort">Listen port (0 = random)</label>
-        <input type="number" id="fw-local-port" placeholder="0" value="0" min="0" max="65535">
-        <button type="button" class="btn btn-primary" id="fw-create" style="margin-top:8px" data-i18n="common.create">Create</button>
-      </div>
-    </div>
-  </div>
-  <div id="pane-workspace" class="pane-workspace" aria-hidden="true">
-    <div class="pane-grid" id="pane-grid"></div>
-  </div>
-  <div id="shell-windows-container" class="shell-windows-container" aria-live="polite"></div>
-
-  <div id="modal-conn" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal">
-      <div class="modal-h">
-        <h2 id="modal-conn-title" data-i18n="modal.conn.titleAdd">Add Host</h2>
-        <button type="button" id="modal-conn-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-conn-err" class="err" style="display:none"></p>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <label for="conn-name" style="margin:0;flex:1;font-size:0.85rem;font-weight:600" data-i18n="modal.conn.name">name</label>
-          <button type="button" class="btn" id="conn-toggle-view" style="font-size:0.78rem;padding:2px 6px" title="Toggle between form and TOML" data-i18n-title="modal.conn.toggleView">
-            <svg id="conn-icon-form" class="toggle-icon-form" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5"/><path d="M4.5 5h5M4.5 7.5h3M4.5 10h2"/></svg>
-            <svg id="conn-icon-toml" class="toggle-icon-toml" viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" style="display:none"><path d="M5 3.5L2 7l3 3.5M9 10.5l3-3.5-3-3.5"/></svg>
-          </button>
-        </div>
-        <input type="text" id="conn-name" placeholder="my-server" autocomplete="off" style="margin-bottom:8px;width:100%">
-        <div class="conn-field conn-field-check" id="conn-temporary-wrap"><label class="conn-check" for="conn-temporary"><input type="checkbox" id="conn-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.temporary.hint">Removed when termcp stops; never saved to a config file.</div></div>
-        <!-- Form view -->
-        <form id="conn-form-view" autocomplete="off" onsubmit="return false">
-          <div id="conn-f-loopback-only" style="display:none" class="conn-field conn-check-hint" data-i18n="modal.conn.loopbackOnly">Built-in loopback connection: it dials this machine over termcp's own SSH server, so host, credentials and jumps do not apply. Only the settings below are used.</div>
-          <div id="conn-f-remote-fields">
-            <div class="conn-field"><label for="conn-f-host" data-i18n="modal.conn.field.host">Host</label><input type="text" id="conn-f-host" placeholder="192.168.1.1" autocomplete="off"></div>
-            <div class="conn-row"><div class="conn-field"><label for="conn-f-port" data-i18n="modal.conn.field.port">Port</label><input type="number" id="conn-f-port" value="22" autocomplete="off"></div><div class="conn-field"><label for="conn-f-user" data-i18n="modal.conn.field.user">User</label><input type="text" id="conn-f-user" placeholder="root" autocomplete="username"></div></div>
-            <div class="conn-field"><label for="conn-f-auth" data-i18n="modal.conn.field.auth">Auth</label><select id="conn-f-auth"><option value="password" data-i18n="modal.conn.field.password">Password</option><option value="key" data-i18n="modal.conn.field.privateKey">Private Key</option></select></div>
-            <div class="conn-field" id="conn-f-password-wrap"><label for="conn-f-password" data-i18n="modal.conn.field.password">Password</label><div class="psw-wrap"><input type="password" id="conn-f-password" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show password" data-i18n-title="modal.conn.showPassword"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-            <div class="conn-field" id="conn-f-pem-wrap" style="display:none"><label for="conn-f-pem" data-i18n="modal.conn.field.privateKey">Private Key</label><textarea id="conn-f-pem" spellcheck="false" rows="4"></textarea></div>
-            <div class="conn-field" id="conn-f-passphrase-wrap" style="display:none"><label for="conn-f-passphrase" data-i18n="modal.conn.field.passphrase">Key Passphrase (optional)</label><div class="psw-wrap"><input type="password" id="conn-f-passphrase" class="psw-input" autocomplete="new-password"><button type="button" class="psw-eye" title="Show" data-i18n-title="modal.conn.show"><svg class="eye-open" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/></svg><svg class="eye-closed" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M6 3.5A6.4 6.4 0 018 3.2C12.5 3.2 15 8 15 8s-1 2-2.8 3.8M10 10a3 3 0 01-4-4M3.5 11.5l-2 2M3 8c0 0 2.5-5 7-5 1 0 2 .4 3 1M14.5 1l-13 13"/></svg></button></div></div>
-          </div>
-          <div class="conn-field"><label for="conn-f-shell" data-i18n="modal.conn.field.shell">Default Shell (optional)</label><input type="text" id="conn-f-shell" placeholder="auto-detect" data-i18n-placeholder="modal.conn.field.shellPlaceholder" autocomplete="off"></div>
-          <div class="conn-field conn-field-check"><label class="conn-check" for="conn-f-approval"><input type="checkbox" id="conn-f-approval"><span data-i18n="modal.conn.field.approval">Review every AI write by default</span></label><div class="conn-check-hint" data-i18n="modal.conn.field.approvalHint">Sessions started from this profile begin with review mode on: each command waits for you to Accept or Reject it before any byte reaches the shell.</div></div>
-          <!-- The network path: how the dial reaches the host, ordered
-               outermost-last — the proxy gets to the bastions, the bastion chain
-               is what finally dials the host, so the chain sits at the bottom of
-               the form. The loopback profile ignores all of it. -->
-          <div id="conn-f-remote-extra">
-            <div class="conn-field"><label for="conn-f-proxy" data-i18n="modal.conn.field.proxy">Proxy (optional, SOCKS5 URL)</label><input type="text" id="conn-f-proxy" placeholder="socks5://user:pass@127.0.0.1:1080" autocomplete="off"></div>
-            <div class="jump-arrow" title="SSH traffic to this host is tunneled through the bastions below, in order" data-i18n-title="modal.conn.jumps.hint" data-i18n="modal.conn.jumps.title">SSH Jumps Chain</div>
-            <div class="jump-chain" id="conn-jumps"></div>
-            <div class="conn-field"><button type="button" class="btn" id="conn-add-jump" style="font-size:0.8rem" data-i18n="modal.conn.addJump">+ add jump</button></div>
-          </div>
-        </form>
-        <!-- JSON view -->
-        <div id="conn-config-view" style="display:none">
-          <label for="conn-config" data-i18n="modal.conn.config">config</label>
-          <textarea id="conn-config" spellcheck="false"></textarea>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn" id="conn-duplicate" style="display:none" data-i18n="common.duplicate">Duplicate</button>
-          <button type="button" class="btn btn-danger" id="conn-delete" style="display:none" data-i18n="common.delete">Delete</button>
-          <button type="button" class="btn" id="conn-test" data-i18n="common.test">Test</button>
-          <button type="button" class="btn btn-primary" id="conn-save" data-i18n="common.save">Save</button>
-        </div>
-        <p id="conn-test-result" style="display:none;margin:8px 0 0;font-size:0.82rem;word-break:break-word"></p>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-conn-import" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:440px">
-      <div class="modal-h">
-        <h2 data-i18n="conn.batch.import">Import Config</h2>
-        <button type="button" class="btn" id="conn-import-close" data-i18n="common.close">Close</button>
-      </div>
-      <div class="modal-body">
-        <p id="conn-import-err" class="err" style="display:none"></p>
-        <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,application/toml,text/plain"></div>
-        <div class="conn-field conn-field-check"><label class="conn-check" for="conn-import-temporary"><input type="checkbox" id="conn-import-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.batch.temporaryHint">Applies to every host in this file. Temporary hosts disappear when termcp stops.</div></div>
-        <p class="conn-check-hint" data-i18n="conn.batch.collisionHint">Conflicting host names are renamed automatically. Invalid files import no hosts.</p>
-        <p id="conn-import-result" role="status" class="form-ok" style="display:none"></p>
-        <div class="modal-actions"><button type="button" class="btn btn-primary" id="conn-import-run" data-i18n="conn.batch.import">Import Config</button></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-start" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-h">
-        <h2 id="start-title" data-i18n="modal.start.title">Start session</h2>
-        <button type="button" class="btn" id="modal-start-close" data-i18n="common.close">Close</button>
-          </div>
-      <div class="modal-body">
-        <p id="modal-start-err" class="err" style="display:none"></p>
-        <input type="hidden" id="start-ssh-config">
-        <label for="start-name" data-i18n="modal.start.name">Session name (optional)</label>
-        <input type="text" id="start-name" placeholder="Default: connection name" data-i18n-placeholder="modal.start.namePlaceholder" autocomplete="off">
-        <label for="start-cmd" data-i18n="modal.start.cmd">Command (optional)</label>
-        <input type="text" id="start-cmd" placeholder="Empty = SSH login shell; or bash, powershell, …" data-i18n-placeholder="modal.start.cmdPlaceholder" autocomplete="off">
-        <label for="start-mode" data-i18n="modal.start.mode">Mode</label>
-        <select id="start-mode"><option value="pty">pty</option><option value="pipe">pipe</option></select>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-primary" id="start-run" data-i18n="modal.start.run">Connect</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Reviews are decided where the terminal is: a switch in the window's title
-       bar and a panel that floats over the terminal. There is no page-level
-       worklist — a decision is always about one command line in one session, and
-       a modal asking "which session?" is a question the terminal already
-       answered. -->
-
-  <div id="modal-cmd" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-h">
-        <h2 id="modal-cmd-title" data-i18n="channel.cmd.titlePty">Run command</h2>
-        <button type="button" id="modal-cmd-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-cmd-err" class="err" style="display:none"></p>
-        <label for="modal-cmd-input" data-i18n="channel.cmd.label">Command</label>
-        <input type="text" id="modal-cmd-input" autocomplete="off" spellcheck="false">
-        <div class="modal-actions">
-          <button type="button" class="btn" id="modal-cmd-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn btn-primary" id="modal-cmd-run" data-i18n="common.ok">OK</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-h">
-        <h2 id="modal-confirm-title" data-i18n="common.confirm">Confirm</h2>
-        <button type="button" id="modal-confirm-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-confirm-msg" class="modal-msg"></p>
-        <div class="modal-actions">
-          <button type="button" class="btn" id="modal-confirm-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn btn-danger" id="modal-confirm-ok" data-i18n="common.delete">Delete</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Closing a running session STOPS AND ARCHIVES it. There is no delete here:
-       the page offers no way to erase a session directly any more, because
-       "delete" beside "stop" made the irreversible choice the one you reach for
-       when you meant the other. Erasing lives in the archive column, where the
-       transcript being destroyed is the thing on screen. -->
-  <div id="modal-close-session" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:460px">
-      <div class="modal-h">
-        <h2 id="modal-close-title" data-i18n="session.close.title">Close session</h2>
-        <button type="button" id="modal-close-x" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-close-msg" class="modal-msg"></p>
-        <p class="modal-hint" data-i18n="session.close.hintArchives">The session stops and keeps its output readable in the archive column.</p>
-        <div class="modal-actions">
-          <button type="button" class="btn" id="modal-close-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn btn-primary" id="modal-close-archive" data-i18n="dock.close.ok">Stop</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- The extension configuration: the modal behind a card's gear, and behind New.
-       It edits the template the store holds — the same text an export hands out.
-       The variable table under it and the value editor it opens are built by
-       extensions.js, which keeps this page's markup budget for the document.
-       Removal lives here rather than on the card: it is a template-level action,
-       and the batch row carries the bulk form of it. -->
-  <div id="modal-ext" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:560px">
-      <div class="modal-h">
-        <h2 id="modal-ext-title" data-i18n="ext.modal.title">New extension</h2>
-        <button type="button" id="modal-ext-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 2l8 8M10 2L2 10"/></svg></button>
-      </div>
-      <div class="modal-body">
-        <p id="modal-ext-err" class="err" style="display:none"></p>
-        <label for="ext-f-name" data-i18n="ext.modal.name">Name</label>
-        <input id="ext-f-name" type="text" autocomplete="off" spellcheck="false" placeholder="my-tool">
-        <label for="ext-f-toml" data-i18n="ext.modal.toml">Template</label>
-        <textarea id="ext-f-toml" spellcheck="false" rows="14"></textarea>
-        <div class="modal-actions">
-          <button type="button" class="btn" id="modal-ext-preview" data-i18n="ext.preview.button">Preview</button>
-          <button type="button" class="btn btn-danger" id="modal-ext-delete" style="display:none" data-i18n="common.delete">Delete</button>
-          <button type="button" class="btn" id="modal-ext-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn btn-primary" id="modal-ext-save" data-i18n="common.save">Save</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Importing extensions: the same document an export produces, as a file. A
-       name that is already taken comes back renamed rather than overwriting what
-       is stored, so the readout is where a partially-renamed import is told. -->
-  <div id="modal-ext-import" class="modal-backdrop hidden" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width:440px">
-      <div class="modal-h">
-        <h2 data-i18n="ext.batch.import">Import extensions</h2>
-        <button type="button" class="btn" id="ext-import-close" data-i18n="common.close">Close</button>
-      </div>
-      <div class="modal-body">
-        <p id="ext-import-err" class="err" style="display:none"></p>
-        <div class="conn-field"><label for="ext-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="ext-import-file" accept=".toml,application/toml,text/plain"></div>
-        <p class="conn-check-hint" data-i18n="ext.batch.importHint">Names already in use are renamed automatically. An invalid file imports nothing.</p>
-        <p id="ext-import-result" role="status" class="form-ok" style="display:none"></p>
-        <div class="modal-actions"><button type="button" class="btn btn-primary" id="ext-import-run" data-i18n="ext.batch.import">Import extensions</button></div>
-      </div>
-    </div>
-  </div>
-
-  <script src="static/xterm/xterm.js"></script>
-  <script src="static/js/i18n-catalog.js"></script>
-  <script src="static/js/i18n.js"></script>
-  <script src="static/js/theme.js"></script>
-  <!-- The batch bar both columns wear (see batch-bar.js): it must be defined
-       before the panels that build one, so it loads ahead of dialogs.js. -->
-  <script src="static/js/batch-bar.js"></script>
-  <script src="static/js/util.js"></script>
-  <script src="static/js/shell-windows.js"></script>
-  <script src="static/js/forward-modal.js"></script>
-  <script src="static/js/approval.js"></script>
-  <script src="static/js/sessions.js"></script>
-  <script src="static/js/ui-socket.js"></script>
-  <script src="static/js/timeline.js"></script>
-  <script src="static/js/terminal-view.js"></script>
-  <script src="static/js/terminal-panels.js"></script>
-  <script src="static/js/terminal-templates.js"></script>
-  <script src="static/js/terminal-window.js"></script>
-  <script src="static/js/terminal-switcher.js"></script>
-  <script src="static/js/dialogs.js"></script>
-  <script src="static/js/conn-form.js"></script>
-  <script src="static/js/extensions.js"></script>
-  <script src="static/js/archive-column.js"></script>
-  <script src="static/js/update-notice.js"></script>
-  <script src="static/js/clients.js"></script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>
