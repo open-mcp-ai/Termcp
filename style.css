@@ -231,16 +231,31 @@
       margin: 0 auto 28px;
     }
     .hero p.lead strong { color: var(--text-bright); font-weight: 600; }
-    /* The tagline under the lead: monospaced, spaced out and dimmer than the
-       lead, so it reads as an epigraph rather than another claim. */
-    .hero p.motto {
+    /* THE ONE BUTTON ON THE PAGE. The hero's claim became this: it is the
+       sentence that says why, and the install section right below is where, so
+       the first screen now offers the action instead of describing it. */
+    .btn-primary {
+      display: inline-block;
+      padding: 12px 26px;
+      background: var(--accent);
+      /* --bg, not a fixed dark: the accent is cyan in the dark theme and a deep
+         teal in the light one, so the readable foreground flips with it. */
+      color: var(--bg);
+      border: 1px solid var(--accent);
       font-family: var(--mono);
-      font-size: 12px;
-      letter-spacing: 0.22em;
-      text-transform: uppercase;
-      color: var(--text-faint);
-      margin: -16px auto 26px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
     }
+    .btn-primary:hover,
+    .btn-primary:focus-visible {
+      background: var(--text-bright);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 22px var(--accent-dim);
+    }
+    .hero .hero-cta { margin-top: 4px; }
 
     .hero p.lead code {
       font-family: var(--mono);
@@ -250,11 +265,20 @@
       padding: 1px 6px;
     }
 
-    /* The sentence the whole page is built on: the agent is a second user on the
-       shell, not a replacement for it. Sits under the install box, on a plate of
-       its own, so it reads as the frame around everything below rather than
-       another line of body copy. */
-    .hero-manifesto {
+    /* The capability band under the install box: four chips that go somewhere and
+       the sentence the page is built on.
+
+       It used to live INSIDE the hero, above the install section, where its
+       comment claimed it sat under the install box and it in fact sat over it.
+       Two rows of chips glued together with `margin-top: -26px` was the sign: the
+       hero had grown to eight stacked layers and the install CTA fell off the
+       first screen. */
+    .capability-band {
+      max-width: 900px;
+      margin: 8px auto 56px;
+      padding: 0 4px;
+    }
+    .band-manifesto {
       max-width: 820px;
       margin: 26px auto 16px;
       padding: 14px 20px;
@@ -271,39 +295,31 @@
        than part of the sentence above it. */
     /* Two pointers for the agent: the skills site itself, and the SKILL.md
        it should load. Inline, one line, both mono. */
-    .hero-manifesto .hero-links {
+    .band-manifesto .hero-links {
       display: block;
       margin-top: 10px;
       font-family: var(--mono);
       font-size: 13.5px;
       color: var(--text-muted);
     }
-    .hero-manifesto .hero-links a {
+    .band-manifesto .hero-links a {
       color: var(--accent);
       text-decoration: none;
     }
-    .hero-manifesto .hero-links a:hover { text-decoration: underline; }
-    .hero-manifesto .hero-links .sep { color: var(--text-faint); }
-    /* The three mechanisms, named in one line — review, custody, persistence —
-       and where the product sits. Mono, because it is a claim, not prose. */
-    .hero-claim {
-      max-width: 820px;
-      margin: 0 auto;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      letter-spacing: 0.04em;
-      color: var(--text-muted);
-    }
-    /* The two targets, stated before anything else: local shell, remote SSH.
-       The MCP rows stack under them, tied tighter than the transport pair. */
+    .band-manifesto .hero-links a:hover { text-decoration: underline; }
+    .band-manifesto .hero-links .sep { color: var(--text-faint); }
+    /* Two rows of doors out of the install box: the transports first, then the
+       reach. They are peers, so the second row keeps the first row's gap — the
+       negative margin that used to glue them was compensating for being stacked
+       in the hero, and made the pair read as one broken row. */
     .targets {
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
       gap: 10px;
-      margin-bottom: 40px;
     }
-    .targets + .targets { margin-top: -26px; }
+    .targets + .targets { margin-top: 10px; }
+    .capability-band .band-manifesto { margin-top: 26px; }
     .target-chip {
       display: inline-flex;
       align-items: baseline;
@@ -1060,7 +1076,7 @@
       clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
     }
     .command-box, .card, .cap, .shot-frame, .security, .terminal-window, .shot-relay,
-    .hero-manifesto, .fleet-code, .gate, .term-toast {
+    .band-manifesto, .fleet-code, .gate, .term-toast {
       border-radius: 0;
       clip-path: polygon(0 14px, 14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
     }
@@ -1242,8 +1258,8 @@
       .hero p.lead { font-size: 16px; }
       .lead-sep { display: none; }
       .lead-tail { display: block; margin-top: 4px; }
-      .hero-manifesto { font-size: 15px; padding: 12px 14px; text-align: left; }
-      .hero-claim { font-size: 12px; }
+      .band-manifesto { font-size: 15px; padding: 12px 14px; text-align: left; }
+      .btn-primary { font-size: 13px; padding: 11px 18px; }
       .sec-title { font-size: 23px; }
       .section { margin-bottom: 64px; }
       .cmd-body { flex-direction: column; align-items: flex-start; }
@@ -1287,7 +1303,7 @@
 
     /* Plates: the magenta-tinted gradient body and the cyan halo that makes
        a panel read as lit rather than filled. */
-    .command-box, .card, .cap, .hero-manifesto, .fleet-code, .terminal-window,
+    .command-box, .card, .cap, .band-manifesto, .fleet-code, .terminal-window,
     .shot-frame, .term-toast, .donor, .target-chip {
       background: linear-gradient(165deg, rgba(9, 14, 26, 0.92), rgba(16, 4, 28, 0.92));
       border-color: var(--accent-glow);
@@ -1448,13 +1464,13 @@
        the colour the frame's own rule already chose. */
     a.github-link { border-bottom: 1px solid var(--accent); }
     .join-qr a { border-bottom: 1px solid var(--border); }
-    .hero-manifesto .hero-links a,
+    .band-manifesto .hero-links a,
     .shot-relay a,
     footer a {
       color: var(--pink);
       border-bottom: 1px dashed rgba(255, 43, 214, 0.5);
     }
-    .hero-manifesto .hero-links a:hover,
+    .band-manifesto .hero-links a:hover,
     .shot-relay a:hover,
     footer a:hover {
       color: var(--accent);
@@ -1522,7 +1538,11 @@
     html[data-theme="light"] .command-box,
     html[data-theme="light"] .card,
     html[data-theme="light"] .cap,
-    html[data-theme="light"] .hero-manifesto,
+    /* The accent is a deep teal here, and white on it lands at 4.41:1 — a hair
+       under the 4.5 a 13px label needs. One shade darker clears it with room,
+       and stays the same hue, so the button still reads as the accent. */
+    html[data-theme="light"] .btn-primary { background: #0a6d80; border-color: #0a6d80; }
+    html[data-theme="light"] .band-manifesto,
     html[data-theme="light"] .fleet-code,
     html[data-theme="light"] .terminal-window,
     html[data-theme="light"] .shot-frame,
@@ -1590,7 +1610,7 @@
       box-shadow: none;
     }
     html[data-theme="light"] .lang-select-wrap select option { background: #fff; }
-    html[data-theme="light"] .hero-manifesto .hero-links a,
+    html[data-theme="light"] .band-manifesto .hero-links a,
     html[data-theme="light"] .shot-relay a,
     html[data-theme="light"] footer a { color: var(--pink); }
     html[data-theme="light"] .a11y-skip { background: #fff; }
