@@ -87,13 +87,13 @@ func TestFlagsThatOnlyMatterServerSide(t *testing.T) {
 		// --for and --sticky set the same field to different things: seconds, and zero.
 		// A wrong hand-off turns a held notification into a disappearing one.
 		for _, cmd := range []string{
-			`notify "held" --for 30`,
-			`notify "sticky" --sticky`,
-			`notify "titled" --title T --level info`,
+			`notify --for 30 "held"`,
+			`notify --sticky "sticky"`,
+			`notify --title T --level info "titled"`,
 			// --on routes the notification to one session rather than the whole
 			// machine; it maps onto session_id, and a wrong hand-off would deliver it
 			// everywhere — which looks like success from the caller's side.
-			`notify "routed" --on ` + firstSessionID(t, s),
+			`notify --on ` + firstSessionID(t, s) + ` "routed"`,
 		} {
 			got := termText(t, s, map[string]any{"cmd": cmd})
 			if !strings.HasPrefix(got, "TERM/1 2") {
