@@ -231,11 +231,21 @@ func (s *Client) ReadFile(remotePath string, offset, length int64, mode string, 
 	result.BytesRead = int64(n)
 	result.Length = int64(n)
 
-	// A NUL BYTE IN A TEXT READ IS A BINARY FILE. Naming an encoding is how a
-	// caller says NULs belong to its text (UTF-16 uses them); otherwise inline text
-	// would turn a binary payload into a page of escapes with no usable meaning.
+	// A NUL BYTE IN A TEXT READ IS A BINARY FILE, EXCEPT WHEN THE FILE DECLARES
+	// AN ENCODING. Windows tools (PowerShell `>` redirect in particular) write
+	// UTF-16 with a BOM (0xFF 0xFE / 0xFE 0xFF), where every ASCII character has a
+	// high NUL byte. Sniff first: if the BOM confirms it, decode automatically
+	// instead of rejecting a text file as binary (#291).
+	if charset == "" && (mode == "text" || mode == "") {
+		if encoding.BOMCharset(segment) != "" {
+			// THE SUFFIX-LESS FORM, deliberately: `utf-16` reads the endianness from
+			// those two bytes AND strips them, while `utf-16le` would leave the BOM in
+			// the text as a leading U+FEFF.
+			charset = "utf-16"
+		}
+	}
 	if (mode == "text" || mode == "") && charset == "" && bytes.IndexByte(segment, 0) >= 0 {
-		return nil, fmt.Errorf("%s: %w; use `--mode hex` for bytes, or `get <session> file <path> --op urls` for a download", remotePath, ErrBinaryFile)
+		return nil, fmt.Errorf("%s: %w; if this is UTF-16 or a wide charset, pass `--encoding utf-16`; use `--mode hex` for bytes, or `get <session> file <path> --op urls` for a download", remotePath, ErrBinaryFile)
 	}
 
 	// Encode based on mode.
