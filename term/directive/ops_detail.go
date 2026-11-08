@@ -201,7 +201,7 @@ var ops = []Op{
 		Kinds:     []string{"cdp", "mcp", "jrpc"},
 		Flags:     []string{"send", "json"},
 		Valueless: []string{"send", "json"},
-		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <tool|frame>",
+		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <frame>",
 		Detail:    callDetail},
 
 	// --- configuration, which outlives any session ---
@@ -1378,8 +1378,16 @@ RAW PROTOCOL (when not calling a tool):
   close <session> mcp:1                        unmount peer
 
 Stdio servers opened with --argv use the channel handle instead of mcp:1:
-  call <channel> <tool> {"arg":"val"}
-  read <channel> --frame                       read frames from stdio stdout`
+  call <channel> '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  read <channel> --frame                       read frames from stdio stdout
+
+A CHANNEL IS NOT A PEER. It carries raw frames only — no handshake, no tool
+name form, no session or id bookkeeping: the caller writes the whole JSON-RPC
+frame and reads the whole reply. An MCP peer mounted with 'open <session> mcp
+<url>' is what gives 'call <session> mcp:1 <tool> {args}', and a 'create ext
+--url ...' relay speaks the same raw frames its channel carries. A tool-name
+form on a channel is refused with "the frame is not JSON", because the first
+word of a frame must be the JSON object itself.`
 
 // forwardDetail is the flag set per direction, which the one-line usage cannot show:
 // `open <session> forward …` does not say which of --remote-host / --local-port belong
