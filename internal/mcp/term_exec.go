@@ -147,9 +147,16 @@ type capabilityHandler struct {
 }
 
 func (h *capabilityHandler) Handle(ctx context.Context, st directive.Statement) []envelope.Slot {
-	expanded, cycle := aliases.Expand(st)
+	expanded, cycle, err := aliases.Expand(st)
+	if err != nil {
+		return []envelope.Slot{h.s.parseErrorSlot(err)}
+	}
 	if cycle != nil {
 		return []envelope.Slot{aliasCycleSlot(st, cycle)}
 	}
-	return h.s.runDirective(ctx, expanded, h.win)
+	slots := make([]envelope.Slot, 0, len(expanded))
+	for _, single := range expanded {
+		slots = append(slots, h.s.runDirective(ctx, single, h.win)...)
+	}
+	return slots
 }

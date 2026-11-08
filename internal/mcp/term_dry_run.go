@@ -24,7 +24,17 @@ import (
 func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelope.Slot {
 	out := make([]envelope.Slot, 0, len(stmts))
 	for _, stmt := range stmts {
-		expanded, cycle := aliases.Expand(stmt)
+		expanded, cycle, expansionErr := aliases.Expand(stmt)
+		if expansionErr != nil {
+			slot := s.parseErrorSlot(expansionErr)
+			if slot.Headers == nil {
+				slot.Headers = map[string]string{}
+			}
+			slot.Headers["Dry-Run"] = "true"
+			slot.Headers["Verdict"] = "invalid"
+			out = append(out, slot)
+			continue
+		}
 		if cycle != nil {
 			slot := aliasCycleSlot(stmt, cycle)
 			if slot.Headers == nil {
@@ -36,27 +46,29 @@ func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelo
 			continue
 		}
 
-		headers := map[string]string{
-			"Dry-Run": "true",
-			"Verdict": "valid-syntax",
-			// PATH IS MASKED TOO, AND THAT IS NOT REDUNDANT. The parser expands
-			// the whole line, echo included (subst.go sets `Path` from the same
-			// table that fills the payload), so `input s1:1 $PASS` reaches here
-			// with the credential ALREADY WRITTEN INTO the echo. Masking only the
-			// payload would leak through the more prominent header — measured, not
-			// theorised (#241 §4.4).
-			"Path": maskSecrets(expanded.Path, win.Secrets),
+		for _, expanded := range expanded {
+			headers := map[string]string{
+				"Dry-Run": "true",
+				"Verdict": "valid-syntax",
+				// PATH IS MASKED TOO, AND THAT IS NOT REDUNDANT. The parser expands
+				// the whole line, echo included (subst.go sets `Path` from the same
+				// table that fills the payload), so `input s1:1 $PASS` reaches here
+				// with the credential ALREADY WRITTEN INTO the echo. Masking only the
+				// payload would leak through the more prominent header — measured, not
+				// theorised (#241 §4.4).
+				"Path": maskSecrets(expanded.Path, win.Secrets),
+			}
+			if expanded.Target != "" {
+				headers["Target"] = maskSecrets(expanded.Target, win.Secrets)
+			}
+			if expanded.Payload != "" {
+				headers["Expanded"] = maskSecrets(expanded.Payload, win.Secrets)
+			}
+			out = append(out, envelope.Slot{
+				Code:    200,
+				Headers: headers,
+			})
 		}
-		if expanded.Target != "" {
-			headers["Target"] = maskSecrets(expanded.Target, win.Secrets)
-		}
-		if expanded.Payload != "" {
-			headers["Expanded"] = maskSecrets(expanded.Payload, win.Secrets)
-		}
-		out = append(out, envelope.Slot{
-			Code:    200,
-			Headers: headers,
-		})
 	}
 	return out
 }

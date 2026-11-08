@@ -46,9 +46,12 @@ func TestAliasCycleIsReportedThroughTheParseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the parser to reject an invented directive")
 	}
-	stmt, resolved, cycle := a.expandErrorCycle(err)
+	stmts, resolved, cycle, expansionErr := a.expandErrorCycle(err, "aa", directive.Subst{})
 	if resolved {
-		t.Fatalf("a cyclic chain resolved to %q", stmt.Op)
+		t.Fatalf("a cyclic chain resolved to %q", stmts[0].Op)
+	}
+	if expansionErr != nil {
+		t.Fatalf("a cyclic chain reported an expansion error: %v", expansionErr)
 	}
 	if len(cycle) == 0 {
 		t.Fatal("expandErrorCycle reported no cycle")
@@ -62,7 +65,7 @@ func TestUnresolvableNameIsNotACycle(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a parse error")
 	}
-	if _, resolved, cycle := a.expandErrorCycle(err); resolved || len(cycle) != 0 {
+	if _, resolved, cycle, expansionErr := a.expandErrorCycle(err, "aa", directive.Subst{}); resolved || len(cycle) != 0 || expansionErr != nil {
 		t.Fatalf("resolved=%v cycle=%v, want neither for a name that is not an alias", resolved, cycle)
 	}
 }

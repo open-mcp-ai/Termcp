@@ -75,24 +75,36 @@ func (a *aliasTable) snapshot() map[string]string {
 // expansion may itself name an alias, so resolution repeats until it reaches a
 // real directive (with a cycle guard).
 //
-// THE SECOND RESULT IS A CYCLE, NOT A FAILURE. When the chain loops, the statement
+// IT RETURNS A SLICE, NOT ONE STATEMENT (#284). An alias body is a command line,
+// and a command line can hold several statements — `ls alias; ls host` is two. The
+// single-statement return was not a simplification, it was a ceiling on the feature:
+// the only way to write a compound alias was a way that did not work.
+//
+// THE CYCLE RESULT IS SEPARATE FROM THE ERROR. When the chain loops, the statement
 // comes back untouched so the caller reports the name it was given — but expanding
 // `aa` (→ bb → aa) and dispatching the word `aa` produced "unknown directive: aa",
 // which sends the caller looking for a typo in a directive that is in fact defined.
 // A cycle is only reachable through the alias table, so saying so is the difference
 // between a puzzle and a fix.
-func (a *aliasTable) Expand(stmt directive.Statement) (directive.Statement, []string) {
+func (a *aliasTable) Expand(stmt directive.Statement) ([]directive.Statement, []string, *directive.Error) {
 	if _, ok := a.get(stmt.Op); !ok {
-		return stmt, nil
+		return []directive.Statement{stmt}, nil, nil
 	}
 	// NO SUBSTITUTION HERE: this runs on an already-parsed statement, so the
 	// caller's values have been filled in. Passing an empty table keeps the
 	// expansion's own `$N` text as the shell's own positional parameters, which is
 	// what it was before this path existed.
-	if resolved, ok := a.resolve(stmt.Op, strings.TrimSpace(stmt.Target+" "+stmt.Payload), directive.Subst{}); ok {
-		return resolved, nil
+	resolved, expansionErr, ok := a.resolve(stmt.Op, strings.TrimSpace(stmt.Target+" "+stmt.Payload), directive.Subst{})
+	if ok {
+		return resolved, nil, nil
 	}
-	return stmt, a.cyclePath(stmt.Op)
+	if expansionErr != nil {
+		// THE EXPANSION'S OWN MISTAKE, REPORTED AS ITSELF. The first word resolved,
+		// so the failure happened inside the alias body; naming the alias again would
+		// send the caller looking for a typo in a name that exists (#284 A1).
+		return nil, nil, expansionErr
+	}
+	return []directive.Statement{stmt}, a.cyclePath(stmt.Op), nil
 }
 
 // cyclePath replays the expansion chain from name and returns the names it
@@ -137,15 +149,55 @@ func (a *aliasTable) cyclePath(name string) []string {
 // which means Expand() below is never reached for the common case, and a cycle that
 // only Expand() knew how to report still came back as "unknown directive: aa". Both
 // doors need the same answer.
-func (a *aliasTable) expandErrorCycle(err error) (directive.Statement, bool, []string) {
+func (a *aliasTable) expandErrorCycle(err error, cmd string, sub directive.Subst) ([]directive.Statement, bool, []string, *directive.Error) {
 	derr, ok := err.(*directive.Error)
-	if !ok || derr.Op == "" {
-		return directive.Statement{}, false, nil
+	if !ok {
+		return nil, false, nil, nil
 	}
-	if stmt, ok := a.resolve(derr.Op, derr.Rest, directive.Subst{}); ok {
-		return stmt, true, nil
+	// THE OFFENDING WORD IS USUALLY IN THE ERROR, AND SOMETIMES THERE IS NO WORD.
+	//
+	// `unknown directive: zz1` names it. The unused-args refusal does not — it says
+	// "cmd never references $1", which is a fact about the LINE, and for an alias
+	// invocation it is a fact about the wrong line: the reference lives in the alias
+	// body, so the caller's `say` legitimately names no $1 and the expansion is the
+	// only text that can (#284). The first word of the command is the name to look up
+	// in that case, because a directive is the first word of a statement.
+	name := derr.Op
+	if name == "" {
+		name = firstWord(cmd)
 	}
-	return directive.Statement{}, false, a.cyclePath(derr.Op)
+	if name == "" {
+		return nil, false, nil, nil
+	}
+	stmts, expansionErr, ok := a.resolve(name, derr.Rest, sub)
+	if ok {
+		return stmts, true, nil, nil
+	}
+	if expansionErr != nil {
+		// THE EXPANSION'S OWN MISTAKE, and reporting it beats "unknown directive".
+		// The first word resolved into an alias, so the failure happened INSIDE the
+		// expansion; naming the alias again would send the caller looking for a typo
+		// in a directive that is in fact defined. The inner error says what the
+		// expansion actually refused (#284 A1).
+		return nil, false, nil, expansionErr
+	}
+	return nil, false, a.cyclePath(name), nil
+}
+
+// firstWord returns the command's first word, which is where a directive name sits.
+//
+// It stops at whitespace and at the operators that end a statement, so `say; ls` and
+// `say && ls` still look up `say`. A quoted first word is not an alias name in any
+// useful sense, and the table lookup will simply miss it.
+func firstWord(cmd string) string {
+	trimmed := strings.TrimSpace(cmd)
+	for i, r := range trimmed {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '&', '|':
+			return trimmed[:i]
+		}
+	}
+	return trimmed
 }
 
 // resolve follows a name through the table until it lands on a directive the
@@ -158,26 +210,47 @@ func (a *aliasTable) expandErrorCycle(err error) (directive.Statement, bool, []s
 // value would arrive quoted as data and a positional payload would stop being syntax.
 // Passing the table through is what makes an alias expand to the same statement the
 // caller would have written out in full.
-func (a *aliasTable) resolve(name, rest string, sub directive.Subst) (directive.Statement, bool) {
+//
+// THE ERROR RESULT IS THE EXPANSION'S OWN MISTAKE (#284 A1), and it is returned
+// instead of being discarded: the caller is the one who can teach it, and the caller
+// that asked for `zz1` was never told that the problem is inside the expansion.
+func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directive.Statement, *directive.Error, bool) {
 	seen := map[string]bool{}
 	for {
 		expansion, ok := a.get(name)
 		if !ok || seen[name] {
-			return directive.Statement{}, false
+			return nil, nil, false
 		}
 		seen[name] = true
 		f, err := directive.ParseWithSubst(strings.TrimSpace(expansion+" "+rest), sub)
-		if err == nil && len(f.Statements) == 1 {
-			stmt := f.Statements[0]
-			if _, next := a.get(stmt.Op); !next {
-				return stmt, true
+		if err == nil {
+			if len(f.Statements) == 0 {
+				return nil, nil, false
 			}
-			name, rest = stmt.Op, strings.TrimSpace(stmt.Target+" "+stmt.Payload)
-			continue
+			// MULTI-STATEMENT ALIASES RUN AS THEY ARE WRITTEN (#284 A2/A3). `ls alias;
+			// ls host` is two statements, and refusing it made the only way to write a
+			// compound alias a way that does not work. Chaining continues only from the
+			// FIRST statement: an alias whose first word is another alias is a chain, one
+			// whose second word is an alias is a compound that the executor handles per
+			// statement.
+			if first := f.Statements[0]; len(f.Statements) == 1 {
+				if _, next := a.get(first.Op); next {
+					name, rest = first.Op, strings.TrimSpace(first.Target+" "+first.Payload)
+					continue
+				}
+			}
+			return f.Statements, nil, true
 		}
 		derr, ok := err.(*directive.Error)
 		if !ok || derr.Op == "" {
-			return directive.Statement{}, false
+			return nil, nil, false
+		}
+		if _, next := a.get(derr.Op); !next {
+			// THE FAILURE IS INSIDE THE EXPANSION, NOT AT THE NEXT HOP. The word the
+			// error names is a real directive (or a shape error on one), so continuing the
+			// walk would report "unknown directive" about a name that exists — the same
+			// wrong answer the cycle branch already had to be taught out of.
+			return nil, derr, false
 		}
 		name, rest = derr.Op, derr.Rest
 	}

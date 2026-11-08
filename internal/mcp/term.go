@@ -325,21 +325,33 @@ func applySlotWindows(slots []envelope.Slot, win termArgs) []envelope.Slot {
 
 // executeTerm parses cmd and runs it, accumulating the reply.
 func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) termReply {
-	file, err := directive.ParseWithSubst(cmd, directive.Subst{Named: win.Vars, Pos: win.Args})
+	sub := directive.Subst{Named: win.Vars, Pos: win.Args}
+	file, err := directive.ParseWithSubst(cmd, sub)
 	if err != nil {
 		// A directive the caller invented (an alias) is unknown to the parser by
 		// definition, so it is resolved here before the error is reported — with the
 		// SAME substitution table, because the alias's expansion is the caller's
 		// command line and may reference the same $1/$NAME values.
 		// resolved says a directive was actually produced; cycle says the chain
-		// never got there. Neither means the word is simply not a directive, and that
-		// case must keep falling through to the normal parse-error teaching below.
-		stmt, resolved, cycle := aliases.expandErrorCycle(err)
+		// never got there; expansionErr says the expansion failed to parse.
+		stmts, resolved, cycle, expansionErr := aliases.expandErrorCycle(err, cmd, sub)
 		if resolved {
 			if win.DryRun {
-				return termReply{win: win, slots: s.dryRunSlots([]directive.Statement{stmt}, win)}
+				return termReply{win: win, slots: s.dryRunSlots(stmts, win)}
 			}
-			return s.runStatements(ctx, []directive.Statement{stmt}, win)
+			return s.runStatements(ctx, stmts, win)
+		}
+		if expansionErr != nil {
+			// THE EXPANSION HAS ITS OWN ERROR, and reporting it beats "unknown directive" (#284 A1).
+			slot := s.parseErrorSlot(expansionErr)
+			if win.DryRun {
+				if slot.Headers == nil {
+					slot.Headers = map[string]string{}
+				}
+				slot.Headers["Dry-Run"] = "true"
+				slot.Headers["Verdict"] = "invalid"
+			}
+			return termReply{win: win, slots: []envelope.Slot{slot}}
 		}
 		if len(cycle) > 0 {
 			slot := aliasCycleSlot(directive.Statement{Path: cmd}, cycle)
