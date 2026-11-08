@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.2.9 — 2026-11-08
+
 ### 新功能
 
 - **`termcp/term` 与 `termcp/term/server` 可被外部 Go 程序直接引用**：写一个 `Handler`、声明自己的词表，就能得到一个 TERM/1 服务器——解析、`&&`/`||` 短路、`208`、slot 对齐、信封、空调用向导全部由协议层提供。`go list -deps ./term` 里没有任何 `internal/` 路径。
