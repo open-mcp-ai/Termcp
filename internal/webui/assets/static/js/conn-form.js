@@ -1113,7 +1113,6 @@ fetch(apiPath('/api/version'))
     var version = j && j.version ? j.version : '';
     var el = document.getElementById('app-version');
     if (el && version) el.textContent = version;
-    if (typeof checkForUpdate === 'function') checkForUpdate(version);
   })
   .catch(function () {});
 

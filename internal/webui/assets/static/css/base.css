@@ -179,16 +179,6 @@
   /* Build version beside the wordmark, filled in from GET /api/version. Left
      margin, not a space, so a failed fetch leaves no gap after the wordmark. */
   .app-header .app-version { margin-left: 6px; font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
-  /* A newer release exists (see update-notice.js). It sits in the header flow
-     rather than floating: the header is the one bar that already reflows on a
-     phone, so a notice placed here follows the layout instead of being the one
-     element that does not. It is an <a> because the whole point is to go there. */
-  .update-notice { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px 4px 3px 10px; border: 1px solid var(--accent-ring); border-radius: 999px; background: var(--accent-surface); font-size: 0.74rem; white-space: nowrap; }
-  .update-notice-link { color: var(--text-primary); text-decoration: none; font-weight: 500; }
-  .update-notice-link:hover { text-decoration: underline; }
-  .update-notice-close { flex-shrink: 0; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); font: inherit; line-height: 1; cursor: pointer; }
-  .update-notice-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
-  .update-notice-link:focus-visible, .update-notice-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; }
   .btn:hover { background: var(--bg-card-hover); border-color: var(--border-strong); color: var(--text-primary); }
   .btn-primary { background: var(--success); border-color: var(--success); color: var(--text-on-accent); }
