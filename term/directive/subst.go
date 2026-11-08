@@ -161,9 +161,6 @@ type occ struct {
 	value      string
 	// raw reports that the value is spliced in verbatim instead of quoted.
 	raw bool
-	// dq reports that the expansion sat inside double quotes, so a value that
-	// must stay inside them is escaped for that context rather than re-quoted.
-	dq bool
 }
 
 // substitute replaces every parameter expansion naming a value the caller supplied
@@ -200,9 +197,7 @@ func substitute(src string, sub Subst, spans []span, refs []ref) (string, *senti
 		b.WriteString(src[last:o.start])
 		switch {
 		case o.raw:
-			b.WriteString(table.prefix + strconv.Itoa(table.add(o.value, o.dq)) + "__")
-		case o.dq:
-			b.WriteString(shellDoubleQuoteBody(o.value))
+			b.WriteString(table.prefix + strconv.Itoa(table.add(o.value)) + "__")
 		default:
 			b.WriteString(shellSingleQuote(o.value))
 		}
@@ -225,9 +220,6 @@ type ref struct {
 	start, end int
 	name       string
 	positional bool
-	// dq reports that the expansion sits inside double quotes, so a value that must stay
-	// inside them is escaped for that context rather than re-quoted.
-	dq bool
 }
 
 // resolve reports every reference that names a value the caller supplied.
@@ -254,7 +246,7 @@ func resolve(src string, sub Subst, spans []span, refs []ref) ([]occ, usage, err
 	}
 	for _, ref := range refs {
 		r.reported[ref.start] = true
-		if err := r.one(ref.start, ref.end, ref.name, ref.positional, ref.dq); err != nil {
+		if err := r.one(ref.start, ref.end, ref.name, ref.positional); err != nil {
 			return nil, usage{}, err
 		}
 	}
@@ -330,7 +322,7 @@ func (r *resolver) blind() {
 				continue
 			}
 			if !r.reported[i] {
-				if err := r.one(i, end, name, positional, false); err != nil {
+				if err := r.one(i, end, name, positional); err != nil {
 					r.failed = err
 					return
 				}
@@ -341,7 +333,7 @@ func (r *resolver) blind() {
 }
 
 // one resolves a single reference, or explains why it cannot.
-func (r *resolver) one(start, end int, name string, positional, dq bool) error {
+func (r *resolver) one(start, end int, name string, positional bool) error {
 	mode, raw := spanAt(r.spans, r.src, start, end)
 	// A shell region is one the parser read as a command line or a word list; everything
 	// else — a frame, a target, a flag value, a heredoc body — is bytes.
@@ -368,22 +360,20 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 			"If the line is literal (no values), write it directly: cmd: \"run <channel> cat /etc/hosts\"", name)
 	}
 
-	// ESCAPING IS A PROPERTY OF THE DESTINATION, NOT OF THE QUOTES.
+	// INSERTION IS A PROPERTY OF THE DESTINATION, NOT OF THE QUOTES.
 	//
-	// `dq` says the reference sat inside double quotes in cmd, which is a fact about the
-	// SOURCE. It only means anything when a shell will later read those quotes and take them
-	// off: a value destined for a file path, a target or a JSON frame is the caller's bytes,
-	// and escaping it injects backslashes nobody asked for.
+	// The source used to decide it: a reference written inside double quotes was escaped
+	// for a double-quoted context. That only means anything where a shell later reads
+	// those quotes and takes them off, and no destination that reaches this point is that
+	// shell — a flag value or a frame is bytes (escaping invented backslashes: `write
+	// <session> file "$1"` created `C:\Users\...`), and a WORD LIST is re-read by
+	// SplitArgv (escaping was a third pass on a value already quoted once and quoted again
+	// by the transport: a PowerShell `$t` reached the target as `\$t`, #292).
 	//
-	// The reported case: `write <session> file "$1"` — the ordinary instinct to quote a path
-	// — answered 202 and created a file whose NAME contained the escape sequences
-	// (`C:\\Users\\...\\asked.bin`), because shell escaping was applied to a destination no
-	// shell reads. The unquoted `$1` was right all along, which is the shape of the bug: two
-	// spellings of the same intent, one of them silently corrupt.
-	//
-	// `run h:1 "$1"` is the case the flag exists for and it keeps its escaping: the payload
-	// IS read by a shell, the quotes reach it, and the value has to survive that unquoting.
-	escapes := dq && shell
+	// So: a destination no shell reads keeps the caller's bytes, and a word list is raw
+	// even when the reference is not a whole word — the caller's own quotes are the
+	// quoting there, and SplitArgv is what takes them off.
+	raw = raw || mode == spanWords || !shell
 
 	if positional {
 		// Positional substitution is opt-in with the args channel: with no args the caller
@@ -415,8 +405,13 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 			// OUTSIDE A SHELL REGION NOTHING QUOTES THE VALUE, because nothing will unquote
 			// it: a flag value arrives at its destination as the bytes between the flags,
 			// and shell quoting there would be bytes the caller never sent.
-			raw: raw || !shell,
-			dq:  escapes,
+			//
+			// A WORD LIST IS INSERTED RAW TOO, even inside the caller's quotes (#292).
+			// `--argv` is not a shell line: its value is re-read by SplitArgv, so a value
+			// quoted here would be quoted a SECOND time by that reader and arrive with
+			// quotes the caller never wrote. The caller's own `"…"` is what keeps the word
+			// together, and SplitArgv is what takes it off again.
+			raw: raw,
 		})
 		return nil
 	}
@@ -449,14 +444,10 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 		// that moved a value from `args` to `vars` (or back) got a different command line
 		// from identical text, and nothing said so.
 		//
-		// The rule is now one rule: WHO READS THE VALUE decides how it is inserted. A
-		// whole payload is a command line, so the value is the line; anywhere inside a
-		// payload it is one quoted word; a destination no shell reads (a flag value, a
-		// frame) gets the caller's bytes. Quoting something as a single word is a thing
-		// the caller asks for with quotes (`run h:1 "$CMD"`), the same way it would in a
-		// shell — not something the choice of variable spelling decides.
-		raw: raw || !shell,
-		dq:  escapes,
+		// WHO READS THE VALUE decides how it is inserted, and both spellings answer
+		// identically: a destination no shell reads gets the caller's bytes, and a shell
+		// line only ever accepts a reference that IS the payload.
+		raw: raw,
 	})
 	return nil
 }
@@ -562,11 +553,10 @@ type sentinelTable struct {
 
 type sentinelValue struct {
 	value string
-	dq    bool
 }
 
-func (t *sentinelTable) add(value string, dq bool) int {
-	t.vals = append(t.vals, sentinelValue{value: value, dq: dq})
+func (t *sentinelTable) add(value string) int {
+	t.vals = append(t.vals, sentinelValue{value: value})
 	return len(t.vals) - 1
 }
 
@@ -603,11 +593,7 @@ func (t *sentinelTable) expand(s string) string {
 			s = rest
 			continue
 		}
-		v := t.vals[id].value
-		if t.vals[id].dq {
-			v = shellDoubleQuoteBody(v)
-		}
-		b.WriteString(v)
+		b.WriteString(t.vals[id].value)
 		s = rest[j+2:]
 	}
 }

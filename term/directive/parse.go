@@ -312,18 +312,13 @@ func analyzeSource(src string, g *Grammar) ([]span, []ref) {
 		return nil, nil
 	}
 	var (
-		dq    [][2]int
 		refs  []ref
 		spans []span
 	)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
-		case *syntax.DblQuoted:
-			// Pre-order: enclosing quote is recorded before nodes inside it.
-			dq = append(dq, [2]int{int(n.Pos().Offset()), int(n.End().Offset())})
 		case *syntax.ParamExp:
 			if r, ok := refOfParam(src, n); ok {
-				r.dq = insideRange(dq, r.start, r.end)
 				refs = append(refs, r)
 			}
 		}
@@ -384,16 +379,6 @@ func refOfParam(src string, p *syntax.ParamExp) (ref, bool) {
 		name:       name,
 		positional: allDigits(name),
 	}, true
-}
-
-// insideRange reports whether [start,end) sits inside any of these ranges.
-func insideRange(ranges [][2]int, start, end int) bool {
-	for _, r := range ranges {
-		if start >= r[0] && end <= r[1] {
-			return true
-		}
-	}
-	return false
 }
 
 // statementRawSpans reports the ranges of a statement whose values are SHELL
@@ -562,14 +547,6 @@ func mustLiteralWord(src string, w *syntax.Word) string {
 // shellSingleQuote renders a value as a single-quoted shell word.
 func shellSingleQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
-}
-
-// shellDoubleQuoteBody renders a value for insertion INSIDE existing double
-// quotes: backslash, double quote and dollar must be escaped, and a literal
-// newline is left as-is (it is data inside quotes).
-func shellDoubleQuoteBody(v string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
-	return r.Replace(v)
 }
 
 // isSentinel reports whether a value is still a raw hole waiting to be filled.
