@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {
@@ -23,9 +23,9 @@ func startTestSession(t *testing.T, s *Server) (sessionID, shellID string) {
 	return m["session_id"].(string), m["shell_id"].(string)
 }
 
-func callReq(name string, args map[string]any) mcpgo.CallToolRequest {
-	return mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{Name: name, Arguments: args},
+func callReq(name string, args map[string]any) mcp.CallToolRequest {
+	return mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Name: name, Arguments: args},
 	}
 }
 

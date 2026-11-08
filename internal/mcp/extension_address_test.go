@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -37,7 +37,7 @@ func TestExtensionListingPrintsAnAddressNotAChannelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := s.extensionListing(mcpgo.NewToolResultText(string(body)), true)
+	got := s.extensionListing(mcp.NewToolResultText(string(body)), true)
 	if !strings.Contains(got, want) {
 		t.Errorf("the listing does not print the address %q:\n%s", want, got)
 	}
@@ -53,7 +53,7 @@ func TestExtensionListingPrintsAnAddressNotAChannelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s.extensionListing(mcpgo.NewToolResultText(string(only)), true); !strings.Contains(got, sess) {
+	if got := s.extensionListing(mcp.NewToolResultText(string(only)), true); !strings.Contains(got, sess) {
 		t.Errorf("a shell-less extension should report its session:\n%s", got)
 	}
 }

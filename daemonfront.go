@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/config"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 	pkgsftp "github.com/pkg/sftp"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -19,7 +19,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
@@ -99,7 +99,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcpgo.CallToolReque
 	return jsonResult(toMap(result)), nil
 }
 
-func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
@@ -145,7 +145,7 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcpgo.CallToolRequ
 // round trip loses anything that changed in between, and a partial write leaves a
 // truncated file. The uniqueness rule is what makes it safe: the caller must describe
 // the target precisely enough to match once.
-func (s *Server) handleFileReplace(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileReplace(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
@@ -184,7 +184,7 @@ func (s *Server) handleFileReplace(ctx context.Context, request mcpgo.CallToolRe
 // required" alone leaves the caller to guess where the path goes in the DSL.
 const remotePathRequired = "remote_path is required: name the file after `file`, e.g. `read <session|host> file /tmp/app.log`"
 
-func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileStat(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
@@ -205,13 +205,13 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 	}
 	m := toMap(result)
 
-	// A BORROWED HOST HAS NO SESSION TO BUILD A URL FROM (#237). The stat is a
+	// A `USE:` HOST HAS NO SESSION TO BUILD A URL FROM (#237). The stat is a
 	// property of the connection, so it answers; the download/upload urls are
 	// addresses in the session REST surface, and inventing one for a target that has
 	// no session would hand the caller a URL that 404s. Omitting them says what is
-	// true: this answer came from a borrowed connection.
-	if _, borrowed := s.parseBorrowedHost(sessionID); borrowed {
-		m["borrowed"] = true
+	// true: this answer came from a `use` connection.
+	if _, isUse := s.parseUseHost(sessionID); isUse {
+		m["use_host"] = true
 		return jsonResult(m), nil
 	}
 
@@ -232,7 +232,72 @@ func (s *Server) handleFileStat(ctx context.Context, request mcpgo.CallToolReque
 	return jsonResult(m), nil
 }
 
-func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// withFileSession resolves `session_id`, leases that session's SFTP engine and
+// hands it to fn.
+//
+// The handlers in this file open with the same lines: read the session, refuse
+// an empty one, lease the engine, and give back both the engine and the
+// transport lease. Only the operation after that differs. Writing the set-up
+// once is not about the line count — a handler that lost one of the two
+// defers would leak a transport lease for the life of the connection, and the
+// way to make that impossible is to have one place that writes them.
+func (s *Server) withFileSession(ctx context.Context, args map[string]any,
+	fn func(cli *filesftp.Client) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
+	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
+	if sessionID == "" {
+		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
+	}
+	cli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
+	if bad != nil {
+		return bad, nil
+	}
+	defer cli.Close()
+	defer releaseTransport()
+	return fn(cli)
+}
+
+func (s *Server) handleFileDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcp.CallToolResult, error) {
+		remotePath := getString(request.GetArguments(), "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
+		}
+		if err := cli.RemoveFile(remotePath); err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return successResult(), nil
+	})
+}
+
+func (s *Server) handleFileRename(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcp.CallToolResult, error) {
+		args := request.GetArguments()
+		fromPath := getString(args, "from_path", "")
+		toPath := getString(args, "to_path", "")
+		if fromPath == "" || toPath == "" {
+			return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
+		}
+		if err := cli.RenameFile(fromPath, toPath); err != nil {
+			return fileErr(err, fromPath), nil
+		}
+		return successResult(), nil
+	})
+}
+
+func (s *Server) handleFileMakeDir(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcp.CallToolResult, error) {
+		remotePath := getString(request.GetArguments(), "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
+		}
+		if err := cli.MakeDir(remotePath); err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return successResult(), nil
+	})
+}
+
+func (s *Server) handleGetFileURLs(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	remotePath := getString(args, "remote_path", "")
@@ -242,79 +307,12 @@ func (s *Server) handleFileDelete(ctx context.Context, request mcpgo.CallToolReq
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	if err := sftpCli.RemoveFile(remotePath); err != nil {
-		return fileErr(err, remotePath), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handleFileRename(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	fromPath := getString(args, "from_path", "")
-	toPath := getString(args, "to_path", "")
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-	if fromPath == "" || toPath == "" {
-		return toolError(CodeInvalidArgument, "%s", "from_path and to_path required"), nil
-	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	if err := sftpCli.RenameFile(fromPath, toPath); err != nil {
-		return fileErr(err, fromPath), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handleFileMakeDir(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
-	}
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	if err := sftpCli.MakeDir(remotePath); err != nil {
-		return fileErr(err, remotePath), nil
-	}
-	return successResult(), nil
-}
-
-func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-	remotePath := getString(args, "remote_path", "")
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-	if remotePath == "" {
-		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
-	}
-	// THE URLS ADDRESS A SESSION, so a borrowed host cannot have them: they are
+	// THE URLS ADDRESS A SESSION, so a `use` host cannot have them: they are
 	// routes in the session REST surface. Saying so is the answer; resolving the
 	// target as a session first would report "not found" about a host that exists.
-	if host, borrowed := s.parseBorrowedHost(sessionID); borrowed {
+	if host, isUse := s.parseUseHost(sessionID); isUse {
 		return toolError(CodeInvalidArgument, "%s", "the download/upload urls are session routes, and "+
-			quoteOrDash(host)+" is a host used through a borrowed connection, so it has no session to address. "+
+			quoteOrDash(host)+" is a host used through a `use` connection, so it has no session to address. "+
 			"Use `read "+host+" file "+remotePath+"` for the bytes, or connect to the host if you need the HTTP surface."), nil
 	}
 	if _, bad := s.requireRunningSession(sessionID); bad != nil {
@@ -351,7 +349,7 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcpgo.CallToolRequ
 // to value, the shape an MCP client sends for an object-typed property. A value
 // that is not a string is refused rather than dropped: the caller would get a
 // URL that looks like it carries the header and does not.
-func responseHeadersArg(args map[string]any) (map[string]string, *mcpgo.CallToolResult) {
+func responseHeadersArg(args map[string]any) (map[string]string, *mcp.CallToolResult) {
 	v, ok := args["response_headers"]
 	if !ok || v == nil {
 		return nil, nil
@@ -372,7 +370,7 @@ func responseHeadersArg(args map[string]any) (map[string]string, *mcpgo.CallTool
 }
 
 // handleFilePerm dispatches chmod, chown, chtimes.
-func (s *Server) handleFilePerm(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFilePerm(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
@@ -445,7 +443,7 @@ func (s *Server) handleFilePerm(ctx context.Context, request mcpgo.CallToolReque
 }
 
 // handleFileLinkOp dispatches readlink, symlink, link.
-func (s *Server) handleFileLinkOp(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileLinkOp(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
@@ -500,7 +498,7 @@ func (s *Server) handleFileLinkOp(ctx context.Context, request mcpgo.CallToolReq
 }
 
 // handleFileFsOp dispatches truncate, realpath, statvfs.
-func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleFileFsOp(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
 	action := getString(args, "action", "")
@@ -594,26 +592,15 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcpgo.CallToolReque
 }
 
 // handleFileGetwd returns the remote working directory via SSH/SFTP.
-func (s *Server) handleFileGetwd(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	args := request.GetArguments()
-	sessionID := strings.TrimSpace(getString(args, "session_id", ""))
-
-	if sessionID == "" {
-		return toolError(CodeInvalidArgument, "%s", "session_id required"), nil
-	}
-
-	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
-	if bad != nil {
-		return bad, nil
-	}
-	defer sftpCli.Close()
-	defer releaseTransport()
-	dir, err := sftpCli.Getwd()
-	if err != nil {
-		// No caller path is involved: the working directory is the server's own.
-		return fileErr(err, ""), nil
-	}
-	return jsonResult(map[string]any{"directory": dir}), nil
+func (s *Server) handleFileGetwd(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.withFileSession(ctx, request.GetArguments(), func(cli *filesftp.Client) (*mcp.CallToolResult, error) {
+		dir, err := cli.Getwd()
+		if err != nil {
+			// No caller path is involved: the working directory is the server's own.
+			return fileErr(err, ""), nil
+		}
+		return jsonResult(map[string]any{"directory": dir}), nil
+	})
 }
 
 // fileErr turns a filesystem failure into the tool error that describes it.
@@ -651,7 +638,7 @@ func resolveLocalPath(p string) string {
 // that gets a system error about the file name — see wireSpellingHint. The hint
 // needs the caller's own path to be useful, so it is passed in rather than
 // recovered from the error text (which is the server's, and may be rewritten).
-func fileErr(err error, remotePath string) *mcpgo.CallToolResult {
+func fileErr(err error, remotePath string) *mcp.CallToolResult {
 	code, msg := classifyFileErr(err)
 	if code == CodeOperationFailed {
 		msg += wireSpellingHint(remotePath)

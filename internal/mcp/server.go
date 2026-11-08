@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -16,13 +15,14 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sftpengine"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/task"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Server wraps the MCP SSE server, streamable HTTP handler, and tool handlers.
 type Server struct {
-	mcpServer    *mcpserver.MCPServer
-	sseServer    *mcpserver.SSEServer
-	streamServer *mcpserver.StreamableHTTPServer
+	mcpServer    *mcp.Server
+	sseServer    *mcp.SSEServer
+	streamServer *mcp.StreamableHTTPServer
 	sessMgr      *session.Manager
 	msgMgr       *message.Manager
 	sshConfigs   *sshconfig.Store
@@ -34,7 +34,6 @@ type Server struct {
 	// ManageSSHConfigs enables the profile write actions (create/edit/copy/delete)
 	// of the `profile` directive; main sets it from --mcp-manage-ssh-configs.
 	ManageSSHConfigs bool
-	sseOpts          []mcpserver.SSEOption // forwarded to the mcp-go SSE transport
 
 	// uiNotify delivers a user-facing notification to the Web UI (the notify_user
 	// tool). Set by main to webui.Handler.BroadcastUINotify so this package stays
@@ -42,8 +41,8 @@ type Server struct {
 	uiNotify func(level, title, message, sessionID string, durationSec int) int
 
 	// connections tracks the MCP clients currently attached (see connections.go).
-	// It is fed by mcp-go's session hooks, which is the only place a client
-	// attaching or detaching is observable.
+	// It is fed by the mcp package's session hooks, which is the only place a
+	// client attaching or detaching is observable.
 	connections *connRegistry
 
 	// tasks tracks the asynchronous file transfers this process started (#158).
@@ -133,10 +132,12 @@ func (s *Server) SFTPPool() *sftpengine.Pool { return s.sftpEngines }
 // stable for callers (and tests) that do not care about the newer knobs.
 type Option func(*Server)
 
-// WithHTTPServer hands the mcp-go SSE transport the http.Server it should attach
-// to, so the SSE and streamable-HTTP handlers share termcp's listener.
-func WithHTTPServer(h *http.Server) Option {
-	return func(s *Server) { s.sseOpts = append(s.sseOpts, mcpserver.WithHTTPServer(h)) }
+// SetUINotifier wires the Web UI notification delivery end (the notify_user tool).
+//
+// It is a setter rather than a construction option because webui imports this
+// package, so this package cannot name its type: main hands over the function.
+func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, durationSec int) int) {
+	s.uiNotify = fn
 }
 
 // SetExtensionReconciler wires the extension layer. Without it the extension
@@ -146,6 +147,19 @@ func WithHTTPServer(h *http.Server) Option {
 func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 	s.extensions = r
 }
+
+// MCP exposes the protocol endpoint itself, so an embedder can register its own
+// tools and prompts on the same server termcp's are on.
+//
+// It returns *mcp.Server, which lives outside internal/ and is already the
+// registration surface (AddTool, AddPrompt, OnMethod, Use). Exposing it is how
+// an integration adds a tool without termcp growing a plugin system: there is
+// nothing to wrap, because the object that takes registrations is public.
+//
+// The returned server is the live one. Registering after Start is safe for
+// tools registered before a client's first tools/list, and is what an embedder
+// doing setup in New-then-Start order does naturally.
+func (s *Server) MCP() *mcp.Server { return s.mcpServer }
 
 // SSEHandler exposes the MCP SSE endpoint for mounting on a shared mux.
 func (s *Server) SSEHandler() http.Handler {
@@ -176,7 +190,10 @@ func (s *Server) Start(addr string) error {
 	// Docs resources/prompts need baseURL, so they are registered here (once)
 	// rather than in New(). registerDocs is idempotent for a single Start.
 	s.registerDocs()
-	return s.sseServer.Start(addr)
+	// The transports are mounted on the shared mux (see core), so there is no
+	// listener of their own to start. The base URL is resolved above because the
+	// docs prompt needs it.
+	return nil
 }
 
 // Stop gracefully shuts down the SSE server.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/pkg/api"
@@ -78,7 +78,7 @@ func TestSessionLocatorsResolveToTheSameSession(t *testing.T) {
 	for _, loc := range append(sessionLocators(sid), "termcp://#"+sid+":1") {
 		sess, bad := s.requireSession(loc)
 		if bad != nil {
-			t.Errorf("requireSession(%q) = %s", loc, bad.Content[0].(mcpgo.TextContent).Text)
+			t.Errorf("requireSession(%q) = %s", loc, bad.Content[0].Text)
 			continue
 		}
 		if sess.ID != sid {
@@ -191,7 +191,7 @@ func TestBatchSessionLocatorsResolvePerEntry(t *testing.T) {
 			OK        bool   `json:"ok"`
 		} `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &body); err != nil {
 		t.Fatal(err)
 	}
 	if len(body.Results) != 2 {
@@ -435,7 +435,7 @@ func TestFileToolsAcceptSessionLocator(t *testing.T) {
 	if err != nil || res.IsError {
 		text := ""
 		if res != nil {
-			text = res.Content[0].(mcpgo.TextContent).Text
+			text = res.Content[0].Text
 		}
 		t.Fatalf("file_stat via shell locator failed: %v %s", err, text)
 	}
@@ -459,7 +459,7 @@ func TestLocatorArgumentEchoesCanonicalIDs(t *testing.T) {
 		{"message", map[string]any{"action": "list", "session_id": base, "shell_id": base + ":2"}, []string{"session_id", "shell_id"}},
 	}
 	for _, c := range calls {
-		var res *mcpgo.CallToolResult
+		var res *mcp.CallToolResult
 		var err error
 		switch c.what {
 		case "shell_list":
@@ -594,10 +594,10 @@ func TestApprovalGateCannotBeBypassedByALocator(t *testing.T) {
 			t.Fatalf("%s: %v", tc.spelling, err)
 		}
 		if res.IsError {
-			t.Fatalf("%s: gated write returned an error: %s", tc.spelling, res.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("%s: gated write returned an error: %s", tc.spelling, res.Content[0].Text)
 		}
-		if !strings.Contains(res.Content[0].(mcpgo.TextContent).Text, "review") {
-			t.Errorf("%s: write was not held for review: %s", tc.spelling, res.Content[0].(mcpgo.TextContent).Text)
+		if !strings.Contains(res.Content[0].Text, "review") {
+			t.Errorf("%s: write was not held for review: %s", tc.spelling, res.Content[0].Text)
 		}
 		if _, statErr := os.Stat(tc.target); statErr == nil {
 			t.Errorf("%s: the gated write executed before approval", tc.spelling)
@@ -613,7 +613,7 @@ func TestApprovalGateCannotBeBypassedByALocator(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("ungated write via locator failed: %v %v", err, res)
 	}
-	if strings.Contains(res.Content[0].(mcpgo.TextContent).Text, "review") {
+	if strings.Contains(res.Content[0].Text, "review") {
 		t.Error("an ungated session held a write for review")
 	}
 }
@@ -632,7 +632,7 @@ func TestFileToolURLsUseResolvedSessionID(t *testing.T) {
 
 	for _, tc := range []struct {
 		what   string
-		handle func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
+		handle func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
 	}{
 		{"file_stat", s.handleFileStat},
 		{"file_urls", s.handleGetFileURLs},
@@ -689,7 +689,7 @@ func TestMessageSpansOnClosedSessionResolveShells(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 		if res.IsError {
-			t.Errorf("%v: reading spans of a closed session failed: %s", args, res.Content[0].(mcpgo.TextContent).Text)
+			t.Errorf("%v: reading spans of a closed session failed: %s", args, res.Content[0].Text)
 			continue
 		}
 		if body := parseResult(t, res); body["shell_id"] == "" || body["shell_id"] == nil {

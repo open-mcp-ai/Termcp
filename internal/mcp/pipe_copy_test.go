@@ -8,6 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/message"
+	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/internal/storage"
 )
 
 // TestAPipelineCopiesBytesWithoutStoringThem is the whole point of `read | write`:
@@ -175,11 +180,13 @@ func spoolLeftovers(t *testing.T) []string {
 	return out
 }
 
-// TestAPipelineTakesTheCallersByteLimitWhenGivenOne. The window is off by default —
-// a copy is the whole span — but the caller is the one paying, so naming a size caps
-// it. The distinction is the flag's PRESENCE: reading the default (200) as a request
-// would cut every copy to 200 bytes and report success.
-func TestAPipelineTakesTheCallersByteLimitWhenGivenOne(t *testing.T) {
+// TestAPipelineIgnoresTheReplyWindow pins #290: `bytes_limit` is a REPLY window, not a
+// data boundary. It was read as a copy cap, so `bytes_limit: 100` over a 4 KiB source
+// wrote a 100-byte prefix and the task still reported 100% done — a corrupt file that
+// looks finished. The copy length is the caller's `--bytes` / `--offset` and nothing
+// else, so a destination must come back the size of its source however small the
+// window is.
+func TestAPipelineIgnoresTheReplyWindow(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
@@ -191,7 +198,7 @@ func TestAPipelineTakesTheCallersByteLimitWhenGivenOne(t *testing.T) {
 	if err := os.WriteFile(src, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(dir, "capped.bin")
+	dst := filepath.Join(dir, "landed.bin")
 
 	got := termText(t, s, map[string]any{
 		"cmd":         "read " + sid + " file " + src + " | write " + sid + " file " + dst,
@@ -208,11 +215,65 @@ func TestAPipelineTakesTheCallersByteLimitWhenGivenOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(landed) != 100 {
-		t.Fatalf("bytes_limit 100 produced %d bytes", len(landed))
+	if len(landed) != len(body) {
+		t.Fatalf("bytes_limit 100 truncated a %d-byte copy to %d bytes: a reply window is not a data boundary", len(body), len(landed))
 	}
-	if !bytes.Equal(landed, body[:100]) {
-		t.Error("the capped copy is not the first 100 bytes of the source")
+	if !bytes.Equal(landed, body) {
+		t.Error("the copy is not byte-identical to the source")
+	}
+}
+
+// TestAPipelineCopiesThroughAUseHostTarget pins #290's other half: `internal` and
+// `use:<host>` are `use` targets, and the copy used a helper that refuses them
+// because it has nowhere to hand the transport lease back. The pipeline was accepted
+// with 202 and then failed at 0 bytes with "use SFTP requires a request-scoped
+// transport lease".
+//
+// The internal profile needs no SSH config, so it is the cheapest `use` target to
+// stand up; both ends are `use` here, which is also the only shape that exercises
+// both leases at once.
+func TestAPipelineCopiesThroughAUseHostTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts an SSH server")
+	}
+	srv := startTestSSH(t)
+
+	dir := t.TempDir()
+	store := storage.New(dir)
+	msgMgr := message.NewManager(store)
+	sessMgr := session.NewManager(msgMgr, store, srv)
+	cleanupTestRuntime(t, sessMgr, srv)
+	s := New(sessMgr, msgMgr, sshconfig.NewStore(dir), nil, "test")
+
+	src := filepath.Join(dir, "use-copy.bin")
+	body := bytes.Repeat([]byte("use-data"), 256)
+	if err := os.WriteFile(src, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "copied.bin")
+
+	got := termText(t, s, map[string]any{
+		"cmd": "read internal file " + filepath.ToSlash(src) + " | write internal file " + filepath.ToSlash(dst),
+	})
+	if !strings.HasPrefix(got, "TERM/1 202") {
+		t.Fatalf("a `use` target must be accepted as a copy end:\n%s", got)
+	}
+	taskID := headerValueOr(got, "Task", "")
+	final := termText(t, s, map[string]any{"cmd": "get task " + taskID, "timeout": 10})
+	if !strings.Contains(final, "Status:   done") {
+		t.Fatalf("the copy did not finish; a `use` end must get a request-scoped lease:\n%s", final)
+	}
+	landed, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("the destination file was never written: %v", err)
+	}
+	if !bytes.Equal(landed, body) {
+		t.Fatalf("the copy is not byte-identical: %d bytes vs %d", len(landed), len(body))
+	}
+	// A `USE:` COPY IS NOT A SESSION: the whole point of #237 is that it does not
+	// create one, and a lease that leaked a session would show up here.
+	if all := sessMgr.ListAll(); len(all) != 0 {
+		t.Errorf("a `use` copy created %d sessions: %+v", len(all), all)
 	}
 }
 

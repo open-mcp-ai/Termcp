@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // isPeerKind reports whether a kind names a frame peer rather than a file or a

@@ -32,9 +32,9 @@ import (
 // sequential 5.45s, concurrent 4.94s, over a 100ms round trip). Bulk transfer over a
 // high-latency link belongs on the upload URL or scp, not the control channel.
 //
-// SCOPE. A borrowed host's transport is NOT pooled: its lease is request-scoped, so a
+// SCOPE. A `use` target's transport is NOT pooled: its lease is request-scoped, so a
 // cached engine would hand a later call a transport that has already been released — a
-// correctness bug traded for a latency win. A borrowed file call still opens and closes
+// correctness bug traded for a latency win. A `use` file call still opens and closes
 // its own engine.
 type Pool struct {
 	mu sync.Mutex

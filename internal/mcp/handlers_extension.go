@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 )
@@ -28,7 +28,7 @@ var extensionActions = []string{"list", "get", "use", "release", "create", "upda
 // and nudges a stuck one back onto its feet. The sessions themselves are
 // ordinary sessions — this tool never opens one, it only hands out the
 // reconciler's handles.
-func (s *Server) handleExtensionOps(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionOps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.extensions == nil {
 		return toolError(CodeNotConfigured, "%s", "extensions are not configured on this termcp"), nil
 	}
@@ -60,7 +60,7 @@ func (s *Server) handleExtensionOps(ctx context.Context, request mcpgo.CallToolR
 // handleExtensionList is the discovery call: every extension, its status, and
 // the handles an available one is driven through. Notes are deliberately absent
 // — they can be long, and an agent that wants them reads them with get.
-func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	names, err := s.extensions.Store().List()
 	if err != nil {
 		return toolError(CodeOperationFailed, "listing extensions: %s", err), nil
@@ -94,13 +94,13 @@ func (s *Server) handleExtensionList(ctx context.Context, request mcpgo.CallTool
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension list: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // handleExtensionGet returns one template in full: the session shape, the
 // capability whitelist, the declared forwards, the failure history, and the
 // notes an available extension is meant to be driven by.
-func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionGet(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -114,7 +114,7 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 		if missing, mErr := s.extensions.Store().Missing(name); mErr == nil && len(missing) > 0 {
 			holes, _ := s.extensions.Store().Holes(name)
 			b, _ := json.Marshal(map[string]any{"name": name, "needs": missing, "holes": holes})
-			return mcpgo.NewToolResultText(string(b)), nil
+			return mcp.NewToolResultText(string(b)), nil
 		}
 		return toolError(CodeRuleNotFound, "extension %q not found", name), nil
 	}
@@ -128,13 +128,13 @@ func (s *Server) handleExtensionGet(ctx context.Context, request mcpgo.CallToolR
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // handleExtensionCreate stores a template document or authors one from its fields.
 // A template's declared shape is its behavior; an unfilled package can be installed
 // first and completed later with action=set.
-func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionCreate(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -170,7 +170,7 @@ func (s *Server) handleExtensionCreate(ctx context.Context, request mcpgo.CallTo
 // stored value; a field that is present but empty clears it. That distinction
 // is what makes "trim the path list" and "leave the path list alone" both
 // expressible in one call.
-func (s *Server) handleExtensionUpdate(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionUpdate(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -212,7 +212,7 @@ func (s *Server) handleExtensionUpdate(ctx context.Context, request mcpgo.CallTo
 // hole name, so a caller never has to know where or how they are stored — and a value
 // for a hole the template does not have is refused rather than filed away where
 // nothing will read it.
-func (s *Server) handleExtensionSet(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionSet(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -236,7 +236,7 @@ func (s *Server) handleExtensionSet(ctx context.Context, request mcpgo.CallToolR
 // values. It does NOT fail when the values do not cover every hole — that is the
 // installed-but-unset state a caller is expected to finish, and the answer says which
 // holes remain.
-func (s *Server) createExtensionFromTemplate(name, doc string, values map[string]any) (*mcpgo.CallToolResult, error) {
+func (s *Server) createExtensionFromTemplate(name, doc string, values map[string]any) (*mcp.CallToolResult, error) {
 	if err := s.extensions.Store().SaveTemplate(name, []byte(doc)); err != nil {
 		return extensionSaveError(err), nil
 	}
@@ -252,7 +252,7 @@ func (s *Server) createExtensionFromTemplate(name, doc string, values map[string
 // still needs. A write that leaves holes unfilled has SUCCEEDED — the recipe is
 // stored — so reporting a failure would be wrong, and reporting plain success would
 // leave the caller thinking it can be used.
-func (s *Server) extensionAfterWrite(name string) (*mcpgo.CallToolResult, error) {
+func (s *Server) extensionAfterWrite(name string) (*mcp.CallToolResult, error) {
 	holes, _ := s.extensions.Store().Holes(name)
 	missing, _ := s.extensions.Store().Missing(name)
 	ext, err := s.extensions.Store().Load(name)
@@ -265,7 +265,7 @@ func (s *Server) extensionAfterWrite(name string) (*mcpgo.CallToolResult, error)
 			entry["error"] = err.Error()
 		}
 		b, _ := json.Marshal(entry)
-		return mcpgo.NewToolResultText(string(b)), nil
+		return mcp.NewToolResultText(string(b)), nil
 	}
 	entry := extensionConfigMap(ext)
 	entry["holes"] = holes
@@ -275,7 +275,7 @@ func (s *Server) extensionAfterWrite(name string) (*mcpgo.CallToolResult, error)
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // templateArg reads a TOML template document from the arguments.
@@ -307,7 +307,7 @@ func valuesArg(args map[string]any) map[string]any {
 
 // handleExtensionDelete removes a template and, with it, the session the
 // reconciler kept warm for it.
-func (s *Server) handleExtensionDelete(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionDelete(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -330,7 +330,7 @@ func (s *Server) handleExtensionDelete(ctx context.Context, request mcpgo.CallTo
 // The template is returned with the runtime half, so one call gives the caller
 // everything `get` would plus the instance: the notes are the operating
 // instructions, and the handles are what they are instructions for.
-func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionUse(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -360,7 +360,7 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // handleExtensionRelease hands an instance back: the explicit half of the idle
@@ -371,7 +371,7 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcpgo.CallToolR
 // Releasing something that is not running is an ERROR rather than a quiet success:
 // a caller that thinks it gave an instance back, and did not, is a caller that will
 // not look again.
-func (s *Server) handleExtensionRelease(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionRelease(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -392,7 +392,7 @@ func (s *Server) handleExtensionRelease(ctx context.Context, request mcpgo.CallT
 	if err != nil {
 		return toolError(CodeInternalError, "encoding release: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // extensionUseBudget bounds how long action=use waits for an answer. Long enough
@@ -403,7 +403,7 @@ const extensionUseBudget = 30 * time.Second
 // handleExtensionRetry asks the reconciler to bring an extension up now rather
 // than waiting out its backoff. Both an agent and a human can reach for it, so
 // a stuck extension is one call away from being re-probed.
-func (s *Server) handleExtensionRetry(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleExtensionRetry(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	name := strings.TrimSpace(getString(args, "name", ""))
 	if name == "" {
@@ -423,11 +423,11 @@ func (s *Server) handleExtensionRetry(ctx context.Context, request mcpgo.CallToo
    arguments through the same code this tool does. A rule for what makes a
    template valid therefore has one home and two callers. */
 
-func extensionSaveError(err error) *mcpgo.CallToolResult {
+func extensionSaveError(err error) *mcp.CallToolResult {
 	return toolError(CodeInvalidArgument, "extension not saved: %s", err)
 }
 
-func extensionSaved(s *Server, ext *extensions.Extension) (*mcpgo.CallToolResult, error) {
+func extensionSaved(s *Server, ext *extensions.Extension) (*mcp.CallToolResult, error) {
 	// The store's own change subscription triggers the reconciler, so the
 	// session is coming up; the returned template is what was persisted.
 	st, _ := s.extensions.Status(ext.Name)
@@ -441,7 +441,7 @@ func extensionSaved(s *Server, ext *extensions.Extension) (*mcpgo.CallToolResult
 	if err != nil {
 		return toolError(CodeInternalError, "encoding extension: %s", err), nil
 	}
-	return mcpgo.NewToolResultText(string(b)), nil
+	return mcp.NewToolResultText(string(b)), nil
 }
 
 // extensionConfigMap renders a template with the same key names the tool's

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/config"
 )
 
 // ChildArgs builds the command-line flags for the detached instance. The

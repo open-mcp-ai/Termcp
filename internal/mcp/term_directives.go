@@ -2,17 +2,15 @@ package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
-	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // runDirective dispatches one parsed statement onto the existing handlers.
@@ -627,58 +625,19 @@ func (s *Server) sessionForStatement(stmt directive.Statement) *session.Session 
 // returns the moment the channel closes; on a pty there is no such signal, so it
 // waits out the caller's time window and returns what the terminal produced.
 func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
-	// SHORT-CIRCUIT BORROWED HOST EXECUTION (#237): `run use:<host> $1`.
-	// If the target is a borrowed host (bare host name or `use:<host>`), execute
-	// directly through the transport pool without creating a session in the registry.
-	if host, borrowed := s.parseBorrowedHost(stmt.Target); borrowed {
-		// THE GATE IS THE SAME EXIT EVERY OTHER OPERATION USES. This path has no
-		// handler to reach, so it asks admission directly with the capability the
-		// command belongs to — a profile's default_approval must not depend on which
-		// spelling reached the host.
-		if bad := s.checkBorrowedRunAdmission(ctx, "use:"+host); bad != nil {
-			slot := failureSlot(failureFromResult(bad))
-			slot.Headers["Path"] = stmt.Path
-			return []envelope.Slot{slot}
-		}
-		// A FILTER MUST NOT RUN ITS COMMAND TO FIND OUT IT WAS INVALID. Check before
-		// starting the remote process, exactly as checkWindow does for channel runs.
-		if bad := validateBorrowedRunFlags(stmt); bad != nil {
-			slot := s.slotFromFailure(ctx, stmt, bad)
-			return []envelope.Slot{slot}
-		}
-		// A DEFERRED CLOSE STOPS NEW WORK (issue #255). `close use:<host> --later`
-		// promised the container ends when its running commands do; dispatching one
-		// more command would break that promise silently, because the caller sees a
-		// normal 200 while the window it is writing into is on its way out. Refuse and
-		// name the two ways forward.
-		if c := s.sessMgr.LiveBorrowed(host); c != nil && c.Closing() {
-			slot := s.slotFromFailure(ctx, stmt, &toolFailure{
-				code: CodeConflict,
-				msg: fmt.Sprintf("use:%s is closing: `close --later` was called, so it no longer accepts new commands. "+
-					"Wait for its running work to finish (it archives by itself), or start a fresh one by closing it now with `close %s`.",
-					host, c.ID),
-			})
-			slot.Headers["Path"] = stmt.Path
-			return []envelope.Slot{slot}
-		}
-		captureLimit := win.BytesLimit
-		if _, ok := stmt.Flag("grep"); ok {
-			captureLimit = grepMaxScanBytes
-		}
-		output, total, exitCode, exited, waited, err := s.runBorrowedHost(ctx, host, stmt.Payload, win, captureLimit)
-		if err != nil && !exited {
-			// A BORROWED TARGET FAILS IN TWO KINDS: the profile is not there (the
-			// caller's argument, answered with the ssh-config code and a next step), or
-			// the connection/command failed (the server's answer). Mapping both to 500
-			// operation_failed made a typo in the host name read like an outage.
-			code := CodeOperationFailed
-			if errors.Is(err, sshconfig.ErrNotFound) {
-				code = CodeSSHConfigNotFound
-			}
-			slot := s.slotFromFailure(ctx, stmt, &toolFailure{code: code, msg: err.Error()})
-			return []envelope.Slot{slot}
-		}
-		slot := s.borrowedRunSlot(ctx, stmt, host, output, total, exitCode, exited, waited, err, win)
+	// RECURSIVE ROUTING (#274) COMES FIRST, because it answers a different
+	// question from the paths below: does the TARGET name a downstream that
+	// speaks this protocol? Only an extension that declared `termcp_tool` and
+	// passed verification does, so an ordinary session, channel or `use` host
+	// never reaches here and nothing below changes for them.
+	if slots, routed := s.termcpRoute(ctx, stmt, win); routed {
+		return slots
+	}
+	// SHORT-CIRCUIT `USE:<HOST>` EXECUTION (#237): `run use:<host> $1`.
+	// If the target is a `use` host (bare host name or `use:<host>`), route it
+	// through the per-host use container.
+	if host, isUse := s.parseUseHost(stmt.Target); isUse {
+		slot := s.runUse(ctx, stmt, win, host)
 		return []envelope.Slot{slot}
 	}
 
@@ -699,7 +658,7 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 	if slot.Code == 404 && slot.Headers["Error-Code"] == CodeShellNotFound &&
 		stmt.Target != "" && !directive.NamesAChannel(stmt.Target) && s.sshConfigs != nil {
 		if entry, err := s.sshConfigs.Load(stmt.Target); err == nil && entry != nil {
-			slot.Body += "\nThat name IS a saved host profile: `run " + stmt.Target + " $1` targets it directly over a borrowed connection, with no session."
+			slot.Body += "\nThat name IS a saved host profile: `run " + stmt.Target + " $1` targets it directly over a `use` connection, with no session."
 		} else {
 			slot.Body += "\nIf you meant a saved host profile, `ls host` lists them and `run <host> $1` targets one directly."
 		}
@@ -735,7 +694,7 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	// removes the trigger; this check removes the CLASS, because the next rule added to
 	// the read validator would otherwise arrive after the effect again. The same
 	// validator is called with the same numbers, just earlier — one rule, two callers.
-	if f := s.checkWindow(stmt, win); f != nil {
+	if f := s.checkRunFlags(stmt, win); f != nil {
 		return s.slotFromFailure(ctx, stmt, f)
 	}
 
@@ -767,7 +726,18 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	if held := reviewPendingFrom(keyRes); held != nil {
 		return held.slot(stmt.Path)
 	}
+	return s.finishRun(ctx, stmt, win, start)
+}
 
+// finishRun reads the window a command opened at start.
+//
+// THIS IS THE HALF OF A RUN THAT DOES NOT CARE HOW THE COMMAND GOT THERE, and that is
+// why it is a function: a channel run typed the line into a live shell, a use run
+// spawned a pipe channel whose process IS the line. From the byte at `start` onward
+// both are the same question — what did it print, did it exit, did the window hold —
+// and answering it twice is how the two roads ended up disagreeing about a status code,
+// a Content-Range and the wording of one refusal.
+func (s *Server) finishRun(ctx context.Context, stmt directive.Statement, win termArgs, start int64) envelope.Slot {
 	// --grep CHANGES WHAT THE WINDOW COUNTS, so it takes the same path `read` does
 	// (matches rather than raw lines) — scoped to this command, which is the region the
 	// caller just created (issue #187).

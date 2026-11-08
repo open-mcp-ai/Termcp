@@ -27,10 +27,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/task"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // pipeCopy runs `read … | write …` as one background task.
@@ -39,7 +39,10 @@ import (
 // caller is usually an agent behind a tool-call watchdog, and a copy larger than that
 // watchdog's patience would be killed partway, leaving a truncated file on the far
 // side with no error anywhere. A receipt costs milliseconds and the bytes keep moving.
-func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, win termArgs) []envelope.Slot {
+//
+// The reply window is accepted and DELIBERATELY UNUSED: it bounds the receipt, not the
+// bytes. The directive layer passes it, so the signature stays.
+func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, _ termArgs) []envelope.Slot {
 	dst := stmt.Pipe
 	if dst == nil {
 		return []envelope.Slot{badRequest(stmt, "a pipeline needs both ends")}
@@ -73,7 +76,7 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, win ter
 				"byte stream. Use `read "+stmt.Target+" "+stmt.Kind+"` on its own to get frames.")}
 	}
 
-	src, bad := s.copySource(stmt, win)
+	src, bad := s.copySource(stmt)
 	if bad != nil {
 		return []envelope.Slot{*bad}
 	}
@@ -131,15 +134,13 @@ func (c copySource) describe() string {
 
 // copySource resolves the left side, refusing a value it cannot honour rather than
 // ignoring it.
-func (s *Server) copySource(stmt directive.Statement, win termArgs) (copySource, *envelope.Slot) {
-	// `bytes_limit`, WHEN THE CALLER NAMED ONE, caps the copy. It has a default, so the
-	// number alone cannot say whether anyone asked — reading the default as a request
-	// would cut every copy to 200 bytes and report success.
-	cap := 0
-	if win.BytesLimitSet {
-		cap = win.BytesLimit
-	}
-
+//
+// THE REPLY WINDOW DOES NOT REACH THIS FAR. `bytes_limit` bounds what one reply hands
+// the caller; the copy's bytes never enter the caller's context, so applying it here
+// made the destination a truncated prefix while the task still reported 100% done —
+// a corrupt file that looks finished (#290). How many bytes move is the caller's
+// explicit `--bytes` / `--offset`, and nothing else.
+func (s *Server) copySource(stmt directive.Statement) (copySource, *envelope.Slot) {
 	if stmt.Kind == "file" {
 		src := copySource{session: stmt.Target, path: stmt.Key}
 		for flag, into := range map[string]*int64{"offset": &src.offset, "bytes": &src.length} {
@@ -151,9 +152,6 @@ func (s *Server) copySource(stmt directive.Statement, win termArgs) (copySource,
 				}
 				*into = n
 			}
-		}
-		if cap > 0 && (src.length == 0 || int64(cap) < src.length) {
-			src.length = int64(cap)
 		}
 		return src, nil
 	}
@@ -186,19 +184,24 @@ func (s *Server) copySource(stmt directive.Statement, win termArgs) (copySource,
 	// span is what moves, so what lands in the destination file is what the channel
 	// carried rather than what a terminal would have shown.
 	src.params.StripAnsi = false
-	if cap > 0 {
-		src.params.MaxBytes = cap
-	}
 	return src, nil
 }
 
 // runCopy wires the two ends together and moves the bytes.
 func (s *Server) runCopy(ctx context.Context, src copySource, dst *directive.Statement, progress func(int64)) (int64, error) {
-	dstCli, bad := s.sftpClient(dst.Target)
+	// A REQUEST-SCOPED LEASE, AND THIS IS THE REQUEST. ctx is the task's own context,
+	// created when the copy was accepted and cancelled only when the copy ends, so the
+	// lease lives exactly as long as the bytes are moving. `sftpClient` cannot be used
+	// here: it refuses every `use` target (`internal`, `use:<host>`) because a
+	// `use` transport is a pool lease and that helper has nowhere to hand it back.
+	dstCli, releaseDst, bad := s.sftpClientContext(ctx, dst.Target)
 	if bad != nil {
 		return 0, fmt.Errorf("%s", errorReplyText(bad))
 	}
-	defer dstCli.Close()
+	defer func() {
+		dstCli.Close()
+		releaseDst()
+	}()
 
 	if src.channel == "" {
 		return s.copyRemoteFile(ctx, src, dst, dstCli, progress)
@@ -209,11 +212,14 @@ func (s *Server) runCopy(ctx context.Context, src copySource, dst *directive.Sta
 // copyRemoteFile is the file-to-file case: two SFTP ends and an io.Pipe between them,
 // which is an io.Copy that never holds more than one chunk.
 func (s *Server) copyRemoteFile(ctx context.Context, src copySource, dst *directive.Statement, dstCli sftpWriter, progress func(int64)) (int64, error) {
-	srcCli, bad := s.sftpClient(src.session)
+	srcCli, releaseSrc, bad := s.sftpClientContext(ctx, src.session)
 	if bad != nil {
 		return 0, fmt.Errorf("%s", errorReplyText(bad))
 	}
-	defer srcCli.Close()
+	defer func() {
+		srcCli.Close()
+		releaseSrc()
+	}()
 
 	pr, pw := io.Pipe()
 	readErr := make(chan error, 1)

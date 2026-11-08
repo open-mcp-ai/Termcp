@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/jrpc"
 	"github.com/open-mcp-ai/termcp/internal/ns"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // Three directives, one channel.
@@ -579,7 +579,7 @@ func (s *Server) jrpcReady(ctx context.Context, h *jrpcHandle) error {
 				"jsonrpc": "2.0",
 				"method":  "initialize",
 				"params": map[string]any{
-					"protocolVersion": mcpgo.LATEST_PROTOCOL_VERSION,
+					"protocolVersion": mcp.ProtocolVersion,
 					"capabilities":    map[string]any{},
 					"clientInfo":      map[string]any{"name": "termcp", "version": "jrpc"},
 				},

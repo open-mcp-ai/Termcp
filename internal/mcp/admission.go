@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/ns"
@@ -39,7 +39,7 @@ func lookupGate(tool string) gate {
 //
 // The result is (refusal, held): a refusal is the reply to send, and held means
 // the operation was queued for a human and the reply reports that.
-func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, bool) {
+func (s *Server) checkAdmission(ctx context.Context, toolName string, request mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
 	g := lookupGate(toolName)
 	if bad := s.admission(ctx, toolName, g, request); bad != nil {
 		return bad, false
@@ -51,7 +51,7 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	// SFTP handler ungated while `connect prod` + `write` was held, so a profile's
 	// default_approval depended on which spelling the caller picked. Every tool that
 	// names a target passes through here, including the ones `term` calls for itself.
-	if bad := s.refuseBorrowedReview(targetSessionID(request), toolName); bad != nil {
+	if bad := s.refuseUseReview(targetSessionID(request), toolName); bad != nil {
 		return bad, false
 	}
 	// Review holds the operation for a human. Whether THIS call is reviewable is
@@ -75,7 +75,7 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 
 // admission answers the reachability and whitelist questions and returns a
 // refusal when either says no.
-func (s *Server) admission(ctx context.Context, toolName string, g gate, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+func (s *Server) admission(ctx context.Context, toolName string, g gate, request mcp.CallToolRequest) *mcp.CallToolResult {
 	guard := toolGuard{server: s}
 	return guard.check(ctx, toolName, g, request)
 }
@@ -83,7 +83,7 @@ func (s *Server) admission(ctx context.Context, toolName string, g gate, request
 // targetSessionID is the session a call names, from whichever argument carries
 // it. It is the SAME spelling independence the guard implements: a raw session
 // id, a shell id, or a locator, in either argument.
-func targetSessionID(request mcpgo.CallToolRequest) string {
+func targetSessionID(request mcp.CallToolRequest) string {
 	args := request.GetArguments()
 	if args == nil {
 		return ""
@@ -103,7 +103,7 @@ func targetSessionID(request mcpgo.CallToolRequest) string {
 // capability's id: the sentence a caller reads names the operation it was denied
 // in the caller's own vocabulary (the tool name), while the decision was made on
 // the capability.
-func refuseSession(sess *session.Session, capID, toolName string) *mcpgo.CallToolResult {
+func refuseSession(sess *session.Session, capID, toolName string) *mcp.CallToolResult {
 	if sess == nil {
 		return nil
 	}
@@ -115,6 +115,6 @@ func refuseSession(sess *session.Session, capID, toolName string) *mcpgo.CallToo
 
 // nsRefusal is the namespace refusal, naming what the caller is rather than what
 // the resource is, so an id cannot be used to enumerate other namespaces.
-func nsRefusal(callerNS string) *mcpgo.CallToolResult {
+func nsRefusal(callerNS string) *mcp.CallToolResult {
 	return toolError(CodeForbidden, "%s", ns.ForbiddenForeign(callerNS))
 }

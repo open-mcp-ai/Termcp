@@ -18,10 +18,10 @@ package transcript
 import (
 	"fmt"
 
-	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // ErrKind classifies a transcript read failure for status mapping.

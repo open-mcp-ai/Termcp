@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // originKey carries the request's origin ("scheme://host") from the transport's
@@ -43,11 +43,11 @@ func withRequestOrigin(ctx context.Context, r *http.Request) context.Context {
 }
 
 // withRequestContext is what both transports install: the request's origin and
-// its namespace claim, in one function. mcp-go's context hook is a single slot
-// per transport (WithHTTPContextFunc replaces rather than stacks), so the two
-// derivations are composed here instead of being passed one after the other —
-// the second call would silently drop the first, which is a failure mode with no
-// symptom until a caller asks where this instance is or which namespace it owns.
+// its namespace claim, in one function. The mcp package's context hook is a
+// single slot per transport, so the two derivations are composed here instead of
+// being passed one after the other — the second call would silently drop the
+// first, which is a failure mode with no symptom until a caller asks where this
+// instance is or which namespace it owns.
 func withRequestContext(ctx context.Context, r *http.Request) context.Context {
 	return withCallerNamespace(withRequestOrigin(ctx, r), r)
 }
@@ -72,7 +72,7 @@ func (s *Server) originFor(ctx context.Context) string {
 // `term` because that is the only tool there is, and it is the one whose
 // `notify` directive reaches the human. The result is per-request, so the
 // decoration never accumulates on the stored tool.
-func (s *Server) decorateTools(ctx context.Context, result *mcpgo.ListToolsResult) {
+func (s *Server) decorateTools(ctx context.Context, result *mcp.ListToolsResult) {
 	origin := s.originFor(ctx)
 	if origin == "" {
 		return

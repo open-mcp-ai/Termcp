@@ -150,7 +150,6 @@ npm 包装器会下载对应平台的预编译二进制（可用 `TERMCP_VERSION
 | [`docs/protocol.md`](./docs/protocol.md) | `TERM/1` 规格：线格式、状态码、标头、19 条指令、三个闸门。 |
 | [`docs/capabilities.md`](./docs/capabilities.md) | 完整能力面与安全模型。 |
 | [`docs/api.md`](./docs/api.md) | REST 端点、WebSocket 帧、定位符解析。 |
-| [`docs/capabilities.md`](./docs/capabilities.md) | 完整能力面与安全模型。 |
 | [`docs/architecture.md`](./docs/architecture.md) | 会话内核、四个入口、存储。 |
 | [`docs/design/`](./docs/design) | 设计记录：Web UI、资源模型、会话存储、字体栈、移动端终端。 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本记录。 |

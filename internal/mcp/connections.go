@@ -5,17 +5,18 @@ import (
 	"sync"
 	"time"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // Connection is one MCP client currently attached to this instance.
 //
-// "Attached" is deliberately narrower than "has ever called": mcp-go announces a
-// session when a client initializes over either HTTP transport and unregisters it
-// when the transport drops, so this is the set of clients holding a live MCP
-// session right now — the answer to "who is driving this instance?".
+// "Attached" is deliberately narrower than "has ever called": a transport
+// announces a session when a client initializes and unregisters it when it drops
+// (the mcp package's OnRegisterSession/OnUnregisterSession hooks), so this is the
+// set of clients holding a live MCP session right now — the answer to "who is
+// driving this instance?".
 type Connection struct {
-	// SessionID is mcp-go's own id for the transport session. Opaque, and not a
+	// SessionID is the transport's id for the session. Opaque, and not a
 	// termcp session id; it is here so two clients with the same name can be
 	// told apart.
 	SessionID string `json:"session_id"`
@@ -41,31 +42,31 @@ type Connection struct {
 
 // connRegistry tracks live MCP client sessions.
 //
-// Why a registry at all: mcp-go owns the session map and only ever exposes
-// individual sessions by id, so there is no way to ask it what is connected. The
-// register/unregister hooks carry the ClientSession, so this keeps its own small
-// map fed by those.
+// Why a registry at all: the mcp package hands each transport its own sessions
+// and never exposes the set, so there is nothing to ask "what is connected?". The
+// register/unregister hooks carry the Session, so this keeps its own small map
+// fed by those.
 type connRegistry struct {
 	mu    sync.Mutex
 	seq   uint64
 	conns map[string]*connEntry
-	// pending holds facts learned before the session was registered. mcp-go
-	// answers initialize *first* and registers the session after ("Register
-	// session after successful initialization"), so the namespace claim — which
-	// rides the initialize request — arrives before there is a row to put it on.
-	// Without this the claim was dropped and every client looked unnamespaced.
+	// pending holds facts learned before the session was registered. The
+	// streamable transport answers initialize *first* and registers the session
+	// after, so the namespace claim — which rides the initialize request —
+	// arrives before there is a row to put it on. Without this the claim was
+	// dropped and every client looked unnamespaced.
 	pending map[string]string
 }
 
-// connEntry keeps the mcp-go session object rather than a copy of its fields.
+// connEntry keeps the session object rather than a copy of its fields.
 //
-// The client's name is not known when the session registers: mcp-go registers
-// first and the client's `initialize` arrives after, so a name captured in the
-// register hook would be empty for every client. mcp-go stores it on the session
+// The client's name is not known when the session registers: the transport
+// registers first and the client's `initialize` arrives after, so a name captured
+// in the register hook would be empty for every client. The session stores it
 // itself, so the read path asks the session — which is also why this holds the
 // object and not a snapshot.
 type connEntry struct {
-	session     mcpserver.ClientSession
+	session     mcp.Session
 	namespace   string
 	connectedAt time.Time
 	seq         uint64
@@ -77,7 +78,7 @@ func newConnRegistry() *connRegistry {
 
 // add records a newly registered session. It runs before the client has said
 // anything, so only the session itself is known here.
-func (r *connRegistry) add(s mcpserver.ClientSession) {
+func (r *connRegistry) add(s mcp.Session) {
 	if s == nil || s.SessionID() == "" {
 		return
 	}
@@ -94,7 +95,7 @@ func (r *connRegistry) add(s mcpserver.ClientSession) {
 }
 
 // remove forgets a session that went away.
-func (r *connRegistry) remove(s mcpserver.ClientSession) {
+func (r *connRegistry) remove(s mcp.Session) {
 	if s == nil {
 		return
 	}
@@ -107,8 +108,9 @@ func (r *connRegistry) remove(s mcpserver.ClientSession) {
 // request.
 //
 // The claim is per request (withRequestContext puts it in the context), and
-// initialize is the first request that carries it — but mcp-go registers the
-// session only after answering initialize, so the row usually does not exist yet.
+// initialize is the first request that carries it — but the streamable transport
+// registers the session only after answering initialize, so the row usually does
+// not exist yet.
 // The claim is therefore held for the registration to pick up, and applied
 // directly when the session is already known (the SSE transport registers
 // first).
@@ -143,7 +145,7 @@ func (r *connRegistry) noteNamespace(sessionID, namespace string) {
 // reading their fields afterwards is a data race with a client that is
 // initializing at the same moment (caught by this package's own -race test).
 func (r *connRegistry) list() []Connection {
-	// Snapshot the rows under the lock, but call external methods (mcp-go's
+	// Snapshot the rows under the lock, but call external methods (the session's
 	// SessionID and GetClientInfo) OUTSIDE it. Calling into third-party interfaces
 	// inside our mutex risks foreign locking or stalls locking us out.
 	r.mu.Lock()
@@ -161,10 +163,8 @@ func (r *connRegistry) list() []Connection {
 			ConnectedAt: e.connectedAt.Format(time.RFC3339),
 			seq:         e.seq,
 		}
-		if withInfo, ok := e.session.(mcpserver.SessionWithClientInfo); ok {
-			info := withInfo.GetClientInfo()
-			c.Name, c.Version = info.Name, info.Version
-		}
+		info := e.session.GetClientInfo()
+		c.Name, c.Version = info.Name, info.Version
 		out = append(out, c)
 	}
 

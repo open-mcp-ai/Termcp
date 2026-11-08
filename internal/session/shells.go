@@ -514,19 +514,19 @@ func (s *Session) SnapshotShells() []api.Session {
 func (s *Session) ShellsForView() []api.Session {
 	s.mu.RLock()
 	status := s.Status
-	borrowed := s.Borrowed
+	useHost := s.UseHost
 	s.mu.RUnlock()
 	if status == api.SessionRunning {
 		live := s.ListChildShells()
-		// A BORROWED CONTAINER'S WORK IS IN THE HISTORY, NOT IN THE LIVE MAP
+		// A USE CONTAINER'S WORK IS IN THE HISTORY, NOT IN THE LIVE MAP
 		// (issue #255). Its recorded commands have no channel - they ran on a pooled
 		// transport and were written down afterwards - so the live-only rule above
 		// would show an empty window for a session whose entire purpose is to show
-		// what ran. Merging is safe here because a borrowed container's entries are
+		// what ran. Merging is safe here because a use container's entries are
 		// append-only records that can never be driven: there is no closed-shell tab
 		// to resurrect, which is the reason the live-only rule exists for ordinary
 		// sessions.
-		if borrowed {
+		if useHost {
 			return mergeShellViews(live, s.SnapshotShells())
 		}
 		return live

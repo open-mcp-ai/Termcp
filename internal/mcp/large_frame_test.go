@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // TestRecvFrameHonoursCallersBytesLimit pins that frames larger than the default

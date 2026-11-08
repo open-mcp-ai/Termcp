@@ -169,7 +169,7 @@ also refresh. Other static resources retain the existing cache policy.
 
 | Location | Responsibility |
 | --- | --- |
-| `internal/config/config.go`, `main.go` | Resolve the independent theme root and wire it before serving. |
+| `config/config.go`, `main.go` | Resolve the independent theme root and wire it before serving. |
 | `internal/webui/assets.go`, `themes.go` | Compose shared, embedded and external files; merge directories on each request. |
 | `internal/webui/handler.go` | Reuse the existing static server and force fresh theme resources. |
 | `assets/static/theme-boot.js` | Restore the browser preference before the page appears, with a default fallback. |

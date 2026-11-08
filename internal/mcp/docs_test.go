@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/webui"
@@ -57,10 +57,11 @@ func dispatchMCPErr(t *testing.T, s *Server, ctx context.Context, req map[string
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg := s.mcpServer.HandleMessage(ctx, raw)
-	b, err := json.Marshal(msg)
-	if err != nil {
-		t.Fatal(err)
+	// Handle returns the encoded answer directly; nil means the frame was a
+	// notification and nothing is sent back.
+	b := s.mcpServer.Handle(ctx, raw, nil)
+	if b == nil {
+		return nil, ""
 	}
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
@@ -188,7 +189,7 @@ func TestLearnAPIPrompt(t *testing.T) {
 			t.Errorf("learn-api prompt misses %q:\n%s", want, text)
 		}
 	}
-	if got.Messages[0].Role != string(mcpgo.RoleUser) {
+	if got.Messages[0].Role != string(mcp.RoleUser) {
 		t.Errorf("expected user role, got %q", got.Messages[0].Role)
 	}
 }
@@ -259,7 +260,7 @@ func listToolsRaw(t *testing.T, s *Server, ctx context.Context) json.RawMessage 
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.Marshal(s.mcpServer.HandleMessage(ctx, raw))
+	b := s.mcpServer.Handle(ctx, raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,10 +274,10 @@ func listToolsRaw(t *testing.T, s *Server, ctx context.Context) json.RawMessage 
 }
 
 // listTools runs tools/list under ctx and returns the tools.
-func listTools(t *testing.T, s *Server, ctx context.Context) []mcpgo.Tool {
+func listTools(t *testing.T, s *Server, ctx context.Context) []mcp.Tool {
 	t.Helper()
 	var result struct {
-		Tools []mcpgo.Tool `json:"tools"`
+		Tools []mcp.Tool `json:"tools"`
 	}
 	if err := json.Unmarshal(listToolsRaw(t, s, ctx), &result); err != nil {
 		t.Fatal(err)
@@ -580,7 +581,7 @@ func TestStreamableTransportScopesByNamespaceHeader(t *testing.T) {
 		if !res.IsError {
 			t.Fatal("bob wrote to alice's session")
 		}
-		text := res.Content[0].(mcpgo.TextContent).Text
+		text := res.Content[0].Text
 		if !strings.Contains(text, "ns:bob") && !strings.Contains(text, "namespace bob") {
 			t.Errorf("refusal does not name the caller's namespace: %s", text)
 		}
@@ -667,7 +668,7 @@ func (c *mcpSession) request(payload map[string]any) *http.Request {
 // callTool performs one tool call and returns the parsed result. Only the
 // JSON-body reply shape is handled: these tests never register a notification,
 // so the transport has no reason to answer in SSE.
-func (c *mcpSession) callTool(tool string, args map[string]any) *mcpgo.CallToolResult {
+func (c *mcpSession) callTool(tool string, args map[string]any) *mcp.CallToolResult {
 	c.t.Helper()
 	r := c.request(map[string]any{
 		"jsonrpc": "2.0", "id": c.nextID(), "method": "tools/call",
@@ -683,8 +684,8 @@ func (c *mcpSession) callTool(tool string, args map[string]any) *mcpgo.CallToolR
 		c.t.Fatal(err)
 	}
 	var envelope struct {
-		Result *mcpgo.CallToolResult      `json:"result"`
-		Error  *mcpgo.JSONRPCErrorDetails `json:"error"`
+		Result *mcp.CallToolResult `json:"result"`
+		Error  *mcp.RPCError       `json:"error"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		c.t.Fatalf("decoding %s reply: %v (%s)", tool, err, body)
@@ -708,7 +709,7 @@ func (c *mcpSession) startSession(t *testing.T) string {
 	// channel, including the primary one, so that a channel handle and a session
 	// id have different shapes. These tests scope by SESSION id, so strip the
 	// index here once rather than at every use.
-	text := res.Content[0].(mcpgo.TextContent).Text
+	text := res.Content[0].Text
 	for _, line := range strings.Split(text, "\n") {
 		if h, ok := strings.CutPrefix(line, "Handle: "); ok {
 			if sid, _, found := strings.Cut(h, ":"); found {
@@ -729,7 +730,7 @@ func (c *mcpSession) listSessions(t *testing.T) map[string]bool {
 	if res.IsError {
 		t.Fatalf("ls failed: %+v", res)
 	}
-	text := res.Content[0].(mcpgo.TextContent).Text
+	text := res.Content[0].Text
 	out := map[string]bool{}
 	body := text
 	if i := strings.Index(text, "\n\n"); i >= 0 {
@@ -750,14 +751,14 @@ func (c *mcpSession) listSessions(t *testing.T) map[string]bool {
 }
 
 // callTerm drives the single tool through the wire.
-func (c *mcpSession) callTerm(t *testing.T, cmd string) *mcpgo.CallToolResult {
+func (c *mcpSession) callTerm(t *testing.T, cmd string) *mcp.CallToolResult {
 	t.Helper()
 	return c.callTool(termToolName, map[string]any{"cmd": cmd})
 }
 
 // callTermArgs is callTerm for a payload that has to arrive as a VALUE: `run` and
 // `input` take exactly one variable reference, so the shell line travels in args.
-func (c *mcpSession) callTermArgs(t *testing.T, cmd string, args []any) *mcpgo.CallToolResult {
+func (c *mcpSession) callTermArgs(t *testing.T, cmd string, args []any) *mcp.CallToolResult {
 	t.Helper()
 	return c.callTool(termToolName, map[string]any{"cmd": cmd, "args": args})
 }

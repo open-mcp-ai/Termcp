@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
@@ -26,7 +26,7 @@ func waitForExited(t *testing.T, s *Server, sid string, timeout time.Duration) b
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		infoRes, _ := s.handleGetSessionInfo(context.Background(), makeRequest(map[string]any{"session_id": sid}))
-		if !infoRes.IsError && strings.Contains(infoRes.Content[0].(mcpgo.TextContent).Text, `"status":"exited"`) {
+		if !infoRes.IsError && strings.Contains(infoRes.Content[0].Text, `"status":"exited"`) {
 			return true
 		}
 		time.Sleep(25 * time.Millisecond)
@@ -35,16 +35,16 @@ func waitForExited(t *testing.T, s *Server, sid string, timeout time.Duration) b
 }
 
 // assertErrorCode fails unless res is an error result whose error_code is want.
-func assertErrorCode(t *testing.T, res *mcpgo.CallToolResult, want, what string) {
+func assertErrorCode(t *testing.T, res *mcp.CallToolResult, want, what string) {
 	t.Helper()
 	if !res.IsError {
-		t.Fatalf("%s: expected an error result, got %s", what, res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("%s: expected an error result, got %s", what, res.Content[0].Text)
 	}
 	var body struct {
 		ErrorCode string `json:"error_code"`
 		Error     string `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(res.Content[0].(mcpgo.TextContent).Text), &body); err != nil {
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &body); err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
 	if body.ErrorCode != want {
@@ -150,12 +150,12 @@ func TestDeadSessionFileAndForwardRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if outRes.IsError {
-		t.Fatalf("shell_output on DEAD session must keep working: %s", outRes.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_output on DEAD session must keep working: %s", outRes.Content[0].Text)
 	}
 	var out struct {
 		Output string `json:"output"`
 	}
-	if err := json.Unmarshal([]byte(outRes.Content[0].(mcpgo.TextContent).Text), &out); err != nil {
+	if err := json.Unmarshal([]byte(outRes.Content[0].Text), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.Output, "DEAD-READ-MARKER") {
@@ -265,7 +265,7 @@ func TestCleanExitPipeShellKeepsContainerRunning(t *testing.T) {
 	}
 	if readRes.IsError {
 		t.Fatalf("file_read must keep working on a container with zero live shells: %s",
-			readRes.Content[0].(mcpgo.TextContent).Text)
+			readRes.Content[0].Text)
 	}
 
 	// This is the port-forwarding case the container rule exists for: closing or
@@ -282,7 +282,7 @@ func TestCleanExitPipeShellKeepsContainerRunning(t *testing.T) {
 	}
 	if fwdRes.IsError {
 		t.Fatalf("forward on a zero-live-shell running session must succeed: %s",
-			fwdRes.Content[0].(mcpgo.TextContent).Text)
+			fwdRes.Content[0].Text)
 	}
 	s.forwardMgr.CloseBySession(sid)
 }

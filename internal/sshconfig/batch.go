@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/open-mcp-ai/termcp/internal/fsutil"
 )
 
 const maxBatchSize = 16 << 20
@@ -158,7 +159,7 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 			p := filepath.Join(s.root(), item.name, "config.toml")
 			if err = os.MkdirAll(filepath.Dir(p), 0700); err == nil {
 				created = append(created, p)
-				err = writeFileAtomic(p, item.data)
+				err = fsutil.WriteFileAtomic(p, item.data)
 			}
 			if err != nil {
 				for _, path := range created {
@@ -173,17 +174,9 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 	return result, nil
 }
 
+// availableBatchName finds a free name for a batch whose own is taken. The
+// 64-byte limit is shared with the document store, and the rule with it: see
+// fsutil.AvailableName.
 func availableBatchName(name string, used, reserved map[string]bool) string {
-	for n := 2; ; n++ {
-		suffix := fmt.Sprintf("-%d", n)
-		base := name
-		if len(base)+len(suffix) > 64 {
-			base = base[:64-len(suffix)]
-		}
-		candidate := base + suffix
-		folded := strings.ToLower(candidate)
-		if !used[folded] && !reserved[folded] {
-			return candidate
-		}
-	}
+	return fsutil.AvailableName(name, used, reserved, 64)
 }

@@ -475,6 +475,7 @@ func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) 
 	}
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
+	setPipeSysProcAttr(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = in.Close()
 		io.WriteString(sess, describeStartError(cmd, err)+"\n")

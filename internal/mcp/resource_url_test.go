@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestResourceURLStartSessionEndToEnd: "termcp://internal" as ssh_config in
@@ -81,7 +81,7 @@ func TestShellLocatorIndexStableAcrossClose(t *testing.T) {
 
 	cs, bad := s.requireShell("termcp://#" + sid + ":3")
 	if bad != nil {
-		t.Fatalf(":3 after closing the middle channel failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf(":3 after closing the middle channel failed: %s", bad.Content[0].Text)
 	}
 	if cs.ID != third {
 		t.Fatalf(":3 after the close resolved to %q, want the third channel %q", cs.ID, third)
@@ -104,7 +104,7 @@ func TestShellLocatorIndexStableAcrossClose(t *testing.T) {
 	// same channel shell_input would write.
 	src, bad := s.resolveOutputSource("termcp://#" + sid + ":3")
 	if bad != nil {
-		t.Fatalf("shell_output :3 failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_output :3 failed: %s", bad.Content[0].Text)
 	}
 	if src.ShellID != third {
 		t.Fatalf("shell_output :3 read shell %q, want %q", src.ShellID, third)
@@ -169,7 +169,7 @@ func TestShellLocatorResolvesAgainstLiveSetNotSnapshot(t *testing.T) {
 	// from the live stream rather than the persisted log of a running session.
 	src, bad := s.resolveOutputSource("termcp://#" + sid + ":2")
 	if bad != nil {
-		t.Fatalf("shell_output :2 failed: %s", bad.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_output :2 failed: %s", bad.Content[0].Text)
 	}
 	if src.Live == nil {
 		t.Fatalf(":2 resolved through the persisted snapshot for a session with live shells (shellID=%s)", src.ShellID)
@@ -204,11 +204,11 @@ func startSubShell(t *testing.T, s *Server, sid string) string {
 		t.Fatal(err)
 	}
 	if res.IsError {
-		t.Fatalf("shell_open failed: %s", res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_open failed: %s", res.Content[0].Text)
 	}
 	id, _ := parseResult(t, res)["shell_id"].(string)
 	if id == "" {
-		t.Fatalf("shell_open returned no shell_id: %s", res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_open returned no shell_id: %s", res.Content[0].Text)
 	}
 	return id
 }
@@ -221,7 +221,7 @@ func closeShell(t *testing.T, s *Server, shellID string) {
 		t.Fatal(err)
 	}
 	if res.IsError {
-		t.Fatalf("shell_close %q failed: %s", shellID, res.Content[0].(mcpgo.TextContent).Text)
+		t.Fatalf("shell_close %q failed: %s", shellID, res.Content[0].Text)
 	}
 }
 
@@ -564,7 +564,7 @@ func TestShortHandleResolvesLikeTheLocator(t *testing.T) {
 	} {
 		cs, bad := s.requireShell(tc.handle)
 		if bad != nil {
-			t.Fatalf("requireShell(%q) failed: %s", tc.handle, bad.Content[0].(mcpgo.TextContent).Text)
+			t.Fatalf("requireShell(%q) failed: %s", tc.handle, bad.Content[0].Text)
 		}
 		if cs.ID != tc.want {
 			t.Errorf("requireShell(%q) = %q, want %q", tc.handle, cs.ID, tc.want)
@@ -700,11 +700,11 @@ func TestEveryHandleDoorAgrees(t *testing.T) {
 }
 
 // textOf renders a tool error result for test messages.
-func textOf(res *mcpgo.CallToolResult) string {
+func textOf(res *mcp.CallToolResult) string {
 	if res == nil || len(res.Content) == 0 {
 		return "<nil>"
 	}
-	if tc, ok := res.Content[0].(mcpgo.TextContent); ok {
+	if tc, ok := res.Content[0], true; ok {
 		return tc.Text
 	}
 	return fmt.Sprint(res.Content[0])

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // pipe and pty — the two primitives, as directives.
@@ -110,7 +110,7 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 
 	// An existing session takes a new channel on its connection; anything else
 	// starts a connection. The distinction is the caller's target, not a flag.
-	var res *mcpgo.CallToolResult
+	var res *mcp.CallToolResult
 	var fail *toolFailure
 	if capID == capability.SessionStart {
 		args["ssh_config"] = stmt.Target

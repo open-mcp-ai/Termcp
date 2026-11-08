@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-func decodeToolError(t *testing.T, result *mcpgo.CallToolResult) (code, message string) {
+func decodeToolError(t *testing.T, result *mcp.CallToolResult) (code, message string) {
 	t.Helper()
 	if result == nil || !result.IsError {
 		t.Fatalf("expected an error result, got %+v", result)
@@ -17,7 +17,7 @@ func decodeToolError(t *testing.T, result *mcpgo.CallToolResult) (code, message 
 	if len(result.Content) != 1 {
 		t.Fatalf("expected exactly one content block, got %d", len(result.Content))
 	}
-	tc, ok := result.Content[0].(mcpgo.TextContent)
+	tc, ok := result.Content[0], true
 	if !ok {
 		t.Fatalf("expected text content, got %T", result.Content[0])
 	}
@@ -57,7 +57,7 @@ func TestExtractErrorInfo_CodedAndPlain(t *testing.T) {
 	}
 
 	// Third-party / plain-text errors must still surface their text.
-	code, msg = extractErrorInfo(mcpgo.NewToolResultError("invalid arg"))
+	code, msg = extractErrorInfo(mcp.NewToolResultError("invalid arg"))
 	if code != "" || msg != "invalid arg" {
 		t.Fatalf("plain extraction = (%q, %q)", code, msg)
 	}
@@ -66,12 +66,12 @@ func TestExtractErrorInfo_CodedAndPlain(t *testing.T) {
 func TestWithLogging_LogsErrorCodeOnCodedFailure(t *testing.T) {
 	cap := withCapturedLogger(t)
 
-	h := func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	h := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return toolError(CodeShellNotFound, "Shell '%s' not found", "12d3e2f8-a15"), nil
 	}
 	wrapped := withLogging("shell_output", h, nil)
 
-	if _, err := wrapped(context.Background(), mcpgo.CallToolRequest{}); err != nil {
+	if _, err := wrapped(context.Background(), mcp.CallToolRequest{}); err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
 

@@ -3,6 +3,33 @@
 ## Unreleased
 
 
+## v0.2.9 — 2026-11-08
+
+### 新功能
+
+- **`termcp/term` 与 `termcp/term/server` 可被外部 Go 程序直接引用**：写一个 `Handler`、声明自己的词表，就能得到一个 TERM/1 服务器——解析、`&&`/`||` 短路、`208`、slot 对齐、信封、空调用向导全部由协议层提供。`go list -deps ./term` 里没有任何 `internal/` 路径。
+- **`termcp/config` 从结构体标签生成命令行与环境变量**：`config.Bind` 注册 flag，`config.ApplyEnv` 按"用户是否显式传入"填 env（`flag.Visit` 判定，`--port 0` 与 `--auth-token ""` 不再被环境变量覆盖）。顺带补上一直没有入口的 `--themes-dir` / `$TERMCP_THEMES_DIR` 与 `$TERMCP_MCP_MANAGE_SSH_CONFIGS`。
+- **`termcp/core` 可作为库嵌入**：`core.New` 装配，`Start` 拉起全部服务面（含 MCP 文档提示），`Listen` 才绑定端口并阻塞。不绑定端口＝不调用 `Listen`，不再是一个布尔开关。
+
+### 修复
+
+- **跨节点文件管道对 `internal`/`use:<host>` 目标崩溃，且复制被 `bytes_limit` 静默截断**（#290）：管道复制原先假定 session 是普通 SSH，直接取 `sftpClient`，在借用/征用目标上为 nil 导致 panic；同时复制源直接复用了工具级 `bytes_limit`（默认 8KB）去限制复制长度，导致大文件被无提示切短。现已统一通过请求作用域租约读写 SFTP，复制长度严格遵循 `--bytes`/`--offset`；同时彻底消除了 `use:<host>` 在下层的平行实现与重复渲染，超时与错误码与普通 session 完全一致。
+- **SFTP 文本读取将 Windows 常见的 UTF-16 误报为二进制拒读**（#291）：PowerShell 重定向默认生成带 BOM 的 UTF-16LE，因 ASCII 高位为 0x00 触发 NUL 检查报 `ErrBinaryFile`。现复用 BOM 表自动识别 UTF-16 并在读取时剥离 BOM，在无法识别的纯二进制错误提示中明确指引 `--encoding utf-16`。
+- **`edit ext` 改掉 `url`/`headers` 之后，挂载的 peer 还是旧的**（#282）：peer 表按「会话 + 扩展名」索引，而 `edit ext` 重建的是实例、会话 id 不变，于是下一次 `open ext` 取回了用旧 header 拨号的 mount。而 `jrpc.Channel` 在拨号时就把 header 快照进了连接，活着的 channel 在原理上也看不到新值——凭据改了等于没改，修正模板指纹（`extensions.Fingerprint`，与 reconciler 判断「这是不是另一个模板」共用同一份定义），指纹不同就释放旧 mount 再拨。`edit ext` 的回复因此也不再自相矛盾：它说旧实例被换掉了，递回的就真是新地址（`mcp:2`），而不是刚被它宣判死亡的那个。
+- **Windows 上每条本地 pipe 会话都弹出一个控制台窗口**（#278）：守护进程以 `DETACHED_PROCESS` 启动，没有控制台可继承，内核于是为每个 console 子进程新分配一个控制台；Windows 11 默认终端是 Windows Terminal，新控制台被转交成可见窗口，标题是子进程路径。pipe 分支现在用 `CREATE_NO_WINDOW`（只关控制台窗口，不影响 `--argv notepad` 这类 GUI 子进程的窗口）；PTY 分支不变，ConPTY 本来就没有真控制台窗口。
+- **不监听端口的实例拿不到 MCP 文档提示**：`mcp.Start`（解析 baseURL、注册 `learn-api`）曾被放在绑定端口的分支里，所以"无端口、无 UI、进程内驱动"这种形态恰恰缺文档。
+- **`Close` 从不关闭 HTTP server**：二进制靠进程退出掩盖了它，嵌入方 `Close` 之后端口仍被占用、无法重绑。
+- **从未 `Listen` 的实例 `Close` 不释放任何资源**：reconciler 继续探测、store 不关闭。
+- **每次关停白等 5 秒**：`SSEServer.Shutdown` 收集完会话就丢弃，然后无条件阻塞到 context 超时。改为关闭各会话的流并等待会话真正清空（有界）。正常关停从 5.0s 降到约 60ms，端口冲突启动失败从 6.5s 降到约 1.5s。
+- **语法错误的 `Error-Code` 在不同入口不一致**：termcp 自己的 REST/MCP 面返回 `invalid_argument`，而基于 `termcp/term` 自建入口的项目会拿到 `syntax_error`——一个在项目与文档里都不再出现的名字。同一个协议里同一个情形有两个名字，调用方必须知道自己在跟哪个服务器说话。现在统一为 `invalid_argument`，并由 `term.SyntaxReply` 提供，两面对照有测试钉住。
+- **`502`/`504` 的 reason phrase 缺失**：这两个码会被返回，但渲染表里没有，于是状态行印出 `TERM/1 502 Status`。
+
+### 文档
+
+- **帮助页面与提示词易读性修复**（#286, #287, #288, #289）：挂载并激活孤立的 54 行 `forwardDetail` 页面，使 `help forward` 可见；为 `key` 添加说明页并列齐 17 个可用键名；更正 `help jrpc` 示例中已废弃的语法；MCP Instructions 预算内压缩至 1707 B 并突出 CDP 浏览器驱动与 `ext` 扩展能力入口。
+- 逐条机械核对全部文档的 flag、仓库路径、HTTP 路由、`TERMCP_*` 环境变量与状态码；修正 `208 Not Run`→`Already Reported`、`500 Internal Error`→`Internal Server Error`、`internal/locator`→`term/locator`、审批 scope 少列 4 个、`--headless`/`--themes-dir` 缺失、README 重复行，以及 `AGENTS.md` 里仍在教 `shell_input`/`shell_key`/`shell_output` 的整节（这些自单工具化起就不是 MCP 工具了）。
+- 删除两份与仓库无关的文档：`docs/agents/domain.md`（指引的 `CONTEXT.md`/`docs/adr/` 在本仓库不存在）、`docs/webui-i18n-prompt.md`（已完成任务的交付提示词）。
+
 ## v0.2.9-rc.2 — 2026-11-06
 
 ### 新增

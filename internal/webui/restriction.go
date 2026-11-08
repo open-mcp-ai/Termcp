@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
-	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // The REST half of a session's Restriction.

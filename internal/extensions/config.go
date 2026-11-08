@@ -134,6 +134,21 @@ type Extension struct {
 	// only half a template.
 	Headers map[string]string `toml:"headers,omitempty"`
 
+	// TermcpTool names an MCP tool of this extension's server that speaks TERM/1,
+	// which makes the extension a downstream this instance can route to instead of
+	// a peer it can only call (#274). Empty means "this server does not speak
+	// TERM/1", which is the default and today's behaviour.
+	//
+	// It is a NAME, not a guess. The protocol's boundary is a declaration by the
+	// downstream, never an inference from arguments that happen to look like a
+	// command line: a server whose `recall` tool takes a natural-language query
+	// would be silently promoted to a router, and every call through it would
+	// mean something else.
+	//
+	// Only meaningful with URL, because a stdio command's tools are reached the
+	// same way and the declaration would be ambiguous about which layer answers.
+	TermcpTool string `toml:"termcp_tool,omitempty"`
+
 	// Notes are the agent's operating instructions — the recipe the reconciler
 	// hands out with the session handle. For an extension this is the product
 	// documentation an agent can actually act on.
@@ -142,6 +157,15 @@ type Extension struct {
 	// Forwards are declared tunnels, set up when the session comes up.
 	Forwards []ForwardDecl `toml:"forward,omitempty"`
 }
+
+// Fingerprint summarizes the fields this template runs from, as a comparable
+// string. It is the reconciler's answer to "is this a different template", and it
+// is exported because the MCP layer needs the same answer for a different
+// question: whether the peer it mounted was dialled from the template the file
+// describes NOW (issue #282). Two callers, one definition — a peer that decided
+// for itself which fields matter would drift from the instance the reconciler
+// rebuilds, which is exactly the disagreement #282 was.
+func (e *Extension) Fingerprint() string { return fingerprint(e) }
 
 // IsEnabled reports whether the reconciler should push this extension toward
 // available. Absence of the key means yes.
@@ -273,6 +297,7 @@ func (e *Extension) Normalize() {
 	e.Mode = strings.TrimSpace(e.Mode)
 	e.Command = strings.TrimSpace(e.Command)
 	e.URL = strings.TrimSpace(e.URL)
+	e.TermcpTool = strings.TrimSpace(e.TermcpTool)
 	// An empty headers map is the same as none, and a header name is an HTTP
 	// token: a blank one is dropped rather than sent as a request line nobody can
 	// parse.
@@ -396,6 +421,15 @@ func (e *Extension) Validate() error {
 	// termcp itself brings up — but it needs TWO channels (one daemon, one bridge),
 	// which the template cannot express yet. Refusing is what keeps that gap visible;
 	// accepting would ship a field that does nothing.
+	// A DECLARATION NEEDS A PEER TO DECLARE ABOUT. termcp_tool names a tool of a
+	// mounted MCP server; with no url there is no such server, and the field would
+	// be a promise nothing can keep. Refusing at save time is the same choice the
+	// url/command pair makes above: a field that silently does nothing is worse
+	// than one that says why it cannot be used.
+	if e.TermcpTool != "" && e.URL == "" {
+		return fmt.Errorf("termcp_tool names a tool of the extension's MCP server, so it needs url: without one there is no server to name a tool of. " +
+			"Set url to the server's endpoint, or drop termcp_tool")
+	}
 	if e.URL != "" && e.Command != "" {
 		return fmt.Errorf("url and command are alternatives on one channel: with url, the channel runs termcp's bridge, so a command here would never execute. " +
 			"Split it in two for now — one extension runs the server, another takes its url — or use a stdio command that speaks MCP itself")

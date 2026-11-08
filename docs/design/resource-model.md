@@ -14,10 +14,10 @@ SSH 连接
 
 **定义**：SSH 连接的管理容器。持有 SSH Client，维护下属 Shell 和 Forward 列表，不负责 I/O。
 
-**创建**：`session_start` → 建立 SSH 连接 → 创建 Session 实例。
+**创建**：`connect` → 建立 SSH 连接 → 创建 Session 实例（REST：`POST /api/sessions`）。
 
 **销毁时机**：
-- 用户显式 `session_terminate` / REST `DELETE /api/sessions/{id}` / `disconnect`
+- 用户显式 `close` / REST `DELETE /api/sessions/{id}` / `disconnect`
 - SSH 连接意外断开（被动检测，见下文）
 
 **销毁行为**：级联关闭所有 Shell → 关闭所有 Forward → 关闭 SSH Client → 从 registry 移除。
@@ -31,10 +31,10 @@ SSH 连接
 **定义**：SSH 连接上的一个 terminal channel。所有 Shell 无论何时创建都是同级的，代码中不存在 "根 shell" 或 "主 shell" 的概念。
 
 **创建**：
-- `session_start`：建 Session 时同时创建第一个 Shell（由参数 command/args 决定具体行为）
-- `shell_open`：在已有 Session 上创建新 Shell
+- `connect`：建 Session 时同时创建第一个 Shell（由 `--argv` 决定具体行为；REST 为 `POST /api/sessions`）
+- `open`：在已有 Session 上创建新 Shell
 
-**I/O**：所有输入输出通过 Shell ID 寻址。`shell_input`、`shell_output` 的目标都是 Shell。
+**I/O**：所有输入输出通过通道句柄 `<session>:<index>` 寻址。`input`、`key`、`read`、`run` 的目标都是 Shell。
 
 **销毁时机**：
 - 用户显式 `shell_close`（手动关闭 = 删除，不是 DEAD）
@@ -73,9 +73,9 @@ SSH 连接
 **自然退出与容器状态**：
 
 - Shell 正常退出后，容器保持 `running`（可继续新建 Shell 或使用端口转发/SFTP），退出的 Shell 以 `exited` 元数据保留，供只读读取末尾输出。
-- 容器的状态只由 SSH transport 决定，跟 shell 的数量与生命周期无关：关掉最后一个 shell（或最后一个 pipe shell 自然退出）不会把容器翻为 DEAD —— 零 shell 但 `running` 的容器是合法的可复用状态（transport 仍承载端口转发、SFTP 与 `shell_open`）。
+- 容器的状态只由 SSH transport 决定，跟 shell 的数量与生命周期无关：关掉最后一个 shell（或最后一个 pipe shell 自然退出）不会把容器翻为 DEAD —— 零 shell 但 `running` 的容器是合法的可复用状态（transport 仍承载端口转发、SFTP 与 `open`）。
 
-**已知边界**：断线检测没有独立的后台探测器，它跟着 shell 的 watcher 跑。零 shell 时 transport 断了不会立即被抓到，要等下一次操作（`shell_open` / 端口转发 / SFTP）失败才暴露；TCP keepalive 已开启，半开连接最终也会被内核回收。若要求零 shell 也即时收敛，需要加一个与 shell 无关的连接监视器。
+**已知边界**：断线检测没有独立的后台探测器，它跟着 shell 的 watcher 跑。零 shell 时 transport 断了不会立即被抓到，要等下一次操作（`open` / 端口转发 / SFTP）失败才暴露；TCP keepalive 已开启，半开连接最终也会被内核回收。若要求零 shell 也即时收敛，需要加一个与 shell 无关的连接监视器。
 
 **DEAD 的边界**：断线收敛只把 Session **就地置为 DEAD（`exited`），保留在 registry 中只读**（"断开 ≠ 删除"）。释放资源需显式 `Delete`，移入历史库需 `ArchiveAndForget`（见 `docs/api.md`）。
 

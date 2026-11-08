@@ -30,34 +30,32 @@ package mcp
 
 const mcpServerInstructions = `termcp — a shell-like DSL over SSH; local ("internal") = remote.
 
-Replies are HTTP-like: TERM/1 <code>, then state headers (Waited, Content-Range,
-Still-Running, Error-Code) and a body.
+TERM/1 replies: <code>, state headers (Waited, Content-Range, Still-Running,
+Error-Code), body.
 
-cmd = the DSL; sh = a shell command. A shell line reaches cmd only as a referenced
-VALUE ($1, $NAME), because cmd is parsed as DSL: /tmp/$1 would be read by two
-grammars at once. cmd composes with && || ; &.
+cmd = the DSL; sh = a shell command. cmd is parsed as DSL, so shell text enters only
+as a VALUE ($1, $NAME): /tmp/$1 would be read by two grammars. && || ; & compose cmd.
 
-Tree: host -> session -> channel/file/forward/peer. connect <host> opens one;
-run/read/write use:<host> … borrow the pool, leave no session. ls prints the
-addresses that exist; help [verb] the usage.
+Tree: host -> session -> channel/file/forward/peer. 'connect <host>' opens one;
+'run/read/write use:<host>' target the pool directly; 'help [verb]' the usage.
 
-MODE: pipe (--argv) = no echo, an observable exit — scripts, batch work; a pty =
-TUI and prompts, no exit signal, so its reply is only a sample.
+MODE: pipe (--argv) = no echo, observable exit — scripts, batch; pty = TUI, prompts,
+no exit signal, so its reply is a sample.
 
-CAPABILITY — inspect first. ls ext lists resident extensions and their notes;
-ls lists state (learn_mode:true adds usage). MCP: get <session> mcp tools, then
-call <peer> <tool> {json}; CDP: call <peer> {method}. Repeated job? create ext or
-open <session> mcp <url>.
+CAPABILITY — start at 'ls ext': installed MCP servers and skill trees,
+with their operating notes. Search here first for a tool or a skill. 'ls': session
+state (learn_mode:true adds usage). MCP peer: 'get <session> mcp tools', then
+'call <peer> <tool> {json}'. CDP controls a real browser: 'open <session> cdp <url>',
+then 'call <peer> {method}' — navigate, click, screenshot, eval. Repeated job?
+'create ext' or 'open <session> mcp <url>'.
 
 A HUMAN IS AN APPROVAL CHANNEL
-  termcp cannot ask a person: notify reaches open Web UI pages, and delivery is not
- acknowledgement — an answer comes back only as the human's reply or as channel
- bytes. A password, sudo, MFA or confirmation therefore goes out through notify and
- the wait is for that answer; polling asks a page, not a person. Review mode lets a
- human see each capability granted: review_pending=true means HELD, nothing ran;
- approval_id pairs the request with the decision, and resending queues a second
- rather than releasing the first. cmd/args reach the server log verbatim, secrets
- logs names — and the remote shell echoes what it runs anyway.
- Long, awkward, or missing a capability?
- say what you are trying to do and ask while a human can answer.
-`
+  notify reaches open Web UI pages and delivers to a person; an answer arrives only as
+  their reply or as channel bytes — delivery is not acknowledgement.
+  password, sudo, MFA, confirmation -> 'notify', then wait for that answer;
+  polling asks a page, not a person.
+  Review mode: review_pending=true (approval_id) -> HELD for a human decision;
+  resending queues a second, not a release.
+  cmd/args -> server log verbatim; secrets -> names only; shell echoes what it runs.
+  Long, awkward, missing a capability, or maybe wrong way?
+  say what you are trying to do and ask while a human can answer.`

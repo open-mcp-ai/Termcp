@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
+	"github.com/open-mcp-ai/termcp/term/directive"
 )
 
 // The term argument table.
@@ -83,7 +83,7 @@ type termArgDecl struct {
 	// It is declared HERE, next to the default, because the three readers must not be
 	// able to disagree: the schema publishes it (so a client can refuse a bad value
 	// before the call), parseTermArgs enforces it (so the REST entrance, which never
-	// reaches mcp-go's schema validator, refuses exactly the same values), and
+	// reaches the schema validator, refuses exactly the same values), and
 	// docs/api.md renders it. Before this, the schema carried only a `default`, the
 	// parser carried an if-chain of ranges, and the doc carried prose — three copies of
 	// one rule.
@@ -304,7 +304,7 @@ func termArgDeclFor(name string) (termArgDecl, bool) {
 // not an accident); present-and-wrong is a 400 that names the argument.
 //
 // This is the one place both entrances pass through: the MCP transport goes via
-// handleTerm and REST calls Term directly, so a check that lived only in mcp-go's
+// handleTerm and REST calls Term directly, so a check that lived only in the
 // schema validator would cover one of the two.
 //
 // The defaults and bounds come from termArgDecls, so an argument added to the table

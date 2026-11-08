@@ -30,6 +30,68 @@
 
 ## 一、整体分层
 
+### 可被外部 import 的三层
+
+仓库里有一个**对外契约层**，它在 `internal/` 之外，因此别的 Go 项目可以直接引用：
+
+```
+termcp/term     TERM/1 协议本体：DSL 解析、指令注册表、信封、地址。
+                纯函数层——不认识会话，不开 socket，不读文件，不看时钟。
+                go list -deps ./term 里没有一条 internal/ 路径。
+termcp/term/server
+                协议的传输层：HTTP 入口与信封的线上形态。它把 term 变成一个
+                能对外服务的服务器，但仍然只认 Handler 接口，不认识会话。
+                自定义词表 + 一个 Handler + 这一层 = 一个 TERM/1 服务器。
+termcp/core     运行时装配：会话、shell、存储、转发、扩展、MCP 服务面、
+                可选 Web UI。core.New(core.Options{...}) 起一个实例。
+termcp/config   实例设置（Config），命令行与库调用共用同一份。
+根包 main      只剩 flag/env → Config → core.New 的装配。
+```
+
+`term` 与 `term/server` 分两层是有原因的：**它们回答不同的问题**。前者是"这行文本是什么意思"，
+后者是"怎么把它送到网络上"。一个只想加自己动词的调用方需要后者但不需要 core 的会话、
+存储与转发；反过来，一个只用协议做解析的调用方（`termcp_tool` 声明的校验就是）连后者都不该拖进来。
+
+`termcp/core` 有两种用法，区别只在**调哪几个方法**，不在一个开关：
+
+```go
+// 二进制走这条：Start 装配，Listen 绑端口并阻塞到关停。
+srv, _ := core.New(core.Options{Config: cfg})
+defer srv.Close("done")
+srv.Start()
+srv.Listen()
+
+// 嵌入方走这条：只 Start，不 Listen。不绑端口，但 MCP 面与 REST 面都在。
+cfg.Headless = true
+srv, _ := core.New(core.Options{Config: cfg})
+defer srv.Close("done")
+srv.Start()
+reply := srv.Term(ctx, "ls session", nil)   // 拿到 TERM/1 信封
+// 或者把 srv.Handler() 挂到自己的 mux 上
+```
+
+**为什么不是 `NoListener: true`。** 那曾经是一个布尔，把 `Start` 切成两半，而切错了地方：它名义上只说"不要开 socket"，实际把 `mcp.Start` 一起跳过了——那个调用注册 agent 读的 `learn-api` 文档提示并解析 baseURL，和端口毫无关系。于是最需要自我描述的形态（无端口、无 UI、进程内驱动）恰恰是唯一拿不到文档的形态。
+
+一个问题一个方法，就不会切错：`Start` 把所有面（SSH、MCP、扩展、`ready`）拉起来并返回；`Listen` 绑定并阻塞。"不监听"＝不调那一步，不是一个字段在替所有人决定跳过 `Start` 的哪一半。端口校验也跟着挪进了 `Listen`——没绑过端口的实例不该因为一个用不到的端口号被拒绝。
+
+`Headless` 是 `config.Config` 的字段，不是 `core.Options` 的：它描述的是这个实例是什么，和 `Host`、`DataDir` 同一类，所以设置它的地方只有一处。`core.New` 读它，同时也在这里应用 `AssetsDir` 与 `ThemesDir`——调用方不需要、也不应该去动 `webui` 的包级变量。它省掉浏览器 UI（静态资源、`/api/sessions`、WebSocket），保留 MCP 工具面与 `POST /api/term`——这正是 agent 需要的全部。它与 `no_webui` 构建标签方向一致：那个标签在编译期就不装 UI，`Headless` 在运行期不装配它。
+
+于是有五种组合，各有各的用途：
+
+| 形态 | 怎么得到 | 适用 |
+|---|---|---|
+| 完整版 | `make build` | 人 + agent 共用一台实例 |
+| 运行时无 UI | `termcp --headless` | 一个二进制既能给 web 也能只给 agent |
+| 编译期无 UI（termcp-headless） | `make build-api` → `dist/termcp-api-*` | 镜像要小、永远不给 web 用 |
+| 库（SDK） | `import "termcp/core"`，只 `Start()` 不 `Listen()` | 嵌进别的 Go 程序，连端口都不要 |
+| 自定义协议服务器 | `import "termcp/term"` + `termcp/term/server` | 词表是自己的，只写动词 |
+
+第三种就是 issue 里说的 `termcp-headless`：产物名带 `api` 后缀，可与完整版并存于 `dist/`。它和 `--headless` 不重复——一个减的是**二进制**，一个减的是**装配**。
+
+协议层的稳定性承诺跟着协议版本走，不跟模块版本走：改一行的含义、改状态码、改 locator 指代什么是 breaking change；加一条指令、一个 flag、一个 helper 不是。
+
+### 内部运行时
+
 Termcp 是平台型架构：**一个会话内核（session/message/sshclient/sshserver）支撑四个平行入口**——Web UI（人）、AI Agent 的两种接入方式——MCP 与 REST（两者是同一套 `term` 指令空间的两种传输，实例自带 `{}` 引导与 `help` 表，不需要另写教程）、WebSocket（实时终端 I/O）。它们操作同一批会话，互不冲突。
 
 ```
@@ -110,245 +172,30 @@ Termcp 是平台型架构：**一个会话内核（session/message/sshclient/ssh
              └─────────────────┘
 ```
 
-## 二、进程启动流程（session_start）
+## 二、运行时路径
 
-```
-AI Agent                    MCP Server              Session.Manager        sshclient              sshserver              OS
-  │                            │                         │                     │                      │                     │
-  │  session_start(            │                         │                     │                      │                     │
-  │    command="bash",         │                         │                     │                      │                     │
-  │    mode="pty",             │                         │                     │                      │                     │
-  │    rows=24, cols=80)       │                         │                     │                      │                     │
-  │ ─────────────────────────> │                         │                     │                      │                     │
-  │                            │  validateStartParams()  │                     │                      │                     │
-  │                            │  sessMgr.Create(cfg) ──>│                     │                      │                     │
-  │                            │                         │  session.New()      │                      │                     │
-  │                            │                         │  sshclient.Start()──>│                     │                     │
-  │                            │                         │                     │  in-memory Dial      │                     │
-  │                            │                         │                     │  (net.Conn 对，无 TCP)│  Accept() 取得 conn │
-  │                            │                         │                     │ ────────────────────>│                     │
-  │                            │                         │                     │  client.NewSession() │                     │
-  │                            │                         │                     │  StdinPipe()         │ 打开 stdin 通道      │
-  │                            │                         │                     │  StdoutPipe()        │ 打开 stdout 通道     │
-  │                            │                         │                     │  StderrPipe()        │ 打开 stderr 通道     │
-  │                            │                         │                     │                      │                     │
-  │                            │                         │                     │  [if pty]             │                     │
-  │                            │                         │                     │  RequestPty(          │                     │
-  │                            │                         │                     │    "xterm-256color",  │  PTY 请求 →          │
-  │                            │                         │                     │    24, 80, ...)       │  AllocatePty 接收    │
-  │                            │                         │                     │ ────────────────────>│                     │
-  │                            │                         │                     │                      │                     │
-  │                            │                         │                     │  session.Start(       │  exec channel        │
-  │                            │                         │                     │    "bash")            │  请求                │
-  │                            │                         │                     │ ────────────────────>│                     │
-  │                            │                         │                     │                      │                     │
-  │                            │                         │                     │                      │  [if pty]            │
-  │                            │                         │                     │                      │  ppty.Start(cmd)     │
-  │                            │                         │                     │                      │  (charmbracelet/ssh │
-  │                            │                         │                     │                      │   → creack/pty /     │
-  │                            │                         │                     │                      │   ConPTY on Windows) │
-  │                            │                         │                     │                      │  ───── ioctl ──────> │ 创建 PTY
-  │                            │                         │                     │                      │                     │ fork/exec bash
-  │                            │                         │                     │                      │                     │
-  │                            │                         │                     │                      │  [if pipe]           │
-  │                            │                         │                     │                      │  cmd.Stdin=sess      │
-  │                            │                         │                     │                      │  cmd.Stdout=sess     │
-  │                            │                         │                     │                      │  cmd.Run()           │
-  │                            │                         │                     │                      │ ─── fork/exec ────> │
-  │                            │                         │                     │                      │                     │
-  │                            │                         │                     │  Wait() goroutine     │                     │
-  │                            │                         │                     │  ← ExitCode           │                     │
-  │                            │                         │                     │                      │                     │
-  │                            │                         │  ExecSession 返回     │                     │                     │
-  │                            │                         │  Buffer 创建           │                     │                     │
-  │                            │                         │  startReaders()       │                     │                     │
-  │                            │                         │  pipeToBuffer(stdout)  │                     │                     │
-  │                            │                         │  pipeToBuffer(stderr)  │                     │                     │
-  │                            │                         │  ← 返回 Session        │                     │                     │
-  │                            │  ← Session{ID,PID,...}  │                     │                      │                     │
-  │                            │                         │                     │                      │                     │
-  │                            │  sleep(100ms)            │                     │                      │                     │
-  │  ← {session_id, shell_id,  │                         │                     │                      │                     │
-  │     pid, ssh_config}       │                         │                     │                      │                     │
-  │     (双 ID：连接 vs 终端)   │                         │                     │                      │                     │
-```
+这里曾经是六张分步时序图：启动、输入、输出、终止、resize、多 Agent 共享。它们画的是
+**单工具化之前**的接口——`session_start`、`shell_output`、`shell_reader_register`——以及
+当时点名的函数（`Session.SendInput`、`Session.ResizePty`）。工具名和函数名现在都不存在了，
+图却仍然整齐，于是读的人会在源码里搜不到其中任何一个名字。
 
-## 三、输入流向（shell_input + shell_key）
+一条会骗人的箭头比没有箭头更糟，所以图换成了路径本身。要细节时，代码是权威：
 
-```
-AI Agent                    ChildShell                 sshclient              sshserver              OS/进程
-  │                            │                          │                      │                     │
-  │  shell_input(shell_id,text) │                          │                      │                     │
-  │ ─────────────────────────> │  SendTerminalBytes       │                      │                     │
-  │  shell_key(shell_id,enter) │  PressKey → \r / \n      │                      │                     │
-  │ ─────────────────────────> │ ── Stdin.Write ─────────>│ ───── SSH data ────>│ ───── stdin ───────>│
-  │  ← {"success":true}        │                          │                      │                     │
-```
+1. **语言层** — `term/directive` 把一行解析成语句，`term/execute` 按 `&&` / `||` / `&`
+   排定顺序，每条语句交给 Handler 一次。某个动词接受什么形状由词表生成，问运行中的实例：
+   `{"cmd":"help <directive>"}`，不会过期。
+2. **能力层** — `internal/mcp` 把语句翻译成对会话、shell、文件、转发的调用。评审闸门在
+   这一层（`internal/capability`），闸门的选择见 [`protocol.md` §6](./protocol.md#6-three-way-capability-gate)。
+3. **会话内核** — `internal/session` 持有连接容器（Session）与它的通道（`internal/session/shell.go`、
+   `shell_output.go`）。`internal/sshclient` 用一对**内存 `net.Conn`** 连到同进程里的
+   `internal/sshserver`：没有 TCP、没有端口、没有第二个二进制。所以"连本机"和"连远端"
+   走的是同一条代码路径，差异只在拨号器。
+4. **进程** — `internal/sshserver` 在 ConPTY（Windows）或 POSIX PTY（Linux/macOS）里启动
+   真实命令；pipe 通道直接把 `cmd.Stdin/Stdout` 接到 SSH 会话上。
+5. **输出** — 读到的字节进入 `internal/message` 的按会话日志，`read` 以字节游标从磁盘分页，
+   所以会话结束后仍可回放。
 
-**关键设计**：shell 级 stdin 串行写入，防止并发 Agent 交替写入导致输入错乱。I/O 一律按 `shell_id`，不再用 session id 当默认 shell。
-
-## 四、输出流向（shell_output）
-
-```
-进程 stdout/stderr                                                               AI Agent
-  │                                                                                 ▲
-  │ 每个 4096 字节 chunk                                                             │
-  ▼                                                                                 │
-  pipeToBuffer goroutine ── 读取 ──> buffer.Buffer ── 追加 master ──> 每 reader 独立 readPos │
-  (每 stdout/stderr 各一个)           │                                                │
-                                     │  ┌─────────┬─────────┬─────────┐              │
-                                     │  │reader 0 │reader 3 │reader 7 │ ...          │
-                                     │  │readPos │readPos │readPos │              │
-                                     │  └────┬────┘────┬────┘─────────┘              │
-                                     │       │         │                              │
-                                     ▼       ▼         ▼                              │
-                                    shell_output 被调用时:                              │
-                                     │                                                 │
-                                     │  buf.Read(ctx, readerID, timeout)               │
-                                     │  ┌─ drain: 拷贝 master[readPos:] 并推进 readPos   │
-                                     │  ├─ 无数据且未关闭: Cond.Wait(timeout)          │
-                                     │  └─ closed: 返回 io.EOF                        │
-                                     │                                                 │
-                                     ▼                                                 │
-                                    ansi.Strip(data)  ── 移除 ANSI 转义码              │
-                                    │  CSI序列、OSC序列、字符集切换                     │
-                                    ▼                                                 │
-                                    ansi.Compact(data) ── 终端噪音压缩                 │
-                                    │  ┌─ 控制字符清理 (保留 \r\n\t)                    │
-                                    │  ├─ CRLF → LF                                   │
-                                    │  ├─ \r覆盖 → 最后一行（进度条处理）               │
-                                    │  ├─ 尾随空白去重                                 │
-                                    │  └─ 3+空行 → 2空行                              │
-                                    │  典型 git clone: ~11500字节 → ~200字节 (98%)     │
-                                    ▼                                                 │
-                                    message.Append(Output) → storage 持久化            │
-                                    │                                                 │
-                                    ▼                                                 │
-                                    {output, has_more, lines_returned, bytes_returned} │
-                                    ──────────────────────────────────────────────────>
-```
-
-**关键设计**：
-
-| 特性 | 实现 |
-|------|------|
-| 多读者 | 每个 `shell_reader_register` 独立 readPos；共享一条 append-only master |
-| 内存 | 全员已读过的前缀可整体丢弃；无固定容量环、不按读者覆盖旧数据 |
-| 阻塞等待 | `sync.Cond.Wait()` + 超时 goroutine，支持 context 取消 |
-| 输出清洗 | 两次处理：Strip(去ANSI) → Compact(压缩噪音) |
-| 统一游标 | `shell_output` 是唯一输出读取入口：活/死会话一律按字节流读取。活会话走 reader 增量游标；`offset` 无状态定位 & `tail_lines` 末尾截取对两种流同样生效；重启恢复的 DEAD 会话其流由磁盘 MsgOutput 按序重建，与内存字节流同构（同 start_offset/end_offset/total_bytes/has_more 协议） |
-
-## 五、信号/终止流向（session_terminate）
-
-```
-AI Agent                Session                    sshclient              sshserver              OS
-  │                        │                          │                      │                     │
-  │  session_terminate(   │                          │                      │                     │
-  │    session_id,        │                          │                      │                     │
-  │    force=false,       │                          │                      │                     │
-  │    grace_period=5)    │                          │                      │                     │
-  │ ─────────────────────>│                          │                      │                     │
-  │                        │  terminateOnce.Do()      │                      │                     │
-  │                        │                          │                      │                     │
-  │                        │  [非强制]                 │                      │                     │
-  │                        │  Signal(ssh.SIGTERM) ──>│                      │                     │
-  │                        │                          │  session.Signal("TERM")
-  │                        │                          │ ── SSH signal msg ──>│                     │
-  │                        │                          │                      │  sshSignalToOSSig    │
-  │                        │                          │                      │  "TERM" → SIGTERM    │
-  │                        │                          │                      │  Process.Signal() ──>│ SIGTERM
-  │                        │                          │                      │                     │
-  │                        │                          │                      │                     │
-  │                        │  [[ 等待 grace_period ]]                      │                     │
-  │                        │  select: Done() | timeout                     │                     │
-  │                        │                          │                      │                     │
-  │                        │  [进程未退出 或 force]                          │                      │
-  │                        │  ExecSession.Close() ──>│                      │                     │
-  │                        │                          │  Stdin.Close()       │                     │
-  │                        │                          │  session.Close()     │                     │
-  │                        │                          │ ── SSH disconnect ──>│ 连接断开             │
-  │                        │                          │                      │                     │
-  │                        │  [[ 等待 2s ]]            │                      │                     │
-  │                        │  exitOnce.Do():           │                      │                     │
-  │                        │    Status=exited          │                      │                     │
-  │                        │    ExitCode=-1            │                      │                     │
-  │                        │    buffer.Close()         │                      │                     │
-  │  ← {"success":true}    │                          │                      │                     │
-```
-
-**关键设计**：
-
-| 概念 | 说明 |
-|------|------|
-| `terminateOnce` | 保证终止只执行一次，重复调用无副作用 |
-| `exitOnce` | 保证 Status/ExitCode 只写一次，退出 goroutine 是单一权威 |
-| 两阶段终止 | SIGTERM（优雅）→ Close（强制）→ 2s hard timeout |
-
-## 六、PTY 调整大小流向（shell_resize）
-
-```
-AI Agent                Session                    sshclient              sshserver              OS
-  │                        │                          │                      │                     │
-  │  shell_resize(           │                          │                      │                     │
-  │    shell_id,           │                          │                      │                     │
-  │    rows=40, cols=120)  │                          │                      │                     │
-  │ ──────────────────────>│                          │                      │                     │
-  │                        │  ResizePty(40,120)        │                      │                     │
-  │                        │  ┌─ 检查 mode=pty         │                      │                     │
-  │                        │  └─ WindowChange(40,120)─>│                      │                     │
-  │                        │                          │  SSH window-change──>│                     │
-  │                        │                          │                      │  pty.Setsize(f,      │
-  │                        │                          │                      │    40x120)           │
-  │                        │                          │                      │  ── ioctl ─────────>│ TIOCSWINSZ
-  │                        │  s.Rows=40, s.Cols=120   │                      │                     │
-  │  ← {"success":true}    │                          │                      │                     │
-```
-
-## 七、多 Agent 共享 Session 流程
-
-```
-Agent A (reader 0)           Session              Agent B (新加入)
-  │                            │                     │
-  │  session_start() ────────>│                     │
-  │  ← reader_id:0 (默认)     │                     │
-  │                            │                     │
-  │  shell_output(             │                     │
-  │    reader_id=0) ─────────>│                     │
-  │                            │ buf.Read(ctx,0,...) │
-  │  ← output                  │                     │
-  │                            │                     │
-  │                            │  shell_reader_register() ─┤
-  │                            │ ─────────────────>  │
-  │                            │  ← reader_id:3      │
-  │                            │                     │
-  │                            │  shell_output(       │
-  │                            │    reader_id=3) ───>│
-  │                            │ buf.Read(ctx,3,...) │
-  │                            │ ← output (从注册点起)  │
-  │                            │                     │
-  │  shell_output(reader_id=0)──┤                     │
-  │  ← 新输出                  │                     │
-```
-
-**关键**：两个 Agent 各自有独立 readPos，互不干扰。Agent B 注册时游标起点 = 当时的 master 末尾（**无历史 backlog**），只能看到此后产生的新输出；历史不再因单读者环形容量被截断。`shell_open` 可在同一 SSH 连接上为 Agent B 开独立 shell 通道，彻底避免共用 reader 的游标协调问题。
-
-
-```
-输出循环（每读到一个 chunk）
-  │
-  ▼
-message.Manager.AppendOutput(sessionID, shellID, chunk)
-  │
-  ├─ per-session mutex（防止字节写与标记写交错）
-  │
-  ├─ storage.AppendLog → 返回 offset（= log.bin 的文件位置，偏移的唯一定义）
-  │   data/sessions/{session_id}/{shell_id}/log.bin
-  │
-  ├─ buffer.WriteAt(chunk, offset)   只断言：自身末尾 == offset，不符则停止记录
-  │
-  └─ 仅状态变化时：storage.AppendMark
-      data/sessions/{session_id}/{shell_id}/log.jsonl
-```
+改动这条路径时不需要同步本文：它说明的是为什么长成这个形状，不是每一步调了哪个函数。
 
 ## 十、会话生命周期状态机
 
@@ -359,7 +206,7 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 - `error`：保留给启动失败等错误；当前启动失败直接返回错误，不会创建 Session。
 
 ```
-                              session_start()
+                          connect + open (pty)
                                    │
                                    ▼
                            ┌──────────────┐
@@ -382,12 +229,12 @@ Session 的 `status` 描述的是连接容器，而 Shell 有自己独立的 `st
 
       running ── shell 自然退出 ──> running（shell 留在列表供 drain）
       running ── shell 手动关闭 ──> running（shell 直接删除；关掉最后一个也一样）
-      running ── 所有 shell 关闭/退出 ──> running（transport 仍可用：转发/SFTP/shell_open 照常）
+      running ── 所有 shell 关闭/退出 ──> running（transport 仍可用：转发/SFTP/open 照常）
 ```
 
 **关键不变量：**
 
-1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭（哪怕一个不剩）就把仍可用的 Session 标成 DEAD —— 容器持有的是 SSH transport，端口转发、SFTP 与 `shell_open` 都只依赖它。
+1. Session 未关闭时，`GET /api/sessions` 显示 `status: "running"`；不要因为某个 shell 退出或手动关闭（哪怕一个不剩）就把仍可用的 Session 标成 DEAD —— 容器持有的是 SSH transport，端口转发、SFTP 与 `open` 都只依赖它。
 2. Shell 的关闭有两种语义：
    - **归档并保留记录（`ArchiveChildShell`，`POST /api/shells/{id}/archive`）**：关闭通道并标记 `archived`，退出码与最后日志保留在 `shellHistory` 快照中，UI 移除活动标签但可在归档列表和只读视图回溯。
    - **彻底删除（`CloseChildShell`，`DELETE /api/shells/{id}`）**：从 live map、shell history snapshot 中彻底删除，不留记录。
@@ -443,5 +290,5 @@ Termcp 本质上是**透明的真实终端与多路交互管道**（PTY Transpor
    - **语义混淆在底层不可判定**：AI 可以将破坏性指令切片拼接（如 `a="rm -"; b="rf /"; $a$b`）、通过变量重组、`eval` 注入、`printf` 格式化拼接、环境变量构造执行、或拆解为多步分片写入后执行。在 PTY 看来，这些输入完全是合法的键盘按键与字符流，底层通道绝无可能在不破坏正常开发操作的前提下区分“混淆攻击”与“正常开发脚本”。
    - **Payload 交付方式千变万化**：攻击性行为可通过 Base64 管道还原、分段追加写入、乃至使用合法的 `curl`/`wget`/`ssh` 远程拉取多阶段执行体。终端与 SFTP 只是原始字节输送管，无法也不应该扮演杀毒引擎或 EDR 的角色。
 2. **责任共担模型（Shared Responsibility）**：
-   - **调用方自负防线**：宿主程序、Agent Harness 或集成框架必须在模型发起 `shell_input` 或 `file_write` 调用**之前**完成安全过滤——包括模型输出敏感指令检测、正则阻断、参数合规审计与指令沙箱隔离。
+   - **调用方自负防线**：宿主程序、Agent Harness 或集成框架必须在模型发起 `input` 或 `write` 调用**之前**完成安全过滤——包括模型输出敏感指令检测、正则阻断、参数合规审计与指令沙箱隔离。
    - **人机接力作为最后屏障**：Termcp 原生提供 Web UI 实时同屏监视与强制接管能力。对高风险命令、权限跃迁（`sudo`、MFA 等）默认暂停等待人工确认，切忌在缺乏隔离的真实生产机器上完全放任 AI 无人值守执行。

@@ -60,3 +60,69 @@ call <session> mcp:<index> '{"jsonrpc":"2.0","id":1,"method":"ping"}'
 MCP `instructions` 会反复进入模型上下文，预算有限。优先写会改变下一步行为的事实：Termcp 是终端式 DSL、先查 help、常见任务用哪个高层入口、何时才需要协议层操作、遇到缺口如何向人确认。复杂语法放在按需读取的 `help` 与 `/api.md`，不要把整份手册塞进每轮 instructions。
 
 每次改 MCP instructions 或 directive help 时，应检查它是否遵循本指南，并用实际解析器/执行测试确认示例语法有效；不要只检查文字是否“看起来像命令”。
+
+### 5.1 常驻文本写成查表，不写成散文
+
+一段话只要进入常驻上下文，它**每一轮都在花读者的注意力**。所以判据不是“写得是否清楚”，而是“为什么用句子而不是符号”。
+
+同一个事实，列表述的代价差一倍：
+
+```text
+散文    termcp cannot ask a person: notify reaches open Web UI pages, and delivery is
+        not acknowledgement — an answer comes back only as the human's reply or as
+        channel bytes. A password, sudo, MFA or confirmation therefore goes out
+        through notify and the wait is for that answer.
+
+查表    notify reaches open Web UI pages: it carries a message to a person and brings back
+        only their reply or channel bytes — delivery is not acknowledgement.
+        password, sudo, MFA, confirmation -> notify, then wait for that answer;
+```
+
+第二版短约三分之一，信息一条不少。分歧不在文采，在**谁承担组织工作**：散文让读者从句子的语法结构里拆出事实，查表把事实直接按列摆好。
+
+具体做法：
+
+1. **能写成 `键 -> 值` 的，不要写成“因为……所以……”。** 映射关系是结构，不是叙述。`review_pending=true -> HELD`、`password, sudo -> notify`、`cmd/args -> server log verbatim`，读者一眼扫完；换成“当 X 发生时，系统会 Y，因此你应当 Z”，读者要做三步推理。
+2. **删掉连接词。** `therefore`、`rather than`、`and … anyway`、`because`、`only a` 都不携带事实，它们只标记“作者在论证”。压缩时先删它们，通常就能省下三成。
+3. **正面陈述起手，不要用否定句开场。** `termcp cannot ask a person` 把一个限制放在第一句，读者先接到的是“做不到什么”，而**限制只有在知道能做做什么之后才有意义**。先说是通道、消息往哪走、回来什么，限制自然落在最后一句。
+4. **按字段对齐，不要按句号分行。** 同一类事实排成一列（`review_pending` / `approval_id` / `resending` 三行对齐），读者按列扫；写成三句独立的话，读者要重新建立它们属于同一组的关系。
+5. **一段只承担一个主题。** 上面那段散文 43% 的字节花在“人怎么被通知”“凭据怎么走”“审阅怎么排队”“日志怎么记”四件事上。四件事挤在一段，读者无法判断哪一条是前提；拆成四行，每行都可以单独被引用。
+
+### 5.2 重复的副本要删掉，不是改写
+
+常驻文本变长的最常见原因不是“写得太啰嗦”，而是**同一个事实在同一份文本里出现了两次**：
+
+- **回复里每条都带的字段名**（`Waited` / `Content-Range` / `Still-Running` / `Error-Code`）：第一次收到回复就看到了，不需要提前预告。
+- **该能力自己的输出会说的话**：`ls` 打印的就是存在的地址，不需要再用一句话保证“ls prints the addresses that exist”。
+- **工具结果已经逐字说过一遍的规则**：审阅被扣住时 `reviewWaitTail` 已经写了等待方式，instructions 里只留一条会改变下一步行为的规则（`review_pending=true (approval_id) -> HELD`）。
+
+判据：**这条信息，读者在读这句话之前是否必须已经知道？** 不是，就删——它会在需要它的那一屏出现。
+
+删完要能回答“细节在哪”：每删一处，都要指出读者遇到该情形时会看到它的位置（tool result、`help <verb>`、`/api.md`）。指不出来的，是丢失，不是精简。
+
+### 5.3 描述能力本体，不要只描述协议形状
+
+`CDP: call <peer> {method}` 说的是**怎么调**，没说**它是什么**。一个不知道手里握着浏览器的模型，会去 `curl` 一个页面、拿到静态 HTML，然后以为页面就长这样。
+
+所以每个外部能力至少要交代三件事，缺一个就会让读者在错误的方向上试错：
+
+| 要素 | 反例 | 正例 |
+|---|---|---|
+| 它是什么 | `call <peer> {method}` | `CDP controls a real browser` |
+| 怎么进 | （没有） | `open <session> cdp <url>` |
+| 能做什么 | （没有） | `navigate, click, screenshot, eval` |
+
+这三个要素都不构成“第二份真相”：方法名由 peer 自己的 `protocol` 列出，入口由 `help open` 校验，动作名是协议标准词汇。**省略它们省不下字节，只是把成本推给了读者的试错。**
+
+### 5.4 预算要用实测数字，不要用感觉
+
+`internal/mcp/token_budget_test.go` 把上限钉死在字节数上，并且会把当前值打进日志。改完读一次：
+
+```
+token_budget_test.go:46: tools/list total: 2451 B
+token_budget_test.go:47: instructions: 1612 B
+```
+
+"感觉短了不少"不是证据。**省下多少字节、余量还剩多少，是这次改动唯一可核对的收益**，也是判断“还能不能加一句”的唯一依据。
+
+配套的纪律是：**压缩不得改变被测试钉住的措辞。** 断言查的是片段（`resending queues a second`、`polling asks a page, not a person`），不是整句，所以可以重组句子，但不能把片段改写成同义的另一种说法——那会让测试变红，而测试红的理由是对的：那些片段是读者靠它做判断的原话。

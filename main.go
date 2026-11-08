@@ -1,40 +1,20 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"golang.org/x/term"
-
-	"github.com/open-mcp-ai/termcp/internal/auth"
-	"github.com/open-mcp-ai/termcp/internal/config"
+	"github.com/open-mcp-ai/termcp/config"
+	"github.com/open-mcp-ai/termcp/core"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
-	"github.com/open-mcp-ai/termcp/internal/extensions"
-	"github.com/open-mcp-ai/termcp/internal/forward"
-	"github.com/open-mcp-ai/termcp/internal/jrpc"
-	"github.com/open-mcp-ai/termcp/internal/logansi"
-	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
-	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
-	"github.com/open-mcp-ai/termcp/internal/message"
-	"github.com/open-mcp-ai/termcp/internal/session"
-	"github.com/open-mcp-ai/termcp/internal/sshconfig"
-	"github.com/open-mcp-ai/termcp/internal/sshserver"
-	"github.com/open-mcp-ai/termcp/internal/storage"
-	"github.com/open-mcp-ai/termcp/internal/webui"
 )
 
 // Build metadata. Release builds override these with -ldflags (the Makefile's
@@ -94,16 +74,11 @@ func logHTTPMain(base string, port int, lanIPv4 []string) {
 
 func main() {
 	cfg := config.Default()
-	flag.StringVar(&cfg.Host, "host", cfg.Host, "HTTP bind address (127.0.0.1 = loopback default; 0.0.0.0 = all interfaces)")
-	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
-	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Data directory for JSON storage (default: $TERMCP_DATA_DIR or ~/.termcp)")
-	flag.StringVar(&cfg.AssetsDir, "assets", cfg.AssetsDir, "External static assets directory: files there override the embedded Web UI and docs; missing files fall back to the embed (default: $TERMCP_ASSETS_DIR or ~/.termcp/assets)")
-	flag.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log verbosity: debug|info|warn|error")
-	flag.BoolVar(&cfg.NoInternal, "no-internal", cfg.NoInternal, "Disable the built-in loopback SSH profile (no internal connection)")
-	flag.BoolVar(&cfg.MCPManageSSHConfigs, "mcp-manage-ssh-configs", cfg.MCPManageSSHConfigs, "Enable the profile write actions of the `profile` directive (create/edit/copy/delete) over MCP (off by default; passwords/keys are never exposed)")
-	flag.StringVar(&cfg.AuthToken, "auth-token", cfg.AuthToken, "HTTP authentication token (or $TERMCP_AUTH_TOKEN)")
-	flag.StringVar(&cfg.AuthHash, "auth-hash", cfg.AuthHash, "Salted SHA-256 HTTP token hash (or $TERMCP_AUTH_HASH; generate with 'termcp --gen-auth-hash')")
-	flag.BoolVar(&cfg.DisableAuth, "disable-auth", cfg.DisableAuth, "Disable HTTP authentication entirely, even on non-loopback binds (or TERMCP_DISABLE_AUTH_TOKEN=1). Errors out if a token or hash is also configured.")
+	// THE SERVER'S OWN FLAGS COME FROM THE STRUCT (config.Bind). They used to be
+	// twenty hand-written flag.XVar lines, which is one more list to keep in step
+	// with the struct and the environment — and it did not stay in step: ThemesDir
+	// had a field and no flag at all.
+	config.Bind(flag.CommandLine, cfg)
 	var genAuthHash bool
 	flag.BoolVar(&genAuthHash, "gen-auth-hash", false, "Generate the salted SHA-256 hash of a token for --auth-hash / $TERMCP_AUTH_HASH, then exit (token from an argument, or from stdin without echo on a terminal)")
 	var showVersion bool
@@ -155,7 +130,12 @@ func main() {
 		}
 		return
 	}
-	cfg.ApplyEnv()
+	// Environment variables fill what the operator did not type. AFTER the parse,
+	// because "was this flag given" is the question, and only the FlagSet knows.
+	if err := config.ApplyEnv(flag.CommandLine, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	if args := flag.Args(); len(args) > 0 {
 		if sub, ok := findSubcommand(args[0]); ok {
@@ -284,11 +264,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "assets %q is not a directory\n", cfg.AssetsDir)
 		os.Exit(1)
 	}
-	// Must run before any consumer reads Assets(): the MCP docs FS and the Web UI
-	// static server both resolve through it.
-	webui.SetAssetsDir(cfg.AssetsDir)
+	// The themes directory is optional in the same way, and resolved here because
+	// only the CLI knows a user's home layout. core applies both to the asset FS.
 	if uiThemesDir, err := config.DefaultThemesDir(); err == nil {
-		webui.SetThemesDir(uiThemesDir)
+		cfg.ThemesDir = uiThemesDir
 	} else {
 		fmt.Fprintf(os.Stderr, "cannot resolve themes dir: %v\n", err)
 		os.Exit(1)
@@ -306,155 +285,33 @@ func main() {
 	runServer(cfg, idleTimeoutArg, idleTimeout, isDaemonChild)
 }
 
-// runServer is the serving half of the command: it builds the runtime - auth,
-// logging, the internal sshd, the storage and managers, the MCP server and the
-// Web UI - wires the parts that have to know about each other, and then serves
-// until a signal or a daemon idle countdown asks it to stop.
+// runServer is the serving half of the command: it hands the configuration to
+// core, which builds the runtime, and then serves until a signal or a daemon
+// idle countdown asks it to stop.
 //
 // It is separate from main because the two halves have different failure models.
 // main only classifies the command line and prints to stderr; from here on the
 // flags are already accepted, so messages go through slog and a startup failure
 // exits the process - there is nothing sensible left to fall back to.
+//
+// The assembly itself lives in core (see core.Options). It moved there so that
+// an embedder gets the same instance this binary gets, instead of a
+// reimplementation of it; what remains here is the part that is genuinely about
+// being a process: install the logger, take the signals, and turn a shutdown
+// request into core.Close.
 func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Duration, isDaemonChild bool) {
-	var verifier *auth.Verifier
-	if cfg.AuthToken != "" || cfg.AuthHash != "" {
-		v, err := auth.NewVerifier(cfg.AuthToken, cfg.AuthHash)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid auth config: %v\n", err)
-			os.Exit(2)
-		}
-		verifier = v
-	}
+	slog.SetDefault(slog.New(core.LogHandler(cfg.LogLevel)))
 
-	slog.SetDefault(slog.New(buildLogHandler(cfg)))
-	slog.Info("termcp server started", "version", versionString())
-
-	// Start internal SSH server (in-process, no TCP port) unless disabled.
-	var sshSrv *sshserver.Server
-	if !cfg.NoInternal {
-		sshSrv = sshserver.New()
-		if err := sshSrv.Start(); err != nil {
-			slog.Error("failed to start SSH server", "err", err)
-			os.Exit(1)
-		}
-	}
-	slog.Info("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
-
-	if verifier != nil {
-		slog.Info("HTTP authentication: enabled (API/MCP: Authorization: Bearer <token>; browsers: native login prompt, token as password)")
-	} else if cfg.DisableAuth {
-		slog.Warn("HTTP authentication: DISABLED on purpose (--disable-auth / $" + config.EnvDisableAuth + "); anyone who can reach this port can drive every session")
-	} else {
-		slog.Info("HTTP authentication: disabled (loopback-only bind)")
-	}
-
-	slog.Info("MCP HTTP:")
-	slog.Info("    /sse SSE transport")
-	slog.Info("    /stream (streamable HTTP per MCP spec, e.g. Open WebUI)")
-	slog.Info("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
-
-	// Initialize storage and managers
-	store := storage.New(cfg.DataDir)
-	msgMgr := message.NewManager(store)
-	sessMgr := session.NewManager(msgMgr, store, sshSrv)
-	if err := sessMgr.RestoreDead(); err != nil {
-		slog.Warn("failed to restore previous DEAD sessions", "err", err)
-	}
-
-	sshStore := sshconfig.NewStore(cfg.DataDir)
-
-	// The in-process MCP bridge is a command the internal SSH server serves itself,
-	// so an extension reaches an HTTP MCP server over its own channel with no second
-	// binary and no PATH lookup (see internal/mcpbridge.RegisterBuiltin).
-	//
-	// REGISTERED HERE RATHER THAN NEXT TO sshSrv.Start(), because `--via <profile>`
-	// needs the profile store and the session manager to answer "which machine does
-	// this connection leave from" (#233). Registration is a sync.Map insert, so doing
-	// it after the server started is safe and needs no second start.
-	if sshSrv != nil {
-		mcpbridge.RegisterBuiltin(sshSrv, viaDialer(sessMgr, sshStore, cfg.NoInternal))
-	}
-
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	mux := http.NewServeMux()
-	mainSrv := &http.Server{Addr: addr, Handler: mux}
-
-	forwardMgr := forward.NewForwardManager()
-
-	// The extension reconciler keeps every enabled extension's session warm and
-	// reports its state. It owns its loop's context — Stop cancels it — and the
-	// shutdown path stops it before the sessions are marked dead, so an in-flight
-	// probe cannot spawn a connection the process is about to leave.
-	extReconciler := extensions.NewReconciler(
-		extensions.NewStore(cfg.DataDir), sessMgr, msgMgr, sshStore, forwardMgr,
-	)
-	extReconciler.NoInternal = cfg.NoInternal
-	if err := extReconciler.Start(context.Background()); err != nil {
-		slog.Error("failed to start extension reconciler", "err", err)
-		os.Exit(1)
-	}
-
-	mcpOpts := []mcpmod.Option{mcpmod.WithHTTPServer(mainSrv)}
-	mcpSrv := mcpmod.New(sessMgr, msgMgr, sshStore, forwardMgr, versionString(), mcpOpts...)
-	// Same embedded docs the Web UI serves over HTTP feed the `learn-api` prompt.
-	// No MCP resources: the tool surface describes itself (see internal/mcp/docs.go).
-	mcpSrv.SetDocsFS(webui.Assets())
-	mcpSrv.NoInternal = cfg.NoInternal
-	mcpSrv.ManageSSHConfigs = cfg.MCPManageSSHConfigs
-	mux.Handle("GET /sse", mcpSrv.SSEHandler())
-	mux.Handle("POST /message", mcpSrv.MessageHandler())
-	mux.Handle("/stream", mcpSrv.StreamableHTTPHandler())
-	// ONE MCP ENDPOINT PER EXTENSION (issue #234). /stream above serves termcp's own
-	// tool surface, whose only tool speaks this project's directive language — so an
-	// MCP client that does not know the language cannot reach an extension's tools.
-	// /ext/{name}/stream exposes that extension's own MCP server verbatim, letting a
-	// client reach it by pointing its config at a URL. termcp keeps the lifecycle
-	// (on-demand start, idle reaping) and the policy (the template's capability
-	// whitelist and review gate), so this is a new door onto the same room, not a
-	// second way around its lock.
-	mux.Handle("/ext/{name}/stream", mcpSrv.ExtMCPHandler())
-	// The REST entrance to the same command space: POST /api/term takes the term
-	// tool's argument object and answers the same envelope. Mounted here rather
-	// than by webuiH because admission and the namespace claim live in internal/mcp
-	// — a second copy on the other side of the import cycle would be a second
-	// place to get admission wrong. A pattern the Web UI owns wins over this one
-	// (it registers later, and ServeMux refuses overlaps rather than overriding),
-	// so no existing route can be shadowed by it.
-	mux.Handle("POST /api/term", mcpSrv.TermHandler())
-	webuiH := &webui.Handler{Sessions: sessMgr, MsgMgr: msgMgr, SSH: sshStore, ForwardMgr: forwardMgr, Extensions: extReconciler, NoInternal: cfg.NoInternal, Version: versionString(), Daemon: isDaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339), SFTP: mcpSrv.SFTPPool()}
-	// The effective countdown is published at GET /api/daemon so the stdio
-	// bridge can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
-	if isDaemonChild {
-		webuiH.DaemonLog = daemon.LogPath(cfg.DataDir)
-		webuiH.IdleTimeout = daemon.DefaultIdleTimeout
-		if idleTimeoutArg != "" {
-			webuiH.IdleTimeout = idleTimeout
-		}
-	}
-	// File transfers and port forwards are held by the same review queue as
-	// command lines, but the operations live with the MCP server (it owns the
-	// SFTP and forward machinery). The Web UI decides; this is how its decision
-	// gets replayed where the operation is implemented.
-	webuiH.ExecuteOperation = mcpSrv.ExecuteApprovedOperation
-	webuiH.Register(mux)
-	// Bridge the MCP notify_user tool to the browser UI (toast/highlight push).
-	mcpSrv.SetExtensionReconciler(extReconciler)
-	mcpSrv.SetUINotifier(webuiH.BroadcastUINotify)
-	// Who is attached: the Web UI lists MCP clients from the MCP server and its
-	// own tabs from its own registry. The listener wakes the same broadcast the
-	// session list uses, so a client connecting shows up without a poll.
-	webuiH.MCPConnections = func() []any {
-		conns := mcpSrv.Connections()
-		out := make([]any, len(conns))
-		for i, c := range conns {
-			out[i] = c
-		}
-		return out
-	}
-	mcpSrv.SetConnectionsListener(webuiH.NotifyClientsChanged)
-
-	if verifier != nil {
-		mainSrv.Handler = auth.Middleware(verifier, mux)
+	srv, err := core.New(core.Options{
+		Config:         cfg,
+		Version:        versionString(),
+		DaemonChild:    isDaemonChild,
+		IdleTimeout:    idleTimeout,
+		IdleTimeoutSet: idleTimeoutArg != "",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot start: %v\n", err)
+		os.Exit(2)
 	}
 
 	host := strings.TrimSpace(cfg.Host)
@@ -465,146 +322,27 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 	logHTTPMain(base, cfg.Port, lan)
 
-	var shuttingDown atomic.Bool
-	var shutdownOnce sync.Once
-
-	// gracefulShutdown is the one exit path for both a signal and a daemon's
-	// idle countdown; once it has run, a second trigger is a no-op.
-	gracefulShutdown := func(reason string) {
-		shutdownOnce.Do(func() {
-			shuttingDown.Store(true)
-			slog.Info("shutting down", "reason", reason)
-			extReconciler.Stop()
-			// Disconnect ≠ delete: DEAD all running sessions (retain history) instead
-			// of killing/clearing every shell.
-			sessMgr.MarkAllDead()
-			if sshSrv != nil {
-				sshSrv.Stop()
-			}
-			mcpSrv.Stop()
-			// The store keeps a shell's log open for appending; close it so the last
-			// bytes are durable and no handle outlives the process.
-			if err := store.Close(); err != nil {
-				slog.Warn("closing output logs", "err", err)
-			}
-		})
-	}
-
-	// The daemon stop endpoint asks for the same exit path a signal takes.
-	webuiH.StopDaemon = func() { gracefulShutdown("daemon stop") }
-
-	// Handle graceful shutdown
+	// SIGINT/SIGTERM and the daemon's stop endpoint all land on core.Close, which
+	// runs once however many times it is asked.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		gracefulShutdown("signal")
+		srv.Close("signal")
 	}()
 
-	// Daemon children carry the idle countdown that is their normal way of
-	// ending. The watcher starts counting at creation — a fresh instance has
-	// seen no activity yet — and management probes are exempt, so a status
-	// query never keeps alive the instance it is asking about. The predicate
-	// lives with the probe itself (daemon.IsProbe): the probe falls back to the
-	// public /api.md fingerprint when /api/daemon is rejected, and that
-	// fallback must be exempt too, or a status query on a guarded instance
-	// would feed the very countdown it reports on.
-	if isDaemonChild {
-		timeout := daemon.DefaultIdleTimeout
-		if idleTimeoutArg != "" {
-			timeout = idleTimeout
-		}
-		watcher := daemon.NewIdleWatcher(timeout, func() { gracefulShutdown("idle timeout") })
-		watcher.Exempt = daemon.IsProbe
-		mainSrv.Handler = watcher.Track(mainSrv.Handler)
-		slog.Info("daemon instance active", "pid", os.Getpid(), "idle_timeout", timeout)
-	}
-
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- mcpSrv.Start(addr) }()
-
-	if err := <-serveErr; err != nil {
-		if shuttingDown.Load() && errors.Is(err, http.ErrServerClosed) {
-			slog.Info("server stopped")
-			return
-		}
-		slog.Error("failed to start MCP server", "err", err)
+	// TWO CALLS, and the split is the point: Start brings the surfaces up and
+	// returns; Listen binds the port and blocks. This binary wants both. A program
+	// that only wants the command language — an embedder, a test — calls the first
+	// and does not ask for the second, which is how it gets an instance without a
+	// port. That replaced Options.NoListener, one flag that decided for everyone
+	// which half of Start to skip, and skipped the MCP docs registration with it.
+	if err := srv.Start(); err != nil {
+		slog.Error("failed to start server", "err", err)
 		os.Exit(1)
 	}
-}
-
-func buildLogHandler(cfg *config.Config) slog.Handler {
-	var minLevel slog.Level
-	switch cfg.LogLevel {
-	case "debug":
-		minLevel = slog.LevelDebug
-	case "warn":
-		minLevel = slog.LevelWarn
-	case "error":
-		minLevel = slog.LevelError
-	default:
-		minLevel = slog.LevelInfo
-	}
-	color := term.IsTerminal(int(os.Stderr.Fd()))
-	return logansi.NewTextHandler(os.Stderr, logansi.Options{MinLevel: minLevel, Color: color})
-}
-
-// viaDialer answers `--via <profile>` for the in-process MCP bridge: the dialer
-// it returns makes its connections from THAT profile's machine, so a template can
-// point at `http://127.0.0.1:8080` and mean the far host's loopback rather than
-// this one (#233).
-//
-// The lease is held for the whole bridge lifetime and released when it ends, for
-// the reason the bridge exists: one MCP session makes many requests to one host,
-// and a per-request lease would pay a handshake for each.
-//
-// It borrows the same transport pool ordinary sessions use, so a template that
-// reaches one host does not open a second connection to a host termcp is already
-// connected to.
-func viaDialer(sessMgr *session.Manager, sshStore *sshconfig.Store, noInternal bool) mcpbridge.ViaDialer {
-	return func(ctx context.Context, profile string) (func(network, addr string) (net.Conn, error), func(), error) {
-		profile = strings.TrimSpace(profile)
-		if profile == "" {
-			return nil, nil, errors.New("--via needs a profile name")
-		}
-		cfg := session.Config{Ctx: ctx}
-		if !sshconfig.IsInternalName(profile) {
-			entry, err := sshStore.Load(profile)
-			if err != nil {
-				if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-					return nil, nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles", sshconfig.ErrNotFound, profile)
-				}
-				return nil, nil, err
-			}
-			remote, err := sshconfig.RemoteFromEntry(entry, sshStore.ConfigDir(profile))
-			if err != nil {
-				return nil, nil, err
-			}
-			cfg.Remote = remote
-			cfg.SSHConfig = profile
-		} else if noInternal {
-			return nil, nil, errors.New("the built-in loopback profile is disabled on this instance")
-		}
-		lease, err := sessMgr.AcquireTransport(ctx, cfg)
-		if err != nil {
-			return nil, nil, err
-		}
-		if lease == nil || lease.Client == nil {
-			if lease != nil && lease.Release != nil {
-				lease.Release()
-			}
-			return nil, nil, fmt.Errorf("no SSH connection to %q", profile)
-		}
-		dial := func(network, addr string) (net.Conn, error) {
-			conn, derr := lease.Client.Dial(network, addr)
-			if derr != nil {
-				return nil, derr
-			}
-			// An SSH channel carries no deadlines of its own, so the wrapper drops
-			// them rather than letting a caller's HTTP deadline surface as an error
-			// from SetDeadline. Same wrapper `mcp open` uses for the same connection.
-			return jrpc.NoDeadlineConn(conn), nil
-		}
-		return dial, lease.Release, nil
+	if err := srv.Listen(); err != nil {
+		slog.Error("server stopped with an error", "err", err)
+		os.Exit(1)
 	}
 }

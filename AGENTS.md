@@ -54,7 +54,7 @@ Go 标准库把并发能力做成了可直接使用的积木：`sync/atomic` 提
 **边界（保留锁的两种情形）：**
 
 - **多个字段必须一起改变、且没有更好的原子表达时，短锁是正确的工具**。写清它保护哪个不变量，并让临界区只含内存操作。`storage.Store`、`extension.Store` 的跨文件事务属于此类。
-- **第三方库与用户回调不在你的控制下**：`mcp-go`、`charmbracelet/ssh` 内部如何加锁、是否阻塞、是否反向回调，你无法保证，也无法保证它们不会与你的锁形成 AB-BA。所以锁内只做本次快照，出锁后再调外部接口（参见 `connRegistry.list()` 与 `approval.Queue.notify()` 的做法）。
+- **第三方库与用户回调不在你的控制下**：`charmbracelet/ssh`、`pkg/sftp` 内部如何加锁、是否阻塞、是否反向回调，你无法保证，也无法保证它们不会与你的锁形成 AB-BA。所以锁内只做本次快照，出锁后再调外部接口（参见 `connRegistry.list()` 与 `approval.Queue.notify()` 的做法）。
 
 ## Agent skills
 
@@ -134,15 +134,24 @@ the transport-level reference. Three invariants are cheap to keep in mind withou
 - **Turns are the scarce resource.** An MCP call costs 2–10 ms; an assistant
   turn costs 6–9 s — ~1000×. Minimise *turns*, not calls: whatever one turn can
   hold, keep it in one turn.
-- **One command = one batch.** `shell_input` (types) → `shell_key(enter)`
-  (executes) → `shell_output` (reads) is *tool semantics, not turn boundaries* —
-  run all three inside a single `mcpScript` turn, and let
-  `shell_output(timeout≤3)` do the only waiting there is. The loop is
-  input → execute → read → next input, with nothing in between.
-- **`shell_id` is the I/O target, `session_id` is the connection.** Every I/O
-  tool takes `shell_id`. One task gets one session (give it a `name`).
+- **One command = one batch.** A whole command line rides in one `term` call, so
+  typing, submitting and reading are ONE turn, not three:
+
+  ```json
+  {"cmd": "input s1:0 $1; key s1:0 Enter; read s1:0 --tail 20",
+   "args": ["echo hi"], "timeout": 3}
+  ```
+
+  The tool's `timeout` is the only waiting there is — it is a budget for the whole
+  call, and `read` has no wait flag of its own. `$1`/`$NAME` come from `args` and
+  `vars`; the reply echoes what each statement expanded to, so a wrong substitution
+  is visible rather than mysterious. The loop is input → submit → read → next
+  input, with nothing in between.
+- **A channel handle is the I/O target.** `<session>:<index>` (`s1:0`) names one
+  shell inside one connection. `connect` makes the session, `open` adds a channel
+  to it, and every I/O directive takes the handle — not the session id alone. One
+  task gets one session (give it `--name`).
 
 Split across turns only when a human must act first (credential prompt → read
-it, then `notify_user(level="warn", duration_seconds=0, session_id=...)`), a
-destructive action needs confirmation, or you must inspect intermediate state
-to decide the next step.
+it, then `notify --level warn "<what you need>"`), a destructive action needs
+confirmation, or you must inspect intermediate state to decide the next step.

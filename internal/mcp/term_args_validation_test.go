@@ -20,7 +20,7 @@ import (
 //
 // The checks run in parseTermArgs, which is the ONE path both entrances share —
 // the MCP transport goes through handleTerm and POST /api/term calls Term directly,
-// so a rule that lived only in mcp-go's schema validator would cover one of them.
+// so a rule that lived only in the schema validator would cover one of them.
 
 // A mistyped window value is refused, naming the argument and what it wants.
 func TestWindowArgumentTypesAreRefused(t *testing.T) {
@@ -161,11 +161,11 @@ func TestAbsentWindowArgumentsStillDefault(t *testing.T) {
 // If these drift, a client validates against a rule the server does not apply.
 func TestSchemaPublishesTheDeclaredBounds(t *testing.T) {
 	s := newTestServer(t)
-	tool, ok := s.mcpServer.ListTools()["term"]
+	tool, ok := s.mcpServer.Tool("term")
 	if !ok {
 		t.Fatal("the term tool is not registered")
 	}
-	props := tool.Tool.InputSchema.Properties
+	props := tool.InputSchema.Properties
 	for _, name := range []string{"timeout", "bytes_limit", "lines_limit", "total_bytes_limit"} {
 		raw, ok := props[name]
 		if !ok {

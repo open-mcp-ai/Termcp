@@ -45,6 +45,11 @@ func SetThemesDir(dir string) {
 // browser UI it holds the agent-facing document (api.md) that the
 // static server publishes
 // and that the MCP server registers as resources.
+// Embedded reports whether this build carries the browser UI. A `no_webui`
+// build carries only the agent documents, so a caller that would mount the UI
+// routes can ask instead of checking a build tag of its own.
+func Embedded() bool { return uiEmbedded }
+
 func Assets() fs.FS {
 	root, err := fs.Sub(embeddedAssets, "assets")
 	if err != nil {

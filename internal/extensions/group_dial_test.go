@@ -3,9 +3,10 @@ package extensions
 import (
 	"context"
 	"errors"
-	"github.com/open-mcp-ai/termcp/internal/session"
 	"testing"
 	"time"
+
+	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
 // TestEnsureGroupSessionSecondCallerCanLeaveItsDial pins that a member of a group

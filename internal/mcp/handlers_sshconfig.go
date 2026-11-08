@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleCreateSSHConfig(ctx context.Context, request mcpgo.CallTo
 	return successResult(), nil
 }
 
-func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
@@ -142,7 +142,7 @@ func (s *Server) handleDeleteSSHConfig(ctx context.Context, request mcpgo.CallTo
 	return successResult(), nil
 }
 
-func (s *Server) handleCopySSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleCopySSHConfig(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
@@ -162,7 +162,7 @@ func (s *Server) handleCopySSHConfig(ctx context.Context, request mcpgo.CallTool
 	return successResult(), nil
 }
 
-func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleEditSSHConfig(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return toolError(CodeNotConfigured, "%s", "ssh config store not configured"), nil
 	}
@@ -198,7 +198,7 @@ func (s *Server) handleEditSSHConfig(ctx context.Context, request mcpgo.CallTool
 	return successResult(), nil
 }
 
-func (s *Server) handleListSSHConfigs(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleListSSHConfigs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return jsonResult(map[string]any{"ssh_configs": []any{}}), nil
 	}
@@ -328,7 +328,7 @@ func brokenReason(err error) string {
 // THE SECRETS DO NOT COME BACK. A password or key passphrase returned here would end up
 // in a transcript, a log line, or an assistant's context, and the caller's actual
 // question — "is a password set?" — is answered by a boolean.
-func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleGetSSHConfig(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.sshConfigs == nil {
 		return toolError(CodeOperationFailed, "%s", "ssh config store not configured"), nil
 	}
@@ -390,7 +390,7 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcpgo.CallToolR
 	return jsonResult(out), nil
 }
 
-func (s *Server) handleDetectShell(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleDetectShell(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, family, hint := shell.NewDetector().Detect()
 	if path == "" {
 		return toolError(CodeOperationFailed, "%s", hint), nil

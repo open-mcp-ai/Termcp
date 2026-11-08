@@ -3,11 +3,11 @@ package mcp
 import (
 	"context"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
-	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/internal/ns"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // toolGuard enforces a session's Restriction before a tool handler runs. It is
@@ -52,7 +52,7 @@ type toolGuard struct {
 // decides whether the caller may reach the session at all. Both live here rather
 // than in the handlers so every tool that names a session is covered by
 // construction, including one added later.
-func (g toolGuard) check(ctx context.Context, toolName string, c gate, request mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+func (g toolGuard) check(ctx context.Context, toolName string, c gate, request mcp.CallToolRequest) *mcp.CallToolResult {
 	args := request.GetArguments()
 	if args == nil || g.server == nil {
 		return nil
@@ -109,7 +109,7 @@ func (g toolGuard) check(ctx context.Context, toolName string, c gate, request m
 //
 // An id that resolves to nothing is skipped rather than refused: that is the
 // handler's not-found error to report, with its own code and its own wording.
-func (g toolGuard) checkEach(ids []string, resolve func(string) *session.Session, callerNS, toolName string, c gate, args map[string]any) *mcpgo.CallToolResult {
+func (g toolGuard) checkEach(ids []string, resolve func(string) *session.Session, callerNS, toolName string, c gate, args map[string]any) *mcp.CallToolResult {
 	for _, id := range ids {
 		if id == "" {
 			continue
@@ -137,7 +137,7 @@ func (g toolGuard) checkEach(ids []string, resolve func(string) *session.Session
 // The message names what the caller is, not what the resource is: an id it was
 // handed once must not become a way to enumerate other namespaces by reading
 // error text.
-func refuseForeignNamespace(sess *session.Session, callerNS string) *mcpgo.CallToolResult {
+func refuseForeignNamespace(sess *session.Session, callerNS string) *mcp.CallToolResult {
 	if sess == nil || ns.Reachable(sess.Namespace, callerNS) {
 		return nil
 	}
@@ -239,7 +239,7 @@ func (g toolGuard) lookupSessionID(id string) *session.Session {
 //
 // The namespace check is separate and comes first: a caller that may not reach
 // the session at all is not told what the session's whitelist says.
-func (g toolGuard) checkSession(sess *session.Session, toolName string, c gate, args map[string]any) *mcpgo.CallToolResult {
+func (g toolGuard) checkSession(sess *session.Session, toolName string, c gate, args map[string]any) *mcp.CallToolResult {
 	if !c.known {
 		// An operation with no capability row has no entry a whitelist could
 		// name, so a restricted session cannot reach it.

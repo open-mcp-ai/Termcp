@@ -3,8 +3,8 @@ package mcp
 import (
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // dryRunSlots assembles preview-only slots for a list of statements (#241).
@@ -15,7 +15,7 @@ import (
 //
 // Hard rules (from issue #241 §4):
 //
-//  1. Zero side effects: no dial (including borrowed hosts), no stdin, no audit span.
+//  1. Zero side effects: no dial (including `use` hosts), no stdin, no audit span.
 //  2. No synthesized output: never emit Content-Range, Input-At, Exit-Code, Waited,
 //     Sampled, or dummy output bodies.
 //  3. Expansion stops at termcp: shell wildcards/globbing are left untouched.

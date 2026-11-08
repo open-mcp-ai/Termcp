@@ -122,6 +122,28 @@ func Decode(name string, data []byte) ([]byte, error) {
 	return out, nil
 }
 
+// BOMCharset names the charset a UTF-16 byte order mark proves, or "" when the data
+// does not start with one.
+//
+// IT IS SPLIT OUT BECAUSE THE ANSWER HAS TWO USES, and they must not drift. `Sniff`
+// orders it before its round-trip loop (a BOM is proof; a UTF-16 round trip is not).
+// A text file read uses it for a different question: a NUL byte normally means binary,
+// but a PowerShell `>` redirect writes UTF-16, where every ASCII character has one --
+// so the BOM is what tells "wide-charset text" from "binary" (#291). One table, two
+// callers.
+func BOMCharset(data []byte) string {
+	if len(data) < 2 {
+		return ""
+	}
+	switch {
+	case data[0] == 0xFF && data[1] == 0xFE:
+		return "utf-16le"
+	case data[0] == 0xFE && data[1] == 0xFF:
+		return "utf-16be"
+	}
+	return ""
+}
+
 // Sniff names the charset these bytes are, when it can be established rather than
 // guessed.
 //
@@ -141,13 +163,8 @@ func Sniff(data []byte) string {
 	// string "decodes" — so a round trip proves nothing there, while the two bytes the
 	// writer itself chose are unambiguous. This is the case issue #177 is about: the
 	// caller cannot see how the file was written, and the file says.
-	if len(data) >= 2 {
-		switch {
-		case data[0] == 0xFF && data[1] == 0xFE:
-			return "utf-16le"
-		case data[0] == 0xFE && data[1] == 0xFF:
-			return "utf-16be"
-		}
+	if name := BOMCharset(data); name != "" {
+		return name
 	}
 	for _, name := range []string{"gbk", "gb18030", "big5", "shift_jis", "euc-kr"} {
 		enc := charsets[name]

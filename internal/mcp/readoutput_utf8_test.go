@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -151,10 +151,10 @@ func waitForShellToExit(t *testing.T, s *Server, shellID string) {
 
 // readFromStart performs the read under test: offset 0, the defaults a
 // model-facing caller would use.
-func readFromStart(t *testing.T, s *Server, shellID string) *mcpgo.CallToolResult {
+func readFromStart(t *testing.T, s *Server, shellID string) *mcp.CallToolResult {
 	t.Helper()
-	res, err := s.handleReadOutput(context.Background(), mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{Arguments: map[string]any{
+	res, err := s.handleReadOutput(context.Background(), mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Arguments: map[string]any{
 			"shell_id": shellID,
 			"offset":   float64(0),
 			"timeout":  float64(0.5),

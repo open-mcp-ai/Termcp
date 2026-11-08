@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // extPeers maps an extension instance to the MCP peer mounted for it (issue #271).
@@ -35,6 +35,14 @@ import (
 // on the same extension resolves to: the peer is per instance, and an instance is
 // a (session, extension name) pair.
 //
+// THE KEY IS NOT THE WHOLE IDENTITY, so the entry also carries the template
+// fingerprint it was dialled from (issue #282). `edit ext` rebuilds the session but
+// the session id stays the same, so the key does not change; the mounted peer —
+// dialled with the OLD headers, and unable to see new ones because `jrpc.Channel`
+// snapshots them at dial — would answer every later call forever. The template is
+// therefore part of what a mount is, and a mount made from another template is
+// replaced on the next ask rather than reused.
+//
 // THE TABLE IS A sync.Map AND EACH ENTRY IS ITS OWN SINGLE-FLIGHT. One key is one
 // independent entry with no invariant spanning keys, which is the shape sync.Map
 // is for. The open it guards is a network handshake — a dial, an `initialize`, a
@@ -56,6 +64,13 @@ type extPeerEntry struct {
 	ready  chan struct{}
 	handle *jrpcHandle
 	err    string
+	// fp is the template fingerprint this mount was dialled from (issue #282).
+	// Written by the creator before close(ready), like handle and err.
+	fp string
+	// termcp carries the verified (or refused) `termcp_tool` declaration (#274).
+	// It lives with the mount because it is a fact about this peer's tool list,
+	// which is only knowable after the handshake.
+	termcp termcpToolCheck
 	// abandoned is set by a release that arrived while this mount was still in
 	// flight. The creator reads it after close(ready) and closes whatever it
 	// opened, because nobody else can reach that handle any more.
@@ -79,6 +94,10 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 			Body: "extension " + name + " needs a running session to reach its endpoint through"}, true
 	}
 	key := extPeerKey(sessionID, name)
+	// The template as it is NOW. A mount carrying another fingerprint was dialled
+	// from a template that no longer exists — different URL, different headers — and
+	// reusing it would keep speaking with credentials the file has already replaced.
+	fp := ext.Fingerprint()
 	for {
 		if v, ok := extPeers.Load(key); ok {
 			entry := v.(*extPeerEntry)
@@ -87,6 +106,12 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 			case <-ctx.Done():
 				return nil, "", envelope.Slot{Code: 504, Headers: map[string]string{"Error-Code": CodeConnectionFailed},
 					Body: "still connecting to " + name + "'s endpoint when this call gave up; the mount is in flight and a retry will join it"}, true
+			}
+			if entry.fp != fp {
+				// Settled, so the unmount cannot collide with a mount in flight: it
+				// closes the stale handle and frees the key, and the loop dials afresh.
+				s.unmountExtPeer(sessionID, name)
+				continue
 			}
 			if entry.err != "" {
 				extPeers.CompareAndDelete(key, entry)
@@ -100,7 +125,7 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 			return nil, "", envelope.Slot{}, true
 		}
 
-		entry := &extPeerEntry{ready: make(chan struct{})}
+		entry := &extPeerEntry{ready: make(chan struct{}), fp: fp}
 		if _, loaded := extPeers.LoadOrStore(key, entry); loaded {
 			continue // another caller published first; join its entry
 		}
@@ -110,6 +135,12 @@ func (s *Server) mountExtPeer(ctx context.Context, ext *extensions.Extension, se
 		entry.handle = h
 		if h == nil {
 			entry.err = slot.Body
+		} else {
+			// THE DECLARATION IS CHECKED ONCE, AT MOUNT. Doing it per call would
+			// put a second round trip in front of every command, and a downstream
+			// that changed its tool list mid-life is a deployment event the next
+			// mount will see.
+			entry.termcp = s.checkTermcpTool(ctx, ext, h)
 		}
 		close(entry.ready)
 		if entry.abandoned.Load() {
@@ -202,6 +233,16 @@ func (s *Server) extPeerHandleOf(sessionID, name string) string {
 		return ""
 	}
 	return peerKey(h.sessionID, h.kind, h.index)
+}
+
+// extTermcpOf reports the verified declaration for a mounted peer, so `open ext`
+// and the status listing can say whether this downstream can be routed to.
+func (s *Server) extTermcpOf(sessionID, name string) termcpToolCheck {
+	v, ok := extPeers.Load(extPeerKey(sessionID, name))
+	if !ok {
+		return termcpToolCheck{}
+	}
+	return v.(*extPeerEntry).termcp
 }
 
 // extPeerNote renders the paragraph an `open ext` reply carries so an agent knows

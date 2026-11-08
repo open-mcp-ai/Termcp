@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-type toolHandler = func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
+type toolHandler = func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
 func withLogging(name string, h toolHandler, s *Server) toolHandler {
-	return func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// The admission decision runs before anything else and before the handler
 		// is even entered: a call that a session's capability list — or another
 		// caller's namespace — refuses must not reach the tool at all, and one that
@@ -96,14 +96,14 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 //
 // It reads the CALLER's arguments, so it is true only where the caller said the values
 // are secret. Nothing infers it from the shape or content of a value.
-func declaredSecrets(request mcpgo.CallToolRequest) bool {
+func declaredSecrets(request mcp.CallToolRequest) bool {
 	obj, ok := request.GetArguments()["secrets"].(map[string]any)
 	return ok && len(obj) > 0
 }
 
 // restrictionAttrs names the target a refusal applied to, so the log line can
 // answer "which session refused what" without replaying the whole call.
-func restrictionAttrs(request mcpgo.CallToolRequest) []any {
+func restrictionAttrs(request mcp.CallToolRequest) []any {
 	args := request.GetArguments()
 	attrs := []any{}
 	if id := getString(args, "session_id", ""); id != "" {
@@ -115,7 +115,7 @@ func restrictionAttrs(request mcpgo.CallToolRequest) []any {
 	return attrs
 }
 
-func appendSafeArgs(attrs []any, request mcpgo.CallToolRequest) []any {
+func appendSafeArgs(attrs []any, request mcp.CallToolRequest) []any {
 	return appendSafeArgsFrom(context.Background(), attrs, request)
 }
 
@@ -142,7 +142,7 @@ func isInnerCall(ctx context.Context) bool {
 // outer call had carefully recorded only the secret's name. Suppressing it here is not
 // a second redactor: the value is a copy of something the outer line already holds in
 // full, so nothing is lost from the record, and there is no pattern to miss.
-func appendSafeArgsFrom(ctx context.Context, attrs []any, request mcpgo.CallToolRequest) []any {
+func appendSafeArgsFrom(ctx context.Context, attrs []any, request mcp.CallToolRequest) []any {
 	args := request.GetArguments()
 	if args == nil {
 		return attrs
@@ -310,17 +310,17 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func extractOutputPreview(result *mcpgo.CallToolResult) string {
+func extractOutputPreview(result *mcp.CallToolResult) string {
 	for _, c := range result.Content {
-		if tc, ok := c.(mcpgo.TextContent); ok && tc.Text != "" {
-			return tc.Text
+		if c.Text != "" {
+			return c.Text
 		}
 	}
 	return ""
 }
 
 // extractErrorInfo decodes the dedicated error_code field from a failed tool
-// result. Plain-text errors (returned by mcp-go internals or third-party
+// result. Plain-text errors (returned by the protocol layer or third-party
 // handlers) yield an empty code and the raw text as the message.
 //
 // THE FAILING SLOT, NOT THE FIRST LINE. A reply is several TERM/1 sections, one
@@ -329,7 +329,7 @@ func extractOutputPreview(result *mcpgo.CallToolResult) string {
 // whose second statement failed was recorded as "is_error=true error=TERM/1 200 OK",
 // which points a reader at the statement that worked. Every failed call would then
 // have to be re-diagnosed from scratch.
-func extractErrorInfo(result *mcpgo.CallToolResult) (code, message string) {
+func extractErrorInfo(result *mcp.CallToolResult) (code, message string) {
 	preview := extractOutputPreview(result)
 	if preview == "" {
 		return "", ""

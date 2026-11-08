@@ -42,7 +42,7 @@ import (
 
 // shellRowSpan is one terminal row's byte range in a shell's log. A null entry in
 // a response is a row holding no bytes — an erased line, or a row no output ever
-// reached — which draws no cell rather than borrowing a neighbour's status.
+// reached — which draws no cell rather than reusing a neighbour's status.
 //
 // The rows tile the log: every byte the terminal consumed belongs to the row the
 // cursor was on when it arrived, the newline that ends a row included. A row is

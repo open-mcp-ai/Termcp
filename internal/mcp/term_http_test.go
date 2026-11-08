@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/term/server"
 )
 
 // POST /api/term is the same protocol over HTTP.
@@ -88,7 +89,7 @@ func TestHTTPTermReturnsTheSameEnvelope(t *testing.T) {
 
 	// The same command through the tool surface must produce the same text.
 	tool := termText(t, s, map[string]any{"cmd": "help"})
-	if viaHTTP := rec.Header().Get("X-Termcp-Text"); viaHTTP != escapeHeader(tool) {
+	if viaHTTP := rec.Header().Get("X-Termcp-Text"); viaHTTP != server.EscapeHeader(tool) {
 		t.Errorf("HTTP text projection differs from the tool's:\nhttp: %q\ntool: %q", viaHTTP, tool)
 	}
 }
@@ -595,7 +596,7 @@ func TestTermDocTableCoversTheSchema(t *testing.T) {
 // byte-identical to the JSON one.
 //
 // The two are generated from ONE value, so they must not disagree — and they did:
-// escapeHeader handled '\n' and let '\r' fall through `default`, which appended
+// server.EscapeHeader handled '\n' and let '\r' fall through `default`, which appended
 // nothing. A Path carrying a CR therefore survived in the body and vanished from
 // X-Termcp-Text, so a caller reading the header saw a path that does not exist with
 // no sign a byte had been removed.
@@ -607,8 +608,8 @@ func TestEscapeHeaderKeepsCarriageReturns(t *testing.T) {
 		{"plain", "plain"},
 		{"", ""},
 	} {
-		if got := escapeHeader(tc.in); got != tc.want {
-			t.Errorf("escapeHeader(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := server.EscapeHeader(tc.in); got != tc.want {
+			t.Errorf("server.EscapeHeader(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

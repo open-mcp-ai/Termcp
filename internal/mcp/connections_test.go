@@ -2,23 +2,72 @@ package mcp
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-// The client list answers "who is connected to this instance?" (issue #99), and
-// the value comes entirely from mcp-go's session hooks: there is no other place a
-// client attaching or detaching is observable. This test drives a REAL client over
-// the real transport, because the part that cannot be checked by reading the code
-// is the ordering the library chooses — mcp-go registers the session *before* the
-// client has sent anything, so a name read at registration time is empty for every
-// client. That is the assumption the registry is built on, and it is exactly the
-// kind of thing that changes under a dependency upgrade.
+// The client list answers "who is connected to this instance?" (issue #99), and the
+// value comes entirely from the transport's session hooks. These tests drive the
+// protocol over real HTTP — initialize, then DELETE — because the part that cannot
+// be checked by reading the code is the ORDER of the two facts: the session exists
+// before it has a name, and the name arrives with initialize.
+//
+// A hand-rolled client is used on purpose. A library client would also test that
+// library; what matters here is that the bytes on the wire produce a row in the
+// registry.
+
+// openStreamableSession performs the handshake and returns the session id the
+// server minted. Close it with endStreamableSession.
+func openStreamableSession(t *testing.T, url, namespace, name, version string) string {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` +
+		mcp.ProtocolVersion + `","capabilities":{},"clientInfo":{"name":"` + name + `","version":"` + version + `"}}}`
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if namespace != "" {
+		req.Header.Set(NamespaceHeader, namespace)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize answered %d", resp.StatusCode)
+	}
+	sid := resp.Header.Get("Mcp-Session-Id")
+	if sid == "" {
+		t.Fatal("initialize did not hand out a session id")
+	}
+	return sid
+}
+
+// endStreamableSession terminates one, the way a client that is done does.
+func endStreamableSession(t *testing.T, url, sid string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Mcp-Session-Id", sid)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
 func TestConnectionsReportsRealClients(t *testing.T) {
 	s, _, _, _ := newTestServerWithHistory(t)
 
@@ -34,29 +83,12 @@ func TestConnectionsReportsRealClients(t *testing.T) {
 	var wakes int
 	s.SetConnectionsListener(func() { wakes++ })
 
-	ctx := context.Background()
-	cli, err := client.NewStreamableHttpClient(ts.URL, transport.WithContinuousListening())
-	if err != nil {
-		t.Fatalf("streamable client: %v", err)
-	}
-	if err := cli.Start(ctx); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	initReq := mcpgo.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "claude-ai", Version: "0.1.0"}
-	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
+	sid := openStreamableSession(t, ts.URL, "", "claude-ai", "0.1.0")
 
-	// The client must appear, with the name it announced. Registration happens
-	// before initialize, so this also proves the name is read from the session
-	// rather than captured in the register hook.
 	conns := waitForConnections(t, s, 1)
 	c := conns[0]
 	if c.Name != "claude-ai" || c.Version != "0.1.0" {
-		t.Errorf("client = %s/%s, want claude-ai/0.1.0 (the name arrives with initialize, after the session registers)",
-			c.Name, c.Version)
+		t.Errorf("client = %s/%s, want claude-ai/0.1.0", c.Name, c.Version)
 	}
 	if c.SessionID == "" {
 		t.Error("a connection needs the transport session id so two clients with one name can be told apart")
@@ -69,35 +101,21 @@ func TestConnectionsReportsRealClients(t *testing.T) {
 	}
 
 	// A second client is a second row, not a replacement.
-	cli2, err := client.NewStreamableHttpClient(ts.URL)
-	if err != nil {
-		t.Fatalf("second client: %v", err)
-	}
-	defer cli2.Close()
-	if err := cli2.Start(ctx); err != nil {
-		t.Fatalf("start second: %v", err)
-	}
-	init2 := mcpgo.InitializeRequest{}
-	init2.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
-	init2.Params.ClientInfo = mcpgo.Implementation{Name: "cursor", Version: "2"}
-	if _, err := cli2.Initialize(ctx, init2); err != nil {
-		t.Fatalf("initialize second: %v", err)
-	}
+	sid2 := openStreamableSession(t, ts.URL, "", "cursor", "2")
 	conns = waitForConnections(t, s, 2)
 	// Oldest first, so the panel does not reshuffle between frames.
 	if conns[0].Name != "claude-ai" || conns[1].Name != "cursor" {
 		t.Errorf("connections = %s, %s; want claude-ai first (oldest first)", conns[0].Name, conns[1].Name)
 	}
 
-	// Disconnecting removes the row: a stale entry would be a client that is not
+	// Ending a session removes the row: a stale entry would be a client that is not
 	// actually attached any more.
-	if err := cli.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	endStreamableSession(t, ts.URL, sid)
 	conns = waitForConnections(t, s, 1)
 	if conns[0].Name != "cursor" {
 		t.Errorf("after the first client left, the survivor is %q, want cursor", conns[0].Name)
 	}
+	_ = sid2
 }
 
 // A caller that claimed a namespace is reported with it: that is what tells the
@@ -107,24 +125,7 @@ func TestConnectionsRecordsTheCallersNamespace(t *testing.T) {
 	ts := httptest.NewServer(s.StreamableHTTPHandler())
 	defer ts.Close()
 
-	ctx := context.Background()
-	tr, err := transport.NewStreamableHTTP(ts.URL, transport.WithHTTPHeaders(map[string]string{
-		NamespaceHeader: "alice",
-	}))
-	if err != nil {
-		t.Fatalf("transport: %v", err)
-	}
-	cli := client.NewClient(tr)
-	if err := cli.Start(ctx); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	defer cli.Close()
-	initReq := mcpgo.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "agent-a", Version: "1"}
-	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
+	openStreamableSession(t, ts.URL, "alice", "agent-a", "1")
 
 	conns := waitForConnections(t, s, 1)
 	if conns[0].Namespace == "" {
@@ -177,12 +178,11 @@ func TestConnRegistryIsSafeUnderConcurrentUse(t *testing.T) {
 	<-done
 }
 
-// fakeSession is the minimum mcp-go session the registry touches.
+// fakeSession is the minimum Session the registry touches.
 type fakeSession struct{ id string }
 
-func (f fakeSession) Initialize()       {}
-func (f fakeSession) Initialized() bool { return true }
 func (f fakeSession) SessionID() string { return f.id }
-func (f fakeSession) NotificationChannel() chan<- mcpgo.JSONRPCNotification {
-	return make(chan mcpgo.JSONRPCNotification, 1)
+func (f fakeSession) GetClientInfo() mcp.Implementation {
+	return mcp.Implementation{}
 }
+func (f fakeSession) Notify(ctx context.Context, method string, params any) error { return nil }

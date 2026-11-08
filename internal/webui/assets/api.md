@@ -318,7 +318,7 @@ The two surfaces expose locators differently, and the difference is deliberate:
   (`termcp://<entry>`), because that field is a JSON body value rather than a
   path segment.
 
-Both surfaces resolve through the same code (`internal/locator` for syntax,
+Both surfaces resolve through the same code (`term/locator` for syntax,
 `internal/session` for shell lookup), so a locator cannot mean one thing in a
 chat and another in curl.
 
@@ -427,7 +427,7 @@ Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 Creates a new SSH connection and session (including its first shell).
 
 Every session dials its own SSH connection. The transport pool is reserved for
-one-shot borrowed operations (`run use:<host>`, `read use:<host>`), so user-created
+one-shot `use` operations (`run use:<host>`, `read use:<host>`), so user-created
 sessions never share an underlying SSH client. If a session closes or times out,
 sibling sessions on the same profile keep running uninterrupted.
 
@@ -436,8 +436,8 @@ Request:
 {
   "ssh_config": "pi",    // profile name; REQUIRED — an omitted or blank value is
                          // refused (400), never defaulted. Name "internal" to get
-                         // the host loopback explicitly, the same as MCP's
-                         // session_start
+                         // the host loopback explicitly, the same as the MCP
+                         // `connect` directive
   "command": "",         // command; empty = login shell
   "args": [],
   "mode": "pty",         // "pty" | "pipe" — mode of the FIRST shell only
@@ -1292,10 +1292,14 @@ PATCH /api/sessions/{id}/approval
 { "enabled": true, "scopes": ["file_write", "file_delete"] }
 ```
 
-Valid scopes are `shell_input`, `file_write`, `file_delete`, `file_rename`,
-`file_mkdir`, `file_perm`, `file_link`, `file_truncate`, `forward_open`,
-`forward_close`. Opening and closing a tunnel are separate names because they are
-separate decisions.
+Valid scopes are `shell_input`; `file_write`, `file_delete`, `file_rename`,
+`file_mkdir`, `file_perm`, `file_link`, `file_truncate`; `forward_open`,
+`forward_close`; `ext_create`, `ext_update`; `profile_create`, `profile_edit`.
+Opening and closing a tunnel are separate names because they are separate
+decisions, and so are creating and editing — the question a human answers is
+different in each direction. This list is `approval.AllKinds`: ask the instance
+(`PATCH` with an unknown name answers with the full list) rather than trusting a
+copy that omits four of them, which this one did.
 
 Two rules make the narrowing trustworthy:
 
@@ -1339,12 +1343,15 @@ them separately would be wrong twice over: the reviewer would decide twice on on
 command, and could approve the text while rejecting the newline, leaving a
 half-typed line in the shell.
 
-So `shell_input` **holds** its text, and the ending key **commits** it:
+So the typing directive **holds** its text, and the ending key **commits** it:
 
 ```
-shell_input("echo hi")   → held            (nothing queued yet)
-shell_key("enter")       → one queued request: text="echo hi", keys=["enter"]
+input s1:0 $1   {args:["echo hi"]}  → held         (nothing queued yet)
+key s1:0 Enter                      → one queued request: text="echo hi", keys=["Enter"]
 ```
+
+Two directives, one decision — the queue is keyed by the channel, so the second
+call joins what the first one staged instead of starting a new request.
 
 With nothing held, the key alone is the unit: a bare `ctrl+c` interrupts a
 running process, and a bare enter runs an empty line, either of which a reviewer
@@ -1406,8 +1413,8 @@ deadline in Unix milliseconds and is omitted when the request has none.
 
 The agent cannot decide the request, so the fields are correlation only: they
 change no authority and the reply still forbids polling or resubmitting. A
-staged command line — text submitted with `shell_input` but not yet ended by
-`shell_key` — is not queued yet and carries none of these fields.
+staged command line — text submitted with `input` but not yet ended by `key` — is
+not queued yet and carries none of these fields.
 
 ### `GET /api/sessions/{id}/approval`
 
@@ -1648,8 +1655,8 @@ now?". Two lists, because they are two different things:
   its `initialize` request and are empty when it announced nothing (the MCP spec
   makes `clientInfo` optional); `namespace` is the claim it made with
   `X-Termcp-Namespace`, when it made one; `session_id` is the transport session
-  id, not a termcp session id. Rows come from mcp-go's session hooks, so a row
-  exists exactly as long as the client holds a live MCP session.
+  id, not a termcp session id. Rows come from the protocol layer's session
+  hooks, so a row exists exactly as long as the client holds a live MCP session.
 - `webui` — browser tabs holding the Web UI socket: the address they came from
   (port stripped), their user agent, how many sessions they are streaming, and
   when they attached. A closed tab disappears. Plain HTTP callers are not listed:

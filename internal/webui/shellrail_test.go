@@ -325,7 +325,7 @@ func TestShellRailWindowAndMarks(t *testing.T) {
 	}
 
 	// A row past the end of the layout comes back null rather than clamped: the
-	// viewport can be parked below the last line, and a borrowed span would colour
+	// viewport can be parked below the last line, and a `use` span would colour
 	// a row with another row's status.
 	if spans := g.window(90, 2); spans[0] != nil || spans[1] != nil {
 		t.Errorf("rows past the layout report spans: %+v", spans)

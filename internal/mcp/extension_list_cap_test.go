@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // TestTheExtensionListCapsItselfAndCountsTheRest is issue #185's last piece.
@@ -33,7 +33,7 @@ func TestTheExtensionListCapsItselfAndCountsTheRest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return s.extensionListing(mcpgo.NewToolResultText(string(body)), all)
+		return s.extensionListing(mcp.NewToolResultText(string(body)), all)
 	}
 
 	folded := listing(14, false)

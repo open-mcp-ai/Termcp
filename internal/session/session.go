@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/buffer"
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -20,6 +19,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/shell"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
+	"github.com/open-mcp-ai/termcp/internal/uid"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 	"golang.org/x/crypto/ssh"
 )
@@ -101,9 +101,9 @@ type Config struct {
 	// leave it out while its terminal stays openable by whoever holds its id (see
 	// internal/ns). Empty means an ordinary session.
 	Namespace string
-	// Borrowed marks the per-host container `run use:<host>` records into
+	// UseHost marks the per-host container `run use:<host>` records into
 	// (issue #255). It is copied to api.Session and stored on the manifest.
-	Borrowed bool
+	UseHost bool
 }
 
 // Session wraps an interactive process session managed over SSH.
@@ -175,7 +175,10 @@ type Session struct {
 // staying collision-free in practice; storage.validateID accepts it (lowercase
 // hex is within [a-zA-Z0-9_-]).
 func newResourceID() string {
-	return uuid.New().String()[:12]
+	// Six bytes, twelve hex characters. The previous spelling sliced a UUID
+	// string, which kept its dash — an id that is 11 hex characters and one
+	// separator, for no reason a reader could recover.
+	return uid.Hex(6)
 }
 
 // New creates and starts a new Session.
@@ -235,7 +238,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 			SSHEndpoint:   sshEndpointPublic,
 			DetectedShell: detectedShell,
 			Namespace:     cfg.Namespace,
-			Borrowed:      cfg.Borrowed,
+			UseHost:       cfg.UseHost,
 		},
 		enterCRLF:    enterCRLF,
 		defaultShell: cfg.DefaultShell,
@@ -346,7 +349,7 @@ func (s *Session) watchTransport(es *sshclient.ExecSession) {
 		case err = <-waitDone:
 		case <-s.Context().Done():
 			// This session owns its transport, so its resource scope cancel means
-			// the connection is closing; do not wait for a borrowed client's lease
+			// the connection is closing; do not wait for a `use` client's lease
 			// to expire (short-circuit operations do not create Sessions).
 			return
 		}
@@ -754,7 +757,7 @@ func (s *Session) finalize() {
 		// Release the scope FIRST: it cancels the session context, which is what
 		// tells transport watchers to stop waiting on a connection that may now be
 		// shared with somebody else (#237). Waiting for them before this cancel was
-		// the deadlock: a borrowed client outlives its session, so WaitTransport
+		// the deadlock: a `use` client outlives its session, so WaitTransport
 		// never returned and finalize blocked on watchWG forever.
 		if s.scope != nil {
 			s.scope.Release()

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 const (
@@ -169,11 +169,18 @@ func (s *Server) readGrepFrom(ctx context.Context, stmt directive.Statement, win
 		// rides in the Hint header for the reason noContentSaying documents: a body under
 		// a 204 contradicts the status line, and a 206 with no bytes would claim a
 		// partial delivery that does not exist.
+		//
+		// Matches: 0 IS CARRIED HERE because the CALLER ASKS THE SAME QUESTION either way.
+		// It was only on the non-empty branch, so "how many matched" was answered only
+		// when the answer was "more than none" — and the other road happened to set it,
+		// which is how a missing field stayed invisible: two renderers, each consistent
+		// with itself.
 		return noContentSaying(map[string]string{
 			"Path":          stmt.Path,
 			"Content-Range": envelope.UnsatisfiedRange(int64(getFloatAny(doc, "total_bytes", 0))),
 			"Grep":          pattern,
 			"Lines-Scanned": fmt.Sprint(scanned),
+			"Matches":       "0",
 		}, "no line matched `"+pattern+"` in the "+fmt.Sprint(scanned)+" lines scanned")
 	}
 

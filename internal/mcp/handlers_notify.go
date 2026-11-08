@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/open-mcp-ai/termcp/mcp"
 )
 
 // maxNotifyMessageLen caps the message shown in the Web UI toast.
@@ -15,7 +15,7 @@ const maxNotifyMessageLen = 2000
 // tab (toast + browser system notification) and optionally highlights the card
 // of the given session. It reaches the human at the browser; nothing in termcp
 // wakes an agent, which is what the retired reverse-wake-up rules tried to do.
-func (s *Server) handleNotifyUser(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) handleNotifyUser(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	message := strings.TrimSpace(getString(args, "message", ""))
 	if message == "" {

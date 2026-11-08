@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/directive"
-	"github.com/open-mcp-ai/termcp/internal/envelope"
-	"github.com/open-mcp-ai/termcp/internal/locator"
 	"github.com/open-mcp-ai/termcp/pkg/api"
+	"github.com/open-mcp-ai/termcp/term/directive"
+	"github.com/open-mcp-ai/termcp/term/envelope"
+	"github.com/open-mcp-ai/termcp/term/locator"
 )
 
 // directiveRead reads a window of a stream, honouring the three axes.
@@ -197,6 +197,9 @@ func (s *Server) awaitRunOutput(ctx context.Context, stmt directive.Statement, w
 // `timeout` bounds both and defaults to two seconds.
 func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, win termArgs, start int64) envelope.Slot {
 	args := argsOf("shell_id", stmt.Target, "offset", float64(start))
+	if v, ok := stmt.Flag("encoding"); ok {
+		args["charset"] = v
+	}
 	// WHERE THIS COMMAND'S OUTPUT BEGINS (issue #194).
 	//
 	// The reply is a SAMPLE of the channel's stream, and the one number that turns the

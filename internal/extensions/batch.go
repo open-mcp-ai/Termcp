@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/open-mcp-ai/termcp/internal/fsutil"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
@@ -192,7 +193,7 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 			return nil, err
 		}
-		if err := writeFileAtomic(p, it.data); err != nil {
+		if err := fsutil.WriteFileAtomic(p, it.data); err != nil {
 			for _, name := range created {
 				if cp, cerr := s.configPath(name); cerr == nil {
 					_ = s.removeLocked(cp)
@@ -225,18 +226,7 @@ func validatePlainTemplate(raw []byte, name string) error {
 
 // availableDocumentName finds a free name for a template whose own is taken: the
 // first suffix nothing uses, counting both what is stored and what this document
-// is about to store.
+// is about to store. The 64-byte limit is the document name's own.
 func availableDocumentName(name string, used, reserved map[string]bool) string {
-	for n := 2; ; n++ {
-		suffix := fmt.Sprintf("-%d", n)
-		base := name
-		if len(base)+len(suffix) > 64 {
-			base = base[:64-len(suffix)]
-		}
-		candidate := base + suffix
-		folded := strings.ToLower(candidate)
-		if !used[folded] && !reserved[folded] {
-			return candidate
-		}
-	}
+	return fsutil.AvailableName(name, used, reserved, 64)
 }
