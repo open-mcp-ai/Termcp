@@ -488,7 +488,7 @@ func paramAt(src string, i int) (name string, end int, positional bool, ok bool)
 		return "", 0, false, false
 	}
 	// ONE digit, deliberately. The shell reads `$10` as `$1` followed by `0`, and
-	// borrowing that quirk would make an eleven-argument call depend on a spelling
+	// carrying that quirk over would make an eleven-argument call depend on a spelling
 	// nobody remembers. `${10}` is the unambiguous form, so `$N` stops at one digit.
 	if c >= '0' && c <= '9' {
 		return string(c), i + 2, true, true

@@ -446,7 +446,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		// region starts one word too early: `run use internal $1` left `internal` in
 		// `rest`, so the payload appeared to begin there and the reference looked like
 		// shell text glued to a literal. One fold, two walks, same rule.
-		if borrowedHostTarget(op.Name) && len(rest) > 1 && mustLiteralWord(src, rest[0]) == "use" {
+		if useHostTarget(op.Name) && len(rest) > 1 && mustLiteralWord(src, rest[0]) == "use" {
 			targetEnd = int(rest[1].End().Offset())
 			consumed = 2
 		}
@@ -957,7 +957,7 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 	return left, true, nil
 }
 
-func borrowedHostTarget(op string) bool {
+func useHostTarget(op string) bool {
 	switch op {
 	case "run", "read", "write", "get", "rm":
 		return true
@@ -1107,10 +1107,10 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 			}
 		default:
 			// `use <host>` is one target, not two positional words. Fold it only on
-			// the operations that accept borrowed hosts, so the same explicit spelling
+			// the operations that accept `use` hosts, so the same explicit spelling
 			// works for a one-shot run and direct file operations without changing the
 			// grammar of commands whose second word is a child kind or payload.
-			if len(rest) > 0 && rest[0].text == "use" && borrowedHostTarget(name) {
+			if len(rest) > 0 && rest[0].text == "use" && useHostTarget(name) {
 				if len(rest) < 2 {
 					return Statement{}, false, &Error{Op: name, Msg: "use needs a host name", Usage: op.Usage}
 				}

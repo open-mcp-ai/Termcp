@@ -249,6 +249,20 @@ func NodeNote(name string) (string, bool) {
 	return note, ok
 }
 
+// KindDetail returns the detail page for a kind `open` accepts (`forward`, `mcp`,
+// `cdp`, `jrpc`), when one exists.
+//
+// `help <kind>` derives its verb list from the usage lines, which is right, but a
+// page about the KIND has no line to be derived from: it is a child, not an action.
+// Without this, `help forward` answered five usage lines and none of the 54 lines
+// that say which flag belongs to which direction, and the page was unreachable —
+// it was written and never referenced. The map is keyed by kind and read by the
+// noun branch of `help`, so a page cannot be written and then lost again.
+func KindDetail(name string) (string, bool) {
+	page, ok := kindDetails[name]
+	return page, ok
+}
+
 // Statement is one directive after parsing.
 type Statement struct {
 	Op     string

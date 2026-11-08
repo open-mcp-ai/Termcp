@@ -50,6 +50,22 @@ been updated in place — a git pull changes the file and not the session templa
 needs the session torn down before the new code can run. Nothing else would notice.`,
 }
 
+// kindDetails maps an `open` kind to the page that explains it, so `help <kind>`
+// reaches the page that was written for it.
+//
+// THE FOUR KINDS ARE CHILDREN, NOT VERBS, which is why they have no Op entry and no
+// usage line of their own. Their pages used to be reachable only through the three
+// that openDetail concatenates, and `forward` was in neither map — 54 lines of the
+// one place that says which flag belongs to which direction, never read by anyone.
+// Deriving from this table (rather than writing another list at the call site) is
+// what keeps a page from being written and then lost again.
+var kindDetails = map[string]string{
+	"forward": forwardDetail,
+	"mcp":     mcpDetail,
+	"cdp":     cdpDetail,
+	"jrpc":    jrpcDetail,
+}
+
 // ops is the directive set. It is the whole user-facing grammar in one table,
 // so `help`, the error usage lines and the parser cannot disagree.
 var ops = []Op{
@@ -144,7 +160,7 @@ var ops = []Op{
 	// it cannot change which object the statement acts on — unlike a kind, a flag name or
 	// a channel index, which is what this boundary exists for.
 	{Name: "key", Core: true, Kind: KindFlags, Target: true, MinArgs: 1, DataArgs: 1, Flags: []string{"repeat:number"}, TargetKind: TargetChain,
-		Usage: "key <channel> <key> [--repeat N]"},
+		Usage: "key <channel> <key> [--repeat N]", Detail: keyDetail},
 	{Name: "resize", Kind: KindFlags, Target: true, MinArgs: 2, MaxArgs: 2, DataArgs: 2, TargetKind: TargetChain,
 		Usage: "resize <channel> <rows> <cols>"},
 	{Name: "span", Kind: KindFlags, Target: true, TargetKind: TargetChain,
@@ -230,6 +246,26 @@ var ops = []Op{
 		Valueless: []string{"all"},
 		Usage:     "help [verb] [--all]"},
 }
+
+// keyDetail names the key domain, which the usage line cannot.
+//
+// "key <channel> <key>" says WHERE, not WHAT, and the names existed only in the
+// refusal — a caller learned that `ctrl+c` was accepted by guessing wrong first. That
+// is the wrong order for the one verb a TUI is driven through: knowing `ctrl+c` exists
+// is what lets a caller interrupt a stuck program instead of closing the channel and
+// losing its buffered output.
+const keyDetail = `The name is a KEY, not text: it becomes the terminal's own escape sequence, so a
+program sees a keystroke rather than the word "enter".
+
+  enter  tab  esc  up  down  left  right  backspace  delete  home  end
+  ctrl+c  ctrl+d  ctrl+z  ctrl+l  ctrl+u  ctrl+w
+
+esc and escape are the same key; either spelling is accepted. --repeat N presses it
+N times, which is how a list is walked (down --repeat 3) without three round trips.
+
+Ctrl+C is how a stuck program is interrupted. Closing the channel is the other way,
+and it loses the output already buffered, so prefer the key when the process is the
+thing that needs to stop.`
 
 // spanDetail decodes the one-letter statuses, which are terse by design (they are
 // written to log.jsonl for every status change) and unreadable without this.
@@ -345,7 +381,7 @@ A PIPELINE IS A COPY, AND IT IS THE ONLY PIPELINE IN THIS LANGUAGE.
   read a1f3:1 --cursor 0 | write b2c4 file /tmp/log
 
 A HOST CAN BE THE TARGET WITHOUT A SESSION. 'read use:<host> file <path>' (or
-'read <host> file <path>' for a saved profile) borrows the pooled SSH transport and
+'read <host> file <path>' for a saved profile) uses the pooled SSH transport and
 returns the bytes directly; it creates no session and leaves no archive tile. Use
 'connect <host>' first only when you need a channel, a terminal, or the file URLs
 that belong to a session.
@@ -658,7 +694,7 @@ For a program whose output you need in full, prefer pipe (--argv) on the same
 entry — its exit IS observable, so a read after it returns the whole output.
 
 A HOST IS ALSO A TARGET, AND THAT IS THE SHORT-CIRCUIT FORM. 'run use:<host> $1' —
-or 'run <host> $1' with a saved profile name — runs ONE command on a borrowed
+or 'run <host> $1' with a saved profile name — runs ONE command on a use host
 connection and answers with its output:
 
   cmd: "run use:internal $1"          args: ["echo short-circuit works"]
@@ -916,8 +952,8 @@ const getDetail = `Describe one node: a session, one of its channels, or a peer.
 For the list of what exists, use ls.
 
 A HOST CAN BE THE TARGET, with 'get use:<host> file <path>' (or the bare profile
-name). That reads the path's metadata over a borrowed pooled transport; the reply
-carries "borrowed: true" and no session or upload/download address, because those
+name). That reads the path's metadata over the host's pooled transport; the reply
+carries "use_host: true" and no session or upload/download address, because those
 URLs are routes into a session that a one-shot call does not create. Use
 'read use:<host> file <path>' when you want the bytes.
 
@@ -976,7 +1012,7 @@ const writeDetail = `Write a file on a session.
   write a1f3 file /tmp/x --data hex:00ff
 
 A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
-profile name) writes over a borrowed pooled transport, so no session is created and
+profile name) writes over the host's pooled transport, so no session is created and
 nothing is archived afterwards. Same bytes, same atomic temp-file-and-rename rule;
 the only thing missing is the session the upload/download URLs would address.
 
@@ -1303,7 +1339,7 @@ automatically upon opening.
 MOUNTING AN MCP PEER:
   open <session> mcp http://host:port/mcp      mount an HTTP SSE endpoint
   open <session> mcp ws://host:port/mcp        mount a WebSocket endpoint
-  open <session> --argv "my-mcp-server"        run a stdio MCP server
+  open <session> --argv my-mcp-server        run a stdio MCP server
 
 CALLING TOOLS (preferred):
   get  <session> mcp tools                     list tools offered by this peer
@@ -1518,7 +1554,7 @@ session, because that is exactly when a caller wants to ask before passing --for
 The reply is 200 with a Dry-Run header and a sentence naming what the real call would
 destroy. Use it whenever you are not certain which session a handle belongs to.
 
-'rm <host> file <path>' also removes one file directly over that host's borrowed
+'rm <host> file <path>' also removes one file directly over that host's use connection
 pooled connection, with no session/archive entry. This is permanent, so check the
 path first with 'get <host> file <path>'. --dry-run previews SESSION deletion only;
 on a file removal it is refused rather than ignored, because a preview that silently

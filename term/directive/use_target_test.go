@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// TestBorrowedHostTargetParsesPinsIssue237 pins the spellings a short-circuit target
+// TestUseHostHostTargetParsesPinsIssue237 pins the spellings a short-circuit target
 // may take, and — the part that is easy to get wrong — that the payload region still
 // starts at the payload.
 //
@@ -13,7 +13,7 @@ import (
 // is one target built from two words, and when only the first walk folded it, the
 // second left `internal` in place and read `$1` as shell text glued to a literal —
 // `run use internal $1` was refused with "a variable cannot sit inside a shell line".
-func TestBorrowedHostTargetParsesPinsIssue237(t *testing.T) {
+func TestUseHostHostTargetParsesPinsIssue237(t *testing.T) {
 	cases := []struct {
 		src    string
 		target string
