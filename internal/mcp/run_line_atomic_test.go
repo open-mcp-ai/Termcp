@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A LINE IS ONE UNIT, EVEN UNDER CONCURRENCY (issue #212).
@@ -41,14 +42,31 @@ func TestConcurrentRunsDoNotStitchLines(t *testing.T) {
 	}
 	wg.Wait()
 
-	out := termText(t, s, map[string]any{"cmd": "read " + h + " --tail 60", "timeout": 0})
-	if strings.Contains(out, "corrupt") || strings.Contains(out, "exited") {
-		t.Fatalf("concurrent runs stitched two lines into one:\n%s", out)
-	}
-	// Every frame must have been answered: the peer answers each parsed line, so a
-	// count below rounds means a line was lost or merged.
-	if got := strings.Count(out, `"ok":true`); got < rounds {
-		t.Fatalf("the peer answered %d of %d frames; a merged line is a lost frame:\n%s", got, rounds, out)
+	// THE STATE IS "EVERY FRAME HAS AN ANSWER", NOT "THE RUNS RETURNED".
+	//
+	// A run's reply is about the run: it can come back as soon as its own window or its
+	// own quiet threshold ends, while the peer is still echoing. Reading the channel
+	// once, immediately after wg.Wait(), therefore asserted on a state that had not
+	// been reached yet — `timeout: 0` is a SNAPSHOT, and a loaded Windows runner showed
+	// one answer and failed a suite with no defect in it. So the read polls until the
+	// count is reached; the deadline only bounds how long a genuine loss takes to
+	// report, so a slow runner costs iterations and nothing else.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		out := termText(t, s, map[string]any{"cmd": "read " + h + " --tail 60", "timeout": 0})
+		if strings.Contains(out, "corrupt") || strings.Contains(out, "exited") {
+			t.Fatalf("concurrent runs stitched two lines into one:\n%s", out)
+		}
+		// Every frame must be answered: the peer answers each parsed line, so a count
+		// below rounds means a line was lost or merged.
+		answers := strings.Count(out, `"ok":true`)
+		if answers >= rounds {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the peer answered %d of %d frames; a merged line is a lost frame:\n%s", answers, rounds, out)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
