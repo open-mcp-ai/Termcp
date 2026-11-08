@@ -438,7 +438,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		out = append(out, span{
 			start: int(rest[0].Pos().Offset()),
 			end:   targetEnd,
-			mode:  spanVerbatim,
+			mode:  SpanVerbatim,
 		})
 		rest = rest[consumed:]
 		// `<session> <index>` IS ONE ADDRESS, SO IT TAKES TWO WORDS HERE TOO (#298).
@@ -471,7 +471,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 			if restValueFlag(op, key) && i+1 < len(rest) {
 				// PER-WORD: `--args` on ext is parsed again by SplitArgv, so each
 				// whole-word `$N` is one argv element and must arrive unquoted.
-				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: spanWords})
+				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: SpanWords})
 			}
 			if !strings.Contains(w, "=") && !valuelessFlag(op, key) && i+1 < len(rest) {
 				i++ // the flag's value word
@@ -496,7 +496,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 			// reason as the flag kind above: each whole-word `$N` is one argv element
 			// and must arrive unquoted.
 			if i+1 < len(rest) {
-				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: spanWords})
+				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: SpanWords})
 			}
 			return out
 		}
@@ -543,9 +543,9 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		// resolves to. `run` keeps the default mode because the value IS a shell line
 		// for the terminal, so an undefined `$NAME` there is still the shell's own — that
 		// is pinned behaviour, and the probe table in this package writes `run … $cmd`
-		// on purpose. A verb whose payload is DATA declares `spanVerbatim`, and there
+		// on purpose. A verb whose payload is DATA declares `SpanVerbatim`, and there
 		// nobody expands anything, so an undefined name is a misspelling to report.
-		value: op.PayloadType == PayloadVar && op.payloadSpanMode() != spanCommandLine,
+		value: op.PayloadType == PayloadVar && op.payloadSpanMode() != SpanCommandLine,
 	})
 }
 
@@ -738,7 +738,7 @@ func checkNoRedirect(stmt *syntax.Stmt, op Op) error {
 //
 // THE PAYLOAD IS NOT HERE, and does not need to be: it is sliced from the raw source
 // rather than built from words, and checkPayloadType already requires it to be exactly
-// one reference. A frame (`call`, PayloadSpan spanVerbatim) is exempt by declaration:
+// one reference. A frame (`call`, PayloadSpan SpanVerbatim) is exempt by declaration:
 // it never passes through a shell, so a reference inside its template is the peer's.
 func checkOneWordOneLanguage(op Op, rest []word, holes *sentinelTable) error {
 	if holes == nil || holes.prefix == "" {

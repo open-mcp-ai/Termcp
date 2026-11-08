@@ -38,7 +38,7 @@ type Subst struct {
 
 func (s Subst) empty() bool { return len(s.Named) == 0 && len(s.Pos) == 0 }
 
-// spanMode is how a value is inserted into one region of cmd.
+// SpanMode is how a value is inserted into one region of cmd.
 //
 // THE THREE MODES ARE THE WHOLE MODEL, and collapsing them into one enum is what
 // keeps the rule in one place. They were three boolean fields (perWord/target/frame)
@@ -52,21 +52,29 @@ func (s Subst) empty() bool { return len(s.Named) == 0 && len(s.Pos) == 0 }
 //	a word list (--argv, alias)      each word is syntax, the rest is boundaries
 //	an identifier (target)           never a shell word, so never quoted
 //	a protocol frame (cdp/jrpc/mcp)  quotes are JSON syntax, so never shell's
-type spanMode int
+// SpanMode says how a reference inside a directive's payload reaches its destination.
+//
+// EXPORTED BECAUSE Op.PayloadSpan IS (#297). An exported field typed with an unexported
+// type can be read from outside the module and not written: the only value an embedder
+// could assign was the zero one, so declaring a frame payload — the thing `call` does
+// internally — was impossible from outside, even though it is the same protocol
+// capability. `go doc` also rendered it as `PayloadSpan SpanMode`, which told the
+// reader nothing about what to put there.
+type SpanMode int
 
 const (
-	// spanCommandLine is a payload that becomes a command line. A reference counts
+	// SpanCommandLine is a payload that becomes a command line. A reference counts
 	// as syntax only when it IS the span: `run h:1 $1` hands the terminal what the
 	// caller passed, while `run h:1 $1 && echo done` names a WORD inside a line the
 	// caller wrote, and splicing there would turn one command into two.
-	spanCommandLine spanMode = iota
+	SpanCommandLine SpanMode = iota
 
-	// spanWords is a payload of several words where each whole word may be a
+	// SpanWords is a payload of several words where each whole word may be a
 	// reference: an argv list (`--argv $1 $2`), and an alias's expansion, whose words
 	// are the next directive line.
-	spanWords
+	SpanWords
 
-	// spanVerbatim is everything a shell never reads: a target (an identifier such as
+	// SpanVerbatim is everything a shell never reads: a target (an identifier such as
 	// `<session>:<n>`) and a protocol frame (JSON-RPC). Every reference inside is
 	// inserted as the caller's own bytes.
 	//
@@ -75,7 +83,7 @@ const (
 	// frame produced `{"e":"'2+3'"}`, a JSON string carrying shell quotes, and under
 	// shell rules a reference inside the frame's own single quotes was not expanded at
 	// all — while the frame directives' help used to tell callers to quote the frame.
-	spanVerbatim
+	SpanVerbatim
 
 	// THERE WAS A FOURTH MODE HERE — `spanArithmetic`, the inside of `$(( ))`, where a
 	// quoted word is not an operand. It is gone with the region that produced it: the
@@ -97,7 +105,7 @@ type span struct {
 	//
 	// With one number, `> $1` fell outside the region and took the flag-value rule: bare.
 	payloadEnd int
-	mode       spanMode
+	mode       SpanMode
 	// value marks a region the directive DECLARED to be one reference: `PayloadType:
 	// PayloadVar`. There a `$NAME` the table does not define cannot be shell text —
 	// the shell text travels in the value, which is the whole point of the
@@ -115,20 +123,20 @@ type span struct {
 //
 // spanAt has already established containment; this is only the insertion rule for the
 // region the reference is in.
-func (s span) admits(src string, start, end int) (mode spanMode, raw bool) {
+func (s span) admits(src string, start, end int) (mode SpanMode, raw bool) {
 	switch s.mode {
-	case spanVerbatim:
+	case SpanVerbatim:
 		// A shell never reads these, so the value is the caller's own bytes.
 		return s.mode, true
 
-	case spanWords:
+	case SpanWords:
 		// A whole WORD: the reference stands alone, so the value replaces that word and
 		// nothing else.
 		whole := (start == s.start || isSpaceByte(src[start-1])) &&
 			(end == s.end || isSpaceByte(src[end]))
 		return s.mode, whole
 
-	default: // spanCommandLine
+	default: // SpanCommandLine
 		// THE SHELL'S OWN RULE: a reference is syntax only when it IS the payload.
 		return s.mode, start == s.start && end == s.payloadEnd
 	}
@@ -141,10 +149,10 @@ func (s span) admits(src string, start, end int) (mode spanMode, raw bool) {
 // and in every nesting it is the smaller, more specific region that says how the value is
 // read.
 //
-// A range that no span contains returns spanMode(-1), and THAT IS A REGION TOO: a flag value
+// A range that no span contains returns SpanMode(-1), and THAT IS A REGION TOO: a flag value
 // (`--data`, `--name`) is outside every payload, argv list and target, and it is not shell
 // syntax. Callers use this answer to tell shell from not-shell rather than re-deriving it.
-func spanAt(spans []span, src string, start, end int) (mode spanMode, raw bool) {
+func spanAt(spans []span, src string, start, end int) (mode SpanMode, raw bool) {
 	mode, raw, _ = spanRegion(spans, src, start, end)
 	return mode, raw
 }
@@ -162,7 +170,7 @@ func anyValueRegion(spans []span) bool {
 
 // spanRegion is spanAt with the third question the resolver asks: is this region a VALUE
 // the directive demanded, rather than text something reads?
-func spanRegion(spans []span, src string, start, end int) (mode spanMode, raw bool, value bool) {
+func spanRegion(spans []span, src string, start, end int) (mode SpanMode, raw bool, value bool) {
 	best := -1
 	for i, s := range spans {
 		if start < s.start || end > s.end {
@@ -173,7 +181,7 @@ func spanRegion(spans []span, src string, start, end int) (mode spanMode, raw bo
 		}
 	}
 	if best < 0 {
-		return spanMode(-1), false, false
+		return SpanMode(-1), false, false
 	}
 	mode, raw = spans[best].admits(src, start, end)
 	return mode, raw, spans[best].value
@@ -331,10 +339,10 @@ type resolver struct {
 // frame as KindPayload, which the grammar never interprets (a JSON frame is not a shell
 // word — its braces are not even legal syntax). So "the grammar did not report it" carries
 // no meaning there, and the bytes are the only truth. That is why this scans a span's bytes
-// and no other: a span whose mode is spanVerbatim is a declaration that nobody parses it.
+// and no other: a span whose mode is SpanVerbatim is a declaration that nobody parses it.
 func (r *resolver) blind() {
 	for _, sp := range r.spans {
-		if sp.mode != spanVerbatim {
+		if sp.mode != SpanVerbatim {
 			continue
 		}
 		for i := sp.start; i < sp.end && i < len(r.src); {
@@ -368,7 +376,7 @@ func (r *resolver) one(start, end int, name string, positional bool) error {
 	mode, raw, valueRegion := spanRegion(r.spans, r.src, start, end)
 	// A shell region is one the parser read as a command line or a word list; everything
 	// else — a frame, a target, a flag value, a heredoc body — is bytes.
-	shell := mode == spanCommandLine || mode == spanWords
+	shell := mode == SpanCommandLine || mode == SpanWords
 
 	// DSL AND SHELL ARE NEVER MIXED.
 	//
@@ -383,7 +391,7 @@ func (r *resolver) one(start, end int, name string, positional bool) error {
 	// reference there is one word of an argv, which is exactly what a variable is for.
 	// The distinction is the REGION, not the spelling — which is why this reads `mode`
 	// rather than testing the text for a `$`.
-	if mode == spanCommandLine && !raw {
+	if mode == SpanCommandLine && !raw {
 		return fmt.Errorf("a variable cannot sit inside a shell line: %s is mixed with other shell text. "+
 			"termcp keeps DSL and shell apart — the whole shell command is a VALUE, so put it in the variable and "+
 			"leave the reference alone in cmd:\n"+
@@ -404,7 +412,7 @@ func (r *resolver) one(start, end int, name string, positional bool) error {
 	// So: a destination no shell reads keeps the caller's bytes, and a word list is raw
 	// even when the reference is not a whole word — the caller's own quotes are the
 	// quoting there, and SplitArgv is what takes them off.
-	raw = raw || mode == spanWords || !shell
+	raw = raw || mode == SpanWords || !shell
 
 	if positional {
 		// Positional substitution is opt-in with the args channel: with no args the caller

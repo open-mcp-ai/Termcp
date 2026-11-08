@@ -215,14 +215,14 @@ type Op struct {
 	// mode. These flags must come last: a known flag after one is refused.
 	RestValue []string
 	// PayloadSpan is how a reference inside this directive's payload reaches its
-	// destination. The zero value (spanCommandLine) is the ordinary case.
+	// destination. The zero value (SpanCommandLine) is the ordinary case.
 	//
 	// ONE FIELD, NOT TWO FLAGS. It was a pair of booleans (PerWordRaw, FramePayload)
 	// and every reader had to know which won when both were set — a question the
 	// declarations could not answer and nothing enforced. The mode is exclusive by
 	// construction: a payload is read by a shell (quoting applies), by an argv parser
 	// (whole words apply), or by a protocol peer (nothing shell-side applies).
-	PayloadSpan spanMode
+	PayloadSpan SpanMode
 	// AlsoKnownAs lists extra spellings that resolve to this directive.
 	//
 	// They exist for the names a caller reaches for before reading `help` — the

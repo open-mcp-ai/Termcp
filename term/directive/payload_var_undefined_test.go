@@ -27,7 +27,7 @@ func TestAValueRegionIsNotALiteralDollar(t *testing.T) {
 	// value IS a shell line, and there an undefined `$NAME` is still the shell's own —
 	// that is why the rule cannot be about the empty table alone.
 	g := NewGrammar([]Op{{
-		Name: "put", Kind: KindPayload, Target: true, PayloadSpan: spanVerbatim,
+		Name: "put", Kind: KindPayload, Target: true, PayloadSpan: SpanVerbatim,
 		PayloadType: PayloadVar, Usage: "put <tree> $1",
 	}})
 	cases := []struct {
@@ -88,7 +88,7 @@ func TestAShellOwnedDollarStaysALiteral(t *testing.T) {
 // caller of a PayloadVar verb writes.
 func TestADeclaredValueRegionSurvivesItsOwnValue(t *testing.T) {
 	g := NewGrammar([]Op{{
-		Name: "put", Kind: KindPayload, Target: true, PayloadSpan: spanVerbatim,
+		Name: "put", Kind: KindPayload, Target: true, PayloadSpan: SpanVerbatim,
 		PayloadType: PayloadVar, Usage: "put <tree> $1",
 	}})
 	f, err := ParseGrammar("put daily $BODY", Subst{Named: map[string]string{"BODY": "the text"}}, g)

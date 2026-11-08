@@ -197,7 +197,7 @@ var ops = []Op{
 
 	// --- a peer: one call, or the manual send/recv pair ---
 
-	{Name: "call", Kind: KindPayload, PayloadSpan: spanVerbatim, Target: true,
+	{Name: "call", Kind: KindPayload, PayloadSpan: SpanVerbatim, Target: true,
 		Kinds:     []string{"cdp", "mcp", "jrpc"},
 		Flags:     []string{"send", "json"},
 		Valueless: []string{"send", "json"},
