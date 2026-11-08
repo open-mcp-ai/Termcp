@@ -1295,6 +1295,27 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 			// that word, because more words follow it (`alias jira mcp open …`).
 			end = int(rest[i].end)
 			out.Args = append(out.Args, texts(rest[i+1:])...)
+		} else if f := trailingFlagInPayload(op, rest[i:]); f != "" {
+			// A FLAG AFTER THE PAYLOAD IS NOT A FLAG, IT IS PAYLOAD BYTES (#285).
+			//
+			// The payload is "everything from here to the end of the line", so a flag
+			// written at the tail is handed to whatever interprets those bytes. For a
+			// frame that reads as a JSON syntax error about a document that is valid:
+			//
+			//   call h {"method":"Page.enable"} --json
+			//   -> the frame is not JSON: invalid character '-' after top-level value
+			//
+			// and the hint then advised quoting the frame, which was never the problem.
+			// The rule the caller needs already exists for the other end of the line
+			// ("flags come after the target, not before it"); this is the same rule at
+			// the tail, and it only fires for a flag this directive DECLARES — an
+			// argument that happens to start with `--` belongs to the command being
+			// run, and refusing it would break `run s1:0 $1 --version`.
+			return Statement{}, false, &Error{
+				Op:    name,
+				Msg:   "flags come before the payload, not after it: " + name + " " + f + " <payload>",
+				Usage: op.Usage,
+			}
 		}
 		out.Payload = src[start:end]
 
@@ -1426,4 +1447,25 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 		}
 	}
 	return out, true, nil
+}
+
+// trailingFlagInPayload reports the flag a payload verb's tail ends in, when that
+// flag is one this directive declares (#285). The payload is "everything from the
+// first non-flag word to the end of the line", so a flag written at the tail is
+// payload bytes — for a frame that surfaces as a JSON error about a document that
+// is valid. Only a DECLARED flag is reported: an argument that happens to start
+// with `--` belongs to the command being run.
+func trailingFlagInPayload(op Op, payloadWords []word) string {
+	if len(payloadWords) == 0 {
+		return ""
+	}
+	last := payloadWords[len(payloadWords)-1]
+	if !strings.HasPrefix(last.text, "--") {
+		return ""
+	}
+	key, _ := splitFlag(last.text)
+	if allowedFlag(op, key) {
+		return "--" + key
+	}
+	return ""
 }
