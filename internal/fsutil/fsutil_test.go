@@ -92,10 +92,12 @@ func TestConcurrentWritesAlwaysLeaveOneWholeFile(t *testing.T) {
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	writerDone := make(chan struct{})
 	var bad error
 	var mu sync.Mutex
 
 	go func() {
+		defer close(writerDone)
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
@@ -133,6 +135,11 @@ func TestConcurrentWritesAlwaysLeaveOneWholeFile(t *testing.T) {
 	}
 	wg.Wait()
 	close(stop)
+	// THE WRITER MUST BE JOINED BEFORE `bad` IS READ. `close(stop)` only ASKS it to
+	// stop; without this wait the writer can still store into `bad` while the check
+	// below loads it, which is the race the detector reported on macos — and it is
+	// real, not a false positive: the read is of a variable the goroutine owns.
+	<-writerDone
 	if bad != nil {
 		t.Fatalf("a reader saw a file that was never written whole: %v", bad)
 	}
