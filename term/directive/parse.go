@@ -441,6 +441,18 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 			mode:  spanVerbatim,
 		})
 		rest = rest[consumed:]
+		// `<session> <index>` IS ONE ADDRESS, SO IT TAKES TWO WORDS HERE TOO (#298).
+		//
+		// parseStatement folds the spaced spelling into the handle, and this walk has to
+		// consume exactly the same words or the payload region starts one word early:
+		// `run x 1 $1` looked like a payload beginning at `1`, which made the reference
+		// beside it look like shell text glued to a literal — the error said the caller
+		// had mixed DSL and shell in a line they wrote correctly.
+		if len(rest) > 0 && !NamesAChannel(mustLiteralWord(src, rest[0])) {
+			if _, ok := channelIndexWord(mustLiteralWord(src, rest[0])); ok {
+				rest = rest[1:]
+			}
+		}
 	}
 
 	if op.Kind == KindFlags {
@@ -525,6 +537,15 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		// the whole line, pipes and redirects included. Only the REGION — the answer
 		// to "is this reference the payload" — stops at the last payload word.
 		mode: op.payloadSpanMode(),
+		// A VERB THAT SAYS ITS PAYLOAD IS A VARIABLE **AND THAT NO SHELL READS IT**
+		// MEANS IT (#298). The declaration is the pair: `PayloadType: PayloadVar` says
+		// the payload is one reference, and the span mode says what reads the text it
+		// resolves to. `run` keeps the default mode because the value IS a shell line
+		// for the terminal, so an undefined `$NAME` there is still the shell's own — that
+		// is pinned behaviour, and the probe table in this package writes `run … $cmd`
+		// on purpose. A verb whose payload is DATA declares `spanVerbatim`, and there
+		// nobody expands anything, so an undefined name is a misspelling to report.
+		value: op.PayloadType == PayloadVar && op.payloadSpanMode() != spanCommandLine,
 	})
 }
 

@@ -98,6 +98,11 @@ type span struct {
 	// With one number, `> $1` fell outside the region and took the flag-value rule: bare.
 	payloadEnd int
 	mode       spanMode
+	// value marks a region the directive DECLARED to be one reference: `PayloadType:
+	// PayloadVar`. There a `$NAME` the table does not define cannot be shell text —
+	// the shell text travels in the value, which is the whole point of the
+	// declaration — so it is a mistake to name, not something to pass through.
+	value bool
 }
 
 // admits reports how a reference this span CONTAINS is inserted.
@@ -140,6 +145,24 @@ func (s span) admits(src string, start, end int) (mode spanMode, raw bool) {
 // (`--data`, `--name`) is outside every payload, argv list and target, and it is not shell
 // syntax. Callers use this answer to tell shell from not-shell rather than re-deriving it.
 func spanAt(spans []span, src string, start, end int) (mode spanMode, raw bool) {
+	mode, raw, _ = spanRegion(spans, src, start, end)
+	return mode, raw
+}
+
+// anyValueRegion reports whether the line has a region a directive declared to be one
+// reference, which is the one thing an empty table still has to check.
+func anyValueRegion(spans []span) bool {
+	for _, s := range spans {
+		if s.value {
+			return true
+		}
+	}
+	return false
+}
+
+// spanRegion is spanAt with the third question the resolver asks: is this region a VALUE
+// the directive demanded, rather than text something reads?
+func spanRegion(spans []span, src string, start, end int) (mode spanMode, raw bool, value bool) {
 	best := -1
 	for i, s := range spans {
 		if start < s.start || end > s.end {
@@ -150,9 +173,10 @@ func spanAt(spans []span, src string, start, end int) (mode spanMode, raw bool) 
 		}
 	}
 	if best < 0 {
-		return spanMode(-1), false
+		return spanMode(-1), false, false
 	}
-	return spans[best].admits(src, start, end)
+	mode, raw = spans[best].admits(src, start, end)
+	return mode, raw, spans[best].value
 }
 
 // occ is one parameter expansion found by scanSubstitutions.
@@ -180,7 +204,14 @@ type occ struct {
 // already a word the parser can read, and quoting it early is what keeps a value
 // with a quote in it from escaping into the surrounding syntax.
 func substitute(src string, sub Subst, spans []span, refs []ref) (string, *sentinelTable, usage, error) {
-	if sub.empty() {
+	// AN EMPTY TABLE IS NOT ALWAYS NOTHING TO DO (#298).
+	//
+	// It skips the whole pass, which is right for a line whose `$` belongs to a shell:
+	// with no table there is nothing to fill and nothing to complain about. A region a
+	// directive declared to BE a reference is the exception — there the table's absence
+	// is the answer ("that name has no value"), and the same call already failed when
+	// the table was merely non-empty and missing that one name.
+	if sub.empty() && !anyValueRegion(spans) {
 		return src, nil, usage{}, nil
 	}
 	occs, used, err := resolve(src, sub, spans, refs)
@@ -334,7 +365,7 @@ func (r *resolver) blind() {
 
 // one resolves a single reference, or explains why it cannot.
 func (r *resolver) one(start, end int, name string, positional bool) error {
-	mode, raw := spanAt(r.spans, r.src, start, end)
+	mode, raw, valueRegion := spanRegion(r.spans, r.src, start, end)
 	// A shell region is one the parser read as a command line or a word list; everything
 	// else — a frame, a target, a flag value, a heredoc body — is bytes.
 	shell := mode == spanCommandLine || mode == spanWords
@@ -418,8 +449,16 @@ func (r *resolver) one(start, end int, name string, positional bool) error {
 
 	value, found := r.sub.Named[name]
 	if !found {
-		if len(r.sub.Named) == 0 {
-			// No vars: the shell owns every $NAME, as it always has.
+		// THE SHELL OWNS AN UNDEFINED NAME ONLY WHERE A SHELL READS IT (#298).
+		//
+		// With no vars table, `grep $HOME` passes `$HOME` through for the shell to
+		// expand — the exemption exists for exactly that, and it stays. But a verb that
+		// declared `PayloadType: PayloadVar` said its payload is ONE REFERENCE and the
+		// shell text arrives in that value: inside that region nobody expands anything,
+		// so an undefined `$MISSING` has one reading only, and it is a misspelling. The
+		// same call already failed when the table was non-empty, which is the shape
+		// this server calls a rule that only fires one way.
+		if len(r.sub.Named) == 0 && !valueRegion {
 			return nil
 		}
 		// vars IS in use, so an undefined name is a mistake in one of the two inputs rather
