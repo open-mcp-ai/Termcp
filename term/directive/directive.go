@@ -95,10 +95,20 @@ type Op struct {
 	Kind Kind
 	// Target says the second word names the object the directive acts on.
 	Target bool
-	// TargetOptional allows the flag-only forms of a targeted directive
-	// (`watch --off <rule>`, `watch --list`), where there is no object to name.
-	// Without it the positional rule ("word 2 is the target") would reject a
-	// leading flag, so the documented forms could never parse.
+	// TargetOptional says a target may be ABSENT, in every spelling — not only the
+	// flag-only ones (`watch --off <rule>`, `watch --list`) it was introduced for.
+	//
+	// Without it the positional rule ("word 2 is the target") rejects a leading flag,
+	// so those forms could never parse; that is why the field exists. But a targeted
+	// payload verb has a third spelling with no object in it: the only remaining word
+	// is the payload. `deploy $1` with `deploy [<env>] $1` reported Target="make
+	// release" and an empty payload — success, no error, the value in the wrong field —
+	// because the rule read `TargetOptional` in the two branches that see no target and
+	// not in the one that takes a word AS one. A lone whole reference now goes to the
+	// payload instead (#296).
+	//
+	// IT IS NOT AFFECTED BY THE OTHER DIRECTION: a required target keeps its reading,
+	// and a verb that declares one and receives a value is caught by TargetKind.
 	TargetOptional bool
 	// TargetKind says what the target NAMES, and therefore which spellings are
 	// accepted. It is a declaration, not a hint: parseStatement enforces it, so a
