@@ -162,6 +162,10 @@ func (s *Server) runUse(ctx context.Context, stmt directive.Statement, win termA
 	// no longer kills the process on timeout: it used to, because it handed back no way
 	// to reach it, and that made the same question answer 504 here and 200 there.
 	slot.Headers["Host"] = host
-	slot.Headers["Channel"] = cs.ID
+	// THE HEADER IS AN ADDRESS READ ACCEPTS, which is `session:index`, not the shell's
+	// internal id (#303). The id below is what the registry keys on, but `read <id>`
+	// resolves to the session's first channel and answers 204 — the caller follows the
+	// header into silence while the process it started keeps running.
+	slot.Headers["Channel"] = fmt.Sprintf("%s:%d", container.ID, cs.Info().Index)
 	return slot
 }
