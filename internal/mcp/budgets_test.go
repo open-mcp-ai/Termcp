@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"os"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -17,6 +18,17 @@ import (
 // The budget stays at its shipped value in production. Only the tests move it, and they
 // move it here, once, rather than in the tests that happen to be slow today.
 func TestMain(m *testing.M) {
+	// The test binary doubles as a helper process for the tests that need a program
+	// which outlives its parent: TestClosingAChannelEndsItsProcessTree runs this same
+	// binary and needs it to report its pid and then sit still. Intercepted before the
+	// flag parser, so the marker argument never reaches the testing package.
+	for _, a := range os.Args[1:] {
+		if a == treeHelperArg {
+			_, _ = os.Stdout.WriteString("PID=" + strconv.Itoa(os.Getpid()) + "\n")
+			time.Sleep(60 * time.Second)
+			os.Exit(0)
+		}
+	}
 	shellReadyBudget = 300 * time.Millisecond
 	os.Exit(m.Run())
 }
