@@ -174,7 +174,7 @@ func (e *poolEntry) watchConnection() {
 
 func (e *poolEntry) closeTransport() {
 	// SSH Close and proxy teardown are outside all pool coordination. A peer that
-	// stopped reading must not hold up another borrow or daemon shutdown.
+	// stopped reading must not hold up another lease or daemon shutdown.
 	e.close.Do(func() {
 		go func() {
 			if e.client != nil && e.client.Conn != nil {

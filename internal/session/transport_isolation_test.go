@@ -9,7 +9,7 @@ import (
 // TestEachSessionDialsItsOwnTransport pins that a session opened from a host
 // gets a connection of its own, never a client another session already holds.
 //
-// The transport pool (#237) exists for ONE-SHOT borrowed operations: `run
+// The transport pool (#237) exists for ONE-SHOT `use` operations: `run
 // use:<host>` and the file verbs rent a connection for the length of one call so
 // they leave no session record behind. When `Manager.Create` also drew its
 // transport from that pool, two sessions on the same host shared a single SSH

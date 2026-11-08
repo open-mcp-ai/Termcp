@@ -371,26 +371,26 @@ func (s *Server) sshClientOnly(sessionID string) (*ssh.Client, *mcp.CallToolResu
 
 // sftpClient preserves the session-only helper used by tests and callers that
 // already own the session lifecycle. Production directives use sftpClientContext
-// so a borrowed transport lease can be released alongside the SFTP channel.
+// so a `use` transport lease can be released alongside the SFTP channel.
 func (s *Server) sftpClient(target string) (*sftp.Client, *mcp.CallToolResult) {
 	cli, release, bad := s.sftpClientContext(context.Background(), target)
 	if bad != nil {
 		return nil, bad
 	}
-	if _, borrowed := s.parseBorrowedHost(target); borrowed {
+	if _, isUse := s.parseUseHost(target); isUse {
 		_ = cli.Close()
 		release()
-		return nil, toolError(CodeInvalidArgument, "%s", "borrowed SFTP requires a request-scoped transport lease")
+		return nil, toolError(CodeInvalidArgument, "%s", "use SFTP requires a request-scoped transport lease")
 	}
 	return cli, nil
 }
 
-// sftpClientContext resolves a session (or borrowed host, #237) and returns an SFTP
+// sftpClientContext resolves a session (or `use` host, #237) and returns an SFTP
 // client over it. The caller closes the SFTP client and invokes release.
 //
-// A SESSION'S ENGINE IS REUSED; A BORROWED HOST'S IS NOT (issue #244). The reuse is what
+// A SESSION'S ENGINE IS REUSED; A `USE:` TARGET'S IS NOT (issue #244). The reuse is what
 // removes three round trips — channel open, subsystem request, INIT/VERSION — from every
-// file operation. A borrowed host keeps the old per-call engine because its transport
+// file operation. A `use` host keeps the old per-call engine because its transport
 // lease is request-scoped: caching one would hand a later call a transport that has
 // already been released, which is a correctness bug traded for a latency win.
 //
@@ -401,10 +401,10 @@ func (s *Server) sftpClient(target string) (*sftp.Client, *mcp.CallToolResult) {
 func (s *Server) sftpClientContext(ctx context.Context, target string) (*sftp.Client, func(), *mcp.CallToolResult) {
 	var sshCli *ssh.Client
 	var release func()
-	if host, borrowed := s.parseBorrowedHost(target); borrowed {
+	if host, isUse := s.parseUseHost(target); isUse {
 		var err error
 		// The explicit marker is kept across this boundary: `host` is already known
-		// to be a borrowed target, and handing the resolver a bare word would make it
+		// to be a `use` target, and handing the resolver a bare word would make it
 		// re-decide (an unknown profile then read as a missing session).
 		sshCli, release, err = s.acquireSSHTransport(ctx, "use:"+host)
 		if err != nil {

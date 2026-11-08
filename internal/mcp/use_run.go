@@ -4,13 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
-	"github.com/open-mcp-ai/termcp/internal/encoding"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/mcp"
@@ -18,11 +13,11 @@ import (
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
-// refuseBorrowedReview enforces a host profile's default review policy on
+// refuseUseReview enforces a host profile's default review policy on
 // operations the capability table marks reviewable.
-func (s *Server) refuseBorrowedReview(target, tool string) *mcp.CallToolResult {
-	host, borrowed := s.parseBorrowedHost(target)
-	if !borrowed || s.sshConfigs == nil {
+func (s *Server) refuseUseReview(target, tool string) *mcp.CallToolResult {
+	host, isUse := s.parseUseHost(target)
+	if !isUse || s.sshConfigs == nil {
 		return nil
 	}
 	c, known := capability.ForTool(tool)
@@ -38,9 +33,9 @@ func (s *Server) refuseBorrowedReview(target, tool string) *mcp.CallToolResult {
 			"`connect %s` first: the operation then enters that session's review queue and a human decides it there.", host, host))
 }
 
-// checkBorrowedRunAdmission sends a short-circuit run through the same capability
+// checkUseRunAdmission sends a short-circuit run through the same capability
 // admission exit used by every handler.
-func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *mcp.CallToolResult {
+func (s *Server) checkUseRunAdmission(ctx context.Context, target string) *mcp.CallToolResult {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "shell_input"
 	req.Params.Arguments = argsOf("shell_id", target)
@@ -48,9 +43,9 @@ func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *
 	return bad
 }
 
-// ensureBorrowedContainer returns the live `use:<host>` session for a host,
+// ensureUseContainer returns the live `use:<host>` session for a host,
 // creating it if one does not already exist (issue #255).
-func (s *Server) ensureBorrowedContainer(ctx context.Context, host string) (*session.Session, error) {
+func (s *Server) ensureUseContainer(ctx context.Context, host string) (*session.Session, error) {
 	if s.sessMgr == nil {
 		return nil, errors.New("no session manager")
 	}
@@ -58,7 +53,7 @@ func (s *Server) ensureBorrowedContainer(ctx context.Context, host string) (*ses
 		Mode:      "pipe",
 		NoShell:   true,
 		SSHConfig: host,
-		Borrowed:  true,
+		UseHost:   true,
 	}
 	// AN UNKNOWN PROFILE MUST NOT SILENTLY BECOME LOOPBACK. If host is not
 	// `internal`, Load must succeed; leaving cfg.Remote nil would start a loopback
@@ -69,7 +64,7 @@ func (s *Server) ensureBorrowedContainer(ctx context.Context, host string) (*ses
 		}
 		entry, err := s.sshConfigs.Load(host)
 		if err != nil || entry == nil {
-			return nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles; a profile name is also accepted without the `use:` prefix", sshconfig.ErrNotFound, host)
+			return nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles; a profile name is also accepted without the `use` prefix", sshconfig.ErrNotFound, host)
 		}
 		remote, err := sshconfig.RemoteFromEntry(entry, s.sshConfigs.ConfigDir(host))
 		if err != nil {
@@ -77,256 +72,96 @@ func (s *Server) ensureBorrowedContainer(ctx context.Context, host string) (*ses
 		}
 		cfg.Remote = remote
 	}
-	return s.sessMgr.FindBorrowed(host, cfg)
+	return s.sessMgr.FindUseHost(host, cfg)
 }
 
-// runBorrowedHost runs one shell command on the host's borrowed container.
+// runUse runs one command on a host's use container.
 //
-// IT REUSES THE REAL CHANNEL PATH (#255). A borrowed container is an ordinary session
-// (`use:<host>`, no primary shell), and CreateChildShell creates an authentic channel
-// on its transport: its own buffer, its own log.bin, its own exit watcher, and its
-// own tab in the Web UI. Nothing is simulated on the side; the terminal reads from the
-// exact same byte log this command writes.
-func (s *Server) runBorrowedHost(ctx context.Context, host, command string, win termArgs, captureLimit int) (output []byte, total int64, exitCode int, exited bool, waited time.Duration, err error) {
-	started := time.Now()
-	defer func() { waited = time.Since(started) }()
-
-	container, err := s.ensureBorrowedContainer(ctx, host)
-	if err != nil {
-		return nil, 0, -1, false, 0, err
-	}
-
-	// A REAL CHANNEL, created with the LINE spelling: the command came from a person
-	// or an agent as shell syntax, so pipes and redirects in it must reach the remote
-	// shell unmangled. Everything downstream is the ordinary channel machinery —
-	// buffer, log, exit watcher, Web UI tab, `--later` accounting.
-	cs, err := container.CreateChildShellLine(command, false, 0, 0, "")
-	if err != nil {
-		return nil, 0, -1, false, 0, fmt.Errorf("open command channel on %s: %w", host, err)
-	}
-	shellID := cs.ID
-
-	// THE WAIT: a pipe channel's process exiting is the completion signal.
-	wait := time.Duration(win.TimeoutSeconds * float64(time.Second))
-	if wait <= 0 {
-		wait = defaultTimeoutSeconds * time.Second
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-
-	stopped := false
-	select {
-	case <-cs.Done():
-		exited = true
-	case <-timer.C:
-		stopped = true
-	case <-ctx.Done():
-		stopped = true
-	}
-
-	// READ THE CHANNEL'S OWN BUFFER via shell_output.
-	args := argsOf("shell_id", shellID, "offset", float64(0), "max_bytes", float64(captureLimit))
-	res, fail := s.callTool(ctx, "shell_output", args)
-	if fail != nil {
-		err = errors.New(fail.msg)
-	} else if doc, ok := toolResultMap(res); ok {
-		if text, ok := doc["output"].(string); ok {
-			output = []byte(text)
-		}
-		total = int64(getFloatAny(doc, "total_bytes", float64(len(output))))
-	}
-
-	if code := cs.Info().ExitCode; code != nil {
-		exitCode = *code
-	} else if exited {
-		exitCode = 0
-	} else {
-		exitCode = -1
-	}
-
-	if stopped {
-		// A stopped run terminates its channel so the process does not linger.
-		cs.TerminateShell()
-		if ctx.Err() != nil {
-			return output, total, -1, false, 0, ctx.Err()
-		}
-		return output, total, -1, false, 0, nil
-	}
-	return output, total, exitCode, exited, 0, err
-}
-
-// borrowedRunSlot renders a short-circuit run.
-func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, host string, output []byte, total int64, exitCode int, exited bool, waited time.Duration, runErr error, win termArgs) envelope.Slot {
-	if runErr != nil && !exited {
-		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: runErr.Error() +
-			". A short-circuit run keeps no channel to read later; use `connect` when a command must outlive the call."})
-	}
-
-	body := string(output)
-	if charset, ok := stmt.Flag("encoding"); ok && charset != "" {
-		decoded, err := encoding.Decode(charset, output)
-		if err != nil {
-			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument, msg: err.Error()})
-		}
-		body = string(decoded)
-	}
-
-	headers := map[string]string{
-		"Path":         stmt.Path,
-		"Host":         host,
-		"Output-Bytes": strconv.FormatInt(total, 10),
-		"Waited":       fmt.Sprintf("%dms", waited.Milliseconds()),
-	}
-	if len(output) > 0 {
-		headers["Content-Range"] = envelope.ContentRange(0, int64(len(output)-1), total)
-	} else {
-		headers["Content-Range"] = envelope.UnsatisfiedRange(total)
-	}
-	var note string
-	if exited {
-		headers["Status"] = "exited"
-		headers["Exit-Code"] = strconv.Itoa(exitCode)
-		if exitCode != 0 {
-			note = fmt.Sprintf("the command exited with status %d and printed nothing on stdout or stderr. Nothing was left running; a short-circuit run has no channel to read afterwards.", exitCode)
-		}
-	} else {
-		headers["Status"] = "stopped"
-		headers["Error-Code"] = "command_timeout"
-		note = fmt.Sprintf(
-			"the command had not exited when this call's window ran out (%gs), so it was stopped and its channel closed — a short-circuit run has nowhere to keep a live process. "+
-				"Raise `timeout` for a longer command, or `connect %s` and drive a channel when it must keep running.", win.TimeoutSeconds, host)
-	}
-	if note != "" {
-		headers["Hint"] = note
-		if len(output) == 0 {
-			body = note
-		}
-	}
-	if runErr != nil {
-		headers["Hint"] = runErr.Error()
-	}
-	if omitted := total - int64(len(output)); omitted > 0 {
-		headers["Truncated"] = fmt.Sprintf(
-			"%d output bytes were not retained: a short-circuit run has no stream to page. "+
-				"Redirect to a file and read it with `read use:%s file <path>` when the whole output matters.", omitted, host)
-	}
-
-	if pattern, ok := stmt.Flag("grep"); ok {
-		slot, _ := grepBorrowed(stmt, pattern, body, win)
-		slot.Headers["Host"] = host
-		slot.Headers["Output-Bytes"] = headers["Output-Bytes"]
-		slot.Headers["Waited"] = headers["Waited"]
-		if truncated := headers["Truncated"]; truncated != "" {
-			slot.Headers["Truncated"] = truncated
-		}
-		if !exited {
-			slot.Code = 504
-			slot.Headers["Status"] = "stopped"
-			slot.Headers["Error-Code"] = "command_timeout"
-		}
-		if exited && exitCode != 0 {
-			slot.Headers["Error-Code"] = "command_failed"
-		}
+// THIS IS THE WHOLE OF THE SUGAR, and its length is the point. It creates the
+// underlying container when the host has none — a `use` target names a host, and a
+// host is not something this server already has a session for — spawns the command as a
+// real channel inside it, and then hands that channel to the ordinary finish path.
+// Validation, the wait, the read, the search, the headers and every error code are
+// finishRun's and runOne's, reached through the same call, so the two roads cannot
+// answer differently.
+//
+// WHAT USED TO LIVE HERE WAS A PARALLEL IMPLEMENTATION: a hand-written slot renderer, a
+// second grep, and a second flag validator. They drifted exactly where nobody was
+// comparing — a window that expired answered 504/`Status: stopped` on this road and
+// 200/`Still-Running` on the other; an empty grep here was missing the Content-Range the
+// other always sent; the same bad `--grep-limit` got two different sentences. Each was
+// invisible to review because each file was internally consistent.
+//
+// A REAL CHANNEL, created with the LINE spelling: the command came from a person or an
+// agent as shell syntax, so pipes and redirects in it must reach the remote shell
+// unmangled. Everything downstream is the ordinary channel machinery — buffer, log,
+// exit watcher, Web UI tab, `--later` accounting (#255).
+func (s *Server) runUse(ctx context.Context, stmt directive.Statement, win termArgs, host string) envelope.Slot {
+	// THE GATE IS THE SAME EXIT EVERY OTHER OPERATION USES. This path has no
+	// handler to reach, so it asks admission directly with the capability the
+	// command belongs to — a profile's default_approval must not depend on which
+	// spelling reached the host.
+	if bad := s.checkUseRunAdmission(ctx, "use:"+host); bad != nil {
+		slot := failureSlot(failureFromResult(bad))
+		slot.Headers["Path"] = stmt.Path
 		return slot
 	}
-	slot := envelope.Slot{
-		Code:    200,
-		Headers: headers,
-		Body:    body,
+	// A FILTER MUST NOT RUN ITS COMMAND TO FIND OUT IT WAS INVALID, and this is the
+	// shared validator both roads now use, so the refusal cannot arrive later here than
+	// it does on a channel.
+	if bad := s.checkRunFlags(stmt, win); bad != nil {
+		return s.slotFromFailure(ctx, stmt, bad)
 	}
-	if !exited {
-		slot.Code = 504
+	// A DEFERRED CLOSE STOPS NEW WORK (issue #255). `close use:<host> --later`
+	// promised the container ends when its running commands do; dispatching one
+	// more command would break that promise silently, because the caller sees a
+	// normal 200 while the window it is writing into is on its way out. Refuse and
+	// name the two ways forward.
+	if c := s.sessMgr.LiveUseHost(host); c != nil && c.Closing() {
+		return s.slotFromFailure(ctx, stmt, &toolFailure{
+			code: CodeConflict,
+			msg: fmt.Sprintf("use:%s is closing: `close --later` was called, so it no longer accepts new commands. "+
+				"Wait for its running work to finish (it archives by itself), or start a fresh one by closing it now with `close %s`.",
+				host, c.ID),
+		})
 	}
-	if exited && exitCode != 0 {
-		slot.Headers["Error-Code"] = "command_failed"
-	}
-	return slot
-}
-
-// The filters used to be parsed in grepBorrowed, which is downstream of the
-// execution: a typo in `--grep` answered 400 with `Output-Bytes: 20` and
-// `Status: exited`, i.e. the 400 was a lie — the command had already run and its
-// effect could not be undone by retrying with a fixed regex. Same rule the window
-// check follows: every refusal this call can make is made before its effect.
-func validateBorrowedRunFlags(stmt directive.Statement) *toolFailure {
-	if pattern, ok := stmt.Flag("grep"); ok {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return &toolFailure{code: CodeInvalidArgument, msg: "`--grep` is a Go regular expression and this one does not compile: " + err.Error()}
-		}
-	}
-	for _, flag := range []string{"grep-limit", "tail"} {
-		if v, ok := stmt.Flag(flag); ok && v != "" {
-			if n, err := strconv.Atoi(v); err != nil || n <= 0 {
-				return &toolFailure{code: CodeInvalidArgument, msg: "`--" + flag + "` must be a positive integer, got " + strconv.Quote(v)}
-			}
-		}
-	}
-	if charset, ok := stmt.Flag("encoding"); ok && charset != "" {
-		if _, err := encoding.Decode(charset, nil); err != nil {
-			return &toolFailure{code: CodeInvalidArgument, msg: err.Error()}
-		}
-	}
-	return nil
-}
-
-// grepBorrowed filters a short-circuit run's output with the same shape a channel
-// grep produces, because a caller branches on that shape.
-func grepBorrowed(stmt directive.Statement, pattern, body string, win termArgs) (envelope.Slot, int) {
-	re, err := regexp.Compile(pattern)
+	container, err := s.ensureUseContainer(ctx, host)
 	if err != nil {
-		return badRequest(stmt, "`--grep` is a Go regular expression and this one does not compile: "+err.Error()), 400
-	}
-	limit := grepDefaultLimit
-	if v, ok := stmt.Flag("grep-limit"); ok && v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return badRequest(stmt, "`--grep-limit` must be a positive integer, got "+strconv.Quote(v)), 400
+		// A `USE:` TARGET FAILS IN TWO KINDS: the profile is not there (the
+		// caller's argument, answered with the ssh-config code and a next step), or
+		// the connection failed (the server's answer). Mapping both to 500
+		// operation_failed made a typo in the host name read like an outage.
+		code := CodeOperationFailed
+		if errors.Is(err, sshconfig.ErrNotFound) {
+			code = CodeSSHConfigNotFound
 		}
-		limit = n
+		return s.slotFromFailure(ctx, stmt, &toolFailure{code: code, msg: err.Error()})
 	}
-
-	body = strings.ReplaceAll(body, "\r\n", "\n")
-	lines := strings.Split(body, "\n")
-	if n := len(lines); n > 0 && lines[n-1] == "" {
-		lines = lines[:n-1] // the trailing newline is not a line
-	}
-	matched := make([]string, 0, min(limit, len(lines)))
-	hits := 0
-	for i, line := range lines {
-		if !re.MatchString(line) {
-			continue
+	cs, err := container.CreateChildShellLine(stmt.Payload, false, 0, 0, "")
+	if err != nil {
+		code := CodeOperationFailed
+		if errors.Is(err, session.ErrClosing) {
+			code = CodeConflict
 		}
-		hits++
-		if len(matched) < limit {
-			matched = append(matched, fmt.Sprintf("%d:%s", i+1, line))
-		}
+		return s.slotFromFailure(ctx, stmt, &toolFailure{code: code,
+			msg: fmt.Sprintf("open a command channel on %s: %v", host, err)})
 	}
-
-	headers := map[string]string{
-		"Path":          stmt.Path,
-		"Grep":          pattern,
-		"Lines-Scanned": strconv.Itoa(len(lines)),
-		"Matches":       strconv.Itoa(hits),
+	// THE CHANNEL IS THE TARGET FROM HERE ON. The rest of the reply is produced by
+	// the same code a channel run reaches, and it needs the handle, not the host: the
+	// bytes, the exit state and the grep scan all belong to this channel.
+	single := stmt
+	single.Target = cs.ID
+	slot := s.finishRun(ctx, single, win, 0)
+	if slot.Headers == nil {
+		slot.Headers = map[string]string{}
 	}
-	if hits == 0 {
-		return noContentSaying(headers, "no line matched `"+pattern+"` in the "+strconv.Itoa(len(lines))+" lines scanned"), 204
-	}
-	if hits > len(matched) {
-		headers["Truncated"] = fmt.Sprintf("showing %d of %d matches; raise --grep-limit", len(matched), hits)
-	}
-	if tail, ok := stmt.Flag("tail"); ok {
-		n, err := strconv.Atoi(tail)
-		if err != nil || n <= 0 {
-			return badRequest(stmt, "`--tail` must be a positive integer, got "+strconv.Quote(tail)), 400
-		}
-		if n < len(matched) {
-			matched = matched[len(matched)-n:]
-		}
-	}
-
-	filtered, code, cut, total := capGeneratedCounted(strings.Join(matched, "\n"), win)
-	if cut > 0 {
-		noteTruncated(headers, code, cut, total, win)
-	}
-	return envelope.Slot{Code: code, Headers: headers, Body: filtered}, code
+	// TWO FACTS THAT BELONG TO THIS ROAD AND CANNOT BE DERIVED FROM THE CHANNEL:
+	// which host answered, and the handle of the channel the command owns. The second
+	// is what a caller needs the moment the window expires — the process is still
+	// running, and reading or closing it takes a name. Naming it is also why this road
+	// no longer kills the process on timeout: it used to, because it handed back no way
+	// to reach it, and that made the same question answer 504 here and 200 there.
+	slot.Headers["Host"] = host
+	slot.Headers["Channel"] = cs.ID
+	return slot
 }

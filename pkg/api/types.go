@@ -73,14 +73,14 @@ type Session struct {
 	// SSHConfig is the canonical, non-secret profile name used to create this session.
 	// It is separate from Name because callers may rename a session after it starts.
 	SSHConfig string `json:"ssh_config,omitempty"`
-	// Borrowed marks a session that exists to make short-circuit work visible: the
+	// UseHost marks a session that exists to make short-circuit work visible: the
 	// `use:<host>` container that `run use:<host> $1` creates and then keeps for reuse
 	// (issue #255). It is a session like any other — it archives, it can be closed —
 	// but two rules follow from the marker: `open`/`connect` must NOT pick it up as a
 	// reusable target (its channels are consumed one command at a time by whoever
-	// calls next), and the UI shows it as borrowed rather than as something a person
+	// calls next), and the UI shows it as `use` rather than as something a person
 	// connected.
-	Borrowed bool `json:"borrowed,omitempty"`
+	UseHost bool `json:"use_host,omitempty"`
 	// DetectedShell is the shell family or binary detected for the target environment (e.g. "pwsh", "cmd", "bash") (issue #208.1).
 	DetectedShell string `json:"detected_shell,omitempty"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).

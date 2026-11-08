@@ -11,7 +11,7 @@ import (
 
 // A server sometimes ASKS the client something — sampling/createMessage is the
 // reason this exists: the program behind the server has no model of its own and
-// borrows the client's.
+// uses the client's.
 //
 // That reverses the normal direction, and it is why a response has to be routable.
 // A pending map is the whole mechanism: mint an id, remember where the answer

@@ -594,7 +594,7 @@ func (s *Server) logSurfaces() {
 //
 // The lease is held for the whole bridge lifetime and released when it ends, for
 // the reason the bridge exists: one MCP session makes many requests to one host,
-// and a per-request lease would pay a handshake for each. It borrows the same
+// and a per-request lease would pay a handshake for each. It uses the same
 // transport pool ordinary sessions use, so a template that reaches one host does
 // not open a second connection to a host termcp is already connected to.
 func viaDialer(sessMgr *session.Manager, sshStore *sshconfig.Store, noInternal bool) mcpbridge.ViaDialer {

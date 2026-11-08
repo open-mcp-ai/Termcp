@@ -427,7 +427,7 @@ Session records carry no `pid`, for the reason given under `POST /api/sessions`.
 Creates a new SSH connection and session (including its first shell).
 
 Every session dials its own SSH connection. The transport pool is reserved for
-one-shot borrowed operations (`run use:<host>`, `read use:<host>`), so user-created
+one-shot `use` operations (`run use:<host>`, `read use:<host>`), so user-created
 sessions never share an underlying SSH client. If a session closes or times out,
 sibling sessions on the same profile keep running uninterrupted.
 

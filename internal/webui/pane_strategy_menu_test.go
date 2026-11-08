@@ -15,7 +15,7 @@ import (
 // cannot show the current choice while closed without a label as wide as the
 // widest one, in a bar with no width to spare.
 //
-// The replacement is markup, and it borrows the header's language menu — the
+// The replacement is markup, and it uses the header's language menu — the
 // same .lang-menu panel and .lang-opt rows — so the two menus cannot drift into
 // two different looks. Only the trigger is dock-shaped. This is a source
 // assertion because the property is about which elements exist; the behaviour

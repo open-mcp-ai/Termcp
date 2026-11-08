@@ -3,27 +3,65 @@ package mcp
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/encoding"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
-// checkWindow validates the read window a command will be read with, before the
-// command runs.
+// checkRunFlags validates everything a run reads from its own statement, before
+// anything is typed or spawned.
 //
-// It builds the argument map readSlot would build and hands it to the same parser,
-// so the two cannot drift. `timeout` here is the caller's whole window rather than
-// what is left of it: the remainder is always smaller, so a window that passes here
-// cannot be refused later, and one refused here would have been refused there.
-func (s *Server) checkWindow(stmt directive.Statement, win termArgs) *toolFailure {
+// THE WINDOW IS CHECKED BEFORE ANYTHING RUNS, because a 400 must not be a lie. The
+// window is validated where it is read — inside shell_output — and that read happens
+// after the command has been typed and Enter pressed. So a refusal about the window
+// used to arrive after the command had already run (issue #179), and a 4xx reads as
+// "nothing happened": the caller retries, and the command runs twice.
+//
+// THE FILTERS ARE THE SAME KIND OF FACT, and they used to be checked in two places for
+// two roads: a channel run let a broken `--grep` through until the read failed, while a
+// use run had a private validator that caught it first. That is the definition of
+// a rule with two implementations — one road refuses before the side effect, the other
+// after it, and nobody compares them. One rule, both callers, before either acts.
+//
+// It builds the argument map readSlot would build and hands it to the same parser, so
+// the two cannot drift. `timeout` here is the caller's whole window rather than what is
+// left of it: the remainder is always smaller, so a window that passes here cannot be
+// refused later, and one refused here would have been refused there.
+func (s *Server) checkRunFlags(stmt directive.Statement, win termArgs) *toolFailure {
 	args := argsOf("shell_id", stmt.Target)
 	args["max_bytes"] = float64(win.BytesLimit)
 	args["max_lines"] = float64(win.LinesLimit)
 	args["timeout"] = win.TimeoutSeconds
 	if _, bad := parseReadParams(args); bad != nil {
 		return failureFromResult(bad)
+	}
+	if pattern, ok := stmt.Flag("grep"); ok {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return &toolFailure{code: CodeInvalidArgument,
+				msg: "`--grep` is a Go regular expression and this one does not compile: " + err.Error()}
+		}
+	}
+	// ONE WORDING FOR ONE RULE. The run pre-flight rejected a non-positive limit as
+	// "must be a positive integer" while the search said "must be a number", and a caller
+	// reading both replies could not tell whether it had made one mistake or two.
+	for _, flag := range []string{"grep-limit", "tail"} {
+		if v, ok := stmt.Flag(flag); ok && v != "" {
+			if n, err := strconv.Atoi(v); err != nil || n <= 0 {
+				return &toolFailure{code: CodeInvalidArgument,
+					msg: "`--" + flag + "` must be a positive integer, got " + strconv.Quote(v)}
+			}
+		}
+	}
+	// A CHARSET IS CHECKED ONCE, HERE: decoding is what later reads do to every byte, so
+	// an unknown name is a mistake about the whole call, not about one reply.
+	if charset, ok := stmt.Flag("encoding"); ok && charset != "" {
+		if _, err := encoding.Decode(charset, nil); err != nil {
+			return &toolFailure{code: CodeInvalidArgument, msg: err.Error()}
+		}
 	}
 	return nil
 }

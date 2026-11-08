@@ -8,9 +8,9 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// TestBorrowedContainerIsPerHostSingleton pins issue #255's central claim: N runs on
+// TestUseHostContainerIsPerHostSingleton pins issue #255's central claim: N runs on
 // one host produce ONE visible session, and each run is recorded inside it.
-func TestBorrowedContainerIsPerHostSingleton(t *testing.T) {
+func TestUseHostContainerIsPerHostSingleton(t *testing.T) {
 	s := newTestServer(t)
 
 	for _, cmd := range []string{"echo alpha", "echo beta"} {
@@ -20,15 +20,15 @@ func TestBorrowedContainerIsPerHostSingleton(t *testing.T) {
 		}
 	}
 
-	containers := borrowedContainers(t, s)
+	containers := useContainers(t, s)
 	if len(containers) != 1 {
 		t.Fatalf("two runs on one host must share one container, got %d", len(containers))
 	}
 	if containers[0].Name != "use:internal" {
 		t.Errorf("container name = %q, want use:internal", containers[0].Name)
 	}
-	if !containers[0].Borrowed {
-		t.Error("container must carry Borrowed=true so connect/open skip it")
+	if !containers[0].UseHost {
+		t.Error("container must carry UseHost=true so connect/open skip it")
 	}
 
 	// Both commands are visible as recorded channels, in the order they ran.
@@ -50,14 +50,14 @@ func TestBorrowedContainerIsPerHostSingleton(t *testing.T) {
 	}
 }
 
-// TestCloseLaterOnBorrowedContainerFulfilsItself pins that a deferred close on a
+// TestCloseLaterOnUseHostContainerFulfilsItself pins that a deferred close on a
 // container with nothing in flight ends it immediately rather than leaving it up
-// forever: a borrowed container holds no live shell, so nothing else would ever fire.
-func TestCloseLaterOnBorrowedContainerFulfilsItself(t *testing.T) {
+// forever: a use container holds no live shell, so nothing else would ever fire.
+func TestCloseLaterOnUseHostContainerFulfilsItself(t *testing.T) {
 	s := newTestServer(t)
 
 	s.runWithArgs("run use internal $1", "echo one")
-	containers := borrowedContainers(t, s)
+	containers := useContainers(t, s)
 	if len(containers) != 1 {
 		t.Fatalf("want 1 container, got %d", len(containers))
 	}
@@ -75,7 +75,7 @@ func TestCloseLaterOnBorrowedContainerFulfilsItself(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("a deferred close on an idle borrowed container never ended the session")
+	t.Fatal("a deferred close on an idle use container never ended the session")
 }
 
 // TestARunWhileClosingIsRefused pins that --later actually stops new work: a command
@@ -88,7 +88,7 @@ func TestARunWhileClosingIsRefused(t *testing.T) {
 	go s.runWithArgs("run use internal $1", "sleep 5")
 	time.Sleep(500 * time.Millisecond)
 
-	containers := borrowedContainers(t, s)
+	containers := useContainers(t, s)
 	if len(containers) != 1 {
 		t.Fatalf("want 1 container, got %d", len(containers))
 	}
@@ -110,12 +110,12 @@ func TestARunWhileClosingIsRefused(t *testing.T) {
 	}
 }
 
-// borrowedContainers lists the live `use:*` containers.
-func borrowedContainers(t *testing.T, s *Server) []api.Session {
+// useContainers lists the live `use:*` containers.
+func useContainers(t *testing.T, s *Server) []api.Session {
 	t.Helper()
 	var out []api.Session
 	for _, sess := range s.sessMgr.ListAll() {
-		if sess.Borrowed && sess.Status == api.SessionRunning {
+		if sess.UseHost && sess.Status == api.SessionRunning {
 			out = append(out, sess)
 		}
 	}

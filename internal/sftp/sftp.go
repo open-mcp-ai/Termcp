@@ -80,7 +80,7 @@ type FileStatResult struct {
 // sftpClient abstracts SFTP operations.
 type Client struct {
 	client *sftp.Client
-	// shared marks a Client that borrows somebody else's engine, so Close is a no-op.
+	// shared marks a Client that uses somebody else's engine, so Close is a no-op.
 	// It is a field rather than a second type because every operation below is the
 	// same call either way — only the lifetime differs, and lifetime is what this flag
 	// records.

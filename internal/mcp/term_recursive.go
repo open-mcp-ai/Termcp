@@ -44,7 +44,7 @@ const hopsHeader = "X-Termcp-Hops"
 // performs it. The bool reports whether this function handled the statement.
 //
 // The target must name an extension instance whose declaration verified; every
-// other target — a session, a channel, a borrowed host — falls through to the
+// other target — a session, a channel, a `use` host — falls through to the
 // ordinary path untouched, which is what keeps this from changing existing
 // behaviour.
 func (s *Server) termcpRoute(ctx context.Context, stmt directive.Statement, win termArgs) ([]envelope.Slot, bool) {

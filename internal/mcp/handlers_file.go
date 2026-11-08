@@ -205,13 +205,13 @@ func (s *Server) handleFileStat(ctx context.Context, request mcp.CallToolRequest
 	}
 	m := toMap(result)
 
-	// A BORROWED HOST HAS NO SESSION TO BUILD A URL FROM (#237). The stat is a
+	// A `USE:` HOST HAS NO SESSION TO BUILD A URL FROM (#237). The stat is a
 	// property of the connection, so it answers; the download/upload urls are
 	// addresses in the session REST surface, and inventing one for a target that has
 	// no session would hand the caller a URL that 404s. Omitting them says what is
-	// true: this answer came from a borrowed connection.
-	if _, borrowed := s.parseBorrowedHost(sessionID); borrowed {
-		m["borrowed"] = true
+	// true: this answer came from a `use` connection.
+	if _, isUse := s.parseUseHost(sessionID); isUse {
+		m["use_host"] = true
 		return jsonResult(m), nil
 	}
 
@@ -232,11 +232,11 @@ func (s *Server) handleFileStat(ctx context.Context, request mcp.CallToolRequest
 	return jsonResult(m), nil
 }
 
-// withFileSession resolves `session_id`, borrows that session's SFTP engine and
+// withFileSession resolves `session_id`, leases that session's SFTP engine and
 // hands it to fn.
 //
 // The handlers in this file open with the same lines: read the session, refuse
-// an empty one, borrow the engine, and give back both the engine and the
+// an empty one, lease the engine, and give back both the engine and the
 // transport lease. Only the operation after that differs. Writing the set-up
 // once is not about the line count — a handler that lost one of the two
 // defers would leak a transport lease for the life of the connection, and the
@@ -307,12 +307,12 @@ func (s *Server) handleGetFileURLs(_ context.Context, request mcp.CallToolReques
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	// THE URLS ADDRESS A SESSION, so a borrowed host cannot have them: they are
+	// THE URLS ADDRESS A SESSION, so a `use` host cannot have them: they are
 	// routes in the session REST surface. Saying so is the answer; resolving the
 	// target as a session first would report "not found" about a host that exists.
-	if host, borrowed := s.parseBorrowedHost(sessionID); borrowed {
+	if host, isUse := s.parseUseHost(sessionID); isUse {
 		return toolError(CodeInvalidArgument, "%s", "the download/upload urls are session routes, and "+
-			quoteOrDash(host)+" is a host used through a borrowed connection, so it has no session to address. "+
+			quoteOrDash(host)+" is a host used through a `use` connection, so it has no session to address. "+
 			"Use `read "+host+" file "+remotePath+"` for the bytes, or connect to the host if you need the HTTP surface."), nil
 	}
 	if _, bad := s.requireRunningSession(sessionID); bad != nil {

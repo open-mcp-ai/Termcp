@@ -51,7 +51,7 @@ func (s *Server) checkAdmission(ctx context.Context, toolName string, request mc
 	// SFTP handler ungated while `connect prod` + `write` was held, so a profile's
 	// default_approval depended on which spelling the caller picked. Every tool that
 	// names a target passes through here, including the ones `term` calls for itself.
-	if bad := s.refuseBorrowedReview(targetSessionID(request), toolName); bad != nil {
+	if bad := s.refuseUseReview(targetSessionID(request), toolName); bad != nil {
 		return bad, false
 	}
 	// Review holds the operation for a human. Whether THIS call is reviewable is
