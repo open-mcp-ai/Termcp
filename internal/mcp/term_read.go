@@ -406,6 +406,15 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 			return false
 		case <-ticker.C:
 		}
+		// THE WINDOW IS CHECKED FIRST, because after it the two outcomes are not
+		// equally worth reporting: the deadline is a fact, "quiet" is an inference.
+		// The quiet branch sat above this line, so a tick that woke after the window
+		// and saw a still stream answered "quiet" — the header that means "my window
+		// ran out" was suppressed by exactly the race it exists to resolve, and on a
+		// loaded machine the last chunk can be an entire quiet window old.
+		if !time.Now().Before(deadline) {
+			return true
+		}
 		now, ok := s.outputSizeFor(handle)
 		if !ok {
 			// The channel went away under the wait; the read that follows reports it
@@ -441,9 +450,6 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 			} else if time.Since(still) >= quiet {
 				return false
 			}
-		}
-		if !time.Now().Before(deadline) {
-			return true
 		}
 	}
 }
