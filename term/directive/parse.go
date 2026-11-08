@@ -1083,6 +1083,26 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 				}
 			}
 		default:
+			// A PAYLOAD VERB'S LONE REFERENCE IS ITS PAYLOAD, NOT ITS TARGET (#296).
+			//
+			// A target is an IDENTIFIER the caller types; a reference is a VALUE. When
+			// the target is optional and one word is all that is left, reading that word
+			// as the target leaves the payload empty and reports success with the value in
+			// the wrong field: `deploy $1` ("deploy [<env>] $1") answered
+			// Target="make release", Payload="" — indistinguishable from a deploy to an
+			// environment named "make release", which is exactly what this server refuses
+			// to guess about elsewhere.
+			//
+			// The rule already exists one block below ("a payload verb is the one place a
+			// lone reference is still a value", for `call h $1`), but the target had
+			// already eaten the word by the time it ran. Here it can still see it.
+			//
+			// Only when the target is OPTIONAL. A required target keeps today's reading,
+			// because `run $1` declaring a target and receiving a value is caught by the
+			// target KIND check rather than by a guess about intent.
+			if op.TargetOptional && op.hasPayload() && len(rest) == 1 && isWholeReference(rest[0].text) {
+				break
+			}
 			// `use <host>` is one target, not two positional words. Fold it only on
 			// the operations that accept `use` hosts, so the same explicit spelling
 			// works for a one-shot run and direct file operations without changing the
