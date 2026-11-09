@@ -80,14 +80,15 @@ func (g *extGroup) takeSession() string {
 
 // groupNamed reports whether any state still resolves to this connection.
 func (r *Reconciler) groupNamed(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, st := range r.states {
-		if st.groupOf() == key {
-			return true
+	named := false
+	r.states.Range(func(_, v any) bool {
+		if v.(*extState).groupOf() == key {
+			named = true
+			return false
 		}
-	}
-	return false
+		return true
+	})
+	return named
 }
 
 // groupKey is the identity of the connection an extension is served by: the host
@@ -152,14 +153,12 @@ func writeSet(b *strings.Builder, list []string) {
 // namespace come from the extension that created it, which the key already fixes:
 // members of a group dial the same profile under the same namespace.
 func (r *Reconciler) group(key string, ext *Extension) *extGroup {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if g, ok := r.groups[key]; ok {
-		return g
+	if v, ok := r.groups.Load(key); ok {
+		return v.(*extGroup)
 	}
 	g := &extGroup{key: key, target: ext.Target, namespace: ns.ForExtensions(ext.Target), created: time.Now()}
-	r.groups[key] = g
-	return g
+	actual, _ := r.groups.LoadOrStore(key, g)
+	return actual.(*extGroup)
 }
 
 // groupFor returns the group an extension's state names, or nil when it has none
@@ -169,18 +168,18 @@ func (r *Reconciler) groupFor(st *extState) *extGroup {
 	if key == "" {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.groups[key]
+	if v, ok := r.groups.Load(key); ok {
+		return v.(*extGroup)
+	}
+	return nil
 }
 
 func (r *Reconciler) groupList() []*extGroup {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]*extGroup, 0, len(r.groups))
-	for _, g := range r.groups {
-		out = append(out, g)
-	}
+	var out []*extGroup
+	r.groups.Range(func(_, v any) bool {
+		out = append(out, v.(*extGroup))
+		return true
+	})
 	return out
 }
 
@@ -407,12 +406,11 @@ func (r *Reconciler) closeGroup(g *extGroup) {
 // merely showing it.
 func (r *Reconciler) onSessionDead(sessionID string) {
 	served := false
-	r.mu.Lock()
-	states := make([]*extState, 0, len(r.states))
-	for _, st := range r.states {
-		states = append(states, st)
-	}
-	r.mu.Unlock()
+	var states []*extState
+	r.states.Range(func(_, v any) bool {
+		states = append(states, v.(*extState))
+		return true
+	})
 
 	reason := "session ended"
 	if sess := r.sessMgr.Get(sessionID); sess != nil {

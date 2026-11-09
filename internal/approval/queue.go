@@ -83,11 +83,10 @@ func NewQueue(sessionID string, opts Options) *Queue {
 func (q *Queue) SessionID() string { return q.session }
 
 // Need reports the configured approver threshold.
-func (q *Queue) Need() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.need
-}
+//
+// NO LOCK: need is written once by NewQueue and never again, so a reader cannot see
+// a torn or half-applied value.
+func (q *Queue) Need() int { return q.need }
 
 // Submit enqueues a command line and returns its id. The caller either polls
 // Get or blocks in Wait.
