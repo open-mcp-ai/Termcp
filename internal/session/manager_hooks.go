@@ -6,19 +6,17 @@ import (
 
 // SetNotifyHooks registers hooks for terminal I/O and lifecycle events.
 func (m *Manager) SetNotifyHooks(onOutput func(shellID string), onExit func(shellID string, exitCode *int), onClose func(shellID string)) {
-	m.listChangeMu.Lock()
-	m.onOutputHook = onOutput
-	m.onExitHook = onExit
-	m.onCloseHook = onClose
-	m.listChangeMu.Unlock()
+	// THREE INDEPENDENT POINTERS, NOT ONE LOCK: each notifier reads exactly one of
+	// them and no reader depends on the three changing together, so storing them as
+	// a group under a lock bought nothing a reader could observe.
+	m.onOutputHook.Store(&onOutput)
+	m.onExitHook.Store(&onExit)
+	m.onCloseHook.Store(&onClose)
 }
 
 func (m *Manager) notifyOutput(shellID string) {
-	m.listChangeMu.RLock()
-	fn := m.onOutputHook
-	m.listChangeMu.RUnlock()
-	if fn != nil {
-		fn(shellID)
+	if p := m.onOutputHook.Load(); p != nil && *p != nil {
+		(*p)(shellID)
 	}
 }
 
@@ -33,11 +31,8 @@ func (m *Manager) notifyExit(shellID string, exitCode *int) {
 	// scanning, since this runs on every shell exit. The lookup can legitimately
 	// fail (a shell closed concurrently), in which case there is no owner left to
 	// describe and skipping is correct.
-	m.listChangeMu.RLock()
-	fn := m.onExitHook
-	m.listChangeMu.RUnlock()
-	if fn != nil {
-		fn(shellID, exitCode)
+	if p := m.onExitHook.Load(); p != nil && *p != nil {
+		(*p)(shellID, exitCode)
 	}
 	if owner := m.GetByShellID(shellID); owner != nil {
 		m.persistOne(owner.ID)
@@ -46,11 +41,8 @@ func (m *Manager) notifyExit(shellID string, exitCode *int) {
 }
 
 func (m *Manager) notifyClose(shellID string) {
-	m.listChangeMu.RLock()
-	fn := m.onCloseHook
-	m.listChangeMu.RUnlock()
-	if fn != nil {
-		fn(shellID)
+	if p := m.onCloseHook.Load(); p != nil && *p != nil {
+		(*p)(shellID)
 	}
 }
 
@@ -134,15 +126,27 @@ func (m *Manager) AddOnDeadHook(fn func(sessionID string)) {
 	if fn == nil {
 		return
 	}
-	m.listChangeMu.Lock()
-	m.onDeadHooks = append(m.onDeadHooks, fn)
-	m.listChangeMu.Unlock()
+	// ADDITIVE, so the same copy-on-write append the activity listeners use: the
+	// slice is never mutated in place, and a subscriber can be added while a dead
+	// transition is being fanned out without either side waiting.
+	for {
+		cur := m.onDeadHooks.Load()
+		var next []func(string)
+		if cur != nil {
+			next = append(next, (*cur)...)
+		}
+		next = append(next, fn)
+		if m.onDeadHooks.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
 }
 
 func (m *Manager) notifyDead(sessionID string) {
-	m.listChangeMu.RLock()
-	hooks := append([]func(string){}, m.onDeadHooks...)
-	m.listChangeMu.RUnlock()
+	var hooks []func(string)
+	if p := m.onDeadHooks.Load(); p != nil {
+		hooks = *p
+	}
 	for _, fn := range hooks {
 		fn(sessionID)
 	}
@@ -151,17 +155,12 @@ func (m *Manager) notifyDead(sessionID string) {
 // SetSessionListListener registers a callback invoked without holding Manager locks whenever
 // the session set or a session's lifecycle state may have changed (create, delete, exit, terminate).
 func (m *Manager) SetSessionListListener(fn func()) {
-	m.listChangeMu.Lock()
-	m.onListChange = fn
-	m.listChangeMu.Unlock()
+	m.onListChange.Store(&fn)
 }
 
 func (m *Manager) notifyListChange() {
-	m.listChangeMu.RLock()
-	fn := m.onListChange
-	m.listChangeMu.RUnlock()
-	if fn != nil {
-		fn()
+	if p := m.onListChange.Load(); p != nil && *p != nil {
+		(*p)()
 	}
 }
 

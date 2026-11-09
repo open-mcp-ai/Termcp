@@ -62,12 +62,12 @@ func readEvents(r io.Reader, onEvent func(event string, data []byte)) error {
 // requests). Opening it before initialize would make the peer mint a second
 // session instead of attaching to this one.
 func (b *bridge) startServerStream(sessionID string) {
-	b.sessMu.Lock()
-	defer b.sessMu.Unlock()
-	if b.sessionID != "" {
+	// COMPARE-AND-SWAP IS THE ONCE-ONLY GATE: the first caller wins, and it is the
+	// same check the lock used to make — a second endpoint event does not open a
+	// second stream.
+	if !b.sessionID.CompareAndSwap(nil, &sessionID) {
 		return
 	}
-	b.sessionID = sessionID
 	go b.readServerStream(sessionID)
 }
 
@@ -151,11 +151,9 @@ func (b *bridge) runSSE(readDone chan error) {
 // startSSEReader records the message endpoint from the stream's endpoint event
 // and starts relaying stdin to it (once; later endpoint events are ignored).
 func (b *bridge) startSSEReader(endpoint []byte, readDone chan error) {
-	b.sessMu.Lock()
-	defer b.sessMu.Unlock()
-	if b.messageURL != "" {
+	resolved := resolveEndpoint(b.cfg.URL, strings.TrimSpace(string(endpoint)))
+	if !b.messageURL.CompareAndSwap(nil, &resolved) {
 		return
 	}
-	b.messageURL = resolveEndpoint(b.cfg.URL, strings.TrimSpace(string(endpoint)))
 	go func() { readDone <- b.readStdin() }()
 }

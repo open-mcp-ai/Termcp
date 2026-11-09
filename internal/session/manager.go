@@ -82,12 +82,14 @@ type Manager struct {
 	// duration of one operation.
 	transports *sshclient.TransportPool
 
-	listChangeMu sync.RWMutex
-	onListChange func()
-	onOutputHook func(shellID string)
-	onExitHook   func(shellID string, exitCode *int)
-	onCloseHook  func(shellID string)
-	onDeadHooks  []func(sessionID string)
+	// THE HOOKS ARE ATOMIC POINTERS, NOT A LOCKED GROUP. Each notifier reads exactly
+	// one of them; the dead hooks are an additive list, so they use the same
+	// copy-on-write append as the activity listeners. Nothing here is a transaction.
+	onListChange atomic.Pointer[func()]
+	onOutputHook atomic.Pointer[func(shellID string)]
+	onExitHook   atomic.Pointer[func(shellID string, exitCode *int)]
+	onCloseHook  atomic.Pointer[func(shellID string)]
+	onDeadHooks  atomic.Pointer[[]func(sessionID string)]
 }
 
 // NewManager creates a Manager. internalSSH must be the built-in sshserver.Server (after Start) when using internal profiles; may be nil if only remote sessions are used in tests.

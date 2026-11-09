@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -49,10 +50,22 @@ type Reconciler struct {
 	// attachment are behind their own locks, because a probe goroutine writes them
 	// while the walk reads them. It also guards cancel, so Start and Stop can be
 	// called from different goroutines.
+	// mu guards the two maps, ctx and cancel.
+	//
+	// THIS LOCK IS KEPT ON PURPOSE. Every access to states/groups is a whole-map
+	// operation — a scan to build a status list, a walk to arm timers, a delete by a
+	// key computed from the entry — spread across events.go, groups.go and
+	// instances.go. sync.Map's Range is the same O(n) walk with a copy-on-read
+	// protocol bolted on, so it would buy nothing while forcing every one of those
+	// call sites through a different shape. The critical sections touch memory only;
+	// no I/O, no user callback, and the callback that used to run here is now an
+	// atomic pointer (see onChange).
 	mu       sync.Mutex
 	states   map[string]*extState
 	groups   map[string]*extGroup
-	onChange func()
+	// onChange is atomic so the callback fires without holding mu: a UI listener
+	// that queries the reconciler from inside the callback must not deadlock on it.
+	onChange atomic.Pointer[func()]
 
 	// syncs carries the names of templates whose saved file changed, and revive
 	// carries "a profile was rewritten". They are queues, not signals to a walk: the
@@ -215,17 +228,12 @@ func (r *Reconciler) SSHConfigs() *sshconfig.Store { return r.sshConfigs }
 // frames). The callback fires after the state has been written, so a reader sees
 // what it is being told about.
 func (r *Reconciler) SetOnChange(fn func()) {
-	r.mu.Lock()
-	r.onChange = fn
-	r.mu.Unlock()
+	r.onChange.Store(&fn)
 }
 
 func (r *Reconciler) notifyChange() {
-	r.mu.Lock()
-	fn := r.onChange
-	r.mu.Unlock()
-	if fn != nil {
-		fn()
+	if p := r.onChange.Load(); p != nil && *p != nil {
+		(*p)()
 	}
 }
 
