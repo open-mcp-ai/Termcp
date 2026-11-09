@@ -1,7 +1,7 @@
 package jrpc
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,13 +43,18 @@ type FrameLogStats struct {
 // that streams responses, while a byte-only cap would hold two frames and call it
 // history. Whichever limit trips first drops the oldest.
 type frameLog struct {
-	mu       sync.Mutex
-	items    []Framed
-	seq      int64
-	dropped  int64
-	bytes    int
+	state    atomic.Pointer[frameLogState]
 	maxItems int
 	maxBytes int
+}
+
+// frameLogState is one immutable snapshot of the ring: a reader that loaded it
+// scans a queue no writer can change, and a writer publishes a fresh one by CAS.
+type frameLogState struct {
+	items   []Framed
+	seq     int64
+	dropped int64
+	bytes   int
 }
 
 // newFrameLog returns a ring that keeps at most maxItems frames or maxBytes of
@@ -61,23 +66,44 @@ func newFrameLog(maxItems, maxBytes int) *frameLog {
 	if maxBytes <= 0 {
 		maxBytes = 8 << 20
 	}
-	return &frameLog{maxItems: maxItems, maxBytes: maxBytes}
+	fl := &frameLog{maxItems: maxItems, maxBytes: maxBytes}
+	fl.state.Store(&frameLogState{})
+	return fl
+}
+
+func (l *frameLog) currentState() *frameLogState {
+	if p := l.state.Load(); p != nil {
+		return p
+	}
+	initial := &frameLogState{}
+	l.state.CompareAndSwap(nil, initial)
+	return l.state.Load()
 }
 
 // add stamps a frame with the next sequence number and retains it.
+//
+// ZERO LOCKS: the ring is a value, and add publishes a new snapshot by CAS. A reader
+// that loaded the previous one keeps scanning it; nothing is overwritten in place.
 func (l *frameLog) add(data string, event bool) Framed {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.seq++
-	rec := Framed{N: l.seq, At: time.Now(), Data: data, Event: event}
-	l.items = append(l.items, rec)
-	l.bytes += len(data)
-	for len(l.items) > 1 && (len(l.items) > l.maxItems || l.bytes > l.maxBytes) {
-		l.dropped++
-		l.bytes -= len(l.items[0].Data)
-		l.items = l.items[1:]
+	for {
+		cur := l.currentState()
+		nextSeq := cur.seq + 1
+		rec := Framed{N: nextSeq, At: time.Now(), Data: data, Event: event}
+		nextItems := make([]Framed, 0, len(cur.items)+1)
+		nextItems = append(nextItems, cur.items...)
+		nextItems = append(nextItems, rec)
+		nextBytes := cur.bytes + len(data)
+		nextDropped := cur.dropped
+		for len(nextItems) > 1 && (len(nextItems) > l.maxItems || nextBytes > l.maxBytes) {
+			nextDropped++
+			nextBytes -= len(nextItems[0].Data)
+			nextItems = nextItems[1:]
+		}
+		next := &frameLogState{items: nextItems, seq: nextSeq, dropped: nextDropped, bytes: nextBytes}
+		if l.state.CompareAndSwap(cur, next) {
+			return rec
+		}
 	}
-	return rec
 }
 
 // since returns the frames with N > since, oldest first, at most limit of them.
@@ -87,10 +113,9 @@ func (l *frameLog) add(data string, event bool) Framed {
 // lossless; returning the newest instead would silently skip the middle of the
 // window, which is the failure mode the cursor exists to prevent.
 func (l *frameLog) since(since int64, keep func(Framed) bool, limit int) ([]Framed, FrameLogStats) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := make([]Framed, 0, len(l.items))
-	for _, rec := range l.items {
+	st := l.currentState()
+	out := make([]Framed, 0, len(st.items))
+	for _, rec := range st.items {
 		if rec.N <= since {
 			continue
 		}
@@ -102,18 +127,16 @@ func (l *frameLog) since(since int64, keep func(Framed) bool, limit int) ([]Fram
 			break
 		}
 	}
-	return out, l.statsLocked()
+	return out, st.stats(l.maxItems)
 }
 
 // stats reports the window without reading frames from it.
-func (l *frameLog) stats() FrameLogStats {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.statsLocked()
-}
+func (l *frameLog) stats() FrameLogStats { return l.currentState().stats(l.maxItems) }
 
-func (l *frameLog) statsLocked() FrameLogStats {
-	return FrameLogStats{Seq: l.seq, Size: len(l.items), Capacity: l.maxItems, Dropped: l.dropped}
+// stats renders one snapshot; capacity belongs to the log, not to the snapshot,
+// because the limit is fixed at construction and the ring never changes it.
+func (st *frameLogState) stats(capacity int) FrameLogStats {
+	return FrameLogStats{Seq: st.seq, Size: len(st.items), Capacity: capacity, Dropped: st.dropped}
 }
 
 // History returns the frames with a sequence number greater than since, oldest
@@ -160,11 +183,10 @@ func (c *Channel) LastAnswer() (Framed, bool) {
 	if c.log == nil {
 		return Framed{}, false
 	}
-	c.log.mu.Lock()
-	defer c.log.mu.Unlock()
-	for i := len(c.log.items) - 1; i >= 0; i-- {
-		if !c.log.items[i].Event {
-			return c.log.items[i], true
+	st := c.log.currentState()
+	for i := len(st.items) - 1; i >= 0; i-- {
+		if !st.items[i].Event {
+			return st.items[i], true
 		}
 	}
 	return Framed{}, false
@@ -178,9 +200,7 @@ func (c *Channel) Frame(n int64) (Framed, bool) {
 	if c.log == nil {
 		return Framed{}, false
 	}
-	c.log.mu.Lock()
-	defer c.log.mu.Unlock()
-	for _, rec := range c.log.items {
+	for _, rec := range c.log.currentState().items {
 		if rec.N == n {
 			return rec, true
 		}
