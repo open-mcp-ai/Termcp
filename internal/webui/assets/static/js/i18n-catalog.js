@@ -179,6 +179,11 @@ var I18N_CATALOG = {
     'clients.namespace': 'namespace {ns}',
     'clients.since': 'since {time}',
     'clients.watching': '{count} sessions',
+    'clients.token': 'Token {id}',
+    'clients.session': 'session {id}',
+    'clients.stdioBridge': 'stdio bridge',
+    'clients.transport.streamableHttp': 'HTTP',
+    'clients.transport.sse': 'SSE',
     'notify.sessionPrefix': 'session {id}',
 
     /* --- shared words --- */
@@ -720,6 +725,11 @@ var I18N_CATALOG = {
     'clients.namespace': '命名空间 {ns}',
     'clients.since': '自 {time}',
     'clients.watching': '{count} 个会话',
+    'clients.token': 'Token {id}',
+    'clients.session': '会话 {id}',
+    'clients.stdioBridge': 'stdio 桥接',
+    'clients.transport.streamableHttp': 'HTTP',
+    'clients.transport.sse': 'SSE',
     'notify.sessionPrefix': '会话 {id}',
 
     /* --- shared words --- */
@@ -1259,6 +1269,11 @@ var I18N_CATALOG = {
     'clients.namespace': '命名空間 {ns}',
     'clients.since': '自 {time}',
     'clients.watching': '{count} 個工作階段',
+    'clients.token': 'Token {id}',
+    'clients.session': '工作階段 {id}',
+    'clients.stdioBridge': 'stdio 橋接',
+    'clients.transport.streamableHttp': 'HTTP',
+    'clients.transport.sse': 'SSE',
     'notify.sessionPrefix': '工作階段 {id}',
 
     /* --- shared words --- */

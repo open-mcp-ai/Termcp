@@ -274,6 +274,20 @@ func TestBridgeKeepAlive(t *testing.T) {
 	}
 }
 
+func TestStdioBridgeHeadersCarryDisplayModeAndNamespace(t *testing.T) {
+	headers := stdioBridgeHeaders("alice")
+	if got := headers[mcpmod.ClientModeHeader]; got != mcpmod.ClientModeStdioBridge {
+		t.Fatalf("client mode header = %q, want %q", got, mcpmod.ClientModeStdioBridge)
+	}
+	if got := headers[mcpmod.NamespaceHeader]; got != "alice" {
+		t.Fatalf("namespace header = %q, want alice", got)
+	}
+	headers = stdioBridgeHeaders("")
+	if len(headers) != 1 || headers[mcpmod.ClientModeHeader] != mcpmod.ClientModeStdioBridge {
+		t.Fatalf("empty namespace headers = %+v", headers)
+	}
+}
+
 func TestMCPConnectionCountsByPrincipal(t *testing.T) {
 	counts := mcpConnectionCountsByPrincipal([]mcpmod.Connection{
 		{PrincipalID: "agent-a", CredentialID: "token-a"},

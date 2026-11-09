@@ -3,6 +3,9 @@
 `#232` uses the normal three-platform CI matrix and adds a focused repeated run
 for permission state. The focused command is:
 
+MCP connection attribution and Token lifecycle interface coverage is listed
+separately in [mcp-connection-interface-testing.md](mcp-connection-interface-testing.md).
+
 ```sh
 make test-permissions
 ```

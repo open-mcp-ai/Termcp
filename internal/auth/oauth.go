@@ -310,6 +310,7 @@ func (m *Managed) admitOAuthToken(r *http.Request, raw string) (context.Context,
 	ctx = m.withOAuthBackgroundWork(ctx, actor.ID, identity.CredentialID, identity.ExpiresAt)
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, "token:"+identity.CredentialID)
+	ctx = withOAuthCredential(ctx)
 	ref := new(int)
 	key := "token:" + identity.CredentialID
 	if m.requests[key] == nil {

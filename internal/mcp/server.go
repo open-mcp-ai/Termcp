@@ -30,7 +30,9 @@ type Server struct {
 	forwardMgr   *forward.ForwardManager
 	extensions   *extensions.Reconciler
 	baseURL      string // http://host:port, set from Start()
-	// MCP session IDs are bound to the verified principal and credential.
+	// MCP session IDs are bound to the verified principal. Static credentials
+	// must match exactly; a refreshed OAuth token may continue the same Agent's
+	// live session.
 	transportOwners sync.Map
 	// extMCPLeases owns one isolated extension channel and reader/writer state
 	// per authenticated /ext/{name}/stream session.

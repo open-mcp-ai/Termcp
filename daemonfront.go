@@ -134,18 +134,24 @@ func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, k
 	if err := ns.ValidCallerName(nsName); err != nil {
 		return fmt.Errorf("--namespace: %w", err)
 	}
-	var headers map[string]string
-	if nsName != "" {
-		headers = map[string]string{mcpmod.NamespaceHeader: nsName}
-	}
 	return mcpbridge.Run(ctx, mcpbridge.Config{
 		URL:       target.URL,
 		SSE:       target.SSE,
 		Token:     daemon.BridgeCredential(cfg),
-		Headers:   headers,
+		Headers:   stdioBridgeHeaders(nsName),
 		KeepAlive: keepAlive,
 		In:        os.Stdin,
 		Out:       os.Stdout,
 		Err:       os.Stderr,
 	})
+}
+
+func stdioBridgeHeaders(namespace string) map[string]string {
+	headers := map[string]string{
+		mcpmod.ClientModeHeader: mcpmod.ClientModeStdioBridge,
+	}
+	if namespace != "" {
+		headers[mcpmod.NamespaceHeader] = namespace
+	}
+	return headers
 }

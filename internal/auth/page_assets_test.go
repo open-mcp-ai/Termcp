@@ -360,6 +360,25 @@ func TestPermissionPageSeparatesAgentWorkspaceAndUsesDefaultGroup(t *testing.T) 
 	}
 }
 
+func TestPermissionPageRefreshesAgentActivityFromSessionFrames(t *testing.T) {
+	for _, want := range []string{
+		`function permissionRefreshAgentActivity()`,
+		`request('/auth/principals')`,
+		`['active_mcp_connections','active_requests','active_work']`,
+		`agent-metric-mcp-connections`,
+		`function permissionOpenActivitySocket()`,
+		`new URL('api/ui/ws',document.baseURI)`,
+		`frame.type==='sessions'`,
+		`document.addEventListener('visibilitychange'`,
+		`setInterval(permissionRefreshAgentActivity,5000)`,
+		`if(!picker)return`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("permissions page does not refresh live Agent activity with %q", want)
+		}
+	}
+}
+
 func TestPermissionAgentDetailProvidesBoundedScrolling(t *testing.T) {
 	for _, want := range []string{
 		`.auth-permissions #agent-detail-content{display:flex;flex:1;flex-direction:column;min-height:0`,

@@ -209,6 +209,66 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	}
 }
 
+func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
+	tests := []struct {
+		name       string
+		owner      transportOwner
+		actorID    string
+		credential string
+		oauth      bool
+		want       bool
+	}{
+		{
+			name:       "oauth refresh same Agent",
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true},
+			actorID:    "agent-a",
+			credential: "token:oauth-new",
+			oauth:      true,
+			want:       true,
+		},
+		{
+			name:       "oauth token different Agent",
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true},
+			actorID:    "agent-b",
+			credential: "token:oauth-new",
+			oauth:      true,
+			want:       false,
+		},
+		{
+			name:       "static Token rotation",
+			owner:      transportOwner{principal: "agent-a", credential: "token:old"},
+			actorID:    "agent-a",
+			credential: "token:new",
+			want:       false,
+		},
+		{
+			name:       "static credential exact match",
+			owner:      transportOwner{principal: "agent-a", credential: "token:old"},
+			actorID:    "agent-a",
+			credential: "token:old",
+			want:       true,
+		},
+		{
+			name:       "OAuth token cannot adopt static session",
+			owner:      transportOwner{principal: "agent-a", credential: "token:static", oauth: false},
+			actorID:    "agent-a",
+			credential: "token:oauth-new",
+			oauth:      true,
+			want:       false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := &Server{connections: newConnRegistry()}
+			server.transportOwners.Store("session-a", test.owner)
+			got := server.authorizeTransport("session-a", auth.Actor{ID: test.actorID}, test.credential, test.oauth)
+			if got != test.want {
+				t.Fatalf("authorizeTransport = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func waitForConnection(t *testing.T, s *Server, match func(Connection) bool) Connection {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

@@ -10,6 +10,8 @@ Agent（内部标识仍为 principal）独立保存稳定 ID、启停、权限�
 
 一个 Agent 同时只有一个当前 Token。普通签发在已有当前 Token 时拒绝；轮换通过原子替换完成，旧 Token 立即停止认证并进入历史。当前 Token 显示 ID、创建时间、可选到期时间和最近使用时间；历史记录只用于审计和追踪，可单独清空，不能恢复为有效 Token。UI 不再建立“客户端凭据”子对象，也不要求输入客户端名称。
 
+Agent 详情中的“活动 MCP 连接”是当前仍持有 MCP 传输会话的连接数，按认证后的稳定 principal ID 统计；它不同于“活动请求”（正在处理的 HTTP 请求数），也不把 Token 数量当作连接数。stdio bridge 会标记 `X-Termcp-Client-Mode: stdio-bridge`，该标记只用于显示，不能替代认证。连接行同时显示 Agent、Token 记录 ID、传输类型和协议会话 ID；永远不显示 Token secret 或摘要。
+
 组内共享策略不会合并 Agent namespace 或 MCP transport owner。管理员身份在人端单独管理，业务权限组不能授予 Admin 角色。Agent Token 仍只允许 MCP，不能进入 WebUI、REST 或管理面。
 
 页面仅显示动作树和当前支持的参数条件；没有 V1 选择器、功能组编辑器或升级入口。动作分类默认全部收起，只展示会话、终端与通道、文件等一级标题；搜索或切换效果筛选时才自动展开匹配分类。Agent 支持搜索、状态筛选、创建、启停、修改权限组、Token 生命周期、删除预览与删除；权限组支持名称、复制、启停、缺省引用和删除预览。认证及权限页使用 [共享主题](auth-page-themes.md)。

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // The client list answers "who is attached to this instance?" — the question the
@@ -111,11 +113,16 @@ func TestHandlerListsClients(t *testing.T) {
 	// With an MCP server, its clients are reported as-is.
 	h.MCPConnections = func() []any {
 		return []any{map[string]any{
-			"session_id":   "sess-abc",
-			"name":         "claude-ai",
-			"version":      "0.1.0",
-			"namespace":    "ns:alice",
-			"connected_at": "2026-10-17T00:00:00Z",
+			"session_id":    "sess-abc",
+			"name":          "claude-ai",
+			"version":       "0.1.0",
+			"principal_id":  "agent-a",
+			"agent_name":    "Alice Agent",
+			"credential_id": "credential-a",
+			"transport":     "streamable_http",
+			"client_mode":   "stdio-bridge",
+			"namespace":     "ns:alice",
+			"connected_at":  "2026-10-17T00:00:00Z",
 		}}
 	}
 	rr = httptest.NewRecorder()
@@ -128,11 +135,66 @@ func TestHandlerListsClients(t *testing.T) {
 	row, _ := rows[0].(map[string]any)
 	for field, want := range map[string]string{
 		"name": "claude-ai", "version": "0.1.0",
-		"namespace": "ns:alice", "session_id": "sess-abc",
+		"principal_id": "agent-a", "agent_name": "Alice Agent",
+		"credential_id": "credential-a", "transport": "streamable_http",
+		"client_mode": "stdio-bridge", "namespace": "ns:alice", "session_id": "sess-abc",
 	} {
 		if got, _ := row[field].(string); got != want {
 			t.Errorf("%s = %q, want %q", field, got, want)
 		}
+	}
+}
+
+func TestWebSocketSessionFrameCarriesMCPClientAttribution(t *testing.T) {
+	h := extensionTestHandler(t)
+	h.MCPConnections = func() []any {
+		return []any{map[string]any{
+			"session_id":    "session-a",
+			"principal_id":  "agent-a",
+			"agent_name":    "Alice Agent",
+			"credential_id": "credential-a",
+			"transport":     "streamable_http",
+			"client_mode":   "stdio-bridge",
+			"connected_at":  "2026-10-17T00:00:00Z",
+		}}
+	}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/api/ui/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		var frame map[string]any
+		if err := conn.ReadJSON(&frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["type"] != "sessions" {
+			continue
+		}
+		rows, ok := frame["mcp_clients"].([]any)
+		if !ok || len(rows) != 1 {
+			t.Fatalf("mcp_clients = %#v, want one row", frame["mcp_clients"])
+		}
+		row, ok := rows[0].(map[string]any)
+		if !ok {
+			t.Fatalf("mcp_clients row = %#v", rows[0])
+		}
+		for field, want := range map[string]string{
+			"principal_id": "agent-a", "agent_name": "Alice Agent",
+			"credential_id": "credential-a", "transport": "streamable_http",
+			"client_mode": "stdio-bridge", "session_id": "session-a",
+		} {
+			if got, _ := row[field].(string); got != want {
+				t.Errorf("mcp_clients[0].%s = %q, want %q", field, got, want)
+			}
+		}
+		return
 	}
 }
 
@@ -438,7 +500,12 @@ assert.ok(menu._termcpClientsWired, 'the open event must be wired at load');
 /* A frame arrives while the panel is closed. Nothing is drawn — the frame path
    stays cheap — but the lists are kept. */
 context.renderClients(
-  [{ name: 'agent-a', version: '1.0', connected_at: '2026-10-17T10:00:00Z' }],
+  [{
+    name: 'claude-ai', version: '1.0', agent_name: 'agent-a',
+    credential_id: 'credential-a', session_id: 'session-a',
+    transport: 'streamable_http', client_mode: 'stdio-bridge',
+    connected_at: '2026-10-17T10:00:00Z'
+  }],
   [{ addr: '127.0.0.1', user_agent: 'Chrome/120', self: true, watching: 2 }]
 );
 assert.strictEqual(els['clients-body'].children.length, 0,
@@ -451,6 +518,17 @@ assert.strictEqual(els['clients-body'].children.length, 2,
   'opening the panel must draw the lists already in hand, or it reads as "nothing connected"');
 assert.strictEqual(els['clients-empty'].hidden, true,
   'with a client and this tab attached, the empty hint must be hidden');
+const mcpBody = els['clients-body'].children[0].children[1];
+assert.strictEqual(mcpBody.children[0].textContent, 'agent-a',
+  'the verified Agent name must be the primary MCP row label');
+assert.ok(mcpBody.children[1].textContent.includes('claude-ai 1.0'),
+  'the MCP client identity must remain visible');
+assert.ok(mcpBody.children[1].textContent.includes('stdioBridge'),
+  'stdio bridges must be marked as such');
+assert.ok(mcpBody.children[2].textContent.includes('credential-a'),
+  'the token record ID must be shown without its secret');
+assert.ok(mcpBody.children[2].textContent.includes('session-a'),
+  'the protocol session must remain distinguishable');
 
 /* Reopening must not duplicate rows: the signature guard is what makes the
    paint idempotent across toggle and frame. */

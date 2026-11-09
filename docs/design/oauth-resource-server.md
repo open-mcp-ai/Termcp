@@ -92,6 +92,9 @@ CIMD depending on their current version and account policy.
   `X-Termcp-Namespace`, `clientInfo`, or a request header.
 - Issuer, audience/resource, scope, expiry, signature, and enabled-Agent checks
   are fail-closed.
+- A refreshed OAuth access token may continue an existing MCP session only when
+  it verifies to the same Agent. Static Token rotation remains exact-credential:
+  the replacement Token starts a new transport session.
 - Raw access tokens and JWKS material are never returned by listing APIs.
 
 ## Deliberately deferred
@@ -105,5 +108,6 @@ CIMD depending on their current version and account policy.
 
 The focused tests cover metadata discovery, 401 challenges, valid and invalid
 JWTs, wrong issuer/audience/Agent/scope, expiry, JWKS key rotation, MCP
-initialization, connection attribution, Agent-disable cleanup, persisted UI settings,
-configuration revisions, and invalidation during an in-flight JWKS fetch.
+initialization, OAuth refresh across a live MCP session, connection attribution,
+Agent-disable cleanup, persisted UI settings, configuration revisions, and
+invalidation during an in-flight JWKS fetch.

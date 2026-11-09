@@ -55,16 +55,44 @@ function clientRow(kind, title, meta, detail) {
 /** A client that never said its name is still a client: the spec makes clientInfo
  *  optional, so the fallback names the fact rather than inventing an identity. */
 function mcpClientTitle(c) {
+  if (c && c.agent_name) return String(c.agent_name);
   var name = c && c.name ? String(c.name) : t('clients.unnamed');
   var version = c && c.version ? ' ' + String(c.version) : '';
   return name + version;
 }
 
-/** The agent's own label for itself, when it made one. */
+function mcpTransportLabel(transport) {
+  if (transport === 'streamable_http') return t('clients.transport.streamableHttp');
+  if (transport === 'sse') return t('clients.transport.sse');
+  return transport ? String(transport) : '';
+}
+
+function shortMCPConnectionID(value) {
+  var text = String(value || '');
+  return text.length > 12 ? text.slice(0, 12) + '…' : text;
+}
+
+/** The client name is metadata once the server has a verified Agent identity;
+ *  keeping both lets a reader distinguish two bridges of the same Agent. */
+function mcpClientMeta(c) {
+  var parts = [];
+  var name = c && c.name ? String(c.name) : '';
+  var version = c && c.version ? String(c.version) : '';
+  if (name) parts.push(version ? name + ' ' + version : name);
+  var transport = mcpTransportLabel(c && c.transport);
+  if (transport) parts.push(transport);
+  if (c && c.client_mode === 'stdio-bridge') parts.push(t('clients.stdioBridge'));
+  if (c && c.connected_at) parts.push(t('clients.since', { time: shortClock(c.connected_at) }));
+  return parts.join(' · ');
+}
+
+/** Token and transport session are independent identifiers: the Agent owns the
+ *  former, while one Agent can hold several live protocol sessions. */
 function mcpClientDetail(c) {
   var parts = [];
-  if (c && c.namespace) parts.push(t('clients.namespace', { ns: String(c.namespace) }));
-  if (c && c.connected_at) parts.push(t('clients.since', { time: shortClock(c.connected_at) }));
+  if (c && c.credential_id) parts.push(t('clients.token', { id: shortMCPConnectionID(c.credential_id) }));
+  if (c && c.session_id) parts.push(t('clients.session', { id: shortMCPConnectionID(c.session_id) }));
+  if (c && !c.agent_name && c.namespace) parts.push(t('clients.namespace', { ns: String(c.namespace) }));
   return parts.join(' · ');
 }
 
@@ -139,7 +167,7 @@ function paintClients(mcpClients, viewers) {
 
   body.textContent = '';
   mcpClients.forEach(function (c) {
-    body.appendChild(clientRow('mcp', mcpClientTitle(c), mcpClientDetail(c), c && c.session_id ? String(c.session_id) : ''));
+    body.appendChild(clientRow('mcp', mcpClientTitle(c), mcpClientMeta(c), mcpClientDetail(c)));
   });
   viewers.forEach(function (v) {
     var meta = shortUserAgent(v && v.user_agent);

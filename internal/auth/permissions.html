@@ -437,7 +437,7 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 .auth-permissions .agent-fact dt{color:var(--muted);font-size:11px}
 .auth-permissions .agent-fact dd{min-width:0;margin:0;overflow-wrap:anywhere;color:var(--ink);font-size:12px;font-weight:600;text-align:right}
 .auth-permissions .agent-fact code{font:500 10px/1.45 var(--font-mono,ui-monospace,monospace)}
-.auth-permissions .agent-activity{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.auth-permissions .agent-activity{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .auth-permissions .agent-activity-item{min-width:0;padding:10px 8px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
 .auth-permissions .agent-activity-item strong{display:block;color:var(--ink);font-size:18px;line-height:1.2;font-variant-numeric:tabular-nums}
 .auth-permissions .agent-activity-item span{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.3}
@@ -574,6 +574,8 @@ Object.assign(copy.zh,{currentTokenSummary:'%n 个当前 Token',historyTokenSumm
 Object.assign(copy.en,{currentTokenSummary:'%n current Tokens',historyTokenSummary:'%n historical Tokens'});
 Object.assign(copy.zh,{neverExpires:'永久有效',expiresAt:'有效期至 %s',lastUsedAt:'最近使用 %s',neverUsed:'尚未使用',tokenExpired:'已过期'});
 Object.assign(copy.en,{neverExpires:'Never expires',expiresAt:'Expires %s',lastUsedAt:'Last used %s',neverUsed:'Never used',tokenExpired:'Expired'});
+Object.assign(copy.zh,{activeMCPSummary:'%n 个 MCP 连接',agentMCPConnectionsMetric:'MCP 连接'});
+Object.assign(copy.en,{activeMCPSummary:'%n MCP connections',agentMCPConnectionsMetric:'MCP connections'});
 Object.assign(copy.zh,{
   groupsWorkspace:'权限组',
   agentsWorkspace:'Agent 管理',
@@ -1888,6 +1890,7 @@ function permissionAgentDeleteSummary(plan){
   return [
     plan.name+' · '+group,
     permissionFormat('credentialSummary',plan.credential_count),
+    permissionFormat('activeMCPSummary',plan.active_mcp_connections||0),
     permissionFormat('activeSummary',plan.active_requests),
     permissionFormat('workSummary',plan.active_work)
   ].join(' · ');
@@ -1939,10 +1942,12 @@ function permissionRenderSubjects(){
     const principalTokens=tokens.filter(token=>token.principal_id===principal.id);
     const activeTokenCount=Number(principal.active_credential_count??principalTokens.filter(token=>token.active).length);
     const historyTokenCount=Math.max(0,Number(principal.credential_count??principalTokens.length)-activeTokenCount);
+    const mcpConnectionCount=Number(principal.active_mcp_connections||0);
     const activeCount=Number(principal.active_requests||0);
     const workCount=Number(principal.active_work||0);
     const details=[groupName(principal),t(principal.enabled?'enabled':'disabled'),permissionFormat('currentTokenSummary',activeTokenCount)];
     if(historyTokenCount)details.push(permissionFormat('historyTokenSummary',historyTokenCount));
+    if(mcpConnectionCount)details.push(permissionFormat('activeMCPSummary',mcpConnectionCount));
     if(activeCount)details.push(permissionFormat('activeSummary',activeCount));
     if(workCount)details.push(permissionFormat('workSummary',workCount));
     copyNode.append(permissionCreate('small','',details.join(' · ')));
@@ -2084,6 +2089,7 @@ function permissionSyncStats(){
 renderTokens=function renderTokensEnhanced(){
   const members=groupMembers();
   const picker=$('token-principal');
+  if(!picker)return;
   if(selected!=='admin'&&picker.value&&!members.some(principal=>principal.id===picker.value))picker.value='';
   if(selected!=='admin'&&!picker.value&&members[0])picker.value=members[0].id;
   const principal=selected==='admin'?state.actor.id:picker.value;
@@ -2362,6 +2368,7 @@ function permissionInstallAgentWorkspace(){
             <div class="agent-section-head"><div><h3 data-text="agentActivity"></h3></div></div>
             <div class="agent-activity">
               <div class="agent-activity-item"><strong id="agent-metric-tokens">0</strong><span data-text="agentTokensMetric"></span></div>
+              <div class="agent-activity-item"><strong id="agent-metric-mcp-connections">0</strong><span data-text="agentMCPConnectionsMetric"></span></div>
               <div class="agent-activity-item"><strong id="agent-metric-requests">0</strong><span data-text="agentRequestsMetric"></span></div>
               <div class="agent-activity-item"><strong id="agent-metric-work">0</strong><span data-text="agentWorkMetric"></span></div>
             </div>
@@ -2500,6 +2507,7 @@ function permissionRenderAgentDetail(){
   $('agent-detail-meta').textContent=[
     groupLabel,
     permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+    principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):'',
     principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
   ].filter(Boolean).join(' · ');
   permissionSetButton('agent-detail-toggle',principal.enabled?'memberDisable':'memberEnable','power');
@@ -2516,6 +2524,7 @@ function permissionRenderAgentDetail(){
   $('agent-created').textContent=new Date(principal.created_at).toLocaleString(lang);
   $('agent-state').textContent=t(principal.enabled?'enabled':'disabled');
   $('agent-metric-tokens').textContent=String(principal.credential_count||0);
+  $('agent-metric-mcp-connections').textContent=String(principal.active_mcp_connections||0);
   $('agent-metric-requests').textContent=String(principal.active_requests||0);
   $('agent-metric-work').textContent=String(principal.active_work||0);
   permissionRenderAgentTokens(principal);
@@ -2564,8 +2573,9 @@ function permissionRenderAgentNavigation(){
     const name=permissionCreate('span','agent-nav-name',principal.name);
     const meta=[
       permissionAgentGroupLabel(principal,true),
-      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany')
-    ].join(' · ');
+      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+      principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):''
+    ].filter(Boolean).join(' · ');
     const metadata=permissionCreate('span','agent-nav-meta',meta);
     const chevron=permissionCreate('span','agent-nav-chevron');
     chevron.append(permissionIcon('chevron'));
@@ -2630,6 +2640,70 @@ function permissionSelectAgent(id){
   permissionRenderAgentNavigation();
   permissionSyncManagementView();
 }
+
+let permissionActivityRequest=null,permissionActivitySocket=null,permissionActivityReconnect=null;
+
+async function permissionRefreshAgentActivity(){
+  if(document.hidden||permissionActivityRequest)return permissionActivityRequest;
+  permissionActivityRequest=request('/auth/principals').then(data=>{
+    const live=new Map((data.principals||[]).map(principal=>[principal.id,principal]));
+    let changed=false;
+    principals.forEach(principal=>{
+      const current=live.get(principal.id);
+      if(!current)return;
+      for(const field of ['active_mcp_connections','active_requests','active_work']){
+        const value=Number(current[field]||0);
+        if(Number(principal[field]||0)===value)continue;
+        principal[field]=value;
+        changed=true;
+      }
+    });
+    if(!changed)return;
+    permissionRenderAgentNavigation();
+    const principal=permissionAgentByID(permissionUI.selectedAgent);
+    if(!principal)return;
+    const groupLabel=permissionAgentGroupLabel(principal);
+    $('agent-detail-meta').textContent=[
+      groupLabel,
+      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+      principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):'',
+      principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
+    ].filter(Boolean).join(' · ');
+    $('agent-metric-mcp-connections').textContent=String(principal.active_mcp_connections||0);
+    $('agent-metric-requests').textContent=String(principal.active_requests||0);
+    $('agent-metric-work').textContent=String(principal.active_work||0);
+  }).catch(()=>{}).finally(()=>{permissionActivityRequest=null;});
+  return permissionActivityRequest;
+}
+
+function permissionOpenActivitySocket(){
+  if(permissionActivitySocket)return;
+  const url=new URL('api/ui/ws',document.baseURI);
+  url.protocol=location.protocol==='https:'?'wss:':'ws:';
+  const socket=new WebSocket(url.href);
+  permissionActivitySocket=socket;
+  socket.onopen=()=>{
+    clearTimeout(permissionActivityReconnect);
+    permissionActivityReconnect=null;
+    permissionRefreshAgentActivity();
+  };
+  socket.onmessage=event=>{
+    try{
+      const frame=JSON.parse(event.data);
+      if(frame.type==='sessions')permissionRefreshAgentActivity();
+    }catch{}
+  };
+  socket.onerror=()=>socket.close();
+  socket.onclose=()=>{
+    if(permissionActivitySocket===socket)permissionActivitySocket=null;
+    clearTimeout(permissionActivityReconnect);
+    permissionActivityReconnect=setTimeout(permissionOpenActivitySocket,2000);
+  };
+}
+
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden)permissionRefreshAgentActivity();
+});
 
 function permissionCloseAgentCreateForm(reset=true){
   const form=$('permission-agent-create-form');
@@ -2874,6 +2948,9 @@ function permissionWireAgentWorkspace(){
 permissionInstallAgentWorkspace();
 permissionEnsureStructure();
 permissionWireAgentWorkspace();
+permissionOpenActivitySocket();
+permissionRefreshAgentActivity();
+setInterval(permissionRefreshAgentActivity,5000);
 if(permissionUI.installed){
   permissionDetachDetail=function(){};
   permissionLayoutDetail=function(){};

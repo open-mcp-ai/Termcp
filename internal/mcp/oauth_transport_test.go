@@ -127,6 +127,10 @@ func TestOAuthTokenInitializesAttributedMCPConnection(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("OAuth initialize: %d", response.StatusCode)
 	}
+	sessionID := response.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("OAuth initialize returned no MCP session id")
+	}
 
 	connection := waitForConnection(t, s, func(connection Connection) bool {
 		return connection.PrincipalID == principalID
@@ -134,6 +138,71 @@ func TestOAuthTokenInitializesAttributedMCPConnection(t *testing.T) {
 	if connection.AgentName != "oauth-agent" || connection.Transport != ConnectionTransportStreamableHTTP ||
 		!strings.HasPrefix(connection.CredentialID, "oauth-") {
 		t.Fatalf("OAuth connection attribution = %+v", connection)
+	}
+	initialCredentialID := connection.CredentialID
+
+	otherCreated := do(http.MethodPost, "/auth/principals", `{"name":"other-oauth-agent"}`)
+	otherPrincipalID := otherCreated["principal"].(map[string]any)["id"].(string)
+	other := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"iss": issuer, "aud": resource, "resource": resource,
+		"scope": "mcp", "termcp_agent_id": otherPrincipalID,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	other.Header["kid"] = "test-key"
+	otherSigned, err := other.SignedString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ = http.NewRequest(http.MethodPost, resource, strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"ping"}`))
+	request.Header.Set("Authorization", "Bearer "+otherSigned)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Session-Id", sessionID)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("another OAuth Agent adopted the MCP session: %d", response.StatusCode)
+	}
+
+	// OAuth clients refresh access tokens under the same verified Agent. Codex
+	// keeps its MCP session id across that refresh, so the same principal must be
+	// allowed to continue the transport under the replacement token. The row
+	// follows the current credential so later revocation observes the live token.
+	refreshed := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"iss": issuer, "aud": resource, "resource": resource,
+		"scope": "mcp", "termcp_agent_id": principalID,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		"jti": "refreshed-access-token",
+	})
+	refreshed.Header["kid"] = "test-key"
+	refreshedSigned, err := refreshed.SignedString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ping := `{"jsonrpc":"2.0","id":2,"method":"ping"}`
+	request, _ = http.NewRequest(http.MethodPost, resource, strings.NewReader(ping))
+	request.Header.Set("Authorization", "Bearer "+refreshedSigned)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Mcp-Session-Id", sessionID)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("refreshed OAuth token could not continue the MCP session: %d", response.StatusCode)
+	}
+	connection = waitForConnection(t, s, func(connection Connection) bool {
+		return connection.SessionID == sessionID
+	})
+	if connection.CredentialID == "" || connection.CredentialID == initialCredentialID {
+		t.Fatalf("refreshed OAuth connection attribution = %+v", connection)
 	}
 
 	// Saving through the settings entrance must revoke the real transport, not
