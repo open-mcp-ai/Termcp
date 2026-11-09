@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -548,4 +550,74 @@ type stubCaps struct {
 func (c *stubCaps) Handle(_ context.Context, st term.Statement) []term.Slot {
 	c.reached.Add(1)
 	return []term.Slot{{Code: 500, Body: "the entrance should have refused this before it reached a handler: " + st.Op + "\n"}}
+}
+
+// Issue dogfooding check: an alias created via /api/term MUST persist to disk in
+// cfg.DataDir/aliases/<name>.toml so it outlives the process.
+func TestCoreWiresDataDirToMCPAliasStore(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dataDir
+	cfg.Headless = true
+	srv, err := New(Options{Config: cfg, Version: "test"})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/term", strings.NewReader(`{"cmd":"create alias foo 'ls'"}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create alias returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	savedFile := filepath.Join(dataDir, "aliases", "foo.toml")
+	data, err := os.ReadFile(savedFile)
+	if err != nil {
+		t.Fatalf("expected alias file at %s, but read failed: %v", savedFile, err)
+	}
+	if !strings.Contains(string(data), "ls") {
+		t.Fatalf("alias file does not contain expansion: %s", string(data))
+	}
+}
+
+// DOGFOOD: created through one instance, invoked through another.
+//
+// The store is only reachable if core hands the MCP server its data directory —
+// a save that answers 204 and writes nothing is the failure this test exists for —
+// and the invocation path reads the store through a different door than `ls alias`
+// does, so "it is listed" is not the same question as "it runs".
+func TestASavedAliasOutlivesTheInstance(t *testing.T) {
+	dataDir := t.TempDir()
+
+	post := func(srv *Server, body string) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/api/term", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	instance := func() *Server {
+		cfg := config.Default()
+		cfg.DataDir = dataDir
+		cfg.Headless = true
+		srv, err := New(Options{Config: cfg, Version: "test"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return srv
+	}
+
+	first := instance()
+	if code, body := post(first, `{"cmd":"create alias saved 'ls'"}`); code != http.StatusOK {
+		t.Fatalf("create alias: %d %s", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "aliases", "saved.toml")); err != nil {
+		t.Fatalf("the alias was not written to the data dir: %v", err)
+	}
+
+	// A SECOND instance is the restart: same data dir, nothing shared in memory.
+	second := instance()
+	if code, body := post(second, `{"cmd":"saved"}`); code != http.StatusOK {
+		t.Fatalf("a saved alias did not run on a fresh instance: %d %s", code, body)
+	}
 }

@@ -218,6 +218,7 @@ func New(opts Options) (*Server, error) {
 	s.extensions.SetExposeHandler(func() http.Handler { return s.httpSrv.Handler })
 
 	s.mcp = mcpi.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
+	s.mcp.SetDataDir(cfg.DataDir)
 	// The embedded docs feed the `learn-api` prompt. In a no_webui build they are
 	// the only asset left, which is deliberate: an instance that serves an HTTP
 	// API should be able to hand an agent its reference for that API.
