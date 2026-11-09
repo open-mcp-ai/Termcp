@@ -54,6 +54,15 @@ type Server struct {
 	// without polling. Set by main to the same broadcast the session list uses.
 	connListener func()
 
+	// aliases is this instance's alias table: the runtime entries a caller defines
+	// with `alias <name> …` plus the saved ones under the data directory.
+	//
+	// PER SERVER, NOT PACKAGE-WIDE. An alias changes what a NAME means, so it is
+	// configuration, and configuration belongs to the instance that holds it: two
+	// termcp instances in one process (an embedder runs them this way) must not share
+	// a vocabulary, and neither should one instance's tests.
+	aliases *aliasTable
+
 	// recvCursors is where each channel's `mcp recv` has read up to.
 	//
 	// It has to live here, per handle, because a recv is a QUEUE CONSUMER: the
@@ -155,12 +164,39 @@ func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, 
 	s.uiNotify = fn
 }
 
+// SetDataDir tells the server where this installation keeps its state, which is
+// what makes `create alias` (and `edit alias`) persist: the saved table lives in
+// `<dir>/aliases.json`.
+//
+// A SERVER GIVEN NO DIRECTORY KEEPS ALIASES IN MEMORY, which is exactly what the
+// plain `alias` verb promises and what an embedder without a data directory wants.
+func (s *Server) SetDataDir(dir string) {
+	if s.aliases == nil {
+		s.aliases = &aliasTable{}
+	}
+	s.aliases.saved = newAliasStore(dir)
+}
+
 // SetExtensionReconciler wires the extension layer. Without it the extension
 // tool reports not_configured rather than offering a surface with no backing
 // state, so a deployment that does not run the reconciler fails loudly instead
 // of silently accepting templates it never connects.
 func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 	s.extensions = r
+	// A TEMPLATE'S `alias` TABLE IS A COMMAND SOURCE, resolved on demand rather than
+	// copied into the table: editing a template (or upgrading it) then takes effect
+	// on the next command, with nothing to invalidate and no second copy to drift.
+	if r == nil || s.aliases == nil {
+		return
+	}
+	store := r.Store()
+	s.aliases.ext = func(name string) (map[string]string, bool) {
+		ext, err := store.Load(name)
+		if err != nil || ext == nil || !ext.IsEnabled() {
+			return nil, false
+		}
+		return ext.Alias, true
+	}
 }
 
 // MCP exposes the protocol endpoint itself, so an embedder can register its own

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 
@@ -32,12 +33,21 @@ import (
 // lock to get wrong.
 type aliasTable struct {
 	m sync.Map // name string -> expansion string
+
+	// saved is the persisted half (see alias_store.go). Nil when this instance was
+	// given no data directory, which leaves the table exactly as process-local as it
+	// used to be.
+	saved *aliasStore
+
+	// ext reads one extension template's `alias` table. Nil when no reconciler is
+	// wired, so a bare Server resolves runtime and saved names only.
+	//
+	// IT IS A FUNCTION, NOT A STORE, because the caller that owns the reconciler
+	// decides how a template is loaded (and the alias code has no business knowing).
+	ext func(ext string) (map[string]string, bool)
 }
 
-// aliases is the process-wide table.
-var aliases = &aliasTable{}
-
-// get reads one entry.
+// get reads one runtime entry.
 func (a *aliasTable) get(name string) (string, bool) {
 	v, ok := a.m.Load(name)
 	if !ok {
@@ -46,6 +56,46 @@ func (a *aliasTable) get(name string) (string, bool) {
 	s, _ := v.(string)
 	return s, true
 }
+
+// lookup resolves a name to the command line it stands for, in the order the
+// sources are allowed to win:
+//
+//  1. RUNTIME — `alias x …` in this process. It is the operator's scratch space, so
+//     it outranks everything for as long as the process lives.
+//  2. SAVED — `create alias x …`, which survives a restart.
+//  3. AN EXTENSION'S OWN TABLE, addressed as `<ext>.<alias>`.
+//
+// THE DOTTED NAME IS THE ONLY WAY INTO A TEMPLATE'S TABLE, and that is deliberate.
+// A bare name that works only when exactly one installed extension happens to
+// define it is the kind of hidden state an agent cannot see and therefore cannot
+// trust: the same word would mean something on one machine and nothing on the next,
+// and the failure would arrive as "unknown directive" long after the install. A
+// qualified name says where it comes from, so `ls ext` can list it and a typo is a
+// typo.
+func (a *aliasTable) lookup(name string) (string, bool, []string) {
+	if expansion, ok := a.get(name); ok {
+		return expansion, true, nil
+	}
+	if a.saved != nil {
+		if expansion, ok := a.saved.get(name); ok {
+			return expansion, true, nil
+		}
+	}
+	ext, alias, dotted := strings.Cut(name, ".")
+	if !dotted || ext == "" || alias == "" || a.ext == nil {
+		return "", false, nil
+	}
+	table, ok := a.ext(ext)
+	if !ok {
+		return "", false, nil
+	}
+	expansion, ok := table[alias]
+	if !ok {
+		return "", false, nil
+	}
+	return expansion, true, []string{ext}
+}
+
 
 // set writes one entry.
 func (a *aliasTable) set(name, expansion string) {
@@ -87,7 +137,7 @@ func (a *aliasTable) snapshot() map[string]string {
 // A cycle is only reachable through the alias table, so saying so is the difference
 // between a puzzle and a fix.
 func (a *aliasTable) Expand(stmt directive.Statement) ([]directive.Statement, []string, *directive.Error) {
-	if _, ok := a.get(stmt.Op); !ok {
+	if _, ok, _ := a.lookup(stmt.Op); !ok {
 		return []directive.Statement{stmt}, nil, nil
 	}
 	// NO SUBSTITUTION HERE: this runs on an already-parsed statement, so the
@@ -118,7 +168,7 @@ func (a *aliasTable) cyclePath(name string) []string {
 		}
 		seen[name] = true
 		path = append(path, name)
-		expansion, ok := a.get(name)
+		expansion, ok, _ := a.lookup(name)
 		if !ok {
 			return nil
 		}
@@ -134,7 +184,7 @@ func (a *aliasTable) cyclePath(name string) []string {
 		} else if derr, ok := err.(*directive.Error); ok && derr.Op != "" {
 			next = derr.Op
 		}
-		if _, ok := a.get(next); !ok {
+		if _, ok, _ := a.lookup(next); !ok {
 			return nil
 		}
 		name = next
@@ -217,7 +267,7 @@ func firstWord(cmd string) string {
 func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directive.Statement, *directive.Error, bool) {
 	seen := map[string]bool{}
 	for {
-		expansion, ok := a.get(name)
+		expansion, ok, _ := a.lookup(name)
 		if !ok || seen[name] {
 			return nil, nil, false
 		}
@@ -234,7 +284,7 @@ func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directiv
 			// whose second word is an alias is a compound that the executor handles per
 			// statement.
 			if first := f.Statements[0]; len(f.Statements) == 1 {
-				if _, next := a.get(first.Op); next {
+				if _, next, _ := a.lookup(first.Op); next {
 					name, rest = first.Op, strings.TrimSpace(first.Target+" "+first.Payload)
 					continue
 				}
@@ -245,7 +295,7 @@ func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directiv
 		if !ok || derr.Op == "" {
 			return nil, nil, false
 		}
-		if _, next := a.get(derr.Op); !next {
+		if _, next, _ := a.lookup(derr.Op); !next {
 			// THE FAILURE IS INSIDE THE EXPANSION, NOT AT THE NEXT HOP. The word the
 			// error names is a real directive (or a shape error on one), so continuing the
 			// walk would report "unknown directive" about a name that exists — the same
@@ -263,29 +313,117 @@ func (s *Server) directiveAlias(_ context.Context, stmt directive.Statement, win
 	// re-quoted: what the caller writes is what the alias runs.
 	body := strings.TrimSpace(stmt.Payload)
 	if body == "" {
-		entries := aliases.snapshot()
-		if len(entries) == 0 {
-			return envelope.Slot{Code: 200, Headers: headers, Body: "(no aliases)\n"}
-		}
-		var b strings.Builder
-		for name, expansion := range entries {
-			b.WriteString(name + " = " + expansion + "\n")
-		}
-		capped, code, cut, total := capGeneratedCounted(b.String(), win)
-		noteTruncated(headers, code, cut, total, win)
-		return envelope.Slot{Code: code, Headers: headers, Body: capped}
+		return s.listAliases(stmt, win)
 	}
 	name, expansion, _ := strings.Cut(body, " ")
 	name, expansion = strings.TrimSpace(name), strings.TrimSpace(expansion)
 	if expansion == "--off" {
-		aliases.drop(name)
+		s.aliases.drop(name)
+		if s.aliases.saved != nil {
+			_, _ = s.aliases.saved.drop(name)
+		}
 		return envelope.Slot{Code: 204, Headers: headers}
 	}
 	if expansion == "" {
 		return badRequest(stmt, "alias needs a directive to expand to: alias jira mcp open https://...")
 	}
-	aliases.set(name, expansion)
+	// AN ALIAS MAY NOT REDEFINE A DIRECTIVE: it would make every caller of that
+	// directive silently run the alias instead. A directive name belongs to the
+	// protocol and cannot be claimed by a caller or a template.
+	if _, isDirective := directive.Lookup(name); isDirective {
+		return badRequest(stmt, "cannot define alias "+quoteOrDash(name)+": it is already a directive name")
+	}
+	// DOT NAMES ARE RESERVED FOR EXTENSION COMMANDS (`<ext>.<alias>`), so a user
+	// alias can never collide with one or pretend to come from one.
+	if strings.Contains(name, ".") {
+		return badRequest(stmt, "cannot define alias "+quoteOrDash(name)+": dot names are reserved for extension commands (<ext>.<alias>)")
+	}
+	// ponytail: a saved alias has no capability gate of its own. It changes what a
+	// NAME means for every later caller, which is the same class of risk as editing
+	// an installed profile — add alias.set to internal/capability when the permission
+	// catalog (#252) settles, rather than minting an id here and having it renamed.
+	s.aliases.set(name, expansion)
+	if stmt.Op == "create" || stmt.Op == "edit" {
+		// THE SAVED COPY IS THE PERSISTENT ONE, and this is the verb that promises
+		// it ("Create saved configuration. It outlives every session"). The plain
+		// `alias` verb stays process-local, which is its documented draft behaviour.
+		if s.aliases.saved != nil {
+			_ = s.aliases.saved.set(name, expansion)
+		}
+	}
 	return envelope.Slot{Code: 204, Headers: headers}
+}
+
+// listAliases renders the three layers in source order: saved, runtime, and the
+// extensions that carry an `alias` table. THE SOURCE IS THE HEADING, because a
+// name's meaning is exactly the thing a caller has to be able to trust, and "who
+// defined it" is most of that answer.
+func (s *Server) listAliases(stmt directive.Statement, win termArgs) envelope.Slot {
+	headers := map[string]string{"Path": stmt.Path}
+	var b strings.Builder
+
+	// 1. SAVED (persists across restarts).
+	if s.aliases.saved != nil {
+		if saved := s.aliases.saved.sorted(); len(saved) > 0 {
+			b.WriteString("SAVED ALIASES (saved to disk):\n")
+			for _, pair := range saved {
+				b.WriteString("  " + pair[0] + " = " + pair[1] + "\n")
+			}
+		}
+	}
+
+	// 2. RUNTIME (this process only).
+	runtimeEntries := s.aliases.snapshot()
+	if len(runtimeEntries) > 0 {
+		names := make([]string, 0, len(runtimeEntries))
+		for n := range runtimeEntries {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		b.WriteString("RUNTIME ALIASES (this process only):\n")
+		for _, n := range names {
+			b.WriteString("  " + n + " = " + runtimeEntries[n] + "\n")
+		}
+	}
+
+	// 3. EXTENSIONS (ship with the template, addressed as <ext>.<alias>).
+	if extAliases := s.extensionAliasesSorted(); len(extAliases) > 0 {
+		b.WriteString("EXTENSION ALIASES (<ext>.<alias>):\n")
+		for _, item := range extAliases {
+			b.WriteString("  " + item[0] + " = " + item[1] + "\n")
+		}
+	}
+
+	if b.Len() == 0 {
+		return envelope.Slot{Code: 200, Headers: headers, Body: "(no aliases)\n"}
+	}
+	capped, code, cut, total := capGeneratedCounted(b.String(), win)
+	noteTruncated(headers, code, cut, total, win)
+	return envelope.Slot{Code: code, Headers: headers, Body: capped}
+}
+
+// extensionAliasesSorted renders every enabled extension's alias table sorted by
+// qualified name.
+func (s *Server) extensionAliasesSorted() [][2]string {
+	if s.extensions == nil {
+		return nil
+	}
+	names, err := s.extensions.Store().List()
+	if err != nil {
+		return nil
+	}
+	var out [][2]string
+	for _, name := range names {
+		ext, err := s.extensions.Store().Load(name)
+		if err != nil || ext == nil || !ext.IsEnabled() || len(ext.Alias) == 0 {
+			continue
+		}
+		for alias, exp := range ext.Alias {
+			out = append(out, [2]string{ext.Name + "." + alias, exp})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
 }
 
 // aliasCycleSlot reports an alias chain that never reaches a directive.

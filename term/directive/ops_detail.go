@@ -1094,6 +1094,19 @@ const createDetail = `Create saved configuration. It outlives every session and 
   create ext myserver --target internal --command npx --args '-y' 'some-server'
   create alias ll 'ls a1f3'
 
+AN ALIAS IS A WORD FOR A COMMAND, AND THERE ARE TWO KINDS. "create alias" (and
+"edit alias") writes it to <data-dir>/aliases.json, so it is still there after a
+restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
+the process. Both expand at parse time, so the reply's Path shows the command that
+actually ran.
+
+AN EXTENSION'S TEMPLATE MAY SHIP ITS OWN, under an [alias] table, and those are
+addressed as <ext>.<alias> — "jira.search openapi". The dot is required: two
+installed extensions both calling themselves search cannot both own the bare word,
+and a name that works only while exactly one template happens to define it is state
+the caller cannot see. "ls alias" lists all three sources under their own headings.
+An alias may not take a directive's name, and a dot name belongs to an extension.
+
 WRITES ARE GATED. Host writes depend on startup configuration: an instance started
 without --mcp-manage-ssh-configs answers 403 and names that flag, because only the
 operator can enable it. Read-only host operations stay available either way.`

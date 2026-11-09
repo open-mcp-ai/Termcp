@@ -38,6 +38,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		sessMgr.AddOnDeadHook(closePeersBySession)
 	}
 	s := &Server{
+		aliases:     &aliasTable{},
 		sessMgr:     sessMgr,
 		msgMgr:      msgMgr,
 		sshConfigs:  sshConfigs,

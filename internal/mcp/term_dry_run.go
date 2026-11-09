@@ -24,7 +24,7 @@ import (
 func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelope.Slot {
 	out := make([]envelope.Slot, 0, len(stmts))
 	for _, stmt := range stmts {
-		expanded, cycle, expansionErr := aliases.Expand(stmt)
+		expanded, cycle, expansionErr := s.aliases.Expand(stmt)
 		if expansionErr != nil {
 			slot := s.parseErrorSlot(expansionErr)
 			if slot.Headers == nil {

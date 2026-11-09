@@ -334,7 +334,7 @@ func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) term
 		// command line and may reference the same $1/$NAME values.
 		// resolved says a directive was actually produced; cycle says the chain
 		// never got there; expansionErr says the expansion failed to parse.
-		stmts, resolved, cycle, expansionErr := aliases.expandErrorCycle(err, cmd, sub)
+		stmts, resolved, cycle, expansionErr := s.aliases.expandErrorCycle(err, cmd, sub)
 		if resolved {
 			if win.DryRun {
 				return termReply{win: win, slots: s.dryRunSlots(stmts, win)}

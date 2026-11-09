@@ -154,6 +154,18 @@ type Extension struct {
 	// documentation an agent can actually act on.
 	Notes string `toml:"notes,omitempty"`
 
+	// Alias is the extension's own command vocabulary, exposed as `<ext>.<alias>`
+	// (`jira.search`). The expansion is a termcp command line whose `$1…$N` and
+	// `$NAME` references are filled from the caller's invocation, exactly as a
+	// user-defined alias's are — so a template can say "this server is reachable
+	// as these verbs" and an install is all it takes to get the commands.
+	//
+	// WHY DOTTED, WHY ALWAYS QUALIFIED. Two extensions both declaring `search`
+	// cannot both own the bare word, and a bare name that works only while exactly
+	// one template defines it is hidden state a caller cannot see. The dot names
+	// where a command comes from; `ls alias` prints the same spelling.
+	Alias map[string]string `toml:"alias,omitempty"`
+
 	// Forwards are declared tunnels, set up when the session comes up.
 	Forwards []ForwardDecl `toml:"forward,omitempty"`
 }

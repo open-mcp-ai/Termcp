@@ -147,7 +147,7 @@ type capabilityHandler struct {
 }
 
 func (h *capabilityHandler) Handle(ctx context.Context, st directive.Statement) []envelope.Slot {
-	expanded, cycle, err := aliases.Expand(st)
+	expanded, cycle, err := h.s.aliases.Expand(st)
 	if err != nil {
 		return []envelope.Slot{h.s.parseErrorSlot(err)}
 	}
