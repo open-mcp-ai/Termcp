@@ -116,11 +116,31 @@ type Task struct {
 	done  atomic.Int64
 	total atomic.Int64
 
-	mu       sync.Mutex
-	status   Status
-	err      error
-	endedAt  time.Time
+	// ONE IMMUTABLE SNAPSHOT INSTEAD OF A MUTEX. The record has exactly one
+	// transition — Running -> a terminal status, taken exactly once — so the whole
+	// terminal state (status, error, end time) is one value published by a single
+	// CompareAndSwap. nil means "still running".
+	//
+	// A reader therefore gets a CONSISTENT three-field snapshot for free, which is
+	// what the mutex was really buying: three separate atomics would let a view show
+	// a terminal status beside a stale end time.
+	outcome  atomic.Pointer[taskOutcome]
 	finished chan struct{}
+}
+
+// taskOutcome is the terminal state of one task, written once and then immutable.
+type taskOutcome struct {
+	status  Status
+	err     error
+	endedAt time.Time
+}
+
+// statusOf reads the status a caller would see now.
+func (t *Task) statusOf() Status {
+	if o := t.outcome.Load(); o != nil {
+		return o.status
+	}
+	return Running
 }
 
 // ID is the receipt a caller keeps.
@@ -139,30 +159,29 @@ func (t *Task) SetTotal(n int64) {
 
 // finish moves the task to a terminal status exactly once.
 func (t *Task) finish(status Status, err error) {
-	t.mu.Lock()
-	if t.status != Running {
-		t.mu.Unlock()
+	// THE TERMINAL FIELDS ARE WRITTEN BEFORE THE CAS PUBLISHES THEM. A reader that
+	// sees a terminal status through the atomic load therefore observes err and
+	// endedAt already stored (the CAS is the release edge), which is the whole
+	// reason three fields could become one transition.
+	if !t.outcome.CompareAndSwap(nil, &taskOutcome{status: status, err: err, endedAt: time.Now()}) {
 		return
 	}
-	t.status = status
-	t.err = err
-	t.endedAt = time.Now()
 	close(t.finished)
-	t.mu.Unlock()
 }
 
 // view renders the current state as a value.
 func (t *Task) view() View {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	v := View{
 		ID: t.id, Kind: t.kind, SessionID: t.sessionID,
 		Path: t.path, LocalPath: t.localPath,
-		Status: t.status, BytesDone: t.done.Load(), BytesTotal: t.total.Load(),
-		StartedAt: t.startedAt, EndedAt: t.endedAt,
+		Status: Running, BytesDone: t.done.Load(), BytesTotal: t.total.Load(),
+		StartedAt: t.startedAt,
 	}
-	if t.err != nil {
-		v.Error = t.err.Error()
+	if o := t.outcome.Load(); o != nil {
+		v.Status, v.EndedAt = o.status, o.endedAt
+		if o.err != nil {
+			v.Error = o.err.Error()
+		}
 	}
 	return v
 }
@@ -200,7 +219,7 @@ func (m *Manager) Start(kind Kind, sessionID, path, localPath string, cancel con
 		id := randomID()
 		t := &Task{
 			id: id, kind: kind, sessionID: sessionID, path: path, localPath: localPath,
-			startedAt: time.Now(), status: Running, cancel: cancel,
+			startedAt: time.Now(), cancel: cancel,
 			finished: make(chan struct{}),
 		}
 		if _, loaded := m.tasks.LoadOrStore(id, t); !loaded {
@@ -217,9 +236,10 @@ func (m *Manager) reap() {
 		if !ok {
 			return true
 		}
-		t.mu.Lock()
-		stale := t.status != Running && t.endedAt.Before(cutoff)
-		t.mu.Unlock()
+		stale := false
+		if o := t.outcome.Load(); o != nil {
+			stale = o.endedAt.Before(cutoff)
+		}
 		if stale {
 			m.tasks.Delete(k)
 		}
@@ -271,13 +291,10 @@ func (m *Manager) Cancel(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	t.mu.Lock()
-	running := t.status == Running
-	cancel := t.cancel
-	t.mu.Unlock()
-	if !running {
+	if t.statusOf() != Running {
 		return false, nil
 	}
+	cancel := t.cancel
 	// Mark first, then cancel: the transfer's own error path would otherwise report
 	// "context canceled" as a failure, and a cancellation the caller asked for is not
 	// a failure.
@@ -341,12 +358,8 @@ func (m *Manager) Close() {
 		return true
 	})
 	for _, t := range all {
-		t.mu.Lock()
-		cancel := t.cancel
-		running := t.status == Running
-		t.mu.Unlock()
-		if running && cancel != nil {
-			cancel()
+		if t.statusOf() == Running && t.cancel != nil {
+			t.cancel()
 		}
 	}
 }

@@ -137,14 +137,13 @@ func TestMcpOpenRefusesAPeerThatCannotHandshake(t *testing.T) {
 	// rather than "the registry is empty": another test's live peer is not this
 	// test's leak.
 	countMCP := func() int {
-		jrpcChannelsMu.Lock()
-		defer jrpcChannelsMu.Unlock()
 		n := 0
-		for _, h := range jrpcChannels {
-			if h.kind == "mcp" {
+		jrpcChannels.Range(func(_, v any) bool {
+			if h, _ := v.(*jrpcHandle); h != nil && h.kind == "mcp" {
 				n++
 			}
-		}
+			return true
+		})
 		return n
 	}
 	before := countMCP()

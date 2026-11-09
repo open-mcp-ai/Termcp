@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,12 +74,20 @@ type SSEServer struct {
 	basePath    string
 	messagePath string
 
-	mu       sync.Mutex
-	sessions map[string]*sseSessionEntry
-	closed   bool
+	// SESSIONS AND THE SHUTDOWN FLAG WITHOUT A LOCK. Every operation here touches
+	// one session: one store on connect, one delete on disconnect, one lookup per
+	// message, and a Range for the shutdown sweep. The closed flag is one boolean.
+	// sync.Map plus atomics keep each of those atomic on its own; the only place two
+	// of them meet is Shutdown, which reads the flag once and then sweeps — and the
+	// sweep is re-checkable by construction (a stream that ended removed itself), so
+	// no lock has to make "flag + map" one moment.
+	sessions sync.Map // sessionID string -> *sseSessionEntry
+	closed   atomic.Bool
 	// stopped is closed by the first Shutdown, so a second one returns instead of
-	// waiting for a state that has already been reached.
-	stopped chan struct{}
+	// waiting for a state that has already been reached. Created in the constructor
+	// so no Shutdown ever races the channel into existence.
+	stopped    chan struct{}
+	stoppedOnce sync.Once
 }
 
 // SSEOption customises the SSE transport.
@@ -95,7 +104,7 @@ func NewSSEServer(srv *Server, opts ...SSEOption) *SSEServer {
 	s := &SSEServer{
 		srv:         srv,
 		messagePath: "/message",
-		sessions:    map[string]*sseSessionEntry{},
+		stopped:     make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -121,15 +130,12 @@ func (s *SSEServer) SSEHandler() http.Handler {
 		}
 		out := make(chan []byte, 64)
 		sess := newSSEClient(nextSessionID(), out)
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
+		if s.closed.Load() {
 			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		s.sessions[sess.SessionID()] = &sseSessionEntry{client: sess, out: out, done: make(chan struct{})}
-		entry := s.sessions[sess.SessionID()]
-		s.mu.Unlock()
+		entry := &sseSessionEntry{client: sess, out: out, done: make(chan struct{})}
+		s.sessions.Store(sess.SessionID(), entry)
 
 		ctx := r.Context()
 		if s.contextFunc != nil {
@@ -140,9 +146,7 @@ func (s *SSEServer) SSEHandler() http.Handler {
 		s.srv.registerSession(ctx, sess)
 
 		defer func() {
-			s.mu.Lock()
-			delete(s.sessions, sess.SessionID())
-			s.mu.Unlock()
+			s.sessions.Delete(sess.SessionID())
 			s.srv.unregisterSession(ctx, sess)
 		}()
 
@@ -199,15 +203,14 @@ func (s *SSEServer) MessageHandler() http.Handler {
 			http.Error(w, "missing "+sseSessionParam, http.StatusBadRequest)
 			return
 		}
-		s.mu.Lock()
-		entry, ok := s.sessions[id]
-		s.mu.Unlock()
+		v, ok := s.sessions.Load(id)
 		if !ok {
 			// 404 is what makes a client re-open its stream, and the alternative
 			// (accepting the frame) would drop it with a 202 that lied.
 			http.Error(w, "unknown session", http.StatusNotFound)
 			return
 		}
+		entry := v.(*sseSessionEntry)
 		body, err := readLimitedBody(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -240,27 +243,23 @@ func (s *SSEServer) MessageHandler() http.Handler {
 // shut down. The state that call is about is "the sessions are gone"; a duration
 // is a guess at when that happens, and here it was a guess of five seconds.
 func (s *SSEServer) Shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	s.closed = true
-	if s.stopped == nil {
-		s.stopped = make(chan struct{})
-	}
-	if len(s.sessions) == 0 {
-		select {
-		case <-s.stopped:
-		default:
-			close(s.stopped)
-		}
-		s.mu.Unlock()
+	s.closed.Store(true)
+	count := 0
+	s.sessions.Range(func(_, v any) bool {
+		count++
+		return true
+	})
+	if count == 0 {
+		s.stoppedOnce.Do(func() { close(s.stopped) })
 		return nil
 	}
-	// Collect, then close, then wait: closing under the lock would race a session
-	// that is removing itself for the same reason.
-	dones := make([]chan struct{}, 0, len(s.sessions))
-	for _, sess := range s.sessions {
-		dones = append(dones, sess.done)
-	}
-	s.mu.Unlock()
+	// Collect, then close, then wait: a session that removes itself while we sweep
+	// is fine — the sweep is a snapshot, and the wait below re-counts the live map.
+	var dones []chan struct{}
+	s.sessions.Range(func(_, v any) bool {
+		dones = append(dones, v.(*sseSessionEntry).done)
+		return true
+	})
 
 	for _, done := range dones {
 		select {
@@ -275,9 +274,11 @@ func (s *SSEServer) Shutdown(ctx context.Context) error {
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		s.mu.Lock()
-		left := len(s.sessions)
-		s.mu.Unlock()
+		left := 0
+		s.sessions.Range(func(_, _ any) bool {
+			left++
+			return true
+		})
 		if left == 0 {
 			return nil
 		}

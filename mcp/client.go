@@ -46,23 +46,27 @@ type client struct {
 	// clientInfo is what the client said about itself in initialize. It is
 	// recorded rather than required: the field is optional in the handshake, and a
 	// client that omits it is still a client.
-	infoMu     sync.Mutex
-	clientInfo Implementation
+	//
+	// AN ATOMIC POINTER IS ONE STORE AND ONE LOAD. There is no multi-field
+	// invariant to protect, and reading it displays a string to a human — a mutex
+	// here was decoration.
+	clientInfo atomic.Pointer[Implementation]
 }
 
 // noteClientInfo records what the client called itself.
 func (c *client) noteClientInfo(info Implementation) {
-	c.infoMu.Lock()
-	c.clientInfo = info
-	c.infoMu.Unlock()
+	cp := info
+	c.clientInfo.Store(&cp)
 }
 
 // GetClientInfo returns what the client called itself, or zero values when it
 // said nothing. A caller that displays this must tolerate empty strings.
 func (c *client) GetClientInfo() Implementation {
-	c.infoMu.Lock()
-	defer c.infoMu.Unlock()
-	return c.clientInfo
+	p := c.clientInfo.Load()
+	if p == nil {
+		return Implementation{}
+	}
+	return *p
 }
 
 // SessionID identifies this client to a registry.

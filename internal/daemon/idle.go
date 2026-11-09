@@ -3,6 +3,7 @@ package daemon
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,11 +29,50 @@ type IdleWatcher struct {
 	// it falls back to — not just a path.
 	Exempt func(*http.Request) bool
 
-	mu       sync.Mutex
+	// THE FOUR FIELDS ARE ONE VALUE, published atomically. inFlight, the timer, the
+	// generation and fired only ever change together — arming is "stop the old timer,
+	// bump the generation, install a new one", and expiring is "no; or mark fired and
+	// drop the timer". A mutex is one way to say that; an immutable snapshot swapped by
+	// CompareAndSwap is the other, and it removes the two obligations a lock carries
+	// (unlock on every path, run the fire callback outside it).
+	state atomic.Pointer[idleState]
+	fireOnce sync.Once
+}
+
+// idleState is the watcher's state, written once per transition.
+type idleState struct {
 	inFlight int
 	timer    *time.Timer
-	gen      int // bumped on every arm, so a spent timer can't fire early
+	gen      uint64 // bumped on every arm, so a spent timer can't fire early
 	fired    bool
+}
+
+// load returns the current state, never nil.
+func (w *IdleWatcher) load() *idleState {
+	if st := w.state.Load(); st != nil {
+		return st
+	}
+	return &idleState{}
+}
+
+// swap applies fn to the current state and publishes the result, retrying when
+// another goroutine got there first. fn returns the timer it created (if any) so a
+// losing attempt can stop it rather than leak a stray callback.
+func (w *IdleWatcher) swap(fn func(*idleState) *time.Timer) *idleState {
+	for {
+		cur := w.state.Load()
+		next := idleState{}
+		if cur != nil {
+			next = *cur
+		}
+		stray := fn(&next)
+		if w.state.CompareAndSwap(cur, &next) {
+			return &next
+		}
+		if stray != nil {
+			stray.Stop()
+		}
+	}
 }
 
 // NewIdleWatcher returns a watcher for the given idle timeout. A timeout <= 0
@@ -44,13 +84,11 @@ func NewIdleWatcher(timeout time.Duration, fire func()) *IdleWatcher {
 	if timeout <= 0 {
 		return w
 	}
-	// Arm under the mutex expire() takes: a live timer can run expire before this
-	// function returns, and expire writes the same two fields set here.
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.gen++
-	gen := w.gen
-	w.timer = time.AfterFunc(timeout, func() { w.expire(gen) })
+	// ARM ONCE, BEFORE THE WATCHER IS SHARED: the pointer below publishes the armed
+	// state, so no expire() can observe a half-built one.
+	st := &idleState{gen: 1}
+	st.timer = time.AfterFunc(timeout, func() { w.expire(1) })
+	w.state.Store(st)
 	return w
 }
 
@@ -70,34 +108,45 @@ func (w *IdleWatcher) Track(next http.Handler) http.Handler {
 }
 
 func (w *IdleWatcher) enter() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.inFlight++
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
+	w.swap(func(st *idleState) *time.Timer {
+		st.inFlight++
+		if st.timer != nil {
+			st.timer.Stop()
+			st.timer = nil
+		}
+		return nil
+	})
 }
 
 func (w *IdleWatcher) leave() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.inFlight--
-	if w.inFlight == 0 && !w.fired && w.timeout > 0 && w.timer == nil {
-		w.gen++
-		gen := w.gen
-		w.timer = time.AfterFunc(w.timeout, func() { w.expire(gen) })
-	}
+	w.swap(func(st *idleState) *time.Timer {
+		st.inFlight--
+		if st.inFlight == 0 && !st.fired && w.timeout > 0 && st.timer == nil {
+			st.gen++
+			t := time.AfterFunc(w.timeout, func() { w.expire(st.gen) })
+			st.timer = t
+			return t
+		}
+		return nil
+	})
 }
 
-func (w *IdleWatcher) expire(gen int) {
-	w.mu.Lock()
-	if w.fired || w.inFlight != 0 || gen != w.gen {
-		w.mu.Unlock()
-		return
+func (w *IdleWatcher) expire(gen uint64) {
+	st := w.swap(func(st *idleState) *time.Timer {
+		// A SPENT TIMER IS RECOGNISED, NOT ASSERTED: the generation it was created
+		// with no longer matches, or activity arrived, or it already fired. Reporting
+		// that by leaving the state untouched is what makes the retry loop safe.
+		if st.fired || st.inFlight != 0 || gen != st.gen {
+			return nil
+		}
+		st.timer = nil
+		st.fired = true
+		return nil
+	})
+	// THE CALLBACK RUNS OUTSIDE ANY LOCK, and only the transition that flipped
+	// `fired` from false to true calls it: a losing attempt saw fired already true
+	// or saw the generation bump, and neither sets this flag.
+	if st.fired && st.gen == gen && st.inFlight == 0 {
+		w.fireOnce.Do(w.fire)
 	}
-	w.timer = nil
-	w.fired = true
-	w.mu.Unlock()
-	w.fire()
 }

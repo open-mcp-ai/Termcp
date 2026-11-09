@@ -3,17 +3,46 @@ package webui
 import (
 	"io/fs"
 	"os"
-	"sync"
+	"sync/atomic"
 )
 
-// assetsDir is the operator-supplied override directory for the static asset
-// surface ("" = embedded copy only). It is set once, before serving starts, via
-// SetAssetsDir; the mutex keeps that one write from racing an early reader.
-var (
-	assetsDirMu sync.RWMutex
-	assetsDir   string
-	themesDir   string
-)
+// dirPair is the operator-supplied override directories, as one immutable value so
+// a reader takes them in one atomic load instead of two (a reader that saw the new
+// assets directory beside the old themes directory would serve a mix).
+//
+// TWO FIELDS, ONE STORE. The pair is read on every asset request and written once at
+// startup, which is exactly the shape atomic.Pointer is for: no lock to hold, and no
+// way to read half of the update.
+type dirPair struct {
+	assets string
+	themes string
+}
+
+var dirs atomic.Pointer[dirPair]
+
+// overrideDirs returns the current pair, empty when nothing was configured.
+func overrideDirs() dirPair {
+	if p := dirs.Load(); p != nil {
+		return *p
+	}
+	return dirPair{}
+}
+
+// setOverrideDirs applies one change to the pair with a compare-and-swap, so two
+// concurrent setters cannot lose each other's field.
+func setOverrideDirs(apply func(*dirPair)) {
+	for {
+		cur := dirs.Load()
+		next := dirPair{}
+		if cur != nil {
+			next = *cur
+		}
+		apply(&next)
+		if dirs.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
 
 // SetAssetsDir points the static asset surface at an external directory whose
 // files take precedence over the copies embedded in the binary. A file missing
@@ -23,9 +52,7 @@ var (
 // read through Assets(), so they always show the same bytes. Call before any
 // consumer (HTTP server, MCP server) reads the FS.
 func SetAssetsDir(dir string) {
-	assetsDirMu.Lock()
-	defer assetsDirMu.Unlock()
-	assetsDir = dir
+	setOverrideDirs(func(p *dirPair) { p.assets = dir })
 	// The ETag cache is keyed by path only; a new override directory serves
 	// different bytes under the same paths, so the old hashes must not survive
 	// the switch (tests repoint this freely).
@@ -35,9 +62,7 @@ func SetAssetsDir(dir string) {
 // SetThemesDir configures application resources independently of the data dir.
 // Only the path is captured; theme files and directory entries are read on demand.
 func SetThemesDir(dir string) {
-	assetsDirMu.Lock()
-	defer assetsDirMu.Unlock()
-	themesDir = dir
+	setOverrideDirs(func(p *dirPair) { p.themes = dir })
 	clearAssetETags()
 }
 
@@ -55,10 +80,8 @@ func Assets() fs.FS {
 	if err != nil {
 		panic("webui: embed assets: " + err.Error())
 	}
-	assetsDirMu.RLock()
-	dir := assetsDir
-	themeDir := themesDir
-	assetsDirMu.RUnlock()
+	pair := overrideDirs()
+	dir, themeDir := pair.assets, pair.themes
 	var base fs.FS = root
 	var external fs.FS
 	if dir != "" {

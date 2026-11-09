@@ -21,17 +21,13 @@ func TestPeersGoWithTheirSession(t *testing.T) {
 	// A CDP door against a URL that cannot resolve still mints a handle only on
 	// success, so drive the registry directly: what is under test is the cascade, not
 	// discovery.
-	jrpcChannelsMu.Lock()
-	jrpcChannels[peerKey(sid, "cdp", "1")] = &jrpcHandle{kind: "cdp", index: "1", sessionID: sid}
-	jrpcChannels[peerKey("other-session", "cdp", "1")] = &jrpcHandle{kind: "cdp", index: "1", sessionID: "other-session"}
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Store(peerKey(sid, "cdp", "1"), &jrpcHandle{kind: "cdp", index: "1", sessionID: sid})
+	jrpcChannels.Store(peerKey("other-session", "cdp", "1"), &jrpcHandle{kind: "cdp", index: "1", sessionID: "other-session"})
 
 	closePeersBySession(sid)
 
-	jrpcChannelsMu.Lock()
-	_, mine := jrpcChannels[peerKey(sid, "cdp", "1")]
-	_, theirs := jrpcChannels[peerKey("other-session", "cdp", "1")]
-	jrpcChannelsMu.Unlock()
+	_, mine := jrpcChannels.Load(peerKey(sid, "cdp", "1"))
+	_, theirs := jrpcChannels.Load(peerKey("other-session", "cdp", "1"))
 	if mine {
 		t.Errorf("the peer of the dead session is still registered")
 	}
@@ -41,26 +37,20 @@ func TestPeersGoWithTheirSession(t *testing.T) {
 
 	// Drive the same path through the session manager, so the hook is proven wired and
 	// not merely available.
-	jrpcChannelsMu.Lock()
-	jrpcChannels[peerKey(sid, "mcp", "2")] = &jrpcHandle{kind: "mcp", index: "2", sessionID: sid}
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Store(peerKey(sid, "mcp", "2"), &jrpcHandle{kind: "mcp", index: "2", sessionID: sid})
 	// The SESSION, not the channel: a peer hangs off the session's transport, so
 	// closing one channel must leave it alone (and does — that is a different test).
 	termText(t, s, map[string]any{"cmd": "close " + sid})
 	waitForPeerGone(t, sid, "mcp", "2")
 
-	jrpcChannelsMu.Lock()
-	delete(jrpcChannels, peerKey("other-session", "cdp", "1"))
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Delete(peerKey("other-session", "cdp", "1"))
 }
 
 func waitForPeerGone(t *testing.T, sid, kind, index string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		jrpcChannelsMu.Lock()
-		_, ok := jrpcChannels[peerKey(sid, kind, index)]
-		jrpcChannelsMu.Unlock()
+		_, ok := jrpcChannels.Load(peerKey(sid, kind, index))
 		if !ok {
 			return
 		}

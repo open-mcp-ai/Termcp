@@ -36,9 +36,10 @@ import (
 // cached engine would hand a later call a transport that has already been released — a
 // correctness bug traded for a latency win. A `use` file call still opens and closes
 // its own engine.
+// ZERO MUTEXES (AGENTS.md rule 5: "并发单飞用 channel 广播"). One entry per key in
+// a sync.Map, and the single-flight is the entry's own `ready` channel.
 type Pool struct {
-	mu sync.Mutex
-	m  map[string]*entry
+	m sync.Map // sessionID string -> *entry
 }
 
 // entry is one session's engine, or the attempt to build one. `ready` closes when that
@@ -59,7 +60,7 @@ type entry struct {
 // the same hook forwards and peers use, and what keeps the map bounded: a daemon that
 // has served a thousand sessions holds none of their subsystems.
 func NewPool(mgr *session.Manager) *Pool {
-	p := &Pool{m: make(map[string]*entry)}
+	p := &Pool{}
 	if mgr != nil {
 		mgr.AddOnDeadHook(p.Forget)
 	}
@@ -75,61 +76,45 @@ func NewPool(mgr *session.Manager) *Pool {
 // impossible to write rather than merely discouraged.
 func (p *Pool) Get(sessionID string, sshCli *ssh.Client) (*sftp.Client, error) {
 	if p == nil {
-		// A surface built without a pool (a Server literal in a test, a Handler wired
-		// before main) still works: the pool is a latency optimisation, and an engine per
-		// call is correct, only slower. Nil-safe instead of a nil check at every caller,
-		// so "remember the guard" is not a rule anyone has to keep.
 		return sftp.NewClient(sshCli)
 	}
-	p.mu.Lock()
-	if e := p.m[sessionID]; e != nil {
-		if e.sshCli != sshCli {
-			// The session reconnected: the engine rides a transport that is gone and
-			// nothing can revive it, so this call rebuilds rather than reuses.
-			delete(p.m, sessionID)
-		} else {
-			p.mu.Unlock()
+
+	for {
+		if v, ok := p.m.Load(sessionID); ok {
+			e := v.(*entry)
+			if e.sshCli != sshCli {
+				// Reconnected: drop stale entry and retry.
+				p.m.CompareAndDelete(sessionID, e)
+				continue
+			}
 			<-e.ready
 			if e.err != nil {
-				// A failed handshake is not worth remembering: the next call gets a
-				// fresh attempt instead of a cached error for ever.
-				p.mu.Lock()
-				if p.m[sessionID] == e {
-					delete(p.m, sessionID)
-				}
-				p.mu.Unlock()
+				// Failed handshake: evict so next call retries fresh.
+				p.m.CompareAndDelete(sessionID, e)
 			}
 			return e.view, e.err
 		}
-	}
-	e := &entry{ready: make(chan struct{}), sshCli: sshCli}
-	p.m[sessionID] = e
-	p.mu.Unlock()
 
-	// THE HANDSHAKE RUNS WITHOUT THE LOCK HELD. It is three round trips, and holding a
-	// mutex across network I/O is the failure this repository has paid for repeatedly
-	// (AGENTS.md). Concurrent callers wait on `ready` — bounded by the handshake they
-	// would each have paid for anyway.
-	engine, err := pkgsftp.NewClient(sshCli)
-	e.view, e.err = sftp.Shared(engine), err
-	close(e.ready)
-	if e.err != nil {
-		p.mu.Lock()
-		if p.m[sessionID] == e {
-			delete(p.m, sessionID)
+		e := &entry{ready: make(chan struct{}), sshCli: sshCli}
+		if _, loaded := p.m.LoadOrStore(sessionID, e); loaded {
+			continue // another caller published first; join its entry
 		}
-		p.mu.Unlock()
-	}
-	return e.view, e.err
-}
 
+		// THIS CALLER IS THE CREATOR. The handshake runs without locks.
+		engine, err := pkgsftp.NewClient(sshCli)
+		e.view, e.err = sftp.Shared(engine), err
+		close(e.ready)
+		if e.err != nil {
+			p.m.CompareAndDelete(sessionID, e)
+		}
+		return e.view, e.err
+	}
+}
 // Forget drops a session's engine. The SSH transport is closed by the same shutdown and
 // the subsystem dies with it; closing the engine here would race a call still using it.
 func (p *Pool) Forget(sessionID string) {
 	if p == nil {
 		return
 	}
-	p.mu.Lock()
-	delete(p.m, sessionID)
-	p.mu.Unlock()
+	p.m.Delete(sessionID)
 }

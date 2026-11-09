@@ -176,9 +176,10 @@ func (s *Server) dialExtPeer(ctx context.Context, ext *extensions.Extension, ses
 	if handle == "" {
 		return nil, "", slot, true
 	}
-	jrpcChannelsMu.Lock()
-	h := jrpcChannels[handle]
-	jrpcChannelsMu.Unlock()
+	var h *jrpcHandle
+	if v, ok := jrpcChannels.Load(handle); ok {
+		h, _ = v.(*jrpcHandle)
+	}
 	return h, handle, slot, true
 }
 
@@ -216,9 +217,7 @@ func (s *Server) closeExtPeer(h *jrpcHandle) {
 	if h == nil || h.ch == nil {
 		return
 	}
-	jrpcChannelsMu.Lock()
-	delete(jrpcChannels, peerKey(h.sessionID, h.kind, h.index))
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Delete(peerKey(h.sessionID, h.kind, h.index))
 	_ = h.ch.Close()
 }
 

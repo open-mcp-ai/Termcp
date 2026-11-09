@@ -63,16 +63,25 @@ func (m *Manager) AddActivityListener(fn func(shellID string, src InputSource, s
 	if fn == nil {
 		return
 	}
-	m.activityMu.Lock()
-	m.activityListeners = append(m.activityListeners, fn)
-	m.activityMu.Unlock()
+	for {
+		cur := m.activityListeners.Load()
+		var next []func(string, InputSource, bool)
+		if cur != nil {
+			next = append(next, (*cur)...)
+		}
+		next = append(next, fn)
+		if m.activityListeners.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
 }
 
 // notifyActivity forwards one input event to every registered listener.
 func (m *Manager) notifyActivity(shellID string, src InputSource, submit bool) {
-	m.activityMu.Lock()
-	listeners := append([]func(string, InputSource, bool){}, m.activityListeners...)
-	m.activityMu.Unlock()
+	var listeners []func(string, InputSource, bool)
+	if p := m.activityListeners.Load(); p != nil {
+		listeners = *p
+	}
 	for _, fn := range listeners {
 		fn(shellID, src, submit)
 	}
@@ -88,16 +97,25 @@ func (m *Manager) AddApprovalListener(fn func(sessionID string, req approval.Req
 	if fn == nil {
 		return
 	}
-	m.approvalMu.Lock()
-	m.approvalListeners = append(m.approvalListeners, fn)
-	m.approvalMu.Unlock()
+	for {
+		cur := m.approvalListeners.Load()
+		var next []func(string, approval.Request)
+		if cur != nil {
+			next = append(next, (*cur)...)
+		}
+		next = append(next, fn)
+		if m.approvalListeners.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
 }
 
 // notifyApproval forwards one queue transition to every registered listener.
 func (m *Manager) notifyApproval(sessionID string, req approval.Request) {
-	m.approvalMu.Lock()
-	listeners := append([]func(string, approval.Request){}, m.approvalListeners...)
-	m.approvalMu.Unlock()
+	var listeners []func(string, approval.Request)
+	if p := m.approvalListeners.Load(); p != nil {
+		listeners = *p
+	}
 	for _, fn := range listeners {
 		fn(sessionID, req)
 	}

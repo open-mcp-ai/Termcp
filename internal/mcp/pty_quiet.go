@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"strings"
+	"sync/atomic"
 	"sync"
 	"time"
 
@@ -87,15 +88,23 @@ const ptyQuietHistory = 8
 // terminal has — while returning late is only slow. That asymmetry is why a
 // learned value is allowed to be optimistic.
 type ptyQuietTracker struct {
-	mu sync.Mutex
-	// recent is a ring of the last ptyQuietHistory gaps between two chunks of one
-	// command, in arrival order.
-	recent [ptyQuietHistory]time.Duration
-	next   int
-	filled int
+	// THE HISTORY IS ONE IMMUTABLE SNAPSHOT, swapped atomically. A ring needs its
+	// three fields (slice, position, count) to agree, and a mutex is one way to say
+	// that; copying the visible gaps and publishing the copy is the other, with no
+	// lock to hold and no reader that can catch the ring mid-advance. The history is
+	// eight durations, so a copy is a handful of words.
+	recent atomic.Pointer[[]time.Duration]
 	// used is the quiet window the last wait actually applied. Written by the waiter,
 	// read by tests; it is not part of the learning.
-	used time.Duration
+	used atomic.Int64
+}
+
+// gaps returns the recorded gaps, oldest first.
+func (t *ptyQuietTracker) gaps() []time.Duration {
+	if p := t.recent.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // threshold is the quiet window this channel should use: twice its widest recent
@@ -113,9 +122,7 @@ func (t *ptyQuietTracker) noteUsed(quiet time.Duration) {
 	if t == nil {
 		return
 	}
-	t.mu.Lock()
-	t.used = quiet
-	t.mu.Unlock()
+	t.used.Store(int64(quiet))
 }
 
 // quietUsed reports the threshold the last wait on this channel used.
@@ -123,23 +130,19 @@ func (t *ptyQuietTracker) quietUsed() time.Duration {
 	if t == nil {
 		return 0
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.used
+	return time.Duration(t.used.Load())
 }
 
 func (t *ptyQuietTracker) threshold() time.Duration {
 	if t == nil {
 		return ptyQuiet
 	}
-	t.mu.Lock()
 	var widest time.Duration
-	for i := 0; i < t.filled; i++ {
-		if g := t.recent[i]; g > widest {
+	for _, g := range t.gaps() {
+		if g > widest {
 			widest = g
 		}
 	}
-	t.mu.Unlock()
 	if widest <= 0 {
 		return ptyQuiet
 	}
@@ -164,13 +167,20 @@ func (t *ptyQuietTracker) observe(gap time.Duration) {
 	if t == nil || gap <= 0 || gap*ptyQuietFactor > ptyQuiet {
 		return
 	}
-	t.mu.Lock()
-	t.recent[t.next] = gap
-	t.next = (t.next + 1) % ptyQuietHistory
-	if t.filled < ptyQuietHistory {
-		t.filled++
+	for {
+		cur := t.recent.Load()
+		var next []time.Duration
+		if cur != nil {
+			next = append(next, (*cur)...)
+		}
+		if len(next) == ptyQuietHistory {
+			next = next[1:]
+		}
+		next = append(next, gap)
+		if t.recent.CompareAndSwap(cur, &next) {
+			return
+		}
 	}
-	t.mu.Unlock()
 }
 
 // seed fills the history with one value, for a caller that has to state what a
@@ -180,13 +190,11 @@ func (t *ptyQuietTracker) seed(gap time.Duration) {
 	if t == nil || gap <= 0 || gap*ptyQuietFactor > ptyQuiet {
 		return
 	}
-	t.mu.Lock()
-	for i := range t.recent {
-		t.recent[i] = gap
+	seeded := make([]time.Duration, ptyQuietHistory)
+	for i := range seeded {
+		seeded[i] = gap
 	}
-	t.next = 0
-	t.filled = ptyQuietHistory
-	t.mu.Unlock()
+	t.recent.Store(&seeded)
 }
 
 // newPtyQuietTracker creates one learner map and wires its lifecycle at the
@@ -194,56 +202,49 @@ func (t *ptyQuietTracker) seed(gap time.Duration) {
 // so one DEAD callback drops each of its handle keys without reaching into session
 // internals — the hook has no session locks held while it calls us.
 func newPtyQuietTracker(m *session.Manager) *quietTrackers {
-	q := &quietTrackers{m: make(map[string]*ptyQuietTracker)}
+	q := &quietTrackers{}
 	if m != nil {
 		m.AddOnDeadHook(q.dropSession)
 	}
 	return q
 }
 
+// ONE TRACKER PER HANDLE, in a sync.Map: every operation touches one handle.
 type quietTrackers struct {
-	mu sync.Mutex
-	m  map[string]*ptyQuietTracker
+	m sync.Map // handle string -> *ptyQuietTracker
 }
 
 // quietTracker returns the learner for one handle, creating it on first use.
 func (q *quietTrackers) quietTracker(handle string) *ptyQuietTracker {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if t := q.m[handle]; t != nil {
-		return t
-	}
 	t := &ptyQuietTracker{}
-	q.m[handle] = t
-	return t
+	v, _ := q.m.LoadOrStore(handle, t)
+	return v.(*ptyQuietTracker)
 }
 
 // drop forgets one closed channel's threshold.
 func (q *quietTrackers) drop(handle string) {
-	q.mu.Lock()
-	delete(q.m, handle)
-	q.mu.Unlock()
+	q.m.Delete(handle)
 }
 
 // peek returns a channel's learner without creating one, for the lifecycle check
 // that a closed channel really did leave nothing behind.
 func (q *quietTrackers) peek(handle string) *ptyQuietTracker {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.m[handle]
+	if v, ok := q.m.Load(handle); ok {
+		return v.(*ptyQuietTracker)
+	}
+	return nil
 }
 
 // dropSession forgets all thresholds owned by a terminated session. Handle ids
 // are opaque to this package; the session prefix is the part before the last ':'.
 func (q *quietTrackers) dropSession(sessionID string) {
 	prefix := sessionID + ":"
-	q.mu.Lock()
-	for handle := range q.m {
-		if strings.HasPrefix(handle, prefix) {
-			delete(q.m, handle)
+	q.m.Range(func(k, _ any) bool {
+		if handle, _ := k.(string); strings.HasPrefix(handle, prefix) {
+			q.m.Delete(k)
 		}
-	}
-	q.mu.Unlock()
+		return true
+	})
 }
 
 // quietTracker returns the learner for one handle, creating it on first use.

@@ -1,88 +1,92 @@
 package mcp
 
 import (
-	"encoding/json"
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
+	"github.com/BurntSushi/toml"
 	"github.com/open-mcp-ai/termcp/internal/fsutil"
+	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-// savedAliases is the persisted half of the alias table: one JSON object under the
-// data directory, name -> expansion.
+// savedAliases manages the persistent half of the alias table: one file per alias
+// under `<data-dir>/aliases/<name>.toml`.
 //
-// WHY A FILE AND NOT THE EXTENSION TEMPLATE. An alias has two possible owners and
-// they are not the same thing. The ones a PACKAGE ships belong in its template,
-// because they travel with the recipe (the `alias` table in internal/extensions).
-// The ones the operator or an agent invents belong to this installation, like
-// `create host` and `create ext` do, and they must survive a template being
-// replaced by an upgrade. Putting them in the template would mean the next upgrade
-// silently deletes them; putting them here means the installer and the user edit
-// different files, which is the same split extensions already draw between
-// config.toml and config.local.toml.
+// ZERO MUTEXES BY DESIGN (see AGENTS.md concurrency rules). An alias table is a
+// key-value store with no multi-key invariant: every lookup, insert, update and
+// removal touches exactly one entry. sync.Map provides atomic Load, Store, Delete,
+// and Range without locks to manage or forget, and WriteFileAtomic commits each
+// file without holding any in-memory synchronization.
 //
-// WHY JSON. The value is a map of strings and nothing else — no nesting, no types,
-// no comments. One stdlib marshal, one stdlib unmarshal, no dependency, and a file
-// a human can read and fix by hand.
+// ONE FILE PER ALIAS (<name>.toml): an alias is an independent unit of configuration,
+// matching the per-entry layout used by ssh_configs/<name>/ and extensions/<name>/.
+// Editing or deleting one alias touches only its own file, so concurrent writes
+// never collide or overwrite each other.
 type aliasStore struct {
-	path string
-
-	// ONE SMALL LOCK OVER MEMORY ONLY. The critical sections copy the map or swap a
-	// key; the file write happens after the lock is released, because a disk write
-	// is an unbounded external event and holding a lock across it is how a slow
-	// filesystem turns into a stalled server (see AGENTS.md).
-	mu     sync.Mutex
-	m      map[string]string
-	loaded bool
+	dir    string
+	loaded atomic.Bool
+	m      sync.Map // name string -> expansion string
 }
 
-// newAliasStore returns the store for one data directory. A blank dir means "this
-// instance keeps no aliases on disk", which is what an embedder that passed no
-// directory gets.
+// aliasFile is the TOML structure stored on disk.
+type aliasFile struct {
+	Expansion string `toml:"expansion"`
+}
+
+// newAliasStore returns the store for one data directory. A blank dir means
+// "this instance keeps no aliases on disk", which leaves the table process-local.
 func newAliasStore(dataDir string) *aliasStore {
 	dir := filepath.Clean(dataDir)
 	if dir == "" || dir == "." {
 		return nil
 	}
-	return &aliasStore{path: filepath.Join(dir, "aliases.json")}
+	return &aliasStore{dir: filepath.Join(dir, "aliases")}
 }
 
-// load returns the table, reading the file once. A missing file is an empty table,
-// not an error: an installation that has never saved an alias is the normal first
-// run.
-func (a *aliasStore) load() map[string]string {
-	a.mu.Lock()
-	if a.loaded {
-		m := a.m
-		a.mu.Unlock()
-		return m
+// filePath returns the on-disk path for one alias, validating the name to prevent
+// directory traversal.
+func (a *aliasStore) filePath(name string) (string, error) {
+	if err := sshconfig.ValidateName(name); err != nil {
+		return "", fmt.Errorf("invalid alias name %q: %w", name, err)
 	}
-	a.mu.Unlock()
-	// THE FIRST READ RUNS WITHOUT THE LOCK. Two first callers may both read the
-	// file; the guard below keeps exactly one winner, so this is a duplicated read,
-	// not a lost one. Holding the lock across os.ReadFile would put an unbounded
-	// disk event inside the critical section.
-	raw, err := os.ReadFile(a.path)
-	onDisk := map[string]string{}
-	if err == nil {
-		if m := map[string]string{}; json.Unmarshal(raw, &m) == nil {
-			onDisk = m
+	return filepath.Join(a.dir, name+".toml"), nil
+}
+
+// ensureLoaded reads all `<dir>/*.toml` files on first access.
+// atomic.CompareAndSwap ensures exactly one reader performs the disk scan.
+func (a *aliasStore) ensureLoaded() {
+	if a == nil || a.loaded.Load() {
+		return
+	}
+	if !a.loaded.CompareAndSwap(false, true) {
+		return
+	}
+	entries, err := os.ReadDir(a.dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" {
+			continue
 		}
-		// A CORRUPT FILE IS NOT FATAL AND NOT SILENT: the aliases it held are gone
-		// either way. Refusing to start would take the instance down over a
-		// convenience file, and pretending it parsed would resurrect half a table,
-		// so a parse failure lands as an empty table and the next save rewrites it.
+		name := entry.Name()[:len(entry.Name())-5]
+		if err := sshconfig.ValidateName(name); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(a.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var f aliasFile
+		if _, err := toml.Decode(string(data), &f); err == nil && f.Expansion != "" {
+			a.m.Store(name, f.Expansion)
+		}
 	}
-	a.mu.Lock()
-	if !a.loaded {
-		a.m = onDisk
-		a.loaded = true
-	}
-	m := a.m
-	a.mu.Unlock()
-	return m
 }
 
 // get reads one saved entry.
@@ -90,77 +94,75 @@ func (a *aliasStore) get(name string) (string, bool) {
 	if a == nil {
 		return "", false
 	}
-	m := a.load()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	v, ok := m[name]
-	return v, ok
+	a.ensureLoaded()
+	v, ok := a.m.Load(name)
+	if !ok {
+		return "", false
+	}
+	s, _ := v.(string)
+	return s, true
 }
 
-// set writes one saved entry and returns the write error, if any.
+// set writes one alias to `<dir>/<name>.toml` and updates the sync.Map.
 //
-// THE MAP IS UPDATED BEFORE THE FILE IS, and the file write is best-effort by
-// contract: the caller reports the error, but the entry is live in this process
-// either way. The alternative — refuse the alias because the disk is read-only —
-// would make `alias` depend on a filesystem the caller cannot see.
+// ZERO LOCKS: the disk write uses WriteFileAtomic (write-to-sibling + rename), and
+// the map is updated only after the file is successfully durable on disk.
 func (a *aliasStore) set(name, expansion string) error {
 	if a == nil {
 		return nil
 	}
-	a.load()
-	a.mu.Lock()
-	a.m[name] = expansion
-	m := make(map[string]string, len(a.m))
-	for k, v := range a.m {
-		m[k] = v
+	a.ensureLoaded()
+	p, err := a.filePath(name)
+	if err != nil {
+		return err
 	}
-	a.mu.Unlock()
-	return fsutil.WriteFileAtomic(a.path, marshalAliases(m))
+	// THE DIRECTORY IS CREATED ON FIRST SAVE, not at construction: a store that was
+	// never written to should not leave a directory behind either.
+	if err := os.MkdirAll(a.dir, 0o700); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(aliasFile{Expansion: expansion}); err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(p, buf.Bytes()); err != nil {
+		return err
+	}
+	a.m.Store(name, expansion)
+	return nil
 }
 
-// drop removes one saved entry, reporting whether it existed.
+// drop removes `<dir>/<name>.toml` and drops the entry from the sync.Map.
 func (a *aliasStore) drop(name string) (bool, error) {
 	if a == nil {
 		return false, nil
 	}
-	a.load()
-	a.mu.Lock()
-	if _, ok := a.m[name]; !ok {
-		a.mu.Unlock()
-		return false, nil
+	a.ensureLoaded()
+	p, err := a.filePath(name)
+	if err != nil {
+		return false, err
 	}
-	delete(a.m, name)
-	m := make(map[string]string, len(a.m))
-	for k, v := range a.m {
-		m[k] = v
+	_, existed := a.m.LoadAndDelete(name)
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return existed, err
 	}
-	a.mu.Unlock()
-	return true, fsutil.WriteFileAtomic(a.path, marshalAliases(m))
+	return existed, nil
 }
 
-// sorted returns the saved entries as a name-ordered slice, so a listing reads the
-// same way twice.
+// sorted returns the saved entries in name order.
 func (a *aliasStore) sorted() [][2]string {
 	if a == nil {
 		return nil
 	}
-	m := a.load()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([][2]string, 0, len(m))
-	for name, expansion := range m {
+	a.ensureLoaded()
+	var out [][2]string
+	a.m.Range(func(k, v any) bool {
+		name, _ := k.(string)
+		expansion, _ := v.(string)
 		out = append(out, [2]string{name, expansion})
-	}
+		return true
+	})
 	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
 	return out
-}
-
-// marshalAliases renders one alias table as indented JSON. encoding/json sorts map
-// keys, so a diff of this file after one alias changes is one line.
-func marshalAliases(m map[string]string) []byte {
-	raw, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return []byte("{}\n")
-	}
-	return append(raw, '\n')
 }

@@ -25,45 +25,39 @@ import (
 
 // Manager is a thread-safe registry of sessions with persistence.
 type Manager struct {
-	// approvalMu guards approvalListeners, which fan approval transitions out to
-	// every interested subsystem (the web UI hub, the notify wake-up).
+	// approvalListeners fan approval transitions out to every interested
+	// subsystem (the web UI hub, the notify wake-up).
 	//
-	// It is a list rather than a single slot because the subscribers are
-	// independent: main installs the agent wake-up and the web UI installs its
-	// push, and neither is a replacement for the other. A single slot silently
-	// dropped one of them.
-	approvalMu        sync.Mutex
-	approvalListeners []func(sessionID string, req approval.Request)
+	// A LIST RATHER THAN A SLOT, because the subscribers are independent: main
+	// installs the agent wake-up and the web UI installs its push, and neither
+	// replaces the other. A single slot silently dropped one of them.
+	//
+	// THE LIST IS IMMUTABLE ONCE PUBLISHED. Add copies it and swaps the pointer;
+	// notify reads it once. An append-only subscriber list published as an atomic
+	// pointer is the copy-on-write shape: adding is rare and never rewrites what a
+	// broadcast is iterating, so no lock has to be held while callbacks run.
+	approvalListeners atomic.Pointer[[]func(sessionID string, req approval.Request)]
 
-	// activityMu guards activityListeners, which report that a shell received
-	// input and from where. A browser keystroke is known to the tab that sent it,
-	// but input an agent sends over MCP happens entirely server-side, so without
-	// this signal a channel driven by MCP would never show it.
+	// activityListeners report that a shell received input and from where. A
+	// browser keystroke is known to the tab that sent it, but input an agent sends
+	// over MCP happens entirely server-side, so without this signal a channel
+	// driven by MCP would never show it.
 	//
-	// A list for the same reason as approvalListeners: subscribers are
-	// independent and one must not displace another.
-	activityMu        sync.Mutex
-	activityListeners []func(shellID string, src InputSource, submit bool)
+	// Same shape and same reason as approvalListeners above.
+	activityListeners atomic.Pointer[[]func(shellID string, src InputSource, submit bool)]
 
-	// persistMu serialises persistOne, because taking a snapshot and writing it are
-	// ONE operation and the code is not shaped like it.
+	// persistTokens gives each session a ONE-SLOT CHANNEL TOKEN to serialize its
+	// own persistOne (see AGENTS.md rule 4: "可取消的串行化用一槽 channel 令牌").
 	//
-	// persistOne reads the session at the top and writes it at the bottom, with the
-	// shell manifests (an fsync each, ~7ms) in between. Without this lock two persists
-	// race, and the loser is the NEWER state: a persist that started before a session
-	// died can finish after the one that recorded why it died, putting the older
-	// manifest back on disk with the reason gone — which is precisely the fact issue
-	// #176 exists to keep.
+	// PER SESSION, NOT A MANAGER MUTEX. An fsync takes ~7ms, and on a slow disk a
+	// rename takes tens of milliseconds; a single manager-wide mutex made session A's
+	// write block every unrelated session B from persisting or renaming.
 	//
-	// Seen as `TestWhyASessionDiedIsRecordedAndSurvivesARestart` failing on CI with the
-	// reason live in memory and empty on disk, and reproduced locally at -cpu=1. It is
-	// not a test-only race: `get` after a restart is where a user asks why their session
-	// disappeared, and the answer was being overwritten.
-	//
-	// Per manager rather than per session: the store already takes one lock per manifest
-	// write, so the fsync order is unchanged, and a map of per-session locks would be
-	// state to keep correct for no measured gain.
-	persistMu sync.Mutex
+	// The channel token is self-contained: the token is in the channel when free,
+	// acquired with <-tok, returned with tok <- struct{}{}. No mutex is held across
+	// disk I/O, and independent sessions write concurrently without queuing behind
+	// each other.
+	persistTokens sync.Map // sessionID string -> chan struct{}
 
 	// persistHook, when set, runs inside persistOne between taking the snapshot and
 	// writing it — the window the lock above closes. Nil in production; a test uses it to
@@ -509,43 +503,37 @@ func (m *Manager) MarkAllDead() {
 // per manifest, so rewriting ten unchanged sessions to record one rename cost ten
 // fsyncs and ~65ms. The previous code did exactly that at nine call sites, all but
 // one of which change a single session.
+func (m *Manager) persistToken(id string) chan struct{} {
+	if v, ok := m.persistTokens.Load(id); ok {
+		return v.(chan struct{})
+	}
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{}
+	actual, _ := m.persistTokens.LoadOrStore(id, ch)
+	return actual.(chan struct{})
+}
+
 func (m *Manager) persistOne(id string) {
-	if m.store == nil {
+	if m.store == nil || id == "" {
 		return
 	}
-	m.persistMu.Lock()
-	defer m.persistMu.Unlock()
+	tok := m.persistToken(id)
+	<-tok
+	defer func() { tok <- struct{}{} }()
+
 	s := m.Get(id)
 	if s == nil {
 		return
 	}
 	sess := s.Info()
+	shells := s.SnapshotShells()
+
 	if hook := m.persistHook.Load(); hook != nil {
 		(*hook)()
 	}
-	// A manifest that fails to write is state the caller believes is durable, so it
-	// is logged rather than discarded. This is not hypothetical: on Windows the
-	// rename can be refused while a reader holds the old manifest open, and when
-	// that happened here the shell's exit status stayed "running" on disk forever
-	// even though the session's own manifest was rewritten - the restart then
-	// resurrected a finished shell as a live one. (The store now retries that one
-	// transient failure; this log is what makes any remaining failure visible.)
-	// Write what the snapshot holds, and REMOVE what it no longer holds.
-	//
-	// Saving alone was not a sync: SaveShell writes one shell's manifest and never
-	// removes one, so a shell dropped from shellHistory stayed on disk forever. The
-	// in-memory view looked right while DELETE had actually left the record behind,
-	// and a restart would read the orphan back into the session. That is the same
-	// class of bug as the close paths themselves — the record outliving the decision
-	// to destroy it — so the reconcile belongs here, where "make disk match memory"
-	// is the stated job.
-	//
-	// `live` is the set the snapshot just produced; anything in the shell directory
-	// outside it is a removed channel. DeleteShell drops the manifest AND the logs,
-	// which is what DELETE means; an archived shell is still in the snapshot, so it is
-	// in `live` and survives untouched.
-	live := make(map[string]bool)
-	for _, sh := range s.SnapshotShells() {
+
+	live := make(map[string]bool, len(shells))
+	for _, sh := range shells {
 		live[sh.ID] = true
 		if err := m.store.SaveShell(id, sh); err != nil {
 			slog.Error("shell manifest write failed", "session_id", id, "shell_id", sh.ID, "status", sh.Status, "err", err)
@@ -566,15 +554,6 @@ func (m *Manager) persistOne(id string) {
 		slog.Error("session manifest write failed", "session_id", id, "err", err)
 	}
 }
-
-// persist writes every session's manifest. Use persistOne for a single session;
-// this exists for the operations that genuinely change the whole table
-// (MarkAllDead, RestoreDead) and for callers holding a snapshot written before
-// their change.
-//
-// The slice argument is the pre-change snapshot some callers already have; it is
-// used only to know which ids to refresh, and each id's content is read fresh, so
-// a stale entry in the snapshot cannot publish stale state.
 func (m *Manager) persist(sessions ...[]api.Session) {
 	if m.store == nil {
 		return

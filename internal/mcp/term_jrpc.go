@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"strings"
 	"sync"
 	"time"
@@ -55,12 +56,21 @@ import (
 // ponytail: an in-memory map with no eviction. A peer is opened inside one
 // conversation and closed with `close`; the leak would be one struct per opened
 // URL. Add a reaper when a long-lived instance is observed accumulating them.
-var (
-	jrpcChannelsMu sync.Mutex
-	jrpcChannels   = map[string]*jrpcHandle{}
-	peerSeqMu      sync.Mutex
-	peerSeq        = map[string]int{}
-)
+//
+// A sync.Map, NOT A MAP AND A MUTEX. Every operation here touches one key: a lookup
+// by address, one store on open, one delete on close, and a Range for the listing.
+// There is no invariant spanning two entries, so there is nothing for a lock to
+// protect — the mutex was three obligations (unlock on every return, don't hold it
+// across the dial) that the runtime now keeps for us.
+var jrpcChannels sync.Map // address string -> *jrpcHandle
+
+// peerSeq numbers the connections opened on one (session, kind), so a second
+// browser is `:2` and stays `:2`.
+//
+// ONE ATOMIC COUNTER PER KEY, in a sync.Map: the number is monotonic per key by
+// itself (nothing else to keep consistent), so an int64 with Add is the whole
+// implementation.
+var peerSeq sync.Map // peerSeqKey string -> *atomic.Uint64
 
 // peerKey renders a peer's address: `<session> <kind>:<index>`.
 //
@@ -81,10 +91,9 @@ func peerKey(sessionID, kind, index string) string {
 // ponytail: an in-memory counter beside the registry. It resets when the process
 // restarts, which is fine — so did every peer.
 func nextPeerIndex(sessionID, kind string) string {
-	peerSeqMu.Lock()
-	defer peerSeqMu.Unlock()
-	peerSeq[peerSeqKey(sessionID, kind)]++
-	return strconv.Itoa(peerSeq[peerSeqKey(sessionID, kind)])
+	key := peerSeqKey(sessionID, kind)
+	v, _ := peerSeq.LoadOrStore(key, new(atomic.Uint64))
+	return strconv.FormatUint(v.(*atomic.Uint64).Add(1), 10)
 }
 
 func peerSeqKey(sessionID, kind string) string { return sessionID + " " + kind }
@@ -219,9 +228,7 @@ func (s *Server) jrpcOpenWithHeaders(ctx context.Context, stmt directive.Stateme
 	if op == "cdp" {
 		h.cdp = newCDPState()
 	}
-	jrpcChannelsMu.Lock()
-	jrpcChannels[handle] = h
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Store(handle, h)
 
 	// "OPEN" REPORTS WHAT IT FOUND, NOT JUST THAT IT OPENED.
 	//
@@ -437,12 +444,14 @@ func (s *Server) jrpcChannel(ctx context.Context, stmt directive.Statement, win 
 		return badRequest(stmt, op+" "+sub+" needs a channel address (the one "+op+" open returned)")
 	}
 	handle := rest[0]
-	jrpcChannelsMu.Lock()
-	h, ok := jrpcChannels[handle]
-	if ok && sub == "close" {
-		delete(jrpcChannels, handle)
+	var h *jrpcHandle
+	var ok bool
+	if v, found := jrpcChannels.Load(handle); found {
+		h, ok = v.(*jrpcHandle), true
 	}
-	jrpcChannelsMu.Unlock()
+	if ok && sub == "close" {
+		jrpcChannels.Delete(handle)
+	}
 
 	if !ok {
 		if op == "mcp" && sub != "open" {

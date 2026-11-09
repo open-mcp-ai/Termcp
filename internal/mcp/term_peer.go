@@ -28,9 +28,7 @@ func isPeerKind(kind string) bool {
 // a kind. A registry key is `<session> <kind>`, which a channel handle can never be,
 // so the check stays exact.
 func isPeerHandle(target string) bool {
-	jrpcChannelsMu.Lock()
-	_, found := jrpcChannels[target]
-	jrpcChannelsMu.Unlock()
+	_, found := jrpcChannels.Load(target)
 	return found
 }
 
@@ -96,13 +94,11 @@ func (s *Server) peerOf(stmt directive.Statement) (*jrpcHandle, string, *envelop
 
 // peerConn finds one connection by index, or the only one when no index is given.
 func (s *Server) peerConn(stmt directive.Statement, sessionID, kind, index string) (*jrpcHandle, *envelope.Slot) {
-	jrpcChannelsMu.Lock()
-	defer jrpcChannelsMu.Unlock()
 	if index != "" {
-		if h, ok := jrpcChannels[peerKey(sessionID, kind, index)]; ok {
-			return h, nil
+		if v, ok := jrpcChannels.Load(peerKey(sessionID, kind, index)); ok {
+			return v.(*jrpcHandle), nil
 		}
-		live := liveAddrsLocked(sessionID, kind)
+		live := liveAddrs(sessionID, kind)
 		body := "this session has no " + kind + ":" + index + ", so that address names nothing."
 		if len(live) > 0 {
 			body += " Live connections: " + strings.Join(live, ", ") + "."
@@ -115,11 +111,12 @@ func (s *Server) peerConn(stmt directive.Statement, sessionID, kind, index strin
 	// No index: allowed only while the answer is unique.
 	var found *jrpcHandle
 	n := 0
-	for _, h := range jrpcChannels {
-		if h.sessionID == sessionID && h.kind == kind {
+	jrpcChannels.Range(func(_, v any) bool {
+		if h := v.(*jrpcHandle); h.sessionID == sessionID && h.kind == kind {
 			found, n = h, n+1
 		}
-	}
+		return true
+	})
 	switch n {
 	case 1:
 		return found, nil
@@ -130,7 +127,7 @@ func (s *Server) peerConn(stmt directive.Statement, sessionID, kind, index strin
 			"Open one first: `open <session> " + kind + " <url>` (a browser's devtools endpoint is http://host:port)."}
 		return nil, &slot
 	default:
-		live := liveAddrsLocked(sessionID, kind)
+		live := liveAddrs(sessionID, kind)
 		slot := envelope.Slot{Code: 400, Headers: map[string]string{
 			"Path": stmt.Path, "Error-Code": "ambiguous",
 		}, Body: "this session has " + fmt.Sprint(n) + " " + kind + " connections, so `" + kind +
@@ -140,13 +137,15 @@ func (s *Server) peerConn(stmt directive.Statement, sessionID, kind, index strin
 }
 
 // liveAddrsLocked renders a session's connections of one kind, sorted.
-func liveAddrsLocked(sessionID, kind string) []string {
-	out := make([]string, 0, 2)
-	for key := range jrpcChannels {
-		if strings.HasPrefix(key, sessionID+" "+kind+":") {
+func liveAddrs(sessionID, kind string) []string {
+	prefix := sessionID + " " + kind + ":"
+	var out []string
+	jrpcChannels.Range(func(k, _ any) bool {
+		if key, _ := k.(string); strings.HasPrefix(key, prefix) {
 			out = append(out, key)
 		}
-	}
+		return true
+	})
 	sort.Strings(out)
 	return out
 }
@@ -182,15 +181,14 @@ func closePeersBySession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
-	jrpcChannelsMu.Lock()
 	var doomed []*jrpcHandle
-	for key, h := range jrpcChannels {
-		if h.sessionID == sessionID {
+	jrpcChannels.Range(func(k, v any) bool {
+		if h := v.(*jrpcHandle); h.sessionID == sessionID {
 			doomed = append(doomed, h)
-			delete(jrpcChannels, key)
+			jrpcChannels.Delete(k)
 		}
-	}
-	jrpcChannelsMu.Unlock()
+		return true
+	})
 	for _, h := range doomed {
 		// A handle without a channel is one that failed before it was usable. This runs
 		// on the session-death path, where a nil dereference would take the process down
@@ -203,9 +201,7 @@ func closePeersBySession(sessionID string) {
 
 // closePeer ends a peer and forgets it.
 func (s *Server) closePeer(stmt directive.Statement, h *jrpcHandle) envelope.Slot {
-	jrpcChannelsMu.Lock()
-	delete(jrpcChannels, peerKey(h.sessionID, h.kind, h.index))
-	jrpcChannelsMu.Unlock()
+	jrpcChannels.Delete(peerKey(h.sessionID, h.kind, h.index))
 	_ = h.ch.Close()
 	return noContent(stmt)
 }
@@ -242,13 +238,11 @@ func (s *Server) peerChannel(ctx context.Context, stmt directive.Statement, win 
 		// JSON-RPC server — and when it is not a peer, typing at the process is the
 		// right thing to do: no handshake, because a handshake would consume the very
 		// frames the caller is about to read.
-		jrpcChannelsMu.Lock()
-		found, ok := jrpcChannels[stmt.Target]
-		jrpcChannelsMu.Unlock()
+		v, ok := jrpcChannels.Load(stmt.Target)
 		if !ok {
 			return []envelope.Slot{s.mcpStdio(ctx, stmt, sub, stmt.Target, []string{frame}, win)}
 		}
-		h = found
+		h = v.(*jrpcHandle)
 	}
 
 	// THE WINDOW IS THIS SIDE'S OWN DEADLINE (#158). Without it the only bound on a
