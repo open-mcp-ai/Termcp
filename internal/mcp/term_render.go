@@ -494,14 +494,13 @@ func peerLines(sessions []api.Session) string {
 	for _, sess := range sessions {
 		want[sess.ID] = true
 	}
-	jrpcChannelsMu.Lock()
-	handles := make([]*jrpcHandle, 0, len(jrpcChannels))
-	for _, h := range jrpcChannels {
-		if want[h.sessionID] {
+	var handles []*jrpcHandle
+	jrpcChannels.Range(func(_, v any) bool {
+		if h := v.(*jrpcHandle); want[h.sessionID] {
 			handles = append(handles, h)
 		}
-	}
-	jrpcChannelsMu.Unlock()
+		return true
+	})
 	if len(handles) == 0 {
 		return ""
 	}
