@@ -709,15 +709,19 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	// THE LOCK COVERS THE WRITES ONLY. The wait for output below must not hold it, or
 	// a slow command would park every later run on this channel for the length of its
 	// window -- the same reason recvReaders is per handle rather than global.
-	line := s.lineLock(stmt.Target)
-	line.Lock()
+	tok := s.lineToken(stmt.Target)
+	select {
+	case <-tok:
+	case <-ctx.Done():
+		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+			msg: "timed out waiting for a prior command line on this channel to finish submitting"})
+	}
+	defer func() { tok <- struct{}{} }()
 	_, inputFail := s.callTool(ctx, "shell_input", argsOf("shell_id", stmt.Target, "text", stmt.Payload))
 	if inputFail != nil {
-		line.Unlock()
 		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, inputFail, s))
 	}
 	keyRes, keyFail := s.callTool(ctx, "shell_key", argsOf("shell_id", stmt.Target, "key", "enter"))
-	line.Unlock()
 	if keyFail != nil {
 		return s.slotFromFailure(ctx, stmt, pipeClosedHint(stmt.Target, keyFail, s))
 	}

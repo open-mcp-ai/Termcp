@@ -27,9 +27,7 @@ func TestEnsureGroupSessionSecondCallerCanLeaveItsDial(t *testing.T) {
 	// A dial in flight: set, and never finished. This is what a second caller finds
 	// while the first is still inside the handshake.
 	d := &groupDial{done: make(chan struct{})}
-	g.mu.Lock()
-	g.dialing = d
-	g.mu.Unlock()
+	g.dialing.Store(d)
 
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer shortCancel()
@@ -54,9 +52,7 @@ func TestEnsureGroupSessionSharesTheDialsResult(t *testing.T) {
 	g := &extGroup{key: "test-group", target: "internal"}
 
 	d := &groupDial{done: make(chan struct{})}
-	g.mu.Lock()
-	g.dialing = d
-	g.mu.Unlock()
+	g.dialing.Store(d)
 
 	type outcome struct {
 		sess *session.Session

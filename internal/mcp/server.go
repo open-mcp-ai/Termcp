@@ -109,7 +109,7 @@ type Server struct {
 	// the cursor are two halves of one position.
 	recvPending sync.Map // handle string -> *frameQueue
 
-	// lineLocks serialises the two writes that make ONE line on a channel (#212).
+	// lineTokens serialises the two writes that make ONE line on a channel (#212).
 	//
 	// `run` is two calls into the shell layer — the text, then the enter that ends it
 	// — and nothing used to keep another `run` from landing between them. Two
@@ -118,7 +118,7 @@ type Server struct {
 	//
 	// PER HANDLE and held ONLY around the writes: the wait for output that follows
 	// must not hold it, or a run would park every later command on the channel.
-	lineLocks sync.Map // handle string -> *sync.Mutex
+	lineTokens sync.Map // handle string -> chan struct{}
 
 	// closedReads is where each CLOSED channel's plain `read` has read up to (#188).
 	//

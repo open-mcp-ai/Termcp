@@ -8,7 +8,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -420,13 +419,14 @@ func (s *Server) recvReader(handle string) chan struct{} {
 // two calls, and two runs interleaving there produce a stream no line reader can
 // parse (issue #212). Callers hold this across both writes and release it before
 // waiting for output.
-func (s *Server) lineLock(handle string) *sync.Mutex {
-	if v, ok := s.lineLocks.Load(handle); ok {
-		return v.(*sync.Mutex)
+func (s *Server) lineToken(handle string) chan struct{} {
+	if v, ok := s.lineTokens.Load(handle); ok {
+		return v.(chan struct{})
 	}
-	m := &sync.Mutex{}
-	actual, _ := s.lineLocks.LoadOrStore(handle, m)
-	return actual.(*sync.Mutex)
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	actual, _ := s.lineTokens.LoadOrStore(handle, tok)
+	return actual.(chan struct{})
 }
 
 func (s *Server) recvCursor(handle string) int64 {
