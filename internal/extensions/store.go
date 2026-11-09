@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/BurntSushi/toml"
@@ -33,7 +32,6 @@ var ErrExists = errors.New("extension already exists")
 // upgraded and the other must survive that.
 type Store struct {
 	dataDir  string
-	mu       sync.Mutex
 	onChange atomic.Value // func(name string), fired after Save/Delete/Rename
 }
 
@@ -482,24 +480,22 @@ func (s *Store) Save(e *Extension) error {
 				e.Name, strings.Join(braceAll(written), ", "))
 		}
 	}
-	s.mu.Lock()
-	err := s.saveLocked(e)
-	s.mu.Unlock()
-	if err != nil {
+	if err := s.save(e); err != nil {
 		return err
 	}
-	// ANNOUNCED AFTER THE LOCK IS RELEASED. The subscriber reads the template back
-	// through this same store, so calling it under s.mu was a deadlock waiting for a
-	// subscriber that does more than signal a channel — which is exactly what the
-	// reconciler became when it stopped walking and started syncing by name.
+	// ANNOUNCED WITHOUT ANY LOCK HELD: the subscriber reads the template back through
+	// this same store, and a callback under a lock is what this file must never do.
 	s.notifyChange(e.Name)
 	return nil
 }
 
-// saveLocked writes one validated plain template. The caller holds s.mu and owns the
-// change notification, which is what lets an import write a whole document under one
-// lock and announce it once rather than once per template.
-func (s *Store) saveLocked(e *Extension) error {
+// save writes one validated plain template.
+//
+// NO LOCK: one extension is one directory and one file, and WriteFileAtomic makes the
+// write whole through write-to-sibling + rename. Two saves of different extensions are
+// therefore independent — which is the point: a store-wide lock serialised every
+// template behind whichever disk happened to be busy.
+func (s *Store) save(e *Extension) error {
 	p, err := s.configPath(e.Name)
 	if err != nil {
 		return err
@@ -524,9 +520,7 @@ func (s *Store) Delete(name string) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	err = s.removeLocked(p)
-	s.mu.Unlock()
+	err = s.remove(p)
 	if err != nil {
 		return err
 	}
@@ -534,9 +528,8 @@ func (s *Store) Delete(name string) error {
 	return nil
 }
 
-// removeLocked deletes one template's file and the directory that held it. The
-// caller holds s.mu and owns the change notification.
-func (s *Store) removeLocked(p string) error {
+// remove deletes one template's file and the directory that held it.
+func (s *Store) remove(p string) error {
 	if err := fsutil.Retry(func() error { return os.Remove(p) }); err != nil && !os.IsNotExist(err) {
 		return err
 	}

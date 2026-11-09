@@ -121,53 +121,90 @@ func (s *Store) ImportBatch(data []byte, temporary bool) (*BatchImportResult, er
 		items = append(items, item{name: name, data: raw})
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dirs, err := os.ReadDir(s.root())
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	existing := make(map[string]bool, len(dirs)+len(s.temporary))
+	existing := make(map[string]bool, len(dirs)+len(items))
 	existing["internal"] = true
-	for name := range s.temporary {
-		existing[strings.ToLower(name)] = true
-	}
+	s.temporary.Range(func(k, _ any) bool {
+		existing[strings.ToLower(k.(string))] = true
+		return true
+	})
 	for _, dir := range dirs {
 		if dir.IsDir() && !strings.HasPrefix(dir.Name(), ".") {
 			existing[strings.ToLower(dir.Name())] = true
 		}
 	}
-	result := &BatchImportResult{Imported: len(items)}
-	for i := range items {
-		original := items[i].name
-		if existing[strings.ToLower(original)] {
-			items[i].name = availableBatchName(original, existing, reserved)
-			result.Renamed = append(result.Renamed, BatchRename{From: original, To: items[i].name})
+	if !temporary {
+		if err := os.MkdirAll(s.root(), 0700); err != nil {
+			return nil, err
 		}
-		existing[strings.ToLower(items[i].name)] = true
 	}
-	if temporary {
-		if s.temporary == nil {
-			s.temporary = make(map[string][]byte)
+	result := &BatchImportResult{}
+
+	// ONE NAME AT A TIME, claimed under that name's own token, and the claim is
+	// double-checked rather than assumed: an import that read the directory before a
+	// concurrent save landed must not write over it. The store-wide lock this replaces
+	// also serialised every unrelated profile behind the whole import.
+	claim := func(name string, data []byte) (bool, error) {
+		unlock := s.lockName(name)
+		defer unlock()
+		if s.checkNameCollision(name, "") != nil {
+			return false, nil
 		}
-		for _, item := range items {
-			s.temporary[item.name] = append([]byte(nil), item.data...)
+		if temporary {
+			s.temporary.Store(name, append([]byte(nil), data...))
+			return true, nil
 		}
-	} else {
-		created := make([]string, 0, len(items))
-		for _, item := range items {
-			p := filepath.Join(s.root(), item.name, "config.toml")
-			if err = os.MkdirAll(filepath.Dir(p), 0700); err == nil {
-				created = append(created, p)
-				err = fsutil.WriteFileAtomic(p, item.data)
+		p := filepath.Join(s.root(), name, "config.toml")
+		if err := os.Mkdir(filepath.Dir(p), 0700); err != nil {
+			if os.IsExist(err) {
+				return false, nil
 			}
-			if err != nil {
-				for _, path := range created {
-					_ = os.Remove(path)
-					_ = os.Remove(filepath.Dir(path))
+			return false, err
+		}
+		if err := fsutil.WriteFileAtomic(p, data); err != nil {
+			_ = os.Remove(filepath.Dir(p))
+			return false, err
+		}
+		return true, nil
+	}
+	created := make([]string, 0, len(items))
+	rollback := func() {
+		for _, name := range created {
+			if temporary {
+				s.temporary.Delete(name)
+				continue
+			}
+			p := filepath.Join(s.root(), name, "config.toml")
+			// Only remove what this import is still responsible for: a concurrent save
+			// may have replaced it, and that is not ours to delete.
+			if _, err := os.Stat(p); err == nil {
+				_ = os.Remove(p)
+				_ = os.Remove(filepath.Dir(p))
+			}
+		}
+	}
+	for _, item := range items {
+		original := item.name
+		name := item.name
+		for {
+			ok, cerr := claim(name, item.data)
+			if cerr != nil {
+				rollback()
+				return nil, cerr
+			}
+			if ok {
+				if name != original {
+					result.Renamed = append(result.Renamed, BatchRename{From: original, To: name})
 				}
-				return nil, err
+				result.Imported++
+				created = append(created, name)
+				break
 			}
+			name = availableBatchName(original, existing, reserved)
+			existing[strings.ToLower(name)] = true
 		}
 	}
 	s.notifyChange()

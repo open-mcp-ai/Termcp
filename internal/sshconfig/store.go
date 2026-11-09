@@ -35,10 +35,49 @@ var ErrReserved = errors.New("reserved ssh config")
 // Store manages dataDir/ssh_configs/<name>/config.toml for remote profiles.
 // The built-in "internal" profile is virtual: it is never written to disk.
 type Store struct {
-	dataDir   string
-	mu        sync.Mutex
-	temporary map[string][]byte // process-local profiles; guarded by mu
-	onChange  atomic.Value      // func(), set via SetOnChange, called after Save/Delete/Rename
+	dataDir string
+
+	// temporary holds process-local profiles. A sync.Map: each entry is one name's
+	// whole state and no rule spans two names.
+	temporary sync.Map // name string -> []byte
+
+	// nameTokens serialises the few operations that are a check-and-write on ONE
+	// name (collision test, then file or temporary entry). The key is the lowercased
+	// name, because uniqueness is case-insensitive — so `prod` and `PROD` share a
+	// token while `prod` and `staging` do not. That is the whole point of splitting
+	// what used to be one lock: unrelated profiles save in parallel.
+	nameTokens sync.Map // lower(name) string -> chan struct{} (1-slot token)
+
+	onChange atomic.Value // func(), set via SetOnChange, called after Save/Delete/Rename
+}
+
+// lockName takes the token for one name and returns its release. Tokens are 1-slot
+// channels rather than mutexes so the acquisition is a plain send, and a caller that
+// already holds another name's token can never deadlock by ordering.
+func (s *Store) lockName(name string) func() {
+	key := strings.ToLower(name)
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	actual, _ := s.nameTokens.LoadOrStore(key, tok)
+	ch := actual.(chan struct{})
+	<-ch
+	return func() { ch <- struct{}{} }
+}
+
+// lockNames takes several tokens in sorted order, so two callers that need the same
+// pair (a rename) cannot each hold what the other wants.
+func (s *Store) lockNames(names ...string) func() {
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	releases := make([]func(), 0, len(sorted))
+	for _, n := range sorted {
+		releases = append(releases, s.lockName(n))
+	}
+	return func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
 }
 
 // SetOnChange registers a callback fired after Save, Delete, or Rename succeeds.
@@ -110,14 +149,10 @@ func (s *Store) Load(name string) (*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	data, inMemory := s.temporary[name]
-	data = append([]byte(nil), data...)
-	s.mu.Unlock()
-	if inMemory {
-		return ParseAndValidate(data)
+	if v, inMemory := s.temporary.Load(name); inMemory {
+		return ParseAndValidate(v.([]byte))
 	}
-	data, err = os.ReadFile(p)
+	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("ssh config %q %w (use data-dir/ssh_configs/%s/config.toml)", name, ErrNotFound, name)
@@ -148,14 +183,10 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	data, inMemory := s.temporary[name]
-	data = append([]byte(nil), data...)
-	s.mu.Unlock()
-	if inMemory {
-		return data, nil
+	if v, inMemory := s.temporary.Load(name); inMemory {
+		return append([]byte(nil), v.([]byte)...), nil
 	}
-	data, err = os.ReadFile(p)
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +199,6 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 // List returns sorted config names: virtual "internal", temporary profiles, and profiles on disk.
 // Leftover ssh_configs/internal/ directories are ignored.
 func (s *Store) List() ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	entries, err := os.ReadDir(s.root())
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -178,10 +207,12 @@ func (s *Store) List() ([]string, error) {
 	}
 	names := []string{"internal"}
 	seen := map[string]bool{"internal": true}
-	for name := range s.temporary {
+	s.temporary.Range(func(k, _ any) bool {
+		name := k.(string)
 		names = append(names, name)
 		seen[name] = true
-	}
+		return true
+	})
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
@@ -217,8 +248,6 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 		if _, err := ParseInternalOverride(data, InternalEntry()); err != nil {
 			return err
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
 		p := s.internalOverridePath()
 		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 			return err
@@ -235,9 +264,9 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.checkNameCollisionLocked(name, name); err != nil {
+	unlock := s.lockName(name)
+	defer unlock()
+	if err := s.checkNameCollision(name, name); err != nil {
 		return err
 	}
 	p := filepath.Join(s.root(), name, "config.toml")
@@ -246,10 +275,7 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 			return err
 		}
 		_ = os.Remove(filepath.Dir(p))
-		if s.temporary == nil {
-			s.temporary = make(map[string][]byte)
-		}
-		s.temporary[name] = append([]byte(nil), data...)
+		s.temporary.Store(name, append([]byte(nil), data...))
 		s.notifyChange()
 		return nil
 	}
@@ -259,24 +285,32 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 	if err := fsutil.WriteFileAtomic(p, data); err != nil {
 		return err
 	}
-	delete(s.temporary, name)
+	s.temporary.Delete(name)
 	s.notifyChange()
 	return nil
 }
 
 // IsTemporary reports whether the profile exists only in this process.
 func (s *Store) IsTemporary(name string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.temporary[name]
+	_, ok := s.temporary.Load(name)
 	return ok
 }
 
-func (s *Store) checkNameCollisionLocked(name, exclude string) error {
-	for existing := range s.temporary {
+// checkNameCollision reports whether the name is taken, case-insensitively. The
+// caller holds that name's token, which is what makes the answer usable: without it
+// another saver could claim the name between this check and the write.
+func (s *Store) checkNameCollision(name, exclude string) error {
+	var clash string
+	s.temporary.Range(func(k, _ any) bool {
+		existing := k.(string)
 		if existing != exclude && strings.EqualFold(existing, name) {
-			return fmt.Errorf("config already exists: %s", existing)
+			clash = existing
+			return false
 		}
+		return true
+	})
+	if clash != "" {
+		return fmt.Errorf("config already exists: %s", clash)
 	}
 	entries, err := os.ReadDir(s.root())
 	if err != nil && !os.IsNotExist(err) {
@@ -319,13 +353,16 @@ func (s *Store) Rename(oldName, newName string) error {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.checkNameCollisionLocked(newName, oldName); err != nil {
+	// BOTH NAMES, TAKEN IN SORTED ORDER. A rename moves two names at once, so it is
+	// the one operation here that needs two tokens; sorting is what stops a concurrent
+	// rename of the pair in the other direction from deadlocking against it.
+	unlock := s.lockNames(oldName, newName)
+	defer unlock()
+	if err := s.checkNameCollision(newName, oldName); err != nil {
 		return err
 	}
-	if data, ok := s.temporary[oldName]; ok {
-		if _, exists := s.temporary[newName]; exists {
+	if v, ok := s.temporary.Load(oldName); ok {
+		if _, exists := s.temporary.Load(newName); exists {
 			return fmt.Errorf("config already exists: %s", newName)
 		}
 		if _, err := os.Stat(newPath); err == nil {
@@ -333,8 +370,8 @@ func (s *Store) Rename(oldName, newName string) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		s.temporary[newName] = data
-		delete(s.temporary, oldName)
+		s.temporary.Store(newName, v)
+		s.temporary.Delete(oldName)
 		s.notifyChange()
 		return nil
 	}
@@ -376,9 +413,9 @@ func (s *Store) Delete(name string) error {
 		return err
 	}
 	dir := filepath.Dir(p)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.temporary, name)
+	unlock := s.lockName(name)
+	defer unlock()
+	s.temporary.Delete(name)
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return err
 	}
