@@ -2,7 +2,6 @@ package jrpc
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 )
@@ -63,8 +62,9 @@ func TestAnAnswerWithNoWaiterIsStillBuffered(t *testing.T) {
 		dead:    make(chan struct{}),
 		readErr: make(chan error, 1),
 	}
-	c.evCond = sync.NewCond(&c.evMu)
-
+	// A LITERAL Channel HAS NO WAKE GENERATION, and buffer/wakeAll handles that:
+	// Swap returns nil and nothing is closed. This test only reads the backlog, so
+	// the missing generation is not on its path.
 	c.dispatch(Framed{N: 1, Data: `{"id":7,"result":{"late":true}}`})
 
 	c.evMu.Lock()
