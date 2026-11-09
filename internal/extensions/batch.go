@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -164,8 +165,6 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 		items = append(items, item{name: name, data: raw})
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	list, err := s.List()
 	if err != nil {
 		return nil, err
@@ -174,39 +173,71 @@ func (s *Store) ImportDocument(data []byte) (*BatchImportResult, error) {
 	for _, n := range list {
 		existing[strings.ToLower(n)] = true
 	}
-	result := &BatchImportResult{Imported: len(items)}
-	for i := range items {
-		original := items[i].name
-		if existing[strings.ToLower(original)] {
-			items[i].name = availableDocumentName(original, existing, reserved)
-			result.Renamed = append(result.Renamed, BatchRename{From: original, To: items[i].name})
-		}
-		existing[strings.ToLower(items[i].name)] = true
-	}
+	result := &BatchImportResult{}
 
-	created := make([]string, 0, len(items))
-	for _, it := range items {
-		p, cerr := s.configPath(it.name)
-		if cerr != nil {
-			return nil, cerr
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-			return nil, err
-		}
-		if err := fsutil.WriteFileAtomic(p, it.data); err != nil {
-			for _, name := range created {
-				if cp, cerr := s.configPath(name); cerr == nil {
-					_ = s.removeLocked(cp)
-				}
-			}
-			return nil, err
-		}
-		created = append(created, it.name)
+	// CLAIM EACH NAME BY CREATING ITS DIRECTORY, and let the filesystem arbitrate.
+	//
+	// os.Mkdir fails when the name is taken, and that answer is atomic across
+	// processes and goroutines alike — so a template that appeared since List(), or a
+	// second import running at the same time, loses the race here and gets a suffixed
+	// name instead of being overwritten. This is what the store-wide lock used to buy,
+	// without serialising the saves of unrelated extensions behind the import.
+	type claimed struct {
+		name string
+		path string
+		data []byte
 	}
-	// An import writes many templates under one lock; each created name is
-	// announced, because the runtime's unit of work is a template.
-	for _, name := range created {
-		s.notifyChange(name)
+	if err := os.MkdirAll(s.root(), 0700); err != nil {
+		return nil, err
+	}
+	created := make([]claimed, 0, len(items))
+	rollback := func() {
+		for _, c := range created {
+			// ONLY WHAT IS STILL OURS. A concurrent save may have rewritten this file
+			// since; deleting it then would throw away work this import never wrote.
+			if cur, err := os.ReadFile(c.path); err == nil && bytes.Equal(cur, c.data) {
+				_ = os.Remove(c.path)
+				_ = os.Remove(filepath.Dir(c.path))
+			}
+		}
+	}
+	for _, it := range items {
+		original := it.name
+		name := it.name
+		for {
+			p, cerr := s.configPath(name)
+			if cerr != nil {
+				rollback()
+				return nil, cerr
+			}
+			err := os.Mkdir(filepath.Dir(p), 0700)
+			if err == nil {
+				if err := fsutil.WriteFileAtomic(p, it.data); err != nil {
+					_ = os.Remove(filepath.Dir(p))
+					rollback()
+					return nil, err
+				}
+				created = append(created, claimed{name: name, path: p, data: it.data})
+				break
+			}
+			if !os.IsExist(err) {
+				rollback()
+				return nil, err
+			}
+			// Taken: pick the next free name and try again. `existing` is kept current
+			// so two entries in one document never pick the same suffix.
+			name = availableDocumentName(original, existing, reserved)
+			existing[strings.ToLower(name)] = true
+		}
+		if name != original {
+			result.Renamed = append(result.Renamed, BatchRename{From: original, To: name})
+		}
+		existing[strings.ToLower(name)] = true
+	}
+	result.Imported = len(created)
+	// Each created name is announced, because the runtime's unit of work is a template.
+	for _, c := range created {
+		s.notifyChange(c.name)
 	}
 	return result, nil
 }
