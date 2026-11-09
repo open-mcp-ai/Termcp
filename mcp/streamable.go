@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,9 +39,17 @@ const (
 type streamClient struct {
 	*client
 
-	mu  sync.Mutex
-	out chan []byte // nil until a GET opens
+	// out is the GET stream, once one is open. An atomic pointer rather than a
+	// mutex: it is one field, and every operation is "read it", "install it if
+	// empty", or "clear it if it is still mine" — each of which is a single atomic
+	// step, so there is nothing for a lock to keep consistent across.
+	out atomic.Pointer[streamOut]
 }
+
+// streamOut is the channel behind that pointer. Wrapped so the pointer identity is
+// the stream's identity: closeStream compares what it was handed with what is
+// installed, which a bare channel cannot express safely.
+type streamOut struct{ ch chan []byte }
 
 func newStreamClient(id string) *streamClient {
 	sc := &streamClient{}
@@ -49,13 +58,12 @@ func newStreamClient(id string) *streamClient {
 }
 
 func (sc *streamClient) write(ctx context.Context, frame []byte) error {
-	sc.mu.Lock()
-	out := sc.out
-	open := out != nil && !sc.client.closed.Load()
-	sc.mu.Unlock()
+	p := sc.out.Load()
+	open := p != nil && !sc.client.closed.Load()
 	if !open {
 		return fmt.Errorf("mcpv1: session %s has no open stream", sc.SessionID())
 	}
+	out := p.ch
 	select {
 	case out <- frame:
 		return nil
@@ -69,29 +77,24 @@ func (sc *streamClient) write(ctx context.Context, frame []byte) error {
 // openStream attaches the GET stream, refusing a second one: two readers would
 // split the frames between them and each would see half.
 func (sc *streamClient) openStream() (chan []byte, error) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-	if sc.out != nil {
+	so := &streamOut{ch: make(chan []byte, 64)}
+	if !sc.out.CompareAndSwap(nil, so) {
 		return nil, fmt.Errorf("stream already open")
 	}
-	sc.out = make(chan []byte, 64)
-	return sc.out, nil
+	return so.ch, nil
 }
 
 func (sc *streamClient) closeStream(out chan []byte) {
-	sc.mu.Lock()
-	if sc.out == out {
-		sc.out = nil
+	p := sc.out.Load()
+	if p != nil && p.ch == out {
+		sc.out.CompareAndSwap(p, nil)
 	}
-	sc.mu.Unlock()
 }
 
 // close ends the session and wakes anyone waiting on it.
 func (sc *streamClient) close() {
 	sc.client.closeAll()
-	sc.mu.Lock()
-	sc.out = nil
-	sc.mu.Unlock()
+	sc.out.Store(nil)
 }
 
 // StreamableHTTPServer is the streamable-HTTP transport.
@@ -103,9 +106,11 @@ type StreamableHTTPServer struct {
 	// advertised location. Empty means "the request's own path".
 	endpoint string
 
-	mu       sync.Mutex
-	sessions map[string]*streamClient
-	closed   bool
+	// SAME SHAPE AS THE SSE TRANSPORT: one session per key, one boolean for the
+	// shutdown flag, no invariant spanning them (a session created as the server
+	// closes is refused by the flag check before the store).
+	sessions sync.Map // sessionID string -> *streamClient
+	closed   atomic.Bool
 }
 
 // StreamableOption customises the streamable transport.
@@ -119,7 +124,7 @@ func WithHTTPContextFunc(f func(context.Context, *http.Request) context.Context)
 
 // NewStreamableHTTPServer builds the streamable-HTTP transport.
 func NewStreamableHTTPServer(srv *Server, opts ...StreamableOption) *StreamableHTTPServer {
-	s := &StreamableHTTPServer{srv: srv, sessions: map[string]*streamClient{}}
+	s := &StreamableHTTPServer{srv: srv}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -156,9 +161,9 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 	// Which session, if any. No header on initialize; required afterwards.
 	var sess *streamClient
 	if id := r.Header.Get(sessionHeader); id != "" {
-		s.mu.Lock()
-		sess = s.sessions[id]
-		s.mu.Unlock()
+		if v, ok := s.sessions.Load(id); ok {
+			sess, _ = v.(*streamClient)
+		}
 		if sess == nil {
 			// 404 is the spec's signal for "that session is gone, start over".
 			http.Error(w, "unknown session", http.StatusNotFound)
@@ -170,14 +175,11 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 	// the one that creates one.
 	if isInitializeFrame(body) && sess == nil {
 		sess = newStreamClient(nextSessionID())
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
+		if s.closed.Load() {
 			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		s.sessions[sess.id] = sess
-		s.mu.Unlock()
+		s.sessions.Store(sess.id, sess)
 		w.Header().Set(sessionHeader, sess.id)
 		s.srv.registerSession(ctx, sess)
 	}
@@ -212,9 +214,10 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	s.mu.Lock()
-	sess := s.sessions[id]
-	s.mu.Unlock()
+	var sess *streamClient
+	if v, ok := s.sessions.Load(id); ok {
+		sess, _ = v.(*streamClient)
+	}
 	if sess == nil {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
@@ -264,10 +267,10 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "missing "+sessionHeader, http.StatusBadRequest)
 		return
 	}
-	s.mu.Lock()
-	sess := s.sessions[id]
-	delete(s.sessions, id)
-	s.mu.Unlock()
+	var sess *streamClient
+	if v, ok := s.sessions.LoadAndDelete(id); ok {
+		sess, _ = v.(*streamClient)
+	}
 	if sess == nil {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
@@ -285,14 +288,13 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 // in-flight handlers, which this transport does not track; it is accepted for
 // symmetry with the SSE transport's signature.
 func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	s.closed = true
-	sessions := make([]*streamClient, 0, len(s.sessions))
-	for _, sess := range s.sessions {
-		sessions = append(sessions, sess)
-	}
-	s.sessions = map[string]*streamClient{}
-	s.mu.Unlock()
+	s.closed.Store(true)
+	var sessions []*streamClient
+	s.sessions.Range(func(k, v any) bool {
+		s.sessions.Delete(k)
+		sessions = append(sessions, v.(*streamClient))
+		return true
+	})
 	for _, sess := range sessions {
 		sess.close()
 		s.srv.unregisterSession(ctx, sess)
