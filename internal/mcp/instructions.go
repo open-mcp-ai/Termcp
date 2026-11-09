@@ -47,7 +47,7 @@ with their operating notes. Search here first for a tool or a skill. 'ls': sessi
 state (learn_mode:true adds usage). MCP peer: 'get <session> mcp tools', then
 'call <peer> <tool> {json}'. CDP controls a real browser: 'open <session> cdp <url>',
 then 'call <peer> {method}' — navigate, click, screenshot, eval. Repeated job?
-'create ext' or 'open <session> mcp <url>'.
+'create ext', 'create alias <name> <cmd>' or 'open <session> mcp <url>'.
 
 A HUMAN IS AN APPROVAL CHANNEL
   notify reaches open Web UI pages and delivers to a person; an answer arrives only as

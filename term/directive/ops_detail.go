@@ -1095,10 +1095,19 @@ const createDetail = `Create saved configuration. It outlives every session and 
   create alias ll 'ls a1f3'
 
 AN ALIAS IS A WORD FOR A COMMAND, AND THERE ARE TWO KINDS. "create alias" (and
-"edit alias") writes it to <data-dir>/aliases.json, so it is still there after a
-restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
+"edit alias") writes it to <data-dir>/aliases/<name>.toml, so it is still there after
+a restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
 the process. Both expand at parse time, so the reply's Path shows the command that
 actually ran.
+
+A BODY'S REFERENCES HAVE TWO LEVELS, AND THE DOLLAR COUNT PICKS ONE. One dollar is
+the caller's: $1 and $NAME in the body are filled from the args and vars the caller
+passes when INVOKING the alias, which is what makes one alias a command for many
+arguments. Two dollars are the shell's: $$1 and $$NAME are stored as written and
+reach the directive as a literal $1 for the shell to read -- the alias layer leaves
+them alone. So "create alias runsh 'run h:1 sh -c $$1'" takes no argument and hands
+the shell a $1 it expands itself, while an alias with $1 takes the payload from its
+caller.
 
 AN EXTENSION'S TEMPLATE MAY SHIP ITS OWN, under an [alias] table, and those are
 addressed as <ext>.<alias> — "jira.search openapi". The dot is required: two

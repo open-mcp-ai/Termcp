@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -259,6 +260,114 @@ func firstWord(cmd string) string {
 	return trimmed
 }
 
+// ALIAS ESCAPES: `$$1` AND `$$NAME` MEAN "THE SHELL'S, NOT MINE".
+//
+// A body's `$1` is filled from the CALLER's args (that is what makes an alias a
+// command rather than a macro), and `$NAME` from its vars. There was therefore no way
+// to write a body whose text has to contain a real `$1` — a shell script fragment like
+// `run h:1 'sh -c "echo $1"'` had its `$1` eaten by the alias layer before the shell
+// ever saw it, and `$$1` was passed through to the shell as `$$1` (its PID, then a
+// literal 1).
+//
+// So an escaped reference is swapped for an opaque word before the parse — the same
+// trick the substitution table uses for values, and for the same reason: a token can
+// pass through a parser untouched — and swapped back to the literal `$1` afterwards.
+// The parser never sees a reference, so nothing substitutes it, and the shell receives
+// exactly what the caller wrote.
+func escapeAliasRefs(src string) (string, map[string]string) {
+	if !strings.Contains(src, "$$") {
+		return src, nil
+	}
+	var b strings.Builder
+	repl := map[string]string{}
+	for i := 0; i < len(src); {
+		if src[i] != '$' || i+1 >= len(src) || src[i+1] != '$' {
+			b.WriteByte(src[i])
+			i++
+			continue
+		}
+		// `$$` followed by a name or a positional index is a deferred reference;
+		// a bare `$$` (the shell's own PID) and every other form are left alone,
+		// because rewriting a construct whose meaning depends on something this
+		// server never sees would be a guess.
+		name, end, ok := aliasRefAt(src, i+2)
+		if !ok {
+			b.WriteString("$$")
+			i += 2
+			continue
+		}
+		token := "termcpesc" + strconv.Itoa(len(repl)) + "x"
+		repl[token] = "$" + name
+		b.WriteString(token)
+		i = end
+	}
+	if len(repl) == 0 {
+		return src, nil
+	}
+	return b.String(), repl
+}
+
+// aliasRefAt reads a `$NAME`, `$N`, `${NAME}` or `${N}` shape starting at src[i].
+func aliasRefAt(src string, i int) (string, int, bool) {
+	if i >= len(src) {
+		return "", i, false
+	}
+	if src[i] == '{' {
+		rel := strings.IndexByte(src[i+1:], '}')
+		if rel < 0 {
+			return "", i, false
+		}
+		body := src[i+1 : i+1+rel]
+		if body == "" || strings.ContainsAny(body, ":-#?@!*/%^,") {
+			return "", i, false
+		}
+		return body, i + rel + 2, true
+	}
+	j := i
+	for j < len(src) {
+		c := src[j]
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			j++
+			continue
+		}
+		break
+	}
+	if j == i {
+		return "", i, false
+	}
+	return src[i:j], j, true
+}
+
+// restoreAliasEscapes puts the literal reference back into every text field a parsed
+// statement carries.
+func restoreAliasEscapes(stmts []directive.Statement, repl map[string]string) []directive.Statement {
+	if len(repl) == 0 {
+		return stmts
+	}
+	restore := func(s string) string {
+		for token, ref := range repl {
+			s = strings.ReplaceAll(s, token, ref)
+		}
+		return s
+	}
+	out := make([]directive.Statement, len(stmts))
+	for i, st := range stmts {
+		st.Op, st.Target, st.Kind, st.Key, st.Payload, st.Path = restore(st.Op), restore(st.Target),
+			restore(st.Kind), restore(st.Key), restore(st.Payload), restore(st.Path)
+		for j := range st.Args {
+			st.Args[j] = restore(st.Args[j])
+		}
+		for k, v := range st.Flags {
+			if v != nil {
+				restored := restore(*v)
+				st.Flags[k] = &restored
+			}
+		}
+		out[i] = st
+	}
+	return out
+}
+
 // resolve follows a name through the table until it lands on a directive the
 // parser knows, or fails (unknown name, unparseable expansion, or a cycle).
 //
@@ -281,11 +390,13 @@ func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directiv
 			return nil, nil, false
 		}
 		seen[name] = true
-		f, err := directive.ParseWithSubst(strings.TrimSpace(expansion+" "+rest), sub)
+		escaped, escapes := escapeAliasRefs(strings.TrimSpace(expansion + " " + rest))
+		f, err := directive.ParseWithSubst(escaped, sub)
 		if err == nil {
 			if len(f.Statements) == 0 {
 				return nil, nil, false
 			}
+			f.Statements = restoreAliasEscapes(f.Statements, escapes)
 			// MULTI-STATEMENT ALIASES RUN AS THEY ARE WRITTEN (#284 A2/A3). `ls alias;
 			// ls host` is two statements, and refusing it made the only way to write a
 			// compound alias a way that does not work. Chaining continues only from the
