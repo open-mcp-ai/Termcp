@@ -3,6 +3,7 @@ package buffer
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 // DefaultMaxBytes is kept for API compatibility with buffer.New(maxBytes); sizing is no longer enforced.
@@ -13,118 +14,191 @@ var (
 	ErrReader = errors.New("buffer: invalid reader ID")
 )
 
-type readerState struct {
-	readPos int64 // next byte offset in master to deliver
+// reader is one independent cursor into the stream. Its position is ABSOLUTE and
+// belongs to that reader alone, which is what makes reading lock-free: a read copies
+// bytes out and advances one atomic, and touches nothing another goroutine owns.
+//
+// Absolute rather than relative-to-retained matters because compaction then moves
+// nothing: dropping a prefix raises the snapshot's base, and every cursor still means
+// the byte it always meant.
+type reader struct{ pos atomic.Int64 }
+
+// logState is the whole log as one immutable value. Published by pointer store; the
+// bytes below len(data) are frozen once a reader can see them.
+//
+// APPENDING WRITES PAST A PUBLISHED LENGTH, NEVER INTO IT. append() into spare
+// capacity mutates the same backing array a reader may be copying out of, and that is
+// safe precisely because the two regions do not overlap: the reader stops at the length
+// it loaded, the writer starts there. When capacity runs out append allocates and
+// copies, and a reader holding the old snapshot keeps reading the old array — a
+// complete, unchanging prefix of the same stream.
+type logState struct {
+	data   []byte // retained bytes; data[0] is absolute offset base
+	base   int64  // absolute offset of data[0]
+	closed bool
 }
 
-// Buffer is a thread-safe multi-reader append-only log of process output.
-// All readers share one master byte slice; each reader has an independent read cursor.
-// Fully consumed prefixes are dropped when compactThreshold is exceeded to bound memory.
+// Buffer is a multi-reader append-only log of process output.
+//
+// WHAT NEEDS A LOCK AND WHAT DOES NOT. Writes are ordered by nature — the bytes of one
+// stream arrive in sequence — so writers take turns on a 1-slot token; that token is
+// also what lets compaction and reader creation be mutually exclusive with a write.
+// READS TAKE NOTHING: they load the snapshot, copy, and advance their own cursor. The
+// memcpy of terminal output, which used to happen while every writer waited, is now
+// outside any shared ownership.
 type Buffer struct {
-	mu      sync.Mutex
-	master  []byte
-	readers map[int]*readerState
-	nextID  int
-	closed  bool
+	log      atomic.Pointer[logState]
+	writeTok chan struct{} // 1-slot: one appending writer at a time
+	readers  sync.Map      // int -> *reader
+	nextID   atomic.Int64
+
 	// wake is closed, and replaced, whenever something a waiter could be waiting
-	// for changes: a write, a close, or a reader being unregistered. A waiter takes
-	// the current channel as its last act before releasing the lock and selects on
-	// that, so a change cannot slip between its check and its wait.
-	//
-	// This replaces a sync.Cond, which can only wait untimed. A deadline there had
-	// to be delivered by a timer calling Broadcast from a helper goroutine, so every
-	// waiting read started a second goroutine and left the deadline to that
-	// goroutine being scheduled. Waiting on this channel instead means the caller's
-	// own goroutine does the waiting, and the deadline is one of the things it waits
-	// on. Measured: 24 waiters cost 48 goroutines before and 24 now.
-	wake chan struct{}
-	// baseOffset is the absolute stream offset of master[0]: the number of bytes
-	// this buffer has dropped from the front through compaction. Every offset this
-	// type reports is absolute (baseOffset + a position in master), so dropping a
-	// prefix to reclaim memory never moves a byte.
-	//
-	// The same numbering is used by the on-disk log (a byte's offset is its file
-	// position), so a live read and a persisted read of the same byte agree.
-	baseOffset        int64
-	compactThreshold  int // compact when len(master) > this
-	compactMinAdvance int // and min(readPos) >= this
+	// for changes: a write, a close, or a reader being unregistered or seeked. A
+	// waiter reads the current channel and only then re-checks its condition, so a
+	// change cannot slip between the check and the wait.
+	wake atomic.Pointer[chan struct{}]
+
+	compactThreshold  int // compact when the retained log exceeds this
+	compactMinAdvance int // and at least this much is reclaimable
 }
 
 // New creates a Buffer. maxBytes is ignored (historical ring capacity); output grows without a fixed cap.
 func New(maxBytes int) *Buffer {
 	_ = maxBytes // API compatibility; no hard limit on retained history
 	b := &Buffer{
-		readers:           make(map[int]*readerState),
-		wake:              make(chan struct{}),
+		writeTok:          make(chan struct{}, 1),
 		compactThreshold:  8 << 20, // 8 MiB before attempting prefix trim
 		compactMinAdvance: 1 << 20, // require ≥1 MiB reclaimable prefix
 	}
+	b.log.Store(&logState{})
+	ch := make(chan struct{})
+	b.wake.Store(&ch)
+	b.writeTok <- struct{}{}
 	return b
 }
 
-// wakeLocked tells every waiter that the buffer changed. Caller must hold b.mu.
-//
-// Closing the channel wakes all of them, which is sync.Cond.Broadcast's semantics,
-// and replacing it immediately means the next waiter has something to select on
-// that no one has closed yet. A waiter may be woken for a change it did not want
-// (another reader was unregistered), which re-enters the wait having re-checked its
-// condition - the same spurious-wakeup handling a Cond loop needs.
-func (b *Buffer) wakeLocked() {
-	close(b.wake)
-	b.wake = make(chan struct{})
+// state is the current log. One atomic load; the value is never mutated afterwards.
+func (b *Buffer) state() *logState {
+	if st := b.log.Load(); st != nil {
+		return st
+	}
+	// Zero-value Buffer: publish an empty log once, and lose the race harmlessly.
+	st := &logState{}
+	if b.log.CompareAndSwap(nil, st) {
+		return st
+	}
+	return b.log.Load()
+}
+
+// retained exposes the bytes still held, for tests in this package.
+func (b *Buffer) retained() []byte { return b.state().data }
+
+// beginWrite takes the writer token: the 1-slot channel arrives holding one value, so
+// acquiring it is a receive and releasing is the send back.
+func (b *Buffer) beginWrite() { <-b.writeTok }
+
+// endWrite releases it.
+func (b *Buffer) endWrite() { b.writeTok <- struct{}{} }
+
+// wakeGen returns the channel that the next change will close, creating one if this
+// is a zero-value Buffer. A waiter takes it as its last act before waiting.
+func (b *Buffer) wakeGen() <-chan struct{} {
+	if ch := b.wake.Load(); ch != nil {
+		return *ch
+	}
+	fresh := make(chan struct{})
+	if b.wake.CompareAndSwap(nil, &fresh) {
+		return fresh
+	}
+	return *b.wake.Load()
+}
+
+// wakeAll tells every waiter the buffer changed: swap in a fresh channel, close the one
+// waiters are on. Closing wakes all of them, which is sync.Cond.Broadcast's semantics,
+// and the replacement means the next waiter has something to select on that nobody has
+// closed yet. A waiter may be woken for a change it did not want (another reader was
+// unregistered), which re-enters the wait having re-checked its condition.
+func (b *Buffer) wakeAll() {
+	for {
+		cur := b.wake.Load()
+		if cur == nil {
+			// Publish a channel nobody waits on yet, then retry.
+			fresh := make(chan struct{})
+			if b.wake.CompareAndSwap(nil, &fresh) {
+				return
+			}
+			continue
+		}
+		next := make(chan struct{})
+		if b.wake.CompareAndSwap(cur, &next) {
+			close(*cur)
+			return
+		}
+	}
 }
 
 // NewReader registers a new independent reader that only observes writes after registration.
 func (b *Buffer) NewReader() (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
+	b.beginWrite()
+	defer b.endWrite()
+	st := b.state()
+	if st.closed {
 		return 0, ErrClosed
 	}
-	id := b.nextID
-	b.nextID++
-	b.readers[id] = &readerState{readPos: int64(len(b.master))}
-	return id, nil
+	return b.addReader(st.base + int64(len(st.data))), nil
 }
 
-// NewReaderFromStart registers a reader at the beginning of the retained master buffer
+// NewReaderFromStart registers a reader at the beginning of the retained buffer
 // (full in-memory scrollback for UI reconnect). Caller must drain this reader or it pins old bytes from compaction.
 func (b *Buffer) NewReaderFromStart() (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
+	b.beginWrite()
+	defer b.endWrite()
+	st := b.state()
+	if st.closed {
 		return 0, ErrClosed
 	}
-	id := b.nextID
-	b.nextID++
-	b.readers[id] = &readerState{readPos: 0}
-	return id, nil
+	return b.addReader(st.base), nil
 }
 
 // NewReaderSeededFrom registers a new reader whose cursor starts at srcReaderID's cursor
 // (same logical position — no duplicate copy of backlog).
 func (b *Buffer) NewReaderSeededFrom(srcReaderID int) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
+	b.beginWrite()
+	defer b.endWrite()
+	if b.state().closed {
 		return 0, ErrClosed
 	}
-	src, ok := b.readers[srcReaderID]
+	src, ok := b.readers.Load(srcReaderID)
 	if !ok {
 		return 0, ErrReader
 	}
-	id := b.nextID
-	b.nextID++
-	b.readers[id] = &readerState{readPos: src.readPos}
-	return id, nil
+	return b.addReader(src.(*reader).pos.Load()), nil
+}
+
+// addReader stores a cursor. Caller holds writeTok, which is what keeps a compaction
+// from dropping bytes this reader is being started on.
+func (b *Buffer) addReader(pos int64) int {
+	// IDs start at 0: the session layer's default reader is "reader 0" by name.
+	id := int(b.nextID.Add(1)) - 1
+	r := &reader{}
+	r.pos.Store(pos)
+	b.readers.Store(id, r)
+	return id
+}
+
+// lookup returns one reader by id.
+func (b *Buffer) lookup(id int) (*reader, bool) {
+	v, ok := b.readers.Load(id)
+	if !ok {
+		return nil, false
+	}
+	return v.(*reader), true
 }
 
 func (b *Buffer) Unregister(id int) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.readers, id)
+	b.readers.Delete(id)
 	// A reader blocked on this id must learn it is gone, so this wakes too.
-	b.wakeLocked()
+	b.wakeAll()
 }
 
 // Write appends data for all readers and wakes waiters.
@@ -132,50 +206,56 @@ func (b *Buffer) Write(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
+	b.beginWrite()
+	defer b.endWrite()
+	st := b.state()
+	if st.closed {
 		return ErrClosed
 	}
-	b.master = append(b.master, data...)
-	b.maybeCompactLocked()
-	b.wakeLocked()
+	next := &logState{data: append(st.data, data...), base: st.base}
+	b.compact(next)
+	b.log.Store(next)
+	b.wakeAll()
 	return nil
 }
 
-// maybeCompactLocked drops a prefix of master that every reader has already passed.
-// Caller must hold b.mu.
-func (b *Buffer) maybeCompactLocked() {
-	if len(b.master) <= b.compactThreshold {
+// compact drops a prefix of the log that every reader has already passed. It edits the
+// private snapshot the writer is about to publish, so no reader ever sees it.
+//
+// THE POSITIONS ARE READ WITHOUT A LOCK, and that is deliberate: a reader may seek
+// backwards between this scan and the publish, in which case those bytes are gone and
+// the read clamps to the new base — the same answer a seek to a dropped offset gets.
+func (b *Buffer) compact(next *logState) {
+	if len(next.data) <= b.compactThreshold {
 		return
 	}
-	minPos := int64(len(b.master))
-	for _, rs := range b.readers {
-		if rs.readPos < minPos {
-			minPos = rs.readPos
+	minPos := int64(len(next.data))
+	b.readers.Range(func(_, v any) bool {
+		if p := v.(*reader).pos.Load() - next.base; p < minPos {
+			minPos = p
 		}
-	}
+		return true
+	})
 	if minPos < int64(b.compactMinAdvance) {
 		return
 	}
-	b.master = b.master[minPos:]
-	// Absorb the drop into baseOffset so the absolute numbering is unchanged;
-	// reader positions are relative to master and so must move too.
-	b.baseOffset += minPos
-	for _, rs := range b.readers {
-		rs.readPos -= minPos
-	}
+	next.data = next.data[minPos:]
+	// Absorb the drop into base so the absolute numbering is unchanged, and the
+	// cursors — already absolute — need no adjustment at all.
+	next.base += minPos
 }
 
 func (b *Buffer) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.closed = true
-	b.wakeLocked()
+	b.beginWrite()
+	defer b.endWrite()
+	st := b.state()
+	if st.closed {
+		return
+	}
+	b.log.Store(&logState{data: st.data, base: st.base, closed: true})
+	b.wakeAll()
 }
 
 func (b *Buffer) IsClosed() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.closed
+	return b.state().closed
 }

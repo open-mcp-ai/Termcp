@@ -592,8 +592,8 @@ func TestBuffer_ByteRangeClampsAgainstRetainedBytes(t *testing.T) {
 		t.Fatal("compaction did not happen; the test no longer exercises a dropped prefix")
 	}
 	total := b.Len()
-	if total <= int64(len(b.master)) {
-		t.Fatalf("expected the absolute total (%d) to exceed the retained bytes (%d)", total, len(b.master))
+	if total <= int64(len(b.retained())) {
+		t.Fatalf("expected the absolute total (%d) to exceed the retained bytes (%d)", total, len(b.retained()))
 	}
 
 	// The documented shape: offset 0 with no byte limit.
@@ -605,8 +605,8 @@ func TestBuffer_ByteRangeClampsAgainstRetainedBytes(t *testing.T) {
 	// start 0 is before the earliest retained byte, so it clamps forward to base:
 	// the caller gets the retained suffix and can tell it was shortened by
 	// comparing its request against BaseOffset.
-	if len(out) != len(b.master) {
-		t.Errorf("returned %d bytes, want the %d retained", len(out), len(b.master))
+	if len(out) != len(b.retained()) {
+		t.Errorf("returned %d bytes, want the %d retained", len(out), len(b.retained()))
 	}
 	if want := strings.Repeat("0123456789", 10); string(out) != want {
 		t.Errorf("returned %q, want the retained suffix %q", out, want)
