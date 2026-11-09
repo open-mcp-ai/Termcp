@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 	"io"
-	"sync"
+	"sync/atomic"
 )
 
 // ErrScopeReleased is the cause stored on the scope context once Release runs.
@@ -25,16 +25,21 @@ var ErrScopeReleased = context.Canceled
 //	...
 //	scope.Release() // cancels ctx, runs every registration LIFO, exactly once
 type ResourceScope struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	state  atomic.Pointer[scopeState]
+}
+
+type scopeState struct {
 	cleanup []func()
 	closed  bool
 }
 
 func newResourceScope() *ResourceScope {
 	ctx, cancel := context.WithCancelCause(context.Background())
-	return &ResourceScope{ctx: ctx, cancel: cancel}
+	s := &ResourceScope{ctx: ctx, cancel: cancel}
+	s.state.Store(&scopeState{})
+	return s
 }
 
 // Context returns the scope's cancelable context. Long-lived goroutines and
@@ -63,17 +68,26 @@ func (s *ResourceScope) Err() error {
 // Add registers a cleanup function to run when the scope is released. If the
 // scope is already released the function runs immediately (registration races
 // with release must not leak). Functions run in LIFO order.
+//
+// ZERO LOCKS: state is an immutable snapshot advanced by CAS. If Release ran first,
+// fn runs immediately; otherwise fn is on the list Release takes.
 func (s *ResourceScope) Add(fn func()) {
 	if fn == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		fn()
-		return
+	for {
+		cur := s.state.Load()
+		if cur == nil || cur.closed {
+			fn()
+			return
+		}
+		next := &scopeState{
+			cleanup: append(append([]func(){}, cur.cleanup...), fn),
+		}
+		if s.state.CompareAndSwap(cur, next) {
+			return
+		}
 	}
-	s.cleanup = append(s.cleanup, fn)
 }
 
 // AddCloser registers an io.Closer to be closed on release.
@@ -86,16 +100,22 @@ func (s *ResourceScope) AddCloser(c io.Closer) {
 
 // Release cancels the context and runs every registered cleanup in LIFO order.
 // It is idempotent: subsequent calls are no-ops.
+//
+// Exactly one caller wins the CAS from open to closed and takes the registered
+// list; concurrent calls observe closed and return immediately.
 func (s *ResourceScope) Release() {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
+	var list []func()
+	for {
+		cur := s.state.Load()
+		if cur == nil || cur.closed {
+			return
+		}
+		closed := &scopeState{closed: true}
+		if s.state.CompareAndSwap(cur, closed) {
+			list = cur.cleanup
+			break
+		}
 	}
-	s.closed = true
-	list := s.cleanup
-	s.cleanup = nil
-	s.mu.Unlock()
 
 	s.cancel(ErrScopeReleased)
 	for i := len(list) - 1; i >= 0; i-- {

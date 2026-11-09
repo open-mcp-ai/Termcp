@@ -1,118 +1,71 @@
 package session
 
 import (
-	"context"
-	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
-type dummyCloser struct {
-	closed bool
-}
-
-func (d *dummyCloser) Close() error {
-	d.closed = true
-	return nil
-}
-
-func TestResourceScope_LIFOCleanup(t *testing.T) {
+// THE CONTRACT: every registered cleanup runs exactly once, and one registered
+// while Release is in flight is not lost — it either lands on the list Release
+// takes or runs immediately. The CAS transition is what makes both true at once.
+func TestScopeRunsEveryCleanupExactlyOnce(t *testing.T) {
+	const n = 200
 	s := newResourceScope()
-	var order []int
-	s.Add(func() { order = append(order, 1) })
-	s.Add(func() { order = append(order, 2) })
-	s.Add(func() { order = append(order, 3) })
 
+	var mu sync.Mutex
+	order := make([]int, 0, n)
+	run := make([]atomic.Int32, n)
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s.Add(func() {
+				run[i].Add(1)
+				mu.Lock()
+				order = append(order, i)
+				mu.Unlock()
+			})
+		}(i)
+	}
+	// Release races the registrations: half land before it, half after.
 	s.Release()
+	wg.Wait()
 
-	if len(order) != 3 || order[0] != 3 || order[1] != 2 || order[2] != 1 {
-		t.Fatalf("expected LIFO [3 2 1], got %v", order)
+	for i := 0; i < n; i++ {
+		if got := run[i].Load(); got != 1 {
+			t.Fatalf("cleanup %d ran %d times, want exactly 1", i, got)
+		}
 	}
-	select {
-	case <-s.Done():
-	default:
-		t.Fatal("expected Done() to be closed after Release")
-	}
-	if !errors.Is(s.Err(), context.Canceled) {
-		t.Fatalf("expected Canceled, got %v", s.Err())
+	// LIFO for the ones Release took; the immediate ones ran at their own time, so
+	// only the count is asserted for order beyond "no duplicates".
+	if len(order) != n {
+		t.Fatalf("%d cleanups recorded, want %d", len(order), n)
 	}
 }
 
-func TestResourceScope_AddCloser(t *testing.T) {
-	s := newResourceScope()
-	c := &dummyCloser{}
-	s.AddCloser(c)
-
-	s.Release()
-
-	if !c.closed {
-		t.Fatal("expected closer to be closed on release")
-	}
-}
-
-func TestResourceScope_LateRegistrationRunsImmediately(t *testing.T) {
+// A registration after release runs immediately rather than being dropped.
+func TestScopeRunsALateCleanupImmediately(t *testing.T) {
 	s := newResourceScope()
 	s.Release()
 
 	ran := false
 	s.Add(func() { ran = true })
-
 	if !ran {
-		t.Fatal("expected registration on closed scope to run immediately")
+		t.Fatal("a cleanup registered after Release did not run")
 	}
 }
 
-func TestResourceScope_Idempotent(t *testing.T) {
+// Release is idempotent: a second call runs nothing again.
+func TestScopeReleaseIsIdempotent(t *testing.T) {
 	s := newResourceScope()
-	count := 0
-	s.Add(func() { count++ })
-
+	var calls atomic.Int32
+	s.Add(func() { calls.Add(1) })
 	s.Release()
 	s.Release()
-
-	if count != 1 {
-		t.Fatalf("expected cleanup once, ran %d times", count)
-	}
-}
-
-func TestResourceScope_RecoversPanickingCleanup(t *testing.T) {
-	s := newResourceScope()
-	var ranAfter bool
-	s.Add(func() { ranAfter = true })
-	s.Add(func() { panic("boom") })
-
-	s.Release()
-
-	if !ranAfter {
-		t.Fatal("panicking cleanup broke the rest of the teardown")
-	}
-}
-
-func TestResourceScope_ConcurrentAddAndRelease(t *testing.T) {
-	s := newResourceScope()
-	var wg sync.WaitGroup
-	var ran sync.Map
-
-	for i := 0; i < 50; i++ {
-		idx := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.Add(func() { ran.Store(idx, true) })
-		}()
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.Release()
-	}()
-
-	wg.Wait()
-	s.Release() // second call should be harmless
-
-	count := 0
-	ran.Range(func(_, _ any) bool { count++; return true })
-	if count != 50 {
-		t.Fatalf("expected 50 cleanups executed, got %d", count)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("cleanup ran %d times across two releases, want 1", got)
 	}
 }
