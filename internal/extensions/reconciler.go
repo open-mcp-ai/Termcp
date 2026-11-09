@@ -50,34 +50,20 @@ type Reconciler struct {
 	// attachment are behind their own locks, because a probe goroutine writes them
 	// while the walk reads them. It also guards cancel, so Start and Stop can be
 	// called from different goroutines.
-	// mu guards the two maps, ctx and cancel.
-	//
-	// THIS LOCK IS KEPT ON PURPOSE. Every access to states/groups is a whole-map
-	// operation — a scan to build a status list, a walk to arm timers, a delete by a
-	// key computed from the entry — spread across events.go, groups.go and
-	// instances.go. sync.Map's Range is the same O(n) walk with a copy-on-read
-	// protocol bolted on, so it would buy nothing while forcing every one of those
-	// call sites through a different shape. The critical sections touch memory only;
-	// no I/O, no user callback, and the callback that used to run here is now an
-	// atomic pointer (see onChange).
-	mu       sync.Mutex
-	states   map[string]*extState
-	groups   map[string]*extGroup
-	// onChange is atomic so the callback fires without holding mu: a UI listener
-	// that queries the reconciler from inside the callback must not deadlock on it.
+	// states and groups are sync.Maps: every lookup, insert and delete touches one
+	// entry, and whole-map walks (status lists, garbage collection) Range over a
+	// snapshot. ZERO LOCKS ON THE RECONCILER.
+	states sync.Map // key string -> *extState
+	groups sync.Map // key string -> *extGroup
+
+	// onChange is atomic so the callback fires without any lock held.
 	onChange atomic.Pointer[func()]
 
-	// syncs carries the names of templates whose saved file changed, and revive
-	// carries "a profile was rewritten". They are queues, not signals to a walk: the
-	// callback that fills them runs inside a store's write, so it must only drop the
-	// name in and get out — doing the work there would deadlock on the store's own
-	// lock, which is exactly what a synchronous subscriber did.
 	syncs  chan string
 	revive chan struct{}
-	// ctx is the run's context, kept so an event that arrives at any time — a save
-	// from a tool call, a deleted file — has a run to join.
-	ctx    context.Context
-	cancel context.CancelFunc
+
+	runCtx atomic.Pointer[context.Context]
+	cancel atomic.Pointer[context.CancelFunc]
 	done   chan struct{}
 
 	// probes tracks the connection attempts the run loop has launched and not yet
@@ -184,8 +170,7 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		msgMgr:     msgMgr,
 		sshConfigs: sshConfigs,
 		forwardMgr: forwardMgr,
-		states:     map[string]*extState{},
-		groups:     map[string]*extGroup{},
+
 		syncs:      make(chan string, 64),
 		revive:     make(chan struct{}, 1),
 		done:       make(chan struct{}),
@@ -241,18 +226,13 @@ func (r *Reconciler) notifyChange() {
 // only for a store that cannot be walked: one broken extension is reported in
 // its own status, not as a failure to start the reconciler.
 func (r *Reconciler) Start(ctx context.Context) error {
-	r.mu.Lock()
-	if r.cancel != nil {
-		r.mu.Unlock()
+	cctx, cancel := context.WithCancel(ctx)
+	if !r.cancel.CompareAndSwap(nil, &cancel) {
+		cancel()
 		return nil
 	}
-	cctx, cancel := context.WithCancel(ctx)
-	r.cancel = cancel
-	r.mu.Unlock()
 	if _, err := r.store.List(); err != nil {
-		r.mu.Lock()
-		r.cancel = nil
-		r.mu.Unlock()
+		r.cancel.Store(nil)
 		cancel()
 		return err
 	}
@@ -282,14 +262,11 @@ func (r *Reconciler) sweepRestored() {
 // ordinary sessions, and their own teardown follows process exit or the caller's
 // shutdown.
 func (r *Reconciler) Stop() {
-	r.mu.Lock()
-	cancel := r.cancel
-	r.cancel = nil
-	r.mu.Unlock()
-	if cancel == nil {
+	p := r.cancel.Swap(nil)
+	if p == nil || *p == nil {
 		return
 	}
-	cancel()
+	(*p)()
 	<-r.done
 	r.probes.Wait()
 }
@@ -749,11 +726,12 @@ func (st *extState) backoffPending() (time.Duration, bool) {
 	return time.Until(st.readyAt), true
 }
 
-// runCtx is the reconciler's run context, or nil before Start.
-func (r *Reconciler) runCtx() context.Context {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.ctx
+// runContext returns the reconciler's run context, or nil before Start.
+func (r *Reconciler) runContext() context.Context {
+	if p := r.runCtx.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // runContext is the run this state belongs to, for calls that start an attempt.
@@ -850,14 +828,12 @@ func (r *Reconciler) stateFor(name, target string) *extState {
 		}
 	}
 	key := stateKey(name, target)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if st, ok := r.states[key]; ok {
-		return st
+	if v, ok := r.states.Load(key); ok {
+		return v.(*extState)
 	}
 	st := &extState{status: StatusUnavailable, autoRetry: true, extName: name, target: target}
-	r.states[key] = st
-	return st
+	actual, _ := r.states.LoadOrStore(key, st)
+	return actual.(*extState)
 }
 
 // statesNamed returns every state filed under one extension name, in the order

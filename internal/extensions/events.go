@@ -33,12 +33,11 @@ func (r *Reconciler) syncNamed(name string) {
 // pass over the states, dials nothing, and is caused by a write — the same shape as
 // every other reaction here.
 func (r *Reconciler) reviveTargets(ctx context.Context) {
-	r.mu.Lock()
-	pairs := make(map[string]*extState, len(r.states))
-	for name, st := range r.states {
-		pairs[name] = st
-	}
-	r.mu.Unlock()
+	var pairs []*extState
+	r.states.Range(func(_, v any) bool {
+		pairs = append(pairs, v.(*extState))
+		return true
+	})
 	for _, st := range pairs {
 		if _, autoRetry := st.flags(); autoRetry || st.lastStage() != "target" {
 			continue
@@ -171,14 +170,13 @@ func (r *Reconciler) Sync(ctx context.Context, name string) {
 // statesOfName returns every state filed under one extension name, whatever
 // hosts it currently declares.
 func (r *Reconciler) statesOfName(name string) []*extState {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]*extState, 0, 1)
-	for _, st := range r.states {
-		if st.name() == name {
+	var out []*extState
+	r.states.Range(func(_, v any) bool {
+		if st := v.(*extState); st.name() == name {
 			out = append(out, st)
 		}
-	}
+		return true
+	})
 	return out
 }
 
@@ -188,9 +186,7 @@ func (r *Reconciler) dropState(st *extState) {
 	st.leaveGroup()
 	r.closeInstances(st, "", "the target was removed from the template")
 	r.detach(st)
-	r.mu.Lock()
-	delete(r.states, stateKey(st.name(), st.host()))
-	r.mu.Unlock()
+	r.states.Delete(stateKey(st.name(), st.host()))
 	r.closeUnnamedGroups()
 }
 
@@ -202,9 +198,7 @@ func (r *Reconciler) Forget(name string) {
 		st.leaveGroup()
 		r.closeInstances(st, "", "the extension was removed")
 		r.detach(st)
-		r.mu.Lock()
-		delete(r.states, stateKey(name, st.host()))
-		r.mu.Unlock()
+		r.states.Delete(stateKey(name, st.host()))
 	}
 	r.closeUnnamedGroups()
 	r.notifyChange()
@@ -213,20 +207,17 @@ func (r *Reconciler) Forget(name string) {
 
 // closeUnnamedGroups closes every connection no state names any more.
 func (r *Reconciler) closeUnnamedGroups() {
-	r.mu.Lock()
-	groups := make([]*extGroup, 0, len(r.groups))
-	for _, g := range r.groups {
-		groups = append(groups, g)
-	}
-	r.mu.Unlock()
+	var groups []*extGroup
+	r.groups.Range(func(_, v any) bool {
+		groups = append(groups, v.(*extGroup))
+		return true
+	})
 	for _, g := range groups {
 		if r.groupNamed(g.key) {
 			continue
 		}
 		r.closeGroup(g)
-		r.mu.Lock()
-		delete(r.groups, g.key)
-		r.mu.Unlock()
+		r.groups.Delete(g.key)
 		slog.Debug("extension session closed", "group", g.key, "target", g.target)
 	}
 }
@@ -243,9 +234,7 @@ func (r *Reconciler) closeUnnamedGroups() {
 // different from what I hold", which is exactly what an event means.
 func (r *Reconciler) run(ctx context.Context) {
 	defer close(r.done)
-	r.mu.Lock()
-	r.ctx = ctx
-	r.mu.Unlock()
+	r.runCtx.Store(&ctx)
 	// The startup pass: resident extensions are established here, because a
 	// template that declares a forward has no caller whose ask could start it.
 	if names, err := r.store.List(); err == nil {

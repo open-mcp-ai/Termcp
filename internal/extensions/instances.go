@@ -460,12 +460,11 @@ func (r *Reconciler) Touch(shellID, sessionID string) {
 	}
 	// The name comes along because renewing has to re-arm that extension's timer,
 	// and the timer goes back through the store by name.
-	r.mu.Lock()
-	pairs := make(map[string]*extState, len(r.states))
-	for name, st := range r.states {
-		pairs[name] = st
-	}
-	r.mu.Unlock()
+	var pairs []*extState
+	r.states.Range(func(_, v any) bool {
+		pairs = append(pairs, v.(*extState))
+		return true
+	})
 
 	// A CHANNEL ID NAMES ONE INSTANCE, and only that one is in use.
 	//
@@ -594,12 +593,11 @@ func (r *Reconciler) ExplainClosed(sessionID, shellID string) (name, reason stri
 	if sessionID == "" && shellID == "" {
 		return "", "", time.Time{}, false
 	}
-	r.mu.Lock()
-	states := make([]*extState, 0, len(r.states))
-	for _, st := range r.states {
-		states = append(states, st)
-	}
-	r.mu.Unlock()
+	var states []*extState
+	r.states.Range(func(_, v any) bool {
+		states = append(states, v.(*extState))
+		return true
+	})
 	for _, st := range states {
 		st.mu.Lock()
 		match := (sessionID != "" && st.closedSessionID == sessionID) ||
