@@ -35,6 +35,11 @@ func requestKey(msg []byte) (string, bool) {
 }
 
 // recordPending notes a forwarded SSE request that is still owed a reply.
+//
+// THE MAP STAYS A MAP UNDER A SHORT LOCK because its entries share one question —
+// "is anything still owed?" — that waitPendingReplies answers by scanning all of
+// them; splitting one counter out into an atomic would leave that scan without a
+// consistent answer. The lock is held only for the increment, never while waiting.
 func (b *bridge) recordPending(id string) {
 	b.pendingMu.Lock()
 	defer b.pendingMu.Unlock()
@@ -62,7 +67,7 @@ func (b *bridge) replySaw(msg []byte) {
 		b.pending[string(id)] = n - 1
 	}
 	if len(b.pending) == 0 {
-		b.pendingCond.Broadcast()
+		b.wakePending()
 	}
 }
 
@@ -72,10 +77,22 @@ func (b *bridge) replySaw(msg []byte) {
 // the reply — SSE replies arrive decoupled from POST acceptance, so stdin EOF
 // alone does not mean the batch is complete.
 func (b *bridge) waitPendingReplies() {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	for len(b.pending) > 0 && !b.fatalPending && b.ctx.Err() == nil {
-		b.pendingCond.Wait()
+	for b.ctx.Err() == nil && !b.fatalPending.Load() {
+		// THE GENERATION IS LOADED BEFORE THE MAP IS READ: a reply that arrives
+		// between the two would otherwise be seen by the read but its wake by neither
+		// side, and the wait would settle on a queue that had just emptied.
+		generation := b.pendingWakeGen()
+		b.pendingMu.Lock()
+		outstanding := len(b.pending) > 0
+		b.pendingMu.Unlock()
+		if !outstanding {
+			return
+		}
+		select {
+		case <-generation:
+		case <-b.ctx.Done():
+			return
+		}
 	}
 }
 

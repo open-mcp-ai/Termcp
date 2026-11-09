@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,10 +102,13 @@ func Run(ctx context.Context, cfg Config) error {
 		client: client,
 		fatal:  make(chan error, 1),
 		outTok: make(chan struct{}, 1),
+		errTok: make(chan struct{}, 1),
 	}
 
 	b.outTok <- struct{}{}
-	b.pendingCond = sync.NewCond(&b.pendingMu)
+	b.errTok <- struct{}{}
+	wake := make(chan struct{})
+	b.pendingWake.Store(&wake)
 	if !cfg.SSE && cfg.KeepAlive > 0 {
 		go b.keepAliveLoop()
 	}
@@ -113,9 +117,6 @@ func Run(ctx context.Context, cfg Config) error {
 		// The stdin reader starts only once the stream's endpoint event names
 		// where messages go; runSSE does that.
 		go b.runSSE(readDone)
-		// Cancellation must reach a waitPendingReplies already parked on the
-		// condition variable.
-		go func() { <-b.ctx.Done(); b.pendingCond.Broadcast() }()
 	} else {
 		go func() { readDone <- b.readStdin() }()
 	}
@@ -154,25 +155,23 @@ type bridge struct {
 	cancel context.CancelFunc
 	client *http.Client
 
-	sessMu     sync.Mutex
-	sessionID  string // streamable mode: captured from the initialize reply; "" until then
-	messageURL string // SSE mode: POST target learned from the stream's endpoint event
+	sessionID  atomic.Pointer[string] // streamable mode: captured from initialize reply; nil until then
+	messageURL atomic.Pointer[string] // SSE mode: POST target learned from endpoint event; nil until then
 
-	// outTok serialises writes to stdout with a door: a client that stops reading
-	// stdout must not park every writer in the bridge forever (issue #220).
-	// Writers give up after writeOutWait and report the failure.
-	//
-	// errMu stays a mutex: diagnostics are short, and unlike stdout they are not a
-	// pipe an agent's harness might stop reading.
+	// outTok and errTok serialise writes to stdout and stderr, with different
+	// waiting policies because the two streams fail differently. stdout has a door
+	// and a timeout: a client that stops reading must not park every writer forever
+	// (issue #220), and the writer gives up and reports it. stderr is serialised
+	// best-effort only: a diagnostic must never wait behind the failure it describes.
 	outTok chan struct{}
-	errMu  sync.Mutex
+	errTok chan struct{}
 	fatal  chan error     // buffered(1): first terminal error wins
 	wg     sync.WaitGroup // in-flight forwards, drained when stdin closes
 
-	pendingMu    sync.Mutex     // guards the three fields below
-	pending      map[string]int // SSE mode: forwarded request ids still owed a reply
-	fatalPending bool           // SSE mode: a fatal error fired while EOF waits
-	pendingCond  *sync.Cond     // signaled on every pending/fatal change and on ctx cancellation
+	pendingMu    sync.Mutex                   // guards pending map
+	pending      map[string]int               // SSE mode: forwarded request ids still owed a reply
+	fatalPending atomic.Bool                  // SSE mode: a fatal error fired while EOF waits
+	pendingWake  atomic.Pointer[chan struct{}] // rotated on queue empty / fatal
 }
 
 // readStdin forwards every newline-delimited message. Malformed lines are NOT
@@ -344,15 +343,17 @@ func (b *bridge) postStreamable(msg []byte) (*http.Response, error) {
 }
 
 func (b *bridge) getSession() string {
-	b.sessMu.Lock()
-	defer b.sessMu.Unlock()
-	return b.sessionID
+	if p := b.sessionID.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func (b *bridge) getMessageURL() string {
-	b.sessMu.Lock()
-	defer b.sessMu.Unlock()
-	return b.messageURL
+	if p := b.messageURL.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func (b *bridge) authorize(req *http.Request) {
@@ -382,12 +383,10 @@ func (b *bridge) fail(msg []byte, text string) {
 	case b.fatal <- errors.New("mcpbridge: " + text):
 	default:
 	}
-	// Waking a waitPendingReplies parked on the condition variable: the owed
-	// replies it waits for may never arrive after a failure.
-	b.pendingMu.Lock()
-	b.fatalPending = true
-	b.pendingMu.Unlock()
-	b.pendingCond.Broadcast()
+	// Waking waitPendingReplies: the owed replies it waits for may never arrive
+	// after a failure.
+	b.fatalPending.Store(true)
+	b.wakePending()
 }
 
 // writeOutWait is how long a write to stdout may wait for the prior write to finish.
@@ -421,7 +420,39 @@ func (b *bridge) writeOut(msg []byte) {
 }
 
 func (b *bridge) errf(format string, args ...any) {
-	b.errMu.Lock()
-	defer b.errMu.Unlock()
+	// BEST-EFFORT SERIALISATION, NEVER A WAIT. A diagnostic is often the report of a
+	// write that is already stuck, so waiting for the token before printing it would
+	// delay the very failure being announced — and a bridge with no errTok at all
+	// (a literal in a test) must not block here either.
+	took := false
+	select {
+	case <-b.errTok:
+		took = true
+	default:
+	}
+	if took {
+		defer func() { b.errTok <- struct{}{} }()
+	}
 	fmt.Fprintf(b.cfg.Err, format+"\n", args...)
+}
+
+// pendingWakeGen returns the generation a waiter should park on, creating the first
+// one for a bridge built as a literal (tests do, and a nil generation would make the
+// wait loop spin instead of blocking).
+func (b *bridge) pendingWakeGen() chan struct{} {
+	if p := b.pendingWake.Load(); p != nil {
+		return *p
+	}
+	fresh := make(chan struct{})
+	if b.pendingWake.CompareAndSwap(nil, &fresh) {
+		return fresh
+	}
+	return *b.pendingWake.Load()
+}
+
+func (b *bridge) wakePending() {
+	fresh := make(chan struct{})
+	if old := b.pendingWake.Swap(&fresh); old != nil {
+		close(*old)
+	}
 }
