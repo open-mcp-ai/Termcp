@@ -22,9 +22,8 @@ import (
 // goroutine polling every extension every five seconds to keep a line in a
 // listing fresh.
 func (r *Reconciler) reapEnded(name string, st *extState) {
-	st.mu.Lock()
-	empty, lazy := len(st.extra) == 0, st.lazy
-	st.mu.Unlock()
+	d := st.load()
+	empty, lazy := len(d.extra) == 0, d.lazy
 	if empty || !lazy {
 		return
 	}
@@ -270,13 +269,15 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 // sees, so the first instance keeps the extension's own name and the rest count up
 // from there. The counter never goes back, for the reason it exists.
 func (st *extState) nextLabel(ext *Extension) string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.labels++
-	if st.labels == 1 {
+	n := 0
+	st.update(func(d *extStateData) {
+		d.labels++
+		n = d.labels
+	})
+	if n == 1 {
 		return ext.Name
 	}
-	return fmt.Sprintf("%s#%d", ext.Name, st.labels)
+	return fmt.Sprintf("%s#%d", ext.Name, n)
 }
 
 // instanceStatus renders a status for the instance just handed out: the
@@ -371,38 +372,43 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 // wherever a channel is opened, renewed or dropped, because those are the only
 // moments the answer changes.
 func (r *Reconciler) armIdle(name string, st *extState) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
-	limit := st.idleLimit
-	if limit <= 0 || len(st.extra) == 0 {
-		return
-	}
+	var ctx context.Context
 	var next time.Time
-	for _, ex := range st.extra {
-		if d := ex.lastUse.Add(limit); next.IsZero() || d.Before(next) {
-			next = d
+	st.update(func(d *extStateData) {
+		if d.timer != nil {
+			d.timer.Stop()
+			d.timer = nil
 		}
-	}
-	st.timer = time.AfterFunc(time.Until(next), func() {
-		if st.ctx != nil && st.ctx.Err() != nil {
+		limit := d.idleLimit
+		if limit <= 0 || len(d.extra) == 0 {
 			return
 		}
-		r.idleFired(name, st.host())
+		for _, ex := range d.extra {
+			if when := ex.lastUse.Add(limit); next.IsZero() || when.Before(next) {
+				next = when
+			}
+		}
+		if next.IsZero() {
+			return
+		}
+		ctx = d.ctx
+		d.timer = time.AfterFunc(time.Until(next), func() {
+			if ctx != nil && ctx.Err() != nil {
+				return
+			}
+			r.idleFired(name, st.host())
+		})
 	})
 }
 
 // stopIdle disarms the timer for a state that is going away.
 func (st *extState) stopIdle() {
-	st.mu.Lock()
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
-	st.mu.Unlock()
+	st.update(func(d *extStateData) {
+		if d.timer != nil {
+			d.timer.Stop()
+			d.timer = nil
+		}
+	})
 }
 
 // idleFired is the window running out. It closes what is due and re-arms for the
@@ -429,10 +435,7 @@ func (r *Reconciler) idleFired(name, target string) {
 // available, nothing up is idle ("nothing is running because nothing asked"), and
 // a recorded failure outranks both.
 func (r *Reconciler) settle(name string, st *extState) {
-	st.mu.Lock()
-	changed := st.settleLocked()
-	st.mu.Unlock()
-	if changed {
+	if st.settle() {
 		r.notifyChange()
 	}
 }
@@ -567,7 +570,12 @@ func (r *Reconciler) ReleaseTarget(name, target, shellID string) (int, error) {
 // anyInstanceOn reports whether one of this extension's instances runs on the
 // session, which is what "this call is about this extension" means for a lazy one.
 func (st *extState) anyInstanceOn(sessionID string) bool {
-	for _, ex := range st.extra {
+	return anyInstanceOn(st.load(), sessionID)
+}
+
+// anyInstanceOn answers the same question about one snapshot.
+func anyInstanceOn(d *extStateData, sessionID string) bool {
+	for _, ex := range d.extra {
 		if ex.sessionID == sessionID {
 			return true
 		}
@@ -576,9 +584,7 @@ func (st *extState) anyInstanceOn(sessionID string) bool {
 }
 
 func (st *extState) hasExtra(shellID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	for _, ex := range st.extra {
+	for _, ex := range st.load().extra {
 		if ex.shellID == shellID {
 			return true
 		}
@@ -599,11 +605,10 @@ func (r *Reconciler) ExplainClosed(sessionID, shellID string) (name, reason stri
 		return true
 	})
 	for _, st := range states {
-		st.mu.Lock()
-		match := (sessionID != "" && st.closedSessionID == sessionID) ||
-			(shellID != "" && st.closedShellID == shellID)
-		reason, at = st.closedReason, st.closedAt
-		st.mu.Unlock()
+		d := st.load()
+		match := (sessionID != "" && d.closedSessionID == sessionID) ||
+			(shellID != "" && d.closedShellID == shellID)
+		reason, at = d.closedReason, d.closedAt
 		if match {
 			return st.name(), reason, at, true
 		}

@@ -4,16 +4,30 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
 )
 
-// extState is the mutable runtime half of one extension. Every field behind its
-// own mutex because a probe goroutine writes it while the walk reads it.
+// extState is the runtime half of one extension: a FIXED IDENTITY and a mutable
+// record published as a whole.
+//
+// The record is an immutable snapshot behind an atomic pointer, not a set of fields
+// behind a mutex. A probe goroutine writes it while the walk reads it, and both want
+// one consistent picture: `status`, `sessionID` and the instance list describe one
+// moment, and a reader that took the snapshot keeps exactly that moment even if the
+// record is replaced underneath. Writers publish by CAS, so they never wait for each
+// other either — which is what the mutex was really buying, minus the ordering.
 type extState struct {
-	mu        sync.Mutex
+	// IDENTITY, WRITTEN ONCE when the state is filed; never changed afterwards.
+	extName string
+	target  string
+
+	data atomic.Pointer[extStateData]
+}
+
+type extStateData struct {
 	status    string
 	groupKey  string // the connection this extension is served by; "" = none
 	sessionID string // the group's session, while this extension is attached
@@ -52,7 +66,10 @@ type extState struct {
 	// extra are the channels this extension has handed out. Each is one caller's
 	// own process on the group's connection, so a second caller costs a fork, not a
 	// dial — and no two callers ever share a cursor (issue #183).
-	extra []*extraChannel
+	//
+	// VALUES, NOT POINTERS: the snapshot is shared with readers, so an element that
+	// changed must be replaced, never mutated in place.
+	extra []extraChannel
 
 	// ctx is the run this state belongs to. The deadline callback checks it, so a
 	// timer that was already scheduled when Stop ran does nothing instead of closing
@@ -83,84 +100,116 @@ type extState struct {
 	timer *time.Timer
 }
 
+// load returns the current record, creating the first one for a state built as a
+// literal (tests do). The returned snapshot is never modified.
+func (st *extState) load() *extStateData {
+	if p := st.data.Load(); p != nil {
+		return p
+	}
+	fresh := &extStateData{}
+	if st.data.CompareAndSwap(nil, fresh) {
+		return fresh
+	}
+	return st.data.Load()
+}
+
+// update publishes a new record built from the current one. Slices are copied on
+// append by the caller: a snapshot that was handed out must never change.
+func (st *extState) update(fn func(d *extStateData)) {
+	for {
+		cur := st.data.Load()
+		var next extStateData
+		if cur != nil {
+			next = *cur
+		}
+		fn(&next)
+		if st.data.CompareAndSwap(cur, &next) {
+			return
+		}
+	}
+}
+
 // setLazy records whether the reconciler starts this extension on demand, and
 // the window it was given. Called by every walk, so a template that gains or
 // loses its forwards changes the answer without any other bookkeeping.
 func (st *extState) setRun(ctx context.Context) {
-	st.mu.Lock()
-	st.ctx = ctx
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.ctx = ctx })
 }
 
 func (st *extState) setLazy(lazy bool, limit time.Duration) {
-	st.mu.Lock()
-	st.lazy, st.idleLimit = lazy, limit
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.lazy, d.idleLimit = lazy, limit })
 }
 
 // setIdleLimit records the window without touching anything else, for the calls
 // that arrive before the first walk has run (an Acquire on a cold daemon).
 func (st *extState) setIdleLimit(limit time.Duration) {
-	st.mu.Lock()
-	st.idleLimit = limit
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.idleLimit = limit })
 }
 
 // want stamps the clock and reports whether this is a fresh ask, which is what
 // decides between "already up" and "starting" on the resident path.
 func (st *extState) want() (fresh bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	fresh = st.lastUse.IsZero()
-	st.lastUse = time.Now()
-	return fresh
+	now := time.Now()
+	for {
+		cur := st.load()
+		var next extStateData
+		next = *cur
+		fresh = next.lastUse.IsZero()
+		next.lastUse = now
+		if st.data.CompareAndSwap(cur, &next) {
+			return fresh
+		}
+	}
 }
 
 // touch renews the clock: something addressed this extension just now. It does
 // NOT set wanted — an extension nobody asked for is not kept up by a stray read
 // of a retained transcript.
 func (st *extState) touch() {
-	st.mu.Lock()
-	st.lastUse = time.Now()
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.lastUse = time.Now() })
 }
 
 // idleFor reports how long it has been since the extension was last asked for or
 // addressed, and false when it has never been (nothing to reap).
 func (st *extState) idleFor() (time.Duration, bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.lastUse.IsZero() {
+	d := st.load()
+	if d.lastUse.IsZero() {
 		return 0, false
 	}
-	return time.Since(st.lastUse), true
+	return time.Since(d.lastUse), true
 }
 
 // recordClosed remembers the instance that was taken away, so the handle the
 // caller is still holding has an answer.
 func (st *extState) recordClosed(sessionID, shellID, reason string) {
-	st.mu.Lock()
-	st.closedAt = time.Now()
-	st.closedSessionID, st.closedShellID, st.closedReason = sessionID, shellID, reason
-	st.mu.Unlock()
+	now := time.Now()
+	st.update(func(d *extStateData) {
+		d.closedAt = now
+		d.closedSessionID, d.closedShellID, d.closedReason = sessionID, shellID, reason
+	})
 }
 
 // renewSession stamps every instance served by this session, for the tool calls
 // that name a session rather than one channel. It reports whether the session is
 // this extension's.
 func (st *extState) renewSession(sessionID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.sessionID != sessionID && !st.anyInstanceOn(sessionID) {
-		return false
-	}
-	st.lastUse = time.Now()
-	for _, ex := range st.extra {
-		if ex.sessionID == sessionID {
-			ex.lastUse = st.lastUse
+	now := time.Now()
+	matched := false
+	st.update(func(d *extStateData) {
+		if d.sessionID != sessionID && !anyInstanceOn(d, sessionID) {
+			return
 		}
-	}
-	return true
+		matched = true
+		d.lastUse = now
+		// A SNAPSHOT'S ELEMENTS ARE VALUES: the lastUse of a matching instance is
+		// written by replacing it, never by mutating shared memory.
+		for i := range d.extra {
+			if d.extra[i].sessionID == sessionID {
+				d.extra[i].lastUse = now
+			}
+		}
+	})
+	return matched
 }
 
 // changed reports whether the template differs from the one this extension was
@@ -170,13 +219,19 @@ func (st *extState) renewSession(sessionID string) bool {
 // how a live channel drifts from its template.
 func (st *extState) changed(ext *Extension) bool {
 	fp := fingerprint(ext)
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.fingerprint == fp {
-		return false
+	// ONE CAS, NOT CHECK-THEN-SET: two callers that saw the same old fingerprint
+	// would both report a change and rebuild twice.
+	for {
+		cur := st.load()
+		if cur.fingerprint == fp {
+			return false
+		}
+		next := *cur
+		next.fingerprint = fp
+		if st.data.CompareAndSwap(cur, &next) {
+			return true
+		}
 	}
-	st.fingerprint = fp
-	return true
 }
 
 // fingerprint summarizes the template as a comparable string. The target and the
@@ -220,31 +275,37 @@ func fingerprint(ext *Extension) string {
 // setGroup records the connection this extension is served by and reports whether
 // it moved. The first resolution is not a move: nothing was held yet.
 func (st *extState) setGroup(key string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.groupKey == key {
-		return false
+	for {
+		cur := st.load()
+		if cur.groupKey == key {
+			return false
+		}
+		next := *cur
+		moved := next.groupKey != ""
+		next.groupKey = key
+		if st.data.CompareAndSwap(cur, &next) {
+			return moved
+		}
 	}
-	moved := st.groupKey != ""
-	st.groupKey = key
-	return moved
 }
 
 // leaveGroup forgets the connection this extension was served by and reports
 // whether it had one.
 func (st *extState) leaveGroup() bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	had := st.groupKey != ""
-	st.groupKey = ""
-	return had
+	for {
+		cur := st.load()
+		if cur.groupKey == "" {
+			return false
+		}
+		next := *cur
+		next.groupKey = ""
+		if st.data.CompareAndSwap(cur, &next) {
+			return true
+		}
+	}
 }
 
-func (st *extState) groupOf() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.groupKey
-}
+func (st *extState) groupOf() string { return st.load().groupKey }
 
 // extraChannel is one instance of an on-demand extension: a caller's channel on
 // the group's connection, plus the clock that says whether anybody is still
@@ -271,32 +332,36 @@ type extraChannel struct {
 // on-demand extension's instances all live on the group's connection, so the first
 // one is also what names the connection the status reports.
 func (st *extState) addExtra(sessionID, shellID, label, fp string) {
-	st.mu.Lock()
-	if st.sessionID == "" {
-		// The first channel also names the connection, and the name OUTLIVES the
-		// channel: the connection is kept for the next caller, so "which session is
-		// this extension served by" must still answer after the last channel goes.
-		st.sessionID = sessionID
-	}
-	st.extra = append(st.extra, &extraChannel{sessionID: sessionID, shellID: shellID, label: label, lastUse: time.Now(), fp: fp})
-	st.mu.Unlock()
+	now := time.Now()
+	st.update(func(d *extStateData) {
+		if d.sessionID == "" {
+			// The first channel also names the connection, and the name OUTLIVES the
+			// channel: the connection is kept for the next caller, so "which session is
+			// this extension served by" must still answer after the last channel goes.
+			d.sessionID = sessionID
+		}
+		next := make([]extraChannel, 0, len(d.extra)+1)
+		next = append(next, d.extra...)
+		next = append(next, extraChannel{sessionID: sessionID, shellID: shellID, label: label, lastUse: now, fp: fp})
+		d.extra = next
+	})
 }
 
 // dropInstancesOnSession forgets every instance served by a connection that is
 // gone. It reports whether there were any.
 func (st *extState) dropInstancesOnSession(sessionID string) []string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	kept := st.extra[:0]
 	var dropped []string
-	for _, ex := range st.extra {
-		if ex.sessionID == sessionID {
-			dropped = append(dropped, ex.shellID)
-			continue
+	st.update(func(d *extStateData) {
+		kept := make([]extraChannel, 0, len(d.extra))
+		for _, ex := range d.extra {
+			if ex.sessionID == sessionID {
+				dropped = append(dropped, ex.shellID)
+				continue
+			}
+			kept = append(kept, ex)
 		}
-		kept = append(kept, ex)
-	}
-	st.extra = kept
+		d.extra = kept
+	})
 	return dropped
 }
 
@@ -308,29 +373,37 @@ func (st *extState) dropInstancesOnSession(sessionID string) []string {
 // climbing is the field telling the caller something the daemon does not believe
 // (dogfood on #183).
 func (st *extState) renew(shellID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	for _, ex := range st.extra {
-		if ex.shellID == shellID {
-			ex.lastUse = time.Now()
-			st.lastUse = ex.lastUse
-			return true
+	now := time.Now()
+	matched := false
+	st.update(func(d *extStateData) {
+		for i := range d.extra {
+			if d.extra[i].shellID == shellID {
+				d.extra[i].lastUse = now
+				d.lastUse = now
+				matched = true
+				return
+			}
 		}
-	}
-	return false
+	})
+	return matched
 }
 
 // dropExtra forgets one instance and reports whether it had it.
 func (st *extState) dropExtra(shellID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	for i, ex := range st.extra {
-		if ex.shellID == shellID {
-			st.extra = append(st.extra[:i], st.extra[i+1:]...)
-			return true
+	found := false
+	st.update(func(d *extStateData) {
+		for i, ex := range d.extra {
+			if ex.shellID == shellID {
+				next := make([]extraChannel, 0, len(d.extra)-1)
+				next = append(next, d.extra[:i]...)
+				next = append(next, d.extra[i+1:]...)
+				d.extra = next
+				found = true
+				return
+			}
 		}
-	}
-	return false
+	})
+	return found
 }
 
 // dueExtras removes and returns the instances whose silence has run out, and
@@ -351,30 +424,30 @@ func (st *extState) dueExtras(limit time.Duration, reason string) []string {
 	if limit <= 0 {
 		return nil
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	now := time.Now()
-	kept := st.extra[:0]
 	var due []string
-	for _, ex := range st.extra {
-		// A channel-less instance is the connection, and the connection is kept for
-		// the next caller — so there is nothing for a window to run out on.
-		if ex.shellID != "" && now.Sub(ex.lastUse) >= limit {
-			due = append(due, ex.shellID)
-			sessionID := st.sessionID
-			if sessionID == "" {
-				sessionID = ex.sessionID
+	st.update(func(d *extStateData) {
+		kept := make([]extraChannel, 0, len(d.extra))
+		for _, ex := range d.extra {
+			// A channel-less instance is the connection, and the connection is kept for
+			// the next caller — so there is nothing for a window to run out on.
+			if ex.shellID != "" && now.Sub(ex.lastUse) >= limit {
+				due = append(due, ex.shellID)
+				sessionID := d.sessionID
+				if sessionID == "" {
+					sessionID = ex.sessionID
+				}
+				d.closedAt = now
+				d.closedSessionID, d.closedShellID, d.closedReason = sessionID, ex.shellID, reason
+				continue
 			}
-			st.closedAt = now
-			st.closedSessionID, st.closedShellID, st.closedReason = sessionID, ex.shellID, reason
-			continue
+			kept = append(kept, ex)
 		}
-		kept = append(kept, ex)
-	}
-	st.extra = kept
-	if len(due) > 0 {
-		st.settleLocked()
-	}
+		d.extra = kept
+		if len(due) > 0 {
+			settle(d)
+		}
+	})
 	return due
 }
 
@@ -383,10 +456,8 @@ func (st *extState) dueExtras(limit time.Duration, reason string) []string {
 // extraShellsNotBuiltFrom lists the channels whose template is not keepFP: the
 // ones an edit invalidated, as opposed to the ones a caller asked for afterwards.
 func (st *extState) extraShellsNotBuiltFrom(keepFP string) []string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	var out []string
-	for _, ex := range st.extra {
+	for _, ex := range st.load().extra {
 		if ex.fp != keepFP {
 			out = append(out, ex.shellID)
 		}
@@ -395,25 +466,20 @@ func (st *extState) extraShellsNotBuiltFrom(keepFP string) []string {
 }
 
 func (st *extState) extraShells() []string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	out := make([]string, 0, len(st.extra))
-	for _, ex := range st.extra {
+	d := st.load()
+	out := make([]string, 0, len(d.extra))
+	for _, ex := range d.extra {
 		out = append(out, ex.shellID)
 	}
 	return out
 }
 
-func (st *extState) instanceCount() int {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.instanceCountLocked()
-}
+func (st *extState) instanceCount() int { return instanceCount(st.load()) }
 
-// instanceCountLocked is instanceCount for a caller that already holds st.mu.
-func (st *extState) instanceCountLocked() int {
-	n := len(st.extra)
-	if st.shellID != "" {
+// instanceCount counts a snapshot's live handles: its own channel plus instances.
+func instanceCount(d *extStateData) int {
+	n := len(d.extra)
+	if d.shellID != "" {
 		n++
 	}
 	return n
@@ -428,25 +494,30 @@ func (st *extState) instanceCountLocked() int {
 // belongs to the channel, so it is written together with the removal that makes it
 // news.
 func (st *extState) retireExtra(sessionID, shellID, reason string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	idx := -1
-	for i, ex := range st.extra {
-		if ex.shellID == shellID {
-			idx = i
-			break
+	found := false
+	st.update(func(d *extStateData) {
+		idx := -1
+		for i, ex := range d.extra {
+			if ex.shellID == shellID {
+				idx = i
+				break
+			}
 		}
-	}
-	if idx < 0 {
-		return false
-	}
-	st.extra = append(st.extra[:idx], st.extra[idx+1:]...)
-	st.recordFailureLocked("session", reason)
-	st.closedAt = time.Now()
-	st.closedSessionID, st.closedShellID, st.closedReason = sessionID, shellID, reason
-	st.status = StatusUnavailable
-	st.settleLocked()
-	return true
+		if idx < 0 {
+			return
+		}
+		found = true
+		next := make([]extraChannel, 0, len(d.extra)-1)
+		next = append(next, d.extra[:idx]...)
+		next = append(next, d.extra[idx+1:]...)
+		d.extra = next
+		recordFailure(d, "session", reason)
+		d.closedAt = time.Now()
+		d.closedSessionID, d.closedShellID, d.closedReason = sessionID, shellID, reason
+		d.status = StatusUnavailable
+		settle(d)
+	})
+	return found
 }
 
 // settleLocked applies the runtime-status rule to the instances that are left and
@@ -456,21 +527,34 @@ func (st *extState) retireExtra(sessionID, shellID, reason string) bool {
 // walk settling after a sweep, and the reap step that just removed the instance.
 // Deciding it only on the walk's path left the moment described in retireExtra and
 // dueExtras.
-func (st *extState) settleLocked() bool {
+func (st *extState) settle() bool {
+	changed := false
+	st.update(func(d *extStateData) { changed = settle(d) })
+	return changed
+}
+
+// settle applies the runtime-status rule to the instances that are left and reports
+// whether the status changed.
+//
+// ONE DECISION, SHARED: "no instances left" is a fact two callers create — the
+// walk settling after a sweep, and the reap step that just removed the instance.
+// Deciding it only on the walk's path left the moment described in retireExtra and
+// dueExtras.
+func settle(d *extStateData) bool {
 	switch {
-	case len(st.failures) > 0 && st.instanceCountLocked() == 0:
+	case len(d.failures) > 0 && instanceCount(d) == 0:
 		return false // leave the failure standing
-	case st.instanceCountLocked() > 0:
-		if st.status == StatusAvailable {
+	case instanceCount(d) > 0:
+		if d.status == StatusAvailable {
 			return false
 		}
-		st.status = StatusAvailable
+		d.status = StatusAvailable
 		return true
 	default:
-		if st.status == StatusIdle {
+		if d.status == StatusIdle {
 			return false
 		}
-		st.status = StatusIdle
+		d.status = StatusIdle
 		return true
 	}
 }
@@ -480,119 +564,106 @@ func (st *extState) settleLocked() bool {
 // "which connection carries this extension" rather than "which channel is this
 // caller using".
 func (st *extState) sessionOf() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.sessionID != "" {
-		return st.sessionID
+	d := st.load()
+	if d.sessionID != "" {
+		return d.sessionID
 	}
 	// An on-demand extension has no attachment of its own: its connection is the one
 	// its first instance runs on.
-	if len(st.extra) > 0 {
-		return st.extra[0].sessionID
+	if len(d.extra) > 0 {
+		return d.extra[0].sessionID
 	}
 	return ""
 }
 
-func (st *extState) shellOf() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.shellID
-}
+func (st *extState) shellOf() string { return st.load().shellID }
 
 // attach records the session and the channel this extension is now driven
 // through.
 func (st *extState) attach(sessionID, shellID string) {
-	st.mu.Lock()
-	st.sessionID = sessionID
-	st.shellID = shellID
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.sessionID, d.shellID = sessionID, shellID })
 }
 
 // takeAttachment removes and returns what this extension holds, so a detach can
 // close it without holding the lock while it does.
 func (st *extState) takeAttachment() (sessionID, shellID string, forwards []ForwardStatus) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	sessionID, shellID, forwards = st.sessionID, st.shellID, st.forwards
-	st.sessionID, st.shellID, st.forwards = "", "", nil
+	st.update(func(d *extStateData) {
+		sessionID, shellID, forwards = d.sessionID, d.shellID, d.forwards
+		d.sessionID, d.shellID, d.forwards = "", "", nil
+	})
 	return sessionID, shellID, forwards
 }
 
 // detachFrom forgets the attachment when it is the one named, and reports whether
 // it was.
 func (st *extState) detachFrom(sessionID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.sessionID != sessionID {
-		return false
-	}
-	st.sessionID, st.shellID, st.forwards = "", "", nil
-	return true
+	matched := false
+	st.update(func(d *extStateData) {
+		if d.sessionID != sessionID {
+			return
+		}
+		matched = true
+		d.sessionID, d.shellID, d.forwards = "", "", nil
+	})
+	return matched
 }
 
 // mark sets the status.
 func (st *extState) mark(status string) {
-	st.mu.Lock()
-	st.status = status
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.status = status })
 }
 
 // statusOf and flags are the two reads the walk makes on one extension: the
 // status alone, and the status together with the retry budget that decides
 // whether the walk may act on it.
-func (st *extState) statusOf() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.status
-}
+func (st *extState) statusOf() string { return st.load().status }
 
 // isLazy reports whether this extension is started on demand rather than kept
 // resident, which decides who owns the retry: the caller, not a timer.
-func (st *extState) isLazy() bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.lazy
-}
+func (st *extState) isLazy() bool { return st.load().lazy }
 
 func (st *extState) flags() (status string, autoRetry bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.status, st.autoRetry
+	d := st.load()
+	return d.status, d.autoRetry
 }
 
 // scheduleBackoff reports how long to wait before the next attempt, and whether
 // there is one at all. Once the budget is spent it schedules nothing, so nothing
 // keeps probing forever: the timer is the only thing that would.
 func (st *extState) scheduleBackoff() (time.Duration, bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.consecutive > maxAutoRetries {
-		st.autoRetry = false
-		st.readyAt = time.Time{}
-		return 0, false
-	}
-	step := backoffSteps[0]
-	if st.consecutive > 1 {
-		i := st.consecutive - 1
-		if i >= len(backoffSteps) {
-			i = len(backoffSteps) - 1
+	var step time.Duration
+	ok := false
+	st.update(func(d *extStateData) {
+		if d.consecutive > maxAutoRetries {
+			d.autoRetry = false
+			d.readyAt = time.Time{}
+			return
 		}
-		step = backoffSteps[i]
-	}
-	st.readyAt = time.Now().Add(step)
-	return step, true
+		ok = true
+		step = backoffSteps[0]
+		if d.consecutive > 1 {
+			i := d.consecutive - 1
+			if i >= len(backoffSteps) {
+				i = len(backoffSteps) - 1
+			}
+			step = backoffSteps[i]
+		}
+		d.readyAt = time.Now().Add(step)
+	})
+	return step, ok
 }
 
 // armRetry schedules the next attempt. Bound to the run's context for the same
 // reason the idle deadline is: a callback that fires after Stop must do nothing.
 func (r *Reconciler) armRetry(st *extState, wait time.Duration) {
-	st.mu.Lock()
-	if st.retry != nil {
-		st.retry.Stop()
-		st.retry = nil
-	}
-	ctx := st.ctx
-	st.mu.Unlock()
+	var ctx context.Context
+	st.update(func(d *extStateData) {
+		if d.retry != nil {
+			d.retry.Stop()
+			d.retry = nil
+		}
+		ctx = d.ctx
+	})
 	if wait <= 0 {
 		return
 	}
@@ -610,9 +681,7 @@ func (r *Reconciler) armRetry(st *extState, wait time.Duration) {
 		}
 		r.retryTargetNow(name, target)
 	})
-	st.mu.Lock()
-	st.retry = t
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.retry = t })
 }
 
 // exhaustRetryBudget spends the automatic budget without scheduling a retry.
@@ -622,30 +691,29 @@ func (r *Reconciler) armRetry(st *extState, wait time.Duration) {
 // budget whole would re-probe every walk for a condition the probe cannot
 // change.
 func (st *extState) exhaustRetryBudget() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.autoRetry = false
-	st.readyAt = time.Time{}
+	st.update(func(d *extStateData) {
+		d.autoRetry = false
+		d.readyAt = time.Time{}
+	})
 }
 
 // resetRetryBudget hands the extension its automatic retries back. Called on the
 // paths that mean "this is a fresh start": a probe that succeeded, a manual
 // retry, a template edit.
 func (st *extState) resetRetryBudget() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.consecutive = 0
-	st.autoRetry = true
-	st.readyAt = time.Time{}
+	st.update(func(d *extStateData) {
+		d.consecutive = 0
+		d.autoRetry = true
+		d.readyAt = time.Time{}
+	})
 }
 
 // lastStage is the stage of the most recent failure, empty when there is no
 // history. It tells the spent-budget path what it is waiting on.
 func (st *extState) lastStage() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if n := len(st.failures); n > 0 {
-		return st.failures[n-1].Stage
+	d := st.load()
+	if n := len(d.failures); n > 0 {
+		return d.failures[n-1].Stage
 	}
 	return ""
 }
@@ -654,40 +722,40 @@ func (st *extState) lastStage() string {
 // so a permanently broken extension does not bury its history under one repeated
 // line while the count still climbs.
 func (st *extState) recordFailure(stage, reason string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.recordFailureLocked(stage, reason)
+	st.update(func(d *extStateData) { recordFailure(d, stage, reason) })
 }
 
-// recordFailureLocked is the same history update for a caller that holds st.mu.
-func (st *extState) recordFailureLocked(stage, reason string) {
-	if len(st.failures) > 0 {
-		last := st.failures[len(st.failures)-1]
+// recordFailure is the history update on one snapshot; callers already hold it.
+func recordFailure(d *extStateData, stage, reason string) {
+	if len(d.failures) > 0 {
+		last := d.failures[len(d.failures)-1]
 		if last.Stage == stage && last.Reason == reason {
-			st.consecutive++
+			d.consecutive++
 			return
 		}
 	}
-	st.failures = append(st.failures, Failure{
+	next := make([]Failure, 0, len(d.failures)+1)
+	next = append(next, d.failures...)
+	next = append(next, Failure{
 		At:     clock.Now(),
 		Stage:  stage,
 		Reason: truncate(reason, 300),
 	})
-	if len(st.failures) > maxFailures {
-		st.failures = append([]Failure(nil), st.failures[len(st.failures)-maxFailures:]...)
+	if len(next) > maxFailures {
+		next = append([]Failure(nil), next[len(next)-maxFailures:]...)
 	}
-	st.consecutive++
+	d.failures = next
+	d.consecutive++
 }
 
 func (st *extState) snapshot() Status {
-	st.mu.Lock()
-	defer st.mu.Unlock()
+	d := st.load()
 	out := Status{
-		Status:    st.status,
-		SessionID: st.sessionID,
-		ShellID:   st.shellID,
-		Lazy:      st.lazy,
-		Instances: len(st.extra),
+		Status:    d.status,
+		SessionID: d.sessionID,
+		ShellID:   d.shellID,
+		Lazy:      d.lazy,
+		Instances: len(d.extra),
 	}
 	// THE CHANNEL REPORTED IS ONE THE CALLER CAN DRIVE. For a template with its own
 	// channel that is the reconciler's; for an on-demand extension it is the instance
@@ -699,33 +767,33 @@ func (st *extState) snapshot() Status {
 	// addresses, no way to tell which was live. The newest is the one an `open` just
 	// returned, so the two now agree; Instances carries how many exist, and
 	// `get <session>` still lists every one of them.
-	if st.shellID != "" {
+	if d.shellID != "" {
 		out.Instances++
-	} else if len(st.extra) > 0 {
-		newest := st.extra[len(st.extra)-1]
+	} else if len(d.extra) > 0 {
+		newest := d.extra[len(d.extra)-1]
 		out.ShellID = newest.shellID
 	}
-	if out.SessionID == "" && len(st.extra) > 0 {
-		out.SessionID = st.extra[len(st.extra)-1].sessionID
+	if out.SessionID == "" && len(d.extra) > 0 {
+		out.SessionID = d.extra[len(d.extra)-1].sessionID
 	}
-	if st.lazy {
-		out.IdleTimeoutMs = st.idleLimit.Milliseconds()
-		if !st.lastUse.IsZero() {
-			out.IdleForMs = time.Since(st.lastUse).Milliseconds()
+	if d.lazy {
+		out.IdleTimeoutMs = d.idleLimit.Milliseconds()
+		if !d.lastUse.IsZero() {
+			out.IdleForMs = time.Since(d.lastUse).Milliseconds()
 		}
 	}
-	if !st.closedAt.IsZero() {
-		out.ClosedAt = st.closedAt.UnixMilli()
-		out.ClosedSessionID, out.ClosedShellID, out.ClosedReason = st.closedSessionID, st.closedShellID, st.closedReason
+	if !d.closedAt.IsZero() {
+		out.ClosedAt = d.closedAt.UnixMilli()
+		out.ClosedSessionID, out.ClosedShellID, out.ClosedReason = d.closedSessionID, d.closedShellID, d.closedReason
 	}
-	if len(st.forwards) > 0 {
-		out.Forwards = append([]ForwardStatus(nil), st.forwards...)
+	if len(d.forwards) > 0 {
+		out.Forwards = append([]ForwardStatus(nil), d.forwards...)
 	}
-	if len(st.failures) > 0 {
-		out.Failures = append([]Failure(nil), st.failures...)
+	if len(d.failures) > 0 {
+		out.Failures = append([]Failure(nil), d.failures...)
 	}
-	if !st.readyAt.IsZero() {
-		out.NextRetry = st.readyAt.UnixMilli()
+	if !d.readyAt.IsZero() {
+		out.NextRetry = d.readyAt.UnixMilli()
 	}
 	return out
 }

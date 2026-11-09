@@ -42,14 +42,12 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 	if r.forwardMgr == nil || len(ext.Forwards) == 0 {
 		return nil
 	}
-	st.mu.Lock()
-	if st.sessionID == "" {
-		st.mu.Unlock()
+	d := st.load()
+	if d.sessionID == "" {
 		return errors.New("no session to attach forwards to")
 	}
-	sessID := st.sessionID
-	existing := append([]ForwardStatus(nil), st.forwards...)
-	st.mu.Unlock()
+	sessID := d.sessionID
+	existing := append([]ForwardStatus(nil), d.forwards...)
 
 	live := map[string]bool{}
 	for _, fw := range r.forwardMgr.ListBySession(sessID) {
@@ -80,9 +78,8 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 		if err != nil {
 			// Record what this attempt did establish before reporting the failure:
 			// the walk reads these entries to decide what is already listening.
-			st.mu.Lock()
-			st.forwards = append([]ForwardStatus(nil), built...)
-			st.mu.Unlock()
+			snapshot := append([]ForwardStatus(nil), built...)
+			st.update(func(d *extStateData) { d.forwards = snapshot })
 			return fmt.Errorf("%s forward on %s: %w", f.Kind, listenSpec(f), err)
 		}
 		// Tear down with the session rather than outliving it as a dangling
@@ -96,9 +93,7 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 		}
 	}
 
-	st.mu.Lock()
-	st.forwards = built
-	st.mu.Unlock()
+	st.update(func(d *extStateData) { d.forwards = built })
 	return nil
 }
 

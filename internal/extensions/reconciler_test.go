@@ -117,9 +117,8 @@ func dumpReconciler(t *testing.T, r *Reconciler, name string) {
 	t.Logf("extension %q: %+v", name, st)
 	r.states.Range(func(k, v any) bool {
 		s := v.(*extState)
-		s.mu.Lock()
-		t.Logf("state %q: status=%q session=%q shell=%q failures=%d", k, s.status, s.sessionID, s.shellID, len(s.failures))
-		s.mu.Unlock()
+		d := s.load()
+		t.Logf("state %q: status=%q session=%q shell=%q failures=%d", k, d.status, d.sessionID, d.shellID, len(d.failures))
 		return true
 	})
 	for _, s := range r.sessMgr.ListAll() {

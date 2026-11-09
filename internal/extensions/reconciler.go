@@ -718,12 +718,11 @@ func (r *Reconciler) retryTargetNow(name, target string) {
 
 // backoffPending reports how much of the current backoff window is left.
 func (st *extState) backoffPending() (time.Duration, bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.readyAt.IsZero() {
+	d := st.load()
+	if d.readyAt.IsZero() {
 		return 0, false
 	}
-	return time.Until(st.readyAt), true
+	return time.Until(d.readyAt), true
 }
 
 // runContext returns the reconciler's run context, or nil before Start.
@@ -735,27 +734,13 @@ func (r *Reconciler) runContext() context.Context {
 }
 
 // runContext is the run this state belongs to, for calls that start an attempt.
-func (st *extState) runContext() context.Context {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.ctx
-}
+func (st *extState) runContext() context.Context { return st.load().ctx }
 
-// name is the extension this state is filed under, needed by the timers that have
-// to look the template up again when they fire.
-func (st *extState) name() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.extName
-}
+// name is the extension this state is filed under: identity, written once.
+func (st *extState) name() string { return st.extName }
 
-// host is the target this state runs on, so a timer can reload the template and
-// project it onto the same host it was armed for.
-func (st *extState) host() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.target
-}
+// host is the target this state runs on: identity, written once.
+func (st *extState) host() string { return st.target }
 
 // forTarget projects a template onto one of its hosts: the fields the whole
 // extension shares, with Target and Forwards taken from that host's own entry.
@@ -831,7 +816,8 @@ func (r *Reconciler) stateFor(name, target string) *extState {
 	if v, ok := r.states.Load(key); ok {
 		return v.(*extState)
 	}
-	st := &extState{status: StatusUnavailable, autoRetry: true, extName: name, target: target}
+	st := &extState{extName: name, target: target}
+	st.data.Store(&extStateData{status: StatusUnavailable, autoRetry: true})
 	actual, _ := r.states.LoadOrStore(key, st)
 	return actual.(*extState)
 }
