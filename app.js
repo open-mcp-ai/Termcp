@@ -368,8 +368,42 @@ async function fetchGitHubMeta() {
   }
 }
 
+/* Station strip: a table of contents, not a tab bar.
+   The five panels are always on the page; the strip floats under the site
+   header and marks whichever layer the reader is currently inside. Clicking a
+   station is a plain anchor jump, so it works with JavaScript switched off. */
+function initStopNav() {
+  const stops = Array.from(document.querySelectorAll('.stops .stop'));
+  if (!stops.length) return;
+
+  const targets = stops.map(a => document.querySelector(a.getAttribute('href')));
+  const strip = document.querySelector('.stops');
+  function sync() {
+    /* The line the reader's eye counts as "here": the bottom edge of the
+       floating strip, measured live so a wrapped station row still lines up. */
+    const line = strip ? strip.getBoundingClientRect().bottom + 24 : 180;
+    let active = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const el = targets[i];
+      if (el && el.getBoundingClientRect().top <= line) active = i;
+    }
+    stops.forEach((a, i) => {
+      if (i === active) a.setAttribute('aria-current', 'true');
+      else a.removeAttribute('aria-current');
+    });
+  }
+
+  /* Called straight from the scroll event: five rect reads per event is
+     cheaper than a rAF hop, and virtual-time/headless environments do not
+     always pump rAF after the load settles. */
+  addEventListener('scroll', sync, { passive: true });
+
+  sync();
+}
+
 detectLang();
 applyTheme(themeChoice);
+initStopNav();
 fetchGitHubMeta();
 fetchDonors();
 detectHost();

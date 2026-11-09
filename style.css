@@ -34,13 +34,18 @@
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Anchor jumps glide instead of snapping; the media query below undoes
+       it for readers who ask the OS for less motion. */
+    html { scroll-behavior: smooth; }
     body {
       background-color: var(--bg);
       color: var(--text);
       font-family: var(--sans);
       line-height: 1.6;
       min-height: 100vh;
-      overflow-x: hidden;
+      /* `clip`, not `hidden`: hidden makes body its own scroll container, so the
+         window stops scrolling and anchor jumps + scroll listeners go dead. */
+      overflow-x: clip;
       position: relative;
     }
 
@@ -68,7 +73,10 @@
     }
 
     /* Header Nav */
-    header {
+    /* The site bar ONLY. Panels use <header> for their own headings, and a
+       bare `header` selector made every station heading sticky and painted.
+       The card header is a label, never chrome. */
+    body > header {
       padding: 24px 0;
       border-bottom: 1px solid var(--border);
       background: rgba(9, 11, 14, 0.85);
@@ -196,7 +204,7 @@
 
     /* Hero */
     .hero {
-      padding: 72px 0 40px;
+      padding: 56px 0 0;
       text-align: center;
     }
     .hero-pill {
@@ -231,15 +239,13 @@
       margin: 0 auto 28px;
     }
     .hero p.lead strong { color: var(--text-bright); font-weight: 600; }
-    /* The tagline under the lead: monospaced, spaced out and dimmer than the
-       lead, so it reads as an epigraph rather than another claim. */
     .hero p.motto {
       font-family: var(--mono);
       font-size: 12px;
       letter-spacing: 0.22em;
       text-transform: uppercase;
       color: var(--text-faint);
-      margin: -16px auto 26px;
+      margin: 0 auto 36px;
     }
 
     .hero p.lead code {
@@ -254,17 +260,20 @@
        shell, not a replacement for it. Sits under the install box, on a plate of
        its own, so it reads as the frame around everything below rather than
        another line of body copy. */
+    /* The thesis, said once. Deliberately NOT a plate like the install box
+       above it: no heavy card background or left bar — pure centered proclamation
+       in bright ink, with the two agent pointers under it. */
     .hero-manifesto {
       max-width: 820px;
-      margin: 26px auto 16px;
-      padding: 14px 20px;
-      background: linear-gradient(90deg, var(--accent-dim), transparent 74%), var(--card-bg);
-      border: 1px solid var(--border);
-      border-left: 2px solid var(--accent);
-      font-size: 16.5px;
-      line-height: 1.75;
+      margin: 22px auto 20px;
+      padding: 0 12px;
+      background: none;
+      border: 0;
+      font-size: 17px;
+      font-weight: 500;
+      line-height: 1.7;
       color: var(--text-bright);
-      text-align: left;
+      text-align: center;
     }
     /* The skills site is the other half of the pitch: where an agent reads how
        to drive termcp. Set off on its own line so it reads as a pointer rather
@@ -273,10 +282,11 @@
        it should load. Inline, one line, both mono. */
     .hero-manifesto .hero-links {
       display: block;
-      margin-top: 10px;
+      margin-top: 8px;
       font-family: var(--mono);
-      font-size: 13.5px;
+      font-size: 13px;
       color: var(--text-muted);
+      letter-spacing: 0.02em;
     }
     .hero-manifesto .hero-links a {
       color: var(--accent);
@@ -284,93 +294,30 @@
     }
     .hero-manifesto .hero-links a:hover { text-decoration: underline; }
     .hero-manifesto .hero-links .sep { color: var(--text-faint); }
-    /* The three mechanisms, named in one line — review, custody, persistence —
-       and where the product sits. Mono, because it is a claim, not prose. */
-    .hero-claim {
-      max-width: 820px;
-      margin: 0 auto;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      letter-spacing: 0.04em;
-      color: var(--text-muted);
-    }
-    /* The two targets, stated before anything else: local shell, remote SSH.
-       The MCP rows stack under them, tied tighter than the transport pair. */
-    .targets {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 10px;
-      margin-bottom: 40px;
-    }
-    .targets + .targets { margin-top: -26px; }
-    .target-chip {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 10px;
-      padding: 8px 16px;
-      background: var(--card-bg);
-      border: 1px solid var(--border);
+
+    .cmd-intro {
       font-family: var(--mono);
       font-size: 13px;
       color: var(--text-muted);
-      text-align: left;
+      margin: 0 auto 14px;
+      text-align: center;
+      letter-spacing: 0.04em;
     }
-    .target-chip b { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; }
-    /* A chip is a door: each one names a section the page already has, so
-       clicking it scrolls there instead of stating the same thing twice. */
-    /* No border-bottom here: the chip's own 1px border already outranks the
-       bare `a` underline, and dropping the edge would take the box's bottom
-       line with it. Only the link's text glow has to go. */
-    .target-chip-link { text-shadow: none; }
-    .target-chip-link:hover { color: var(--text-muted); border-color: var(--accent); box-shadow: 0 0 12px var(--accent-dim); }
-    /* Anchors land under the sticky header, not behind it. */
-    section[id] { scroll-margin-top: 96px; }
-    /* Platform marks: monochrome, currentColor, so they inherit the chip's text
-       colour and stay legible in every theme. */
-    .target-chip svg {
-      width: 14px;
-      height: 14px;
-      fill: currentColor;
-      opacity: 0.85;
-      flex-shrink: 0;
-      align-self: center;
-    }
-    .target-platforms {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--text-muted);
-    }
-
-    /* Install gets its own section between the hero and the claims, so its
-       heading is a real section head: kicker + title + one line of why. */
-    .install-section { margin-bottom: 72px; }
-    .install-title {
-      max-width: 820px;
-      margin: 0 auto 16px;
-      text-align: left;
-    }
-    .install-kicker {
-      display: block;
-      color: var(--accent);
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.2em;
-      margin-bottom: 8px;
-    }
-    .install-title h2 {
-      color: var(--text-bright);
-      font-size: 28px;
-      font-weight: 800;
-      line-height: 1.3;
-      letter-spacing: -0.3px;
-    }
-    .install-title p {
-      margin-top: 8px;
+    /* The lead-in word: a little larger and bolder than the facts beside it,
+       in body ink rather than accent — present, not shouting. */
+    .cmd-intro b {
       font-size: 15px;
-      color: var(--text-muted);
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      margin-right: 4px;
+    }
+    .cmd-intro code {
+      font-family: var(--mono);
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 1px 6px;
+      border: 1px solid rgba(var(--accent-rgb), 0.2);
     }
     .command-box {
       max-width: 820px;
@@ -381,6 +328,10 @@
       overflow: hidden;
       text-align: left;
     }
+    /* Anchors land under the sticky header, not behind it. */
+    section[id] { scroll-margin-top: 96px; }
+
+    .hero .command-box { margin-bottom: 0; }
     .cmd-tabs {
       display: flex;
       background: var(--panel-bg);
@@ -608,6 +559,329 @@
       margin-bottom: 10px;
     }
     .cap p { font-size: 14.5px; color: var(--text-muted); }
+    /* Architecture: the five layers as a single-bus pipeline.
+       Desktop: 5 equal columns tied by one horizontal wire.
+       Mobile: 1 column tied by one vertical left rail.
+       No overlap, no stagger, no cards piled on cards — geometry is strict. */
+    /* The five-layer interactive strip:
+       Desktop: one row of 5 stations + one shared panel below.
+       Phone:   stations and their panels interleave vertically. */
+    #stack {
+      max-width: 1100px;
+      margin: 20px auto 20px;
+    }
+    .stops {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      position: sticky;
+      top: 73px;
+      z-index: 90;
+      padding: 16px 0 14px;
+      margin: 0 0 22px;
+      background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .stops::before {
+      content: "";
+      position: absolute;
+      left: 10%;
+      right: 10%;
+      top: 31px;
+      height: 2px;
+      background: var(--accent);
+      opacity: 0.35;
+      z-index: 0;
+    }
+    .stop {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 34px 14px 20px;
+      background: var(--card-bg);
+      border: 1px solid rgba(var(--accent-rgb), 0.25);
+      border-bottom: 1px solid rgba(var(--accent-rgb), 0.25);
+      cursor: pointer;
+      font: inherit;
+      color: inherit;
+      text-decoration: none;
+      text-shadow: none;
+      width: 100%;
+      transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .stop::before {
+      content: "";
+      position: absolute;
+      top: -9px;
+      left: 50%;
+      width: 18px;
+      height: 18px;
+      transform: translateX(-50%);
+      background: var(--bg);
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.5);
+      transition: background 0.18s ease, transform 0.18s ease;
+    }
+    .stop[aria-current="true"],
+    .stop[aria-selected="true"] {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 18px var(--accent-dim);
+    }
+    .stop:hover::before,
+    .stop[aria-current="true"]::before,
+    .stop[aria-selected="true"]::before {
+      background: var(--accent);
+      transform: translateX(-50%) scale(1.15);
+    }
+    .stop-name {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin-bottom: 8px;
+      letter-spacing: 0.02em;
+      display: block;
+    }
+    .stop-keys {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-muted);
+      margin: 0;
+      display: block;
+    }
+
+    .stop-flow {
+      margin-top: 18px;
+    }
+    .stop-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      margin-top: 0;
+    }
+    section.stop-panel {
+      scroll-margin-top: 265px;
+    }
+    .stop-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 36px 36px 40px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+    }
+    /* Every panel is always on the page: the strip is a table of contents,
+       not a tab bar, so the station heads are part of the document now. */
+    .stop-panel > .stop-head {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      padding: 0 0 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .stop-panel > .stop-head h2 {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin: 0;
+    }
+    .stop-panel > .stop-head .stop-keys {
+      flex: 1 1 100%;
+      font-size: 12.5px;
+    }
+    .stop-panel h3 {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin: 0 0 10px;
+      letter-spacing: 0.01em;
+    }
+    .stop-panel h3:not(:first-child) {
+      margin-top: 28px;
+    }
+    .stop-lede {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.7;
+      margin: 0 0 20px;
+      max-width: 820px;
+    }
+    /* A bold run-in lead instead of a heading on its own line: the phrase and
+       the sentence it introduces are one paragraph, so the eye reads them as
+       one statement rather than a two-row label/value pair. */
+    .stop-runin {
+      font-size: 15px;
+      line-height: 1.75;
+      color: var(--text-muted);
+      margin: 0 0 18px;
+      max-width: 900px;
+    }
+    .stop-runin b {
+      font-size: 16.5px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin-right: 8px;
+      letter-spacing: 0.01em;
+    }
+    .stop-body > .shot-frame:first-child,
+    .stop-body > .stop-runin:first-child {
+      margin-top: 0;
+    }
+    .stop-panel .shot-frame {
+      margin: 16px 0 24px;
+      /* The panel is the only plate inside a station: nested surfaces stay
+         clear, so there is never a second background tone inside it. */
+      background: none;
+    }
+    .stop-panel .dsl-card {
+      background: none;
+    }
+    .stop-list {
+      list-style: none;
+      padding: 0;
+      margin: 20px 0 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px 18px;
+    }
+    .stop-list li {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text);
+      padding: 8px 12px;
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+      border-left: 2px solid var(--accent);
+    }
+    .stop-list-long {
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    .stop-list-long li {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 12px 14px;
+    }
+    .stop-list-long b {
+      color: var(--text-bright);
+      font-size: 14px;
+    }
+    .stop-list-long span {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* Phone: a metro line running down the page. Each station is a static
+       header with its content hanging under it — nothing to tap, the whole
+       route is readable by scrolling. */
+    /* Phone: no floating strip. The page reads as one vertical metro line:
+       a continuous wire down the left, a beacon per station, and each panel
+       carrying its own station heading. */
+    @media (max-width: 860px) {
+      .stops { display: none; }
+      .stop-flow {
+        position: relative;
+        gap: 18px;
+        padding-left: 24px;
+      }
+      /* The wire, drawn once behind every beacon. */
+      .stop-flow::before {
+        content: "";
+        position: absolute;
+        left: 6px;
+        top: 14px;
+        bottom: 14px;
+        width: 2px;
+        background: linear-gradient(to bottom, var(--accent), var(--pink), var(--green));
+        opacity: 0.45;
+      }
+      .stop-panel {
+        position: relative;
+        padding: 16px 18px 18px;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+        min-width: 0;
+        scroll-margin-top: 180px;
+      }
+      .stop-panel > .stop-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px 10px;
+        padding: 0 0 12px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 14px;
+      }
+      /* Beacon on the wire, outside the card so the line never breaks. */
+      .stop-panel > .stop-head::before {
+        content: "";
+        position: absolute;
+        left: -25px;
+        top: 20px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--bg);
+        border: 2px solid var(--accent);
+        box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.5);
+      }
+      .stop-panel > .stop-head .pipe-who {
+        margin-bottom: 0;
+      }
+      .stop-panel > .stop-head h2 {
+        font-size: 17px;
+        font-weight: 800;
+        color: var(--text-bright);
+        margin: 0;
+      }
+      .stop-panel > .stop-head .stop-keys {
+        flex: 1 1 100%;
+        font-size: 11.5px;
+      }
+      .stop-panel > .stop-body {
+        padding: 0;
+        background: transparent;
+        border: none;
+        min-width: 0;
+      }
+      .stop-panel h3 {
+        font-size: 18px;
+      }
+      .stop-list,
+      .stop-list-long {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .pipe-who {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      padding: 2px 8px;
+      margin-bottom: 10px;
+      display: inline-block;
+      text-transform: uppercase;
+      border: 1px solid currentColor;
+    }
+    .who-human, .who-ha, .who-ai, .who-both {
+      background: color-mix(in srgb, currentColor 9%, transparent);
+      border-color: color-mix(in srgb, currentColor 32%, transparent);
+    }
+    .who-human { color: var(--yellow); }
+    .who-ha    { color: var(--purple); }
+    .who-ai    { color: var(--pink); }
+    .who-both  { color: var(--green); }
 
     /* Terminal demo — the theme's floating window. Each transcript line carries
        the mark termcp's rail uses for it: a = AI input (pink), i = human input
@@ -927,14 +1201,186 @@
     .fleet {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      /* No row gap: the heading's own margin is the only space between the two
-         rows of column one, so the left column reads as one block. */
       column-gap: 26px;
-      /* NOT `align-items: start`: the plate is the taller column, and a start
-         alignment keeps row two at its content height, so the plate overflows it
-         and the recipe has no slack to take up. Stretch lets the rows grow to the
-         plate and the recipe spread into the difference. */
       align-items: stretch;
+    }
+    /* When inside a stop-panel, the heading is rendered by the panel above,
+       so the grid has only 1 row: steps on left, code on right, starting
+       together with no top void. */
+    .fleet-solo {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+      align-items: stretch;
+      margin-top: 14px;
+    }
+    .fleet-solo .fleet-steps {
+      grid-column: 1;
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      justify-content: flex-start;
+    }
+    /* The heading belongs to the left column, not to a band above both: it
+       makes the two columns start and end together. */
+    .fleet-solo .fleet-head {
+      font-size: 21px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin: 0;
+      letter-spacing: 0.01em;
+    }
+    .fleet-solo .fleet-sub {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin: 0;
+    }
+    .fleet-solo .fleet-lede {
+      font-size: 14.5px;
+      color: var(--text-muted);
+      line-height: 1.65;
+      margin: 2px 0 6px;
+    }
+    .fleet-solo .fleet-plate {
+      grid-column: 2;
+      grid-row: 1;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+    }
+    .fleet-solo .fleet-code {
+      font-size: 11.8px;
+      line-height: 1.55;
+    }
+    /* Bottom edges on the same line: the note takes the slack between the
+       steps and the plate's caption row. */
+    .fleet-solo .fleet-note {
+      margin-top: auto;
+    }
+    .fleet-claim {
+      margin-top: auto;
+      padding: 12px 14px;
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      border-left: 2px solid var(--accent);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .fleet-claim b {
+      color: var(--text-bright);
+      font-size: 14px;
+    }
+    .fleet-claim span {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* DSL Spec section inside the control layer */
+    .dsl-spec {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px dashed var(--border);
+    }
+    .dsl-spec h4 {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text-bright);
+      margin: 0 0 6px;
+      letter-spacing: 0.02em;
+    }
+    /* One line of framing, no tutorial: the cards below are the evidence. */
+    .dsl-note {
+      font-size: 15px;
+      line-height: 1.7;
+      color: var(--text-muted);
+      margin: 0;
+      max-width: 820px;
+    }
+    .dsl-note b {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text-bright);
+      letter-spacing: 0.01em;
+    }
+    /* Bold in lede and stop-runin: pop out as pure bright ink */
+    .stop-runin b,
+    .stop-lede b,
+    .stop-list b {
+      color: var(--text-bright);
+      font-weight: 800;
+    }
+    .dsl-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .dsl-card {
+      background: color-mix(in srgb, var(--card-bg) 95%, var(--accent) 5%);
+      border: 1px solid var(--border);
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.16s ease, transform 0.16s ease;
+    }
+    .dsl-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .dsl-tag {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      width: fit-content;
+      padding: 1px 6px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(var(--accent-rgb), 0.25);
+    }
+    .dsl-card b {
+      font-size: 14.5px;
+      color: var(--text-bright);
+      font-weight: 700;
+    }
+    .dsl-sample {
+      display: block;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.6;
+      color: var(--green);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      margin: 4px 0 2px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .dsl-card p {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin: 0;
+    }
+    @media (max-width: 860px) {
+      .dsl-grid { grid-template-columns: 1fr; }
+      .fleet, .fleet-solo {
+        grid-template-columns: 1fr;
+        row-gap: 16px;
+      }
+      .fleet-solo .fleet-steps,
+      .fleet-solo .fleet-plate {
+        grid-column: 1;
+        grid-row: auto;
+        min-width: 0;
+      }
+      .fleet-code {
+        max-width: 100%;
+        overflow-x: auto;
+      }
     }
     .fleet > .sec-head { grid-column: 1; grid-row: 1; margin-bottom: 26px; }
     /* The plate is the taller column, so the recipe takes the slack: with
@@ -1052,7 +1498,7 @@
     /* Nothing is rounded: plates and controls are cut, the way a terminal
        frame is cut — top-left and bottom-right chamfered, everything else
        square. Small controls take a shallower chamfer than full plates. */
-    .github-link, .version-tag, .lang-select-wrap select, .hero-pill, .target-chip,
+    .github-link, .version-tag, .lang-select-wrap select, .hero-pill, .pipe-who,
     .cmd-tab, .copy-btn, .term-status, .term-send, .review-lock, .term-replay,
     .lang-icon-btn, .task-chip, .mode-btn, .gate-actions button, .fleet-step .n,
     .card-icon, .donor {
@@ -1236,14 +1682,11 @@
     @media (max-width: 640px) {
       .nav-wrap { gap: 8px; flex-wrap: wrap; }
       .header-controls { gap: 5px; margin-left: auto; }
-      .install-title { padding: 0 2px; }
-      .install-title h2 { font-size: 23px; }
       .hero h1 { font-size: 30px; }
       .hero p.lead { font-size: 16px; }
       .lead-sep { display: none; }
       .lead-tail { display: block; margin-top: 4px; }
-      .hero-manifesto { font-size: 15px; padding: 12px 14px; text-align: left; }
-      .hero-claim { font-size: 12px; }
+      .hero-manifesto { font-size: 15.5px; padding: 0 12px; text-align: center; }
       .sec-title { font-size: 23px; }
       .section { margin-bottom: 64px; }
       .cmd-body { flex-direction: column; align-items: flex-start; }
@@ -1287,8 +1730,8 @@
 
     /* Plates: the magenta-tinted gradient body and the cyan halo that makes
        a panel read as lit rather than filled. */
-    .command-box, .card, .cap, .hero-manifesto, .fleet-code, .terminal-window,
-    .shot-frame, .term-toast, .donor, .target-chip {
+    .command-box, .card, .cap, .fleet-code, .terminal-window,
+    .term-toast, .donor {
       background: linear-gradient(165deg, rgba(9, 14, 26, 0.92), rgba(16, 4, 28, 0.92));
       border-color: var(--accent-glow);
       box-shadow: 0 0 22px rgba(0, 240, 255, 0.16), 0 0 60px rgba(255, 43, 214, 0.1),
@@ -1517,18 +1960,17 @@
         linear-gradient(to right, rgba(8, 126, 149, 0.035) 1px, transparent 1px),
         linear-gradient(to bottom, rgba(8, 126, 149, 0.035) 1px, transparent 1px);
     }
-    html[data-theme="light"] header { background: rgba(255, 255, 255, 0.9); }
+    html[data-theme="light"] body > header { background: rgba(255, 255, 255, 0.9); }
     html[data-theme="light"] body::after { display: none; }
     html[data-theme="light"] .command-box,
     html[data-theme="light"] .card,
     html[data-theme="light"] .cap,
-    html[data-theme="light"] .hero-manifesto,
     html[data-theme="light"] .fleet-code,
     html[data-theme="light"] .terminal-window,
-    html[data-theme="light"] .shot-frame,
     html[data-theme="light"] .term-toast,
-    html[data-theme="light"] .donor,
-    html[data-theme="light"] .target-chip {
+    html[data-theme="light"] .stop,
+    html[data-theme="light"] .stop-panel,
+    html[data-theme="light"] .donor {
       background: linear-gradient(160deg, #fff, #f7fafd);
       border-color: var(--border);
       box-shadow: 0 8px 24px rgba(30, 62, 78, 0.07);
@@ -1596,6 +2038,7 @@
     html[data-theme="light"] .a11y-skip { background: #fff; }
 
     @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
       .card:hover { transform: none; }
       .command-box::before,
       .terminal-window::before,
