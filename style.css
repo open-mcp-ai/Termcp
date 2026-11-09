@@ -1208,6 +1208,14 @@
       align-items: stretch;
       margin-top: 14px;
     }
+    /* When the worked example follows the syntax spec, it opens its own section:
+       the same dashed rule the spec uses, so the two read as separate blocks
+       instead of one long scroll. */
+    .dsl-spec + .fleet-solo {
+      margin-top: 34px;
+      padding-top: 26px;
+      border-top: 1px dashed var(--border);
+    }
     .fleet-solo .fleet-steps {
       grid-column: 1;
       grid-row: 1;

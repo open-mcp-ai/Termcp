@@ -50,7 +50,7 @@
         : theme;
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <div class="bg-grid"></div>
@@ -154,7 +154,7 @@
         </a>
         <a class="stop" href="#stop-ops">
           <span class="pipe-who who-ha" data-i18n="pipe_who_ha">人·AI</span>
-          <span class="stop-name" data-i18n="pipe_l2_name">人工在环</span>
+          <span class="stop-name" data-i18n="pipe_l2_name">智能终端</span>
           <span class="stop-keys" data-i18n="pipe_l2_keys">和 AI 同一会话，终端在手</span>
         </a>
         <a class="stop" href="#stop-control">
@@ -181,7 +181,8 @@
           <span class="stop-keys" data-i18n="pipe_l1_keys">加能力，上下文不涨</span>
         </header>
         <div class="stop-body">
-          <p class="stop-runin" data-i18n-html="meta_lede"><b>运行中热挂载，能力按需拓展</b>Termcp 支持在服务运行过程中直接挂载 MCP：无需重启、无需修改配置，新能力即时生效；亦可由 AI 自行开发并接入，随业务持续增长。</p>
+          <p class="stop-runin" data-i18n-html="dyn3_lede"><b>原生统御</b>Termcp 可以控制本机与远程终端，而 MCP 也能被视为一种终端。因此 Termcp 天生就能控制不限数量的 MCP，无需任何新能力。</p>
+          <p class="stop-runin" data-i18n-html="dyn1_desc">基于 <a href="https://github.com/open-mcp-ai/Termcp/blob/main/docs/protocol.md" target="_blank" rel="noopener"><b>Termcp 协议</b></a>，MCP 挂载数量不限；无论装多少，模型侧始终只有<b>一个 Tool</b>，上下文占用保持恒定。</p>
           <figure class="shot-frame ext">
            <a class="shot-link" id="ext-link" href="ext-cn.jpg" target="_blank" rel="noopener">
              <img class="shot-img" id="ext-zh" width="2535" height="1159"
@@ -196,7 +197,7 @@
              <span class="shot-hint" data-i18n="shot_zoom">点击查看原图 ↗</span>
            </figcaption>
          </figure>
-          <p class="stop-runin" data-i18n-html="dyn1_desc">基于 <b>Termcp 协议</b>，MCP 挂载数量不限；无论装多少，模型侧始终只有<b>一个 Tool</b>，上下文占用保持恒定。</p>
+          <p class="stop-runin" data-i18n-html="meta_lede"><b>运行中热挂载，能力按需拓展</b>Termcp 支持在服务运行过程中直接挂载 MCP：无需重启、无需修改配置，新能力即时生效；亦可由 AI 自行开发并接入，随业务持续增长。</p>
           <p class="stop-runin" data-i18n-html="dyn2_lede"><b>跨主机挂载</b>MCP 不必只装在本机：通过 SSH 直达任意被管主机，能力装在哪台机器都一样调用，目标机不装任何 Termcp 组件。</p>
         </div>
       </section>
@@ -204,11 +205,11 @@
       <section class="stop-panel" id="stop-ops" data-stop="ops">
         <header class="stop-head">
           <span class="pipe-who who-ha" data-i18n="pipe_who_ha">人·AI</span>
-          <h2 data-i18n="pipe_l2_name">人工在环</h2>
+          <h2 data-i18n="pipe_l2_name">智能终端</h2>
           <span class="stop-keys" data-i18n="pipe_l2_keys">和 AI 同一会话，终端在手</span>
         </header>
         <div class="stop-body">
-          <h3 data-i18n="shot_title">控制台：本地与 SSH 会话，都在这一屏</h3>
+          <h3 data-i18n="shot_title">人工在环控制台：人和AI共同控制，共驾协作。</h3>
           <p class="stop-lede" data-i18n="shot_sub">每一行按来源标色 —— 绿色是 shell 输出，黄色是你的输入，粉色是 AI 的调用。</p>
           <figure class="shot-frame">
             <a class="shot-link" id="shot-link" href="cn.jpg" target="_blank" rel="noopener">
@@ -247,6 +248,36 @@
           <span class="stop-keys" data-i18n="pipe_l3_keys">语法极简，AI 一读就懂</span>
         </header>
         <div class="stop-body">
+          <p class="stop-runin" data-i18n-html="ctrl_lede"><b>AI 天生擅长终端</b>，Termcp 的 MCP Tool 提供了类似终端的操作界面，也就是 <a href="https://github.com/open-mcp-ai/Termcp/blob/main/docs/protocol.md" target="_blank" rel="noopener">Termcp（Terminalization Model Context Protocol，终端化上下文协议）</a>，减少 AI 的心智负担和试错成本。</p>
+          <div class="dsl-spec">
+            <p class="dsl-note" data-i18n-html="dsl_note"><b>Termcp 协议</b>：把类 Shell 语法解析成 AST，命令可灵活组合。</p>
+            <div class="dsl-grid">
+              <div class="dsl-card">
+                <span class="dsl-tag" data-i18n="dsl_c1_tag">统一寻址</span>
+                <b data-i18n="dsl_c1_t">&lt;session&gt;[:channel] 树模型</b>
+                <code class="dsl-sample">run a1f3:1 $1<br>read a1f3 file /var/log/nginx.log<br>open a1f3 forward --remote-port 8080</code>
+                <p data-i18n="dsl_c1_d">主机、会话、Shell 通道、SFTP 文件、端口转发，都在同一棵树上按路径寻址。</p>
+              </div>
+              <div class="dsl-card">
+                <span class="dsl-tag" data-i18n="dsl_c2_tag">管道与并发</span>
+                <b data-i18n="dsl_c2_t">; 串行 · & 并行 · | 管道</b>
+                <code class="dsl-sample">connect h1 &amp; connect h2 &amp;<br>run h1:1 $1 ; run h1:1 $2<br>read h1 file /db.dump | write h2 file /db.dump</code>
+                <p data-i18n="dsl_c2_d">命令顺序执行（;）、并行执行（&）与管道转发（|），复杂流程由指令直接驱动。</p>
+              </div>
+              <div class="dsl-card">
+                <span class="dsl-tag" data-i18n="dsl_c3_tag">安全边界</span>
+                <b data-i18n="dsl_c3_t">变量注入防转义</b>
+                <code class="dsl-sample">term(cmd="run node:1 $1",<br>     args=["systemctl restart api"])</code>
+                <p data-i18n="dsl_c3_d">语法层只管控制流；真正的 shell 文本通过参数插值作为值进入，不会被当成指令再解析 —— 注入无从发生。</p>
+              </div>
+              <div class="dsl-card">
+                <span class="dsl-tag" data-i18n="dsl_c4_tag">语法极简</span>
+                <b data-i18n="dsl_c4_t">一小套指令，AI 一看就懂</b>
+                <code class="dsl-sample">connect · open · run · input · key<br>read · write · get · ls · close · rm · help</code>
+                <p data-i18n="dsl_c4_d">动词少而正交，名词全是资源路径：模型不用背一棵 API 树，读一遍就会用。</p>
+              </div>
+            </div>
+          </div>
           <div class="fleet fleet-solo">
             <div class="fleet-steps">
               <h3 class="fleet-head" data-i18n="fleet_title">多台主机，AI 自动管理</h3>
@@ -273,35 +304,6 @@
            <span class="k">"git pull"</span>])
   <span class="h" data-i18n="fleet_h1">→ bytes 0-0/0 · bytes 0-96/97 · bytes 0-14/15</span></div>
               <div class="fleet-cap" data-i18n="fleet_cap">*此为 AI 上下文</div>
-            </div>
-          </div>
-          <div class="dsl-spec">
-            <p class="dsl-note" data-i18n-html="dsl_note"><b>Termcp 协议：用类 Shell 语法解析成 AST，命令可灵活组合。</b></p>
-            <div class="dsl-grid">
-              <div class="dsl-card">
-                <span class="dsl-tag" data-i18n="dsl_c1_tag">统一寻址</span>
-                <b data-i18n="dsl_c1_t">&lt;session&gt;[:channel] 树模型</b>
-                <code class="dsl-sample">run a1f3:1 $1<br>read a1f3 file /var/log/nginx.log<br>open a1f3 forward --remote-port 8080</code>
-                <p data-i18n="dsl_c1_d">主机、会话、Shell 通道、SFTP 文件、端口转发，都在同一棵树上按路径寻址。</p>
-              </div>
-              <div class="dsl-card">
-                <span class="dsl-tag" data-i18n="dsl_c2_tag">管道与并发</span>
-                <b data-i18n="dsl_c2_t">; 串行 · & 并行 · | 管道</b>
-                <code class="dsl-sample">connect h1 &amp; connect h2 &amp;<br>run h1:1 $1 ; run h1:1 $2<br>read h1 file /db.dump | write h2 file /db.dump</code>
-                <p data-i18n="dsl_c2_d">命令顺序执行（;）、并行执行（&）与管道转发（|），复杂流程由指令直接驱动。</p>
-              </div>
-              <div class="dsl-card">
-                <span class="dsl-tag" data-i18n="dsl_c3_tag">安全边界</span>
-                <b data-i18n="dsl_c3_t">变量注入防转义</b>
-                <code class="dsl-sample">term(cmd="run node:1 $1",<br>     args=["systemctl restart api"])</code>
-                <p data-i18n="dsl_c3_d">语法层只管控制流；真正的 shell 文本通过参数插值作为值进入，不会被当成指令再解析 —— 注入无从发生。</p>
-              </div>
-              <div class="dsl-card">
-                <span class="dsl-tag" data-i18n="dsl_c4_tag">语法极简</span>
-                <b data-i18n="dsl_c4_t">一小套指令，AI 一看就懂</b>
-                <code class="dsl-sample">connect · open · run · input · key<br>read · write · get · ls · close · rm · help</code>
-                <p data-i18n="dsl_c4_d">动词少而正交，名词全是资源路径：模型不用背一棵 API 树，读一遍就会用。</p>
-              </div>
             </div>
           </div>
         </div>
@@ -440,7 +442,7 @@
 
 
 
-    <!-- Donors are data, not markup: donors.js?v=6on sits next to this page, so a
+    <!-- Donors are data, not markup: donors.js?v=7on sits next to this page, so a
          name is added by editing that file and never this section. Only the
          first 100 entries are rendered. -->
     <section class="section" id="donors">
@@ -482,10 +484,10 @@
   <!-- Client scripts: plain classic scripts, in load order. The catalog comes
        first, then the data that reads it, then the page chrome that wires the
        controls up and runs the initialisers. No modules, so they share a scope. -->
-  <script src="i18n.js?v=6"></script>
-  <script src="commands.js?v=6"></script>
-  <script src="demo.js?v=6"></script>
-  <script src="donors.js?v=6"></script>
-  <script src="app.js?v=6"></script>
+  <script src="i18n.js?v=7"></script>
+  <script src="commands.js?v=7"></script>
+  <script src="demo.js?v=7"></script>
+  <script src="donors.js?v=7"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
