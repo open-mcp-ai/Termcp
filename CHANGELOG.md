@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 修复
+
+- **连接对话框点完 Test，结论落在滚动区之外，看起来像没反应**：`#conn-test-result` 原本是 `.modal-body` 的最后一个节点，排在 Test/Save 那一行**下面**，而连接表单本身就比 `max-height:90vh` 的弹窗高——1280×720 下要滚 104px 才能够到 Test，用户正好停在容器底部。结论追加在按钮下方，容器不会跟着新增内容滚动：实测一行的「✓ Connected in 15 ms」16px 里有 15px 在视野外，真实失败（`DescribeDialError` 会拼上一段多行 hint）96px 里 95px 看不见，而那几行恰是「接下来该查什么」。现在结论与 Test 同处 `.modal-actions` 一行（左对齐、`role="status"`，hint 的换行不再被折叠），出现后 `scrollIntoView({block:'nearest'})` 把弹窗滚到能看全的位置；同一段文本也终于会被屏幕阅读器播报。
+
 
 ## v0.2.9 — 2026-11-08
 
