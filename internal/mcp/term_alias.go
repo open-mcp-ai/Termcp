@@ -73,6 +73,9 @@ func (a *aliasTable) get(name string) (string, bool) {
 // qualified name says where it comes from, so `ls ext` can list it and a typo is a
 // typo.
 func (a *aliasTable) lookup(name string) (string, bool, []string) {
+	if a == nil {
+		return "", false, nil
+	}
 	if expansion, ok := a.get(name); ok {
 		return expansion, true, nil
 	}
@@ -137,6 +140,9 @@ func (a *aliasTable) snapshot() map[string]string {
 // A cycle is only reachable through the alias table, so saying so is the difference
 // between a puzzle and a fix.
 func (a *aliasTable) Expand(stmt directive.Statement) ([]directive.Statement, []string, *directive.Error) {
+	if a == nil {
+		return []directive.Statement{stmt}, nil, nil
+	}
 	if _, ok, _ := a.lookup(stmt.Op); !ok {
 		return []directive.Statement{stmt}, nil, nil
 	}
@@ -200,6 +206,9 @@ func (a *aliasTable) cyclePath(name string) []string {
 // only Expand() knew how to report still came back as "unknown directive: aa". Both
 // doors need the same answer.
 func (a *aliasTable) expandErrorCycle(err error, cmd string, sub directive.Subst) ([]directive.Statement, bool, []string, *directive.Error) {
+	if a == nil {
+		return nil, false, nil, nil
+	}
 	derr, ok := err.(*directive.Error)
 	if !ok {
 		return nil, false, nil, nil
@@ -307,7 +316,15 @@ func (a *aliasTable) resolve(name, rest string, sub directive.Subst) ([]directiv
 }
 
 // directiveAlias manages the runtime table.
+func (s *Server) ensureAliases() *aliasTable {
+	if s.aliases == nil {
+		s.aliases = &aliasTable{}
+	}
+	return s.aliases
+}
+
 func (s *Server) directiveAlias(_ context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	s.ensureAliases()
 	headers := map[string]string{"Path": stmt.Path}
 	// The payload is "<name> <expansion...>" verbatim, so the expansion is never
 	// re-quoted: what the caller writes is what the alias runs.
