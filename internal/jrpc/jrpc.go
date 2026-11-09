@@ -99,7 +99,8 @@ var ErrClosed = errors.New("the channel is closed")
 //   - hand-off between the socket reader and callers is the DISPATCHER: one
 //     goroutine that is the only reader of the wire, and that decides where each
 //     frame goes. See dispatch below for why there cannot be two.
-//   - the frame backlog is ev, a slice guarded by evMu, because the queue has to be
+//   - the frame backlog is ev, an atomic pointer to an immutable slice, because the
+//     queue has to be
 //     searched rather than popped: "the first frame with no id" is a filter, and a
 //     channel can only be drained.
 type Channel struct {
@@ -122,12 +123,11 @@ type Channel struct {
 	next atomic.Int64
 
 	// ev holds frames no caller was waiting for: events, and answers to calls that
-	// already gave up. A slice rather than a channel because readers FILTER it —
-	// "the next frame with no id" and "anything at all" are different questions
-	// about the same queue, and popping to look is how a frame gets destroyed by a
-	// reader that did not want it.
-	evMu sync.Mutex
-	ev   []Framed
+	// already gave up. An atomic pointer to an immutable slice: pop and append are
+	// copy-on-write CAS updates, and readers never lock each other out (AGENTS.md).
+	// Slices are never mutated in place, so readers holding a snapshot cannot see
+	// a later append overwrite elements in place.
+	ev atomic.Pointer[[]Framed]
 
 	// waiters are the calls in flight, by id. The dispatcher hands an answer
 	// straight to the call that asked for it, which is the whole point of being the
@@ -185,7 +185,7 @@ type Channel struct {
 	//
 	// A CONDITION VARIABLE COULD NOT BE CANCELLED. A sync.Cond has no way to select on
 	// ctx.Done(), so every wait needed a helper goroutine just to Broadcast on expiry,
-	// and the wait itself held evMu. Rotating a channel instead lets one select listen
+	// and the wait itself held a lock. Rotating a channel instead lets one select listen
 	// to the wake, the caller's context, Close, and a dead socket at once — and the
 	// lock is held only while the slice is touched.
 	wake atomic.Pointer[chan struct{}]
@@ -632,17 +632,9 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 	// to park on, so the race has one side that always wins.
 	for {
 		generation := c.wakeGen()
-		c.evMu.Lock()
-		if len(c.ev) > 0 {
-			frame := c.ev[0]
-			c.ev = c.ev[1:]
-			c.evMu.Unlock()
+		if frame, ok := c.pop(); ok {
 			return frame, true
 		}
-		c.evMu.Unlock()
-		// THE REFUSAL IS CHECKED EVERY ROUND, not only before the loop: while this
-		// wait was parked the peer may have answered the listening GET with "no" —
-		// a fact this wait has to act on rather than spend its window on.
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return Framed{}, false
 		}
@@ -677,15 +669,9 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 	}
 	for {
 		generation := c.wakeGen()
-		c.evMu.Lock()
-		for i, f := range c.ev {
-			if f.Event {
-				c.ev = append(c.ev[:i], c.ev[i+1:]...)
-				c.evMu.Unlock()
-				return f.Data, true
-			}
+		if frame, ok := c.popEvent(); ok {
+			return frame.Data, true
 		}
-		c.evMu.Unlock()
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return "", false
 		}
@@ -703,15 +689,30 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 
 // popEvent extracts the oldest event frame, leaving any answers in place.
 func (c *Channel) popEvent() (Framed, bool) {
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
-	for i, f := range c.ev {
-		if f.Event {
-			c.ev = append(c.ev[:i], c.ev[i+1:]...)
-			return f, true
+	for {
+		p := c.ev.Load()
+		if p == nil || len(*p) == 0 {
+			return Framed{}, false
+		}
+		cur := *p
+		idx := -1
+		for i, f := range cur {
+			if f.Event {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return Framed{}, false
+		}
+		frame := cur[idx]
+		next := make([]Framed, 0, len(cur)-1)
+		next = append(next, cur[:idx]...)
+		next = append(next, cur[idx+1:]...)
+		if c.ev.CompareAndSwap(p, &next) {
+			return frame, true
 		}
 	}
-	return Framed{}, false
 }
 
 // socketGone reports that the read loop has stopped, so no further frame can
@@ -728,16 +729,20 @@ func (c *Channel) socketGone() bool {
 	}
 }
 
-// pop takes the oldest buffered frame.
+// pop takes the oldest buffered frame via copy-on-write CAS.
 func (c *Channel) pop() (Framed, bool) {
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
-	if len(c.ev) == 0 {
-		return Framed{}, false
+	for {
+		p := c.ev.Load()
+		if p == nil || len(*p) == 0 {
+			return Framed{}, false
+		}
+		cur := *p
+		frame := cur[0]
+		next := append([]Framed(nil), cur[1:]...)
+		if c.ev.CompareAndSwap(p, &next) {
+			return frame, true
+		}
 	}
-	frame := c.ev[0]
-	c.ev = c.ev[1:]
-	return frame, true
 }
 
 // Close shuts the channel. A socket is closed with a normal closure frame so the
@@ -972,15 +977,22 @@ func (c *Channel) buffer(frame Framed) {
 	if frame.Data == "" {
 		return
 	}
-	c.evMu.Lock()
-	c.ev = append(c.ev, frame)
-	if len(c.ev) > maxEvents {
-		c.ev = append(c.ev[:0], c.ev[len(c.ev)-maxEvents:]...)
+	for {
+		p := c.ev.Load()
+		var cur []Framed
+		if p != nil {
+			cur = *p
+		}
+		next := make([]Framed, 0, len(cur)+1)
+		next = append(next, cur...)
+		next = append(next, frame)
+		if len(next) > maxEvents {
+			next = next[len(next)-maxEvents:]
+		}
+		if c.ev.CompareAndSwap(p, &next) {
+			break
+		}
 	}
-	c.evMu.Unlock()
-	// OUTSIDE THE LOCK: closing the old generation wakes readers that will
-	// immediately ask for evMu, and waking them from inside the critical section is
-	// the pattern this file exists to avoid.
 	c.wakeAll()
 }
 
