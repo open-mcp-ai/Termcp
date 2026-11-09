@@ -29,3 +29,12 @@ Makefile    text
 Dockerfile  text
 LICENSE     text
 .gitignore  text
+
+# Vendored third-party build output, copied byte-for-byte from the upstream npm
+# package (checksums and verification steps in docs/xterm.md). The attributes
+# below change nothing about the bytes — they tell GitHub, and any reader of a
+# diff, that these two files are not this project's JavaScript. Without them the
+# 488KB upstream bundle is counted as termcp source, which reads as a hand-
+# written single-line program to anyone auditing the repository.
+third_party/xterm/xterm.js   linguist-vendored linguist-generated=true
+third_party/xterm/xterm.css  linguist-vendored linguist-generated=true

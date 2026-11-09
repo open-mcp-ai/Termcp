@@ -1,0 +1,51 @@
+xterm.js — third-party notice
+=============================
+
+The files in this directory are build artifacts of xterm.js, the browser
+terminal emulator, copied byte-for-byte from the official npm distribution.
+They are third-party code: not termcp source, and not obfuscated by us.
+
+    xterm.js    @xterm/xterm@6.0.0, package/lib/xterm.js
+                sha256 14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972
+    xterm.css   @xterm/xterm@6.0.0, package/css/xterm.css
+                sha256 854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6
+
+Upstream tarball: https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz
+npm integrity:    sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==
+
+Containing project: https://github.com/open-mcp-ai/Termcp
+Provenance, verification commands and why the bundle is minified (upstream's
+own distribution format, unmodified): docs/xterm.md in that repository.
+To re-derive these bytes: `npm pack @xterm/xterm@6.0.0`.
+
+The file `_README.md` beside this notice is NOT part of the shipped assets: Go's
+//go:embed skips files whose names begin with `_` or `.`, so it stays in the
+repository for a human reviewer and never enters the binary.
+
+xterm.js is MIT-licensed. The notice below is reproduced here, and this copy —
+unlike the notes in docs/xterm.md — is embedded in every termcp binary, which is
+what makes the notice accompany each distributed copy of the software.
+
+--------------------------------------------------------------------------------
+
+Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

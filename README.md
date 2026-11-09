@@ -179,6 +179,9 @@ Comming Soon
 ## License
 
 Released under the [MIT License](./LICENSE).
+The Web UI's terminal is [xterm.js](https://github.com/xtermjs/xterm.js), vendored
+byte-for-byte from the official npm package; its license and the exact checksums
+are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 Thanks to friends in the [linux.do](https://linux.do/) community for the discussions, feedback, and support.
 
 ---

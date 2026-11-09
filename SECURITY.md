@@ -45,6 +45,9 @@ serialized, persisted to disk, or sent across the network.
 
 ## Vendored Dependencies
 
-`internal/webui/assets/static/xterm/` contains upstream xterm.js build
-artifacts needed for the self-contained Web UI. See [`docs/xterm.md`](docs/xterm.md)
-for upstream versions and SHA-256 checksums to verify they are unmodified.
+`third_party/xterm/` contains upstream xterm.js build artifacts needed for the
+self-contained Web UI: two runtime files, embedded by name from
+`third_party/xterm/embed.go`, plus the provenance (`README.md`) and licence
+(`NOTICE`) that stay in the repository. See [`docs/xterm.md`](docs/xterm.md) for
+upstream versions and SHA-256 checksums to verify they are unmodified, and
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the attribution.

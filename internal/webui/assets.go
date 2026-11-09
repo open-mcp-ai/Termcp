@@ -69,7 +69,16 @@ func Assets() fs.FS {
 	if themeDir != "" {
 		themes = os.DirFS(themeDir)
 	}
-	return themeFS{base: base, externalAssets: external, externalThemes: themes, embedded: root}
+	var fsys fs.FS = themeFS{base: base, externalAssets: external, externalThemes: themes, embedded: root}
+	// The vendored browser terminal is served from its own package, not from the
+	// asset tree: that is what lets the licence and the provenance sit beside the
+	// bytes without shipping (see vendored.go and third_party/xterm/embed.go).
+	// Outermost, so its two paths are answered here and everything else falls
+	// through unchanged.
+	if v := vendoredAssets(); v != nil {
+		fsys = vendoredFS{base: fsys, vendored: v}
+	}
+	return fsys
 }
 
 // overrideFS composes an external directory with the embedded assets, file by

@@ -1,6 +1,6 @@
 # Vendored xterm.js
 
-`internal/webui/assets/static/xterm/` contains upstream build artifacts of the
+`third_party/xterm/` contains upstream build artifacts of the
 [xterm.js](https://github.com/xtermjs/xterm.js) browser terminal emulator,
 copied verbatim from the official npm distribution. They are minified
 production artifacts published by the xterm.js project — **not** termcp source
@@ -21,12 +21,35 @@ Files copied out of that tarball, unmodified:
 
 | In-tree path | Upstream path in tarball | SHA-256 |
 |---|---|---|
-| `internal/webui/assets/static/xterm/xterm.js` | `package/lib/xterm.js` | `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972` |
-| `internal/webui/assets/static/xterm/xterm.css` | `package/css/xterm.css` | `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6` |
+| `third_party/xterm/xterm.js` | `package/lib/xterm.js` | `14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972` |
+| `third_party/xterm/xterm.css` | `package/css/xterm.css` | `854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6` |
 
-Only those two runtime files are vendored. Documentation and license text live
-here instead, because everything under `internal/webui/assets/` is embedded into
-the binary and served at guessed URLs nobody links to.
+Only those two runtime files are vendored. Three more files sit beside them and
+**none of them ships**:
+
+| File | Why |
+|---|---|
+| `NOTICE` | The MIT text. It travels with the release assets and the container image rather than inside the binary. |
+| `README.md` | A one-screen answer to "what is this single-line file", for whoever opens the directory. |
+| `embed.go` | The `//go:embed xterm.js xterm.css` line: it names the two files that ship, which is what keeps the other two out. |
+
+**The embed list is the mechanism, and it is why this directory exists.** A
+`//go:embed` of the directory would take everything in it; naming the files
+takes exactly two. Keeping the vendored bytes out of `internal/webui/assets/`
+is what makes that possible without an underscore prefix on the licence.
+
+The Web UI still asks for `static/xterm/xterm.js` and `static/xterm/xterm.css`:
+`internal/webui/vendored.go` serves this filesystem behind those two paths, so
+`index.html` and the browser see no difference.
+
+Longer documentation lives here in `docs/` rather than next to the assets,
+because the assets directory is served as static routes and a file nobody links
+to is not documentation.
+
+`internal/webui/xterm_provenance_test.go` pins the arrangement: the embedded
+bytes still hash to the values in the table above, `NOTICE` and `README.md` are
+still *absent* from the served filesystem, and `embed.go` still names exactly
+the two files that ship.
 
 Only the core package is vendored. The Web UI implements its own grid fitting
 (`fitShellTerminal` in `internal/webui/assets/static/js/ui-socket.js`), so
@@ -54,8 +77,8 @@ sha1sum xterm-6.0.0.tgz     # matches 93637b0f2ee3a70718b5746a27c9c506af16745b
 
 # 2. Verify in-tree files are byte-identical to the tarball's contents:
 tar -xzf xterm-6.0.0.tgz
-cmp internal/webui/assets/static/xterm/xterm.js package/lib/xterm.js
-cmp internal/webui/assets/static/xterm/xterm.css package/css/xterm.css
+cmp third_party/xterm/xterm.js package/lib/xterm.js
+cmp third_party/xterm/xterm.css package/css/xterm.css
 ```
 
 ## 6.0.0 integration notes
@@ -89,15 +112,20 @@ What that changed for termcp's UI code (all in
 ## Upgrading
 
 Download the target `@xterm/xterm` npm tarball, copy `package/lib/xterm.js` and
-`package/css/xterm.css` to `internal/webui/assets/static/xterm/`, and update the
-checksums and the license text in this file. Re-read the DOM notes before a
-major bump.
+`package/css/xterm.css` into `third_party/xterm/`, and update the three copies
+of the checksums that must agree: this file, `README.md` beside the files, and
+`THIRD_PARTY_NOTICES.md` at the repository root — plus the constants in
+`internal/webui/xterm_provenance_test.go` (a mismatch fails the test). Re-read
+the DOM notes before a major bump.
 
 ## License
 
-xterm.js is MIT-licensed. The notice is reproduced here, as the MIT terms
-require it to accompany copies of the software; the runtime assets embed no
-license file of their own.
+xterm.js is MIT-licensed. The notice is reproduced here and in
+`third_party/xterm/NOTICE`. It does **not** ship inside the binary: the two
+distributed forms that can carry a file do it instead — every GitHub release
+attaches `THIRD_PARTY_NOTICES.md`, and the container image copies it to
+`/usr/share/doc/termcp/`. `go install` is covered by the module itself, which
+contains this directory.
 
 ```
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)

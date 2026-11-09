@@ -2,7 +2,10 @@
 
 package webui
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
 // uiEmbedded is false in the pure-API build: there is no browser UI to serve.
 const uiEmbedded = false
@@ -15,3 +18,7 @@ const uiEmbedded = false
 //
 //go:embed assets/api.md
 var embeddedAssets embed.FS
+
+// vendoredAssets is nil in the pure-API build: no browser UI, no browser
+// terminal, and therefore none of its bytes in the binary.
+func vendoredAssets() fs.FS { return nil }
