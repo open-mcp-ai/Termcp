@@ -132,8 +132,12 @@ type Channel struct {
 	// waiters are the calls in flight, by id. The dispatcher hands an answer
 	// straight to the call that asked for it, which is the whole point of being the
 	// only reader: the match is decided in one place instead of raced for.
-	waitMu sync.Mutex
-	wait   map[string]chan Framed
+	//
+	// A sync.Map: every operation touches one id, and there is no invariant spanning
+	// two waiters — a lookup by the frame's id, one store before the write, one
+	// delete on the way out. The mutex was three obligations (unlock on every return,
+	// never hold it across the send) that no longer have to be remembered.
+	wait sync.Map // id string -> chan Framed
 
 	// log is the receive history: every frame, numbered, retained in a bounded
 	// ring. The ev queue above is a BACKLOG (read once, then gone); this is the
@@ -264,7 +268,6 @@ func OpenWithHeaders(ctx context.Context, rawURL string, dial DialFunc, headers 
 		transport:    WS,
 		extraHeaders: extra,
 		callGate:     make(chan struct{}, 1),
-		wait:         make(map[string]chan Framed),
 		done:         make(chan struct{}),
 		log:          newFrameLog(maxEvents*8, 8<<20),
 	}
@@ -375,13 +378,12 @@ func (c *Channel) dispatch(rec Framed) {
 		c.buffer(rec)
 		return
 	}
-	c.waitMu.Lock()
-	ch, waiting := c.wait[key]
-	c.waitMu.Unlock()
+	v, waiting := c.wait.Load(key)
 	if !waiting {
 		c.buffer(rec)
 		return
 	}
+	ch := v.(chan Framed)
 	// A one-slot channel and a non-blocking send: the waiter is either parked on it
 	// or already gone, and a blocked dispatcher would stall the only socket reader.
 	select {
@@ -444,18 +446,14 @@ func (c *Channel) awaitAnswer(ctx context.Context, want any, send func() error) 
 		return "", errors.New("the frame carries no id, so no answer can be matched to it")
 	}
 	ch := make(chan Framed, 1)
-	c.waitMu.Lock()
-	c.wait[key] = ch
-	c.waitMu.Unlock()
+	c.wait.Store(key, ch)
 	// DEREGISTERING IS WHERE A DEADLINE RACE IS MADE HARMLESS. The dispatcher can
 	// deliver in the same instant the window closes; if this simply returned, that
 	// frame would sit in a channel nobody will ever read again and the result would
 	// be gone. So whatever arrived is put back into the backlog on the way out,
 	// where a later Take can still find it.
 	defer func() {
-		c.waitMu.Lock()
-		delete(c.wait, key)
-		c.waitMu.Unlock()
+		c.wait.Delete(key)
 		select {
 		case rec := <-ch:
 			c.buffer(rec)
