@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/uid"
@@ -36,14 +36,74 @@ var (
 // one queue, which matches the scope of the approval switch: turning approval
 // mode on for a session covers every shell in it.
 type Queue struct {
-	mu       sync.Mutex
 	session  string
 	need     int
 	timeout  time.Duration
-	byID     map[string]*Request
-	byShell  map[string][]string // shellID -> request ids, oldest first
-	onChange func(Request)       // invoked without the lock held
-	stopped  bool
+	onChange func(Request)
+
+	// state is the whole queue — both indexes and the stopped flag — published as
+	// an immutable snapshot and advanced by CAS.
+	//
+	// THE TWO INDEXES ARE ONE VALUE. byID answers "what is this request" and byShell
+	// answers "what did this shell ask for"; every transition has to move both, and a
+	// reader that saw them disagree would show a shell a request its own list does not
+	// have. A snapshot makes that impossible instead of making it a locking rule.
+	state atomic.Pointer[queueState]
+}
+
+type queueState struct {
+	byID    map[string]Request
+	byShell map[string][]string // shellID -> request ids, oldest first
+	stopped bool
+}
+
+func (st *queueState) clone() *queueState {
+	next := &queueState{
+		byID:    make(map[string]Request, len(st.byID)),
+		byShell: make(map[string][]string, len(st.byShell)),
+		stopped: st.stopped,
+	}
+	for k, v := range st.byID {
+		next.byID[k] = v
+	}
+	for k, v := range st.byShell {
+		next.byShell[k] = append([]string(nil), v...)
+	}
+	return next
+}
+
+// load returns the current snapshot, creating the first one for a zero Queue.
+func (q *Queue) load() *queueState {
+	if p := q.state.Load(); p != nil {
+		return p
+	}
+	fresh := &queueState{byID: map[string]Request{}, byShell: map[string][]string{}}
+	if q.state.CompareAndSwap(nil, fresh) {
+		return fresh
+	}
+	return q.state.Load()
+}
+
+// mutate publishes a new snapshot built from the current one. fn edits a private
+// copy, so a reader holding the old snapshot never sees a half-applied change.
+//
+// WAKING A WAITER IS NOT PART OF THE EDIT. fn may run several times — each failed
+// CAS throws its copy away — and closing a request's done channel twice panics, so
+// the channel is only closed by the attempt that actually wins, through the `wake`
+// callback it collected during that attempt.
+func (q *Queue) mutate(fn func(st *queueState, wake func(chan struct{}))) {
+	for {
+		cur := q.load()
+		next := cur.clone()
+		var waking []chan struct{}
+		fn(next, func(ch chan struct{}) { waking = append(waking, ch) })
+		if q.state.CompareAndSwap(cur, next) {
+			for _, ch := range waking {
+				close(ch)
+			}
+			return
+		}
+	}
 }
 
 // Options configures a Queue.
@@ -69,14 +129,14 @@ func NewQueue(sessionID string, opts Options) *Queue {
 	// has a single reviewer, and honouring a stale count would leave requests that
 	// no one can ever resolve.
 	const need = 1
-	return &Queue{
+	q := &Queue{
 		session:  sessionID,
 		need:     need,
 		timeout:  opts.Timeout,
-		byID:     map[string]*Request{},
-		byShell:  map[string][]string{},
 		onChange: opts.OnChange,
 	}
+	q.state.Store(&queueState{byID: map[string]Request{}, byShell: map[string][]string{}})
+	return q
 }
 
 // SessionID reports which session this queue gates.
@@ -147,26 +207,30 @@ func (q *Queue) Submit(sub Submission) (string, error) {
 		done:      make(chan struct{}),
 	}
 
-	q.mu.Lock()
-	if q.stopped {
-		q.mu.Unlock()
-		return "", errors.New("approval queue is closed")
-	}
 	if q.timeout > 0 {
 		r.ExpiresAt = now + q.timeout.Milliseconds()
 	}
 	r.Need = q.need
-	q.byID[r.ID] = r
-	if sub.ShellID != "" {
-		q.byShell[sub.ShellID] = append(q.byShell[sub.ShellID], r.ID)
+
+	closed := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		if st.stopped {
+			closed = true
+			return
+		}
+		st.byID[r.ID] = *r
+		if sub.ShellID != "" {
+			ids := append([]string(nil), st.byShell[sub.ShellID]...)
+			st.byShell[sub.ShellID] = append(ids, r.ID)
+		}
+	})
+	if closed {
+		return "", errors.New("approval queue is closed")
 	}
 	// Need is clamped to >= 1 in NewQueue, so NeedsMore() is never 0 here.
 	// That matters: a request that already met its threshold could never gain
 	// another state change, and Wait would block forever.
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
+	q.notify(r.clone())
 	return r.ID, nil
 }
 
@@ -185,17 +249,27 @@ func (q *Queue) SubmitShellInput(shellID, source, text string, keys []string) (s
 
 // Get returns a snapshot of one request.
 func (q *Queue) Get(id string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
+	var expired Request
+	due := false
+	var snap Request
+	var found bool
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			return
+		}
+		found = true
+		if expireIfDue(&r, wake) {
+			st.byID[id] = r
+			expired, due = r.clone(), true
+		}
+		snap = r.clone()
+	})
+	if !found {
 		return Request{}, ErrNotFound
 	}
-	expired := q.expireIfDueLocked(r)
-	snap := r.clone()
-	q.mu.Unlock()
-	if expired {
-		q.notify(snap)
+	if due {
+		q.notify(expired)
 	}
 	return snap, nil
 }
@@ -203,27 +277,29 @@ func (q *Queue) Get(id string) (Request, error) {
 // List returns every request, pending first, so the API can show a worklist
 // with the actionable entries at the top.
 func (q *Queue) List() []Request {
-	q.mu.Lock()
-	// A worklist that still shows an expired request as actionable is a worklist
-	// that lies about what can be approved (issue #216).
 	var due []Request
-	for _, r := range q.byID {
-		if q.expireIfDueLocked(r) {
-			due = append(due, r.clone())
+	var out []Request
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		// A worklist that still shows an expired request as actionable is a worklist
+		// that lies about what can be approved (issue #216).
+		for id, r := range st.byID {
+			if expireIfDue(&r, wake) {
+				st.byID[id] = r
+				due = append(due, r.clone())
+			}
 		}
-	}
-	out := make([]Request, 0, len(q.byID))
-	for _, r := range q.byID {
-		if r.State == Pending {
-			out = append(out, r.clone())
+		out = make([]Request, 0, len(st.byID))
+		for _, r := range st.byID {
+			if r.State == Pending {
+				out = append(out, r.clone())
+			}
 		}
-	}
-	for _, r := range q.byID {
-		if r.State != Pending {
-			out = append(out, r.clone())
+		for _, r := range st.byID {
+			if r.State != Pending {
+				out = append(out, r.clone())
+			}
 		}
-	}
-	q.mu.Unlock()
+	})
 	for _, snap := range due {
 		q.notify(snap)
 	}
@@ -232,19 +308,23 @@ func (q *Queue) List() []Request {
 
 // ListForShell returns one shell's requests, oldest first.
 func (q *Queue) ListForShell(shellID string) []Request {
-	q.mu.Lock()
 	var due []Request
-	ids := q.byShell[shellID]
-	out := make([]Request, 0, len(ids))
-	for _, id := range ids {
-		if r, ok := q.byID[id]; ok {
-			if q.expireIfDueLocked(r) {
+	var out []Request
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		ids := st.byShell[shellID]
+		out = make([]Request, 0, len(ids))
+		for _, id := range ids {
+			r, ok := st.byID[id]
+			if !ok {
+				continue
+			}
+			if expireIfDue(&r, wake) {
+				st.byID[id] = r
 				due = append(due, r.clone())
 			}
 			out = append(out, r.clone())
 		}
-	}
-	q.mu.Unlock()
+	})
 	for _, snap := range due {
 		q.notify(snap)
 	}
@@ -258,73 +338,78 @@ func (q *Queue) ListForShell(shellID string) []Request {
 // deployment token, so requiring one was friction that produced a claim rather
 // than a fact.
 func (q *Queue) Approve(id string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
-		return Request{}, ErrNotFound
-	}
-	// An expired request is not pending, whatever the map still says (issue #216).
-	if q.expireIfDueLocked(r) {
-		snap := r.clone()
-		q.mu.Unlock()
+	var snap Request
+	var err error
+	notify := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			snap, err = Request{}, ErrNotFound
+			return
+		}
+		// An expired request is not pending, whatever the map still says (issue #216).
+		if expireIfDue(&r, wake) {
+			st.byID[id] = r
+			snap, err, notify = r.clone(), ErrTimeout, true
+			return
+		}
+		if r.State == Expired {
+			snap, err = r.clone(), ErrTimeout
+			return
+		}
+		if r.State != Pending {
+			snap, err = r.clone(), ErrNotPending
+			return
+		}
+		r.Approvals = append(append([]string(nil), r.Approvals...), LocalReviewer)
+		if r.NeedsMore() == 0 {
+			resolve(&r, Approved, "", "", wake)
+			notify = true
+		}
+		st.byID[id] = r
+		snap = r.clone()
+	})
+	if notify {
 		q.notify(snap)
-		return snap, ErrTimeout
 	}
-	if r.State == Expired {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrTimeout
-	}
-	if r.State != Pending {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrNotPending
-	}
-	r.Approvals = append(r.Approvals, LocalReviewer)
-	if r.NeedsMore() == 0 {
-		q.resolveLocked(r, Approved, "", "")
-	}
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
-	return snap, nil
+	return snap, err
 }
 
 // Reject refuses the request. One rejection is final: the request gates a
 // command line, and saying no is enough to stop it.
 func (q *Queue) Reject(id, reason string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
-		return Request{}, ErrNotFound
-	}
-	// A rejection after the deadline is still a refusal, but the honest state is
-	// Expired: the window closed before a human decided (issue #216).
-	if q.expireIfDueLocked(r) {
-		snap := r.clone()
-		q.mu.Unlock()
+	var snap Request
+	var err error
+	notify := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			snap, err = Request{}, ErrNotFound
+			return
+		}
+		// A rejection after the deadline is still a refusal, but the honest state is
+		// Expired: the window closed before a human decided (issue #216).
+		if expireIfDue(&r, wake) {
+			st.byID[id] = r
+			snap, err, notify = r.clone(), ErrTimeout, true
+			return
+		}
+		if r.State == Expired {
+			snap, err = r.clone(), ErrTimeout
+			return
+		}
+		if r.State != Pending {
+			snap, err = r.clone(), ErrNotPending
+			return
+		}
+		resolve(&r, Rejected, "", reason, wake)
+		st.byID[id] = r
+		snap, notify = r.clone(), true
+	})
+	if notify {
 		q.notify(snap)
-		return snap, ErrTimeout
 	}
-	if r.State == Expired {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrTimeout
-	}
-	if r.State != Pending {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrNotPending
-	}
-	q.resolveLocked(r, Rejected, "", reason)
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
-	return snap, nil
+	return snap, err
 }
 
 // Cancel drops a request without a human decision (session died, shell closed,
@@ -333,17 +418,20 @@ func (q *Queue) Cancel(id, reason string) {
 	if id == "" {
 		return
 	}
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok || r.State != Pending {
-		q.mu.Unlock()
-		return
+	var snap Request
+	cancelled := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok || r.State != Pending {
+			return
+		}
+		resolve(&r, Cancelled, "", reason, wake)
+		st.byID[id] = r
+		snap, cancelled = r.clone(), true
+	})
+	if cancelled {
+		q.notify(snap)
 	}
-	q.resolveLocked(r, Cancelled, "", reason)
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
 }
 
 // CancelAll drops every pending request, for the same reasons as Cancel. Used
@@ -358,9 +446,7 @@ func (q *Queue) CancelAll(reason string) {
 // Close permanently stops the queue: pending requests are cancelled and further
 // submissions are refused. The session calls this on release.
 func (q *Queue) Close(reason string) {
-	q.mu.Lock()
-	q.stopped = true
-	q.mu.Unlock()
+	q.mutate(func(st *queueState, wake func(chan struct{})) { st.stopped = true })
 	for _, r := range q.cancelPending(reason) {
 		q.notify(r)
 	}
@@ -368,42 +454,44 @@ func (q *Queue) Close(reason string) {
 
 // cancelPending cancels every pending request and returns their snapshots.
 func (q *Queue) cancelPending(reason string) []Request {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	var out []Request
 	now := clock.Now()
-	for _, r := range q.byID {
-		if r.State == Pending {
-			q.resolveLocked(r, Cancelled, "", reason)
-			out = append(out, r.clone())
-			continue
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		out = out[:0]
+		for id, r := range st.byID {
+			if r.State == Pending {
+				resolve(&r, Cancelled, "", reason, wake)
+				st.byID[id] = r
+				out = append(out, r.clone())
+				continue
+			}
+			// Approval and execution are separate. Closing the gate cannot undo an
+			// approval that already started, but it must not leave a running
+			// execution looking live after its session is gone.
+			if r.State == Approved && r.Execution != nil && r.Execution.State == ExecutionRunning {
+				exec := *r.Execution
+				exec.State = ExecutionUnknown
+				exec.FinishedAt = now
+				exec.Error = reason
+				r.Execution = &exec
+				st.byID[id] = r
+				out = append(out, r.clone())
+			}
 		}
-		// Approval and execution are separate. Closing the gate cannot undo an
-		// approval that already started, but it must not leave a running
-		// execution looking live after its session is gone.
-		if r.State == Approved && r.Execution != nil && r.Execution.State == ExecutionRunning {
-			r.Execution.State = ExecutionUnknown
-			r.Execution.FinishedAt = now
-			r.Execution.Error = reason
-			out = append(out, r.clone())
-		}
-	}
+	})
 	return out
 }
 
 // Wait blocks until the request reaches a terminal state or its deadline
 // passes, then returns the final snapshot.
 func (q *Queue) Wait(id string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
+	st := q.load()
+	r, ok := st.byID[id]
 	if !ok {
-		q.mu.Unlock()
 		return Request{}, ErrNotFound
 	}
 	if r.State.Terminal() {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, nil
+		return r.clone(), nil
 	}
 	done := r.done
 	var wait time.Duration
@@ -413,7 +501,6 @@ func (q *Queue) Wait(id string) (Request, error) {
 			wait = 0
 		}
 	}
-	q.mu.Unlock()
 
 	if r.ExpiresAt == 0 {
 		// No deadline: the only way out is a decision.
@@ -435,29 +522,27 @@ func (q *Queue) Wait(id string) (Request, error) {
 // does not notify listeners: the approval itself was already announced, and an
 // intermediate "running" update would only flicker in the reviewer UI.
 func (q *Queue) BeginExecution(id string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
-		return Request{}, ErrNotFound
-	}
-	if r.State != Approved {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrNotApproved
-	}
-	if r.Execution != nil {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrExecutionAlreadyStarted
-	}
-	r.Execution = &Execution{
-		State:     ExecutionRunning,
-		StartedAt: clock.Now(),
-	}
-	snap := r.clone()
-	q.mu.Unlock()
-	return snap, nil
+	var snap Request
+	var err error
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			snap, err = Request{}, ErrNotFound
+			return
+		}
+		if r.State != Approved {
+			snap, err = r.clone(), ErrNotApproved
+			return
+		}
+		if r.Execution != nil {
+			snap, err = r.clone(), ErrExecutionAlreadyStarted
+			return
+		}
+		r.Execution = &Execution{State: ExecutionRunning, StartedAt: clock.Now()}
+		st.byID[id] = r
+		snap = r.clone()
+	})
+	return snap, err
 }
 
 // FinishExecution records the terminal result of replaying an approved
@@ -470,58 +555,66 @@ func (q *Queue) FinishExecution(id string, state ExecutionState, detail string) 
 		return Request{}, ErrInvalidExecutionState
 	}
 
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
-		return Request{}, ErrNotFound
+	var snap Request
+	var err error
+	notify := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			snap, err = Request{}, ErrNotFound
+			return
+		}
+		if r.State != Approved || r.Execution == nil || r.Execution.State != ExecutionRunning {
+			snap, err = r.clone(), ErrExecutionNotRunning
+			return
+		}
+		isShellInput := r.Kind == "" || r.Kind == KindShellInput
+		if isShellInput && state == ExecutionSucceeded {
+			snap, err = r.clone(), ErrInvalidExecutionState
+			return
+		}
+		if !isShellInput && state == ExecutionSubmitted {
+			snap, err = r.clone(), ErrInvalidExecutionState
+			return
+		}
+		exec := *r.Execution
+		exec.State = state
+		exec.FinishedAt = clock.Now()
+		exec.Error = strings.TrimSpace(detail)
+		r.Execution = &exec
+		st.byID[id] = r
+		snap, notify = r.clone(), true
+	})
+	if notify {
+		q.notify(snap)
 	}
-	if r.State != Approved || r.Execution == nil || r.Execution.State != ExecutionRunning {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrExecutionNotRunning
-	}
-	isShellInput := r.Kind == "" || r.Kind == KindShellInput
-	if isShellInput && state == ExecutionSucceeded {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrInvalidExecutionState
-	}
-	if !isShellInput && state == ExecutionSubmitted {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, ErrInvalidExecutionState
-	}
-	r.Execution.State = state
-	r.Execution.FinishedAt = clock.Now()
-	r.Execution.Error = strings.TrimSpace(detail)
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
-	return snap, nil
+	return snap, err
 }
 
 // expire transitions a still-pending request whose deadline passed. It reports
 // the truth rather than overwriting a decision that won the race.
 func (q *Queue) expire(id string) (Request, error) {
-	q.mu.Lock()
-	r, ok := q.byID[id]
-	if !ok {
-		q.mu.Unlock()
-		return Request{}, ErrNotFound
+	var snap Request
+	var err error
+	notify := false
+	q.mutate(func(st *queueState, wake func(chan struct{})) {
+		r, ok := st.byID[id]
+		if !ok {
+			snap, err = Request{}, ErrNotFound
+			return
+		}
+		if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
+			snap = r.clone()
+			return
+		}
+		resolve(&r, Expired, "", "", wake)
+		st.byID[id] = r
+		snap, err, notify = r.clone(), ErrTimeout, true
+	})
+	if notify {
+		q.notify(snap)
 	}
-	if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
-		snap := r.clone()
-		q.mu.Unlock()
-		return snap, nil
-	}
-	q.resolveLocked(r, Expired, "", "")
-	snap := r.clone()
-	q.mu.Unlock()
-
-	q.notify(snap)
-	return snap, ErrTimeout
+	return snap, err
 }
 
 // expireIfDue moves a pending request to Expired when its deadline has passed, and
@@ -536,23 +629,28 @@ func (q *Queue) expire(id string) (Request, error) {
 //
 // Every reader and every decision calls this first, so a request is expired by the
 // time anyone can observe or act on it.
-func (q *Queue) expireIfDueLocked(r *Request) bool {
+func expireIfDue(r *Request, wake func(chan struct{})) bool {
 	if r.State != Pending || r.ExpiresAt == 0 || clock.Now() < r.ExpiresAt {
 		return false
 	}
-	q.resolveLocked(r, Expired, "", "")
+	resolve(r, Expired, "", "", wake)
 	return true
 }
 
 // resolveLocked performs the one-way transition to a terminal state and signals
 // waiters. The queue lock must be held.
-func (q *Queue) resolveLocked(r *Request, state State, by, reason string) {
+// resolve moves one request to a terminal state and wakes its waiter.
+//
+// CLOSING done IS SAFE UNDER CAS: only the transition out of Pending reaches here,
+// and a CAS loop can publish exactly one such transition — so the channel a waiter
+// holds is closed once, by the writer that won.
+func resolve(r *Request, state State, by, reason string, wake func(chan struct{})) {
 	r.State = state
 	r.DecidedBy = by
 	r.Reason = reason
 	r.ResolvedAt = clock.Now()
 	if r.done != nil {
-		close(r.done)
+		wake(r.done)
 		r.done = nil
 	}
 }
