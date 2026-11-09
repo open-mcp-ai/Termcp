@@ -168,8 +168,7 @@ func (s *Session) createChildShell(command string, args []string, line, pty bool
 	// do not create a shell and therefore do not consume a locator number; every
 	// successful channel still gets a unique, monotonically increasing number
 	// under shellStateMu.
-	s.nextShellIndex++
-	index := s.nextShellIndex
+	index := int(s.nextShellIndex.Add(1))
 	if name == "" {
 		// Keep the public default name backward-compatible. The stable channel
 		// number used by locators is carried separately in Index; it is not

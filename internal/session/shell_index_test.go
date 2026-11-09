@@ -228,8 +228,8 @@ func TestShellIndexSurvivesRestart(t *testing.T) {
 	if _, ok := restored.SnapshotShellByIndex(3); ok {
 		t.Fatal("restored session reports a channel 3 that was never created")
 	}
-	if restored.nextShellIndex != 2 {
-		t.Fatalf("restored nextShellIndex = %d, want 2 (one past the highest retained channel)", restored.nextShellIndex)
+	if restored.nextShellIndex.Load() != 2 {
+		t.Fatalf("restored nextShellIndex = %d, want 2 (one past the highest retained channel)", restored.nextShellIndex.Load())
 	}
 }
 
@@ -275,8 +275,8 @@ func TestShellIndexBackfilledFromLegacyManifest(t *testing.T) {
 	if _, ok := sess.SnapshotShellByIndex(3); ok {
 		t.Fatal("backfill invented a third channel")
 	}
-	if sess.nextShellIndex != 2 {
-		t.Fatalf("backfilled nextShellIndex = %d, want 2", sess.nextShellIndex)
+	if sess.nextShellIndex.Load() != 2 {
+		t.Fatalf("backfilled nextShellIndex = %d, want 2", sess.nextShellIndex.Load())
 	}
 }
 

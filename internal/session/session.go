@@ -136,7 +136,7 @@ type Session struct {
 	onExit         OnExitPolicy // what to do when the last shell ends by itself
 	primaryShellID string       // first shell id (≠ session id); addressed by session-level helpers; empty when NoShell
 	primaryMode    api.SessionMode
-	nextShellIndex int         // guarded by shellStateMu; monotonically assigns channel indexes
+	nextShellIndex atomic.Int64 // monotonically assigns channel indexes; no lock, no field beside it
 	restriction    Restriction // the zero value is unrestricted; see Config.Restriction
 
 	shells sync.Map // *ChildShell by ID
@@ -276,7 +276,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	s.readerID = rid
 	s.primaryShellID = shellID
 	s.primaryMode = cfg.Mode
-	s.nextShellIndex = 1
+	s.nextShellIndex.Store(1)
 
 	root := &ChildShell{
 		ID:          shellID,

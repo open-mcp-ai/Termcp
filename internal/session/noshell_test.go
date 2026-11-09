@@ -26,8 +26,8 @@ func TestSessionNoShell(t *testing.T) {
 	if s.PrimaryShell() != nil {
 		t.Error("PrimaryShell() should be nil when no primary shell was created")
 	}
-	if s.nextShellIndex != 0 {
-		t.Errorf("nextShellIndex = %d, want 0 so the first child shell becomes channel 1", s.nextShellIndex)
+	if n := s.nextShellIndex.Load(); n != 0 {
+		t.Errorf("nextShellIndex = %d, want 0 so the first child shell becomes channel 1", n)
 	}
 	if count := liveShellCount(s); count != 0 {
 		t.Errorf("live shells = %d, want 0", count)
