@@ -168,8 +168,11 @@ type bridge struct {
 	fatal  chan error     // buffered(1): first terminal error wins
 	wg     sync.WaitGroup // in-flight forwards, drained when stdin closes
 
-	pendingMu    sync.Mutex                   // guards pending map
-	pending      map[string]int               // SSE mode: forwarded request ids still owed a reply
+	// pending counts replies still owed per forwarded request id. A sync.Map of
+	// atomic counters: each entry is one id's whole state, and the only cross-entry
+	// question — "is anything still owed?" — is a Range, which is a snapshot rather
+	// than an invariant.
+	pending      sync.Map                     // id string -> *atomic.Int64
 	fatalPending atomic.Bool                  // SSE mode: a fatal error fired while EOF waits
 	pendingWake  atomic.Pointer[chan struct{}] // rotated on queue empty / fatal
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -42,13 +41,23 @@ type markRef struct {
 // that shrank is read again from its start rather than mixing two generations of
 // one path.
 //
-// mu guards both fields and is held only for the duration of a refresh, which
-// reads the appended bytes and nothing else.
+// tok serialises a refresh. A 1-SLOT CHANNEL, NOT A MUTEX, because the section it
+// guards READS THE FILE: refresh opens log.jsonl and parses the bytes appended since
+// the last call, and a lock held across that I/O is exactly what AGENTS.md forbids.
+// A token says the same thing in one place and cannot be left locked by a panic in
+// the parse path.
 type markIndex struct {
-	mu    sync.Mutex
+	tok   chan struct{}
 	refs  []markRef
 	size  int64 // bytes of log.jsonl already consumed
 	count int64 // marks scanned so far; the stride's counter
+}
+
+// newMarkIndex returns an index whose token is ready to take.
+func newMarkIndex() *markIndex {
+	i := &markIndex{tok: make(chan struct{}, 1)}
+	i.tok <- struct{}{}
+	return i
 }
 
 // refresh brings the index up to the file's current length. A missing file is an
@@ -250,11 +259,11 @@ func seekRef(refs []markRef, start int64) int {
 // the entries that read already holds.
 func (s *Store) markCursors(sessionID, shellID string) ([]markRef, error) {
 	key := sessionID + "\x00" + shellID
-	actual, _ := s.markIdx.LoadOrStore(key, &markIndex{})
+	actual, _ := s.markIdx.LoadOrStore(key, newMarkIndex())
 	idx, _ := actual.(*markIndex)
 
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
+	<-idx.tok
+	defer func() { idx.tok <- struct{}{} }()
 	if err := idx.refresh(s.MarkPath(sessionID, shellID)); err != nil {
 		return nil, err
 	}

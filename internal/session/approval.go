@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
@@ -25,7 +26,6 @@ import (
 //     webui.handleWSInput): a per-keystroke stream cannot be reviewed as a unit,
 //     so it is dropped rather than squeezed through the queue.
 type approvalState struct {
-	mu     sync.Mutex
 	queue  *approval.Queue
 	need   int
 	window time.Duration
@@ -37,17 +37,14 @@ type approvalState struct {
 	// shell. An agent types a line and then presses enter, and those are two MCP
 	// calls; holding the text until the newline arrives is what lets a reviewer
 	// see one complete command instead of half a line followed by a bare enter.
-	pending map[string]*stagedInput
-	// onChange is invoked (without the lock) after every queue transition, so
-	// the UI and waiting agents can be notified.
-	onChange func(sessionID string, req approval.Request)
-}
-
-// stagedInput is one shell's uncommitted text. It is not yet a reviewable unit,
-// so it is deliberately not in the queue: nothing decides it until an ending key
-// arrives.
-type stagedInput struct {
-	text string
+	//
+	// A sync.Map OF STRINGS, NOT A LOCKED MAP OF MUTABLE CELLS: the value is the
+	// whole state of one shell, appending is a CompareAndSwap on that key, and no
+	// rule spans two shells. Every other field of approvalState is written once when
+	// the state is built.
+	pending sync.Map // shellID string -> staged text string
+	// onChange is atomic so a transition never holds a lock while calling out.
+	onChange atomic.Pointer[func(sessionID string, req approval.Request)]
 }
 
 // SubmitStaged appends text for a shell and reports whether a reviewer needs to
@@ -67,18 +64,20 @@ func (s *Session) SubmitStaged(shellID, source, text string) error {
 	if text == "" {
 		return nil
 	}
-	st.mu.Lock()
-	if st.pending == nil {
-		st.pending = map[string]*stagedInput{}
+	// APPEND BY CAS: two calls can stage on one shell at once, and the second must
+	// see the first's text rather than replace it.
+	for {
+		cur, ok := st.pending.Load(shellID)
+		if !ok {
+			if _, loaded := st.pending.LoadOrStore(shellID, text); !loaded {
+				return nil
+			}
+			continue
+		}
+		if st.pending.CompareAndSwap(shellID, cur, cur.(string)+text) {
+			return nil
+		}
 	}
-	cur := st.pending[shellID]
-	if cur == nil {
-		cur = &stagedInput{}
-		st.pending[shellID] = cur
-	}
-	cur.text += text
-	st.mu.Unlock()
-	return nil
 }
 
 // CommitStaged turns whatever a shell has staged into a queued request, adding
@@ -91,15 +90,10 @@ func (s *Session) CommitStaged(shellID, source, key string, repeat int) (string,
 	if st == nil {
 		return "", ErrApprovalOff
 	}
-	st.mu.Lock()
 	text := ""
-	if st.pending != nil {
-		if cur := st.pending[shellID]; cur != nil {
-			text = cur.text
-			delete(st.pending, shellID)
-		}
+	if cur, ok := st.pending.LoadAndDelete(shellID); ok {
+		text, _ = cur.(string)
 	}
-	st.mu.Unlock()
 
 	keys := make([]string, 0, repeat)
 	for i := 0; i < repeat; i++ {
@@ -112,9 +106,7 @@ func (s *Session) CommitStaged(shellID, source, key string, repeat int) (string,
 
 // discardStaged drops every shell's uncommitted text.
 func (st *approvalState) discardStaged() {
-	st.mu.Lock()
-	st.pending = nil
-	st.mu.Unlock()
+	st.pending.Clear()
 }
 
 // approvalConfig is the resolved configuration for enabling approval mode.
@@ -156,7 +148,8 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 		return err
 	}
 
-	st := &approvalState{need: need, window: timeout, onChange: s.approvalSink, scopes: set}
+	st := &approvalState{need: need, window: timeout, scopes: set}
+	st.onChange.Store(&s.approvalSink)
 	// The queue's change hook re-reads the session's current state rather than
 	// capturing the event sink here: the sink is installed by main and can be
 	// replaced between enable and use.
@@ -167,11 +160,8 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 			// The audit mark goes first: a replay of log.jsonl should show the
 			// decision point even if a UI subscriber is slow or absent.
 			s.recordApprovalMark(r)
-			st.mu.Lock()
-			sink := st.onChange
-			st.mu.Unlock()
-			if sink != nil {
-				sink(s.ID, r)
+			if p := st.onChange.Load(); p != nil && *p != nil {
+				(*p)(s.ID, r)
 			}
 		},
 	})
@@ -277,8 +267,6 @@ func (s *Session) ApprovalScopes() []approval.Kind {
 // lock (EnableApproval swaps the whole state in, so the set never changes under a
 // live pointer, but the lock keeps the read explicit).
 func (st *approvalState) gates(kind approval.Kind) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.scopes == nil {
 		return true
 	}
@@ -287,8 +275,6 @@ func (st *approvalState) gates(kind approval.Kind) bool {
 
 // scopeList returns the gated kinds in a stable order, or nil for "everything".
 func (st *approvalState) scopeList() []approval.Kind {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.scopes == nil {
 		return nil
 	}
@@ -323,9 +309,7 @@ func (s *Session) SetApprovalChangeHandler(fn func(sessionID string, req approva
 	s.mu.Unlock()
 
 	if st != nil {
-		st.mu.Lock()
-		st.onChange = fn
-		st.mu.Unlock()
+		st.onChange.Store(&fn)
 	}
 }
 

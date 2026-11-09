@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/ns"
@@ -28,14 +28,13 @@ type extGroup struct {
 	//
 	// "Two extensions coming up at once must open ONE connection" is still the rule;
 	// it is now expressed by dialing, which a caller can leave.
-	mu        sync.Mutex
 	key       string
 	target    string
 	namespace string
 	// dialing is the connection currently being established, if any. Callers that
 	// find it set wait for it instead of starting a second dial, and wait somewhere
 	// their own context can release them.
-	dialing *groupDial
+	dialing atomic.Pointer[groupDial]
 	// created is when this group was first resolved. The sweep uses it to leave
 	// alone a connection that appeared while the walk was running: the walk's
 	// picture of who wants what was taken at the top, and a group that did not exist
@@ -45,7 +44,7 @@ type extGroup struct {
 	// here until the next attempt replaces it, so the corpse can be finalized
 	// rather than left in the registry; "does this group have a session" is a
 	// liveness question, which is what liveSession answers.
-	sessionID string
+	sessionID atomic.Pointer[string]
 }
 
 // hostPlan is one template resolved into what it actually needs: the connection
@@ -61,6 +60,22 @@ type hostPlan struct {
 	pty     bool
 	rows    int
 	cols    int
+}
+
+// session returns the session the group is served by, or "" when it has none.
+func (g *extGroup) session() string {
+	if p := g.sessionID.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// takeSession clears and returns the group's session id.
+func (g *extGroup) takeSession() string {
+	if p := g.sessionID.Swap(nil); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // groupNamed reports whether any state still resolves to this connection.
@@ -170,8 +185,7 @@ func (r *Reconciler) groupList() []*extGroup {
 }
 
 // ensureGroupSession returns the connection the group is served by: the one it
-// already has when that is still running, a new one otherwise. The group's own
-// lock is what makes two members starting at once share the answer.
+// already has when that is still running, a new one otherwise.
 // groupDial is one in-flight connection attempt. Its done channel is closed when
 // the attempt finishes, and the outcome is read from sess/err afterwards.
 type groupDial struct {
@@ -181,56 +195,59 @@ type groupDial struct {
 }
 
 func (r *Reconciler) ensureGroupSession(ctx context.Context, g *extGroup, base session.Config) (*session.Session, error) {
-	// FAST PATH AND SINGLE-FLIGHT DECISION UNDER THE LOCK, DIAL OUTSIDE IT.
+	// SINGLE-FLIGHT BY COMPARE-AND-SWAP, WITH THE DIAL OUTSIDE IT.
 	//
-	// The lock now protects only the bookkeeping: is there a live session, and is
-	// somebody already dialing. Both are answered in a few instructions, so the lock
-	// is never held across anything that can block.
-	g.mu.Lock()
-	if sess := r.liveSession(g.sessionID); sess != nil {
-		g.mu.Unlock()
-		return sess, nil
-	}
-	if d := g.dialing; d != nil {
-		// Somebody else is already opening this group's connection. Wait for THEIR
-		// result, but wait somewhere this caller's context can end the wait — which
-		// is the whole reason this is a channel and not the mutex.
-		g.mu.Unlock()
-		select {
-		case <-d.done:
-			return d.sess, d.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	// Two fields and no transaction between them, so the group needs no lock: `dialing`
+	// names the attempt in flight (CAS nil -> mine is what decides who dials), and
+	// `sessionID` names the connection. The slow half — finalising the dead session and
+	// dialling a new one — is a network wait and happens after both are settled, which
+	// is the rule the previous lock existed to honour (issue #222).
+	var d *groupDial
+	for {
+		if sess := r.liveSession(g.session()); sess != nil {
+			return sess, nil
 		}
+		if d := g.dialing.Load(); d != nil {
+			// Somebody else is already opening this group's connection. Wait for THEIR
+			// result, in a place this caller's context can end the wait.
+			select {
+			case <-d.done:
+				return d.sess, d.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		d = &groupDial{done: make(chan struct{})}
+		if g.dialing.CompareAndSwap(nil, d) {
+			deadID := g.takeSession()
+			if deadID == "" {
+				break
+			}
+			// The previous session is DEAD and has served its purpose — it held the
+			// failure's output for anyone watching — and the group is about to be
+			// served by a new one. Finalizing it here keeps a failing group from
+			// leaving one dead connection per attempt behind.
+			_ = r.sessMgr.Delete(deadID)
+			break
+		}
+		// Lost the race: another goroutine claimed the attempt between the load and
+		// the swap. Loop once more; its `dialing` is now visible and we wait for it.
 	}
-	d := &groupDial{done: make(chan struct{})}
-	g.dialing = d
-	deadID := g.sessionID
-	g.sessionID = ""
-	g.mu.Unlock()
-
-	// THE SLOW HALF, UNLOCKED. Finalizing the dead connection and dialing a new one
-	// are both network operations, and neither may hold the group's lock.
-	if deadID != "" {
-		// The previous session is DEAD and has served its purpose — it held the
-		// failure's output for anyone watching — and the group is about to be served
-		// by a new one. Finalizing it here keeps a failing group from leaving one dead
-		// connection per attempt behind.
-		_ = r.sessMgr.Delete(deadID)
-	}
+	// THE SLOW HALF: a full SSH dial and handshake, with no lock to hold and none taken.
 	cfg := base
 	cfg.Ctx = ctx
 	sess, err := r.sessMgr.Create(cfg)
 
-	g.mu.Lock()
-	g.dialing = nil
+	// PUBLISH BEFORE CLEARING THE ATTEMPT, in this order: a waiter parked on d.done
+	// reads d.sess/d.err after the close, and a caller arriving after the clear finds
+	// the new session in sessionID. Clearing first would open a window in which
+	// neither is true and the group would dial a second connection for one request.
 	if err == nil {
-		g.sessionID = sess.ID
+		g.sessionID.Store(&sess.ID)
 	}
-	g.mu.Unlock()
-
 	d.sess, d.err = sess, err
 	close(d.done) // broadcast: every waiter re-reads the outcome
+	g.dialing.Store(nil)
 
 	if err != nil {
 		return nil, err
@@ -376,10 +393,7 @@ func (r *Reconciler) closeForwards(forwards []ForwardStatus) {
 // DEAD — it is infrastructure, not a transcript anyone asked for, and a hidden
 // dead session only accumulates on disk while the next member dials a fresh one.
 func (r *Reconciler) closeGroup(g *extGroup) {
-	g.mu.Lock()
-	sid := g.sessionID
-	g.sessionID = ""
-	g.mu.Unlock()
+	sid := g.takeSession()
 	if sid == "" || r.sessMgr == nil {
 		return
 	}
