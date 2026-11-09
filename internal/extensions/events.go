@@ -261,13 +261,19 @@ func (r *Reconciler) run(ctx context.Context) {
 // must not delay the other extensions or the walk.
 func (r *Reconciler) startProbe(ctx context.Context, name, target string) {
 	st := r.stateFor(name, target)
-	st.mu.Lock()
-	if st.status == StatusProbing {
-		st.mu.Unlock()
+	// ONE ATOMIC STEP: claim the probe. A second caller that finds it already
+	// probing returns without starting a second dial.
+	claimed := false
+	st.update(func(d *extStateData) {
+		if d.status == StatusProbing {
+			return
+		}
+		d.status = StatusProbing
+		claimed = true
+	})
+	if !claimed {
 		return
 	}
-	st.status = StatusProbing
-	st.mu.Unlock()
 	r.notifyChange()
 	r.probes.Add(1)
 	go func() {
