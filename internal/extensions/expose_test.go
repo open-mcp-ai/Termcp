@@ -85,7 +85,11 @@ func TestExposeRejectsWildcards(t *testing.T) {
 // publish, which is what an embedder that never called SetExposeHandler looks like.
 func TestExposeWithoutHandlerIsReported(t *testing.T) {
 	r := &Reconciler{}
-	st := &extState{sessionID: "sess"}
+	// ATTACH, DO NOT REACH INTO THE FIELDS: extState's state is one atomic snapshot
+	// now, so a literal cannot name its fields and attach() is the way to say
+	// "this extension is driven through session sess".
+	st := &extState{}
+	st.attach("sess", "")
 	ext := &Extension{Name: "a", Exposes: []ExposeDecl{{Paths: []string{"/api.md"}}}}
 	err := r.ensureExposes(ext, st)
 	if err == nil || !strings.Contains(err.Error(), "cannot expose") {
