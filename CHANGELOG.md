@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 修复
+
+- **`docker run ghcr.io/open-mcp-ai/termcp` 只起一个 shell 就退了，从外面看就是「服务器跑不起来」**：镜像刻意不设 ENTRYPOINT/CMD（“绑定地址由部署决定”），于是裸跑时继承 Alpine 的 `/bin/sh`、没有 TTY、立刻退出。现在镜像自带 `CMD ["termcp", "--host", "0.0.0.0", "--port", "18765"]` 与 `EXPOSE 18765`，裸跑就是一个监听中的服务器；绑定 `0.0.0.0` 需要凭据，所以 `TERMCP_AUTH_TOKEN` 成为默认启动方式的一部分（`server.json` 已把它声明为 required + secret）。**仍然没有 ENTRYPOINT**：镜像名后面写命令依旧完全接管，现有脚本与 `--entrypoint` 用法一行都不用改。
+- **`server.json` 只说镜像在哪，不说怎么跑**：现在同时声明 npm/stdio 入口（`npx -y @open-mcp-ai/termcp daemon stdio`，不需要容器和 token）与 OCI 入口必需的环境变量，让读清单的目录不必靠猜。OCI 仍排在 `packages[0]`，发布脚本与测试依赖这个位置。
+
+### 文档
+
+- **第三方代码的归属写在能被看到的地方，且不再随着二进制走**：Web UI 终端用的 xterm.js 是 npm 官方构建产物（`@xterm/xterm@6.0.0`，与发布包字节一致），但原先只有 `docs/xterm.md` 说过这件事，而打开目录看到的是 488KB 的单行 bundle——一份独立安全审计因此把它读成「代码混淆，1 个文件无法人工审阅」。现在产物搬到 `third_party/xterm/`，**由该目录里的 `embed.go` 按文件名逐一嵌入**（`//go:embed xterm.js xterm.css`）：于是 `README.md`（来源说明）与 `NOTICE`（MIT 全文）能和字节放在一起而**不进二进制**，网页的 `static/xterm/...` 路径由 `internal/webui/vendored.go` 原样接管，`index.html` 一字未改。许可证改由**分发形态**携带——GitHub release 每次附上 `THIRD_PARTY_NOTICES.md`，镜像拷到 `/usr/share/doc/termcp/`。仓库根新增 `THIRD_PARTY_NOTICES.md` 并从 README 链接，`.gitattributes` 把两个上游文件标为 vendored/generated；`internal/webui/xterm_provenance_test.go` 把三份说明里的哈希钉在实际提供的那份字节上，并断言 NOTICE/README **不在**被服务的那层里、`embed.go` 仍然只列那两个文件。
+
 
 ## v0.2.9 — 2026-11-08
 
