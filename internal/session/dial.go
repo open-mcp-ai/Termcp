@@ -13,11 +13,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
-// Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
-// only taken by session-level transitions (close/DEAD/terminate, new shells).
-// The manager-assigned callbacks and the per-shell closed flag are atomics and
-// need no lock (see field docs below).
+// NO LOCK HIERARCHY. s.mu is a leaf mutex for metadata; shell registration and
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 // RemoteSSH selects a user-supplied SSH server instead of the built-in internal one.
 // Jump, when non-nil, is a bastion (ProxyJump): the SSH connection to this host
