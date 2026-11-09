@@ -202,11 +202,17 @@ function eq(label, got, want) {
 {
   const f = fixture();
   f.snapshot([{ id: 'agent2', name: 'agent-work', status: 'running', created_at: 2 }]);
-  eq('a session with no window here pulses', f.tabs()[0].classList.contains('is-fresh'), true);
-  // Opening it is the look, so the pulse stops — and stays stopped when the window
-  // is closed again, because the human has now seen this session.
+  // NO WINDOW, NO MARK. The rule is about a window that changed while nobody was
+  // looking; with no window nothing could have changed, so marking it "fresh" said
+  // an event happened when none had. It was also a strobe: the mark was set on
+  // every strip rebuild, so the tab pulsed once a second for as long as the session
+  // ran, and a reload re-marked every window-less session at once — the report of
+  // tabs flickering on a page with nothing new on it.
+  eq('a session with no window here does not pulse', f.tabs()[0].classList.contains('is-fresh'), false);
+  // Opening it still works — the press asks for its window; the mark question is
+  // moot because there was no mark to clear.
   f.tabs()[0].listeners.click({ target: { closest() { return null; } }, clientX: 10, clientY: 20 });
-  eq('opening it clears the pulse', f.tabs()[0].classList.contains('is-fresh'), false);
+  eq('pressing a window-less tab asks for its window', f.openRequests.map(r => r.sid), ['agent2']);
 }
 
 // A window and its session are ONE tab, and the tab outlives the window.
@@ -292,7 +298,9 @@ function eq(label, got, want) {
   ]);
   eq('opening a window does not move its tab', f.keys(), ['sess:a', 'sess:b', 'sess:c']);
   eq('the pressed tab keeps its own mark cleared', f.tabs()[2].classList.contains('is-fresh'), false);
-  eq('the other two still pulse', [f.tabs()[0].classList.contains('is-fresh'), f.tabs()[1].classList.contains('is-fresh')], [true, true]);
+  // The other two have no window either, so they carry no mark: a pulse here said
+  // "output arrived" about sessions that had printed nothing.
+  eq('the other two do not pulse either', [f.tabs()[0].classList.contains('is-fresh'), f.tabs()[1].classList.contains('is-fresh')], [false, false]);
 }
 
 // OUTPUT NOBODY LOOKED AT also marks the tab, and looking clears it.
@@ -471,8 +479,17 @@ func TestTheDockIsToldWhenOutputArrives(t *testing.T) {
 		t.Errorf("prefers-reduced-motion still touches the fresh mark; the pulse is the "+
 			"one signal that must reach every reader. Block was:\n%s", reduced)
 	}
-	if !strings.Contains(readAppCSS(t), "animation: sessionTabPulse 1s steps(1, end) infinite") {
-		t.Error("the fresh mark no longer animates: it is a hard cut, so it needs no " +
-			"reduced-motion exemption")
+	/* FINITE, NOT INFINITE. The pulse marks an EVENT — output arrived while nobody
+	   was looking — and an event ends. `infinite` turned any condition that stayed
+	   true into a metronome: a tab blinking once a second with nothing new to say,
+	   which is the flicker report this file exists to prevent. Six cycles is three
+	   seconds of signal, then the tab settles; dockClearFresh still removes it on
+	   the press, and the pulse never depends on a condition that persists. */
+	if !strings.Contains(readAppCSS(t), "animation: sessionTabPulse 1s steps(1, end) 6") {
+		t.Error("the fresh pulse must be finite (an event, not a state); infinite turned " +
+			"any persistent condition into a once-a-second strobe")
+	}
+	if strings.Contains(readAppCSS(t), "sessionTabPulse 1s steps(1, end) infinite") {
+		t.Error("the fresh pulse still runs forever")
 	}
 }

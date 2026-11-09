@@ -40,7 +40,13 @@
         stopped", short enough that a glance two seconds later still catches a flash.
         A longer pause (an early version rested for two seconds) read as a tab that
         blinked once and then never again. */
-  .session-tab.is-fresh { animation: sessionTabPulse 1s steps(1, end) infinite; }
+  /* FINITE, NOT INFINITE. An output frame is an EVENT: it deserves a few flashes
+     and then silence. `infinite` turned any condition that stayed true into a
+     metronome — the tab blinked once a second, forever, with nothing new to say,
+     which is exactly the report "the tabs flicker and there are no new messages".
+     Six cycles is three seconds: long enough that a glance lands on it, short
+     enough that it stops on its own. */
+  .session-tab.is-fresh { animation: sessionTabPulse 1s steps(1, end) 6; }
   .session-tab.is-fresh .session-tab-label { color: inherit; }
   @keyframes sessionTabPulse {
     0%, 16.6%     { background: var(--term-accent); border-color: var(--term-accent); color: var(--term-bg); }
