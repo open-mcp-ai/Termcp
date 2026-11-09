@@ -67,9 +67,11 @@ func TestAnAnswerWithNoWaiterIsStillBuffered(t *testing.T) {
 	// the missing generation is not on its path.
 	c.dispatch(Framed{N: 1, Data: `{"id":7,"result":{"late":true}}`})
 
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
-	if len(c.ev) != 1 {
-		t.Fatalf("an answer with no waiter was dropped: ev holds %d frames, want 1", len(c.ev))
+	backlog := 0
+	if p := c.ev.Load(); p != nil {
+		backlog = len(*p)
+	}
+	if backlog != 1 {
+		t.Fatalf("an answer with no waiter was dropped: ev holds %d frames, want 1", backlog)
 	}
 }
