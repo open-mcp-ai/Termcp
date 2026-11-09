@@ -238,8 +238,12 @@ func (a *aliasTable) expandErrorCycle(err error, cmd string, sub directive.Subst
 		// The first word resolved into an alias, so the failure happened INSIDE the
 		// expansion; naming the alias again would send the caller looking for a typo
 		// in a directive that is in fact defined. The inner error says what the
-		// expansion actually refused (#284 A1).
-		return nil, false, nil, expansionErr
+		// expansion actually refused (#284 A1) — prefixed with the chain, because the
+		// caller typed `foo`, never the word the expansion choked on, and a bare
+		// "unknown directive: ps" would have them hunting a typo they did not make.
+		wrapped := *expansionErr
+		wrapped.Msg = "while expanding alias " + name + ": " + wrapped.Msg
+		return nil, false, nil, &wrapped
 	}
 	return nil, false, a.cyclePath(name), nil
 }

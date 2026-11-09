@@ -166,7 +166,7 @@ func (s *Server) SetUINotifier(fn func(level, title, message, sessionID string, 
 
 // SetDataDir tells the server where this installation keeps its state, which is
 // what makes `create alias` (and `edit alias`) persist: the saved table lives in
-// `<dir>/aliases.json`.
+// `<dir>/aliases/<name>.toml`.
 //
 // A SERVER GIVEN NO DIRECTORY KEEPS ALIASES IN MEMORY, which is exactly what the
 // plain `alias` verb promises and what an embedder without a data directory wants.
