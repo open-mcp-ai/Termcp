@@ -59,8 +59,8 @@ func TestChannelIndexSurvivesRestart(t *testing.T) {
 	}
 
 	// Verify nextShellIndex is at least 3 (max of 1, 2, 3), not reset to 1.
-	if restored.nextShellIndex < 3 {
-		t.Errorf("restored nextShellIndex = %d, want >= 3", restored.nextShellIndex)
+	if n := restored.nextShellIndex.Load(); n < 3 {
+		t.Errorf("restored nextShellIndex = %d, want >= 3", n)
 	}
 
 	// The restored manager sees only persisted state, so it holds no writer; the

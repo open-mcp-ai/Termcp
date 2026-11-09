@@ -635,7 +635,7 @@ func (m *Manager) RestoreDead() error {
 		// restored session has no live shells, but its retained ones still answer
 		// termcp://#<session>:N, and a new channel opened on it must take a fresh N
 		// rather than colliding with a retained one.
-		s.nextShellIndex = maxShellIndex(meta.Shells)
+		s.nextShellIndex.Store(int64(maxShellIndex(meta.Shells)))
 		m.sessions.Store(meta.ID, s)
 		m.slogf("restored DEAD session", meta.ID)
 	}
