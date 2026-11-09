@@ -29,11 +29,10 @@ var ErrUnboundedWorkload = errors.New("close --later needs a session that ends b
 // set closing first and stored it back on the failure path, which silently undid the
 // CAS while leaving every other consequence of beginClosing in place.
 //
-// THE CHECK AND THE MARK ARE ONE CRITICAL SECTION. CreateChildShell takes the same
-// shellStateMu and refuses on closeLater, so a pty cannot slip in between "this
-// session has no pty" and "this session refuses new pty-less work". Everything inside
-// the lock is memory-only; beginClosing runs after it, and a caller that arrives then
-// finds closeLater already set.
+// SET-THEN-CHECK INSTEAD OF A MUTEX. closeLater is set first, so any channel that
+// passes its own check during this decision is caught by createChildShell's re-check
+// and torn down. An unbounded workload rolls the bit back, leaving the session as
+// it was.
 
 // CloseLater marks the session as closing and lets its existing work finish.
 //
@@ -69,17 +68,20 @@ func (s *Session) CloseLater() error {
 		return nil
 	}
 
-	s.shellStateMu.Lock()
-	if s.closeLater.Load() {
-		s.shellStateMu.Unlock()
+	// SET THE FLAG FIRST, THEN JUDGE, THEN ROLL BACK ON REFUSAL.
+	//
+	// The flag is what refuses new channels, so setting it before the judgement closes
+	// the window the old lock closed: a channel that passes its own check afterwards is
+	// re-checked when its SSH channel exists (createChildShell) and tears itself down.
+	// Rolling back on refusal keeps the promise exact — a caller that gets 400 finds
+	// the session exactly as it was, still accepting channels.
+	if !s.closeLater.CompareAndSwap(false, true) {
 		return nil // idempotent: what the first call established is still in effect
 	}
 	if unbounded := s.unboundedWorkload(); unbounded != "" {
-		s.shellStateMu.Unlock()
+		s.closeLater.Store(false)
 		return fmt.Errorf("%w: %s", ErrUnboundedWorkload, unbounded)
 	}
-	s.closeLater.Store(true)
-	s.shellStateMu.Unlock()
 
 	// The request is in force: new channels are refused whether or not the teardown
 	// flag below has been set yet.
@@ -99,8 +101,8 @@ func (s *Session) CloseLater() error {
 // noWorkOutstanding reports whether no live channel remains, which is the whole of
 // what a deferred close waits for.
 func (s *Session) noWorkOutstanding() bool {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
+	// NO LOCK: the answer comes from a sync.Map walk, and a channel registered after
+	// the walk is caught by the same re-check that refuses a channel after close.
 	live := false
 	s.shells.Range(func(_, v any) bool {
 		if v.(*ChildShell).statusValue() == api.SessionRunning {
@@ -119,8 +121,8 @@ func (s *Session) noWorkOutstanding() bool {
 // no end and what to do about it, because "some channel cannot be deferred" is not
 // actionable in a session holding ten of them.
 //
-// CALLERS HOLD shellStateMu, which is what makes the answer stay true while the
-// caller marks the request.
+// The answer is a snapshot: a channel that registers afterwards is refused by the
+// re-check in createChildShell, so nothing can start after the request is in force.
 func (s *Session) unboundedWorkload() string {
 	var found string
 	s.shells.Range(func(_, v any) bool {

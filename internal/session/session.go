@@ -24,11 +24,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
-// Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
-// only taken by session-level transitions (close/DEAD/terminate, new shells).
-// The manager-assigned callbacks and the per-shell closed flag are atomics and
-// need no lock (see field docs below).
+// NO LOCK HIERARCHY. s.mu is a leaf mutex for metadata; shell registration and
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 // OnExitPolicy decides what a session does when its last shell channel ends by
 // itself (the user typing `exit`, or a run-to-exit pipe command finishing).
@@ -111,7 +109,6 @@ type Config struct {
 type Session struct {
 	api.Session
 	mu            sync.RWMutex
-	shellStateMu  sync.Mutex  // serializes child registration with close/DEAD transition
 	closing       atomic.Bool // blocks new child channels and approval reconfiguration
 	closeLater    atomic.Bool // a deferred close was requested (#255); fulfilled by closeIfLastShellEnded
 	terminateOnce sync.Once
@@ -624,11 +621,9 @@ func normalizeOnExit(p OnExitPolicy) OnExitPolicy {
 // readable.
 //
 // It is called by the exit watcher, after the shell has left Running. "Last" is
-// decided by the live map, and the transition is guarded by the same
-// shellStateMu that registration uses, so a shell being opened concurrently
-// either lands before the check (and the session stays) or finds the session
-// already closing (and is refused) -- a new channel can never be added to a
-// session that this call is about to close.
+// decided by the live map: a shell being opened concurrently either lands before
+// the check (and the session stays) or finds closing set afterwards and is torn
+// down by createChildShell's re-check.
 func (s *Session) closeIfLastShellEnded() {
 	// A DEFERRED CLOSE IS FULFILLED HERE (issue #255). `close <session> --later`
 	// promised "this ends without me touching it again", and the last work item
@@ -639,7 +634,6 @@ func (s *Session) closeIfLastShellEnded() {
 	if s.onExit != OnExitClose && !deferred {
 		return
 	}
-	s.shellStateMu.Lock()
 	live := false
 	s.shells.Range(func(_, v any) bool {
 		cs := v.(*ChildShell)
@@ -649,7 +643,6 @@ func (s *Session) closeIfLastShellEnded() {
 		}
 		return true
 	})
-	s.shellStateMu.Unlock()
 	// A live channel (or a session already going down via Terminate/finalize)
 	// means this was not the end of the session's work.
 	//
@@ -683,8 +676,11 @@ func (s *Session) markDead() {
 }
 
 func (s *Session) markDeadWithMessage(systemMessage string) {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
+	// NO LOCK. Run-once is deadOnce's job, and the two things the old lock serialised
+	// here were both worse for it: the flush wait below is up to 500 ms,
+	// and the onDead callback is other people's code — a session that held a lock
+	// across either would park every channel open behind a dying session.
+	//
 	// A deliberate close may race with an exit watcher that already observed
 	// the transport error. Do not turn that intentional close into a network-loss
 	// notification.
@@ -701,7 +697,7 @@ func (s *Session) markDeadWithMessage(systemMessage string) {
 	s.markDeadLocked(systemMessage)
 }
 
-// markDeadLocked requires shellStateMu.
+// markDeadLocked is the once-only DEAD transition; deadOnce is what makes it once.
 func (s *Session) markDeadLocked(systemMessage string) {
 	s.closing.Store(true)
 	s.deadOnce.Do(func() {
@@ -841,18 +837,17 @@ func (s *Session) beginClosing() {
 	// grant, while the bytes were refused because the process was already gone.
 	// The decision then read as effective in the audit trail when nothing ran.
 	//
-	// Called after releasing shellStateMu: the lock order in this file is
-	// shellStateMu then s.mu (see CreateChildShell), and DisableApproval takes
-	// s.mu.
+	// Called outside any lock: DisableApproval takes s.mu, and a session transitioning
+	// to DEAD must not hold anything a channel open would wait on.
 	s.DisableApproval()
 }
 
 // terminateChildren closes all child shells. Called during parent session termination.
-// Holds write lock long enough to snapshot+clear the map, preventing races with Create/Close.
+//
+// The sweep needs no lock: a sync.Map Range plus Delete is safe, a create that lands
+// afterwards is refused (the session is closing by this point) and tears itself down,
+// and a shell deleted here cannot be resurrected by CloseChildShell's purge.
 func (s *Session) terminateChildren() {
-	s.shellStateMu.Lock()
-	defer s.shellStateMu.Unlock()
-
 	var children []*ChildShell
 	s.shells.Range(func(k, v any) bool {
 		s.shells.Delete(k)
