@@ -570,6 +570,12 @@ frame is held for the next call rather than cut in half. That cursor is kept per
 channel, independent of the plain byte reader — so reading raw bytes never consumes
 a frame, and reading frames never shifts the byte position of a plain read.
 
+FRAMES A CALL PASSED OVER COME BACK HERE. call <channel> <frame> waits for the reply
+whose id matches the frame it sent. Every frame it reads meanwhile — a notification,
+an answer to an earlier request — is parked, and read --frame hands the parked ones
+out oldest first, before touching the stream again. So the call's window expiring
+does not cost the caller those frames; it only means the answer has not arrived yet.
+
 WHAT COUNTS AS A FRAME IS THE MESSAGE, NOT THE JSON. A frame is an object carrying
 id or method, or an array of such objects (a batch); a value that is merely legal
 JSON is skipped, and the scan keeps looking behind it. This is not pedantry: a

@@ -85,6 +85,21 @@ type Server struct {
 	// same exclusivity with a door.
 	recvReaders sync.Map // handle string -> chan struct{}
 
+	// recvPending holds frames a `call` read off the stream while waiting for its
+	// OWN id (issue #301).
+	//
+	// `call` used to hand the foreign frame back with a note, which made the next
+	// call answer the previous question — a 200 whose body is not what was asked.
+	// Skipping the frame instead would lose it, so the skipped frames wait here and
+	// `read <channel> --frame` hands them out, oldest first, before reading the
+	// stream again. A waiter also looks here for its own id: a reply can be skipped
+	// into the queue by a waiter for a different id.
+	//
+	// Per handle, touched only while holding that handle's recvReaders token — the
+	// same single-reader rule that keeps the cursor honest, because the queue and
+	// the cursor are two halves of one position.
+	recvPending sync.Map // handle string -> *frameQueue
+
 	// lineLocks serialises the two writes that make ONE line on a channel (#212).
 	//
 	// `run` is two calls into the shell layer — the text, then the enter that ends it
