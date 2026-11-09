@@ -179,11 +179,16 @@ type Channel struct {
 	dead    chan struct{}
 	deadOne sync.Once
 
-	// evCond is signalled when ev gains a frame. The dispatcher appends; readers
-	// wait on it. A condition variable rather than a channel because a reader
-	// FILTERS the queue ("the next frame with no id") and must put back what it did
-	// not want, which a channel cannot do without spinning.
-	evCond *sync.Cond
+	// wake is the current generation of "something arrived" broadcast. Readers load
+	// it, then check the backlog, then select on it: the load has to come FIRST, or
+	// a frame appended between the check and the wait is missed.
+	//
+	// A CONDITION VARIABLE COULD NOT BE CANCELLED. A sync.Cond has no way to select on
+	// ctx.Done(), so every wait needed a helper goroutine just to Broadcast on expiry,
+	// and the wait itself held evMu. Rotating a channel instead lets one select listen
+	// to the wake, the caller's context, Close, and a dead socket at once — and the
+	// lock is held only while the slice is touched.
+	wake atomic.Pointer[chan struct{}]
 }
 
 // deadlineFreeConn wraps a net.Conn whose SetDeadline is unimplemented.
@@ -271,7 +276,8 @@ func OpenWithHeaders(ctx context.Context, rawURL string, dial DialFunc, headers 
 		done:         make(chan struct{}),
 		log:          newFrameLog(maxEvents*8, 8<<20),
 	}
-	c.evCond = sync.NewCond(&c.evMu)
+	wake := make(chan struct{})
+	c.wake.Store(&wake)
 	// The default transport dials from this process. Replacing its DialContext is the
 	// whole of the change: every request the channel makes, and every socket it opens,
 	// then travels inside the SSH connection.
@@ -347,7 +353,7 @@ func (c *Channel) readLoop() {
 			c.deadOne.Do(func() { close(c.dead) })
 			// A reader parked on the backlog has to learn that nothing more is
 			// coming, or it waits out its whole window for a frame that cannot arrive.
-			c.evCond.Broadcast()
+			c.wakeAll()
 			return
 		}
 		payload := strings.TrimSpace(string(raw))
@@ -619,39 +625,37 @@ func (c *Channel) TakeFramed(ctx context.Context) (Framed, bool) {
 		return Framed{}, false
 	}
 	// Wait on the backlog until a frame arrives, Close runs, or ctx expires.
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
-	for len(c.ev) == 0 {
-		// THE REFUSAL IS CHECKED INSIDE THE LOOP, not only before it: while this
-		// wait was parked the peer may have answered the listening GET with
-		// "no" — a fact this wait has to act on rather than spend its window on.
+	//
+	// THE GENERATION IS LOADED BEFORE THE QUEUE IS READ. A frame appended between
+	// the read and the wait would otherwise be invisible until the next one arrived;
+	// loading first means the append's wakeAll closes the channel this wait is about
+	// to park on, so the race has one side that always wins.
+	for {
+		generation := c.wakeGen()
+		c.evMu.Lock()
+		if len(c.ev) > 0 {
+			frame := c.ev[0]
+			c.ev = c.ev[1:]
+			c.evMu.Unlock()
+			return frame, true
+		}
+		c.evMu.Unlock()
+		// THE REFUSAL IS CHECKED EVERY ROUND, not only before the loop: while this
+		// wait was parked the peer may have answered the listening GET with "no" —
+		// a fact this wait has to act on rather than spend its window on.
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return Framed{}, false
 		}
-		// A helper goroutine releases the condition when ctx or done closes, so a
-		// wait can end on the caller's deadline.
-		stop := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				c.evCond.Broadcast()
-			case <-c.done:
-				c.evCond.Broadcast()
-			case <-stop:
-			}
-		}()
-		c.evCond.Wait()
-		close(stop)
-		if len(c.ev) > 0 {
-			break
-		}
-		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
+		select {
+		case <-generation:
+		case <-ctx.Done():
+			return Framed{}, false
+		case <-c.done:
+			return Framed{}, false
+		case <-c.dead:
 			return Framed{}, false
 		}
 	}
-	frame := c.ev[0]
-	c.ev = c.ev[1:]
-	return frame, true
 }
 
 // Next waits up to the context's deadline for the next frame that is NOT an
@@ -671,31 +675,27 @@ func (c *Channel) Next(ctx context.Context) (string, bool) {
 	if !c.CanWaitEvents() {
 		return "", false
 	}
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
 	for {
+		generation := c.wakeGen()
+		c.evMu.Lock()
 		for i, f := range c.ev {
 			if f.Event {
 				c.ev = append(c.ev[:i], c.ev[i+1:]...)
+				c.evMu.Unlock()
 				return f.Data, true
 			}
 		}
+		c.evMu.Unlock()
 		if c.shut.Load() || ctx.Err() != nil || c.socketGone() || c.sseRefused.Load() {
 			return "", false
 		}
-		stop := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				c.evCond.Broadcast()
-			case <-c.done:
-				c.evCond.Broadcast()
-			case <-stop:
-			}
-		}()
-		c.evCond.Wait()
-		close(stop)
-		if c.shut.Load() || ctx.Err() != nil {
+		select {
+		case <-generation:
+		case <-ctx.Done():
+			return "", false
+		case <-c.done:
+			return "", false
+		case <-c.dead:
 			return "", false
 		}
 	}
@@ -852,7 +852,7 @@ func (c *Channel) readSSEStream(ctx context.Context, sessionID string) {
 				// WAKE THE PARKED READERS: "nothing will ever arrive here" is a
 				// change they asked to be told about, and a waiter that is not woken
 				// spends the rest of its window on a stream that already said no.
-				c.evCond.Broadcast()
+				c.wakeAll()
 				return
 			}
 			select {
@@ -977,8 +977,39 @@ func (c *Channel) buffer(frame Framed) {
 	if len(c.ev) > maxEvents {
 		c.ev = append(c.ev[:0], c.ev[len(c.ev)-maxEvents:]...)
 	}
-	c.evCond.Broadcast()
 	c.evMu.Unlock()
+	// OUTSIDE THE LOCK: closing the old generation wakes readers that will
+	// immediately ask for evMu, and waking them from inside the critical section is
+	// the pattern this file exists to avoid.
+	c.wakeAll()
+}
+
+// wakeGen returns the generation a reader should park on, creating the first one if
+// this Channel was built as a literal (tests do, and a nil generation would make the
+// wait loop spin instead of blocking).
+func (c *Channel) wakeGen() chan struct{} {
+	if p := c.wake.Load(); p != nil {
+		return *p
+	}
+	fresh := make(chan struct{})
+	if c.wake.CompareAndSwap(nil, &fresh) {
+		return fresh
+	}
+	return *c.wake.Load()
+}
+
+// wakeAll ends the current generation of the "frame arrived" broadcast: every reader
+// parked on it leaves, and the next reader parks on a fresh channel.
+//
+// Swap is the whole of the atomicity: two concurrent broadcasts each take a distinct
+// channel and close it, so no channel is closed twice and no reader is missed — a
+// reader that loaded the generation before the swap is woken by it, and one that
+// loads afterwards sees the backlog it was woken for.
+func (c *Channel) wakeAll() {
+	fresh := make(chan struct{})
+	if old := c.wake.Swap(&fresh); old != nil {
+		close(*old)
+	}
 }
 
 // deadlineOf is the read/write deadline for one call: the context's own, or the
