@@ -4,11 +4,15 @@ Termcp 是纯 Go、无 CGO 的单二进制，可交叉编译到任意平台（Wi
 
 ## 运行官方镜像
 
-registry 镜像以非 root 用户 `termcp`（uid/gid 1000）运行，并把 `/home/termcp` 声明为 `VOLUME`——所有状态（会话、SSH 配置、转录）默认落在 `~/.termcp`。镜像里只有二进制：没有内置 entrypoint、没有 EXPOSE，绑定地址由运行命令决定。
+registry 镜像以非 root 用户 `termcp`（uid/gid 1000）运行，并把 `/home/termcp` 声明为 `VOLUME`——所有状态（会话、SSH 配置、转录）默认落在 `~/.termcp`。镜像是自带默认命令的：`docker run <镜像>` 不带任何参数就会以 `--host 0.0.0.0 --port 18765` 启动并监听 `EXPOSE 18765`。没有内置 entrypoint，所以在镜像名后面写命令仍然完全接管（下文所有示例都是这种写法）。
+
+因为默认命令绑定 `0.0.0.0`，而 Termcp 拒绝在非 loopback 绑定上无凭据启动，**`TERMCP_AUTH_TOKEN` 是默认启动方式的一部分**：
 
 ```bash
-docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765
+docker run -d --name termcp -p 18765:18765 -v termcp-data:/home/termcp -e TERMCP_AUTH_TOKEN=change-me-to-a-long-random-secret ghcr.io/open-mcp-ai/termcp:latest
 ```
+
+镜像名后面写命令会整个替换默认 `CMD`，所以既有的显式写法（`... ghcr.io/open-mcp-ai/termcp:latest termcp --no-internal --host 0.0.0.0 --port 18765`）一行都不用改——`--no-internal` 这类只有显式写法才带得上。
 
 > Shell 示例刻意写成单行：`\` 续行在 bash 里合法，在 PowerShell 里是语法错误，所以每条命令都能原样粘进 bash、zsh 和 PowerShell。
 

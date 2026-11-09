@@ -11,9 +11,37 @@
     {
       "registryType": "oci",
       "identifier": "ghcr.io/open-mcp-ai/termcp:0.2.9",
+      "runtimeHint": "docker",
+      "environmentVariables": [
+        {
+          "name": "TERMCP_AUTH_TOKEN",
+          "description": "Bearer token that guards the MCP/HTTP surface. Required here because the container's default command binds 0.0.0.0, and termcp refuses a non-loopback bind without a credential (use a long random secret). Clients then send 'Authorization: Bearer <token>'.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ],
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:18765/stream"
+      }
+    },
+    {
+      "registryType": "npm",
+      "identifier": "@open-mcp-ai/termcp",
+      "version": "0.0.5",
+      "runtimeHint": "npx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "daemon"
+        },
+        {
+          "type": "positional",
+          "value": "stdio"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
       }
     }
   ]

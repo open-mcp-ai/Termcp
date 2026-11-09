@@ -19,12 +19,28 @@ RUN addgroup -S -g 1000 termcp \
 
 COPY --from=build /out/termcp /usr/local/bin/termcp
 
+# The image is a distribution of the software, so it carries the notices that a
+# single binary cannot: the project licence and the vendored terminal's MIT text.
+# They are NOT embedded in the binary (see docs/xterm.md).
+COPY --from=build /src/LICENSE /src/THIRD_PARTY_NOTICES.md /usr/share/doc/termcp/
+
 USER termcp
 ENV HOME=/home/termcp
 WORKDIR /home/termcp
 VOLUME /home/termcp
 
-# No EXPOSE/ENTRYPOINT: the image only carries the binary, and the deployment
-# decides how to run it. Start termcp explicitly and pass the bind address it
-# should listen on, e.g.
-#   docker run -d -p 18765:18765 -e TERMCP_AUTH_TOKEN=... ghcr.io/open-mcp-ai/termcp:latest termcp --host 0.0.0.0 --port 18765
+EXPOSE 18765
+
+# A default command, because `docker run <image>` used to start `/bin/sh` and
+# exit: registry scanners and one-line trials do not read the docs that explain
+# that the binary has to be named. The bind is 0.0.0.0 since a published port
+# cannot reach the container's loopback, and termcp refuses a non-loopback bind
+# without a credential — so TERMCP_AUTH_TOKEN is part of the contract, not an
+# option:
+#
+#   docker run -d -p 18765:18765 -e TERMCP_AUTH_TOKEN=... ghcr.io/open-mcp-ai/termcp:latest
+#
+# There is still no ENTRYPOINT: a command of your own on the line (`... <image>
+# termcp status`) replaces this CMD outright, which is what every documented
+# recipe already relies on.
+CMD ["termcp", "--host", "0.0.0.0", "--port", "18765"]

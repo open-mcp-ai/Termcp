@@ -72,6 +72,11 @@ jobs:
             esac
             gzip -9 -n -c "$f" > "$f.gz"
           done
+          # The binaries are single files with nowhere to carry a licence, and the
+          # vendored terminal's NOTICE is deliberately not inside the binary either
+          # (see docs/xterm.md). So the notices ride beside them: one asset per
+          # release, next to every download, plus LICENSE for this project.
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/
           ls -l dist
 
       - name: Create Release
