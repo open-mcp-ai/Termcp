@@ -390,6 +390,29 @@ function resetConnTestResult() {
   }
 }
 
+/** Show the Test verdict and bring it into view.
+ *
+ *  The verdict shares the action row with the button that produced it, so it
+ *  appears where the user is already looking instead of under the fold of a
+ *  scrolling dialog. A failure carries the API's hint, which is several lines
+ *  tall: the row grows downwards, and the dialog has to follow it or the lines
+ *  that say what to check next are the ones cut off. `block: 'nearest'` scrolls
+ *  the least amount that shows the whole verdict, so the buttons stay in view
+ *  above it. */
+function showConnTestResult(text, color) {
+  var out = document.getElementById('conn-test-result');
+  if (!out) return;
+  out.style.color = color;
+  /* Shown BEFORE the text is written, so the text lands in a live region that is
+     already on screen: a role="status" that appears with its content in the same
+     frame is the case assistive tech is allowed to miss. */
+  out.style.display = 'block';
+  out.textContent = text;
+  if (typeof out.scrollIntoView === 'function') {
+    try { out.scrollIntoView({ block: 'nearest' }); } catch (e) { out.scrollIntoView(false); }
+  }
+}
+
 document.getElementById('conn-f-auth').onchange = _connAuthChange;
 document.getElementById('conn-toggle-view').onclick = _connToggleView;
 
@@ -528,20 +551,15 @@ document.getElementById('conn-test').onclick = function () {
          different profile) inside that window. The verdict is about the body
          that was submitted, so it is dropped once the dialog has moved on. */
       if (connModalSeq() !== seq) return;
-      out.style.display = 'block';
       if (j.ok) {
-        out.textContent = t('test.ok', { ms: j.duration_ms || 0 });
-        out.style.color = 'var(--success)';
+        showConnTestResult(t('test.ok', { ms: j.duration_ms || 0 }), 'var(--success)');
       } else {
-        out.textContent = t('test.failed', { msg: j.error || t('test.connectionFailed') });
-        out.style.color = 'var(--danger)';
+        showConnTestResult(t('test.failed', { msg: j.error || t('test.connectionFailed') }), 'var(--danger)');
       }
     })
     .catch(function (e) {
       if (connModalSeq() !== seq) return;
-      out.style.display = 'block';
-      out.textContent = t('test.failed', { msg: String(e.message || e) });
-      out.style.color = 'var(--danger)';
+      showConnTestResult(t('test.failed', { msg: String(e.message || e) }), 'var(--danger)');
     })
     .finally(function () {
       if (connModalSeq() !== seq) return;

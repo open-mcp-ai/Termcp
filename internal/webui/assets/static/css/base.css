@@ -695,6 +695,23 @@
   .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary); margin-bottom: 12px; }
   .modal-body textarea { min-height: 220px; font-family: var(--font-mono); font-size: 12px; }
   .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 8px; }
+  /* A verdict that belongs to one of the buttons shares their row instead of
+     following it. Below the row it was the last line of a scrolling dialog: the
+     user reaches Test at the bottom edge, the verdict is appended underneath,
+     and the container does not follow — measured on the connection dialog, a
+     one-line "✓ Connected in 15 ms" had 15 of its 16 pixels out of view, and a
+     real failure (the API appends a multi-line hint) 95 of 96. In the row it
+     lands where the eye already is; conn-form.js scrolls the dialog to it when
+     even that does not fit.
+
+     `align-items: flex-start` is load-bearing: the default stretch would make a
+     tall verdict drag the buttons to its height. */
+  .modal-actions-status { align-items: flex-start; }
+  /* `flex: 1 1 0` rather than the default `0 1 auto`: the base size of a
+     paragraph is its max-content width, so it would claim the whole row and push
+     the buttons onto the next line — below the verdict they answer. Growing from
+     zero instead gives the verdict the space the buttons leave. */
+  .modal-actions-status > [role="status"] { flex: 1 1 0; min-width: 0; margin: 7px auto 0 0; font-size: .82rem; line-height: 1.45; /* the API's hints arrive newline-separated */ white-space: pre-line; word-break: break-word; }
   /* Close affordances and small print. These used to carry literal hex colours
      in inline style attributes, which is how a light-theme grey (#1f2328, ~1.2:1
      on this plate) survived the dark conversion and made a dialog body read as
