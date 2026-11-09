@@ -50,7 +50,7 @@
         : theme;
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <div class="bg-grid"></div>
@@ -236,6 +236,7 @@
             <li data-i18n-html="cap1_title"><b>会话并发</b>：单实例同时管理多个会话，并为每个会话独立开启<b>多条 shell</b></li>
             <li data-i18n-html="cap2_title"><b>增量输出</b>：输入通道常驻，输出按<b>游标位置</b>回读，避免重复与遗漏</li>
           </ul>
+          <p class="shot-relay" data-i18n-html="shot_relay">目标机没有 SSH？那就在它上面装 <a href="https://github.com/open-mcp-ai/termcp-relay" target="_blank" rel="noopener">termcp-relay</a> —— 一个独立的轻量 SSH 服务端，装完即可被 Termcp 接入。</p>
         </div>
       </section>
 
@@ -439,7 +440,7 @@
 
 
 
-    <!-- Donors are data, not markup: donors.js?v=4on sits next to this page, so a
+    <!-- Donors are data, not markup: donors.js?v=5on sits next to this page, so a
          name is added by editing that file and never this section. Only the
          first 100 entries are rendered. -->
     <section class="section" id="donors">
@@ -481,10 +482,10 @@
   <!-- Client scripts: plain classic scripts, in load order. The catalog comes
        first, then the data that reads it, then the page chrome that wires the
        controls up and runs the initialisers. No modules, so they share a scope. -->
-  <script src="i18n.js?v=4"></script>
-  <script src="commands.js?v=4"></script>
-  <script src="demo.js?v=4"></script>
-  <script src="donors.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="i18n.js?v=5"></script>
+  <script src="commands.js?v=5"></script>
+  <script src="demo.js?v=5"></script>
+  <script src="donors.js?v=5"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
