@@ -33,11 +33,9 @@ func (e *processGoneError) Error() string {
 }
 func (e *processGoneError) Is(target error) bool { return target == ErrProcessGone }
 
-// Lock ordering: shellStateMu -> mu.
-// shellStateMu is only taken by session-level transitions (close/DEAD/terminate,
-// new shells), and stdin uses a bounded channel token (see #219). Per-shell state that changes
-// after creation is atomic, so there is no per-shell lock to order: a reader
-// never blocks the exit watcher (see the field docs below).
+// NO LOCK HIERARCHY. s.mu is a leaf mutex for metadata; shell registration and
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 // ChildShell is a lightweight shell channel sharing the parent Session's SSH connection.
 //
