@@ -294,6 +294,142 @@ Response 200:
 
 ---
 
+### Configuration at rest
+
+`GET /api/config-storage` returns whether a keyring is initialized, whether new
+profiles will be encrypted, whether an encryption password is configured,
+whether automatic unlocking is available, and each listed host's `mode`:
+
+```json
+{
+  "initialized": true,
+  "encrypt_new": true,
+  "main_key_id": "0123456789abcdef0123456789abcdef",
+  "rotation_pending": false,
+  "locked": false,
+  "password_configured": true,
+  "automatic_unlock": true,
+  "hosts": [
+    {"name": "internal", "mode": "builtin"},
+    {"name": "prod", "mode": "plaintext"},
+    {"name": "staging", "mode": "encrypted"}
+  ]
+}
+```
+
+Opening the Web UI or reading status never creates a keyring. The first enable
+action asks the user to choose an encryption password and submit:
+
+```json
+{"password": "<user password>", "confirmation": "<same password>"}
+```
+
+to `POST /api/config-storage/initialize`. The password must contain at least 8
+Unicode characters and at most 1024 UTF-8 bytes. A 32-byte Main Key is derived
+directly with Argon2id using a random 16-byte salt (3 iterations, 64 MiB,
+parallelism 1). The password and plaintext Main Key are never stored. Only the
+KDF parameters, salt, an authenticated verifier, and optional automatic-unlock
+wrappers are stored in `keys/config.keys`.
+
+This explicit action initializes the keyring and sets `encrypt_new=true`.
+Canceling leaves the data directory uninitialized. Existing plaintext files are
+not converted or moved.
+
+After initialization, `PUT /api/config-storage` with `{"encrypt_new":true}`
+enables encryption for newly created profiles. An uninitialized enable request
+returns `409` with `code: config_initialization_required`. Sending `false` switches new profiles back
+to plaintext; already encrypted hosts remain readable and encrypted. The
+preference is stored inside the authenticated encrypted catalog, so changing a
+plaintext file on disk cannot silently disable it. Ciphertext generations live
+at `ssh_configs/<profile>/<generation>.enc`.
+
+The encrypted catalog itself is `ssh_configs/store.enc`. It contains the format
+version, Store ID, monotonic revision, the authenticated `encrypt_new` setting,
+and each committed profile's name, Object ID, and current Generation ID. The
+profile TOML is not stored in the catalog. A profile is one independent
+envelope:
+
+```text
+random DEK encrypts the TOML
+Main Key encrypts the DEK into an EDK
+the current Main Key ID, wrap nonce, and EDK are stored with the body ciphertext
+```
+
+`POST /api/config-storage/encrypt` and `POST
+/api/config-storage/restore` take `{"names":["prod","staging"]}` and report one
+result per requested host. Encryption commits all selected ciphertext objects
+and the catalog before removing their plaintext `config.toml` files. Restore
+writes an atomic plaintext file first, then removes the encrypted catalog entry.
+Temporary profiles cannot be converted. These routes use the instance's existing
+HTTP authentication.
+
+`POST /api/config-storage/password` changes the encryption password with:
+
+```json
+{
+  "current_password": "<current password>",
+  "new_password": "<new password>",
+  "confirmation": "<new password>"
+}
+```
+
+The server first authenticates the current password, verifies every active
+ciphertext object, and derives a new Main Key from the new password. It rewraps
+all active EDKs and the catalog EDK; profile body ciphertext, Object IDs,
+Generation IDs, storage modes, and `encrypt_new` stay unchanged. A short-lived
+two-key state is persisted before publication so an interrupted change can be
+resumed. The old password no longer authenticates the active key after the
+change completes.
+
+When `rotation_pending` is true, submit the password accepted by the interrupted
+change as `current_password`, with empty `new_password` and `confirmation`, to
+finish publication. Encryption-mode changes and host conversions return `409`
+while this state is pending. This is a key-rewrap operation; it does not
+re-encrypt profile bodies. It also does not protect data for which a DEK or
+plaintext was already exposed.
+
+When the provider cannot unlock an existing keyring, the server remains running
+with the repository exclusively locked. Status returns `initialized:true`,
+`locked:true`, `hosts:[]`, and an `error_code`:
+
+- `password_required`: no automatic provider can unlock the keyring, so enter
+  the encryption password.
+- `key_provider_unavailable`: the system or ENV provider secret is missing.
+- `keyring_authentication_failed`: a supplied KEK cannot authenticate the
+  keyring.
+
+Credential reads and configuration writes fail closed while locked. The
+encryption preference and Main Key ID are unknown until unlocking. An
+authentication failure in the catalog after successful keyring unlocking is a
+data error, not a provider-unlock state.
+
+`POST /api/config-storage/unlock` accepts
+`{"password":"<encryption password>"}` and unlocks the current process for
+manual use after restart. It does not change automatic-provider wrappers.
+
+`POST /api/config-storage/recover` accepts the same body, authenticates the
+catalog and every active profile, and then unlocks with that password. If the
+selected system or ENV provider is available, it also replaces the automatic
+unlock wrappers in `keys/config.keys`. The catalog, profile ciphertext,
+identities, and encryption preference stay unchanged. If the provider remains
+unavailable, the password unlock can still succeed and the request reports
+`key_provider_unavailable`; the UI reloads the now-unlocked state.
+
+Password operations require `Content-Type: application/json`, reject
+cross-origin requests, use the instance's HTTP authentication policy, serialize
+concurrent key operations (`429 key_operation_busy`), and return
+`Cache-Control: no-store`. They are available in `no_webui` builds too.
+
+Password unlocking needs no external KEK. Automatic unlocking additionally uses
+the operating-system credential store, or a stable ENV key in containers. Set
+`TERMCP_CONFIG_KEK` to the canonical Base64 encoding of 32 random bytes. When
+set, it is the only automatic unlock path: it wraps the Main Key for startup and
+is not the Main Key or the user's encryption password. Without a working
+`TERMCP_CONFIG_KEK`, the service starts locked and requires the password after
+every restart.
+
+---
+
 ## 5. Resource locators (termcp://)
 
 A locator names a Termcp object in one string. The Web UI's copy buttons emit
