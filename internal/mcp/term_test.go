@@ -1239,6 +1239,31 @@ func awaitPtyReady(t *testing.T, s *Server, handle string) {
 	}
 }
 
+// awaitQuiet drains a pty channel until a plain read answers 204 — the server's own
+// statement that the stream has been still for a whole quiet window.
+//
+// A TEST THAT RUNS A NOISY COMMAND FIRST HAS TO WAIT FOR THIS, and the reason is not
+// politeness: a themed shell repaints its prompt in several chunks, so a chunk that
+// lands after the next run's start offset is answered as THAT command's output. The wait
+// resets its quiet timer on it and then ends on the silence that follows — before the new
+// command has printed anything — so the reply says `Completion: quiet` and carries the
+// previous prompt instead of this command's first line. Measured: one execution of
+// TestAWindowThatRanOutSaysSo on a loaded machine answered exactly that, and passed 5/5
+// in isolation. Starting from a stream that has already gone quiet removes the leftover
+// the timer was resetting on.
+//
+// It is a STATE, not a sleep: the loop ends on the server's own 204, and a channel that
+// never stops talking fails instead of returning a stream that is still moving.
+func awaitQuiet(t *testing.T, s *Server, handle string) {
+	t.Helper()
+	for i := 0; i < 40; i++ {
+		if strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + handle}), "TERM/1 204") {
+			return
+		}
+	}
+	t.Fatalf("the stream never went quiet: %s kept producing output", handle)
+}
+
 // noisyCommand is a command that keeps printing for several seconds, in the syntax of
 // whichever shell a pty open actually gives us.
 //

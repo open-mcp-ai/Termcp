@@ -14,13 +14,9 @@ func TestEmptyReadEndsOnTheQuietWindow(t *testing.T) {
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 	awaitPtyReady(t, s, h)
 
-	// Drain whatever the shell printed at start-up, so the read under test is the
-	// empty-window case.
-	for i := 0; i < 40; i++ {
-		if strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + h, "timeout": float64(1)}), "TERM/1 204") {
-			break
-		}
-	}
+	// The read under test is the empty-window case, so the start-up output has to be
+	// gone first — established by the server's own 204, not by a sleep.
+	awaitQuiet(t, s, h)
 
 	start := time.Now()
 	got := termText(t, s, map[string]any{"cmd": "read " + h, "timeout": float64(30)})
@@ -45,11 +41,7 @@ func TestReadWaitSpendsTheWholeWindow(t *testing.T) {
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 	awaitPtyReady(t, s, h)
-	for i := 0; i < 40; i++ {
-		if strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + h, "timeout": float64(1)}), "TERM/1 204") {
-			break
-		}
-	}
+	awaitQuiet(t, s, h)
 
 	start := time.Now()
 	got := termText(t, s, map[string]any{"cmd": "read " + h + " --wait", "timeout": float64(1.5)})

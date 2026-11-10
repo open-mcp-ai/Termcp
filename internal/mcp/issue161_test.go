@@ -49,6 +49,10 @@ func TestAWindowThatRanOutSaysSo(t *testing.T) {
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 	awaitPtyReady(t, s, h)
+	// THE PROMPT IS STILL REPAINTING when the readiness probe returns, and a chunk that
+	// lands after this run's start offset is answered as this command's output — which is
+	// exactly how this test once passed 5/5 in isolation and failed on a loaded machine.
+	awaitQuiet(t, s, h)
 
 	// A command that keeps printing for longer than the window: the stream never goes
 	// quiet, so the wait can only end because the deadline arrived.

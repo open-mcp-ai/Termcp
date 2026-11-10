@@ -4,7 +4,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestSilentPtyRunNamesTheQueuedPossibility pins issue #308.
@@ -20,7 +19,10 @@ func TestSilentPtyRunNamesTheQueuedPossibility(t *testing.T) {
 	s := newTestServer(t)
 	argv := "sleep 10"
 	if runtime.GOOS == "windows" {
-		argv = "powershell -NoLogo -Command Start-Sleep -Seconds 10"
+		// -NoProfile, because a themed PowerShell prints its banner a second after it
+		// starts: a pause longer than any quiet window, so a drain reports "quiet" while
+		// the banner is still on its way and the next run's window catches it instead.
+		argv = "powershell -NoLogo -NoProfile -Command Start-Sleep -Seconds 10"
 	}
 	opened := termText(t, s, map[string]any{"cmd": "connect internal", "timeout": float64(2)})
 	sid := strings.Split(firstHandle(opened), ":")[0]
@@ -28,14 +30,10 @@ func TestSilentPtyRunNamesTheQueuedPossibility(t *testing.T) {
 	h := firstHandle(out)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 
-	// Wait for start-up banner (e.g. powershell theme) to finish printing.
-	time.Sleep(3 * time.Second)
-	for i := 0; i < 30; i++ {
-		got := termText(t, s, map[string]any{"cmd": "read " + h, "timeout": float64(1)})
-		if strings.HasPrefix(got, "TERM/1 204") {
-			break
-		}
-	}
+	// NO awaitPtyReady HERE: this channel's foreground process is the sleep, so a probe
+	// line would never be read. What has to be established is only that the nested
+	// shell's start-up banner has stopped printing, which the drain does.
+	awaitQuiet(t, s, h)
 
 	// Send a command while the foreground sleep is holding the terminal.
 	got := termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{"echo test-input"}, "timeout": float64(1)})
@@ -61,6 +59,7 @@ func TestRunningPtyRunStillSaysStillRunning(t *testing.T) {
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 	awaitPtyReady(t, s, h)
+	awaitQuiet(t, s, h)
 
 	got := termText(t, s, map[string]any{
 		"cmd":     "run " + h + " $1",
