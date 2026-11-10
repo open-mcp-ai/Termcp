@@ -1,0 +1,1067 @@
+package configstore
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
+
+	"golang.org/x/crypto/chacha20poly1305"
+)
+
+const (
+	repositoryVersion = uint16(1)
+	maxCatalogEntries = 10_000
+)
+
+var (
+	// ErrNotFound reports that no committed object has the requested name.
+	ErrNotFound = errors.New("configstore: object not found")
+	// ErrExists reports a case-insensitive name collision.
+	ErrExists = errors.New("configstore: object already exists")
+	// ErrNotInitialized reports that no encrypted keyring has been created.
+	ErrNotInitialized = errors.New("configstore: encrypted store is not initialized")
+	// ErrAlreadyInitialized reports inconsistent initialization state.
+	ErrAlreadyInitialized = errors.New("configstore: encrypted store is already initialized")
+	// ErrClosed reports use of a repository after Close.
+	ErrClosed = errors.New("configstore: repository is closed")
+)
+
+var (
+	catalogObjectID  = repeatedID(0xca)
+	internalObjectID = repeatedID(0xcb)
+)
+
+type catalogDocument struct {
+	Version    uint16           `json:"version"`
+	StoreID    []byte           `json:"store_id"`
+	Revision   uint64           `json:"revision"`
+	EncryptNew bool             `json:"encrypt_new"`
+	Profiles   []catalogProfile `json:"profiles"`
+}
+
+type catalogProfile struct {
+	Name         string `json:"name"`
+	ObjectID     []byte `json:"object_id"`
+	GenerationID []byte `json:"generation_id"`
+}
+
+type catalogRef struct {
+	name         string
+	objectID     ID
+	generationID ID
+}
+
+// Item is one opaque profile body for an import transaction.
+type Item struct {
+	Name string
+	Data []byte
+}
+
+// Status is the non-secret administrative state of a repository.
+type Status struct {
+	StoreID            ID
+	Revision           uint64
+	Profiles           int
+	EncryptNew         bool
+	Closed             bool
+	MainKeyID          ID
+	RotationPending    bool
+	Locked             bool
+	ErrorCode          string
+	PasswordConfigured bool
+	AutomaticUnlock    bool
+}
+
+// Repository owns one exclusive encrypted connection-profile directory. The
+// catalog commits name-to-object mappings; profile bodies remain independent
+// generations so one damaged item cannot silently replace another.
+type Repository struct {
+	dataDir string
+	lock    *directoryLock
+
+	// Mutable state lives in the published snapshot (see store_state.go).
+	state    atomic.Pointer[repoSnapshot]
+	writeTok chan struct{}
+}
+
+// InitializeRepository creates an empty encrypted repository. If key creation
+// succeeded but catalog publication was interrupted, a retry with the same
+// provider resumes at the missing catalog.
+func InitializeRepository(dataDir string, providers ...Provider) (*Repository, error) {
+	return initializeRepository(dataDir, nil, providers...)
+}
+
+// InitializeRepositoryWithMainKey initializes encryption with the key backed up
+// by the user during the first enable operation. It never replaces existing keys.
+func InitializeRepositoryWithMainKey(dataDir string, main MainKey, providers ...Provider) (*Repository, error) {
+	defer clear(main[:])
+	if isZeroBytes(main[:]) {
+		return nil, ErrFormat
+	}
+	return initializeRepository(dataDir, &main, providers...)
+}
+
+func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Provider) (*Repository, error) {
+	root, err := prepareDataDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := acquireDirectoryLock(root)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*Repository, error) {
+		_ = lock.Close()
+		return nil, err
+	}
+
+	keysPath := filepath.Join(root, "keys", "config.keys")
+	catalogPath := repositoryCatalogPath(root)
+	keysExist, err := pathExists(keysPath)
+	if err != nil {
+		return fail(err)
+	}
+	catalogExists, err := pathExists(catalogPath)
+	if err != nil {
+		return fail(err)
+	}
+	if catalogExists && !keysExist {
+		return fail(fmt.Errorf("%w: catalog exists without its keyring", ErrAlreadyInitialized))
+	}
+	if !keysExist {
+		storeID, err := NewID()
+		if err != nil {
+			return fail(err)
+		}
+		var keyData []byte
+		var keyring *Keyring
+		if suppliedMain == nil {
+			keyData, keyring, err = CreateKeyring(storeID, providers...)
+		} else {
+			keyData, keyring, err = createKeyringWithMainKey(storeID, *suppliedMain, providers...)
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if err := writeFileAtomic(keysPath, keyData); err != nil {
+			keyring.Destroy()
+			return fail(err)
+		}
+		repository := newRepository(root)
+		repository.lock = lock
+		repository.storeKeyring(keyring, keyring.StoreID())
+		if err := repository.commitCatalog(catalogDocument{
+			Version:  repositoryVersion,
+			StoreID:  append([]byte(nil), storeID[:]...),
+			Revision: 1,
+			Profiles: []catalogProfile{},
+		}); err != nil {
+			keyring.Destroy()
+			return fail(err)
+		}
+		repository.setRevision(1)
+		return repository, nil
+	}
+
+	keyData, err := readBoundedFile(keysPath, maxKeyringFile)
+	if err != nil {
+		return fail(err)
+	}
+	keyring, err := UnlockKeyring(keyData, providers...)
+	clear(keyData)
+	if err != nil {
+		return fail(err)
+	}
+	if suppliedMain != nil {
+		_, keys, activeID, err := keyring.snapshot()
+		matches := err == nil && keys[activeID] == *suppliedMain && !catalogExists
+		clearMainKeyMap(keys)
+		if !matches {
+			keyring.Destroy()
+			return fail(ErrAlreadyInitialized)
+		}
+	}
+	repository := newRepository(root)
+	repository.lock = lock
+	repository.storeKeyring(keyring, keyring.StoreID())
+	if catalogExists {
+		if err := repository.loadCatalog(); err != nil {
+			keyring.Destroy()
+			return fail(err)
+		}
+		return repository, nil
+	}
+	storeID := keyring.StoreID()
+	if err := repository.commitCatalog(catalogDocument{
+		Version:  repositoryVersion,
+		StoreID:  append([]byte(nil), storeID[:]...),
+		Revision: 1,
+		Profiles: []catalogProfile{},
+	}); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
+	repository.setRevision(1)
+	return repository, nil
+}
+
+// OpenRepository unlocks the existing keyring and verifies every committed
+// profile before returning.
+func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) {
+	return openRepository(dataDir, false, providers...)
+}
+
+// OpenRepositoryForRecovery retains a locked repository when only provider
+// unlocking fails. The directory remains exclusively held and no reads or
+// mutations can fall back to plaintext while the management UI offers recovery.
+func OpenRepositoryForRecovery(dataDir string, providers ...Provider) (*Repository, error) {
+	return openRepository(dataDir, true, providers...)
+}
+
+func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (*Repository, error) {
+	root, err := prepareDataDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := acquireDirectoryLock(root)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*Repository, error) {
+		_ = lock.Close()
+		return nil, err
+	}
+
+	keyData, err := readBoundedFile(filepath.Join(root, "keys", "config.keys"), maxKeyringFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return fail(ErrNotInitialized)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	stored, err := parseStoredKeyring(keyData)
+	if err != nil {
+		return fail(err)
+	}
+	keyring, err := UnlockKeyring(keyData, providers...)
+	clear(keyData)
+	if err != nil {
+		if stored.Password != nil && len(stored.Slots) == 0 {
+			err = ErrPasswordRequired
+		}
+		if allowRecovery && (errors.Is(err, ErrProviderUnavailable) || errors.Is(err, ErrAuthentication) || errors.Is(err, ErrPasswordRequired)) {
+			var storeID ID
+			copy(storeID[:], stored.StoreID)
+			if exists, statErr := pathExists(repositoryCatalogPath(root)); statErr != nil {
+				return fail(statErr)
+			} else if !exists {
+				return fail(ErrNotInitialized)
+			}
+			locked := newRepository(root)
+			locked.lock = lock
+			locked.mutate(func(next *repoSnapshot) {
+				next.unlockErr = err
+				next.lockedStoreID = storeID
+				next.password = stored.Password
+			})
+			return locked, nil
+		}
+		return fail(err)
+	}
+	repository := newRepository(root)
+	repository.lock = lock
+	repository.storeKeyring(keyring, keyring.StoreID())
+	if err := repository.loadCatalog(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
+	repository.mutate(func(next *repoSnapshot) {
+		next.password = stored.Password
+		next.automaticUnlock = len(stored.Slots) > 0
+	})
+	return repository, nil
+}
+
+// List returns committed names in lexical order.
+func (r *Repository) List() ([]string, error) {
+	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	if err := r.refreshProfileDirectories(); err != nil {
+		return nil, err
+	}
+	st := r.snap()
+	names := make([]string, 0, len(st.refs))
+	for name := range st.refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// Read returns a caller-owned plaintext copy for the committed name.
+func (r *Repository) Read(name string) ([]byte, error) {
+	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	if err := validateCatalogName(name); err != nil {
+		return nil, err
+	}
+	st := r.snap()
+	ref, ok := st.refs[name]
+	if !ok {
+		if err := r.refreshProfileDirectories(); err != nil {
+			return nil, err
+		}
+		st = r.snap()
+		ref, ok = st.refs[name]
+	}
+	if !ok {
+		return nil, fmt.Errorf("%q: %w", name, ErrNotFound)
+	}
+	return r.readObject(ref)
+}
+
+// Save creates a profile or commits a new generation under the existing stable
+// object ID. It never substitutes an empty profile for a damaged one.
+func (r *Repository) Save(name string, data []byte) error {
+	return r.put([]Item{{Name: name, Data: data}}, true)
+}
+
+// Import commits profiles that must not overwrite an existing name.
+func (r *Repository) Import(items []Item) error {
+	return r.put(items, false)
+}
+
+func (r *Repository) put(items []Item, overwrite bool) error {
+	if len(items) == 0 {
+		return nil
+	}
+	defer r.acquireWrite()()
+	if err := r.writable(); err != nil {
+		return err
+	}
+
+	cur := r.snap()
+	next := cloneRefs(cur.refs)
+	oldGenerations := make([]catalogRef, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if err := validateCatalogName(item.Name); err != nil {
+			return err
+		}
+		if len(item.Data) > MaxProfilePlaintext {
+			return ErrTooLarge
+		}
+		folded := strings.ToLower(item.Name)
+		if _, duplicate := seen[folded]; duplicate {
+			return fmt.Errorf("%q: %w", item.Name, ErrExists)
+		}
+		seen[folded] = struct{}{}
+		existing, collision := findRef(next, item.Name)
+		if collision && (existing.name != item.Name || !overwrite) {
+			return fmt.Errorf("%s: %w", existing.name, ErrExists)
+		}
+
+		ref, exists := next[item.Name]
+		if !exists {
+			objectID := internalObjectID
+			if !strings.EqualFold(item.Name, "internal") {
+				var err error
+				objectID, err = NewID()
+				if err != nil {
+					return err
+				}
+				if objectID == catalogObjectID || objectID == internalObjectID {
+					return ErrFormat
+				}
+			}
+			ref = catalogRef{name: item.Name, objectID: objectID}
+		} else {
+			oldGenerations = append(oldGenerations, ref)
+		}
+		generationID, err := NewID()
+		if err != nil {
+			return err
+		}
+		ref.generationID = generationID
+		if err := r.writeObject(ref, item.Data); err != nil {
+			return err
+		}
+		next[item.Name] = ref
+	}
+
+	nextCatalog := r.catalogDocument(next, cur.revision+1)
+	if err := r.commitCatalog(nextCatalog); err != nil {
+		if errors.Is(err, ErrDurability) {
+			r.publishRefs(cur, next, cur.encryptNew)
+		}
+		return err
+	}
+	r.publishRefs(cur, next, cur.encryptNew)
+	for _, ref := range oldGenerations {
+		r.removeObject(ref)
+	}
+	return nil
+}
+
+// Rename publishes the same ciphertext under the new per-profile directory
+// before committing the catalog rename, then removes the old copy.
+func (r *Repository) Rename(oldName, newName string) error {
+	defer r.acquireWrite()()
+	if err := r.writable(); err != nil {
+		return err
+	}
+	if oldName == newName {
+		return nil
+	}
+	if err := validateCatalogName(oldName); err != nil {
+		return err
+	}
+	if err := validateCatalogName(newName); err != nil {
+		return err
+	}
+	cur := r.snap()
+	ref, ok := cur.refs[oldName]
+	if !ok {
+		return fmt.Errorf("%q: %w", oldName, ErrNotFound)
+	}
+	if existing, collision := findRef(cur.refs, newName); collision {
+		return fmt.Errorf("%s: %w", existing.name, ErrExists)
+	}
+	raw, err := r.readObjectRaw(ref)
+	if err != nil {
+		return err
+	}
+	checked, err := r.openObjectRaw(ref, raw)
+	clear(checked)
+	if err != nil {
+		return err
+	}
+	newRef := ref
+	newRef.name = newName
+	oldDir, newDir := filepath.Dir(r.objectPath(ref)), filepath.Dir(r.objectPath(newRef))
+	if err := requireRealDirectory(oldDir); err != nil {
+		return err
+	}
+	if exists, err := pathExists(newDir); err != nil {
+		return err
+	} else if exists {
+		return ErrExists
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return err
+	}
+	next := cloneRefs(cur.refs)
+	delete(next, oldName)
+	next[newName] = newRef
+	err = r.commitCatalog(r.catalogDocument(next, cur.revision+1))
+	if err != nil && !errors.Is(err, ErrDurability) {
+		if rollbackErr := os.Rename(newDir, oldDir); rollbackErr != nil {
+			r.publishRefs(cur, next, cur.encryptNew)
+			return fmt.Errorf("%w: profile directory rename needs recovery: %v; rollback: %v", ErrDurability, err, rollbackErr)
+		}
+		_ = syncDir(filepath.Dir(oldDir))
+		return err
+	}
+	r.publishRefs(cur, next, cur.encryptNew)
+	if syncErr := syncDir(filepath.Dir(newDir)); syncErr != nil {
+		return fmt.Errorf("%w: sync renamed profile directory: %v", ErrDurability, syncErr)
+	}
+	return err
+}
+
+// Delete removes the catalog reference before cleaning its ciphertext.
+func (r *Repository) Delete(name string) error {
+	defer r.acquireWrite()()
+	if err := r.writable(); err != nil {
+		return err
+	}
+	cur := r.snap()
+	ref, ok := cur.refs[name]
+	if !ok {
+		return nil
+	}
+	next := cloneRefs(cur.refs)
+	delete(next, name)
+	if err := r.commitCatalog(r.catalogDocument(next, cur.revision+1)); err != nil {
+		if errors.Is(err, ErrDurability) {
+			r.publishRefs(cur, next, cur.encryptNew)
+		}
+		return err
+	}
+	r.publishRefs(cur, next, cur.encryptNew)
+	r.removeObject(ref)
+	return nil
+}
+
+// Status returns non-secret state for diagnostics.
+func (r *Repository) Status() Status {
+	if r == nil {
+		return Status{}
+	}
+	st := r.snap()
+	keyID, pending := st.keyring.rotationStatus()
+	password := st.password
+	if st.keyring != nil {
+		password = st.keyring.password
+	}
+	if password != nil && password.Previous != nil {
+		pending = true
+	}
+	storeID := st.lockedStoreID
+	if st.keyring != nil {
+		storeID = st.keyring.StoreID()
+	}
+	return Status{
+		StoreID:            storeID,
+		Revision:           st.revision,
+		Profiles:           len(st.refs),
+		EncryptNew:         st.encryptNew,
+		Closed:             st.closed,
+		MainKeyID:          keyID,
+		RotationPending:    pending,
+		Locked:             st.unlockErr != nil,
+		ErrorCode:          keyUnlockErrorCode(st.unlockErr),
+		PasswordConfigured: password != nil,
+		AutomaticUnlock:    st.automaticUnlock,
+	}
+}
+
+// EncryptNew reports the authenticated preference for newly created profiles.
+func (r *Repository) EncryptNew() bool {
+	if r == nil {
+		return false
+	}
+	return r.snap().encryptNew
+}
+
+// SetEncryptNew commits the authenticated preference in the encrypted catalog.
+func (r *Repository) SetEncryptNew(enabled bool) error {
+	defer r.acquireWrite()()
+	if err := r.writable(); err != nil {
+		return err
+	}
+	cur := r.snap()
+	if cur.encryptNew == enabled {
+		return nil
+	}
+	next := cloneRefs(cur.refs)
+	catalog := r.catalogDocument(next, cur.revision+1)
+	catalog.EncryptNew = enabled
+	if err := r.commitCatalog(catalog); err != nil {
+		if !errors.Is(err, ErrDurability) {
+			return err
+		}
+		r.publishRefs(cur, next, enabled)
+		return err
+	}
+	r.publishRefs(cur, next, enabled)
+	return nil
+}
+
+// DataDir returns the resolved directory owned by this repository.
+func (r *Repository) DataDir() string {
+	if r == nil {
+		return ""
+	}
+	return r.dataDir
+}
+
+// Close clears Main Keys in this process and releases the directory lock.
+func (r *Repository) Close() error {
+	if r == nil {
+		return nil
+	}
+	defer r.acquireWrite()()
+	cur := r.snap()
+	if cur.closed {
+		return nil
+	}
+	r.mutate(func(next *repoSnapshot) {
+		*next = repoSnapshot{closed: true}
+	})
+	if cur.keyring != nil {
+		cur.keyring.Destroy()
+	}
+	return r.lock.Close()
+}
+
+func (r *Repository) ready() error {
+	st := r.snap()
+	if st.closed {
+		return ErrClosed
+	}
+	if st.unlockErr != nil {
+		return fmt.Errorf("%w: %w", ErrLocked, st.unlockErr)
+	}
+	if st.keyring == nil {
+		return ErrClosed
+	}
+	return nil
+}
+
+func (r *Repository) loadCatalog() error {
+	catalog, refs, generationID, err := r.readCatalogSnapshot()
+	if err != nil {
+		return err
+	}
+	refs, moved, err := r.resolveProfileDirectories(refs)
+	if err != nil {
+		return err
+	}
+	if err := r.migrateLegacyObjectLayout(refs); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		data, err := r.readUnlocked(ref)
+		if err != nil {
+			return fmt.Errorf("verify profile %q: %w", ref.name, err)
+		}
+		clear(data)
+	}
+	r.cleanupLegacyObjectLayout(refs)
+	if moved {
+		if err := r.commitCatalog(r.catalogDocument(refs, catalog.Revision+1)); err != nil {
+			return err
+		}
+		catalog.Revision++
+	}
+	r.mutate(func(next *repoSnapshot) {
+		next.catalogGeneration = generationID
+		next.revision = catalog.Revision
+		next.encryptNew = catalog.EncryptNew
+		next.refs = refs
+	})
+	return nil
+}
+
+func (r *Repository) commitCatalog(catalog catalogDocument) error {
+	if catalog.Version != repositoryVersion || len(catalog.StoreID) != len(ID{}) ||
+		catalog.Revision == 0 || len(catalog.Profiles) > maxCatalogEntries {
+		return ErrFormat
+	}
+	plaintext, err := json.Marshal(catalog)
+	if err != nil {
+		return fmt.Errorf("encode catalog: %w", err)
+	}
+	defer clear(plaintext)
+	if len(plaintext) > MaxCatalogPlaintext {
+		return ErrTooLarge
+	}
+	generationID, err := NewID()
+	if err != nil {
+		return err
+	}
+	identity := Identity{
+		StoreID:      r.snap().keyring.StoreID(),
+		ObjectID:     catalogObjectID,
+		GenerationID: generationID,
+		Kind:         KindCatalog,
+	}
+	envelope, err := r.snap().keyring.Seal(plaintext, identity)
+	if err != nil {
+		return err
+	}
+	path := repositoryCatalogPath(r.dataDir)
+	durabilityErr := error(nil)
+	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
+		if !errors.Is(err, ErrDurability) {
+			return err
+		}
+		durabilityErr = err
+	}
+
+	parsed, err := parseCatalogEnvelope(envelope.Bytes(), identity.StoreID, catalogObjectID)
+	if err != nil {
+		return err
+	}
+	check, err := r.snap().keyring.Open(parsed)
+	if err != nil {
+		return err
+	}
+	defer clear(check)
+	if !bytes.Equal(check, plaintext) {
+		return ErrAuthentication
+	}
+	r.mutate(func(next *repoSnapshot) {
+		next.catalogGeneration = generationID
+	})
+	return durabilityErr
+}
+
+func (r *Repository) writeObject(ref catalogRef, data []byte) error {
+	identity := Identity{
+		StoreID:      r.snap().keyring.StoreID(),
+		ObjectID:     ref.objectID,
+		GenerationID: ref.generationID,
+		Kind:         KindProfile,
+	}
+	envelope, err := r.snap().keyring.Seal(data, identity)
+	if err != nil {
+		return err
+	}
+	path := r.objectPath(ref)
+	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
+		return err
+	}
+	parsed, err := Parse(envelope.Bytes(), identity)
+	if err != nil {
+		return err
+	}
+	check, err := r.snap().keyring.Open(parsed)
+	if err != nil {
+		return err
+	}
+	defer clear(check)
+	if !bytes.Equal(check, data) {
+		return ErrAuthentication
+	}
+	return nil
+}
+
+func (r *Repository) readObject(ref catalogRef) ([]byte, error) {
+	return r.readUnlocked(ref)
+}
+
+func (r *Repository) readUnlocked(ref catalogRef) ([]byte, error) {
+	raw, err := r.readObjectRaw(ref)
+	if err != nil {
+		return nil, err
+	}
+	return r.openObjectRaw(ref, raw)
+}
+
+func (r *Repository) readObjectRaw(ref catalogRef) ([]byte, error) {
+	max := int64(envelopeHeaderSize + MaxProfilePlaintext + chacha20poly1305.Overhead)
+	raw, err := readBoundedFile(r.objectPath(ref), max)
+	if err == nil {
+		return raw, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	raw, err = readBoundedFile(r.legacyObjectPath(ref), max)
+	if err == nil {
+		return raw, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: missing object %s", ErrNotFound, hex.EncodeToString(ref.objectID[:]))
+}
+
+func (r *Repository) openObjectRaw(ref catalogRef, raw []byte) ([]byte, error) {
+	identity := Identity{
+		StoreID:      r.snap().keyring.StoreID(),
+		ObjectID:     ref.objectID,
+		GenerationID: ref.generationID,
+		Kind:         KindProfile,
+	}
+	envelope, err := Parse(raw, identity)
+	if err != nil {
+		return nil, err
+	}
+	return r.snap().keyring.Open(envelope)
+}
+
+func (r *Repository) migrateLegacyObjectLayout(refs map[string]catalogRef) error {
+	for _, ref := range refs {
+		newPath := r.objectPath(ref)
+		if exists, err := pathExists(newPath); err != nil {
+			return err
+		} else if exists {
+			continue
+		}
+		legacyPath := r.legacyObjectPath(ref)
+		raw, err := readBoundedFile(
+			legacyPath,
+			int64(envelopeHeaderSize+MaxProfilePlaintext+chacha20poly1305.Overhead),
+		)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := r.openObjectRaw(ref, raw); err != nil {
+			return err
+		}
+		if err := writeFileAtomic(newPath, raw); err != nil {
+			return err
+		}
+		_ = removeIfExists(legacyPath)
+		_ = os.Remove(filepath.Dir(legacyPath))
+	}
+	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
+	return nil
+}
+
+func (r *Repository) cleanupLegacyObjectLayout(refs map[string]catalogRef) {
+	for _, ref := range refs {
+		path := r.legacyObjectPath(ref)
+		_ = removeIfExists(path)
+		_ = os.Remove(filepath.Dir(path))
+	}
+	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
+}
+
+func (r *Repository) objectPath(ref catalogRef) string {
+	return filepath.Join(
+		r.dataDir,
+		"ssh_configs",
+		ref.name,
+		hex.EncodeToString(ref.generationID[:])+".enc",
+	)
+}
+
+func (r *Repository) legacyObjectPath(ref catalogRef) string {
+	return filepath.Join(
+		r.dataDir,
+		"ssh_configs",
+		"objects",
+		hex.EncodeToString(ref.objectID[:]),
+		hex.EncodeToString(ref.generationID[:])+".enc",
+	)
+}
+
+func (r *Repository) removeObject(ref catalogRef) {
+	for _, path := range []string{r.objectPath(ref), r.legacyObjectPath(ref)} {
+		_ = removeIfExists(path)
+		_ = os.Remove(filepath.Dir(path))
+	}
+}
+
+func (r *Repository) catalogDocument(refs map[string]catalogRef, revision uint64) catalogDocument {
+	profiles := make([]catalogProfile, 0, len(refs))
+	for _, ref := range refs {
+		profiles = append(profiles, catalogProfile{
+			Name:         ref.name,
+			ObjectID:     append([]byte(nil), ref.objectID[:]...),
+			GenerationID: append([]byte(nil), ref.generationID[:]...),
+		})
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return strings.ToLower(profiles[i].Name) < strings.ToLower(profiles[j].Name)
+	})
+	storeID := r.snap().keyring.StoreID()
+	return catalogDocument{
+		Version:    repositoryVersion,
+		StoreID:    append([]byte(nil), storeID[:]...),
+		Revision:   revision,
+		EncryptNew: r.snap().encryptNew,
+		Profiles:   profiles,
+	}
+}
+
+func decodeCatalog(data []byte, storeID ID) (catalogDocument, map[string]catalogRef, error) {
+	var catalog catalogDocument
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return catalogDocument{}, nil, ErrFormat
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return catalogDocument{}, nil, ErrFormat
+	}
+	if catalog.Version != repositoryVersion || catalog.Revision == 0 ||
+		len(catalog.StoreID) != len(ID{}) || !bytes.Equal(catalog.StoreID, storeID[:]) ||
+		len(catalog.Profiles) > maxCatalogEntries {
+		return catalogDocument{}, nil, ErrFormat
+	}
+	refs := make(map[string]catalogRef, len(catalog.Profiles))
+	folded := make(map[string]string, len(catalog.Profiles))
+	for _, profile := range catalog.Profiles {
+		if err := validateCatalogName(profile.Name); err != nil ||
+			len(profile.ObjectID) != len(ID{}) || len(profile.GenerationID) != len(ID{}) {
+			return catalogDocument{}, nil, ErrFormat
+		}
+		var objectID, generationID ID
+		copy(objectID[:], profile.ObjectID)
+		copy(generationID[:], profile.GenerationID)
+		if objectID.IsZero() || generationID.IsZero() || objectID == catalogObjectID ||
+			(strings.EqualFold(profile.Name, "internal") && objectID != internalObjectID) ||
+			(!strings.EqualFold(profile.Name, "internal") && objectID == internalObjectID) {
+			return catalogDocument{}, nil, ErrFormat
+		}
+		nameKey := strings.ToLower(profile.Name)
+		if existing, ok := folded[nameKey]; ok {
+			return catalogDocument{}, nil, fmt.Errorf("%w: duplicate names %q and %q", ErrFormat, existing, profile.Name)
+		}
+		folded[nameKey] = profile.Name
+		refs[profile.Name] = catalogRef{
+			name:         profile.Name,
+			objectID:     objectID,
+			generationID: generationID,
+		}
+	}
+	return catalog, refs, nil
+}
+
+func cloneRefs(refs map[string]catalogRef) map[string]catalogRef {
+	out := make(map[string]catalogRef, len(refs))
+	for name, ref := range refs {
+		out[name] = ref
+	}
+	return out
+}
+
+func findRef(refs map[string]catalogRef, name string) (catalogRef, bool) {
+	for existing, ref := range refs {
+		if strings.EqualFold(existing, name) {
+			return ref, true
+		}
+	}
+	return catalogRef{}, false
+}
+
+func validateCatalogName(name string) error {
+	if name == "" || name != strings.TrimSpace(name) || len(name) > 64 {
+		return ErrFormat
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return ErrFormat
+	}
+	return nil
+}
+
+func prepareDataDir(dataDir string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(dataDir))
+	if clean == "" {
+		clean = "."
+	}
+	absolute, err := filepath.Abs(clean)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(absolute, privateDirMode); err != nil {
+		return "", fmt.Errorf("create data directory: %w", err)
+	}
+	absolute, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("data directory is not a directory")
+	}
+	return absolute, nil
+}
+
+func repositoryCatalogPath(dataDir string) string {
+	return filepath.Join(dataDir, "ssh_configs", "store.enc")
+}
+
+func hasIncompatibleLayout(dataDir string) (bool, error) {
+	for _, path := range []string{
+		filepath.Join(dataDir, "keys", "master.key"),
+		filepath.Join(dataDir, "config", "hosts.enc"),
+	} {
+		exists, err := pathExists(path)
+		if err != nil || exists {
+			return exists, err
+		}
+	}
+	return false, nil
+}
+
+// HasLegacyEncryptionArtifacts reports files from the unreleased
+// encryption-test branch. They are ignored by the current mixed store.
+func HasLegacyEncryptionArtifacts(dataDir string) (bool, error) {
+	root, err := filepath.Abs(filepath.Clean(dataDir))
+	if err != nil {
+		return false, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return hasIncompatibleLayout(root)
+}
+
+// HasManagedCatalog reports whether a current encrypted catalog exists. A
+// catalog without its keyring is damaged state and must fail closed.
+func HasManagedCatalog(dataDir string) (bool, error) {
+	root, err := filepath.Abs(filepath.Clean(dataDir))
+	if err != nil {
+		return false, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return pathExists(repositoryCatalogPath(root))
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func readBoundedFile(path string, max int64) ([]byte, error) {
+	if err := requireRealDirectory(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	linkInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !linkInfo.Mode().IsRegular() {
+		return nil, ErrFormat
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(linkInfo, info) {
+		return nil, ErrFormat
+	}
+	if info.Size() > max {
+		return nil, ErrTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(file, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		clear(data)
+		return nil, ErrTooLarge
+	}
+	return data, nil
+}
+
+func repeatedID(value byte) (id ID) {
+	for i := range id {
+		id[i] = value
+	}
+	return id
+}
