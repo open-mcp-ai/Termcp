@@ -199,7 +199,10 @@ func (c *uiWS) enqueueSessions() {
 				if c.h.NoInternal && ent.Kind == "internal" {
 					continue
 				}
-				conns = append(conns, summarizeConnection(n, ent))
+				cs := summarizeConnection(n, ent)
+				cs.Temporary = c.h.SSH.IsTemporary(n)
+				cs.Storage, _ = c.h.SSH.StorageMode(n)
+				conns = append(conns, cs)
 			}
 			payload["connections"] = conns
 		}
