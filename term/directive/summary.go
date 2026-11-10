@@ -38,6 +38,7 @@ var flagSummaries = map[string]map[string]string{
 		"bytes":      "page size for --at (4 KB default)",
 		"reader":     "registered reader id to consume from; keeps its own cursor independent of the default reader",
 		"mode":       "on a file read: text (default), hex for bytes, or file to download to a local_path",
+		"wait":       "spend the whole timeout on an empty window instead of ending it when the stream goes quiet (valueless)",
 	},
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -339,21 +340,48 @@ func numberLines(body string, first int) string {
 	return b.String()
 }
 
-// WriteFile writes data to a remote file, either inline or from a local file.
-func (s *Client) WriteFile(remotePath string, offset *int64, data string, mode string, localPath string, localOffset, length int64) (int64, error) {
+// WriteReport carries the byte count and verification facts of a successful file write.
+//
+// WHY A STRUCT INSTEAD OF A BARE int64 (issue #302): writing a file was the only
+// mutating operation whose reply looked byte-identical to a success that did not
+// happen. Text mode decodes escapes (\n -> newline, \\ -> \), and the reply echoed the
+// payload back with the escapes intact — so a caller comparing the echo to its input
+// concluded the file was written as typed. The SHA256 and the decode summary are the
+// two facts that break that circle: a caller with an expected hash can check it in one
+// turn, and a caller whose text was rewritten is told which characters changed.
+type WriteReport struct {
+	BytesWritten int64
+	SHA256       string // lowercase hex of the SHA256 digest of bytes actually written
+	Decoded      string // summary of escapes expanded, or empty if none
+}
+
+// WriteFile writes data to a remote file, either inline or from a local file, and
+// returns the receipt: the byte count plus what the payload's encoding did to it.
+func (s *Client) WriteFile(remotePath string, offset *int64, data string, mode string, localPath string, localOffset, length int64) (WriteReport, error) {
 	if localPath != "" {
-		return s.writeFromLocal(remotePath, offset, localPath, localOffset, length)
+		n, err := s.writeFromLocal(remotePath, offset, localPath, localOffset, length)
+		if err != nil {
+			return WriteReport{}, err
+		}
+		return WriteReport{BytesWritten: n}, nil
 	}
 	return s.writeInline(remotePath, offset, data, mode)
 }
 
-func (s *Client) writeInline(remotePath string, offset *int64, data string, mode string) (int64, error) {
+func (s *Client) writeInline(remotePath string, offset *int64, data string, mode string) (WriteReport, error) {
 	var raw []byte
+	var decodedSummary string
 	switch mode {
+	case "raw":
+		// RAW IS WHAT YOU TYPE (issue #302). Every other mode interprets something:
+		// text decodes \n and \\, hex decodes hex pairs. Raw passes data byte-for-byte
+		// as UTF-8 with no escape decoding and no prefix sniffing, which is the mode
+		// Dockerfiles, C source code, and scripts with inline \n needed all along.
+		raw = []byte(data)
 	case "hex":
 		decoded, err := encoding.HexDecode(data)
 		if err != nil {
-			return 0, fmt.Errorf("hex decode: %w", err)
+			return WriteReport{}, fmt.Errorf("hex decode: %w", err)
 		}
 		raw = decoded
 	case "text", "":
@@ -373,19 +401,23 @@ func (s *Client) writeInline(remotePath string, offset *int64, data string, mode
 		if hex, ok := strings.CutPrefix(data, "hex:"); ok {
 			decoded, err := encoding.HexDecode(hex)
 			if err != nil {
-				return 0, fmt.Errorf("hex decode after the `hex:` prefix: %w", err)
+				return WriteReport{}, fmt.Errorf("hex decode after the `hex:` prefix: %w", err)
 			}
 			raw = decoded
 			break
 		}
-		raw = encoding.DecodeText(data)
+		var summary encoding.DecodeSummary
+		raw, summary = encoding.DecodeTextSummary(data)
+		if summary.Total() > 0 {
+			decodedSummary = summary.String()
+		}
 	default:
-		return 0, fmt.Errorf("unknown mode %q", mode)
+		return WriteReport{}, fmt.Errorf("unknown mode %q", mode)
 	}
 
 	f, off, err := s.openForWrite(remotePath, offset)
 	if err != nil {
-		return 0, err
+		return WriteReport{}, err
 	}
 	defer f.Close()
 
@@ -395,14 +427,19 @@ func (s *Client) writeInline(remotePath string, offset *int64, data string, mode
 	// and the position was right, so only the truncate decision was wrong.
 	if off > 0 {
 		if _, err := f.Seek(off, io.SeekStart); err != nil {
-			return 0, fmt.Errorf("seek: %w", err)
+			return WriteReport{}, fmt.Errorf("seek: %w", err)
 		}
 	}
 	n, err := f.Write(raw)
 	if err != nil {
-		return 0, fmt.Errorf("write: %w", err)
+		return WriteReport{}, fmt.Errorf("write: %w", err)
 	}
-	return int64(n), nil
+	sum := sha256.Sum256(raw)
+	return WriteReport{
+		BytesWritten: int64(n),
+		SHA256:       hex.EncodeToString(sum[:]),
+		Decoded:      decodedSummary,
+	}, nil
 }
 
 // NativeLocalPath rewrites a POSIX-shell path into the spelling this host's file

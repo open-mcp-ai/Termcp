@@ -175,8 +175,8 @@ var ops = []Op{
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
-			"frame", "encoding", "mode"},
-		Valueless: []string{"raw", "lines", "frame"},
+			"frame", "encoding", "mode", "wait"},
+		Valueless: []string{"raw", "lines", "frame", "wait"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
@@ -387,6 +387,13 @@ an unchanged channel is legitimately empty, which is not data loss and not an
 error. To see the whole log again, ask for it by position (--from-line 1, or
 offset 0); to peek without consuming, use bytes_limit 0 on the call (it returns
 the handle and the range it would have read).
+
+AN EMPTY WINDOW COMES BACK WHEN THE STREAM STOPS TALKING, NOT WHEN THE CALLER'S
+WINDOW RUNS OUT. A plain read with nothing new waits for this channel's quiet window
+(a few hundred ms, the same rhythm a run ends its wait on) and answers 204 with
+Completion: quiet; it does not sit out a 60s window to say the same thing, which is
+long enough for a client watchdog to kill the call first. --wait spends the whole
+window instead, for a caller that really is long-polling for bytes.
 
 run ADVANCES THIS CURSOR TOO, and it has to: a run reply IS a read — it hands you
 the bytes the command produced — so a cursor that ignored it made the default
@@ -682,6 +689,15 @@ question: Completion: quiet means the stream went quiet (the ordinary ending —
 command may have finished, or may be working without printing), and Still-Running:
 true means the window ran out while bytes were still arriving. Neither one claims
 the command finished, because a pty gives nothing to base that on.
+
+AN EMPTY REPLY DOES NOT CLAIM THE LINE IS EXECUTING. A terminal queues what it is
+given until the foreground process reads it, so a line typed while a program holds
+the terminal produces nothing — byte for byte what a silent command produces. When
+the window ends with no bytes at all, the reply says exactly that (a Hint) instead of
+Still-Running, because that header is a claim about work, and silence is not evidence
+of it. There is no header that answers "was my line read": the terminal does not have
+that signal either. If the answer matters, interrupt whatever holds the terminal
+(key <channel> ctrl+c) and the shell runs what is queued.
 
 A reply that ends mid-output is not a lost command: the bytes are still in the
 stream. read has its own cursor and does not continue after the sample — it
@@ -1047,9 +1063,14 @@ profile name) writes over the host's pooled transport, so no session is created 
 nothing is archived afterwards. Same bytes, same atomic temp-file-and-rename rule;
 the only thing missing is the session the upload/download URLs would address.
 
---data decodes by --mode (text by default, so \n is a newline). For binary use hex:
+--data decodes by --mode (text by default, so \n is a newline; raw writes characters
+verbatim with no escape expansion; hex decodes hex pairs). For binary use hex:
 or a pipeline. The write is a plain overwrite, not an append: use --offset only
 when you mean to patch bytes in place.
+
+Every write reports the SHA256 of the bytes that actually landed, and text mode
+reports what it decoded (\n -> LF, \\ -> \) so a rewritten payload is visible in
+the reply rather than only downstream when a build or compile fails.
 
 PATHS ARE POSIX ON THE WIRE, ON EVERY PLATFORM. SFTP is a POSIX-shaped protocol, so
 a Windows absolute path has a second spelling: C:/tc/x is /C:/tc/x on the wire, and

@@ -248,6 +248,14 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 		waitedOnAPty = true
 		windowExpired = s.awaitWindow(ctx, stmt.Target, win, start)
 	}
+	// DID ANYTHING HAPPEN IN THIS WINDOW? It is the fact that separates the two things
+	// `Still-Running` used to be asked about (issue #308), and it is measured on the
+	// channel rather than on the reply: a folded window shows no body, but the bytes
+	// existed, so the reply is the wrong place to ask.
+	sawBytes := false
+	if now, ok := s.outputSizeFor(stmt.Target); ok && now > start {
+		sawBytes = true
+	}
 	slot, channelEnd := s.readSlot(ctx, stmt, win, args, time.Since(waitStarted))
 	if slot.Code < 400 {
 		if slot.Headers == nil {
@@ -280,10 +288,27 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 		// Same header the pipe path uses, same meaning: the command was accepted and has
 		// not finished. It is set only when the window expired, so it does not become the
 		// permanently-true flag that kept it off the pty path in the first place.
+		//
+		// AND ONLY WITH EVIDENCE (issue #308). The window expiring is not evidence that
+		// THIS line is executing: the pty driver queues what it is given until the
+		// foreground process reads, so a line typed while a program holds the terminal
+		// sits in that queue and produces nothing — byte for byte what a command that is
+		// running silently produces. The caller cannot tell those apart, and neither can
+		// this server ("is a foreground command running" is unanswerable from here). What
+		// it CAN tell apart is "bytes arrived and were still arriving when the window
+		// ended", which is evidence of work, from "nothing arrived at all", which is only
+		// evidence of silence. So the no-bytes case names the ambiguity instead of
+		// asserting a state, and `Still-Running` stays the evidence-based claim it was.
 		if slot.Headers == nil {
 			slot.Headers = map[string]string{}
 		}
-		slot.Headers["Still-Running"] = "true"
+		if sawBytes {
+			slot.Headers["Still-Running"] = "true"
+		} else {
+			slot.Headers["Hint"] = "no bytes since this line. A pty gives no signal that a line was read, " +
+				"so a silent command and a line still queued behind a program holding the terminal look " +
+				"identical here: read again, or key " + stmt.Target + " ctrl+c to interrupt what holds it."
+		}
 	}
 	// A WINDOW I SHOWED IS A WINDOW I READ. The read above is positional (it names an
 	// offset), and a positional read moves no cursor — so `read <channel>`'s documented
@@ -569,7 +594,8 @@ func (s *Server) readSlot(ctx context.Context, stmt directive.Statement, win ter
 	// A pipe channel that has not exited yet must not block for the whole timeout
 	// on a read that has nothing new; a pty read waits for the quiet window
 	// instead. Both are upper bounds, so the smaller of the two wins.
-	args["timeout"] = readTimeout(remaining(win, waited))
+	budget, quietCapped := s.readBudget(stmt, args, win, waited)
+	args["timeout"] = budget
 
 	res, fail := s.callTool(ctx, "shell_output", args)
 	if fail != nil {
@@ -588,7 +614,19 @@ func (s *Server) readSlot(ctx context.Context, stmt directive.Statement, win ter
 	// reporting caller read that as "the window never happened" (issue #161, P1-3).
 	// end_offset is the CHANNEL's end even when the reply's own addresses are the
 	// stream's: the two groups are always both present (see windowResult).
-	return s.windowSlot(stmt, win, doc, waited+time.Since(started)), int64(getFloatAny(doc, "end_offset", 0))
+	slot := s.windowSlot(stmt, win, doc, waited+time.Since(started))
+	if quietCapped && slot.Code == 204 && s.ptyRunning(stmt.Target) {
+		// HOW THE WAIT ENDED IS A FACT, and here it ended on the quiet window rather than
+		// on the caller's number. Same header `run` uses for the same ending, and same
+		// reach: a pty's completion is not observable, so what is reported is the
+		// evidence (the stream stood still), never a conclusion. Without it, `Waited:
+		// 512ms` under a 60s window reads as "the server ignored my window".
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		slot.Headers["Completion"] = "quiet"
+	}
+	return slot, int64(getFloatAny(doc, "end_offset", 0))
 }
 
 // remaining is the part of the caller's window that the wait did not spend.
@@ -967,4 +1005,46 @@ func readTimeout(win termArgs) float64 {
 		return 0
 	}
 	return win.TimeoutSeconds
+}
+
+// cursorRead reports whether this read is the live-cursor form — no byte offset and no
+// line selector — which is the only form that WAITS for new bytes. The others copy a
+// range that is already on the stream, so a shorter budget would change nothing there.
+func cursorRead(args map[string]any) bool {
+	for _, key := range []string{"offset", "from_line", "tail_lines"} {
+		if _, ok := args[key]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// readBudget is how long this read may block: what is left of the caller's window,
+// bounded by the channel's own quiet window.
+//
+// A READ WITH NOTHING TO SHOW DOES NOT SPEND THE WHOLE WINDOW (issue #307). `read <ch>`
+// on a channel with no new bytes blocked for the caller's timeout to the millisecond —
+// 20001ms for a 20s window, 45001ms for 45s, measured — and a caller whose client
+// enforces a watchdog at that same number got "Request timed out" instead of the 204 the
+// server was about to send, losing the cursor and the state headers with it. Waiting is a
+// state, not a duration: once this channel's stream has stood still for the quiet window
+// the server already uses to call a pty command done, more waiting answers nothing.
+//
+// `--wait` asks for the duration anyway: a caller that really is long-polling says so,
+// and spends its own ceiling rather than having one picked for it. The reply's `Waited`
+// reports what was spent either way.
+//
+// Only the cursor form is capped. A positional read answers immediately, and a tail on a
+// live pipe waits for the process itself (see awaitExit), so neither has a window to
+// shorten.
+func (s *Server) readBudget(stmt directive.Statement, args map[string]any, win termArgs, waited time.Duration) (float64, bool) {
+	budget := readTimeout(remaining(win, waited))
+	if budget <= 0 || !cursorRead(args) || boolFlag(stmt, "wait") {
+		return budget, false
+	}
+	quiet := s.quietTracker(stmt.Target).threshold().Seconds()
+	if quiet >= budget {
+		return budget, false
+	}
+	return quiet, true
 }

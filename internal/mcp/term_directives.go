@@ -329,6 +329,23 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		if stmt.Piped {
 			return []envelope.Slot{badRequest(stmt, "this is the right half of a `|`; it runs as part of the pipeline")}
 		}
+		// `--wait` IS A CHANNEL'S LONG POLL, AND IT NAMES NOTHING ON THE OTHER SHAPES.
+		// A file read copies a range that is already there, a peer read waits for a frame on
+		// a socket, and `--grep` answers from the bytes already on the stream — none of them
+		// has a byte stream that can go quiet, so all three would accept the flag and ignore
+		// it. That is the one path this surface forbids: the caller would believe it waited.
+		if boolFlag(stmt, "wait") {
+			switch {
+			case stmt.Kind != "":
+				return []envelope.Slot{badRequest(stmt, "`--wait` names a channel read: it spends the whole "+
+					"timeout instead of ending the wait when the bytes stop arriving. A "+stmt.Kind+" read "+
+					"has no stream to watch, so it cannot wait for one.")}
+			case stmt.FlagState("grep") != directive.FlagAbsent:
+				return []envelope.Slot{badRequest(stmt, "`--wait` and `--grep` are different questions: a "+
+					"search answers from the bytes already on the stream and does not wait for more. "+
+					"`read <channel> --wait` first, then `--grep` over what arrived.")}
+			}
+		}
 		if stmt.Kind == "file" {
 			flags := map[string]string{
 				"action":      "read",
