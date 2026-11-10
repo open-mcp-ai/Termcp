@@ -301,6 +301,7 @@ func (k *Keyring) Open(envelope *Envelope) ([]byte, error) {
 }
 
 // StoreID returns the public identity bound to this keyring.
+// StoreID returns the public identity bound to this keyring.
 func (k *Keyring) StoreID() ID {
 	if k == nil {
 		return ID{}
@@ -310,6 +311,55 @@ func (k *Keyring) StoreID() ID {
 		return ID{}
 	}
 	return st.storeID
+}
+
+func (k *Keyring) activeKeyID() ID {
+	if k == nil {
+		return ID{}
+	}
+	st := k.state.Load()
+	if st == nil {
+		return ID{}
+	}
+	return st.activeKeyID
+}
+
+func (k *Keyring) key(id ID) (MainKey, bool) {
+	if k == nil {
+		return MainKey{}, false
+	}
+	st := k.state.Load()
+	if st == nil {
+		return MainKey{}, false
+	}
+	key, ok := st.mainKeys[id]
+	return key, ok
+}
+
+func (k *Keyring) keysCount() int {
+	if k == nil {
+		return 0
+	}
+	st := k.state.Load()
+	if st == nil {
+		return 0
+	}
+	return len(st.mainKeys)
+}
+
+func (k *Keyring) isClosed() bool {
+	if k == nil {
+		return true
+	}
+	return k.state.Load() == nil
+}
+
+func (k *Keyring) withState(storeID, activeKeyID ID, keys map[ID]MainKey) {
+	k.state.Store(&keyringState{
+		storeID:     storeID,
+		activeKeyID: activeKeyID,
+		mainKeys:    keys,
+	})
 }
 
 // Destroy revokes this keyring's in-process Main Keys. Existing Envelope values

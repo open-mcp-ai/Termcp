@@ -34,7 +34,7 @@ type keyEncryptionKey [chacha20poly1305.KeySize]byte
 // Argon2Parameters records the computational cost required to derive a KEK.
 type Argon2Parameters struct {
 	Time    uint32 `json:"time"`
-	Memory  uint32 `json:"memory"`
+	Memory  uint32 `json:"memory_kib"`
 	Threads uint8  `json:"threads"`
 }
 
