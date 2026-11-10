@@ -81,6 +81,15 @@ type sessionPTY struct {
 	// unsafe to call concurrently with Close (the child could inherit a
 	// recycled descriptor). Taking mu around pty.Start in the handler and
 	// around the library's closer removes that interleaving.
+	//
+	// THE CLOSER IS REAL, WHICH IS EASY TO MISREAD. srv.SetOption(ssh.AllocatePty())
+	// installs emulatePtyHandler as PtyHandler, so the closer this file wraps is
+	// the library's own conpty teardown — not a no-op — and the library runs it
+	// with `defer closer()` in handleRequests, i.e. on the REQUEST goroutine
+	// (session.go:365), concurrently with the handler's fork/exec. Removing this
+	// mutex produces a real report: conpty.Spawn reads the process
+	// thread-attribute list while conpty.Close deletes it
+	// (TestChannelIndexIsMonotonicAndNeverReused, -race).
 	mu  sync.Mutex
 	pty ssh.Pty
 	ok  bool
