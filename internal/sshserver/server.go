@@ -2,6 +2,7 @@ package sshserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -72,49 +73,114 @@ func (s *Server) BuiltinForTest(name string) CommandHandler { return s.builtin(n
 // connection apart.
 type ptyContextKey struct{ sess ssh.Session }
 
-// sessionPTY is the per-session PTY handoff cell.
+// ptyOp is one request for the goroutine that owns a PTY.
+type ptyOp struct {
+	start *exec.Cmd   // non-nil: fork this command onto the PTY
+	close bool        // true: tear the PTY down; the owner then exits
+	win   *ssh.Window // non-nil: apply this window size
+	done  chan error  // nil for a best-effort op (a resize)
+}
+
+// sessionPTY owns one PTY through a goroutine, and is the only way to touch it.
+//
+// WHY AN OWNER GOROUTINE AND NOT A MUTEX. Two goroutines reach this object and
+// nothing orders them: the handler forks the command onto the PTY, and the request
+// loop tears the PTY down (the closer charmbracelet/ssh defers at session.go:365).
+// Inside conpty those two share a heap structure — Spawn reads attrList while
+// Close deletes it — so they must not overlap. Measured: without serialisation,
+// -race reports conpty.Spawn reading the process thread-attribute list while
+// conpty.Close deletes it.
+//
+// A mutex made that true for the two calls that existed when it was written. An
+// owner goroutine makes it true for every call BY CONSTRUCTION, because the handle
+// is a local variable inside the owner's closure: it is deliberately not a field of
+// this struct, since a field is something a later caller can use without noticing
+// the rule. Resizes join the same serialisation, which the mutex never covered.
+//
+// WHAT THIS CANNOT COVER: charmbracelet/ssh resizes the PTY itself from its own
+// winch goroutine (session.go:368 → sess.pty.Resize), and reads the PTY struct
+// unlocked in the handler (sess.pty.IsZero at :269/:276) while the request loop
+// writes sess.pty.Window at :391. Both ends of that pair are inside the library;
+// no arrangement of our code routes them through here.
 type sessionPTY struct {
-	// mu guards the PTY against concurrent use from the handler goroutine and
-	// the request goroutine. charmbracelet/ssh closes the PTY from the session
-	// request goroutine when the client closes the channel, which can land in
-	// the middle of the handler's fork/exec — and os.File.Fd is documented as
-	// unsafe to call concurrently with Close (the child could inherit a
-	// recycled descriptor). Taking mu around pty.Start in the handler and
-	// around the library's closer removes that interleaving.
-	//
-	// THE CLOSER IS REAL, WHICH IS EASY TO MISREAD. srv.SetOption(ssh.AllocatePty())
-	// installs emulatePtyHandler as PtyHandler, so the closer this file wraps is
-	// the library's own conpty teardown — not a no-op — and the library runs it
-	// with `defer closer()` in handleRequests, i.e. on the REQUEST goroutine
-	// (session.go:365), concurrently with the handler's fork/exec. Removing this
-	// mutex produces a real report: conpty.Spawn reads the process
-	// thread-attribute list while conpty.Close deletes it
-	// (TestChannelIndexIsMonotonicAndNeverReused, -race).
-	mu  sync.Mutex
-	pty ssh.Pty
-	ok  bool
+	// term is TERM, copied out at allocation so the command's environment can be
+	// built without reaching into the handle.
+	term string
+	ops  chan ptyOp
+	// quit is closed when the owner has served the close and returned, so a late
+	// resize or a second close cannot park forever on a channel nobody reads.
+	quit chan struct{}
 }
 
-// stashPTY records the PTY the client requested for sess. It runs on the
-// session request goroutine — the same goroutine that applies "window-change"
-// updates — so this is the one place where the session's PTY struct can be read
-// without racing charmbracelet/ssh's unlocked `sess.pty.Window` write.
-func stashPTY(sess ssh.Session) {
-	ps, _ := sess.Context().Value(ptyContextKey{sess}).(*sessionPTY)
-	if ps == nil {
-		return
+// errPTYClosed reports a start attempted after the PTY was torn down: the client
+// closed the channel before the command was forked.
+var errPTYClosed = errors.New("sshserver: pty closed before the command started")
+
+// newSessionPTY starts the owner and hands it the only two things that touch the
+// PTY: the handle and the library's teardown.
+func newSessionPTY(pty ssh.Pty, closer func() error) *sessionPTY {
+	ps := &sessionPTY{
+		term: pty.Term,
+		ops:  make(chan ptyOp),
+		quit: make(chan struct{}),
 	}
-	if pty, _, ok := sess.Pty(); ok {
-		ps.pty, ps.ok = pty, true
+	go func() {
+		defer close(ps.quit)
+		for op := range ps.ops {
+			switch {
+			case op.start != nil:
+				op.done <- pty.Start(op.start)
+			case op.close:
+				err := closer()
+				op.done <- err
+				return
+			case op.win != nil:
+				// Best-effort: a resize the platform refuses is not a session error,
+				// and there is nobody to report it to on this path.
+				_ = applyWindow(pty, *op.win)
+			}
+		}
+	}()
+	return ps
+}
+
+// start forks cmd onto the PTY and reports what the platform said.
+func (ps *sessionPTY) start(cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	select {
+	case ps.ops <- ptyOp{start: cmd, done: done}:
+	case <-ps.quit:
+		return errPTYClosed
+	}
+	return <-done
+}
+
+// close tears the PTY down. Idempotent: after the owner has exited this reports
+// success, because the thing the caller wanted is already true.
+func (ps *sessionPTY) close() error {
+	done := make(chan error, 1)
+	select {
+	case ps.ops <- ptyOp{close: true, done: done}:
+	case <-ps.quit:
+		return nil
+	}
+	return <-done
+}
+
+// resize applies a window size, or drops it if the PTY is already gone.
+func (ps *sessionPTY) resize(win ssh.Window) {
+	select {
+	case ps.ops <- ptyOp{win: &win}:
+	case <-ps.quit:
 	}
 }
 
-// takePTY returns the PTY stashed for sess by stashPTY, if any, and clears the
-// stash so the connection context does not retain the session (and its pty).
+// takePTY returns the PTY allocated for sess, if any, and clears the stash so the
+// connection context does not retain the session.
 func takePTY(sess ssh.Session) (*sessionPTY, bool) {
 	key := ptyContextKey{sess}
 	ps, _ := sess.Context().Value(key).(*sessionPTY)
-	if ps == nil || !ps.ok {
+	if ps == nil {
 		return nil, false
 	}
 	sess.Context().SetValue(key, nil)
@@ -138,9 +204,9 @@ func takePTY(sess ssh.Session) (*sessionPTY, bool) {
 // so no window can be lost. Applying is platform-routed (see applyWindow):
 // Windows must not reach conpty's Resize, whose geometry cache is unlocked and
 // which the library's consumer calls concurrently.
-func drainWindowChanges(pty ssh.Pty, winch <-chan ssh.Window) {
+func drainWindowChanges(ps *sessionPTY, winch <-chan ssh.Window) {
 	for win := range winch {
-		_ = applyWindow(pty, win)
+		ps.resize(win)
 	}
 }
 
@@ -155,13 +221,6 @@ func New() *Server {
 			return s.passwordOK(ctx.User(), password)
 		},
 		LocalPortForwardingCallback: func(ctx ssh.Context, dHost string, dPort uint32) bool {
-			return true
-		},
-		// Capture the allocated PTY on the request goroutine (see stashPTY) so the
-		// session handler never reads the session's PTY struct while a
-		// window-change may be updating it.
-		SessionRequestCallback: func(sess ssh.Session, _ string) bool {
-			stashPTY(sess)
 			return true
 		},
 		ChannelHandlers: map[string]ssh.ChannelHandler{
@@ -210,10 +269,10 @@ func New() *Server {
 	// session handler holds while forking the command onto it (see sessionPTY).
 	allocPty := srv.PtyHandler
 	srv.PtyHandler = func(ctx ssh.Context, sess ssh.Session, pty ssh.Pty) (func() error, error) {
-		ps := &sessionPTY{}
 		key := ptyContextKey{sess}
-		sess.Context().SetValue(key, ps)
 		if allocPty == nil {
+			// No allocator means nothing to own: the library's own PTY handling is
+			// all there is, and no PTY is started through this server.
 			return func() error { return nil }, nil
 		}
 		closer, err := allocPty(ctx, sess, pty)
@@ -221,14 +280,26 @@ func New() *Server {
 			sess.Context().SetValue(key, nil)
 			return nil, err
 		}
-		if p, winch, ok := sess.Pty(); ok && !p.IsZero() {
-			go drainWindowChanges(p, winch)
+		// THE HANDLE COMES FROM sess.Pty(), NOT FROM THE pty PARAMETER. The argument
+		// is the CLIENT'S REQUEST (term, window, modes); the allocator above fills in
+		// the actual handle on the session's own copy, so reading it back here is the
+		// only place the two meet — on the request goroutine, which is also the one
+		// that may be writing a window-change.
+		p, winch, ok := sess.Pty()
+		if !ok {
+			// Nothing was allocated to own: there is no handle to fork onto and no
+			// ordering to establish, so the closer goes back as the library gave it.
+			return closer, nil
 		}
-		return func() error {
-			ps.mu.Lock()
-			defer ps.mu.Unlock()
-			return closer()
-		}, nil
+		// The owner is created HERE, on the request goroutine at pty-req time, and
+		// not in the handler. That anchoring is what makes the tear-down safe when
+		// the handler never runs at all: a client may send pty-req and close the
+		// channel without ever sending exec or shell, and the deferred closer still
+		// reaches the owner.
+		ps := newSessionPTY(p, closer)
+		sess.Context().SetValue(key, ps)
+		go drainWindowChanges(ps, winch)
+		return ps.close, nil
 	}
 	s.server = srv
 	return s
@@ -493,11 +564,10 @@ func describeStartError(cmd *exec.Cmd, err error) string {
 func startProcess(cmd *exec.Cmd, sess ssh.Session, ps *sessionPTY, hasPty bool) bool {
 	if hasPty {
 		setPtySysProcAttr(cmd)
-		cmd.Env = append(os.Environ(), "TERM="+ps.pty.Term)
-		// Serialized with the library's PTY teardown: see sessionPTY.
-		ps.mu.Lock()
-		startErr := ps.pty.Start(cmd)
-		ps.mu.Unlock()
+		cmd.Env = append(os.Environ(), "TERM="+ps.term)
+		// Through the owner: the library may be tearing the PTY down on the request
+		// goroutine at this very moment (see sessionPTY).
+		startErr := ps.start(cmd)
 		if startErr != nil {
 			io.WriteString(sess, describeStartError(cmd, startErr)+"\n")
 			sess.Exit(1)
