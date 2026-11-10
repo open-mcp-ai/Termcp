@@ -185,7 +185,15 @@ func New(opts Options) (*Server, error) {
 	if err := s.sessMgr.RestoreDead(); err != nil {
 		slog.Warn("failed to restore previous DEAD sessions", "err", err)
 	}
-	s.sshStore = sshconfig.NewStore(cfg.DataDir)
+	sshStore, err := sshconfig.OpenConfiguredStore(cfg.DataDir)
+	if err != nil {
+		s.finish()
+		return nil, fmt.Errorf("open ssh configs: %w", err)
+	}
+	s.sshStore = sshStore
+	if warning := sshStore.StartupWarning(); warning != "" {
+		slog.Warn(warning)
+	}
 	s.forwardMgr = forward.NewForwardManager()
 
 	// THE ASSET DIRECTORIES ARE APPLIED HERE, from Config, rather than expected of
@@ -563,6 +571,11 @@ func (s *Server) finish() {
 	}
 	if s.mcp != nil {
 		_ = s.mcp.Stop()
+	}
+	if s.sshStore != nil {
+		if err := s.sshStore.Close(); err != nil {
+			slog.Warn("closing ssh configs store", "err", err)
+		}
 	}
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
