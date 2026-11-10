@@ -33,7 +33,7 @@ func (e *processGoneError) Error() string {
 }
 func (e *processGoneError) Is(target error) bool { return target == ErrProcessGone }
 
-// NO LOCK HIERARCHY. s.mu is a leaf mutex for metadata; shell registration and
+// NO LOCK HIERARCHY. Session metadata is an immutable snapshot (live); shell
 // teardown use atomic flags and re-checks (see shells.go), so channel opens dial
 // outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
