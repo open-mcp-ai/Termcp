@@ -57,9 +57,7 @@ func (s *Session) CloseLater() error {
 	if s == nil {
 		return errors.New("no session")
 	}
-	s.mu.RLock()
-	running := s.Status == api.SessionRunning
-	s.mu.RUnlock()
+	running := s.liveStatus() == api.SessionRunning
 
 	// AN ALREADY-FINISHED SESSION IS SATISFIED, not an error: the caller asked for a
 	// state ("this ends without me") that is already true. Reporting failure would

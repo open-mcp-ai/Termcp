@@ -13,7 +13,7 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// NO LOCK HIERARCHY. s.mu is a leaf mutex for metadata; shell registration and
+// NO LOCK HIERARCHY. Session metadata is an immutable snapshot (live); shell
 // teardown use atomic flags and re-checks (see shells.go), so channel opens dial
 // outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
@@ -101,9 +101,7 @@ func (s *Session) createChildShell(command string, args []string, line, pty bool
 	// flags are RE-CHECKED after it exists — a `close --later` that arrived while we
 	// were dialling is then honoured by closing the brand-new channel instead of by
 	// having held a mutex for the length of the network call (AGENTS.md rule 1).
-	s.mu.RLock()
-	running := s.Status == api.SessionRunning
-	s.mu.RUnlock()
+	running := s.liveStatus() == api.SessionRunning
 	// A DEFERRED CLOSE REFUSES NEW WORK IMMEDIATELY, not when the teardown flag
 	// lands: `close --later` promised this session stops accepting channels, and the
 	// gap between the request and beginClosing must not be a door.
@@ -172,9 +170,7 @@ func (s *Session) createChildShell(command string, args []string, line, pty bool
 		_ = execSession.Close()
 		return nil, fmt.Errorf("%w: a deferred close (`close --later`) was requested while this channel was opening", ErrClosing)
 	}
-	s.mu.RLock()
-	running = s.Status == api.SessionRunning
-	s.mu.RUnlock()
+	running = s.liveStatus() == api.SessionRunning
 	if !running {
 		_ = execSession.Close()
 		return nil, fmt.Errorf("session has exited")
@@ -526,10 +522,8 @@ func (s *Session) SnapshotShells() []api.Session {
 // the retained shell snapshot (natural exits / transport aborts only) so their
 // tabs survive transport teardown or a restart.
 func (s *Session) ShellsForView() []api.Session {
-	s.mu.RLock()
-	status := s.Status
-	useHost := s.UseHost
-	s.mu.RUnlock()
+	status := s.liveStatus()
+	useHost := s.Session.UseHost
 	if status == api.SessionRunning {
 		live := s.ListChildShells()
 		// A USE CONTAINER'S WORK IS IN THE HISTORY, NOT IN THE LIVE MAP
