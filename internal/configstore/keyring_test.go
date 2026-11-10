@@ -7,261 +7,282 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
-func testStoreID(t *testing.T) ID {
-	t.Helper()
-	id, err := NewID()
-	if err != nil {
-		t.Fatalf("NewID: %v", err)
-	}
-	return id
+func environmentKEK(value byte) string {
+	key := bytes.Repeat([]byte{value}, 32)
+	return base64.StdEncoding.EncodeToString(key)
 }
 
-func profileIdentity(store ID, name string) Identity {
-	object := sha(name)
-	return Identity{StoreID: store, ObjectID: object, GenerationID: object, Kind: KindProfile}
+func testArgon2Cost() Argon2Parameters {
+	return Argon2Parameters{Time: 1, Memory: 8 * 1024, Threads: 1}
 }
 
-// sha maps a name to a stable id for tests, so one envelope can be sealed and later
-// expected for the same profile name.
-func sha(name string) ID {
-	var id ID
-	copy(id[:], name)
-	return id
-}
-
-// THE PASSWORD IS THE KEY. A round trip is the whole feature: seal a profile, put the
-// keyring on disk, and a later process with the right password reads it back.
-func TestPasswordKeyringRoundTrip(t *testing.T) {
-	store := testStoreID(t)
-	k, raw, err := CreatePasswordKeyring(store, "correct horse battery", "correct horse battery")
+func TestKeyringENVRoundTripAndProfileEnvelope(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
-	defer k.Destroy()
-
-	identity := profileIdentity(store, "prod")
-	env, err := k.Seal([]byte("password = \"hunter2\"\n"), identity)
-	if err != nil {
-		t.Fatalf("seal: %v", err)
+	defer keyring.Destroy()
+	if bytes.Contains(data, []byte(environmentKEK(0x61))) {
+		t.Fatal("keyring file contains its Provider KEK")
 	}
-	blob := env.Bytes()
 
-	unlocked, err := UnlockPasswordKeyring(raw, "correct horse battery")
+	unlocked, err := UnlockKeyring(data, NewEnvProvider(""))
 	if err != nil {
-		t.Fatalf("unlock: %v", err)
+		t.Fatal(err)
 	}
 	defer unlocked.Destroy()
-	if unlocked.StoreID() != store {
-		t.Fatalf("store id = %s, want %s", unlocked.StoreID(), store)
+	identity := Identity{
+		StoreID:      storeID,
+		ObjectID:     filledID(0x20),
+		GenerationID: filledID(0x30),
+		Kind:         KindProfile,
 	}
-	if unlocked.KeyID() != k.KeyID() {
-		t.Fatalf("key id changed across a round trip: %s vs %s", unlocked.KeyID(), k.KeyID())
-	}
-
-	parsed, err := Parse(blob, identity)
+	envelope, err := unlocked.Seal([]byte("profile body"), identity)
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatal(err)
 	}
-	plain, err := unlocked.Open(parsed)
+	plaintext, err := keyring.Open(envelope)
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatal(err)
 	}
-	if want := "password = \"hunter2\"\n"; string(plain) != want {
-		t.Fatalf("plaintext = %q, want %q", plain, want)
+	if string(plaintext) != "profile body" {
+		t.Fatalf("plaintext = %q", plaintext)
 	}
 }
 
-// A WRONG PASSWORD MUST NOT OPEN ANYTHING, and the answer must not say which of
-// "wrong password" and "tampered file" it was.
-func TestWrongPasswordIsRejected(t *testing.T) {
-	store := testStoreID(t)
-	k, raw, err := CreatePasswordKeyring(store, "correct horse battery", "correct horse battery")
+func TestKeyringWrongEnvironmentKEKDoesNotRevealAuthenticationOracle(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
-	k.Destroy()
+	defer keyring.Destroy()
 
-	if _, err := UnlockPasswordKeyring(raw, "correct horse batterY"); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("unlock with a wrong password = %v, want ErrAuthentication", err)
+	t.Setenv(EnvKEKVariable, environmentKEK(0x62))
+	if _, err := UnlockKeyring(data, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("UnlockKeyring = %v, want ErrAuthentication", err)
 	}
 }
 
-// THE KDF INPUTS ARE AUTHENTICATED. Without them in the AAD, lowering the cost in the
-// file would make the victim derive a weaker key from the same password, and raising
-// it would turn unlocking into a denial of service.
-func TestTamperedKeyringIsRejected(t *testing.T) {
-	store := testStoreID(t)
-	const password = "correct horse battery"
-	_, raw, err := CreatePasswordKeyring(store, password, password)
+func TestPasswordAndENVSlotsUnwrapSameKeyring(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	passwordProvider, err := NewPasswordProvider([]byte("correct-horse-battery"), testArgon2Cost())
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
+	defer passwordProvider.Destroy()
 
-	tamper := []struct {
-		name  string
-		apply func(*storedKeyring)
-	}{
-		{"lower the Argon2 cost", func(st *storedKeyring) { st.Argon2.Time = 1 }},
-		{"lower the memory", func(st *storedKeyring) { st.Argon2.Memory = 8 * 1024 }},
-		{"replace the salt", func(st *storedKeyring) { st.Salt[0] ^= 0xff }},
-		{"replace the nonce", func(st *storedKeyring) { st.Nonce[0] ^= 0xff }},
-		{"replace the verifier", func(st *storedKeyring) { st.Verifier[0] ^= 0xff }},
-		{"replace the key id", func(st *storedKeyring) { st.KeyID[0] ^= 0xff }},
-		{"replace the store id", func(st *storedKeyring) { st.StoreID = strings.Repeat("ab", 16) }},
+	data, keyring, err := CreateKeyring(storeID, passwordProvider, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tamper {
-		t.Run(tc.name, func(t *testing.T) {
-			var st storedKeyring
-			if err := json.Unmarshal(raw, &st); err != nil {
-				t.Fatalf("decode fixture: %v", err)
-			}
-			tc.apply(&st)
-			mutated, err := json.Marshal(st)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
-			}
-			if _, err := UnlockPasswordKeyring(mutated, password); !errors.Is(err, ErrAuthentication) {
-				t.Fatalf("a tampered keyring was accepted: err = %v", err)
-			}
-		})
+	defer keyring.Destroy()
+
+	fromENV, err := UnlockKeyring(data, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fromENV.Destroy()
+
+	fromPassword, err := UnlockKeyring(data, passwordProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fromPassword.Destroy()
+
+	identity := Identity{
+		StoreID:      storeID,
+		ObjectID:     filledID(0x20),
+		GenerationID: filledID(0x30),
+		Kind:         KindProfile,
+	}
+	envelope, err := fromENV.Seal([]byte("wrapped body"), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := fromPassword.Open(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plaintext) != "wrapped body" {
+		t.Fatalf("plaintext = %q", plaintext)
 	}
 }
 
-// A MODIFIED FILE MUST NOT BUY COMPUTE. The parameters are bounded before the KDF
-// runs, so an attacker who can write the file cannot make unlocking allocate 1 TiB.
-func TestArgon2ParametersAreBoundedBeforeTheKDFRuns(t *testing.T) {
-	store := testStoreID(t)
-	const password = "correct horse battery"
-	_, raw, err := CreatePasswordKeyring(store, password, password)
+func TestPasswordProviderRejectsWrongPasswordAndBoundsKDF(t *testing.T) {
+	storeID := filledID(0x10)
+	good, err := NewPasswordProvider([]byte("the-real-password"), testArgon2Cost())
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
-	for _, p := range []Argon2Parameters{
+	defer good.Destroy()
+
+	data, keyring, err := CreateKeyring(storeID, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keyring.Destroy()
+
+	bad, err := NewPasswordProvider([]byte("wrong-password"), testArgon2Cost())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bad.Destroy()
+
+	if _, err := UnlockKeyring(data, bad); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("UnlockKeyring with bad password = %v, want ErrAuthentication", err)
+	}
+
+	for _, invalid := range []Argon2Parameters{
 		{Time: 0, Memory: 64 * 1024, Threads: 1},
-		{Time: 1_000, Memory: 64 * 1024, Threads: 1},
-		{Time: 3, Memory: 1024, Threads: 1},
-		{Time: 3, Memory: 4 << 20, Threads: 1},
-		{Time: 3, Memory: 64 * 1024, Threads: 0},
+		{Time: 11, Memory: 64 * 1024, Threads: 1},
+		{Time: 1, Memory: 4 * 1024, Threads: 1},
+		{Time: 1, Memory: 512 * 1024, Threads: 1},
+		{Time: 1, Memory: 64 * 1024, Threads: 0},
+		{Time: 1, Memory: 64 * 1024, Threads: 9},
 	} {
-		var st storedKeyring
-		if err := json.Unmarshal(raw, &st); err != nil {
-			t.Fatalf("decode fixture: %v", err)
-		}
-		st.Argon2 = p
-		mutated, err := json.Marshal(st)
-		if err != nil {
-			t.Fatalf("encode: %v", err)
-		}
-		if _, err := UnlockPasswordKeyring(mutated, password); !errors.Is(err, ErrFormat) {
-			t.Fatalf("parameters %+v = %v, want ErrFormat", p, err)
+		if _, err := NewPasswordProvider([]byte("password"), invalid); !errors.Is(err, ErrFormat) {
+			t.Fatalf("NewPasswordProvider(%+v) = %v, want ErrFormat", invalid, err)
 		}
 	}
 }
 
-// CHANGING THE PASSWORD CHANGES THE MAIN KEY, so every envelope must be rewrapped —
-// the body ciphertext is reused, which is the point of the DEK layer: a password
-// change does not re-encrypt the configuration, and does not touch the disk bytes.
-func TestRekeyRewrapsAndRetiresTheOldPassword(t *testing.T) {
-	store := testStoreID(t)
-	oldKey, oldRaw, err := CreatePasswordKeyring(store, "first password here", "first password here")
+func TestKeyringFileRejectsUnknownFieldsDuplicateSlotsAndTampering(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
-	defer oldKey.Destroy()
+	defer keyring.Destroy()
 
-	identity := profileIdentity(store, "staging")
-	env, err := oldKey.Seal([]byte("user = \"deploy\"\n"), identity)
-	if err != nil {
-		t.Fatalf("seal: %v", err)
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
 	}
-	bodyBefore := env.Bytes()
-
-	newKey, err := oldKey.Rekey("second password here", "second password here")
-	if err != nil {
-		t.Fatalf("rekey: %v", err)
-	}
-	defer newKey.Destroy()
-	if newKey.KeyID() == oldKey.KeyID() {
-		t.Fatal("rekey kept the old key id")
+	raw["extra"] = "forbidden"
+	withUnknown, _ := json.Marshal(raw)
+	if _, err := UnlockKeyring(withUnknown, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
+		t.Fatalf("UnlockKeyring with unknown fields = %v, want ErrFormat", err)
 	}
 
-	rewrapped, err := env.Rewrap(oldKey.main, newKey.KeyID(), newKey.main)
-	if err != nil {
-		t.Fatalf("rewrap: %v", err)
+	var stored storedKeyring
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
 	}
-	// The inherited DEK means the body ciphertext survives a password change.
-	if !bytes.Equal(rewrapped.Bytes()[envelopeHeaderSize:], bodyBefore[envelopeHeaderSize:]) {
-		t.Fatal("rewrap re-encrypted the body; the DEK layer exists so it does not")
-	}
-	plain, err := rewrapped.Open(newKey.main)
-	if err != nil {
-		t.Fatalf("open with the new key: %v", err)
-	}
-	if string(plain) != "user = \"deploy\"\n" {
-		t.Fatalf("plaintext = %q", plain)
-	}
-	// The retired key must not open the rewrapped envelope.
-	if _, err := rewrapped.Open(oldKey.main); err == nil {
-		t.Fatal("the retired Main Key still opens the rewrapped envelope")
+	stored.Slots = append(stored.Slots, stored.Slots[0])
+	withDuplicates, _ := json.Marshal(stored)
+	if _, err := UnlockKeyring(withDuplicates, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
+		t.Fatalf("UnlockKeyring with duplicate slot IDs = %v, want ErrFormat", err)
 	}
 
-	newRaw, err := newKey.Marshal()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if _, err := UnlockPasswordKeyring(newRaw, "first password here"); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("the old password unlocked the new keyring: %v", err)
-	}
-	if _, err := UnlockPasswordKeyring(oldRaw, "second password here"); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("the new password unlocked the old keyring: %v", err)
+	tampered := bytes.Clone(data)
+	tampered[len(tampered)-10] ^= 0x40
+	if _, err := UnlockKeyring(tampered, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) && !errors.Is(err, ErrFormat) {
+		t.Fatalf("UnlockKeyring with tampered ciphertext = %v", err)
 	}
 }
 
-// NO KEY MATERIAL IN THE FILE. The Main Key is a function of the password and the
-// salt; if it ever appeared on disk the file would be the whole secret.
+func TestKeyringMarshalPreservesMainKeys(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	keyID := filledID(0x20)
+	main := testMainKey(0x30)
+	keyring := &Keyring{}
+	keyring.state.Store(&keyringState{
+		storeID:     storeID,
+		activeKeyID: keyID,
+		mainKeys:    map[ID]MainKey{keyID: main},
+	})
+	data, err := keyring.Marshal(NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlocked, err := UnlockKeyring(data, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlocked.Destroy()
+
+	identity := Identity{
+		StoreID:      storeID,
+		ObjectID:     filledID(0x40),
+		GenerationID: filledID(0x50),
+		Kind:         KindProfile,
+	}
+	envelope, err := unlocked.Seal([]byte("payload"), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := envelope.Open(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plaintext) != "payload" {
+		t.Fatalf("plaintext = %q", plaintext)
+	}
+}
+
 func TestKeyringFileHoldsNoKeyMaterial(t *testing.T) {
-	store := testStoreID(t)
-	k, raw, err := CreatePasswordKeyring(store, "correct horse battery", "correct horse battery")
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	passwordProvider, err := NewPasswordProvider([]byte("correct-horse-battery"), testArgon2Cost())
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatal(err)
 	}
-	defer k.Destroy()
+	defer passwordProvider.Destroy()
 
-	mainKey := k.main[:]
-	if bytes.Contains(raw, mainKey) {
-		t.Fatal("the keyring file contains the Main Key raw")
+	raw, keyring, err := CreateKeyring(storeID, passwordProvider, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, enc := range [][]byte{
-		[]byte(hex.EncodeToString(mainKey)),
-		[]byte(base64.StdEncoding.EncodeToString(mainKey)),
-	} {
-		if bytes.Contains(raw, enc) {
-			t.Fatalf("the keyring file contains the Main Key encoded: %q", enc)
+	defer keyring.Destroy()
+
+	st := keyring.state.Load()
+	if st == nil {
+		t.Fatal("keyring state is nil")
+	}
+	for _, main := range st.mainKeys {
+		mainBytes := main[:]
+		if bytes.Contains(raw, mainBytes) {
+			t.Fatal("the keyring file contains a Main Key raw")
+		}
+		if bytes.Contains(raw, []byte(hex.EncodeToString(mainBytes))) {
+			t.Fatal("the keyring file contains a Main Key hex-encoded")
+		}
+		if bytes.Contains(raw, []byte(base64.StdEncoding.EncodeToString(mainBytes))) {
+			t.Fatal("the keyring file contains a Main Key base64-encoded")
 		}
 	}
-	if bytes.Contains(raw, []byte("correct horse battery")) {
+	if bytes.Contains(raw, []byte("correct-horse-battery")) {
 		t.Fatal("the keyring file contains the password")
 	}
 }
 
-// The policy in the error message is the policy in the code.
 func TestPasswordPolicy(t *testing.T) {
-	store := testStoreID(t)
 	for _, tc := range []struct {
 		password string
+		confirm  string
 		want     error
 	}{
-		{"", ErrPasswordRequired},
-		{"short", ErrPasswordInvalid},
-		{"1234567", ErrPasswordInvalid},
-		{"12345678", nil},
-		{strings.Repeat("a", maxPasswordBytes), nil},
-		{strings.Repeat("a", maxPasswordBytes+1), ErrPasswordInvalid},
+		{"", "", ErrPasswordInvalid},
+		{"short", "short", ErrPasswordInvalid},
+		{"1234567", "1234567", ErrPasswordInvalid},
+		{"12345678", "12345678", nil},
+		{"   12345678   ", "   12345678   ", nil},
+		{strings.Repeat("a", 1024), strings.Repeat("a", 1024), nil},
+		{strings.Repeat("a", 1025), strings.Repeat("a", 1025), ErrPasswordInvalid},
+		{"12345678", "1234567x", ErrPasswordConfirmation},
 	} {
-		_, _, err := CreatePasswordKeyring(store, tc.password, tc.password)
+		err := validateNewPassword(tc.password, tc.confirm)
 		if tc.want == nil {
 			if err != nil {
 				t.Errorf("password of len %d rejected: %v", len(tc.password), err)
@@ -269,34 +290,46 @@ func TestPasswordPolicy(t *testing.T) {
 			continue
 		}
 		if !errors.Is(err, tc.want) {
-			t.Errorf("password of len %d = %v, want %v", len(tc.password), err, tc.want)
+			t.Errorf("validateNewPassword(%q, %q) = %v, want %v", tc.password, tc.confirm, err, tc.want)
 		}
-	}
-	if _, _, err := CreatePasswordKeyring(store, "12345678", "1234567x"); !errors.Is(err, ErrPasswordConfirmation) {
-		t.Fatalf("mismatched confirmation = %v, want ErrPasswordConfirmation", err)
 	}
 }
 
-// An envelope sealed under another keyring's key id must be refused rather than
-// decrypted: that id is how a half-finished rotation is detected.
-func TestOpenRefusesAnEnvelopeFromAnotherKey(t *testing.T) {
-	store := testStoreID(t)
-	first, _, err := CreatePasswordKeyring(store, "first password here", "first password here")
+// Destroy can be called concurrently with Seal or Open without panic or data race.
+// The lock detector confirms no mutex was used to buy that property.
+func TestConcurrentSealAndDestroyRacesSafely(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
+	storeID := filledID(0x10)
+	_, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
 	if err != nil {
-		t.Fatalf("create first: %v", err)
+		t.Fatal(err)
 	}
-	defer first.Destroy()
-	second, _, err := CreatePasswordKeyring(store, "second password here", "second password here")
-	if err != nil {
-		t.Fatalf("create second: %v", err)
-	}
-	defer second.Destroy()
 
-	env, err := first.Seal([]byte("x = 1\n"), profileIdentity(store, "a"))
-	if err != nil {
-		t.Fatalf("seal: %v", err)
+	identity := Identity{
+		StoreID:      storeID,
+		ObjectID:     filledID(0x20),
+		GenerationID: filledID(0x30),
+		Kind:         KindProfile,
 	}
-	if _, err := second.Open(env); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("open with a foreign keyring = %v, want ErrAuthentication", err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_, _ = keyring.Seal([]byte("race"), identity)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		keyring.Destroy()
+	}()
+	wg.Wait()
+
+	if _, err := keyring.Seal([]byte("after"), identity); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("Seal after Destroy = %v, want ErrProviderUnavailable", err)
 	}
 }

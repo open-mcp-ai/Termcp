@@ -4,355 +4,524 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
-	"unicode/utf8"
+	"sync/atomic"
 
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// The keyring is where the password meets the envelopes.
-//
-// ONE KEY, DERIVED AND NEVER STORED. The Main Key is Argon2id(password, salt); the
-// file on disk holds the salt, the cost parameters and a VERIFIER — an AEAD tag over
-// the store id and key id under the derived key — and nothing that can be turned back
-// into the key. A wrong password fails the verifier; a modified cost parameter fails
-// it too, because the parameters are part of the authenticated data, which is also
-// what stops a tampered file from asking the KDF for unbounded work.
-//
-// This is the subset of the audited design that needs no key provider: the password
-// is typed by a human (see the config-storage commands), so there is no system
-// keychain, no DPAPI, no Secret Service and no wrapped-Main-Key snapshot on disk.
 const (
-	keyringVersion uint16 = 1
-
-	minPasswordChars = 8
-	maxPasswordBytes = 1024
-
-	// Argon2id costs, matching the audited design. Memory is in KiB.
-	defaultArgon2Time    = 3
-	defaultArgon2Memory  = 64 * 1024
-	defaultArgon2Threads = 1
-
-	keyringSaltSize = 16
+	keyringVersion   uint16 = 1
+	maxKeyringFile          = 64 << 10
+	maxProviderSlots        = 8
+	maxMainKeys             = 2
 )
 
-var (
-	// ErrPasswordRequired reports a keyring operation with no password supplied.
-	ErrPasswordRequired = errors.New("configstore: enter the encryption password")
-	// ErrPasswordInvalid reports a password outside the accepted bounds.
-	ErrPasswordInvalid = errors.New("configstore: password must contain at least 8 characters and at most 1024 UTF-8 bytes")
-	// ErrPasswordConfirmation reports mismatched initial password inputs.
-	ErrPasswordConfirmation = errors.New("configstore: password confirmation does not match")
-)
+var keyringDomain = []byte("termcp/config/keyring/v1")
 
-// passwordDomain separates this verifier's key from every other use of the derived
-// key, so a tag from one purpose can never be replayed as another.
-var passwordDomain = []byte("termcp/config/password/v1")
-
-// Argon2Parameters are persisted with the keyring. Memory is in KiB and is
-// validated before the KDF runs, so a modified file cannot request unbounded work.
-type Argon2Parameters struct {
-	Time    uint32 `json:"time"`
-	Memory  uint32 `json:"memory_kib"`
-	Threads uint8  `json:"threads"`
-}
-
-func defaultArgon2Parameters() Argon2Parameters {
-	return Argon2Parameters{
-		Time:    defaultArgon2Time,
-		Memory:  defaultArgon2Memory,
-		Threads: defaultArgon2Threads,
-	}
-}
-
-func (p Argon2Parameters) validate() error {
-	if p.Time < 1 || p.Time > 10 ||
-		p.Memory < 8*1024 || p.Memory > 256*1024 ||
-		p.Threads < 1 || p.Threads > 8 {
-		return fmt.Errorf("%w: Argon2 parameters outside supported limits", ErrFormat)
-	}
-	return nil
-}
-
-// storedKeyring is the on-disk form. It holds KDF inputs and a verifier; it never
-// holds the Main Key, in any encoding.
 type storedKeyring struct {
-	Version  uint16           `json:"version"`
-	StoreID  string           `json:"store_id"`
-	KeyID    []byte           `json:"key_id"`
-	Salt     []byte           `json:"salt"`
-	Argon2   Argon2Parameters `json:"argon2id"`
-	Nonce    []byte           `json:"nonce"`
-	Verifier []byte           `json:"verifier"`
+	Version  uint16                    `json:"version"`
+	StoreID  []byte                    `json:"store_id"`
+	Slots    []storedKeySlot           `json:"slots"`
+	Password *storedPasswordDerivation `json:"password,omitempty"`
 }
 
-// Keyring is an unlocked keyring: the store it belongs to and the Main Key derived
-// from the password this process was given.
+type storedKeySlot struct {
+	ID         []byte             `json:"id"`
+	Provider   string             `json:"provider"`
+	Parameters providerParameters `json:"parameters"`
+	Nonce      []byte             `json:"nonce"`
+	Wrapped    []byte             `json:"wrapped"`
+}
+
+type storedKeyringPayload struct {
+	Version     uint16                  `json:"version"`
+	StoreID     []byte                  `json:"store_id"`
+	ActiveKeyID []byte                  `json:"active_key_id"`
+	Keys        []storedMainKeyMaterial `json:"keys"`
+}
+
+type storedMainKeyMaterial struct {
+	ID       []byte `json:"id"`
+	Material []byte `json:"material"`
+}
+
+// keyringState captures one immutable generation of unwrapped Main Keys.
+// Key mutations publish a replacement; reading reads the pointer.
+type keyringState struct {
+	storeID     ID
+	activeKeyID ID
+	mainKeys    map[ID]MainKey
+}
+
+// Keyring owns unwrapped Main Keys. It does not expose their bytes to callers;
+// profile persistence can only ask it to seal or open an Envelope.
+//
+// All access is lock-free: state is held in an atomic.Pointer swapped to nil
+// by Destroy.
 type Keyring struct {
-	storeID ID
-	keyID   ID
-	main    MainKey
-	stored  storedKeyring
+	state    atomic.Pointer[keyringState]
+	password *storedPasswordDerivation
 }
 
-// passwordAAD authenticates everything a keyring file must not be able to change:
-// the store identity and the KDF inputs. Without the parameters in the AAD, an
-// attacker could lower the cost in the file and have the victim derive a weaker key
-// from the same password, or raise it and make unlocking a denial of service.
-func passwordAAD(store ID, st *storedKeyring) []byte {
-	out := append([]byte(nil), passwordDomain...)
-	out = append(out, store[:]...)
-	out = append(out, st.KeyID...)
-	out = append(out, st.Salt...)
-	out = binary.LittleEndian.AppendUint32(out, st.Argon2.Time)
-	out = binary.LittleEndian.AppendUint32(out, st.Argon2.Memory)
-	out = append(out, st.Argon2.Threads)
-	return out
+// CreateKeyring generates one Main Key and exports it through one or more
+// Provider KEKs. The returned bytes are the config.keys representation.
+func CreateKeyring(storeID ID, providers ...Provider) ([]byte, *Keyring, error) {
+	main, err := GenerateMainKey()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(main[:])
+	return createKeyringWithMainKey(storeID, main, providers...)
 }
 
-// deriveMainKey runs the KDF. The caller owns the result and must Destroy it.
-func deriveMainKey(password []byte, salt []byte, p Argon2Parameters) (MainKey, error) {
-	var main MainKey
-	if len(password) == 0 || len(password) > maxPasswordBytes {
-		return main, ErrPasswordInvalid
-	}
-	if err := p.validate(); err != nil {
-		return main, err
-	}
-	raw := argon2.IDKey(password, salt, p.Time, p.Memory, p.Threads, uint32(len(main)))
-	copy(main[:], raw)
-	clear(raw)
-	return main, nil
-}
-
-// checkPassword enforces the policy the error message states.
-func checkPassword(password string) error {
-	if password == "" {
-		return ErrPasswordRequired
-	}
-	if utf8.RuneCountInString(password) < minPasswordChars || len(password) > maxPasswordBytes {
-		return ErrPasswordInvalid
-	}
-	return nil
-}
-
-// newStoredKeyring builds the file contents for a fresh password: a new salt, a new
-// nonce, a new key id, and the verifier that proves the derivation.
-func newStoredKeyring(store ID, password string) (*storedKeyring, ID, MainKey, error) {
-	var main MainKey
-	var zero ID
-	if err := checkPassword(password); err != nil {
-		return nil, zero, main, err
+func createKeyringWithMainKey(storeID ID, main MainKey, providers ...Provider) ([]byte, *Keyring, error) {
+	defer clear(main[:])
+	if storeID.IsZero() || isZeroBytes(main[:]) {
+		return nil, nil, ErrFormat
 	}
 	keyID, err := NewID()
 	if err != nil {
-		return nil, zero, main, err
-	}
-	st := &storedKeyring{
-		Version:  keyringVersion,
-		StoreID:  hex.EncodeToString(store[:]),
-		KeyID:    append([]byte(nil), keyID[:]...),
-		Salt:     make([]byte, keyringSaltSize),
-		Argon2:   defaultArgon2Parameters(),
-		Nonce:    make([]byte, chacha20poly1305.NonceSizeX),
-		Verifier: make([]byte, 32+chacha20poly1305.Overhead),
-	}
-	if _, err := io.ReadFull(rand.Reader, st.Salt); err != nil {
-		return nil, zero, main, err
-	}
-	if _, err := io.ReadFull(rand.Reader, st.Nonce); err != nil {
-		return nil, zero, main, err
-	}
-	main, err = deriveMainKey([]byte(password), st.Salt, st.Argon2)
-	if err != nil {
-		return nil, zero, main, err
-	}
-	aead, err := chacha20poly1305.NewX(main[:])
-	if err != nil {
-		clear(main[:])
-		return nil, zero, main, err
-	}
-	// The proof is what the verifier authenticates: this store, this key id.
-	proof := append(append([]byte(nil), store[:]...), st.KeyID...)
-	st.Verifier = aead.Seal(nil, st.Nonce, proof, passwordAAD(store, st))
-	return st, keyID, main, nil
-}
-
-// CreatePasswordKeyring derives a Main Key from password and returns the keyring
-// together with the bytes to persist.
-func CreatePasswordKeyring(storeID ID, password, confirmation string) (*Keyring, []byte, error) {
-	if password != confirmation {
-		return nil, nil, ErrPasswordConfirmation
-	}
-	st, keyID, main, err := newStoredKeyring(storeID, password)
-	if err != nil {
 		return nil, nil, err
 	}
-	k := &Keyring{storeID: storeID, keyID: keyID, main: main, stored: *st}
-	raw, err := k.Marshal()
+	keyring := &Keyring{}
+	keyring.state.Store(&keyringState{
+		storeID:     storeID,
+		activeKeyID: keyID,
+		mainKeys:    map[ID]MainKey{keyID: main},
+	})
+	data, err := keyring.Marshal(providers...)
 	if err != nil {
-		k.Destroy()
+		keyring.Destroy()
 		return nil, nil, err
 	}
-	return k, raw, nil
+	return data, keyring, nil
 }
 
-// UnlockPasswordKeyring verifies the file and derives the Main Key.
-//
-// THE FILE IS PARSED DEFENSIVELY. Every length is checked and the cost parameters
-// are bounded BEFORE the KDF runs, because the file is the one thing an attacker who
-// can write to the data directory controls.
-func UnlockPasswordKeyring(raw []byte, password string) (*Keyring, error) {
-	if err := checkPassword(password); err != nil {
-		return nil, err
-	}
-	var st storedKeyring
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&st); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFormat, err)
-	}
-	if st.Version != keyringVersion {
-		return nil, fmt.Errorf("%w: keyring version %d", ErrVersion, st.Version)
-	}
-	store, err := parseIDHex(st.StoreID)
+// UnlockKeyring validates a keyring file and tries only the Provider names
+// supplied by the caller. A matched Provider with failing authentication returns
+// ErrAuthentication; a missing Provider returns ErrProviderUnavailable.
+func UnlockKeyring(data []byte, providers ...Provider) (*Keyring, error) {
+	stored, err := parseStoredKeyring(data)
 	if err != nil {
 		return nil, err
 	}
-	if len(st.KeyID) != 16 || isZeroBytes(st.KeyID) || len(st.Salt) != keyringSaltSize ||
-		len(st.Nonce) != chacha20poly1305.NonceSizeX ||
-		len(st.Verifier) != 32+chacha20poly1305.Overhead {
-		return nil, ErrFormat
+	var storeID ID
+	copy(storeID[:], stored.StoreID)
+	matchedProvider := false
+	derivedProviderKEK := false
+	for _, slot := range stored.Slots {
+		for _, provider := range providers {
+			if provider == nil || provider.providerName() != slot.Provider {
+				continue
+			}
+			matchedProvider = true
+			if err := provider.validateParameters(slot.Parameters); err != nil {
+				continue
+			}
+			kek, err := provider.unwrapKey(slot.Parameters)
+			if err != nil {
+				continue
+			}
+			derivedProviderKEK = true
+			aead, err := chacha20poly1305.NewX(kek[:])
+			clear(kek[:])
+			if err != nil {
+				continue
+			}
+			payloadBytes, err := aead.Open(nil, slot.Nonce, slot.Wrapped, keyringSlotAAD(stored, slot))
+			if err != nil {
+				continue
+			}
+			keyring, err := parseKeyringPayload(payloadBytes, storeID)
+			clear(payloadBytes)
+			if err == nil {
+				if stored.Password != nil {
+					if err := verifyDerivedKeyring(keyring, stored.Password); err != nil {
+						keyring.Destroy()
+						continue
+					}
+					keyring.password = stored.Password
+				}
+				return keyring, nil
+			}
+		}
 	}
-	if err := st.Argon2.validate(); err != nil {
-		return nil, err
+	if !matchedProvider {
+		return nil, ErrProviderUnavailable
 	}
-	main, err := deriveMainKey([]byte(password), st.Salt, st.Argon2)
-	if err != nil {
-		return nil, err
+	if !derivedProviderKEK {
+		return nil, ErrProviderUnavailable
 	}
-	aead, err := chacha20poly1305.NewX(main[:])
-	if err != nil {
-		clear(main[:])
-		return nil, err
-	}
-	if _, err := aead.Open(nil, st.Nonce, st.Verifier, passwordAAD(store, &st)); err != nil {
-		// A wrong password and a tampered file are the same answer on purpose.
-		clear(main[:])
-		return nil, ErrAuthentication
-	}
-	var keyID ID
-	copy(keyID[:], st.KeyID)
-	k := &Keyring{storeID: store, keyID: keyID, main: main, stored: st}
-	return k, nil
+	return nil, ErrAuthentication
 }
 
-// Marshal returns the bytes to persist. It contains no key material: the Main Key is
-// a function of the password and the salt, and is never written anywhere.
-func (k *Keyring) Marshal() ([]byte, error) {
+// Marshal wraps the same in-memory Main Keys under the supplied Providers.
+func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 	if k == nil {
 		return nil, ErrFormat
 	}
-	raw, err := json.Marshal(k.stored)
+	if len(providers) > maxProviderSlots || len(providers) == 0 && k.password == nil {
+		return nil, ErrFormat
+	}
+	plaintext, err := k.marshalPayload()
 	if err != nil {
 		return nil, err
 	}
-	return append(raw, '\n'), nil
+	defer clear(plaintext)
+	storeID := k.StoreID()
+	stored := storedKeyring{
+		Version:  keyringVersion,
+		StoreID:  append([]byte(nil), storeID[:]...),
+		Slots:    make([]storedKeySlot, 0, len(providers)),
+		Password: k.password,
+	}
+	if k.password != nil {
+		stored.Version = passwordKeyringVersion
+	}
+	for _, provider := range providers {
+		if provider == nil {
+			return nil, ErrFormat
+		}
+		parameters, err := provider.newParameters()
+		if err != nil {
+			if k.password != nil && provider.providerName() != "env" && errors.Is(err, ErrProviderUnavailable) {
+				continue
+			}
+			return nil, err
+		}
+		if err := provider.validateParameters(parameters); err != nil {
+			return nil, err
+		}
+		slotID, err := NewID()
+		if err != nil {
+			return nil, err
+		}
+		kek, err := provider.unwrapKey(parameters)
+		if err != nil {
+			return nil, err
+		}
+		aead, err := chacha20poly1305.NewX(kek[:])
+		clear(kek[:])
+		if err != nil {
+			return nil, fmt.Errorf("keyring cipher: %w", err)
+		}
+		var nonce [chacha20poly1305.NonceSizeX]byte
+		if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
+			return nil, fmt.Errorf("generate keyring nonce: %w", err)
+		}
+		slot := storedKeySlot{
+			ID:         append([]byte(nil), slotID[:]...),
+			Provider:   provider.providerName(),
+			Parameters: parameters,
+			Nonce:      append([]byte(nil), nonce[:]...),
+		}
+		slot.Wrapped = aead.Seal(nil, nonce[:], plaintext, keyringSlotAAD(stored, slot))
+		stored.Slots = append(stored.Slots, slot)
+	}
+	out, err := json.Marshal(stored)
+	if err != nil {
+		return nil, fmt.Errorf("encode keyring file: %w", err)
+	}
+	if len(out) > maxKeyringFile {
+		return nil, ErrTooLarge
+	}
+	return out, nil
 }
 
-// StoreID is the store this keyring belongs to.
-func (k *Keyring) StoreID() ID { return k.storeID }
+func (k *Keyring) marshalPayload() ([]byte, error) {
+	storeID, keys, activeKeyID, err := k.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer clearMainKeyMap(keys)
+	payload := storedKeyringPayload{
+		Version:     keyringVersion,
+		StoreID:     append([]byte(nil), storeID[:]...),
+		ActiveKeyID: append([]byte(nil), activeKeyID[:]...),
+		Keys:        make([]storedMainKeyMaterial, 0, len(keys)),
+	}
+	for id, material := range keys {
+		payload.Keys = append(payload.Keys, storedMainKeyMaterial{
+			ID:       append([]byte(nil), id[:]...),
+			Material: append([]byte(nil), material[:]...),
+		})
+	}
+	plaintext, err := json.Marshal(payload)
+	clearStoredPayload(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode keyring: %w", err)
+	}
+	if len(plaintext) > maxKeyringFile {
+		clear(plaintext)
+		return nil, ErrTooLarge
+	}
+	return plaintext, nil
+}
 
-// KeyID identifies the Main Key generation, so an envelope sealed under a retired
-// key can be told apart from one sealed under the current key.
-func (k *Keyring) KeyID() ID { return k.keyID }
-
-// Seal encrypts one object under this keyring's Main Key.
+// Seal encrypts one object with a fresh DEK under the active Main Key.
 func (k *Keyring) Seal(plaintext []byte, identity Identity) (*Envelope, error) {
 	if k == nil {
 		return nil, ErrFormat
 	}
-	return Seal(plaintext, identity, k.keyID, k.main)
-}
-
-// Open decrypts one object. The envelope's key id must be this keyring's, which is
-// what makes a key rotation detectable instead of silently unreadable.
-func (k *Keyring) Open(env *Envelope) ([]byte, error) {
-	if k == nil || env == nil {
+	st := k.state.Load()
+	if st == nil {
+		return nil, ErrProviderUnavailable
+	}
+	if identity.StoreID != st.storeID {
+		return nil, ErrIdentityMismatch
+	}
+	main, ok := st.mainKeys[st.activeKeyID]
+	if !ok {
 		return nil, ErrFormat
 	}
-	if env.WrapKeyID() != k.keyID {
-		return nil, ErrAuthentication
-	}
-	return env.Open(k.main)
+	return Seal(plaintext, identity, st.activeKeyID, main)
 }
 
-// Rekey derives a NEW Main Key from a new password. The caller rewraps every
-// envelope with the returned keyring and persists its Marshal output; the old
-// keyring stays usable for reading until the last envelope is rewrapped.
-func (k *Keyring) Rekey(password, confirmation string) (*Keyring, error) {
+// Open unwraps an already parsed profile, catalog, or migration envelope.
+func (k *Keyring) Open(envelope *Envelope) ([]byte, error) {
+	if k == nil || envelope == nil {
+		return nil, ErrFormat
+	}
+	st := k.state.Load()
+	if st == nil {
+		return nil, ErrProviderUnavailable
+	}
+	if envelope.identity.StoreID != st.storeID {
+		return nil, ErrIdentityMismatch
+	}
+	main, ok := st.mainKeys[envelope.keyID]
+	if !ok {
+		return nil, ErrProviderUnavailable
+	}
+	return envelope.Open(main)
+}
+
+// StoreID returns the public identity bound to this keyring.
+func (k *Keyring) StoreID() ID {
 	if k == nil {
-		return nil, ErrFormat
+		return ID{}
 	}
-	if password != confirmation {
-		return nil, ErrPasswordConfirmation
+	st := k.state.Load()
+	if st == nil {
+		return ID{}
 	}
-	st, keyID, main, err := newStoredKeyring(k.storeID, password)
-	if err != nil {
-		return nil, err
-	}
-	next := &Keyring{storeID: k.storeID, keyID: keyID, main: main, stored: *st}
-	return next, nil
+	return st.storeID
 }
 
-// Destroy zeroes the Main Key. Callers do it when a keyring goes out of scope for
-// good, so the key does not linger in memory for the rest of the process.
+// Destroy revokes this keyring's in-process Main Keys. Existing Envelope values
+// become unreadable through it, and a later Seal or Open reports
+// ErrProviderUnavailable.
+//
+// ponytail: revocation swaps the state pointer; it does not overwrite the key
+// bytes. Zeroing a buffer a concurrent reader may still be copying from is a
+// data race, and Go makes no promise about erasure anyway (copies, the stack,
+// a core dump). The lock this replaced bought exclusion between Destroy and
+// Seal, which no caller ever needed: Destroy runs on construction failure and
+// at shutdown, and revocation covers both.
 func (k *Keyring) Destroy() {
 	if k == nil {
 		return
 	}
-	clear(k.main[:])
+	k.state.Store(nil)
 }
 
-// isZeroBytes reports whether every byte is zero, which no valid id or salt is.
-func isZeroBytes(b []byte) bool {
-	for _, v := range b {
-		if v != 0 {
-			return false
+func (k *Keyring) snapshot() (ID, map[ID]MainKey, ID, error) {
+	st := k.state.Load()
+	if st == nil || st.storeID.IsZero() || st.activeKeyID.IsZero() ||
+		len(st.mainKeys) == 0 || len(st.mainKeys) > maxMainKeys {
+		return ID{}, nil, ID{}, ErrFormat
+	}
+	if _, ok := st.mainKeys[st.activeKeyID]; !ok {
+		return ID{}, nil, ID{}, ErrFormat
+	}
+	keys := make(map[ID]MainKey, len(st.mainKeys))
+	for id, key := range st.mainKeys {
+		if id.IsZero() {
+			return ID{}, nil, ID{}, ErrFormat
+		}
+		keys[id] = key
+	}
+	return st.storeID, keys, st.activeKeyID, nil
+}
+
+func parseStoredKeyring(data []byte) (storedKeyring, error) {
+	var stored storedKeyring
+	if len(data) > maxKeyringFile {
+		return stored, ErrTooLarge
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&stored); err != nil {
+		return storedKeyring{}, ErrFormat
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return storedKeyring{}, ErrFormat
+	}
+	if stored.Version != keyringVersion && stored.Version != passwordKeyringVersion {
+		return storedKeyring{}, ErrVersion
+	}
+	if len(stored.StoreID) != 16 || isZeroBytes(stored.StoreID) ||
+		len(stored.Slots) > maxProviderSlots || len(stored.Slots) == 0 && stored.Password == nil {
+		return storedKeyring{}, ErrFormat
+	}
+	if stored.Password != nil && validatePasswordDerivation(stored.Password) != nil {
+		return storedKeyring{}, ErrFormat
+	}
+	slotIDs := make(map[ID]struct{}, len(stored.Slots))
+	for _, slot := range stored.Slots {
+		if len(slot.ID) != 16 || isZeroBytes(slot.ID) ||
+			len(slot.Nonce) != chacha20poly1305.NonceSizeX ||
+			len(slot.Wrapped) == 0 || len(slot.Wrapped) > maxKeyringFile {
+			return storedKeyring{}, ErrFormat
+		}
+		var id ID
+		copy(id[:], slot.ID)
+		if _, exists := slotIDs[id]; exists {
+			return storedKeyring{}, ErrFormat
+		}
+		slotIDs[id] = struct{}{}
+		provider, ok := registeredProvider(slot.Provider)
+		if !ok || provider.validateParameters(slot.Parameters) != nil {
+			return storedKeyring{}, ErrFormat
 		}
 	}
-	return true
+	return stored, nil
 }
 
-// parseIDHex decodes a 16-byte id from its hex spelling.
-func parseIDHex(s string) (ID, error) {
-	var id ID
-	raw, err := hex.DecodeString(s)
-	if err != nil || len(raw) != len(id) {
-		return id, ErrFormat
+func parseKeyringPayload(raw []byte, expectedStoreID ID) (*Keyring, error) {
+	var payload storedKeyringPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, ErrFormat
 	}
-	copy(id[:], raw)
-	if id.IsZero() {
-		return id, ErrFormat
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, ErrFormat
 	}
-	return id, nil
+	if payload.Version != keyringVersion || len(payload.StoreID) != 16 ||
+		len(payload.ActiveKeyID) != 16 || len(payload.Keys) == 0 ||
+		len(payload.Keys) > maxMainKeys {
+		return nil, ErrFormat
+	}
+	var storeID, activeKeyID ID
+	copy(storeID[:], payload.StoreID)
+	copy(activeKeyID[:], payload.ActiveKeyID)
+	if storeID != expectedStoreID || activeKeyID.IsZero() {
+		return nil, ErrFormat
+	}
+	keys := make(map[ID]MainKey, len(payload.Keys))
+	for _, record := range payload.Keys {
+		if len(record.ID) != 16 || len(record.Material) != chacha20poly1305.KeySize {
+			clearStoredPayload(payload)
+			return nil, ErrFormat
+		}
+		var id ID
+		copy(id[:], record.ID)
+		if id.IsZero() {
+			clearStoredPayload(payload)
+			return nil, ErrFormat
+		}
+		if _, exists := keys[id]; exists {
+			clearStoredPayload(payload)
+			return nil, ErrFormat
+		}
+		var main MainKey
+		copy(main[:], record.Material)
+		keys[id] = main
+	}
+	clearStoredPayload(payload)
+	if _, ok := keys[activeKeyID]; !ok {
+		for _, key := range keys {
+			clear(key[:])
+		}
+		return nil, ErrFormat
+	}
+	keyring := &Keyring{}
+	keyring.state.Store(&keyringState{
+		storeID:     storeID,
+		activeKeyID: activeKeyID,
+		mainKeys:    keys,
+	})
+	return keyring, nil
 }
 
-// String keeps a keyring out of logs: printing one must not print the key.
-func (k *Keyring) String() string {
-	if k == nil {
-		return "configstore.Keyring(nil)"
+func keyringSlotAAD(stored storedKeyring, slot storedKeySlot) []byte {
+	out := make([]byte, 0, len(keyringDomain)+64+len(slot.Provider)+providerParameterSize(slot.Parameters))
+	out = append(out, keyringDomain...)
+	out = binary.LittleEndian.AppendUint16(out, stored.Version)
+	out = append(out, stored.StoreID...)
+	out = append(out, slot.ID...)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(slot.Provider)))
+	out = append(out, slot.Provider...)
+	out = appendLengthPrefixed(out, slot.Parameters.Salt)
+	if slot.Parameters.Argon2 != nil {
+		out = binary.LittleEndian.AppendUint32(out, slot.Parameters.Argon2.Time)
+		out = binary.LittleEndian.AppendUint32(out, slot.Parameters.Argon2.Memory)
+		out = append(out, slot.Parameters.Argon2.Threads)
 	}
-	return "configstore.Keyring(store=" + hex.EncodeToString(k.storeID[:]) + " key=" + hex.EncodeToString(k.keyID[:]) + ")"
+	out = appendLengthPrefixed(out, []byte(slot.Parameters.Reference))
+	out = appendLengthPrefixed(out, slot.Parameters.Protected)
+	if stored.Version == passwordKeyringVersion {
+		metadata, _ := json.Marshal(stored.Password)
+		out = appendLengthPrefixed(out, metadata)
+	}
+	return out
 }
 
-var _ fmt.Stringer = (*Keyring)(nil)
+func providerParameterSize(parameters providerParameters) int {
+	size := 8 + len(parameters.Salt) + len(parameters.Reference) + len(parameters.Protected)
+	if parameters.Argon2 != nil {
+		size += 9
+	}
+	return size
+}
 
-// trimNewline is used by tests that read a persisted keyring.
-func trimNewline(b []byte) []byte { return []byte(strings.TrimRight(string(b), "\n")) }
+func appendLengthPrefixed(out, value []byte) []byte {
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(value)))
+	return append(out, value...)
+}
+
+func registeredProvider(name string) (Provider, bool) {
+	switch name {
+	case "env":
+		return NewEnvProvider(""), true
+	case "password":
+		// This fixed-cost instance validates slot shape only. No password is
+		// retained and no KDF is run during structural parsing.
+		return &PasswordProvider{}, true
+	case "keychain", "secret-service":
+		return credentialProvider{name: name}, true
+	case "dpapi":
+		return dpapiProviderForValidation(), true
+	default:
+		return nil, false
+	}
+}
+
+func clearStoredPayload(payload storedKeyringPayload) {
+	for i := range payload.Keys {
+		clear(payload.Keys[i].Material)
+		clear(payload.Keys[i].ID)
+	}
+	clear(payload.StoreID)
+	clear(payload.ActiveKeyID)
+}
+
+func clearMainKeyMap(keys map[ID]MainKey) {
+	for id, key := range keys {
+		clear(key[:])
+		delete(keys, id)
+	}
+}
+
+func isZeroBytes(value []byte) bool {
+	var zero byte
+	for _, b := range value {
+		zero |= b
+	}
+	return zero == 0
+}
