@@ -115,8 +115,10 @@ type Handler struct {
 
 	// viewers tracks the Web UI tabs currently attached (see viewers.go), so the
 	// page can show who is watching. Created on first use.
-	viewers    *viewerRegistry
-	viewerOnce sync.Once
+	viewers       *viewerRegistry
+	viewerOnce    sync.Once
+	configKeyOnce sync.Once
+	configKeyBusy chan struct{} // 1-slot channel token for non-blocking password admission (429)
 
 	// MCPConnections lists the MCP clients attached to the MCP server (see
 	// internal/mcp/connections.go). Wired by main to server.Connections; nil when
@@ -180,6 +182,17 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
 	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
+
+	// Configuration-at-rest management. The page chooses whether new profiles
+	// are encrypted and explicitly converts selected existing hosts.
+	mux.HandleFunc("GET /api/config-storage", h.handleConfigStorageStatus)
+	mux.HandleFunc("PUT /api/config-storage", h.handleConfigStorageSetting)
+	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
+	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
+	mux.HandleFunc("POST /api/config-storage/initialize", h.handleInitializeConfigKey)
+	mux.HandleFunc("POST /api/config-storage/recover", h.handleRecoverConfigKey)
+	mux.HandleFunc("POST /api/config-storage/unlock", h.handleUnlockConfigKey)
+	mux.HandleFunc("POST /api/config-storage/password", h.handleChangeConfigPassword)
 
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes

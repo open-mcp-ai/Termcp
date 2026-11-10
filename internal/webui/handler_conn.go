@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/term/locator"
@@ -24,8 +25,9 @@ type connectionSummary struct {
 	Port        int    `json:"port,omitempty"`
 	// DefaultApproval is the profile's review default for new sessions. It is
 	// served on the list so the card can show the flag without a second fetch.
-	DefaultApproval bool `json:"default_approval"`
-	Temporary       bool `json:"temporary"`
+	DefaultApproval bool   `json:"default_approval"`
+	Temporary       bool   `json:"temporary"`
+	Storage         string `json:"storage"`
 }
 
 // errSSHConfigRequired is what an omitted ssh_config resolves to, on every
@@ -41,6 +43,10 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 	}
 	names, err := h.SSH.List()
 	if err != nil {
+		if errors.Is(err, configstore.ErrLocked) {
+			writeConfigStorageError(w, err)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -55,6 +61,7 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 		}
 		cs := summarizeConnection(n, ent)
 		cs.Temporary = h.SSH.IsTemporary(n)
+		cs.Storage, _ = h.SSH.StorageMode(n)
 		list = append(list, cs)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": list})
