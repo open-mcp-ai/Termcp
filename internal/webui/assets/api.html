@@ -178,6 +178,9 @@
           <tr><td>Connections</td><td>GET</td><td><code class="inline">/api/connections</code></td></tr>
           <tr><td>Connection</td><td>GET / PUT / DELETE</td><td><code class="inline">/api/connections/{name}</code></td></tr>
           <tr><td>Test connection</td><td>POST</td><td><code class="inline">/api/connections/test</code> <span class="muted">(validates connectivity, does not save)</span></td></tr>
+          <tr><td>Encryption status</td><td>GET / PUT</td><td><code class="inline">/api/config-storage</code> <span class="muted">(new-profile mode and per-host storage)</span></td></tr>
+          <tr><td>Encrypt selected</td><td>POST</td><td><code class="inline">/api/config-storage/encrypt</code> <span class="muted">({"names":[...]})</span></td></tr>
+          <tr><td>Restore selected</td><td>POST</td><td><code class="inline">/api/config-storage/restore</code> <span class="muted">({"names":[...]})</span></td></tr>
           <tr><td>Sessions</td><td>GET / POST</td><td><code class="inline">/api/sessions</code></td></tr>
           <tr><td>Session</td><td>GET / PATCH / DELETE</td><td><code class="inline">/api/sessions/{id}</code> <span class="muted">(DELETE removes the session directory permanently; {id} may be a comma-separated list — a batch answers 200 with per-id results)</span></td></tr>
           <tr><td>Shells</td><td>GET / POST</td><td><code class="inline">/api/sessions/{id}/shells</code></td></tr>
