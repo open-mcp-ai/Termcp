@@ -55,9 +55,7 @@ type approvalState struct {
 // queueing each separately would ask for two decisions on one command (and allow
 // approving the text while rejecting the newline, leaving a half-typed line).
 func (s *Session) SubmitStaged(shellID, source, text string) error {
-	s.mu.Lock()
-	st := s.approval
-	s.mu.Unlock()
+	st := s.approval.Load()
 	if st == nil {
 		return ErrApprovalOff
 	}
@@ -84,9 +82,7 @@ func (s *Session) SubmitStaged(shellID, source, text string) error {
 // the key that ended it. With nothing staged, the key alone is queued: a bare
 // ctrl+c or enter is a command line of its own and must still be reviewable.
 func (s *Session) CommitStaged(shellID, source, key string, repeat int) (string, error) {
-	s.mu.Lock()
-	st := s.approval
-	s.mu.Unlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}
@@ -149,7 +145,9 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 	}
 
 	st := &approvalState{need: need, window: timeout, scopes: set}
-	st.onChange.Store(&s.approvalSink)
+	if sink := s.approvalSink.Load(); sink != nil {
+		st.onChange.Store(sink)
+	}
 	// The queue's change hook re-reads the session's current state rather than
 	// capturing the event sink here: the sink is installed by main and can be
 	// replaced between enable and use.
@@ -174,19 +172,16 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 		return ErrSessionClosing
 	}
 
-	s.mu.Lock()
+	prev := s.approval.Load()
 	if s.closing.Load() {
-		s.mu.Unlock()
 		st.discardStaged()
 		st.queue.Close("session is closing")
 		return ErrSessionClosing
 	}
-	prev := s.approval
-	s.approval = st
+	s.approval.Store(st)
 	// A live queue supersedes the retained one: the cancelled history belongs to a
 	// mode that is no longer in force.
-	s.retainedQueue = nil
-	s.mu.Unlock()
+	s.retainedQueue.Store(nil)
 
 	if prev != nil {
 		prev.discardStaged()
@@ -207,18 +202,16 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 // not yet approved must not become executable merely because the mode changed.
 // It also releases callers blocked in Wait instead of leaving them until timeout.
 func (s *Session) DisableApproval() {
-	s.mu.Lock()
-	st := s.approval
-	s.approval = nil
+	st := s.approval.Load()
+	s.approval.Store(nil)
 	if st != nil {
 		// KEEP THE QUEUE READABLE (issue #217). Clearing it made every pending
 		// request vanish from /api/approvals the moment the session closed: the
 		// safety half was right (approving answered 404/409 and nothing executed),
 		// but the promised terminal `cancelled` state could never be observed, so a
 		// harness could not tell why a request ended.
-		s.retainedQueue = st.queue
+		s.retainedQueue.Store(st.queue)
 	}
-	s.mu.Unlock()
 
 	if st != nil {
 		st.discardStaged()
@@ -228,9 +221,7 @@ func (s *Session) DisableApproval() {
 
 // ApprovalEnabled reports whether this session gates anything at all.
 func (s *Session) ApprovalEnabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.approval != nil
+	return s.approval.Load() != nil
 }
 
 // GatesKind reports whether this session holds operations of this kind.
@@ -241,9 +232,7 @@ func (s *Session) ApprovalEnabled() bool {
 // through. A caller that only checked ApprovalEnabled would hold the wrong
 // things — which is the whole point of #75.
 func (s *Session) GatesKind(kind approval.Kind) bool {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return false
 	}
@@ -254,9 +243,7 @@ func (s *Session) GatesKind(kind approval.Kind) bool {
 // everything. Reported so the UI can show what the switch currently covers
 // instead of a bare on/off.
 func (s *Session) ApprovalScopes() []approval.Kind {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return nil
 	}
@@ -284,16 +271,14 @@ func (st *approvalState) scopeList() []approval.Kind {
 // ApprovalQueue returns the active queue, or nil when approval mode is off.
 // Callers use it to submit, list, and decide requests.
 func (s *Session) ApprovalQueue() *approval.Queue {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.approval != nil {
-		return s.approval.queue
+		if st := s.approval.Load(); st != nil {
+		return st.queue
 	}
 	// A disabled or closed session retains its closed queue so readers can observe
 	// the terminal cancelled state (issue #217). It gates nothing — ApprovalEnabled
 	// and GatesKind both read s.approval — and approving from it answers
 	// ErrNotPending, so a late click cannot execute anything.
-	return s.retainedQueue
+	return s.retainedQueue.Load()
 }
 
 // SetApprovalChangeHandler installs the sink notified on every queue
@@ -303,12 +288,8 @@ func (s *Session) ApprovalQueue() *approval.Queue {
 // It works whether or not approval mode is already on: main installs the sink
 // at startup for every session it creates, and mode is switched on later.
 func (s *Session) SetApprovalChangeHandler(fn func(sessionID string, req approval.Request)) {
-	s.mu.Lock()
-	s.approvalSink = fn
-	st := s.approval
-	s.mu.Unlock()
-
-	if st != nil {
+	s.approvalSink.Store(&fn)
+	if st := s.approval.Load(); st != nil {
 		st.onChange.Store(&fn)
 	}
 }
@@ -317,9 +298,7 @@ func (s *Session) SetApprovalChangeHandler(fn func(sessionID string, req approva
 // ErrApprovalOff when approval mode is off, which the caller reads as "write
 // directly".
 func (s *Session) submitApproval(shellID, source, text string, keys []string) (string, error) {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}
@@ -334,9 +313,7 @@ func (s *Session) submitApproval(shellID, source, text string, keys []string) (s
 // look. What differs is the payload, which the caller describes with a summary
 // (what a human reads) and a payload (what the executor replays).
 func (s *Session) SubmitOperation(sub approval.Submission) (string, error) {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}

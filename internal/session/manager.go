@@ -327,10 +327,10 @@ func (m *Manager) Rename(id, name string) error {
 	if s == nil {
 		return fmt.Errorf("session %q not found", id)
 	}
-	s.mu.Lock()
-	s.Name = name
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.updateLive(func(st *liveMeta) {
+		st.name = name
+		st.updatedAt = clock.Now()
+	})
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
@@ -347,16 +347,15 @@ func (m *Manager) RenameSSHConfig(fromName, toName string) {
 	}
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
-		// Lock, rewrite, unlock, then persist: persistOne reads the session back
-		// through Info(), so it cannot run under the write lock.
-		s.mu.Lock()
-		if s.SSHConfig != fromName {
-			s.mu.Unlock()
-			return true
-		}
-		s.SSHConfig = toName
-		s.UpdatedAt = clock.Now()
-		s.mu.Unlock()
+		// Rewrite, then persist: persistOne reads the session back through Info(),
+		// so the record must be complete before it runs.
+		s.updateLive(func(st *liveMeta) {
+			if st.sshConfig != fromName {
+				return
+			}
+			st.sshConfig = toName
+			st.updatedAt = clock.Now()
+		})
 		m.persistOne(s.ID)
 		return true
 	})
@@ -383,9 +382,7 @@ func (m *Manager) EnableApprovalScoped(id string, need int, timeout time.Duratio
 	if err := s.EnableApprovalScoped(need, timeout, scopes); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.touch()
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
@@ -399,9 +396,7 @@ func (m *Manager) DisableApproval(id string) error {
 		return fmt.Errorf("session %q not found", id)
 	}
 	s.DisableApproval()
-	s.mu.Lock()
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.touch()
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
