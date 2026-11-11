@@ -181,13 +181,13 @@ func TestVarsASTSubstitution(t *testing.T) {
 			// THE SHELL LINE IS THE VALUE. The reference is the whole payload, so what
 			// arrives is the statement the caller put in `vars`.
 			"simple substitution",
-			"run " + h + " $MYVAR",
+			"run " + h + " --force $MYVAR",
 			map[string]any{"MYVAR": "echo hello_from_env"},
 			"hello_from_env",
 		},
 		{
 			"braced variable",
-			"run " + h + " ${MYVAR}",
+			"run " + h + " --force ${MYVAR}",
 			map[string]any{"MYVAR": "echo braced_works"},
 			"braced_works",
 		},
@@ -201,7 +201,7 @@ func TestVarsASTSubstitution(t *testing.T) {
 			// A semicolon in the value IS a statement separator, because the value is a
 			// statement. Both halves run; the caller's text was not data to be quoted.
 			"a semicolon in the value separates statements",
-			"run " + h + " $PAYLOAD",
+			"run " + h + " --force $PAYLOAD",
 			map[string]any{"PAYLOAD": "echo A; echo B"},
 			"echo B",
 		},

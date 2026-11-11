@@ -29,7 +29,7 @@ func TestAFullWindowEndsTheWait(t *testing.T) {
 	noisy := noisyCommand("line")
 	start := time.Now()
 	got := termText(t, s, map[string]any{
-		"cmd":         "run " + h + " $1",
+		"cmd":         "run " + h + " --force $1",
 		"args":        []any{noisy},
 		"bytes_limit": 200,
 		"timeout":     10,
@@ -100,7 +100,7 @@ func TestWaitedCoversTheWholeCall(t *testing.T) {
 	// call spent its window waiting. So the yardstick is the call's own duration.
 	start := time.Now()
 	got := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
+		"cmd":     "run " + h + " --force $1",
 		"args":    []any{"sleep 2"},
 		"timeout": 1,
 	})

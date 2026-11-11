@@ -714,6 +714,11 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	if f := s.checkRunFlags(stmt, win); f != nil {
 		return s.slotFromFailure(ctx, stmt, f)
 	}
+	// A COMPOUND LINE NEEDS A CHANNEL THAT HAS EVIDENCE (#311). Checked here, with the
+	// other flags, because a refusal must not arrive after the bytes did.
+	if f := s.refuseUnconfirmedCompound(stmt); f != nil {
+		return s.slotFromFailure(ctx, stmt, f)
+	}
 
 	// THE LINE IS ONE UNIT: THE TEXT AND ITS ENTER LAND TOGETHER (issue #212).
 	//
@@ -778,6 +783,7 @@ func (s *Server) finishRun(ctx context.Context, stmt directive.Statement, win te
 		return slot
 	}
 	slot := s.readSlotAfter(ctx, stmt, win, start)
+	s.noteRunCompletion(stmt.Target, slot.Headers["Completion"] != "")
 	return tailSlot(slot, stmt)
 }
 
