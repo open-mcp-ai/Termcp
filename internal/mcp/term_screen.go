@@ -24,11 +24,11 @@ import (
 // replayed at the channel's width into rows, and each row's bytes are what that row
 // displays. One implementation, one answer, checked against xterm.js byte for byte.
 //
-// WHAT IT IS NOT: an emulator with colours, styles and a scroll region. It models where
-// text lands, which is what "what does the screen say" needs. A full-screen program's own
-// buffer is not recorded (see termview.setAlt), so a channel currently in alt-screen
-// reports that fact — Alt-Screen: yes — rather than inventing its contents. The ceiling is
-// reported, not hidden.
+// A FULL-SCREEN PROGRAM IS A SECOND BUFFER. The transcript records nothing of the
+// alternate screen — the rail must not colour a program's painting — so while one is in
+// control this reply answers from the model's own grid (#314), which is where the program's
+// characters actually go. The ceiling is stated in the headers rather than hidden: the grid
+// models where characters land, not how they look.
 
 // screenTailRows bounds how much of a screen one reply carries when the caller does not
 // say. A terminal is a few dozen rows; asking for more is asking for scrollback, which is
@@ -82,6 +82,34 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		want = min(want, win.LinesLimit)
 	}
 	want = min(want, screenTailRows)
+
+	// A FULL-SCREEN PROGRAM IS A DIFFERENT BUFFER, and answering from the transcript while
+	// one is in control would answer about rows the program is not painting on.
+	if alt := layout.AltLines(); alt != nil {
+		if len(alt) > want {
+			alt = alt[len(alt)-want:]
+		}
+		var body strings.Builder
+		for _, row := range alt {
+			body.WriteString(row)
+			body.WriteByte(10)
+		}
+		cursorRow, cursorCol := layout.Cursor()
+		return envelope.Slot{
+			Code: 200,
+			Headers: map[string]string{
+				"Path":          stmt.Path,
+				"Screen":        "the full-screen program's own screen at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
+				"Cols":          strconv.Itoa(cols),
+				"Rows":          strconv.Itoa(rows),
+				"Cursor":        strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
+				"Alt-Screen":    "yes",
+				"Screen-Rows":   strconv.Itoa(len(alt)),
+				"Content-Range": strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
+			},
+			Body: body.String(),
+		}
+	}
 
 	// THE LAST N ROWS THAT SAY SOMETHING, not the last N slots of the buffer.
 	//
@@ -138,7 +166,7 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	var body strings.Builder
 	for _, row := range keptRows {
 		body.WriteString(row)
-		body.WriteByte('\n')
+		body.WriteByte(10)
 	}
 	cursorRow, cursorCol := layout.Cursor()
 	return envelope.Slot{
