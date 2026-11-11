@@ -105,6 +105,10 @@ type Layout struct {
 	// is the rail sliding out of step with the terminal the moment a full-screen
 	// program quits.
 	alt bool
+	// altGrid is the screen the full-screen program is painting (#314). The primary
+	// buffer keeps its rows and its cursor untouched while a program holds the screen, because
+	// that is what the terminal does; this grid is what the program sees instead.
+	altGrid *grid
 	// altRow, altCol, altTop and altPending are the primary screen's state while the
 	// alternate one is up. xterm keeps a cursor per buffer and hands the normal one
 	// back as it was, so these are copied back on the way out rather than
@@ -187,6 +191,21 @@ func (g *Layout) Feed(base int64, data []byte) {
 		switch {
 		case b == 0x1b:
 			g.esc, g.escStart, i = escEsc, g.at+int64(i), i+1
+		case g.alt && g.altGrid != nil && (b == '\n' || b == '\r' || b == '\b' || b == '\t' || b < 0x20 || b == 0x7f):
+			// Line breaks, returns, tabs and backspaces inside a full-screen program are
+			// the program's own cursor movement: they move the grid's cursor and record
+			// nothing on the transcript (see setAlt).
+			switch b {
+			case '\n', '\v', '\f':
+				g.altGrid.lf()
+			case '\r':
+				g.altGrid.cr()
+			case '\b':
+				g.altGrid.back()
+			case '\t':
+				g.altGrid.tab(TabStop)
+			}
+			i++
 		case b == '\n' || b == '\v' || b == '\f':
 			// The newline belongs to the row it ends, which is what gives a blank
 			// line a range of its own: a line break and nothing else is still a
@@ -248,6 +267,11 @@ func (g *Layout) Feed(base int64, data []byte) {
 // offset within the current read.
 func (g *Layout) write(off int64, r rune) {
 	if g.alt {
+		// The program's own screen: its characters go into the grid, and the transcript
+		// keeps the rows it had before the screen was taken over.
+		if g.altGrid != nil {
+			g.altGrid.put(r)
+		}
 		return
 	}
 	w := 1

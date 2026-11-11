@@ -130,6 +130,13 @@ func (g *Layout) applyCSI(body []byte, final byte) {
 		// moves are its own, and the transcript's are the ones saved on the way in. Its
 		// private modes are still read, because that is where the sequence giving the
 		// screen back is.
+		//
+		// These sequences are applied to the grid rather than dropped: `read --screen`
+		// while vim is up has to answer with what vim painted, and where the program put
+		// each character is exactly what the transcript model threw away.
+		if g.altGrid != nil {
+			g.altGrid.applyCSI(parseCSIParams(body), final)
+		}
 		return
 	}
 	if len(body) > 0 && (body[0] == '?' || body[0] == '>' || body[0] == '=') {
@@ -261,8 +268,13 @@ func (g *Layout) setAlt(on bool) {
 	g.alt = on
 	if on {
 		g.altRow, g.altCol, g.altTop, g.altPending = g.row, g.col, g.top, g.pending
+		// A fresh grid, not a reused one: the program that takes the screen over owns
+		// every cell in it, and the bytes it has not painted yet are blank by definition.
+		g.altGrid = newGrid(g.height, g.cols)
 		return
 	}
+	// The program's screen is discarded on the way out, exactly as a terminal discards it.
+	g.altGrid = nil
 	g.row, g.col, g.top, g.pending = g.altRow, g.altCol, g.altTop, g.altPending
 }
 
