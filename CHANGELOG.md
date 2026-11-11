@@ -4,6 +4,7 @@
 
 ### 新功能
 
+- **`read <channel> --screen` 直接回答「屏幕现在是什么」（#312）**：此前的读都活在日志坐标系里（字节偏移、行号），而终端不是流——`` 覆盖、`CSI K` 擦除、`CSI H` 移动，重绘十次的提示符占一行却是十段字节。现在把 channel 的日志按终端宽度重放成行，返回**显示出来的**行，并给出 `Cursor: <row>,<col>`、`Alt-Screen: yes|no`、`Cols`/`Rows`/`Screen-Top`/`Screen-Rows`。模型与 WebUI 时间线用的是同一份（`internal/termview`，对 xterm.js 逐字节差分校验），不新增依赖。
 - **`run` / `read` 增加 `--until <RE|preset>` 观察谓词（#313）**：用「等到观察到证据」取代靠窗口延时硬猜命令完成。接受任意 Go 正则，并提供两个预设：`exit` 被动识别现代 shell 的 OSC 133 语义提示符标记（`\x1b]133;D;<exit>`）并直接给出 `Exit-Code` 头；`prompt` 匹配常见 shell 的提示符末尾（`[$#>]\s*$`）。`read` 上是"等到下一段字节里出现它"，因此 `read --until` 就是此前缺失的等待原语。匹配从 `Input-At` 开始并跳过首行自身的命令回显，避免命令还没跑就匹配到自己。
 
 ### 破坏性变更

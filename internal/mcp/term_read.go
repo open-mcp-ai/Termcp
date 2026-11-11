@@ -43,6 +43,9 @@ func (s *Server) directiveRead(ctx context.Context, stmt directive.Statement, wi
 // consume nothing", and a wait followed by an empty reply is the worst of both: the
 // caller spent its window and learned nothing it could not have had at once.
 func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	if boolFlag(stmt, "screen") {
+		return s.readScreen(ctx, stmt, win)
+	}
 	watch := s.untilWatchFrom(stmt)
 	base, observable := s.outputSizeFor(stmt.Target)
 	if watch == nil || !observable || win.BytesLimit == 0 {
