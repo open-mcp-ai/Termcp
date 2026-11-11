@@ -181,7 +181,9 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 // duration rather than a bool: what is LEFT of the window is what the read may spend.
 func (s *Server) awaitRunOutput(ctx context.Context, stmt directive.Statement, win termArgs, start int64) time.Duration {
 	began := time.Now()
-	if s.completionWait(stmt.Target) {
+	if watch := s.untilWatchFrom(stmt); watch != nil {
+		s.awaitUntil(ctx, stmt.Target, win, start, watch)
+	} else if s.completionWait(stmt.Target) {
 		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
 		s.awaitWindow(ctx, stmt.Target, win, start)
@@ -241,11 +243,21 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// and without it the caller cannot tell a finished command from a window that ended
 	// (issue #161, P1-3).
 	windowExpired := false
-	waitedOnAPty := false
-	if wait := s.completionWait(stmt.Target); wait {
+	// `--until` REPLACES THE WAIT, IT DOES NOT ADD TO IT. A caller that named the
+	// evidence it wants is not waiting for a threshold as well: the predicate or the
+	// deadline, whichever comes first, and neither of them is a verdict on its own.
+	watch := s.untilWatchFrom(stmt)
+	if watch != nil {
+		if !s.awaitUntil(ctx, stmt.Target, win, start, watch) {
+			// The caller's window was spent without seeing the caller's evidence.
+			// That is the same shape as an expired pty window — the budget ran out
+			// with nothing to report — and it is reported the same way: as what the
+			// wait did, never as what the command did.
+			windowExpired = true
+		}
+	} else if wait := s.completionWait(stmt.Target); wait {
 		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
-		waitedOnAPty = true
 		windowExpired = s.awaitWindow(ctx, stmt.Target, win, start)
 	}
 	slot, channelEnd := s.readSlot(ctx, stmt, win, args, time.Since(waitStarted))
@@ -255,28 +267,17 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 		}
 		slot.Headers["Input-At"] = inputAt
 	}
-	if waitedOnAPty && !windowExpired && slot.Code < 400 {
-		// HOW THE WAIT ENDED IS A FACT, AND IT WAS THE ONE THING NOT SAID.
-		//
-		// A pty has no completion signal, so this wait ends one of two ways: the window
-		// runs out, or the stream goes quiet (ptyQuiet with no new byte). The second is
-		// the ordinary case — it is how a finished command looks — and it said NOTHING,
-		// so a command that merely went silent while it worked was indistinguishable from
-		// one that had finished. Three callers reading the same reply hit it the same way:
-		// "the output looks truncated, and nothing tells me whether it is".
-		//
-		// `Still-Running` is deliberately NOT reused: it means "the window expired while
-		// bytes were still arriving", which is evidence. A quiet stream is not evidence of
-		// anything — the command may have finished, or be sleeping — and a header that
-		// claimed either would be the kind of guess this server refuses to make about a
-		// pty. So it names the evidence instead, and `read` is how the caller finds out
-		// more.
-		if slot.Headers == nil {
-			slot.Headers = map[string]string{}
-		}
-		slot.Headers["Completion"] = "quiet"
+	// ONLY EVIDENCE PRODUCES `Completion`. A wait that ended because the stream went
+	// quiet produces none: a finished command and one that is thinking look identical
+	// on a pty, so the header used to say `quiet` — a measurement dressed as a verdict,
+	// and callers acted on it by typing the next command into a program that still held
+	// the terminal. Absence now means what it says: not known.
+	watch.headers(&slot)
+	if watch != nil && !watch.matched && slot.Code < 400 {
+		slot.Headers["Hint"] = "`--until` did not match within the window, so this reply says nothing about whether the command finished. " +
+			"read " + stmt.Target + " --tail 20 looks at the stream, and key " + stmt.Target + " ctrl+c interrupts whatever holds the terminal."
 	}
-	if windowExpired && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
+	if windowExpired && watch == nil && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
 		// Same header the pipe path uses, same meaning: the command was accepted and has
 		// not finished. It is set only when the window expired, so it does not become the
 		// permanently-true flag that kept it off the pty path in the first place.

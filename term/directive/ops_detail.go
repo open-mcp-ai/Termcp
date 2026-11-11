@@ -149,7 +149,7 @@ var ops = []Op{
 
 	{Name: "run", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
 		PayloadType: PayloadVar,
-		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding"},
+		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding", "until"},
 		Usage:       "run <channel> [--tail N] [--grep RE] $1   |   run <session> <index> $1   |   run use:<host> $1",
 		Detail:      runDetail},
 	{Name: "input", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
@@ -677,11 +677,26 @@ The half second is a STARTING bet, not a constant: a channel that has shown its
 chunks arriving closer together stops paying for a slower shell elsewhere, down to
 a quarter second. It never waits longer than the half second, whatever it sees.
 
-The reply says WHICH of the two happened, because the difference is the whole
-question: Completion: quiet means the stream went quiet (the ordinary ending — the
-command may have finished, or may be working without printing), and Still-Running:
-true means the window ran out while bytes were still arriving. Neither one claims
-the command finished, because a pty gives nothing to base that on.
+THE REPLY DOES NOT CLAIM THE COMMAND FINISHED, because a pty gives nothing to base
+that on: a finished command and one that is working without printing are the same
+bytes. So Completion appears ONLY when there is evidence to name:
+Completion: matched when your own --until pattern was observed, Completion: exit when
+the remote shell reported the end itself (OSC 133, together with Exit-Code). NO
+Completion HEADER MEANS THE STATE IS UNKNOWN — the honest answer, not a failure: read
+the stream and decide, the way a human at the same screen would. Still-Running: true
+is the one other fact, and it means the window ran out while bytes were still
+arriving.
+
+--until IS HOW YOU ASK FOR EVIDENCE INSTEAD OF WAITING BLINDLY. --until 'BUILD OK'
+ends the wait when that line appears. --until prompt matches a shell prompt ([$#>] at
+the end of a line); --until exit matches the shell's own OSC 133 completion report
+(FinalTerm; iTerm2, kitty, WezTerm, Ghostty, fish 4.x, Starship, oh-my-posh and the
+Windows Terminal profile emit it) and reports the status it carries. Anything else is
+a Go regular expression. Matching starts after the line you typed, so
+run ch "echo DONE" --until DONE cannot match its own echo, and it scans the bytes as
+they arrived rather than the ANSI-stripped text — the completion report IS an ANSI
+sequence, so a stripped view could never see it. Without --until the wait ends on
+stillness; with it, only the evidence or the window ends it.
 
 A reply that ends mid-output is not a lost command: the bytes are still in the
 stream. read has its own cursor and does not continue after the sample — it
