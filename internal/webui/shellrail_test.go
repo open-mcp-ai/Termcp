@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/termview"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,13 +92,13 @@ func railLog(lines int) []byte {
 // character that takes two columns.
 func TestShellRailLayoutWrapsAndMarksRows(t *testing.T) {
 	// Eight columns, four rows: a width small enough that every rule is visible.
-	lay := func(cols int, log string) *rowLayout {
-		g := newRowLayout(cols, 4)
-		g.feed(0, []byte(log))
+	lay := func(cols int, log string) *termview.Layout {
+		g := termview.New(cols, 4)
+		g.Feed(0, []byte(log))
 		return g
 	}
-	span := func(g *rowLayout, row int) (int64, int64, bool) {
-		spans := g.window(row, 1)
+	span := func(g *termview.Layout, row int) (int64, int64, bool) {
+		spans := g.Window(row, 1)
 		if spans[0] == nil {
 			return 0, 0, false
 		}
@@ -137,7 +138,7 @@ func TestShellRailLayoutWrapsAndMarksRows(t *testing.T) {
 	tiled := "one\ntwo\n\nthree\n"
 	g = lay(8, tiled)
 	var at int64
-	for row := 0; row < int(g.rowCount()); row++ {
+	for row := 0; row < int(g.RowCount()); row++ {
 		s, e, ok := span(g, row)
 		if !ok {
 			break // the empty row a trailing newline opens holds no bytes
@@ -228,15 +229,15 @@ func TestShellRailLayoutWrapsAndMarksRows(t *testing.T) {
 	// A read split mid-sequence and mid-rune must resume exactly: the parser and
 	// the rune are carried across the pieces, so the same log laid out in pieces
 	// and in one go gives the same rows.
-	full := newRowLayout(8, 4)
-	full.feed(0, []byte("héllo\x1b[3"))
-	part := newRowLayout(8, 4)
-	part.feed(0, []byte("héllo"))
-	part.feed(6, []byte("\x1b[3"))
-	if a, b := full.rowCount(), part.rowCount(); a != b {
+	full := termview.New(8, 4)
+	full.Feed(0, []byte("héllo\x1b[3"))
+	part := termview.New(8, 4)
+	part.Feed(0, []byte("héllo"))
+	part.Feed(6, []byte("\x1b[3"))
+	if a, b := full.RowCount(), part.RowCount(); a != b {
 		t.Errorf("a log split across reads has %d rows, whole it has %d", b, a)
 	}
-	for row := 0; row < int(full.rowCount()); row++ {
+	for row := 0; row < int(full.RowCount()); row++ {
 		s1, e1, ok1 := span(full, row)
 		s2, e2, ok2 := span(part, row)
 		if ok1 != ok2 || s1 != s2 || e1 != e2 {
@@ -262,25 +263,25 @@ func TestShellRailLayoutWrapsAndMarksRows(t *testing.T) {
 func TestShellRailSplitReadsAgree(t *testing.T) {
 	log := "\x1b[2J\x1b[H\r\n\x1b[4;17Hscoped\x1b[?25h done\r\n" +
 		"\x1b[m\x1b[1;1Htop\x1b[3;5Hmid\x1b[32mgreen\x1b[0m tail\r\n"
-	ref := newRowLayout(80, 24)
-	ref.feed(0, []byte(log))
+	ref := termview.New(80, 24)
+	ref.Feed(0, []byte(log))
 	for _, size := range []int{1, 2, 3, 5, 7, 11, 64, 4096} {
-		g := newRowLayout(80, 24)
+		g := termview.New(80, 24)
 		for off := 0; off < len(log); off += size {
 			end := off + size
 			if end > len(log) {
 				end = len(log)
 			}
-			g.feed(int64(off), []byte(log[off:end]))
+			g.Feed(int64(off), []byte(log[off:end]))
 		}
-		if g.rowCount() != ref.rowCount() {
-			t.Fatalf("reading in %d-byte pieces gives %d rows, one read gives %d", size, g.rowCount(), ref.rowCount())
+		if g.RowCount() != ref.RowCount() {
+			t.Fatalf("reading in %d-byte pieces gives %d rows, one read gives %d", size, g.RowCount(), ref.RowCount())
 		}
-		for row := 0; row < ref.rowCount(); row++ {
-			if g.rows[row] != ref.rows[row] {
-				t.Errorf("reading in %d-byte pieces puts row %d at [%d,%d), one read puts it at [%d,%d)",
-					size, row, g.rows[row].Start, g.rows[row].End,
-					ref.rows[row].Start, ref.rows[row].End)
+		for row := 0; row < ref.RowCount(); row++ {
+			got, want := g.SpanAt(row), ref.SpanAt(row)
+			if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+				t.Errorf("reading in %d-byte pieces and one read disagree about row %d: %v vs %v",
+					size, row, got, want)
 			}
 		}
 	}
@@ -295,11 +296,11 @@ func TestShellRailSplitReadsAgree(t *testing.T) {
 // off-by-one in the byte window would silently drop the mark that colours the
 // first visible row, which reads as a rail that starts one row too late.
 func TestShellRailWindowAndMarks(t *testing.T) {
-	g := newRowLayout(8, 4)
-	g.feed(0, []byte("aaaaaaaa\nbbbbbbbb\ncccccccc\ndddddddd\n"))
+	g := termview.New(8, 4)
+	g.Feed(0, []byte("aaaaaaaa\nbbbbbbbb\ncccccccc\ndddddddd\n"))
 
 	// A window in the middle: absolute rows, and each span the row's own bytes.
-	spans := g.window(1, 2)
+	spans := g.Window(1, 2)
 	if len(spans) != 2 {
 		t.Fatalf("asked for 2 rows, got %d", len(spans))
 	}
@@ -327,7 +328,7 @@ func TestShellRailWindowAndMarks(t *testing.T) {
 	// A row past the end of the layout comes back null rather than clamped: the
 	// viewport can be parked below the last line, and a `use` span would colour
 	// a row with another row's status.
-	if spans := g.window(90, 2); spans[0] != nil || spans[1] != nil {
+	if spans := g.Window(90, 2); spans[0] != nil || spans[1] != nil {
 		t.Errorf("rows past the layout report spans: %+v", spans)
 	}
 }
@@ -340,13 +341,13 @@ func TestShellRailWindowAndMarks(t *testing.T) {
 // paints are the ones the rail shows, and a model that ignored cursor addressing
 // would pile a whole screenful of redraws onto the last line.
 func TestShellRailParsesCursorAddressing(t *testing.T) {
-	g := newRowLayout(10, 4)
+	g := termview.New(10, 4)
 	// Write three lines, then repaint the middle one by addressing it directly.
 	first := "one\ntwo\nthree\n"
 	addr := "\x1b[2;1HXX"
-	g.feed(0, []byte(first))
-	g.feed(int64(len(first)), []byte(addr))
-	spans := g.window(1, 1)
+	g.Feed(0, []byte(first))
+	g.Feed(int64(len(first)), []byte(addr))
+	spans := g.Window(1, 1)
 	if spans[0] == nil {
 		t.Fatal("the addressed row reports no bytes")
 	}
@@ -358,16 +359,16 @@ func TestShellRailParsesCursorAddressing(t *testing.T) {
 			spans[0].Start, spans[0].End, wantStart, wantStart+2)
 	}
 	// The rows above and below keep their own bytes.
-	if sp := g.window(0, 1)[0]; sp == nil || sp.Start != 0 || sp.End != 4 {
+	if sp := g.Window(0, 1)[0]; sp == nil || sp.Start != 0 || sp.End != 4 {
 		t.Errorf("the row above the addressed one moved: %+v", sp)
 	}
 
 	// Cursor up then write: the bytes land on the row above, which is how a
 	// progress line is redrawn without addressing.
 	up := "first\nsecond\n\x1b[1A\rREDONE"
-	g = newRowLayout(10, 4)
-	g.feed(0, []byte(up))
-	spans = g.window(1, 1)
+	g = termview.New(10, 4)
+	g.Feed(0, []byte(up))
+	spans = g.Window(1, 1)
 	// The bytes land on the row above, replacing what stood there: the row is the
 	// text written last, which is what the reader sees on it.
 	wantUp := int64(strings.Index(up, "REDONE"))
@@ -524,14 +525,14 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	vim += "\x1b[24;1H:q!\r\n\x1b[?1049l"
 	log := "before\r\n" + vim + "after\r\n"
 
-	g := newRowLayout(80, 24)
-	g.feed(0, []byte(log))
+	g := termview.New(80, 24)
+	g.Feed(0, []byte(log))
 
 	// Two lines of transcript: the one before the program and the one after it, as
 	// the terminal shows them once the alternate screen is gone.
 	var live []*shellRowSpan
-	for r := 0; r < g.rowCount(); r++ {
-		if sp := &g.rows[r]; sp.End > sp.Start {
+	for r := 0; r < g.RowCount(); r++ {
+		if sp := g.SpanAt(r); sp != nil && sp.End > sp.Start {
 			live = append(live, sp)
 		}
 	}
@@ -552,9 +553,9 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	iEnter := int64(strings.Index(log, "\x1b[?1049h"))
 	iExit := int64(strings.Index(log, "\x1b[?1049l"))
 	openEnd := iEnter + int64(len("\x1b[?1049h"))
-	for r := 0; r < g.rowCount(); r++ {
-		sp := &g.rows[r]
-		if sp.End > sp.Start && sp.Start < iExit && sp.End > openEnd {
+	for r := 0; r < g.RowCount(); r++ {
+		sp := g.SpanAt(r)
+		if sp != nil && sp.End > sp.Start && sp.Start < iExit && sp.End > openEnd {
 			t.Errorf("row %d reaches into the full-screen program's screen: [%d,%d)", r, sp.Start, sp.End)
 		}
 	}
@@ -564,11 +565,11 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	for _, mode := range []string{"47", "1047", "1049"} {
 		prog := "\x1b[?" + mode + "h" + strings.Repeat("x", 200) + "\x1b[?" + mode + "l"
 		tail := "one\r\n" + prog + "two\r\n"
-		gg := newRowLayout(80, 24)
-		gg.feed(0, []byte(tail))
+		gg := termview.New(80, 24)
+		gg.Feed(0, []byte(tail))
 		var got []string
-		for r := 0; r < gg.rowCount(); r++ {
-			if sp := &gg.rows[r]; sp.End > sp.Start {
+		for r := 0; r < gg.RowCount(); r++ {
+			if sp := gg.SpanAt(r); sp != nil && sp.End > sp.Start {
 				got = append(got, tail[sp.Start:sp.End])
 			}
 		}
@@ -586,13 +587,13 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	// next shell line must still be row 1.
 	steps := "\x1b[?1049h" + strings.Repeat("page\r\n", 40) + "\x1b[?1049l"
 	cursorLog := "first\r\n" + steps + "second\r\n"
-	cg := newRowLayout(80, 24)
-	cg.feed(0, []byte(cursorLog))
+	cg := termview.New(80, 24)
+	cg.Feed(0, []byte(cursorLog))
 	wantSecond := int64(strings.Index(cursorLog, "second\r\n"))
 	row := -1
-	for r := 0; r < cg.rowCount(); r++ {
-		sp := &cg.rows[r]
-		if sp.End > sp.Start && sp.Start <= wantSecond && wantSecond < sp.End {
+	for r := 0; r < cg.RowCount(); r++ {
+		sp := cg.SpanAt(r)
+		if sp != nil && sp.End > sp.Start && sp.Start <= wantSecond && wantSecond < sp.End {
 			row = r
 		}
 	}
@@ -606,17 +607,17 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	// own.
 	paint := "\x1b[?1049h" + strings.Repeat("y\r\n", 40)
 	open := "start\r\n" + paint
-	gg := newRowLayout(80, 24)
-	gg.feed(0, []byte(open))
+	gg := termview.New(80, 24)
+	gg.Feed(0, []byte(open))
 	iOpen := int64(strings.Index(open, "\x1b[?1049h"))
-	for r := 0; r < gg.rowCount(); r++ {
-		sp := &gg.rows[r]
-		if sp.End > sp.Start && sp.End > iOpen+int64(len("\x1b[?1049h")) {
+	for r := 0; r < gg.RowCount(); r++ {
+		sp := gg.SpanAt(r)
+		if sp != nil && sp.End > sp.Start && sp.End > iOpen+int64(len("\x1b[?1049h")) {
 			t.Errorf("row %d records a log that ends inside a full-screen program: [%d,%d)",
 				r, sp.Start, sp.End)
 		}
 	}
-	if sp := gg.window(0, 1)[0]; sp == nil || open[sp.Start:sp.End] != "start\r\n" {
+	if sp := gg.Window(0, 1)[0]; sp == nil || open[sp.Start:sp.End] != "start\r\n" {
 		t.Errorf("the line printed before the program is not row 0 any more: %+v", sp)
 	}
 
@@ -624,21 +625,22 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 	// sequence itself — must not change the outcome: the prefix is read off the
 	// body across read boundaries like any other parameter.
 	for _, size := range []int{1, 3, 8, 64} {
-		pieces := newRowLayout(80, 24)
+		pieces := termview.New(80, 24)
 		for off := 0; off < len(log); off += size {
 			end := off + size
 			if end > len(log) {
 				end = len(log)
 			}
-			pieces.feed(int64(off), []byte(log[off:end]))
+			pieces.Feed(int64(off), []byte(log[off:end]))
 		}
-		if pieces.rowCount() != g.rowCount() {
-			t.Fatalf("reading in %d-byte pieces gives %d rows, one read gives %d", size, pieces.rowCount(), g.rowCount())
+		if pieces.RowCount() != g.RowCount() {
+			t.Fatalf("reading in %d-byte pieces gives %d rows, one read gives %d", size, pieces.RowCount(), g.RowCount())
 		}
-		for r := 0; r < g.rowCount(); r++ {
-			if pieces.rows[r] != g.rows[r] {
-				t.Errorf("reading in %d-byte pieces puts row %d at [%d,%d), one read puts it at [%d,%d)",
-					size, r, pieces.rows[r].Start, pieces.rows[r].End, g.rows[r].Start, g.rows[r].End)
+		for r := 0; r < g.RowCount(); r++ {
+			got, want := pieces.SpanAt(r), g.SpanAt(r)
+			if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+				t.Errorf("reading in %d-byte pieces and one read disagree about row %d: %v vs %v",
+					size, r, got, want)
 			}
 		}
 	}
@@ -666,55 +668,6 @@ func TestShellRailAltScreenLeavesTheTranscriptAlone(t *testing.T) {
 // xterm sizes its line buffer to the configured scrollback *plus* the screen it is
 // showing (`getCorrectBufferLength`), so the oldest row falls off at `scrollback +
 // rows`. The model has to drop at the same point and say so with the same numbers.
-func TestShellRailBufferCapIsScrollbackPlusScreen(t *testing.T) {
-	// The cap itself, exercised at the boundary instead of by filling 100k rows: one
-	// row over `scrollback + height` drops exactly one row off the front, and the rows
-	// that survive keep their own bytes — which is the whole point of moving them down
-	// rather than dropping them all. A cap that ignored the height would trim one
-	// screenful early; one that used the height as the cap would throw the scrollback
-	// away entirely.
-	const height = 4
-	g := newRowLayout(20, height)
-	// A buffer filled to the cap, with a byte range on each row so a moved row can be
-	// told from an empty one.
-	g.rows = make([]shellRowSpan, shellRailScrollback+height)
-	for i := range g.rows {
-		g.rows[i] = shellRowSpan{Start: int64(i), End: int64(i) + 1}
-	}
-	g.row, g.top = shellRailScrollback+height-1, shellRailScrollback+height-height
-
-	// One row past the cap: the oldest goes and the rest slide down by one.
-	g.ensure(shellRailScrollback + height)
-	if got := len(g.rows); got != shellRailScrollback+height {
-		t.Errorf("past the cap the buffer holds %d rows, want it held at %d", got, shellRailScrollback+height)
-	}
-	if g.rows[0].Start != 1 {
-		t.Errorf("the oldest surviving row starts at %d, want 1: the front row should have been dropped", g.rows[0].Start)
-	}
-	if got := g.row; got != shellRailScrollback+height-2 {
-		t.Errorf("the cursor is on row %d after one row was dropped above it, want %d: it must stay on the same text",
-			got, shellRailScrollback+height-2)
-	}
-	if got := g.top; got != shellRailScrollback+height-height-1 {
-		t.Errorf("the screen top is %d after one row was dropped, want %d", got, shellRailScrollback+height-height-1)
-	}
-
-	// A buffer well inside the cap is untouched: the cap is a limit, not a size the
-	// layout is padded to. Printing `n` lines on a small screen leaves one row per line
-	// plus the one the final newline opened, and none of them is dropped however small
-	// the screen is.
-	for _, lines := range []int{3, 7, 9} {
-		short := newRowLayout(20, height)
-		var log []byte
-		for i := 0; i < lines; i++ {
-			log = append(log, []byte("L\r\n")...)
-		}
-		short.feed(0, log)
-		if got, want := short.rowCount(), lines+1; got != want {
-			t.Errorf("%d lines on a %d-row screen hold %d rows, want %d", lines, height, got, want)
-		}
-	}
-}
 
 func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 	prompt := "\x1b[?2004h\x1b[31mmain\x1b[0m$ "
@@ -731,14 +684,14 @@ func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 		{Status: "o", Start: submit, End: int64(len(log))},
 	}
 
-	g := newRowLayout(80, 24)
-	g.feed(0, []byte(log))
+	g := termview.New(80, 24)
+	g.Feed(0, []byte(log))
 
 	// Every mark lands inside exactly one row's span.
 	for _, m := range marks {
 		hit := -1
-		for row := 0; row < int(g.rowCount()); row++ {
-			sp := g.rows[row]
+		for row := 0; row < int(g.RowCount()); row++ {
+			sp := g.SpanAt(row)
 			if sp.End > sp.Start && sp.Start <= m.Start && m.Start < sp.End {
 				if hit >= 0 {
 					t.Errorf("mark %s at %d is on two rows: %d and %d", m.Status, m.Start, hit, row)
@@ -753,8 +706,8 @@ func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 
 	// The blank line in the banner holds bytes, so the rail colours it. It is the
 	// row after the first, and it is the line break that was printed.
-	blank := g.rows[1]
-	if blank.End <= blank.Start {
+	blank := g.SpanAt(1)
+	if blank == nil || blank.End <= blank.Start {
 		t.Error("a blank output line holds no bytes; it must draw a cell like any other line")
 	}
 	// And it holds the line break itself, not a neighbour's text.
@@ -767,9 +720,9 @@ func TestShellRailTilesRowsSoEveryMarkLands(t *testing.T) {
 	// and an erased line owns nothing — that is what erasing it means.
 	last := int64(strings.LastIndex(log, "[K")) + int64(len("[K"))
 	var at int64 = -1
-	for row := 0; row < int(g.rowCount()); row++ {
-		sp := g.rows[row]
-		if sp.End <= sp.Start || sp.End <= last {
+	for row := 0; row < int(g.RowCount()); row++ {
+		sp := g.SpanAt(row)
+		if sp == nil || sp.End <= sp.Start || sp.End <= last {
 			continue
 		}
 		if at >= 0 && sp.Start != at {

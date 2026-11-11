@@ -1,4 +1,4 @@
-package webui
+package termview
 
 // GET /api/shells/{id}/rail: which bytes of a shell's log sit on which terminal row.
 //
@@ -35,7 +35,7 @@ package webui
 // ensure grows the layout up to and including `row`, filling the rows in between
 // with empty spans: a cursor can address a row far below the text (a clear, a
 // cursor move), and those rows hold no bytes.
-func (g *rowLayout) ensure(row int) {
+func (g *Layout) ensure(row int) {
 	if g.alt {
 		return
 	}
@@ -43,7 +43,7 @@ func (g *rowLayout) ensure(row int) {
 		return
 	}
 	for len(g.rows) <= row {
-		g.rows = append(g.rows, shellRowSpan{})
+		g.rows = append(g.rows, Span{})
 	}
 	// Past the retention limit the oldest rows fall off and every row number slides
 	// down with them, exactly as they do in the terminal’s own trimmed buffer. This
@@ -63,11 +63,11 @@ func (g *rowLayout) ensure(row int) {
 }
 
 // capacity is how many rows the buffer holds before the oldest falls off.
-func (g *rowLayout) capacity() int {
-	if g.height >= shellRailScrollback {
+func (g *Layout) capacity() int {
+	if g.height >= Scrollback {
 		return g.height
 	}
-	return shellRailScrollback + g.height
+	return Scrollback + g.height
 }
 
 // trimToScrollback applies an erase-saved-lines sequence (CSI 3 J): the terminal
@@ -82,7 +82,7 @@ func (g *rowLayout) capacity() int {
 //
 // The trim only reaches the scrollback: rows on the screen stay, and so do the
 // cursor and the screen top, which are already inside the last `height` rows.
-func (g *rowLayout) trimToScrollback() {
+func (g *Layout) trimToScrollback() {
 	if g.alt {
 		// A full-screen program erasing its own screen's saved lines changes nothing
 		// about the transcript's buffer; the rows it is painting are not recorded and
@@ -111,7 +111,7 @@ func (g *rowLayout) trimToScrollback() {
 // rows once; that is amortized over the rows which filled that capacity, rather
 // than paid on every trim. The live slice remains `rows[0:]`, so all row-indexed
 // accesses continue to use the terminal's numbering directly.
-func (g *rowLayout) trimFront(drop int) {
+func (g *Layout) trimFront(drop int) {
 	if drop <= 0 {
 		return
 	}
@@ -131,7 +131,7 @@ func (g *rowLayout) trimFront(drop int) {
 
 // screenTop is the row a cursor-addressing sequence counts from: the top of the
 // screen, which is the window the cursor has scrolled into view.
-func (g *rowLayout) screenTop() int {
+func (g *Layout) screenTop() int {
 	if g.top < 0 {
 		return 0
 	}
@@ -142,7 +142,7 @@ func (g *rowLayout) screenTop() int {
 // nothing to colour there. It is the one place a row is left holding no bytes
 // while the bytes it held are still in the log, which is exactly what erasing a
 // line means.
-func (g *rowLayout) erase(from, to int) {
+func (g *Layout) erase(from, to int) {
 	if g.alt {
 		return
 	}
@@ -154,7 +154,7 @@ func (g *rowLayout) erase(from, to int) {
 	}
 	for r := from; r < to; r++ {
 		g.ensure(r)
-		g.rows[r] = shellRowSpan{}
+		g.rows[r] = Span{}
 	}
 	if g.row >= from && g.row < to {
 		g.pending = true
@@ -170,11 +170,11 @@ func (g *rowLayout) erase(from, to int) {
 // bytes still standing at the left of it are the row's content. Dropping the whole
 // row would lose the prompt of every command whose line was repainted, which is
 // most of them.
-func (g *rowLayout) eraseLine(mode int) {
+func (g *Layout) eraseLine(mode int) {
 	if g.alt {
 		return
 	}
-	sp := g.span(g.row)
+	sp := g.SpanAt(g.row)
 	if sp.End <= sp.Start {
 		return
 	}
@@ -184,7 +184,7 @@ func (g *rowLayout) eraseLine(mode int) {
 	}
 	if mode == 2 {
 		g.ensure(g.row)
-		g.rows[g.row] = shellRowSpan{}
+		g.rows[g.row] = Span{}
 		g.pending = true
 		return
 	}
@@ -192,7 +192,7 @@ func (g *rowLayout) eraseLine(mode int) {
 	// cursor; when the cursor is at the start of the row that is the whole row.
 	if g.col <= 0 {
 		g.ensure(g.row)
-		g.rows[g.row] = shellRowSpan{}
+		g.rows[g.row] = Span{}
 		g.pending = true
 	}
 }

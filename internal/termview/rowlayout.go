@@ -1,4 +1,4 @@
-package webui
+package termview
 
 import (
 	"unicode/utf8"
@@ -66,7 +66,7 @@ import (
 // past `scrollback + height` rows the terminal itself drops the oldest and slides
 // every remaining row number down, so a model that kept them would be counting in
 // a space the terminal has already left. See ensure for where that trim happens.
-type rowLayout struct {
+type Layout struct {
 	cols   int
 	height int
 	// rows is the buffer, indexed by the row number the terminal itself would use:
@@ -76,7 +76,7 @@ type rowLayout struct {
 	// every row number down, so an offset would have to be subtracted from every
 	// one of them on the way out, and any path that forgot would name a row the
 	// terminal does not have.
-	rows []shellRowSpan
+	rows []Span
 	row  int // the cursor's row
 	col  int
 	// pending says the row the cursor is on is about to be rewritten, so the next
@@ -142,20 +142,20 @@ const (
 	escSkip
 )
 
-func newRowLayout(cols, height int) *rowLayout {
+func New(cols, height int) *Layout {
 	if height < 1 {
 		height = 1
 	}
-	return &rowLayout{cols: cols, height: height}
+	return &Layout{cols: cols, height: height}
 }
 
 // rowCount is the number of rows the log has.
-func (g *rowLayout) rowCount() int { return len(g.rows) }
+func (g *Layout) RowCount() int { return len(g.rows) }
 
 // window returns the spans of rows [top, top+count), with a null for every row
 // holding no bytes or lying outside the layout.
-func (g *rowLayout) window(top, count int) []*shellRowSpan {
-	out := make([]*shellRowSpan, count)
+func (g *Layout) Window(top, count int) []*Span {
+	out := make([]*Span, count)
 	for i := 0; i < count; i++ {
 		r := top + i
 		if r < 0 || r >= len(g.rows) || g.rows[r].End <= g.rows[r].Start {
@@ -168,7 +168,7 @@ func (g *rowLayout) window(top, count int) []*shellRowSpan {
 }
 
 // feed replays one piece of the log; `base` is the log offset of data[0].
-func (g *rowLayout) feed(base int64, data []byte) {
+func (g *Layout) Feed(base int64, data []byte) {
 	g.at = base
 	if len(g.tail) > 0 {
 		data = append(g.tail, data...)
@@ -218,7 +218,7 @@ func (g *rowLayout) feed(base int64, data []byte) {
 			i++
 		case b == '\t':
 			g.touch(g.row, g.at+int64(i), g.at+int64(i)+1)
-			g.col = (g.col/shellRailTabStop + 1) * shellRailTabStop
+			g.col = (g.col/TabStop + 1) * TabStop
 			if g.col >= g.cols {
 				g.newRow()
 			}
@@ -246,7 +246,7 @@ func (g *rowLayout) feed(base int64, data []byte) {
 
 // write places one printable rune, wrapping at the right edge. `off` is its byte
 // offset within the current read.
-func (g *rowLayout) write(off int64, r rune) {
+func (g *Layout) write(off int64, r rune) {
 	if g.alt {
 		return
 	}
@@ -266,7 +266,7 @@ func (g *rowLayout) write(off int64, r rune) {
 		// so the row's range starts here. The bytes it replaced belong to no row:
 		// they are not on screen any more, which is what the rail must not colour.
 		g.pending = false
-		sp := g.span(g.row)
+		sp := g.SpanAt(g.row)
 		sp.Start, sp.End = from, from
 	}
 	g.touch(g.row, from, from+int64(utf8.RuneLen(r)))
@@ -287,14 +287,14 @@ func (g *rowLayout) write(off int64, r rune) {
 // mark is recorded at exactly such an offset: the keystroke ended at the carriage
 // return that submitted the line. Leaving control bytes out would put the mark in
 // a gap between two rows and the input bar would be missing from the strip.
-func (g *rowLayout) touch(row int, start, end int64) {
+func (g *Layout) touch(row int, start, end int64) {
 	if g.alt {
 		return
 	}
 	if row < 0 || end <= start {
 		return // its row has aged out of the scrollback
 	}
-	sp := g.span(row)
+	sp := g.SpanAt(row)
 	if sp.End <= sp.Start {
 		sp.Start = start
 	}
@@ -308,7 +308,7 @@ func (g *rowLayout) touch(row int, start, end int64) {
 // covers just those columns, so the text to its left is still on the row: that is
 // how a prompt survives the inline prediction a shell writes over the tail of the
 // line, and resetting the whole row there would throw the prompt away.
-func (g *rowLayout) armRepaint() {
+func (g *Layout) armRepaint() {
 	if g.alt {
 		return
 	}
@@ -316,7 +316,7 @@ func (g *rowLayout) armRepaint() {
 }
 
 // newRow closes the row being written and moves the cursor to the next one.
-func (g *rowLayout) newRow() {
+func (g *Layout) newRow() {
 	if g.alt {
 		// A line break inside a full-screen program advances its cursor, not the
 		// transcript's: the program has a screen of its own, and the cursor the
@@ -336,10 +336,19 @@ func (g *rowLayout) newRow() {
 }
 
 // span returns one row's span, growing the layout so the row exists.
-func (g *rowLayout) span(row int) *shellRowSpan {
+func (g *Layout) SpanAt(row int) *Span {
 	g.ensure(row)
 	if row < 0 {
 		row = 0
 	}
 	return &g.rows[row]
 }
+
+// Alt reports whether a full-screen program currently holds the screen (47 / 1047 /
+// 1049). What the program painted there is NOT recorded — see setAlt — so this says
+// "a TUI is in control", not "here is what it shows".
+func (g *Layout) Alt() bool { return g.alt }
+
+// Cursor is where the terminal's cursor stands: the row in the model's numbering and the
+// column within it. A pty gives no other way to ask whether a prompt is ready.
+func (g *Layout) Cursor() (row, col int) { return g.row, g.col }

@@ -1,4 +1,4 @@
-package webui
+package termview
 
 // GET /api/shells/{id}/rail: which bytes of a shell's log sit on which terminal row.
 //
@@ -36,7 +36,7 @@ package webui
 // many bytes it used. The sequences that move the cursor are applied; the ones
 // that only paint are read and dropped, because the rail asks where the text is,
 // not what colour it is.
-func (g *rowLayout) feedEscape(base int64, data []byte) int {
+func (g *Layout) feedEscape(base int64, data []byte) int {
 	switch g.esc {
 	case escEsc:
 		g.esc = escNone
@@ -85,7 +85,7 @@ func (g *rowLayout) feedEscape(base int64, data []byte) int {
 		}
 		// No final byte yet: hold the parameters for the next read, bounded so a
 		// stream that never ends a sequence cannot grow the body without limit.
-		if len(g.csiBody) < shellRailMaxCSIParams {
+		if len(g.csiBody) < MaxCSIParams {
 			g.csiBody = append(g.csiBody, data...)
 		}
 		// What has arrived is recorded now, so a read that splits mid-sequence leaves
@@ -124,7 +124,7 @@ func (g *rowLayout) feedEscape(base int64, data []byte) int {
 // applyCSI applies one CSI sequence: `body` is its parameters (without the
 // introducer or the final byte) and `final` the byte that ended it. Missing and
 // zero parameters default as the sequences themselves define, which is usually 1.
-func (g *rowLayout) applyCSI(body []byte, final byte) {
+func (g *Layout) applyCSI(body []byte, final byte) {
 	if g.alt && !(len(body) > 0 && body[0] == '?') {
 		// A full-screen program addressing its own screen: the rows and the cursor it
 		// moves are its own, and the transcript's are the ones saved on the way in. Its
@@ -229,7 +229,7 @@ func (g *rowLayout) applyCSI(body []byte, final byte) {
 // applyPrivateMode reads the private modes this model has to act on, which is the
 // alternate screen and nothing else. Cursor visibility, mouse tracking and
 // bracketed paste say how a terminal behaves, not which row text lands on.
-func (g *rowLayout) applyPrivateMode(body []byte, final byte) {
+func (g *Layout) applyPrivateMode(body []byte, final byte) {
 	if final != 'h' && final != 'l' {
 		return
 	}
@@ -254,7 +254,7 @@ func (g *rowLayout) applyPrivateMode(body []byte, final byte) {
 // and copied back on the way out, because that is what the terminal does — the
 // normal buffer keeps its cursor, its screen top and its rows throughout, and a
 // model that recomputed them would be guessing at what the program did in between.
-func (g *rowLayout) setAlt(on bool) {
+func (g *Layout) setAlt(on bool) {
 	if on == g.alt {
 		return
 	}
