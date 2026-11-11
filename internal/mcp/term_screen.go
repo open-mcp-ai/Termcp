@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/ansi"
+	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/termview"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
@@ -40,6 +41,53 @@ const screenTailRows = 200
 // only how many calls it takes.
 const screenReadChunk = 256 * 1024
 
+// replayLayout builds the channel's screen from its log. The caller decides what to ask it.
+func (s *Server) replayLayout(cs *session.ChildShell) (*termview.Layout, int64, bool) {
+	info := cs.Info()
+	cols, rows := info.Cols, info.Rows
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	total, err := s.sessMgr.OutputSize(cs.ParentSessionID(), cs.ID)
+	if err != nil {
+		return nil, 0, false
+	}
+	layout := termview.New(cols, rows)
+	for off := int64(0); off < total; {
+		chunk, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, off, screenReadChunk)
+		if err != nil {
+			return nil, 0, false
+		}
+		if len(chunk) == 0 {
+			break
+		}
+		layout.Feed(off, chunk)
+		off += int64(len(chunk))
+	}
+	return layout, total, true
+}
+
+// channelInAltScreen reports whether a full-screen program holds this channel's terminal.
+//
+// IT REPLAYS THE LOG RATHER THAN GUESSING FROM THE TAIL: the answer is the model's, and the
+// model is the only thing here that knows a `?1049h` from the same bytes printed as text.
+// It runs only when a compound line is about to be typed, which is why paying for a replay
+// is acceptable — the alternative is a guard that fires on the common case.
+func (s *Server) channelInAltScreen(handle string) bool {
+	cs, bad := s.requireShell(handle)
+	if bad != nil || cs == nil {
+		return false
+	}
+	layout, _, ok := s.replayLayout(cs)
+	if !ok {
+		return false
+	}
+	return layout.Alt()
+}
+
 // readScreen replays the channel's log and answers with the screen.
 func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	cs, bad := s.requireShell(stmt.Target)
@@ -55,22 +103,10 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	if rows <= 0 {
 		rows = 24
 	}
-	total, ok := s.outputSizeFor(stmt.Target)
+	layout, total, ok := s.replayLayout(cs)
 	if !ok {
-		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeShellNotFound,
+		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed,
 			msg: "the channel's log is not readable"})
-	}
-	layout := termview.New(cols, rows)
-	for off := int64(0); off < total; {
-		chunk, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, off, screenReadChunk)
-		if err != nil {
-			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeOperationFailed, msg: err.Error()})
-		}
-		if len(chunk) == 0 {
-			break
-		}
-		layout.Feed(off, chunk)
-		off += int64(len(chunk))
 	}
 
 	want := rows

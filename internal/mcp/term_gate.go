@@ -15,31 +15,33 @@ import (
 // sign, because `;` does not stop on failure either. Losing a segment does not shorten
 // such a line, it RE-BINDS the remainder.
 //
-// THE GUARD IS STRUCTURAL, NOT A GUESS ABOUT THE PROCESS. "Is something in the
-// foreground?" cannot be answered from here — the process group lives on the far side of
-// the SSH connection and a Windows terminal has no such notion (see runDetail). What CAN
-// be known is two facts the server already has:
+// THE FIRST VERSION OF THIS GUARD REFUSED EVERY COMPOUND LINE ON A CHANNEL WITHOUT A
+// `Completion` HEADER, and that turned out to be a default rather than a boundary: a pty
+// `run` never produces `Completion` on its own, so the rule became "compound lines need
+// --force on a pty, forever". Five of this repository's own tests had to be edited to keep
+// passing — the shape of a product default changing, not of an edge being covered.
 //
-//   - whether the last `run` on this channel ended with evidence (`Completion`) or not;
-//   - whether the line about to be typed is simple or compound.
+// So the decision is made on the evidence the server actually has, in three tiers:
 //
-// So an unconfirmed channel refuses a compound line, and a confirmed one does not. A
-// simple command still passes on an unconfirmed channel: if it is eaten, it is eaten,
-// and nothing downstream is re-bound to a mistake.
+//	Alt-Screen: yes    the program owns the terminal. A shell line typed now is keys to
+//	                   that program, so a compound line is refused — observation, not
+//	                   inference: the grid exists because the program took the screen.
+//	Still-Running      bytes were arriving when the last window ended: something is
+//	                   executing, so a compound line is very likely to land half-delivered.
+//	                   Also observation.
+//	otherwise          nothing is known. The line is sent, and the reply carries a Warning:
+//	                   a claim the server cannot make must not be a refusal the caller
+//	                   cannot argue with.
 //
-// THIS IS DELIBERATELY NOT "REFUSE EVERYTHING WHEN UNSURE". A refusal that cannot see
-// the reason would fire on every batch of `a; b`, and a tool that refuses the ordinary
-// case is a tool people work around with `--force`, which removes the guard from the
-// case it was built for. The escape hatch exists and says what it costs.
+// A caller who knows better always has `--force`.
 
 // compoundSeparators are the bytes that turn one line into more than one meaning.
 //
 // The list over-approximates on purpose: a `;` inside quotes is not a separator, and
 // telling the two apart needs a parser per target shell (POSIX, PowerShell, cmd) — which
-// would be a second grammar to keep in sync with three hosts. Over-approximating refuses
-// a harmless `echo "a;b"` on an unconfirmed channel, which costs one `--force` or one
-// `--until`; under-approximating would let the `rm -rf *` case through, which costs the
-// working directory.
+// would be a second grammar to keep in sync with three hosts. Over-approximating costs a
+// Warning on `echo "a;b"`, which is a line the caller can read past; under-approximating
+// would let the `rm -rf *` case through, which costs the working directory.
 func compoundSeparators(payload string) (string, bool) {
 	for _, sep := range []string{"&&", "||", ";", "|", ">", "<", "\n", "\r"} {
 		if strings.Contains(payload, sep) {
@@ -49,60 +51,84 @@ func compoundSeparators(payload string) (string, bool) {
 	return "", false
 }
 
-// noteRunCompletion records what a run's reply proved, for the next run to consult.
-//
-// CONFIRMED MEANS A `Completion` HEADER WAS THERE — `matched` (the caller's own
-// `--until`) or `exit` (the remote shell said the command ended). Its absence means not
-// known, which is the whole point of the header change: the reply no longer dresses a
-// measurement up as a verdict, so this gate has exactly one bit to read and it is a real
-// one.
-func (s *Server) noteRunCompletion(handle string, confirmed bool) {
-	s.runEvidence.Store(handle, confirmed)
+// runProof is what a run's reply proved, recorded for the next run to consult.
+type runProof struct {
+	// confirmed: the reply carried a `Completion` header — the caller's own `--until`
+	// matched, or the remote shell reported the command ended.
+	confirmed bool
+	// busy: the reply said Still-Running, which means bytes were still arriving when the
+	// window ended. That is observation of work, not an inference about it.
+	busy bool
 }
 
-// lastRunConfirmed reports whether this channel's last run proved completion.
+// noteRunProof records what a run's reply proved.
+func (s *Server) noteRunProof(handle string, confirmed, busy bool) {
+	s.runEvidence.Store(handle, runProof{confirmed: confirmed, busy: busy})
+}
+
+// lastRunProof reports what this channel's last run proved, if anything.
 //
-// KNOWN IS FALSE UNTIL A RUN HAS HAPPENED. An unknown channel is not an unconfirmed one:
-// refusing the first compound line on a fresh channel would refuse the normal case to
-// guard against a state that only exists after a run.
-func (s *Server) lastRunConfirmed(handle string) (confirmed, known bool) {
+// KNOWN IS FALSE UNTIL A RUN HAS HAPPENED: refusing the first compound line on a fresh
+// channel would refuse the normal case to guard against a state that only exists after a run.
+func (s *Server) lastRunProof(handle string) (runProof, bool) {
 	v, ok := s.runEvidence.Load(handle)
 	if !ok {
-		return false, false
+		return runProof{}, false
 	}
-	b, _ := v.(bool)
-	return b, true
+	p, _ := v.(runProof)
+	return p, true
 }
 
-// refuseUnconfirmedCompound is the gate, checked BEFORE anything is typed.
-//
-// A refusal has to arrive before the bytes do, for the same reason every other run flag
-// is validated up front (issue #179): a 4xx that arrives after the side effect reads as
-// "nothing happened" and invites a retry that repeats it.
-func (s *Server) refuseUnconfirmedCompound(stmt directive.Statement) *toolFailure {
+// compoundVerdict is the whole decision, as a pure function: what to do about a compound
+// line, given what is known. Kept apart from the I/O so the table is testable without a
+// terminal.
+func compoundVerdict(force, compound, altScreen, busy, confirmed, known bool) (refuse string, warn bool) {
+	if force || !compound {
+		return "", false
+	}
+	switch {
+	case altScreen:
+		return "a full-screen program owns the terminal", true
+	case busy:
+		return "the previous command was still producing output when its window ended", true
+	case !known || !confirmed:
+		// NOT A REFUSAL: nothing here says a program is holding the terminal, and a 4xx
+		// that rests on "we could not tell" is the kind of guess this server does not make.
+		return "", true
+	}
+	return "", false
+}
+
+// compoundGate runs the table above against the channel, before anything is typed (a 4xx
+// must not arrive after the side effect — issue #179). It returns the warning to attach to
+// the reply when it let the line through.
+func (s *Server) compoundGate(stmt directive.Statement) (warn string, fail *toolFailure) {
 	if stmt.FlagState("force") != directive.FlagAbsent {
-		return nil
+		return "", nil
 	}
-	// PIPE CHANNELS ARE NOT THIS HAZARD. Their bytes go to a process's stdin, not to a
+	// PIPE CHANNELS ARE NOT THIS HAZARD: their bytes go to a process's stdin, not to a
 	// terminal's line editor, so there is no queue that hands a half-typed line to the
-	// shell afterwards — and a resident pipe (`cat`, a REPL) is never "confirmed" by
-	// design, so gating it would refuse the ordinary way to use one.
+	// shell afterwards.
 	if !s.ptyRunning(stmt.Target) {
-		return nil
-	}
-	confirmed, known := s.lastRunConfirmed(stmt.Target)
-	if !known || confirmed {
-		return nil
+		return "", nil
 	}
 	sep, compound := compoundSeparators(stmt.Payload)
 	if !compound {
-		return nil
+		return "", nil
 	}
-	return &toolFailure{code: CodeConflict,
-		msg: "this line is compound (`" + sep + "`) and the previous run on " + stmt.Target +
-			" ended without evidence that it finished. If a program still holds the terminal, part of this " +
-			"line is taken as input by it and the rest is executed on its own — `cd dir; rm -rf *` loses the " +
-			"`cd` and the rest runs somewhere else, silently. " +
-			"Pass `--until` (e.g. `--until exit` or a prompt pattern) so the channel has evidence before the " +
-			"next line goes in, read the channel, or `--force` to type it anyway."}
+	proof, known := s.lastRunProof(stmt.Target)
+	reason, warned := compoundVerdict(false, compound, s.channelInAltScreen(stmt.Target), proof.busy, proof.confirmed, known)
+	if reason != "" {
+		return "", &toolFailure{code: CodeConflict,
+			msg: "this line is compound (`" + sep + "`) and " + reason + ". Part of it would be taken as input " +
+				"by whatever holds the terminal and the rest executed on its own — `cd dir; rm -rf *` loses the " +
+				"`cd` and the rest runs somewhere else, silently. Send the segments separately, pass `--until` so " +
+				"the channel has evidence, or `--force` to type it anyway."}
+	}
+	if warned {
+		return "this line is compound (`" + sep + "`) and the previous command on this channel left no evidence " +
+			"that it finished. Nothing observed says a program is holding the terminal, so the line was sent — " +
+			"but if it is answered by something other than the shell, part of it was input, not a command.", nil
+	}
+	return "", nil
 }
