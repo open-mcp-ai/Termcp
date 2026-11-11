@@ -6,24 +6,21 @@ import (
 	"time"
 )
 
-// HOW THE WAIT ENDED IS A FACT THE CALLER NEEDS, AND IT WAS THE ONE NOT SAID.
+// A WAIT THAT ENDED ON QUIETNESS MAKES NO CLAIM.
 //
-// A pty has no completion signal, so a `run` on one ends its wait one of two ways:
-// the window runs out, or the stream goes quiet (half a second with no new byte). The
-// quiet case is the ordinary one — it is how a finished command looks — and it said
-// nothing at all. So a command that went silent while it worked was indistinguishable
-// from a command that had finished: the reply was 200, the body was the echoed line,
-// and the caller had no way to tell whether more was coming.
+// A pty has no completion signal, so a `run` on one ends its wait one of two ways: the
+// window runs out, or the stream goes quiet (half a second with no new byte). The quiet
+// case is the ordinary one — it is how a finished command looks — and the reply used to
+// say `Completion: quiet` about it.
 //
-// Three callers reading the same reply hit it the same way ("the output looks
-// truncated, and nothing tells me whether it is"). Measured before the fix, a
-// `sleep 6` with a 2s window: code 200, Waited 1540ms, no header saying anything about
-// why the wait stopped at 1540ms.
-//
-// `Still-Running` is deliberately not reused: it is set when the window expired while
-// bytes were still arriving, which is evidence. A quiet stream is not evidence of
-// anything, so the reply names the evidence instead of guessing at a conclusion.
-func TestAPtyRunSaysTheStreamWentQuiet(t *testing.T) {
+// THAT HEADER WAS A MEASUREMENT DRESSED AS A VERDICT, and callers acted on it: reading
+// `Completion: quiet` and moving on is how the next command got typed into a program
+// that still held the terminal. Standing still is not evidence of anything — a finished
+// command and a thinking one are identical on a pty — so the reply now says nothing
+// about completion at all. `Completion` appears only when there is evidence to name
+// (`matched` from the caller's own `--until`, `exit` from the remote shell), and a
+// missing header means exactly what its absence says: not known.
+func TestAQuietPtyRunClaimsNothing(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
@@ -35,18 +32,18 @@ func TestAPtyRunSaysTheStreamWentQuiet(t *testing.T) {
 		"args":    []any{"echo FIRST-LINE; sleep 4; echo LATE-LINE"},
 		"timeout": 30,
 	})
-	if v, ok := headerValue(t, got, "Completion"); !ok || v != "quiet" {
-		t.Fatalf("a wait that ended on quietness does not say so (Completion=%q, present=%v):\n%s", v, ok, firstLine(got))
+	if v, ok := headerValue(t, got, "Completion"); ok {
+		t.Fatalf("a wait that ended on quietness claimed Completion=%q; a quiet stream is not evidence of anything:\n%s", v, firstLine(got))
 	}
-	// And it must not claim the other thing: nothing here proves the command finished
-	// or that it is still running.
+	// And it must not claim the other thing either: nothing here proves the command is
+	// still running.
 	if v, ok := headerValue(t, got, "Still-Running"); ok {
 		t.Fatalf("a quiet stream claimed Still-Running=%q, which is evidence this reply does not have", v)
 	}
 
-	// The late output is still in the stream, which is what makes the header useful
-	// rather than alarming: the command kept working and its bytes arrived after the
-	// reply did. Polled, because the point is that they arrive LATER.
+	// The late output is still in the stream, which is what makes the silence harmless:
+	// the command kept working and its bytes arrived after the reply did. Polled,
+	// because the point is that they arrive LATER.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(termText(t, s, map[string]any{"cmd": "read " + h + " --tail 20", "timeout": 0}), "LATE-LINE") {
