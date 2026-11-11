@@ -15,9 +15,10 @@ package termview
 //
 // WHAT IT MODELS: where characters land — cursor addressing, line feed at the bottom
 // margin, scrolling within the margins DECSTBM sets, and the erase operations a redraw
-// uses. WHAT IT DOES NOT: colours, attributes, character sets, wide-character widths.
-// Those decide how a cell looks, not which cell holds what, and a caller reading a screen
-// needs the second.
+// uses — plus how many columns a character occupies, because a Chinese row that counts
+// its characters instead of its columns puts every cursor address after it one cell off.
+// WHAT IT DOES NOT: colours, attributes, character sets. Those decide how a cell looks,
+// not which cell holds what, and a caller reading a screen needs the second.
 
 // grid is one fixed-size screen of characters.
 type grid struct {
@@ -70,13 +71,20 @@ func (g *grid) clampCol(c int) int {
 	return c
 }
 
+// put writes one character at the cursor and advances by the columns it occupies. A wide
+// character marks its second cell as occupied-but-empty, so a later cursor address into
+// it lands where the terminal would.
 func (g *grid) put(r rune) {
-	if g.col >= g.cols {
+	w := runeWidth(r)
+	if g.col+w > g.cols {
 		g.col = 0
 		g.lf()
 	}
 	g.cells[g.row][g.col] = r
-	g.col++
+	if w == 2 && g.col+1 < g.cols {
+		g.cells[g.row][g.col+1] = wideTail
+	}
+	g.col += w
 }
 
 func (g *grid) cr() { g.col = 0 }
@@ -284,16 +292,25 @@ func (g *grid) insertChars(n int) {
 	}
 }
 
-// lines renders the grid the way a screen reads: trailing blanks trimmed, because an
-// 80-column row of spaces is a fact about the terminal, not about what the program said.
+// lines renders the grid the way a screen reads: the second cell of a wide character
+// emits nothing (the character before it already occupies both columns), and trailing
+// blanks are trimmed, because an 80-column row of spaces is a fact about the terminal,
+// not about what the program said.
 func (g *grid) lines() []string {
 	out := make([]string, 0, g.rows)
 	for _, row := range g.cells {
-		end := len(row)
-		for end > 0 && row[end-1] == ' ' {
+		var b []rune
+		for _, r := range row {
+			if r == wideTail {
+				continue
+			}
+			b = append(b, r)
+		}
+		end := len(b)
+		for end > 0 && b[end-1] == ' ' {
 			end--
 		}
-		out = append(out, string(row[:end]))
+		out = append(out, string(b[:end]))
 	}
 	return out
 }

@@ -122,3 +122,22 @@ func TestAltGridDoesNotReachTheTranscript(t *testing.T) {
 		t.Fatalf("painting the program's screen added %d transcript rows", got-before)
 	}
 }
+
+// A WIDE CHARACTER OCCUPIES TWO COLUMNS IN THE ALT GRID, EXACTLY AS IT DOES IN THE
+// TRANSCRIPT. Counting it as one puts every cursor address after it one cell too far left,
+// which is how Chinese rows drift off-column in a full-screen program.
+func TestAltGridAdvancesTwoColumnsOnWideRunes(t *testing.T) {
+	g := New(80, 4)
+	g.Feed(0, []byte("\x1b[?1049h\x1b[1;1H中A"))
+	lines := g.AltLines()
+	if lines == nil {
+		t.Fatalf("no alt lines")
+	}
+	if got := lines[0]; got != "中A" {
+		t.Fatalf("row 1 is %q, want 中A", got)
+	}
+	// '中' takes col 0 and 1, 'A' takes col 2; next write is at col 3.
+	if g.altGrid.col != 3 {
+		t.Fatalf("after '中A' the cursor column is %d, want 3 (中 occupies 2)", g.altGrid.col)
+	}
+}

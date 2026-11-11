@@ -70,13 +70,14 @@ func (s *Server) replayLayout(cs *session.ChildShell) (*termview.Layout, int64, 
 	return layout, total, true
 }
 
-// channelInAltScreen reports whether a full-screen program holds this channel's terminal.
+// channelScreenState reports whether a program is holding or drawing on this channel's
+// terminal: the alternate screen is up, or the cursor is hidden while it repaints.
 //
 // IT REPLAYS THE LOG RATHER THAN GUESSING FROM THE TAIL: the answer is the model's, and the
 // model is the only thing here that knows a `?1049h` from the same bytes printed as text.
 // It runs only when a compound line is about to be typed, which is why paying for a replay
 // is acceptable — the alternative is a guard that fires on the common case.
-func (s *Server) channelInAltScreen(handle string) bool {
+func (s *Server) channelScreenState(handle string) (altScreen bool) {
 	cs, bad := s.requireShell(handle)
 	if bad != nil || cs == nil {
 		return false
@@ -85,7 +86,7 @@ func (s *Server) channelInAltScreen(handle string) bool {
 	if !ok {
 		return false
 	}
-	return layout.Alt()
+	return layout.Alt() || !layout.CursorVisible()
 }
 
 // readScreen replays the channel's log and answers with the screen.
@@ -134,31 +135,57 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		return envelope.Slot{
 			Code: 200,
 			Headers: map[string]string{
-				"Path":          stmt.Path,
-				"Screen":        "the full-screen program's own screen at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
-				"Cols":          strconv.Itoa(cols),
-				"Rows":          strconv.Itoa(rows),
-				"Cursor":        strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
-				"Alt-Screen":    "yes",
-				"Screen-Rows":   strconv.Itoa(len(alt)),
-				"Content-Range": strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
+				"Path":           stmt.Path,
+				"Screen":         "the full-screen program's own screen at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
+				"Cols":           strconv.Itoa(cols),
+				"Rows":           strconv.Itoa(rows),
+				"Cursor":         strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
+				"Cursor-Visible": yesNo(layout.CursorVisible()),
+				"Alt-Screen":     "yes",
+				"Paste-Mode":     yesNo(layout.BracketedPaste()),
+				"Screen-Rows":    strconv.Itoa(len(alt)),
+				"Content-Range":  strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
 			},
 			Body: body.String(),
 		}
 	}
 
-	// THE LAST N ROWS THAT SAY SOMETHING, not the last N slots of the buffer.
-	//
-	// Two things separate the two. The model's row list runs to the screen's height, and
-	// the rows below the cursor are blank by definition — a terminal is a fixed grid, not
-	// a list of lines. And a row can hold bytes that display as nothing: a prompt's colour
-	// reset, an erase, the move that put the cursor there. Answering `--tail 2` with either
-	// is true of the grid and useless to a caller asking what happened last.
 	count := layout.RowCount()
-	// One read for the whole tail, sliced per row: the rows are adjacent by construction,
+	// PAGING IS THE SCREEN'S OWN COORDINATES (#312): `--top` names the first row in the
+	// model's numbering and `--rows` how many, so a caller can walk back through output
+	// that has scrolled off. Without `--top` the reply is the tail, which is what a
+	// terminal shows.
+	paged := false
+	from := 0
+	span := want
+	if v, ok := stmt.Flag("top"); ok {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			paged = true
+			from = min(n, count)
+			span = rows
+			if v2, ok := stmt.Flag("rows"); ok {
+				if m, err := strconv.Atoi(v2); err == nil && m > 0 {
+					span = m
+				}
+			}
+			span = min(span, screenTailRows)
+		}
+	}
+	if !paged {
+		// THE LAST N ROWS THAT SAY SOMETHING, not the last N slots of the buffer.
+		//
+		// Two things separate the two. The model's row list runs to the screen's height,
+		// and the rows below the cursor are blank by definition — a terminal is a fixed
+		// grid, not a list of lines. And a row can hold bytes that display as nothing: a
+		// prompt's colour reset, an erase, the move that put the cursor there. Answering
+		// `--tail 2` with either is true of the grid and useless to a caller asking what
+		// happened last.
+		from = max(0, count-(want+rows))
+		span = count - from
+	}
+	// One read for the whole range, sliced per row: the rows are adjacent by construction,
 	// and one read per row would be a tool call per row.
-	from := max(0, count-(want+rows))
-	spans := layout.Window(from, count-from)
+	spans := layout.Window(from, span)
 	unionStart, unionEnd := int64(-1), int64(0)
 	for _, sp := range spans {
 		if sp == nil || sp.End <= sp.Start {
@@ -189,15 +216,27 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		text := ansi.Strip(string(tailBytes[lo:hi]))
 		return strings.TrimRight(text, "\r\n")
 	}
-	keptRows := make([]string, 0, want)
-	for row := len(spans) - 1; row >= 0 && len(keptRows) < want; row-- {
-		if text := rowText(spans[row]); text != "" {
-			keptRows = append(keptRows, text)
+
+	var keptRows []string
+	if paged {
+		// A page is a page: empty rows stay, because a caller walking a numbered range
+		// needs the numbering to line up with what it will ask for next.
+		for _, sp := range spans {
+			keptRows = append(keptRows, rowText(sp))
 		}
+	} else {
+		for row := len(spans) - 1; row >= 0 && len(keptRows) < want; row-- {
+			if text := rowText(spans[row]); text != "" {
+				keptRows = append(keptRows, text)
+			}
+		}
+		// Collected newest-first; a screen reads oldest-first.
+		slices.Reverse(keptRows)
 	}
-	// Collected newest-first; a screen reads oldest-first.
-	slices.Reverse(keptRows)
-	top := max(0, count-len(keptRows))
+	top := from
+	if !paged {
+		top = max(0, count-len(keptRows))
+	}
 
 	var body strings.Builder
 	for _, row := range keptRows {
@@ -208,15 +247,18 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	return envelope.Slot{
 		Code: 200,
 		Headers: map[string]string{
-			"Path":          stmt.Path,
-			"Screen":        "replayed from the log at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
-			"Cols":          strconv.Itoa(cols),
-			"Rows":          strconv.Itoa(rows),
-			"Cursor":        strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
-			"Alt-Screen":    yesNo(layout.Alt()),
-			"Screen-Top":    strconv.Itoa(top),
-			"Screen-Rows":   strconv.Itoa(len(keptRows)),
-			"Content-Range": strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
+			"Path":           stmt.Path,
+			"Screen":         "replayed from the log at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
+			"Cols":           strconv.Itoa(cols),
+			"Rows":           strconv.Itoa(rows),
+			"Cursor":         strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
+			"Cursor-Visible": yesNo(layout.CursorVisible()),
+			"Alt-Screen":     yesNo(layout.Alt()),
+			"Paste-Mode":     yesNo(layout.BracketedPaste()),
+			"Screen-Top":     strconv.Itoa(top),
+			"Screen-Total":   strconv.Itoa(count),
+			"Screen-Rows":    strconv.Itoa(len(keptRows)),
+			"Content-Range":  strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
 		},
 		Body: body.String(),
 	}

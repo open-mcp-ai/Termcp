@@ -117,7 +117,9 @@ func (s *Server) compoundGate(stmt directive.Statement) (warn string, fail *tool
 		return "", nil
 	}
 	proof, known := s.lastRunProof(stmt.Target)
-	reason, warned := compoundVerdict(false, compound, s.channelInAltScreen(stmt.Target), proof.busy, proof.confirmed, known)
+	// A HIDDEN CURSOR IS THE SAME TIER OF EVIDENCE AS THE ALT SCREEN: a program that
+	// turned it off is repainting, and a line typed now is keys to it, not a command.
+	reason, warned := compoundVerdict(false, compound, s.channelScreenState(stmt.Target), proof.busy, proof.confirmed, known)
 	if reason != "" {
 		return "", &toolFailure{code: CodeConflict,
 			msg: "this line is compound (`" + sep + "`) and " + reason + ". Part of it would be taken as input " +
