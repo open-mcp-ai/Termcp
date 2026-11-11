@@ -151,6 +151,9 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 		if m.ServeOAuthMetadata(w, r) {
 			return
 		}
+		if m.oauthEndpoint(w, r) {
+			return
+		}
 		if r.URL.Path == "/auth/agents" || strings.HasPrefix(r.URL.Path, "/auth/agents/") {
 			http.NotFound(w, r)
 			return
@@ -261,6 +264,34 @@ func (m *Managed) Wrap(next http.Handler) http.Handler {
 			} else {
 				m.oauthSettings(w, r)
 			}
+		case r.URL.Path == "/auth/oauth/test" && r.Method == "POST":
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			m.oauthSettingsTest(w, r)
+		case r.URL.Path == "/auth/oauth/users" || strings.HasPrefix(r.URL.Path, "/auth/oauth/users/"):
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			if unsafeMethod(r.Method) {
+				m.audited(w, r, "oauth.user.update", m.oauthUsers)
+			} else {
+				m.oauthUsers(w, r)
+			}
+		case r.URL.Path == "/auth/oauth/grants" || strings.HasPrefix(r.URL.Path, "/auth/oauth/grants/"):
+			if session.Actor.Role != RoleAdmin {
+				authError(w, 403, "admin required")
+				return
+			}
+			if unsafeMethod(r.Method) {
+				m.audited(w, r, "oauth.grant.update", m.oauthGrants)
+			} else {
+				m.oauthGrants(w, r)
+			}
+		case m.oauthAvatar(w, r):
+			return
 		case r.URL.Path == "/auth/unlock" && r.Method == "POST":
 			m.unlock(w, r)
 		case r.URL.Path == "/auth/mcp":
@@ -506,28 +537,31 @@ func (m *Managed) permissions(w http.ResponseWriter, r *http.Request) {
 			authError(w, 400, err.Error())
 			return
 		}
-		m.mu.Lock()
-		beforeRevision := m.state.Revision
-		if input.Revision != m.state.Revision {
-			m.mu.Unlock()
-			authError(w, 409, "permissions changed; reload before saving")
-			return
-		}
-		s := m.state
-		s.Revision++
-		s.Permissions = input.Permissions
-		err := m.save(s, false)
-		if err == nil || errors.Is(err, configstore.ErrDurability) {
-			m.cancelDeniedTokensLocked()
-		}
-		m.mu.Unlock()
+		var beforeRevision uint64
+		err := m.commitState(r.Context(), func(s *managedState) (func(), error) {
+			beforeRevision = s.Revision
+			if input.Revision != s.Revision {
+				return nil, &statusError{status: http.StatusConflict, err: errors.New("permissions changed; reload before saving")}
+			}
+			s.Revision++
+			s.Permissions = cloneRolePolicy(input.Permissions)
+			return func() {
+				m.mu.Lock()
+				m.cancelDeniedTokensLocked()
+				m.mu.Unlock()
+			}, nil
+		})
 		if err != nil {
+			if status, ok := err.(*statusError); ok {
+				authError(w, status.status, status.err.Error())
+				return
+			}
 			authError(w, 500, "could not save permissions")
 			return
 		}
 		auditDetail(r.Context(), func(draft *auditDraft) {
 			draft.beforeRevision = beforeRevision
-			draft.afterRevision = s.Revision
+			draft.afterRevision = beforeRevision + 1
 		})
 	}
 	m.mu.Lock()

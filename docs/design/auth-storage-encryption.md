@@ -4,7 +4,7 @@
 
 状态：已实现，2026-10-29。此方案取代此前“独立认证密钥环”的候选设计。认证和主机配置使用同一 Repository、同一密钥环及同一 Main Key。
 
-关联：[配置加密](config-encryption.md)、[认证与签发](auth-issuance.md)、[stdio/daemon 协商](stdio-daemon-negotiation.md)。[简易 MCP token](mcp-static-tokens.md) 已实现；外部 AS 的 OAuth resource-server 切片见 [OAuth resource server](oauth-resource-server.md)，Termcp 自有授权服务器仍未实现。
+关联：[配置加密](config-encryption.md)、[认证与签发](auth-issuance.md)、[stdio/daemon 协商](stdio-daemon-negotiation.md)。[简易 MCP token](mcp-static-tokens.md) 与 [内置 OAuth/OIDC Agent 自动创建](builtin-oauth-user-agents.md) 已实现；两类凭据共用加密认证对象和 AgentPolicy，但保持独立生命周期。
 
 ## 1. 唯一主密码的含义
 

@@ -17,6 +17,9 @@ type transportOwner struct {
 	transport    string
 	clientMode   string
 	oauth        bool
+	grantID      string
+	oauthClient  string
+	resource     string
 }
 
 func (s *Server) rememberTransport(ctx context.Context, id string) connectionOwner {
@@ -32,6 +35,9 @@ func (s *Server) rememberTransport(ctx context.Context, id string) connectionOwn
 			transport:    mcpTransportFromContext(ctx),
 			clientMode:   mcpClientModeFromContext(ctx),
 			oauth:        auth.IsOAuthCredential(ctx),
+			grantID:      auth.OAuthGrantIDFromContext(ctx),
+			oauthClient:  auth.OAuthClientIDFromContext(ctx),
+			resource:     auth.OAuthResourceFromContext(ctx),
 		}
 		s.transportOwners.Store(id, owner)
 		return connectionOwner{
@@ -58,7 +64,7 @@ func (s *Server) authenticatedTransport(next http.Handler, sse bool) http.Handle
 				http.Error(w, "ambiguous MCP session", http.StatusBadRequest)
 				return
 			}
-			if id != "" && !s.authorizeTransport(id, actor, auth.CredentialIDFromContext(r.Context()), auth.IsOAuthCredential(r.Context())) {
+			if id != "" && !s.authorizeTransport(r.Context(), id, actor, auth.CredentialIDFromContext(r.Context()), auth.IsOAuthCredential(r.Context())) {
 				http.Error(w, "MCP session belongs to a different credential", http.StatusForbidden)
 				return
 			}
@@ -67,7 +73,7 @@ func (s *Server) authenticatedTransport(next http.Handler, sse bool) http.Handle
 	})
 }
 
-func (s *Server) authorizeTransport(id string, actor auth.Actor, credential string, oauth bool) bool {
+func (s *Server) authorizeTransport(ctx context.Context, id string, actor auth.Actor, credential string, oauth bool) bool {
 	owner, ok := s.transportOwners.Load(id)
 	if !ok {
 		return false
@@ -77,14 +83,20 @@ func (s *Server) authorizeTransport(id string, actor auth.Actor, credential stri
 		return false
 	}
 	if t.credential == credential {
+		if t.oauth && (t.grantID != auth.OAuthGrantIDFromContext(ctx) ||
+			t.oauthClient != auth.OAuthClientIDFromContext(ctx) ||
+			t.resource != auth.OAuthResourceFromContext(ctx)) {
+			return false
+		}
 		return true
 	}
-	// OAuth access tokens are short-lived and refresh under the same verified
-	// Agent. The refreshed token has a different digest, but it is the same MCP
-	// authority and the host reuses its MCP session across the refresh. Static
-	// Token rotation remains exact-match: a replacement credential must start a
-	// new transport session.
-	if !t.oauth || !oauth {
+	// OAuth access tokens may rotate, but a transport session can only move to a
+	// new token when the grant, client and resource remain identical. Agent
+	// equality alone is insufficient because one user may own several grants.
+	if !t.oauth || !oauth ||
+		t.grantID == "" || t.grantID != auth.OAuthGrantIDFromContext(ctx) ||
+		t.oauthClient == "" || t.oauthClient != auth.OAuthClientIDFromContext(ctx) ||
+		t.resource == "" || t.resource != auth.OAuthResourceFromContext(ctx) {
 		return false
 	}
 	t.credential = credential

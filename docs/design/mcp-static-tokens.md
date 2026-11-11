@@ -1,8 +1,8 @@
 # 简易 MCP token（已实现）
 
-2026-11-02。此文描述当前静态 Token 交付；外部 OAuth Authorization Server 的 resource-server 模式见 [OAuth resource server](oauth-resource-server.md)，Termcp 自有 OAuth 授权服务器、自动配对、自动刷新、多个权限组继承和子凭据仍属未来计划。逐操作策略、权限组、主体、审计和只读预览见 [权限组合同](permission-groups.md)。
+2026-11-02。此文描述静态 Token 的独立生命周期；支持 OAuth 的 HTTP 客户端改用 [内置 OAuth/OIDC Agent 自动创建](builtin-oauth-user-agents.md)，两者共享 AgentPolicy，但不共享凭据表或“每个 Agent 一枚静态 Token”的替换语义。逐操作策略、权限组、主体、审计和只读预览见 [权限组合同](permission-groups.md)。
 
-**2026-11-05 更新**：同一 principal 现只允许一枚当前静态 Token。普通签发在已有当前 Token 时返回冲突；轮换使用原子替换，旧 Token 立即失效并进入历史。历史记录可清理但不能重新启用。签发/轮换可设置可选 `expires_at`，成功 MCP 准入会更新 `last_used_at`。外部 OAuth resource-server 支持不改变静态 Token 表；自有 OAuth 授权服务器、AgentGrant 和多用户仍不做。完整边界见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+**2026-11-10 更新**：同一 principal 仍只允许一枚当前静态 Token；普通签发在已有当前 Token 时返回冲突，轮换使用原子替换。历史记录可清理但不能重新启用。签发/轮换可设置可选 `expires_at`，成功 MCP 准入会更新 `last_used_at`。内置 OAuth access/refresh credential、grant 级撤销和多次接入不改变静态 Token 表；静态 Token、手工 Agent 和已有权限组在 OAuth 配置替换时原样保留。
 
 管理员从 `/permissions` 选择或创建权限组，再创建主体并签发 Token。主体保存稳定 ID 与组绑定，权限属于组；创建主体默认不签发凭据，`issue_token:true` 才同时返回一次 Token。也可以为没有当前 Token 的主体签发，或不指定主体，为管理员自己签发。一个 Agent 标识一个独立客户端/进程安全边界；同一 Token 可以承载多个 MCP 连接和会话。重启桥不登记新身份。
 

@@ -42,9 +42,12 @@ human decision, per session.
   interface returns profile names. Profile write tools stay off unless
   `--mcp-manage-ssh-configs` is set, and `--no-internal` narrows agents to remote
   hosts.
-- **One token protects every surface.** `--auth-token`, or a salted `--auth-hash` so
-  the server holds no plaintext — Web UI, REST, both MCP transports and the
-  WebSocket. A non-loopback bind **requires** it.
+- **Managed authentication separates people, Agents and clients.** The local
+  Admin uses a browser session; static MCP tokens remain one current credential
+  per Agent; built-in OAuth uses opaque short-lived access tokens plus rotating
+  refresh tokens bound to one user/client/resource grant. OAuth login identity
+  never grants WebUI or REST administration. The older `--auth-token` /
+  `--auth-hash` shared mode still protects every surface when explicitly chosen.
 - **Basic auth is Base64.** Terminate TLS in a reverse proxy when serving beyond
   your own machine; the token is never logged and never placed in a URL.
 - **🚨 Do not put an agent on a production host unattended. If you must, turn review

@@ -148,9 +148,22 @@ keys and logins are process-local; a restart always requires browser sign-in.
 | `/auth/tokens/{id}` | DELETE | Revoke the active Token, cancel its requests, and retain the record in history |
 | `/auth/tokens/history` | DELETE | Clear revoked Token history for `principal_id`; the current Token is never removed |
 | `/oauth` | GET / HEAD | Admin OAuth settings page, also linked from Permissions |
-| `/auth/oauth` | GET / PUT | Read or save external OAuth settings in encrypted account state; PUT requires the current settings revision and CSRF |
+| `/auth/oauth` | GET / PUT | Read redacted built-in OAuth/OIDC settings or save a new revision in encrypted account state; PUT requires the current revision and CSRF |
+| `/auth/oauth/test` | POST | Admin-only bounded OIDC discovery check using the submitted settings |
+| `/auth/oauth/avatar/{file}` | GET / HEAD | Admin-only bounded cached PNG avatar fetched during OIDC login |
+| `/auth/oauth/users` | GET | List OIDC login users with grant and Agent ownership summaries |
+| `/auth/oauth/users/{id}` | PATCH | Enable or disable a login user; disabling revokes every grant owned by that user |
+| `/auth/oauth/grants` | GET | List OAuth grants with owner, Agent, client, resource, status and live credential counts |
+| `/auth/oauth/grants/{id}` | DELETE | Revoke one grant family, cancel its requests/work and disconnect matching MCP sessions |
+| `/oauth/authorize` | GET | Browser authorization transaction; validates client, PKCE S256, exact resource and redirect before OIDC login |
+| `/oauth/oidc/callback` | GET | Verify upstream state/nonce/PKCE result and render this connection's consent page |
+| `/oauth/continue` | POST | CSRF- and browser-bound consent decision; GET never approves |
+| `/oauth/token` | POST | Authorization-code and rotating refresh-token grants with opaque Termcp credentials |
+| `/oauth/register` | POST | RFC 7591 public-client DCR compatibility endpoint |
+| `/oauth/revoke` | POST | Revoke one access token or one refresh-token grant family after client binding checks |
 | `/auth/mcp` | GET | MCP admission probe: returns `ok` and `idle_timeout_ms`; accepts an MCP token without daemon management privileges |
 | `/.well-known/oauth-protected-resource` | GET | RFC 9728 protected-resource metadata; root and path-specific `/stream` and `/sse` forms |
+| `/.well-known/oauth-authorization-server` | GET | RFC 8414 authorization-server metadata, including CIMD, DCR, PKCE S256 and RFC 9207 capability |
 
 Anonymous `/auth/status` reports `can_setup=true` only while no login is
 configured and the request passes the loopback peer/Host checks. Once configured,
@@ -208,18 +221,32 @@ verified principal; it is distinct from `active_requests`, which counts
 in-flight HTTP work. The value is process-local and disappears on restart.
 Agent operation and host checks are described below; these do not provide an
 operating-system sandbox.
-OAuth resource-server mode is available for external authorization servers.
-Configure it at `/permissions` → `/oauth`; the settings are encrypted and apply
-immediately without OAuth flags or environment variables. `GET /auth/oauth`
-returns `settings` with `enabled`, `revision`, `issuer`, `resource`, `jwks_url`,
-`agent_claim`, and `scope`. `PUT /auth/oauth` replaces these values using the
-current revision; stale updates return 409. Changes end old OAuth requests and
-connections while static tokens remain valid.
-It provides Protected Resource Metadata, an RFC 6750 `resource_metadata`
-challenge, JWKS JWT verification, issuer/audience/resource/scope checks, and a
-`termcp_agent_id` claim mapped to an existing Agent. It does not implement a
-Termcp-owned authorization server, `/authorize`, `/token`, refresh-token
-issuance, DCR, or CIMD; those remain with the external authorization server.
+Termcp can act as the MCP resource server and its own OAuth authorization server.
+An administrator configures the public URL and one standard OIDC identity source
+once at `/permissions` → `/oauth`; ordinary MCP users only configure the
+`/stream` URL. `GET /auth/oauth` returns a redacted `settings` object with
+`enabled`, `revision`, `public_url`, `oidc_issuer`, `oidc_client_id`,
+`oidc_client_secret_set`, `callback_url`, and `resource_url`. Secrets are never
+returned. `PUT /auth/oauth` accepts the same fields plus optional
+`oidc_client_secret` and `clear_oidc_client_secret`; stale revisions return 409.
+
+The public authorization endpoints support CIMD and public-client DCR,
+authorization-code plus mandatory S256 PKCE, exact `resource` binding, RFC 9207
+`iss`, opaque access tokens, rotating refresh tokens, and the RFC 7009 revocation
+endpoint. CIMD and avatar HTTP fetches reject non-public network targets and
+bound redirects, time, response size and image decoding. A successful first code
+exchange atomically creates one login user if needed, one owner-bound Agent in
+the current default group, one access grant, and credentials. Refresh and MCP
+reconnects reuse that grant and Agent. A separate full authorization creates a
+separate Agent.
+
+Every MCP request checks the credential, grant, login user, Agent, permission
+group, client, exact resource, scope and current policy. Revoking a grant, login
+user or Agent, disabling/changing a group, changing OAuth configuration, expiry,
+or locking the vault cancels matching requests and background work and removes
+live MCP transports. OAuth credentials do not enter the static Token table and
+do not grant WebUI, REST or daemon authority. The upstream OIDC access/refresh
+tokens are not retained for MCP use.
 `--disable-auth` explicitly selects open mode.
 
 ### Agent permission groups

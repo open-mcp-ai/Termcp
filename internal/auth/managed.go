@@ -15,6 +15,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/open-mcp-ai/termcp/internal/configstore"
+	"github.com/open-mcp-ai/termcp/internal/oauthserver"
 )
 
 type Role string
@@ -101,19 +102,26 @@ type sessionRecord struct {
 }
 
 type managedState struct {
-	Version        int                        `json:"version"`
-	InstanceID     string                     `json:"instance_id"`
-	SigningKey     string                     `json:"signing_key"`
-	Admin          adminRecord                `json:"admin"`
-	Permissions    RolePolicy                 `json:"permissions"`
-	Revision       uint64                     `json:"revision"`
-	Sessions       map[string]sessionRecord   `json:"sessions"`
-	Agents         map[string]agentRecord     `json:"agents,omitempty"`
-	Tokens         map[string]tokenRecord     `json:"tokens,omitempty"`
-	Groups         map[string]permissionGroup `json:"groups,omitempty"`
-	DefaultGroupID string                     `json:"default_group_id,omitempty"`
-	AccessRevision uint64                     `json:"access_revision,omitempty"`
-	OAuth          OAuthSettings              `json:"oauth,omitempty"`
+	Version        int                              `json:"version"`
+	InstanceID     string                           `json:"instance_id"`
+	SigningKey     string                           `json:"signing_key"`
+	Admin          adminRecord                      `json:"admin"`
+	Permissions    RolePolicy                       `json:"permissions"`
+	Revision       uint64                           `json:"revision"`
+	Sessions       map[string]sessionRecord         `json:"sessions"`
+	Agents         map[string]agentRecord           `json:"agents,omitempty"`
+	Tokens         map[string]tokenRecord           `json:"tokens,omitempty"`
+	Groups         map[string]permissionGroup       `json:"groups,omitempty"`
+	DefaultGroupID string                           `json:"default_group_id,omitempty"`
+	AccessRevision uint64                           `json:"access_revision,omitempty"`
+	OAuthServer    OAuthServerSettings              `json:"oauth_server,omitempty"`
+	LoginUsers     map[string]loginUser             `json:"login_users,omitempty"`
+	OAuthClients   map[string]oauthserver.Client    `json:"oauth_clients,omitempty"`
+	OAuthGrants    map[string]oauthGrant            `json:"oauth_grants,omitempty"`
+	OAuthCodes     map[string]oauthCodeRecord       `json:"oauth_codes,omitempty"`
+	OAuthAccess    map[string]oauthCredentialRecord `json:"oauth_access,omitempty"`
+	OAuthRefresh   map[string]oauthCredentialRecord `json:"oauth_refresh,omitempty"`
+	OAuthRevision  uint64                           `json:"oauth_revision,omitempty"`
 }
 
 type sessionClaims struct {
@@ -157,8 +165,16 @@ type Managed struct {
 	// persisted: a live transport ends with the process.
 	mcpConnectionCounts      atomic.Pointer[map[string]int]
 	mcpConnectionInvalidator func(principalID, credentialID string)
-	oauth                    *oauthVerifier
-	oauthSessions            map[string]oauthSession
+	oauthProtocol            *oauthserver.Provider
+	oauthFetcher             *oauthserver.Fetcher
+	oauthClientCacheMu       sync.Mutex
+	oauthClientCache         map[string]oauthCachedClient
+	oauthTransactionsMu      sync.Mutex
+	oauthTransactions        map[string]*oauthAuthorizationTransaction
+	oauthRateMu              sync.Mutex
+	oauthRate                map[string]oauthRateBucket
+	commit                   chan struct{}
+	stateEpoch               uint64
 }
 
 func randomSecret() (string, error) {

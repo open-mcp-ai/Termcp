@@ -1,6 +1,8 @@
 # 认证与权限范围收敛（2026-11-05）
 
-状态：已确认。2026-11-07 新增外部 authorization server 的 OAuth resource-server 切片，见 [OAuth resource-server](oauth-resource-server.md)；Termcp 自有授权服务器、多用户和 AgentGrant 仍未实现。
+状态：已确认。2026-11-10 内置 OAuth 授权服务器、OIDC 登录用户、owner 和 grant 生命周期已实现；旧外部 JWT resource-server 实验已替换。实现说明见 [内置 OAuth、OIDC 用户归属与 Agent 自动创建](builtin-oauth-user-agents.md)。
+
+外部 OAuth 尚未正式发布；新方案直接替换它，不保留旧 `oauth` 配置、外部 Token 准入或验证器回退。共享状态中的 Admin、手工 Agent、权限组、静态 Token、主机和加密数据继续保留。
 
 ## 目标
 
@@ -16,9 +18,9 @@
 
 | 范围 | 决策 |
 | --- | --- |
-| AgentGrant | 暂不新增。当前使用 `Principal + PermissionGroup + Token`；Token 已绑定主体，权限由组解析。 |
+| AgentGrant | OAuth 接入使用独立 `AccessGrant`，固定关联 login user、Agent、client 与 resource；静态 Token 仍使用原有的 `Agent + PermissionGroup + Token` 生命周期，两者只在 AgentPolicy 与取消机制汇合。 |
 | 多用户 | 暂不实现。保持单本机 Admin；不增加 human principal、member、RoleBinding、tenant 或邀请登录。 |
-| OAuth/OIDC | 已实现外部 AS 的 resource-server discovery、JWKS JWT 验证、resource/audience/scope 校验和 Agent claim 映射。自有 authorization code、PKCE、token endpoint、refresh、DCR/CIMD 和 stdio OAuth profile 仍延期。 |
+| OAuth/OIDC | 已实现 Termcp 自有授权服务器和 MCP resource server：protected-resource/authorization-server discovery、OIDC 登录、CIMD/DCR、authorization code + PKCE S256、opaque access token、refresh 轮换、grant 级撤销和 owner-bound Agent 自动创建。Admin OIDC 登录与 stdio OAuth profile 不在本阶段。 |
 | Canonical origin / 可信代理 | 不纳入本阶段。部署必须让反向代理保留正确的 Host 和 Origin；不新增 forwarded-header 信任配置。 |
 | 退出所有设备 | 不新增独立入口。保留“退出当前会话”和“修改登录密码时撤销全部 Web 会话”。 |
 | 忘记密码恢复 | 不纳入本阶段。不新增 `termcp auth recover`、专用 socket/named pipe 或离线恢复流程。 |
@@ -62,9 +64,9 @@
 
 ## 明确不做
 
-- AgentGrant、grant 级撤销、owner/tenant 和父子授权；
-- 多用户、RoleBinding、OIDC 或 member 角色；
-- Termcp 自有 OAuth authorization server、动态客户端注册、PKCE、refresh token 和自动凭据轮换；
+- tenant、父子授权和按 Agent 的 OAuth 设备合并；
+- 一般成员后台、RoleBinding 和 Admin OIDC 登录；
+- stdio OAuth profile 与 DPoP/mTLS；
 - canonical external origin、可信代理 CIDR 或 forwarded-header 信任规则；
 - 退出所有设备、grant 列表或批量设备撤销；
 - 忘记密码恢复工具；
@@ -77,5 +79,5 @@
 - 已认证桥可以维持 daemon，未认证请求不能延长空闲期限；
 - Token 满足 #253 的单有效凭据、原子轮换、到期、最近使用和撤销合同；
 - 权限目录与 #252 修正后的 46 项完全一致；
-- OAuth 自有授权服务器、AgentGrant、多用户、canonical origin 和忘记密码恢复不出现在本阶段 UI 或 API 中；
+- OAuth 只接受新 `oauth_server` 模型和新授权事务，不接受旧外部 JWT 或旧设置；
 - HTTP/SSE、重启、锁定、撤权和并发场景继续通过 `make test-permissions`。

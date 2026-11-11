@@ -8,7 +8,7 @@
 
 ### 新增
 
-OAuth resource-server mode now accepts external JWKS-backed access tokens for Claude and Codex. Configure it in Permissions → OAuth connections; settings are encrypted, survive restart and apply immediately without OAuth startup flags or environment variables. Changes end old OAuth connections while static tokens keep working. It publishes RFC 9728 protected-resource metadata, returns `resource_metadata` challenges, validates issuer/audience/resource/scope/claim state, and maps `termcp_agent_id` to an existing Agent permission group. Static Agent tokens remain unchanged. The external authorization server owns DCR/CIMD, PKCE, authorization and refresh; Termcp does not yet run its own authorization server.
+Managed Termcp now includes its own OAuth authorization server while remaining the MCP resource server. An administrator configures one public URL and one standard OIDC identity source; users of OAuth-capable MCP clients configure only the Termcp URL, then complete login and connection consent in the browser. Termcp publishes RFC 9728/RFC 8414 metadata, supports CIMD and public-client DCR, enforces authorization code with S256 PKCE and exact resource binding, issues opaque access tokens, rotates refresh tokens, and atomically creates an owner-bound Agent in the current default group on the first successful authorization. Refreshes and MCP reconnects reuse the same grant and Agent; separate full authorizations create separately revocable Agents. Permission management shows login-user ownership, avatar, client, grant and live connection state, and supports grant/user/Agent revocation. Static Agent tokens and their single-active-token lifecycle are unchanged. The previous external-JWT experimental configuration is removed without compatibility mode.
 
 The unpublished V1 permission model has been removed. Permission groups now use only explicit operation grants; principals bind to groups through /auth/principals. Legacy function groups, principal-local policies, upgrade previews and management aliases are rejected instead of migrated.
 
@@ -36,7 +36,7 @@ Permissions now support `deny`, `allow`, and `ask`. Session-bound approvals use 
 
 Configuration password diagnostics now read the current `local-state` keyring as well as the legacy key file, and a login-password mismatch produces a specific explanation. Manually started instances again write `<data-dir>/termcp.log` while continuing to mirror logs to the terminal; daemon start keeps its launcher-owned log redirection.
 
-默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，登录校验记录、签名密钥、凭据及预设角色入口权限保存到 `auth.enc`，与主机配置共用密钥环；`auth.json` 只保留版本标记。自动解锁只恢复密钥，管理员浏览器会话每次重启后均需重新登录；无自动解锁时先输入主密码解锁。登录与安全页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文登录记录可在登录时迁移，原配置密码不同时需一并验证。独立 Agent token 为 P1；外部 Authorization Server 的 OAuth resource-server 模式已支持，Termcp 自有授权服务器尚未实现，显式旧 token/hash 与开放模式仍保留。
+默认启动进入管理员设置与 JWT 登录。Admin 主密码同时通过 Argon2id 派生现有 Main Key，登录校验记录、签名密钥、凭据及预设角色入口权限保存到加密认证对象，与主机配置共用密钥环；`auth.json` 只保留版本标记。自动解锁只恢复密钥，管理员浏览器会话每次重启后均需重新登录。登录与安全页和配置加密页统一改主密码，重封认证及主机对象的 DEK，并撤销全部登录；旧明文登录记录可在登录时迁移。独立静态 Agent token 与内置 OAuth/OIDC 接入并存，显式旧 token/hash 与开放模式仍保留。
 
 - **`term` 可以只要 JSON，不要文本（#231）**。回复有两种投影：渲染文本和它的 JSON 双胞胎。`structured_content` 加上后者，新增的 `content:false` 去掉前者，程序化调用方（机器人、CI）于是只为真正解析的那半付费。两者都拒绝是 400：一条要求「一个字节都别回」的命令是打错的请求，不是请求。REST 的 body 本来就是 JSON，所以那边 `content:false` 只去掉可选的 `X-Termcp-Text` 头。
 - **持久主机配置有稳定身份**。每个配置目录的 `identity` 旁车保存不随改名变化的 UUID；会话、扩展、标签和面板按身份关联，删除后同名新建不会再继承旧授权。旧目录首次加载时补建身份，配置正文保持原样，多目标扩展的身份映射单独保存。

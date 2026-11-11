@@ -26,12 +26,14 @@ var (
 )
 
 type agentRecord struct {
-	GroupID   string    `json:"group_id,omitempty"`
-	Revision  uint64    `json:"revision,omitempty"`
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	GroupID     string    `json:"group_id,omitempty"`
+	Revision    uint64    `json:"revision,omitempty"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	OwnerUserID string    `json:"owner_user_id,omitempty"`
+	Origin      string    `json:"origin,omitempty"`
 }
 
 func (a *agentRecord) UnmarshalJSON(raw []byte) error {
@@ -41,6 +43,12 @@ func (a *agentRecord) UnmarshalJSON(raw []byte) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
 		return err
+	}
+	if value.Origin == "" {
+		value.Origin = agentOriginManual
+	}
+	if value.Origin != agentOriginManual && value.Origin != agentOriginOAuth {
+		return errors.New("invalid saved Agent origin")
 	}
 	*a = agentRecord(value)
 	return nil
@@ -74,11 +82,17 @@ type tokenInfo struct {
 
 type principalView struct {
 	agentRecord
-	CredentialCount       int `json:"credential_count"`
-	ActiveCredentialCount int `json:"active_credential_count"`
-	ActiveMCPConnections  int `json:"active_mcp_connections"`
-	ActiveRequests        int `json:"active_requests"`
-	ActiveWork            int `json:"active_work"`
+	CredentialCount       int      `json:"credential_count"`
+	ActiveCredentialCount int      `json:"active_credential_count"`
+	ActiveMCPConnections  int      `json:"active_mcp_connections"`
+	ActiveRequests        int      `json:"active_requests"`
+	ActiveWork            int      `json:"active_work"`
+	OwnerDisplayName      string   `json:"owner_display_name,omitempty"`
+	OwnerUsername         string   `json:"owner_username,omitempty"`
+	OwnerAvatarPath       string   `json:"owner_avatar_path,omitempty"`
+	OAuthGrantCount       int      `json:"oauth_grant_count,omitempty"`
+	ActiveOAuthGrantCount int      `json:"active_oauth_grant_count,omitempty"`
+	OAuthClients          []string `json:"oauth_clients,omitempty"`
 }
 
 type principalDeletePreview struct {
@@ -104,6 +118,13 @@ func validateCredentials(s managedState) error {
 	for id, a := range s.Agents {
 		if a.Revision == 0 || id == "" || id != a.ID || id == s.Admin.ID || !validLabel(a.Name) || a.CreatedAt.IsZero() {
 			return errors.New("invalid saved Agent")
+		}
+		if a.Origin != agentOriginManual && a.Origin != agentOriginOAuth {
+			return errors.New("invalid saved Agent origin")
+		}
+		if a.Origin == agentOriginOAuth && a.OwnerUserID == "" ||
+			a.Origin == agentOriginManual && a.OwnerUserID != "" {
+			return errors.New("invalid saved Agent owner")
 		}
 	}
 	active := map[string]string{}
@@ -135,7 +156,10 @@ func validateCredentials(s managedState) error {
 			active[t.PrincipalID] = t.ID
 		}
 	}
-	return validateGroupState(s)
+	if err := validateGroupState(s); err != nil {
+		return err
+	}
+	return validateOAuthServerState(s)
 }
 
 func tokenDigest(raw string) string {
@@ -236,6 +260,30 @@ func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalVi
 		ActiveMCPConnections: m.activeMCPConnections(a.ID),
 	}
 	now := m.now().UTC()
+	if owner, ok := s.LoginUsers[a.OwnerUserID]; ok {
+		view.OwnerDisplayName = owner.DisplayName
+		view.OwnerUsername = owner.Username
+		if owner.AvatarFile != "" && s.OAuthServer.PublicURL != "" {
+			view.OwnerAvatarPath = s.OAuthServer.PublicURL + "/auth/oauth/avatar/" + owner.AvatarFile
+		}
+	}
+	clients := map[string]bool{}
+	for _, grant := range s.OAuthGrants {
+		if grant.AgentID != a.ID {
+			continue
+		}
+		view.OAuthGrantCount++
+		if grantActive(grant, now) {
+			view.ActiveOAuthGrantCount++
+		}
+		if client := s.OAuthClients[grant.ClientID]; client.Name != "" {
+			clients[client.Name] = true
+		}
+	}
+	for name := range clients {
+		view.OAuthClients = append(view.OAuthClients, name)
+	}
+	sort.Strings(view.OAuthClients)
 	for id, token := range s.Tokens {
 		if token.PrincipalID != a.ID {
 			continue
@@ -246,6 +294,14 @@ func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalVi
 		}
 		view.ActiveRequests += len(m.requests["token:"+id])
 		view.ActiveWork += len(m.background[id])
+	}
+	for _, record := range s.OAuthAccess {
+		grant := s.OAuthGrants[record.GrantID]
+		if grant.AgentID != a.ID {
+			continue
+		}
+		view.ActiveRequests += len(m.requests["token:"+record.ID])
+		view.ActiveWork += len(m.background[record.ID])
 	}
 	return view
 }
@@ -482,9 +538,14 @@ func (m *Managed) cancelDeniedTokensLocked() {
 		}
 	}
 	now := m.now().UTC()
-	for id, session := range m.oauthSessions {
-		if !session.expires.After(now) {
-			m.cancelOAuthSessionLocked(id)
+	for signature, record := range m.state.OAuthAccess {
+		if record.RevokedAt != nil || !now.Before(record.ExpiresAt) {
+			m.cancelCredentialLocked(record.ID)
+			continue
+		}
+		grant := m.state.OAuthGrants[record.GrantID]
+		if err := m.oauthAuthorityLocked(signature, record.ID, grant.AgentID, record.GrantID); err != nil {
+			m.cancelCredentialLocked(record.ID)
 		}
 	}
 	for key := range m.requests {
@@ -511,6 +572,10 @@ func (m *Managed) cancelDeniedTokensLocked() {
 }
 
 func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		m.credentialMutation(w, r)
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := credentialState(m.state)
@@ -567,7 +632,7 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 			authError(w, 500, "could not create principal")
 			return
 		}
-		a := agentRecord{ID: id, Name: input.Name, GroupID: input.GroupID, Enabled: true, Revision: 1, CreatedAt: m.now().UTC()}
+		a := agentRecord{ID: id, Name: input.Name, GroupID: input.GroupID, Enabled: true, Revision: 1, CreatedAt: m.now().UTC(), Origin: agentOriginManual}
 		s.Agents[id] = a
 		markAuditTarget(a.ID)
 		result = map[string]any{"principal": a}
@@ -681,6 +746,23 @@ func (m *Managed) credentials(w http.ResponseWriter, r *http.Request) {
 		deletedTokenIDs = principalTokenIDs(s, a.ID)
 		for _, tokenID := range deletedTokenIDs {
 			delete(s.Tokens, tokenID)
+		}
+		for grantID, grant := range s.OAuthGrants {
+			if grant.AgentID != a.ID {
+				continue
+			}
+			for signature, access := range s.OAuthAccess {
+				if access.GrantID == grantID {
+					deletedTokenIDs = append(deletedTokenIDs, access.ID)
+					delete(s.OAuthAccess, signature)
+				}
+			}
+			for signature, refresh := range s.OAuthRefresh {
+				if refresh.GrantID == grantID {
+					delete(s.OAuthRefresh, signature)
+				}
+			}
+			delete(s.OAuthGrants, grantID)
 		}
 		delete(s.Agents, a.ID)
 		markAuditTarget(a.ID)

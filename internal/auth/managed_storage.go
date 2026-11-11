@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
+	"github.com/open-mcp-ai/termcp/internal/oauthserver"
 )
 
 // Vault is the existing configuration repository, not a second keyring.
@@ -53,7 +54,22 @@ func OpenManaged(dataDir string, vault Vault, providers ...configstore.Provider)
 	if err != nil {
 		return nil, err
 	}
-	m := &Managed{webSigningKey: signing, background: make(map[string]map[*int]context.CancelFunc), path: filepath.Join(dataDir, "auth.json"), now: time.Now, requests: make(map[string]map[*int]context.CancelFunc), vault: vault, providers: providers, webBootID: boot, auditSink: SlogAuditSink{}}
+	m := &Managed{
+		webSigningKey:     signing,
+		background:        make(map[string]map[*int]context.CancelFunc),
+		path:              filepath.Join(dataDir, "auth.json"),
+		now:               time.Now,
+		requests:          make(map[string]map[*int]context.CancelFunc),
+		vault:             vault,
+		providers:         providers,
+		webBootID:         boot,
+		auditSink:         SlogAuditSink{},
+		oauthFetcher:      oauthserver.NewFetcher(),
+		oauthClientCache:  map[string]oauthCachedClient{},
+		oauthTransactions: map[string]*oauthAuthorizationTransaction{},
+		oauthRate:         map[string]oauthRateBucket{},
+		commit:            make(chan struct{}, 1),
+	}
 	m.credential, _, err = m.readLoginCredential()
 	if err != nil {
 		return nil, err
@@ -141,8 +157,10 @@ func validateState(s managedState, legacy bool) error {
 		}
 		return nil
 	}
-	if _, err := normalizeOAuthSettings(s.OAuth); err != nil {
+	if normalized, err := normalizeOAuthServerSettings(s.OAuthServer); err != nil {
 		return err
+	} else {
+		s.OAuthServer = normalized
 	}
 	return validateCredentials(s)
 }
@@ -181,7 +199,8 @@ func (m *Managed) loadLocked() error {
 	if state.Version != managedStateVersion {
 		return errors.New("unsupported permission state version")
 	}
-	changed := upgradePresetGroups(&state)
+	changed := normalizeOAuthState(&state)
+	changed = upgradePresetGroups(&state) || changed
 	changed = repairAmbiguousAgentPolicies(&state) || changed
 	changed = repairRetiredAgentOperations(&state) || changed
 	normalizedTokens, revokedTokens := normalizeTokenUniqueness(&state, m.now().UTC())
@@ -208,6 +227,7 @@ func (m *Managed) loadLocked() error {
 		return nil
 	}
 	m.state = state
+	m.stateEpoch++
 	m.applyOAuthSettingsLocked()
 	if m.markerDirty {
 		if err := m.writeMarker(); err != nil {
@@ -296,6 +316,7 @@ func (m *Managed) setupWithOptions(username, password, previous string, automati
 		return errInitialized
 	}
 	state := managedState{Version: managedStateVersion, InstanceID: instance, SigningKey: key, Admin: adminRecord{ID: id, Username: username}, Permissions: defaultPolicy(), Revision: 1, Sessions: make(map[string]sessionRecord)}
+	normalizeOAuthState(&state)
 	seedPermissionGroups(&state, m.now().UTC())
 	m.markerDirty = true
 	credential, err := m.newLoginCredential(state, password, previous == "" || equalSecret(password, previous))
@@ -338,6 +359,7 @@ func (m *Managed) unlockForLogin(username, password, previous string, automatic 
 		old.Admin.Password = ""
 		old.Sessions = make(map[string]sessionRecord)
 		old.SigningKey = key
+		normalizeOAuthState(&old)
 		credential, err := m.newLoginCredential(old, password, false)
 		if err != nil {
 			return err

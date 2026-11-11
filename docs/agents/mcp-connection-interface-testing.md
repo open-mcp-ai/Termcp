@@ -157,3 +157,47 @@ go test -race ./internal/auth \
   -count=3 -shuffle=on
 go test -race ./internal/auth -run '^TestPermissionPage' -count=3 -shuffle=on
 ```
+
+## 2026-11-10 built-in OAuth integration
+
+The previous 2026-11-08 record and its focused test names describe the removed
+external-authorization-server experiment. They are retained as history and are
+not compatibility evidence for the current built-in authorization server.
+
+The built-in flow is covered with a temporary, synthetic OIDC provider and a
+temporary Termcp data directory. The integration test exercises DCR, browser
+authorization with S256 PKCE, OIDC discovery/ID-token/UserInfo validation,
+consent, authorization-code exchange, owner-bound Agent creation in the default
+group, real mcp-go Streamable HTTP initialization, refresh-token rotation, MCP
+session continuation under the same grant/client/resource, and immediate Agent
+disable cancellation. Auth-package tests additionally cover CIMD validation and
+caching, dynamic loopback callback ports, denied consent, duplicate callbacks,
+concurrent code exchange, refresh reuse revocation, dynamic group changes,
+default-group isolation, Admin grant/user revocation, restart persistence,
+vault locking, non-durable storage failure, and legacy `oauth` key removal.
+
+### Native Codex verification
+
+On 2026-11-11, `codex-cli 0.166.0` was run with an isolated `CODEX_HOME`, a
+ temporary Termcp data directory, and the synthetic OIDC provider above:
+
+- `codex mcp add native-e2e --url http://127.0.0.1:18990/stream` was the complete
+  client configuration: no bearer token, Agent ID, OAuth client ID, callback or
+  registration option was supplied.
+- Codex auto-selected CIMD using its public
+  `https://chatgpt.com/oauth/codex/client.json` metadata URL. Termcp fetched
+  and validated that document, accepted the dynamic loopback callback port,
+  completed the OIDC browser transaction, consent and authorization-code/PKCE
+  exchange, and Codex reported `Successfully logged in.`
+- `codex mcp list --json` reported `transport=streamable_http` and
+  `auth_status=o_auth`. Termcp showed one `origin=oauth` Agent named
+  `Codex · Native Test User`, owned by the verified OIDC user, bound to
+  `preset-no-access`, with one active grant for `client_name=Codex` and the exact
+  `/stream` resource.
+- A separate isolated run forced `--oauth-client-registration dcr` and completed
+  the same login, so both native CIMD and DCR registration paths were exercised.
+
+Automatic access-token refresh inside that Codex version and Claude client
+interoperability were not measured in this run. Refresh rotation, MCP session
+continuation and disabled-Agent cleanup are covered by the synthetic mcp-go
+integration test above.

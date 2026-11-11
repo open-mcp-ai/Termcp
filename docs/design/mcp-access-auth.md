@@ -1,14 +1,14 @@
 # MCP 接入方式盘点与认证交互
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；本文下方保留的自有授权服务、stdio OAuth 和 P1/候选端点不代表额外已实现能力，以实现文档和 API 文档为准。
+**实现更新（2026-11-10）**：简易静态 token 仍见 [当前静态 token 实现](mcp-static-tokens.md)。未发布的外部 Authorization Server 实验已被内置 OAuth 授权服务器替换，见 [内置 OAuth、OIDC 用户归属与 Agent 自动创建](builtin-oauth-user-agents.md)；本文下方保留的自定义配对、stdio OAuth 和候选端点不代表额外已实现能力。
 
-**2026-11-05 范围收敛**：OAuth、AgentGrant、多用户和 canonical origin/可信代理延期；桥继续使用认证过的 MCP 探测，但必须修复未认证请求延长 daemon 空闲期的问题。认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+**2026-11-05 范围收敛（OAuth 部分由 #281 覆盖）**：一般多用户和 canonical origin/可信代理继续延期；OAuth 已实现为内置授权服务器、OIDC 登录用户、owner-bound Agent 和 grant 生命周期。桥继续使用认证过的 MCP 探测，认证子路径与 bridge 保活由 #265 跟踪。
 
-状态：Admin/JWT 登录和预设角色入口权限第一版已实现（2026-10-28），Agent token 为 P1，OAuth 仍是未来计划。下文 Agent 接入交互及桥控制端点保留为提案。原盘点日期：2026-10-27，核验对象 `dev@6a8af55` 及当时工作区；npm 启动行为另核对相邻的 Termcp-npm 仓库。
+状态：Admin/JWT 登录、静态 Agent token 和内置 OAuth/OIDC 接入均已实现。下文不含凭据的 stdio OAuth profile、自定义配对及桥控制端点仍为历史提案。原盘点日期：2026-10-27，核验对象 `dev@6a8af55` 及当时工作区；npm 启动行为另核对相邻的 Termcp-npm 仓库。
 
-本文细化 [身份与凭据签发机制](auth-issuance.md) 的接入交互。当前决策为 **OAuth 整体延期，简易静态 token 为 P1**。用户首次运行时设置 Admin 主密码，认证密文与主机配置共用现有 Main Key；HTTP 和 daemon 使用同一默认 `.termcp` 数据目录。P1 中用户登录 WebUI、新增 Agent、取得 token 并自行填入 MCP 配置；stdio 读取 token 的能力与之同批交付。
+本文细化 [身份与凭据签发机制](auth-issuance.md) 的接入交互。固定 Header/stdio 客户端继续使用静态 token；支持原生 OAuth 的 HTTP 客户端只填写 Termcp URL。HTTP 和 daemon 使用同一默认 `.termcp` 数据目录，登录身份、Agent owner 和凭据状态共用加密认证对象。
 
-本文第 3、5 节中的手动填 token 流程属于 P1；HTTP/stdio OAuth 均为未来计划。P1 未交付前，新 managed Agent 接入不具备完整能力，不能用匿名访问补齐。多桥协商、权限持久化、重启和失败语义的最新确认及遗漏项见 [多 stdio 与单 daemon 的协商](stdio-daemon-negotiation.md)。现有 Ensure 已支持目标 endpoint 的实例复用，本认证方案不新增 daemon 启动互斥机制。
+本文第 3、5 节中的手动填 token 流程仍适用于静态客户端；HTTP OAuth 已实现，stdio OAuth profile 仍不在当前范围。多桥协商、权限持久化、重启和失败语义见 [多 stdio 与单 daemon 的协商](stdio-daemon-negotiation.md)。
 
 ## 1. 统计口径与当前入口
 
@@ -58,7 +58,7 @@ stdio 宿主 ── env ── Termcp 桥 ── Bearer ────────
 
 token 同时证明准入资格并引用服务端 Agent 身份；稳定身份是 `principal_id`。token 更新不改变 Principal。显示名、namespace、`clientInfo`、来源 IP 及“由 npx 启动”都不决定角色。
 
-### 2.1 未来计划：OAuth（当前不实现）
+### 2.1 OAuth 历史方案与当前实现边界
 
 本节仅保留后续接缝，HTTP 授权服务与 stdio OAuth 客户端均不进入当前实施范围，不阻塞 Admin 加密持久化或 P1 token。
 
@@ -233,11 +233,11 @@ OAuth 安装配置不包含人工复制的访问/刷新凭据；静态兼容配�
 2. 权限与桥适配：可信 Actor、权限过滤、MCP session 绑定与撤销，沿用既有 Ensure 复用机制；明确多桥保活、重启后初始化及结果不明时不重放。
 3. **P1 简易 token**：WebUI 新增 Agent、一次性返回随机 token、列表及撤销；同批实现 stdio 读取 token。用户自行填写 header/env，支持人工重发和更新，不增加自动安装或换证依赖。
 4. 同步配置模板和安装文档：HTTP/stdio 共用 P1 凭据模型，保留完整实例 URL；认证失败不自动降级成匿名访问。
-5. **未来 OAuth**：标准 HTTP 授权服务与客户端兼容、stdio profile/授权/保存/刷新均延期，当前不实现。
+5. **OAuth**：标准 HTTP 授权服务、客户端兼容、PKCE、refresh 与撤销已实现；stdio profile/授权/保存/刷新仍延期。
 
-OAuth 整体属于未来计划，不列入当前桥适配或 P1 的必需工作。多桥资源视图、后台任务是否阻止空闲退出等尚未确认的规则，继续按协商讨论稿标注待定。
+HTTP OAuth 已实现；stdio OAuth profile 仍不属于当前桥适配。多桥资源视图、后台任务是否阻止空闲退出等尚未确认的规则，继续按协商讨论稿标注待定。
 
-未来 OAuth 再验收发现、PKCE、回调校验、resource/audience、刷新及撤销；本轮不执行或要求这些能力。P1 token 按下面的四种配置形态验收。
+当前 HTTP OAuth 验收发现、PKCE、回调校验、resource/audience、刷新及撤销；静态 token 仍按下面的四种配置形态验收。stdio OAuth 另立后续验收。
 
 实施验收至少覆盖 A/B/C/D：有效/缺失/撤销 token、SSE GET 与 POST 主体一致性、Streamable GET/POST/DELETE、启动后认证恢复、桥初始化前保活，以及越权不能访问 daemon stop。额外验证非默认端口、HTTPS/路径前缀、远端 stdio 不启动本机实例、三 OS 环境继承与子进程剥离、同一 Agent 双 token 替换、不同 data-dir 误连及初始化超时。
 

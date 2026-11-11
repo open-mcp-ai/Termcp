@@ -1,8 +1,8 @@
 # 人与 Agent 的身份与凭据签发机制
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；本文下方保留的自有 OAuth 授权服务器/P1 候选端点不代表已经实现，以实现文档和 API 文档为准。
+**实现更新（2026-11-10）**：简易静态 token 仍按 [当前静态 token 实现](mcp-static-tokens.md) 独立交付。2026-11-07 的未发布外部 Authorization Server 实验已在 2026-11-10 被内置 OAuth 授权服务器直接替换，见 [内置 OAuth、OIDC 用户归属与 Agent 自动创建](builtin-oauth-user-agents.md)。本文下方保留的是历史候选设计，以该实现文档和 API 文档为准。
 
-**2026-11-05 范围收敛**：AgentGrant、多用户/RoleBinding、OAuth、canonical origin/可信代理、退出所有设备和密码恢复不进入当前实现。权限目录以 #252 为唯一来源，认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
+**2026-11-05 范围收敛（后续已被 #281 覆盖）**：一般多用户/RoleBinding、canonical origin/可信代理、退出所有设备和密码恢复仍不进入当前实现；OAuth 已按 #281 实现为 Termcp 自有授权服务器、OIDC 登录用户、owner-bound Agent 和独立 grant。权限目录以 #252 为唯一来源，认证子路径与 bridge 保活由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
 
 状态：Admin 初始化、JWT Cookie、可撤销会话及预设角色入口权限第一版已实现（2026-10-28）；本文其他 Agent/Grant、逐操作权限和换证细节仍为设计提案。原始设计日期：2026-10-27，核验基线 `dev@6a8af55`。
 
@@ -10,15 +10,15 @@
 
 认证存储升级已实现，见 [Admin 主密码与共享 Main Key](auth-storage-encryption.md)：认证与主机配置共用同一密钥环。账号与配置页面统一改主密码并撤销全部会话；此前独立认证密钥环提案已被取代。
 
-本文补齐 [Agent 权限设计](agent-permissions.md) 和 [权限过滤器实施方案](agent-access-implementation.md) 留出的身份签发部分。共享 Agent 业务策略、主机范围、MCP 入口限制及审批复核继续适用。所有新增路由、命令和数据结构均为提案。
+本文补齐 [Agent 权限设计](agent-permissions.md) 和 [权限过滤器实施方案](agent-access-implementation.md) 留出的身份签发部分。共享 Agent 业务策略、主机范围、MCP 入口限制及审批复核继续适用。当前 OAuth 路由和数据模型以 `docs/api.md` 与实现文档为准。
 
-按现有接入方式核验的交互见 [MCP 接入方式盘点与认证交互](mcp-access-auth.md)：3 类传输接入、4 种常用配置形态。最新决定为 **OAuth 整体先不实现，简易 token 为 P1**。Admin 由用户第一次运行时设置，主密码同时用于现有 Main Key 派生，配置及会话密文保存到默认 `.termcp` 下；daemon 与 HTTP 模式读写同一套配置。本文保留的 OAuth、自定义配对、claim/renew 与 Agent Cookie 细节均属未来候选，不进入当前交付。
+按现有接入方式核验的交互见 [MCP 接入方式盘点与认证交互](mcp-access-auth.md)：3 类传输接入、4 种常用配置形态。静态 token 仍是固定 Header/stdio 客户端的兼容路径；OAuth-capable HTTP 客户端使用内置 URL-only 流程。Admin 由用户第一次运行时设置，主密码同时用于现有 Main Key 派生，配置及会话密文保存到默认 `.termcp` 下；daemon 与 HTTP 模式读写同一套配置。本文保留的自定义配对、claim/renew 与 Agent Cookie 细节仍属历史候选。
 
 简易 token 的 stdio 读取与 P1 同批交付；HTTP/stdio OAuth 均延期。现有 daemon 按 endpoint 复用，本方案不额外新增启动锁或全机单例要求。多桥共享、权限持久化及待定项集中记录于 [协商与遗漏清单](stdio-daemon-negotiation.md)，讨论中的建议不自动成为已确认需求。
 
 ## 1. 设计结论
 
-如果产品承诺区分 Admin 与 Agent，使用有身份管理的 managed 模式。当前已交付首次设置 Admin、共享 Main Key 加密存储与 JWT 登录；P1 提供简易 Agent token：用户在 WebUI 新增 Agent，复制随机 token，自行配置到 MCP header/env，不要求自动配对、凭据库或自动换证。OAuth 整体移到未来，`open` 只保留为明确的本机兼容/开发选项。
+如果产品承诺区分 Admin 与 Agent，使用有身份管理的 managed 模式。当前已交付首次设置 Admin、共享 Main Key 加密存储、JWT 登录、静态 Agent token 与 HTTP OAuth/OIDC。固定 Header/stdio 客户端继续使用静态 token；OAuth-capable HTTP 客户端只配置 URL，由客户端保存和刷新凭据。stdio OAuth profile 仍属未来方案。
 
 角色始终来自服务端授权记录，客户端不能选择或修改。静态 token 和目标态的短期会话都引用独立 Agent grant；MCP 配置中的显示名称、`clientInfo` 或请求参数都不是身份。`open` 模式没有可信 Agent 身份，不能启用人/Agent 策略隔离，只适用于明确可信的 loopback 场景。
 
@@ -43,8 +43,8 @@ OAuth 的“客户端”特指实现授权能力的 MCP 宿主、SDK 或后续�
 | --- | --- | --- |
 | 模型 | 根据上下文调用已经提供给它的 MCP 工具 | 保存 Cookie/refresh token、完成浏览器授权、轮询认证端点或批准自己 |
 | MCP 宿主/SDK | 启动 MCP 连接、向每个 HTTP 请求注入当前凭据，可选地实现 CredentialProvider | 在服务端不提供授权协议时猜测配对流程；代表所有静态配置客户端自动续期 |
-| `termcp stdio` 等本地桥/凭据代理 | P1 读取静态 Agent env 并转发 Bearer；OAuth 登录、凭据保存和刷新为未来计划 | 绕开人的首次批准；在 stdio 的 MCP 消息流里伪造业务工具；替服务端修改宿主配置 |
-| Termcp 服务端 | 当前验证首次设置的 Admin 凭据并加载持久权限；P1 允许 Admin 新增/撤销 Agent token；OAuth 授权服务为未来计划 | 主动连接一个尚未认证的 MCP 客户端、向模型推送 Cookie、更新宿主的静态配置文件或在客户端持久化 secret |
+| `termcp stdio` 等本地桥/凭据代理 | 读取静态 Agent env 并转发 Bearer；HTTP OAuth 由原生 MCP 宿主保存/刷新，stdio OAuth profile 仍属未来计划 | 绕开人的首次批准；在 stdio 的 MCP 消息流里伪造业务工具；替服务端修改宿主配置 |
+| Termcp 服务端 | 验证 Admin 浏览器会话并加载持久权限；Admin 可签发/撤销静态 Agent token；内置 OAuth 服务签发、刷新和撤销本地 grant | 主动连接一个尚未认证的 MCP 客户端、向模型推送 Cookie、更新宿主的静态配置文件或在客户端持久化 secret |
 
 因此，**“自动配对”不是服务端可以单独提供的能力**。首次建立信任必须由宿主、桥或人参与，且只能有三种形式：
 
@@ -145,7 +145,7 @@ Credential
 - Agent 委派：以后增加 parent/child 关系时必须显式建模；不能让 Agent 自己创建更宽权限的 token 或另一个 Agent。
 - 长期自动化：凭证中心/桥保存 refresh token 并自动 renew；纯静态 MCP 客户端仍使用可轮换的 agent token。
 
-OAuth 整体留作未来计划，不要求当前实现发现、客户端注册、授权码/PKCE 或刷新。当前 Admin 及 P1 Agent token 共用身份库和权限判断，不能把 token 做成能绕过 AgentGrant 的另一套认证系统。
+HTTP OAuth 已按 [内置 OAuth 实现](builtin-oauth-user-agents.md) 交付；stdio OAuth profile 仍是未来计划。当前 Admin、静态 Agent token 与 OAuth grant 共用身份库和 AgentPolicy，不能把任一类 token 做成绕过权限组的另一套认证系统。
 
 ### 1.4 简易 token 兼容版本的接入向导
 
@@ -318,7 +318,7 @@ capabilities
 
 ### 1.6 未来 OAuth 与 P1 简易 token 的共同边界
 
-本节的 OAuth 流程只保留设计接缝，当前不实现；P1 token 不依赖它。
+本节记录早期 OAuth 设计接缝；当前 HTTP 实现以 [内置 OAuth 文档](builtin-oauth-user-agents.md) 为准，stdio profile 仍不实现。
 
 支持 OAuth 的宿主添加 Termcp URL 后，通过标准授权发现进入浏览器批准流程，用户不需要先新增静态 token。批准页确认 Agent 名称和策略后创建或明确关联 Principal/Grant；宿主用授权码与 PKCE 换取 access token，若获准获得 refresh token，则保存并主动刷新。Admin 是批准者，最终 MCP 请求只具有 Agent 执行权限。
 
@@ -668,7 +668,7 @@ PendingPairing (短期内存):
 
 ## 11. 拟议路由与入口边界
 
-当前先交付首次设置 Admin、共享 Main Key 的加密持久化、人端登录；P1 再交付简易 Agent token。OAuth 的资源发现、授权服务、客户端注册、authorize/token、PKCE 与刷新均为未来计划，不列入当前路由实现。
+当前已交付首次设置 Admin、共享 Main Key 的加密持久化、人端登录、静态 Agent token，以及 HTTP OAuth 的发现、内置授权服务、CIMD/DCR、authorize/token、PKCE 与 refresh。stdio OAuth profile 仍是未来计划。
 
 以下是后续静态兼容版本的管理路由，以及两种凭据共用的有限桥控制端点：
 
@@ -716,9 +716,9 @@ stdio 的 keepalive/探活也必须保持 Agent 身份：桥在 initialize 前�
 2. 业务权限：可信 Actor、权限过滤、MCP session 绑定及撤销；沿用既有 daemon Ensure 复用，不新增启动互斥模块。
 3. **P1 简易 token**：WebUI 新增 Agent、一次显示随机 token、查看状态与撤销；同批实现 stdio 读取 token。用户自行填写 MCP header/env，人工重新生成后更新配置。
 4. 桥与迁移：处理 Agent 探测/保活、重启后重新 initialize 和已发送操作不自动重放；旧共享凭据不能绕过新模式，不自动降级。
-5. **未来 OAuth**：HTTP 授权服务、宿主兼容、stdio profile/浏览器授权/凭据保存/刷新均延期，当前不实现。
+5. **OAuth**：HTTP 授权服务、发现、CIMD/DCR、PKCE、授权码、refresh 和 grant 撤销已实现；stdio profile、凭据保存与桥刷新仍延期。
 
-P1 token 不依赖自动配置、配对或刷新；OAuth 整体为未来计划，因此 P1 前不能宣称新 managed Agent 接入已完整可用。自定义设备配对、claim/renew 和 Agent Cookie 也是可选后续方案。当前不以 OAuth 的 HTTPS/issuer/refresh 等额外能力阻塞首次 Admin 设置和加密配置持久化。
+静态 token 不依赖自动配置、配对或刷新；HTTP OAuth 已实现 URL-only 接入。stdio OAuth profile、自定义设备配对、旧 claim/renew 和 Agent Cookie 仍是后续方案。
 
 ## 13. 验收重点
 

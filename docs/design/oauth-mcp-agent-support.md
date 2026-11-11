@@ -23,16 +23,17 @@ the newest revision.
 
 ## Termcp current status
 
-Termcp now implements the first OAuth resource-server slice for external
-authorization servers: Protected Resource Metadata, an OAuth 401 challenge,
-external JWT verification through JWKS, and `termcp_agent_id` claim mapping.
-There is still no Termcp-owned OAuth Authorization Server, `/authorize`,
-`/token`, refresh-token issuance, CIMD, or DCR endpoint; client registration and
-refresh stay with the external authorization server. The managed mode continues
-to have a local Admin login, browser JWT sessions, Origin/CSRF checks, static
-Agent Bearer tokens, permission groups, and Token rotation/expiry/revocation.
-See [auth scope](auth-scope-2026-11-05.md), the OAuth resource-server design in
-[oauth-resource-server.md](oauth-resource-server.md), and the current
+Termcp now implements both the MCP resource-server and its own OAuth
+authorization server. It publishes Protected Resource and Authorization Server
+Metadata, supports CIMD and public-client DCR, performs browser authorization
+with S256 PKCE, logs in through an administrator-configured OIDC source, creates
+an owner-bound Agent on first exchange, and issues/rotates opaque local
+credentials. The old external-JWT resource-server experiment and
+`termcp_agent_id` mapping have been removed without a compatibility mode.
+Managed mode continues to have a local Admin login, browser JWT sessions,
+Origin/CSRF checks, static Agent Bearer tokens, permission groups, and static
+Token rotation/expiry/revocation. See
+[builtin-oauth-user-agents.md](builtin-oauth-user-agents.md) and the current
 authentication wrapper in [managed_http.go](../../internal/auth/managed_http.go).
 
 The most important design distinction is that an MCP HTTP server is normally an

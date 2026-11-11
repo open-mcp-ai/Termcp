@@ -1,6 +1,13 @@
 # OAuth resource server for Claude and Codex
 
-Status: first resource-server slice implemented on 2026-11-07.
+Status: historical experimental design. Replaced on 2026-11-10 by the built-in
+authorization server implementation.
+
+Replacement implementation: [built-in authorization, OIDC user ownership, and automatic
+Agent creation](builtin-oauth-user-agents.md). The behavior below records the
+unpublished external-server profile that was
+removed. The replacement does not preserve its settings or external-token
+admission as a compatibility mode.
 
 This is intentionally not a Termcp-owned identity provider. Termcp validates
 access tokens issued by an external OAuth 2.1/OIDC authorization server. Client

@@ -170,19 +170,35 @@ func (m *Managed) ApprovalContextForCredential(ctx context.Context, principalID,
 		ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
 		return ctx, nil
 	}
-	session, ok := m.oauthSessions[credentialID]
-	if !ok || session.principal != principalID || !session.expires.After(m.now().UTC()) {
+	var record oauthCredentialRecord
+	var credentialSignature string
+	found := false
+	for signature, candidate := range m.state.OAuthAccess {
+		if candidate.ID == credentialID {
+			record, credentialSignature, found = candidate, signature, true
+			break
+		}
+	}
+	if !found {
 		return nil, errors.New("approval credential is unavailable")
 	}
-	agent, ok := m.state.Agents[principalID]
-	if !ok || !agent.Enabled || !slices.Contains(m.state.Permissions[RoleAgent], "mcp") {
-		return nil, errors.New("approval principal is disabled")
+	if err := m.oauthAuthorityLocked(credentialSignature, credentialID, principalID, record.GrantID); err != nil {
+		return nil, err
 	}
+	grant := m.state.OAuthGrants[record.GrantID]
+	agent := m.state.Agents[principalID]
 	actor := Actor{ID: agent.ID, Username: agent.Name, Role: RoleAgent}
-	ctx = m.withOAuthAgentPolicy(ctx, actor.ID, credentialID)
-	ctx = m.withOAuthBackgroundWork(ctx, actor.ID, credentialID, session.expires)
+	ctx = m.withOAuthAgentPolicy(ctx, credentialSignature, credentialID, actor.ID, grant.ID)
+	ctx = m.withOAuthBackgroundWork(ctx, credentialSignature, credentialID, actor.ID, grant.ID, record.ExpiresAt)
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
+	ctx = context.WithValue(ctx, oauthCredentialKey{}, true)
+	ctx = context.WithValue(ctx, oauthAuthorityKey{}, oauthAuthority{
+		GrantID:  grant.ID,
+		UserID:   grant.UserID,
+		ClientID: grant.ClientID,
+		Resource: grant.Resource,
+	})
 	return ctx, nil
 }
 

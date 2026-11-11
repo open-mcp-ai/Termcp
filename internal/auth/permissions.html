@@ -492,6 +492,18 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
   .auth-permissions .agent-detail-title{align-items:flex-start;flex-wrap:wrap}
   .auth-permissions .agent-token-history table{display:block;overflow-x:auto}
 }
+.auth-permissions .agent-owner-summary{display:flex;align-items:center;gap:12px;margin:4px 0 14px;padding:12px;border:1px solid var(--line);border-radius:7px;background:var(--canvas)}
+.auth-permissions .agent-owner-avatar{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;border:1px solid var(--line);background:var(--paper)}
+.auth-permissions .agent-owner-copy{min-width:0}
+.auth-permissions .agent-owner-copy strong,.auth-permissions .agent-owner-copy small{display:block;overflow-wrap:anywhere}
+.auth-permissions .oauth-grant-list{display:grid;gap:8px;margin-top:12px}
+.auth-permissions .oauth-grant-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 0;border-top:1px solid var(--line)}
+.auth-permissions .oauth-grant-copy{min-width:0}
+.auth-permissions .oauth-grant-copy strong,.auth-permissions .oauth-grant-copy small{display:block;overflow-wrap:anywhere}
+.auth-permissions .oauth-grant-status{font-size:11px;font-weight:650;color:var(--muted)}
+.auth-permissions .oauth-grant-status[data-state=active]{color:var(--good)}
+.auth-permissions .oauth-grant-status[data-state=revoked],.auth-permissions .oauth-grant-status[data-state=expired]{color:var(--error)}
+@media(max-width:620px){.auth-permissions .oauth-grant-row{grid-template-columns:1fr}.auth-permissions .oauth-grant-row button{justify-self:start}}
 </style>
 </head>
 <body class="auth-page auth-permissions">
@@ -554,7 +566,7 @@ function authPath(path) {
 }
 /* end auth deployment path */
 document.querySelectorAll('.brand,.back-link').forEach(node=>{node.href=authPath('/');});
-let lang=/^zh/i.test(navigator.language)?'zh':'en',state=null,roles=null,agents=[],tokens=[],catalog={operations:[],hosts:[]},selected=null,draft=null,original='',tab='policy',revealed=null,busy=false,principals=[],presets=[],defaultGroupID='',accessRevision=0,deletePlan=null,principalDeletePlan=null;
+let lang=/^zh/i.test(navigator.language)?'zh':'en',state=null,roles=null,agents=[],tokens=[],catalog={operations:[],hosts:[]},selected=null,draft=null,original='',tab='policy',revealed=null,busy=false,principals=[],oauthUsers=[],oauthGrants=[],presets=[],defaultGroupID='',accessRevision=0,deletePlan=null,principalDeletePlan=null;
 const copy={zh:{title:'权限管理',workspace:'工作区',instanceAccess:'MCP 访问',adminMCP:'管理员 MCP',agentMCP:'Agent MCP',saveRoles:'保存开关',intro:'按权限组配置 Agent 的能力与主机范围。',newAgent:'新增',agentName:'Agent 名称',createAgent:'创建并配置权限',selectAgent:'选择一个 Agent',emptyHint:'从左侧选择权限组，配置动作与主机范围，再关联 Agent和客户端凭据。',policy:'权限配置',tokens:'Tokens',operationPolicy:'动作权限',selectAll:'全选',clearAll:'清空',hosts:'可访问主机',allHosts:'全部主机',selectedHosts:'指定主机',noHosts:'无主机',searchHosts:'筛选主机',globalNote:'修改主机配置和管理扩展需要“全部主机”范围。',terminalNote:'终端命令可读写文件和访问网络；这些开关不提供系统沙箱。',savePolicy:'保存权限',tokenHint:'每个客户端使用独立 Token，可单独撤销。',clientName:'客户端名称',issueToken:'签发 token',copyNow:'请立即保存配置',oneTime:'Token 只展示一次，离开页面前请保存。',savedClose:'已保存，关闭',connection:'接入方式',configuration:'MCP 配置',copyConfig:'复制配置',createdAt:'创建日期',actions:'操作',noTokens:'尚无 token。保存权限后，为客户端签发 token。',admin:'管理员（我）',enabled:'已启用',disabled:'已停用',disable:'停用 Agent',enable:'启用 Agent',saved:'已保存',unsaved:'有未保存的权限更改',policySaved:'权限已保存，客户端下次请求按新权限执行。',working:'正在保存…',network:'连接失败，请检查服务是否运行后重试。',revoke:'撤销',revokeConfirm:'撤销此 token 并断开对应客户端连接？',discard:'放弃未保存的权限更改？',saveFirst:'请先保存或关闭当前展示的 token。',copied:'配置已复制',manualCopy:'请手动复制已选中的配置。',created:'权限组已创建，未添加 Agent或签发凭据。',roleSaved:'MCP 访问开关已保存。',noneHint:'不允许访问任何主机。',selectedHint:'仅允许勾选的已保存主机；空选即无主机权限。',allHint:'允许访问当前及以后新增的已保存主机。',missing:'已删除或不可用的主机',noMatches:'没有匹配的主机。',globalRemoved:'指定主机模式下已取消“修改主机配置”和“管理扩展”。',tokenSaved:'Token 已签发，请立即保存配置。',loading:'正在加载权限…',adminHint:'管理员身份保留管理权限；此处仅管理管理员的 MCP token。',saveBeforeToken:'请先保存当前权限，再签发 token。'},en:{title:'Permission management',workspace:'Workspace',instanceAccess:'MCP access',adminMCP:'Admin MCP',agentMCP:'Agent MCP',saveRoles:'Save switches',intro:'Configure Agent capabilities and host scope by permission group.',newAgent:'New',agentName:'Agent name',createAgent:'Create and configure',selectAgent:'Select an Agent',emptyHint:'Choose a group to configure actions and host scope, then associate Agents and credentials.',policy:'Permissions',tokens:'Tokens',operationPolicy:'Action permissions',selectAll:'Select all',clearAll:'Clear',hosts:'Accessible hosts',allHosts:'All hosts',selectedHosts:'Selected hosts',noHosts:'No hosts',searchHosts:'Filter hosts',globalNote:'Profile changes and extension management require all hosts.',terminalNote:'Terminal commands can access files and networks using the host’s OS permissions.',savePolicy:'Save permissions',tokenHint:'Each client uses its own revocable Token.',clientName:'Client name',issueToken:'Issue token',copyNow:'Save this configuration now',oneTime:'The token is shown once. Save it before leaving.',savedClose:'Saved, close',connection:'Connection',configuration:'MCP configuration',copyConfig:'Copy configuration',createdAt:'Created',actions:'Actions',noTokens:'No tokens yet. Save permissions, then issue a client token.',admin:'Administrator (me)',enabled:'Enabled',disabled:'Disabled',disable:'Disable Agent',enable:'Enable Agent',saved:'Saved',unsaved:'Unsaved permission changes',policySaved:'Permissions saved. Subsequent client requests use the new policy.',working:'Saving…',network:'Connection failed. Check the server, then retry.',revoke:'Revoke',revokeConfirm:'Revoke this token and disconnect its clients?',discard:'Discard unsaved permission changes?',saveFirst:'Save or dismiss the displayed token first.',copied:'Configuration copied',manualCopy:'Copy the selected configuration manually.',created:'Group created with no members or credentials.',roleSaved:'MCP access switches saved.',noneHint:'No hosts are accessible.',selectedHint:'Only checked saved hosts are accessible. An empty selection grants none.',allHint:'Includes current and future saved hosts.',missing:'Deleted or unavailable host',noMatches:'No matching hosts.',globalRemoved:'Profile changes and extension management were deselected for selected hosts.',tokenSaved:'Token issued. Save the configuration now.',loading:'Loading permissions…',adminHint:'Admin retains management permissions. This view manages MCP tokens only.',saveBeforeToken:'Save the current permissions before issuing a token.'}};
 Object.assign(copy.zh,{finePolicy:'按实际动作授权，未勾选的动作禁止。',conditions:'参数条件',unlimited:'不限；多个值用英文逗号分隔，[] 表示空集合',recipe:'run 需要输入、Enter 和输出；connect 需要建连及打开通道。新增动作默认禁止。',keys:'允许的按键',repeat_max:'最多重复次数',tool_names:'允许的工具名',methods:'允许的方法',forms:'允许的形式（inline / local / pipe）',max_bytes:'单次最大字节数（未知长度拒绝）',globalNote:'修改共享主机、扩展定义和公共别名需要“全部主机”范围。',globalRemoved:'共享配置写操作已取消勾选。'});
 Object.assign(copy.en,{finePolicy:'Authorize actual operations. Unchecked operations are denied.',conditions:'Parameter conditions',unlimited:'Unrestricted; comma-separated values, [] for an empty set',recipe:'run needs input, Enter and output; connect needs session start and channel open. New operations are denied.',keys:'Allowed keys',repeat_max:'Maximum repeat',tool_names:'Allowed tool names',methods:'Allowed methods',forms:'Allowed forms (inline / local / pipe)',max_bytes:'Maximum bytes per call (unknown size refused)',globalNote:'Shared profile, extension definition and alias changes require all hosts.',globalRemoved:'Shared configuration writes were deselected.'});
@@ -692,7 +704,7 @@ function grantAction(op,enabled){setActionEffect(op,enabled?'allow':'deny');}
 function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=permissionUI.openFamilies.has(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
 function renderHosts(){document.querySelectorAll('[name=host-mode]').forEach(n=>n.checked=n.value===draft.host_mode);$('host-count').textContent=draft.host_mode==='selected'?String(draft.hosts.length):'';$('scope-note').textContent=t(draft.host_mode==='all'?'allHint':draft.host_mode==='none'?'noneHint':'selectedHint');$('host-picker').hidden=draft.host_mode!=='selected';const list=$('host-grid');list.replaceChildren();const query=$('host-search').value.toLowerCase();const hosts=[...catalog.hosts,...draft.hosts.filter(id=>!catalog.hosts.some(h=>h.id===id)).map(id=>({id,name:t('missing')+' · '+id.slice(0,8)}))].filter(h=>h.name.toLowerCase().includes(query));hosts.forEach(h=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.value=h.id;input.checked=draft.hosts.includes(h.id);label.append(input,el('span',h.name));input.onchange=()=>{draft.hosts=input.checked?[...draft.hosts,h.id]:draft.hosts.filter(id=>id!==h.id);$('host-count').textContent=String(draft.hosts.length);updateSave();};list.append(label);});if(!hosts.length)list.append(el('p',t('noMatches')));}
 function renderTokens(){const members=new Set(groupMembers().map(p=>p.id));const list=tokens.filter(c=>selected==='admin'?c.principal_id===state.actor.id:members.has(c.principal_id));$('tokens-empty').hidden=list.length>0;$('token-list').replaceChildren();list.forEach(c=>{const row=el('tr'),name=el('td',c.label);const principal=principals.find(p=>p.id===c.principal_id);name.append(el('small',(principal?principal.name+' · ':'')+c.id.slice(0,10)));row.append(name,el('td',new Date(c.created_at).toLocaleDateString(lang)));const cell=el('td'),button=el('button',t('revoke'));button.type='button';button.className='danger';button.onclick=async()=>{if(!confirm(t('revokeConfirm')))return;setBusy(true);try{await request('/auth/tokens/'+encodeURIComponent(c.id),{method:'DELETE'});if(revealed?.credential.id===c.id)clearRevealed();await reload();feedback(t('saved'),'success');}catch(e){fail(e,'token-error');}finally{setBusy(false);}};cell.append(button);row.append(cell);$('token-list').append(row);});}
-async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens')]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;renderList();renderMembers();}
+async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens'),request('/auth/oauth/users').catch(()=>({users:[]})),request('/auth/oauth/grants').catch(()=>({grants:[]}))]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;oauthUsers=data[3].users||[];oauthGrants=data[4].grants||[];renderList();renderMembers();}
 function clearRevealed(){revealed=null;$('token-config').value='';$('token-result').hidden=true;$('copy-state').textContent='';}
 function renderConfig(){if(!revealed)return;const mode=$('config-mode').value;let entry;if(mode==='http'||mode==='sse')entry={url:location.origin+authPath(mode==='sse'?'/sse':'/stream'),headers:{Authorization:'Bearer '+revealed.token}};else{const args=['-y','@open-mcp-ai/termcp'];if(mode==='daemon')args.push('daemon');args.push('stdio',location.origin+authPath('/stream'));entry={command:'npx',args,env:{TERMCP_MCP_TOKEN:revealed.token}};}$('token-config').value=JSON.stringify({mcpServers:{termcp:entry}},null,2);$('token-result').hidden=false;}
 function closeNewAgentForm(){const wrap=$('new-agent-form-wrap');if(wrap.hidden)return;wrap.hidden=true;$('new-agent').setAttribute('aria-expanded','false');$('new-agent-form').reset();$('create-error').textContent='';$('new-agent').focus();}
@@ -860,6 +872,44 @@ Object.assign(copy.en,{
   summarySensitiveCount:'Includes %n sensitive or high-risk actions',
   groupsUnit:'permission groups',
   permissionNote:'Actions define callable capabilities; terminal commands still inherit the remote user permissions.'
+});
+Object.assign(copy.zh,{
+  oauthIdentitySection:'OAuth 身份与接入',
+  oauthIdentityHint:'所属用户是申请接入的人；权限组和撤销操作仍由 Admin 管理。',
+  oauthUserLabel:'所属用户',
+  oauthSourceLabel:'身份来源',
+  oauthClientsLabel:'客户端',
+  oauthGrantsLabel:'接入授权',
+  oauthGrantCount:'%n 个有效接入',
+  manualAgent:'手工创建',
+  oauthActive:'有效',
+  oauthRevoked:'已撤销',
+  oauthExpired:'已到期',
+  oauthUserDisabled:'用户已停用',
+  oauthAgentDisabled:'Agent 已停用',
+  oauthClientDisabled:'客户端已停用',
+  oauthRevokeGrant:'撤销本次接入',
+  oauthGrantRevoked:'OAuth 接入已撤销，相关连接和后台工作已终止。',
+  oauthUserDisabledSaved:'登录用户已停用，其 OAuth 接入已终止。'
+});
+Object.assign(copy.en,{
+  oauthIdentitySection:'OAuth identity and connections',
+  oauthIdentityHint:'The owner is the person who requested access; administrators still control groups and revocation.',
+  oauthUserLabel:'Owner',
+  oauthSourceLabel:'Identity source',
+  oauthClientsLabel:'Clients',
+  oauthGrantsLabel:'Access grants',
+  oauthGrantCount:'%n active',
+  manualAgent:'Manually created',
+  oauthActive:'Active',
+  oauthRevoked:'Revoked',
+  oauthExpired:'Expired',
+  oauthUserDisabled:'User disabled',
+  oauthAgentDisabled:'Agent disabled',
+  oauthClientDisabled:'Client disabled',
+  oauthRevokeGrant:'Revoke this connection',
+  oauthGrantRevoked:'OAuth access revoked and related connections and background work ended.',
+  oauthUserDisabledSaved:'Login user disabled and their OAuth grants ended.'
 });
 
 const permissionIconPaths={
@@ -2148,6 +2198,18 @@ function permissionAgentByID(id){
   return principals.find(principal=>principal.id===id)||null;
 }
 
+function permissionOAuthUser(id){
+  return oauthUsers.find(user=>user.id===id)||null;
+}
+
+function permissionAgentOAuthGrants(id){
+  return oauthGrants.filter(grant=>grant.agent_id===id);
+}
+
+function permissionOAuthStatusLabel(status){
+  return t({active:'oauthActive',revoked:'oauthRevoked',expired:'oauthExpired',user_disabled:'oauthUserDisabled',agent_disabled:'oauthAgentDisabled',client_disabled:'oauthClientDisabled'}[status]||'oauthActive');
+}
+
 function permissionAgentGroupLabel(principal,short=false){
   if(!principal)return '';
   if(principal.group_id==='system-deny')return t('unassignedAgentState');
@@ -2319,6 +2381,19 @@ function permissionInstallAgentWorkspace(){
             </form>
             <div class="agent-group-current"><span data-text="currentGroupLabel"></span><strong id="agent-current-group"></strong></div>
             <p id="agent-group-error" class="inline-message" role="alert"></p>
+          </section>
+          <section class="agent-section" id="agent-oauth-section" hidden>
+            <div class="agent-section-head">
+              <div><h3 data-text="oauthIdentitySection"></h3><p data-text="oauthIdentityHint"></p></div>
+              <button id="agent-disable-owner" class="danger" type="button"></button>
+            </div>
+            <div id="agent-oauth-owner" class="agent-owner-summary"></div>
+            <dl class="agent-facts">
+              <div class="agent-fact"><dt data-text="oauthSourceLabel"></dt><dd id="agent-oauth-issuer"></dd></div>
+              <div class="agent-fact"><dt data-text="oauthClientsLabel"></dt><dd id="agent-oauth-clients"></dd></div>
+              <div class="agent-fact"><dt data-text="oauthGrantsLabel"></dt><dd id="agent-oauth-grant-count"></dd></div>
+            </dl>
+            <div id="agent-oauth-grants" class="oauth-grant-list"></div>
           </section>
           <section class="agent-section" id="agent-token-section">
             <div class="agent-section-head">
@@ -2501,11 +2576,16 @@ function permissionRenderAgentDetail(){
   if(!principal)return;
 
   const groupLabel=permissionAgentGroupLabel(principal);
+  const owner=permissionOAuthUser(principal.owner_user_id);
+  const agentGrants=permissionAgentOAuthGrants(principal.id);
+  const activeGrants=agentGrants.filter(grant=>grant.status==='active').length;
   $('agent-detail-name').textContent=principal.name;
   $('agent-detail-status').textContent=t(principal.enabled?'enabled':'disabled');
   $('agent-detail-status').dataset.state=principal.enabled?'enabled':'disabled';
   $('agent-detail-meta').textContent=[
     groupLabel,
+    principal.origin==='oauth'?(owner?.display_name||principal.owner_display_name||t('oauthUserLabel')):t('manualAgent'),
+    activeGrants?permissionFormat('oauthGrantCount',activeGrants):'',
     permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
     principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):'',
     principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
@@ -2527,7 +2607,75 @@ function permissionRenderAgentDetail(){
   $('agent-metric-mcp-connections').textContent=String(principal.active_mcp_connections||0);
   $('agent-metric-requests').textContent=String(principal.active_requests||0);
   $('agent-metric-work').textContent=String(principal.active_work||0);
+  permissionRenderAgentOAuth(principal,owner,agentGrants);
   permissionRenderAgentTokens(principal);
+}
+
+function permissionRenderAgentOAuth(principal,owner,grants){
+  const section=$('agent-oauth-section');
+  if(!section)return;
+  section.hidden=false;
+  const ownerBox=$('agent-oauth-owner');
+  ownerBox.replaceChildren();
+  if(principal.origin!=='oauth'){
+    const manual=permissionCreate('div','agent-owner-copy');
+    manual.append(permissionCreate('strong','',t('manualAgent')),permissionCreate('small','',t('oauthIdentityHint')));
+    ownerBox.append(manual);
+  }else{
+    const avatar=owner?.avatar_path?(()=>{const img=document.createElement('img');img.className='agent-owner-avatar';img.src=owner.avatar_path;img.alt='';return img;})():permissionCreate('span','agent-owner-avatar','U');
+    const ownerCopy=permissionCreate('div','agent-owner-copy');
+    ownerCopy.append(permissionCreate('strong','',owner?.display_name||principal.owner_display_name||t('oauthUserLabel')),permissionCreate('small','',owner?.username||principal.owner_username||owner?.issuer||''));
+    ownerBox.append(avatar,ownerCopy);
+  }
+  $('agent-oauth-issuer').textContent=owner?.issuer||'—';
+  $('agent-oauth-clients').textContent=(principal.oauth_clients||[]).join(', ')||'—';
+  const active=grants.filter(grant=>grant.status==='active').length;
+  $('agent-oauth-grant-count').textContent=permissionFormat('oauthGrantCount',active);
+  const disable=$('agent-disable-owner');
+  disable.hidden=principal.origin!=='oauth'||!owner||!owner.enabled;
+  disable.textContent=t('disable')+' '+t('oauthUserLabel');
+  disable.onclick=async()=>{
+    if(!owner||!confirm(t('disable')+' '+t('oauthUserLabel')+'?'))return;
+    setBusy(true);
+    try{
+      await request('/auth/oauth/users/'+encodeURIComponent(owner.id),{method:'PATCH',body:JSON.stringify({enabled:false,revision:owner.revision})});
+      await reload();
+      renderDetail();
+      feedback(t('oauthUserDisabledSaved'),'success');
+    }catch(error){fail(error);}finally{setBusy(false);}
+  };
+  const list=$('agent-oauth-grants');
+  list.replaceChildren();
+  if(!grants.length){
+    list.append(permissionCreate('p','agent-token-empty',t('agentNoTokenHistory')));
+    return;
+  }
+  grants.sort((left,right)=>String(right.created_at).localeCompare(String(left.created_at))).forEach(grant=>{
+    const row=permissionCreate('div','oauth-grant-row');
+    const copyNode=permissionCreate('div','oauth-grant-copy');
+    const status=permissionCreate('span','oauth-grant-status',permissionOAuthStatusLabel(grant.status));
+    status.dataset.state=grant.status;
+    copyNode.append(permissionCreate('strong','',grant.client_name||grant.client_id),permissionCreate('small','',new Date(grant.created_at).toLocaleString(lang)+' · '+grant.resource),status);
+    row.append(copyNode);
+    if(grant.status==='active'){
+      const revoke=permissionCreate('button','danger',t('oauthRevokeGrant'));
+      revoke.type='button';
+      revoke.onclick=async()=>{
+        if(!confirm(t('oauthRevokeGrant')+'?'))return;
+        setBusy(true);
+        try{
+          await request('/auth/oauth/grants/'+encodeURIComponent(grant.id),{method:'DELETE'});
+          await reload();
+          renderDetail();
+          feedback(t('oauthGrantRevoked'),'success');
+        }catch(error){fail(error);}finally{setBusy(false);}
+      };
+      row.append(revoke);
+    }else{
+      row.append(permissionCreate('span','status-dot',''));
+    }
+    list.append(row);
+  });
 }
 
 function permissionRenderAgentNavigation(){
@@ -2552,7 +2700,7 @@ function permissionRenderAgentNavigation(){
     if(permissionUI.agentFilter==='disabled'&&principal.enabled)return false;
     if(permissionUI.agentFilter==='unassigned'&&principal.group_id!=='system-deny')return false;
     if(!query)return true;
-    return [principal.name,principal.id,permissionAgentGroupLabel(principal)].join(' ').toLowerCase().includes(query);
+    return [principal.name,principal.id,principal.owner_display_name||'',permissionAgentGroupLabel(principal)].join(' ').toLowerCase().includes(query);
   });
   list.replaceChildren();
   if(!principals.length){
@@ -2573,6 +2721,7 @@ function permissionRenderAgentNavigation(){
     const name=permissionCreate('span','agent-nav-name',principal.name);
     const meta=[
       permissionAgentGroupLabel(principal,true),
+      principal.origin==='oauth'?(principal.owner_display_name||t('oauthUserLabel')):t('manualAgent'),
       permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
       principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):''
     ].filter(Boolean).join(' · ');

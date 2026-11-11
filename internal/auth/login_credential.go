@@ -145,6 +145,7 @@ func (m *Managed) saveWithLogin(state managedState, c *loginCredential) error {
 		return err
 	}
 	m.state = state
+	m.stateEpoch++
 	m.credential = c
 	m.sealed = true
 	m.legacy = nil

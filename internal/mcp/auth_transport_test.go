@@ -216,14 +216,20 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 		actorID    string
 		credential string
 		oauth      bool
+		grant      string
+		client     string
+		resource   string
 		want       bool
 	}{
 		{
 			name:       "oauth refresh same Agent",
-			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true},
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true, grantID: "grant-a", oauthClient: "client-a", resource: "https://termcp.example/stream"},
 			actorID:    "agent-a",
 			credential: "token:oauth-new",
 			oauth:      true,
+			grant:      "grant-a",
+			client:     "client-a",
+			resource:   "https://termcp.example/stream",
 			want:       true,
 		},
 		{
@@ -232,6 +238,39 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			actorID:    "agent-b",
 			credential: "token:oauth-new",
 			oauth:      true,
+			want:       false,
+		},
+		{
+			name:       "oauth token different grant",
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true, grantID: "grant-a", oauthClient: "client-a", resource: "https://termcp.example/stream"},
+			actorID:    "agent-a",
+			credential: "token:oauth-new",
+			oauth:      true,
+			grant:      "grant-b",
+			client:     "client-a",
+			resource:   "https://termcp.example/stream",
+			want:       false,
+		},
+		{
+			name:       "oauth token different client",
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true, grantID: "grant-a", oauthClient: "client-a", resource: "https://termcp.example/stream"},
+			actorID:    "agent-a",
+			credential: "token:oauth-new",
+			oauth:      true,
+			grant:      "grant-a",
+			client:     "client-b",
+			resource:   "https://termcp.example/stream",
+			want:       false,
+		},
+		{
+			name:       "oauth token different resource",
+			owner:      transportOwner{principal: "agent-a", credential: "token:oauth-old", oauth: true, grantID: "grant-a", oauthClient: "client-a", resource: "https://termcp.example/stream"},
+			actorID:    "agent-a",
+			credential: "token:oauth-new",
+			oauth:      true,
+			grant:      "grant-a",
+			client:     "client-a",
+			resource:   "https://termcp.example/sse",
 			want:       false,
 		},
 		{
@@ -261,7 +300,11 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := &Server{connections: newConnRegistry()}
 			server.transportOwners.Store("session-a", test.owner)
-			got := server.authorizeTransport("session-a", auth.Actor{ID: test.actorID}, test.credential, test.oauth)
+			ctx := t.Context()
+			if test.oauth {
+				ctx = auth.WithVerifiedOAuthAuthority(ctx, test.grant, test.client, test.resource)
+			}
+			got := server.authorizeTransport(ctx, "session-a", auth.Actor{ID: test.actorID}, test.credential, test.oauth)
 			if got != test.want {
 				t.Fatalf("authorizeTransport = %v, want %v", got, test.want)
 			}

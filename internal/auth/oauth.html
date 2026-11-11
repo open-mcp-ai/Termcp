@@ -5,174 +5,54 @@
 <title>OAuth 接入 · Termcp</title>
 {{template "theme-head" .}}
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.5 var(--font-sans)}
-button,input,select{font:inherit;caret-color:var(--accent)}
-a{color:var(--accent);text-underline-offset:3px}
-button,a,input,select,summary{outline-offset:3px}
-:focus-visible{outline:2px solid var(--accent)}
-header{display:flex;align-items:center;gap:24px;min-height:64px;padding:12px 32px;border-bottom:1px solid var(--line);background:var(--paper)}
-header nav a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink)}
-header nav svg{width:16px;height:16px;flex:none}
-button,select{min-height:38px;padding:7px 12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);cursor:pointer}
-button:hover{background:var(--selected)}
-button:disabled{opacity:.55;cursor:default}
-main{max-width:760px;margin:0 auto;padding:32px 24px 48px}
-h1{margin:0 0 8px;font-size:26px;line-height:1.25;letter-spacing:-.02em}
-p{margin:0;color:var(--muted);max-width:70ch}
-.intro{margin-bottom:24px}
-form{padding:24px;background:var(--paper);border:1px solid var(--line);border-radius:8px}
-fieldset{margin:0;padding:0;border:0;min-width:0}
-.enable-row{display:flex;align-items:center;gap:10px;font-weight:600}
-input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--accent);flex:none}
-.form-hint{margin:8px 0 24px;font-size:13px}
-.fields{display:grid;gap:20px}
-.field{display:grid;gap:6px;font-weight:550;min-width:0}
-.field small{color:var(--muted);font-weight:400;font-size:13px;line-height:1.5}
-input[type=url],input[type=text]{width:100%;min-width:0;min-height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--ink)}
-#advanced{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}
-#advanced summary{width:fit-content;color:var(--muted);cursor:pointer}
-#advanced .fields{margin-top:18px}
-.actions{display:flex;align-items:center;gap:12px;margin-top:24px;flex-wrap:wrap}
-.actions span{color:var(--muted);font-size:13px}
-#message{margin-top:16px;overflow-wrap:anywhere}
-#message[data-tone=error]{color:var(--error)}
-#message[data-tone=success]{color:var(--good)}
-.connection{margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
-h2{margin:0 0 8px;font-size:18px}
-.endpoint{display:flex;align-items:center;gap:8px;margin:14px 0}
-.endpoint input{font-family:var(--font-mono,ui-monospace,monospace);font-size:13px}
-.endpoint button{flex:none}
-.connection p+p{margin-top:8px}
-.reload-row{display:flex;align-items:center;gap:12px;margin-top:16px}
-[hidden]{display:none!important}
-::selection{background:var(--selected);color:var(--ink)}
-@media(max-width:600px){header{padding-inline:16px;gap:12px}main{padding:24px 16px 32px}form{padding:20px 16px}.page-controls{gap:6px}header nav a{font-size:13px}.endpoint{align-items:stretch;flex-direction:column}.endpoint button{align-self:flex-start}}
+*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.55 var(--font-sans)}button,input,select{font:inherit;caret-color:var(--accent)}button,a,input,summary{outline-offset:3px}:focus-visible{outline:2px solid var(--accent)}a{color:var(--accent);text-underline-offset:3px}
+header{display:flex;align-items:center;gap:24px;min-height:64px;padding:12px 32px;border-bottom:1px solid var(--line);background:var(--paper)}header nav a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink)}header nav svg{width:16px;height:16px}.page-controls{margin-left:auto;display:flex;align-items:center;gap:10px}select,button{min-height:38px;padding:7px 12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink)}button{cursor:pointer}button:hover{background:var(--selected)}button:disabled{opacity:.55;cursor:default}button.primary{background:var(--accent);border-color:var(--accent);color:var(--button-ink);font-weight:650}
+main{max-width:820px;margin:0 auto;padding:32px 24px 56px}h1{font-size:26px;line-height:1.2;margin:0 0 8px}p{margin:0;color:var(--muted);max-width:72ch}.intro{margin-bottom:24px}.notice{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;padding:14px 16px;margin:0 0 20px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}.notice strong{display:block;color:var(--ink)}.notice span{color:var(--muted)}
+form{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:24px}fieldset{border:0;padding:0;margin:0;min-width:0}.enable-row{display:flex;align-items:center;gap:10px;font-weight:650}input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);margin:0}.hint{margin:7px 0 22px;font-size:13px}.fields{display:grid;gap:18px}.field{display:grid;gap:6px;font-weight:600;min-width:0}.field small{color:var(--muted);font-size:12px;font-weight:400}.field input{width:100%;min-width:0;min-height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--ink)}.field input[readonly]{font-family:var(--font-mono,ui-monospace,monospace);font-size:12px}.secret-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}.clear-secret{display:flex;align-items:center;gap:7px;font-weight:400;color:var(--muted);min-height:42px}.actions{display:flex;align-items:center;gap:10px;margin-top:24px;flex-wrap:wrap}.actions span{color:var(--muted);font-size:13px;margin-left:auto}.sections{display:grid;gap:16px;margin-top:22px}.section{border-top:1px solid var(--line);padding-top:18px}.section h2{font-size:16px;margin:0 0 8px}.endpoint{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:10px}.endpoint input{font-family:var(--font-mono,ui-monospace,monospace);font-size:12px}.message{margin-top:16px;min-height:22px;overflow-wrap:anywhere}.message[data-tone=error]{color:var(--error)}.message[data-tone=success]{color:var(--good)}.reload{margin-top:10px}[hidden]{display:none!important}@media(max-width:620px){header{padding:10px 14px;gap:10px}main{padding:24px 14px 36px}form{padding:18px}.endpoint{grid-template-columns:1fr}.endpoint button{justify-self:start}.actions span{flex:1 1 100%;margin-left:0}.secret-row{grid-template-columns:1fr}}
 </style>
 </head>
 <body class="auth-page auth-oauth">
-<header>
-  <nav><a id="permissions-link" href="permissions"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 3-5 5 5 5M2 8h12"/></svg><span data-text="permissions">权限管理</span></a></nav>
-  <div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div>
-</header>
-<main>
-  <h1 data-text="title">OAuth 接入</h1>
-  <p class="intro" data-text="intro">让 Claude、Codex 等客户端通过外部授权服务器登录，再按已有 Agent 的权限访问 Termcp。</p>
-  <form id="oauth-form">
-    <fieldset id="oauth-fields" disabled>
-      <label class="enable-row"><input id="enabled" type="checkbox"><span data-text="enable">启用 OAuth 接入</span></label>
-      <p id="enable-hint" class="form-hint" data-text="enableHint">保存后立即生效，重启后保留。修改或停用会结束现有 OAuth 连接，静态 Token 不受影响。</p>
-      <div class="fields">
-        <label class="field"><span data-text="issuer">授权服务器地址</span><input id="issuer" type="url" autocomplete="off" spellcheck="false" placeholder="https://id.example.com" aria-describedby="issuer-hint"><small id="issuer-hint" data-text="issuerHint">填写授权服务提供的 issuer；它负责客户端登录与授权。</small></label>
-        <label class="field"><span data-text="resource">Termcp 公开访问地址</span><input id="resource" type="url" autocomplete="off" spellcheck="false" placeholder="https://termcp.example.com" aria-describedby="resource-hint"><small id="resource-hint" data-text="resourceHint">填写客户端实际使用的固定地址；经过反向代理时包含部署路径。</small></label>
-        <label class="field"><span data-text="jwks">签名公钥地址（JWKS）</span><input id="jwks_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://id.example.com/.well-known/jwks.json" aria-describedby="jwks-hint"><small id="jwks-hint" data-text="jwksHint">从授权服务复制 JWKS 地址。Termcp 用公钥验证访问令牌，无需填写私钥。</small></label>
-      </div>
-      <details id="advanced"><summary data-text="advanced">高级选项</summary><div class="fields">
-        <label class="field"><span data-text="claim">Agent 身份字段</span><input id="agent_claim" type="text" autocomplete="off" spellcheck="false"><small data-text="claimHint">默认 termcp_agent_id。授权服务应在此字段写入权限管理页中的 Agent ID。</small></label>
-        <label class="field"><span data-text="scope">所需授权范围（scope）</span><input id="scope" type="text" autocomplete="off" spellcheck="false"><small data-text="scopeHint">默认 mcp；多个范围用空格分隔。留空则不要求 scope。</small></label>
-      </div></details>
-      <div class="actions"><button id="save" class="primary" type="submit" data-text="save">保存配置</button><span id="save-state" aria-live="polite"></span></div>
-    </fieldset>
-    <p id="message" role="status" aria-live="polite"></p>
-    <div id="reload-row" class="reload-row" hidden><button id="reload" type="button" data-text="reload">重新加载配置</button></div>
-  </form>
-  <section id="connection" class="connection" hidden aria-labelledby="connection-title">
-    <h2 id="connection-title" data-text="connect">连接客户端</h2>
-    <p data-text="connectHint">将以下地址添加到支持 OAuth 的 MCP 客户端，然后完成授权。</p>
-    <div class="endpoint"><input id="endpoint" type="url" readonly aria-label="MCP URL"><button id="copy-endpoint" type="button" data-text="copy">复制地址</button></div>
-    <p data-text="externalHint">客户端注册、授权页面与令牌续期由外部授权服务器负责。</p>
-  </section>
-</main>
+<header><nav><a id="permissions-link" href="permissions"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m7 3-5 5 5 5M2 8h12"/></svg><span data-text="permissions">权限管理</span></a></nav><div class="page-controls">{{template "theme-picker" .}}<select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></div></header>
+<main><h1 data-text="title">OAuth 接入</h1><p class="intro" data-text="intro">客户端只需填写 Termcp 的 MCP 地址。登录、确认、Agent 创建和凭据续期由 Termcp 内置 OAuth 服务完成。</p>
+<div class="notice"><span aria-hidden="true">OIDC</span><div><strong data-text="identityTitle">用户身份来自管理员配置的 OIDC 身份源</strong><span data-text="identityHint">身份源的 Token 不会交给 MCP 客户端；Termcp 只保存本地签名索引与加密后的接入状态。</span></div></div>
+<form id="oauth-form"><fieldset id="oauth-fields">
+<label class="enable-row"><input id="enabled" type="checkbox"><span data-text="enable">启用 OAuth 接入</span></label><p class="hint" data-text="enableHint">保存后立即生效并保留到重启。修改公开地址、身份源或启用状态会终止旧 OAuth 凭据；静态 Token 不受影响。</p>
+<div class="fields">
+<label class="field"><span data-text="publicUrl">公开访问地址</span><input id="public_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://termcp.example.com/termcp"><small data-text="publicHint">客户端访问 Termcp 的固定地址，包含反向代理部署前缀；不使用请求 Host 或转发头推导。</small></label>
+<label class="field"><span data-text="issuer">OIDC issuer</span><input id="oidc_issuer" type="url" autocomplete="off" spellcheck="false" placeholder="https://id.example.com"><small data-text="issuerHint">Termcp 作为标准 OIDC 客户端连接此身份源。身份源应用应只允许需要接入的用户。</small></label>
+<label class="field"><span data-text="clientId">OIDC client ID</span><input id="oidc_client_id" type="text" autocomplete="off" spellcheck="false"></label>
+<label class="field"><span data-text="clientSecret">OIDC client secret</span><div class="secret-row"><input id="oidc_client_secret" type="password" autocomplete="new-password"><label class="clear-secret"><input id="clear_oidc_client_secret" type="checkbox"><span data-text="clearSecret">清除已保存密钥</span></label></div><small id="secret-hint" data-text="secretHint">可留空保持已保存的密钥。公开 OIDC 客户端可以不设置；保存后页面不会回显密钥。</small></label>
+</div>
+<div class="actions"><button id="test" type="button" data-text="test">测试身份源</button><button id="save" class="primary" type="submit" data-text="save">保存配置</button><span id="save-state"></span></div>
+<p id="message" class="message" role="status" aria-live="polite"></p><button id="reload" class="reload" type="button" data-text="reload" hidden>重新加载配置</button>
+<div class="sections">
+<section class="section"><h2 data-text="callbackTitle">在身份源登记的回调地址</h2><p data-text="callbackHint">在 OIDC 应用配置中登记这个精确地址；修改公开访问地址后需要同步更新。</p><div class="endpoint"><input id="callback_url" type="text" readonly><button id="copy-callback" type="button" data-text="copy">复制</button></div></section>
+<section id="connection" class="section" hidden><h2 data-text="connectTitle">MCP 客户端地址</h2><p data-text="connectHint">在支持 OAuth 的 MCP 客户端中只填写这个 URL。客户端会发现授权服务并打开浏览器。</p><div class="endpoint"><input id="resource_url" type="text" readonly><button id="copy-resource" type="button" data-text="copy">复制</button></div></section>
+</div>
+</fieldset></form></main>
 <script nonce="{{.Nonce}}">
 'use strict';
 const $=id=>document.getElementById(id);
-const fields=['issuer','resource','jwks_url','agent_claim','scope'];
+const fields=['public_url','oidc_issuer','oidc_client_id'];
 let lang=/^zh/i.test(navigator.language)?'zh':'en',csrf='',saved=null,busy=false;
-const copy={zh:{
-  title:'OAuth 接入',permissions:'权限管理',intro:'让 Claude、Codex 等客户端通过外部授权服务器登录，再按已有 Agent 的权限访问 Termcp。',
-  enable:'启用 OAuth 接入',enableHint:'保存后立即生效，重启后保留。修改或停用会结束现有 OAuth 连接，静态 Token 不受影响。',
-  issuer:'授权服务器地址',issuerHint:'填写授权服务提供的 issuer；它负责客户端登录与授权。',resource:'Termcp 公开访问地址',resourceHint:'填写客户端实际使用的固定地址；经过反向代理时包含部署路径。',jwks:'签名公钥地址（JWKS）',jwksHint:'从授权服务复制 JWKS 地址。Termcp 用公钥验证访问令牌，无需填写私钥。',
-  advanced:'高级选项',claim:'Agent 身份字段',claimHint:'默认 termcp_agent_id。授权服务应在此字段写入权限管理页中的 Agent ID。',scope:'所需授权范围（scope）',scopeHint:'默认 mcp；多个范围用空格分隔。留空则不要求 scope。',
-  save:'保存配置',reload:'重新加载配置',connect:'连接客户端',connectHint:'将以下地址添加到支持 OAuth 的 MCP 客户端，然后完成授权。',copy:'复制地址',externalHint:'客户端注册、授权页面与令牌续期由外部授权服务器负责。',
-  loading:'正在加载配置…',saving:'正在保存…',saved:'已保存并生效。',enabled:'已启用',disabled:'未启用',unsaved:'有未保存的修改',network:'连接失败，请重试。',conflict:'配置已被其他页面修改。重新加载后再保存。',copied:'地址已复制。',copyFailed:'复制失败，请手动选择并复制地址。',discard:'放弃未保存的 OAuth 配置修改？',
-  required:'启用 OAuth 需要同时填写授权服务器、公开访问地址和签名公钥地址。',invalid:'配置请求无效，请重新加载后重试。',saveFailed:'保存未完成，请重新加载确认结果后重试。',locked:'请先解锁配置加密，再修改 OAuth。',url:'必须填写完整的 HTTP(S) 地址。',https:'远程地址必须使用 HTTPS；本机回环地址可用 HTTP。',query:'地址不能包含查询参数或片段。'
-},en:{
-  title:'OAuth connections',permissions:'Permissions',intro:'Let Claude, Codex and other clients sign in through an external authorization server, then use the permissions of an existing Agent.',
-  enable:'Enable OAuth connections',enableHint:'Saving takes effect immediately and survives restart. Changing or disabling OAuth ends existing OAuth connections; static tokens keep working.',
-  issuer:'Authorization server URL',issuerHint:'Use the issuer supplied by your authorization service, which handles client sign-in and consent.',resource:'Public Termcp URL',resourceHint:'Use the stable address clients reach, including the deployment path when using a reverse proxy.',jwks:'Signing-key URL (JWKS)',jwksHint:'Copy the JWKS address from your authorization service. Termcp verifies access tokens with public keys; no private key is needed.',
-  advanced:'Advanced options',claim:'Agent identity claim',claimHint:'Defaults to termcp_agent_id. The authorization service must put an Agent ID from Permissions in this claim.',scope:'Required scopes',scopeHint:'Defaults to mcp. Separate multiple scopes with spaces; leave empty to skip scope enforcement.',
-  save:'Save configuration',reload:'Reload configuration',connect:'Connect a client',connectHint:'Add this address to an OAuth-capable MCP client, then complete authorization.',copy:'Copy URL',externalHint:'The external authorization server handles client registration, consent and token refresh.',
-  loading:'Loading configuration…',saving:'Saving…',saved:'Saved and applied.',enabled:'Enabled',disabled:'Disabled',unsaved:'Unsaved changes',network:'Could not connect. Try again.',conflict:'Another page changed this configuration. Reload before saving.',copied:'URL copied.',copyFailed:'Could not copy. Select and copy the URL manually.',discard:'Discard unsaved OAuth changes?',
-  required:'OAuth requires an issuer, public Termcp URL and signing-key URL.',invalid:'Invalid configuration request. Reload and try again.',saveFailed:'Could not finish saving. Reload to check the result before retrying.',locked:'Unlock configuration encryption before changing OAuth.',url:'Enter an absolute HTTP(S) URL.',https:'Remote URLs require HTTPS; loopback URLs may use HTTP.',query:'URLs must not contain a query or fragment.'
-}};
-Object.assign(copy.zh,{'theme.label':'主题','theme.loading':'正在加载主题…','theme.discoverFailed':'无法加载主题列表','theme.loadFailed':'主题加载失败','theme.light':'浅色','theme.dark':'深色','theme.auto':'跟随系统','theme.cyberpunk':'赛博朋克','theme.matrix':'矩阵'});
-Object.assign(copy.en,{'theme.label':'Theme','theme.loading':'Loading themes…','theme.discoverFailed':'Unable to load themes','theme.loadFailed':'Theme could not be loaded','theme.light':'Light','theme.dark':'Dark','theme.auto':'Auto','theme.cyberpunk':'Cyberpunk','theme.matrix':'Matrix'});
-const t=key=>copy[lang][key]||key;
-const base=location.pathname.slice(0,location.pathname.lastIndexOf('/'));
-const path=value=>base+value;
-$('permissions-link').href=path('/permissions');
-function draft(){return {enabled:$('enabled').checked,revision:saved?.revision||0,...Object.fromEntries(fields.map(id=>[id,$(id).value.trim()]))};}
-function dirty(){return saved&&JSON.stringify(draft())!==JSON.stringify({enabled:saved.enabled,revision:saved.revision,...Object.fromEntries(fields.map(id=>[id,saved[id]||'']))});}
+const copy={zh:{title:'OAuth 接入',permissions:'权限管理',intro:'客户端只需填写 Termcp 的 MCP 地址。登录、确认、Agent 创建和凭据续期由 Termcp 内置 OAuth 服务完成。',identityTitle:'用户身份来自管理员配置的 OIDC 身份源',identityHint:'身份源的 Token 不会交给 MCP 客户端；Termcp 只保存本地签名索引与加密后的接入状态。',enable:'启用 OAuth 接入',enableHint:'保存后立即生效并保留到重启。修改公开地址、身份源或启用状态会终止旧 OAuth 凭据；静态 Token 不受影响。',publicUrl:'公开访问地址',publicHint:'客户端访问 Termcp 的固定地址，包含反向代理部署前缀；不使用请求 Host 或转发头推导。',issuer:'OIDC issuer',issuerHint:'Termcp 作为标准 OIDC 客户端连接此身份源。身份源应用应只允许需要接入的用户。',clientId:'OIDC client ID',clientSecret:'OIDC client secret',clearSecret:'清除已保存密钥',secretHint:'可留空保持已保存的密钥。公开 OIDC 客户端可以不设置；保存后页面不会回显密钥。',test:'测试身份源',save:'保存配置',reload:'重新加载配置',callbackTitle:'在身份源登记的回调地址',callbackHint:'在 OIDC 应用配置中登记这个精确地址；修改公开访问地址后需要同步更新。',connectTitle:'MCP 客户端地址',connectHint:'在支持 OAuth 的 MCP 客户端中只填写这个 URL。客户端会发现授权服务并打开浏览器。',copy:'复制',loading:'正在加载配置…',saving:'正在保存…',testing:'正在检查 discovery…',saved:'配置已保存并生效。',tested:'身份源 discovery 可用。',enabled:'已启用',disabled:'未启用',unsaved:'有未保存的修改',required:'启用 OAuth 需要填写公开访问地址、OIDC issuer 和 client ID。',invalid:'配置请求无效，请检查输入。',network:'连接失败，请检查服务、地址与网络。',conflict:'配置已被其他页面修改，请重新加载。',locked:'请先解锁配置加密。',copyFailed:'复制失败，请手动选择地址。',discard:'放弃未保存的 OAuth 配置修改？',secretSaved:'已保存密钥',secretUnset:'未设置密钥'},en:{title:'OAuth connections',permissions:'Permissions',intro:'Clients only need the Termcp MCP URL. Login, consent, Agent provisioning, and credential refresh stay inside Termcp.',identityTitle:'User identity comes from the administrator-configured OIDC source',identityHint:'The identity source token is never given to MCP clients. Termcp stores only local credential indexes and encrypted grant state.',enable:'Enable OAuth connections',enableHint:'Saving applies immediately and survives restart. Changing the public URL, identity source, or enabled state ends existing OAuth credentials; static tokens are unaffected.',publicUrl:'Public Termcp URL',publicHint:'The stable URL clients use, including any reverse-proxy deployment prefix. Request Host and forwarded headers are not used.',issuer:'OIDC issuer',issuerHint:'Termcp connects as a standard OIDC client. Restrict the application assignment in the identity source.',clientId:'OIDC client ID',clientSecret:'OIDC client secret',clearSecret:'Clear saved secret',secretHint:'Leave blank to keep the saved secret. Public OIDC clients may have none. Saved secrets are never displayed.',test:'Test identity source',save:'Save configuration',reload:'Reload configuration',callbackTitle:'Callback URL to register',callbackHint:'Register this exact URL in the OIDC application. Update it when the public URL changes.',connectTitle:'MCP client URL',connectHint:'Give this URL to an OAuth-capable MCP client. It discovers the authorization service and opens the browser.',copy:'Copy',loading:'Loading configuration…',saving:'Saving…',testing:'Checking discovery…',saved:'Configuration saved and applied.',tested:'OIDC discovery is available.',enabled:'Enabled',disabled:'Disabled',unsaved:'Unsaved changes',required:'Public URL, OIDC issuer, and client ID are required to enable OAuth.',invalid:'Invalid configuration request. Check the fields.',network:'Connection failed. Check the service, URL, and network.',conflict:'Another page changed this configuration. Reload first.',locked:'Unlock configuration encryption first.',copyFailed:'Could not copy. Select the URL manually.',discard:'Discard unsaved OAuth changes?',secretSaved:'Secret saved',secretUnset:'No secret set'}};
+Object.assign(copy.zh,{'theme.label':'主题','theme.loading':'正在加载主题…','theme.discoverFailed':'无法加载主题列表','theme.loadFailed':'主题加载失败','theme.light':'浅色','theme.dark':'深色','theme.auto':'跟随系统','theme.cyberpunk':'赛博朋克','theme.matrix':'矩阵'});Object.assign(copy.en,{'theme.label':'Theme','theme.loading':'Loading themes…','theme.discoverFailed':'Unable to load themes','theme.loadFailed':'Theme could not be loaded','theme.light':'Light','theme.dark':'Dark','theme.auto':'Auto','theme.cyberpunk':'Cyberpunk','theme.matrix':'Matrix'});
+const t=key=>copy[lang][key]||key;const base=location.pathname.slice(0,location.pathname.lastIndexOf('/'));const path=value=>base+value;$('permissions-link').href=path('/permissions');
+function payload(){return {enabled:$('enabled').checked,revision:saved?.revision||0,public_url:$('public_url').value.trim(),oidc_issuer:$('oidc_issuer').value.trim(),oidc_client_id:$('oidc_client_id').value.trim(),oidc_client_secret:$('oidc_client_secret').value,clear_oidc_client_secret:$('clear_oidc_client_secret').checked};}
+function normalizedDraft(){const value=payload();delete value.oidc_client_secret;delete value.clear_oidc_client_secret;return value;}
+function dirty(){if(!saved)return false;const current=normalizedDraft();const original={enabled:saved.enabled,revision:saved.revision,public_url:saved.public_url||'',oidc_issuer:saved.oidc_issuer||'',oidc_client_id:saved.oidc_client_id||''};return JSON.stringify(current)!==JSON.stringify(original)||!!$('oidc_client_secret').value||$('clear_oidc_client_secret').checked;}
+function updateCallback(){const publicURL=$('public_url').value.trim().replace(/\/+$/,'');$('callback_url').value=publicURL?publicURL+'/oauth/oidc/callback':'';$('resource_url').value=publicURL?publicURL+'/stream':'';}
+function update(){busy?$('oauth-fields').disabled=true:$('oauth-fields').disabled=false;$('save').disabled=busy||!saved||!dirty();$('test').disabled=busy||!$('oidc_issuer').value.trim()||!$('oidc_client_id').value.trim();$('save-state').textContent=t(busy?'saving':dirty()?'unsaved':saved?.enabled?'enabled':'disabled');$('secret-hint').textContent=t(saved?.oidc_client_secret_set?'secretSaved':'secretUnset')+'. '+t('secretHint');updateCallback();}
 function message(text,tone='info'){$('message').textContent=text;$('message').dataset.tone=tone;}
-function update(){
-  $('oauth-fields').disabled=busy||!saved;
-  $('save').disabled=busy||!saved||!dirty();
-  $('reload').disabled=busy;
-  ['issuer','resource','jwks_url'].forEach(id=>$(id).required=$('enabled').checked);
-  $('save-state').textContent=t(busy?'saving':dirty()?'unsaved':saved?.enabled?'enabled':'disabled');
-}
-function renderLanguage(){
-  document.documentElement.lang=lang;document.title=t('title')+' · Termcp';$('language').value=lang;
-  document.querySelectorAll('[data-text]').forEach(node=>{if(copy[lang][node.dataset.text])node.textContent=t(node.dataset.text);});
-  if(typeof syncThemeControl==='function')syncThemeControl();
-  update();
-}
-function fill(settings){
-  saved=settings;$('enabled').checked=settings.enabled;
-  fields.forEach(id=>$(id).value=settings[id]||'');
-  $('connection').hidden=!settings.enabled;
-  const resource=String(settings.resource||'').replace(/\/+$/,'');
-  $('endpoint').value=/\/(stream|sse)$/.test(resource)?resource.replace(/\/sse$/,'/stream'):resource+'/stream';
-  update();
-}
-function errorText(error){
-  if(error.status===409)return t('conflict');
-  const raw=error.message||'';
-  if(raw.includes('required together'))return t('required');
-  if(raw.includes('absolute http(s)'))return t('url');
-  if(raw.includes('must use https'))return t('https');
-  if(raw.includes('query or fragment'))return t('query');
-  if(raw.includes('invalid OAuth settings'))return t('invalid');
-  if(raw.includes('could not save OAuth'))return t('saveFailed');
-  if(error.status===423)return t('locked');
-  return error instanceof TypeError?t('network'):raw;
-}
-async function request(url,options={}){
-  const response=await fetch(path(url),{...options,headers:{'Content-Type':'application/json','X-Termcp-CSRF':csrf}});
-  if(response.status===401){location.assign(path('/login'));throw new Error(t('network'));}
-  const data=await response.json();
-  if(!response.ok){const error=new Error(data.error||String(response.status));error.status=response.status;throw error;}
-  return data;
-}
-async function load(){
-  if(dirty()&&!confirm(t('discard')))return;
-  busy=true;update();message(t('loading'));
-  try{const status=await request('/auth/status');if(!status.authenticated){location.replace(path('/login'));return;}csrf=status.csrf;const data=await request('/auth/oauth');fill(data.settings);message('');$('reload-row').hidden=true;}
-  catch(error){message(errorText(error),'error');$('reload-row').hidden=false;}
-  finally{busy=false;update();}
-}
-$('oauth-form').addEventListener('input',()=>{message('');update();});
-$('oauth-form').addEventListener('submit',async event=>{
-  event.preventDefault();const input=draft();busy=true;update();message(t('saving'));
-  try{const data=await request('/auth/oauth',{method:'PUT',body:JSON.stringify(input)});fill(data.settings);message(t('saved'),'success');$('reload-row').hidden=true;}
-  catch(error){message(errorText(error),'error');$('reload-row').hidden=error.status!==409&&error.status!==500;}
-  finally{busy=false;update();}
-});
-$('language').addEventListener('change',event=>{lang=event.target.value;message('');renderLanguage();});
-$('reload').addEventListener('click',load);
-$('copy-endpoint').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('endpoint').value);message(t('copied'),'success');}catch{message(t('copyFailed'),'error');}});
-window.addEventListener('beforeunload',event=>{if(dirty()){event.preventDefault();event.returnValue='';}});
-renderLanguage();load();
+function fill(settings){saved=settings;$('enabled').checked=settings.enabled;fields.forEach(id=>$(id).value=settings[id]||'');$('oidc_client_secret').value='';$('clear_oidc_client_secret').checked=false;$('connection').hidden=!settings.enabled;$('reload').hidden=true;update();}
+async function request(url,options={}){const response=await fetch(path(url),{...options,headers:{'Content-Type':'application/json','X-Termcp-CSRF':csrf}});if(response.status===401){location.assign(path('/login'));throw new Error(t('network'));}const data=await response.json();if(!response.ok){const error=new Error(data.error||String(response.status));error.status=response.status;throw error;}return data;}
+async function load(){if(dirty()&&!confirm(t('discard')))return;busy=true;update();message(t('loading'));try{const status=await request('/auth/status');if(!status.authenticated){location.replace(path('/login'));return;}csrf=status.csrf;const data=await request('/auth/oauth');fill(data.settings);message('');}catch(error){message(error.status===423?t('locked'):error.message||t('network'),'error');$('reload').hidden=false;}finally{busy=false;update();}}
+async function testConnection(){busy=true;update();message(t('testing'));try{const data=await request('/auth/oauth/test',{method:'POST',body:JSON.stringify(payload())});message(t('tested')+' · '+data.issuer,'success');}catch(error){message(error.status===423?t('locked'):error.message||t('network'),'error');}finally{busy=false;update();}}
+function renderLanguage(){document.documentElement.lang=lang;document.title=t('title')+' · Termcp';$('language').value=lang;document.querySelectorAll('[data-text]').forEach(node=>{if(copy[lang][node.dataset.text])node.textContent=t(node.dataset.text);});if(typeof syncThemeControl==='function')syncThemeControl();update();}
+$('oauth-form').addEventListener('input',()=>{message('');update();});$('oauth-form').addEventListener('submit',async event=>{event.preventDefault();busy=true;update();message(t('saving'));try{const data=await request('/auth/oauth',{method:'PUT',body:JSON.stringify(payload())});fill(data.settings);message(t('saved'),'success');}catch(error){const text=error.status===409?t('conflict'):error.status===423?t('locked'):error.status===400?t('invalid'):error.message||t('network');message(text,'error');$('reload').hidden=error.status!==409&&error.status!==500;}finally{busy=false;update();}});
+$('test').addEventListener('click',testConnection);$('reload').addEventListener('click',load);$('language').addEventListener('change',event=>{lang=event.target.value;renderLanguage();});
+async function copyValue(id){try{await navigator.clipboard.writeText($(id).value);message(t('saved'),'success');}catch{message(t('copyFailed'),'error');}}
+$('copy-callback').addEventListener('click',()=>copyValue('callback_url'));$('copy-resource').addEventListener('click',()=>copyValue('resource_url'));window.addEventListener('beforeunload',event=>{if(dirty()){event.preventDefault();event.returnValue='';}});renderLanguage();load();
 </script>
 {{template "theme-script" .}}
 </body></html>

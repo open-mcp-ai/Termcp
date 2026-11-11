@@ -1,6 +1,6 @@
 # 多 stdio 与单 daemon 的协商：决策及遗漏项
 
-**实现更新（2026-10-29）**：简易 token 已交付，详见 [当前静态 token 实现](mcp-static-tokens.md)。2026-11-07 新增外部 Authorization Server 的 OAuth resource-server 切片，见 [OAuth resource server](oauth-resource-server.md)；stdio OAuth、自有授权服务和本文下方 P1/候选端点仍不代表已实现，以实现文档和 API 文档为准。
+**实现更新（2026-11-10）**：简易静态 token 已交付。未发布的外部 Authorization Server 实验已被 [内置 OAuth、OIDC 用户归属与 Agent 自动创建](builtin-oauth-user-agents.md) 替换；HTTP OAuth 已实现，stdio OAuth profile 仍未实现。
 
 **2026-11-05 范围收敛**：不新增 AgentGrant、多用户或 canonical origin/可信代理。Bridge 继续使用认证成功的 MCP 探测；必须保证未认证请求不能延长 daemon 空闲期限。相关开发由 #265 跟踪。完整约束见 [认证与权限范围收敛](auth-scope-2026-11-05.md)。
 
@@ -13,7 +13,7 @@
 | 能力或规则 | 当前决定 |
 | --- | --- |
 | 服务端认证 | daemon 与独立 HTTP 部署共用 `.termcp` 下的持久配置、身份、权限和撤销记录 |
-| HTTP OAuth | **未来计划，当前不实现**；与 stdio OAuth 一起移出当前实施范围 |
+| HTTP OAuth | **已实现**：原生 HTTP MCP 客户端使用 URL-only 发现、OIDC 登录和本地 grant；stdio 桥仍使用静态 token |
 | 简易 token | **P1**：WebUI 新增 Agent、一次返回 token、状态/撤销；用户自行填写 MCP 配置 |
 | stdio token 客户端 | 与 P1 简易 token 同批：读取显式配置的 Agent token、转成 Bearer、报告失败；不刷新、不自动配对 |
 | stdio OAuth 客户端 | **未来计划，当前不实现**：登录 profile、浏览器授权、凭据持久化、刷新、同 profile 并发协调 |
@@ -22,7 +22,7 @@
 | Admin 初始化 | 用户第一次运行程序时设置；Admin 主密码解锁现有 Main Key，认证状态加密持久化 |
 | 配置位置 | daemon 与 HTTP 模式都使用同一数据目录，默认 `.termcp`；保留已有 data-dir 覆盖能力 |
 
-当前 Admin 初始化、共享 Main Key 加密存储和权限持久化已实现；简易 Agent token 按 P1 交付，OAuth 全部留到未来。在 P1 交付前，新 managed Agent 接入仍需标为未完成，不能复用人的凭据或自动关闭认证。现有旧共享认证模式只通过显式旧模式保留，不能请求失败后自动退回。
+当前 Admin 初始化、共享 Main Key 加密存储、权限持久化、简易 Agent token 和 HTTP OAuth 已实现；stdio OAuth profile 仍留到未来。不能复用人的凭据或自动关闭认证，现有旧共享认证模式只通过显式旧模式保留。
 
 ## 2. 持久状态和连接状态必须分开
 
@@ -112,7 +112,7 @@ P1 不新增 OAuth profile，也不保存可刷新凭据。同一份 token 配�
 
 - 第一次运行程序时由用户设置 Admin；认证状态加密保存在默认 `.termcp/auth.enc`，主密码同时解锁既有主机配置密钥环。完成设置后正常启动直接读取，不反复创建 Admin；stdio 的 MCP stdin 不用于读取管理员密码。
 - 本机 npx、远端部署和容器需要明确不同的初始化入口；本机浏览器不等于 MCP 宿主在本机，反向代理路径/HTTPS 不应在配置生成时丢失。桥在 session 建立前使用同前缀 `/auth/mcp` 保活，未认证请求不计入 daemon 活动。
-- OAuth 的 HTTP 授权服务、发现、PKCE、issuer/resource、桥登录及刷新均为未来计划，不作为当前交付条件。
+- HTTP OAuth 的发现、PKCE、issuer/resource 与刷新已实现；stdio profile、桥登录及桥持有 refresh token 仍不作为当前交付条件。
 - 有效权限、撤销记录与认证库加载完成后才报告可服务；存储损坏、丢失、schema 不兼容不能被当作普通“未初始化”自动重建 Admin。
 - Admin 忘记密码或认证库恢复须走显式本机恢复程序；普通桥无权触发。备份恢复若回退了已撤销状态，应通过恢复流程轮换部署认证 epoch/相关凭据，不能把旧备份当成安全状态的自然延续。
 - 旧共享 token/hash 不能在新模式中继续当全权旁路；升级时应提示受影响的桥，由用户选择保留显式旧模式或完成新配置。业务历史可以保留，认证身份不能静默重分配。

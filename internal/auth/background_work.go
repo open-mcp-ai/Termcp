@@ -82,6 +82,13 @@ func (m *Managed) cancelCredentialLocked(id string) {
 		principalID := ""
 		if token, ok := m.state.Tokens[id]; ok {
 			principalID = token.PrincipalID
+		} else {
+			for _, record := range m.state.OAuthAccess {
+				if record.ID == id {
+					principalID = m.state.OAuthGrants[record.GrantID].AgentID
+					break
+				}
+			}
 		}
 		m.mcpConnectionInvalidator(principalID, id)
 	}

@@ -12,12 +12,14 @@ import (
 
 type groupView struct {
 	permissionGroup
-	MemberCount           int  `json:"member_count"`
-	CredentialCount       int  `json:"credential_count"`
-	ActiveCredentialCount int  `json:"active_credential_count"`
-	ActiveRequests        int  `json:"active_requests"`
-	ActiveWork            int  `json:"active_work"`
-	IsDefault             bool `json:"is_default"`
+	MemberCount            int  `json:"member_count"`
+	CredentialCount        int  `json:"credential_count"`
+	ActiveCredentialCount  int  `json:"active_credential_count"`
+	OAuthGrantCount        int  `json:"oauth_grant_count"`
+	ActiveOAuthCredentials int  `json:"active_oauth_credentials"`
+	ActiveRequests         int  `json:"active_requests"`
+	ActiveWork             int  `json:"active_work"`
+	IsDefault              bool `json:"is_default"`
 }
 
 func (m *Managed) groupViewLocked(s managedState, g permissionGroup) groupView {
@@ -38,6 +40,25 @@ func (m *Managed) groupViewLocked(s managedState, g permissionGroup) groupView {
 			out.ActiveWork += len(m.background[id])
 		}
 	}
+	for _, grant := range s.OAuthGrants {
+		if !wanted[grant.AgentID] {
+			continue
+		}
+		if grantActive(grant, now) {
+			out.OAuthGrantCount++
+		}
+	}
+	for _, record := range s.OAuthAccess {
+		grant := s.OAuthGrants[record.GrantID]
+		if !wanted[grant.AgentID] {
+			continue
+		}
+		if record.RevokedAt == nil && now.Before(record.ExpiresAt) {
+			out.ActiveOAuthCredentials++
+		}
+		out.ActiveRequests += len(m.requests["token:"+record.ID])
+		out.ActiveWork += len(m.background[record.ID])
+	}
 	return out
 }
 func isGroupPath(path string) bool {
@@ -45,6 +66,10 @@ func isGroupPath(path string) bool {
 }
 
 func (m *Managed) groupManagement(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		m.groupMutation(w, r)
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := credentialState(m.state)

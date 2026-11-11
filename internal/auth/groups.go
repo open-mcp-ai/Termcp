@@ -551,9 +551,14 @@ func (m *Managed) cancelPrincipalsLocked(ids []string) {
 	for _, id := range ids {
 		wanted[id] = true
 	}
-	for id, session := range m.oauthSessions {
-		if wanted[session.principal] {
-			m.cancelOAuthSessionLocked(id)
+	for _, grant := range m.state.OAuthGrants {
+		if !wanted[grant.AgentID] {
+			continue
+		}
+		for _, record := range m.state.OAuthAccess {
+			if record.GrantID == grant.ID {
+				m.cancelCredentialLocked(record.ID)
+			}
 		}
 	}
 	for id, token := range m.state.Tokens {

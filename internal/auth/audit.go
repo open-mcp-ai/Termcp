@@ -215,6 +215,10 @@ func auditTargetType(path string) string {
 		return "default_group"
 	case path == "/auth/oauth":
 		return "oauth_configuration"
+	case strings.HasPrefix(path, "/auth/oauth/users"):
+		return "oauth_login_user"
+	case strings.HasPrefix(path, "/auth/oauth/grants"):
+		return "oauth_grant"
 	default:
 		return "authentication"
 	}
@@ -223,6 +227,9 @@ func auditTargetType(path string) string {
 func auditTargetID(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 3 && parts[0] == "auth" {
+		if len(parts) >= 4 && parts[1] == "oauth" && (parts[2] == "users" || parts[2] == "grants") {
+			return parts[3]
+		}
 		return parts[2]
 	}
 	return ""
@@ -270,6 +277,10 @@ func auditAction(r *http.Request) string {
 		return "role_policy.update"
 	case r.URL.Path == "/auth/password":
 		return "authentication.password_change"
+	case strings.HasPrefix(r.URL.Path, "/auth/oauth/users/"):
+		return "oauth.user.update"
+	case strings.HasPrefix(r.URL.Path, "/auth/oauth/grants/"):
+		return "oauth.grant.revoke"
 	default:
 		return "access.manage"
 	}
