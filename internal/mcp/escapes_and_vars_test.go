@@ -181,13 +181,13 @@ func TestVarsASTSubstitution(t *testing.T) {
 			// THE SHELL LINE IS THE VALUE. The reference is the whole payload, so what
 			// arrives is the statement the caller put in `vars`.
 			"simple substitution",
-			"run " + h + " --force $MYVAR",
+			"run " + h + " $MYVAR",
 			map[string]any{"MYVAR": "echo hello_from_env"},
 			"hello_from_env",
 		},
 		{
 			"braced variable",
-			"run " + h + " --force ${MYVAR}",
+			"run " + h + " ${MYVAR}",
 			map[string]any{"MYVAR": "echo braced_works"},
 			"braced_works",
 		},
@@ -201,7 +201,7 @@ func TestVarsASTSubstitution(t *testing.T) {
 			// A semicolon in the value IS a statement separator, because the value is a
 			// statement. Both halves run; the caller's text was not data to be quoted.
 			"a semicolon in the value separates statements",
-			"run " + h + " --force $PAYLOAD",
+			"run " + h + " $PAYLOAD",
 			map[string]any{"PAYLOAD": "echo A; echo B"},
 			"echo B",
 		},
@@ -219,7 +219,10 @@ func TestVarsASTSubstitution(t *testing.T) {
 					"cmd":  tc.cmd,
 					"vars": tc.env,
 				})
-				if strings.HasPrefix(got, "TERM/1 4") {
+				// A CONFLICT IS THE GATE, NOT A FAILURE (#311): a compound line can be
+				// refused while the previous attempt's output is still arriving, and the
+				// next attempt is what this loop is for. Any other 4xx is an error.
+				if strings.HasPrefix(got, "TERM/1 4") && !strings.Contains(got, "409") {
 					t.Fatalf("call failed with 4xx:\n%s", got)
 				}
 				if strings.Contains(got, tc.want) {

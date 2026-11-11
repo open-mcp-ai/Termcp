@@ -697,10 +697,13 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	if f := s.checkRunFlags(stmt, win); f != nil {
 		return s.slotFromFailure(ctx, stmt, f)
 	}
-	// A COMPOUND LINE NEEDS A CHANNEL THAT HAS EVIDENCE (#311). Checked here, with the
-	// other flags, because a refusal must not arrive after the bytes did.
-	if f := s.refuseUnconfirmedCompound(stmt); f != nil {
-		return s.slotFromFailure(ctx, stmt, f)
+	// A COMPOUND LINE IS CHECKED AGAINST WHAT IS OBSERVED (#311): a program holding the
+	// screen, or a command still producing output, refuses it; not knowing refuses nothing
+	// and warns instead. Checked here, with the other flags, because a refusal must not
+	// arrive after the bytes did.
+	warn, gateFail := s.compoundGate(stmt)
+	if gateFail != nil {
+		return s.slotFromFailure(ctx, stmt, gateFail)
 	}
 
 	// THE LINE IS ONE UNIT: THE TEXT AND ITS ENTER LAND TOGETHER (issue #212).
@@ -731,7 +734,14 @@ func (s *Server) runOne(ctx context.Context, stmt directive.Statement, win termA
 	if held := reviewPendingFrom(keyRes); held != nil {
 		return held.slot(stmt.Path)
 	}
-	return s.finishRun(ctx, stmt, win, start)
+	slot := s.finishRun(ctx, stmt, win, start)
+	if warn != "" && slot.Code < 400 {
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		slot.Headers["Warning"] = warn
+	}
+	return slot
 }
 
 // finishRun reads the window a command opened at start.
@@ -763,10 +773,13 @@ func (s *Server) finishRun(ctx context.Context, stmt directive.Statement, win te
 			// at as much here as anywhere (issue #194).
 			slot.Headers["Input-At"] = strconv.FormatInt(start, 10)
 		}
+		// A searched run is evidence about completion as much as a plain one: what the
+		// next `run` may assume must not depend on which spelling this one used.
+		s.noteRunProof(stmt.Target, slot.Headers["Completion"] != "", slot.Headers["Still-Running"] == "true")
 		return slot
 	}
 	slot := s.readSlotAfter(ctx, stmt, win, start)
-	s.noteRunCompletion(stmt.Target, slot.Headers["Completion"] != "")
+	s.noteRunProof(stmt.Target, slot.Headers["Completion"] != "", slot.Headers["Still-Running"] == "true")
 	return tailSlot(slot, stmt)
 }
 
