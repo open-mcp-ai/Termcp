@@ -28,6 +28,7 @@ var flagSummaries = map[string]map[string]string{
 		"grep":       "filter BEFORE the window; each match keeps its real line number",
 		"grep-limit": "cap the matches (default 200); the reply reports the true total",
 		"until":      "wait for this regex or preset (exit = OSC 133, prompt = shell prompt) instead of returning at once",
+		"screen":     "the screen, not the log: rows as displayed, plus Cursor and Alt-Screen (valueless)",
 		"stream":     "o = stdout only, e = stderr only; default is both, and the other is reported as omitted",
 		"encoding":   "the charset of these bytes; without it a non-UTF-8 window is refused rather than guessed",
 		"raw":        "the bytes as they arrived: no ANSI stripping on a window, no escape-decoding on --at, no \\n escaping on a file read (valueless)",

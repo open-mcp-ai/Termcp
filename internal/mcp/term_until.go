@@ -202,7 +202,6 @@ func (s *Server) untilWatchFrom(stmt directive.Statement) *untilWatch {
 	return &untilWatch{spec: spec}
 }
 
-//
 // `Completion` APPEARS ONLY WITH EVIDENCE, and this is the whole point of the change:
 // the header used to be set to `quiet` when the stream simply stopped talking, which
 // asserted a verdict the server did not have. A missing `Completion` now means what it
