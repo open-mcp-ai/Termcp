@@ -63,6 +63,14 @@ type Server struct {
 	// a vocabulary, and neither should one instance's tests.
 	aliases *aliasTable
 
+	// runEvidence is what each channel's last `run` proved about completion (#311).
+	//
+	// ONE BIT PER HANDLE, and it is a fact rather than an inference: the reply carried a
+	// `Completion` header or it did not. The gate in term_gate.go reads it before typing a
+	// compound line, because a compound line whose first segment is eaten is not a shorter
+	// command — it is a different one.
+	runEvidence sync.Map // handle string -> bool (true = the last run ended with evidence)
+
 	// recvCursors is where each channel's `mcp recv` has read up to.
 	//
 	// It has to live here, per handle, because a recv is a QUEUE CONSUMER: the

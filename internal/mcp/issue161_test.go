@@ -54,7 +54,7 @@ func TestAWindowThatRanOutSaysSo(t *testing.T) {
 	// quiet, so the wait can only end because the deadline arrived.
 	long := noisyCommand("tick")
 	got := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
+		"cmd":     "run " + h + " --force $1",
 		"args":    []any{long},
 		"timeout": 1,
 	})
@@ -81,7 +81,7 @@ func TestAQuietCommandIsNotMarkedStillRunning(t *testing.T) {
 
 	// A command that prints and stops: the wait ends on quiet, long before the window.
 	got := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
+		"cmd":     "run " + h + " --force $1",
 		"args":    []any{"echo zz-quiet-done"},
 		"timeout": 20,
 	})

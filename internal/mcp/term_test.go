@@ -282,7 +282,7 @@ func TestTermRunOnPtyReadsTheWindow(t *testing.T) {
 	h := openPty(t, s)
 	start := time.Now()
 	text := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
+		"cmd":     "run " + h + " --force $1",
 		"args":    []any{"echo hi"},
 		"timeout": float64(2),
 	})
@@ -309,7 +309,7 @@ func TestTermPtyRunWaitsTheWindow(t *testing.T) {
 	h := openPty(t, s)
 	awaitPtyReady(t, s, h)
 	text := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
+		"cmd":     "run " + h + " --force $1",
 		"args":    []any{"sleep 1 && echo LATE"},
 		"timeout": float64(3),
 	})
@@ -344,14 +344,14 @@ func TestTermRunStartsAtItsOwnOffset(t *testing.T) {
 	// wait would then be measuring nothing, which is how this test spent a while passing
 	// for the wrong reason.
 	termText(t, s, map[string]any{
-		"cmd":         "run " + h + " $1",
+		"cmd":         "run " + h + " --force $1",
 		"args":        []any{"seq 1 60; echo seq-finished-$(echo marker)"},
 		"timeout":     float64(2),
 		"bytes_limit": float64(64),
 	})
 	waitForContent(t, s, h, "seq-finished-marker")
 
-	second := termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{"echo SECOND"}, "timeout": float64(2)})
+	second := termText(t, s, map[string]any{"cmd": "run " + h + " --force $1", "args": []any{"echo SECOND"}, "timeout": float64(2)})
 	if !strings.Contains(second, "SECOND") {
 		t.Fatalf("the second command's output is missing:\n%s", second)
 	}

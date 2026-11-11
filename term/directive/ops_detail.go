@@ -149,7 +149,8 @@ var ops = []Op{
 
 	{Name: "run", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
 		PayloadType: PayloadVar,
-		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding", "until"},
+		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding", "until", "force"},
+		Valueless:   []string{"force"},
 		Usage:       "run <channel> [--tail N] [--grep RE] $1   |   run <session> <index> $1   |   run use:<host> $1",
 		Detail:      runDetail},
 	{Name: "input", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
