@@ -112,3 +112,50 @@ func stmtWithFlag(value string) directive.Statement {
 	v := value
 	return directive.Statement{Flags: map[string]*string{"until": &v}}
 }
+
+// A READ CAN WAIT FOR THE SAME EVIDENCE, which is the verb that has no other way to
+// wait at all: `read` returns what is there now, and a caller watching a long command
+// had to poll it. With `--until` it is a wait primitive — the same predicate, applied
+// to the bytes that arrive next.
+func TestReadUntilWaitsForTheEvidence(t *testing.T) {
+	s := newTestServer(t)
+	h := openPty(t, s)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	// Start a command that prints late, then wait for its output in a separate call.
+	termText(t, s, map[string]any{
+		"cmd":     "run " + h + " $1",
+		"args":    []any{"sleep 2; echo ARRIVED-LATER"},
+		"timeout": 0,
+	})
+	got := termText(t, s, map[string]any{
+		"cmd":     "read " + h + " --until ARRIVED-LATER",
+		"timeout": 20,
+	})
+	if v, ok := headerValue(t, got, "Completion"); !ok || v != "matched" {
+		t.Fatalf("a read whose --until matched did not say so (Completion=%q, present=%v):\n%s", v, ok, firstLine(got))
+	}
+	if !strings.Contains(got, "ARRIVED-LATER") {
+		t.Fatalf("the read matched the evidence but did not return it:\n%s", firstLine(got))
+	}
+}
+
+// AND IT IS OPTIONAL: without `--until` a read still returns at once and claims nothing.
+func TestReadWithoutUntilDoesNotWait(t *testing.T) {
+	s := newTestServer(t)
+	h := openPty(t, s)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	termText(t, s, map[string]any{
+		"cmd":     "run " + h + " $1",
+		"args":    []any{"sleep 2; echo NEVER-WAITED-FOR"},
+		"timeout": 0,
+	})
+	got := termText(t, s, map[string]any{"cmd": "read " + h, "timeout": 0})
+	if v, ok := headerValue(t, got, "Completion"); ok {
+		t.Fatalf("a plain read claimed Completion=%q; only evidence may produce it", v)
+	}
+	if strings.Contains(got, "NEVER-WAITED-FOR") {
+		t.Fatalf("a read without --until waited for later output:\n%s", firstLine(got))
+	}
+}

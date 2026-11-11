@@ -31,8 +31,41 @@ func (s *Server) directiveRead(ctx context.Context, stmt directive.Statement, wi
 	return []envelope.Slot{s.directiveReadOne(ctx, stmt, win)}
 }
 
-// directiveReadOne reads one channel.
+// directiveReadOne reads one channel, waiting first when the caller named evidence.
+//
+// `--until` ON A READ IS THE SAME PREDICATE AS ON A RUN, and its absence is the old
+// behaviour exactly: the read happens now and the reply says nothing about completion.
+// A read is a cursor over the stream, so the honest reading of "wait until X appears" is
+// "wait for the bytes that arrive from the channel's current end" — the predicate is
+// about what happens NEXT, not about the scrollback that is already there.
+//
+// A CALL THAT ASKS FOR NOTHING DOES NOT WAIT. bytes_limit 0 means "show me nothing and
+// consume nothing", and a wait followed by an empty reply is the worst of both: the
+// caller spent its window and learned nothing it could not have had at once.
 func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	watch := s.untilWatchFrom(stmt)
+	base, observable := s.outputSizeFor(stmt.Target)
+	if watch == nil || !observable || win.BytesLimit == 0 {
+		// A peer or file target has no channel stream, and its own refusal explains
+		// itself better than a wait that could never end.
+		return s.readChannelNow(ctx, stmt, win)
+	}
+	began := time.Now()
+	s.awaitUntil(ctx, stmt.Target, win, base, watch)
+	slot := s.readChannelNow(ctx, stmt, remaining(win, time.Since(began)))
+	watch.headers(&slot)
+	if !watch.matched && slot.Code < 400 {
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		slot.Headers["Hint"] = "`--until` did not match within the window, so nothing here says the bytes you asked for have arrived. " +
+			"read again, or widen the window."
+	}
+	return slot
+}
+
+// readChannelNow is the read itself: the cursor over the stream, with no waiting.
+func (s *Server) readChannelNow(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	// PEER FLAGS ON A CHANNEL READ ARE REFUSED, NOT IGNORED (issue #159).
 	//
 	// --since and --at are declared on the `read` verb, but their meaning belongs to
