@@ -84,3 +84,35 @@ func TestReadScreenTailCountsRows(t *testing.T) {
 		}
 	}
 }
+
+// --top AND --rows PAGE THROUGH THE SCREEN IN THE MODEL'S ROW NUMBERING (#312).
+//
+// `--tail` only looks down; a caller reading output that has already scrolled off needs
+// to walk back without having to switch to byte reads.
+func TestReadScreenPagingWalksPastRows(t *testing.T) {
+	s := newTestServer(t)
+	h := openPty(t, s)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{`echo ROW""ZERO`}, "timeout": 5})
+	termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{`echo ROW""ONE`}, "timeout": 5})
+	screenUntil(t, s, h, "ROWONE")
+
+	banner := termText(t, s, map[string]any{"cmd": "read " + h + " --screen --top 0 --rows 2", "timeout": 0})
+	if v, ok := headerValue(t, banner, "Screen-Top"); !ok || v != "0" {
+		t.Fatalf("banner page reported Screen-Top=%q, want 0:\n%s", v, firstLine(banner))
+	}
+	if v, ok := headerValue(t, banner, "Screen-Rows"); !ok || v != "2" {
+		t.Fatalf("banner page reported Screen-Rows=%q, want 2:\n%s", v, firstLine(banner))
+	}
+
+	newest := termText(t, s, map[string]any{"cmd": "read " + h + " --screen --top 8 --rows 16", "timeout": 0})
+	if !strings.Contains(newest, "ROWONE") {
+		t.Fatalf("the page covering the newest rows is missing the last command:\n%s", firstLine(newest))
+	}
+	for _, hname := range []string{"Cursor-Visible", "Paste-Mode", "Screen-Total"} {
+		if _, ok := headerValue(t, newest, hname); !ok {
+			t.Fatalf("paged screen is missing header %s:\n%s", hname, firstLine(newest))
+		}
+	}
+}

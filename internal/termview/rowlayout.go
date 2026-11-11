@@ -104,7 +104,9 @@ type Layout struct {
 	// prompt and its history were puts every row below it out by a screenful, which
 	// is the rail sliding out of step with the terminal the moment a full-screen
 	// program quits.
-	alt bool
+	alt            bool
+	cursorVisible  bool
+	bracketedPaste bool
 	// altGrid is the screen the full-screen program is painting (#314). The primary
 	// buffer keeps its rows and its cursor untouched while a program holds the screen, because
 	// that is what the terminal does; this grid is what the program sees instead.
@@ -150,7 +152,7 @@ func New(cols, height int) *Layout {
 	if height < 1 {
 		height = 1
 	}
-	return &Layout{cols: cols, height: height}
+	return &Layout{cols: cols, height: height, cursorVisible: true}
 }
 
 // rowCount is the number of rows the log has.
@@ -376,3 +378,10 @@ func (g *Layout) Alt() bool { return g.alt }
 // Cursor is where the terminal's cursor stands: the row in the model's numbering and the
 // column within it. A pty gives no other way to ask whether a prompt is ready.
 func (g *Layout) Cursor() (row, col int) { return g.row, g.col }
+
+// CursorVisible reports whether the terminal cursor is currently visible (?25h vs ?25l).
+// A full-screen program turns it off while repainting; a shell turns it on at the prompt.
+func (g *Layout) CursorVisible() bool { return g.cursorVisible }
+
+// BracketedPaste reports whether the shell or program has bracketed paste enabled (?2004).
+func (g *Layout) BracketedPaste() bool { return g.bracketedPaste }

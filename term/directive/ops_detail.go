@@ -176,7 +176,7 @@ var ops = []Op{
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
-			"frame", "encoding", "mode", "until", "screen"},
+			"frame", "encoding", "mode", "until", "screen", "top:number", "rows:number"},
 		Valueless: []string{"raw", "lines", "frame", "screen"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +

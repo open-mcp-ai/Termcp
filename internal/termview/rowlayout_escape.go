@@ -242,6 +242,14 @@ func (g *Layout) applyPrivateMode(body []byte, final byte) {
 	}
 	for _, p := range parseCSIParams(body) {
 		switch p {
+		case 25:
+			// DECTCEM: cursor visibility. `?25l` hides it while a program redraws;
+			// a hidden cursor is evidence that the program is not waiting for input.
+			g.cursorVisible = (final == 'h')
+		case 2004:
+			// Bracketed paste: a shell setting this is a modern shell with prompt
+			// integration; a program reading it takes pasted lines literally.
+			g.bracketedPaste = (final == 'h')
 		case 47, 1047, 1049:
 			// The three ways to take the screen over, oldest first: 47 hands the
 			// alternate screen over as it is, 1047 clears it on the way out, and 1049 —
