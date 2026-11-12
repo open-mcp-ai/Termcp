@@ -278,8 +278,28 @@ func TestEnabledEncryptionWithoutKeyringFailsClosed(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "keys", "config.keys")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenConfiguredStore(dir, configstore.NewEnvProvider("")); !errors.Is(err, configstore.ErrNotInitialized) {
-		t.Fatalf("missing keyring error = %v", err)
+	/* Losing the keyring must not take the instance down with it. The store comes
+	   back LOCKED: the encrypted profile is unreachable, plaintext profiles are
+	   untouched, and the operator still has a page to fix it from. */
+	store, err := OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
+	if err != nil {
+		t.Fatalf("missing keyring prevented startup: %v", err)
+	}
+	defer store.Close()
+	status, err := store.EncryptionStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Locked {
+		t.Fatal("store with a lost keyring reported itself unlocked")
+	}
+	raw := []byte(`kind = "remote"
+host = "host.example"
+user = "u"
+password = "p"
+`)
+	if err := store.Save("prod", raw); err == nil {
+		t.Fatal("a store whose keys are gone accepted a write")
 	}
 }
 

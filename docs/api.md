@@ -335,13 +335,22 @@ This explicit action initializes the keyring and sets `encrypt_new=true`.
 Canceling leaves the data directory uninitialized. Existing plaintext files are
 not converted or moved.
 
-After initialization, `PUT /api/config-storage` with `{"encrypt_new":true}`
-enables encryption for newly created profiles. An uninitialized enable request
-returns `409` with `code: config_initialization_required`. Sending `false` switches new profiles back
-to plaintext; already encrypted hosts remain readable and encrypted. The
-preference is stored inside the authenticated encrypted catalog, so changing a
-plaintext file on disk cannot silently disable it. Ciphertext generations live
-at `ssh_configs/<profile>/<generation>.enc`.
+Whether a profile is encrypted is a property of that profile, not a global
+setting: `PUT /api/connections/<name>` takes `?encrypt=true|false` alongside
+`?temporary=`. `true` writes the profile into the encrypted catalog and `false`
+restores it to plaintext, so the connection form's own checkbox decides the
+mode. Omitting the parameter keeps the store preference for callers that do not
+care. Ciphertext generations live at
+`ssh_configs/<profile>/<generation>.enc`.
+
+`POST /api/config-storage/lock` takes no body and **locks the store**: it drops the
+unwrapped Main Key from memory while leaving the keyring on disk. Encrypted
+profiles stop being readable and plaintext profiles keep working; unlocking
+again takes the credential. `POST /api/config-storage/destroy` (also no body)
+**deletes the key**: it deletes `keys/config.keys` and `ssh_configs/store.enc` and
+nothing else, so every still-encrypted profile becomes permanently unreadable
+while remaining on disk. It requires an unlocked store — deleting a key you
+cannot use would destroy data without proving the caller was entitled to it.
 
 The encrypted catalog itself is `ssh_configs/store.enc`. It contains the format
 version, Store ID, monotonic revision, the authenticated `encrypt_new` setting,
@@ -402,6 +411,12 @@ Credential reads and configuration writes fail closed while locked. The
 encryption preference and Main Key ID are unknown until unlocking. An
 authentication failure in the catalog after successful keyring unlocking is a
 data error, not a provider-unlock state.
+
+`POST /api/config-storage/unlock` with an empty password unlocks through the
+machine provider chain (DPAPI, macOS Keychain, Linux Secret Service, a KEK file,
+or `TERMCP_CONFIG_KEK`), which is how a machine-bound keyring is re-opened after
+an explicit `lock`. With a password it opens the password slot instead, and
+`recover` additionally re-wraps the key for this machine.
 
 `POST /api/config-storage/unlock` accepts
 `{"password":"<encryption password>"}` and unlocks the current process for

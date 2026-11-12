@@ -330,6 +330,39 @@ func TestLanguageSelectorIsWired(t *testing.T) {
 // grow a whitelist longer than the code. Run it with:
 //
 //	go test ./internal/webui/ -run TestUntranslatedAudit -v
+/* A Chinese catalog whose value is an English sentence is a hole in the UI: the
+ * key parity tests cannot see it (the key exists) and the audit above only logs.
+ * This one fails. It compares against the English catalog and requires CJK in
+ * values that look like prose; protocol names and deliberate brand strings are
+ * whitelisted explicitly, so the list cannot quietly grow.
+ *
+ * Mutation check: reverting storage.enableMachine to English fails this test. */
+func TestChineseCatalogsHaveNoEnglishSentences(t *testing.T) {
+	// Values that are correct as-is: protocols, shell terms, deliberate marks.
+	whitelist := map[string]bool{
+		"ext.inscription.a":         true, // deliberate brand mark
+		"ext.status.shell":          true, // "Shell" is the term of art
+		"modal.forward.dir.dynamic": true, // SOCKS5 (ssh -D) is a protocol spelling
+	}
+	cat := loadCatalogs(t)
+	en := cat["en"]
+	for _, lang := range []string{"zh-Hans", "zh-Hant"} {
+		for key, value := range cat[lang] {
+			if whitelist[key] {
+				continue
+			}
+			// Placeholders carry English identifiers ({msg}, {from}) that say
+			// nothing about the language: strip them before judging the value.
+			stripped := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(value, "")
+			looksEnglish := strings.Contains(stripped, " ") && regexp.MustCompile(`[A-Za-z]{3,}`).MatchString(stripped)
+			proseEnglish := looksEnglish && value == en[key]
+			if (proseEnglish || !strings.ContainsFunc(value, func(r rune) bool { return r >= 0x4e00 && r <= 0x9fff })) && looksEnglish {
+				t.Errorf("%s: %q is still English (en: %q)", lang, key, value)
+			}
+		}
+	}
+}
+
 func TestUntranslatedAudit(t *testing.T) {
 	// Capitalised word + space + more text, which is what an English sentence
 	// fragment looks like in this codebase.

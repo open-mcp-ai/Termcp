@@ -32,6 +32,10 @@ var (
 	ErrAlreadyInitialized = errors.New("configstore: encrypted store is already initialized")
 	// ErrClosed reports use of a repository after Close.
 	ErrClosed = errors.New("configstore: repository is closed")
+	// ErrKeyringMissing reports a catalog whose keyring file is gone. The data is
+	// still on disk and still encrypted; nothing can open it, which is a locked
+	// store, not an uninitialized one.
+	ErrKeyringMissing = errors.New("configstore: the keyring for the encrypted catalog is missing")
 )
 
 var (
@@ -158,6 +162,12 @@ func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Pr
 		repository := newRepository(root)
 		repository.lock = lock
 		repository.storeKeyring(keyring, keyring.StoreID())
+		/* A keyring created through providers is openable without a password, so
+		   the status must say so immediately rather than only after the first
+		   restart's unlock. */
+		if len(providers) > 0 {
+			repository.mutate(func(next *repoSnapshot) { next.automaticUnlock = true })
+		}
 		if err := repository.commitCatalog(catalogDocument{
 			Version:  repositoryVersion,
 			StoreID:  append([]byte(nil), storeID[:]...),
@@ -242,6 +252,25 @@ func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (
 
 	keyData, err := readBoundedFile(filepath.Join(root, "keys", "config.keys"), maxKeyringFile)
 	if errors.Is(err, os.ErrNotExist) {
+		/* A catalog whose keyring is gone is unreadable, not uninitialized. The
+		   profiles are still on disk and their names are still knowable, so open
+		   LOCKED and let each encrypted profile fail on access. Refusing to open
+		   would take every plaintext profile down with the encrypted ones — one
+		   lost key would stop the whole instance, including hosts it never
+		   touched. */
+		if allowRecovery {
+			if exists, statErr := pathExists(repositoryCatalogPath(root)); statErr != nil {
+				return fail(statErr)
+			} else if exists {
+				locked := newRepository(root)
+				locked.lock = lock
+				locked.mutate(func(next *repoSnapshot) {
+					next.unlockErr = ErrKeyringMissing
+					next.encryptNew = true
+				})
+				return locked, nil
+			}
+		}
 		return fail(ErrNotInitialized)
 	}
 	if err != nil {

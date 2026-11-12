@@ -43,6 +43,10 @@ function confirmDialog(opts) {
   var freshOk = okBtn.cloneNode(true);
   okBtn.parentNode.replaceChild(freshOk, okBtn);
   var freshCancel = cancelBtn.cloneNode(true);
+  // A two-exit dialog whose second key is not "cancel": naming it after what it
+  // actually does ("save as plaintext") is the difference between a choice and a
+  // shrug. Defaults to the plain cancel label.
+  freshCancel.textContent = opts.cancelText || t('common.cancel');
   cancelBtn.parentNode.replaceChild(freshCancel, cancelBtn);
   var freshClose = closeBtn.cloneNode(true);
   closeBtn.parentNode.replaceChild(freshClose, closeBtn);
@@ -321,7 +325,7 @@ var _nodeBatch = createBatchBar({
   menuId: 'nethub-open-menu',
   exportId: 'nethub-menu-export',
   deleteId: 'nethub-menu-delete',
-  actionIds: ['nethub-menu-export', 'nethub-menu-delete'],
+  actionIds: ['nethub-menu-export', 'nethub-menu-encrypt', 'nethub-menu-restore', 'nethub-menu-delete'],
   gridId: 'conn-grid',
   cardSelector: '.conn-tile[data-conn-name]',
   nameAttr: 'data-conn-name',
@@ -344,8 +348,26 @@ var _nodeBatch = createBatchBar({
   },
   onOpen: function (names) { openSelectedNodes(names); },
   onExport: function (names) { exportSelectedNodes(names); },
-  onDelete: function (names) { deleteSelectedNodes(names); }
+  onDelete: function (names) { deleteSelectedNodes(names); },
+  /* The encryption keys need the selection's storage modes, which the component
+     cannot know: it counts ticks, not what those hosts hold. Its own paint runs
+     first (disabled while nothing is ticked), so this refines that answer. */
+  onUpdate: function () { if (typeof syncConfigStorageActions === 'function') syncConfigStorageActions(); }
 });
+
+/* The banner is the page's one persistent statement that the store is locked.
+   Leaving it as text means a dismissed modal cannot be reopened without a
+   browser refresh — the door has to be the same thing as the sign. */
+function makeConnBannerOpenUnlock() {
+  var banner = document.getElementById('conn-load-banner');
+  if (!banner) return;
+  banner.classList.add('is-clickable');
+  banner.title = t('storage.clickToUnlock');
+  banner.onclick = function (event) {
+    if (event.target.closest('button[aria-label], .banner-close')) return;
+    showModal('modal-config-storage');
+  };
+}
 
 function renderConnGrid(connections, bannerMsg) {
   var grid = document.getElementById('conn-grid');
@@ -395,11 +417,22 @@ function renderConnGrid(connections, bannerMsg) {
     var temporaryMark = c.temporary
       ? '<span class="conn-temporary-mark" data-i18n-title="conn.temporary.hint" title="Temporary host" data-i18n="conn.temporary.mark">TEMP</span>'
       : '';
-    var storageMark = c.storage === 'encrypted'
-      ? '<span class="conn-storage-mark" title="Encrypted at rest" data-i18n-title="storage.mode.encrypted">' +
-          '<svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.2 7V5.2a2.8 2.8 0 015.6 0V7"/></svg>ENC' +
-        '</span>'
-      : '';
+    /* A lock on every profile that has a file on disk: open while the config is
+       plaintext TOML, closed once only ciphertext is left. It is a button, not a
+       badge — the mark is the one control on the card whose subject is the file
+       itself, so it does the thing it names: encrypt when open, restore when
+       closed. Builtin and temporary profiles persist nothing, so they carry no
+       lock at all. */
+    var storageMark = '';
+    if (c.storage === 'encrypted') {
+      storageMark = '<button type="button" class="conn-storage-mark is-locked" data-conn-name="' + escapeHtml(c.name) + '" data-storage="encrypted"' +
+        ' title="Encrypted at rest. Click to restore plaintext." data-i18n-title="storage.card.locked"' +
+        ' aria-label="Encrypted at rest, restore plaintext" data-i18n-aria="storage.card.lockedAria">' + SVG_LOCK_CLOSED + '</button>';
+    } else if (c.storage === 'plaintext') {
+      storageMark = '<button type="button" class="conn-storage-mark" data-conn-name="' + escapeHtml(c.name) + '" data-storage="plaintext"' +
+        ' title="Saved as plaintext TOML. Click to encrypt." data-i18n-title="storage.card.open"' +
+        ' aria-label="Saved as plaintext, encrypt this host" data-i18n-aria="storage.card.openAria">' + SVG_LOCK_OPEN + '</button>';
+    }
     var addr = nodeAddress(c);
     /* The node's readout, in the order the column is meant to be read: what it is
        (name), how Termcp reaches it (protocol), at which address, and whether
@@ -445,7 +478,14 @@ function renderConnGrid(connections, bannerMsg) {
         _nodeBatch.toggleSelection(c.name, tile);
         return;
       }
-      if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn')) return;
+      if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn') || e.target.closest('.conn-storage-mark')) return;
+      /* An encrypted host on a locked store has no decrypted recipe to connect
+         to. Clicking the card opens the unlock dialog directly, so closing the
+         modal earlier does not trap the user in an un-unlockable page. */
+      if (c.storage === 'encrypted' && (!c.host || c.kind === 'remote' && !c.user)) {
+        showModal('modal-config-storage');
+        return;
+      }
       var b = document.getElementById('conn-load-banner');
       if (b) setLoadBanner(b, '');
       rememberConnBanner(null);
@@ -712,8 +752,14 @@ function loadConnections() {
     })
     .then(function (j) {
       window._lastConnections = j.connections || [];
-      rememberConnBanner(null);
-      renderConnGrid(window._lastConnections, '');
+      /* The list now succeeds even while the store is locked: plaintext hosts
+         load normally and encrypted ones come back marked. So the warning can no
+         longer piggyback on the 409 — it is derived from the state instead, and
+         stays clickable so the unlock form is one click away. */
+      var locked = !!(window._configStorageState && window._configStorageState.locked);
+      rememberConnBanner(locked ? 'storage.lockedBanner' : null);
+      renderConnGrid(window._lastConnections, locked ? t('storage.lockedBanner') : '');
+      if (locked) makeConnBannerOpenUnlock();
     })
     .catch(function (e) {
       if (e && e.code === 'config_encryption_locked') {

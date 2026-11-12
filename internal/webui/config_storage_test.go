@@ -17,10 +17,46 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
+// An empty body initializes a machine-bound keyring: nothing is typed, the
+// provider protects the Main Key alone, and the store stays open across restarts
+// with no human in the loop. This is the deployment's default path, and it is
+// covered at the HTTP boundary because the empty password is what the Web UI
+// sends when the operator leaves the password checkbox alone.
+func TestConfigStorageInitializeMachineBound(t *testing.T) {
+	dir := t.TempDir()
+	store := sshconfig.NewStore(dir)
+	defer store.Close()
+	h := &Handler{SSH: store}
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/config-storage/initialize", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("machine-bound initialize: %d %s", rec.Code, rec.Body.String())
+	}
+	var state sshconfig.EncryptionStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Initialized {
+		t.Fatalf("state = %+v, want initialized", state)
+	}
+	if state.PasswordConfigured {
+		t.Fatal("machine-bound keyring reports a password; nothing was typed")
+	}
+	if state.Locked {
+		t.Fatalf("state = %+v, want unlocked right after enabling", state)
+	}
+}
+
 func TestConfigStorageHTTPEnablesEncryptsAndRestoresSelectedHosts(t *testing.T) {
 	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, 32)))
 	dir := t.TempDir()
 	store := sshconfig.NewStore(dir)
+	defer store.Close()
 	h := &Handler{SSH: store}
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -278,7 +314,12 @@ func TestConfigStorageInitializationAndProviderRecovery(t *testing.T) {
 			t.Fatal("opening the settings initialized a keyring")
 		}
 	}
-	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": true}, http.StatusConflict)
+	/* There is no global on/off switch any more: whether a profile is encrypted
+	   is decided per profile in the connection form (see handlePutConnection's
+	   ?encrypt=), and this endpoint existed only to flip that preference. The
+	   route is gone, so an attempt to use it 404s — which is the honest answer
+	   for a surface that no longer exists. */
+	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": true}, http.StatusNotFound)
 	if _, err := os.Stat(filepath.Join(dir, "keys", "config.keys")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the first enable request skipped explicit Main Key initialization")
 	}
@@ -320,11 +361,35 @@ func TestConfigStorageInitializationAndProviderRecovery(t *testing.T) {
 	if !state.Initialized || !state.Locked || state.ErrorCode != "keyring_authentication_failed" || len(state.Hosts) != 0 {
 		t.Fatalf("locked status = %+v", state)
 	}
-	if _, err := locked.ReadRaw("plain"); !errors.Is(err, configstore.ErrLocked) {
-		t.Fatalf("provider failure fell back to a plaintext profile: %v", err)
+	// The encrypted host is locked and cannot be read.
+	if _, err := locked.ReadRaw("encrypted"); !errors.Is(err, configstore.ErrLocked) {
+		t.Fatalf("encrypted profile did not report locked: %v", err)
 	}
-	request(http.MethodGet, "/api/connections", nil, http.StatusServiceUnavailable)
-	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": false}, http.StatusServiceUnavailable)
+	// Plaintext profile must load normally.
+	if _, err := locked.ReadRaw("plain"); err != nil {
+		t.Fatalf("plaintext profile failed on locked store: %v", err)
+	}
+	// The connections list succeeds (200), carrying the plaintext host and the
+	// marked locked host, rather than dragging the whole inventory down.
+	connsResp := request(http.MethodGet, "/api/connections", nil, http.StatusOK)
+	var conns struct {
+		Connections []struct {
+			Name    string `json:"name"`
+			Storage string `json:"storage"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(connsResp.Body.Bytes(), &conns); err != nil {
+		t.Fatal(err)
+	}
+	hasPlain, hasEnc := false, false
+	for _, c := range conns.Connections {
+		if c.Name == "plain" && c.Storage == "plaintext" { hasPlain = true }
+		if c.Name == "encrypted" && c.Storage == "encrypted" { hasEnc = true }
+	}
+	if !hasPlain || !hasEnc {
+		t.Fatalf("connections list under lock = %+v; want plain (plaintext) and encrypted (encrypted)", conns.Connections)
+	}
+	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": false}, http.StatusNotFound)
 	request(http.MethodPost, "/api/config-storage/recover", map[string]string{"password": "incorrect synthetic password"}, http.StatusBadRequest)
 	keysWrong, err := os.ReadFile(keyPath)
 	if err != nil || !bytes.Equal(keysWrong, keysBefore) {

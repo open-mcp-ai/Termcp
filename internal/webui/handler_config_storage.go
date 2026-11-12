@@ -7,7 +7,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
@@ -39,6 +38,66 @@ func (h *Handler) handleConfigStorageStatus(w http.ResponseWriter, r *http.Reque
 	status, err := h.SSH.EncryptionStatus()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, status)
+}
+
+// handleConfigStorageLock 上锁: the key leaves memory, the keyring stays on disk,
+// and encrypted hosts stop being readable until someone unlocks again.
+// handleConfigStorageDestroy permanently deletes the keyring and catalog. Any
+// profiles still encrypted become unreadable forever.
+func (h *Handler) handleConfigStorageDestroy(w http.ResponseWriter, r *http.Request) {
+	if !allowConfigKeyRequest(w, r) {
+		return
+	}
+	if h.SSH == nil {
+		writeConfigStorageError(w, configstore.ErrNotInitialized)
+		return
+	}
+	select {
+	case h.configKeyToken() <- struct{}{}:
+		defer func() { <-h.configKeyToken() }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"code": "key_operation_busy", "error": "Another password operation is in progress."})
+		return
+	}
+	if err := h.SSH.DestroyEncryption(); err != nil {
+		writeConfigStorageError(w, err)
+		return
+	}
+	status, err := h.SSH.EncryptionStatus()
+	if err != nil {
+		writeConfigStorageError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (h *Handler) handleConfigStorageLock(w http.ResponseWriter, r *http.Request) {
+	if !allowConfigKeyRequest(w, r) {
+		return
+	}
+	if h.SSH == nil {
+		writeConfigStorageError(w, configstore.ErrNotInitialized)
+		return
+	}
+	select {
+	case h.configKeyToken() <- struct{}{}:
+		defer func() { <-h.configKeyToken() }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"code": "key_operation_busy", "error": "Another password operation is in progress."})
+		return
+	}
+	if err := h.SSH.LockEncryption(); err != nil {
+		writeConfigStorageError(w, err)
+		return
+	}
+	status, err := h.SSH.EncryptionStatus()
+	if err != nil {
+		writeConfigStorageError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -136,6 +195,9 @@ func (h *Handler) handleConfigPassword(w http.ResponseWriter, r *http.Request, a
 	case "password":
 		err = h.SSH.ChangeEncryptionPassword(body.CurrentPassword, body.NewPassword, body.Confirmation, configEncryptionProviders()...)
 	case "unlock", "recover":
+		// An empty password asks to unlock via the machine provider chain: if this
+		// host holds the DPAPI/Keychain/SecretService wrapper, typing nothing
+		// reopens the store. Non-empty unlocks via the password slot.
 		err = h.SSH.UnlockEncryption(body.Password, action == "recover", configEncryptionProviders()...)
 	}
 	body = configStoragePassword{}
@@ -210,11 +272,11 @@ func writeConfigStorageError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }
 
+/* The same chain the server starts with. Registering it here too is what lets an
+   enable operation write a machine-bound slot at all: with no provider the only
+   wrapper is the password, and every restart then needs a human. */
 func configEncryptionProviders() []configstore.Provider {
-	if os.Getenv(configstore.EnvKEKVariable) != "" {
-		return []configstore.Provider{configstore.NewEnvProvider("")}
-	}
-	return nil
+	return configstore.DefaultProviders()
 }
 
 // configKeyToken lazily creates the 1-slot admission token. A nil channel

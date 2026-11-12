@@ -68,6 +68,7 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
@@ -185,7 +186,12 @@ func New(opts Options) (*Server, error) {
 	if err := s.sessMgr.RestoreDead(); err != nil {
 		slog.Warn("failed to restore previous DEAD sessions", "err", err)
 	}
-	sshStore, err := sshconfig.OpenConfiguredStore(cfg.DataDir)
+	/* The unlock chain, not just a data dir: without it an initialized store opens
+	   locked on every restart and the password is the only way back in — which for
+	   an MCP deployment means the agent cannot connect a host until a human opens
+	   the Web UI. The chain is machine credential store, mounted secret file, then
+	   the environment variable. */
+	sshStore, err := sshconfig.OpenConfiguredStore(cfg.DataDir, configstore.DefaultProviders()...)
 	if err != nil {
 		s.finish()
 		return nil, fmt.Errorf("open ssh configs: %w", err)

@@ -106,22 +106,24 @@ func NewHybridStore(dataDir string, repo *configstore.Repository, encryptNew boo
 func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*Store, error) {
 	repo, err := configstore.OpenRepositoryForRecovery(dataDir, providers...)
 	if errors.Is(err, configstore.ErrNotInitialized) {
-		// A catalog without its keyring is not a plaintext store: something was
-		// initialized and then lost its keys. Falling back to plaintext here would
-		// write cleartext where the operator expects ciphertext.
-		hasCatalog, catalogErr := configstore.HasManagedCatalog(dataDir)
-		if catalogErr != nil {
-			return nil, catalogErr
-		}
-		if hasCatalog {
-			return nil, fmt.Errorf("%w: encrypted catalog exists but config.keys is missing", configstore.ErrNotInitialized)
-		}
+		/* The catalog without its keyring no longer lands here: configstore opens
+		   that state as a locked repository, so the instance starts and each
+		   encrypted profile fails on access instead of every plaintext profile
+		   being refused at startup. What is left is a genuinely plaintext dir. */
 		return NewStore(dataDir), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	store := NewHybridStore(repo.DataDir(), repo, repo.EncryptNew())
+	/* A locked store is told to encrypt even if the catalog's preference cannot be
+	   read yet: "I cannot read the keyring" must never become "then plaintext is
+	   fine". Writes are refused while locked, and UnlockEncryption re-reads the
+	   real preference once the catalog opens. */
+	encryptNew := repo.EncryptNew()
+	if repo.Status().Locked {
+		encryptNew = true
+	}
+	store := NewHybridStore(repo.DataDir(), repo, encryptNew)
 	if repo.Status().Locked {
 		return store, nil
 	}
@@ -237,6 +239,28 @@ func (s *Store) configPath(name string) (string, error) {
 	return filepath.Join(s.root(), name, "config.toml"), nil
 }
 
+// orphanedCiphertextError reports a profile whose key has been deleted: the
+// file is there, nothing can decrypt it, and saying so is kinder than reporting
+// the host as missing or letting the operator believe an unlock would help.
+type orphanedCiphertextError struct{ name string }
+
+func (e orphanedCiphertextError) Error() string {
+	return fmt.Sprintf("host %q is encrypted and its key was deleted; this profile can never be read again", e.name)
+}
+
+func (e orphanedCiphertextError) Unwrap() error { return configstore.ErrNotInitialized }
+
+// lockedHostError names the one profile that cannot be read and what would fix
+// it, while still answering errors.Is(err, configstore.ErrLocked) so callers
+// keep one condition to handle.
+type lockedHostError struct{ name string }
+
+func (e lockedHostError) Error() string {
+	return fmt.Sprintf("host %q is encrypted at rest and the store is locked; unlock it with the encryption password to use this host", e.name)
+}
+
+func (e lockedHostError) Unwrap() error { return configstore.ErrLocked }
+
 // Load reads and validates a named config.
 // name "internal" is the built-in entry, optionally overridden by a stored
 // internal/config.toml (see ParseInternalOverride).
@@ -260,6 +284,19 @@ func (s *Store) Load(name string) (*Entry, error) {
 		}
 		return ent, nil
 	}
+	/* Both no-repo and locked-repo mean "no readable ciphertext". The first case
+	   is a deleted key: the ciphertext is still on disk and can never be opened
+	   again, which is a different message from "unlock me". */
+	lockedRepo := false
+	if repo := s.repositorySnapshot(); repo != nil {
+		lockedRepo = repo.Status().Locked
+	}
+	if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted && (lockedRepo || s.repositorySnapshot() == nil) {
+		if s.repositorySnapshot() == nil {
+			return nil, orphanedCiphertextError{name: name}
+		}
+		return nil, lockedHostError{name: name}
+	}
 	p, err := s.configPath(name)
 	if err != nil {
 		return nil, err
@@ -270,7 +307,9 @@ func (s *Store) Load(name string) (*Entry, error) {
 	// Ciphertext is consulted before plaintext: an encrypted profile is the
 	// current generation of that name, and a leftover plaintext copy is what a
 	// half-finished conversion or an interrupted restore leaves behind.
-	if repo := s.repositorySnapshot(); repo != nil {
+	// A locked store has no ciphertext it can read: asking would fail the load
+	// with "store is locked" and take every plaintext profile with it.
+	if repo := s.repositorySnapshot(); repo != nil && !repo.Status().Locked {
 		data, err := repo.Read(name)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
 			return nil, err
@@ -306,6 +345,13 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 		}
 		return InternalTemplate(), nil
 	}
+	if repo := s.repositorySnapshot(); repo != nil && repo.Status().Locked {
+		if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted {
+			/* Name the host and the action. A generic "store is locked" leaves the
+			   AI unable to tell which profile failed or what would fix it. */
+			return nil, lockedHostError{name: name}
+		}
+	}
 	p, err := s.configPath(name)
 	if err != nil {
 		return nil, err
@@ -313,7 +359,9 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	if v, inMemory := s.temporary.Load(name); inMemory {
 		return append([]byte(nil), v.([]byte)...), nil
 	}
-	if repo := s.repositorySnapshot(); repo != nil {
+	// Same rule as Load: a locked store has no ciphertext it can read, so asking
+	// the repository would fail a plaintext profile with "store is locked".
+	if repo := s.repositorySnapshot(); repo != nil && !repo.Status().Locked {
 		data, err := repo.Read(name)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
 			return nil, err
@@ -357,7 +405,10 @@ func (s *Store) List() ([]string, error) {
 	})
 	if repo := s.repositorySnapshot(); repo != nil {
 		stored, err := repo.List()
-		if err != nil {
+		// Locked: the catalog cannot be read, so the names below come from the
+		// profile directories on disk. A host whose key is unavailable is still a
+		// host the user can see and un-block, not one that disappears.
+		if err != nil && !errors.Is(err, configstore.ErrLocked) {
 			return nil, err
 		}
 		for _, name := range stored {
@@ -378,8 +429,24 @@ func (s *Store) List() ([]string, error) {
 		if IsInternalName(name) || seen[folded] {
 			continue // disk leftover; virtual entry already listed
 		}
-		cfg := filepath.Join(s.root(), name, "config.toml")
-		if st, err := os.Stat(cfg); err == nil && !st.IsDir() {
+		dir := filepath.Join(s.root(), name)
+		listed := false
+		if st, err := os.Stat(filepath.Join(dir, "config.toml")); err == nil && !st.IsDir() {
+			listed = true
+		}
+		if !listed {
+			// Ciphertext on disk is still a known host: it stays in the list (and
+			// fails per-profile) rather than vanishing when its key cannot open it.
+			if entries, err := os.ReadDir(dir); err == nil {
+				for _, f := range entries {
+					if !f.IsDir() && strings.HasSuffix(f.Name(), ".enc") {
+						listed = true
+						break
+					}
+				}
+			}
+		}
+		if listed {
 			names = append(names, name)
 			seen[folded] = true
 		}
@@ -398,10 +465,26 @@ func (s *Store) Save(name string, data []byte) error {
 
 // SaveWithOptions stores a remote profile only in memory when temporary is true.
 // Switching an existing profile between modes removes its previous copy.
+// SaveMode is the caller's per-save storage decision. Encrypt is a triple state
+// on purpose: nil keeps the store preference, true encrypts, false stores
+// plaintext. The connection form sends it because whether one profile is
+// encrypted is a property of that profile, not a global setting — and "nil"
+// keeps older callers working unchanged.
+type SaveMode struct {
+	Temporary bool
+	Encrypt   *bool
+}
+
+// SaveWithOptions stores a profile under the store's preference.
 func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error {
+	return s.SaveWithMode(name, data, SaveMode{Temporary: temporary})
+}
+
+// SaveWithMode stores a profile with an explicit per-save storage decision.
+func (s *Store) SaveWithMode(name string, data []byte, mode SaveMode) error {
 	name = strings.TrimSpace(name)
 	if IsInternalName(name) {
-		if temporary {
+		if mode.Temporary {
 			return fmt.Errorf("internal profile cannot be temporary")
 		}
 		if _, err := ParseInternalOverride(data, InternalEntry()); err != nil {
@@ -446,7 +529,7 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 		return err
 	}
 
-	if temporary {
+	if mode.Temporary {
 		if encryptedExists {
 			if repo == nil {
 				return errEncryptionUnavailable
@@ -465,11 +548,38 @@ func (s *Store) SaveWithOptions(name string, data []byte, temporary bool) error 
 		return nil
 	}
 
-	// Existing plaintext profiles keep that mode until the operator explicitly
-	// selects them on the encryption page. The preference only chooses how a
-	// brand-new profile is first persisted.
+	// The explicit request wins over the store preference; nil keeps the old
+	// rule (existing plaintext profiles stay plaintext until converted).
 	encryptNew := s.stateSnapshot().encryptNew
-	if !encryptedExists && (!encryptNew || plaintextExists) {
+	if mode.Encrypt != nil {
+		encryptNew = *mode.Encrypt
+	}
+	// Unchecking "encrypt" on an existing encrypted profile restores it: the
+	// operator asked for plaintext, and leaving ciphertext behind would make the
+	// checkbox a lie.
+	if encryptedExists && mode.Encrypt != nil && !*mode.Encrypt {
+		repo := s.repositorySnapshot()
+		if repo == nil {
+			return errEncryptionUnavailable
+		}
+		data, err := repo.Read(name)
+		if err != nil {
+			return err
+		}
+		p := s.plaintextPath(name)
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			return err
+		}
+		if err := fsutil.WriteFileAtomic(p, data); err != nil {
+			return err
+		}
+		if err := repo.Delete(name); err != nil {
+			return fmt.Errorf("plaintext copy written but the encrypted one could not be removed: %w", err)
+		}
+		s.notifyChange()
+		return nil
+	}
+	if !encryptedExists && (!encryptNew || (plaintextExists && mode.Encrypt == nil)) {
 		p := s.plaintextPath(name)
 		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 			return err
@@ -670,10 +780,30 @@ func (s *Store) Delete(name string) error {
 // case-insensitively, returning the stored spelling.
 func (s *Store) encryptedFold(name string) (string, bool, error) {
 	repo := s.repositorySnapshot()
-	if repo == nil {
+	locked := repo == nil
+	var names []string
+	var err error
+	if repo != nil {
+		names, err = repo.List()
+		locked = errors.Is(err, configstore.ErrLocked)
+	}
+	if locked {
+		/* Locked: the catalog is unreadable, but the ciphertext's directory still
+		   says this name is encrypted. Answering from disk keeps the storage mode
+		   — and therefore the lock glyph and the "unavailable" state — visible
+		   instead of degrading into "not found". */
+		dir := filepath.Join(s.root(), name)
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			return "", false, nil
+		}
+		for _, f := range entries {
+			if !f.IsDir() && strings.HasSuffix(f.Name(), ".enc") {
+				return name, true, nil
+			}
+		}
 		return "", false, nil
 	}
-	names, err := repo.List()
 	if err != nil {
 		return "", false, err
 	}

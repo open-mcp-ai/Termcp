@@ -71,6 +71,78 @@ func InitializeRepositoryWithPassword(dataDir, password, confirmation string, pr
 
 // UnlockPassword derives Main Key directly from the password. It publishes no
 // key material and remains usable without any operating-system or ENV KEK.
+// Lock drops the unwrapped key from memory and returns to the locked state the
+// store boots in. The keyring file is untouched: this is "walk away", not
+// "destroy". Every encrypted profile stops being readable until someone unlocks
+// again, while plaintext profiles keep working — that is the whole point of
+// having a lock you can engage on purpose instead of only on restart.
+func (r *Repository) Lock() error {
+	defer r.acquireWrite()()
+	if r.snap().closed {
+		return ErrClosed
+	}
+	if r.snap().unlockErr != nil {
+		return ErrNotLocked
+	}
+	locked := r.snap()
+	r.mutate(func(next *repoSnapshot) {
+		next.unlockErr = ErrPasswordRequired
+		next.keyring = nil
+		next.refs = nil
+		next.lockedStoreID = locked.keyring.StoreID()
+		next.password = locked.password
+		next.automaticUnlock = false
+	})
+	if locked.keyring != nil {
+		locked.keyring.Destroy()
+	}
+	return nil
+}
+
+// UnlockProviders opens a locked store using the supplied provider chain (e.g.
+// DPAPI / Keychain / Secret Service / KEK file / env). Used when the key was
+// machine-bound, or when the operator wants to unlock without re-typing their
+// password on a machine that already carries the wrapper.
+func (r *Repository) UnlockProviders(providers ...Provider) error {
+	defer r.acquireWrite()()
+	if r.snap().closed {
+		return ErrClosed
+	}
+	if r.snap().unlockErr == nil {
+		return ErrNotLocked
+	}
+	data, err := readBoundedFile(filepath.Join(r.dataDir, "keys", "config.keys"), maxKeyringFile)
+	if err != nil {
+		return err
+	}
+	stored, err := parseStoredKeyring(data)
+	if err != nil {
+		return err
+	}
+	k, err := UnlockKeyring(data, providers...)
+	if err != nil {
+		return err
+	}
+	probe := newRepository(r.dataDir)
+	probe.storeKeyring(k, k.StoreID())
+	if err := probe.loadCatalog(); err != nil {
+		k.Destroy()
+		return err
+	}
+	pst := probe.snap()
+	r.mutate(func(next *repoSnapshot) {
+		next.keyring = k
+		next.unlockErr = nil
+		next.refs = pst.refs
+		next.encryptNew = pst.encryptNew
+		next.revision = pst.revision
+		next.catalogGeneration = pst.catalogGeneration
+		next.password = stored.Password
+		next.automaticUnlock = len(stored.Slots) > 0
+	})
+	return nil
+}
+
 func (r *Repository) UnlockPassword(password string) error {
 	defer r.acquireWrite()()
 	if r.snap().closed {
@@ -260,6 +332,28 @@ func (r *Repository) changePassword(current, password, confirmation string, prov
 		return err
 	}
 	return r.publishRotationKeyring(path, active, protection, publish)
+}
+
+// SealToPasswordOnly rewrites the keyring with the password slot and nothing
+// else, dropping every machine-bound wrapper. It is how "stop unlocking this by
+// itself" is expressed: the ciphertext stays exactly where it is and the data is
+// not decrypted, so the profiles become unreadable until someone types the
+// password — which is the point of turning the feature off.
+func (r *Repository) SealToPasswordOnly() error {
+	defer r.acquireWrite()()
+	if err := r.ready(); err != nil {
+		return err
+	}
+	if r.snap().keyring.password == nil {
+		// Without a password slot there is nothing left to open the key with, so
+		// this would silently destroy the data. Refuse and say why.
+		return fmt.Errorf("%w: set an encryption password first, otherwise these profiles could never be read again", ErrPasswordNotConfigured)
+	}
+	data, err := r.snap().keyring.Marshal() // no providers: password slot only
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(r.dataDir, "keys", "config.keys"), data)
 }
 
 func (r *Repository) RebindPasswordProvider(providers ...Provider) error {

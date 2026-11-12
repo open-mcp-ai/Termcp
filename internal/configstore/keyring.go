@@ -182,13 +182,20 @@ func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 	if k.password != nil {
 		stored.Version = passwordKeyringVersion
 	}
+	/* The provider list is a preference chain, not a requirement: a host without a
+	   credential store, without a mounted KEK file and without the environment
+	   variable simply has fewer ways in, and the one that does exist must still
+	   produce a keyring. What must never happen is a keyring with no wrapper at
+	   all, because nothing could ever open it again — that is checked after the
+	   loop. */
+	wrapped := 0
 	for _, provider := range providers {
 		if provider == nil {
 			return nil, ErrFormat
 		}
 		parameters, err := provider.newParameters()
 		if err != nil {
-			if k.password != nil && provider.providerName() != "env" && errors.Is(err, ErrProviderUnavailable) {
+			if errors.Is(err, ErrProviderUnavailable) {
 				continue
 			}
 			return nil, err
@@ -221,6 +228,10 @@ func (k *Keyring) Marshal(providers ...Provider) ([]byte, error) {
 		}
 		slot.Wrapped = aead.Seal(nil, nonce[:], plaintext, keyringSlotAAD(stored, slot))
 		stored.Slots = append(stored.Slots, slot)
+		wrapped++
+	}
+	if wrapped == 0 && k.password == nil {
+		return nil, ErrProviderUnavailable
 	}
 	out, err := json.Marshal(stored)
 	if err != nil {

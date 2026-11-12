@@ -272,6 +272,21 @@ function _connGetBody() {
 }
 
 function openConnModal(edit, name, kind) {
+  /* Whether THIS profile is encrypted belongs to this profile, so the control
+     sits in the form that creates it — not in a global preference. Built here
+     rather than in index.html: the page has a hard size budget and this is one
+     modal's markup. */
+  if (!document.getElementById('conn-encrypt-wrap')) {
+    var temporaryWrap = document.getElementById('conn-temporary-wrap');
+    if (temporaryWrap) {
+      temporaryWrap.insertAdjacentHTML('afterend',
+        '<div class="conn-field conn-field-check" id="conn-encrypt-wrap">' +
+        '<label class="conn-check" for="conn-encrypt"><input type="checkbox" id="conn-encrypt" checked>' +
+        '<span data-i18n="conn.encrypt">Encrypt this profile</span></label>' +
+        '<div class="conn-check-hint" data-i18n="conn.encrypt.hint">Saved in the encrypted store. Needs the key to read.</div></div>');
+    }
+  }
+
   // The internal profile is editable too: its settings are stored as an
   // override over the built-in defaults, which is how the loopback connection
   // gets a review default. It cannot be renamed or deleted (the name is how the
@@ -294,6 +309,17 @@ function openConnModal(edit, name, kind) {
 	var current = (window._lastConnections || []).find(function(c) { return c.name === name; });
 	temporaryEl.checked = !!(edit && current && current.temporary);
 	document.getElementById('conn-temporary-wrap').style.display = isInternal ? 'none' : '';
+  /* 加密勾选 follows the profile being edited: encrypted shows checked, plaintext
+     unchecked, and a brand-new host defaults to checked whenever a key exists.
+     Builtin and temporary profiles persist nothing, so it is hidden for them. */
+  var encWrap = document.getElementById('conn-encrypt-wrap');
+  var encBox = document.getElementById('conn-encrypt');
+  if (encWrap && encBox) {
+    var temporaryNow = document.getElementById('conn-temporary').checked;
+    encWrap.style.display = (isInternal || temporaryNow) ? 'none' : '';
+    var keyReady = !!(window._configStorageState && window._configStorageState.initialized);
+    encBox.checked = (edit && current) ? current.storage === 'encrypted' : keyReady;
+  }
   document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
   document.getElementById('conn-duplicate').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
@@ -567,7 +593,34 @@ document.getElementById('conn-test').onclick = function () {
       btn.textContent = t('common.test');
     });
 };
+/* A ticked "encrypt" with no key is not a validation error to bounce: the save
+   point is where the operator can act, so it offers the two real exits — go set
+   up the key, or save this profile as plaintext. */
+var _connSaveAfterUncheck = false;
+function connEncryptGate() {
+  var box = document.getElementById('conn-encrypt');
+  if (_connSaveAfterUncheck || !box || box.style.display === 'none' || !box.checked) return true;
+  if (window._configStorageState && window._configStorageState.initialized) return true;
+  confirmDialog({
+    title: t('conn.encrypt.needed.title'),
+    message: t('conn.encrypt.needed.msg'),
+    okText: t('conn.encrypt.needed.setup'),
+    cancelText: t('conn.encrypt.needed.plain')
+  }).then(function (go) {
+    if (go) {
+      hideModal('modal-conn');
+      showModal('modal-config-storage');
+      return;
+    }
+    _connSaveAfterUncheck = true;
+    box.checked = false;
+    document.getElementById('conn-save').click();
+    _connSaveAfterUncheck = false;
+  });
+  return false;
+}
 document.getElementById('conn-save').onclick = function () {
+  if (!connEncryptGate()) return;
   var err = document.getElementById('modal-conn-err');
   err.style.display = 'none';
   var name = document.getElementById('conn-name').value.trim();
@@ -591,6 +644,10 @@ document.getElementById('conn-save').onclick = function () {
   var url = apiPath('/api/connections/') + encodeURIComponent(name);
   var params = new URLSearchParams();
   params.set('temporary', document.getElementById('conn-temporary').checked ? 'true' : 'false');
+  var encryptBox = document.getElementById('conn-encrypt');
+  if (encryptBox && encryptBox.style.display !== 'none') {
+    params.set('encrypt', encryptBox.checked ? 'true' : 'false');
+  }
   if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
   url += '?' + params.toString();
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })

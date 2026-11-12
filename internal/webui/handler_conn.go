@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/configcrypt"
-	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/term/locator"
@@ -43,10 +42,6 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 	}
 	names, err := h.SSH.List()
 	if err != nil {
-		if errors.Is(err, configstore.ErrLocked) {
-			writeConfigStorageError(w, err)
-			return
-		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -54,6 +49,18 @@ func (h *Handler) handleListConnections(w http.ResponseWriter, r *http.Request) 
 	for _, n := range names {
 		ent, err := h.SSH.Load(n)
 		if err != nil {
+			/* An encrypted host on a locked store cannot be loaded, but it must still
+			   appear on the list: the operator has to see WHICH hosts are locked,
+			   and the AI needs a structured list with an honest storage mode rather
+			   than the whole inventory disappearing. Plaintext hosts are unaffected. */
+			if mode, _ := h.SSH.StorageMode(n); mode == sshconfig.StorageEncrypted {
+				list = append(list, connectionSummary{
+					Name:        n,
+					Kind:        sshconfig.KindRemote,
+					Description: "Locked: enter the encryption password to load",
+					Storage:     mode,
+				})
+			}
 			continue
 		}
 		if h.NoInternal && ent.Kind == sshconfig.KindInternal {
@@ -159,7 +166,22 @@ func (h *Handler) handlePutConnection(w http.ResponseWriter, r *http.Request) {
 			h.Sessions.RenameSSHConfig(from, name)
 		}
 	}
-	if err := h.SSH.SaveWithOptions(name, body, temporary); err != nil {
+	// Per-profile encryption intent from the connection form. Absent means "use
+	// the store preference", which is what the API and older clients send.
+	mode := sshconfig.SaveMode{Temporary: temporary}
+	if values, ok := r.URL.Query()["encrypt"]; ok {
+		if len(values) != 1 {
+			http.Error(w, "encrypt must be true or false", http.StatusBadRequest)
+			return
+		}
+		want, parseErr := strconv.ParseBool(values[0])
+		if parseErr != nil {
+			http.Error(w, "encrypt must be true or false", http.StatusBadRequest)
+			return
+		}
+		mode.Encrypt = &want
+	}
+	if err := h.SSH.SaveWithMode(name, body, mode); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

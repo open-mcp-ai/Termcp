@@ -1,360 +1,70 @@
-.encryption-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 7px;
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
+/* Configuration-at-rest presentation.
+   The panel reuses the native modal, field, password-eye and action shapes. This
+   file owns the two lock glyphs — the one on the entry key and the one on each
+   profile card — plus the panel's top spacing, because its first child is a hint
+   whose negative top margin is meant to hug an input above it.
+
+   Both locks speak the same two words: warning means "nothing is encrypted
+   here", quiet means "the bytes are protected". The card's lock is built to the
+   same spec as the edit and launch keys beside it (22px box, square, no chrome
+   until hover) so the mark row reads as one row of controls rather than a badge
+   dropped among buttons. */
+
+/* Entry key: open while no password is configured, closed once a key protects the
+   store. The unprotected state is the one that wants the eye. */
+#config-storage-open:not(.is-configured) { color: var(--warning); }
+#config-storage-open.is-configured { color: var(--accent); }
+
+/* Profile card lock. Same box as .conn-edit-btn and .conn-quick-btn: the three
+   sit in a row, so a different radius or padding would be visible as a seam. */
+.conn-tile.entry-card .conn-storage-mark {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
-  font: inherit;
-  font-size: .8rem;
-}
-
-.encryption-btn:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-.encryption-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.config-storage-modal {
-  max-width: 680px;
-  width: min(680px, calc(100vw - 24px));
-}
-
-.config-storage-modal .modal-body {
-  max-height: calc(100dvh - 144px);
-  overflow-y: auto;
-}
-
-.config-storage-key-form {
-  margin: 12px 0;
-  padding: 12px 0 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.config-storage-key-form h3 {
-  margin: 0 0 8px;
-  font-size: .95rem;
-  color: var(--text-primary);
-}
-
-.config-storage-key-form label {
-  display: block;
-  margin: 12px 0 6px;
-  color: var(--text-primary);
-  font-size: .85rem;
-}
-
-.config-storage-key-form .conn-check-hint {
-  color: var(--text-secondary);
-  font-size: .8rem;
-  line-height: 1.5;
-}
-
-.config-storage-key-form input[type="password"],
-.config-storage-key-form input[type="text"] {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: .8rem;
-  caret-color: var(--accent);
-}
-
-.config-storage-key-form input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.config-storage-secret,
-.config-storage-form-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.config-storage-secret input {
-  flex: 1;
-}
-
-.config-storage-secret .btn {
-  flex: 0 0 auto;
-}
-
-.config-storage-form-actions {
-  flex-wrap: wrap;
-}
-
-.config-storage-key-form .config-storage-confirm {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 14px 0;
-}
-
-.config-storage-confirm input {
-  margin: 3px 0 0;
-}
-
-.config-storage-toggle {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 2px 0 14px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.config-storage-toggle strong {
-  display: block;
-  color: var(--text-primary);
-  font-size: .92rem;
-}
-
-.config-storage-toggle p {
-  max-width: 480px;
-  margin: 5px 0 0;
-  color: var(--text-muted);
-  font-size: .8rem;
-  line-height: 1.5;
-}
-
-.config-storage-modal .config-storage-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-size: .78rem;
-  cursor: pointer;
-}
-
-.config-storage-switch input {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
-}
-
-.config-storage-switch-track {
   position: relative;
-  width: 38px;
-  height: 21px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--bg-input);
-  transition: background .16s ease, border-color .16s ease;
-}
-
-.config-storage-switch-track::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  content: "";
-  transition: transform .16s ease, background .16s ease;
-}
-
-.config-storage-switch input:checked + .config-storage-switch-track {
-  border-color: var(--accent);
-  background: var(--accent-surface);
-}
-
-.config-storage-switch input:checked + .config-storage-switch-track::after {
-  background: var(--accent);
-  transform: translateX(17px);
-}
-
-.config-storage-switch input:focus-visible + .config-storage-switch-track {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.config-storage-switch input:disabled + .config-storage-switch-track {
-  opacity: .55;
-}
-
-.config-storage-toolbar {
+  z-index: var(--z-tile-control);
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 16px 0 8px;
-}
-
-.config-storage-key {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.config-storage-key strong {
-  color: var(--text-primary);
-  font-size: .85rem;
-}
-
-.config-storage-key .conn-check-hint {
-  margin: 5px 0;
-}
-
-.config-storage-key code {
-  color: var(--text-muted);
-  font-size: .7rem;
-  overflow-wrap: anywhere;
-}
-
-.config-storage-key .btn {
-  flex: 0 0 auto;
-}
-
-.config-storage-toolbar strong {
-  color: var(--text-primary);
-  font-size: .85rem;
-}
-
-.config-storage-selected {
-  color: var(--text-muted);
-  font-size: .76rem;
-}
-
-.config-storage-select-all {
-  margin-left: auto;
-  padding: 4px 8px;
-  font-size: .74rem;
-}
-
-.config-storage-hosts {
-  max-height: min(42vh, 340px);
-  overflow: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-input);
-}
-
-.config-storage-host {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 7px 11px;
-  border-bottom: 1px solid var(--border-subtle);
-  cursor: pointer;
-}
-
-.config-storage-host:last-child {
-  border-bottom: 0;
-}
-
-.config-storage-host:hover {
-  background: var(--bg-card-hover);
-}
-
-.config-storage-host input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-}
-
-.config-storage-host:has(input:disabled) {
-  cursor: default;
-  opacity: .64;
-}
-
-.config-storage-host-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: .79rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.config-storage-host-mode,
-.conn-storage-mark {
-  padding: 2px 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: .65rem;
-  font-weight: 700;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}
-
-.config-storage-host-mode[data-mode="encrypted"],
-.conn-storage-mark {
-  border-color: var(--accent-ring);
-  background: var(--accent-surface);
-  color: var(--accent);
-}
-
-.conn-storage-mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.config-storage-host-mode[data-mode="temporary"] {
-  border-color: var(--warning);
+  justify-content: center;
+  align-self: center;
   color: var(--warning);
 }
 
-.config-storage-actions {
-  padding-top: 12px;
-}
+.conn-tile.entry-card .conn-storage-mark svg { width: 14px; height: 14px; display: block; }
+.conn-tile.entry-card .conn-storage-mark:hover { color: var(--warning); background: var(--warning-surface); }
+.conn-tile.entry-card .conn-storage-mark:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--warning-border); }
 
-.config-storage-actions .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
+/* Protected is the resting state of a store that is working, so it keeps the
+   neighbours' quiet grey until the pointer arrives. */
+.conn-tile.entry-card .conn-storage-mark.is-locked { color: var(--text-secondary); }
+.conn-tile.entry-card .conn-storage-mark.is-locked:hover { color: var(--accent); background: var(--accent-surface); }
+.conn-tile.entry-card .conn-storage-mark.is-locked:focus-visible { box-shadow: 0 0 0 2px var(--accent-ring); }
 
-@media (max-width: 800px) {
-  .encryption-btn {
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    justify-content: center;
-  }
+/* The title bar sits directly on the body, whose first child here is a hint with
+   a negative top margin; without this the panel reads as if the heading were cut
+   off from its own text. */
+#modal-config-storage .modal-body { padding: 14px 24px 18px; }
+#modal-config-storage #config-storage-status { margin: 0 0 12px; }
+/* The setup form's own rhythm: a hint, an optional switch that reveals two
+   fields, and one primary key at the bottom. The shared .conn-field-hint carries
+   a negative top margin meant to hug an input above it, which has no input to hug
+   here — the panel's first paragraph sets its own spacing instead. */
+#modal-config-storage #config-storage-setup > .conn-field-hint { margin: 0 0 14px; }
+#modal-config-storage #config-storage-setup .conn-field-check { margin: 4px 0 12px; }
+#modal-config-storage #config-storage-setup .conn-check { align-items: flex-start; line-height: 1.45; }
+#modal-config-storage #config-storage-setup .conn-check span { white-space: normal; }
+#modal-config-storage #config-storage-setup-password-fields { margin-top: 12px; padding-left: 2px; border-left: 2px solid var(--border-subtle); padding-left: 12px; }
+#modal-config-storage #config-storage-setup .modal-actions { margin-top: 4px; }
 
-  .encryption-btn span {
-    display: none;
-  }
-
-  .config-storage-toggle {
-    gap: 12px;
-  }
-
-  .config-storage-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .config-storage-key {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .config-storage-select-all {
-    margin-left: 0;
-  }
-}
+/* A locked store is a state the operator must act on: the glyph and the card
+   mark take the warning colour, and the banner says it is a door, not a notice. */
+#config-storage-open.is-locked { color: var(--warning); }
+.conn-storage-mark.is-locked[disabled] { opacity: .55; cursor: progress; }
+#conn-load-banner.is-clickable { cursor: pointer; }
+#conn-load-banner.is-clickable:hover { filter: brightness(1.06); }
+.conn-card.is-storage-locked .conn-addr { color: var(--text-muted); }
