@@ -1256,7 +1256,19 @@ func awaitPtyReady(t *testing.T, s *Server, handle string) {
 // never stops talking fails instead of returning a stream that is still moving.
 func awaitQuiet(t *testing.T, s *Server, handle string) {
 	t.Helper()
-	for i := 0; i < 40; i++ {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if !strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + handle}), "TERM/1 204") {
+			continue
+		}
+		// QUIET IS A STATE THAT HAS TO HOLD, not a moment that happened. A themed prompt
+		// repaints in chunks, and the gap between two of them looks exactly like silence:
+		// a test that treats the first 204 as "the stream is now still" then reads again
+		// and finds the next chunk, which is a test failure about nothing. So the window
+		// is observed twice, with a settle in between — long enough to cover a chunk
+		// arriving late, short enough that a genuinely quiet stream costs two hundred
+		// milliseconds.
+		time.Sleep(200 * time.Millisecond)
 		if strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + handle}), "TERM/1 204") {
 			return
 		}
