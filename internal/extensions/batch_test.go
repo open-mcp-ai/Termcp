@@ -27,7 +27,7 @@ func TestDocumentRoundTrip(t *testing.T) {
 	second.Target = "internal"
 	second.Command = "npx"
 	second.Args = []string{"-y", "tickets-mcp"}
-	second.Forwards = []ForwardDecl{{Kind: ForwardDynamic, LocalPort: 0}}
+	second.Forwards = []ForwardDecl{{DirectionKind: ForwardDynamic, LocalPort: 0}}
 	if err := src.Save(&second); err != nil {
 		t.Fatal(err)
 	}

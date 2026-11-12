@@ -29,7 +29,7 @@ func TestMultiTargetValidation(t *testing.T) {
 	}
 
 	ext.Targets = []TargetDecl{{Host: "cluster-bj"}}
-	ext.Forwards = []ForwardDecl{{Kind: ForwardLocal, LocalPort: 8080, RemotePort: 80}}
+	ext.Forwards = []ForwardDecl{{DirectionKind: ForwardLocal, LocalPort: 8080, RemotePort: 80}}
 	if err := ext.Validate(); err == nil || !strings.Contains(err.Error(), "forwards belong to a host") {
 		t.Fatalf("expected top-level forwards refusal with targets list, got %v", err)
 	}
@@ -39,11 +39,11 @@ func TestMultiTargetValidation(t *testing.T) {
 	ext.Targets = []TargetDecl{
 		{
 			Host:     "cluster-bj",
-			Forwards: []ForwardDecl{{Kind: ForwardLocal, LocalPort: 8081, RemotePort: 80}},
+			Forwards: []ForwardDecl{{DirectionKind: ForwardLocal, LocalPort: 8081, RemotePort: 80}},
 		},
 		{
 			Host:     "cluster-sh",
-			Forwards: []ForwardDecl{{Kind: ForwardLocal, LocalPort: 8082, RemotePort: 80}},
+			Forwards: []ForwardDecl{{DirectionKind: ForwardLocal, LocalPort: 8082, RemotePort: 80}},
 		},
 	}
 	if err := ext.Validate(); err != nil {
@@ -134,9 +134,9 @@ func TestMixedForwardDirectionsValidateAndAreResident(t *testing.T) {
 	ext.Target = "internal"
 	ext.Command = "true"
 	ext.Forwards = []ForwardDecl{
-		{Kind: ForwardLocal, LocalPort: 18080, RemotePort: 80, RemoteHost: "127.0.0.1"},
-		{Kind: ForwardRemote, LocalPort: 19090, RemoteHost: "10.0.0.5", RemotePort: 9090},
-		{Kind: ForwardDynamic, LocalPort: 10808},
+		{DirectionKind: ForwardLocal, LocalPort: 18080, RemotePort: 80, RemoteHost: "127.0.0.1"},
+		{DirectionKind: ForwardRemote, LocalPort: 19090, RemoteHost: "10.0.0.5", RemotePort: 9090},
+		{DirectionKind: ForwardDynamic, LocalPort: 10808},
 	}
 	if err := ext.Validate(); err != nil {
 		t.Fatalf("mixed local+remote+dynamic forwards failed validation: %v", err)

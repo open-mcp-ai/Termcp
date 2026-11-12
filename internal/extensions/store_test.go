@@ -65,9 +65,9 @@ func TestStoreSaveRejectsInvalid(t *testing.T) {
 		{"bad name", Extension{Name: "../escape", Target: "mac"}},
 		{"pipe without command", Extension{Name: "a", Target: "mac", Mode: "pipe"}},
 		{"bad mode", Extension{Name: "a", Target: "mac", Mode: "serial"}},
-		{"bad forward kind", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{Kind: "sideways"}}}},
-		{"local forward without remote port", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{Kind: ForwardLocal}}}},
-		{"remote forward without local port", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{Kind: ForwardRemote, RemoteHost: "h", RemotePort: 22}}}},
+		{"bad forward kind", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{DirectionKind: "sideways"}}}},
+		{"local forward without remote port", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{DirectionKind: ForwardLocal}}}},
+		{"remote forward without local port", Extension{Name: "a", Target: "mac", Forwards: []ForwardDecl{{DirectionKind: ForwardRemote, RemoteHost: "h", RemotePort: 22}}}},
 		{"bad path pattern", Extension{Name: "a", Target: "mac", Paths: []string{"re:unclosed["}}},
 	}
 	for _, tt := range tests {
@@ -89,7 +89,7 @@ func TestStoreForwardNormalization(t *testing.T) {
 		Name:     "tunnel",
 		Target:   "mac",
 		Mode:     "",
-		Forwards: []ForwardDecl{{Kind: ForwardLocal, RemotePort: 9222}, {Kind: ForwardRemote, LocalPort: 8080, RemoteHost: "h", RemotePort: 80}},
+		Forwards: []ForwardDecl{{DirectionKind: ForwardLocal, RemotePort: 9222}, {DirectionKind: ForwardRemote, LocalPort: 8080, RemoteHost: "h", RemotePort: 80}},
 	}
 	if err := s.Save(ext); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -112,9 +112,9 @@ func TestStoreForwardNormalization(t *testing.T) {
 	// the help text never mentions, and it must stay supported rather than merely
 	// happening.
 	mixed := Extension{Name: "mixed", Target: "mac", Mode: "pipe", Command: "example-mcp-server", Forwards: []ForwardDecl{
-		{Kind: ForwardLocal, LocalPort: 8443, RemoteHost: "127.0.0.1", RemotePort: 443},
-		{Kind: ForwardRemote, LocalPort: 8080, RemoteHost: "127.0.0.1", RemotePort: 80},
-		{Kind: ForwardDynamic, LocalPort: 1080},
+		{DirectionKind: ForwardLocal, LocalPort: 8443, RemoteHost: "127.0.0.1", RemotePort: 443},
+		{DirectionKind: ForwardRemote, LocalPort: 8080, RemoteHost: "127.0.0.1", RemotePort: 80},
+		{DirectionKind: ForwardDynamic, LocalPort: 1080},
 	}}
 	if err := mixed.Validate(); err != nil {
 		t.Fatalf("an MCP server with mixed forward kinds must validate: %v", err)

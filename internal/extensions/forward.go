@@ -29,10 +29,10 @@ type Failure struct {
 // ListenAddr/TargetAddr are the bound addresses, which differ from the
 // declaration whenever local_port was left at 0 ("pick one").
 type ForwardStatus struct {
-	Kind       string `json:"kind"`
-	ForwardID  string `json:"forward_id,omitempty"`
-	ListenAddr string `json:"listen_addr,omitempty"`
-	TargetAddr string `json:"target_addr,omitempty"`
+	DirectionKind string `json:"kind"`
+	ForwardID     string `json:"forward_id,omitempty"`
+	ListenAddr    string `json:"listen_addr,omitempty"`
+	TargetAddr    string `json:"target_addr,omitempty"`
 }
 
 // ensureForwards establishes the forwards the template declares, skipping the
@@ -83,16 +83,16 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 			st.mu.Lock()
 			st.forwards = append([]ForwardStatus(nil), built...)
 			st.mu.Unlock()
-			return fmt.Errorf("%s forward on %s: %w", f.Kind, listenSpec(f), err)
+			return fmt.Errorf("%s forward on %s: %w", f.DirectionKind, listenSpec(f), err)
 		}
 		// Tear down with the session rather than outliving it as a dangling
 		// listener, the same way the forward tool attaches its own.
 		sess.AttachCleanup(func() { r.forwardMgr.Close(fw.ForwardID) })
 		built[i] = ForwardStatus{
-			Kind:       f.Kind,
-			ForwardID:  fw.ForwardID,
-			ListenAddr: fw.ListenAddr,
-			TargetAddr: fw.TargetAddr,
+			DirectionKind: f.DirectionKind,
+			ForwardID:     fw.ForwardID,
+			ListenAddr:    fw.ListenAddr,
+			TargetAddr:    fw.TargetAddr,
 		}
 	}
 
@@ -103,7 +103,7 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 }
 
 func (r *Reconciler) createForward(f ForwardDecl, sess *session.Session, sshCli *ssh.Client, info api.Session) (*forward.ForwardInfo, error) {
-	switch f.Kind {
+	switch f.DirectionKind {
 	case ForwardDynamic:
 		return r.forwardMgr.CreateDynamic(sess.ID, info.Name, f.BindHost, f.LocalPort, sshCli, info.SSHEndpoint == "internal")
 	case ForwardLocal:
@@ -111,7 +111,7 @@ func (r *Reconciler) createForward(f ForwardDecl, sess *session.Session, sshCli 
 	case ForwardRemote:
 		return r.forwardMgr.CreateRemote(sess.ID, info.Name, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort, sshCli)
 	}
-	return nil, fmt.Errorf("unknown forward kind %q", f.Kind)
+	return nil, fmt.Errorf("unknown forward direction %q", f.DirectionKind)
 }
 
 // exitReason reads the last bytes a dying process produced, so a startup failure

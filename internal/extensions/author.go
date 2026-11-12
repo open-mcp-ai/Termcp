@@ -234,12 +234,12 @@ func ParseForwardDecls(v any) ([]ForwardDecl, error) {
 			return nil, fmt.Errorf("forward #%d must be an object, got %T", i+1, item)
 		}
 		out = append(out, ForwardDecl{
-			Kind:       optString(m, "kind", ""),
-			BindHost:   optString(m, "bind_host", ""),
-			LocalHost:  optString(m, "local_host", ""),
-			LocalPort:  optInt(m, "local_port", 0),
-			RemoteHost: optString(m, "remote_host", ""),
-			RemotePort: optInt(m, "remote_port", 0),
+			DirectionKind: optString(m, "kind", ""),
+			BindHost:      optString(m, "bind_host", ""),
+			LocalHost:     optString(m, "local_host", ""),
+			LocalPort:     optInt(m, "local_port", 0),
+			RemoteHost:    optString(m, "remote_host", ""),
+			RemotePort:    optInt(m, "remote_port", 0),
 		})
 	}
 	return out, nil

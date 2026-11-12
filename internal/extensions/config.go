@@ -198,7 +198,7 @@ func (e *Extension) SetEnabled(v bool) {
 // is why the listening address has two names: the side doing the listening is the
 // target for -R and this host for -L/-D, and one field cannot say both.
 type ForwardDecl struct {
-	Kind string `toml:"kind"`
+	DirectionKind string `toml:"kind"`
 	// BindHost is what -L and -D listen on in this host; empty means loopback.
 	BindHost string `toml:"bind_host,omitempty"`
 	// LocalHost is what -R listens on in the TARGET host.
@@ -343,16 +343,16 @@ func (e *Extension) Normalize() {
 
 // Normalize fills a forward's conventional defaults.
 func (f *ForwardDecl) Normalize() {
-	f.Kind = strings.TrimSpace(strings.ToLower(f.Kind))
+	f.DirectionKind = strings.TrimSpace(strings.ToLower(f.DirectionKind))
 	f.BindHost = strings.TrimSpace(f.BindHost)
 	f.LocalHost = strings.TrimSpace(f.LocalHost)
 	f.RemoteHost = strings.TrimSpace(f.RemoteHost)
 	// -L reaches a host as seen from the target, where localhost is the usual
 	// intent; -R names its own target explicitly, so it gets no default.
-	if f.Kind == ForwardLocal && f.RemoteHost == "" {
+	if f.DirectionKind == ForwardLocal && f.RemoteHost == "" {
 		f.RemoteHost = "localhost"
 	}
-	if f.Kind == ForwardRemote && f.LocalHost == "" {
+	if f.DirectionKind == ForwardRemote && f.LocalHost == "" {
 		// LOOPBACK, LIKE EVERY OTHER DEFAULT HERE. The port is opened on the TARGET,
 		// and 0.0.0.0 there publishes an authenticated tunnel to that machine's whole
 		// network — which is a decision, not a default. `ssh -R` made the same move for
@@ -363,7 +363,7 @@ func (f *ForwardDecl) Normalize() {
 	// this host listens on -- the reading the field now has under its own name.
 	// Those declarations were accepted and ignored before, so honouring the
 	// intent here costs nothing and fixes them rather than keeping them broken.
-	if (f.Kind == ForwardLocal || f.Kind == ForwardDynamic) && f.BindHost == "" {
+	if (f.DirectionKind == ForwardLocal || f.DirectionKind == ForwardDynamic) && f.BindHost == "" {
 		f.BindHost = f.LocalHost
 	}
 }
@@ -507,7 +507,7 @@ func (e *Extension) Validate() error {
 // Validate checks a declared forward against the same rules the forward tool
 // enforces, so a tunnel that cannot be created is caught at save time.
 func (f *ForwardDecl) Validate() error {
-	switch f.Kind {
+	switch f.DirectionKind {
 	case ForwardDynamic:
 		// Only a listen port, and even that is optional.
 	case ForwardLocal:
@@ -522,7 +522,7 @@ func (f *ForwardDecl) Validate() error {
 			return fmt.Errorf("remote forward requires remote_host and remote_port")
 		}
 	default:
-		return fmt.Errorf("forward kind must be dynamic, local or remote, got %q", f.Kind)
+		return fmt.Errorf("forward direction must be dynamic, local or remote (the TOML key is `kind`), got %q", f.DirectionKind)
 	}
 	// The listen port is the one field every kind carries, and every kind lets it
 	// be left at 0 ("pick one"), so its range is checked once, after the kinds.
@@ -533,7 +533,7 @@ func (f *ForwardDecl) Validate() error {
 	// asking for one on a public interface would publish an open proxy. Refuse it
 	// at save time, where the author can read the reason, rather than at every
 	// reconcile -- and point at the forward that does publish one service.
-	if f.Kind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
+	if f.DirectionKind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
 		return fmt.Errorf("a dynamic (SOCKS5) forward binds loopback only: it performs no authentication, so %q would be an open proxy (use kind = \"local\" to publish one service)", forward.ResolveBindHost(f.BindHost))
 	}
 	return nil

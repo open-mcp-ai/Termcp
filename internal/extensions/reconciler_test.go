@@ -465,7 +465,7 @@ func TestReconcilerForwardEstablished(t *testing.T) {
 	ext.Target = "internal"
 	ext.Paths = []string{"/srv/"}
 	ext.Forwards = []ForwardDecl{{
-		Kind:       ForwardDynamic,
+		DirectionKind:       ForwardDynamic,
 		LocalHost:  "127.0.0.1",
 		LocalPort:  0,
 		RemoteHost: "localhost",

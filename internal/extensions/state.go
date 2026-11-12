@@ -211,7 +211,7 @@ func fingerprint(ext *Extension) string {
 	}
 	b.WriteByte('|')
 	for _, f := range ext.Forwards {
-		fmt.Fprintf(&b, "%s:%s:%s:%d:%s:%d|", f.Kind, f.BindHost, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
+		fmt.Fprintf(&b, "%s:%s:%s:%d:%s:%d|", f.DirectionKind, f.BindHost, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
 	}
 	fmt.Fprintf(&b, "|%d|%d|%t", ext.Rows, ext.Cols, ext.IsEnabled())
 	return b.String()
