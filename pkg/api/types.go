@@ -83,6 +83,18 @@ type Session struct {
 	UseHost bool `json:"use_host,omitempty"`
 	// DetectedShell is the shell family or binary detected for the target environment (e.g. "pwsh", "cmd", "bash") (issue #208.1).
 	DetectedShell string `json:"detected_shell,omitempty"`
+	// OS is the target's operating system as one of windows/linux/darwin/bsd/solaris/
+	// other (issue #318). A caller that has this does not have to discover the platform by
+	// running a command that fails on the wrong one.
+	//
+	// IT IS EMPTY UNTIL SOMETHING DETERMINES IT, and empty means "not known" rather than
+	// "a unix". The alternative — assuming unix because the transport is SSH — is exactly
+	// the guess that cost three turns on a Windows node.
+	OS string `json:"os,omitempty"`
+	// OSSource says how OS was determined: "local" (the built-in loopback profile, which
+	// is this machine), "probe" (a one-shot exec channel), or "config" (an operator or an
+	// embedder said so). It is what separates a measurement from an inference.
+	OSSource string `json:"os_source,omitempty"`
 	// SSHEndpoint is a coarse hint for clients: "internal" (built-in loopback SSH) or "remote" (no host/user/port exposed).
 	SSHEndpoint string `json:"ssh_endpoint,omitempty"`
 	// ApprovalMode reports whether this session gates input behind N-person

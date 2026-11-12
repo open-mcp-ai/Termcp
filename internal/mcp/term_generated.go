@@ -178,6 +178,14 @@ func (s *Server) directiveInfo(ctx context.Context, stmt directive.Statement, wi
 	// has to know whether `ls -la` means a listing or a PowerShell alias failure, and
 	// until now the only way to find out was to run something and read the error.
 	writeKV(&b, "shell_family", dash(info.DetectedShell))
+	osVal := info.OS
+	if osVal == "" {
+		osVal = "unknown"
+	}
+	if info.OSSource != "" {
+		osVal += " (" + info.OSSource + ")"
+	}
+	writeKV(&b, "os", osVal)
 	if info.ExitCode != nil {
 		writeKV(&b, "exit_code", fmt.Sprint(*info.ExitCode))
 	}

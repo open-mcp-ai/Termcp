@@ -316,6 +316,7 @@ func New(internal *sshserver.Server, cfg Config, msgMgr *message.Manager) (*Sess
 	// duplicate the per-shell path: markDead is idempotent, so whichever watcher
 	// notices first wins and the message is recorded once.
 	s.watchTransport(execSession)
+	s.DetectOS()
 
 	slog.Debug("session started", "session_id", sessionID, "shell_id", shellID, "command", cfg.Command, "ssh_endpoint", sshEndpointPublic)
 
