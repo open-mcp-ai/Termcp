@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +106,22 @@ func (s *Server) directiveOpen(ctx context.Context, stmt directive.Statement, wi
 		}
 		if cols > 0 {
 			args["cols"] = float64(cols)
+		}
+	}
+	// --rows AND --cols ARE THE SAME SIZE, SAID SEPARATELY, and they were declared
+	// without being read: `connect internal --cols 20` answered 200 and the terminal
+	// stayed 80 wide, so a caller who set the geometry was talking to a screen that
+	// wrapped somewhere else. Only `--size` was wired up, and only because the same
+	// line served `open`. Two spellings of one thing must both work, or one of them
+	// must go: the flag is the contract.
+	if v, ok := stmt.Flag("rows"); ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			args["rows"] = float64(n)
+		}
+	}
+	if v, ok := stmt.Flag("cols"); ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			args["cols"] = float64(n)
 		}
 	}
 

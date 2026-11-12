@@ -116,3 +116,47 @@ func TestReadScreenPagingWalksPastRows(t *testing.T) {
 		}
 	}
 }
+
+// connect --cols and --rows MUST TAKE EFFECT (#312).
+//
+// Both were declared on `connect` and `open` and neither was read: only `--size`
+// took effect, so a caller who passed `--cols 40` got 200 OK and an 80-wide screen.
+func TestConnectColsAndRowsTakeEffect(t *testing.T) {
+	s := newTestServer(t)
+	text := termText(t, s, map[string]any{"cmd": "connect internal --cols 40 --rows 12"})
+	if !strings.HasPrefix(text, "TERM/1 200 OK") {
+		t.Fatalf("connect --cols 40 --rows 12 failed:\n%s", text)
+	}
+	h := handleFrom(t, text)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	awaitPtyReady(t, s, h)
+
+	sc := termText(t, s, map[string]any{"cmd": "read " + h + " --screen", "timeout": 0})
+	if v, _ := headerValue(t, sc, "Cols"); v != "40" {
+		t.Fatalf("Cols=%q, want 40:\n%s", v, firstLine(sc))
+	}
+	if v, _ := headerValue(t, sc, "Rows"); v != "12" {
+		t.Fatalf("Rows=%q, want 12:\n%s", v, firstLine(sc))
+	}
+}
+
+// --rows PAST THE END OF THE MODEL IS CLAMPED.
+//
+// Paging past the end of the buffer must not return padding that pretends to be
+// real terminal rows. Screen-Rows describes what the screen has, not what was asked.
+func TestReadScreenRowsPastTheEndIsClamped(t *testing.T) {
+	s := newTestServer(t)
+	h := openPty(t, s)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	awaitPtyReady(t, s, h)
+
+	sc := termText(t, s, map[string]any{"cmd": "read " + h + " --screen --top 0 --rows 500", "timeout": 0})
+	totalStr, ok := headerValue(t, sc, "Screen-Total")
+	if !ok {
+		t.Fatalf("missing Screen-Total:\n%s", firstLine(sc))
+	}
+	rowsStr, _ := headerValue(t, sc, "Screen-Rows")
+	if rowsStr != totalStr {
+		t.Fatalf("Screen-Rows=%q, want it clamped to Screen-Total=%s:\n%s", rowsStr, totalStr, firstLine(sc))
+	}
+}

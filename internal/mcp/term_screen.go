@@ -169,6 +169,11 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 				}
 			}
 			span = min(span, screenTailRows)
+			// A WINDOW PAST THE END IS NOT A WINDOW OF BLANK ROWS. The model has `count`
+			// rows; asking for more than that returns padding a caller cannot tell apart
+			// from the empty rows a terminal really does show, and `Screen-Rows` then
+			// describes the request instead of the answer.
+			span = min(span, count-from)
 		}
 	}
 	if !paged {
