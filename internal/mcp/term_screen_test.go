@@ -164,3 +164,39 @@ func TestReadScreenRowsPastTheEndIsClamped(t *testing.T) {
 		t.Fatalf("Screen-Rows=%q, want it clamped to Screen-Total=%s:\n%s", rowsStr, totalStr, firstLine(sc))
 	}
 }
+
+// A DEAD CHANNEL'S SCREEN MUST NOT SHOW THE SESSION TWICE (#312).
+//
+// After the shell exits, the store serves the archived transcript beside the live buffer,
+// so a replay that trusts the read rather than the size models the whole session a second
+// time — raw, carriage returns and all — and the caller reading `--screen` sees the
+// session echoed under itself. The size is the contract.
+func TestReadScreenOnAExitedChannelDoesNotRepeatTheLog(t *testing.T) {
+	s := newTestServer(t)
+	h := openPty(t, s)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	awaitPtyReady(t, s, h)
+
+	termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{`echo ONLY""ONCE`}, "timeout": 15})
+	screenUntil(t, s, h, "ONLYONCE")
+
+	// End the shell itself: the channel exits, and from then on its log is served from
+	// the archive rather than the live buffer.
+	termText(t, s, map[string]any{"cmd": "run " + h + " exit", "timeout": 15})
+
+	// POLLED, NOT TIMED: the archive comes into play when the child is reaped, which is
+	// after the run's own reply.
+	deadline := time.Now().Add(30 * time.Second)
+	var sc string
+	for time.Now().Before(deadline) {
+		sc = termText(t, s, map[string]any{"cmd": "read " + h + " --screen", "timeout": 0})
+		if v, ok := headerValue(t, sc, "Screen-Total"); ok && v != "" {
+			if !strings.Contains(sc, "\r") && strings.Count(sc, "ONLYONCE") == 1 {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("the screen of an exited channel repeated its transcript (marker x%d):\n%s",
+		strings.Count(sc, "ONLYONCE"), firstLine(sc))
+}

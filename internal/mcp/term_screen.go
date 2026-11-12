@@ -57,12 +57,22 @@ func (s *Server) replayLayout(cs *session.ChildShell) (*termview.Layout, int64, 
 	}
 	layout := termview.New(cols, rows)
 	for off := int64(0); off < total; {
-		chunk, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, off, screenReadChunk)
+		// ASK FOR WHAT IS LEFT, AND TAKE NO MORE. OutputSize says how many bytes this
+		// channel's log holds; a read that comes back with more than that (a dead
+		// session's archived transcript is served beside the live buffer) would be
+		// replayed as new terminal output, and the screen then shows the whole session
+		// twice — once modelled, once raw with its carriage returns intact. The size is
+		// the contract, so the excess is dropped rather than modelled.
+		want := min(int64(screenReadChunk), total-off)
+		chunk, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, off, int(want))
 		if err != nil {
 			return nil, 0, false
 		}
 		if len(chunk) == 0 {
 			break
+		}
+		if int64(len(chunk)) > want {
+			chunk = chunk[:want]
 		}
 		layout.Feed(off, chunk)
 		off += int64(len(chunk))
