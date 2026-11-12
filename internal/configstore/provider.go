@@ -3,7 +3,6 @@ package configstore
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -85,7 +84,10 @@ func NewEnvProvider(variable string) Provider {
 
 func (envProvider) providerName() string { return "env" }
 
-func (envProvider) newParameters() (providerParameters, error) {
+func (p envProvider) newParameters() (providerParameters, error) {
+	if v, ok := os.LookupEnv(p.variable); !ok || v == "" {
+		return providerParameters{}, ErrProviderUnavailable
+	}
 	return providerParameters{}, nil
 }
 
@@ -105,11 +107,11 @@ func (p envProvider) unwrapKey(parameters providerParameters) (keyEncryptionKey,
 	if !ok || encoded == "" {
 		return key, ErrProviderUnavailable
 	}
-	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	defer clear(decoded)
-	if err != nil || len(decoded) != len(key) {
-		return key, fmt.Errorf("%w: expected a base64-encoded 32-byte KEK", ErrProviderUnavailable)
+	decoded, err := decodeKEK([]byte(encoded))
+	if err != nil {
+		return key, err
 	}
+	defer clear(decoded)
 	copy(key[:], decoded)
 	return key, nil
 }
@@ -213,27 +215,4 @@ func (p providerParameters) empty() bool {
 	return len(p.Salt) == 0 && p.Argon2 == nil && p.Reference == "" && len(p.Protected) == 0
 }
 
-// credentialProvider represents a platform keychain slot for keyring parsing.
-// System keychain access is optional; validation only requires the structural
-// shape to be parsable.
-type credentialProvider struct {
-	name string
-}
-
-func (p credentialProvider) providerName() string { return p.name }
-
-func (credentialProvider) newParameters() (providerParameters, error) {
-	return providerParameters{}, ErrProviderUnavailable
-}
-
-func (credentialProvider) unwrapKey(providerParameters) (keyEncryptionKey, error) {
-	return keyEncryptionKey{}, ErrProviderUnavailable
-}
-
-func (credentialProvider) validateParameters(parameters providerParameters) error {
-	if len(parameters.Reference) == 0 || len(parameters.Reference) > 1024 ||
-		len(parameters.Salt) != 0 || parameters.Argon2 != nil || len(parameters.Protected) != 0 {
-		return ErrFormat
-	}
-	return nil
-}
+// credentialProvider implementation moved to provider_system.go

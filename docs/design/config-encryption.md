@@ -25,7 +25,10 @@
 - 用户密码通过 Argon2id 直接派生 Main Key；无头环境可通过 `TERMCP_CONFIG_KEK` 提供可选的自动解锁。系统钥匙串 Provider 暂不包含（WebUI 手动输入是主路径）。
 - 加密目录 catalog、稳定 Profile/Object ID、每次保存新 Generation ID、按主机目录保存代际密文、删除先移除索引，以及目录排他锁和原子发布。
 - `sshconfig.Store` 同时读取明文 `config.toml` 和加密仓库；未选择的主机保持原路径与原字节，临时 profile 仍只存在进程内。
-- WebUI 的“配置加密”页面可选择是否加密新建配置，也可勾选具体主机执行“加密所选”或“还原所选”。
+- 默认绑定本机凭据（Windows DPAPI）：首次开启加密无需设置密码，操作系统自动保护 Main Key；日常重启自动静默解锁，AI 免输密码直接可用；数据目录离开本机则无法解开。
+- 用户可选择额外设置密码（跨电脑迁移场景）：换新机器时凭密码恢复数据；容器场景支持通过 `TERMCP_CONFIG_KEK_FILE`（挂载 Secret 文件）或 `TERMCP_CONFIG_KEK` 实现无头自动解锁。
+- 主机栏底部提供“配置加密”入口（锁形图标，位于 Add host 与 Import 之间），可开启本机加密、设置密码或修改密码。
+- 具体主机的加密与还原直接走主机栏原生批量操作条：在主机列表勾选主机，展开菜单即可执行“加密所选”或“还原所选”；也可直接点击卡片上的锁图标一键切换。
 - 首次启用时才初始化密钥环：用户输入并确认密码，服务以随机 salt 和 Argon2id 派生 Main Key；取消或仅打开 WebUI 不创建密钥环。系统不生成备份码或恢复码，密码和明文 Main Key 均不落盘。
 - 自动解锁不可用时保留排他锁并提供 WebUI，状态区分 `password_required`、`key_provider_unavailable` 与 `keyring_authentication_failed`。用户输入加密密码，验证 catalog、所有配置及业务 TOML 后恢复当前进程；可选择让当前 ENV/系统 provider 重新封装 Main Key。
 - WebUI 可输入当前密码、新密码和确认密码修改 Main Key。服务先持久化双密钥过渡封装，再逐条重封活动配置与 catalog 的 EDK，全部验证后退役旧 key。中断或重启后，以新密码续跑；密码修改仅在 WebUI 页面完成。

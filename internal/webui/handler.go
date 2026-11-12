@@ -219,7 +219,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Configuration-at-rest management. The page chooses whether new profiles
 	// are encrypted and explicitly converts selected existing hosts.
 	mux.HandleFunc("GET /api/config-storage", h.handleConfigStorageStatus)
-	mux.HandleFunc("PUT /api/config-storage", h.handleConfigStorageSetting)
+	mux.HandleFunc("POST /api/config-storage/lock", h.handleConfigStorageLock)
+	mux.HandleFunc("POST /api/config-storage/destroy", h.handleConfigStorageDestroy)
 	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
 	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
 	mux.HandleFunc("POST /api/config-storage/initialize", h.handleInitializeConfigKey)

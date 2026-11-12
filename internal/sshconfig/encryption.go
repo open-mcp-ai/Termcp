@@ -37,6 +37,10 @@ type EncryptionStatus struct {
 	ErrorCode                 string           `json:"error_code,omitempty"`
 	PasswordConfigured        bool             `json:"password_configured"`
 	AutomaticUnlock           bool             `json:"automatic_unlock"`
+	// SystemAvailable reports whether this OS offers a native credential store.
+	// The setup form uses it to offer (or refuse) machine binding up front,
+	// instead of letting the user choose a mode that then fails.
+	SystemAvailable bool `json:"system_available"`
 }
 
 // EncryptionResult is one selected host's outcome.
@@ -79,7 +83,10 @@ func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.P
 // storage. Temporary profiles and the stateless built-in profile are included
 // so the page can explain why they cannot be converted.
 func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
-	status := EncryptionStatus{Hosts: []EncryptionHost{}}
+	// Reported on every response, including the locked one: the page decides
+	// whether "bind to this machine" is even offered, and it must not have to
+	// guess or fail after the user picks it.
+	status := EncryptionStatus{Hosts: []EncryptionHost{}, SystemAvailable: configstore.SystemAvailable()}
 	st := s.stateSnapshot()
 	status.Initialized = st.repo != nil
 	status.EncryptNew = st.encryptNew
@@ -111,12 +118,23 @@ func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
 	return status, nil
 }
 
-// InitializeEncryption derives Main Key from the user's password on first use.
+// InitializeEncryption creates the first keyring. An empty password asks for a
+// machine-bound keyring instead: the Main Key is wrapped only by the providers,
+// so the operating system's credential store can open it on every later start
+// with no human in the loop, and a copy of the data directory cannot be opened
+// on another machine at all. A non-empty password keeps the old behaviour and
+// adds a password wrapper beside the provider's.
 func (s *Store) InitializeEncryption(password, confirmation string, providers ...configstore.Provider) error {
 	if s.repositorySnapshot() != nil {
 		return configstore.ErrAlreadyInitialized
 	}
-	repo, err := configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
+	var repo *configstore.Repository
+	var err error
+	if password == "" && confirmation == "" {
+		repo, err = configstore.InitializeRepository(s.dataDir, providers...)
+	} else {
+		repo, err = configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
+	}
 	if err == nil {
 		err = repo.SetEncryptNew(true)
 		if err != nil {
@@ -130,14 +148,27 @@ func (s *Store) InitializeEncryption(password, confirmation string, providers ..
 	return err
 }
 
-func (s *Store) UnlockEncryption(password string, rebind bool, providers ...configstore.Provider) error {
+// UnlockEncryption opens a locked store. Unlocking is the only way to make
+// encrypted profiles readable, and it requires the credential — that is what
+// makes 上锁 worth doing.
+//
+// bindMachine is the caller's choice, never a default: adding a machine wrapper
+// changes key material, and key material must only change because someone asked.
+// (An older build did this implicitly to migrate password-only keyrings; the
+// migration is now a checkbox in the unlock form.)
+func (s *Store) UnlockEncryption(password string, bindMachine bool, providers ...configstore.Provider) error {
 	repo := s.repositorySnapshot()
 	if repo == nil {
 		return configstore.ErrNotInitialized
 	}
-	err := repo.UnlockPassword(password)
-	if err == nil && rebind {
-		err = repo.RebindPasswordProvider(providers...)
+	var err error
+	if password == "" {
+		err = repo.UnlockProviders(providers...)
+	} else {
+		err = repo.UnlockPassword(password)
+		if err == nil && bindMachine {
+			err = repo.RebindPasswordProvider(providers...)
+		}
 	}
 	if !repo.Status().Locked {
 		s.setEncryptPreference(repo.EncryptNew())
@@ -359,4 +390,49 @@ func cleanProfileSelection(names []string) []string {
 		}
 	}
 	return out
+}
+
+// DestroyEncryption 删除密钥: it deletes the keyring and the catalog index and
+// nothing else. Encrypted profiles stay on disk, unreadable forever — that is
+// the stated consequence, not an accident, and it is what a user asking to
+// "delete the key" actually asked for. Removing host data is a separate,
+// per-host action; folding it in here would destroy more than the request.
+//
+// It requires an unlocked store, so the caller has already presented the
+// credential. Deleting a key you cannot use would be a way to destroy data
+// without ever proving you were entitled to it.
+func (s *Store) DestroyEncryption() error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return fmt.Errorf("configuration encryption has not been enabled")
+	}
+	if repo.Status().Locked {
+		return configstore.ErrPasswordRequired
+	}
+	if repo.Status().RotationPending {
+		return fmt.Errorf("a password change is unfinished; finish it before deleting the key")
+	}
+	if err := configstore.DiscardDataDirKeys(s.dataDir); err != nil {
+		return err
+	}
+	if err := repo.Close(); err != nil {
+		return err
+	}
+	s.setEncryption(nil, false)
+	s.notifyChange()
+	return nil
+}
+
+// LockEncryption 上锁: the unwrapped key leaves memory, the keyring file stays.
+// Encrypted hosts stop being readable; plaintext ones are untouched. Locking
+// asks for no credential — it is the safe direction, and being able to do it
+// deliberately (而不是只能靠重启) is the reason the lock exists.
+func (s *Store) LockEncryption() error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	err := repo.Lock()
+	s.notifyChange()
+	return err
 }

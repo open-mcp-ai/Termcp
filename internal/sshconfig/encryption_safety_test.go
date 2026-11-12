@@ -170,7 +170,19 @@ func TestCatalogWithoutKeyringFailsClosed(t *testing.T) {
 		t.Fatalf("remove keyring: %v", err)
 	}
 
-	if _, err := OpenConfiguredStore(dir); err == nil {
-		t.Fatal("opening a catalog without its keyring succeeded")
+	/* Opening succeeds, in the LOCKED state: the daemon still has to serve the
+	   plaintext profiles that share this data directory, and the Web UI needs a
+	   running process to accept the recovery. What must never happen is reading
+	   or writing the encrypted profile. */
+	reopened, err := OpenConfiguredStore(dir)
+	if err != nil {
+		t.Fatalf("a catalog without its keyring must open locked, not fail: %v", err)
+	}
+	defer reopened.Close()
+	if status, err := reopened.EncryptionStatus(); err != nil || !status.Locked {
+		t.Fatalf("status = %+v, err %v; want locked", status, err)
+	}
+	if _, err := reopened.Load("prod"); err == nil {
+		t.Fatal("an unreadable encrypted profile was loaded")
 	}
 }
