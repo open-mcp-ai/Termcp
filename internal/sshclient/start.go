@@ -105,10 +105,17 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 
 	go func() {
 		es.err = session.Wait()
-		if es.err != nil {
-			if exitErr, ok := es.err.(*ssh.ExitError); ok {
-				es.exitCode = exitErr.ExitStatus()
-			}
+		// THREE ENDINGS, AND ONLY TWO OF THEM CARRY A STATUS. A nil error is a clean
+		// exit and the code IS zero — the server reports nothing because there is
+		// nothing to report. An *ssh.ExitError is a non-zero code the far side sent. Any
+		// other error means the channel died before a status arrived: a closed session, a
+		// dropped transport, a process we killed. Publishing 0 there is the invention this
+		// field now refuses.
+		switch err := es.err.(type) {
+		case nil:
+			es.exitCode, es.exitCodeKnown = 0, true
+		case *ssh.ExitError:
+			es.exitCode, es.exitCodeKnown = err.ExitStatus(), true
 		}
 		close(es.done)
 	}()

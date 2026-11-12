@@ -41,6 +41,11 @@ const screenTailRows = 200
 // only how many calls it takes.
 const screenReadChunk = 256 * 1024
 
+// screenReadOneShot is the size under which the whole log is read in one call, so the replay
+// cannot straddle a live-buffer-to-archive move. The ceiling exists so a very large log is
+// still streamed rather than materialized to answer one page.
+const screenReadOneShot = 8 << 20
+
 // replayLayout builds the channel's screen from its log. The caller decides what to ask it.
 func (s *Server) replayLayout(cs *session.ChildShell) (*termview.Layout, int64, bool) {
 	info := cs.Info()
@@ -56,6 +61,23 @@ func (s *Server) replayLayout(cs *session.ChildShell) (*termview.Layout, int64, 
 		return nil, 0, false
 	}
 	layout := termview.New(cols, rows)
+	// ONE READ WHEN THE LOG FITS. Chunking is right for a big log and wrong across a
+	// migration: when a channel exits its bytes move from the live buffer to the archive,
+	// and a loop holding an offset across that move can feed the same region twice — which
+	// is how `--screen` on a just-exited shell came to show the session under itself. A
+	// single read of the declared size cannot straddle a move that changes what the size
+	// means.
+	if total <= screenReadOneShot {
+		buf, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, 0, int(total))
+		if err != nil {
+			return nil, 0, false
+		}
+		if int64(len(buf)) > total {
+			buf = buf[:total]
+		}
+		layout.Feed(0, buf)
+		return layout, total, true
+	}
 	for off := int64(0); off < total; {
 		// ASK FOR WHAT IS LEFT, AND TAKE NO MORE. OutputSize says how many bytes this
 		// channel's log holds; a read that comes back with more than that (a dead
@@ -229,7 +251,12 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		// performed describe a screen the caller cannot see, so the reply carries what is
 		// displayed.
 		text := ansi.Strip(string(tailBytes[lo:hi]))
-		return strings.TrimRight(text, "\r\n")
+		// A SCREEN ROW HAS NO CARRIAGE RETURNS: a CR is the terminal's own instruction to
+		// go back to column one, which the model already applied when it laid the row out.
+		// Any that survive in the bytes are a repaint the row's span happens to include, and
+		// passing them through hands the caller a line that a line-based parser will mangle.
+		text = strings.ReplaceAll(text, "\r", "")
+		return strings.TrimRight(text, "\n")
 	}
 
 	var keptRows []string

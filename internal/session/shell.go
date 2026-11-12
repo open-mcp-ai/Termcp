@@ -355,7 +355,9 @@ func (cs *ChildShell) TerminateShell() {
 	// published only after the bytes are final (same rule as the watcher).
 	cs.drainPipes()
 	cs.buf.Close()
-	cs.setExitCode(-1)
+	// NO EXIT CODE ON A DELIBERATE TERMINATE. `-1` was a sentinel for "kill requested",
+	// and it reached callers as `Exit-Code: -1` — a number that looks like a status. The
+	// honest answer is the one the type already allows: nothing.
 	cs.setStatus(api.SessionExited)
 	if parent := cs.parent.Load(); parent != nil {
 		cs.retainHistory(parent)

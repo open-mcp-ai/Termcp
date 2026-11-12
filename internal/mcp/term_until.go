@@ -44,7 +44,20 @@ const (
 	// promptEnd is the fallback: a line that ends on a shell prompt character. Every
 	// shell has one and none of them announce it, so it is a guess about a shape —
 	// but it is a shape the caller can also override with its own regex.
-	promptEnd = `(?m)[$#>][ \t]*\r?$`
+	//
+	// THE GLYPH SET IS THE ONE PEOPLE ACTUALLY USE. `$ # >` alone missed the themed
+	// prompts — starship, oh-my-posh, powerlevel10k all end on ❯ ➜ λ — and a preset that
+	// cannot match the prompt in front of it is a preset that costs the whole timeout on
+	// every call (found by the dogfood pass: 10s burned, no match, on a live shell).
+	//
+	// A TRAILING SGR RESET IS PART OF THE PROMPT. Those themes colour the glyph and then
+	// reset, so the line ends `❯ \x1b[m` — the reset is after the space, not before it,
+	// which is why allowing only `[ \t]` at the end never matched.
+	// TWO FAMILIES OF PROMPT, BOTH MATCHED. A bash-ish prompt puts the glyph last
+	// (`user@box:~$ `); a themed one puts it first and ends on a space or a colour reset
+	// (`\x1b[38;2;1;2;3m➜  repo `). Matching only the first family meant every
+	// `--until prompt` on a starship/p10k shell burned its whole timeout.
+	promptEnd = `(?m)(?:[$#>%❯➜λ][ \t]?(?:\x1b\[[0-9;]*m)*\r?$)|(?:^(?:\x1b\[[0-9;]*m)*[❯➜λ][^\r\n]*[ \t](?:\x1b\[[0-9;]*m)*\r?$)`
 )
 
 // untilSpec is one compiled `--until`.

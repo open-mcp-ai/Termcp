@@ -18,15 +18,16 @@ type ExecSession struct {
 	// session is the channel a command runs on. It is nil for a bare client (see
 	// BareClient): a connection with no process on it, which is what a shell-less
 	// container is.
-	session      *ssh.Session
-	Stdin        io.WriteCloser
-	Stdout       io.Reader
-	Stderr       io.Reader
-	done         chan struct{}
-	exitCode     int
-	err          error
-	ownClient    bool // if false, Close() does not close the underlying SSH client
-	extraClosers []io.Closer
+	session       *ssh.Session
+	Stdin         io.WriteCloser
+	Stdout        io.Reader
+	Stderr        io.Reader
+	done          chan struct{}
+	exitCode      int
+	exitCodeKnown bool
+	err           error
+	ownClient     bool // if false, Close() does not close the underlying SSH client
+	extraClosers  []io.Closer
 	// stdinTok is the right to touch stdin, held as ONE TOKEN rather than a mutex.
 	//
 	// x/crypto's channel does not tolerate a concurrent Write and CloseWrite (they
@@ -311,6 +312,19 @@ func (es *ExecSession) WaitTransport() error {
 // ExitCode returns the process exit code after Done is closed.
 func (es *ExecSession) ExitCode() int {
 	return es.exitCode
+}
+
+// ExitStatus reports the code only when the far side actually sent one.
+//
+// A ZERO IS A CLAIM. `Wait()` returns an *ssh.ExitError when the server reported a status
+// and something else when the channel died — a killed transport, a closed session — and
+// the field stayed 0 in that second case. Readers printed it, so a channel that was closed
+// deliberately advertised `Exit-Code: 0`, which is the one value it certainly did not have.
+func (es *ExecSession) ExitStatus() (int, bool) {
+	if es.exitCodeKnown {
+		return es.exitCode, true
+	}
+	return 0, false
 }
 
 // Aborted returns true if the session ended due to connection loss rather than a clean process exit.
