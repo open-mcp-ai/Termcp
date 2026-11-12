@@ -210,6 +210,12 @@ func New(opts Options) (*Server, error) {
 		extensions.NewStore(cfg.DataDir), s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr,
 	)
 	s.extensions.NoInternal = cfg.NoInternal
+	// WHAT A TEMPLATE MAY PUBLISH IS THE STACK THE LOCAL LISTENER SERVES, resolved when
+	// the tunnel is opened rather than here: auth.Middleware is applied further down,
+	// and handing over the bare mux would publish every route with no token required.
+	// The closure is the difference between exposing the API and exposing the API
+	// unauthenticated (issue #321).
+	s.extensions.SetExposeHandler(func() http.Handler { return s.httpSrv.Handler })
 
 	s.mcp = mcpi.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
 	// The embedded docs feed the `learn-api` prompt. In a no_webui build they are

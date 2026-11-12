@@ -52,12 +52,15 @@ func TestTermExtCarriesArgvHeadersAndForwards(t *testing.T) {
 	if len(fwds) != 1 {
 		t.Fatalf("forwards = %v, want one declaration", got["forwards"])
 	}
-	// The declaration comes back as the stored struct, so its fields are the Go
-	// names. What matters here is that it ARRIVED: --forwards used to be parsed
-	// and never read, so a template's tunnels silently never existed.
+	// THE REPLY SPEAKS THE SAME KEYS AS THE FILE. It used to echo the Go field names,
+	// because ForwardDecl carried no json tag and "Kind" was whatever encoding/json
+	// made of it. A caller writing the template and a caller reading this reply were
+	// then looking at two spellings of one field. What matters here is that it
+	// ARRIVED: --forwards used to be parsed and never read, so a template's tunnels
+	// silently never existed.
 	one, _ := fwds[0].(map[string]any)
-	if one["Kind"] != "dynamic" {
-		t.Errorf("forward = %v, want Kind dynamic", one)
+	if one["kind"] != "dynamic" {
+		t.Errorf("forward = %v, want kind dynamic", one)
 	}
 	if port, _ := one["LocalPort"].(float64); port != 1080 {
 		t.Errorf("forward local port = %v, want 1080", one["LocalPort"])

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -35,11 +36,12 @@ import (
 // the ordinary shell/SFTP tools, gated by the session's Restriction. The
 // reconciler never reads a skill or speaks JSON-RPC on the agent's behalf.
 type Reconciler struct {
-	store      *Store
-	sessMgr    *session.Manager
-	msgMgr     *message.Manager
-	sshConfigs *sshconfig.Store
-	forwardMgr *forward.ForwardManager
+	store         *Store
+	sessMgr       *session.Manager
+	msgMgr        *message.Manager
+	sshConfigs    *sshconfig.Store
+	forwardMgr    *forward.ForwardManager
+	exposeHandler func() http.Handler
 
 	// NoInternal refuses the built-in loopback profile as an extension target,
 	// mirroring the flag the MCP server exposes.

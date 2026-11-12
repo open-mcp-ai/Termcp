@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"net/http"
+
 	"golang.org/x/crypto/ssh"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
@@ -123,6 +125,25 @@ func (fm *ForwardManager) CreateRemote(sessionID, sshConfig, localHost string, l
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	fw, ln, err := RemoteForwardSSH(ctx, sshClient, localHost, localPort, remoteHost, remotePort)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	fw.SessionID = sessionID
+	fw.SSHConfig = sshConfig
+	fm.put(fw, ln, cancel)
+	return fw, nil
+}
+
+// CreateRemoteHTTP publishes this process's own HTTP handler on the far side of the
+// connection (issue #321). There is no local port and no TCP target: the remote sshd
+// accepts, and the accepted channel becomes an HTTP connection to h.
+func (fm *ForwardManager) CreateRemoteHTTP(sessionID, sshConfig, agentHost string, agentPort int, h http.Handler, sshClient *ssh.Client) (*ForwardInfo, error) {
+	if sshClient == nil {
+		return nil, fmt.Errorf("no SSH client available for %q", sshConfig)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	fw, ln, err := RemoteForwardHTTP(ctx, sshClient, agentHost, agentPort, h)
 	if err != nil {
 		cancel()
 		return nil, err

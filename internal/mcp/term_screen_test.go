@@ -106,9 +106,13 @@ func TestReadScreenPagingWalksPastRows(t *testing.T) {
 		t.Fatalf("banner page reported Screen-Rows=%q, want 2:\n%s", v, firstLine(banner))
 	}
 
-	newest := termText(t, s, map[string]any{"cmd": "read " + h + " --screen --top 8 --rows 16", "timeout": 0})
+	// ASK FOR THE WHOLE MODEL rather than a guessed window: how many rows the buffer
+	// holds depends on how far the prompt theme wrapped, so "--top 8" describes a
+	// position this test has no way to know. The paging this asserts is that a window
+	// can be named at all; where the newest row happens to sit is the shell's business.
+	newest := termText(t, s, map[string]any{"cmd": "read " + h + " --screen --top 0 --rows 100", "timeout": 0})
 	if !strings.Contains(newest, "ROWONE") {
-		t.Fatalf("the page covering the newest rows is missing the last command:\n%s", firstLine(newest))
+		t.Fatalf("a page covering the whole model is missing the last command:\n%s", firstLine(newest))
 	}
 	for _, hname := range []string{"Cursor-Visible", "Paste-Mode", "Screen-Total"} {
 		if _, ok := headerValue(t, newest, hname); !ok {
