@@ -123,6 +123,12 @@ func (s *Server) channelScreenState(handle string) (altScreen bool) {
 
 // readScreen replays the channel's log and answers with the screen.
 func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	// `--grep` SEARCHES LINES OF THE LOG, and a screen row is not a line: the model has
+	// already applied the carriage returns and erases a grep would not know about. Dropping
+	// the flag silently read as "no matches", which is worse than saying so.
+	if _, ok := stmt.Flag("grep"); ok {
+		return badRequest(stmt, "`--grep` searches the log's lines; the screen model has rows, not lines. Drop `--screen` to grep, or read the screen without `--grep`")
+	}
 	cs, bad := s.requireShell(stmt.Target)
 	if bad != nil || cs == nil {
 		return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeShellNotFound,
@@ -191,14 +197,22 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	from := 0
 	span := want
 	if v, ok := stmt.Flag("top"); ok {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+				msg: "`--top` is a row number counted from 0 and got " + strconv.Quote(v) + ": `read " + stmt.Target + " --screen --top 0` starts at the first row"})
+		}
+		{
 			paged = true
 			from = min(n, count)
 			span = rows
 			if v2, ok := stmt.Flag("rows"); ok {
-				if m, err := strconv.Atoi(v2); err == nil && m > 0 {
-					span = m
+				m, err := strconv.Atoi(v2)
+				if err != nil || m < 1 {
+					return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+						msg: "`--rows` is a page height and must be at least 1, got " + strconv.Quote(v2)})
 				}
+				span = m
 			}
 			span = min(span, screenTailRows)
 			// A WINDOW PAST THE END IS NOT A WINDOW OF BLANK ROWS. The model has `count`
@@ -256,6 +270,10 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		// Any that survive in the bytes are a repaint the row's span happens to include, and
 		// passing them through hands the caller a line that a line-based parser will mangle.
 		text = strings.ReplaceAll(text, "\r", "")
+		// BACKSPACE IS AN INSTRUCTION TOO. A 0x08 that survived in a row's span means the
+		// model did not consume a delete the terminal would have applied; passing the byte
+		// through hands the caller a control character in the middle of a line.
+		text = strings.ReplaceAll(text, "\b", "")
 		return strings.TrimRight(text, "\n")
 	}
 

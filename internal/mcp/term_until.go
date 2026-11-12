@@ -57,7 +57,7 @@ const (
 	// (`user@box:~$ `); a themed one puts it first and ends on a space or a colour reset
 	// (`\x1b[38;2;1;2;3m➜  repo `). Matching only the first family meant every
 	// `--until prompt` on a starship/p10k shell burned its whole timeout.
-	promptEnd = `(?m)(?:[$#>%❯➜λ][ \t]?(?:\x1b\[[0-9;]*m)*\r?$)|(?:^(?:\x1b\[[0-9;]*m)*[❯➜λ][^\r\n]*[ \t](?:\x1b\[[0-9;]*m)*\r?$)`
+	promptEnd = `(?m)(?:[$#>%❯➜λ\x{e0a0}-\x{e0b3}\x{2500}-\x{257f}\x{f400}-\x{f4ff}][ \t]*(?:\x1b\[[0-9;]*m)*\r?$)|(?:^(?:\x1b\[[0-9;]*m)*[❯➜λ][^\r\n]*[ \t]+(?:\x1b\[[0-9;]*m)*\r?$)`
 )
 
 // untilSpec is one compiled `--until`.

@@ -258,8 +258,13 @@ var ops = []Op{
 const keyDetail = `The name is a KEY, not text: it becomes the terminal's own escape sequence, so a
 program sees a keystroke rather than the word "enter".
 
-  enter  tab  esc  up  down  left  right  backspace  delete  home  end
+  enter  tab  esc  space  up  down  left  right  pageup  pagedown
+  backspace  delete  home  end
   ctrl+c  ctrl+d  ctrl+z  ctrl+l  ctrl+u  ctrl+w
+
+The list is the parser's, not a summary of it: space and the page keys are what a TUI
+with no line editor is driven with, and this page has to agree with the refusal that a
+wrong name gets.
 
 esc and escape are the same key; either spelling is accepted. --repeat N presses it
 N times, which is how a list is walked (down --repeat 3) without three round trips.

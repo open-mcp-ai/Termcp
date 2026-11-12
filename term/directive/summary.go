@@ -68,7 +68,7 @@ func HasSummaries(op string) bool {
 // column of them.
 var summaryExamples = map[string]string{
 	"read":    "read a1f3:1 --grep 'error|fail' --tail 5        # the last 5 failures, with line numbers",
-	"run":     `run a1f3:1 $1 -- args ["ls -la"]              # one line, one wait, one reply`,
+	"run":     `run a1f3:1 $1                                 # one line, one wait; args: ["ls -la"]`,
 	"input":   `input a1f3:1 $1 -- args ["echo hi"]           # type without submitting`,
 	"key":     "key a1f3:1 enter                              # submit what was typed",
 	"send":    "send a1f3:1 {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
