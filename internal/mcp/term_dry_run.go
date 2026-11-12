@@ -3,6 +3,8 @@ package mcp
 import (
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/session"
+
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -47,6 +49,33 @@ func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelo
 		}
 
 		for _, expanded := range expanded {
+			// VALIDATE WHAT CAN BE KNOWN SYNTACTICALLY. `key` takes an enumerated set;
+			// letting an unknown key pass dry-run as "valid-syntax" makes a green verdict
+			// into a lie the real call exposes.
+			// Key names live in expanded.Args[0], not Key (Key is for statements that
+			// take a resource name, like `get <host> file <path>`).
+			keyName := expanded.Key
+			if len(expanded.Args) > 0 {
+				keyName = expanded.Args[0]
+			}
+			if expanded.Op == "key" && keyName != "" {
+				if _, err := session.KeyBytes(keyName, true, false); err != nil {
+					// MASK BEFORE REFUSING. The key name can be a $VAR that expanded to a
+					// secret, and a refusal is not exempt from the rule the rest of dry-run
+					// follows: the reply must not be the place the credential appears.
+					maskedKey := maskSecrets(keyName, win.Secrets)
+					slot := badRequest(expanded,
+						strings.Replace(err.Error(), keyName, maskedKey, 1))
+					if slot.Headers == nil {
+						slot.Headers = map[string]string{}
+					}
+					slot.Headers["Path"] = maskSecrets(expanded.Path, win.Secrets)
+					slot.Headers["Dry-Run"] = "true"
+					slot.Headers["Verdict"] = "invalid"
+					out = append(out, slot)
+					continue
+				}
+			}
 			headers := map[string]string{
 				"Dry-Run": "true",
 				"Verdict": "valid-syntax",

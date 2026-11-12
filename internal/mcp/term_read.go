@@ -328,8 +328,18 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// the terminal. Absence now means what it says: not known.
 	watch.headers(&slot)
 	if watch != nil && !watch.matched && slot.Code < 400 {
-		slot.Headers["Hint"] = "`--until` did not match within the window, so this reply says nothing about whether the command finished. " +
-			"read " + stmt.Target + " --tail 20 looks at the stream, and key " + stmt.Target + " ctrl+c interrupts whatever holds the terminal."
+		// A CONTRADICTION IN ONE REPLY: if the shell exited and printed its code (e.g.
+		// Windows ConPTY child exit), saying "this reply says nothing about whether the
+		// command finished" contradicts the `Exit-Code:` printed above it. The predicate
+		// did not match, but the answer IS known.
+		if slot.Headers != nil && slot.Headers["Exit-Code"] != "" {
+			// An exit code was observed, so the command finished: --until did not match its
+			// OSC 133 marker, but the process has reported its status.
+			slot.Headers["Completion"] = "exit"
+		} else {
+			slot.Headers["Hint"] = "`--until` did not match within the window, so this reply says nothing about whether the command finished. " +
+				"read " + stmt.Target + " --tail 20 looks at the stream, and key " + stmt.Target + " ctrl+c interrupts whatever holds the terminal."
+		}
 	}
 	if windowExpired && watch == nil && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
 		// Same header the pipe path uses, same meaning: the command was accepted and has

@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/termview"
 	"github.com/open-mcp-ai/termcp/term/directive"
@@ -253,28 +252,38 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	if unionStart >= 0 {
 		tailBytes, _, _ = s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, unionStart, int(unionEnd-unionStart))
 	}
+	// CONSUMED IS THE BYTE OFFSET ALREADY RENDERED, and it is what keeps a row's span from
+	// repeating its neighbour's bytes. A wrapped row and its continuation can both be given
+	// the same span, and emitting each span from its own start printed the text twice — the
+	// "same transcript under itself" the page-height test kept finding.
+	consumed := unionStart
 	rowText := func(sp *termview.Span) string {
 		if sp == nil || sp.End <= sp.Start || unionStart < 0 {
 			return ""
 		}
-		lo, hi := sp.Start-unionStart, sp.End-unionStart
+		start := sp.Start
+		if start < consumed {
+			start = consumed
+		}
+		lo, hi := start-unionStart, sp.End-unionStart
 		if lo < 0 || hi > int64(len(tailBytes)) || hi <= lo {
 			return ""
 		}
-		// A row's bytes are the terminal's own: the colours it painted and the erase it
-		// performed describe a screen the caller cannot see, so the reply carries what is
-		// displayed.
-		text := ansi.Strip(string(tailBytes[lo:hi]))
-		// A SCREEN ROW HAS NO CARRIAGE RETURNS: a CR is the terminal's own instruction to
-		// go back to column one, which the model already applied when it laid the row out.
-		// Any that survive in the bytes are a repaint the row's span happens to include, and
-		// passing them through hands the caller a line that a line-based parser will mangle.
-		text = strings.ReplaceAll(text, "\r", "")
-		// BACKSPACE IS AN INSTRUCTION TOO. A 0x08 that survived in a row's span means the
-		// model did not consume a delete the terminal would have applied; passing the byte
-		// through hands the caller a control character in the middle of a line.
-		text = strings.ReplaceAll(text, "\b", "")
-		return strings.TrimRight(text, "\n")
+		if sp.End > consumed {
+			consumed = sp.End
+		}
+		// THE ROW'S OWN CONTROL BYTES DECIDE WHAT IT DISPLAYS. A shell repaints its input
+		// line with CR and CSI K on every keystroke, so the span holds every paint; the
+		// characters that survived are the last one.
+		return renderScreenRow(tailBytes[lo:hi])
+	}
+
+	// EVERY ROW IS RENDERED IN ORDER, ONCE. The consumption cursor is per-window state, so
+	// rendering out of order (the tail walks backwards from the bottom) would let the first
+	// row visited claim every byte and leave the rest empty.
+	texts := make([]string, len(spans))
+	for i := range spans {
+		texts[i] = rowText(spans[i])
 	}
 
 	var keptRows []string
@@ -286,14 +295,12 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	if paged {
 		// A page is a page: empty rows stay, because a caller walking a numbered range
 		// needs the numbering to line up with what it will ask for next.
-		for _, sp := range spans {
-			keptRows = append(keptRows, rowText(sp))
-		}
+		keptRows = append(keptRows, texts...)
 	} else {
 		firstKept := -1
-		for row := len(spans) - 1; row >= 0 && len(keptRows) < want; row-- {
-			if text := rowText(spans[row]); text != "" {
-				keptRows = append(keptRows, text)
+		for row := len(texts) - 1; row >= 0 && len(keptRows) < want; row-- {
+			if texts[row] != "" {
+				keptRows = append(keptRows, texts[row])
 				firstKept = row
 			}
 		}
