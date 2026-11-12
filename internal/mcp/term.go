@@ -403,6 +403,17 @@ func (s *Server) parseErrorSlot(err error) envelope.Slot {
 	if derr.Usage != "" {
 		headers["Usage"] = derr.Usage
 	}
+	// ONE COPYABLE LINE, IN THE REPLY WHERE THE CALLER JUST GOT IT WRONG (issue #317).
+	//
+	// The Usage header is the shape and the caller still has to fill it in; an
+	// example is the shape already filled in. It rides as a header rather than a
+	// body line because the body of a parse error is already the most specific
+	// thing that can be said about THIS call, and an example under it would compete
+	// with that sentence. A verb with no example sends nothing, because an invented
+	// example is copyable and wrong.
+	if line, ok := directive.SummaryExample(derr.Op); ok {
+		headers["Example"] = line
+	}
 	if _, known := directive.Lookup(derr.Op); !known && derr.Op != "" {
 		// An unknown directive is exactly the caller who needs the table, so the
 		// whole listing rides along instead of a second round trip.
