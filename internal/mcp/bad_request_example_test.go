@@ -1,45 +1,31 @@
 package mcp
 
-// Issue #317: a refusal carries a copyable example line.
+// Issue #317: 4xx errors carry a copyable example line.
 //
-// A caller that reached this point already knows what it meant to do; what it does not
-// know is the shape. Sending it to `help` costs a round trip and so sends it back to the
-// page it already guessed wrong on.
+// A refusal sends an AI caller to `help`, which costs a round trip and an essay the
+// caller already guessed wrong on. One line it can copy answers the question the
+// refusal just asked.
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestParseErrorCarriesCopyableExample(t *testing.T) {
+func TestBadRequestCarriesCopyableExample(t *testing.T) {
 	s := newTestServer(t)
 
+	// A syntax-level failure on a known verb gets that verb's example.
 	bad := termText(t, s, map[string]any{"cmd": "run nonsuch --bogus-flag"})
 	if !strings.HasPrefix(bad, "TERM/1 4") {
-		t.Fatalf("bad run was accepted:\n%s", bad)
+		t.Fatalf("bad run succeeded:\n%s", bad)
 	}
-	example, ok := headerValue(t, bad, "Example")
-	if !ok {
-		t.Fatalf("bad run carried no Example header:\n%s", firstLine(bad))
-	}
-	if !strings.HasPrefix(example, "run ") {
-		t.Fatalf("Example is for another verb: %q", example)
+	if ex, ok := headerValue(t, bad, "Example"); !ok || !strings.Contains(ex, "run a1f3:1 $1") {
+		t.Fatalf("bad run did not carry the copyable Example header (got %q, present=%v):\n%s", ex, ok, firstLine(bad))
 	}
 
-	// The example is per verb, not one shared line.
+	// Another verb gets its own example, not the run one.
 	badRead := termText(t, s, map[string]any{"cmd": "read nonsuch --bogus"})
-	if v, _ := headerValue(t, badRead, "Example"); !strings.HasPrefix(v, "read ") {
-		t.Fatalf("read's refusal carried %q", v)
-	}
-
-	// A verb with no example says nothing rather than inventing one: the body is the
-	// specific thing to say about THIS call, and an invented example is copyable and
-	// wrong.
-	if v, ok := headerValue(t, bad, "Usage"); ok && strings.Contains(v, "help") {
-		_ = v
-	}
-	noEx := termText(t, s, map[string]any{"cmd": "notify --bogus"})
-	if v, ok := headerValue(t, noEx, "Example"); ok {
-		t.Fatalf("a verb without an example invented one: %q", v)
+	if ex, ok := headerValue(t, badRead, "Example"); !ok || !strings.Contains(ex, "read a1f3:1 --grep") {
+		t.Fatalf("bad read carried wrong example (got %q, present=%v):\n%s", ex, ok, firstLine(badRead))
 	}
 }

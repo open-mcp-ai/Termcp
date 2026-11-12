@@ -181,7 +181,7 @@ var ops = []Op{
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
-			"read <session> <index> | write <session> file <path>",
+			"read <session> <index> [--tail N]",
 		Detail: readDetail},
 	// NO TargetKind: `write <session> file <path>` names a container and
 	// `write <handle> <frame>` names a channel, so a shape check would refuse one of

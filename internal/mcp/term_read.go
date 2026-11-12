@@ -46,6 +46,16 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 	if boolFlag(stmt, "screen") {
 		return s.readScreen(ctx, stmt, win)
 	}
+	// A FLAG THAT CANNOT APPLY IS REFUSED, NOT DROPPED. `--top` and `--rows` describe a
+	// window of the screen model; the byte read has no rows, so the pair used to be parsed,
+	// ignored, and answered with the whole log — a caller who asked for nine rows could not
+	// tell it had been served everything.
+	if _, ok := stmt.Flag("top"); ok {
+		return badRequest(stmt, "`--top` pages the screen model, so it needs `--screen`: `read "+stmt.Target+" --screen --top 0 --rows 20`")
+	}
+	if _, ok := stmt.Flag("rows"); ok {
+		return badRequest(stmt, "`--rows` sizes a screen page, so it needs `--screen`: `read "+stmt.Target+" --screen --top 0 --rows 20`")
+	}
 	watch := s.untilWatchFrom(stmt)
 	base, observable := s.outputSizeFor(stmt.Target)
 	if watch == nil || !observable || win.BytesLimit == 0 {

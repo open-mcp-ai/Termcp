@@ -233,6 +233,11 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 	}
 
 	var keptRows []string
+	// SCREEN-TOP IS WHERE THE RETURNED ROWS START, not where the window ended. Reporting
+	// the tail's end made the documented round trip a lie: a caller that asked again from
+	// that `--top` got a different part of the screen, because the rows below the cursor are
+	// blank and the tail skips them.
+	top := from
 	if paged {
 		// A page is a page: empty rows stay, because a caller walking a numbered range
 		// needs the numbering to line up with what it will ask for next.
@@ -240,17 +245,18 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 			keptRows = append(keptRows, rowText(sp))
 		}
 	} else {
+		firstKept := -1
 		for row := len(spans) - 1; row >= 0 && len(keptRows) < want; row-- {
 			if text := rowText(spans[row]); text != "" {
 				keptRows = append(keptRows, text)
+				firstKept = row
 			}
 		}
 		// Collected newest-first; a screen reads oldest-first.
 		slices.Reverse(keptRows)
-	}
-	top := from
-	if !paged {
-		top = max(0, count-len(keptRows))
+		if firstKept >= 0 {
+			top = from + firstKept
+		}
 	}
 
 	var body strings.Builder
