@@ -67,7 +67,18 @@ func HasSummaries(op string) bool {
 // separate from the table because an example is not a flag and does not belong in a
 // column of them.
 var summaryExamples = map[string]string{
-	"read": "read a1f3:1 --grep 'error|fail' --tail 5        # the last 5 failures, with line numbers",
+	"read":    "read a1f3:1 --grep 'error|fail' --tail 5        # the last 5 failures, with line numbers",
+	"run":     `run a1f3:1 $1 -- args ["ls -la"]              # one line, one wait, one reply`,
+	"input":   `input a1f3:1 $1 -- args ["echo hi"]           # type without submitting`,
+	"key":     "key a1f3:1 enter                              # submit what was typed",
+	"send":    "send a1f3:1 {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+	"call":    `call a1f3:1 mcp:1 ping {"a":1}                 # a tool on a mounted peer`,
+	"open":    "open a1f3:1 --pty --argv bash                 # a second channel on a session",
+	"connect": "connect internal --name build                 # a session, then `ls` shows it",
+	"close":   "close a1f3:1                                  # one channel; the session stays",
+	"write":   `write a1f3:1 file app.log --data "line\n"     # append bytes to a file`,
+	"get":     "get a1f3:1 file app.log --tail 20             # read part of a file",
+	"ls":      "ls                                           # everything this instance holds",
 }
 
 // SummaryExample returns the worked example for a verb, if it has one.

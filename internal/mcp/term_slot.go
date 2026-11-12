@@ -154,8 +154,28 @@ func badRequest(stmt directive.Statement, body string) envelope.Slot {
 	return envelope.Slot{
 		Code:    400,
 		Headers: map[string]string{"Path": stmt.Path, "Error-Code": CodeInvalidArgument},
-		Body:    body,
+		Body:    withExample(stmt, body),
 	}
+}
+
+// withExample appends the copyable line for the verb that was refused (issue #317).
+//
+// THE REFUSAL IS WHERE THE EXAMPLE IS WORTH MOST. A caller that reached this point
+// already knows what it meant to do; what it does not know is the shape. Sending it to
+// `help` costs a round trip and a page, and the page is the reason it guessed wrong. One
+// line it can paste answers the question the error just created.
+//
+// A verb with no example is left alone rather than given an invented one: a wrong
+// example is worse than none, because it is copyable.
+func withExample(stmt directive.Statement, body string) string {
+	if strings.Contains(body, "Example:") {
+		return body
+	}
+	line, ok := directive.SummaryExample(stmt.Op)
+	if !ok {
+		return body
+	}
+	return body + "\nExample: " + line
 }
 
 // badRequestNoPath is badRequest for the replies that predate a statement — the
