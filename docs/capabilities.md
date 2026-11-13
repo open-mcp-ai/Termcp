@@ -27,6 +27,7 @@ human decision, per session.
 | **Review mode** | Per-session approval gate: every agent write waits for a human decision. |
 | **Extensions** | A stored session template with a tool/path whitelist, port tunnels, and agent notes. Templates without forwards start on demand (`open ext <name>`), issue a separate channel per ask, and idle out after `idle_timeout`. **Two things make a template resident instead**: declaring a forward (a listener has no "use" moment), or `resident = true` (`--resident`) for a template whose unasked-for duty is not a listener — an MCP server holding a WebSocket to push events, a continuous log sink — which would otherwise be killed by idle collection and never restart. Resident templates start at daemon boot and are restarted when they exit; `resident` and `idle_timeout` are mutually exclusive. `local`, `remote` and `dynamic` forwards mix freely in one array; the array is index-keyed, so order is identity, and a failure at entry 3 leaves 1–2 listening, retried only for what failed. |
 | **Connected clients** | The icon at the right end of the bottom dock opens an upward-facing list of who is attached: MCP clients with the name they announced and their namespace, plus Web UI tabs with their address and what they are watching. |
+| **Agent origin and lifecycle** | Permission management separates how an Agent was created (OAuth login, trusted local `daemon stdio` registration, or manual), which credentials it holds (OAuth grant, managed daemon credential, and at most one active manual static Token), and how it is currently attached. Ordinary group/action/constraint/host changes keep valid MCP sessions; revocation, identity suspension, static-token replacement and vault locking end affected authority. Streamable HTTP reports missing sessions as 404 and real ownership conflicts as 403, while the self-managed bridge reinitializes bounded sessions without replaying calls whose result is unknown. |
 | **Update notice** | The header tells you when a newer release exists — only for real `vX.Y.Z` builds, never for a local `dev-<sha>`. |
 | **One REST entrance** | `POST /api/term` speaks the same command language as the MCP tool, so an agent drives everything with plain `curl`. |
 | **Static preview (`dry_run`)** | `dry_run:true` parses `cmd`, substitutes `$1`/`$NAME`, expands aliases and checks each statement's grammar, then stops before dispatch — no dial, no bytes written, no audit span. Every statement answers `Verdict: valid-syntax` or `invalid` with its expanded form, so a harness can score how well a model follows the DSL in milliseconds instead of standing up a sandbox. It checks what a line SAYS, not what it WILL do: a reference to a session that is not running is still valid syntax, and a secret's value is never echoed back. |
@@ -48,6 +49,11 @@ human decision, per session.
   refresh tokens bound to one user/client/resource grant. OAuth login identity
   never grants WebUI or REST administration. The older `--auth-token` /
   `--auth-hash` shared mode still protects every surface when explicitly chosen.
+- **Policy revision is not credential revocation.** Group and policy changes are
+  re-evaluated by the next operation, approval replay and background controlled
+  step. They preserve MCP transport identity. Only identity/grant/token
+  invalidation, vault locking or explicit transport termination removes the
+  session.
 - **Basic auth is Base64.** Terminate TLS in a reverse proxy when serving beyond
   your own machine; the token is never logged and never placed in a URL.
 - **🚨 Do not put an agent on a production host unattended. If you must, turn review

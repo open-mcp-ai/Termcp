@@ -567,3 +567,71 @@ func (m *Managed) cancelPrincipalsLocked(ids []string) {
 		}
 	}
 }
+
+// cancelBackgroundForPrincipalsLocked stops detached work whose authority may
+// have changed with a policy or group binding. It deliberately does not cancel
+// request contexts or MCP transports: those carry the authenticated identity
+// and must stay alive so the next business operation resolves the new policy.
+func (m *Managed) cancelBackgroundForPrincipalsLocked(ids []string) {
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	for id, token := range m.state.Tokens {
+		if !wanted[token.PrincipalID] {
+			continue
+		}
+		for _, work := range m.background[id] {
+			if !m.backgroundWorkAuthorizedLocked(id, work.authority) {
+				work.cancel()
+			}
+		}
+	}
+	for _, record := range m.state.OAuthAccess {
+		grant := m.state.OAuthGrants[record.GrantID]
+		if !wanted[grant.AgentID] {
+			continue
+		}
+		for _, work := range m.background[record.ID] {
+			if !m.backgroundWorkAuthorizedLocked(record.ID, work.authority) {
+				work.cancel()
+			}
+		}
+	}
+}
+
+func (m *Managed) backgroundWorkAuthorizedLocked(credentialID string, authority BackgroundWorkAuthority) bool {
+	if len(authority.Operations) == 0 && len(authority.Hosts) == 0 {
+		return false
+	}
+	principalID := ""
+	if token, ok := m.state.Tokens[credentialID]; ok {
+		principalID = token.PrincipalID
+	} else {
+		for _, record := range m.state.OAuthAccess {
+			if record.ID == credentialID {
+				principalID = m.state.OAuthGrants[record.GrantID].AgentID
+				break
+			}
+		}
+	}
+	agent, ok := m.state.Agents[principalID]
+	if !ok || !agent.Enabled {
+		return false
+	}
+	policy, err := resolvedAgentPolicy(m.state, agent)
+	if err != nil {
+		return false
+	}
+	for _, operation := range authority.Operations {
+		if !policy.MayRequestOperation(operation) {
+			return false
+		}
+	}
+	for _, host := range authority.Hosts {
+		if !policy.AllowsHost(host) {
+			return false
+		}
+	}
+	return true
+}

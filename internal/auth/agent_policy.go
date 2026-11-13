@@ -189,7 +189,7 @@ func (m *Managed) ApprovalContextForCredential(ctx context.Context, principalID,
 	agent := m.state.Agents[principalID]
 	actor := Actor{ID: agent.ID, Username: agent.Name, Role: RoleAgent}
 	ctx = m.withOAuthAgentPolicy(ctx, credentialSignature, credentialID, actor.ID, grant.ID)
-	ctx = m.withOAuthBackgroundWork(ctx, credentialSignature, credentialID, actor.ID, grant.ID, record.ExpiresAt)
+	ctx = m.withOAuthBackgroundWork(ctx, credentialSignature, credentialID, actor.ID, grant.ID, record.ExpiresAt, agent.Revision, m.state.Revision)
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, "token:"+credentialID)
 	ctx = context.WithValue(ctx, oauthCredentialKey{}, true)

@@ -648,11 +648,13 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 		// handler to reach, so it asks admission directly with the capability the
 		// command belongs to — a profile's default_approval must not depend on which
 		// spelling reached the host.
-		if bad := s.checkBorrowedRunAdmission(ctx, "use:"+host); bad != nil {
+		admitted, bad := s.checkBorrowedRunAdmission(ctx, "use:"+host)
+		if bad != nil {
 			slot := failureSlot(failureFromResult(bad))
 			slot.Headers["Path"] = stmt.Path
 			return []envelope.Slot{slot}
 		}
+		ctx = admitted
 		// A FILTER MUST NOT RUN ITS COMMAND TO FIND OUT IT WAS INVALID. Check before
 		// starting the remote process, exactly as checkWindow does for channel runs.
 		if bad := validateBorrowedRunFlags(stmt); bad != nil {
@@ -664,7 +666,7 @@ func (s *Server) directiveRun(ctx context.Context, stmt directive.Statement, win
 		// more command would break that promise silently, because the caller sees a
 		// normal 200 while the window it is writing into is on its way out. Refuse and
 		// name the two ways forward.
-		if c := s.sessMgr.LiveBorrowed(host); c != nil && c.Closing() {
+		if c := s.sessMgr.LiveBorrowed(host, callerNamespace(ctx)); c != nil && c.Closing() {
 			slot := s.slotFromFailure(ctx, stmt, &toolFailure{
 				code: CodeConflict,
 				msg: fmt.Sprintf("use:%s is closing: `close --later` was called, so it no longer accepts new commands. "+

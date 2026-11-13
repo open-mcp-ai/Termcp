@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -18,11 +20,16 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
+	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"
 )
 
@@ -129,9 +136,17 @@ func TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes(t *testing.T) {
 
 	store := storage.New(dir)
 	msgMgr := message.NewManager(store)
-	sessMgr := session.NewManager(msgMgr, store, nil)
+	internalSSH := sshserver.New()
+	if err := internalSSH.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = internalSSH.Stop() })
+	sessMgr := session.NewManager(msgMgr, store, internalSSH)
+	sessMgr.SetSSHConfigResolver(vault.ResolveSessionReference)
 	t.Cleanup(func() {
-		sessMgr.MarkAllDead()
+		for _, info := range sessMgr.ListAll() {
+			_ = sessMgr.Delete(info.ID)
+		}
 		_ = store.Close()
 	})
 	mcpServer := New(sessMgr, msgMgr, vault, forward.NewForwardManager(), "test")
@@ -157,7 +172,7 @@ func TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes(t *testing.T) {
 		t.Fatal(err)
 	}
 	statusResponse.Body.Close()
-	adminDo := func(method, path, body string) *http.Response {
+	adminDo := func(method, path, body string) map[string]any {
 		request, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Origin", server.URL)
@@ -175,7 +190,7 @@ func TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes(t *testing.T) {
 		if response.StatusCode >= 300 {
 			t.Fatalf("%s %s: %d %#v", method, path, response.StatusCode, decoded)
 		}
-		return response
+		return decoded
 	}
 	adminDo(http.MethodPost, "/auth/setup", `{"password":"oauth-e2e-password","config_password":"oauth-e2e-password"}`)
 	settings := `{"enabled":true,"revision":0,"public_url":"` + server.URL + `","oidc_issuer":"` + idp.server.URL + `","oidc_client_id":"` + idp.clientID + `","oidc_client_secret":"secret"}`
@@ -315,7 +330,172 @@ func TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes(t *testing.T) {
 	if refreshedConnection.CredentialID == "" || refreshedConnection.CredentialID == connection.CredentialID {
 		t.Fatalf("MCP connection did not follow refreshed credential: before=%+v after=%+v", connection, refreshedConnection)
 	}
-	adminDo(http.MethodPatch, "/auth/principals/"+refreshedConnection.PrincipalID, `{"revision":1,"enabled":false}`)
+	newOAuthClient := func() *client.Client {
+		cli, err := client.NewStreamableHttpClient(server.URL+"/stream", transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + newAccess}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		t.Cleanup(cancel)
+		if err := cli.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cli.Close() })
+		var request mcpgo.InitializeRequest
+		request.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+		request.Params.ClientInfo = mcpgo.Implementation{Name: "oauth-command-test", Version: "1"}
+		if _, err := cli.Initialize(ctx, request); err != nil {
+			t.Fatal(err)
+		}
+		return cli
+	}
+	limited := newOAuthClient()
+	if out := v2Term(t, limited, "run use:internal $1", "echo must-not-run"); !strings.HasPrefix(out, "TERM/1 403") {
+		t.Fatal("default group allowed a command", out)
+	}
+	if len(sessMgr.ListAll()) != 0 {
+		t.Fatal("denied command created a session")
+	}
+	all := auth.EmptyAgentPolicy()
+	for _, op := range authorization.Catalog() {
+		all.Actions[op.ID] = authorization.Grant{Effect: authorization.EffectAllow}
+	}
+	rawGroup, _ := json.Marshal(map[string]any{"name": "all-e2e", "policy": all})
+	group := adminDo(http.MethodPost, "/auth/groups", string(rawGroup))["group"].(map[string]any)
+	rawBinding, _ := json.Marshal(map[string]any{"revision": 1, "group_id": group["id"]})
+	adminDo(http.MethodPut, "/auth/principals/"+refreshedConnection.PrincipalID+"/group", string(rawBinding))
+	// The already initialized client keeps the same MCP session. No static token
+	// issuance, refresh, reinitialization, or new browser authorization is
+	// needed after changing the group.
+	commandResult := v2Term(t, limited, "run use:internal $1", "echo oauth-borrowed-ok")
+	_, commandOutput, _ := strings.Cut(commandResult, "\n\n")
+	if !strings.Contains(commandOutput, "oauth-borrowed-ok") {
+		t.Fatal("all-host group did not enable OAuth command execution", commandResult)
+	}
+	liveConnection := waitForConnection(t, mcpServer, func(connection Connection) bool {
+		return connection.SessionID == sessionID
+	})
+	if liveConnection.CredentialID != refreshedConnection.CredentialID || liveConnection.PrincipalID != refreshedConnection.PrincipalID {
+		t.Fatalf("ordinary group change replaced OAuth session attribution: %+v", liveConnection)
+	}
+
+	// Reversing the business permission also keeps the same session alive. The
+	// next call is denied by the live policy instead of losing authentication.
+	groupRevision := int(group["revision"].(float64))
+	rawGroup, _ = json.Marshal(map[string]any{
+		"revision": groupRevision,
+		"policy":   auth.EmptyAgentPolicy(),
+	})
+	adminDo(http.MethodPatch, "/auth/groups/"+group["id"].(string), string(rawGroup))
+	if out := v2Term(t, limited, "run use:internal $1", "echo must-not-run"); !strings.HasPrefix(out, "TERM/1 403") {
+		t.Fatalf("revoked business policy remained allowed on the same session: %s", out)
+	}
+	liveConnection = waitForConnection(t, mcpServer, func(connection Connection) bool {
+		return connection.SessionID == sessionID
+	})
+	if liveConnection.CredentialID != refreshedConnection.CredentialID {
+		t.Fatalf("policy denial changed OAuth session credential: %+v", liveConnection)
+	}
+
+	// Refresh rotation and an Admin policy update can commit concurrently. The
+	// refresh keeps the same Agent, owner, group, grant, client and resource.
+	type refreshOutcome struct {
+		tokens map[string]any
+		err    error
+	}
+	refreshOut := make(chan refreshOutcome, 1)
+	refreshToken, _ = refreshed["refresh_token"].(string)
+	go func() {
+		form := url.Values{
+			"grant_type":    {"refresh_token"},
+			"client_id":     {registered.ClientID},
+			"refresh_token": {refreshToken},
+			"resource":      {server.URL + "/stream"},
+		}
+		request, _ := http.NewRequest(http.MethodPost, server.URL+"/oauth/token", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			refreshOut <- refreshOutcome{err: err}
+			return
+		}
+		defer response.Body.Close()
+		var tokens map[string]any
+		if err = json.NewDecoder(response.Body).Decode(&tokens); err != nil {
+			refreshOut <- refreshOutcome{err: err}
+			return
+		}
+		if response.StatusCode != http.StatusOK {
+			refreshOut <- refreshOutcome{err: fmt.Errorf("refresh token endpoint returned %d: %#v", response.StatusCode, tokens)}
+			return
+		}
+		refreshOut <- refreshOutcome{tokens: tokens}
+	}()
+	rawAllowAgain, _ := json.Marshal(map[string]any{
+		"revision": groupRevision + 1,
+		"policy":   group["policy"],
+	})
+	adminDo(http.MethodPatch, "/auth/groups/"+group["id"].(string), string(rawAllowAgain))
+	refreshResult := <-refreshOut
+	if refreshResult.err != nil {
+		t.Fatal(refreshResult.err)
+	}
+	concurrentAccess, _ := refreshResult.tokens["access_token"].(string)
+	if concurrentAccess == "" {
+		t.Fatalf("concurrent refresh returned no access token: %#v", refreshResult.tokens)
+	}
+	concurrentPrincipals := adminDo(http.MethodGet, "/auth/principals", "")
+	refreshedGroup := ""
+	refreshedOwner := ""
+	for _, rawPrincipal := range concurrentPrincipals["principals"].([]any) {
+		principal := rawPrincipal.(map[string]any)
+		if principal["id"] == refreshedConnection.PrincipalID {
+			refreshedGroup, _ = principal["group_id"].(string)
+			refreshedOwner, _ = principal["owner_user_id"].(string)
+			break
+		}
+	}
+	grantList := adminDo(http.MethodGet, "/auth/oauth/grants", "")
+	activeGrants := 0
+	for _, rawGrant := range grantList["grants"].([]any) {
+		grant := rawGrant.(map[string]any)
+		if grant["agent_id"] == refreshedConnection.PrincipalID && grant["status"] == "active" {
+			activeGrants++
+		}
+	}
+	if refreshedGroup != group["id"] || refreshedOwner == "" || activeGrants != 1 {
+		t.Fatalf("concurrent refresh changed Agent authority: group=%q owner=%q active grants=%d", refreshedGroup, refreshedOwner, activeGrants)
+	}
+	concurrentPing, _ := http.NewRequest(http.MethodPost, server.URL+"/stream", strings.NewReader(`{"jsonrpc":"2.0","id":"after-concurrent-refresh","method":"ping"}`))
+	concurrentPing.Header.Set("Authorization", "Bearer "+concurrentAccess)
+	concurrentPing.Header.Set("Content-Type", "application/json")
+	concurrentPing.Header.Set("Accept", "application/json, text/event-stream")
+	concurrentPing.Header.Set("Mcp-Session-Id", sessionID)
+	concurrentPingResponse, err := http.DefaultClient.Do(concurrentPing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, concurrentPingResponse.Body)
+	concurrentPingResponse.Body.Close()
+	if concurrentPingResponse.StatusCode != http.StatusOK {
+		t.Fatalf("refreshed credential could not continue the original session: %d", concurrentPingResponse.StatusCode)
+	}
+
+	// Disabling the Agent is an identity suspension and does end the connection.
+	principalList := adminDo(http.MethodGet, "/auth/principals", "")
+	currentRevision := uint64(0)
+	for _, rawPrincipal := range principalList["principals"].([]any) {
+		principal := rawPrincipal.(map[string]any)
+		if principal["id"] == refreshedConnection.PrincipalID {
+			currentRevision = uint64(principal["revision"].(float64))
+			break
+		}
+	}
+	if currentRevision == 0 {
+		t.Fatal("OAuth Agent disappeared before disable test")
+	}
+	disableAgent, _ := json.Marshal(map[string]any{"revision": currentRevision, "enabled": false})
+	adminDo(http.MethodPatch, "/auth/principals/"+refreshedConnection.PrincipalID, string(disableAgent))
 	waitForCredentialAbsent(t, mcpServer, refreshedConnection.CredentialID)
 	disabledRequest, _ := http.NewRequest(http.MethodPost, server.URL+"/stream", strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"ping"}`))
 	disabledRequest.Header.Set("Authorization", "Bearer "+newAccess)

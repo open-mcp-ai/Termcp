@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/auth"
 	"github.com/open-mcp-ai/termcp/internal/config"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	mcpmod "github.com/open-mcp-ai/termcp/internal/mcp"
@@ -66,7 +67,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 			fmt.Fprintf(out, "  log:  %s\n", daemon.LogPath(cfg.DataDir))
 			fmt.Fprintf(out, "  %s\n", daemonIdleHint(stdio, idleTimeoutArg, idleTimeout))
 		case res.Unauthorized:
-			if stdio && cfg.MCPToken == "" {
+			if stdio && cfg.MCPToken == "" && daemon.ManagementCredential(cfg) == "" && !targetOnLocalInstance(cfg, target.URL) {
 				// The bridge would 401 on every message; say why before it starts.
 				fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
 				os.Exit(1)
@@ -80,6 +81,15 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 	}
 
 	if stdio {
+		bridgeCredential := daemon.BridgeCredential(cfg)
+		if bridgeCredential == "" && targetOnLocalInstance(cfg, target.URL) {
+			var credentialErr error
+			bridgeCredential, credentialErr = waitLocalDaemonCredential(ctx, cfg.DataDir)
+			if credentialErr != nil {
+				fmt.Fprintf(os.Stderr, "stdio bridge: %v\n", credentialErr)
+				os.Exit(1)
+			}
+		}
 		// The instance's *actual* countdown decides how often the bridge must
 		// ping to count as activity. Ask it (GET /api/daemon reports the
 		// effective value) instead of assuming the default: a pre-existing
@@ -98,8 +108,8 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 					os.Exit(1)
 				}
 			}
-			if rep.Unauthorized && cfg.MCPToken != "" {
-				idle, err := daemon.ProbeMCP(ctx, cfg.Host, cfg.Port, cfg.MCPToken)
+			if rep.Unauthorized && bridgeCredential != "" {
+				idle, err := daemon.ProbeMCP(ctx, cfg.Host, cfg.Port, bridgeCredential)
 				if err != nil {
 					fmt.Fprintln(os.Stderr, bridgeAuthHint(cfg))
 					os.Exit(1)
@@ -113,7 +123,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 				keepAlive = keepAliveFor(rep.Info.IdleTimeout())
 			}
 		}
-		if err := stdioBridge(ctx, cfg, target, keepAlive, namespace); err != nil && !errors.Is(err, context.Canceled) {
+		if err := stdioBridge(ctx, cfg, target, keepAlive, namespace, bridgeCredential); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "stdio bridge: %v\n", err)
 			os.Exit(1)
 		}
@@ -129,7 +139,7 @@ func runDaemonFront(cfg *config.Config, ensureDaemon, stdio bool, idleTimeoutArg
 // bridges using that identity share the same namespace. An invalid name is refused here, at
 // startup, rather than left for the instance to reject one request at a time — a
 // bridge that fails on its first call is much harder to diagnose than a flag.
-func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, keepAlive time.Duration, namespace string) error {
+func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, keepAlive time.Duration, namespace, credential string) error {
 	nsName := strings.TrimSpace(namespace)
 	if err := ns.ValidCallerName(nsName); err != nil {
 		return fmt.Errorf("--namespace: %w", err)
@@ -137,13 +147,33 @@ func stdioBridge(ctx context.Context, cfg *config.Config, target bridgeTarget, k
 	return mcpbridge.Run(ctx, mcpbridge.Config{
 		URL:       target.URL,
 		SSE:       target.SSE,
-		Token:     daemon.BridgeCredential(cfg),
+		Token:     credential,
 		Headers:   stdioBridgeHeaders(nsName),
 		KeepAlive: keepAlive,
 		In:        os.Stdin,
 		Out:       os.Stdout,
 		Err:       os.Stderr,
 	})
+}
+
+func waitLocalDaemonCredential(ctx context.Context, dataDir string) (string, error) {
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		token, err := auth.ReadLocalDaemonCredential(dataDir)
+		if err == nil {
+			return token, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-deadline.C:
+			return "", fmt.Errorf("managed local bridge credential is not available in %s; finish first-run setup and unlock the configuration vault, then reconnect", dataDir)
+		case <-ticker.C:
+		}
+	}
 }
 
 func stdioBridgeHeaders(namespace string) map[string]string {

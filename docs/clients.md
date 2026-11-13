@@ -18,8 +18,15 @@ Termcp 在同一个端口上同时提供四种入口，它们操作**同一批�
 - HTTP `/stream` 和 SSE `/sse`：每个请求携带 `Authorization: Bearer <token>`（SSE 的 `/message` 请求也需要）。
 - stdio / daemon stdio：MCP 配置的 `env` 写入 `TERMCP_MCP_TOKEN`。它是客户端凭据，不改变 daemon 的认证模式，也不会传给新启动的 daemon。
 - 远端实例或反向代理部署使用 `stdio <完整 HTTP(S) URL>`；`daemon stdio` 也接收完整 endpoint，因此会保留 HTTPS、端口和 `/termcp` 一类部署前缀。自定义数据目录时，请补充相同的 `--data-dir`。生成片段采用常见 `mcpServers` JSON 格式；不同宿主的外层配置键可能需要调整，不依赖环境变量插值。
-- 服务端仅保存摘要，不能再次查看原 Token。轮换使用原子替换，旧 Token 立即失效；撤销会移入历史，清空历史不会影响当前 Token。停用 Agent 或权限组会断开受影响 Token 的连接。
+- 服务端仅保存摘要，不能再次查看原 Token。轮换使用原子替换，旧 Token 立即失效；撤销会移入历史，清空历史不会影响当前 Token。停用 Agent 或撤销静态 Token 会断开受影响连接；普通改组、修改动作/约束/主机范围或停用权限组只改变下一次业务调用的策略，不会让仍有效的凭据重新认证。
 - daemon 重启后需要先输入登录密码，再用解密密码解锁配置；客户端 token 不解锁 Main Key。Termcp 可在 managed 模式内置 OAuth 授权服务器，直接接受只配置 MCP URL 的原生 OAuth 客户端。
+
+本机 `daemon stdio` 还有一个由服务端生成并 owning-only 保存的受管凭据。未显式提供
+`TERMCP_MCP_TOKEN` 或 `--mcp-token` 时，桥只从同一 data directory 读取这份凭据；它不会
+被网页回显、复制或写入加密 auth JSON。该登记创建的服务端来源是
+`daemon_stdio`，不代表任何客户端自报的 Header、namespace 或 clientInfo。手工 Agent
+通过同一个 stdio 桥接入时来源仍是 `manual`，详情里的“当前连接”只显示
+`stdio bridge` 这一接入方式。
 
 ### Claude Code / Codex OAuth
 
@@ -40,10 +47,21 @@ opaque access token 和 refresh 轮换。浏览器登录使用独立的上游 OI
 接入确认。首次完整授权会创建一个有 OIDC 用户归属的 Agent，并显式写入当时缺省组；刷新和
 MCP 重连复用同一 Agent，客户端丢失凭据后重新完整授权会创建新的独立 Agent。
 
-后台 Agent 管理显示所属用户、头像、身份来源、客户端和接入授权，可撤销单次接入或停用登录用户。
+后台 Agent 管理把创建来源、持有凭据和当前接入方式分开显示。OAuth 登录默认显示所属用户、
+头像、身份源、客户端、接入授权和当前连接，不显示静态 Token 数量或签发提示；本机
+`daemon stdio` 显示受管登记和凭据状态，但不提供复制凭据；手工创建仍显示静态 Token
+生命周期。OAuth Agent 如另有独立静态 Token，会在次级接入区域保留真实记录。
+三类来源都可撤销单次接入或停用登录用户。
 修改缺省组只影响之后创建的 OAuth Agent；Admin 调整已有 Agent 的组则立即改变其有效策略。
 OAuth 凭据与每个 Agent 的静态 Token 分开，静态 Token 行为不变。实现与限制见
 [`design/builtin-oauth-user-agents.md`](./design/builtin-oauth-user-agents.md)。
+
+Streamable HTTP 的有效认证请求携带未知、过期或已终止的 session 时返回 404，客户端应
+不带旧 session ID 重新 `initialize`；会话存在但属于另一 Agent、grant、client 或 resource
+时返回 403；无效 Bearer 仍返回 401 和授权 challenge。刷新 access token 可以在相同
+grant/client/resource 下继续原 session。SSE 按自己的 GET 事件流与 `/message` endpoint
+重建，不把 Streamable HTTP 的 session header 规则套到它上面。撤销 grant、停用用户/Agent
+或撤销静态凭据则会真正终止受影响连接，不能靠自动重连复活。
 
 ## 按客户端接入
 

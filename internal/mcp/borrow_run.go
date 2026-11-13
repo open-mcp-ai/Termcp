@@ -40,12 +40,12 @@ func (s *Server) refuseBorrowedReview(target, tool string) *mcpgo.CallToolResult
 
 // checkBorrowedRunAdmission sends a short-circuit run through the same capability
 // admission exit used by every handler.
-func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) *mcpgo.CallToolResult {
+func (s *Server) checkBorrowedRunAdmission(ctx context.Context, target string) (context.Context, *mcpgo.CallToolResult) {
 	req := mcpgo.CallToolRequest{}
 	req.Params.Name = "shell_input"
 	req.Params.Arguments = argsOf("shell_id", target)
-	_, bad, _ := s.checkAdmission(ctx, "shell_input", req)
-	return bad
+	ctx, bad, _ := s.checkAdmission(ctx, "shell_input", req)
+	return ctx, bad
 }
 
 // ensureBorrowedContainer returns the live `use:<host>` session for a host,
@@ -55,27 +55,43 @@ func (s *Server) ensureBorrowedContainer(ctx context.Context, host string) (*ses
 		return nil, errors.New("no session manager")
 	}
 	cfg := session.Config{
+		Ctx:       ctx,
+		Namespace: callerNamespace(ctx),
 		Mode:      "pipe",
 		NoShell:   true,
 		SSHConfig: host,
 		Borrowed:  true,
 	}
+	bindings, _ := agentBindingsFromContext(ctx)
+	if bound, ok := bindings.profiles[host]; ok {
+		cfg.SSHConfigIdentity = bound.Identity
+	}
 	// AN UNKNOWN PROFILE MUST NOT SILENTLY BECOME LOOPBACK. If host is not
 	// `internal`, Load must succeed; leaving cfg.Remote nil would start a loopback
 	// session and run the caller's command on THIS machine under the typo's name.
-	if !sshconfig.IsInternalName(host) {
-		if s.sshConfigs == nil {
-			return nil, fmt.Errorf("%w: ssh config store not initialized", sshconfig.ErrNotFound)
-		}
-		entry, err := s.sshConfigs.Load(host)
-		if err != nil || entry == nil {
+	if s.sshConfigs != nil {
+		canonical, entry, err := s.loadAgentProfile(ctx, host)
+		if errors.Is(err, sshconfig.ErrNotFound) {
 			return nil, fmt.Errorf("%w: %q. `ls host` lists the saved profiles; a profile name is also accepted without the `use:` prefix", sshconfig.ErrNotFound, host)
 		}
-		remote, err := sshconfig.RemoteFromEntry(entry, s.sshConfigs.ConfigDir(host))
 		if err != nil {
-			return nil, fmt.Errorf("resolve profile %s: %w", host, err)
+			return nil, fmt.Errorf("resolve borrowed host %q: %w", host, err)
 		}
-		cfg.Remote = remote
+		host, cfg.SSHConfig = canonical, canonical
+		if entry.Kind != sshconfig.KindInternal {
+			remote, err := sshconfig.RemoteFromEntry(entry, s.sshConfigs.ConfigDir(host))
+			if err != nil {
+				return nil, fmt.Errorf("resolve profile %s: %w", host, err)
+			}
+			cfg.Remote = remote
+		} else if s.NoInternal {
+			return nil, errors.New("internal profile is disabled")
+		}
+	} else if !sshconfig.IsInternalName(host) {
+		return nil, fmt.Errorf("%w: ssh config store not initialized", sshconfig.ErrNotFound)
+	}
+	if sshconfig.IsInternalName(host) && s.NoInternal {
+		return nil, errors.New("internal profile is disabled")
 	}
 	return s.sessMgr.FindBorrowed(host, cfg)
 }
@@ -242,6 +258,7 @@ func (s *Server) borrowedRunSlot(ctx context.Context, stmt directive.Statement, 
 	}
 	return slot
 }
+
 // The filters used to be parsed in grepBorrowed, which is downstream of the
 // execution: a typo in `--grep` answered 400 with `Output-Bytes: 20` and
 // `Status: exited`, i.e. the 400 was a lie — the command had already run and its

@@ -14,6 +14,7 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 	var affected []string
 	var result any
 	mutated := false
+	policyChanged := false
 	targetID := auditTargetID(r.URL.Path)
 	beforeAccessRevision := m.accessRevision()
 	err := m.commitState(r.Context(), func(s *managedState) (func(), error) {
@@ -97,6 +98,7 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 					s.Agents[id] = agent
 				}
 			}
+			policyChanged = len(affected) > 0
 			s.DefaultGroupID = group.ID
 			targetID = group.ID
 			result = map[string]any{"group_id": group.ID, "revision": s.AccessRevision + 1}
@@ -129,6 +131,7 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 			agent.Revision++
 			s.Agents[agent.ID] = agent
 			affected = append(affected, agent.ID)
+			policyChanged = true
 			targetID = agent.ID
 			result = map[string]any{"principal": agent}
 		case strings.HasPrefix(r.URL.Path, "/auth/groups/"):
@@ -206,9 +209,11 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 					group.Policy = clonePolicy(*input.Policy)
 					group.PolicyVocabulary = permissionPolicyVocabularyVersion
 					group.PolicyWarnings = nil
+					policyChanged = true
 				}
 				if input.Enabled != nil {
 					group.Enabled = *input.Enabled
+					policyChanged = true
 				}
 				group.Revision++
 				s.Groups[group.ID] = group
@@ -262,6 +267,7 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 				delete(s.Groups, group.ID)
 				targetID = group.ID
 				affected = append(affected, members...)
+				policyChanged = true
 				result = map[string]any{"ok": true, "affected_principals": len(members)}
 			default:
 				if len(parts) > 1 {
@@ -279,8 +285,9 @@ func (m *Managed) groupMutation(w http.ResponseWriter, r *http.Request) {
 		if mutated {
 			after = func() {
 				m.mu.Lock()
-				m.cancelDeniedTokensLocked()
-				m.cancelPrincipalsLocked(affected)
+				if policyChanged {
+					m.cancelBackgroundForPrincipalsLocked(affected)
+				}
 				m.mu.Unlock()
 			}
 		}

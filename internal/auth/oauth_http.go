@@ -430,7 +430,7 @@ func (m *Managed) renderOAuthConsent(w http.ResponseWriter, r *http.Request, tx 
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", oauthConsentCSP(tx.Authorize.GetRedirectURI()))
 	_ = oauthConsentTemplate.Execute(w, oauthConsentView{
 		State:        state,
 		CSRF:         tx.CSRF,
@@ -445,6 +445,20 @@ func (m *Managed) renderOAuthConsent(w http.ResponseWriter, r *http.Request, tx 
 		GroupName:    groupName,
 		Error:        message,
 	})
+}
+
+func oauthConsentCSP(redirect *url.URL) string {
+	formAction := "'self'"
+	// form-action also checks redirects after the same-origin consent POST.
+	// Permit only this authorization request's already validated callback origin,
+	// including its actual loopback port. Never include query/fragment material
+	// or characters that could become CSP separators, keywords, or wildcards.
+	if oauthserver.SecureRedirect(nil, redirect) &&
+		!strings.ContainsAny(redirect.Host, ";,'\" \t\r\n*\\") {
+		origin := url.URL{Scheme: redirect.Scheme, Host: redirect.Host}
+		formAction += " " + origin.String()
+	}
+	return "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action " + formAction + "; base-uri 'none'; frame-ancestors 'none'"
 }
 
 func (m *Managed) oauthContinue(w http.ResponseWriter, r *http.Request) {

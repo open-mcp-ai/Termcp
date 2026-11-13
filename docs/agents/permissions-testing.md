@@ -53,3 +53,26 @@ platform's tests.
 - macOS: single-CPU stress passed for auth, MCP, configstore, sshconfig, and extensions.
 - macOS: the real `/permissions` page was exercised in the built-in browser with a temporary encrypted data directory and synthetic Admin credentials. The preview reported missing `shell.input`, `shell.key`, and `shell.output`, and did not create a session.
 - Linux/amd64 and Windows/amd64: permission-package test binaries cross-compiled with `CGO_ENABLED=0`. Native execution is assigned to the three-platform CI matrix and was not available in the local macOS run.
+
+## 2026-11-11 Issue #315 verification record
+
+- macOS: `make test-permissions` passed with
+  `-count=2 -shuffle=on -race` for auth, authorization, capability, fileop, MCP
+  and WebUI.
+- macOS: `make test` passed the full repository with race and shuffle.
+- The ordinary group/action/constraint/host tests now assert that the admitted
+  request and MCP transport survive while the live policy resolver changes.
+  daemon and static Token transports are covered alongside OAuth.
+- Background work records its operations and stable hosts; a test removes an
+  unrelated operation and verifies that work continues, then removes the
+  operation it actually exercises and verifies cancellation.
+- Focused auth/MCP Issue #315 stress passed with `-count=2 -cpu=1,2,4
+  -shuffle=on -race`. Full mcpbridge, configstore and sshconfig stress also
+  passed with those flags. A combined all-package stress command reached its
+  30-minute timeout in CPU-1 Argon2 setup; it is not reported as a pass.
+- Streamable HTTP and SSE bridge recovery tests verify bounded reinitialization
+  and that the request which observed the lost session returns
+  `result=unknown` with `request_was_replayed=false`.
+- Windows/amd64 auth, MCP and mcpbridge test binaries cross-compiled. Native
+  Windows and Linux execution is delegated to the normal three-platform CI
+  matrix.

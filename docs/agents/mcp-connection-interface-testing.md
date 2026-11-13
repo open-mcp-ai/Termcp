@@ -201,3 +201,164 @@ Automatic access-token refresh inside that Codex version and Claude client
 interoperability were not measured in this run. Refresh rotation, MCP session
 continuation and disabled-Agent cleanup are covered by the synthetic mcp-go
 integration test above.
+
+### 2026-11-11 consent redirect regression
+
+The native CLI run above forwarded the final loopback callback through a local
+protocol verifier; it did not prove that a browser could follow the complete
+consent redirect chain unaided. A later isolated browser test reproduced the
+missing step: the consent POST succeeded with HTTP 302, but `form-action 'self'`
+blocked the redirect to the client's different loopback port. The consumed
+transaction then produced "OAuth transaction is missing or expired" on retry.
+
+The consent policy now also permits the origin of the already validated
+callback for this authorization, using the actual requested port. Query values
+and hosts containing CSP separators or wildcards are excluded from the policy. Browser,
+CSRF, PKCE, redirect validation and single-use transaction checks still apply.
+
+The built-in browser was used with a temporary encrypted auth store, a synthetic
+OIDC provider and an ephemeral client callback listener. Before the fix, the
+listener received no callback; after the fix, a single confirmation click
+returned an authorization code and the original client state to that listener.
+No Google account or production client configuration was used in this test.
+
+`TestBuiltinOAuthRenderedConsentSubmission` parses the real consent HTML,
+submits its hidden fields over HTTP with a cookie jar, verifies the callback
+policy and authorization response, and rejects a repeated confirmation.
+`TestOAuthConsentCSPCallbackOrigin` covers loopback, IPv6 and HTTPS callback
+origins, query exclusion, and attempts to inject CSP directives or wildcards.
+
+macOS validation passed: `make test`, `make test-permissions`, focused auth and
+oauthserver `go vet`, `go build -tags no_webui ./...`, and
+`TestNoWebUIBuildCarriesDocsOnly` with race detection. OAuth-focused stress in
+`internal/auth` and `internal/oauthserver` passed with `-race -count=2
+-cpu=1,2,4 -shuffle=on`, selecting `TestBuiltinOAuth|TestOAuthConsent|TestCIMD|
+TestFetcher|TestRedirect`. The broader auth-package stress run was interrupted
+and replaced with that focused run; neither a completed full-package stress
+run nor Linux/Windows execution is claimed for this fix. Google login and
+OpenCode's real callback still require a fresh user-side authorization after
+restarting the updated service.
+
+### 2026-11-11 Agent direct-host authorization regression
+
+An Agent with all-host scope and the required action grants could still receive
+"session is outside this Agent's host scope" for `run use:internal`. Admission
+treated a borrowed host locator as an existing shell/session handle. After that
+was corrected, borrowed command containers also needed the caller's namespace;
+an operator-owned or another Agent's container must not be reused.
+
+`TestAgentBorrowedRunWithAllHosts` drives real Streamable HTTP with synthetic
+Agent credentials and verifies actual command output for explicit, bare and
+quoted host locators, reusing one container per caller while separating the
+operator and two Agents. Scope-denial and missing composite grants are checked
+before execution. A profile changed after admission is rejected before dialing
+for both direct commands and borrowed file transport.
+
+`TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes` now also runs a real
+command through the synthetic OIDC/OAuth flow: the default group denies it,
+Admin moves that same Agent to an all-host/all-actions group, and the original
+OAuth access token succeeds after an MCP reconnect. This path issues no static
+Agent token and performs no new browser authorization or refresh after the
+group change. Disabling the Agent still rejects the existing OAuth credential.
+
+macOS validation passed: `make test`, `make test-permissions`, a final full
+`internal/mcp`/`internal/session` race-and-shuffle run after the binding change,
+focused `go vet`, the `no_webui` build and docs-only test, and the release binary
+build. MCP-focused stress passed with `-race -count=2 -cpu=1,2,4 -shuffle=on`
+for `TestAgentBorrowed|TestBuiltinOAuthStreamableHTTPInitializesAndRefreshes|
+TestBorrowedContainerIsPerHostSingleton|TestAuthorizedProfileBindingRejectsContentAndNameReplacement`.
+The final rename/binding case was repeated separately with those stress flags.
+The integration tests use synthetic identities and local SSH only; no real
+Google/OpenCode session or production SSH host was used for this verification.
+
+## 2026-11-11 Issue #315 Agent origins and reconnect
+
+This record uses only synthetic OIDC identities, a temporary encrypted data
+directory, an isolated OpenCode config/home and loopback endpoints. It does not
+touch the operator's normal OpenCode credentials or Termcp data.
+
+### Browser and Agent management
+
+- A real built-in-browser OIDC login and consent created an OAuth Agent owned by
+  the synthetic user. The same page also showed the server-created
+  `daemon_stdio` registration and a manual Agent, with no client-supplied field
+  used for classification.
+- OAuth detail showed owner, avatar fallback, issuer, client, grant/resource,
+  validity and live connection state without a static-Token count or issue
+  action. daemon detail showed the trusted registration and managed credential
+  status without a copy action. Manual detail retained Token issue/rotation.
+- The origin filter changed both the list and selected detail when the previous
+  selection was filtered out. Search covered Agent name, owner, client and
+  identity source.
+- Chinese and English were checked at desktop width. `default-light`,
+  `default-dark`, `cyberpunk` and `matrix` all rendered the full Agent detail.
+  A real Chrome CDP viewport at `390x844` reported
+  `scrollWidth - innerWidth = 0`; the stacked list/detail layout was usable.
+  Browser console logs were empty after the page interactions.
+- A follow-up mobile regression at `390x844` selected a permission group and an
+  Agent and asserted that `.detail` / `#agent-detail` were DOM descendants of the
+  corresponding expanded list entry. Both entries expanded inline, remained
+  scrollable, and kept page overflow at zero. The regression is pinned by
+  `TestPermissionMobileDetailsExpandInsideTheirSelectedListEntry`.
+- At the same mobile width, Agent search and creation now share one toolbar row:
+  the 44px-tall `新增` control is 72px wide beside the search field instead of
+  consuming a full-width row. With the previously added notice and filters, the
+  visible toolbar reduced to one search/create row and the first Agent began
+  sooner in the viewport.
+
+### OpenCode 1.18.30
+
+- The complete config was a remote MCP entry containing only the URL
+  `http://127.0.0.1:18990/stream`.
+- `opencode mcp auth termcp315` performed DCR, opened the native authorization
+  URL, completed the synthetic OIDC login and Termcp consent, and ended with
+  `Authentication successful!`.
+- `opencode mcp list` reported `termcp315` connected. `opencode mcp debug
+  termcp315` reported authenticated, an opaque access token, a refresh token and
+  `Connection successful`.
+- The access token stored by OpenCode initialized MCP and invoked `term` with
+  `help`, receiving `TERM/1 200 OK`.
+- Termcp was restarted, its vault unlocked, and a request using OpenCode's token
+  plus the old `Mcp-Session-Id` returned 404 with
+  `initialize a new session`. A new initialize with the same token returned 200,
+  and a new isolated `opencode mcp list` process reported connected without URL
+  or credential edits.
+- Admin moved the same OAuth Agent to the host-operator group; the original MCP
+  session continued. Clearing that group's business policy kept the session but
+  made the same `term` call return `TERM/1 403`.
+- A refresh using OpenCode's stored refresh token rotated the credential, and
+  the new access token continued the same MCP session. The OpenCode CLI process
+  itself was not left running long enough to observe its automatic refresh
+  timer.
+
+### Automated and stress checks
+
+- `make test-permissions`: passed auth, authorization, capability, fileop, MCP
+  and WebUI with `-count=2 -shuffle=on -race`.
+- `make test`: full repository passed with `-shuffle=on -race`.
+- Focused Issue #315 stress passed auth (150 runs), MCP (84 runs), and the full
+  mcpbridge package (240 runs) with `-count=2 -cpu=1,2,4 -shuffle=on -race`.
+- Full `configstore` (444 runs) and `sshconfig` (198 runs) stress passed with the
+  same flags.
+- A single make invocation covering auth, MCP, configstore, sshconfig and bridge
+  hit the command's 30-minute timeout while auth was still in CPU-1 Argon2 test
+  setup. The MCP half also exposed the pre-existing
+  `TestDeadSessionFileAndForwardRejected` retained-tail flake once. That test
+  then passed 10 consecutive race/shuffle runs by itself. The package-scoped
+  stress runs above are the completed evidence; the single-command run is not
+  claimed as passed.
+- `go build -tags no_webui ./...`,
+  `go test -tags no_webui -count=1 -race -run TestNoWebUIBuildCarriesDocsOnly
+  ./internal/webui/`, `go vet ./...` and `git diff --check` passed.
+- Windows/amd64 auth, MCP and mcpbridge test binaries cross-compiled
+  successfully. Native Windows/Linux execution remains assigned to CI and was
+  not run on this macOS host.
+
+### Residual external check
+
+No isolated model/provider credential was available, so `opencode run` could
+not be driven end-to-end through an LLM turn. Native OpenCode registration,
+consent, credential storage, initialization, `term` invocation with the
+OpenCode-acquired token, reconnect after Termcp restart, policy changes and
+manual refresh were exercised. Automatic refresh inside a still-running
+OpenCode process remains an external client-timing check.

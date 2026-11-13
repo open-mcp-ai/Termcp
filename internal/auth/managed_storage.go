@@ -56,7 +56,7 @@ func OpenManaged(dataDir string, vault Vault, providers ...configstore.Provider)
 	}
 	m := &Managed{
 		webSigningKey:     signing,
-		background:        make(map[string]map[*int]context.CancelFunc),
+		background:        make(map[string]map[*int]backgroundWork),
 		path:              filepath.Join(dataDir, "auth.json"),
 		now:               time.Now,
 		requests:          make(map[string]map[*int]context.CancelFunc),

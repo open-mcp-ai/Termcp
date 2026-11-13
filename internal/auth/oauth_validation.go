@@ -107,6 +107,24 @@ func validateOAuthServerState(s managedState) error {
 		}
 		credentialIDs[credential.ID] = true
 	}
+	if s.DaemonRegistration != nil {
+		registration := s.DaemonRegistration
+		if registration.ID == "" || registration.AgentID == "" || registration.CreatedAt.IsZero() ||
+			registration.ProvisionedAt.IsZero() ||
+			registration.RevokedAt != nil && registration.RevokedAt.Before(registration.CreatedAt) {
+			return errors.New("invalid daemon registration")
+		}
+		if registration.RevokedAt == nil {
+			agent, ok := s.Agents[registration.AgentID]
+			if !ok || agent.Origin != agentOriginDaemon {
+				return errors.New("daemon registration references a missing Agent")
+			}
+			token, ok := s.Tokens[registration.TokenID]
+			if !ok || token.PrincipalID != agent.ID || token.Kind != tokenKindDaemon {
+				return errors.New("daemon registration references a missing credential")
+			}
+		}
+	}
 	return nil
 }
 

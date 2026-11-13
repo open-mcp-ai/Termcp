@@ -95,10 +95,6 @@ func (m *Managed) admitOAuthToken(r *http.Request, raw string) (context.Context,
 		m.mu.Unlock()
 		return nil, nil, http.StatusUnauthorized
 	}
-	if _, err := resolvedAgentPolicy(m.state, agent); err != nil {
-		m.mu.Unlock()
-		return nil, nil, http.StatusUnauthorized
-	}
 	if !slices.Contains(m.state.Permissions[RoleAgent], "mcp") || requestSurface(r) != "mcp" {
 		m.mu.Unlock()
 		return nil, nil, http.StatusForbidden
@@ -116,8 +112,10 @@ func (m *Managed) admitOAuthToken(r *http.Request, raw string) (context.Context,
 	actor := Actor{ID: agent.ID, Username: agent.Name, Role: RoleAgent}
 	baseCtx, baseCancel := context.WithDeadline(r.Context(), record.ExpiresAt)
 	ctx := baseCtx
+	agentRevision := agent.Revision
+	roleRevision := m.state.Revision
 	ctx = m.withOAuthAgentPolicy(ctx, signature, record.ID, agent.ID, grant.ID)
-	ctx = m.withOAuthBackgroundWork(ctx, signature, record.ID, agent.ID, grant.ID, record.ExpiresAt)
+	ctx = m.withOAuthBackgroundWork(ctx, signature, record.ID, agent.ID, grant.ID, record.ExpiresAt, agentRevision, roleRevision)
 	ctx = context.WithValue(ctx, actorKey{}, actor)
 	ctx = context.WithValue(ctx, credentialKey{}, "token:"+record.ID)
 	ctx = context.WithValue(ctx, oauthCredentialKey{}, true)
@@ -161,8 +159,8 @@ func (m *Managed) withOAuthAgentPolicy(ctx context.Context, signature, credentia
 	}))
 }
 
-func (m *Managed) withOAuthBackgroundWork(ctx context.Context, signature, credentialID, principalID, grantID string, expires time.Time) context.Context {
-	return context.WithValue(ctx, backgroundWorkKey{}, backgroundRegistrar(func(message context.Context, cancel context.CancelFunc) (func(), error) {
+func (m *Managed) withOAuthBackgroundWork(ctx context.Context, signature, credentialID, principalID, grantID string, expires time.Time, agentRevision, roleRevision uint64) context.Context {
+	return context.WithValue(ctx, backgroundWorkKey{}, backgroundRegistrar(func(message context.Context, cancel context.CancelFunc, authority BackgroundWorkAuthority) (func(), error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if err := message.Err(); err != nil {
@@ -174,11 +172,14 @@ func (m *Managed) withOAuthBackgroundWork(ctx context.Context, signature, creden
 		if err := m.oauthAuthorityLocked(signature, credentialID, principalID, grantID); err != nil {
 			return nil, err
 		}
+		if agent := m.state.Agents[principalID]; agent.Revision != agentRevision || m.state.Revision != roleRevision {
+			return nil, errors.New("credential authority changed; start a new request")
+		}
 		ref := new(int)
 		if m.background[credentialID] == nil {
-			m.background[credentialID] = map[*int]context.CancelFunc{}
+			m.background[credentialID] = map[*int]backgroundWork{}
 		}
-		m.background[credentialID][ref] = cancel
+		m.background[credentialID][ref] = backgroundWork{cancel: cancel, authority: authority}
 		return func() {
 			m.mu.Lock()
 			defer m.mu.Unlock()

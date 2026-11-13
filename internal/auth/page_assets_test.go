@@ -251,6 +251,47 @@ func TestPermissionPageHasMobileGroupAccordionAndDraftControls(t *testing.T) {
 	}
 }
 
+func TestPermissionMobileDetailsExpandInsideTheirSelectedListEntry(t *testing.T) {
+	for _, want := range []string{
+		`function permissionLayoutDetail()`,
+		`body.append(detail)`,
+		`function permissionLayoutAgentDetail()`,
+		`agentBody.append(detail)`,
+		`permissionUI.expandedAgent`,
+		`permissionCreate('section','agent-nav-entry')`,
+		`permissionCreate('div','agent-nav-body')`,
+		`.auth-permissions .agent-nav-entry{display:contents}`,
+		`.auth-permissions .agent-nav-body{display:none}`,
+		`.auth-permissions .agent-nav-body[hidden]{display:none!important}`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("mobile Agent/group expansion lacks %q", want)
+		}
+	}
+	for _, gone := range []string{
+		`permissionDetachDetail=function(){};`,
+		`permissionLayoutDetail=function(){};`,
+	} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("mobile expansion is disabled by %q", gone)
+		}
+	}
+}
+
+func TestPermissionMobileAgentToolbarKeepsCreateBesideSearch(t *testing.T) {
+	for _, want := range []string{
+		`.auth-permissions #permission-mobile-subjects .permission-agent-tools{grid-template-columns:minmax(0,1fr) auto`,
+		`.auth-permissions #permission-mobile-subjects #permission-agent-create-toggle{width:auto;min-width:72px;min-height:44px`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("mobile Agent toolbar lacks compact create layout %q", want)
+		}
+	}
+	if strings.Contains(permissionsHTML, `.permission-agent-tools{grid-template-columns:1fr}`) {
+		t.Error("mobile Agent create control still consumes a full toolbar row")
+	}
+}
+
 func TestPermissionFamiliesStartCollapsed(t *testing.T) {
 	for _, want := range []string{
 		`openFamilies:new Set()`,
@@ -364,7 +405,7 @@ func TestPermissionPageRefreshesAgentActivityFromSessionFrames(t *testing.T) {
 	for _, want := range []string{
 		`function permissionRefreshAgentActivity()`,
 		`request('/auth/principals')`,
-		`['active_mcp_connections','active_requests','active_work']`,
+		`['active_mcp_connections','active_requests','active_work','active_static_credential_count','static_credential_count','daemon_token_status','daemon_last_used_at','connections']`,
 		`agent-metric-mcp-connections`,
 		`function permissionOpenActivitySocket()`,
 		`new URL('api/ui/ws',document.baseURI)`,
@@ -441,6 +482,45 @@ func TestPermissionAgentDetailUsesOneCurrentTokenWithHistory(t *testing.T) {
 	} {
 		if !strings.Contains(permissionsHTML, want) {
 			t.Errorf("Agent detail token lifecycle UI lacks %q", want)
+		}
+	}
+}
+
+func TestPermissionPageSeparatesAgentOriginsCredentialsAndConnections(t *testing.T) {
+	for _, want := range []string{
+		`id='permission-agent-origin-filter'`,
+		`['all','originAll'],['oauth','originOAuth'],['daemon_stdio','originDaemon'],['manual','originManual']`,
+		`permissionUI.agentOrigin`,
+		`function permissionAgentOrigin(principal)`,
+		`function permissionOwnerAvatar(owner,principal,compact=false)`,
+		`function permissionStaticCredentialLabel(principal)`,
+		`function permissionRenderAgentDaemon(principal,origin)`,
+		`function permissionRenderAgentConnections(principal)`,
+		`id="agent-daemon-section"`,
+		`id="agent-daemon-credential-state"`,
+		`id="agent-detail-origin"`,
+		`id="agent-connections"`,
+		`agent-nav-meta`,
+		`originSearchHint`,
+		`agent-origin-badge`,
+		`(token.kind||'static')==='static'`,
+		`tokenSection.hidden=!showStatic`,
+		`$('agent-issue-token').hidden=origin!=='manual'||!!staticCurrent`,
+		`if(connection.credential_id&&!String(connection.credential_id).startsWith('oauth-'))`,
+		`permissionGroupScopeLabel(principal)`,
+		`!shown.some(principal=>principal.id===permissionUI.selectedAgent)`,
+		`agentOriginFilter.setAttribute('aria-label',t('originFilterLabel'))`,
+	} {
+		if !strings.Contains(permissionsHTML, want) {
+			t.Errorf("three-origin Agent interface lacks %q", want)
+		}
+	}
+	for _, gone := range []string{
+		`permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany')`,
+		`principal.origin==='oauth'?(principal.owner_display_name||t('oauthUserLabel')):t('manualAgent')`,
+	} {
+		if strings.Contains(permissionsHTML, gone) {
+			t.Errorf("three-origin Agent interface still conflates origin with credentials: %q", gone)
 		}
 	}
 }

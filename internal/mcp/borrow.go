@@ -62,7 +62,7 @@ func (s *Server) acquireSSHTransport(ctx context.Context, target string) (*ssh.C
 		if s.sshConfigs == nil {
 			return nil, nil, fmt.Errorf("SSH config store is not available")
 		}
-		entry, err := s.sshConfigs.Load(host)
+		canonical, entry, err := s.loadAgentProfile(ctx, host)
 		if err != nil {
 			if errors.Is(err, sshconfig.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 				// A MISSING PROFILE IS A CALLER MISTAKE, NOT A SERVER FAULT, and the
@@ -73,6 +73,7 @@ func (s *Server) acquireSSHTransport(ctx context.Context, target string) (*ssh.C
 			}
 			return nil, nil, err
 		}
+		host = canonical
 		if entry.Kind == sshconfig.KindInternal {
 			if s.NoInternal {
 				return nil, nil, fmt.Errorf("internal profile is disabled")

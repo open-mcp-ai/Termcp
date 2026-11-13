@@ -9,7 +9,21 @@ import (
 
 func (s *Server) startTransfer(ctx context.Context, kind task.Kind, session, path, localPath string, resources ...task.ResourceRef) (*task.Task, context.Context, func(), error) {
 	workCtx, cancel := context.WithCancel(context.Background())
-	release, err := auth.RegisterBackgroundWork(ctx, cancel)
+	authority := auth.BackgroundWorkAuthority{}
+	switch kind {
+	case task.Upload:
+		authority.Operations = []string{"file.write"}
+	case task.Download:
+		authority.Operations = []string{"file.read"}
+	case task.Copy:
+		authority.Operations = []string{"file.read", "file.write"}
+	}
+	for _, resource := range resources {
+		if resource.HostID != "" {
+			authority.Hosts = append(authority.Hosts, resource.HostID)
+		}
+	}
+	release, err := auth.RegisterBackgroundWorkFor(ctx, cancel, authority)
 	if err != nil {
 		cancel()
 		return nil, nil, nil, err

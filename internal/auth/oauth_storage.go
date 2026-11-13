@@ -802,8 +802,8 @@ func (m *Managed) cancelCredentialLockedByID(principalID, credentialID string) {
 	for _, cancel := range m.requests["token:"+credentialID] {
 		cancel()
 	}
-	for _, cancel := range m.background[credentialID] {
-		cancel()
+	for _, work := range m.background[credentialID] {
+		work.cancel()
 	}
 	invalidate := m.mcpConnectionInvalidator
 	m.mu.Unlock()

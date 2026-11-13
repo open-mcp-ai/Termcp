@@ -330,8 +330,9 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
   .permission-mobile-subject-controls{grid-template-columns:minmax(0,1fr) auto}
   .permission-mobile-subject-row select,.permission-mobile-subject-row button{min-height:44px}
   .permission-mobile-subject-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
-  .permission-agent-tools{grid-template-columns:1fr}
+  .auth-permissions #permission-mobile-subjects .permission-agent-tools{grid-template-columns:minmax(0,1fr) auto;gap:6px}
   .permission-agent-tools button{min-height:44px}
+  .auth-permissions #permission-mobile-subjects #permission-agent-create-toggle{width:auto;min-width:72px;min-height:44px;padding-inline:10px}
   .permission-agent-filter button{min-height:44px;font-size:12px}
   .auth-permissions .permission-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
   .auth-permissions .permission-metric{border-left:0;border-top:1px solid var(--line)}
@@ -397,12 +398,32 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
 .auth-permissions .agent-nav-item{display:grid;grid-template-columns:8px minmax(0,1fr) auto;grid-template-areas:"dot title chevron" "dot meta chevron";gap:3px 10px;width:100%;min-height:62px;padding:10px 9px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;color:var(--ink)}
 .auth-permissions .agent-nav-item:hover{border-color:var(--line);background:var(--paper)}
 .auth-permissions .agent-nav-item[aria-current=true]{border-color:var(--accent);background:var(--paper)}
+.auth-permissions .agent-nav-entry{display:contents}
+.auth-permissions .agent-nav-body{display:none}
 .auth-permissions .agent-nav-dot{grid-area:dot;width:7px;height:7px;margin-top:5px;border-radius:50%;background:var(--good)}
 .auth-permissions .agent-nav-item[data-enabled=false] .agent-nav-dot{background:var(--error)}
 .auth-permissions .agent-nav-item[data-group-state=unassigned] .agent-nav-dot{background:var(--warning,var(--muted))}
 .auth-permissions .agent-nav-name{grid-area:title;min-width:0;overflow:hidden;font-size:13px;font-weight:650;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
 .auth-permissions .agent-nav-meta{grid-area:meta;min-width:0;overflow:hidden;color:var(--muted);font-size:11px;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
 .auth-permissions .agent-nav-chevron{grid-area:chevron;align-self:center;width:16px;height:16px;color:var(--muted);transform:rotate(-90deg)}
+.auth-permissions .agent-origin-badge{display:inline-flex;align-items:center;max-width:100%;min-height:20px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:5px;font-size:9px;font-weight:700;line-height:1;vertical-align:middle;white-space:nowrap}
+.auth-permissions .agent-origin-badge[data-origin=oauth]{color:var(--accent)}
+.auth-permissions .agent-origin-badge[data-origin=daemon_stdio]{color:var(--good)}
+.auth-permissions .agent-origin-badge[data-origin=manual]{color:var(--muted)}
+.auth-permissions .permission-agent-origin-filter{padding:0 6px 10px}
+.auth-permissions .permission-agent-origin-filter select{width:100%;min-height:36px;background:var(--paper)}
+.auth-permissions .agent-owner-inline{display:inline-flex;align-items:center;gap:5px;min-width:0;margin-right:5px;vertical-align:middle}
+.auth-permissions .agent-owner-inline img,.auth-permissions .agent-owner-inline span{width:17px;height:17px;flex:none;border:1px solid var(--line);border-radius:50%;object-fit:cover}
+.auth-permissions .agent-owner-inline span{display:grid;place-items:center;background:var(--canvas);font-size:8px;font-weight:700}
+.auth-permissions .agent-access-state{display:inline-flex;align-items:center;min-height:22px;margin-top:7px;padding:0 7px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font-size:10px;font-weight:650}
+.auth-permissions .agent-access-state[data-state=valid]{color:var(--good)}
+.auth-permissions .agent-access-state[data-state=business-denied]{color:var(--warning,var(--muted))}
+.auth-permissions .agent-connection-list{display:grid;gap:6px;margin-top:10px}
+.auth-permissions .agent-connection-row{display:grid;gap:3px;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);overflow-wrap:anywhere}
+.auth-permissions .agent-connection-row strong{font-size:11px;line-height:1.4}
+.auth-permissions .agent-connection-row small{color:var(--muted);font-size:10px;line-height:1.45}
+.auth-permissions .agent-connection-row code{font:500 9px/1.4 var(--font-mono,ui-monospace,monospace)}
+.auth-permissions .agent-managed-note{margin:0;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);font-size:11px;line-height:1.5}
 .auth-permissions #permission-agent-create-form{margin:0 2px 10px}
 .auth-permissions .permission-agent-form-note{margin:0;color:var(--muted);font-size:11px;line-height:1.45}
 .auth-permissions .permission-agent-default-note{display:flex;align-items:flex-start;gap:7px;margin:0 6px 10px;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--muted);font-size:11px;line-height:1.45}
@@ -477,6 +498,13 @@ body.auth-permissions{--permission-rail:var(--bg-subtle,var(--canvas));--permiss
   .auth-permissions .workspace-nav{position:sticky;top:0;z-index:6;background:var(--permission-rail)}
   .auth-permissions #permission-groups-mobile-body,.auth-permissions #permission-mobile-subjects{overflow:visible}
   .auth-permissions #permission-mobile-subject-list{max-height:320px;overflow-y:auto}
+  .auth-permissions .agent-nav-entry{display:block;border-top:1px solid var(--line)}
+  .auth-permissions .agent-nav-entry:first-child{border-top:0}
+  .auth-permissions .agent-nav-body{display:block;padding:0;border-top:1px solid var(--line);background:var(--paper)}
+  .auth-permissions .agent-nav-body[hidden]{display:none!important}
+  .auth-permissions .agent-nav-body #agent-detail{min-height:0;width:100%}
+  .auth-permissions .agent-nav-body .agent-detail-heading{padding:16px}
+  .auth-permissions .agent-nav-body .agent-detail-main,.auth-permissions .agent-nav-body .agent-detail-rail{padding-right:16px;padding-left:16px}
   .auth-permissions #agent-detail{overflow:visible}
   .auth-permissions .agent-detail-heading{padding:18px 16px 14px;flex-direction:column;gap:12px}
   .auth-permissions .agent-detail-main,.auth-permissions .agent-detail-rail{padding-right:16px;padding-left:16px}
@@ -704,7 +732,7 @@ function grantAction(op,enabled){setActionEffect(op,enabled?'allow':'deny');}
 function renderOperations(grid){draft.actions||={};const families=Object.groupBy?Object.groupBy(catalog.operations,o=>o.family):catalog.operations.reduce((a,o)=>((a[o.family]||=[]).push(o),a),{});Object.entries(families).forEach(([family,ops])=>{const section=el('details');section.className='operation-family';section.open=permissionUI.openFamilies.has(family);const summary=el('summary');const wrap=el('span');wrap.className='family-toggle';const all=el('input');all.type='checkbox';all.setAttribute('aria-label',familyNames[family]?.[lang==='zh'?0:1]||family);const available=ops.filter(o=>!o.global||draft.host_mode==='all');const chosen=available.filter(o=>draft.actions[o.id]?.effect==='allow').length;all.checked=available.length>0&&chosen===available.length;all.indeterminate=chosen>0&&!all.checked;all.disabled=!available.length;all.onclick=e=>e.stopPropagation();all.onchange=()=>{available.forEach(o=>grantAction(o,all.checked));renderFunctions();updateSave();};wrap.append(all,el('span',(familyNames[family]?.[lang==='zh'?0:1]||family)+' · '+chosen+'/'+ops.length));summary.append(wrap);section.append(summary);ops.forEach(op=>{const row=el('div');row.className='operation-row';const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.checked=draft.actions[op.id]?.effect==='allow';input.disabled=op.global&&draft.host_mode!=='all';const text=el('span',operationName(op));text.append(el('code',op.id));const access=(op.access_paths||[]).map(permissionAccessLabel).join(', ');const details=[access,op.risk=== 'high'?t('riskHigh'):op.risk==='elevated'?t('riskElevated'):'',(op.dependencies||[]).length?t('requires')+': '+op.dependencies.join(', '):''].filter(Boolean);if(details.length)text.append(el('small',details.join(' · ')));label.append(input,text);row.append(label);input.onchange=()=>{grantAction(op,input.checked);renderFunctions();updateSave();};if(input.checked&&op.constraint_kinds?.length){const details=el('details');details.className='operation-conditions';details.open=!!draft.actions[op.id].constraints;details.append(el('summary',t('conditions')));op.constraint_kinds.forEach(kind=>{const field=el('label');field.className='field';field.append(el('span',t(kind)));const control=el('input');const number=['repeat_max','max_bytes'].includes(kind);control.type=number?'number':'text';control.setAttribute('aria-label',op.id+' '+t(kind));const value=draft.actions[op.id].constraints?.[kind];control.value=number?(value??''):Array.isArray(value)?value.length?value.join(', '):'[]':'';if(number){control.min=kind==='repeat_max'?'1':'0';control.step='1';}else control.placeholder=t('unlimited');control.oninput=()=>{const raw=control.value.trim(),grant=draft.actions[op.id];let val;if(number&&raw!==''){val=Number(raw);if(!Number.isSafeInteger(val)||val<Number(control.min)){control.setCustomValidity('Invalid integer');updateSave();return;}}else if(!number&&raw!=='')val=raw==='[]'?[]:raw.split(',').map(v=>v.trim());control.setCustomValidity('');grant.constraints||={};if(raw==='')delete grant.constraints[kind];else grant.constraints[kind]=val;if(!Object.keys(grant.constraints).length)delete grant.constraints;updateSave();};field.append(control);details.append(field);});row.append(details);}section.append(row);});grid.append(section);});grid.append(el('p',t('recipe')));}
 function renderHosts(){document.querySelectorAll('[name=host-mode]').forEach(n=>n.checked=n.value===draft.host_mode);$('host-count').textContent=draft.host_mode==='selected'?String(draft.hosts.length):'';$('scope-note').textContent=t(draft.host_mode==='all'?'allHint':draft.host_mode==='none'?'noneHint':'selectedHint');$('host-picker').hidden=draft.host_mode!=='selected';const list=$('host-grid');list.replaceChildren();const query=$('host-search').value.toLowerCase();const hosts=[...catalog.hosts,...draft.hosts.filter(id=>!catalog.hosts.some(h=>h.id===id)).map(id=>({id,name:t('missing')+' · '+id.slice(0,8)}))].filter(h=>h.name.toLowerCase().includes(query));hosts.forEach(h=>{const label=el('label');label.className='choice';const input=el('input');input.type='checkbox';input.value=h.id;input.checked=draft.hosts.includes(h.id);label.append(input,el('span',h.name));input.onchange=()=>{draft.hosts=input.checked?[...draft.hosts,h.id]:draft.hosts.filter(id=>id!==h.id);$('host-count').textContent=String(draft.hosts.length);updateSave();};list.append(label);});if(!hosts.length)list.append(el('p',t('noMatches')));}
 function renderTokens(){const members=new Set(groupMembers().map(p=>p.id));const list=tokens.filter(c=>selected==='admin'?c.principal_id===state.actor.id:members.has(c.principal_id));$('tokens-empty').hidden=list.length>0;$('token-list').replaceChildren();list.forEach(c=>{const row=el('tr'),name=el('td',c.label);const principal=principals.find(p=>p.id===c.principal_id);name.append(el('small',(principal?principal.name+' · ':'')+c.id.slice(0,10)));row.append(name,el('td',new Date(c.created_at).toLocaleDateString(lang)));const cell=el('td'),button=el('button',t('revoke'));button.type='button';button.className='danger';button.onclick=async()=>{if(!confirm(t('revokeConfirm')))return;setBusy(true);try{await request('/auth/tokens/'+encodeURIComponent(c.id),{method:'DELETE'});if(revealed?.credential.id===c.id)clearRevealed();await reload();feedback(t('saved'),'success');}catch(e){fail(e,'token-error');}finally{setBusy(false);}};cell.append(button);row.append(cell);$('token-list').append(row);});}
-async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens'),request('/auth/oauth/users').catch(()=>({users:[]})),request('/auth/oauth/grants').catch(()=>({grants:[]}))]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=data[2].tokens;oauthUsers=data[3].users||[];oauthGrants=data[4].grants||[];renderList();renderMembers();}
+async function reload(){const data=await Promise.all([request('/auth/groups'),request('/auth/principals'),request('/auth/tokens'),request('/auth/oauth/users').catch(()=>({users:[]})),request('/auth/oauth/grants').catch(()=>({grants:[]}))]);agents=data[0].groups;defaultGroupID=data[0].default_group_id;accessRevision=data[0].access_revision;principals=data[1].principals;tokens=(data[2].tokens||[]).filter(token=>(token.kind||'static')==='static');oauthUsers=data[3].users||[];oauthGrants=data[4].grants||[];renderList();renderMembers();}
 function clearRevealed(){revealed=null;$('token-config').value='';$('token-result').hidden=true;$('copy-state').textContent='';}
 function renderConfig(){if(!revealed)return;const mode=$('config-mode').value;let entry;if(mode==='http'||mode==='sse')entry={url:location.origin+authPath(mode==='sse'?'/sse':'/stream'),headers:{Authorization:'Bearer '+revealed.token}};else{const args=['-y','@open-mcp-ai/termcp'];if(mode==='daemon')args.push('daemon');args.push('stdio',location.origin+authPath('/stream'));entry={command:'npx',args,env:{TERMCP_MCP_TOKEN:revealed.token}};}$('token-config').value=JSON.stringify({mcpServers:{termcp:entry}},null,2);$('token-result').hidden=false;}
 function closeNewAgentForm(){const wrap=$('new-agent-form-wrap');if(wrap.hidden)return;wrap.hidden=true;$('new-agent').setAttribute('aria-expanded','false');$('new-agent-form').reset();$('create-error').textContent='';$('new-agent').focus();}
@@ -754,8 +782,7 @@ function renderMembers(){
     view.type='button';
     view.dataset.text='viewAgent';
     view.onclick=()=>{
-      permissionUI.selectedAgent=principal.id;
-      permissionSwitchManagementView('agents',true);
+      permissionSelectAgent(principal.id);
     };
     row.append(dot,copyNode,view);
     list.append(row);
@@ -911,6 +938,96 @@ Object.assign(copy.en,{
   oauthGrantRevoked:'OAuth access revoked and related connections and background work ended.',
   oauthUserDisabledSaved:'Login user disabled and their OAuth grants ended.'
 });
+Object.assign(copy.zh,{
+  originFilterLabel:'创建来源',
+  originAll:'全部来源',
+  originOAuth:'OAuth 登录',
+  originDaemon:'本机 stdio 自动接入',
+  originManual:'手工创建',
+  daemonManaged:'本机受管接入',
+  daemonAccessSection:'daemon 托管接入',
+  daemonAccessHint:'Termcp 本机服务端创建并持有此凭据；用户无需复制 Token。',
+  daemonTrustedSource:'可信登记来源',
+  daemonLocalServer:'Termcp 本机服务端',
+  daemonRegistrationID:'接入登记',
+  daemonCredentialStatus:'受管凭据状态',
+  daemonLastActivity:'最近活动',
+  daemonNoCredentialCopy:'受管凭据不会在管理页展示或复制；停止或撤销时由 Admin 统一处理。',
+  staticCredentialSection:'静态 Token',
+  staticCredentialHint:'每个手工 Agent 只有一个当前静态 Token；轮换后旧 Token 进入历史。',
+  otherStaticSection:'其他接入方式 · 静态 Token',
+  otherStaticHint:'此 OAuth Agent 还持有一枚独立静态 Token。它不影响 OAuth 来源或浏览器接入状态。',
+  noStaticCredential:'此 Agent 没有附加静态 Token。',
+  connectionSection:'当前接入',
+  connectionNone:'当前没有活动 MCP 连接。',
+  connectionHTTP:'Streamable HTTP',
+  connectionSSE:'SSE',
+  connectionStdio:'stdio bridge',
+  connectionConnectedAt:'连接时间',
+  connectionSession:'会话',
+  connectionCredential:'凭据',
+  connectionOpenActivity:'查看连接',
+  oauthAccessValid:'接入有效',
+  oauthNeedsAuthentication:'需要重新认证',
+  businessUnauthorized:'业务未授权',
+  businessAuthorized:'业务权限已配置',
+  staticTokenActive:'静态 Token · 有效',
+  staticTokenNone:'静态 Token · 未签发',
+  staticTokenDisabled:'静态 Token · 已失效',
+  staticTokenExpired:'静态 Token · 已到期',
+  daemonTokenActive:'受管凭据有效',
+  daemonTokenRevoked:'受管凭据已撤销',
+  daemonTokenExpired:'受管凭据已到期',
+  ownerUnknown:'所属用户资料不可用',
+  oauthGrantLastUsed:'最近使用 %s',
+  oauthGrantExpires:'有效期至 %s',
+  originSearchHint:'搜索 Agent、用户、客户端或身份源…'
+});
+Object.assign(copy.en,{
+  originFilterLabel:'Creation origin',
+  originAll:'All origins',
+  originOAuth:'OAuth login',
+  originDaemon:'Local stdio automatic',
+  originManual:'Manually created',
+  daemonManaged:'Locally managed',
+  daemonAccessSection:'daemon-managed access',
+  daemonAccessHint:'The local Termcp server created and holds this credential; users do not copy a Token.',
+  daemonTrustedSource:'Trusted registration source',
+  daemonLocalServer:'Termcp local server',
+  daemonRegistrationID:'Registration',
+  daemonCredentialStatus:'Managed credential status',
+  daemonLastActivity:'Last activity',
+  daemonNoCredentialCopy:'The managed credential is not shown or copied here; stopping or revoking it remains an Admin action.',
+  staticCredentialSection:'Static Token',
+  staticCredentialHint:'Each manually created Agent has one current static Token; rotation moves the previous Token to history.',
+  otherStaticSection:'Other access · static Token',
+  otherStaticHint:'This OAuth Agent also has an independent static Token. It does not change the OAuth origin or browser authorization state.',
+  noStaticCredential:'This Agent has no additional static Token.',
+  connectionSection:'Current access',
+  connectionNone:'There are no live MCP connections.',
+  connectionHTTP:'Streamable HTTP',
+  connectionSSE:'SSE',
+  connectionStdio:'stdio bridge',
+  connectionConnectedAt:'Connected',
+  connectionSession:'Session',
+  connectionCredential:'Credential',
+  connectionOpenActivity:'View connections',
+  oauthAccessValid:'Access valid',
+  oauthNeedsAuthentication:'Reauthentication required',
+  businessUnauthorized:'Business access not granted',
+  businessAuthorized:'Business permissions configured',
+  staticTokenActive:'Static Token · active',
+  staticTokenNone:'Static Token · not issued',
+  staticTokenDisabled:'Static Token · invalidated',
+  staticTokenExpired:'Static Token · expired',
+  daemonTokenActive:'Managed credential active',
+  daemonTokenRevoked:'Managed credential revoked',
+  daemonTokenExpired:'Managed credential expired',
+  ownerUnknown:'Owner profile unavailable',
+  oauthGrantLastUsed:'Last used %s',
+  oauthGrantExpires:'Expires %s',
+  originSearchHint:'Search Agents, users, clients or issuers…'
+});
 
 const permissionIconPaths={
   plus:['M12 5v14','M5 12h14'],
@@ -973,10 +1090,12 @@ const permissionUI={
   batch:false,
   batchSelected:new Set(),
   expanded:null,
+  expandedAgent:null,
   groupsOpen:true,
   subjectsOpen:false,
   agentQuery:'',
   agentFilter:'all',
+  agentOrigin:'all',
   view:'groups',
   selectedAgent:null,
   agentRevealed:null
@@ -1038,6 +1157,10 @@ function permissionLocalizeChrome(){
   if(hostSearch)hostSearch.placeholder=t('searchHosts');
   const groupSearch=$('group-search');
   if(groupSearch)groupSearch.placeholder=t('searchGroups');
+  const agentSearch=$('permission-agent-search');
+  if(agentSearch)agentSearch.placeholder=t('originSearchHint');
+  const agentOriginFilter=$('permission-agent-origin-filter');
+  if(agentOriginFilter)agentOriginFilter.setAttribute('aria-label',t('originFilterLabel'));
   const helpTrigger=$('mcp-access-help-trigger');
   if(helpTrigger)helpTrigger.setAttribute('aria-label',t('mcpAccessHelpLabel'));
   const mcpHelp=$('mcp-access-help');
@@ -1905,6 +2028,11 @@ function permissionDetachDetail(){
   if(detail&&home)home.after(detail);
 }
 
+function permissionDetachAgentDetail(){
+  const detail=$('agent-detail'),home=$('permission-agent-detail-home');
+  if(detail&&home)home.after(detail);
+}
+
 function permissionLayoutDetail(){
   const detail=document.querySelector('.detail'),home=$('permission-detail-home');
   if(!detail||!home)return;
@@ -1935,11 +2063,37 @@ function permissionLayoutDetail(){
   }
 }
 
-function permissionAgentDeleteSummary(plan){
+function permissionLayoutAgentDetail(){
+  const detail=$('agent-detail'),home=$('permission-agent-detail-home');
+  if(!detail||!home)return;
+  home.after(detail);
+  const mobile=permissionIsMobile();
+  detail.classList.toggle('is-mobile-detail',mobile);
+  detail.hidden=false;
+  if(!mobile)return;
+  detail.hidden=true;
+  if(permissionUI.view!=='agents'||!permissionUI.expandedAgent)return;
+  const button=[...$('permission-mobile-subject-list').querySelectorAll('[data-agent-id]')].find(node=>node.dataset.agentId===permissionUI.expandedAgent);
+  const entry=button?.closest('.agent-nav-entry');
+  const agentBody=entry?.querySelector('.agent-nav-body');
+  if(agentBody){
+    agentBody.hidden=false;
+    agentBody.append(detail);
+    detail.hidden=false;
+  }
+}
+
+function permissionAgentDeleteSummary(plan,principal){
   const group=plan.group_id==='system-deny'?t('unassigned'):plan.group_id?agents.find(item=>item.id===plan.group_id)?.name||plan.group_id:t('followDefault')+' · '+(agents.find(item=>item.id===defaultGroupID)?.name||defaultGroupID);
+  const origin=permissionAgentOrigin(principal);
+  const credential=origin==='oauth'
+    ?permissionFormat('oauthGrantCount',Number(principal?.active_oauth_grant_count||0))
+    :origin==='daemon_stdio'
+      ?t(principal?.daemon_token_status==='active'?'daemonTokenActive':principal?.daemon_token_status==='expired'?'daemonTokenExpired':'daemonTokenRevoked')
+      :permissionFormat('credentialSummary',plan.credential_count);
   return [
     plan.name+' · '+group,
-    permissionFormat('credentialSummary',plan.credential_count),
+    credential,
     permissionFormat('activeMCPSummary',plan.active_mcp_connections||0),
     permissionFormat('activeSummary',plan.active_requests),
     permissionFormat('workSummary',plan.active_work)
@@ -1951,7 +2105,7 @@ async function permissionPreviewAgentDelete(principal){
   $('delete-agent-error').textContent='';
   try{
     principalDeletePlan=await request('/auth/principals/'+encodeURIComponent(principal.id)+'/delete-preview',{method:'POST'});
-    $('delete-agent-summary').textContent=permissionAgentDeleteSummary(principalDeletePlan);
+    $('delete-agent-summary').textContent=permissionAgentDeleteSummary(principalDeletePlan,principal);
     $('delete-agent-dialog').showModal();
   }catch(error){
     fail(error,'delete-agent-error');
@@ -2206,6 +2360,111 @@ function permissionAgentOAuthGrants(id){
   return oauthGrants.filter(grant=>grant.agent_id===id);
 }
 
+function permissionAgentOrigin(principal){
+  return ['oauth','daemon_stdio','manual'].includes(principal?.origin)?principal.origin:'manual';
+}
+
+function permissionOriginLabel(principal){
+  return t({oauth:'originOAuth',daemon_stdio:'originDaemon',manual:'originManual'}[permissionAgentOrigin(principal)]);
+}
+
+function permissionOwner(principal){
+  const user=principal?permissionOAuthUser(principal.owner_user_id):null;
+  if(user)return user;
+  if(principal?.owner_user_id||principal?.owner_display_name||principal?.owner_username||principal?.owner_issuer){
+    return {
+      id:principal.owner_user_id||'',
+      display_name:principal.owner_display_name||t('oauthUserLabel'),
+      username:principal.owner_username||'',
+      issuer:principal.owner_issuer||'',
+      avatar_path:principal.owner_avatar_path||''
+    };
+  }
+  return null;
+}
+
+function permissionOwnerInitials(owner,principal){
+  const name=owner?.display_name||principal?.owner_display_name||owner?.username||principal?.owner_username||t('oauthUserLabel');
+  const parts=String(name).trim().split(/\s+/).filter(Boolean);
+  return (parts.length>1?parts[0][0]+parts[parts.length-1][0]:parts[0]?.slice(0,1)||'U').toUpperCase();
+}
+
+function permissionOwnerAvatar(owner,principal,compact=false){
+  const wrap=permissionCreate('span','agent-owner-inline');
+  const fallback=()=>permissionCreate('span','',permissionOwnerInitials(owner,principal));
+  const source=owner?.avatar_path||principal?.owner_avatar_path;
+  if(!source){wrap.append(fallback());return wrap;}
+  const img=document.createElement('img');
+  img.src=source;
+  img.alt='';
+  img.loading='lazy';
+  img.onerror=()=>img.replaceWith(fallback());
+  wrap.append(img);
+  return wrap;
+}
+
+function permissionStaticTokens(principalID){
+  return tokens.filter(token=>token.principal_id===principalID&&(token.kind||'static')==='static');
+}
+
+function permissionStaticCurrent(principalID){
+  return permissionStaticTokens(principalID).find(token=>token.active)||null;
+}
+
+function permissionStaticCredentialLabel(principal){
+  const history=permissionStaticTokens(principal.id);
+  const current=history.find(token=>token.active);
+  if(current)return t('staticTokenActive');
+  if(!history.length)return t('staticTokenNone');
+  const latest=history.slice().sort((left,right)=>String(right.created_at).localeCompare(String(left.created_at)))[0];
+  if(latest?.status==='expired'||latest?.expires_at&&Date.parse(latest.expires_at)<=Date.now())return t('staticTokenExpired');
+  return t('staticTokenDisabled');
+}
+
+function permissionGroupBusinessAllowed(principal){
+  if(!principal||principal.group_id==='system-deny')return false;
+  const groupID=principal.group_id||defaultGroupID;
+  const group=agents.find(candidate=>candidate.id===groupID);
+  if(!group?.enabled||!group.policy)return false;
+  const hostMode=group.policy.host_mode;
+  const hasHosts=hostMode==='all'||hostMode==='selected'&&(group.policy.hosts||[]).length>0;
+  const hasAction=Object.values(group.policy.actions||{}).some(grant=>['allow','ask'].includes(grant?.effect));
+  return hasHosts&&hasAction;
+}
+
+function permissionGroupScopeLabel(principal){
+  if(!principal||principal.group_id==='system-deny')return t('noHosts');
+  const group=agents.find(candidate=>candidate.id===(principal.group_id||defaultGroupID));
+  const policy=group?.policy;
+  if(!policy||policy.host_mode==='none')return t('noHosts');
+  if(policy.host_mode==='all')return t('allHosts');
+  return permissionFormat('hostsSelected',(policy.hosts||[]).length);
+}
+
+function permissionDaemonClientLabel(principal){
+  const names=[...(principal.oauth_clients||[]),...(principal.connections||[]).map(connection=>connection.client_mode==='stdio-bridge'?connection.name:''),principal.name]
+    .filter(Boolean);
+  return [...new Set(names)].join(', ')||t('daemonManaged');
+}
+
+function permissionConnectionTransport(connection){
+  if(connection.client_mode==='stdio-bridge')return t('connectionStdio');
+  if(connection.transport==='sse')return t('connectionSSE');
+  if(connection.transport==='streamable_http')return t('connectionHTTP');
+  return connection.transport||t('connectionNone');
+}
+
+function permissionGrantClientLabel(grant){
+  return grant.client_name||grant.client_id||'—';
+}
+
+function permissionGrantUsage(grant){
+  const parts=[];
+  if(grant.last_used_at)parts.push(t('oauthGrantLastUsed').replace('%s',new Date(grant.last_used_at).toLocaleString(lang)));
+  if(grant.expires_at)parts.push(t('oauthGrantExpires').replace('%s',new Date(grant.expires_at).toLocaleString(lang)));
+  return parts.join(' · ');
+}
+
 function permissionOAuthStatusLabel(status){
   return t({active:'oauthActive',revoked:'oauthRevoked',expired:'oauthExpired',user_disabled:'oauthUserDisabled',agent_disabled:'oauthAgentDisabled',client_disabled:'oauthClientDisabled'}[status]||'oauthActive');
 }
@@ -2288,7 +2547,7 @@ function permissionInstallAgentWorkspace(){
   search.id='permission-agent-search';
   search.type='search';
   search.autocomplete='off';
-  search.placeholder=t('searchAgents');
+  search.placeholder=t('originSearchHint');
   searchLabel.append(searchCaption,search);
   const createToggle=permissionCreate('button','','');
   createToggle.id='permission-agent-create-toggle';
@@ -2307,6 +2566,20 @@ function permissionInstallAgentWorkspace(){
     button.setAttribute('aria-pressed',String(value==='all'));
     filters.append(button);
   });
+
+  const originLabel=permissionCreate('label','field permission-agent-origin-filter');
+  const originCaption=permissionCreate('span','visually-hidden',t('originFilterLabel'));
+  originCaption.dataset.text='originFilterLabel';
+  const originFilter=document.createElement('select');
+  originFilter.id='permission-agent-origin-filter';
+  originFilter.setAttribute('aria-label',t('originFilterLabel'));
+  [['all','originAll'],['oauth','originOAuth'],['daemon_stdio','originDaemon'],['manual','originManual']].forEach(([value,key])=>{
+    const option=permissionCreate('option','',t(key));
+    option.value=value;
+    option.dataset.text=key;
+    originFilter.append(option);
+  });
+  originLabel.append(originCaption,originFilter);
 
   const note=permissionCreate('div','permission-agent-default-note');
   note.id='permission-agent-default-note';
@@ -2345,7 +2618,7 @@ function permissionInstallAgentWorkspace(){
   const list=permissionCreate('div','permission-mobile-subject-list');
   list.id='permission-mobile-subject-list';
   list.setAttribute('aria-label',t('mobileSubjects'));
-  body.append(tools,filters,note,form,list);
+  body.append(tools,filters,originLabel,note,form,list);
 
   const detail=permissionCreate('section','detail agent-detail');
   detail.id='agent-detail';
@@ -2361,8 +2634,9 @@ function permissionInstallAgentWorkspace(){
     <div id="agent-detail-content">
       <div class="agent-detail-heading">
         <div>
-          <div class="agent-detail-title"><h2 id="agent-detail-name"></h2><span id="agent-detail-status" class="agent-status-badge"></span></div>
+          <div class="agent-detail-title"><h2 id="agent-detail-name"></h2><span id="agent-detail-origin" class="agent-origin-badge"></span><span id="agent-detail-status" class="agent-status-badge"></span></div>
           <p id="agent-detail-meta"></p>
+          <span id="agent-detail-access-state" class="agent-access-state"></span>
         </div>
         <div class="group-actions">
           <button id="agent-detail-toggle" type="button"></button>
@@ -2395,9 +2669,23 @@ function permissionInstallAgentWorkspace(){
             </dl>
             <div id="agent-oauth-grants" class="oauth-grant-list"></div>
           </section>
+          <section class="agent-section" id="agent-daemon-section" hidden>
+            <div class="agent-section-head">
+              <div><h3 data-text="daemonAccessSection"></h3><p data-text="daemonAccessHint"></p></div>
+              <span id="agent-daemon-credential-state" class="oauth-grant-status"></span>
+            </div>
+            <dl class="agent-facts">
+              <div class="agent-fact"><dt data-text="daemonTrustedSource"></dt><dd data-text="daemonLocalServer"></dd></div>
+              <div class="agent-fact"><dt data-text="daemonRegistrationID"></dt><dd><code id="agent-daemon-registration"></code></dd></div>
+              <div class="agent-fact"><dt data-text="daemonCredentialStatus"></dt><dd id="agent-daemon-credential"></dd></div>
+              <div class="agent-fact"><dt data-text="agentCreatedLabel"></dt><dd id="agent-daemon-created"></dd></div>
+              <div class="agent-fact"><dt data-text="daemonLastActivity"></dt><dd id="agent-daemon-last-used"></dd></div>
+            </dl>
+            <p class="agent-managed-note" data-text="daemonNoCredentialCopy"></p>
+          </section>
           <section class="agent-section" id="agent-token-section">
             <div class="agent-section-head">
-              <div><h3 data-text="agentTokenSection"></h3><p data-text="agentTokenHint"></p></div>
+              <div><h3 id="agent-token-heading" data-text="staticCredentialSection"></h3><p id="agent-token-hint" data-text="staticCredentialHint"></p></div>
               <button id="agent-issue-token" class="primary" type="button" data-text="issueToken"></button>
             </div>
             <section id="agent-token-current" class="current-token agent-token-current" hidden>
@@ -2422,7 +2710,7 @@ function permissionInstallAgentWorkspace(){
               <label class="field"><span data-text="configuration"></span><textarea id="agent-token-config" readonly spellcheck="false"></textarea></label>
               <div class="result-actions"><button id="agent-copy-config" type="button" data-text="copyConfig"></button><span id="agent-copy-state" role="status"></span></div>
             </section>
-            <div class="agent-token-history">
+            <div id="agent-token-history" class="agent-token-history">
               <div class="agent-token-history-head"><h3 data-text="tokenHistory"></h3><button id="agent-clear-history" type="button" data-text="clearTokenHistory"></button></div>
               <table><thead><tr><th data-text="tokenID"></th><th data-text="createdAt"></th><th data-text="revokedAt"></th></tr></thead><tbody id="agent-token-history-body"></tbody></table>
               <p id="agent-token-history-empty" class="agent-token-empty" data-text="agentNoTokenHistory"></p>
@@ -2442,16 +2730,27 @@ function permissionInstallAgentWorkspace(){
           <section class="agent-section">
             <div class="agent-section-head"><div><h3 data-text="agentActivity"></h3></div></div>
             <div class="agent-activity">
-              <div class="agent-activity-item"><strong id="agent-metric-tokens">0</strong><span data-text="agentTokensMetric"></span></div>
+              <div class="agent-activity-item" id="agent-token-metric"><strong id="agent-metric-tokens">0</strong><span data-text="agentTokensMetric"></span></div>
               <div class="agent-activity-item"><strong id="agent-metric-mcp-connections">0</strong><span data-text="agentMCPConnectionsMetric"></span></div>
               <div class="agent-activity-item"><strong id="agent-metric-requests">0</strong><span data-text="agentRequestsMetric"></span></div>
               <div class="agent-activity-item"><strong id="agent-metric-work">0</strong><span data-text="agentWorkMetric"></span></div>
             </div>
           </section>
+          <section class="agent-section">
+            <div class="agent-section-head">
+              <div><h3 data-text="connectionSection"></h3><p id="agent-connection-summary"></p></div>
+              <a id="agent-connection-open" href="api/clients" data-text="connectionOpenActivity"></a>
+            </div>
+            <div id="agent-connections" class="agent-connection-list"></div>
+          </section>
         </div>
       </div>
     </div>`;
   groupDetail.after(detail);
+  const agentDetailHome=permissionCreate('div','permission-detail-home');
+  agentDetailHome.id='permission-agent-detail-home';
+  agentDetailHome.hidden=true;
+  detail.after(agentDetailHome);
 
   permissionSetButton('permission-agent-create-toggle','newAgentButton','plus');
   permissionSetButton('agent-detail-toggle','disable','power');
@@ -2477,7 +2776,7 @@ function permissionAgentConfig(revealed, mode){
 function permissionCurrentAgentToken(){
   const principal=permissionAgentByID(permissionUI.selectedAgent);
   if(!principal)return null;
-  return tokens.find(token=>token.principal_id===principal.id&&token.active)||null;
+  return permissionStaticCurrent(principal.id);
 }
 
 function permissionRenderAgentConfig(){
@@ -2488,6 +2787,7 @@ function permissionRenderAgentConfig(){
 }
 
 function permissionRenderAgentTokens(principal){
+  $('agent-token-history').hidden=false;
   const current=permissionCurrentAgentToken();
   const history=tokens
     .filter(token=>token.principal_id===principal.id&&!token.active)
@@ -2497,7 +2797,7 @@ function permissionRenderAgentTokens(principal){
   const issue=$('agent-issue-token');
   currentBox.hidden=!current;
   empty.hidden=!!current;
-  issue.hidden=!!current;
+  issue.hidden=permissionAgentOrigin(principal)!=='manual'||!!current;
   issue.disabled=busy;
   if(current){
     $('agent-token-id').textContent=current.id;
@@ -2530,6 +2830,8 @@ function permissionRenderAgentTokens(principal){
   });
   body.closest('table').hidden=!history.length;
   $('agent-token-history-empty').hidden=history.length>0;
+  empty.textContent=permissionAgentOrigin(principal)==='oauth'?t('noStaticCredential'):t('agentNoCurrentToken');
+  $('agent-token-history-empty').textContent=permissionAgentOrigin(principal)==='oauth'?t('noStaticCredential'):t('agentNoTokenHistory');
   if(permissionUI.agentRevealed){
     $('agent-token-result').hidden=false;
     permissionRenderAgentConfig();
@@ -2575,21 +2877,44 @@ function permissionRenderAgentDetail(){
   $('agent-detail-content').hidden=!principal;
   if(!principal)return;
 
+  const origin=permissionAgentOrigin(principal);
   const groupLabel=permissionAgentGroupLabel(principal);
-  const owner=permissionOAuthUser(principal.owner_user_id);
+  const owner=permissionOwner(principal);
   const agentGrants=permissionAgentOAuthGrants(principal.id);
   const activeGrants=agentGrants.filter(grant=>grant.status==='active').length;
+  const staticCurrent=permissionStaticCurrent(principal.id);
+  const staticCount=permissionStaticTokens(principal.id).length;
+  const businessAllowed=permissionGroupBusinessAllowed(principal);
   $('agent-detail-name').textContent=principal.name;
+  $('agent-detail-origin').textContent=permissionOriginLabel(principal);
+  $('agent-detail-origin').dataset.origin=origin;
   $('agent-detail-status').textContent=t(principal.enabled?'enabled':'disabled');
   $('agent-detail-status').dataset.state=principal.enabled?'enabled':'disabled';
   $('agent-detail-meta').textContent=[
+    permissionOriginLabel(principal),
     groupLabel,
-    principal.origin==='oauth'?(owner?.display_name||principal.owner_display_name||t('oauthUserLabel')):t('manualAgent'),
-    activeGrants?permissionFormat('oauthGrantCount',activeGrants):'',
-    permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+    origin==='oauth'?(owner?.display_name||t('ownerUnknown'))+(owner?.username?' · '+owner.username:''):origin==='daemon_stdio'?t('daemonManaged'):permissionStaticCredentialLabel(principal),
+    origin==='oauth'?(principal.oauth_clients||[]).join(', '):origin==='daemon_stdio'?permissionDaemonClientLabel(principal):'',
+    principal.group_id==='system-deny'?t('unassignedAgentState'):'',
     principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):'',
     principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
   ].filter(Boolean).join(' · ');
+  const access=$('agent-detail-access-state');
+  if(origin==='oauth'){
+    access.textContent=activeGrants?t('oauthAccessValid'):t('oauthNeedsAuthentication');
+    access.dataset.state=activeGrants?'valid':'reauth';
+    if(activeGrants&&!businessAllowed)access.textContent+=' · '+t('businessUnauthorized');
+    else if(activeGrants&&businessAllowed)access.textContent+=' · '+t('businessAuthorized');
+  }else if(origin==='daemon_stdio'){
+    const status=principal.daemon_token_status||(principal.enabled?'active':'revoked');
+    access.textContent=status==='active'?t('daemonTokenActive'):status==='expired'?t('daemonTokenExpired'):t('daemonTokenRevoked');
+    access.dataset.state=status==='active'?'valid':'reauth';
+    if(status==='active'&&!businessAllowed)access.textContent+=' · '+t('businessUnauthorized');
+  }else{
+    access.textContent=permissionStaticCredentialLabel(principal);
+    access.dataset.state=staticCurrent?'valid':'none';
+    if(staticCurrent&&!businessAllowed)access.textContent+=' · '+t('businessUnauthorized');
+  }
   permissionSetButton('agent-detail-toggle',principal.enabled?'memberDisable':'memberEnable','power');
   $('agent-detail-toggle').disabled=busy;
   $('agent-detail-delete').disabled=busy;
@@ -2603,31 +2928,84 @@ function permissionRenderAgentDetail(){
   $('agent-id').textContent=principal.id;
   $('agent-created').textContent=new Date(principal.created_at).toLocaleString(lang);
   $('agent-state').textContent=t(principal.enabled?'enabled':'disabled');
-  $('agent-metric-tokens').textContent=String(principal.credential_count||0);
+  $('agent-token-metric').hidden=origin==='daemon_stdio'||origin==='oauth'&&staticCount===0;
+  $('agent-metric-tokens').textContent=String(principal.active_static_credential_count||0)+(staticCount>Number(principal.active_static_credential_count||0)?' / '+staticCount:'');
   $('agent-metric-mcp-connections').textContent=String(principal.active_mcp_connections||0);
   $('agent-metric-requests').textContent=String(principal.active_requests||0);
   $('agent-metric-work').textContent=String(principal.active_work||0);
-  permissionRenderAgentOAuth(principal,owner,agentGrants);
-  permissionRenderAgentTokens(principal);
+  const tokenSection=$('agent-token-section');
+  const showStatic=origin==='manual'||staticCount>0;
+  tokenSection.hidden=!showStatic;
+  $('agent-token-heading').textContent=origin==='oauth'?t('otherStaticSection'):t('staticCredentialSection');
+  $('agent-token-heading').dataset.text=origin==='oauth'?'otherStaticSection':'staticCredentialSection';
+  $('agent-token-hint').textContent=origin==='oauth'?t('otherStaticHint'):t('staticCredentialHint');
+  $('agent-token-hint').dataset.text=origin==='oauth'?'otherStaticHint':'staticCredentialHint';
+  $('agent-issue-token').hidden=origin!=='manual'||!!staticCurrent;
+  if(showStatic)permissionRenderAgentTokens(principal);
+  else{
+    $('agent-token-current').hidden=true;
+    $('agent-token-empty').hidden=true;
+    $('agent-token-history').hidden=true;
+  }
+  permissionRenderAgentOAuth(principal,owner,agentGrants,origin);
+  permissionRenderAgentDaemon(principal,origin);
+  permissionRenderAgentConnections(principal);
 }
 
-function permissionRenderAgentOAuth(principal,owner,grants){
+function permissionRenderAgentConnections(principal){
+  const list=$('agent-connections');
+  const connections=principal.connections||[];
+  $('agent-connection-summary').textContent=connections.length?permissionFormat('activeMCPSummary',connections.length):t('connectionNone');
+  $('agent-connection-open').href=authPath('/api/clients');
+  list.replaceChildren();
+  connections.forEach(connection=>{
+    const row=permissionCreate('div','agent-connection-row');
+    const transport=permissionConnectionTransport(connection);
+    const title=[transport,connection.name||'',connection.client_mode==='stdio-bridge'?'('+t('connectionStdio')+')':''].filter(Boolean).join(' · ');
+    row.append(permissionCreate('strong','',title));
+    const facts=[];
+    if(connection.connected_at)facts.push(t('connectionConnectedAt')+': '+new Date(connection.connected_at).toLocaleString(lang));
+    if(connection.session_id)facts.push(t('connectionSession')+': '+connection.session_id.slice(0,18));
+    if(connection.credential_id&&!String(connection.credential_id).startsWith('oauth-'))facts.push(t('connectionCredential')+': '+connection.credential_id.slice(0,18));
+    row.append(permissionCreate('small','',facts.join(' · ')));
+    list.append(row);
+  });
+}
+
+function permissionRenderAgentDaemon(principal,origin){
+  const section=$('agent-daemon-section');
+  section.hidden=origin!=='daemon_stdio';
+  if(origin!=='daemon_stdio')return;
+  $('agent-daemon-registration').textContent=principal.daemon_registration_id||'—';
+  const status=principal.daemon_token_status||'—';
+  const label=status==='active'?t('daemonTokenActive'):status==='expired'?t('daemonTokenExpired'):status==='revoked'?t('daemonTokenRevoked'):status;
+  const state=$('agent-daemon-credential-state');
+  state.textContent=label;
+  state.dataset.state=status;
+  $('agent-daemon-credential').textContent=label;
+  $('agent-daemon-created').textContent=principal.daemon_registered_at?new Date(principal.daemon_registered_at).toLocaleString(lang):'—';
+  $('agent-daemon-last-used').textContent=principal.daemon_last_used_at?new Date(principal.daemon_last_used_at).toLocaleString(lang):t('neverUsed');
+}
+
+function permissionRenderAgentOAuth(principal,owner,grants,origin){
   const section=$('agent-oauth-section');
   if(!section)return;
-  section.hidden=false;
+  section.hidden=origin!=='oauth';
+  if(origin!=='oauth')return;
   const ownerBox=$('agent-oauth-owner');
   ownerBox.replaceChildren();
-  if(principal.origin!=='oauth'){
-    const manual=permissionCreate('div','agent-owner-copy');
-    manual.append(permissionCreate('strong','',t('manualAgent')),permissionCreate('small','',t('oauthIdentityHint')));
-    ownerBox.append(manual);
-  }else{
-    const avatar=owner?.avatar_path?(()=>{const img=document.createElement('img');img.className='agent-owner-avatar';img.src=owner.avatar_path;img.alt='';return img;})():permissionCreate('span','agent-owner-avatar','U');
+  if(owner){
+    const avatar=permissionOwnerAvatar(owner,principal);
+    avatar.firstElementChild?.classList.add('agent-owner-avatar');
     const ownerCopy=permissionCreate('div','agent-owner-copy');
-    ownerCopy.append(permissionCreate('strong','',owner?.display_name||principal.owner_display_name||t('oauthUserLabel')),permissionCreate('small','',owner?.username||principal.owner_username||owner?.issuer||''));
+    ownerCopy.append(permissionCreate('strong','',owner.display_name||principal.owner_display_name||t('oauthUserLabel')),permissionCreate('small','',owner.username||principal.owner_username||owner.issuer||principal.owner_issuer||''));
     ownerBox.append(avatar,ownerCopy);
+  }else{
+    const missing=permissionCreate('div','agent-owner-copy');
+    missing.append(permissionCreate('strong','',t('ownerUnknown')),permissionCreate('small','',principal.owner_issuer||''));
+    ownerBox.append(permissionCreate('span','agent-owner-avatar',permissionOwnerInitials(owner,principal)),missing);
   }
-  $('agent-oauth-issuer').textContent=owner?.issuer||'—';
+  $('agent-oauth-issuer').textContent=owner?.issuer||principal.owner_issuer||'—';
   $('agent-oauth-clients').textContent=(principal.oauth_clients||[]).join(', ')||'—';
   const active=grants.filter(grant=>grant.status==='active').length;
   $('agent-oauth-grant-count').textContent=permissionFormat('oauthGrantCount',active);
@@ -2655,7 +3033,7 @@ function permissionRenderAgentOAuth(principal,owner,grants){
     const copyNode=permissionCreate('div','oauth-grant-copy');
     const status=permissionCreate('span','oauth-grant-status',permissionOAuthStatusLabel(grant.status));
     status.dataset.state=grant.status;
-    copyNode.append(permissionCreate('strong','',grant.client_name||grant.client_id),permissionCreate('small','',new Date(grant.created_at).toLocaleString(lang)+' · '+grant.resource),status);
+    copyNode.append(permissionCreate('strong','',permissionGrantClientLabel(grant)),permissionCreate('small','',new Date(grant.created_at).toLocaleString(lang)+' · '+grant.resource+(permissionGrantUsage(grant)?' · '+permissionGrantUsage(grant):'')),status);
     row.append(copyNode);
     if(grant.status==='active'){
       const revoke=permissionCreate('button','danger',t('oauthRevokeGrant'));
@@ -2681,6 +3059,7 @@ function permissionRenderAgentOAuth(principal,owner,grants){
 function permissionRenderAgentNavigation(){
   const list=$('permission-mobile-subject-list');
   if(!list)return;
+  permissionDetachAgentDetail();
   const sorted=permissionSortedAgents();
   if(permissionUI.selectedAgent&&!permissionAgentByID(permissionUI.selectedAgent)){
     permissionUI.selectedAgent=sorted[0]?.id||null;
@@ -2699,9 +3078,25 @@ function permissionRenderAgentNavigation(){
     if(permissionUI.agentFilter==='enabled'&&!principal.enabled)return false;
     if(permissionUI.agentFilter==='disabled'&&principal.enabled)return false;
     if(permissionUI.agentFilter==='unassigned'&&principal.group_id!=='system-deny')return false;
+    if(permissionUI.agentOrigin!=='all'&&permissionAgentOrigin(principal)!==permissionUI.agentOrigin)return false;
     if(!query)return true;
-    return [principal.name,principal.id,principal.owner_display_name||'',permissionAgentGroupLabel(principal)].join(' ').toLowerCase().includes(query);
+    const owner=permissionOwner(principal);
+    return [
+      principal.name,principal.id,principal.owner_display_name||'',principal.owner_username||'',
+      principal.owner_issuer||'',owner?.display_name||'',owner?.username||'',owner?.issuer||'',
+      ...(principal.oauth_clients||[]),
+      ...(principal.connections||[]).flatMap(connection=>[connection.name||'',connection.transport||'',connection.client_mode||'']),
+      permissionAgentGroupLabel(principal),permissionOriginLabel(principal),permissionStaticCredentialLabel(principal),
+      principal.daemon_registration_id||''
+    ].join(' ').toLowerCase().includes(query);
   });
+  if(shown.length&&!shown.some(principal=>principal.id===permissionUI.selectedAgent)){
+    permissionUI.selectedAgent=shown[0].id;
+    permissionUI.expandedAgent=null;
+  }else if(!shown.length&&principals.length){
+    permissionUI.selectedAgent=null;
+    permissionUI.expandedAgent=null;
+  }
   list.replaceChildren();
   if(!principals.length){
     const empty=permissionCreate('div','permission-empty');
@@ -2711,27 +3106,59 @@ function permissionRenderAgentNavigation(){
     list.append(permissionCreate('p','permission-empty',t('noAgentMatches')));
   }
   shown.forEach(principal=>{
+    const entry=permissionCreate('section','agent-nav-entry');
     const button=permissionCreate('button','agent-nav-item');
     button.type='button';
+    button.dataset.agentId=principal.id;
     button.dataset.enabled=String(principal.enabled);
     if(principal.group_id==='system-deny')button.dataset.groupState='unassigned';
     button.setAttribute('aria-current',String(principal.id===permissionUI.selectedAgent));
+    button.setAttribute('aria-expanded',String(permissionIsMobile()&&permissionUI.expandedAgent===principal.id));
+    button.setAttribute('aria-controls','agent-nav-body-'+principal.id);
     button.setAttribute('aria-label',principal.name+' · '+permissionAgentGroupLabel(principal));
     const dot=permissionCreate('span','agent-nav-dot');
-    const name=permissionCreate('span','agent-nav-name',principal.name);
+    const name=permissionCreate('span','agent-nav-name');
+    const origin=permissionAgentOrigin(principal);
+    const badge=permissionCreate('span','agent-origin-badge',permissionOriginLabel(principal));
+    badge.dataset.origin=origin;
+    name.append(document.createTextNode(principal.name),badge);
+    const metadata=permissionCreate('span','agent-nav-meta');
+    if(origin==='oauth'){
+      metadata.append(permissionOwnerAvatar(permissionOwner(principal),principal,true));
+    }
+    const clientLine=origin==='oauth'
+      ?(principal.oauth_clients||[]).join(', ')||t('oauthClientsLabel')
+      :origin==='daemon_stdio'
+        ?t('daemonManaged')+' · '+permissionDaemonClientLabel(principal)
+        :permissionStaticCredentialLabel(principal);
     const meta=[
-      permissionAgentGroupLabel(principal,true),
-      principal.origin==='oauth'?(principal.owner_display_name||t('oauthUserLabel')):t('manualAgent'),
-      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
+      clientLine,
+      permissionAgentGroupLabel(principal,true)+' · '+permissionGroupScopeLabel(principal),
       principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):''
     ].filter(Boolean).join(' · ');
-    const metadata=permissionCreate('span','agent-nav-meta',meta);
+    metadata.append(document.createTextNode(meta));
     const chevron=permissionCreate('span','agent-nav-chevron');
     chevron.append(permissionIcon('chevron'));
     button.append(dot,name,metadata,chevron);
-    button.onclick=()=>permissionSelectAgent(principal.id);
-    list.append(button);
+    button.onclick=()=>{
+      if(permissionIsMobile()&&permissionUI.selectedAgent===principal.id){
+        permissionUI.expandedAgent=permissionUI.expandedAgent===principal.id?null:principal.id;
+        permissionRenderAgentNavigation();
+        permissionSyncManagementView();
+        return;
+      }
+      permissionSelectAgent(principal.id);
+    };
+    const body=permissionCreate('div','agent-nav-body');
+    body.id='agent-nav-body-'+principal.id;
+    body.hidden=!permissionIsMobile()||permissionUI.expandedAgent!==principal.id;
+    entry.append(button,body);
+    list.append(entry);
   });
+  if(permissionUI.view==='agents'){
+    permissionRenderAgentDetail();
+    permissionLayoutAgentDetail();
+  }
 }
 
 function permissionSyncManagementView(){
@@ -2752,8 +3179,10 @@ function permissionSyncManagementView(){
     }
     permissionRenderAgentNavigation();
     permissionRenderAgentDetail();
+    permissionLayoutAgentDetail();
   }else if(selected){
     renderDetail();
+    permissionLayoutDetail();
   }
 }
 
@@ -2785,6 +3214,7 @@ function permissionSelectAgent(id){
   }
   if(!permissionAgentByID(id))return;
   permissionUI.selectedAgent=id;
+  permissionUI.expandedAgent=permissionIsMobile()?id:null;
   permissionUI.view='agents';
   permissionRenderAgentNavigation();
   permissionSyncManagementView();
@@ -2800,27 +3230,15 @@ async function permissionRefreshAgentActivity(){
     principals.forEach(principal=>{
       const current=live.get(principal.id);
       if(!current)return;
-      for(const field of ['active_mcp_connections','active_requests','active_work']){
-        const value=Number(current[field]||0);
-        if(Number(principal[field]||0)===value)continue;
-        principal[field]=value;
+      for(const field of ['active_mcp_connections','active_requests','active_work','active_static_credential_count','static_credential_count','daemon_token_status','daemon_last_used_at','connections']){
+        if(JSON.stringify(principal[field]??null)===JSON.stringify(current[field]??null))continue;
+        principal[field]=current[field];
         changed=true;
       }
     });
     if(!changed)return;
     permissionRenderAgentNavigation();
-    const principal=permissionAgentByID(permissionUI.selectedAgent);
-    if(!principal)return;
-    const groupLabel=permissionAgentGroupLabel(principal);
-    $('agent-detail-meta').textContent=[
-      groupLabel,
-      permissionCount(principal.credential_count||0,'credentialSummaryOne','credentialSummaryMany'),
-      principal.active_mcp_connections?permissionFormat('activeMCPSummary',principal.active_mcp_connections):'',
-      principal.active_requests?permissionFormat('activeSummary',principal.active_requests):''
-    ].filter(Boolean).join(' · ');
-    $('agent-metric-mcp-connections').textContent=String(principal.active_mcp_connections||0);
-    $('agent-metric-requests').textContent=String(principal.active_requests||0);
-    $('agent-metric-work').textContent=String(principal.active_work||0);
+    if(permissionUI.view==='agents'&&permissionAgentByID(permissionUI.selectedAgent))permissionRenderAgentDetail();
   }).catch(()=>{}).finally(()=>{permissionActivityRequest=null;});
   return permissionActivityRequest;
 }
@@ -2897,6 +3315,10 @@ function permissionWireAgentWorkspace(){
     const button=event.target.closest('button[data-agent-filter]');
     if(!button)return;
     permissionUI.agentFilter=button.dataset.agentFilter;
+    permissionRenderAgentNavigation();
+  };
+  $('permission-agent-origin-filter').onchange=event=>{
+    permissionUI.agentOrigin=event.target.value;
     permissionRenderAgentNavigation();
   };
   $('permission-agent-create-toggle').onclick=()=>{
@@ -3101,8 +3523,6 @@ permissionOpenActivitySocket();
 permissionRefreshAgentActivity();
 setInterval(permissionRefreshAgentActivity,5000);
 if(permissionUI.installed){
-  permissionDetachDetail=function(){};
-  permissionLayoutDetail=function(){};
   permissionLayoutSubjectSection=function(){};
   permissionRenderSubjects=permissionRenderAgentNavigation;
 

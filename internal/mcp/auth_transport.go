@@ -22,6 +22,14 @@ type transportOwner struct {
 	resource     string
 }
 
+type transportAuthorization uint8
+
+const (
+	transportAuthorized transportAuthorization = iota
+	transportSessionMissing
+	transportOwnerMismatch
+)
+
 func (s *Server) rememberTransport(ctx context.Context, id string) connectionOwner {
 	if actor, ok := auth.ActorFromContext(ctx); ok && id != "" {
 		credential := auth.CredentialIDFromContext(ctx)
@@ -64,31 +72,37 @@ func (s *Server) authenticatedTransport(next http.Handler, sse bool) http.Handle
 				http.Error(w, "ambiguous MCP session", http.StatusBadRequest)
 				return
 			}
-			if id != "" && !s.authorizeTransport(r.Context(), id, actor, auth.CredentialIDFromContext(r.Context()), auth.IsOAuthCredential(r.Context())) {
-				http.Error(w, "MCP session belongs to a different credential", http.StatusForbidden)
-				return
+			if id != "" {
+				switch s.authorizeTransport(r.Context(), id, actor, auth.CredentialIDFromContext(r.Context()), auth.IsOAuthCredential(r.Context())) {
+				case transportSessionMissing:
+					http.Error(w, "MCP session not found; initialize a new session", http.StatusNotFound)
+					return
+				case transportOwnerMismatch:
+					http.Error(w, "MCP session belongs to a different credential or grant", http.StatusForbidden)
+					return
+				}
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) authorizeTransport(ctx context.Context, id string, actor auth.Actor, credential string, oauth bool) bool {
+func (s *Server) authorizeTransport(ctx context.Context, id string, actor auth.Actor, credential string, oauth bool) transportAuthorization {
 	owner, ok := s.transportOwners.Load(id)
 	if !ok {
-		return false
+		return transportSessionMissing
 	}
 	t := owner.(transportOwner)
 	if t.principal != actor.ID {
-		return false
+		return transportOwnerMismatch
 	}
 	if t.credential == credential {
 		if t.oauth && (t.grantID != auth.OAuthGrantIDFromContext(ctx) ||
 			t.oauthClient != auth.OAuthClientIDFromContext(ctx) ||
 			t.resource != auth.OAuthResourceFromContext(ctx)) {
-			return false
+			return transportOwnerMismatch
 		}
-		return true
+		return transportAuthorized
 	}
 	// OAuth access tokens may rotate, but a transport session can only move to a
 	// new token when the grant, client and resource remain identical. Agent
@@ -97,7 +111,7 @@ func (s *Server) authorizeTransport(ctx context.Context, id string, actor auth.A
 		t.grantID == "" || t.grantID != auth.OAuthGrantIDFromContext(ctx) ||
 		t.oauthClient == "" || t.oauthClient != auth.OAuthClientIDFromContext(ctx) ||
 		t.resource == "" || t.resource != auth.OAuthResourceFromContext(ctx) {
-		return false
+		return transportOwnerMismatch
 	}
 	t.credential = credential
 	t.credentialID = strings.TrimPrefix(credential, "token:")
@@ -110,5 +124,5 @@ func (s *Server) authorizeTransport(ctx context.Context, id string, actor auth.A
 		ClientMode:   t.clientMode,
 	})
 	s.notifyConnectionsChanged()
-	return true
+	return transportAuthorized
 }

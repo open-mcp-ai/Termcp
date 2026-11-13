@@ -188,9 +188,11 @@ Termcp 使用固定的服务端 OIDC client 请求最小 `openid profile`；首�
 
 ## 7. 权限、撤销和会话
 
-每次 MCP 请求都必须同时满足：凭据有效、grant 有效、用户启用、Agent 启用、组启用、角色允许 MCP、目标 resource/scope 正确，以及当前 AgentPolicy 允许具体业务动作。
+每次 MCP 请求都必须先满足认证边界：凭据有效、grant 有效、用户启用、Agent 启用、角色允许 MCP，以及目标 resource/scope 正确。组是否存在、是否启用，以及具体 AgentPolicy 是否允许某个动作，在业务调用边界实时解析。
 
-“认证完成、组内没有业务动作”是正常状态，不返回假的认证失败。客户端可完成 MCP 初始化；业务调用按照现有权限层拒绝。Admin 调整组后使用当前策略，不要求用户重新复制 Token。撤权时取消受影响请求和后台工作，客户端按正常 MCP 生命周期重连。
+“认证完成、组内没有业务动作”是正常状态，不返回假的认证失败。客户端可完成 MCP 初始化；业务调用按照当前权限层拒绝。Admin 调整组、动作、约束或主机范围后使用当前策略，不轮换凭据、不撤销 grant、不注销 MCP session，也不要求用户重新复制 Token。失去权限的后台工作按明确的 operation/host authority 取消，无关工作保留。
+
+Modifying the default group only affects later OAuth Agents; existing Agents keep their explicit group. Agent/user/login-client/grant revocation and vault locking are identity failures: they terminate affected connections and work after the encrypted state commit succeeds.
 
 ### 7.1 刷新与重放
 
@@ -215,6 +217,8 @@ Admin 撤销用户或 grant 后，后续普通登录不应悄悄复活已停用�
 ### 7.3 MCP 会话归属
 
 将已验证的 grant ID 带入请求上下文与 transport owner。刷新接续 MCP session 必须匹配同一个 grant、Agent、client 和 resource，不能只看相同 Agent ID；静态 Token 继续按现有精确凭据规则隔离。
+
+Streamable HTTP 使用 session 时，有效 Bearer 携带未知/过期/terminated session 返回 404；session 仍存在但归属不匹配返回 403；无效 Bearer 返回 401。客户端可沿用同一 grant 重新 `initialize`。SSE 按 GET event stream 和 `/message` endpoint 的语义独立重建。自管 stdio bridge 允许有界、可取消地重握手，但请求一旦可能已经执行，就返回可识别的“结果未知”，不自动重放命令、按键、文件写入或删除。
 
 请求受当前 access token 期限约束。刷新不复活已经结束的请求或任务；新凭据可以重新发起请求。后台任务继续使用既有权限生命周期规则，并纳入 Token/grant 撤销；不为 OAuth 引入永久有效的任务上下文。
 

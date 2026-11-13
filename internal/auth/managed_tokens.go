@@ -47,7 +47,7 @@ func (a *agentRecord) UnmarshalJSON(raw []byte) error {
 	if value.Origin == "" {
 		value.Origin = agentOriginManual
 	}
-	if value.Origin != agentOriginManual && value.Origin != agentOriginOAuth {
+	if value.Origin != agentOriginManual && value.Origin != agentOriginOAuth && value.Origin != agentOriginDaemon {
 		return errors.New("invalid saved Agent origin")
 	}
 	*a = agentRecord(value)
@@ -64,6 +64,7 @@ type tokenRecord struct {
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 	ReplacedBy  string     `json:"replaced_by,omitempty"`
+	Kind        string     `json:"kind,omitempty"`
 }
 
 // tokenInfo is the only credential representation returned by listing APIs.
@@ -78,21 +79,45 @@ type tokenInfo struct {
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 	ReplacedBy  string     `json:"replaced_by,omitempty"`
+	Kind        string     `json:"kind"`
+}
+
+// MCPConnectionInfo is the non-secret connection snapshot published by the MCP
+// composition root. ClientMode is display-only; identity always remains the
+// verified principal and credential IDs.
+type MCPConnectionInfo struct {
+	SessionID    string `json:"session_id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Version      string `json:"version,omitempty"`
+	PrincipalID  string `json:"principal_id"`
+	CredentialID string `json:"credential_id"`
+	Transport    string `json:"transport"`
+	ClientMode   string `json:"client_mode,omitempty"`
+	ConnectedAt  string `json:"connected_at,omitempty"`
 }
 
 type principalView struct {
 	agentRecord
-	CredentialCount       int      `json:"credential_count"`
-	ActiveCredentialCount int      `json:"active_credential_count"`
-	ActiveMCPConnections  int      `json:"active_mcp_connections"`
-	ActiveRequests        int      `json:"active_requests"`
-	ActiveWork            int      `json:"active_work"`
-	OwnerDisplayName      string   `json:"owner_display_name,omitempty"`
-	OwnerUsername         string   `json:"owner_username,omitempty"`
-	OwnerAvatarPath       string   `json:"owner_avatar_path,omitempty"`
-	OAuthGrantCount       int      `json:"oauth_grant_count,omitempty"`
-	ActiveOAuthGrantCount int      `json:"active_oauth_grant_count,omitempty"`
-	OAuthClients          []string `json:"oauth_clients,omitempty"`
+	CredentialCount             int                 `json:"credential_count"`
+	ActiveCredentialCount       int                 `json:"active_credential_count"`
+	ActiveMCPConnections        int                 `json:"active_mcp_connections"`
+	ActiveRequests              int                 `json:"active_requests"`
+	ActiveWork                  int                 `json:"active_work"`
+	OwnerDisplayName            string              `json:"owner_display_name,omitempty"`
+	OwnerUsername               string              `json:"owner_username,omitempty"`
+	OwnerAvatarPath             string              `json:"owner_avatar_path,omitempty"`
+	OAuthGrantCount             int                 `json:"oauth_grant_count,omitempty"`
+	ActiveOAuthGrantCount       int                 `json:"active_oauth_grant_count,omitempty"`
+	OAuthClients                []string            `json:"oauth_clients,omitempty"`
+	OwnerIssuer                 string              `json:"owner_issuer,omitempty"`
+	StaticCredentialCount       int                 `json:"static_credential_count"`
+	ActiveStaticCredentialCount int                 `json:"active_static_credential_count"`
+	DaemonRegistrationID        string              `json:"daemon_registration_id,omitempty"`
+	DaemonTokenID               string              `json:"daemon_token_id,omitempty"`
+	DaemonTokenStatus           string              `json:"daemon_token_status,omitempty"`
+	DaemonLastUsedAt            *time.Time          `json:"daemon_last_used_at,omitempty"`
+	DaemonRegisteredAt          time.Time           `json:"daemon_registered_at,omitempty"`
+	Connections                 []MCPConnectionInfo `json:"connections,omitempty"`
 }
 
 type principalDeletePreview struct {
@@ -119,11 +144,11 @@ func validateCredentials(s managedState) error {
 		if a.Revision == 0 || id == "" || id != a.ID || id == s.Admin.ID || !validLabel(a.Name) || a.CreatedAt.IsZero() {
 			return errors.New("invalid saved Agent")
 		}
-		if a.Origin != agentOriginManual && a.Origin != agentOriginOAuth {
+		if a.Origin != agentOriginManual && a.Origin != agentOriginOAuth && a.Origin != agentOriginDaemon {
 			return errors.New("invalid saved Agent origin")
 		}
 		if a.Origin == agentOriginOAuth && a.OwnerUserID == "" ||
-			a.Origin == agentOriginManual && a.OwnerUserID != "" {
+			a.Origin != agentOriginOAuth && a.OwnerUserID != "" {
 			return errors.New("invalid saved Agent owner")
 		}
 	}
@@ -133,6 +158,9 @@ func validateCredentials(s managedState) error {
 		_, agent := s.Agents[t.PrincipalID]
 		if id == "" || id != t.ID || !validLabel(t.Label) || err != nil || len(digest) != 32 || t.CreatedAt.IsZero() || t.PrincipalID != s.Admin.ID && !agent {
 			return errors.New("invalid saved MCP token")
+		}
+		if t.Kind != tokenKindStatic && t.Kind != tokenKindDaemon {
+			return errors.New("invalid saved MCP token kind")
 		}
 		if t.RevokedAt != nil && t.RevokedAt.Before(t.CreatedAt) {
 			return errors.New("invalid saved MCP token revocation")
@@ -183,6 +211,22 @@ func (m *Managed) SetMCPConnectionCounts(counts map[string]int) {
 	m.mcpConnectionCounts.Store(&snapshot)
 }
 
+// SetMCPConnections publishes an immutable live-connection snapshot. It is
+// separate from in-flight requests and detached background work.
+func (m *Managed) SetMCPConnections(connections []MCPConnectionInfo) {
+	if m == nil {
+		return
+	}
+	byPrincipal := map[string][]MCPConnectionInfo{}
+	for _, connection := range connections {
+		if connection.PrincipalID == "" || connection.CredentialID == "" {
+			continue
+		}
+		byPrincipal[connection.PrincipalID] = append(byPrincipal[connection.PrincipalID], connection)
+	}
+	m.mcpConnections.Store(&byPrincipal)
+}
+
 // SetMCPConnectionInvalidator wires authority changes to the MCP transport.
 // The callback runs while auth state is locked, so the composition root must
 // only schedule the transport cleanup and must not call back into Managed.
@@ -204,6 +248,17 @@ func (m *Managed) activeMCPConnections(principalID string) int {
 		return 0
 	}
 	return (*snapshot)[principalID]
+}
+
+func (m *Managed) connectionsForPrincipal(principalID string) []MCPConnectionInfo {
+	if m == nil || principalID == "" {
+		return nil
+	}
+	snapshot := m.mcpConnections.Load()
+	if snapshot == nil {
+		return nil
+	}
+	return append([]MCPConnectionInfo(nil), (*snapshot)[principalID]...)
 }
 
 func credentialState(s managedState) managedState {
@@ -266,6 +321,7 @@ func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalVi
 		if owner.AvatarFile != "" && s.OAuthServer.PublicURL != "" {
 			view.OwnerAvatarPath = s.OAuthServer.PublicURL + "/auth/oauth/avatar/" + owner.AvatarFile
 		}
+		view.OwnerIssuer = owner.Issuer
 	}
 	clients := map[string]bool{}
 	for _, grant := range s.OAuthGrants {
@@ -289,11 +345,32 @@ func (m *Managed) principalViewLocked(s managedState, a agentRecord) principalVi
 			continue
 		}
 		view.CredentialCount++
+		if token.Kind == tokenKindStatic {
+			view.StaticCredentialCount++
+			if tokenLive(token, now) {
+				view.ActiveStaticCredentialCount++
+			}
+		}
 		if tokenLive(token, now) {
 			view.ActiveCredentialCount++
 		}
 		view.ActiveRequests += len(m.requests["token:"+id])
 		view.ActiveWork += len(m.background[id])
+	}
+	if registration := s.DaemonRegistration; registration != nil && registration.AgentID == a.ID {
+		view.DaemonRegistrationID = registration.ID
+		view.DaemonRegisteredAt = registration.CreatedAt
+		view.DaemonTokenID = registration.TokenID
+		if token, ok := s.Tokens[registration.TokenID]; ok {
+			view.DaemonTokenStatus = tokenStatus(token, now)
+			view.DaemonLastUsedAt = token.LastUsedAt
+		} else if registration.RevokedAt != nil {
+			view.DaemonTokenStatus = "revoked"
+		}
+	}
+	view.Connections = m.connectionsForPrincipal(a.ID)
+	if len(view.Connections) > 0 {
+		view.ActiveMCPConnections = len(view.Connections)
 	}
 	for _, record := range s.OAuthAccess {
 		grant := s.OAuthGrants[record.GrantID]
@@ -348,6 +425,7 @@ func tokenInfoOf(t tokenRecord, now time.Time) tokenInfo {
 		LastUsedAt:  t.LastUsedAt,
 		RevokedAt:   t.RevokedAt,
 		ReplacedBy:  t.ReplacedBy,
+		Kind:        t.Kind,
 	}
 }
 
@@ -396,7 +474,7 @@ func (m *Managed) mintToken(s *managedState, principal, label string, expiresAt 
 		}
 		expiresAt = &expiry
 	}
-	t := tokenRecord{ID: id, PrincipalID: principal, Label: label, Digest: tokenDigest(raw), CreatedAt: now, ExpiresAt: expiresAt}
+	t := tokenRecord{ID: id, PrincipalID: principal, Label: label, Digest: tokenDigest(raw), CreatedAt: now, ExpiresAt: expiresAt, Kind: tokenKindStatic}
 	s.Tokens[id] = t
 	return t, raw, nil
 }
@@ -433,6 +511,9 @@ func (m *Managed) rotateToken(s *managedState, tokenID, label string, expiresAt 
 	if !ok || !tokenLive(old, now) {
 		return tokenRecord{}, tokenRecord{}, "", errNoActiveCredential
 	}
+	if old.Kind == tokenKindDaemon {
+		return tokenRecord{}, tokenRecord{}, "", errors.New("daemon-managed credentials cannot be rotated manually")
+	}
 	if label == "" {
 		label = old.Label
 	}
@@ -454,8 +535,7 @@ func (m *Managed) tokenActorLocked(t tokenRecord) (Actor, bool) {
 		return Actor{ID: m.state.Admin.ID, Username: m.state.Admin.Username, Role: RoleAdmin}, true
 	}
 	a, ok := m.state.Agents[t.PrincipalID]
-	_, err := resolvedAgentPolicy(m.state, a)
-	return Actor{ID: a.ID, Username: a.Name, Role: RoleAgent}, ok && a.Enabled && err == nil
+	return Actor{ID: a.ID, Username: a.Name, Role: RoleAgent}, ok && a.Enabled
 }
 
 // admitToken authenticates and registers cancellation under the same lock, so

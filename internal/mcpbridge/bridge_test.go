@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -413,6 +414,115 @@ func TestSSEPostRepliesAreRelayed(t *testing.T) {
 	}
 }
 
+func TestSSERecoveryReinitializesWithoutReplayingUnknownCall(t *testing.T) {
+	type sseSession struct {
+		messages chan []byte
+	}
+	var mu sync.Mutex
+	nextSession := 0
+	sessions := map[int]sseSession{}
+	initializations := 0
+	executedCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/sse" {
+			mu.Lock()
+			nextSession++
+			id := nextSession
+			session := sseSession{messages: make(chan []byte, 8)}
+			sessions[id] = session
+			mu.Unlock()
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "event: endpoint\ndata: /message?session_id=%d\n\n", id)
+			w.(http.Flusher).Flush()
+			for {
+				select {
+				case message := <-session.messages:
+					fmt.Fprintf(w, "event: message\ndata: %s\n\n", message)
+					w.(http.Flusher).Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/message" {
+			http.NotFound(w, r)
+			return
+		}
+		id, _ := strconv.Atoi(r.URL.Query().Get("session_id"))
+		var message struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		session, ok := sessions[id]
+		mu.Unlock()
+		if !ok {
+			http.Error(w, "session missing", http.StatusNotFound)
+			return
+		}
+		if message.Method == "initialize" {
+			mu.Lock()
+			initializations++
+			mu.Unlock()
+			session.messages <- []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"sse-recovery","version":"1"}}}`, mustJSON(message.ID)))
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if message.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if message.Method == "tools/call" {
+			mu.Lock()
+			executedCalls++
+			delete(sessions, id)
+			mu.Unlock()
+			http.Error(w, "session vanished after dispatch", http.StatusNotFound)
+			return
+		}
+		session.messages <- []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"ok":true}}`, mustJSON(message.ID)))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(ts.Close)
+
+	h := startBridge(t, Config{URL: ts.URL + "/sse", SSE: true})
+	h.send(initMessage)
+	h.waitFor(5*time.Second, hasID(1))
+	h.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"side_effect","arguments":{}}}`)
+	unknown := h.waitFor(5*time.Second, hasID(2))
+	errorObject, _ := unknown["error"].(map[string]any)
+	data, _ := errorObject["data"].(map[string]any)
+	if data["result"] != "unknown" || data["request_was_replayed"] != false {
+		t.Fatalf("SSE lost endpoint did not identify an unreplayed unknown result: %v", unknown)
+	}
+
+	h.send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	reply := h.waitFor(10*time.Second, hasID(3))
+	if reply["result"] == nil {
+		t.Fatalf("SSE request after recovery did not use the new session: %v", reply)
+	}
+	mu.Lock()
+	if initializations != 2 || executedCalls != 1 {
+		t.Fatalf("SSE recovery replayed the side effect: initializations=%d calls=%d", initializations, executedCalls)
+	}
+	mu.Unlock()
+	_ = h.in.Close()
+	if err := h.waitDead(5 * time.Second); err != nil {
+		t.Fatalf("clean SSE shutdown after recovery: %v", err)
+	}
+}
+
+func mustJSON(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
+}
+
 // A rejected request must answer the client with a JSON-RPC error carrying the
 // original id, land the status on stderr, and end the bridge.
 func TestHTTPErrorIsTerminal(t *testing.T) {
@@ -446,6 +556,189 @@ func TestHTTPErrorIsTerminal(t *testing.T) {
 	}
 	if lines != 1 {
 		t.Errorf("stdout carries %d messages, want only the error response: %q", lines, h.out.String())
+	}
+}
+
+func TestStreamableSessionRecoveryDoesNotReplayUnknownCall(t *testing.T) {
+	var mu sync.Mutex
+	nextSession := 0
+	initializations := 0
+	executedCalls := 0
+	current := map[string]bool{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			if !current[r.Header.Get(sessionHeader)] {
+				http.Error(w, "session missing", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		case http.MethodDelete:
+			mu.Lock()
+			delete(current, r.Header.Get(sessionHeader))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var message struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		sessionID := r.Header.Get(sessionHeader)
+		mu.Lock()
+		defer mu.Unlock()
+		if message.Method == "initialize" {
+			nextSession++
+			initializations++
+			sessionID = fmt.Sprintf("session-%d", nextSession)
+			current[sessionID] = true
+			w.Header().Set(sessionHeader, sessionID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      message.ID,
+				"result": map[string]any{
+					"protocolVersion": "2025-03-26",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "recovery-test", "version": "1"},
+				},
+			})
+			return
+		}
+		if !current[sessionID] {
+			http.Error(w, "session missing", http.StatusNotFound)
+			return
+		}
+		if message.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if message.Method == "tools/call" {
+			executedCalls++
+			delete(current, sessionID)
+			http.Error(w, "session vanished after dispatch", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      message.ID,
+			"result":  map[string]any{"ok": true},
+		})
+	}))
+	t.Cleanup(ts.Close)
+
+	h := startBridge(t, Config{URL: ts.URL + "/stream"})
+	h.send(initMessage)
+	h.waitFor(5*time.Second, hasID(1))
+	h.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"side_effect","arguments":{}}}`)
+
+	unknown := h.waitFor(5*time.Second, hasID(2))
+	errorObject, _ := unknown["error"].(map[string]any)
+	data, _ := errorObject["data"].(map[string]any)
+	if data["kind"] != "termcp_session_replaced" || data["result"] != "unknown" || data["request_was_replayed"] != false {
+		t.Fatalf("lost-session reply did not identify an unreplayed unknown result: %v", unknown)
+	}
+	mu.Lock()
+	if executedCalls != 1 || initializations != 2 {
+		t.Fatalf("recovery replayed the side effect: calls=%d initializations=%d", executedCalls, initializations)
+	}
+	mu.Unlock()
+
+	h.send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	reply := h.waitFor(5*time.Second, hasID(3))
+	if reply["result"] == nil {
+		t.Fatalf("request after recovery did not use the new session: %v", reply)
+	}
+	_ = h.in.Close()
+	if err := h.waitDead(5 * time.Second); err != nil {
+		t.Fatalf("clean shutdown after recovery: %v", err)
+	}
+}
+
+func TestStreamableSessionRecoveryIsBounded(t *testing.T) {
+	var mu sync.Mutex
+	nextSession := 0
+	recoveryAttemptsSeen := 0
+	failed := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			if failed {
+				http.Error(w, "session missing", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var message struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !failed && message.Method == "initialize" {
+			nextSession++
+			w.Header().Set(sessionHeader, fmt.Sprintf("session-%d", nextSession))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": message.ID,
+				"result": map[string]any{
+					"protocolVersion": "2025-03-26", "capabilities": map[string]any{},
+					"serverInfo": map[string]any{"name": "recovery-test", "version": "1"},
+				},
+			})
+			return
+		}
+		if message.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if message.Method == "tools/call" {
+			failed = true
+			http.Error(w, "session vanished", http.StatusNotFound)
+			return
+		}
+		recoveryAttemptsSeen++
+		http.Error(w, "identity source unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(ts.Close)
+
+	h := startBridge(t, Config{URL: ts.URL + "/stream"})
+	h.send(initMessage)
+	h.waitFor(5*time.Second, hasID(1))
+	h.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"side_effect","arguments":{}}}`)
+	reply := h.waitFor(5*time.Second, hasID(2))
+	if reply["error"] == nil {
+		t.Fatalf("bounded recovery failure returned no error: %v", reply)
+	}
+	if err := h.waitDead(5 * time.Second); err == nil {
+		t.Fatal("bridge stayed alive after bounded recovery failed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if recoveryAttemptsSeen != 3 {
+		t.Fatalf("recovery attempts = %d, want 3", recoveryAttemptsSeen)
 	}
 }
 

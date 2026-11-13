@@ -2,7 +2,10 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,6 +23,7 @@ func (m *Managed) credentialMutation(w http.ResponseWriter, r *http.Request) {
 	var canceledOAuth []oauthCancellation
 	var affectedPrincipals []string
 	var accessRevisionChanged bool
+	var removeDaemonCredentialFile bool
 	err := m.commitState(r.Context(), func(s *managedState) (func(), error) {
 		fail := func(status int, message string) error {
 			return &statusError{status: status, err: errors.New(message)}
@@ -163,6 +167,12 @@ func (m *Managed) credentialMutation(w http.ResponseWriter, r *http.Request) {
 				}
 				delete(s.OAuthGrants, grantID)
 			}
+			if registration := s.DaemonRegistration; registration != nil && registration.AgentID == agent.ID && registration.RevokedAt == nil {
+				now := m.now().UTC()
+				registration.RevokedAt = &now
+				registration.RevokeReason = "agent_deleted"
+				removeDaemonCredentialFile = true
+			}
 			delete(s.Agents, agent.ID)
 			affectedPrincipals = append(affectedPrincipals, agent.ID)
 			targetID = agent.ID
@@ -186,7 +196,9 @@ func (m *Managed) credentialMutation(w http.ResponseWriter, r *http.Request) {
 			agent.Enabled = *input.Enabled
 			agent.Revision++
 			s.Agents[id] = agent
-			affectedPrincipals = append(affectedPrincipals, agent.ID)
+			if !agent.Enabled {
+				affectedPrincipals = append(affectedPrincipals, agent.ID)
+			}
 			targetID = agent.ID
 			result = map[string]any{"principal": agent}
 		case r.URL.Path == "/auth/tokens/history" && r.Method == http.MethodDelete:
@@ -218,6 +230,12 @@ func (m *Managed) credentialMutation(w http.ResponseWriter, r *http.Request) {
 			now := m.now().UTC()
 			token.RevokedAt = &now
 			s.Tokens[id] = token
+			if registration := s.DaemonRegistration; token.Kind == tokenKindDaemon && registration != nil &&
+				registration.TokenID == token.ID && registration.RevokedAt == nil {
+				registration.RevokedAt = &now
+				registration.RevokeReason = "credential_revoked"
+				removeDaemonCredentialFile = true
+			}
 			canceledTokens = append(canceledTokens, id)
 			targetID = id
 			result = map[string]bool{"ok": true}
@@ -237,6 +255,11 @@ func (m *Managed) credentialMutation(w http.ResponseWriter, r *http.Request) {
 			m.cancelPrincipalsLocked(affectedPrincipals)
 			m.mu.Unlock()
 			m.cancelOAuthCredentialsMap(canceledOAuth)
+			if removeDaemonCredentialFile {
+				if err := os.Remove(LocalDaemonCredentialPath(filepath.Dir(m.path))); err != nil && !errors.Is(err, os.ErrNotExist) {
+					slog.WarnContext(r.Context(), "could not remove revoked local daemon credential", "err", err)
+				}
+			}
 		}, nil
 	})
 	if err != nil {

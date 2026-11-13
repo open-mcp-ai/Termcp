@@ -102,26 +102,27 @@ type sessionRecord struct {
 }
 
 type managedState struct {
-	Version        int                              `json:"version"`
-	InstanceID     string                           `json:"instance_id"`
-	SigningKey     string                           `json:"signing_key"`
-	Admin          adminRecord                      `json:"admin"`
-	Permissions    RolePolicy                       `json:"permissions"`
-	Revision       uint64                           `json:"revision"`
-	Sessions       map[string]sessionRecord         `json:"sessions"`
-	Agents         map[string]agentRecord           `json:"agents,omitempty"`
-	Tokens         map[string]tokenRecord           `json:"tokens,omitempty"`
-	Groups         map[string]permissionGroup       `json:"groups,omitempty"`
-	DefaultGroupID string                           `json:"default_group_id,omitempty"`
-	AccessRevision uint64                           `json:"access_revision,omitempty"`
-	OAuthServer    OAuthServerSettings              `json:"oauth_server,omitempty"`
-	LoginUsers     map[string]loginUser             `json:"login_users,omitempty"`
-	OAuthClients   map[string]oauthserver.Client    `json:"oauth_clients,omitempty"`
-	OAuthGrants    map[string]oauthGrant            `json:"oauth_grants,omitempty"`
-	OAuthCodes     map[string]oauthCodeRecord       `json:"oauth_codes,omitempty"`
-	OAuthAccess    map[string]oauthCredentialRecord `json:"oauth_access,omitempty"`
-	OAuthRefresh   map[string]oauthCredentialRecord `json:"oauth_refresh,omitempty"`
-	OAuthRevision  uint64                           `json:"oauth_revision,omitempty"`
+	Version            int                              `json:"version"`
+	InstanceID         string                           `json:"instance_id"`
+	SigningKey         string                           `json:"signing_key"`
+	Admin              adminRecord                      `json:"admin"`
+	Permissions        RolePolicy                       `json:"permissions"`
+	Revision           uint64                           `json:"revision"`
+	Sessions           map[string]sessionRecord         `json:"sessions"`
+	Agents             map[string]agentRecord           `json:"agents,omitempty"`
+	Tokens             map[string]tokenRecord           `json:"tokens,omitempty"`
+	Groups             map[string]permissionGroup       `json:"groups,omitempty"`
+	DefaultGroupID     string                           `json:"default_group_id,omitempty"`
+	AccessRevision     uint64                           `json:"access_revision,omitempty"`
+	OAuthServer        OAuthServerSettings              `json:"oauth_server,omitempty"`
+	LoginUsers         map[string]loginUser             `json:"login_users,omitempty"`
+	OAuthClients       map[string]oauthserver.Client    `json:"oauth_clients,omitempty"`
+	OAuthGrants        map[string]oauthGrant            `json:"oauth_grants,omitempty"`
+	OAuthCodes         map[string]oauthCodeRecord       `json:"oauth_codes,omitempty"`
+	OAuthAccess        map[string]oauthCredentialRecord `json:"oauth_access,omitempty"`
+	OAuthRefresh       map[string]oauthCredentialRecord `json:"oauth_refresh,omitempty"`
+	OAuthRevision      uint64                           `json:"oauth_revision,omitempty"`
+	DaemonRegistration *daemonRegistration              `json:"daemon_registration,omitempty"`
 }
 
 type sessionClaims struct {
@@ -145,7 +146,7 @@ type Managed struct {
 	path            string
 	state           managedState
 	now             func() time.Time
-	background      map[string]map[*int]context.CancelFunc
+	background      map[string]map[*int]backgroundWork
 	requests        map[string]map[*int]context.CancelFunc
 	attempts        int
 	window          time.Time
@@ -164,6 +165,7 @@ type Managed struct {
 	// root when the MCP connection registry changes. It is deliberately not
 	// persisted: a live transport ends with the process.
 	mcpConnectionCounts      atomic.Pointer[map[string]int]
+	mcpConnections           atomic.Pointer[map[string][]MCPConnectionInfo]
 	mcpConnectionInvalidator func(principalID, credentialID string)
 	oauthProtocol            *oauthserver.Provider
 	oauthFetcher             *oauthserver.Fetcher

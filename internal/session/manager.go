@@ -515,18 +515,19 @@ func (m *Manager) FindActiveBySSHConfig(sshConfig string) *Session {
 // FindBorrowed returns the live `use:<host>` container for a host, creating it when
 // there is none (issue #255).
 //
-// THE KEY IS THE HOST, not the session name: a borrowed container is a per-host
-// singleton, so ten callers asking for the same host share one visible record instead
-// of producing ten windows and ten archive rows. A rename by a person would break a
-// name-keyed lookup; the host is the fact the caller actually says.
+// The key is the host and caller namespace, not the display name. Repeated runs
+// by one caller share a container; different Agents and the operator keep their
+// command channels and histories separate.
 //
 // THE CALLER MUST ALREADY HAVE DECIDED that visible is wanted. Creating a container
 // starts a real connection (no primary shell, so nothing runs on the target), which is
 // more than the old short-circuit did - so the MCP layer only calls this after it has
 // taken every refusal path it can.
 func (m *Manager) FindBorrowed(host string, cfg Config) (*Session, error) {
-	if found := m.LiveBorrowed(host); found != nil {
-		return found, nil
+	if found := m.LiveBorrowed(host, cfg.Namespace); found != nil {
+		if cfg.SSHConfigIdentity == "" || found.Info().SSHConfigIdentity == cfg.SSHConfigIdentity {
+			return found, nil
+		}
 	}
 	cfg.Name = BorrowedSessionName(host)
 	cfg.SSHConfig = host
@@ -542,7 +543,7 @@ func (m *Manager) FindBorrowed(host string, cfg Config) (*Session, error) {
 // must never be the reason a connection is opened - the command already ran on the
 // pooled transport, and a container started just to hold a row would be a connection
 // nobody asked for. The first run on a host creates the container; later runs find it.
-func (m *Manager) LiveBorrowed(host string) *Session {
+func (m *Manager) LiveBorrowed(host, namespace string) *Session {
 	var found *Session
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
@@ -550,7 +551,7 @@ func (m *Manager) LiveBorrowed(host string) *Session {
 		if info.Status != api.SessionRunning || !info.Borrowed {
 			return true
 		}
-		if info.SSHConfig == host {
+		if info.SSHConfig == host && info.Namespace == namespace {
 			found = s
 			return false
 		}

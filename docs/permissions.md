@@ -236,3 +236,22 @@
 - `POST /ext/{name}/stream` 对 Agent 在任何字节写入前核验 `ext.get`、`shell.input`、`shell.key(enter)`、需要回复时的 `shell.output` 和扩展目标主机，并使用授权时冻结的模板/主机绑定启动。首次响应返回 `Mcp-Session-Id`；后续帧必须由同一 verified principal + credential 使用该 session。DELETE 只释放该 session 的独立 channel。
 - 文件 `forms`、`max_bytes`，按键 `keys`、`repeat_max`，以及工具/方法 allowlist 都是服务端可验证条件；无法证明的约束应保守拒绝。
 - 预设组只提供初始策略快照。管理员可以在组级策略中修改。
+
+## 权限变化与 MCP 会话
+
+权限组、动作、约束和主机范围属于业务授权，不是登录身份。普通修改完成后，现有静态
+Token、OAuth grant、Agent owner 和 MCP session 保持不变；下一次工具调用、组合动作、
+审批重放或后台任务后续受控步骤重新读取当前策略。组停用、删除或把 Agent 移入
+“未授权”同样允许 MCP 握手和协议帧，但业务动作返回 403。已经失去所需动作或主机范围的
+后台传输按它登记的 operation/host authority 被取消；与此次变化无关的传输继续运行。
+
+只有 Agent 停用、登录用户停用、OAuth grant/client/credential 撤销、静态 Token 撤销或
+替换、配置保险库锁定这类身份或凭据失效事件才注销 transport session 并取消该凭据的请求
+和后台工作。OAuth refresh 轮换只改变 opaque access token，不改变 Agent、owner、group、
+grant、client 或 resource，因此可以继续已有 Streamable HTTP session。
+
+会话丢失不是撤权：有效 Bearer 携带未知 session 时返回 404，客户端可重新
+`initialize`；真实归属不匹配返回 403；无效 Bearer 返回 401。自管 stdio bridge 对
+Streamable HTTP 与 SSE 都做有界、可取消的重握手，但不会重放结果不明的命令、按键或文件
+操作；这类请求以 `termcp_session_replaced` / `result=unknown` / `request_was_replayed=false`
+返回。

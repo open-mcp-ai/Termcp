@@ -127,6 +127,56 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 	}
 
 	ping := `{"jsonrpc":"2.0","id":2,"method":"ping"}`
+	createdGroup := call("POST", "/auth/groups", `{"name":"transport-policy","preset_id":"host-operator"}`)["group"].(map[string]any)
+	changeGroup, _ := json.Marshal(map[string]any{"revision": 1, "group_id": createdGroup["id"]})
+	call("PUT", "/auth/principals/"+principal+"/group", string(changeGroup))
+	// An ordinary permission change applies to the next business call without
+	// rotating the static credential or invalidating either live MCP session.
+	resp = request("POST", "/stream", ping, token, sid)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("static-token session did not survive an ordinary group change: %d", resp.StatusCode)
+	}
+	if got := waitForConnections(t, s, 2); len(got) != 2 || got[0].CredentialID != credential && got[1].CredentialID != credential {
+		t.Fatalf("group change replaced static-token sessions: %+v", got)
+	}
+
+	// Valid authentication plus an unknown session is recoverable: 404 tells the
+	// client to initialize again without changing its credential. An invalid
+	// bearer is still an authentication failure, not a session ownership error.
+	resp = request("POST", "/stream", ping, token, "missing-session")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown session status = %d, want 404", resp.StatusCode)
+	}
+	resp = request("POST", "/stream", ping, token+"-invalid", "missing-session")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("invalid bearer status = %d, want 401", resp.StatusCode)
+	}
+
+	// A terminated session can be reinitialized with the same valid credential,
+	// preserving Agent and credential ownership across the new transport session.
+	resp = request("DELETE", "/stream", "", token, sid)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("terminate stream session: %d", resp.StatusCode)
+	}
+	resp = request("POST", "/stream", init, token, "")
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	reinitializedSID := resp.Header.Get("Mcp-Session-Id")
+	if resp.StatusCode != http.StatusOK || reinitializedSID == "" || reinitializedSID == sid {
+		t.Fatalf("reinitialize after session loss: status=%d session=%q old=%q", resp.StatusCode, reinitializedSID, sid)
+	}
+	reinitialized := waitForConnection(t, s, func(connection Connection) bool {
+		return connection.SessionID == reinitializedSID
+	})
+	if reinitialized.PrincipalID != principal || reinitialized.CredentialID != credential {
+		t.Fatalf("reinitialized session changed ownership: %+v", reinitialized)
+	}
+	sid = reinitializedSID
+
 	resp = request("POST", "/stream", ping, other, sid)
 	resp.Body.Close()
 	if resp.StatusCode != 403 {
@@ -193,6 +243,17 @@ func TestManagedMCPTransportCredentials(t *testing.T) {
 		sseConnection.CredentialID != credential || sseConnection.ClientMode != ClientModeStdioBridge {
 		t.Fatalf("attributed SSE connection = %+v", sseConnection)
 	}
+	groupRevision := int(createdGroup["revision"].(float64))
+	denyPolicy, _ := json.Marshal(map[string]any{"revision": groupRevision, "policy": auth.EmptyAgentPolicy()})
+	call("PATCH", "/auth/groups/"+createdGroup["id"].(string), string(denyPolicy))
+	msg = request("POST", endpoint, ping, token, "")
+	msg.Body.Close()
+	if msg.StatusCode != http.StatusAccepted {
+		t.Fatalf("SSE session did not survive an ordinary group change: %d", msg.StatusCode)
+	}
+	if got := waitForConnections(t, s, 3); len(got) != 3 {
+		t.Fatalf("ordinary group change replaced SSE or stream sessions: %+v", got)
+	}
 	call("DELETE", "/auth/tokens/"+credential, "")
 	finished := make(chan struct{})
 	go func() { _, _ = io.Copy(io.Discard, reader); close(finished) }()
@@ -219,7 +280,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 		grant      string
 		client     string
 		resource   string
-		want       bool
+		want       transportAuthorization
 	}{
 		{
 			name:       "oauth refresh same Agent",
@@ -230,7 +291,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			grant:      "grant-a",
 			client:     "client-a",
 			resource:   "https://termcp.example/stream",
-			want:       true,
+			want:       transportAuthorized,
 		},
 		{
 			name:       "oauth token different Agent",
@@ -238,7 +299,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			actorID:    "agent-b",
 			credential: "token:oauth-new",
 			oauth:      true,
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 		{
 			name:       "oauth token different grant",
@@ -249,7 +310,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			grant:      "grant-b",
 			client:     "client-a",
 			resource:   "https://termcp.example/stream",
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 		{
 			name:       "oauth token different client",
@@ -260,7 +321,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			grant:      "grant-a",
 			client:     "client-b",
 			resource:   "https://termcp.example/stream",
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 		{
 			name:       "oauth token different resource",
@@ -271,21 +332,21 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			grant:      "grant-a",
 			client:     "client-a",
 			resource:   "https://termcp.example/sse",
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 		{
 			name:       "static Token rotation",
 			owner:      transportOwner{principal: "agent-a", credential: "token:old"},
 			actorID:    "agent-a",
 			credential: "token:new",
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 		{
 			name:       "static credential exact match",
 			owner:      transportOwner{principal: "agent-a", credential: "token:old"},
 			actorID:    "agent-a",
 			credential: "token:old",
-			want:       true,
+			want:       transportAuthorized,
 		},
 		{
 			name:       "OAuth token cannot adopt static session",
@@ -293,7 +354,7 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 			actorID:    "agent-a",
 			credential: "token:oauth-new",
 			oauth:      true,
-			want:       false,
+			want:       transportOwnerMismatch,
 		},
 	}
 	for _, test := range tests {
@@ -309,6 +370,14 @@ func TestAuthorizeTransportAllowsOnlyOAuthRefreshForSameAgent(t *testing.T) {
 				t.Fatalf("authorizeTransport = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAuthorizeTransportDistinguishesMissingFromMismatch(t *testing.T) {
+	server := &Server{connections: newConnRegistry()}
+	got := server.authorizeTransport(t.Context(), "missing", auth.Actor{ID: "agent-a"}, "token:a", false)
+	if got != transportSessionMissing {
+		t.Fatalf("missing session = %v", got)
 	}
 }
 

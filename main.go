@@ -95,6 +95,26 @@ func mcpConnectionCountsByPrincipal(conns []mcpmod.Connection) map[string]int {
 	return counts
 }
 
+func mcpConnectionsForAuth(conns []mcpmod.Connection) []auth.MCPConnectionInfo {
+	out := make([]auth.MCPConnectionInfo, 0, len(conns))
+	for _, connection := range conns {
+		if connection.PrincipalID == "" || connection.CredentialID == "" {
+			continue
+		}
+		out = append(out, auth.MCPConnectionInfo{
+			SessionID:    connection.SessionID,
+			Name:         connection.Name,
+			Version:      connection.Version,
+			PrincipalID:  connection.PrincipalID,
+			CredentialID: connection.CredentialID,
+			Transport:    connection.Transport,
+			ClientMode:   connection.ClientMode,
+			ConnectedAt:  connection.ConnectedAt,
+		})
+	}
+	return out
+}
+
 func logHTTPMain(base string, port int, lanIPv4 []string) {
 	slog.Info(base + "/")
 	for _, ip := range lanIPv4 {
@@ -424,6 +444,11 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		managed.MCPIdleTimeout = idleTimeout
 		managed.HideInternal = cfg.NoInternal
 	}
+	if managed != nil {
+		registrationCtx, cancelRegistration := context.WithCancel(context.Background())
+		defer cancelRegistration()
+		go ensureLocalDaemonRegistration(registrationCtx, managed)
+	}
 	sessMgr.SetSSHConfigResolver(sshStore.ResolveSessionReference)
 
 	// The in-process MCP bridge is a command the internal SSH server serves itself,
@@ -526,7 +551,9 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 	}
 	mcpSrv.SetConnectionsListener(func() {
 		if managed != nil {
-			managed.SetMCPConnectionCounts(mcpConnectionCountsByPrincipal(mcpSrv.Connections()))
+			connections := mcpSrv.Connections()
+			managed.SetMCPConnectionCounts(mcpConnectionCountsByPrincipal(connections))
+			managed.SetMCPConnections(mcpConnectionsForAuth(connections))
 		}
 		webuiH.NotifyClientsChanged()
 	})
@@ -632,6 +659,35 @@ func runServer(cfg *config.Config, idleTimeoutArg string, idleTimeout time.Durat
 		}
 		slog.Error("failed to start MCP server", "err", err)
 		os.Exit(1)
+	}
+}
+
+func ensureLocalDaemonRegistration(ctx context.Context, managed *auth.Managed) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	lastError := ""
+	for {
+		done, err := managed.EnsureLocalDaemonRegistration(ctx)
+		if done {
+			return
+		}
+		if err != nil && ctx.Err() == nil {
+			// The common pre-ready errors are "vault locked" and "setup not
+			// complete"; both are expected during first-run onboarding. Retry
+			// quietly until the encrypted state becomes available, logging only
+			// when the reason changes rather than twice a second.
+			if message := err.Error(); message != lastError {
+				slog.Debug("local daemon registration is not ready", "err", err)
+				lastError = message
+			}
+		} else {
+			lastError = ""
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

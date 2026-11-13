@@ -14,6 +14,12 @@ import (
 const (
 	agentOriginManual = "manual"
 	agentOriginOAuth  = "oauth"
+	agentOriginDaemon = "daemon_stdio"
+
+	tokenKindStatic = "static"
+	tokenKindDaemon = "daemon"
+
+	localDaemonRegistrationID = "local-daemon"
 
 	maxLoginUsers    = 4096
 	maxOAuthClients  = 4096
@@ -131,6 +137,20 @@ type pendingOAuthGrant struct {
 	ConfigRevision uint64 `json:"config_revision"`
 }
 
+// daemonRegistration is the durable trust record for the local stdio bridge.
+// The raw bridge credential is intentionally kept outside the encrypted auth
+// JSON in a 0600 data-directory file; the encrypted state contains only its
+// digest-backed token record and the ownership/registration relationship.
+type daemonRegistration struct {
+	ID            string     `json:"id"`
+	AgentID       string     `json:"agent_id"`
+	TokenID       string     `json:"token_id"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ProvisionedAt time.Time  `json:"provisioned_at"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	RevokeReason  string     `json:"revoke_reason,omitempty"`
+}
+
 func normalizeOAuthServerSettings(settings OAuthServerSettings) (OAuthServerSettings, error) {
 	settings.PublicURL = strings.TrimRight(strings.TrimSpace(settings.PublicURL), "/")
 	settings.OIDCIssuer = strings.TrimSpace(settings.OIDCIssuer)
@@ -180,6 +200,13 @@ func normalizeOAuthState(s *managedState) bool {
 	if s.OAuthRefresh == nil {
 		s.OAuthRefresh = map[string]oauthCredentialRecord{}
 		changed = true
+	}
+	for id, token := range s.Tokens {
+		if token.Kind == "" {
+			token.Kind = tokenKindStatic
+			s.Tokens[id] = token
+			changed = true
+		}
 	}
 	if s.OAuthRevision == 0 {
 		s.OAuthRevision = 1
@@ -255,6 +282,10 @@ func cloneManagedState(s managedState) managedState {
 		credential.Scopes = slices.Clone(credential.Scopes)
 		credential.Request = cloneStoredRequest(credential.Request)
 		s.OAuthRefresh[id] = credential
+	}
+	if s.DaemonRegistration != nil {
+		registration := *s.DaemonRegistration
+		s.DaemonRegistration = &registration
 	}
 	return s
 }

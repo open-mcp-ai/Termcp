@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/open-mcp-ai/termcp/internal/authorization"
 )
 
 func TestBackgroundWorkSurvivesResponseAndStopsOnAccessChanges(t *testing.T) {
@@ -91,6 +93,58 @@ func TestBackgroundRegistrationRefusesAlreadyRevokedIntent(t *testing.T) {
 	if release, err := RegisterBackgroundWork(ctx, func() {}); err == nil {
 		release()
 		t.Fatal("revoked request registered new background authority")
+	}
+}
+
+func TestBackgroundWorkCancellationUsesItsOperationAndHostAuthority(t *testing.T) {
+	m, cookie, session := configuredManaged(t)
+	group := createTestGroup(t, m, cookie, session, "selective background owners", "viewer")
+	policy := EmptyAgentPolicy()
+	policy.Actions["file.write"] = authorization.Grant{Effect: authorization.EffectAllow}
+	policy.Actions["profile.list"] = authorization.Grant{Effect: authorization.EffectAllow}
+	payload, _ := json.Marshal(map[string]any{"revision": group.Revision, "policy": policy})
+	if w := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodPatch, "/auth/groups/"+group.ID, string(payload), cookie, session.CSRF); w.Code != http.StatusOK {
+		t.Fatalf("set initial policy: %d %s", w.Code, w.Body)
+	}
+
+	a := issueTestCredential(t, m, cookie, session, "/auth/principals", `{"name":"selective-worker","group_id":"`+group.ID+`"}`)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+a.Token)
+	ctx, finish, status := m.admitToken(req)
+	if status != 0 {
+		t.Fatal(status)
+	}
+	defer finish()
+	work, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release, err := RegisterBackgroundWorkFor(ctx, cancel, BackgroundWorkAuthority{
+		Operations: []string{"file.write"},
+		Hosts:      []string{"host-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	finish()
+
+	// A change to an unrelated operation keeps this transfer alive.
+	delete(policy.Actions, "profile.list")
+	payload, _ = json.Marshal(map[string]any{"revision": group.Revision + 1, "policy": policy})
+	if w := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodPatch, "/auth/groups/"+group.ID, string(payload), cookie, session.CSRF); w.Code != http.StatusOK {
+		t.Fatalf("unrelated policy change: %d %s", w.Code, w.Body)
+	}
+	if work.Err() != nil {
+		t.Fatal("policy change canceled background work whose authority remained valid")
+	}
+
+	// Removing the operation that the transfer is exercising does cancel it.
+	delete(policy.Actions, "file.write")
+	payload, _ = json.Marshal(map[string]any{"revision": group.Revision + 2, "policy": policy})
+	if w := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodPatch, "/auth/groups/"+group.ID, string(payload), cookie, session.CSRF); w.Code != http.StatusOK {
+		t.Fatalf("relevant policy change: %d %s", w.Code, w.Body)
+	}
+	if work.Err() == nil {
+		t.Fatal("removing a required operation left background work running")
 	}
 }
 

@@ -85,22 +85,27 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 	if bindings.extensions == nil {
 		bindings.extensions = map[string]extensions.AuthorizationBinding{}
 	}
-	targets := capability.AgentToolTargets(tool, args)
-	if key := targets.ProfileArgument; key != "" {
-		name := getString(args, key, "")
+	bindHost := func(name string) error {
 		binding, exists := bindings.profiles[strings.TrimSpace(name)]
 		if !exists {
 			binding, err = s.profileAuthorizationBinding(name)
 			if err != nil {
-				return deny(fmt.Errorf("cannot resolve the authorized host: %w", err))
+				return fmt.Errorf("cannot resolve the authorized host: %w", err)
 			}
 		}
 		if !p.AllowsHost(binding.Identity) {
-			return deny(fmt.Errorf("host is outside this Agent's scope"))
+			return fmt.Errorf("host is outside this Agent's scope")
 		}
 		bindings.profiles[name] = binding
 		bindings.profiles[strings.TrimSpace(name)] = binding
 		bindings.profiles[binding.Name] = binding
+		return nil
+	}
+	targets := capability.AgentToolTargets(tool, args)
+	if key := targets.ProfileArgument; key != "" {
+		if err := bindHost(getString(args, key, "")); err != nil {
+			return deny(err)
+		}
 	}
 	if key := targets.ExtensionArgument; key != "" {
 		name := getString(args, key, "")
@@ -128,6 +133,16 @@ func (s *Server) agentToolCheckV2(ctx context.Context, p auth.AgentPolicy, tool 
 					sess = g.sessionForForwardID(id)
 				default:
 					sess = g.lookupSessionID(id)
+				}
+				// Borrowed host locators do not name an existing session. Bind
+				// their saved host identity before applying the operation policy.
+				if sess == nil && key != "forward_id" {
+					if host, borrowed := s.parseBorrowedHost(id); borrowed {
+						if err := bindHost(host); err != nil {
+							return deny(err)
+						}
+						continue
+					}
 				}
 				if !s.agentSessionAllowed(ctx, p, sess) {
 					return deny(fmt.Errorf("session is outside this Agent's host scope"))

@@ -25,8 +25,10 @@ import (
 )
 
 const (
-	sessionHeader  = "Mcp-Session-Id" // set by mcp-go on the initialize reply; required afterwards
-	cleanupTimeout = 5 * time.Second
+	sessionHeader    = "Mcp-Session-Id" // set by mcp-go on the initialize reply; required afterwards
+	cleanupTimeout   = 5 * time.Second
+	recoveryTimeout  = 5 * time.Second
+	recoveryAttempts = 3
 )
 
 // Config describes one bridge run. In and Out are required.
@@ -154,9 +156,21 @@ type bridge struct {
 	cancel context.CancelFunc
 	client *http.Client
 
-	sessMu     sync.Mutex
-	sessionID  string // streamable mode: captured from the initialize reply; "" until then
-	messageURL string // SSE mode: POST target learned from the stream's endpoint event
+	sessMu          sync.Mutex
+	sessionID       string // streamable mode: captured from the initialize reply; "" until then
+	messageURL      string // SSE mode: POST target learned from the stream's endpoint event
+	streamCancel    context.CancelFunc
+	readerStarted   bool
+	sseRecovering   bool
+	sseStreamCancel context.CancelFunc
+	sseRecoveryDone chan struct{}
+
+	handshakeMu sync.RWMutex
+	initialize  []byte
+	initialized []byte
+
+	recoverMu sync.Mutex
+	recovery  *sessionRecovery
 
 	// outTok serialises writes to stdout with a door: a client that stops reading
 	// stdout must not park every writer in the bridge forever (issue #220).
@@ -173,6 +187,11 @@ type bridge struct {
 	pending      map[string]int // SSE mode: forwarded request ids still owed a reply
 	fatalPending bool           // SSE mode: a fatal error fired while EOF waits
 	pendingCond  *sync.Cond     // signaled on every pending/fatal change and on ctx cancellation
+}
+
+type sessionRecovery struct {
+	done chan struct{}
+	err  error
 }
 
 // readStdin forwards every newline-delimited message. Malformed lines are NOT
@@ -221,7 +240,9 @@ func (b *bridge) forward(msg []byte) {
 // relays the reply. Failures are terminal: a client waiting on a bridge whose
 // session is gone must be told, not hung.
 func (b *bridge) forwardStreamable(msg []byte) {
-	resp, err := b.postStreamable(msg)
+	b.rememberHandshake(msg)
+	sessionID := b.getSession()
+	resp, err := b.postStreamableContext(b.ctx, msg, sessionID)
 	if err != nil {
 		b.fail(msg, fmt.Sprintf("POST %s: %v", b.cfg.URL, err))
 		return
@@ -238,6 +259,17 @@ func (b *bridge) forwardStreamable(msg []byte) {
 		if err := b.relayBody(resp); err != nil {
 			b.fail(msg, err.Error())
 		}
+	case http.StatusNotFound:
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if sessionID == "" {
+			b.fail(msg, fmt.Sprintf("the server answered %s: %s", resp.Status, bytes.TrimSpace(snippet)))
+			return
+		}
+		if err := b.recoverSession(sessionID); err != nil {
+			b.fail(msg, fmt.Sprintf("MCP session was lost; the request may have run, but its result is unknown; reinitialization failed: %v", err))
+			return
+		}
+		b.unknownResult(msg, "the MCP session was replaced; the request may have run, but its result is unknown; the connection was reinitialized without replaying it")
 	default:
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		b.fail(msg, fmt.Sprintf("the server answered %s: %s", resp.Status, bytes.TrimSpace(snippet)))
@@ -247,9 +279,19 @@ func (b *bridge) forwardStreamable(msg []byte) {
 // forwardSSE POSTs one MCP message to the message endpoint named by the event
 // stream. The reply (if any) arrives on that stream, not in the POST response.
 func (b *bridge) forwardSSE(msg []byte) {
+	b.rememberHandshake(msg)
+	if b.sseIsRecovering() {
+		waitCtx, cancelWait := context.WithTimeout(b.ctx, 3*recoveryTimeout)
+		err := b.waitSSERecovery(waitCtx)
+		cancelWait()
+		if err != nil {
+			b.unknownResultState(msg, "the SSE connection could not be reinitialized before this request; the request was not sent and no result is available", false)
+			return
+		}
+	}
 	target := b.getMessageURL()
 	if target == "" {
-		b.fail(msg, "the server has not named a message endpoint")
+		b.unknownResultState(msg, "the SSE message endpoint is unavailable; the request was not sent and no result is available", false)
 		return
 	}
 	// Recorded before the POST: the reply can reach the relay goroutine as
@@ -271,6 +313,10 @@ func (b *bridge) forwardSSE(msg []byte) {
 	b.authorize(req)
 	resp, err := b.client.Do(req)
 	if err != nil {
+		if b.sseIsRecovering() {
+			b.unknownResultState(msg, "the SSE connection was interrupted; the request may have run, but its result is unknown and it was not replayed", false)
+			return
+		}
 		b.fail(msg, fmt.Sprintf("POST %s: %v", target, err))
 		return
 	}
@@ -279,6 +325,10 @@ func (b *bridge) forwardSSE(msg []byte) {
 	case http.StatusAccepted, http.StatusOK:
 		// The reply travels over the event stream.
 		_, _ = io.Copy(io.Discard, resp.Body)
+	case http.StatusNotFound, http.StatusGone:
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b.beginSSERecovery()
+		b.unknownResultState(msg, fmt.Sprintf("the SSE message endpoint answered %s (%s); the request may have run, but its result is unknown and it was not replayed", resp.Status, bytes.TrimSpace(snippet)), false)
 	default:
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		b.fail(msg, fmt.Sprintf("the server answered %s: %s", resp.Status, bytes.TrimSpace(snippet)))
@@ -326,21 +376,147 @@ func resolveEndpoint(streamURL, endpoint string) string {
 	return base.ResolveReference(ref).String()
 }
 
-func (b *bridge) postStreamable(msg []byte) (*http.Response, error) {
+func (b *bridge) postStreamableContext(ctx context.Context, msg []byte, sessionID string) (*http.Response, error) {
 	// NO DEADLINE HERE, deliberately: this POST's response body IS the tool's answer,
 	// so a fixed cap would cut a legitimately slow call at 30s. The wait is the
 	// caller's to bound, and the bridge's own context ends it at shutdown.
-	req, err := http.NewRequestWithContext(b.ctx, http.MethodPost, b.cfg.URL, bytes.NewReader(msg))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.cfg.URL, bytes.NewReader(msg))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if sid := b.getSession(); sid != "" {
-		req.Header.Set(sessionHeader, sid)
+	if sessionID != "" {
+		req.Header.Set(sessionHeader, sessionID)
 	}
 	b.authorize(req)
 	return b.client.Do(req)
+}
+
+func (b *bridge) rememberHandshake(msg []byte) {
+	var envelope struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(msg, &envelope) != nil {
+		return
+	}
+	b.handshakeMu.Lock()
+	defer b.handshakeMu.Unlock()
+	switch envelope.Method {
+	case "initialize":
+		b.initialize = append(b.initialize[:0], msg...)
+	case "notifications/initialized":
+		b.initialized = append(b.initialized[:0], msg...)
+	}
+}
+
+func (b *bridge) recoveryMessages() ([]byte, []byte, bool) {
+	b.handshakeMu.RLock()
+	defer b.handshakeMu.RUnlock()
+	if len(b.initialize) == 0 {
+		return nil, nil, false
+	}
+	initialize := append([]byte(nil), b.initialize...)
+	initialized := append([]byte(nil), b.initialized...)
+	if len(initialized) == 0 {
+		initialized = []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	}
+	return initialize, initialized, true
+}
+
+func (b *bridge) recoverSession(failedSessionID string) error {
+	b.recoverMu.Lock()
+	current := b.getSession()
+	if current != "" && current != failedSessionID {
+		b.recoverMu.Unlock()
+		return nil
+	}
+	if active := b.recovery; active != nil {
+		done := active.done
+		b.recoverMu.Unlock()
+		select {
+		case <-done:
+			return active.err
+		case <-b.ctx.Done():
+			return b.ctx.Err()
+		}
+	}
+	recovery := &sessionRecovery{done: make(chan struct{})}
+	b.recovery = recovery
+	b.recoverMu.Unlock()
+
+	err := b.performSessionRecovery()
+
+	b.recoverMu.Lock()
+	recovery.err = err
+	if b.recovery == recovery {
+		b.recovery = nil
+	}
+	close(recovery.done)
+	b.recoverMu.Unlock()
+	return err
+}
+
+func (b *bridge) performSessionRecovery() error {
+	initialize, initialized, ok := b.recoveryMessages()
+	if !ok {
+		return errors.New("the bridge did not observe an initialize request to replay into a new session")
+	}
+	b.clearSession()
+	var lastErr error
+	for attempt := range recoveryAttempts {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 150 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-b.ctx.Done():
+				timer.Stop()
+				return b.ctx.Err()
+			}
+		}
+		ctx, cancel := context.WithTimeout(b.ctx, recoveryTimeout)
+		resp, err := b.postStreamableContext(ctx, initialize, "")
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		sessionID := resp.Header.Get(sessionHeader)
+		if resp.StatusCode == http.StatusOK && sessionID != "" {
+			cancel()
+			b.startServerStream(sessionID)
+			notifyCtx, notifyCancel := context.WithTimeout(b.ctx, recoveryTimeout)
+			notifyResp, notifyErr := b.postStreamableContext(notifyCtx, initialized, sessionID)
+			if notifyErr == nil {
+				_, _ = io.Copy(io.Discard, notifyResp.Body)
+				notifyResp.Body.Close()
+				if notifyResp.StatusCode == http.StatusOK || notifyResp.StatusCode == http.StatusAccepted {
+					notifyCancel()
+					return nil
+				}
+				notifyErr = fmt.Errorf("initialized notification answered %s", notifyResp.Status)
+			}
+			notifyCancel()
+			lastErr = notifyErr
+			b.clearSession()
+			continue
+		}
+		cancel()
+		lastErr = fmt.Errorf("initialize answered %s", resp.Status)
+	}
+	return fmt.Errorf("new MCP session could not be initialized after %d attempts: %w", recoveryAttempts, lastErr)
+}
+
+func (b *bridge) clearSession() {
+	b.sessMu.Lock()
+	b.sessionID = ""
+	if b.streamCancel != nil {
+		b.streamCancel()
+		b.streamCancel = nil
+	}
+	b.sessMu.Unlock()
 }
 
 func (b *bridge) getSession() string {
@@ -388,6 +564,38 @@ func (b *bridge) fail(msg []byte, text string) {
 	b.fatalPending = true
 	b.pendingMu.Unlock()
 	b.pendingCond.Broadcast()
+}
+
+// unknownResult answers the request that discovered the lost session without
+// pretending the operation failed before execution. The bridge cannot know
+// whether the server committed the call before dropping the session, so it
+// reports the uncertainty and deliberately does not replay the request.
+func (b *bridge) unknownResult(msg []byte, text string) {
+	b.unknownResultState(msg, text, true)
+}
+
+func (b *bridge) unknownResultState(msg []byte, text string, reinitialized bool) {
+	b.errf("mcpbridge: %s", text)
+	if id := requestID(msg); id != nil {
+		payload, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"error": map[string]any{
+				"code":    -32010,
+				"message": "termcp bridge: " + text,
+				"data": map[string]any{
+					"kind":                 "termcp_session_replaced",
+					"result":               "unknown",
+					"reinitialized":        reinitialized,
+					"request_was_replayed": false,
+				},
+			},
+		})
+		if err == nil {
+			b.writeOut(payload)
+		}
+	}
+	b.replySaw(msg)
 }
 
 // writeOutWait is how long a write to stdout may wait for the prior write to finish.

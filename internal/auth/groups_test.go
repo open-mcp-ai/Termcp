@@ -78,8 +78,8 @@ func TestPermissionGroupsSharePolicyWithoutSharingIdentity(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("update group: %d %s", w.Code, w.Body)
 	}
-	if live.Err() == nil {
-		t.Fatal("group policy update left existing request running")
+	if live.Err() != nil {
+		t.Fatal("ordinary group policy update ended the authenticated request")
 	}
 	for _, client := range []issuedCredential{a, b} {
 		h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,8 +136,14 @@ func TestGroupLifecyclePreviewConflictAndExplicitDeny(t *testing.T) {
 	if w := managedRequest(t, h, "DELETE", "/auth/groups/"+g.ID, string(body), cookie, session.CSRF); w.Code != 200 {
 		t.Fatal("confirmed delete failed", w.Code, w.Body)
 	}
-	if w := bearerRequest(checkNoBusinessHandler(t, m), "POST", "/stream", rotated.Token, ""); w.Code != 401 {
-		t.Fatal("deleted group left an effective orphan credential", w.Code)
+	deniedPolicy := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, restricted, err := PolicyFromContext(r.Context()); !restricted || err == nil {
+			t.Error("deleted group did not produce a live policy failure")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if w := bearerRequest(deniedPolicy, "POST", "/stream", rotated.Token, ""); w.Code != http.StatusNoContent {
+		t.Fatal("deleted group invalidated the Agent identity instead of only its policy", w.Code)
 	}
 	loaded, err := reopenManaged(t, m)
 	if err != nil {

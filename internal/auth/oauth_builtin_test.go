@@ -392,6 +392,33 @@ func TestBuiltinOAuthURLLoginAgentProvisionRefreshAndReuseRevocation(t *testing.
 		t.Fatalf("provisioned Agent = %+v", agent)
 	}
 	m.mu.Unlock()
+	principalResponse := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodGet, "/auth/principals", "", cookie, session.CSRF)
+	if principalResponse.Code != http.StatusOK {
+		t.Fatalf("list OAuth Agent: %d %s", principalResponse.Code, principalResponse.Body)
+	}
+	var principalList struct {
+		Principals []struct {
+			ID                          string   `json:"id"`
+			Origin                      string   `json:"origin"`
+			OwnerIssuer                 string   `json:"owner_issuer"`
+			ActiveOAuthGrantCount       int      `json:"active_oauth_grant_count"`
+			OAuthClients                []string `json:"oauth_clients"`
+			StaticCredentialCount       int      `json:"static_credential_count"`
+			ActiveStaticCredentialCount int      `json:"active_static_credential_count"`
+		} `json:"principals"`
+	}
+	if err := json.Unmarshal(principalResponse.Body.Bytes(), &principalList); err != nil {
+		t.Fatal(err)
+	}
+	if len(principalList.Principals) != 1 {
+		t.Fatalf("OAuth principal list = %+v", principalList.Principals)
+	}
+	oauthView := principalList.Principals[0]
+	if oauthView.ID != agent.ID || oauthView.Origin != agentOriginOAuth || oauthView.OwnerIssuer == "" ||
+		oauthView.ActiveOAuthGrantCount != 1 || len(oauthView.OAuthClients) != 1 ||
+		oauthView.StaticCredentialCount != 0 || oauthView.ActiveStaticCredentialCount != 0 {
+		t.Fatalf("OAuth principal view conflates origin and credentials: %+v", oauthView)
+	}
 
 	accessRequest := httptest.NewRequest(http.MethodPost, public.URL+"/stream", nil)
 	accessRequest.Header.Set("Authorization", "Bearer "+accessToken)
@@ -405,7 +432,9 @@ func TestBuiltinOAuthURLLoginAgentProvisionRefreshAndReuseRevocation(t *testing.
 	assertOAuthBearerStatus(t, m, public.URL, accessToken, http.StatusLocked)
 	m.vault = baseVault
 
-	// Permission changes take effect immediately without rotating credentials.
+	// Permission changes take effect immediately without rotating credentials or
+	// ending the authenticated identity. Admission remains valid; the business
+	// policy is consulted by the MCP operation path.
 	m.mu.Lock()
 	initialGroup := m.state.Groups[agent.GroupID]
 	accessRevision := m.state.AccessRevision
@@ -414,7 +443,7 @@ func TestBuiltinOAuthURLLoginAgentProvisionRefreshAndReuseRevocation(t *testing.
 	if response := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodPatch, "/auth/groups/"+initialGroup.ID, disableGroup, cookie, session.CSRF); response.Code != http.StatusOK {
 		t.Fatalf("disable OAuth Agent group: %d %s", response.Code, response.Body)
 	}
-	assertOAuthBearerStatus(t, m, public.URL, accessToken, http.StatusUnauthorized)
+	assertOAuthBearerStatus(t, m, public.URL, accessToken, http.StatusNoContent)
 	enableGroup := fmt.Sprintf(`{"revision":%d,"enabled":true}`, initialGroup.Revision+1)
 	if response := managedRequest(t, m.Wrap(http.NotFoundHandler()), http.MethodPatch, "/auth/groups/"+initialGroup.ID, enableGroup, cookie, session.CSRF); response.Code != http.StatusOK {
 		t.Fatalf("re-enable OAuth Agent group: %d %s", response.Code, response.Body)
