@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -149,10 +150,21 @@ func TestReadWithoutUntilDoesNotWait(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	awaitPtyReady(t, s, h)
 
+	// A command that sleeps before printing, in the syntax of whichever shell was given.
+	//
+	// THE MARKER IS BUILT BY THE SHELL, NOT SPELLED IN THE LINE: the pty echoes what was
+	// typed, so a line containing the literal marker puts it in the read's window and the
+	// assertion starts testing the echo instead of the wait. Quoting splits it only in the
+	// echoed text — the shell still prints one word.
+	cmd := `sleep 5; echo NEVER-"WAITED"-FOR`
+	if runtime.GOOS == "windows" {
+		cmd = `Start-Sleep -Seconds 5; echo ("NEVER-" + "WAITED-FOR")`
+	}
 	termText(t, s, map[string]any{
 		"cmd":     "run " + h + " $1",
-		"args":    []any{"sleep 2; echo NEVER-WAITED-FOR"},
+		"args":    []any{cmd},
 		"timeout": 0,
 	})
 	got := termText(t, s, map[string]any{"cmd": "read " + h, "timeout": 0})
@@ -160,6 +172,6 @@ func TestReadWithoutUntilDoesNotWait(t *testing.T) {
 		t.Fatalf("a plain read claimed Completion=%q; only evidence may produce it", v)
 	}
 	if strings.Contains(got, "NEVER-WAITED-FOR") {
-		t.Fatalf("a read without --until waited for later output:\n%s", firstLine(got))
+		t.Fatalf("a read without --until waited for later output:\n%s", got)
 	}
 }
