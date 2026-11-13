@@ -37,8 +37,16 @@ func TestSilentPtyRunNamesTheQueuedPossibility(t *testing.T) {
 
 	// Send a command while the foreground sleep is holding the terminal.
 	got := termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{"echo test-input"}, "timeout": float64(1)})
-	if !strings.HasPrefix(got, "TERM/1 204") {
-		t.Fatalf("expected 204 No Content for a queued command:\n%s", got)
+	// 200 IS THE HONEST STATUS: the pty echoed the line, so the window is not empty. What
+	// must not be there is a claim about work — and what must be there is the sentence
+	// naming the two possibilities. Asserting 204 made a status code stand in for a
+	// meaning, and it failed the moment a runner's tty echoed at a different moment.
+	if strings.HasPrefix(got, "TERM/1 204") {
+		if !strings.Contains(got, "Hint:") {
+			t.Fatalf("a 204 for a queued command explained nothing:\n%s", got)
+		}
+	} else if !strings.HasPrefix(got, "TERM/1 200") {
+		t.Fatalf("a queued command answered neither 200 nor 204:\n%s", firstLine(got))
 	}
 	if strings.Contains(got, "Still-Running: true") {
 		t.Errorf("an empty window is not evidence that the command is running:\n%s", got)

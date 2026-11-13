@@ -312,7 +312,12 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// existed, so the reply is the wrong place to ask.
 	sawBytes := false
 	if now, ok := s.outputSizeFor(stmt.Target); ok && now > start {
-		sawBytes = true
+		// NOT OUR OWN ECHO. A pty echoes the line it was handed, so "bytes arrived since
+		// Input-At" was true before the command had done anything — and on a Linux runner
+		// that turned "your line is queued behind a program holding the terminal" into a
+		// 200 with no explanation at all. What the caller wants to know is whether the
+		// command produced anything, so the echo is subtracted before answering.
+		sawBytes = !s.onlyEcho(stmt.Target, start, now, stmt.Payload)
 	}
 	slot, channelEnd := s.readSlot(ctx, stmt, win, args, time.Since(waitStarted))
 	if slot.Code < 400 {
@@ -341,7 +346,13 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 				"read " + stmt.Target + " --tail 20 looks at the stream, and key " + stmt.Target + " ctrl+c interrupts whatever holds the terminal."
 		}
 	}
-	if windowExpired && watch == nil && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
+	// NOT GATED ON THE WINDOW EXPIRING. A queued line echoes and then goes quiet, so the
+	// wait ends on quiet — the same ending a finished command has — and gating here meant
+	// the one case that most needs the explanation (nothing but your own echo came back)
+	// was the one case that got none. What separates the cases is whether any bytes came
+	// from the command, which is `sawBytes`; `windowExpired` still decides Still-Running,
+	// because only a window that ended mid-stream is evidence of work.
+	if watch == nil && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
 		// Same header the pipe path uses, same meaning: the command was accepted and has
 		// not finished. It is set only when the window expired, so it does not become the
 		// permanently-true flag that kept it off the pty path in the first place.
@@ -359,9 +370,9 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 		if slot.Headers == nil {
 			slot.Headers = map[string]string{}
 		}
-		if sawBytes {
+		if sawBytes && windowExpired {
 			slot.Headers["Still-Running"] = "true"
-		} else {
+		} else if !sawBytes {
 			slot.Headers["Hint"] = "no bytes since this line. A pty gives no signal that a line was read, " +
 				"so a silent command and a line still queued behind a program holding the terminal look " +
 				"identical here: read again, or key " + stmt.Target + " ctrl+c to interrupt what holds it."
@@ -1104,4 +1115,27 @@ func (s *Server) readBudget(stmt directive.Statement, args map[string]any, win t
 		return budget, false
 	}
 	return quiet, true
+}
+
+// onlyEcho reports whether the bytes in [start, now) are nothing but the pty's echo of the
+// line we just typed.
+//
+// THE ECHO IS A COPY OF INPUT THIS SERVER ALREADY HAS, so recognising it needs no
+// heuristics: strip the line endings the terminal adds and compare with what went out. A
+// wrapped echo (a payload wider than the terminal) does not compare equal and is reported
+// as output — the conservative answer, because guessing wrong there would suppress a
+// Still-Running header that was real.
+func (s *Server) onlyEcho(handle string, start, now int64, payload string) bool {
+	if payload == "" {
+		return false
+	}
+	text, ok := s.peekRaw(context.Background(), handle, start, now)
+	if !ok {
+		return false
+	}
+	// A COPY OF THE PAYLOAD SPLIT BY THE TERMINAL'S LINE ENDINGS. Rejoining on the two
+	// characters a tty inserts is what makes a canonical-mode echo compare equal without
+	// letting unrelated output through.
+	joined := strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(text)
+	return joined == strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(payload)
 }

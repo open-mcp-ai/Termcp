@@ -110,10 +110,18 @@ func (s *Server) untilFrom(stmt directive.Statement) (*untilSpec, *toolFailure) 
 // starts looking after its newline — and until that newline exists there is nothing
 // to match, because the only line present is the one the caller typed.
 type untilWatch struct {
-	spec        *untilSpec
-	echoSkipped bool
-	matched     bool
-	exitCode    *int
+	spec *untilSpec
+	// outFrom is the absolute offset where the command's output begins: the byte after
+	// the line the shell echoed back. Zero means "not known yet".
+	//
+	// IT IS AN OFFSET, NOT A ONE-TIME SLICE. Skipping the echo by slicing the text once
+	// only skipped it for that poll; the next poll re-read the tail, which still
+	// contained the echo, and matched the caller's own command. On a Linux runner that
+	// is what made `--until` answer "matched" 0.08s after typing, before the command had
+	// printed anything.
+	outFrom  int64
+	matched  bool
+	exitCode *int
 }
 
 // peekWindow bounds how much is fetched for one match attempt. A marker is a handful
@@ -163,21 +171,26 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	if from < start {
 		from = start
 	}
-	if !w.echoSkipped {
+	// BEFORE THE ECHO IS LOCATED THE WHOLE WINDOW IS READ, and afterwards the read
+	// starts where the output does — never before it, or the echo comes back into view
+	// on the next poll.
+	if w.outFrom == 0 {
 		from = start
+	} else if from < w.outFrom {
+		from = w.outFrom
 	}
 	text, ok := s.peekRaw(ctx, handle, from, now)
 	if !ok {
 		return false, false
 	}
-	if !w.echoSkipped {
+	if w.outFrom == 0 {
 		nl := strings.IndexByte(text, '\n')
 		if nl < 0 {
 			// Only the echoed line so far: matching it is matching the caller's own
 			// command, so there is nothing to answer yet.
 			return false, true
 		}
-		w.echoSkipped = true
+		w.outFrom = from + int64(nl) + 1
 		text = text[nl+1:]
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
