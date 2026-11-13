@@ -1,4 +1,4 @@
-package webui
+package termview
 
 import (
 	"bytes"
@@ -230,7 +230,7 @@ func TestRowLayoutAgreesWithXterm(t *testing.T) {
 	if err != nil {
 		t.Skip("node not on PATH; cannot compare the row model with xterm")
 	}
-	xterm, err := readAsset("static/xterm/xterm.js")
+	xterm, err := readBundledXterm()
 	if err != nil {
 		t.Skipf("the bundled xterm is not readable: %v", err)
 	}
@@ -353,7 +353,7 @@ next();
 		}
 
 		data := []byte(log)
-		g := newRowLayout(80, 24)
+		g := New(80, 24)
 		for i := 0; i < len(data); i++ {
 			// A full-screen program's bytes are deliberately not recorded: the model
 			// keeps the transcript's rows while xterm's cursor is on the program's own
@@ -361,7 +361,7 @@ next();
 			// pinned by TestShellRailAltScreenLeavesTheTranscriptAlone; here it is
 			// skipped so the rest of the case is still compared.
 			wasAlt := g.alt
-			g.feed(int64(i), data[i:i+1])
+			g.Feed(int64(i), data[i:i+1])
 			if wasAlt || g.alt {
 				continue
 			}
@@ -394,11 +394,11 @@ next();
 		// model has to reproduce — but it must not be the reason the counts differ past
 		// a screenful.
 		if probe.RowCount > 24 {
-			if g.rowCount() != probe.RowCount {
-				t.Errorf("%s: the model holds %d rows, xterm holds %d", name, g.rowCount(), probe.RowCount)
+			if g.RowCount() != probe.RowCount {
+				t.Errorf("%s: the model holds %d rows, xterm holds %d", name, g.RowCount(), probe.RowCount)
 			}
-		} else if g.rowCount() > probe.RowCount {
-			t.Errorf("%s: the model holds %d rows, more than xterm's %d", name, g.rowCount(), probe.RowCount)
+		} else if g.RowCount() > probe.RowCount {
+			t.Errorf("%s: the model holds %d rows, more than xterm's %d", name, g.RowCount(), probe.RowCount)
 		}
 		if g.row != probe.Cursor {
 			t.Errorf("%s: the model ends on row %d, xterm on row %d", name, g.row, probe.Cursor)
@@ -423,7 +423,7 @@ next();
 		// overwritten result ("secret"). Those rows are skipped. Their byte-to-row
 		// placement is still checked above; modelling columns is deliberately not
 		// something the layout does.
-		modelRows := make([]string, 0, g.rowCount())
+		modelRows := make([]string, 0, g.RowCount())
 		for i := range g.rows {
 			sp := g.rows[i]
 			if sp.End <= sp.Start {
@@ -516,7 +516,7 @@ func xtermRowText(b []byte) string {
 			}
 			i++
 		case c == '\t':
-			n := shellRailTabStop - (col % shellRailTabStop)
+			n := TabStop - (col % TabStop)
 			for k := 0; k < n; k++ {
 				out = append(out, ' ')
 			}
@@ -538,4 +538,16 @@ func xtermRowText(b []byte) string {
 		}
 	}
 	return string(out)
+}
+
+// readBundledXterm reads the xterm build the Web UI serves. It is a relative path into
+// that package on purpose: the asset is embedded there (go:embed) and this is the only
+// copy in the repository, so pointing at it keeps one truth instead of two.
+func readBundledXterm() (string, error) {
+	path := filepath.Join("..", "webui", "assets", "static", "xterm", "xterm.js")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

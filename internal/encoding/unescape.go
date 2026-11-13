@@ -98,19 +98,11 @@ func hex4(s string) (uint32, bool) {
 	}
 	var v uint32
 	for i := 0; i < 4; i++ {
-		c := s[i]
-		var d uint32
-		switch {
-		case c >= '0' && c <= '9':
-			d = uint32(c - '0')
-		case c >= 'a' && c <= 'f':
-			d = uint32(c-'a') + 10
-		case c >= 'A' && c <= 'F':
-			d = uint32(c-'A') + 10
-		default:
+		d, ok := hexDigit(s[i])
+		if !ok {
 			return 0, false
 		}
-		v = v<<4 | d
+		v = v<<4 | uint32(d)
 	}
 	return v, true
 }

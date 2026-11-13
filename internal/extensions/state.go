@@ -19,6 +19,7 @@ type extState struct {
 	sessionID string // the group's session, while this extension is attached
 	shellID   string // this extension's own channel; "" for a template with no shell
 	forwards  []ForwardStatus
+	exposes   []ForwardStatus
 	failures  []Failure
 	// consecutive counts consecutive failures, for the backoff ladder.
 	consecutive int
@@ -211,7 +212,18 @@ func fingerprint(ext *Extension) string {
 	}
 	b.WriteByte('|')
 	for _, f := range ext.Forwards {
-		fmt.Fprintf(&b, "%s:%s:%s:%d:%s:%d|", f.Kind, f.BindHost, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
+		fmt.Fprintf(&b, "%s:%s:%s:%d:%s:%d|", f.DirectionKind, f.BindHost, f.LocalHost, f.LocalPort, f.RemoteHost, f.RemotePort)
+	}
+	// An expose is part of what runs: changing its paths changes what the far side can
+	// reach, so a template edit must rebuild the listener rather than leave the old
+	// whitelist in place.
+	b.WriteByte('|')
+	for _, x := range ext.Exposes {
+		fmt.Fprintf(&b, "%s:%s:%d:", x.Transport, x.RemoteHost, x.RemotePort)
+		for _, p := range x.Paths {
+			fmt.Fprintf(&b, "%q,", p)
+		}
+		b.WriteByte('|')
 	}
 	fmt.Fprintf(&b, "|%d|%d|%t", ext.Rows, ext.Cols, ext.IsEnabled())
 	return b.String()

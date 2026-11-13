@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 
 	"golang.org/x/crypto/ssh"
@@ -265,4 +266,48 @@ func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig, bindHost string, lo
 	})
 	fm.put(fw, ln, cancel)
 	return fw, nil
+}
+
+// RemoteForwardHTTP publishes an http.Handler on the far side of an SSH connection
+// (issue #321): the remote sshd listens, and every connection it accepts is handed to
+// http.Serve as-is.
+//
+// THE CHANNEL IS THE CONNECTION. The neighbouring RemoteForwardSSH dials a TCP address
+// on this machine for each accepted channel, which is what makes a tunnel a tunnel; here
+// there is nothing to dial, because the handler runs in this process and HTTP is
+// client-speaks-first. Skipping that dial is the entire difference, and it is what makes
+// "expose the API without opening a port" true rather than a diagram: the only socket is
+// the one the remote sshd opens.
+func RemoteForwardHTTP(ctx context.Context, client *ssh.Client, agentHost string, agentPort int, h http.Handler) (*ForwardInfo, net.Listener, error) {
+	listener, err := client.Listen("tcp", net.JoinHostPort(agentHost, fmt.Sprintf("%d", agentPort)))
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssh remote http forward: %w", err)
+	}
+	fw := &ForwardInfo{
+		ForwardID: ForwardID(DirectionRemote),
+		Direction: DirectionRemote,
+		// The far sshd picks the port when the request said 0, so the listener's own
+		// address is the only place the chosen number appears.
+		ListenAddr: listener.Addr().String(),
+		TargetAddr: "http (in-process)",
+		Status:     "active",
+		CreatedAt:  clock.Now(),
+	}
+	ServeHTTPOn(ctx, listener, h)
+	return fw, listener, nil
+}
+
+// ServeHTTPOn serves h on ln until ctx is done, then closes both.
+//
+// It is exported (and takes a listener rather than an ssh client) because it is the half
+// that has no SSH in it: a test can hand it a loopback listener and see the whole
+// behaviour — requests answered, ctx cancelling, listener closing — without a remote sshd.
+func ServeHTTPOn(ctx context.Context, ln net.Listener, h http.Handler) {
+	srv := &http.Server{Handler: h}
+	go func() { _ = srv.Serve(ln) }()
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+		_ = ln.Close()
+	}()
 }

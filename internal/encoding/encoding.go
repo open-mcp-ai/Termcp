@@ -59,33 +59,94 @@ func EncodeText(data []byte) string {
 
 // DecodeText decodes a text string with \xHH, \n, \r, \t escapes back to bytes.
 func DecodeText(s string) []byte {
+	out, _ := DecodeTextSummary(s)
+	return out
+}
+
+// DecodeSummary counts what DecodeText turned into bytes, one field per escape it
+// knows.
+//
+// THE COUNT IS THE RECEIPT A CALLER COULD NOT GET BEFORE (issue #302). Text mode is a
+// REWRITER: `--data 'printf("%s\n")'` lands as a line break, because that is the
+// inverse of what `read --mode text` hands back. The rewrite itself is right; what was
+// wrong is that nothing said it had happened. The reply echoed the payload as typed and
+// reported a byte count, so a file the caller wrote as source code parsed as something
+// else only later, inside `docker build` or `gcc` — where the error names a different
+// problem entirely. "2 escapes: \n -> LF x2" is a fact about the bytes that landed,
+// and it is what turns that into something the caller can see before it compiles.
+type DecodeSummary struct {
+	Newline   int // \n -> LF
+	Carriage  int // \r -> CR
+	Tab       int // \t -> TAB
+	Hex       int // \xHH -> that byte
+	Backslash int // \\ -> \
+}
+
+// Total is how many escapes were decoded, which is also how many bytes the payload
+// lost on the way to the file.
+func (d DecodeSummary) Total() int {
+	return d.Newline + d.Carriage + d.Tab + d.Hex + d.Backslash
+}
+
+// String renders the summary as the pairs the caller wrote and the bytes they became,
+// in the order the escape table lists them, so a reply can be checked against the file
+// without decoding anything by hand.
+func (d DecodeSummary) String() string {
+	parts := make([]string, 0, 5)
+	add := func(escape, became string, n int) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%s -> %s x%d", escape, became, n))
+		}
+	}
+	add(`\n`, "LF", d.Newline)
+	add(`\r`, "CR", d.Carriage)
+	add(`\t`, "TAB", d.Tab)
+	add(`\xHH`, "byte", d.Hex)
+	add(`\\`, `\`, d.Backslash)
+	return strings.Join(parts, ", ")
+}
+
+// DecodeTextSummary is DecodeText plus the count of what it changed.
+//
+// A MALFORMED \x STAYS AS WRITTEN. It used to consume four bytes and append the zero
+// Sscanf left behind, so `\xZZ` silently became a NUL byte: the same class of silent
+// rewrite the receipt above exists to stop, one step further from what the caller
+// typed. An unknown escape was already left alone (`\q` is `\q`), and this now matches
+// that rule instead of inventing a byte.
+func DecodeTextSummary(s string) ([]byte, DecodeSummary) {
 	var result []byte
+	var sum DecodeSummary
 	i := 0
 	for i < len(s) {
 		if s[i] == '\\' && i+1 < len(s) {
 			switch s[i+1] {
 			case 'n':
 				result = append(result, '\n')
+				sum.Newline++
 				i += 2
 				continue
 			case 'r':
 				result = append(result, '\r')
+				sum.Carriage++
 				i += 2
 				continue
 			case 't':
 				result = append(result, '\t')
+				sum.Tab++
 				i += 2
 				continue
 			case 'x':
 				if i+3 < len(s) {
-					var b byte
-					fmt.Sscanf(s[i+2:i+4], "%02x", &b)
-					result = append(result, b)
-					i += 4
-					continue
+					if b, ok := hexByte(s[i+2 : i+4]); ok {
+						result = append(result, b)
+						sum.Hex++
+						i += 4
+						continue
+					}
 				}
 			case '\\':
 				result = append(result, '\\')
+				sum.Backslash++
 				i += 2
 				continue
 			}
@@ -93,7 +154,32 @@ func DecodeText(s string) []byte {
 		result = append(result, s[i])
 		i++
 	}
-	return result
+	return result, sum
+}
+
+// hexByte reads two hex digits, the width \xHH is defined at.
+func hexByte(s string) (byte, bool) {
+	hi, ok := hexDigit(s[0])
+	if !ok {
+		return 0, false
+	}
+	lo, ok := hexDigit(s[1])
+	if !ok {
+		return 0, false
+	}
+	return hi<<4 | lo, true
+}
+
+func hexDigit(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 // HexDecode decodes a hex string to bytes. Returns an error for malformed hex.

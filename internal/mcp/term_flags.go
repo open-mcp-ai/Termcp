@@ -45,6 +45,9 @@ func (s *Server) checkRunFlags(stmt directive.Statement, win termArgs) *toolFail
 				msg: "`--grep` is a Go regular expression and this one does not compile: " + err.Error()}
 		}
 	}
+	if _, bad := s.untilFrom(stmt); bad != nil {
+		return bad
+	}
 	// ONE WORDING FOR ONE RULE. The run pre-flight rejected a non-positive limit as
 	// "must be a positive integer" while the search said "must be a number", and a caller
 	// reading both replies could not tell whether it had made one mistake or two.

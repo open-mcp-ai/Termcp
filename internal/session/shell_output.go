@@ -420,10 +420,15 @@ func (cs *ChildShell) startReaders() {
 		// tail of a command that ended as fast as it started.
 		cs.drainPipes()
 		cs.buf.Close()
-		code := cs.execSession.ExitCode()
-		// Exit code first: a reader that observes "exited" must also observe the
-		// code, so the two stores cannot be seen in the wrong order.
-		cs.setExitCode(code)
+		// A CODE THE FAR SIDE REPORTED IS A FACT; the absence of one is not zero. A
+		// channel whose transport died — closed by us, dropped by the network — never
+		// produced an exit status, and publishing 0 for it made `read` after `close`
+		// assert a clean exit that nothing observed.
+		if code, ok := cs.execSession.ExitStatus(); ok {
+			// Exit code first: a reader that observes "exited" must also observe the
+			// code, so the two stores cannot be seen in the wrong order.
+			cs.setExitCode(code)
+		}
 		cs.setStatus(api.SessionExited)
 		// Done is the finalization signal, not the process-exit signal: it
 		// closes only after the output is drained and the exit code published,
@@ -473,6 +478,6 @@ func (cs *ChildShell) startReaders() {
 		if reparent != nil {
 			reparent.closeIfLastShellEnded()
 		}
-		slog.Debug("child shell exited", "child_shell_id", cs.ID, "exit_code", code)
+		slog.Debug("child shell exited", "child_shell_id", cs.ID, "exit_code", cs.exitCodeValue())
 	}()
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/buffer"
 	"github.com/open-mcp-ai/termcp/internal/clock"
+	"golang.org/x/crypto/ssh"
+
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
@@ -329,6 +331,20 @@ func (cs *ChildShell) TerminateShell() {
 	}
 	cs.deliberateClose.Store(true)
 
+	// ASK FIRST, THEN CLOSE (#293).
+	//
+	// A channel close is an EOF on the session's streams and nothing more. On POSIX
+	// the remote sshd HUPs the process group, so most programs stop; on Windows there
+	// is no SIGHUP at all, so `close <channel>` answered 204 and the program kept
+	// running — holding a port the next task then failed to bind. The signal request
+	// (RFC 4254 §6.9) is the protocol's own way to say "terminate this", and a termcp
+	// server answers TERM/KILL by ending the whole process TREE, which is the only
+	// thing that reaches a child its shell spawned and then waited on.
+	//
+	// Best-effort: a peer that does not implement signal requests (or a channel that
+	// is already gone) leaves the close below to do what it always did.
+	_ = cs.execSession.Signal(ssh.SIGTERM)
+
 	cs.execSession.CloseSessionOnly()
 	select {
 	case <-cs.execSession.Done():
@@ -339,7 +355,9 @@ func (cs *ChildShell) TerminateShell() {
 	// published only after the bytes are final (same rule as the watcher).
 	cs.drainPipes()
 	cs.buf.Close()
-	cs.setExitCode(-1)
+	// NO EXIT CODE ON A DELIBERATE TERMINATE. `-1` was a sentinel for "kill requested",
+	// and it reached callers as `Exit-Code: -1` — a number that looks like a status. The
+	// honest answer is the one the type already allows: nothing.
 	cs.setStatus(api.SessionExited)
 	if parent := cs.parent.Load(); parent != nil {
 		cs.retainHistory(parent)

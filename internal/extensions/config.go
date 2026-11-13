@@ -154,8 +154,26 @@ type Extension struct {
 	// documentation an agent can actually act on.
 	Notes string `toml:"notes,omitempty"`
 
+	// Alias is the extension's own command vocabulary, exposed as `<ext>.<alias>`
+	// (`jira.search`). The expansion is a termcp command line whose `$1…$N` and
+	// `$NAME` references are filled from the caller's invocation, exactly as a
+	// user-defined alias's are — so a template can say "this server is reachable
+	// as these verbs" and an install is all it takes to get the commands.
+	//
+	// WHY DOTTED, WHY ALWAYS QUALIFIED. Two extensions both declaring `search`
+	// cannot both own the bare word, and a bare name that works only while exactly
+	// one template defines it is hidden state a caller cannot see. The dot names
+	// where a command comes from; `ls alias` prints the same spelling.
+	Alias map[string]string `toml:"alias,omitempty"`
+
 	// Forwards are declared tunnels, set up when the session comes up.
 	Forwards []ForwardDecl `toml:"forward,omitempty"`
+
+	// Exposes publish THIS INSTANCE'S HTTP surface on the target (issue #321). A
+	// forward carries bytes to a TCP address; an expose carries requests to the
+	// handler termcp already serves, so nothing here opens a port on either machine:
+	// the far sshd listens, and each accepted channel is handed to http.Serve.
+	Exposes []ExposeDecl `toml:"expose,omitempty"`
 }
 
 // Fingerprint summarizes the fields this template runs from, as a comparable
@@ -186,7 +204,7 @@ func (e *Extension) SetEnabled(v bool) {
 // is why the listening address has two names: the side doing the listening is the
 // target for -R and this host for -L/-D, and one field cannot say both.
 type ForwardDecl struct {
-	Kind string `toml:"kind"`
+	DirectionKind string `toml:"kind" json:"kind"`
 	// BindHost is what -L and -D listen on in this host; empty means loopback.
 	BindHost string `toml:"bind_host,omitempty"`
 	// LocalHost is what -R listens on in the TARGET host.
@@ -194,6 +212,23 @@ type ForwardDecl struct {
 	LocalPort  int    `toml:"local_port,omitempty"`  // 0 = picked at runtime
 	RemoteHost string `toml:"remote_host,omitempty"` // local: where the target dials
 	RemotePort int    `toml:"remote_port,omitempty"`
+}
+
+// ExposeDecl is one path whitelist published to a target over ssh -R (issue #321).
+//
+// TRANSPORT, NOT KIND. `ForwardDecl`'s direction field is called kind in TOML and this
+// one deliberately does not repeat that word: the whole reason it is a second type is
+// that "what carries the bytes" and "which way they go" are different questions, and a
+// shared vocabulary would put them back in one field.
+type ExposeDecl struct {
+	Transport  string `toml:"transport,omitempty"` // "http"; empty means http
+	RemoteHost string `toml:"remote_host,omitempty"`
+	RemotePort int    `toml:"remote_port,omitempty"` // 0 = the far sshd picks
+	// Paths is the whitelist. Exact match, no wildcards, empty means the declaration is
+	// invalid rather than "everything": an expose that names no path is a typo or a
+	// misread, and both answers ("serve the whole API", "serve nothing") are worse than
+	// refusing to save it.
+	Paths []string `toml:"paths,omitempty"`
 }
 
 // TargetDecl defines one host binding under an extension. Any host-specific
@@ -321,6 +356,9 @@ func (e *Extension) Normalize() {
 	for i := range e.Forwards {
 		e.Forwards[i].Normalize()
 	}
+	for i := range e.Exposes {
+		e.Exposes[i].Normalize()
+	}
 	for i := range e.Targets {
 		e.Targets[i].Host = strings.TrimSpace(e.Targets[i].Host)
 		for j := range e.Targets[i].Forwards {
@@ -331,16 +369,16 @@ func (e *Extension) Normalize() {
 
 // Normalize fills a forward's conventional defaults.
 func (f *ForwardDecl) Normalize() {
-	f.Kind = strings.TrimSpace(strings.ToLower(f.Kind))
+	f.DirectionKind = strings.TrimSpace(strings.ToLower(f.DirectionKind))
 	f.BindHost = strings.TrimSpace(f.BindHost)
 	f.LocalHost = strings.TrimSpace(f.LocalHost)
 	f.RemoteHost = strings.TrimSpace(f.RemoteHost)
 	// -L reaches a host as seen from the target, where localhost is the usual
 	// intent; -R names its own target explicitly, so it gets no default.
-	if f.Kind == ForwardLocal && f.RemoteHost == "" {
+	if f.DirectionKind == ForwardLocal && f.RemoteHost == "" {
 		f.RemoteHost = "localhost"
 	}
-	if f.Kind == ForwardRemote && f.LocalHost == "" {
+	if f.DirectionKind == ForwardRemote && f.LocalHost == "" {
 		// LOOPBACK, LIKE EVERY OTHER DEFAULT HERE. The port is opened on the TARGET,
 		// and 0.0.0.0 there publishes an authenticated tunnel to that machine's whole
 		// network — which is a decision, not a default. `ssh -R` made the same move for
@@ -351,7 +389,7 @@ func (f *ForwardDecl) Normalize() {
 	// this host listens on -- the reading the field now has under its own name.
 	// Those declarations were accepted and ignored before, so honouring the
 	// intent here costs nothing and fixes them rather than keeping them broken.
-	if (f.Kind == ForwardLocal || f.Kind == ForwardDynamic) && f.BindHost == "" {
+	if (f.DirectionKind == ForwardLocal || f.DirectionKind == ForwardDynamic) && f.BindHost == "" {
 		f.BindHost = f.LocalHost
 	}
 }
@@ -464,7 +502,7 @@ func (e *Extension) Validate() error {
 	// An author must declare what the extension actually does (a command, an mcp url,
 	// exposed file paths, port forwards, or an interactive pty shell). Declaring none
 	// of these is an empty container.
-	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || e.Mode == "pty"
+	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || len(e.Exposes) > 0 || e.Mode == "pty"
 	for _, t := range e.Targets {
 		if len(t.Forwards) > 0 {
 			hasCapability = true
@@ -476,6 +514,11 @@ func (e *Extension) Validate() error {
 	for i := range e.Forwards {
 		if err := e.Forwards[i].Validate(); err != nil {
 			return fmt.Errorf("forward #%d: %w", i+1, err)
+		}
+	}
+	for i := range e.Exposes {
+		if err := e.Exposes[i].Validate(); err != nil {
+			return fmt.Errorf("expose #%d: %w", i+1, err)
 		}
 	}
 	if e.Resident && strings.TrimSpace(e.IdleTimeout) != "" {
@@ -495,7 +538,7 @@ func (e *Extension) Validate() error {
 // Validate checks a declared forward against the same rules the forward tool
 // enforces, so a tunnel that cannot be created is caught at save time.
 func (f *ForwardDecl) Validate() error {
-	switch f.Kind {
+	switch f.DirectionKind {
 	case ForwardDynamic:
 		// Only a listen port, and even that is optional.
 	case ForwardLocal:
@@ -510,7 +553,7 @@ func (f *ForwardDecl) Validate() error {
 			return fmt.Errorf("remote forward requires remote_host and remote_port")
 		}
 	default:
-		return fmt.Errorf("forward kind must be dynamic, local or remote, got %q", f.Kind)
+		return fmt.Errorf("forward direction must be dynamic, local or remote (the TOML key is `kind`), got %q", f.DirectionKind)
 	}
 	// The listen port is the one field every kind carries, and every kind lets it
 	// be left at 0 ("pick one"), so its range is checked once, after the kinds.
@@ -521,7 +564,7 @@ func (f *ForwardDecl) Validate() error {
 	// asking for one on a public interface would publish an open proxy. Refuse it
 	// at save time, where the author can read the reason, rather than at every
 	// reconcile -- and point at the forward that does publish one service.
-	if f.Kind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
+	if f.DirectionKind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
 		return fmt.Errorf("a dynamic (SOCKS5) forward binds loopback only: it performs no authentication, so %q would be an open proxy (use kind = \"local\" to publish one service)", forward.ResolveBindHost(f.BindHost))
 	}
 	return nil
@@ -563,4 +606,41 @@ func Parse(data []byte) (*Extension, error) {
 		return nil, fmt.Errorf("extension toml: %w", err)
 	}
 	return &e, nil
+}
+
+func (x *ExposeDecl) Normalize() {
+	x.Transport = strings.TrimSpace(strings.ToLower(x.Transport))
+	if x.Transport == "" {
+		x.Transport = "http"
+	}
+	x.RemoteHost = strings.TrimSpace(x.RemoteHost)
+	var kept []string
+	for _, p := range x.Paths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	x.Paths = kept
+}
+
+func (x *ExposeDecl) Validate() error {
+	if x.Transport != "http" {
+		return fmt.Errorf("expose transport must be \"http\", got %q", x.Transport)
+	}
+	if !validPort(x.RemotePort, 0) {
+		return fmt.Errorf("remote_port out of range (0-65535)")
+	}
+	if len(x.Paths) == 0 {
+		return fmt.Errorf("expose requires at least one path: an empty whitelist would expose nothing (name the endpoints, e.g. paths = [\"/api/term\"])")
+	}
+	for _, p := range x.Paths {
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("expose path %q must start with \"/\": it matches the HTTP request path exactly", p)
+		}
+		if strings.ContainsAny(p, "*?[") {
+			return fmt.Errorf("expose path %q contains wildcards: whitelist matching is exact equality, wildcards are not supported", p)
+		}
+	}
+	return nil
 }

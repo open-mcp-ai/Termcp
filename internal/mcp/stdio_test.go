@@ -280,11 +280,23 @@ func TestStreamFilter_PtyMergesStderr(t *testing.T) {
 		prev = cur
 		time.Sleep(100 * time.Millisecond)
 	}
-	filtered := readStream(t, s, shellID, "o", map[string]any{"offset": 0.0})
-	all := readStream(t, s, shellID, "", map[string]any{"offset": 0.0})
-	if filtered["output"].(string) != all["output"].(string) {
-		t.Fatalf("pty stream=o differs from the unfiltered read: %q vs %q",
-			filtered["output"], all["output"])
+	// A STABLE SNAPSHOT IS NOT A FROZEN STREAM. The quiet check above says nothing arrived
+	// for one poll; it does not say nothing will arrive before the second read, and a
+	// themed prompt repaints in chunks long after the command finished. So the two reads
+	// are compared until they agree: a filter that really dropped bytes never agrees, and
+	// a repaint landing between two reads stops mattering.
+	var filtered, all []byte
+	agreeDeadline := time.Now().Add(10 * time.Second)
+	for {
+		filtered = []byte(readStream(t, s, shellID, "o", map[string]any{"offset": 0.0})["output"].(string))
+		all = []byte(readStream(t, s, shellID, "", map[string]any{"offset": 0.0})["output"].(string))
+		if string(filtered) == string(all) {
+			break
+		}
+		if time.Now().After(agreeDeadline) {
+			t.Fatalf("pty stream=o never matched the unfiltered read: %q vs %q", filtered, all)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// A pipe child shell of the same session reports the other receipt.

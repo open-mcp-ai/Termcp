@@ -77,9 +77,11 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 		//
 		// The correlation is here rather than in the caller's head because the id is
 		// already in the frame this function just wrote. A frame whose id does NOT match
-		// is still returned — it is a notification or another request's reply, and
-		// dropping it would be data loss — but the reply says which one it is, so the
-		// caller is never silently handed an answer to a question it did not ask.
+		// is not returned as the answer: mcpAwaitReply keeps reading until its own id
+		// arrives or the window ends, and parks every frame it passed on recvPending so
+		// `read --frame` still hands them out. Returning the foreign frame was a wrong
+		// 200 — the caller got an answer to a question it had not asked, and the real
+		// reply was left to be found by hand (#301).
 		if sub == "send" || boolFlag(stmt, "send") {
 			return envelope.Slot{Code: 202, Headers: headers, Body: "sent; read the reply with `read " + handle + " --frame`"}
 		}
@@ -140,8 +142,18 @@ func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, han
 			"another reader on this channel is still inside its own window; this call gave up waiting for it")
 	}
 	defer func() { reader <- struct{}{} }()
+	// PARKED FRAMES COME FIRST (issue #301). A `call` waiting for a different id read
+	// them off the stream and the cursor has already moved past them; reading the
+	// stream again would return the NEXT frame and lose these. Oldest first, which is
+	// the order they arrived in.
+	if slot, ok := s.popPendingFrame(handle); ok {
+		return slot
+	}
+	// ONE BUDGET FOR THE WHOLE READ, not one per attempt: the deadline is set once
+	// here and carried into every poll, including those mcpAwaitReply repeats.
+	deadline := time.Now().Add(recvWindow(win))
 	for {
-		slot, readAgain := s.mcpRecvFrameOnce(ctx, stmt, handle, win)
+		slot, readAgain := s.mcpRecvFrameOnce(ctx, stmt, handle, win, deadline)
 		if !readAgain {
 			return slot
 		}
@@ -154,7 +166,7 @@ func (s *Server) mcpRecvFrame(ctx context.Context, stmt directive.Statement, han
 // mcpRecvFrameOnce is one frame, with the caller holding this handle's reader lock.
 // readAgain asks for another read because the frame it took was answered on the
 // caller's behalf (a sub-MCP's sampling request) rather than delivered.
-func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement, handle string, win termArgs) (envelope.Slot, bool) {
+func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement, handle string, win termArgs, deadline time.Time) (envelope.Slot, bool) {
 	from := s.recvCursor(handle)
 	// A whole frame has to fit the window, or a single large reply could never be
 	// delivered: the window is a cap on what one recv will consider, not a
@@ -195,7 +207,11 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 	// differ: a caller that names no window gets the READ default (recvWindow), not
 	// the peer default — fifteen seconds of silence is not what reading a channel
 	// means, and it is not what this directive did before.
-	deadline := time.Now().Add(recvWindow(win))
+	//
+	// DEADLINE ARRIVES AS A VALUE because a `call` may take several reads on ONE
+	// window (every frame it skips is another read). Computing it here would give each
+	// skipped frame a fresh window, so a peer that never answers the id would hold the
+	// call open for frames × window.
 	var doc map[string]any
 	var body string
 	for {
@@ -268,28 +284,60 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 	}, false
 }
 
-// mcpAwaitReply reads one frame for a `call` that has already been written, and says
-// whether that frame is the answer to it.
+// mcpAwaitReply waits for the frame that answers ONE id, and parks what it passes.
 //
-// The read is mcpRecvFrame, unchanged: it polls for the caller's window and advances
-// the same per-handle cursor, so `call` and `read --frame` share one position and a
-// frame is never delivered twice. What this adds is the one fact the caller cannot
-// recover from the bytes alone in the moment it matters — whether this frame answers
-// the id it just sent. Replies arrive in completion order, which is correct JSON-RPC
-// and means the frame that lands first may belong to an earlier request (issue #175).
+// THE WAIT IS FOR THE ID, NOT FOR THE NEXT FRAME (issue #301). It used to stop at the
+// first frame, label it, and return it — so one stale reply in the channel made the
+// next `call` answer the previous question with a 200. A 200 whose body is not what
+// the caller asked about is worse than an error: the correct reply is still on the
+// channel, and nothing tells the caller to go back for it. Replies arriving in
+// completion order is correct JSON-RPC (issue #175); the answer is to keep reading.
+//
+// NOTHING IS DROPPED ON THE WAY. A skipped frame is a notification or another
+// request's reply, and the cursor has already moved past it, so it is parked on
+// recvPending for `read <channel> --frame`. The queue is also how a concurrent
+// waiter gets its reply back: a frame can be skipped by a waiter that is after a
+// later id, so every wait checks the queue for its own id before reading the stream.
+//
+// AND THE WINDOW IS ONE BUDGET for the whole wait, not one per skipped frame: a
+// caller that named two seconds gets two seconds, however many foreign frames land.
 func (s *Server) mcpAwaitReply(ctx context.Context, stmt directive.Statement, handle, id string, win termArgs, headers map[string]string) envelope.Slot {
-	slot := s.mcpRecvFrame(ctx, stmt, handle, win)
-	if slot.Code >= 400 || slot.Body == "" {
+	reader := s.recvReader(handle)
+	select {
+	case <-reader:
+	case <-ctx.Done():
+		return noContentSaying(headers,
+			"another reader on this channel is still inside its own window; this call gave up waiting for the reply to id "+id)
+	}
+	defer func() { reader <- struct{}{} }()
+	if slot, ok := s.takePendingFrame(handle, id); ok {
 		return slot
 	}
-	if got := frameID(slot.Body); got == id {
-		return slot
-	} else if got == "" {
-		slot.Body += "\n\n[this frame has no id: it is a notification or an event, not the answer to id " + id + ". The answer is still on the channel — `read " + handle + " --frame` again.]"
-		return slot
-	} else {
-		slot.Body += "\n\n[this frame answers id " + got + ", not the id " + id + " you just sent: the peer replied in completion order. The answer to " + id + " is still on the channel — `read " + handle + " --frame` again.]"
-		return slot
+	deadline := time.Now().Add(recvWindow(win))
+	skipped := 0
+	for {
+		slot, readAgain := s.mcpRecvFrameOnce(ctx, stmt, handle, win, deadline)
+		if readAgain {
+			// A sub-MCP sampling request was answered underneath: the frame went to
+			// that answer, so it is neither this caller's reply nor parked for later.
+			continue
+		}
+		if slot.Code >= 400 || slot.Code == 204 {
+			if skipped > 0 {
+				// The recv's own reason (a banner, say) describes bytes the caller will
+				// never see; what it needs to know is that the frames it passed are not
+				// lost, and where they are.
+				return noContentSaying(headers, fmt.Sprintf(
+					"no frame for id %s within %s; %d parked frame(s) answer other ids, and `read %s --frame` hands them out",
+					id, recvWindow(win), skipped, handle))
+			}
+			return slot
+		}
+		if frameID(slot.Body) == id {
+			return slot
+		}
+		s.enqueuePendingFrame(handle, slot)
+		skipped++
 	}
 }
 
@@ -390,9 +438,10 @@ func (s *Server) recvCursor(handle string) int64 {
 	return n
 }
 
-// dropRecvCursor forgets a closed handle's read position.
+// dropRecvCursor forgets a closed handle's read position and parked frames.
 func (s *Server) dropRecvCursor(handle string) {
 	s.recvCursors.Delete(handle)
+	s.recvPending.Delete(handle)
 	// The reader gate goes too: handles are minted monotonically, so a reopened
 	// channel never reuses this key and the map would grow by one entry per channel
 	// the process ever opened.
@@ -401,6 +450,66 @@ func (s *Server) dropRecvCursor(handle string) {
 
 func (s *Server) setRecvCursor(handle string, at int64) {
 	s.recvCursors.Store(handle, at)
+}
+
+// frameQueue is the frames one handle has read past but not delivered.
+//
+// THE CURSOR AND THIS QUEUE ARE TWO HALVES OF ONE READ POSITION: the cursor says
+// which byte the stream has been consumed to, and the queue says which frames that
+// consumption passed over without giving to anyone. They are therefore touched under
+// the same single-reader token (recvReaders), which is why a plain slice is enough
+// and this type needs no lock of its own.
+//
+// Nothing is lost by skipping a frame: `read --frame` drains the queue oldest first,
+// and a `call` looks here for its own id, which is how a reply skipped by a waiter
+// after a later id finds its way back.
+type frameQueue struct{ frames []envelope.Slot }
+
+func (s *Server) pendingQueue(handle string) *frameQueue {
+	if v, ok := s.recvPending.Load(handle); ok {
+		return v.(*frameQueue)
+	}
+	q := &frameQueue{}
+	actual, _ := s.recvPending.LoadOrStore(handle, q)
+	return actual.(*frameQueue)
+}
+
+// enqueuePendingFrame parks a frame a `call` read while waiting for a different id.
+func (s *Server) enqueuePendingFrame(handle string, slot envelope.Slot) {
+	q := s.pendingQueue(handle)
+	q.frames = append(q.frames, slot)
+}
+
+// popPendingFrame hands back the oldest parked frame, for `read --frame`.
+func (s *Server) popPendingFrame(handle string) (envelope.Slot, bool) {
+	v, ok := s.recvPending.Load(handle)
+	if !ok {
+		return envelope.Slot{}, false
+	}
+	q := v.(*frameQueue)
+	if len(q.frames) == 0 {
+		return envelope.Slot{}, false
+	}
+	slot := q.frames[0]
+	q.frames = q.frames[1:]
+	return slot, true
+}
+
+// takePendingFrame hands back the parked frame for ONE id, leaving the rest queued.
+func (s *Server) takePendingFrame(handle, id string) (envelope.Slot, bool) {
+	v, ok := s.recvPending.Load(handle)
+	if !ok {
+		return envelope.Slot{}, false
+	}
+	q := v.(*frameQueue)
+	for i := range q.frames {
+		if frameID(q.frames[i].Body) == id {
+			slot := q.frames[i]
+			q.frames = append(q.frames[:i], q.frames[i+1:]...)
+			return slot, true
+		}
+	}
+	return envelope.Slot{}, false
 }
 
 // notAFrame says what the buffer holds when nothing in it parsed as a value, so a

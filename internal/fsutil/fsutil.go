@@ -5,6 +5,7 @@ package fsutil
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -22,7 +23,24 @@ import (
 // The file is created 0600 and chmodded before the rename, so it is never
 // briefly readable by anyone else, and never arrives at its final name with the
 // wrong mode.
+//
+// TWO WRITERS IN ONE PROCESS ARE SERIALISED. The retry above cannot be relied on for
+// that collision: both goroutines keep replacing the SAME destination as fast as they
+// finish, so each attempt finds the other's rename in flight and the 500ms budget can be
+// starved indefinitely — measured on Windows as `TestConcurrentWritesAlwaysLeaveOneWholeFile`
+// failing with `rename …: Access is denied` after every attempt was spent. A process-local
+// lock removes that contention at its source, and leaves the retry with the case it was
+// written for: another process, or a transient handle, on a name this process is not
+// fighting itself over.
+//
+// A whole-file lock rather than one per path: these are small files written when state
+// changes, not a hot path, so the simplest correct thing is the one that cannot leak
+// entries or be held across a wait.
+var writeMu sync.Mutex
+
 func WriteFileAtomic(p string, data []byte) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
 	if err != nil {
 		return err

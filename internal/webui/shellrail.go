@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
+	"github.com/open-mcp-ai/termcp/internal/termview"
 )
 
 // GET /api/shells/{id}/rail: which bytes of a shell's log sit on which terminal row.
@@ -40,25 +41,9 @@ import (
 // the alternate screen — a model with no scrolling region cannot follow that
 // faithfully.
 
-// shellRowSpan is one terminal row's byte range in a shell's log. A null entry in
-// a response is a row holding no bytes — an erased line, or a row no output ever
-// reached — which draws no cell rather than reusing a neighbour's status.
-//
-// The rows tile the log: every byte the terminal consumed belongs to the row the
-// cursor was on when it arrived, the newline that ends a row included. A row is
-// therefore never the blank between two others, and a mark cannot fall between
-// them — a zero-length input mark sitting on the very newline that submitted the
-// line colours that line, which is the row a reader looks at when asking where the
-// input was. Blank lines come out of the same rule: a newline and nothing else is a
-// row's content, because a blank line a program printed is still output.
-//
-// Erasing is the deliberate exception. A row the terminal cleared holds nothing,
-// because its bytes are not on screen any more: that is what the erase meant, and
-// it is why the row draws no cell.
-type shellRowSpan struct {
-	Start int64 `json:"start"`
-	End   int64 `json:"end"`
-}
+// shellRowSpan is the model's row type. It is an alias, not a copy: the Web UI draws
+// the rows the model produces, and a second definition would let the two drift.
+type shellRowSpan = termview.Span
 
 // shellRailResponse is one screen of the rail: the spans of the rows asked for,
 // and the marks covering their bytes.
@@ -70,23 +55,13 @@ type shellRailResponse struct {
 	TotalRows int             `json:"total_rows"`
 }
 
-// The model's limits. The scrollback cap is the xterm option the client sets
-// (terminal-view.js): xterm drops the oldest lines past it, and because the rail
-// indexes rows the way the terminal does, the layout has to drop them too or every
-// row number below the trim point would be off by the difference. xterm's buffer
-// holds the scrollback *plus* the screen (see getCorrectBufferLength in xterm.js),
-// so the cap is raised by the terminal's height in capacity() rather than being a
-// hard number here.
+// The rail's own limits: how much it will answer at once, and where it reads the log
+// from. The model's limits stay in termview because they decide which row a byte lands
+// on; these decide only the size of one answer.
 const (
-	shellRailScrollback = 100000
-	shellRailTabStop    = 8
-	shellRailMaxRows    = 2048
-	shellRailMaxCols    = 1000
-	shellRailReadChunk  = 256 * 1024
-	// shellRailMaxCSIParams bounds the parameters of a CSI sequence still in
-	// flight: the longest real one is a handful of bytes, and a stream that never
-	// ends a sequence must not grow the body without limit.
-	shellRailMaxCSIParams = 64
+	shellRailMaxRows   = 2048
+	shellRailMaxCols   = 1000
+	shellRailReadChunk = 256 * 1024
 )
 
 // handleShellRail answers GET /api/shells/{id}/rail.
@@ -119,7 +94,7 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 	}
 	// `top` may name any row the buffer can still hold: the scrollback plus the
 	// screen above it, which is where the terminal stops keeping rows.
-	top := queryInt(r, "top", 0, 0, shellRailScrollback+shellRailMaxRows)
+	top := queryInt(r, "top", 0, 0, termview.Scrollback+shellRailMaxRows)
 	count := queryInt(r, "count", 0, 1, shellRailMaxRows)
 	height := queryInt(r, "height", count, 1, shellRailMaxRows)
 
@@ -157,7 +132,7 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 	// replays in about 0.2s. Before that fix the same replay spent 7.2s copying rows
 	// at the retention limit — the copying, not the parsing, was what made a full
 	// replay expensive.
-	layout := newRowLayout(cols, height)
+	layout := termview.New(cols, height)
 	for off := int64(0); off < total; {
 		chunk, _, err := h.Sessions.OutputByteRange(sessionID, shellID, off, shellRailReadChunk)
 		if err != nil {
@@ -167,16 +142,16 @@ func (h *Handler) handleShellRail(w http.ResponseWriter, r *http.Request) {
 		if len(chunk) == 0 {
 			break
 		}
-		layout.feed(off, chunk)
+		layout.Feed(off, chunk)
 		off += int64(len(chunk))
 	}
 
-	spans := layout.window(top, count)
+	spans := layout.Window(top, count)
 	resp := shellRailResponse{
 		Cols:      cols,
 		Top:       top,
 		Spans:     spans,
-		TotalRows: layout.rowCount(),
+		TotalRows: layout.RowCount(),
 	}
 	// The marks the rail needs are the ones covering the bytes those rows hold, and
 	// the server has both the spans and the index in hand: answering with them

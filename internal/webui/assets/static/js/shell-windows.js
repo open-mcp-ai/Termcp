@@ -581,14 +581,17 @@ function refreshSessionTabbar() {
        paths repaints this bar. Deleting the flag (instead of calling
        dockClearFresh) keeps it out of the strip while the strip is being rebuilt. */
     if (entry.sid && w && dockWindowWatched(w)) delete _dockFresh[entry.sid];
-    /* NO WINDOW HERE IS THE LOUDEST CASE OF "NOBODY IS WATCHING": the session is
-       running and there is nothing on this page showing it. Marking only on frames
-       missed it entirely — frames reach windows, and a session started over MCP has
-       none, so the tabs that most needed the pulse were the only ones that never got
-       it. The mark is set here rather than at creation for the same reason the rest
-       of the rule lives in this loop: the snapshot is the one thing every session
-       passes through. */
-    if (entry.sid && !w) _dockFresh[entry.sid] = true;
+    /* A SESSION WITH NO WINDOW HAS NO WINDOW TO WATCH, so it has nothing to mark.
+       The rule above is about a window that changed while nobody was looking; with
+       no window there is nothing that could have changed, and marking it "fresh"
+       said an event had happened when none had. It was ALSO a strobe: the mark is
+       set on every strip rebuild, so every window-less session pulsed once a second
+       for as long as it ran, and a reload re-marked all of them at once (the set is
+       in memory, so a fresh page starts empty and the first rebuild fills it again).
+       That is the report of tabs flickering on a page with nothing new on it.
+       Clearing here rather than only marking elsewhere is what keeps a flag left
+       over from a window that has since closed off the strip. */
+    if (entry.sid && !w) delete _dockFresh[entry.sid];
     var tabFresh = !!(entry.sid && _dockFresh[entry.sid]);
     if (tab.classList.contains('is-fresh') !== tabFresh) tab.classList.toggle('is-fresh', tabFresh);
     if (!w) {

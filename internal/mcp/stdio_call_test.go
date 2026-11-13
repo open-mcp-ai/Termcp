@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
 // A ROUND TRIP IS ONE CALL, WHICHEVER WAY THE PEER WAS STARTED.
@@ -59,16 +62,17 @@ func TestSendDoesNotWait(t *testing.T) {
 	}
 }
 
-// A FRAME THAT IS NOT THE ANSWER IS LABELLED, NOT PASSED OFF AS ONE.
+// ONE STALE FRAME DOES NOT MAKE THE NEXT CALL ANSWER THE WRONG QUESTION (#301).
 //
-// Replies arrive in completion order — correct JSON-RPC, and the reason a caller used
-// to have to keep a queue. When the frame that lands first belongs to an earlier
-// request, the reply says so instead of letting the caller believe it got its answer.
-func TestAFrameThatAnswersSomethingElseSaysSo(t *testing.T) {
+// A frame that was already on the channel used to be handed to the next `call` with a
+// warning attached: a 200 whose body answers a question nobody just asked, while the
+// real answer stayed on the stream. The wait is now for the id the call sent; frames
+// passed on the way are parked and `read --frame` hands them out, oldest first.
+func TestACallWaitsForItsIDAndKeepsWhatItPasses(t *testing.T) {
 	s := newTestServer(t)
-	// The peer answers id 1 first, then whatever was asked. Two writes, one reply each:
-	// the first call takes the first frame, the second call takes the next.
-	script := writeScript(t, `read line; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stale":true}}'`)
+	// Two frames are on the channel before the call: a notification (no id at all) and
+	// a reply to an earlier request. Only the third answers what this call asks.
+	script := writeScript(t, `printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/stale"}'; printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stale":true}}'; read line; printf '%s\n' '{"jsonrpc":"2.0","id":99,"result":{"fresh":true}}'`)
 	h := openPipe(t, s, "sh "+script)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 
@@ -76,11 +80,76 @@ func TestAFrameThatAnswersSomethingElseSaysSo(t *testing.T) {
 		"cmd":     "call " + h + ` {"jsonrpc":"2.0","id":99,"method":"tools/list"}`,
 		"timeout": 20,
 	})
-	if !strings.Contains(got, "stale") {
-		t.Fatalf("the frame the peer wrote was lost:\n%s", got)
+	if !strings.HasPrefix(got, "TERM/1 200") || !strings.Contains(got, "fresh") {
+		t.Fatalf("the call did not return the reply to its own id:\n%s", got)
 	}
-	if !strings.Contains(got, "id 1") || !strings.Contains(got, "id 99") {
-		t.Fatalf("a reply to another id was not labelled as such:\n%s", got)
+	if strings.Contains(got, "stale") {
+		t.Fatalf("a frame for another id was returned as this call's answer:\n%s", got)
+	}
+	// NOTHING WAS LOST. The two frames the call passed are on the parked queue, and the
+	// order they come back in is the order they arrived in.
+	first := termText(t, s, map[string]any{"cmd": "read " + h + " --frame"})
+	if !strings.Contains(first, "notifications/stale") {
+		t.Fatalf("the parked notification was not handed out first:\n%s", first)
+	}
+	second := termText(t, s, map[string]any{"cmd": "read " + h + " --frame"})
+	if !strings.Contains(second, `"stale":true`) {
+		t.Fatalf("the parked reply was not handed out:\n%s", second)
+	}
+}
+
+// THE WINDOW IS ONE BUDGET FOR THE WHOLE WAIT, not one per frame it passes.
+//
+// A peer that never answers the id must end the call at the window the caller named;
+// resetting the window per skipped frame would multiply the wait by the number of
+// foreign frames on the stream. Twenty buffered frames and half a second: the fixed
+// call returns in about the window, the resetting one takes ten seconds.
+func TestTheWindowIsOneBudgetNotOnePerSkippedFrame(t *testing.T) {
+	s := newTestServer(t)
+	script := writeScript(t, strings.Repeat(`printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'; `, 20)+`sleep 30`)
+	h := openPipe(t, s, "sh "+script)
+	defer termText(t, s, map[string]any{"cmd": "close " + h})
+
+	start := time.Now()
+	got := termText(t, s, map[string]any{
+		"cmd":     "call " + h + ` {"jsonrpc":"2.0","id":99,"method":"tools/list"}`,
+		"timeout": 0.5,
+	})
+	elapsed := time.Since(start)
+	if !strings.HasPrefix(got, "TERM/1 204") {
+		t.Fatalf("a call whose id never arrived answered something other than nothing-yet:\n%s", got)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("the wait (%v) grew past the window: the budget is being reset per skipped frame", elapsed)
+	}
+	// The nothing-yet answer says where the frames it passed went, and they survive the
+	// timeout: read --frame still hands them out.
+	if !strings.Contains(got, "parked") {
+		t.Errorf("the nothing-yet answer does not say what happened to the skipped frames:\n%s", got)
+	}
+	first := termText(t, s, map[string]any{"cmd": "read " + h + " --frame"})
+	if !strings.Contains(first, `"id":1`) {
+		t.Fatalf("the frames skipped before the timeout were lost:\n%s", first)
+	}
+}
+
+// A WAITER LOOKS IN THE PARKED QUEUE FIRST, BY ID: its reply can have been skipped by
+// a waiter that was after a later id, and the queue is the only way back to it.
+func TestAParkedFrameIsTakenByIDWithoutDisturbingTheRest(t *testing.T) {
+	s := newTestServer(t)
+	s.enqueuePendingFrame("h", envelope.Slot{Body: `{"jsonrpc":"2.0","id":5}`})
+	s.enqueuePendingFrame("h", envelope.Slot{Body: `{"jsonrpc":"2.0","id":7}`})
+
+	slot, ok := s.takePendingFrame("h", "7")
+	if !ok || frameID(slot.Body) != "7" {
+		t.Fatalf("the parked reply for id 7 was not found: %v %q", ok, slot.Body)
+	}
+	slot, ok = s.popPendingFrame("h")
+	if !ok || frameID(slot.Body) != "5" {
+		t.Fatalf("taking by id disturbed the order of the rest: %v %q", ok, slot.Body)
+	}
+	if _, ok := s.popPendingFrame("h"); ok {
+		t.Fatal("an empty queue answered as if it held a frame")
 	}
 }
 

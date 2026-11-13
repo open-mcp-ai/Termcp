@@ -27,16 +27,26 @@ var flagSummaries = map[string]map[string]string{
 		"cursor":     "byte offset to resume from (end+1 of the last Content-Range)",
 		"grep":       "filter BEFORE the window; each match keeps its real line number",
 		"grep-limit": "cap the matches (default 200); the reply reports the true total",
-		"stream":     "o = stdout only, e = stderr only; default is both, and the other is reported as omitted",
-		"encoding":   "the charset of these bytes; without it a non-UTF-8 window is refused rather than guessed",
-		"raw":        "the bytes as they arrived: no ANSI stripping on a window, no escape-decoding on --at, no \\n escaping on a file read (valueless)",
-		"lines":      "on a file read: number each line from the file's own first line (valueless)",
-		"frame":      "read one JSON-RPC frame; advances only when the frame was complete (valueless)",
-		"since":      "on a peer: the frame history after N — does not consume",
-		"at":         "page inside one frame, named by its number",
-		"offset":     "byte offset inside the frame named by --at",
-		"bytes":      "page size for --at (4 KB default)",
-		"mode":       "on a file read: text (default), hex for bytes, or file to download to a local_path",
+		"until": "wait for this regex or preset instead of returning at once. " +
+			"`exit` reads the shell's own OSC 133 marker (bash/zsh/fish with shell integration; PowerShell does not send it). " +
+			"`prompt` is a guess about a shape — line endings on $ # > % ❯ ➜ λ, powerline separators or box drawing, " +
+			"optional colour reset — so a theme outside that set never matches and the call spends its whole window: " +
+			"pass your own regex when the preset misses",
+		"screen":   "the screen, not the log: rows as displayed, plus Cursor and Alt-Screen (valueless)",
+		"top":      "with --screen: the first row of the page, in the model's row numbering",
+		"rows":     "with --screen --top: how many rows the page holds (default: the screen height)",
+		"stream":   "o = stdout only, e = stderr only; default is both, and the other is reported as omitted",
+		"encoding": "the charset of these bytes; without it a non-UTF-8 window is refused rather than guessed",
+		"raw":      "the bytes as they arrived: no ANSI stripping on a window, no escape-decoding on --at, no \\n escaping on a file read (valueless)",
+		"lines":    "on a file read: number each line from the file's own first line (valueless)",
+		"frame":    "read one JSON-RPC frame; advances only when the frame was complete (valueless)",
+		"since":    "on a peer: the frame history after N — does not consume",
+		"at":       "page inside one frame, named by its number",
+		"offset":   "byte offset inside the frame named by --at",
+		"bytes":    "page size for --at (4 KB default)",
+		"reader":   "registered reader id to consume from; keeps its own cursor independent of the default reader",
+		"mode":     "on a file read: text (default), hex for bytes, or file to download to a local_path",
+		"wait":     "spend the whole timeout on an empty window instead of ending it when the stream goes quiet (valueless)",
 	},
 }
 
@@ -61,7 +71,18 @@ func HasSummaries(op string) bool {
 // separate from the table because an example is not a flag and does not belong in a
 // column of them.
 var summaryExamples = map[string]string{
-	"read": "read a1f3:1 --grep 'error|fail' --tail 5        # the last 5 failures, with line numbers",
+	"read":    "read a1f3:1 --grep 'error|fail' --tail 5        # the last 5 failures, with line numbers",
+	"run":     `run a1f3:1 $1                                 # one line, one wait; args: ["ls -la"]`,
+	"input":   `input a1f3:1 $1 -- args ["echo hi"]           # type without submitting`,
+	"key":     "key a1f3:1 enter                              # submit what was typed",
+	"send":    "send a1f3:1 {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+	"call":    `call a1f3:1 mcp:1 ping {"a":1}                 # a tool on a mounted peer`,
+	"open":    "open a1f3:1 --pty --argv bash                 # a second channel on a session",
+	"connect": "connect internal --name build                 # a session, then `ls` shows it",
+	"close":   "close a1f3:1                                  # one channel; the session stays",
+	"write":   `write a1f3:1 file app.log --data "line\n"     # append bytes to a file`,
+	"get":     "get a1f3:1 file app.log --tail 20             # read part of a file",
+	"ls":      "ls                                           # everything this instance holds",
 }
 
 // SummaryExample returns the worked example for a verb, if it has one.

@@ -127,6 +127,9 @@ type (
 	Error = directive.Error
 	// Subst fills the language's variable holes before parsing.
 	Subst = directive.Subst
+	// SpanMode says how a reference inside a directive's payload reaches its
+	// destination: a shell line, a word list, or bytes no shell reads.
+	SpanMode = directive.SpanMode
 )
 
 // The verb declarations a Grammar is made of. A caller that adds a verb needs
@@ -146,6 +149,13 @@ const (
 	TargetChannel = directive.TargetChannel
 	TargetSession = directive.TargetSession
 	TargetChain   = directive.TargetChain
+
+	// The PayloadSpan values, for the verbs that declare how their payload's
+	// references are read (issue #297). The zero value is SpanCommandLine; a frame or
+	// an identifier payload declares SpanVerbatim, and a word list declares SpanWords.
+	SpanCommandLine = directive.SpanCommandLine
+	SpanWords       = directive.SpanWords
+	SpanVerbatim    = directive.SpanVerbatim
 )
 
 // NewGrammar indexes a vocabulary: each verb's own name and every synonym it

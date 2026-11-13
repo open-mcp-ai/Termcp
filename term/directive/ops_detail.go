@@ -108,7 +108,7 @@ var ops = []Op{
 			"local-host", "dynamic", "remote", "target", "all"},
 		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
-		Usage:     "open <session> [--argv <cmd> [--pty]]   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
+		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
 	{Name: "ls", Core: true, Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true,
 		Kinds:     []string{"forward", "file", "host", "ext", "alias", "cdp", "mcp", "jrpc", "task"},
@@ -149,7 +149,8 @@ var ops = []Op{
 
 	{Name: "run", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
 		PayloadType: PayloadVar,
-		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding"},
+		Flags:       []string{"tail:number", "grep", "grep-limit:number", "encoding", "until", "force"},
+		Valueless:   []string{"force"},
 		Usage:       "run <channel> [--tail N] [--grep RE] $1   |   run <session> <index> $1   |   run use:<host> $1",
 		Detail:      runDetail},
 	{Name: "input", Core: true, Kind: KindPayload, Target: true, MinArgs: 1, TargetKind: TargetChain,
@@ -167,20 +168,20 @@ var ops = []Op{
 		Usage:  "span <channel>",
 		Detail: spanDetail},
 	{Name: "reader", Kind: KindFlags, Target: true, Flags: []string{"drop"}, TargetKind: TargetChain,
-		Usage: "reader <session> <index>   |   reader <session> <index> --drop <id>"},
+		Usage: "reader <session> <index>   |   reader <session> <index> --drop <id>", Detail: readerDetail},
 
 	// --- bytes in and out of a node ---
 
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
-		Flags: []string{"cursor:number", "since:number", "at:number", "offset:number", "bytes:number",
+		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
-			"frame", "encoding", "mode"},
-		Valueless: []string{"raw", "lines", "frame"},
-		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N] [--grep RE]   |   " +
+			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait"},
+		Valueless: []string{"raw", "lines", "frame", "screen", "wait"},
+		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
-			"read <session> <index> | write <session> file <path>",
+			"read <session> <index> [--tail N]",
 		Detail: readDetail},
 	// NO TargetKind: `write <session> file <path>` names a container and
 	// `write <handle> <frame>` names a channel, so a shape check would refuse one of
@@ -197,11 +198,11 @@ var ops = []Op{
 
 	// --- a peer: one call, or the manual send/recv pair ---
 
-	{Name: "call", Kind: KindPayload, PayloadSpan: spanVerbatim, Target: true,
+	{Name: "call", Kind: KindPayload, PayloadSpan: SpanVerbatim, Target: true,
 		Kinds:     []string{"cdp", "mcp", "jrpc"},
 		Flags:     []string{"send", "json"},
 		Valueless: []string{"send", "json"},
-		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <tool|frame>",
+		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <frame>",
 		Detail:    callDetail},
 
 	// --- configuration, which outlives any session ---
@@ -257,8 +258,13 @@ var ops = []Op{
 const keyDetail = `The name is a KEY, not text: it becomes the terminal's own escape sequence, so a
 program sees a keystroke rather than the word "enter".
 
-  enter  tab  esc  up  down  left  right  backspace  delete  home  end
+  enter  tab  esc  space  up  down  left  right  pageup  pagedown
+  backspace  delete  home  end
   ctrl+c  ctrl+d  ctrl+z  ctrl+l  ctrl+u  ctrl+w
+
+The list is the parser's, not a summary of it: space and the page keys are what a TUI
+with no line editor is driven with, and this page has to agree with the refusal that a
+wrong name gets.
 
 esc and escape are the same key; either spelling is accepted. --repeat N presses it
 N times, which is how a list is walked (down --repeat 3) without three round trips.
@@ -269,6 +275,31 @@ thing that needs to stop.`
 
 // spanDetail decodes the one-letter statuses, which are terse by design (they are
 // written to log.jsonl for every status change) and unreadable without this.
+// readerDetail states the registration protocol, which the usage line cannot.
+//
+// The usage line offers two forms and says nothing about what a reader IS, so the
+// caller has to know that the reply's id is the thing `--drop` takes, that a reader
+// can be dropped again, and that dropping one is not a tidy-up but the way to stop
+// paying for bytes nobody reads. Issue #286 asked for exactly this page.
+const readerDetail = `A reader is a second cursor on one channel: it consumes from its own position and
+returns an id, so two consumers can read the same output without stealing each other's
+bytes. The default reader ('read <channel>') is the cursor that moves; a reader is how
+a watcher, a bridge or a summariser follows along without disturbing it.
+
+  reader <channel>              register one; the reply is its id (200, body 'reader N')
+  reader <channel> --drop <id>  unregister it; the reply is 204
+
+  read <channel> --reader <id>  read the new bytes since this reader's last read
+
+DROPPING IS NOT HOUSEKEEPING. A registered reader holds the bytes it has not read yet,
+and a reader nobody drains is a buffer that grows until the channel closes. Drop it as
+soon as the consumer stops; 'reader <channel> --drop' with no id is refused rather than
+treated as a registration, because a typo that leaves a resource behind is the one kind
+of typo that must not be quiet.
+
+A reader cannot be re-registered by name: the id is the only handle, and the channel
+reports its live readers through 'span'.`
+
 const spanDetail = `Session output index: time, byte range, line range and line start per
 span, so a window can be read by position instead of by streaming.
 
@@ -362,6 +393,13 @@ an unchanged channel is legitimately empty, which is not data loss and not an
 error. To see the whole log again, ask for it by position (--from-line 1, or
 offset 0); to peek without consuming, use bytes_limit 0 on the call (it returns
 the handle and the range it would have read).
+
+AN EMPTY WINDOW COMES BACK WHEN THE STREAM STOPS TALKING, NOT WHEN THE CALLER'S
+WINDOW RUNS OUT. A plain read with nothing new waits for this channel's quiet window
+(a few hundred ms, the same rhythm a run ends its wait on) and answers 204 with
+Completion: quiet; it does not sit out a 60s window to say the same thing, which is
+long enough for a client watchdog to kill the call first. --wait spends the whole
+window instead, for a caller that really is long-polling for bytes.
 
 run ADVANCES THIS CURSOR TOO, and it has to: a run reply IS a read — it hands you
 the bytes the command produced — so a cursor that ignored it made the default
@@ -545,6 +583,12 @@ frame is held for the next call rather than cut in half. That cursor is kept per
 channel, independent of the plain byte reader — so reading raw bytes never consumes
 a frame, and reading frames never shifts the byte position of a plain read.
 
+FRAMES A CALL PASSED OVER COME BACK HERE. call <channel> <frame> waits for the reply
+whose id matches the frame it sent. Every frame it reads meanwhile — a notification,
+an answer to an earlier request — is parked, and read --frame hands the parked ones
+out oldest first, before touching the stream again. So the call's window expiring
+does not cost the caller those frames; it only means the answer has not arrived yet.
+
 WHAT COUNTS AS A FRAME IS THE MESSAGE, NOT THE JSON. A frame is an object carrying
 id or method, or an array of such objects (a batch); a value that is merely legal
 JSON is skipped, and the scan keeps looking behind it. This is not pedantry: a
@@ -646,11 +690,35 @@ The half second is a STARTING bet, not a constant: a channel that has shown its
 chunks arriving closer together stops paying for a slower shell elsewhere, down to
 a quarter second. It never waits longer than the half second, whatever it sees.
 
-The reply says WHICH of the two happened, because the difference is the whole
-question: Completion: quiet means the stream went quiet (the ordinary ending — the
-command may have finished, or may be working without printing), and Still-Running:
-true means the window ran out while bytes were still arriving. Neither one claims
-the command finished, because a pty gives nothing to base that on.
+THE REPLY DOES NOT CLAIM THE COMMAND FINISHED, because a pty gives nothing to base
+that on: a finished command and one that is working without printing are the same
+bytes. So Completion appears ONLY when there is evidence to name:
+Completion: matched when your own --until pattern was observed, Completion: exit when
+the remote shell reported the end itself (OSC 133, together with Exit-Code). NO
+Completion HEADER MEANS THE STATE IS UNKNOWN — the honest answer, not a failure: read
+the stream and decide, the way a human at the same screen would. Still-Running: true
+is the one other fact, and it means the window ran out while bytes were still
+arriving.
+
+--until IS HOW YOU ASK FOR EVIDENCE INSTEAD OF WAITING BLINDLY. --until 'BUILD OK'
+ends the wait when that line appears. --until prompt matches a shell prompt ([$#>] at
+the end of a line); --until exit matches the shell's own OSC 133 completion report
+(FinalTerm; iTerm2, kitty, WezTerm, Ghostty, fish 4.x, Starship, oh-my-posh and the
+Windows Terminal profile emit it) and reports the status it carries. Anything else is
+a Go regular expression. Matching starts after the line you typed, so
+run ch "echo DONE" --until DONE cannot match its own echo, and it scans the bytes as
+they arrived rather than the ANSI-stripped text — the completion report IS an ANSI
+sequence, so a stripped view could never see it. Without --until the wait ends on
+stillness; with it, only the evidence or the window ends it.
+
+AN EMPTY REPLY DOES NOT CLAIM THE LINE IS EXECUTING. A terminal queues what it is
+given until the foreground process reads it, so a line typed while a program holds
+the terminal produces nothing — byte for byte what a silent command produces. When
+the window ends with no bytes at all, the reply says exactly that (a Hint) instead of
+Still-Running, because that header is a claim about work, and silence is not evidence
+of it. There is no header that answers "was my line read": the terminal does not have
+that signal either. If the answer matters, interrupt whatever holds the terminal
+(key <channel> ctrl+c) and the shell runs what is queued.
 
 A reply that ends mid-output is not a lost command: the bytes are still in the
 stream. read has its own cursor and does not continue after the sample — it
@@ -1016,9 +1084,14 @@ profile name) writes over the host's pooled transport, so no session is created 
 nothing is archived afterwards. Same bytes, same atomic temp-file-and-rename rule;
 the only thing missing is the session the upload/download URLs would address.
 
---data decodes by --mode (text by default, so \n is a newline). For binary use hex:
+--data decodes by --mode (text by default, so \n is a newline; raw writes characters
+verbatim with no escape expansion; hex decodes hex pairs). For binary use hex:
 or a pipeline. The write is a plain overwrite, not an append: use --offset only
 when you mean to patch bytes in place.
+
+Every write reports the SHA256 of the bytes that actually landed, and text mode
+reports what it decoded (\n -> LF, \\ -> \) so a rewritten payload is visible in
+the reply rather than only downstream when a build or compile fails.
 
 PATHS ARE POSIX ON THE WIRE, ON EVERY PLATFORM. SFTP is a POSIX-shaped protocol, so
 a Windows absolute path has a second spelling: C:/tc/x is /C:/tc/x on the wire, and
@@ -1062,6 +1135,19 @@ const createDetail = `Create saved configuration. It outlives every session and 
   create host staging --source prod --name staging    copy an existing entry
   create ext myserver --target internal --command npx --args '-y' 'some-server'
   create alias ll 'ls a1f3'
+
+AN ALIAS IS A WORD FOR A COMMAND, AND THERE ARE TWO KINDS. "create alias" (and
+"edit alias") writes it to <data-dir>/aliases.json, so it is still there after a
+restart; the plain "alias <name> <expansion>" verb is the scratch one and dies with
+the process. Both expand at parse time, so the reply's Path shows the command that
+actually ran.
+
+AN EXTENSION'S TEMPLATE MAY SHIP ITS OWN, under an [alias] table, and those are
+addressed as <ext>.<alias> — "jira.search openapi". The dot is required: two
+installed extensions both calling themselves search cannot both own the bare word,
+and a name that works only while exactly one template happens to define it is state
+the caller cannot see. "ls alias" lists all three sources under their own headings.
+An alias may not take a directive's name, and a dot name belongs to an extension.
 
 WRITES ARE GATED. Host writes depend on startup configuration: an instance started
 without --mcp-manage-ssh-configs answers 403 and names that flag, because only the
@@ -1353,8 +1439,16 @@ RAW PROTOCOL (when not calling a tool):
   close <session> mcp:1                        unmount peer
 
 Stdio servers opened with --argv use the channel handle instead of mcp:1:
-  call <channel> <tool> {"arg":"val"}
-  read <channel> --frame                       read frames from stdio stdout`
+  call <channel> '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  read <channel> --frame                       read frames from stdio stdout
+
+A CHANNEL IS NOT A PEER. It carries raw frames only — no handshake, no tool
+name form, no session or id bookkeeping: the caller writes the whole JSON-RPC
+frame and reads the whole reply. An MCP peer mounted with 'open <session> mcp
+<url>' is what gives 'call <session> mcp:1 <tool> {args}', and a 'create ext
+--url ...' relay speaks the same raw frames its channel carries. A tool-name
+form on a channel is refused with "the frame is not JSON", because the first
+word of a frame must be the JSON object itself.`
 
 // forwardDetail is the flag set per direction, which the one-line usage cannot show:
 // `open <session> forward …` does not say which of --remote-host / --local-port belong

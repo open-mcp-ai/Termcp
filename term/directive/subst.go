@@ -38,7 +38,7 @@ type Subst struct {
 
 func (s Subst) empty() bool { return len(s.Named) == 0 && len(s.Pos) == 0 }
 
-// spanMode is how a value is inserted into one region of cmd.
+// SpanMode is how a value is inserted into one region of cmd.
 //
 // THE THREE MODES ARE THE WHOLE MODEL, and collapsing them into one enum is what
 // keeps the rule in one place. They were three boolean fields (perWord/target/frame)
@@ -52,21 +52,29 @@ func (s Subst) empty() bool { return len(s.Named) == 0 && len(s.Pos) == 0 }
 //	a word list (--argv, alias)      each word is syntax, the rest is boundaries
 //	an identifier (target)           never a shell word, so never quoted
 //	a protocol frame (cdp/jrpc/mcp)  quotes are JSON syntax, so never shell's
-type spanMode int
+// SpanMode says how a reference inside a directive's payload reaches its destination.
+//
+// EXPORTED BECAUSE Op.PayloadSpan IS (#297). An exported field typed with an unexported
+// type can be read from outside the module and not written: the only value an embedder
+// could assign was the zero one, so declaring a frame payload — the thing `call` does
+// internally — was impossible from outside, even though it is the same protocol
+// capability. `go doc` also rendered it as `PayloadSpan SpanMode`, which told the
+// reader nothing about what to put there.
+type SpanMode int
 
 const (
-	// spanCommandLine is a payload that becomes a command line. A reference counts
+	// SpanCommandLine is a payload that becomes a command line. A reference counts
 	// as syntax only when it IS the span: `run h:1 $1` hands the terminal what the
 	// caller passed, while `run h:1 $1 && echo done` names a WORD inside a line the
 	// caller wrote, and splicing there would turn one command into two.
-	spanCommandLine spanMode = iota
+	SpanCommandLine SpanMode = iota
 
-	// spanWords is a payload of several words where each whole word may be a
+	// SpanWords is a payload of several words where each whole word may be a
 	// reference: an argv list (`--argv $1 $2`), and an alias's expansion, whose words
 	// are the next directive line.
-	spanWords
+	SpanWords
 
-	// spanVerbatim is everything a shell never reads: a target (an identifier such as
+	// SpanVerbatim is everything a shell never reads: a target (an identifier such as
 	// `<session>:<n>`) and a protocol frame (JSON-RPC). Every reference inside is
 	// inserted as the caller's own bytes.
 	//
@@ -75,7 +83,7 @@ const (
 	// frame produced `{"e":"'2+3'"}`, a JSON string carrying shell quotes, and under
 	// shell rules a reference inside the frame's own single quotes was not expanded at
 	// all — while the frame directives' help used to tell callers to quote the frame.
-	spanVerbatim
+	SpanVerbatim
 
 	// THERE WAS A FOURTH MODE HERE — `spanArithmetic`, the inside of `$(( ))`, where a
 	// quoted word is not an operand. It is gone with the region that produced it: the
@@ -97,7 +105,12 @@ type span struct {
 	//
 	// With one number, `> $1` fell outside the region and took the flag-value rule: bare.
 	payloadEnd int
-	mode       spanMode
+	mode       SpanMode
+	// value marks a region the directive DECLARED to be one reference: `PayloadType:
+	// PayloadVar`. There a `$NAME` the table does not define cannot be shell text —
+	// the shell text travels in the value, which is the whole point of the
+	// declaration — so it is a mistake to name, not something to pass through.
+	value bool
 }
 
 // admits reports how a reference this span CONTAINS is inserted.
@@ -110,20 +123,20 @@ type span struct {
 //
 // spanAt has already established containment; this is only the insertion rule for the
 // region the reference is in.
-func (s span) admits(src string, start, end int) (mode spanMode, raw bool) {
+func (s span) admits(src string, start, end int) (mode SpanMode, raw bool) {
 	switch s.mode {
-	case spanVerbatim:
+	case SpanVerbatim:
 		// A shell never reads these, so the value is the caller's own bytes.
 		return s.mode, true
 
-	case spanWords:
+	case SpanWords:
 		// A whole WORD: the reference stands alone, so the value replaces that word and
 		// nothing else.
 		whole := (start == s.start || isSpaceByte(src[start-1])) &&
 			(end == s.end || isSpaceByte(src[end]))
 		return s.mode, whole
 
-	default: // spanCommandLine
+	default: // SpanCommandLine
 		// THE SHELL'S OWN RULE: a reference is syntax only when it IS the payload.
 		return s.mode, start == s.start && end == s.payloadEnd
 	}
@@ -136,10 +149,28 @@ func (s span) admits(src string, start, end int) (mode spanMode, raw bool) {
 // and in every nesting it is the smaller, more specific region that says how the value is
 // read.
 //
-// A range that no span contains returns spanMode(-1), and THAT IS A REGION TOO: a flag value
+// A range that no span contains returns SpanMode(-1), and THAT IS A REGION TOO: a flag value
 // (`--data`, `--name`) is outside every payload, argv list and target, and it is not shell
 // syntax. Callers use this answer to tell shell from not-shell rather than re-deriving it.
-func spanAt(spans []span, src string, start, end int) (mode spanMode, raw bool) {
+func spanAt(spans []span, src string, start, end int) (mode SpanMode, raw bool) {
+	mode, raw, _ = spanRegion(spans, src, start, end)
+	return mode, raw
+}
+
+// anyValueRegion reports whether the line has a region a directive declared to be one
+// reference, which is the one thing an empty table still has to check.
+func anyValueRegion(spans []span) bool {
+	for _, s := range spans {
+		if s.value {
+			return true
+		}
+	}
+	return false
+}
+
+// spanRegion is spanAt with the third question the resolver asks: is this region a VALUE
+// the directive demanded, rather than text something reads?
+func spanRegion(spans []span, src string, start, end int) (mode SpanMode, raw bool, value bool) {
 	best := -1
 	for i, s := range spans {
 		if start < s.start || end > s.end {
@@ -150,9 +181,10 @@ func spanAt(spans []span, src string, start, end int) (mode spanMode, raw bool) 
 		}
 	}
 	if best < 0 {
-		return spanMode(-1), false
+		return SpanMode(-1), false, false
 	}
-	return spans[best].admits(src, start, end)
+	mode, raw = spans[best].admits(src, start, end)
+	return mode, raw, spans[best].value
 }
 
 // occ is one parameter expansion found by scanSubstitutions.
@@ -161,9 +193,6 @@ type occ struct {
 	value      string
 	// raw reports that the value is spliced in verbatim instead of quoted.
 	raw bool
-	// dq reports that the expansion sat inside double quotes, so a value that
-	// must stay inside them is escaped for that context rather than re-quoted.
-	dq bool
 }
 
 // substitute replaces every parameter expansion naming a value the caller supplied
@@ -183,7 +212,14 @@ type occ struct {
 // already a word the parser can read, and quoting it early is what keeps a value
 // with a quote in it from escaping into the surrounding syntax.
 func substitute(src string, sub Subst, spans []span, refs []ref) (string, *sentinelTable, usage, error) {
-	if sub.empty() {
+	// AN EMPTY TABLE IS NOT ALWAYS NOTHING TO DO (#298).
+	//
+	// It skips the whole pass, which is right for a line whose `$` belongs to a shell:
+	// with no table there is nothing to fill and nothing to complain about. A region a
+	// directive declared to BE a reference is the exception — there the table's absence
+	// is the answer ("that name has no value"), and the same call already failed when
+	// the table was merely non-empty and missing that one name.
+	if sub.empty() && !anyValueRegion(spans) {
 		return src, nil, usage{}, nil
 	}
 	occs, used, err := resolve(src, sub, spans, refs)
@@ -200,9 +236,7 @@ func substitute(src string, sub Subst, spans []span, refs []ref) (string, *senti
 		b.WriteString(src[last:o.start])
 		switch {
 		case o.raw:
-			b.WriteString(table.prefix + strconv.Itoa(table.add(o.value, o.dq)) + "__")
-		case o.dq:
-			b.WriteString(shellDoubleQuoteBody(o.value))
+			b.WriteString(table.prefix + strconv.Itoa(table.add(o.value)) + "__")
 		default:
 			b.WriteString(shellSingleQuote(o.value))
 		}
@@ -225,9 +259,6 @@ type ref struct {
 	start, end int
 	name       string
 	positional bool
-	// dq reports that the expansion sits inside double quotes, so a value that must stay
-	// inside them is escaped for that context rather than re-quoted.
-	dq bool
 }
 
 // resolve reports every reference that names a value the caller supplied.
@@ -254,7 +285,7 @@ func resolve(src string, sub Subst, spans []span, refs []ref) ([]occ, usage, err
 	}
 	for _, ref := range refs {
 		r.reported[ref.start] = true
-		if err := r.one(ref.start, ref.end, ref.name, ref.positional, ref.dq); err != nil {
+		if err := r.one(ref.start, ref.end, ref.name, ref.positional); err != nil {
 			return nil, usage{}, err
 		}
 	}
@@ -308,10 +339,10 @@ type resolver struct {
 // frame as KindPayload, which the grammar never interprets (a JSON frame is not a shell
 // word — its braces are not even legal syntax). So "the grammar did not report it" carries
 // no meaning there, and the bytes are the only truth. That is why this scans a span's bytes
-// and no other: a span whose mode is spanVerbatim is a declaration that nobody parses it.
+// and no other: a span whose mode is SpanVerbatim is a declaration that nobody parses it.
 func (r *resolver) blind() {
 	for _, sp := range r.spans {
-		if sp.mode != spanVerbatim {
+		if sp.mode != SpanVerbatim {
 			continue
 		}
 		for i := sp.start; i < sp.end && i < len(r.src); {
@@ -330,7 +361,7 @@ func (r *resolver) blind() {
 				continue
 			}
 			if !r.reported[i] {
-				if err := r.one(i, end, name, positional, false); err != nil {
+				if err := r.one(i, end, name, positional); err != nil {
 					r.failed = err
 					return
 				}
@@ -341,11 +372,11 @@ func (r *resolver) blind() {
 }
 
 // one resolves a single reference, or explains why it cannot.
-func (r *resolver) one(start, end int, name string, positional, dq bool) error {
-	mode, raw := spanAt(r.spans, r.src, start, end)
+func (r *resolver) one(start, end int, name string, positional bool) error {
+	mode, raw, valueRegion := spanRegion(r.spans, r.src, start, end)
 	// A shell region is one the parser read as a command line or a word list; everything
 	// else — a frame, a target, a flag value, a heredoc body — is bytes.
-	shell := mode == spanCommandLine || mode == spanWords
+	shell := mode == SpanCommandLine || mode == SpanWords
 
 	// DSL AND SHELL ARE NEVER MIXED.
 	//
@@ -360,7 +391,7 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 	// reference there is one word of an argv, which is exactly what a variable is for.
 	// The distinction is the REGION, not the spelling — which is why this reads `mode`
 	// rather than testing the text for a `$`.
-	if mode == spanCommandLine && !raw {
+	if mode == SpanCommandLine && !raw {
 		return fmt.Errorf("a variable cannot sit inside a shell line: %s is mixed with other shell text. "+
 			"termcp keeps DSL and shell apart — the whole shell command is a VALUE, so put it in the variable and "+
 			"leave the reference alone in cmd:\n"+
@@ -368,22 +399,20 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 			"If the line is literal (no values), write it directly: cmd: \"run <channel> cat /etc/hosts\"", name)
 	}
 
-	// ESCAPING IS A PROPERTY OF THE DESTINATION, NOT OF THE QUOTES.
+	// INSERTION IS A PROPERTY OF THE DESTINATION, NOT OF THE QUOTES.
 	//
-	// `dq` says the reference sat inside double quotes in cmd, which is a fact about the
-	// SOURCE. It only means anything when a shell will later read those quotes and take them
-	// off: a value destined for a file path, a target or a JSON frame is the caller's bytes,
-	// and escaping it injects backslashes nobody asked for.
+	// The source used to decide it: a reference written inside double quotes was escaped
+	// for a double-quoted context. That only means anything where a shell later reads
+	// those quotes and takes them off, and no destination that reaches this point is that
+	// shell — a flag value or a frame is bytes (escaping invented backslashes: `write
+	// <session> file "$1"` created `C:\Users\...`), and a WORD LIST is re-read by
+	// SplitArgv (escaping was a third pass on a value already quoted once and quoted again
+	// by the transport: a PowerShell `$t` reached the target as `\$t`, #292).
 	//
-	// The reported case: `write <session> file "$1"` — the ordinary instinct to quote a path
-	// — answered 202 and created a file whose NAME contained the escape sequences
-	// (`C:\\Users\\...\\asked.bin`), because shell escaping was applied to a destination no
-	// shell reads. The unquoted `$1` was right all along, which is the shape of the bug: two
-	// spellings of the same intent, one of them silently corrupt.
-	//
-	// `run h:1 "$1"` is the case the flag exists for and it keeps its escaping: the payload
-	// IS read by a shell, the quotes reach it, and the value has to survive that unquoting.
-	escapes := dq && shell
+	// So: a destination no shell reads keeps the caller's bytes, and a word list is raw
+	// even when the reference is not a whole word — the caller's own quotes are the
+	// quoting there, and SplitArgv is what takes them off.
+	raw = raw || mode == SpanWords || !shell
 
 	if positional {
 		// Positional substitution is opt-in with the args channel: with no args the caller
@@ -415,16 +444,29 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 			// OUTSIDE A SHELL REGION NOTHING QUOTES THE VALUE, because nothing will unquote
 			// it: a flag value arrives at its destination as the bytes between the flags,
 			// and shell quoting there would be bytes the caller never sent.
-			raw: raw || !shell,
-			dq:  escapes,
+			//
+			// A WORD LIST IS INSERTED RAW TOO, even inside the caller's quotes (#292).
+			// `--argv` is not a shell line: its value is re-read by SplitArgv, so a value
+			// quoted here would be quoted a SECOND time by that reader and arrive with
+			// quotes the caller never wrote. The caller's own `"…"` is what keeps the word
+			// together, and SplitArgv is what takes it off again.
+			raw: raw,
 		})
 		return nil
 	}
 
 	value, found := r.sub.Named[name]
 	if !found {
-		if len(r.sub.Named) == 0 {
-			// No vars: the shell owns every $NAME, as it always has.
+		// THE SHELL OWNS AN UNDEFINED NAME ONLY WHERE A SHELL READS IT (#298).
+		//
+		// With no vars table, `grep $HOME` passes `$HOME` through for the shell to
+		// expand — the exemption exists for exactly that, and it stays. But a verb that
+		// declared `PayloadType: PayloadVar` said its payload is ONE REFERENCE and the
+		// shell text arrives in that value: inside that region nobody expands anything,
+		// so an undefined `$MISSING` has one reading only, and it is a misspelling. The
+		// same call already failed when the table was non-empty, which is the shape
+		// this server calls a rule that only fires one way.
+		if len(r.sub.Named) == 0 && !valueRegion {
 			return nil
 		}
 		// vars IS in use, so an undefined name is a mistake in one of the two inputs rather
@@ -449,14 +491,10 @@ func (r *resolver) one(start, end int, name string, positional, dq bool) error {
 		// that moved a value from `args` to `vars` (or back) got a different command line
 		// from identical text, and nothing said so.
 		//
-		// The rule is now one rule: WHO READS THE VALUE decides how it is inserted. A
-		// whole payload is a command line, so the value is the line; anywhere inside a
-		// payload it is one quoted word; a destination no shell reads (a flag value, a
-		// frame) gets the caller's bytes. Quoting something as a single word is a thing
-		// the caller asks for with quotes (`run h:1 "$CMD"`), the same way it would in a
-		// shell — not something the choice of variable spelling decides.
-		raw: raw || !shell,
-		dq:  escapes,
+		// WHO READS THE VALUE decides how it is inserted, and both spellings answer
+		// identically: a destination no shell reads gets the caller's bytes, and a shell
+		// line only ever accepts a reference that IS the payload.
+		raw: raw,
 	})
 	return nil
 }
@@ -562,11 +600,10 @@ type sentinelTable struct {
 
 type sentinelValue struct {
 	value string
-	dq    bool
 }
 
-func (t *sentinelTable) add(value string, dq bool) int {
-	t.vals = append(t.vals, sentinelValue{value: value, dq: dq})
+func (t *sentinelTable) add(value string) int {
+	t.vals = append(t.vals, sentinelValue{value: value})
 	return len(t.vals) - 1
 }
 
@@ -603,11 +640,7 @@ func (t *sentinelTable) expand(s string) string {
 			s = rest
 			continue
 		}
-		v := t.vals[id].value
-		if t.vals[id].dq {
-			v = shellDoubleQuoteBody(v)
-		}
-		b.WriteString(v)
+		b.WriteString(t.vals[id].value)
 		s = rest[j+2:]
 	}
 }

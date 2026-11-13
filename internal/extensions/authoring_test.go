@@ -145,9 +145,9 @@ func TestEnsureForwardsKeepsWhatCameUpBeforeAFailure(t *testing.T) {
 	ext.Paths = []string{"/srv/"}
 	ext.Forwards = []ForwardDecl{
 		// This one binds an ephemeral port and succeeds.
-		{Kind: ForwardDynamic, LocalPort: 0},
+		{DirectionKind: ForwardDynamic, LocalPort: 0},
 		// This one asks for the port the test is holding, so it fails.
-		{Kind: ForwardDynamic, LocalHost: "127.0.0.1", LocalPort: busy},
+		{DirectionKind: ForwardDynamic, LocalHost: "127.0.0.1", LocalPort: busy},
 	}
 	mustSave(t, r.store, &ext)
 

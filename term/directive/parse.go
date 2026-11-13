@@ -312,18 +312,13 @@ func analyzeSource(src string, g *Grammar) ([]span, []ref) {
 		return nil, nil
 	}
 	var (
-		dq    [][2]int
 		refs  []ref
 		spans []span
 	)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
-		case *syntax.DblQuoted:
-			// Pre-order: enclosing quote is recorded before nodes inside it.
-			dq = append(dq, [2]int{int(n.Pos().Offset()), int(n.End().Offset())})
 		case *syntax.ParamExp:
 			if r, ok := refOfParam(src, n); ok {
-				r.dq = insideRange(dq, r.start, r.end)
 				refs = append(refs, r)
 			}
 		}
@@ -386,16 +381,6 @@ func refOfParam(src string, p *syntax.ParamExp) (ref, bool) {
 	}, true
 }
 
-// insideRange reports whether [start,end) sits inside any of these ranges.
-func insideRange(ranges [][2]int, start, end int) bool {
-	for _, r := range ranges {
-		if start >= r[0] && end <= r[1] {
-			return true
-		}
-	}
-	return false
-}
-
 // statementRawSpans reports the ranges of a statement whose values are SHELL
 // SYNTAX rather than data. There are two, and both are read as a command line by
 // something downstream:
@@ -453,9 +438,21 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		out = append(out, span{
 			start: int(rest[0].Pos().Offset()),
 			end:   targetEnd,
-			mode:  spanVerbatim,
+			mode:  SpanVerbatim,
 		})
 		rest = rest[consumed:]
+		// `<session> <index>` IS ONE ADDRESS, SO IT TAKES TWO WORDS HERE TOO (#298).
+		//
+		// parseStatement folds the spaced spelling into the handle, and this walk has to
+		// consume exactly the same words or the payload region starts one word early:
+		// `run x 1 $1` looked like a payload beginning at `1`, which made the reference
+		// beside it look like shell text glued to a literal — the error said the caller
+		// had mixed DSL and shell in a line they wrote correctly.
+		if len(rest) > 0 && !NamesAChannel(mustLiteralWord(src, rest[0])) {
+			if _, ok := channelIndexWord(mustLiteralWord(src, rest[0])); ok {
+				rest = rest[1:]
+			}
+		}
 	}
 
 	if op.Kind == KindFlags {
@@ -474,7 +471,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 			if restValueFlag(op, key) && i+1 < len(rest) {
 				// PER-WORD: `--args` on ext is parsed again by SplitArgv, so each
 				// whole-word `$N` is one argv element and must arrive unquoted.
-				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: spanWords})
+				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: SpanWords})
 			}
 			if !strings.Contains(w, "=") && !valuelessFlag(op, key) && i+1 < len(rest) {
 				i++ // the flag's value word
@@ -499,7 +496,7 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 			// reason as the flag kind above: each whole-word `$N` is one argv element
 			// and must arrive unquoted.
 			if i+1 < len(rest) {
-				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: spanWords})
+				return append(out, span{start: int(rest[i+1].Pos().Offset()), end: bodyEnd, mode: SpanWords})
 			}
 			return out
 		}
@@ -540,6 +537,15 @@ func statementRawSpans(src string, stmt *syntax.Stmt, g *Grammar) []span {
 		// the whole line, pipes and redirects included. Only the REGION — the answer
 		// to "is this reference the payload" — stops at the last payload word.
 		mode: op.payloadSpanMode(),
+		// A VERB THAT SAYS ITS PAYLOAD IS A VARIABLE **AND THAT NO SHELL READS IT**
+		// MEANS IT (#298). The declaration is the pair: `PayloadType: PayloadVar` says
+		// the payload is one reference, and the span mode says what reads the text it
+		// resolves to. `run` keeps the default mode because the value IS a shell line
+		// for the terminal, so an undefined `$NAME` there is still the shell's own — that
+		// is pinned behaviour, and the probe table in this package writes `run … $cmd`
+		// on purpose. A verb whose payload is DATA declares `SpanVerbatim`, and there
+		// nobody expands anything, so an undefined name is a misspelling to report.
+		value: op.PayloadType == PayloadVar && op.payloadSpanMode() != SpanCommandLine,
 	})
 }
 
@@ -562,14 +568,6 @@ func mustLiteralWord(src string, w *syntax.Word) string {
 // shellSingleQuote renders a value as a single-quoted shell word.
 func shellSingleQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
-}
-
-// shellDoubleQuoteBody renders a value for insertion INSIDE existing double
-// quotes: backslash, double quote and dollar must be escaped, and a literal
-// newline is left as-is (it is data inside quotes).
-func shellDoubleQuoteBody(v string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
-	return r.Replace(v)
 }
 
 // isSentinel reports whether a value is still a raw hole waiting to be filled.
@@ -740,7 +738,7 @@ func checkNoRedirect(stmt *syntax.Stmt, op Op) error {
 //
 // THE PAYLOAD IS NOT HERE, and does not need to be: it is sliced from the raw source
 // rather than built from words, and checkPayloadType already requires it to be exactly
-// one reference. A frame (`call`, PayloadSpan spanVerbatim) is exempt by declaration:
+// one reference. A frame (`call`, PayloadSpan SpanVerbatim) is exempt by declaration:
 // it never passes through a shell, so a reference inside its template is the peer's.
 func checkOneWordOneLanguage(op Op, rest []word, holes *sentinelTable) error {
 	if holes == nil || holes.prefix == "" {
@@ -1106,6 +1104,26 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 				}
 			}
 		default:
+			// A PAYLOAD VERB'S LONE REFERENCE IS ITS PAYLOAD, NOT ITS TARGET (#296).
+			//
+			// A target is an IDENTIFIER the caller types; a reference is a VALUE. When
+			// the target is optional and one word is all that is left, reading that word
+			// as the target leaves the payload empty and reports success with the value in
+			// the wrong field: `deploy $1` ("deploy [<env>] $1") answered
+			// Target="make release", Payload="" — indistinguishable from a deploy to an
+			// environment named "make release", which is exactly what this server refuses
+			// to guess about elsewhere.
+			//
+			// The rule already exists one block below ("a payload verb is the one place a
+			// lone reference is still a value", for `call h $1`), but the target had
+			// already eaten the word by the time it ran. Here it can still see it.
+			//
+			// Only when the target is OPTIONAL. A required target keeps today's reading,
+			// because `run $1` declaring a target and receiving a value is caught by the
+			// target KIND check rather than by a guess about intent.
+			if op.TargetOptional && op.hasPayload() && len(rest) == 1 && isWholeReference(rest[0].text) {
+				break
+			}
 			// `use <host>` is one target, not two positional words. Fold it only on
 			// the operations that accept `use` hosts, so the same explicit spelling
 			// works for a one-shot run and direct file operations without changing the
@@ -1295,6 +1313,27 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 			// that word, because more words follow it (`alias jira mcp open …`).
 			end = int(rest[i].end)
 			out.Args = append(out.Args, texts(rest[i+1:])...)
+		} else if f := trailingFlagInPayload(op, rest[i:]); f != "" {
+			// A FLAG AFTER THE PAYLOAD IS NOT A FLAG, IT IS PAYLOAD BYTES (#285).
+			//
+			// The payload is "everything from here to the end of the line", so a flag
+			// written at the tail is handed to whatever interprets those bytes. For a
+			// frame that reads as a JSON syntax error about a document that is valid:
+			//
+			//   call h {"method":"Page.enable"} --json
+			//   -> the frame is not JSON: invalid character '-' after top-level value
+			//
+			// and the hint then advised quoting the frame, which was never the problem.
+			// The rule the caller needs already exists for the other end of the line
+			// ("flags come after the target, not before it"); this is the same rule at
+			// the tail, and it only fires for a flag this directive DECLARES — an
+			// argument that happens to start with `--` belongs to the command being
+			// run, and refusing it would break `run s1:0 $1 --version`.
+			return Statement{}, false, &Error{
+				Op:    name,
+				Msg:   "flags come before the payload, not after it: " + name + " " + f + " <payload>",
+				Usage: op.Usage,
+			}
 		}
 		out.Payload = src[start:end]
 
@@ -1426,4 +1465,25 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 		}
 	}
 	return out, true, nil
+}
+
+// trailingFlagInPayload reports the flag a payload verb's tail ends in, when that
+// flag is one this directive declares (#285). The payload is "everything from the
+// first non-flag word to the end of the line", so a flag written at the tail is
+// payload bytes — for a frame that surfaces as a JSON error about a document that
+// is valid. Only a DECLARED flag is reported: an argument that happens to start
+// with `--` belongs to the command being run.
+func trailingFlagInPayload(op Op, payloadWords []word) string {
+	if len(payloadWords) == 0 {
+		return ""
+	}
+	last := payloadWords[len(payloadWords)-1]
+	if !strings.HasPrefix(last.text, "--") {
+		return ""
+	}
+	key, _ := splitFlag(last.text)
+	if allowedFlag(op, key) {
+		return "--" + key
+	}
+	return ""
 }

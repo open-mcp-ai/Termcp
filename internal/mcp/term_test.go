@@ -1231,12 +1231,56 @@ func awaitPtyReady(t *testing.T, s *Server, handle string) {
 			"timeout": 3,
 		})
 		if strings.Contains(termText(t, s, map[string]any{"cmd": "read " + handle + " --from-line 1", "timeout": 0}), marker) {
+			// LEAVE THE CHANNEL QUIET. The probe run's reply can carry Still-Running (its
+			// output was still arriving when its window ended), and a compound line typed
+			// next is refused on that evidence — correct for the gate, wrong for a helper
+			// whose whole job is to hand the test a channel that is ready. Waiting for the
+			// stream to stand still also stops the next run's echo from interleaving with
+			// the probe's, which mangled the window a `--until` test was asserting on.
+			awaitQuiet(t, s, handle)
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the pty never accepted a line: %s is not reading", handle)
 		}
 	}
+}
+
+// awaitQuiet drains a pty channel until a plain read answers 204 — the server's own
+// statement that the stream has been still for a whole quiet window.
+//
+// A TEST THAT RUNS A NOISY COMMAND FIRST HAS TO WAIT FOR THIS, and the reason is not
+// politeness: a themed shell repaints its prompt in several chunks, so a chunk that
+// lands after the next run's start offset is answered as THAT command's output. The wait
+// resets its quiet timer on it and then ends on the silence that follows — before the new
+// command has printed anything — so the reply says `Completion: quiet` and carries the
+// previous prompt instead of this command's first line. Measured: one execution of
+// TestAWindowThatRanOutSaysSo on a loaded machine answered exactly that, and passed 5/5
+// in isolation. Starting from a stream that has already gone quiet removes the leftover
+// the timer was resetting on.
+//
+// It is a STATE, not a sleep: the loop ends on the server's own 204, and a channel that
+// never stops talking fails instead of returning a stream that is still moving.
+func awaitQuiet(t *testing.T, s *Server, handle string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if !strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + handle}), "TERM/1 204") {
+			continue
+		}
+		// QUIET IS A STATE THAT HAS TO HOLD, not a moment that happened. A themed prompt
+		// repaints in chunks, and the gap between two of them looks exactly like silence:
+		// a test that treats the first 204 as "the stream is now still" then reads again
+		// and finds the next chunk, which is a test failure about nothing. So the window
+		// is observed twice, with a settle in between — long enough to cover a chunk
+		// arriving late, short enough that a genuinely quiet stream costs two hundred
+		// milliseconds.
+		time.Sleep(200 * time.Millisecond)
+		if strings.HasPrefix(termText(t, s, map[string]any{"cmd": "read " + handle}), "TERM/1 204") {
+			return
+		}
+	}
+	t.Fatalf("the stream never went quiet: %s kept producing output", handle)
 }
 
 // noisyCommand is a command that keeps printing for several seconds, in the syntax of

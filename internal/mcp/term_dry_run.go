@@ -3,6 +3,8 @@ package mcp
 import (
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/session"
+
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -24,7 +26,17 @@ import (
 func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelope.Slot {
 	out := make([]envelope.Slot, 0, len(stmts))
 	for _, stmt := range stmts {
-		expanded, cycle := aliases.Expand(stmt)
+		expanded, cycle, expansionErr := s.aliases.Expand(stmt)
+		if expansionErr != nil {
+			slot := s.parseErrorSlot(expansionErr)
+			if slot.Headers == nil {
+				slot.Headers = map[string]string{}
+			}
+			slot.Headers["Dry-Run"] = "true"
+			slot.Headers["Verdict"] = "invalid"
+			out = append(out, slot)
+			continue
+		}
 		if cycle != nil {
 			slot := aliasCycleSlot(stmt, cycle)
 			if slot.Headers == nil {
@@ -36,27 +48,56 @@ func (s *Server) dryRunSlots(stmts []directive.Statement, win termArgs) []envelo
 			continue
 		}
 
-		headers := map[string]string{
-			"Dry-Run": "true",
-			"Verdict": "valid-syntax",
-			// PATH IS MASKED TOO, AND THAT IS NOT REDUNDANT. The parser expands
-			// the whole line, echo included (subst.go sets `Path` from the same
-			// table that fills the payload), so `input s1:1 $PASS` reaches here
-			// with the credential ALREADY WRITTEN INTO the echo. Masking only the
-			// payload would leak through the more prominent header — measured, not
-			// theorised (#241 §4.4).
-			"Path": maskSecrets(expanded.Path, win.Secrets),
+		for _, expanded := range expanded {
+			// VALIDATE WHAT CAN BE KNOWN SYNTACTICALLY. `key` takes an enumerated set;
+			// letting an unknown key pass dry-run as "valid-syntax" makes a green verdict
+			// into a lie the real call exposes.
+			// Key names live in expanded.Args[0], not Key (Key is for statements that
+			// take a resource name, like `get <host> file <path>`).
+			keyName := expanded.Key
+			if len(expanded.Args) > 0 {
+				keyName = expanded.Args[0]
+			}
+			if expanded.Op == "key" && keyName != "" {
+				if _, err := session.KeyBytes(keyName, true, false); err != nil {
+					// MASK BEFORE REFUSING. The key name can be a $VAR that expanded to a
+					// secret, and a refusal is not exempt from the rule the rest of dry-run
+					// follows: the reply must not be the place the credential appears.
+					maskedKey := maskSecrets(keyName, win.Secrets)
+					slot := badRequest(expanded,
+						strings.Replace(err.Error(), keyName, maskedKey, 1))
+					if slot.Headers == nil {
+						slot.Headers = map[string]string{}
+					}
+					slot.Headers["Path"] = maskSecrets(expanded.Path, win.Secrets)
+					slot.Headers["Dry-Run"] = "true"
+					slot.Headers["Verdict"] = "invalid"
+					out = append(out, slot)
+					continue
+				}
+			}
+			headers := map[string]string{
+				"Dry-Run": "true",
+				"Verdict": "valid-syntax",
+				// PATH IS MASKED TOO, AND THAT IS NOT REDUNDANT. The parser expands
+				// the whole line, echo included (subst.go sets `Path` from the same
+				// table that fills the payload), so `input s1:1 $PASS` reaches here
+				// with the credential ALREADY WRITTEN INTO the echo. Masking only the
+				// payload would leak through the more prominent header — measured, not
+				// theorised (#241 §4.4).
+				"Path": maskSecrets(expanded.Path, win.Secrets),
+			}
+			if expanded.Target != "" {
+				headers["Target"] = maskSecrets(expanded.Target, win.Secrets)
+			}
+			if expanded.Payload != "" {
+				headers["Expanded"] = maskSecrets(expanded.Payload, win.Secrets)
+			}
+			out = append(out, envelope.Slot{
+				Code:    200,
+				Headers: headers,
+			})
 		}
-		if expanded.Target != "" {
-			headers["Target"] = maskSecrets(expanded.Target, win.Secrets)
-		}
-		if expanded.Payload != "" {
-			headers["Expanded"] = maskSecrets(expanded.Payload, win.Secrets)
-		}
-		out = append(out, envelope.Slot{
-			Code:    200,
-			Headers: headers,
-		})
 	}
 	return out
 }

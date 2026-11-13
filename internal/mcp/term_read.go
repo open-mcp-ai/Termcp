@@ -31,8 +31,54 @@ func (s *Server) directiveRead(ctx context.Context, stmt directive.Statement, wi
 	return []envelope.Slot{s.directiveReadOne(ctx, stmt, win)}
 }
 
-// directiveReadOne reads one channel.
+// directiveReadOne reads one channel, waiting first when the caller named evidence.
+//
+// `--until` ON A READ IS THE SAME PREDICATE AS ON A RUN, and its absence is the old
+// behaviour exactly: the read happens now and the reply says nothing about completion.
+// A read is a cursor over the stream, so the honest reading of "wait until X appears" is
+// "wait for the bytes that arrive from the channel's current end" — the predicate is
+// about what happens NEXT, not about the scrollback that is already there.
+//
+// A CALL THAT ASKS FOR NOTHING DOES NOT WAIT. bytes_limit 0 means "show me nothing and
+// consume nothing", and a wait followed by an empty reply is the worst of both: the
+// caller spent its window and learned nothing it could not have had at once.
 func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
+	if boolFlag(stmt, "screen") {
+		return s.readScreen(ctx, stmt, win)
+	}
+	// A FLAG THAT CANNOT APPLY IS REFUSED, NOT DROPPED. `--top` and `--rows` describe a
+	// window of the screen model; the byte read has no rows, so the pair used to be parsed,
+	// ignored, and answered with the whole log — a caller who asked for nine rows could not
+	// tell it had been served everything.
+	if _, ok := stmt.Flag("top"); ok {
+		return badRequest(stmt, "`--top` pages the screen model, so it needs `--screen`: `read "+stmt.Target+" --screen --top 0 --rows 20`")
+	}
+	if _, ok := stmt.Flag("rows"); ok {
+		return badRequest(stmt, "`--rows` sizes a screen page, so it needs `--screen`: `read "+stmt.Target+" --screen --top 0 --rows 20`")
+	}
+	watch := s.untilWatchFrom(stmt)
+	base, observable := s.outputSizeFor(stmt.Target)
+	if watch == nil || !observable || win.BytesLimit == 0 {
+		// A peer or file target has no channel stream, and its own refusal explains
+		// itself better than a wait that could never end.
+		return s.readChannelNow(ctx, stmt, win)
+	}
+	began := time.Now()
+	s.awaitUntil(ctx, stmt.Target, win, base, watch)
+	slot := s.readChannelNow(ctx, stmt, remaining(win, time.Since(began)))
+	watch.headers(&slot)
+	if !watch.matched && slot.Code < 400 {
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		slot.Headers["Hint"] = "`--until` did not match within the window, so nothing here says the bytes you asked for have arrived. " +
+			"read again, or widen the window."
+	}
+	return slot
+}
+
+// readChannelNow is the read itself: the cursor over the stream, with no waiting.
+func (s *Server) readChannelNow(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	// PEER FLAGS ON A CHANNEL READ ARE REFUSED, NOT IGNORED (issue #159).
 	//
 	// --since and --at are declared on the `read` verb, but their meaning belongs to
@@ -114,8 +160,17 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 		[2]string{"offset", "offset"},
 		[2]string{"from-line", "from_line"},
 		[2]string{"tail", "tail_lines"},
+		[2]string{"reader", "reader_id"},
 	); bad {
 		return slot
+	}
+	// A REGISTERED READER IS A CURSOR THE CALLER NAMED (issue #286). `reader <channel>`
+	// answers with an id and the buffer keeps a position for it; without this the id had
+	// no consumer on this surface, so registering one was a way to pin the compaction
+	// watermark and never read anything. Absent stays absent: reader_id 0 IS the default
+	// reader, and sending it explicitly would be a different request from saying nothing.
+	if stmt.FlagState("reader") == directive.FlagAbsent {
+		delete(args, "reader_id")
 	}
 	if v, ok := stmt.Flag("stream"); ok {
 		args["stream"] = v
@@ -155,6 +210,10 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 		waited = time.Since(began)
 	}
 	slot, _ := s.readSlot(ctx, stmt, win, args, waited)
+	if slot.Code == 204 {
+		// Nothing new arrived: whatever the last run's Still-Running said has expired.
+		s.forgetStaleBusy(stmt.Target)
+	}
 	return slot
 }
 
@@ -172,7 +231,9 @@ func (s *Server) directiveReadOne(ctx context.Context, stmt directive.Statement,
 // duration rather than a bool: what is LEFT of the window is what the read may spend.
 func (s *Server) awaitRunOutput(ctx context.Context, stmt directive.Statement, win termArgs, start int64) time.Duration {
 	began := time.Now()
-	if s.completionWait(stmt.Target) {
+	if watch := s.untilWatchFrom(stmt); watch != nil {
+		s.awaitUntil(ctx, stmt.Target, win, start, watch)
+	} else if s.completionWait(stmt.Target) {
 		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
 		s.awaitWindow(ctx, stmt.Target, win, start)
@@ -232,49 +293,99 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// and without it the caller cannot tell a finished command from a window that ended
 	// (issue #161, P1-3).
 	windowExpired := false
-	waitedOnAPty := false
-	if wait := s.completionWait(stmt.Target); wait {
+	// `--until` REPLACES THE WAIT, IT DOES NOT ADD TO IT. A caller that named the
+	// evidence it wants is not waiting for a threshold as well: the predicate or the
+	// deadline, whichever comes first, and neither of them is a verdict on its own.
+	watch := s.untilWatchFrom(stmt)
+	if watch != nil {
+		if !s.awaitUntil(ctx, stmt.Target, win, start, watch) {
+			// The caller's window was spent without seeing the caller's evidence.
+			// That is the same shape as an expired pty window — the budget ran out
+			// with nothing to report — and it is reported the same way: as what the
+			// wait did, never as what the command did.
+			windowExpired = true
+		}
+	} else if wait := s.completionWait(stmt.Target); wait {
 		s.awaitExit(ctx, stmt.Target, win, start)
 	} else if s.ptyRunning(stmt.Target) {
-		waitedOnAPty = true
 		windowExpired = s.awaitWindow(ctx, stmt.Target, win, start)
 	}
+	// DID ANYTHING HAPPEN IN THIS WINDOW? It is the fact that separates the two things
+	// `Still-Running` used to be asked about (issue #308), and it is measured on the
+	// channel rather than on the reply: a folded window shows no body, but the bytes
+	// existed, so the reply is the wrong place to ask.
+	sawBytes := false
+	if now, ok := s.outputSizeFor(stmt.Target); ok && now > start {
+		// NOT OUR OWN ECHO. A pty echoes the line it was handed, so "bytes arrived since
+		// Input-At" was true before the command had done anything — and on a Linux runner
+		// that turned "your line is queued behind a program holding the terminal" into a
+		// 200 with no explanation at all. What the caller wants to know is whether the
+		// command produced anything, so the echo is subtracted before answering.
+		sawBytes = !s.onlyEcho(stmt.Target, start, now, stmt.Payload)
+	}
 	slot, channelEnd := s.readSlot(ctx, stmt, win, args, time.Since(waitStarted))
+	if slot.Code == 204 {
+		// Nothing new arrived: the channel is not producing output any more, so what the
+		// last run's Still-Running said about it has expired.
+		s.forgetStaleBusy(stmt.Target)
+	}
 	if slot.Code < 400 {
 		if slot.Headers == nil {
 			slot.Headers = map[string]string{}
 		}
 		slot.Headers["Input-At"] = inputAt
 	}
-	if waitedOnAPty && !windowExpired && slot.Code < 400 {
-		// HOW THE WAIT ENDED IS A FACT, AND IT WAS THE ONE THING NOT SAID.
-		//
-		// A pty has no completion signal, so this wait ends one of two ways: the window
-		// runs out, or the stream goes quiet (ptyQuiet with no new byte). The second is
-		// the ordinary case — it is how a finished command looks — and it said NOTHING,
-		// so a command that merely went silent while it worked was indistinguishable from
-		// one that had finished. Three callers reading the same reply hit it the same way:
-		// "the output looks truncated, and nothing tells me whether it is".
-		//
-		// `Still-Running` is deliberately NOT reused: it means "the window expired while
-		// bytes were still arriving", which is evidence. A quiet stream is not evidence of
-		// anything — the command may have finished, or be sleeping — and a header that
-		// claimed either would be the kind of guess this server refuses to make about a
-		// pty. So it names the evidence instead, and `read` is how the caller finds out
-		// more.
-		if slot.Headers == nil {
-			slot.Headers = map[string]string{}
+	// ONLY EVIDENCE PRODUCES `Completion`. A wait that ended because the stream went
+	// quiet produces none: a finished command and one that is thinking look identical
+	// on a pty, so the header used to say `quiet` — a measurement dressed as a verdict,
+	// and callers acted on it by typing the next command into a program that still held
+	// the terminal. Absence now means what it says: not known.
+	watch.headers(&slot)
+	if watch != nil && !watch.matched && slot.Code < 400 {
+		// A CONTRADICTION IN ONE REPLY: if the shell exited and printed its code (e.g.
+		// Windows ConPTY child exit), saying "this reply says nothing about whether the
+		// command finished" contradicts the `Exit-Code:` printed above it. The predicate
+		// did not match, but the answer IS known.
+		if slot.Headers != nil && slot.Headers["Exit-Code"] != "" {
+			// An exit code was observed, so the command finished: --until did not match its
+			// OSC 133 marker, but the process has reported its status.
+			slot.Headers["Completion"] = "exit"
+		} else {
+			slot.Headers["Hint"] = "`--until` did not match within the window, so this reply says nothing about whether the command finished. " +
+				"read " + stmt.Target + " --tail 20 looks at the stream, and key " + stmt.Target + " ctrl+c interrupts whatever holds the terminal."
 		}
-		slot.Headers["Completion"] = "quiet"
 	}
-	if windowExpired && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
+	// NOT GATED ON THE WINDOW EXPIRING. A queued line echoes and then goes quiet, so the
+	// wait ends on quiet — the same ending a finished command has — and gating here meant
+	// the one case that most needs the explanation (nothing but your own echo came back)
+	// was the one case that got none. What separates the cases is whether any bytes came
+	// from the command, which is `sawBytes`; `windowExpired` still decides Still-Running,
+	// because only a window that ended mid-stream is evidence of work.
+	if watch == nil && slot.Code < 400 && s.ptyRunning(stmt.Target) && slot.Headers["Still-Running"] == "" {
 		// Same header the pipe path uses, same meaning: the command was accepted and has
 		// not finished. It is set only when the window expired, so it does not become the
 		// permanently-true flag that kept it off the pty path in the first place.
+		//
+		// AND ONLY WITH EVIDENCE (issue #308). The window expiring is not evidence that
+		// THIS line is executing: the pty driver queues what it is given until the
+		// foreground process reads, so a line typed while a program holds the terminal
+		// sits in that queue and produces nothing — byte for byte what a command that is
+		// running silently produces. The caller cannot tell those apart, and neither can
+		// this server ("is a foreground command running" is unanswerable from here). What
+		// it CAN tell apart is "bytes arrived and were still arriving when the window
+		// ended", which is evidence of work, from "nothing arrived at all", which is only
+		// evidence of silence. So the no-bytes case names the ambiguity instead of
+		// asserting a state, and `Still-Running` stays the evidence-based claim it was.
 		if slot.Headers == nil {
 			slot.Headers = map[string]string{}
 		}
-		slot.Headers["Still-Running"] = "true"
+		if sawBytes && windowExpired {
+			slot.Headers["Still-Running"] = "true"
+		} else if !sawBytes {
+			slot.Headers["Hint"] = "no bytes since this line. A pty gives no signal that a line was read, " +
+				"so a silent command and a line still queued behind a program holding the terminal look " +
+				"identical here: read again, or key " + stmt.Target + " ctrl+c to interrupt what holds it."
+		}
 	}
 	// A WINDOW I SHOWED IS A WINDOW I READ. The read above is positional (it names an
 	// offset), and a positional read moves no cursor — so `read <channel>`'s documented
@@ -397,6 +508,15 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 			return false
 		case <-ticker.C:
 		}
+		// THE WINDOW IS CHECKED FIRST, because after it the two outcomes are not
+		// equally worth reporting: the deadline is a fact, "quiet" is an inference.
+		// The quiet branch sat above this line, so a tick that woke after the window
+		// and saw a still stream answered "quiet" — the header that means "my window
+		// ran out" was suppressed by exactly the race it exists to resolve, and on a
+		// loaded machine the last chunk can be an entire quiet window old.
+		if !time.Now().Before(deadline) {
+			return true
+		}
 		now, ok := s.outputSizeFor(handle)
 		if !ok {
 			// The channel went away under the wait; the read that follows reports it
@@ -432,9 +552,6 @@ func (s *Server) awaitWindow(ctx context.Context, handle string, win termArgs, s
 			} else if time.Since(still) >= quiet {
 				return false
 			}
-		}
-		if !time.Now().Before(deadline) {
-			return true
 		}
 	}
 }
@@ -554,7 +671,8 @@ func (s *Server) readSlot(ctx context.Context, stmt directive.Statement, win ter
 	// A pipe channel that has not exited yet must not block for the whole timeout
 	// on a read that has nothing new; a pty read waits for the quiet window
 	// instead. Both are upper bounds, so the smaller of the two wins.
-	args["timeout"] = readTimeout(remaining(win, waited))
+	budget, quietCapped := s.readBudget(stmt, args, win, waited)
+	args["timeout"] = budget
 
 	res, fail := s.callTool(ctx, "shell_output", args)
 	if fail != nil {
@@ -573,7 +691,19 @@ func (s *Server) readSlot(ctx context.Context, stmt directive.Statement, win ter
 	// reporting caller read that as "the window never happened" (issue #161, P1-3).
 	// end_offset is the CHANNEL's end even when the reply's own addresses are the
 	// stream's: the two groups are always both present (see windowResult).
-	return s.windowSlot(stmt, win, doc, waited+time.Since(started)), int64(getFloatAny(doc, "end_offset", 0))
+	slot := s.windowSlot(stmt, win, doc, waited+time.Since(started))
+	if quietCapped && slot.Code == 204 && s.ptyRunning(stmt.Target) {
+		// HOW THE WAIT ENDED IS A FACT, and here it ended on the quiet window rather than
+		// on the caller's number. Same header `run` uses for the same ending, and same
+		// reach: a pty's completion is not observable, so what is reported is the
+		// evidence (the stream stood still), never a conclusion. Without it, `Waited:
+		// 512ms` under a 60s window reads as "the server ignored my window".
+		if slot.Headers == nil {
+			slot.Headers = map[string]string{}
+		}
+		slot.Headers["Completion"] = "quiet"
+	}
+	return slot, int64(getFloatAny(doc, "end_offset", 0))
 }
 
 // remaining is the part of the caller's window that the wait did not spend.
@@ -952,4 +1082,69 @@ func readTimeout(win termArgs) float64 {
 		return 0
 	}
 	return win.TimeoutSeconds
+}
+
+// cursorRead reports whether this read is the live-cursor form — no byte offset and no
+// line selector — which is the only form that WAITS for new bytes. The others copy a
+// range that is already on the stream, so a shorter budget would change nothing there.
+func cursorRead(args map[string]any) bool {
+	for _, key := range []string{"offset", "from_line", "tail_lines"} {
+		if _, ok := args[key]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// readBudget is how long this read may block: what is left of the caller's window,
+// bounded by the channel's own quiet window.
+//
+// A READ WITH NOTHING TO SHOW DOES NOT SPEND THE WHOLE WINDOW (issue #307). `read <ch>`
+// on a channel with no new bytes blocked for the caller's timeout to the millisecond —
+// 20001ms for a 20s window, 45001ms for 45s, measured — and a caller whose client
+// enforces a watchdog at that same number got "Request timed out" instead of the 204 the
+// server was about to send, losing the cursor and the state headers with it. Waiting is a
+// state, not a duration: once this channel's stream has stood still for the quiet window
+// the server already uses to call a pty command done, more waiting answers nothing.
+//
+// `--wait` asks for the duration anyway: a caller that really is long-polling says so,
+// and spends its own ceiling rather than having one picked for it. The reply's `Waited`
+// reports what was spent either way.
+//
+// Only the cursor form is capped. A positional read answers immediately, and a tail on a
+// live pipe waits for the process itself (see awaitExit), so neither has a window to
+// shorten.
+func (s *Server) readBudget(stmt directive.Statement, args map[string]any, win termArgs, waited time.Duration) (float64, bool) {
+	budget := readTimeout(remaining(win, waited))
+	if budget <= 0 || !cursorRead(args) || boolFlag(stmt, "wait") {
+		return budget, false
+	}
+	quiet := s.quietTracker(stmt.Target).threshold().Seconds()
+	if quiet >= budget {
+		return budget, false
+	}
+	return quiet, true
+}
+
+// onlyEcho reports whether the bytes in [start, now) are nothing but the pty's echo of the
+// line we just typed.
+//
+// THE ECHO IS A COPY OF INPUT THIS SERVER ALREADY HAS, so recognising it needs no
+// heuristics: strip the line endings the terminal adds and compare with what went out. A
+// wrapped echo (a payload wider than the terminal) does not compare equal and is reported
+// as output — the conservative answer, because guessing wrong there would suppress a
+// Still-Running header that was real.
+func (s *Server) onlyEcho(handle string, start, now int64, payload string) bool {
+	if payload == "" {
+		return false
+	}
+	text, ok := s.peekRaw(context.Background(), handle, start, now)
+	if !ok {
+		return false
+	}
+	// A COPY OF THE PAYLOAD SPLIT BY THE TERMINAL'S LINE ENDINGS. Rejoining on the two
+	// characters a tty inserts is what makes a canonical-mode echo compare equal without
+	// letting unrelated output through.
+	joined := strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(text)
+	return joined == strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(payload)
 }

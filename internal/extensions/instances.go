@@ -256,6 +256,10 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		r.fail(st, "forward", err.Error())
 		return sess.ID, shellID, "", "forward", err
 	}
+	if err := r.ensureExposes(ext, st); err != nil {
+		r.fail(st, "expose", err.Error())
+		return sess.ID, shellID, "", "expose", err
+	}
 	// Proven up: the budget is whole again, so a later failure starts the ladder over
 	// rather than resuming a count from before the extension was working.
 	st.resetRetryBudget()

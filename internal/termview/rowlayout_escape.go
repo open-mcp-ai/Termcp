@@ -1,4 +1,4 @@
-package webui
+package termview
 
 // GET /api/shells/{id}/rail: which bytes of a shell's log sit on which terminal row.
 //
@@ -36,7 +36,7 @@ package webui
 // many bytes it used. The sequences that move the cursor are applied; the ones
 // that only paint are read and dropped, because the rail asks where the text is,
 // not what colour it is.
-func (g *rowLayout) feedEscape(base int64, data []byte) int {
+func (g *Layout) feedEscape(base int64, data []byte) int {
 	switch g.esc {
 	case escEsc:
 		g.esc = escNone
@@ -85,7 +85,7 @@ func (g *rowLayout) feedEscape(base int64, data []byte) int {
 		}
 		// No final byte yet: hold the parameters for the next read, bounded so a
 		// stream that never ends a sequence cannot grow the body without limit.
-		if len(g.csiBody) < shellRailMaxCSIParams {
+		if len(g.csiBody) < MaxCSIParams {
 			g.csiBody = append(g.csiBody, data...)
 		}
 		// What has arrived is recorded now, so a read that splits mid-sequence leaves
@@ -124,12 +124,19 @@ func (g *rowLayout) feedEscape(base int64, data []byte) int {
 // applyCSI applies one CSI sequence: `body` is its parameters (without the
 // introducer or the final byte) and `final` the byte that ended it. Missing and
 // zero parameters default as the sequences themselves define, which is usually 1.
-func (g *rowLayout) applyCSI(body []byte, final byte) {
+func (g *Layout) applyCSI(body []byte, final byte) {
 	if g.alt && !(len(body) > 0 && body[0] == '?') {
 		// A full-screen program addressing its own screen: the rows and the cursor it
 		// moves are its own, and the transcript's are the ones saved on the way in. Its
 		// private modes are still read, because that is where the sequence giving the
 		// screen back is.
+		//
+		// These sequences are applied to the grid rather than dropped: `read --screen`
+		// while vim is up has to answer with what vim painted, and where the program put
+		// each character is exactly what the transcript model threw away.
+		if g.altGrid != nil {
+			g.altGrid.applyCSI(parseCSIParams(body), final)
+		}
 		return
 	}
 	if len(body) > 0 && (body[0] == '?' || body[0] == '>' || body[0] == '=') {
@@ -229,12 +236,20 @@ func (g *rowLayout) applyCSI(body []byte, final byte) {
 // applyPrivateMode reads the private modes this model has to act on, which is the
 // alternate screen and nothing else. Cursor visibility, mouse tracking and
 // bracketed paste say how a terminal behaves, not which row text lands on.
-func (g *rowLayout) applyPrivateMode(body []byte, final byte) {
+func (g *Layout) applyPrivateMode(body []byte, final byte) {
 	if final != 'h' && final != 'l' {
 		return
 	}
 	for _, p := range parseCSIParams(body) {
 		switch p {
+		case 25:
+			// DECTCEM: cursor visibility. `?25l` hides it while a program redraws;
+			// a hidden cursor is evidence that the program is not waiting for input.
+			g.cursorVisible = (final == 'h')
+		case 2004:
+			// Bracketed paste: a shell setting this is a modern shell with prompt
+			// integration; a program reading it takes pasted lines literally.
+			g.bracketedPaste = (final == 'h')
 		case 47, 1047, 1049:
 			// The three ways to take the screen over, oldest first: 47 hands the
 			// alternate screen over as it is, 1047 clears it on the way out, and 1049 —
@@ -254,15 +269,20 @@ func (g *rowLayout) applyPrivateMode(body []byte, final byte) {
 // and copied back on the way out, because that is what the terminal does — the
 // normal buffer keeps its cursor, its screen top and its rows throughout, and a
 // model that recomputed them would be guessing at what the program did in between.
-func (g *rowLayout) setAlt(on bool) {
+func (g *Layout) setAlt(on bool) {
 	if on == g.alt {
 		return
 	}
 	g.alt = on
 	if on {
 		g.altRow, g.altCol, g.altTop, g.altPending = g.row, g.col, g.top, g.pending
+		// A fresh grid, not a reused one: the program that takes the screen over owns
+		// every cell in it, and the bytes it has not painted yet are blank by definition.
+		g.altGrid = newGrid(g.height, g.cols)
 		return
 	}
+	// The program's screen is discarded on the way out, exactly as a terminal discards it.
+	g.altGrid = nil
 	g.row, g.col, g.top, g.pending = g.altRow, g.altCol, g.altTop, g.altPending
 }
 

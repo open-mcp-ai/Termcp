@@ -496,3 +496,117 @@ func TestTargetFromArgsIsRaw(t *testing.T) {
 		})
 	}
 }
+
+// TestArgvValueWithDollarArrivesUnchanged pins #292 at the byte level.
+//
+// The report from a Windows target: `--argv powershell.exe -NoProfile -Command "$1"`
+// with args `foreach($t in @('a','b')) { $t }` reached PowerShell as
+// `foreach(\$t ...)`, a syntax error.
+//
+// The value had already been quoted once — the caller's `"` around the reference —
+// and it will be quoted again by the transport, which is what `--argv` means: a word
+// list SplitArgv reads, then per-element quoting for the remote shell. Substitution
+// was adding a THIRD pass because it read the caller's `"` as "a shell will unquote
+// this": `$t` became `\$t`, and the reader that DOES take those quotes off copies what
+// is inside them byte for byte, so the backslash reached the program.
+//
+// Asserted on the argv ELEMENTS the program is handed, which is the only place where
+// "unchanged" is a claim about the caller's data. No remote host is needed, so three
+// OSes run it.
+//
+// The ceiling, and it is older than this fix: a value that contains the very quote the
+// caller grouped it with (`"$1"` around `say "hi"`) still closes the caller's quote
+// early, because the word-list reader is source-preserving and does not unescape. That
+// is a property of the reader, not of substitution, and it fails identically before
+// this change.
+func TestArgvValueWithDollarArrivesUnchanged(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		sub  Subst
+		val  string
+	}{
+		{
+			name: "quoted positional, PowerShell script",
+			cmd:  `open h --argv powershell.exe -NoProfile -Command "$1"`,
+			sub:  Subst{Pos: []string{`foreach($t in @('a','b')) { $t }`}},
+			val:  `foreach($t in @('a','b')) { $t }`,
+		},
+		{
+			name: "quoted named var, same rule",
+			cmd:  `open h --argv powershell.exe -NoProfile -Command "$SCRIPT"`,
+			sub:  Subst{Named: map[string]string{"SCRIPT": `foreach($t in 1,2) { $t }`}},
+			val:  `foreach($t in 1,2) { $t }`,
+		},
+		{
+			name: "unquoted whole word, the spelling that already worked",
+			cmd:  `open h --argv echo $1`,
+			sub:  Subst{Pos: []string{`a$b`}},
+			val:  `a$b`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := ParseWithSubst(tc.cmd, tc.sub)
+			if err != nil {
+				t.Fatalf("ParseWithSubst(%q): %v", tc.cmd, err)
+			}
+			argv, _ := f.Statements[0].Flag("argv")
+			_, args, err := SplitArgv(argv)
+			if err != nil {
+				t.Fatalf("SplitArgv(%q): %v", argv, err)
+			}
+			if len(args) == 0 {
+				t.Fatalf("no argv elements from %q", argv)
+			}
+			if got := args[len(args)-1]; got != tc.val {
+				t.Errorf("last argv element = %q, want the caller's bytes %q (argv was %q)", got, tc.val, argv)
+			}
+		})
+	}
+}
+
+// TestAWordListReferenceIsRawWhetherOrNotItFillsTheWord pins the half of #292 that
+// the issue's own suggestion would have missed.
+//
+// The raw rule — "a value in a word list is the caller's bytes" — was reached only
+// through the whole-word check, so `--argv echo $1` was raw and `--argv echo "$1"` was
+// not, even though in a word list the quotes only GROUP the same value. The second
+// spelling therefore fell to the single-quote path and put MORE quoting inside the
+// caller's, which the word-list reader then kept as text.
+//
+// The quotes still do the one thing they do in a word list: hold a spaced value
+// together. Unquoted, `echo $HOME` is two elements because it is two words — that is
+// the caller asking for two arguments, and it is why the reference is raw rather than
+// pre-quoted: the grouping is the caller's decision, visible in cmd.
+func TestAWordListReferenceIsRawWhetherOrNotItFillsTheWord(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		val  string
+		want []string
+		why  string
+	}{
+		{`open h --argv sh -c $1`, `a$b`, []string{"-c", `a$b`},
+			"a whole word in the list"},
+		{`open h --argv sh -c "$1"`, `a$b`, []string{"-c", `a$b`},
+			"the same word, grouped by the caller"},
+		{`open h --argv sh -c "$1"`, `echo $HOME`, []string{"-c", `echo $HOME`},
+			"the quotes hold a spaced value together"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd+" "+tc.val, func(t *testing.T) {
+			f, err := ParseWithSubst(tc.cmd, Subst{Pos: []string{tc.val}})
+			if err != nil {
+				t.Fatalf("ParseWithSubst(%q): %v", tc.cmd, err)
+			}
+			argv, _ := f.Statements[0].Flag("argv")
+			_, args, err := SplitArgv(argv)
+			if err != nil {
+				t.Fatalf("SplitArgv(%q): %v", argv, err)
+			}
+			if len(args) != len(tc.want) || args[0] != tc.want[0] || args[len(args)-1] != tc.want[len(tc.want)-1] {
+				t.Errorf("%s: args = %q, want %q (argv was %q)", tc.why, args, tc.want, argv)
+			}
+		})
+	}
+}

@@ -329,7 +329,7 @@ func TestResidentExtensionIsNotOnDemand(t *testing.T) {
 	ext.Target = "internal"
 	ext.Command = testShellCommand()
 	ext.Args = nil
-	ext.Forwards = []ForwardDecl{{Kind: ForwardDynamic}}
+	ext.Forwards = []ForwardDecl{{DirectionKind: ForwardDynamic}}
 	mustSave(t, r.store, &ext)
 
 	// No ask: the walk brings it up because the template asked for a listener.

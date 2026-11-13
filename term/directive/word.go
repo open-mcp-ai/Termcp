@@ -628,7 +628,7 @@ func (op Op) payloadStopsAtWord() bool { return op.Kind == KindInterpreted }
 // A pipe or pty program takes its argv through a RestValue flag, and that value is a
 // word list no matter what the directive's payload would have been — so the flag's
 // own rule wins over the declaration.
-func (op Op) payloadSpanMode() spanMode { return op.PayloadSpan }
+func (op Op) payloadSpanMode() SpanMode { return op.PayloadSpan }
 
 // keyIsThePayload reports whether a verb's words after the kind ARE its payload.
 //

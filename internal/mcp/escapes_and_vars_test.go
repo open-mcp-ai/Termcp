@@ -219,7 +219,10 @@ func TestVarsASTSubstitution(t *testing.T) {
 					"cmd":  tc.cmd,
 					"vars": tc.env,
 				})
-				if strings.HasPrefix(got, "TERM/1 4") {
+				// A CONFLICT IS THE GATE, NOT A FAILURE (#311): a compound line can be
+				// refused while the previous attempt's output is still arriving, and the
+				// next attempt is what this loop is for. Any other 4xx is an error.
+				if strings.HasPrefix(got, "TERM/1 4") && !strings.Contains(got, "409") {
 					t.Fatalf("call failed with 4xx:\n%s", got)
 				}
 				if strings.Contains(got, tc.want) {

@@ -353,10 +353,26 @@ func (s *Server) handleSession(sess ssh.Session) {
 	sess.Signals(sigCh)
 
 	var sigProc atomic.Pointer[os.Process]
+	// THE TREE IS REACHED THROUGH AN ATOMIC FOR THE SAME REASON sigProc IS: the
+	// forwarder runs before the process exists, and a TERM that arrives in between
+	// must still be able to end it.
+	//
+	// A TERMINATION REQUEST MEANS THE WHOLE TREE, because on Windows it is the only
+	// thing that reaches a child the shell spawned and then waited on (#293): the
+	// session's connection context is not cancelled when a single CHANNEL closes, so
+	// nothing else in this handler would ever notice `close <channel>`.
+	var sigTree atomic.Pointer[processTree]
 	go func() {
 		for {
 			select {
 			case sig := <-sigCh:
+				tree := sigTree.Load()
+				switch sig {
+				case ssh.SIGTERM, ssh.SIGKILL:
+					if tree != nil {
+						tree.close()
+					}
+				}
 				if proc := sigProc.Load(); proc != nil {
 					if osSig := sshSignalToOSSig(sig); osSig != nil {
 						_ = proc.Signal(osSig)
@@ -378,6 +394,22 @@ func (s *Server) handleSession(sess ssh.Session) {
 
 	sigProc.Store(cmd.Process)
 
+	// THE SESSION OWNS A TREE, AND THE TREE DIES WITH IT (#293).
+	//
+	// A session runs one process, and that process runs others: `cmd.exe /c python …`
+	// is the normal shape on Windows, where the shell never execs. Closing the channel
+	// gives the session's streams an EOF and nothing else, so a program that does not
+	// read stdin — a listening port, `ping`, an MCP server — kept running after `close`
+	// answered 204. Killing cmd.Process ends the shell and leaves its children behind.
+	//
+	// So the child is put in a kill-on-close job object and the handle is released at
+	// every exit from this function, which is the kernel's guarantee that the tree
+	// cannot outlive the channel. On POSIX this is nil: `sh -c cmd` replaces itself
+	// with cmd, so there is no tree to own (see process_tree_windows.go).
+	tree := newProcessTree(cmd)
+	sigTree.Store(tree)
+	defer tree.close()
+
 	// Wait for the child, but never let a dead connection leave it running.
 	//
 	// cmd.Wait() blocks until the CHILD exits, and nothing else notices when the
@@ -397,6 +429,11 @@ func (s *Server) handleSession(sess ssh.Session) {
 	select {
 	case exitCode = <-waitDone:
 	case <-sess.Context().Done():
+		// Close the tree FIRST: on Windows it is the only thing that ends a child
+		// that ignores its closed streams, and waitDone does not return until that
+		// child is gone. cmd.Process.Kill is kept for the case where no job could be
+		// made — it is what this path always did — and is redundant otherwise.
+		tree.close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}

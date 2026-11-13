@@ -111,10 +111,10 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	mode := getString(args, "mode", "")
 
 	switch mode {
-	case "", "text", "hex":
+	case "", "text", "hex", "raw":
 	default:
 		return toolError(CodeInvalidArgument, "%s",
-			"unknown mode "+strconv.Quote(mode)+": it is the ENCODING of --data, one of text, hex. "+
+			"unknown mode "+strconv.Quote(mode)+": it is the ENCODING of --data, one of text, hex, raw. "+
 				"(Permissions are not this flag: use --op chmod --mode 0755.)"), nil
 	}
 
@@ -131,11 +131,24 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	}
 	defer sftpCli.Close()
 	defer releaseTransport()
-	n, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
+	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
 	if err != nil {
 		return fileErr(err, remotePath), nil
 	}
-	return jsonResult(map[string]any{"ok": true, "bytes_written": n}), nil
+	// THE RECEIPT HAS TO PROVE THE BYTES (issue #302). `bytes_written: 542` next to an
+	// echo of the payload as typed was indistinguishable from `bytes_written: 541` next
+	// to a text mode that turned one `\n` into a newline, and a caller cannot compare an
+	// echo to its own input when the echo re-escapes what it wrote. So the reply carries
+	// the SHA256 of the bytes that actually landed, and — only when text mode rewrote
+	// something — a count of what it rewrote.
+	out := map[string]any{"ok": true, "bytes_written": rep.BytesWritten}
+	if rep.SHA256 != "" {
+		out["sha256"] = rep.SHA256
+	}
+	if rep.Decoded != "" {
+		out["decoded"] = rep.Decoded + "; the file holds these bytes, not the payload as typed — --mode raw writes the characters verbatim"
+	}
+	return jsonResult(out), nil
 }
 
 // handleFileReplace performs an exact, unique, atomic replacement inside a file.

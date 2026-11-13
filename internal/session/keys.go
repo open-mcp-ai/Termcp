@@ -24,7 +24,7 @@ var ErrUnknownKey = errors.New("unknown key")
 type unknownKeyError struct{ key string }
 
 func (e *unknownKeyError) Error() string {
-	return fmt.Sprintf("unknown key %q; supported: enter, tab, esc (or escape), up, down, left, right, backspace, delete, home, end, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+u, ctrl+w", e.key)
+	return fmt.Sprintf("unknown key %q; supported: enter, tab, esc (or escape), space, up, down, left, right, pageup, pagedown, backspace, delete, home, end, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+u, ctrl+w, or a single character", e.key)
 }
 func (e *unknownKeyError) Is(target error) bool { return target == ErrUnknownKey }
 
@@ -53,6 +53,15 @@ func KeyBytes(key string, pty bool, enterCRLF bool) ([]byte, error) {
 		return []byte{0x1b, '[', 'C'}, nil
 	case "left":
 		return []byte{0x1b, '[', 'D'}, nil
+	case "space":
+		// SPACE IS NOT A CHARACTER HERE, it is a key: a TUI that has no line editor to
+		// type into still needs it, and the help page has listed it since there was a
+		// help page. A caller that wants a literal space in a line uses `input`.
+		return []byte{' '}, nil
+	case "pageup":
+		return []byte{0x1b, '[', '5', '~'}, nil
+	case "pagedown":
+		return []byte{0x1b, '[', '6', '~'}, nil
 	case "backspace":
 		return []byte{0x7f}, nil
 	case "delete":

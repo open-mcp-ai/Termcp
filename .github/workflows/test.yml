@@ -12,6 +12,11 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+      # EVERY LEG FINISHES, EVEN WHEN ONE FAILS. The default fail-fast cancels the
+      # remaining jobs the moment the first one goes red, so a macOS-only flake reported
+      # as "windows: canceled" and the next round had to be spent guessing whether Windows
+      # passed or simply never ran. Three verdicts cost the same minutes as one.
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     env:
       # -race needs cgo; all three runner images ship a gcc (windows: 15.2.0).
