@@ -24,9 +24,9 @@
     "kind": "human",
     "url": "https://github.com/g2nnyS",
     "note": {
-      "zh-CN": "安全依赖升级：Go 1.27.3 与 x/crypto，清掉 12 条 ssh 公告",
-      "zh-TW": "安全相依升級：Go 1.27.3 與 x/crypto，清掉 12 條 ssh 公告",
-      "en": "Security dependency upgrade: Go 1.27.3 and x/crypto, clearing 12 ssh advisories"
+      "zh-CN": "把项目的依赖升到安全版本，清掉 12 条已公开的 SSH 漏洞",
+      "zh-TW": "把專案的相依升到安全版本，清掉 12 條已公開的 SSH 漏洞",
+      "en": "Moved the project onto patched dependencies, closing 12 published SSH vulnerabilities"
     }
   },
   {
@@ -34,9 +34,9 @@
     "kind": "human",
     "url": "https://github.com/qianyears",
     "note": {
-      "zh-CN": "Web UI 多语言与语言切换重构",
-      "zh-TW": "Web UI 多語言與語言切換重構",
-      "en": "Localised the web UI and rebuilt its language switch"
+      "zh-CN": "给网站加上多语言：简体、繁体、英文可切换",
+      "zh-TW": "給網站加上多語言：簡體、繁體、英文可切換",
+      "en": "Added the language switch — the site reads in simplified Chinese, traditional Chinese or English"
     }
   },
   {
@@ -44,9 +44,9 @@
     "kind": "human",
     "url": "https://github.com/geekjam",
     "note": {
-      "zh-CN": "页面拆分与终端配色改版：index.html 拆成 style.css 加 5 个脚本，Bin 安装 tab 随拆分落地",
-      "zh-TW": "頁面拆分與終端配色改版：index.html 拆成 style.css 加 5 個腳本，Bin 安裝 tab 隨拆分落地",
-      "en": "Split the page into style.css plus five scripts, redrew it in a terminal palette, and landed the Bin install tab in those files"
+      "zh-CN": "整站改版：终端配色、页面重新拆分，安装方式多了直接下载二进制",
+      "zh-TW": "整站改版：終端配色、頁面重新拆分，安裝方式多了直接下載二進位",
+      "en": "Restyled the site in a terminal palette, rebuilt its page structure, and added the binary install option"
     }
   },
   {
@@ -54,9 +54,9 @@
     "kind": "human",
     "url": "https://github.com/Sud0g-BlackZer0",
     "note": {
-      "zh-CN": "审批链路：执行状态与审批状态分开记录，新增 GET /api/approvals/{id}，202 槽带上 Approval-ID 等关联头；另修掉会话关闭时重开审批队列的竞态",
-      "zh-TW": "審批鏈路：執行狀態與審批狀態分開記錄，新增 GET /api/approvals/{id}，202 槽帶上 Approval-ID 等關聯頭；另修掉會話關閉時重開審批佇列的競態",
-      "en": "Approval pipeline: execution state recorded apart from approval state, added GET /api/approvals/{id}, correlation headers on the 202 slot, and fixed the race that reinstalled an approval queue on a closing session"
+      "zh-CN": "让审批有据可查：放行后是否真的执行成功会被记下，响应丢了也能查回来；并修掉关闭会话时审批状态错乱的问题",
+      "zh-TW": "讓審批有據可查：放行後是否真的執行成功會被記下，回應丟了也能查回來；並修掉關閉會話時審批狀態錯亂的問題",
+      "en": "Made an approval answerable: whether it actually succeeded is recorded and can be read back even when the response was lost; also fixed the approval state left behind when a session closes"
     }
   }
 ]
