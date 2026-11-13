@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.2.10-rc.1 — 2026-11-13
+
 ### 新功能
 
 - **`read --screen`：读「屏幕现在是什么」，而不是字节流（#312 / #314）**：把 channel 的日志按终端宽度重放成行，返回显示出来的行，并给出 `Cursor`、`Alt-Screen`、`Cols`/`Rows`、`Screen-Top`/`Screen-Rows`。全屏程序（vim/htop/less）有独立的字符网格：`?1049` 进出、光标寻址、`EL`/`ED` 擦除、底部滚屏与 `DECSTBM` 滚动区域都算，所以 TUI 的画面能读。CJK 宽字符占两列，与主屏同一套规则；`--top N --rows M` 按模型行号翻页，能读回已滚出视口的输出；`Cursor-Visible`（`?25`）与 `Paste-Mode`（`?2004`）报告程序状态。模型与 WebUI 时间线共用一份（`internal/termview`，对 xterm.js 逐字节差分校验）。

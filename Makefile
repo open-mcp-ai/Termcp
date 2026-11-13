@@ -120,13 +120,17 @@ test-linux:
 			chmod +x /tmp/fakebin/go /src/.pi-tmp/linux/mcp.test; \
 			PATH=/tmp/fakebin:$$PATH /src/.pi-tmp/linux/mcp.test -test.count=1 -test.shuffle=on'
 
+# python3 在部分 Windows 机器上是 Microsoft Store 的执行别名：它存在、退出码 49、什么也不做，
+# 于是 `make check-release` 静默失败在发布流程最不该失败的一步。探一次，失败就退回 python。
+PYTHON ?= $(shell python3 -c "import sys" >/dev/null 2>&1 && echo python3 || echo python)
+
 # 发布 PR：将 Unreleased 归档到指定版本，并同步 server.json。
 prepare-release:
-	python3 scripts/release_metadata.py prepare "$(RELEASE_VERSION)"
+	$(PYTHON) scripts/release_metadata.py prepare "$(RELEASE_VERSION)"
 
 check-release:
-	python3 scripts/release_metadata.py check $(if $(RELEASE_VERSION),--expected "$(RELEASE_VERSION)")
-	python3 -m unittest discover -s scripts -p '*_test.py'
+	$(PYTHON) scripts/release_metadata.py check $(if $(RELEASE_VERSION),--expected "$(RELEASE_VERSION)")
+	$(PYTHON) -m unittest discover -s scripts -p '*_test.py'
 
 # 清理构建文件
 clean:
