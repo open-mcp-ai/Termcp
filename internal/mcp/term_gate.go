@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/term/directive"
@@ -128,9 +129,68 @@ func (s *Server) compoundGate(stmt directive.Statement) (warn string, fail *tool
 				"the channel has evidence, or `--force` to type it anyway."}
 	}
 	if warned {
-		return "this line is compound (`" + sep + "`) and the previous command on this channel left no evidence " +
-			"that it finished. Nothing observed says a program is holding the terminal, so the line was sent — " +
-			"but if it is answered by something other than the shell, part of it was input, not a command.", nil
+		// WHAT WAS ACTUALLY OBSERVED, NAMED. The old text said "nothing observed says a
+		// program is holding the terminal" while the previous reply's own last line was a
+		// program prompt (`Press any key to continue . . .`) — a false statement about our
+		// own evidence, which is the exact failure this product refuses everywhere else.
+		tail := s.tailPromptState(stmt.Target)
+		msg := "this line is compound (`" + sep + "`) and the previous command on this channel left no evidence " +
+			"that it finished. "
+		if tail.observed && !tail.atPrompt {
+			msg += "The last line on this channel is not a shell prompt (" + quoteOrDash(tail.line) + "), so a " +
+				"program may well be holding the terminal — it was sent anyway because that is not proof, and " +
+				"`--force` would do the same without the warning. Part of a compound line taken as input runs on " +
+				"its own. Send the segments separately, or pass `--until` so the channel has evidence."
+			return msg, nil
+		}
+		msg += "No alternate screen, the cursor is visible, and the last line looks like a shell prompt — but none " +
+			"of that proves the previous command finished. If it is answered by something other than the shell, " +
+			"part of it was input, not a command. Send the segments separately, or pass `--until` so the channel " +
+			"has evidence."
+		return msg, nil
 	}
 	return "", nil
+}
+
+// tailState is what the last line of a channel's screen says about who holds the terminal.
+type tailState struct {
+	observed bool   // the screen could be replayed at all
+	atPrompt bool   // the last non-empty line matches the prompt preset
+	line     string // that line, for the message
+}
+
+// tailPromptState answers with the last line the caller would see, so a warning can say
+// what it looked at instead of asserting that it looked at nothing.
+func (s *Server) tailPromptState(handle string) tailState {
+	cs, bad := s.requireShell(handle)
+	if bad != nil || cs == nil {
+		return tailState{}
+	}
+	layout, _, ok := s.replayLayout(cs)
+	if !ok {
+		return tailState{}
+	}
+	count := layout.RowCount()
+	if count == 0 {
+		return tailState{}
+	}
+	from := max(0, count-4)
+	spans := layout.Window(from, count-from)
+	promptRe := regexp.MustCompile(promptEnd)
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		if sp == nil || sp.End <= sp.Start {
+			continue
+		}
+		buf, _, err := s.sessMgr.OutputByteRange(cs.ParentSessionID(), cs.ID, sp.Start, int(sp.End-sp.Start))
+		if err != nil {
+			return tailState{}
+		}
+		line := strings.TrimSpace(renderScreenRow(buf))
+		if line == "" {
+			continue
+		}
+		return tailState{observed: true, atPrompt: promptRe.MatchString(line), line: line}
+	}
+	return tailState{}
 }

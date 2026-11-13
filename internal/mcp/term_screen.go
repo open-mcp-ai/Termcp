@@ -316,25 +316,32 @@ func (s *Server) readScreen(ctx context.Context, stmt directive.Statement, win t
 		body.WriteString(row)
 		body.WriteByte(10)
 	}
-	cursorRow, cursorCol := layout.Cursor()
-	return envelope.Slot{
-		Code: 200,
-		Headers: map[string]string{
-			"Path":           stmt.Path,
-			"Screen":         "replayed from the log at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
-			"Cols":           strconv.Itoa(cols),
-			"Rows":           strconv.Itoa(rows),
-			"Cursor":         strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
-			"Cursor-Visible": yesNo(layout.CursorVisible()),
-			"Alt-Screen":     yesNo(layout.Alt()),
-			"Paste-Mode":     yesNo(layout.BracketedPaste()),
-			"Screen-Top":     strconv.Itoa(top),
-			"Screen-Total":   strconv.Itoa(count),
-			"Screen-Rows":    strconv.Itoa(len(keptRows)),
-			"Content-Range":  strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
-		},
-		Body: body.String(),
+	pastEnd := ""
+	if paged && from >= count {
+		// ASKING PAST THE END IS NOT AN ERROR — the buffer may grow — but an empty page
+		// with no explanation reads as "the screen is empty".
+		pastEnd = "`--top " + strconv.Itoa(from) + "` is past the end of the screen model (`Screen-Total` is " +
+			strconv.Itoa(count) + "), so this page is empty. Ask for a top below that number."
 	}
+	cursorRow, cursorCol := layout.Cursor()
+	headers := map[string]string{
+		"Path":           stmt.Path,
+		"Screen":         "replayed from the log at " + strconv.Itoa(cols) + "x" + strconv.Itoa(rows),
+		"Cols":           strconv.Itoa(cols),
+		"Rows":           strconv.Itoa(rows),
+		"Cursor":         strconv.Itoa(cursorRow) + "," + strconv.Itoa(cursorCol),
+		"Cursor-Visible": yesNo(layout.CursorVisible()),
+		"Alt-Screen":     yesNo(layout.Alt()),
+		"Paste-Mode":     yesNo(layout.BracketedPaste()),
+		"Screen-Top":     strconv.Itoa(top),
+		"Screen-Total":   strconv.Itoa(count),
+		"Screen-Rows":    strconv.Itoa(len(keptRows)),
+		"Content-Range":  strconv.FormatInt(total, 10) + "/" + strconv.FormatInt(total, 10),
+	}
+	if pastEnd != "" {
+		headers["Hint"] = pastEnd
+	}
+	return envelope.Slot{Code: 200, Headers: headers, Body: body.String()}
 }
 
 func yesNo(v bool) string {

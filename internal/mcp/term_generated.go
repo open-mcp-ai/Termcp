@@ -72,6 +72,17 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 				sess.ID, sess.Status, dash(sess.SSHConfig), ageOf(sess.CreatedAt)))
 			continue
 		}
+		// A SESSION IS A CONTAINER, AND ITS STATUS IS THE CONTAINER'S. When every channel
+		// has exited the session is still `running` — and that is TRUE: `open` adds a
+		// channel to it, forwards and SFTP still work. What was missing is the other half
+		// of the sentence, which is why `ls` and `get` looked like they disagreed about the
+		// same object: one named the container, the other the channels.
+		liveChannels := 0
+		for _, sh := range shells {
+			if sh.Status == api.SessionRunning {
+				liveChannels++
+			}
+		}
 		shown := 0
 		for _, sh := range shells {
 			if !boolFlag(stmt, "shells") && len(shells) > 1 && sh.Index > 1 {
@@ -92,8 +103,12 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 		// A SESSION WHOSE CHANNELS ARE ALL HIDDEN MUST NOT VANISH: its own line is what
 		// keeps it addressable from this listing, and the channels are one flag away.
 		if shown == 0 && hidden > 0 {
-			b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\n",
+			b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s",
 				sess.ID, sess.Status, dash(sess.SSHConfig), ageOf(sess.CreatedAt)))
+			if liveChannels == 0 {
+				b.WriteString("\t(no live channel; `open` still works)")
+			}
+			b.WriteString("\n")
 		}
 	}
 	if hidden > 0 {
