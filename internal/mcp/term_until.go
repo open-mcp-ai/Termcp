@@ -57,7 +57,17 @@ const (
 	// (`user@box:~$ `); a themed one puts it first and ends on a space or a colour reset
 	// (`\x1b[38;2;1;2;3m➜  repo `). Matching only the first family meant every
 	// `--until prompt` on a starship/p10k shell burned its whole timeout.
-	promptEnd = `(?m)(?:[$#>%❯➜λ\x{e0a0}-\x{e0b3}\x{2500}-\x{257f}\x{f400}-\x{f4ff}][ \t]*(?:\x1b\[[0-9;]*m)*\r?$)|(?:^(?:\x1b\[[0-9;]*m)*[❯➜λ][^\r\n]*[ \t]+(?:\x1b\[[0-9;]*m)*\r?$)`
+	promptEnd = `(?m)(?:[$#>%❯➜λ\x{e0a0}-\x{e0b3}\x{2500}-\x{257f}\x{f400}-\x{f4ff}][ \t]*(?:\x1b\[[0-9;]*m)*\r?$)` +
+		// `|(?:^(?:SGR)*[❯➜λ][^\r\n]*[ \t]+(?:SGR)*\r?$)` — a themed prompt puts the glyph
+		// first and ends on a space or a colour reset (`➜  repo `).
+		`|(?:^(?:\x1b\[[0-9;]*m)*[❯➜λ][^\r\n]*[ \t]+(?:\x1b\[[0-9;]*m)*\r?$)` +
+		// A GLYPH IN THE MIDDLE OF THE LINE IS STILL A PROMPT. Themes label the glyph with a
+		// path and a git status, so the line really reads `@anonymous ➜ repo git(main) ` — it
+		// ends on `)`, and requiring the glyph at either edge recognised only stripped-down
+		// themes. The third dogfood round burned a whole `--until prompt` window on exactly
+		// this shape. After the glyph only "what it labels" is allowed: no second glyph, and
+		// at most a line's worth of it.
+		`|(?m)^(?:\x1b\[[0-9;]*m)*[^\r\n]{0,120}?[❯➜λ›»][^❯➜λ›»\r\n]{0,120}[ \t]*(?:\x1b\[[0-9;]*m)*\r?$`
 )
 
 // untilSpec is one compiled `--until`.

@@ -129,6 +129,14 @@ func (s *Server) compoundGate(stmt directive.Statement) (warn string, fail *tool
 				"the channel has evidence, or `--force` to type it anyway."}
 	}
 	if warned {
+		// THE WARNING'S OWN REMEDY SILENCES IT. Its closing advice is "pass `--until` so the
+		// channel has evidence"; a third dogfood round sent `--until prompt` with a compound
+		// line and got that advice back, which tells the caller to do what it just did. When
+		// a watch is attached, the reply is going to state what happened to the line, so the
+		// guess this warning hedges against is no longer the last word.
+		if stmt.FlagState("until") != directive.FlagAbsent {
+			return "", nil
+		}
 		// WHAT WAS ACTUALLY OBSERVED, NAMED. The old text said "nothing observed says a
 		// program is holding the terminal" while the previous reply's own last line was a
 		// program prompt (`Press any key to continue . . .`) — a false statement about our

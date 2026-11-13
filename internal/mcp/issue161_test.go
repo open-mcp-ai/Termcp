@@ -57,18 +57,28 @@ func TestAWindowThatRanOutSaysSo(t *testing.T) {
 	// A command that keeps printing for longer than the window: the stream never goes
 	// quiet, so the wait can only end because the deadline arrived.
 	long := noisyCommand("tick")
-	got := termText(t, s, map[string]any{
-		"cmd":     "run " + h + " $1",
-		"args":    []any{long},
-		"timeout": 1,
-	})
-	// "tick 1", not "tick": the second is in the echo of the command line, so a reply
-	// carrying nothing but the echoed line and a parse error used to satisfy it.
-	if !strings.Contains(got, "tick 1") {
-		t.Fatalf("the window should have caught some output:\n%s", got)
-	}
-	if !strings.Contains(got, "Still-Running: true") {
-		t.Errorf("a pty run whose window expired must say the command is still running:\n%s", got)
+	// A 1s WINDOW IS THE THING UNDER TEST, NOT A BUDGET FOR THE SHELL'S STARTUP. On a
+	// loaded runner the shell can take longer than that to reach the pipeline, so the
+	// window legitimately expires with nothing but the echoed line — and asserting "the
+	// window caught output" on the first attempt made this test red on CI and green here.
+	// The state being asserted is "a window that expired mid-output said so"; retrying
+	// until that state is observed costs a slow machine extra iterations and nothing else.
+	deadline := time.Now().Add(90 * time.Second)
+	var got string
+	for {
+		got = termText(t, s, map[string]any{
+			"cmd":     "run " + h + " $1",
+			"args":    []any{long},
+			"timeout": 1,
+		})
+		// "tick 1", not "tick": the second is in the echo of the command line, so a reply
+		// carrying nothing but the echoed line and a parse error used to satisfy it.
+		if strings.Contains(got, "tick 1") && strings.Contains(got, "Still-Running: true") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no window ever expired mid-output with Still-Running set:\n%s", got)
+		}
 	}
 }
 
