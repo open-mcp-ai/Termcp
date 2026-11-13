@@ -111,8 +111,17 @@ func (s *Server) untilFrom(stmt directive.Statement) (*untilSpec, *toolFailure) 
 // to match, because the only line present is the one the caller typed.
 type untilWatch struct {
 	spec *untilSpec
-	// outFrom is the absolute offset where the command's output begins: the byte after
-	// the line the shell echoed back. Zero means "not known yet".
+	// echo says this call typed a line into a pty, so the first line of the window is
+	// the terminal echoing it back and cannot be evidence about the command.
+	//
+	// IT IS NOT ALWAYS TRUE. A `read --until` types nothing: its window may start
+	// anywhere, and the first line of THAT window is output the caller asked for.
+	// Skipping it unconditionally made a read wait out its whole window while the
+	// evidence sat on line one (found on a Linux runner, where the read's window began
+	// exactly at the marker).
+	echo bool
+	// outFrom is the absolute offset where the output begins: the byte after the echoed
+	// line. Zero means "not located yet".
 	//
 	// IT IS AN OFFSET, NOT A ONE-TIME SLICE. Skipping the echo by slicing the text once
 	// only skipped it for that poll; the next poll re-read the tail, which still
@@ -174,7 +183,7 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	// BEFORE THE ECHO IS LOCATED THE WHOLE WINDOW IS READ, and afterwards the read
 	// starts where the output does — never before it, or the echo comes back into view
 	// on the next poll.
-	if w.outFrom == 0 {
+	if !w.echo || w.outFrom == 0 {
 		from = start
 	} else if from < w.outFrom {
 		from = w.outFrom
@@ -183,7 +192,7 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	if !ok {
 		return false, false
 	}
-	if w.outFrom == 0 {
+	if w.echo && w.outFrom == 0 {
 		nl := strings.IndexByte(text, '\n')
 		if nl < 0 {
 			// Only the echoed line so far: matching it is matching the caller's own
@@ -235,7 +244,10 @@ func (s *Server) untilWatchFrom(stmt directive.Statement) *untilWatch {
 	if bad != nil || spec == nil {
 		return nil
 	}
-	return &untilWatch{spec: spec}
+	// THE ECHO IS ONLY A HAZARD WHEN THIS CALL TYPED SOMETHING. `run` writes a line into a
+	// pty and the terminal shows it back; `read` writes nothing, so its window begins
+	// with whatever bytes the caller asked for. A pipe does not echo at all.
+	return &untilWatch{spec: spec, echo: stmt.Payload != "" && s.ptyRunning(stmt.Target)}
 }
 
 // `Completion` APPEARS ONLY WITH EVIDENCE, and this is the whole point of the change:
