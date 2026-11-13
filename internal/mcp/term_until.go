@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -120,6 +121,9 @@ type untilWatch struct {
 	// evidence sat on line one (found on a Linux runner, where the read's window began
 	// exactly at the marker).
 	echo bool
+	// echoText is what this call typed, so the echo can be recognised instead of assumed
+	// to be "the first line".
+	echoText string
 	// outFrom is the absolute offset where the output begins: the byte after the echoed
 	// line. Zero means "not located yet".
 	//
@@ -193,14 +197,19 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 		return false, false
 	}
 	if w.echo && w.outFrom == 0 {
-		nl := strings.IndexByte(text, '\n')
-		if nl < 0 {
-			// Only the echoed line so far: matching it is matching the caller's own
-			// command, so there is nothing to answer yet.
+		// COUNT THE ECHO LINES, DO NOT ASSUME THERE IS ONE. A Windows ConPTY echoes the
+		// line twice — the pty's copy, then the line editor's repaint — so skipping "the
+		// first line" left the second copy sitting in the matchable text and `--until`
+		// answered "matched" on the caller's own command. Every leading line that
+		// contains what we typed is the echo; the first one that does not is output.
+		off, decided := echoSkip(text, w.echoText)
+		if !decided {
+			// The deciding line is still arriving. Matching the echo, or guessing where
+			// it ends, would both be wrong — so there is nothing to answer yet.
 			return false, true
 		}
-		w.outFrom = from + int64(nl) + 1
-		text = text[nl+1:]
+		w.outFrom = from + int64(off)
+		text = text[off:]
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
 	if loc == nil {
@@ -247,7 +256,37 @@ func (s *Server) untilWatchFrom(stmt directive.Statement) *untilWatch {
 	// THE ECHO IS ONLY A HAZARD WHEN THIS CALL TYPED SOMETHING. `run` writes a line into a
 	// pty and the terminal shows it back; `read` writes nothing, so its window begins
 	// with whatever bytes the caller asked for. A pipe does not echo at all.
-	return &untilWatch{spec: spec, echo: stmt.Payload != "" && s.ptyRunning(stmt.Target)}
+	return &untilWatch{spec: spec, echo: stmt.Payload != "" && s.ptyRunning(stmt.Target), echoText: stmt.Payload}
+}
+
+// echoSkip reports where the terminal's echo of payload ends: the byte offset after the
+// last leading line that contains it.
+//
+// THE SECOND RETURN IS WHETHER THE BOUNDARY IS KNOWN. A trailing line with no newline yet
+// may still be another echo; committing to a boundary there would either match the echo or
+// discard output, so the caller waits for the byte that decides it.
+func echoSkip(text, payload string) (int, bool) {
+	if payload == "" {
+		return 0, true
+	}
+	off := 0
+	for {
+		nl := strings.IndexByte(text[off:], '\n')
+		line := text[off:]
+		if nl >= 0 {
+			line = text[off : off+nl]
+		}
+		if !strings.Contains(ansi.Strip(line), payload) {
+			// This line is not the echo — and if it is incomplete, it still is not the
+			// echo, because an echo line contains the payload from its first bytes.
+			return off, true
+		}
+		if nl < 0 {
+			// The echo is still arriving: what comes after it is not known yet.
+			return off, false
+		}
+		off += nl + 1
+	}
 }
 
 // `Completion` APPEARS ONLY WITH EVIDENCE, and this is the whole point of the change:
