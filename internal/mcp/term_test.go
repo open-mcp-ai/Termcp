@@ -1231,6 +1231,13 @@ func awaitPtyReady(t *testing.T, s *Server, handle string) {
 			"timeout": 3,
 		})
 		if strings.Contains(termText(t, s, map[string]any{"cmd": "read " + handle + " --from-line 1", "timeout": 0}), marker) {
+			// LEAVE THE CHANNEL QUIET. The probe run's reply can carry Still-Running (its
+			// output was still arriving when its window ended), and a compound line typed
+			// next is refused on that evidence — correct for the gate, wrong for a helper
+			// whose whole job is to hand the test a channel that is ready. Waiting for the
+			// stream to stand still also stops the next run's echo from interleaving with
+			// the probe's, which mangled the window a `--until` test was asserting on.
+			awaitQuiet(t, s, handle)
 			return
 		}
 		if time.Now().After(deadline) {

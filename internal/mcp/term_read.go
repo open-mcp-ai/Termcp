@@ -210,6 +210,10 @@ func (s *Server) readChannelNow(ctx context.Context, stmt directive.Statement, w
 		waited = time.Since(began)
 	}
 	slot, _ := s.readSlot(ctx, stmt, win, args, waited)
+	if slot.Code == 204 {
+		// Nothing new arrived: whatever the last run's Still-Running said has expired.
+		s.forgetStaleBusy(stmt.Target)
+	}
 	return slot
 }
 
@@ -320,6 +324,11 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 		sawBytes = !s.onlyEcho(stmt.Target, start, now, stmt.Payload)
 	}
 	slot, channelEnd := s.readSlot(ctx, stmt, win, args, time.Since(waitStarted))
+	if slot.Code == 204 {
+		// Nothing new arrived: the channel is not producing output any more, so what the
+		// last run's Still-Running said about it has expired.
+		s.forgetStaleBusy(stmt.Target)
+	}
 	if slot.Code < 400 {
 		if slot.Headers == nil {
 			slot.Headers = map[string]string{}
