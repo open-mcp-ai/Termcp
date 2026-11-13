@@ -48,5 +48,15 @@
       "zh-TW": "頁面拆分與終端配色改版：index.html 拆成 style.css 加 5 個腳本，Bin 安裝 tab 隨拆分落地",
       "en": "Split the page into style.css plus five scripts, redrew it in a terminal palette, and landed the Bin install tab in those files"
     }
+  },
+  {
+    "name": "Sud0g-BlackZer0",
+    "kind": "human",
+    "url": "https://github.com/Sud0g-BlackZer0",
+    "note": {
+      "zh-CN": "审批链路：执行状态与审批状态分开记录，新增 GET /api/approvals/{id}，202 槽带上 Approval-ID 等关联头；另修掉会话关闭时重开审批队列的竞态",
+      "zh-TW": "審批鏈路：執行狀態與審批狀態分開記錄，新增 GET /api/approvals/{id}，202 槽帶上 Approval-ID 等關聯頭；另修掉會話關閉時重開審批佇列的競態",
+      "en": "Approval pipeline: execution state recorded apart from approval state, added GET /api/approvals/{id}, correlation headers on the 202 slot, and fixed the race that reinstalled an approval queue on a closing session"
+    }
   }
 ]
