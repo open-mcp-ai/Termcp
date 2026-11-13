@@ -93,6 +93,10 @@ func TestUntilIgnoresTheEchoedCommandLine(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// A PROMPT THAT IS STILL PAINTING JOINS THE TYPED LINE. Without this the window's first
+	// line is `PS …> echo hi # MARKER` — the startup banner and our input on one line — and
+	// the echo region becomes harder to describe than the property under test.
+	awaitPtyReady(t, s, h)
 
 	got := termText(t, s, map[string]any{
 		"cmd":     "run " + h + " --until MARKER-ONLY-IN-THE-ECHO $1",

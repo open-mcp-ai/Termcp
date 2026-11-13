@@ -195,38 +195,33 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	if !ok {
 		return false, false
 	}
-	// A LOADED WINDOWS RUNNER ECHOES DIFFERENTLY, so the echo is located by SEARCHING for
-	// what was typed instead of assuming it is "the first line". What survives every
-	// terminal is the invariant: the rendering of our own input ends somewhere after
-	// Input-At, and nothing before that point is output.
-	if w.echo && w.outFrom == 0 {
-		i := strings.Index(text, w.echoText)
-		if i < 0 {
-			// The echo has not arrived whole. With no newline in the window the first line
-			// is still arriving, so nothing can be judged yet; a complete line without our
-			// text means this channel is not echoing it at all.
-			if nl := strings.IndexByte(text, '\n'); nl < 0 {
-				return false, true
+	// A WINDOWS CONPTY RENDERS THE ECHO ACROSS MULTIPLE POLLS.
+	//
+	// The pty driver echoes what was typed, and PSReadLine later repaints it — often on a
+	// subsequent poll, AFTER the command output (`hi\n`) has already arrived! So the stream
+	// order on Windows ConPTY can literally be:
+	//     1. (pty driver echo) echo hi # MARKER\n
+	//     2. (command output)  hi\n
+	//     3. (PSReadLine repaint) echo hi # MARKER
+	//
+	// Setting `outFrom` on the first poll to after line 1 and never checking again meant the
+	// subsequent repaint on poll 2 was treated as output, matching the caller's own command.
+	//
+	// Therefore, as long as `w.echo` is true, ANY line in `text` that contains the echoed
+	// command line is the terminal drawing our input, not output, and is skipped.
+	if w.echo {
+		for {
+			idx := strings.Index(text, w.echoText)
+			if idx < 0 {
+				break
 			}
-			w.outFrom = from
-		} else {
-			nl := strings.IndexByte(text[i:], '\n')
+			nl := strings.IndexByte(text[idx:], '\n')
 			if nl < 0 {
-				// The echoed line is still arriving: what follows it is not known yet.
+				// The echo line is still arriving: nothing past it is output yet.
 				return false, true
 			}
-			end := i + nl + 1
-			// A CONPTY CAN ECHO TWICE — the pty's copy, then the line editor's repaint — so a
-			// second copy on the next line is still the echo, not output.
-			if j := strings.Index(text[end:], w.echoText); j >= 0 &&
-				!strings.Contains(text[end:end+j], "\n") {
-				if nl2 := strings.IndexByte(text[end+j:], '\n'); nl2 >= 0 {
-					end += j + nl2 + 1
-				}
-			}
-			w.outFrom = from + int64(end)
+			text = text[idx+nl+1:]
 		}
-		text = text[w.outFrom-from:]
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
 	if loc == nil {
