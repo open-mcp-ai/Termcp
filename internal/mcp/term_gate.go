@@ -80,6 +80,24 @@ func (s *Server) lastRunProof(handle string) (runProof, bool) {
 	return p, true
 }
 
+// forgetStaleBusy retires a `busy` proof that no longer describes the channel.
+//
+// STILL-RUNNING IS A STATEMENT ABOUT ONE WINDOW. A later read that answers `204 No Content`
+// has observed that there are no new bytes — the stream the proof described has stopped —
+// so refusing a compound line on it afterwards is acting on evidence that expired. Found
+// on a loaded runner: `awaitPtyReady`'s probe run ended `Still-Running`, the helper's own
+// snapshot read saw nothing, and the next compound line was refused for output that had
+// finished arriving before the probe returned.
+//
+// Completion is cleared with it: a quiet read is not evidence either way, and leaving a
+// stale `matched` behind would let the NEXT compound line through on this cycle's proof.
+func (s *Server) forgetStaleBusy(handle string) {
+	if p, ok := s.lastRunProof(handle); !ok || (!p.busy && !p.confirmed) {
+		return
+	}
+	s.noteRunProof(handle, false, false)
+}
+
 // compoundVerdict is the whole decision, as a pure function: what to do about a compound
 // line, given what is known. Kept apart from the I/O so the table is testable without a
 // terminal.
