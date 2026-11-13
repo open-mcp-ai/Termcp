@@ -91,9 +91,10 @@ restored copy has none.
 ```bash
 make test         # the CI command exactly; -race is on wherever the toolchain supports it
 make test-stress  # scheduling perturbation: -cpu=1,2,4 × -count=2 × -shuffle=on
+make test-linux   # Docker-based cross-test: runs internal/mcp on a real Linux kernel
 ```
 
-The two targets cover the two sources of test-owned races:
+The three targets cover the three sources of test-owned divergence:
 
 - **Memory races** — `-race` (CI always; locally wherever cgo and a C compiler
   exist, which `make test` probes and prints when it has to skip).
@@ -103,6 +104,12 @@ The two targets cover the two sources of test-owned races:
   `-count` repeats, `-shuffle` reorders. This is the harness that reproduced
   `internal/session`'s TempDir race 28 runs out of 30, on a machine where
   plain `-count=15` had never caught it.
+- **OS-specific pty timing** — Windows ConPTY, macOS BSD ttys, and Linux POSIX
+  ptys echo bytes and schedule wakeups at different moments relative to the
+  calling goroutine. `make test-linux` cross-compiles `internal/mcp` and runs
+  it in an `ubuntu:24.04` container: that catches the Linux-only pty bugs
+  (echo mistaken for output, a quiet channel that never took the slow path)
+  before pushing to dev.
 
 `-count` also catches state leaked between runs in one process; `-shuffle=on`
 catches a test that only passes after some other test has run (failures print a

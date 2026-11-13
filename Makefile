@@ -1,4 +1,4 @@
-.PHONY: build build-api build-debug test test-stress clean dist sync-assets prepare-release check-release
+.PHONY: build build-api build-debug test test-linux test-stress clean dist sync-assets prepare-release check-release
 
 # Plain `make` must keep meaning "build the release binary" (GNU make otherwise
 # picks the first target in the file as the default goal).
@@ -93,6 +93,32 @@ test-stress:
 # no failing assertion, which reads like a hang and is not one; it is the budget.
 # Run this on an idle machine, otherwise the number it produces is the machine's.
 	go test $(STRESS_PKGS) -count=$(STRESS_COUNT) -cpu=$(STRESS_CPU) -shuffle=on $(race_flag) -timeout 1800s
+
+# LINUX 是 pty 测试挂掉的地方，而开发台是 Windows/macOS。同一个包在这里绿、在 ubuntu
+# runner 上红，原因几乎总是同一族：终端回显的时机，而不是逻辑本身（第三轮 CI 失败就是
+# `--until` 把自己敲的命令当成证据，以及 pty 回显被当成输出）。
+#
+# 所以推送前用这个目标在真正的 Linux 里跑一遍 internal/mcp：交叉编译一个 linux/amd64
+# 测试二进制，放进容器执行。`-race` 不在此列（需要容器里有 gcc 和 Go），仍然只有 CI 跑。
+#
+# 两个踩过一次才明白的约束：
+#   - cwd 必须是 internal/mcp：源码形状测试（TestNoDirectiveFlagIsDead 等）用
+#     os.ReadDir(".") 读包内源码，在仓库根目录跑会把它们全部读空并报"没人读这个 flag"。
+#   - 容器里没有 go，而 TestHandleStartSubShell_CommandWithArgs 会真的执行 `go version`；
+#     给一个只打印版本号的假 go，测的是 argv 形态，不是工具链。
+LINUX_IMAGE ?= ubuntu:24.04
+test-linux:
+	@command -v docker >/dev/null 2>&1 || { echo "make test-linux needs docker"; exit 1; }
+	mkdir -p .pi-tmp/linux
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o .pi-tmp/linux/mcp.test ./internal/mcp/
+	MSYS_NO_PATHCONV=1 docker run --rm \
+		-v "$(shell cygpath -w $(CURDIR) 2>/dev/null || echo $(CURDIR))":/src \
+		-w /src/internal/mcp $(LINUX_IMAGE) bash -lc '\
+			set -e; \
+			mkdir -p /tmp/fakebin; \
+			printf "%s\n" "#!/bin/sh" "echo go version go1.27.3 linux/amd64" > /tmp/fakebin/go; \
+			chmod +x /tmp/fakebin/go /src/.pi-tmp/linux/mcp.test; \
+			PATH=/tmp/fakebin:$$PATH /src/.pi-tmp/linux/mcp.test -test.count=1 -test.shuffle=on'
 
 # 发布 PR：将 Unreleased 归档到指定版本，并同步 server.json。
 prepare-release:
