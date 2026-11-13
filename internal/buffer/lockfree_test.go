@@ -121,10 +121,17 @@ func TestConcurrentReadersSeeAnUnbrokenStream(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < chunksPerWriter; i++ {
 				chunk := bytes.Repeat([]byte{byte('a' + w)}, 7)
+				/* The expected stream and the write must be one step. Recording
+				   first and writing after left a window where two writers could
+				   interleave in the buffer in the opposite order to the recorded
+				   stream, and the reader's (correct) run then looked like bytes the
+				   stream never contained — a flake in the expectation, not in the
+				   buffer. */
 				streamMu.Lock()
 				stream = append(stream, chunk...)
+				err := b.Write(chunk)
 				streamMu.Unlock()
-				if err := b.Write(chunk); err != nil {
+				if err != nil {
 					return
 				}
 			}
