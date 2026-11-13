@@ -99,7 +99,11 @@ func TestUntilIgnoresTheEchoedCommandLine(t *testing.T) {
 		"timeout": 1,
 	})
 	if v, ok := headerValue(t, got, "Completion"); ok {
-		t.Fatalf("the echo of the caller's own command matched (Completion=%q); the echo is not evidence:\n%s", v, firstLine(got))
+		// THE WHOLE REPLY, because this assertion is about BYTES: "the echo matched"
+		// names no byte, and the runner that echoes differently is exactly the machine
+		// whose window text is the evidence. A one-line message sent the Windows
+		// failure back unreadable.
+		t.Fatalf("the echo of the caller's own command matched (Completion=%q); the echo is not evidence:\n%s", v, got)
 	}
 	// AND THE MISS SAYS SOMETHING USEFUL. A refusal to claim completion must not leave
 	// the caller guessing what to do next.

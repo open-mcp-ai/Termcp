@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -196,20 +195,38 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	if !ok {
 		return false, false
 	}
+	// A LOADED WINDOWS RUNNER ECHOES DIFFERENTLY, so the echo is located by SEARCHING for
+	// what was typed instead of assuming it is "the first line". What survives every
+	// terminal is the invariant: the rendering of our own input ends somewhere after
+	// Input-At, and nothing before that point is output.
 	if w.echo && w.outFrom == 0 {
-		// COUNT THE ECHO LINES, DO NOT ASSUME THERE IS ONE. A Windows ConPTY echoes the
-		// line twice — the pty's copy, then the line editor's repaint — so skipping "the
-		// first line" left the second copy sitting in the matchable text and `--until`
-		// answered "matched" on the caller's own command. Every leading line that
-		// contains what we typed is the echo; the first one that does not is output.
-		off, decided := echoSkip(text, w.echoText)
-		if !decided {
-			// The deciding line is still arriving. Matching the echo, or guessing where
-			// it ends, would both be wrong — so there is nothing to answer yet.
-			return false, true
+		i := strings.Index(text, w.echoText)
+		if i < 0 {
+			// The echo has not arrived whole. With no newline in the window the first line
+			// is still arriving, so nothing can be judged yet; a complete line without our
+			// text means this channel is not echoing it at all.
+			if nl := strings.IndexByte(text, '\n'); nl < 0 {
+				return false, true
+			}
+			w.outFrom = from
+		} else {
+			nl := strings.IndexByte(text[i:], '\n')
+			if nl < 0 {
+				// The echoed line is still arriving: what follows it is not known yet.
+				return false, true
+			}
+			end := i + nl + 1
+			// A CONPTY CAN ECHO TWICE — the pty's copy, then the line editor's repaint — so a
+			// second copy on the next line is still the echo, not output.
+			if j := strings.Index(text[end:], w.echoText); j >= 0 &&
+				!strings.Contains(text[end:end+j], "\n") {
+				if nl2 := strings.IndexByte(text[end+j:], '\n'); nl2 >= 0 {
+					end += j + nl2 + 1
+				}
+			}
+			w.outFrom = from + int64(end)
 		}
-		w.outFrom = from + int64(off)
-		text = text[off:]
+		text = text[w.outFrom-from:]
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
 	if loc == nil {
@@ -257,36 +274,6 @@ func (s *Server) untilWatchFrom(stmt directive.Statement) *untilWatch {
 	// pty and the terminal shows it back; `read` writes nothing, so its window begins
 	// with whatever bytes the caller asked for. A pipe does not echo at all.
 	return &untilWatch{spec: spec, echo: stmt.Payload != "" && s.ptyRunning(stmt.Target), echoText: stmt.Payload}
-}
-
-// echoSkip reports where the terminal's echo of payload ends: the byte offset after the
-// last leading line that contains it.
-//
-// THE SECOND RETURN IS WHETHER THE BOUNDARY IS KNOWN. A trailing line with no newline yet
-// may still be another echo; committing to a boundary there would either match the echo or
-// discard output, so the caller waits for the byte that decides it.
-func echoSkip(text, payload string) (int, bool) {
-	if payload == "" {
-		return 0, true
-	}
-	off := 0
-	for {
-		nl := strings.IndexByte(text[off:], '\n')
-		line := text[off:]
-		if nl >= 0 {
-			line = text[off : off+nl]
-		}
-		if !strings.Contains(ansi.Strip(line), payload) {
-			// This line is not the echo — and if it is incomplete, it still is not the
-			// echo, because an echo line contains the payload from its first bytes.
-			return off, true
-		}
-		if nl < 0 {
-			// The echo is still arriving: what comes after it is not known yet.
-			return off, false
-		}
-		off += nl + 1
-	}
 }
 
 // `Completion` APPEARS ONLY WITH EVIDENCE, and this is the whole point of the change:
