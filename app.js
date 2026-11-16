@@ -63,7 +63,11 @@ function renderCmd(key) {
   display.textContent = currentCmdText;
   display.classList.toggle('quoted', isAI);
   /* A tab may carry a caveat that belongs with its own command. */
-  const noteKey = { docker: 'cmd_note_docker', binary: hostFilled ? 'cmd_note_binary_ok' : 'cmd_note_binary' }[key];
+  const noteKey = {
+    claude: 'cmd_note_npx', codex: 'cmd_note_npx', gemini: 'cmd_note_npx', npm: 'cmd_note_npx',
+    docker: 'cmd_note_docker',
+    binary: hostFilled ? 'cmd_note_binary_ok' : 'cmd_note_binary'
+  }[key];
   /* innerHTML, not textContent: the followup line is marked up so it reads as
      the next step rather than as a footnote. */
   const note = noteKey ? t(noteKey).replace('{{target}}', hostTarget) : '';

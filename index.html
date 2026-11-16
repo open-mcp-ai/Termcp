@@ -6,7 +6,7 @@
   <title>Termcp - 最终的 MCP | Terminus MCP</title>
 
   <!-- SEO & Metadata -->
-  <meta name="description" content="Termcp：一个 MCP 统御所有机器和所有 MCP | 让 AI 进入你的诸多终端。模型看到的工具列表永远只有 1 个 —— 装多少 MCP 都不增加工具定义；缺能力时，AI 自己开发一个 MCP，装上直接用。单文件 10+MB。">
+  <meta name="description" content="给 AI 用的超级终端 MCP：只有一个 tool，却能让 AI 跨机器装不限量 MCP、执行命令，工具定义不随装机数量增长。缺能力时，AI 自己开发一个 MCP，装上直接用。单文件 10+MB。">
   <meta name="keywords" content="Termcp, MCP 聚合, MCP hub, 动态安装 MCP, 跨主机 MCP, AI 自写 MCP, AI 运维平台, SSH MCP, 本地终端, 远程终端, 端口转发, SFTP, AI terminal, AI native, MCP, Model Context Protocol, MCP server, Claude Code, Codex, Gemini CLI, terminal control plane, human-in-the-loop, 终端MCP, 人机共驾, AI终端, 运维自动化, 渗透测试, 安全终端, 终端复用, session multiplexing, open-mcp-ai">
   <meta name="author" content="open-mcp-ai">
   <meta name="theme-color" content="#6EE2FF">
@@ -18,7 +18,7 @@
   <!-- Open Graph / Social Media -->
   <meta property="og:type" content="website">
   <meta property="og:title" content="Termcp - 最终的 MCP | Terminus MCP">
-  <meta property="og:description" content="一个 MCP 统御所有机器和所有 MCP | 让 AI 进入你的诸多终端：跨主机安装、自己开发自己装；装多少 MCP，模型看到的工具定义都还是 1 个。凭据留在 Termcp，不交给 AI。">
+  <meta property="og:description" content="给 AI 用的超级终端 MCP：只有一个 tool，却能让 AI 跨机器装不限量 MCP、执行命令。凭据留在 Termcp，不交给 AI。">
   <meta property="og:url" content="https://termcp.org">
 
   <!-- Machine-readable identity. The alternateName is the point: the tagline
@@ -50,7 +50,7 @@
         : theme;
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <div class="bg-grid"></div>
@@ -111,11 +111,11 @@
     <section class="hero">
       <div class="hero-pill" data-i18n="hero_pill">AI NATIVE CONTROL PLANE · MCP</div>
       <h1 class="highlight" data-i18n="hero_title" data-text="最终的 MCP">最终的 MCP</h1>
-      <p class="lead" data-i18n-html="hero_desc">一个 MCP <strong>统御</strong> 所有机器和所有 MCP <span class="lead-sep">|</span> <span class="lead-tail">让 AI 进入你的诸多终端</span></p>
+      <p class="lead" data-i18n-html="hero_desc">给 AI 用的<strong>超级终端 MCP</strong> <span class="lead-sep">|</span> <span class="lead-tail">它只有一个 tool，却能让 AI 跨机器装不限量 MCP、执行命令</span></p>
 
       <p class="motto">Termcp: The Terminus MCP · one for all, all for one</p>
 
-      <div class="cmd-intro" data-i18n-html="install_intro"><b>极速安装</b> 单文件 10+MB · 零依赖 · <code>npm</code> 包装</div>
+      <div class="cmd-intro" data-i18n-html="install_intro"><b>极速安装</b> 单文件 10+MB · 零依赖 · 纯 Go 跨平台</div>
       <div class="command-box">
         <div class="cmd-tabs" id="cmd-tabs">
           <button class="cmd-tab active" data-cmd="ai" data-i18n="cmd_tab_ai">AI Install</button>
@@ -442,7 +442,7 @@
 
 
 
-    <!-- Donors are data, not markup: donors.js?v=7on sits next to this page, so a
+    <!-- Donors are data, not markup: donors.js?v=8on sits next to this page, so a
          name is added by editing that file and never this section. Only the
          first 100 entries are rendered. -->
     <section class="section" id="donors">
@@ -484,10 +484,10 @@
   <!-- Client scripts: plain classic scripts, in load order. The catalog comes
        first, then the data that reads it, then the page chrome that wires the
        controls up and runs the initialisers. No modules, so they share a scope. -->
-  <script src="i18n.js?v=7"></script>
-  <script src="commands.js?v=7"></script>
-  <script src="demo.js?v=7"></script>
-  <script src="donors.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="i18n.js?v=8"></script>
+  <script src="commands.js?v=8"></script>
+  <script src="demo.js?v=8"></script>
+  <script src="donors.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
