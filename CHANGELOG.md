@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 新功能
+
+- **`/ext/{name}/stream` 有了服务端推送：扩展自己发的事件能到达挂在上面的 agent（#328）**：每个扩展一个常驻 pump，用一个独立 reader 从「现在」开始读该通道，把读到的字节切成帧后四路路由——`method` 无 `id` 的通知扇给所有 session 的 GET 流；`id` 是本端铸的回包唤醒等它的 POST（**只改 id 成员，其余字节原样**）；对端发起的请求交给声明了能力的客户端，没有就回 error 给对端而不是静默丢；都不是则当横幅/echo 跳过。因此 `GET /ext/{name}/stream` 不再 405，`Mcp-Session-Id`、真正的 `DELETE`、400/404/409 语义都由本体那份 streamable transport 提供，不再手写第二遍。
+- **多客户端共用一个 stdio 对端不再串包（#328 / #262）**：请求进通道前把 `id` 换成本端铸的唯一拼写、登记 (上游 id → session + 原 id)，回包再换回来；两个客户端都用 `id:1` 也各收各的。`initialize` 只转发一次并缓存回包，后续 session 直接重放（serverInfo/capabilities 仍是扩展自己的），`notifications/initialized` 只发一次。
+- **`MCP-Protocol-Version` 不再撒谎（#328 / #327 第 3 条的一半）**：`StreamableHTTP` 改成取 handler 回报的版本，扩展端点是它自己 initialize 回包里的值（`VersionReporter`）。本体没有这个接口时仍回 `2025-06-18`。
+- **一封一 Enter 在同一个行锁内（#328 / #262 第 2 条）**：转发路径过去没拿 `lineLock`，两个并发 POST 会交错成一条坏行；现在两笔写一起持锁。
+
+### 修复
+
+- **扩展窗口超时不再回 202**：规范不允许对**请求**回 `202 Accepted`——客户端会去 GET 流等一帧可能永远不来的包。现在超时回一条带调用方 id 的 JSON-RPC error，并说明请求仍然在途、若回包到达会走该 session 的流。
+- **对端进程退出时报可读错误**：pump 结束会把所有在等的 POST 以「extension stopped: <原因>」唤醒，不再让客户端挂到超时。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

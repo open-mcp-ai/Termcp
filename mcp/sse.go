@@ -137,13 +137,13 @@ func (s *SSEServer) SSEHandler() http.Handler {
 		}
 		// Register AFTER the handler owns the stream, so a hook that inspects the
 		// session sees one that can already accept a notification.
-		s.srv.registerSession(ctx, sess)
+		s.srv.RegisterSession(ctx, sess)
 
 		defer func() {
 			s.mu.Lock()
 			delete(s.sessions, sess.SessionID())
 			s.mu.Unlock()
-			s.srv.unregisterSession(ctx, sess)
+			s.srv.UnregisterSession(ctx, sess)
 		}()
 
 		h := w.Header()

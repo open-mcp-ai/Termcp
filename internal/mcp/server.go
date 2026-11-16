@@ -149,6 +149,14 @@ type Server struct {
 	// pay three round trips to open its own engine every call (see
 	// internal/sftpengine, issue #244).
 	sftpEngines *sftpengine.Pool
+
+	// extEndpoints is one MCP endpoint per extension name (issue #328).
+	//
+	// PER NAME, because what an endpoint holds is per-extension state: the session
+	// ids its clients were handed, the peer's cached initialize answer, the
+	// upstream id counter, and the pump reading that extension's channel. A map
+	// with the zero value usable, so a Server built by a test needs no constructor.
+	extEndpoints sync.Map // name string -> *extEndpoint
 }
 
 // SFTPPool exposes the shared SFTP engine pool, so a second surface over the same
