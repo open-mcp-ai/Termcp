@@ -77,6 +77,18 @@ func (c *client) Notify(ctx context.Context, method string, params any) error {
 	return c.write(ctx, frame)
 }
 
+// NotifyRaw delivers a frame this package did not build.
+//
+// THE EXTENSION ENDPOINT NEEDS THIS (issue #328): a notification an extension emits
+// on its own is the PEER'S frame, and re-encoding it through Notification would
+// lose every member this package does not model — the extension's own namespace in
+// the method, a sequence number in the params, anything. "The client is talking to
+// the extension" is that endpoint's promise, and a frame rebuilt here would break
+// it while looking correct.
+func (c *client) NotifyRaw(ctx context.Context, frame []byte) error {
+	return c.write(ctx, frame)
+}
+
 // Request sends a request to the client and waits for its answer.
 //
 // The returned error is "the client said no" or "the client said nothing"; both

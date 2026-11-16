@@ -1,48 +1,69 @@
 package mcp
 
 import (
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// TestExtMCPHandlerValidation pins the HTTP-level contracts of /ext/{name}/stream (issue #234).
-func TestExtMCPHandlerValidation(t *testing.T) {
+// TestExtMCPHandlerHTTPContract pins what the route says to a client that has not
+// handed it a session yet (issues #234, #328).
+//
+// THE ANSWERS CHANGED WHEN THE TRANSPORT MOVED IN. GET used to be 405 with a
+// paragraph about how this extension never initiates; now the endpoint HAS a
+// server-initiated stream, and a GET with no session is the ordinary "you forgot the
+// header" 400 the transport already gives everywhere else. DELETE used to report 204
+// while doing nothing; now it is a real end-of-session, so it needs one too.
+func TestExtMCPHandlerHTTPContract(t *testing.T) {
 	s := &Server{}
 	handler := s.ExtMCPHandler()
 
-	// 1. GET is refused with 405 and teaches POST
-	req := httptest.NewRequest(http.MethodGet, "/ext/testext/stream", nil)
-	req.SetPathValue("name", "testext")
+	do := func(method, body string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/ext/testext/stream", strings.NewReader(body))
+		req.SetPathValue("name", "testext")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. A GET with no session names the header it wanted.
+	if w := do(http.MethodGet, "", nil); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Mcp-Session-Id") {
+		t.Errorf("GET without a session: want 400 naming Mcp-Session-Id, got %d %q", w.Code, w.Body.String())
+	}
+
+	// 2. A POST with no session cannot be an ordinary frame: only initialize may
+	// create one, so the same 400 applies.
+	if w := do(http.MethodPost, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, nil); w.Code != http.StatusBadRequest {
+		t.Errorf("POST without a session: want 400, got %d %q", w.Code, w.Body.String())
+	}
+
+	// 3. DELETE with no session, likewise.
+	if w := do(http.MethodDelete, "", nil); w.Code != http.StatusBadRequest {
+		t.Errorf("DELETE without a session: want 400, got %d %q", w.Code, w.Body.String())
+	}
+
+	// 4. A verb nobody defined still says which verbs exist.
+	if w := do(http.MethodPut, "", nil); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("PUT: want 405, got %d", w.Code)
+	}
+	if allow := do(http.MethodPut, "", nil).Header().Get("Allow"); !strings.Contains(allow, "POST") || !strings.Contains(allow, "GET") || !strings.Contains(allow, "DELETE") {
+		t.Errorf("405 must list the verbs, got %q", allow)
+	}
+}
+
+// TestExtMCPRouteNeedsAName: the handler is mounted on one pattern for every
+// extension, so a request that reached it with no name is a routing mistake worth a
+// sentence rather than an empty session table keyed "".
+func TestExtMCPRouteNeedsAName(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/ext//stream", strings.NewReader("{}"))
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405 on GET, got %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "POST your JSON-RPC frames") {
-		t.Errorf("refusal should teach POST, got: %q", w.Body.String())
-	}
-
-	// 2. Non-JSON body is refused with 400
-	req = httptest.NewRequest(http.MethodPost, "/ext/testext/stream", bytes.NewBufferString("not-json"))
-	req.SetPathValue("name", "testext")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 on non-JSON, got %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "not JSON") {
-		t.Errorf("refusal should mention not JSON, got: %q", w.Body.String())
-	}
-
-	// 3. DELETE reports 204
-	req = httptest.NewRequest(http.MethodDelete, "/ext/testext/stream", nil)
-	req.SetPathValue("name", "testext")
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("expected 204 on DELETE, got %d", w.Code)
+	s.ExtMCPHandler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "{name}") {
+		t.Fatalf("a nameless route should be refused by name, got %d %q", w.Code, w.Body.String())
 	}
 }

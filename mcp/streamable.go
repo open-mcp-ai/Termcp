@@ -94,9 +94,29 @@ func (sc *streamClient) close() {
 	sc.mu.Unlock()
 }
 
+// StreamHandler is everything the streamable transport needs from the thing on the
+// other side of it.
+//
+// THREE METHODS, AND THAT IS THE WHOLE DEPENDENCY. It used to be spelled `*Server`
+// at every call site, which made this transport unusable by anyone whose dispatch
+// is not this package's: an extension's own MCP server lives on a line-delimited
+// channel and answers by being typed at, so its "server" is a different type that
+// wants the same transport — session ids, the GET stream, real DELETE and the
+// correct status codes, all of which are this file's job and not a peer's (issue
+// #328). *Server satisfies this as it stands, so the existing call sites do not
+// change.
+type StreamHandler interface {
+	// Handle answers one inbound frame. nil means "a notification, nothing to say".
+	Handle(ctx context.Context, raw []byte, sess Session) []byte
+	// RegisterSession records a new session before the client has said anything.
+	RegisterSession(ctx context.Context, sess Session)
+	// UnregisterSession drops it and fires whatever teardown is owed.
+	UnregisterSession(ctx context.Context, sess Session)
+}
+
 // StreamableHTTPServer is the streamable-HTTP transport.
 type StreamableHTTPServer struct {
-	srv *Server
+	srv StreamHandler
 	// contextFunc lifts the HTTP request into handler context.
 	contextFunc func(context.Context, *http.Request) context.Context
 	// endpoint is the path this handler is mounted at, used for the GET stream's
@@ -118,7 +138,7 @@ func WithHTTPContextFunc(f func(context.Context, *http.Request) context.Context)
 }
 
 // NewStreamableHTTPServer builds the streamable-HTTP transport.
-func NewStreamableHTTPServer(srv *Server, opts ...StreamableOption) *StreamableHTTPServer {
+func NewStreamableHTTPServer(srv StreamHandler, opts ...StreamableOption) *StreamableHTTPServer {
 	s := &StreamableHTTPServer{srv: srv, sessions: map[string]*streamClient{}}
 	for _, opt := range opts {
 		opt(s)
@@ -179,7 +199,7 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		s.sessions[sess.id] = sess
 		s.mu.Unlock()
 		w.Header().Set(sessionHeader, sess.id)
-		s.srv.registerSession(ctx, sess)
+		s.srv.RegisterSession(ctx, sess)
 	}
 
 	if sess == nil {
@@ -194,9 +214,32 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(versionHeader, ProtocolVersion)
+	w.Header().Set(versionHeader, s.protocolVersion())
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(answer)
+}
+
+// VersionReporter is a handler that knows which protocol version its peer settled
+// on, which is not always this package's constant.
+//
+// AN EXTENSION NEGOTIATES FOR ITSELF (issue #328). Termcp speaks 2025-06-18 to its
+// own clients, but /ext/{name}/stream proxies a different server whose initialize
+// answer names its own version — and a client told 2025-06-18 by a server that
+// asked for something else will interpret the frames it gets by the wrong rules.
+// The version reported in the response header is therefore the peer's, when the
+// handler has one.
+type VersionReporter interface {
+	ProtocolVersion() string
+}
+
+// protocolVersion is the value for the versionHeader of a POST answer.
+func (s *StreamableHTTPServer) protocolVersion() string {
+	if r, ok := s.srv.(VersionReporter); ok {
+		if v := r.ProtocolVersion(); v != "" {
+			return v
+		}
+	}
+	return ProtocolVersion
 }
 
 func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +320,7 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 		ctx = s.contextFunc(ctx, r)
 	}
 	sess.close()
-	s.srv.unregisterSession(ctx, sess)
+	s.srv.UnregisterSession(ctx, sess)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -295,7 +338,7 @@ func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
 	s.mu.Unlock()
 	for _, sess := range sessions {
 		sess.close()
-		s.srv.unregisterSession(ctx, sess)
+		s.srv.UnregisterSession(ctx, sess)
 	}
 	return nil
 }

@@ -159,16 +159,19 @@ func (s *Server) OnMethod(method string, h InboundHandler) {
 	s.inbound[method] = h
 }
 
-// registerSession records a new session and fires the hook.
-func (s *Server) registerSession(ctx context.Context, sess Session) {
+// RegisterSession records a new session and fires the hook.
+//
+// EXPORTED because a transport now reaches it through StreamHandler rather than
+// being the same package (issue #328). The spelling change is the whole change.
+func (s *Server) RegisterSession(ctx context.Context, sess Session) {
 	s.sessions.Store(sess.SessionID(), sess)
 	for _, fn := range s.hooks.OnRegisterSession {
 		fn(ctx, sess)
 	}
 }
 
-// unregisterSession drops a session and fires the hook.
-func (s *Server) unregisterSession(ctx context.Context, sess Session) {
+// UnregisterSession drops a session and fires the hook.
+func (s *Server) UnregisterSession(ctx context.Context, sess Session) {
 	s.sessions.Delete(sess.SessionID())
 	for _, fn := range s.hooks.OnUnregisterSession {
 		fn(ctx, sess)

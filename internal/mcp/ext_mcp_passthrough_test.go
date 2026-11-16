@@ -1,65 +1,94 @@
 package mcp
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/open-mcp-ai/termcp/term/envelope"
+	"time"
 )
 
-// TestExtMCPForwardsThePeersFrameVerbatim pins issue #234's central promise: the
+// TestExtAnswerReachesTheClientByteForByte pins issue #234's central promise: the
 // client that connects to /ext/{name}/stream talks to the EXTENSION, so what it
 // reads is the peer's own frame — its serverInfo, its tools, its answers.
 //
-// Two halves of that promise are checked here, because both have a tempting wrong
-// answer that looks fine until a real client is on the other end:
-//
-//  1. A JSON-RPC body is returned unchanged. Anything this project appends to a
-//     reply for a human reader (a Hint header, a note after the body) would be a
-//     parse error for an MCP client, so the body has to survive untouched.
-//  2. A body that is NOT a JSON-RPC message is refused as a gateway error rather
-//     than forwarded. Sending it would hand the client a "response" it cannot
-//     parse, and the failure would surface later as a mysterious protocol error
-//     instead of as "this extension did not answer with a frame".
-func TestExtMCPForwardsThePeersFrameVerbatim(t *testing.T) {
-	s := &Server{}
-
-	// 1. A peer's frame comes back byte for byte, as JSON.
-	frame := `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"mock-calc","version":"1.0.0"}}}`
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/ext/any/stream", nil)
-	s.extMCPWriteSlot(rec, req, envelope.Slot{Code: 200, Body: frame})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("a JSON-RPC body should be returned 200, got %d", rec.Code)
-	}
-	if got := rec.Body.String(); got != frame {
-		t.Fatalf("the peer's frame must be returned verbatim.\n want: %s\n  got: %s", frame, got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Fatalf("a client accepting JSON should get application/json, got %q", ct)
+// IT USED TO BE TESTED THROUGH extMCPWriteSlot, the hand-written writer that
+// converted a directive slot into an HTTP response. That writer is gone: the
+// transport writes the answer now, and what the endpoint owes is that the BYTES it
+// hands the transport are the peer's. That is what this pins — every member the
+// reply carried, in the order the peer wrote them, with only the id restored.
+func TestExtAnswerReachesTheClientByteForByte(t *testing.T) {
+	ep, ch := newTestEndpoint(t)
+	sess := newExtTestSession("client")
+	ep.RegisterSession(context.Background(), sess)
+	defer ep.UnregisterSession(context.Background(), sess)
+	if _, err := ep.ensureChannel(context.Background()); err != nil {
+		t.Fatalf("ensureChannel: %v", err)
 	}
 
-	// 2. A non-frame answer is a 502, not a body the client cannot parse.
-	rec = httptest.NewRecorder()
-	s.extMCPWriteSlot(rec, req, envelope.Slot{Code: 200, Body: "python: command not found"})
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("a non-JSON-RPC answer should be a 502, got %d", rec.Code)
+	answerCh := make(chan string, 1)
+	go func() {
+		answerCh <- string(ep.Handle(context.Background(),
+			[]byte(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"calc"}}`), sess))
+	}()
+
+	var upstream string
+	deadline := time.Now().Add(2 * time.Second)
+	for upstream == "" && time.Now().Before(deadline) {
+		if frames := ch.take(); len(frames) > 0 {
+			upstream = frames[0]
+		} else {
+			time.Sleep(2 * time.Millisecond)
+		}
 	}
-	if !strings.Contains(rec.Body.String(), "not a JSON-RPC message") {
-		t.Errorf("the 502 should say what went wrong, got: %q", rec.Body.String())
+	if upstream == "" {
+		t.Fatal("the request never reached the peer")
 	}
 
-	// 3. A client that accepts only an event stream gets one, wrapping the same frame.
-	rec = httptest.NewRecorder()
-	sseReq := httptest.NewRequest(http.MethodPost, "/ext/any/stream", nil)
-	sseReq.Header.Set("Accept", "text/event-stream")
-	s.extMCPWriteSlot(rec, sseReq, envelope.Slot{Code: 200, Body: frame})
-	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("an event-stream client should get text/event-stream, got %q", ct)
+	// A reply with members this project does not model, in an order it would not
+	// choose, and a nested object that holds a comma — re-encoding would change all
+	// three.
+	peerReply := `{"jsonrpc":"2.0","result":{"zeta":1,"alpha":[2,3],"content":[{"type":"text","text":"ok"}]},"id":` + frameID(upstream) + `}`
+	ch.inbound <- []byte(peerReply + "\n")
+
+	select {
+	case got := <-answerCh:
+		want := strings.Replace(peerReply, `"id":`+frameID(upstream), `"id":5`, 1)
+		if got != want {
+			t.Fatalf("the reply was changed on the way to the client.\n want: %s\n  got: %s", want, got)
+		}
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(got), &probe); err != nil {
+			t.Fatalf("the answer is not JSON: %s", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client never got its answer")
 	}
-	if !strings.Contains(rec.Body.String(), "data: "+frame) {
-		t.Errorf("the frame should ride in an SSE data line, got: %q", rec.Body.String())
+}
+
+// TestExtNonFrameAnswerIsNeverSentAsOne: ordinary output from the peer (a crash
+// message, a banner) is not a JSON-RPC message, and handing it to an MCP client
+// would surface later as a mysterious protocol error instead of "the extension did
+// not answer with a frame". The pump skips it, so the request times out with a
+// sentence — which is the honest outcome.
+func TestExtNonFrameAnswerIsNeverSentAsOne(t *testing.T) {
+	ep, ch := newTestEndpoint(t)
+	sess := newExtTestSession("client")
+	ep.RegisterSession(context.Background(), sess)
+	defer ep.UnregisterSession(context.Background(), sess)
+	if _, err := ep.ensureChannel(context.Background()); err != nil {
+		t.Fatalf("ensureChannel: %v", err)
+	}
+
+	ch.inbound <- []byte("python: command not found\n")
+
+	answer := ep.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":6,"method":"tools/call"}`), sess)
+	if !strings.Contains(string(answer), `"error"`) {
+		t.Fatalf("a peer that printed a crash message must become an error, got: %s", answer)
+	}
+	for _, s := range sess.frames() {
+		if strings.Contains(s, "command not found") {
+			t.Fatalf("the peer's stdout reached the client as a frame: %s", s)
+		}
 	}
 }
