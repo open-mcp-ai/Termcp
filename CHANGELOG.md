@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 修复
+
+- **连接对话框的布局探针不再偶发失败**：`TestConnectionTestVerdictLandsInsideTheDialog` 断言的是「表单比对话框高时必须滚动」这个前提，而它把 1280x720 当成一个已知会滚动的视口。实测该视口下内容 753px、可视 646px，本该滚动——但探针在 `openConnModal` 可用时就开跑，那时样式链（`theme.css` → `@import app.css` → `base.css` 的 `max-height: 90vh`）可能还没到，于是 `scrollHeight == clientHeight`，探针就报「对话框不再溢出」。装机的机器上偶尔命中。现在两件事分开：等 `max-height` 解析成像素值再量（`none` = 样式没到，是探针自己的问题），并且**不再假设哪个视口会滚动**——依次试 720/640/560，用第一个确实滚动的；一个都不滚动才失败，且错误消息区分「样式没到」与「表单真的变短了」。
+
 
 ## v0.2.10-rc.1 — 2026-11-13
 
