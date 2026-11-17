@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### 新功能
+
+- **`notifications/cancelled` 真的会停掉那次调用（#327 第 1 条）**：过去这条通知被归进「什么都不做」那一档，取消只在 HTTP 断连时生效——客户端礼貌地取消一个 60s 的读，SSH 侧的工作继续跑完。现在每个带 id 的请求在 dispatch 前拿到自己的 `context.CancelFunc`，登记在一张 (request id → cancel) 表里；通知到达时调对应的 cancel，未知 id 按规范忽略（取消和回包撞在一起是竞态，不是错误）。
+- **会话会自己过期（#327 第 2 条）**：DELETE 过去是唯一的出口，客户端崩溃/被杀/断网就永久占一个 session 槽、一个扇出槽和 `Connections()` 里的一行。现在每个 session 记最后活动时间，超过 `2 × keepalive`（60s）且没有开着的 GET 流就回收并走 `unregisterSession`；开着 GET 的一律不动——一条流就是活着的证明。
+- **`MCP-Protocol-Version` 被读而不只是写（#327 第 3 条）**：POST 上读该头，不认识的版本回 400 并点名本实例支持的版本。`initialize` 之前或之后缺这个头都放行——握手才是协商版本的地方，而这个头在规范里是可选的。
+- **帧窗口的地板从 1 MiB 抬到 8 MiB（#327 第 4 条）**：`call` / `recv` 的默认窗口过去被 `minRecvWindow` 锁在 1 MiB，而传输层的帧上限本来就是 8 MiB——一个返回 base64 截图或大 JSON 的 MCP 工具因此永远送不出来，MCP 又没有分块可重试。现在地板与传输上限一致，`bytes_limit` 仍可上下覆盖；413 的正文点名这个旋钮。
+- **进度有了通道也有了生产者（#327 第 5 条）**：带 `_meta.progressToken` 且 `Accept: text/event-stream` 的 POST 现在回一条事件流——请求在响应还开着的时候执行，工具写的进度帧边产生边写出，结果最后写。`_meta` 过去解析完就丢，POST 恒回 JSON，所以进度帧连「搭在同一次调用的响应里」这条路都没有。生产者已接上 `--until` 的等待循环：等待期间按已用时间/总窗口报进度。
+- **`term` 工具带 `title`，`Tool` 支持 `outputSchema`（#327 第 6 条）**：`title` 是给人看的显示名（`term` 是机器名，客户端菜单里只有它），`outputSchema` 用 `json.RawMessage` 原样透传、不校验——服务器拿自己的输出验证自己声明的 schema 什么也证明不了，要保证的客户端手里有 schema。
+- **`completion/complete` 从指令词表作答（#327 第 7 条）**：`cmd: "cl"` 返回 `close`，不存在的前缀返回空列表而不是错误。词表来自 `term/directive`，不是第二份要维护的清单；只有 `cmd` 这个参数会被补全，地址是运行时事实，属于 `ls` 不属于语法。能力声明跟着注册走——没有 provider 就不在 `initialize` 里声明，声明了却回 method-not-found 比不声明更糟。
+
 
 ## v0.2.10-rc.1 — 2026-11-13
 

@@ -254,7 +254,9 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 			return envelope.Slot{Code: 413, Headers: map[string]string{
 				"Path": stmt.Path, "Error-Code": "frame_too_large",
 				"Content-Range": envelope.UnsatisfiedRange(total),
-			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window", from, window)}, false
+			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window; raise bytes_limit "+
+				"(the transport refuses a frame over %d bytes, so a larger window buys nothing past that)",
+				from, window, minRecvWindow)}, false
 		}
 		// THE EXPLANATION IS A HEADER, NOT A BODY (see noContentSaying). "no complete
 		// frame yet" is true of a slow peer and of a peer whose bytes will never parse,
@@ -392,8 +394,17 @@ func recvWindow(win termArgs) time.Duration {
 // defaultBytesLimit is the tool's default for a READ, where a caller usually wants
 // a screenful. A JSON-RPC frame is a different unit: an initialize result with
 // instructions is routinely larger than that, and a window smaller than one frame
-// makes it undeliverable. 1 MiB is far past any legitimate frame and still a bound.
-const minRecvWindow = 1 << 20
+// makes it undeliverable.
+//
+// IT MATCHES THE TRANSPORT'S FRAME CEILING (#327). It used to be 1 MiB, which made a
+// tool returning a base64 screenshot or a large JSON document permanently
+// undeliverable: MCP has no chunking to retry with, so the frame was not "late", it
+// was gone. The transport already refuses a frame over 8 MiB (sse.go's maxFrame) and
+// that refusal names the limit; a read window smaller than what the transport allows
+// in is a wall this package invented for itself.
+//
+// A caller that names bytes_limit still overrides it, up and down.
+const minRecvWindow = 8 << 20
 
 // recvCursor and setRecvCursor keep one read position per channel.
 //

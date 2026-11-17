@@ -103,9 +103,19 @@ type Server struct {
 	// uses would be an implementation nobody verifies against a moving spec.
 	inbound map[string]InboundHandler
 
+	// completions answers completion/complete. Registered through OnComplete, and
+	// claimed in initialize's capabilities only when one is (issue #327): a client
+	// that reads "completions: {}" will ask, and answering method-not-found to
+	// something the server said it supports is a worse lie than saying nothing.
+	completions CompletionHandler
+
 	sessions sync.Map // session id -> Session
-	seq      atomic.Uint64
-	closed   atomic.Bool
+	// cancels routes notifications/cancelled onto the request it names (#327).
+	// The value is a context.CancelFunc: an id is a promise that "stop this" has
+	// somewhere to arrive.
+	cancels sync.Map // request id string -> context.CancelFunc
+	seq     atomic.Uint64
+	closed  atomic.Bool
 }
 
 // NewServer builds a protocol endpoint.
@@ -133,6 +143,18 @@ func (s *Server) AddTool(t Tool, h ToolHandler) {
 func (s *Server) AddPrompt(p Prompt, h PromptHandler) {
 	s.prompts[p.Name] = p
 	s.promptHandlers[p.Name] = h
+}
+
+// CompletionHandler answers completion/complete.
+//
+// It is a separate registration rather than a special InboundHandler so the
+// capability claim and the implementation cannot disagree: registering one is what
+// makes initialize advertise the surface.
+type CompletionHandler func(ctx context.Context, params json.RawMessage) (any, *RPCError)
+
+// OnComplete registers the completion provider, which also claims the capability.
+func (s *Server) OnComplete(h CompletionHandler) {
+	s.completions = h
 }
 
 // InboundHandler answers a method this package does not model.
@@ -218,7 +240,26 @@ func (s *Server) Handle(ctx context.Context, raw []byte, sess Session) []byte {
 	// A frame with no id is a notification: no answer is sent, ever.
 	isNotification := IDString(req.ID) == ""
 
-	result, rpcErr := s.dispatch(WithSessionContext(ctx, sess), &req, sess)
+	// A REQUEST GETS A DOOR BEFORE IT IS DISPATCHED (#327). Until this existed, the
+	// only thing that could stop a long tool call was the HTTP connection closing,
+	// so a client that politely sent notifications/cancelled was ignored and the
+	// work — an SSH read, a 60-second command — ran to completion for nobody.
+	//
+	// Registered here rather than inside a tool so it covers every method this
+	// server answers, including the registered escape hatches.
+	reqID := IDString(req.ID)
+	callCtx := WithSessionContext(ctx, sess)
+	if !isNotification && reqID != "" {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithCancel(callCtx)
+		s.cancels.Store(reqID, cancel)
+		defer func() {
+			s.cancels.Delete(reqID)
+			cancel()
+		}()
+	}
+
+	result, rpcErr := s.dispatch(callCtx, &req, sess)
 	if isNotification {
 		return nil
 	}
@@ -226,6 +267,29 @@ func (s *Server) Handle(ctx context.Context, raw []byte, sess Session) []byte {
 		return s.encodeError(req.ID, rpcErr.Code, rpcErr.Message)
 	}
 	return s.encodeResult(req.ID, result)
+}
+
+// cancelRequest stops the call whose id the notification named.
+//
+// UNKNOWN IDS ARE IGNORED, which is the spec's rule and also the only sane one: a
+// client that cancels at the same moment the answer is being written is racing, and
+// reporting "no such request" would turn a harmless race into a protocol error.
+func (s *Server) cancelRequest(params json.RawMessage) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return
+		}
+	}
+	key := IDString(p.RequestID)
+	if key == "" {
+		return
+	}
+	if cancel, ok := s.cancels.Load(key); ok {
+		cancel.(context.CancelFunc)()
+	}
 }
 
 // dispatch routes one method. It returns either a result to encode or an error.
@@ -263,6 +327,12 @@ func (s *Server) dispatch(ctx context.Context, req *Request, sess Session) (any,
 	case "prompts/list":
 		return s.listPrompts(), nil
 
+	case "completion/complete":
+		if s.completions == nil {
+			return nil, &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + req.Method}
+		}
+		return s.completions(ctx, req.Params)
+
 	case "prompts/get":
 		var p GetPromptRequest
 		if err := json.Unmarshal(req.Params, &p.Params); err != nil {
@@ -270,7 +340,15 @@ func (s *Server) dispatch(ctx context.Context, req *Request, sess Session) (any,
 		}
 		return s.getPrompt(ctx, &p)
 
-	case "notifications/initialized", "notifications/cancelled", "notifications/roots/list_changed":
+	case "notifications/cancelled":
+		// A CANCELLATION IS AN INSTRUCTION, NOT A NO-OP (#327). The params carry the
+		// id of the request to stop; an id this server is not running is ignored, as
+		// the spec requires — a client that cancels late is racing the answer, and
+		// that is not an error.
+		s.cancelRequest(req.Params)
+		return nil, nil
+
+	case "notifications/initialized", "notifications/roots/list_changed":
 		return nil, nil
 
 	default:
@@ -296,6 +374,13 @@ func (s *Server) initialize(ctx context.Context, p *InitializeRequest, sess Sess
 	}
 	if len(s.prompts) > 0 {
 		caps.Prompts = &ListChangedCapability{}
+	}
+	if s.completions != nil {
+		// CLAIMED BECAUSE IT IS IMPLEMENTED, not because the spec has the field: a
+		// client that reads the claim will send completion/complete, and answering
+		// method-not-found to a surface the server advertised is a worse lie than
+		// advertising nothing (issue #327).
+		caps.Completions = &ListChangedCapability{}
 	}
 	res := &InitializeResult{
 		ProtocolVersion: ProtocolVersion,
