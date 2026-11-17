@@ -55,7 +55,7 @@ func TestADisabledTemplateIsStillDisabledAfterARestart(t *testing.T) {
 	before := make(map[string]string, n)
 	for i := 0; i < n; i++ {
 		name := "ext-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
-		body := "kind = \"mcp\"\ntarget = \"internal\"\nmode = \"pipe\"\nenabled = false\ncommand = \"true\"\n"
+		body := "target = \"internal\"\nmode = \"pipe\"\nenabled = false\ncommand = \"true\"\n"
 		writeRawTemplate(t, store, name, body)
 		before[name] = body
 	}

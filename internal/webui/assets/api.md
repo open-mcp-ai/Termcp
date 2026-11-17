@@ -1870,6 +1870,17 @@ row/card; its panel shows only host and forward counts, while its detail view sh
 the per-host status and forward addresses. `open ext <name> --target <host>` selects
 one host; an omitted target is refused if the extension declares more than one.
 
+**A `[[targets]]` entry is a host binding and nothing else.** It takes `host` (or
+`target`) and `forwards` (or `forward`), and any other key is refused with the key
+named — `command`, `args`, `mode`, `resident` and `allow` belong to the extension,
+not to one of its hosts. The refusal is deliberate rather than pedantic: an ignored
+key used to parse cleanly and produce a template shorter than the one that was
+written, so an author experimenting on a shape would be reasoning about a document
+they no longer had. A misspelled key at the top level is refused the same way, and a
+key from a newer version is refused with the spelling explanation rather than
+silently dropped. A value of the wrong type is a different message, because it has a
+different fix.
+
 **A template that declares no `forwards` is started on demand.** Nothing is
 dialled until a caller asks, and the ask is the MCP tool's `action=use` (or
 `open ext <name>` on the terminal surface); it answers with the
