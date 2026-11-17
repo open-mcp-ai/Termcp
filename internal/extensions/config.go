@@ -14,6 +14,7 @@ package extensions
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -597,13 +598,43 @@ func validEndpointURL(raw string) error {
 
 // Parse decodes TOML bytes into an Extension without validating. Callers that
 // round-trip a file through an editor use this; Save validates separately.
+//
+// AN UNKNOWN KEY IS REFUSED (issue #332). TOML decoding drops keys the struct does
+// not name, so a hand-written `[[targets]]` entry carrying `command = "node"` or a
+// misspelled `comand` parses cleanly, produces a template with the key missing, and
+// reports success. The author then reasons about a document they no longer have.
+//
+// The decoder's own Undecoded() list is exactly the caller's unknown-key list, and
+// it is what internal/sshconfig already uses for the same reason (issue #249.4).
+//
+// THE MESSAGE DISTINGUISHES TWO KINDS OF MISTAKE, because they have different
+// fixes: a key nothing reads is a version difference or a word that does not exist
+// (change the word, or upgrade); a value of the wrong type is a document that says
+// the right thing in the wrong shape (fix the value). Only the first can come from
+// Undecoded — a type error fails the decode itself and is reported by the library,
+// which is why the two never arrive in the same message.
 func Parse(data []byte) (*Extension, error) {
 	if len(data) > MaxConfigSize {
 		return nil, fmt.Errorf("extension config too large (max %d bytes)", MaxConfigSize)
 	}
 	var e Extension
-	if err := toml.Unmarshal(data, &e); err != nil {
-		return nil, fmt.Errorf("extension toml: %w", err)
+	md, err := toml.Decode(string(data), &e)
+	if err != nil {
+		// The decoder's own error names the key and the expected type, so it is
+		// passed through with one sentence of framing rather than re-worded.
+		return nil, fmt.Errorf("extension toml: %w (a key that exists with the wrong type is a shape mistake, "+
+			"not a missing feature)", err)
+	}
+	if und := md.Undecoded(); len(und) > 0 {
+		names := make([]string, len(und))
+		for i, k := range und {
+			names[i] = k.String()
+		}
+		sort.Strings(names)
+		return nil, fmt.Errorf("this template has %s that nothing reads, so the value would be ignored. "+
+			"Check the spelling, or the version that introduced the key: a target is a host binding and takes only "+
+			"%s; a process belongs to the extension, so put it at the top level",
+			quoteWords(names), quoteWords(targetDeclKeys))
 	}
 	return &e, nil
 }

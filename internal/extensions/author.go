@@ -2,6 +2,8 @@ package extensions
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -173,8 +175,27 @@ func SaveStruct(store *Store, ext *Extension) error {
 	return store.Save(ext)
 }
 
+// targetDeclKeys is every key a target object may carry. Anything else is refused
+// rather than ignored — see ParseTargetDecls.
+var targetDeclKeys = []string{"host", "target", "forwards", "forward"}
+
 // ParseTargetDecls decodes a targets list: shorthand host strings ("node1") or
 // full target objects ({ host: "node1", forwards: [...] }).
+//
+// AN UNKNOWN KEY IS REFUSED, NOT IGNORED (issue #332). A target object used to read
+// `host` and `forwards` and drop everything else, so `--targets '[{"host":"a",
+// "command":"node"}]'` answered 200 and stored a template with the command gone. The
+// author then experimented on a shape that had already changed under them: this
+// repository has done exactly that once, three experiment rounds wasted, and the
+// conclusion drawn was "this shape is unsupported" when the real cause was the key
+// being eaten.
+//
+// The same rule ParseForwardDecls states — "a silently shortened list is a template
+// the author did not write" — applies to an object's keys, because the loss is the
+// same and it is harder to notice.
+//
+// The refusal NAMES the key and points at where it belongs: a target is a host
+// binding, not a second place to declare a process.
 func ParseTargetDecls(v any) ([]TargetDecl, error) {
 	if v == nil {
 		return nil, nil
@@ -192,6 +213,9 @@ func ParseTargetDecls(v any) ([]TargetDecl, error) {
 			host := optString(m, "host", "")
 			if host == "" {
 				host = optString(m, "target", "")
+			}
+			if err := refuseUnknownTargetKeys(i+1, host, m); err != nil {
+				return nil, err
 			}
 			var forwards []ForwardDecl
 			if hasOpt(m, "forwards") {
@@ -213,6 +237,47 @@ func ParseTargetDecls(v any) ([]TargetDecl, error) {
 		}
 	}
 	return out, nil
+}
+
+// refuseUnknownTargetKeys fails when a target object carries a key nothing reads.
+//
+// SORTED AND NAMED: the caller's next action is to fix these words, and every word
+// named here is one they wrote. A count or a "unknown field" would send them looking.
+func refuseUnknownTargetKeys(index int, host string, m map[string]any) error {
+	known := make(map[string]bool, len(targetDeclKeys))
+	for _, k := range targetDeclKeys {
+		known[k] = true
+	}
+	var unknown []string
+	for k := range m {
+		if !known[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	where := ""
+	if host != "" {
+		where = " (" + host + ")"
+	}
+	return fmt.Errorf("targets #%d%s has %s that nothing reads, so the value would be ignored: "+
+		"a target is a host binding and takes only %s. "+
+		"A process belongs to the extension: put %q at the top level, or wait for [[channel]] (template v2)",
+		index, where, quoteWords(unknown), quoteWords(targetDeclKeys), unknown[0])
+}
+
+// quoteWords renders keys as a readable list: `"a"`, `"a" and "b"`, `"a", "b" and "c"`.
+func quoteWords(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	if len(q) == 1 {
+		return "the key " + q[0]
+	}
+	return "the keys " + strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
 }
 
 // ParseForwardDecls turns the JSON array an author sent into forward

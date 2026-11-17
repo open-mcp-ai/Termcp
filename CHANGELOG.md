@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 修复
+
+- **`--targets` 与 `[[targets]]` 里的未知键不再被静默丢弃（#332）**：`ParseTargetDecls` 只读 `host`/`target` 与 `forwards`/`forward`，其余键既不应用也不报错；`toml.Unmarshal` 同样不检查未解码键。于是 `--targets '[{"host":"a","command":"node"}]'` 答 200，存下来的模板里 `command` 已经没了——作者据此做实验会得出错误结论，本仓库已经因此白做过三组实验，最后归因为「这个形态不支持」，真实原因是键被吃掉了。现在两侧都拒绝并点名键：JSON 侧遍历对象键，TOML 侧用解码器的 `Undecoded()`（`internal/sshconfig` 早已为同一原因这么做过），消息里说清键该放哪里。类型不对仍由解码器报，两者不混为一谈——前者是拼写或版本差异，后者是值的形状。
+
 
 ## v0.2.10-rc.1 — 2026-11-13
 

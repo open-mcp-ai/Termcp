@@ -346,7 +346,12 @@ func writeStaleTemplate(t *testing.T, s *Store, name string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	body := "kind = \"skill\"\ntarget = \"internal\"\n"
+	// NOT A `kind`: nothing reads that key, and the strict decoder now refuses it —
+	// which would make this file unloadable for a different reason than the one the
+	// test is about. A template with no target and no channel is invalid on its own
+	// terms, so the file is still exactly what this fixture promises: parseable, and
+	// not a working extension.
+	body := "mode = \"pipe\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

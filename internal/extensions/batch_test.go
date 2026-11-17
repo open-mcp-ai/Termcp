@@ -174,10 +174,10 @@ func TestImportDocumentRejectsBrokenDocuments(t *testing.T) {
 	}{
 		{"unknown table", "[[hosts]]\nname = \"x\"\n"},
 		{"no entries", "[extensions]\n"},
-		{"missing name", "[[extensions]]\nkind = \"skill\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"},
-		{"invalid name", "[[extensions]]\nname = \"bad name\"\nkind = \"skill\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"},
-		{"invalid template", "[[extensions]]\nname = \"no-shell\"\nkind = \"mcp\"\ntarget = \"\"\n"},
-		{"skill without paths", "[[extensions]]\nname = \"empty-window\"\nkind = \"skill\"\ntarget = \"internal\"\n"},
+		{"missing name", "[[extensions]]\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"},
+		{"invalid name", "[[extensions]]\nname = \"bad name\"\ntarget = \"internal\"\npaths = [\"/srv/\"]\n"},
+		{"invalid template", "[[extensions]]\nname = \"no-shell\"\ntarget = \"\"\n"},
+		{"skill without paths", "[[extensions]]\nname = \"empty-window\"\ntarget = \"internal\"\n"},
 	} {
 		if _, err := s.ImportDocument([]byte(tc.doc)); err == nil {
 			t.Errorf("%s: import should have been refused", tc.name)
