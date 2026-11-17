@@ -103,12 +103,15 @@ var ops = []Op{
 		// the key position — there is no session to name, because the reconciler owns
 		// the container — which is why TargetOptional is set for it alone below.
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "ext"},
+		// `channel` SELECTS ONE OF AN EXTENSION'S PROCESSES (issue #331). It is declared
+		// on `open` because that is the verb that hands back a handle, and an extension
+		// may now have more than one to hand back.
 		Flags: []string{"pipe", "pty", "argv", "name", "on-exit:enum=keep,close", "rows:number", "cols:number",
 			"size:geometry", "bind-host", "remote-host", "remote-port:number", "local-port:number",
-			"local-host", "dynamic", "remote", "target", "all"},
+			"local-host", "dynamic", "remote", "target", "channel", "all"},
 		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
-		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
+		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name> [--channel <name>]   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
 	{Name: "ls", Core: true, Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true,
 		Kinds:     []string{"forward", "file", "host", "ext", "alias", "cdp", "mcp", "jrpc", "task"},

@@ -1181,6 +1181,13 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if v, ok := stmt.Flag("target"); ok && strings.TrimSpace(v) != "" {
 		target = strings.TrimSpace(v)
 	}
+	// A NAMED CHANNEL (issue #331). `open ext <name> --channel worker` asks for the
+	// worker process; leaving it out asks for the default, which is what this verb
+	// meant before a template could hold more than one.
+	channelName := ""
+	if v, ok := stmt.Flag("channel"); ok && strings.TrimSpace(v) != "" {
+		channelName = strings.TrimSpace(v)
+	}
 	// WORDS THIS FORM CANNOT HONOR ARE REFUSED, NOT IGNORED.
 	if stmt.Target != "" {
 		return badRequest(stmt, "open ext names no session: the extension's connection belongs to the reconciler. "+
@@ -1195,6 +1202,9 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	args := map[string]any{"action": "use", "name": name}
 	if target != "" {
 		args["target"] = target
+	}
+	if channelName != "" {
+		args["channel"] = channelName
 	}
 	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {

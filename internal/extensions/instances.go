@@ -75,12 +75,26 @@ func (r *Reconciler) reapEnded(name string, st *extState) {
 // instance: a host that is slow to answer returns `probing` with what to poll
 // rather than a failure the caller would have to guess was not one.
 func (r *Reconciler) Acquire(name string, wait time.Duration) (Status, error) {
-	return r.AcquireTarget(name, "", wait)
+	return r.AcquireChannel(name, "", "", wait)
 }
 
 // AcquireTarget brings up an instance on a specific host of an extension. An
 // empty target is accepted only when the extension declares exactly one host.
+//
+// Kept as the name the callers that only care about a host use; a channel selector
+// is one word further, in AcquireChannel.
 func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Status, error) {
+	return r.AcquireChannel(name, target, "", wait)
+}
+
+// AcquireChannel brings up one channel of an extension on one host (issue #331).
+//
+// AN EMPTY CHANNEL MEANS THE DEFAULT, resolved through EffectiveChannels so `open
+// ext`, the MCP route and an unqualified Acquire cannot disagree about which process
+// they mean. A named channel that the template does not declare is refused by name:
+// silently handing back the default would be a caller driving a process it did not
+// ask for.
+func (r *Reconciler) AcquireChannel(name, target, channel string, wait time.Duration) (Status, error) {
 	ext, err := r.store.Load(name)
 	if err != nil {
 		return Status{}, err
@@ -99,6 +113,20 @@ func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Sta
 			return Status{}, fmt.Errorf("extension %q has no target %q", name, target)
 		}
 		return Status{}, fmt.Errorf("extension %q has no targets configured", name)
+	}
+	// A NAMED CHANNEL HAS TO EXIST BEFORE ANYTHING IS DIALED (issue #331). Checking
+	// after the connection is up would answer a typo with a dial.
+	if channel != "" {
+		if _, ok := ext.ChannelFor(channel); !ok {
+			names := make([]string, 0)
+			for _, c := range ext.EffectiveChannels() {
+				names = append(names, c.Label())
+			}
+			if len(names) == 0 {
+				return Status{}, fmt.Errorf("extension %q declares no channels", name)
+			}
+			return Status{}, fmt.Errorf("extension %q has no channel %q (declared: %s)", name, channel, strings.Join(names, ", "))
+		}
 	}
 	targetHost := tDecl.Host
 	view := forTarget(ext, targetHost)
@@ -122,7 +150,7 @@ func (r *Reconciler) AcquireTarget(name, target string, wait time.Duration) (Sta
 
 	state.want()
 	state.setIdleLimit(limit)
-	sid, shellID, _, _, err := r.bringUp(context.Background(), &view, state, true)
+	sid, shellID, _, _, err := r.bringUp(context.Background(), &view, state, true, channel)
 	if err != nil {
 		got, _ := r.Status(name)
 		return got, nil
@@ -181,7 +209,7 @@ func (r *Reconciler) instanceEndReason(sess *session.Session, shellID string) st
 // failure stages, the budget, the status — is the same work, which is why it is one
 // function: two copies of it is how the two paths start disagreeing about what
 // "dial failed" means.
-func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, fresh bool) (sessionID, shellID, label, stage string, err error) {
+func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, fresh bool, channel string) (sessionID, shellID, label, stage string, err error) {
 	name := st.name()
 	plan, err := r.resolve(ext)
 	if err != nil {
@@ -205,9 +233,14 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 
 	if fresh {
 		label = ""
-		if plan.shell {
+		// A FRESH INSTANCE IS ONE CALLER'S CHANNEL, which is #183's rule and unchanged
+		// by #331: the ask names ONE channel, and that is what this caller gets. A
+		// template with several channels is served by the reconciler's own instance,
+		// where every channel is up; a per-caller instance is one process by design.
+		ch, hasChannel := plan.channelFor(channel)
+		if hasChannel && ch.shell {
 			label = st.nextLabel(ext)
-			shell, cerr := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, label)
+			shell, cerr := sess.CreateChildShell(ch.command, ch.args, ch.pty, ch.rows, ch.cols, label)
 			if cerr != nil {
 				r.fail(st, "start", cerr.Error())
 				return "", "", "", "start", cerr
@@ -238,14 +271,18 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		return sess.ID, shellID, label, "", nil
 	}
 
-	shellID, err = r.ensureMemberShell(plan, st, sess)
+	shells, err := r.ensureChannels(plan, st, sess)
 	if err != nil {
 		// The connection is up and shared; only this extension's process failed to
 		// start, so the retry is a channel open rather than a redial.
 		r.fail(st, "start", err.Error())
 		return "", "", "", "start", err
 	}
-	st.attach(sess.ID, shellID)
+	shellID = shells[""]
+	// EVERY CHANNEL'S SHELL IS RECORDED, not just the default's (issue #331). The
+	// default stays in shellID because a dozen readers mean "the channel"; the map
+	// is what makes `--channel <name>` answerable and what a status report walks.
+	st.attachChannels(sess.ID, shells)
 	// A fresh instance starts with a fresh clock, or the first sync after it came up
 	// reads the moment of the ASK as its last use and reaps it early.
 	st.touch()

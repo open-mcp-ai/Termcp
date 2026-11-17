@@ -55,12 +55,61 @@ type hostPlan struct {
 	// own, since every extension brings its own.
 	config  session.Config
 	channel string // the channel's name, so a shared session says which extension a shell belongs to
+	// channels is every process this extension asks for (issue #331). A template with
+	// no [[channel]] list has exactly one here, derived from its command/url/mode, so
+	// the single-channel path is the same code with one element.
+	channels []channelPlan
+}
+
+// channelPlan is one channel resolved against a profile: the argv to start, or the
+// relay argv for an endpoint.
+type channelPlan struct {
+	// name is the channel's identity in reports and in `--channel`. The derived
+	// single channel has the empty name, which is what makes an unqualified ask mean
+	// "the default" without a special case anywhere.
+	name    string
 	command string
 	args    []string
-	shell   bool // the template declares a shell (false = SFTP/forwards only)
+	shell   bool // false = SFTP/forwards only, or an endpoint served by the relay
 	pty     bool
 	rows    int
 	cols    int
+	// via is the host the RELAY dials from, empty when the relay runs where the
+	// session is. It is per channel because a template may hold one endpoint that
+	// leaves from elsewhere and one worker program that does not (issue #330).
+	via string
+}
+
+// channelFor returns the plan for a named channel, or the default when the name is
+// empty. found is false when the template declares channels but none by that name.
+func (p hostPlan) channelFor(name string) (channelPlan, bool) {
+	if len(p.channels) == 0 {
+		return channelPlan{}, false
+	}
+	if name == "" {
+		return p.defaultChannel()
+	}
+	for _, c := range p.channels {
+		if c.name == name {
+			return c, true
+		}
+	}
+	return channelPlan{}, false
+}
+
+// defaultChannel is the channel an unqualified ask means: the one marked default, or
+// the first. One helper, because `open ext`, Acquire and the MCP route all ask this
+// question and three answers is how they start pointing at different processes.
+func (p hostPlan) defaultChannel() (channelPlan, bool) {
+	if len(p.channels) == 0 {
+		return channelPlan{}, false
+	}
+	for _, c := range p.channels {
+		if c.name == "" || c.name == "channel" {
+			return c, true
+		}
+	}
+	return p.channels[0], true
 }
 
 // groupNamed reports whether any state still resolves to this connection.
@@ -264,21 +313,69 @@ func (r *Reconciler) attachedSession(st *extState) *session.Session {
 // channel is still running keeps it, so a retry after a tunnel failure does not
 // restart the process.
 func (r *Reconciler) ensureMemberShell(plan hostPlan, st *extState, sess *session.Session) (string, error) {
-	if !plan.shell {
-		return "", nil
-	}
-	if shell := liveShell(sess, st.shellOf()); shell != nil {
-		return shell.ID, nil
-	}
-	shell, err := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, plan.channel)
+	shells, err := r.ensureChannels(plan, st, sess)
 	if err != nil {
 		return "", err
 	}
+	return shells[""], nil
+}
 
-	if err := r.waitForStart(sess, shell); err != nil {
-		return "", err
+// ensureChannels brings up every channel the plan declares and returns their shell
+// ids keyed by channel name (issue #331).
+//
+// THE DEFAULT CHANNEL KEEPS THE EMPTY NAME. That is what lets the whole existing
+// single-channel path — `st.attach`, forwards, the end reason, the status field —
+// go on meaning what it meant: there is one channel, it is the default, and its name
+// is the absence of one. A template that writes [[channel]] entries fills the map
+// with named entries beside it.
+//
+// A CHANNEL THAT IS STILL RUNNING IS KEPT. A retry after a tunnel failure must not
+// restart a process that is serving a caller, so each channel is looked up by its own
+// recorded shell id before one is created.
+func (r *Reconciler) ensureChannels(plan hostPlan, st *extState, sess *session.Session) (map[string]string, error) {
+	out := make(map[string]string, len(plan.channels))
+	// channelShells is keyed by name; the default is "" so an old template's single
+	// channel lands exactly where the old field was.
+	existing := st.channelShellsOf()
+	for _, c := range plan.channels {
+		if shell := liveShell(sess, existing[channelShellKey(c)]); shell != nil {
+			out[channelShellKey(c)] = shell.ID
+			continue
+		}
+		if !c.shell {
+			// An http channel's relay IS its command; a channel with no command and no
+			// url is a template that declares no process on this host.
+			if c.command == "" {
+				out[channelShellKey(c)] = ""
+				continue
+			}
+		}
+		label := plan.channel
+		if c.name != "" {
+			label = plan.channel + ":" + c.name
+		}
+		shell, err := sess.CreateChildShell(c.command, c.args, c.pty, c.rows, c.cols, label)
+		if err != nil {
+			return nil, fmt.Errorf("channel %s: %w", c.Label(), err)
+		}
+		if err := r.waitForStart(sess, shell); err != nil {
+			return nil, fmt.Errorf("channel %s: %w", c.Label(), err)
+		}
+		out[channelShellKey(c)] = shell.ID
 	}
-	return shell.ID, nil
+	return out, nil
+}
+
+// channelShellKey is the map key a channel's shell is filed under: the declared name,
+// or "" for the derived single channel.
+func channelShellKey(c channelPlan) string { return c.name }
+
+// Label is the word a failure report uses for this channel.
+func (c channelPlan) Label() string {
+	if c.name != "" {
+		return c.name
+	}
+	return "channel"
 }
 
 // waitForStart is the grace every channel gets, whoever forked it: the reconciler's

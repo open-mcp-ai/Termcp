@@ -88,6 +88,20 @@ type Extension struct {
 	Rows    int      `toml:"rows,omitempty"`
 	Cols    int      `toml:"cols,omitempty"`
 
+	// Channels declares the extension's processes, one entry each (issue #331).
+	//
+	// A TEMPLATE USED TO HOLD ONE. command/url/mode occupied a single shell id, so
+	// "this extension speaks HTTP on one endpoint AND runs a worker program" had no
+	// shape: `command` and `url` are mutually exclusive by construction, and there
+	// was no second slot for a second process. Everything ELSE was already a list
+	// (forwards, exposes, paths, allow), which is what made the single slot stand out
+	// as structural rather than a validation rule.
+	//
+	// EMPTY MEANS "THE LEGACY SHAPE", which is one channel derived from
+	// command/url/mode — see EffectiveChannels. Every stored template keeps working
+	// unchanged, and `ext get` prints the same fields it always did.
+	Channels []ChannelDecl `toml:"channel,omitempty"`
+
 	// IdleTimeout closes the channel after this long with nothing asked of it.
 	//
 	// IT APPLIES TO THE EXTENSIONS THE RECONCILER STARTS ON DEMAND — every enabled
@@ -239,6 +253,156 @@ type TargetDecl struct {
 	Forwards []ForwardDecl `toml:"forward,omitempty" json:"forwards,omitempty"`
 }
 
+// ChannelDecl is one process an extension runs: the unit that used to be the whole
+// template (issue #331).
+//
+// KIND IS WHAT THE CHANNEL *IS*, and it decides which of command/url it needs:
+//
+//	stdio — a program on a pipe (command required)
+//	pty   — a program on a terminal (command required)
+//	http  — an MCP endpoint termcp relays (url required)
+//
+// An empty kind is inferred: url present → http, otherwise stdio, unless mode says
+// pty. The inference is what lets a legacy field set be read as one channel without
+// the author having to learn the new word to keep their old file working.
+type ChannelDecl struct {
+	// Name is the channel's identity: what `open ext <name> --channel <name>` names,
+	// and what a failure report points at. Empty is legal for a single-channel
+	// template (it is derived, not written); a template that writes [[channel]]
+	// entries must name them, because two nameless channels are indistinguishable.
+	Name string `toml:"name,omitempty"`
+	// Kind is stdio, pty or http. See the type comment.
+	Kind    string   `toml:"kind,omitempty"`
+	Command string   `toml:"command,omitempty"`
+	Args    []string `toml:"args,omitempty"`
+	URL     string   `toml:"url,omitempty"`
+	// Default marks the channel an unqualified ask refers to. Exactly one channel is
+	// the default when a template declares any: the one marked, or the first.
+	Default bool `toml:"default,omitempty"`
+	// Headers belong to an http channel; they are here rather than on the extension
+	// so two endpoints on one template can authenticate differently.
+	Headers map[string]string `toml:"headers,omitempty"`
+	// TermcpTool is the same declaration as the extension-level field, per channel:
+	// one endpoint of a template may speak TERM/1 while another does not.
+	TermcpTool string `toml:"termcp_tool,omitempty"`
+	// Rows and Cols size a pty channel's terminal.
+	Rows int `toml:"rows,omitempty"`
+	Cols int `toml:"cols,omitempty"`
+}
+
+// resolvedKind fills in the kind a channel was written without.
+func (c ChannelDecl) resolvedKind() string {
+	if c.Kind != "" {
+		return c.Kind
+	}
+	if c.URL != "" {
+		return "http"
+	}
+	return "stdio"
+}
+
+// shell reports whether this channel runs a program at all. An http channel has no
+// process: what runs on its pipe is termcp's own relay, which the session layer
+// knows to start.
+func (c ChannelDecl) shell() bool { return c.resolvedKind() != "http" }
+
+// pty reports whether this channel's program gets a terminal.
+func (c ChannelDecl) pty() bool { return c.resolvedKind() == "pty" }
+
+// Label is the name used in a failure report and a status row: the declared name, or
+// "channel" for a single derived one.
+func (c ChannelDecl) Label() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return "channel"
+}
+
+// EffectiveChannels is the channel list this template actually has.
+//
+// THE LEGACY SHAPE IS ONE DERIVED CHANNEL (issue #331), which is what keeps every
+// stored template working and every existing test meaningful: command/url/mode/args
+// are read as a single unnamed channel, exactly as they were read before there was a
+// list to put them in. A template that writes [[channel]] entries has no legacy
+// fields, so there is never a question of which one wins.
+func (e *Extension) EffectiveChannels() []ChannelDecl {
+	if len(e.Channels) > 0 {
+		return e.Channels
+	}
+	if e.Command == "" && e.URL == "" && e.Mode == "" {
+		// A template with none of these declares no channel at all: a read-only file
+		// window or a forwards-only template is served by the connection alone.
+		return nil
+	}
+	kind := "stdio"
+	switch {
+	case e.URL != "":
+		kind = "http"
+	case e.Mode == "pty":
+		kind = "pty"
+	}
+	return []ChannelDecl{{
+		Kind:       kind,
+		Command:    e.Command,
+		Args:       e.Args,
+		URL:        e.URL,
+		Headers:    e.Headers,
+		TermcpTool: e.TermcpTool,
+		Rows:       e.Rows,
+		Cols:       e.Cols,
+		Default:    true,
+	}}
+}
+
+// DefaultChannel returns the channel an unqualified ask refers to, and false when the
+// template declares none.
+//
+// THE MARKED ONE WINS; OTHERWISE THE FIRST. One answer, decided in one place, because
+// three callers ask this question — `open ext`, Acquire, and the MCP route — and three
+// answers is how `/ext/{name}/stream` and `open ext <name>` would start pointing at
+// different processes of the same extension.
+func (e *Extension) DefaultChannel() (ChannelDecl, bool) {
+	chans := e.EffectiveChannels()
+	if len(chans) == 0 {
+		return ChannelDecl{}, false
+	}
+	for _, c := range chans {
+		if c.Default {
+			return c, true
+		}
+	}
+	return chans[0], true
+}
+
+// ChannelFor returns the channel with this name. An empty name means the default, so
+// a caller that did not ask for one gets the same answer as DefaultChannel.
+func (e *Extension) ChannelFor(name string) (ChannelDecl, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return e.DefaultChannel()
+	}
+	for _, c := range e.EffectiveChannels() {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return ChannelDecl{}, false
+}
+
+// HTTPChannel returns the channel the MCP route speaks to: the first http one.
+//
+// `/ext/{name}/stream` MOUNTS AN MCP SERVER, so it can only mean an http channel.
+// A template whose default is a stdio worker but which also relays an endpoint
+// answers on the endpoint, because that is the only channel the route can carry.
+func (e *Extension) HTTPChannel() (ChannelDecl, bool) {
+	for _, c := range e.EffectiveChannels() {
+		if c.resolvedKind() == "http" {
+			return c, true
+		}
+	}
+	return ChannelDecl{}, false
+}
+
 // EffectiveTargets returns the target bindings of the extension. If Targets is
 // non-empty, it is returned; otherwise, a legacy Target string is wrapped.
 func (e *Extension) EffectiveTargets() []TargetDecl {
@@ -320,6 +484,74 @@ func (e *Extension) IdleTimeoutDuration() (time.Duration, error) {
 		return 0, fmt.Errorf("idle_timeout cannot be negative, got %q; write 0 to disable idle collection", e.IdleTimeout)
 	}
 	return d, nil
+}
+
+// validateChannels checks a declared channel list (issue #331).
+//
+// NAMES ARE REQUIRED AND UNIQUE. Two nameless channels are indistinguishable, and the
+// whole point of naming one is `--channel <name>` and a failure report that says which
+// process broke. Exactly one may carry `default = true`, for the same reason
+// `[[targets]]` refuses a repeated host: two answers to one question.
+func (e *Extension) validateChannels() error {
+	seen := make(map[string]bool, len(e.Channels))
+	defaults := 0
+	for i, c := range e.Channels {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			return fmt.Errorf("channel #%d has no name: every [[channel]] entry needs name = \"<word>\" so it can be asked for and reported", i+1)
+		}
+		if seen[name] {
+			return fmt.Errorf("channel #%d repeats name %q: each channel appears once", i+1, name)
+		}
+		seen[name] = true
+		if c.Default {
+			defaults++
+		}
+		switch c.resolvedKind() {
+		case "stdio", "pty":
+			if strings.TrimSpace(c.Command) == "" {
+				return fmt.Errorf("channel %q is %s and has no command: a %s channel runs a program", name, c.resolvedKind(), c.resolvedKind())
+			}
+			if c.URL != "" {
+				return fmt.Errorf("channel %q is %s and also names a url: a channel is a program or an endpoint, not both", name, c.resolvedKind())
+			}
+		case "http":
+			if strings.TrimSpace(c.URL) == "" {
+				return fmt.Errorf("channel %q is http and has no url: an http channel names the endpoint termcp relays", name)
+			}
+			if c.Command != "" {
+				return fmt.Errorf("channel %q is http and also names a command: the relay IS its command", name)
+			}
+		default:
+			return fmt.Errorf("channel %q has kind %q: use stdio, pty or http", name, c.Kind)
+		}
+	}
+	if defaults > 1 {
+		return fmt.Errorf("%d channels are marked default = true: at most one is, and it is the channel an unqualified ask refers to", defaults)
+	}
+	return nil
+}
+
+// firstNonEmpty returns the first of its arguments that is not blank, for a message
+// that has to name the field the author actually wrote.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// channelLabels lists what a template's channels are called, for a refusal that has
+// to tell a caller what it could have asked for.
+func (e *Extension) channelLabels() []string {
+	chans := e.EffectiveChannels()
+	out := make([]string, 0, len(chans))
+	for _, c := range chans {
+		out = append(out, c.Label())
+	}
+	return out
 }
 
 // Normalize trims whitespace and fills the defaults an author would otherwise
@@ -438,6 +670,20 @@ func (e *Extension) Validate() error {
 			return fmt.Errorf("forwards belong to a host: move [[forward]] under the [[targets]] entry it listens for, since two targets cannot both bind the same local port")
 		}
 	}
+	// A CHANNEL LIST AND THE LEGACY FIELDS ARE ALTERNATIVES (issue #331). A template
+	// carrying both would leave "what does this extension run" with two answers, and
+	// the runtime would have to pick one silently — the same reasoning that already
+	// refuses `target` beside `[[targets]]`.
+	if len(e.Channels) > 0 {
+		if e.Command != "" || e.URL != "" {
+			return fmt.Errorf("command/url and [[channel]] are alternatives: a channel list says what runs, and the "+
+				"extension-level command/url belong to a template with one channel. Move %q into a [[channel]] entry or drop the list",
+				firstNonEmpty(e.Command, e.URL))
+		}
+		if err := e.validateChannels(); err != nil {
+			return err
+		}
+	}
 	switch e.Mode {
 	case "", "pty", "pipe":
 	default:
@@ -508,8 +754,17 @@ func (e *Extension) Validate() error {
 			hasCapability = true
 		}
 	}
+	// A CHANNEL IS A CAPABILITY (issue #331). Before the list existed the only way to
+	// declare a process was command/url/mode, so checking those was complete; a
+	// template that puts its process in [[channel]] declares the same thing in the
+	// new shape and must not be read as an empty container.
+	for _, c := range e.EffectiveChannels() {
+		if c.Command != "" || c.URL != "" || c.resolvedKind() == "pty" {
+			hasCapability = true
+		}
+	}
 	if !hasCapability {
-		return fmt.Errorf("extension declares no capability: explicitly specify at least one of command, url, paths, forward, or mode=pty")
+		return fmt.Errorf("extension declares no capability: explicitly specify at least one of command, url, paths, forward, mode=pty, or a [[channel]] with a command or url")
 	}
 	for i := range e.Forwards {
 		if err := e.Forwards[i].Validate(); err != nil {

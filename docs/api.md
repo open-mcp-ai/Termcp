@@ -1840,15 +1840,44 @@ ports, and whatever a header or a path holds. A package that shipped them would
 hand the next person somebody else's machines, and that is exactly where a
 credential sits.
 
-There is **no `kind` field**. What an extension does is what it declares: `command`
-(a program on a pipe channel), `url` (an HTTP MCP endpoint relayed by termcp),
-`paths` (a read-only SFTP window), `mode = "pty"` (a terminal), or `forwards`
-(tunnels). These are not alternatives: one template may declare a `command` **and**
-`forwards`, and the tunnels come up and go down with that same session, so a program
-on a remote host that also needs a port does not need two extensions that know
-nothing about each other. `local`, `remote` and `dynamic` entries mix freely in one
-list. (`url` is the one exception: the relay runs inside termcp, so an endpoint
-template still requires an internal target.)
+**There is no extension-level `kind` field.** What an extension does is what it
+declares: `command` (a program on a pipe channel), `url` (an HTTP MCP endpoint
+relayed by termcp), `paths` (a read-only SFTP window), `mode = "pty"` (a terminal),
+`forwards` (tunnels), or a `[[channel]]` list. These are not alternatives: one
+template may declare a `command` **and** `forwards`, and the tunnels come up and go
+down with that same session, so a program on a remote host that also needs a port
+does not need two extensions that know nothing about each other. `local`, `remote`
+and `dynamic` entries mix freely in one list. (`url` is the one exception: the relay
+runs inside termcp, so an endpoint template still requires an internal target.)
+
+**A template may declare more than one process.** `[[channel]]` is a list, and each
+entry is one channel with a `name`, a `kind` (`stdio`, `pty` or `http`), and either a
+`command` with `args` or a `url`:
+
+```toml
+[[channel]]
+name = "mcp-http"
+kind = "http"
+url = "http://127.0.0.1:18890/mcp"
+default = true
+
+[[channel]]
+name = "worker"
+kind = "stdio"
+command = "node"
+args = ["worker.mjs"]
+```
+
+`default = true` marks the channel an unqualified ask refers to; when none is marked,
+the first one is. `open ext <name> --channel <name>` asks for a specific one, and
+`/ext/{name}/stream` always means the `http` channel — that route mounts an MCP
+server, and only an endpoint can carry it. `command`/`url` at the top level and a
+`[[channel]]` list are alternatives: a template with both would leave "what does this
+run" with two answers. And **a template that writes neither behaves exactly as it
+did** — its `command`/`url`/`mode` are read as a single unnamed channel, which is why
+`ext get` prints the same fields and `shell_id` is still the handle to drive. A
+template with one channel reports no `channels` array, for the same reason a
+single-host template reports no `targets`.
 
 Three consequences of declaring `forwards` are not visible in the field:
 
