@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	mcplib "github.com/open-mcp-ai/termcp/mcp"
+
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -151,9 +153,19 @@ func (s *Server) awaitUntil(ctx context.Context, handle string, win termArgs, st
 	// A ZERO WINDOW IS A SNAPSHOT, not a wait: `timeout: 0` already means "do not
 	// block" everywhere else, so it means the same here — look once, answer honestly.
 	deadline := time.Now().Add(limit)
+	// PROGRESS FOR A WAIT THE CALLER ASKED ABOUT (#327). A wait with no news is
+	// indistinguishable from a hung server, and this loop is exactly the long-running
+	// thing a client wants a heartbeat from. The report is unconditional because
+	// ReportProgress is a no-op when nobody asked, which is the common case.
+	began := time.Now()
 	for {
 		if matched, ok := s.matchUntil(ctx, handle, start, w); ok && matched {
 			return true
+		}
+		if limit > 0 {
+			elapsed := time.Since(began).Seconds()
+			total := limit.Seconds()
+			mcplib.ReportProgress(ctx, elapsed, &total, "waiting for the pattern")
 		}
 		if limit <= 0 || !time.Now().Before(deadline) {
 			return false

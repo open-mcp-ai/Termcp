@@ -25,6 +25,13 @@
 // the annotation vocabulary. Adding one is a small change when something needs
 // it — the point is that the absence is a decision rather than an oversight.
 //
+// The list is about SURFACES, not about the details of the ones that exist. What
+// this package does implement it implements properly: a request can be cancelled,
+// a silent session expires, the version header is checked, a call can report
+// progress, a tool can carry a title and an output schema, and completion/complete
+// is answered when a provider is registered (issue #327). Those were gaps of the
+// second kind — received and ignored, which a client sees as a silent error.
+//
 // # Compatibility
 //
 // The names mirror the vocabulary of the MCP specification, so a reader who knows
@@ -142,9 +149,52 @@ type CallToolRequest struct {
 type CallToolParams struct {
 	Name      string `json:"name"`
 	Arguments any    `json:"arguments,omitempty"`
-	// Meta is the request's _meta object. Kept because the protocol puts
-	// per-request metadata there and a client may send it; nothing here reads it.
+	// Meta is the request's _meta object: per-request metadata, of which this
+	// package reads exactly one member, progressToken (see ProgressFrom).
 	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// ProgressToken is the client's handle for one request's progress reports.
+//
+// It is whatever JSON value the client chose — a number, a string — so it travels
+// as a raw message and is echoed back unchanged. Anything else would report a token
+// the client does not recognise.
+type ProgressToken = json.RawMessage
+
+// ProgressFrom reads _meta.progressToken off a request. ok is false when the client
+// did not ask for progress, which is the common case and means "send nothing".
+func ProgressFrom(meta map[string]any) (ProgressToken, bool) {
+	if meta == nil {
+		return nil, false
+	}
+	raw, ok := meta["progressToken"]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	return ProgressToken(b), true
+}
+
+// NewProgressNotification builds one notifications/progress frame.
+//
+// `total` is optional in the spec, so a caller that does not know the end omits it
+// rather than inventing one: a percentage derived from a guess is worse than a
+// count with no denominator.
+func NewProgressNotification(token ProgressToken, progress float64, total *float64, message string) Notification {
+	params := map[string]any{
+		"progressToken": token,
+		"progress":      progress,
+	}
+	if total != nil {
+		params["total"] = *total
+	}
+	if message != "" {
+		params["message"] = message
+	}
+	return Notification{JSONRPC: "2.0", Method: "notifications/progress", Params: params}
 }
 
 // CallToolResult is the answer to a tools/call.
@@ -185,9 +235,18 @@ func NewToolResultError(text string) *CallToolResult {
 
 // Tool is one entry of tools/list.
 type Tool struct {
-	Name        string          `json:"name"`
+	Name string `json:"name"`
+	// Title is a human-readable display name. A client that shows `term` in a menu
+	// has only the machine name otherwise, and the two are not the same thing
+	// (issue #327).
+	Title       string          `json:"title,omitempty"`
 	Description string          `json:"description,omitempty"`
 	InputSchema ToolInputSchema `json:"inputSchema"`
+	// OutputSchema describes structuredContent when the tool produces one. It is
+	// passed through as given: this package does not validate against it, because a
+	// client that wants to validate has the schema and a server that enforced it
+	// here would be validating its own output against its own claim (issue #327).
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 	// Annotations is the spec's optional display hints. Passed through as given.
 	Annotations *ToolAnnotation `json:"annotations,omitempty"`
 }
@@ -246,6 +305,26 @@ func NewTool(name string, opts ...ToolOption) Tool {
 // WithDescription sets the tool's description.
 func WithDescription(s string) ToolOption {
 	return func(t *Tool) { t.Description = s }
+}
+
+// WithTitle sets the human-readable display name.
+func WithTitle(s string) ToolOption {
+	return func(t *Tool) { t.Title = s }
+}
+
+// WithOutputSchema attaches a JSON Schema for structuredContent.
+//
+// IT IS PASSED THROUGH, NOT VALIDATED. A server validating its own output against
+// its own claim proves nothing, and a client that wants the guarantee has the schema
+// and can check. An invalid schema is therefore the caller's mistake to see, and the
+// only thing checked here is that it is JSON at all — a string that is not JSON would
+// produce a tools/list no client can parse.
+func WithOutputSchema(schema string) ToolOption {
+	return func(t *Tool) {
+		if json.Valid([]byte(schema)) {
+			t.OutputSchema = json.RawMessage(schema)
+		}
+	}
 }
 
 // WithToolAnnotation attaches the annotation object.
@@ -451,6 +530,10 @@ type Implementation struct {
 type ServerCapabilities struct {
 	Tools   *ListChangedCapability `json:"tools,omitempty"`
 	Prompts *ListChangedCapability `json:"prompts,omitempty"`
+	// Completions says this server answers completion/complete. Claimed only when a
+	// completion provider is registered, because a client that reads the claim will
+	// ask (issue #327).
+	Completions *ListChangedCapability `json:"completions,omitempty"`
 }
 
 // ListChangedCapability is the only capability field this project sets.

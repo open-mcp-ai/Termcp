@@ -88,6 +88,11 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	mcpServer.Use(withPanicRecovery())
 
 	registerTermTools(mcpServer, s)
+	// completion/complete is answered from the directive grammar, and registering it
+	// is what makes initialize claim the capability (issue #327). A server that
+	// advertised completions and answered method-not-found would be worse than one
+	// that advertised nothing.
+	mcpServer.OnComplete(s.completeDirective)
 
 	s.mcpServer = mcpServer
 	// Both transports lift the request's own origin into the context, so a tools/list

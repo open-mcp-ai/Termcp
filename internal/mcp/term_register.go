@@ -17,6 +17,10 @@ func registerTermTools(mcpServer *mcp.Server, s *Server) {
 		// Four default booleans on every tool carry no termcp information and cost
 		// ~80 bytes; the annotation block is empty on purpose.
 		mcp.WithToolAnnotation(mcp.ToolAnnotation{}),
+		// A DISPLAY NAME, because `term` is the machine name and a client showing it
+		// in a menu has nothing else (issue #327). It says what the tool is, not what
+		// it is called.
+		mcp.WithTitle("Terminal"),
 		mcp.WithDescription(termDescription),
 	}
 	opts = append(opts, termArgToolOptions()...)
