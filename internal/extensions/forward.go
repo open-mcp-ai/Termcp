@@ -33,6 +33,11 @@ type ForwardStatus struct {
 	ForwardID     string `json:"forward_id,omitempty"`
 	ListenAddr    string `json:"listen_addr,omitempty"`
 	TargetAddr    string `json:"target_addr,omitempty"`
+	// Via is the host this tunnel was built through, when the declaration named one
+	// (issue #330). It is reported rather than implied: the listener is on that
+	// machine, and an operator reading a status with no location would go looking for
+	// it on the extension's own host.
+	Via string `json:"via,omitempty"`
 }
 
 // ensureForwards establishes the forwards the template declares, skipping the
@@ -76,7 +81,22 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 			built[i] = existing[i]
 			continue
 		}
-		fw, err := r.createForward(f, sess, sshCli, info)
+		// A TUNNEL CAN BE BUILT ON ANOTHER HOST'S CONNECTION (issue #330). `via`
+		// names one, and the connection for it is a derived target, so it exists by
+		// the time this runs. Without `via` the forward keeps the extension's own
+		// session, which is what every template meant before the field existed.
+		fwSess, fwSSH, fwInfo := sess, sshCli, info
+		if f.Via != "" {
+			var viaErr error
+			fwSess, fwSSH, fwInfo, viaErr = r.sessionForVia(f.Via)
+			if viaErr != nil {
+				st.mu.Lock()
+				st.forwards = append([]ForwardStatus(nil), built...)
+				st.mu.Unlock()
+				return fmt.Errorf("%s forward on %s via %s: %w", f.DirectionKind, listenSpec(f), f.Via, viaErr)
+			}
+		}
+		fw, err := r.createForward(f, fwSess, fwSSH, fwInfo)
 		if err != nil {
 			// Record what this attempt did establish before reporting the failure:
 			// the walk reads these entries to decide what is already listening.
@@ -85,14 +105,17 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 			st.mu.Unlock()
 			return fmt.Errorf("%s forward on %s: %w", f.DirectionKind, listenSpec(f), err)
 		}
-		// Tear down with the session rather than outliving it as a dangling
-		// listener, the same way the forward tool attaches its own.
-		sess.AttachCleanup(func() { r.forwardMgr.Close(fw.ForwardID) })
+		// Tear down with the session that carries the tunnel rather than outliving it
+		// as a dangling listener, the same way the forward tool attaches its own. With
+		// `via` that is the other host's session: the listener lives on its connection,
+		// so it must die with it.
+		fwSess.AttachCleanup(func() { r.forwardMgr.Close(fw.ForwardID) })
 		built[i] = ForwardStatus{
 			DirectionKind: f.DirectionKind,
 			ForwardID:     fw.ForwardID,
 			ListenAddr:    fw.ListenAddr,
 			TargetAddr:    fw.TargetAddr,
+			Via:           f.Via,
 		}
 	}
 
@@ -100,6 +123,42 @@ func (r *Reconciler) ensureForwards(ext *Extension, st *extState) error {
 	st.forwards = built
 	st.mu.Unlock()
 	return nil
+}
+
+// sessionForVia resolves the connection a `via` forward is built on (issue #330).
+//
+// IT MUST ALREADY BE UP. The derived target is in EffectiveTargets, so the
+// reconciler's own walk brought it up before reaching this extension's forwards —
+// a `via` that is not connected is a bug in the ordering, not a reason to dial here
+// (dialling from inside a forward would put a second connection on a host the walk
+// already owns, and the two would race for the same profile).
+//
+// The message names what to check, because the only way to get here is a state that
+// was dropped between the walk and this call.
+func (r *Reconciler) sessionForVia(host string) (*session.Session, *ssh.Client, api.Session, error) {
+	r.mu.Lock()
+	var found *extState
+	for _, st := range r.states {
+		if st.host() == host {
+			found = st
+			break
+		}
+	}
+	r.mu.Unlock()
+	if found == nil {
+		return nil, nil, api.Session{}, fmt.Errorf("host %q is not connected: the connection a `via` names is brought up by the reconciler before its forwards", host)
+	}
+	// sessionOf covers both shapes: a declared target holds the attachment itself,
+	// and a derived one has the connection its first instance runs on.
+	sessID := found.sessionOf()
+	if sessID == "" {
+		return nil, nil, api.Session{}, fmt.Errorf("host %q has no connection yet", host)
+	}
+	sess := r.sessMgr.Get(sessID)
+	if sess == nil {
+		return nil, nil, api.Session{}, fmt.Errorf("host %q has no live session", host)
+	}
+	return sess, sess.SSHClient(), sess.Info(), nil
 }
 
 func (r *Reconciler) createForward(f ForwardDecl, sess *session.Session, sshCli *ssh.Client, info api.Session) (*forward.ForwardInfo, error) {

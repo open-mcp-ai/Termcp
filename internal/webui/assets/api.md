@@ -1857,6 +1857,15 @@ Three consequences of declaring `forwards` are not visible in the field:
   startup, because a listener has no "use" moment to start it.
 - **Order is identity.** A forward is tracked by its position across reconciler
   walks, so reordering the list is not cosmetic.
+- **A tunnel can be built on another host's connection.** `via = "<profile>"` moves
+  that one tunnel there, while the extension's channel stays where it was declared.
+  This is what lets one template both dial an MCP endpoint from this machine and
+  listen on a remote one: a `url` template's relay runs here, so without `via` every
+  tunnel it declares would listen here too. The host named by `via` is brought up as
+  a connection the extension needs — it carries no command and cannot be used as a
+  target, so `open ext` and `/ext/{name}/stream` are unaffected. A top-level
+  `[[forward]]` may name only a host that is NOT in `[[targets]]`: a tunnel has one
+  host, and two declarations of the same one would leave the runtime to pick.
 - **A partial failure is kept.** A failure at entry 3 does not undo entries 1-2:
   they stay listening and recorded, and the retry targets only the one that failed.
   A failed tunnel therefore does not take the session down — the extension reports

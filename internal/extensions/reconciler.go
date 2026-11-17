@@ -396,7 +396,7 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// connection to somewhere else. What changes is only which machine CARRIES the
 	// channel.
 	bridgeVia := ""
-	if ext.URL != "" && !sshconfig.IsInternalName(ext.Target) {
+	if ext.URL != "" && !sshconfig.IsInternalName(ext.Target) && !ext.isViaDerivedTarget() {
 		bridgeVia = ext.Target
 	}
 	// A url TEMPLATE'S SESSION IS ALWAYS THE LOOPBACK ONE, because the thing that
@@ -404,7 +404,13 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// The far host travels as `--via` instead, so the session is not "where the
 	// process is" but "where the relay stands" — which is this machine.
 	sessionHost := ext.Target
-	if ext.URL != "" {
+	// A HOST DERIVED FROM A `via` IS A REAL CONNECTION, NOT A BRIDGE CARRIER
+	// (issue #330). The loopback rule below exists because a url template's channel
+	// runs termcp's own relay and nothing else serves it — but the relay dials
+	// through `--via`, which is a different machine. A derived target exists only so
+	// a tunnel has a connection to ride; forcing it internal would put that tunnel on
+	// this machine, which is exactly what `via` was written to avoid.
+	if ext.URL != "" && !ext.isViaDerivedTarget() {
 		sessionHost = "internal"
 		switch {
 		case r.NoInternal:
@@ -784,9 +790,42 @@ func (st *extState) host() string {
 func forTarget(ext *Extension, target string) Extension {
 	out := *ext
 	out.Targets = nil
+	// A VIEW OF A HOST NOBODY DECLARED (issue #330): it came from a forward's `via`,
+	// so it carries no channel and must not be treated as lazy.
+	// DERIVED MEANS: this host is named only by a forward's `via`. Deciding it here
+	// rather than from ext.Target matters, because a multi-target template has no
+	// single Target to compare against — the view being built IS the question.
+	derived := false
+	if _, declared := ext.TargetFor(target); !declared {
+		for _, host := range ext.viaHosts() {
+			if host == target {
+				derived = true
+				break
+			}
+		}
+	}
 	if t, ok := ext.TargetFor(target); ok {
 		out.Target = t.Host
 		out.Forwards = t.Forwards
+	} else if derived {
+		out.Target = target
+		out.Forwards = nil
+	}
+	out.viaDerived = derived
+	if derived {
+		// A DERIVED HOST CARRIES A CONNECTION AND NOTHING ELSE (issue #330). It has no
+		// command, no mode and no url of its own: the extension's process runs on its
+		// DECLARED host, and copying that template down here would start a second copy
+		// of it on the machine that is only meant to listen. An empty mode with an
+		// empty command is already the legal "connection only" shape.
+		out.Command = ""
+		out.Args = nil
+		out.Mode = ""
+		out.URL = ""
+		// PATHS AND ALLOW ARE DELIBERATELY KEPT. This host needs no channel, but the
+		// connection it creates is a session an agent can still drive by name, and
+		// clearing the whitelist here would make a host the author never meant to open
+		// the one place an extension's capabilities do not apply.
 	}
 	return out
 }
