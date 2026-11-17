@@ -38,12 +38,29 @@ func TestConnectionTestVerdictLandsInsideTheDialog(t *testing.T) {
   function report(obj) { document.title = 'RESULT::' + JSON.stringify(obj); }
   var deadline = Date.now() + 30000;
 
+  /* A MEASUREMENT BEFORE THE STYLESHEET APPLIES MEASURES NOTHING. The modal's
+     height comes from base.css, which reaches the page through an @import inside
+     theme.css; an imported sheet is fetched separately, so the script can run while
+     the page is still unstyled — no max-height, no overflow, and scrollHeight equal
+     to clientHeight for a reason that has nothing to do with the dialog. A resolved
+     max-height is the proof the chain arrived: it is a pixel value only once
+     base.css has applied. */
+  function stylesApplied() {
+    var m = document.querySelector('#modal-conn .modal');
+    if (!m) return false;
+    var mh = getComputedStyle(m).maxHeight;
+    return !!mh && mh !== 'none';
+  }
+
   (function ready() {
     if (typeof openConnModal === 'function' && typeof showConnTestResult === 'function' &&
-        document.getElementById('conn-test') && document.getElementById('conn-test-result')) {
+        document.getElementById('conn-test') && document.getElementById('conn-test-result') &&
+        stylesApplied()) {
       return run();
     }
-    if (Date.now() > deadline) return report({ error: 'the connection dialog never came up' });
+    if (Date.now() > deadline) {
+      return report({ error: 'the connection dialog never came up, or its stylesheet never applied' });
+    }
     setTimeout(ready, 50);
   })();
 
@@ -90,6 +107,7 @@ func TestConnectionTestVerdictLandsInsideTheDialog(t *testing.T) {
     var r = out.getBoundingClientRect();
     var b = btn.getBoundingClientRect();
     report({
+      maxHeight: getComputedStyle(modal).maxHeight,
       scrollable: scrollable,
       inActionsRow: !!(out.parentNode && out.parentNode.classList && out.parentNode.classList.contains('modal-actions')),
       verdictTop: r.top,
@@ -117,16 +135,36 @@ func TestConnectionTestVerdictLandsInsideTheDialog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1280x720 is the smallest desktop the dialog is used at, and the form is
-	// already taller than it there: the dialog must scroll to reach Test.
-	const width, height = 1280, 720
-	dom := renderedProbeDOMSized(t, chrome, index, width, height)
-	probe := verdictProbeResult(t, dom)
-	if probe.Error != "" {
-		t.Fatalf("the probe did not get to a verdict: %s", probe.Error)
+	// THE VIEWPORT IS PICKED, NOT ASSUMED. The defect is geometric: a verdict
+	// appended below the form lands under the fold BECAUSE THE DIALOG SCROLLS. The
+	// probe therefore needs a viewport where it does scroll, and 1280x720 is a guess
+	// at one — a guess that stops being true the moment the form gets shorter (a
+	// field moved, a heading dropped), at which point the old code failed with
+	// "no longer overflows" on a test that had nothing left to measure. Rather than
+	// assert the guess, try the smallest desktop and then shorter ones, and measure at
+	// the first that actually overflows. Every height here is a real desktop height;
+	// the width is fixed because that is what selects the desktop layout.
+	const width = 1280
+	var probe verdictProbe
+	var used int
+	for _, h := range []int{720, 640, 560} {
+		dom := renderedProbeDOMSized(t, chrome, index, width, h)
+		p := verdictProbeResult(t, dom)
+		if p.Error != "" {
+			t.Fatalf("the probe did not get to a verdict at %dx%d: %s", width, h, p.Error)
+		}
+		if !p.Scrollable {
+			continue
+		}
+		probe, used = p, h
+		break
 	}
-	if !probe.Scrollable {
-		t.Fatalf("the connection dialog no longer overflows at %dx%d, so this probe measured the one case that was never broken; shrink the viewport so the dialog still scrolls", width, height)
+	if used == 0 {
+		t.Fatalf("the connection dialog does not overflow at %dx{%d,640,560}: it fits its content at every desktop "+
+			"height this probe tries, so there is no scrolled case to measure. max-height resolved to %q — `none` means the "+
+			"stylesheet never applied (a probe fault); a pixel value means the form is now short enough that the original "+
+			"defect cannot occur, and this probe has nothing left to assert",
+			width, 720, probe.MaxHeight)
 	}
 	if !probe.InActionsRow {
 		t.Errorf("the verdict is not in the action row with the Test button; as a sibling BELOW that row it is the last line of a scrolled dialog and lands under the fold")
@@ -146,14 +184,15 @@ func TestConnectionTestVerdictLandsInsideTheDialog(t *testing.T) {
 		t.Errorf("the Test button (top %.0f, left %.0f) was wrapped below the verdict (bottom %.0f, right %.0f); the verdict must share the row with the button, not push it out of the way",
 			probe.ButtonTop, probe.ButtonLeft, probe.VerdictBottom, probe.VerdictRight)
 	}
-	t.Logf("verdict %.0f..%.0f inside dialog %.0f..%.0f (%0.fpx tall, %q); button at %.0f,%.0f",
-		probe.VerdictTop, probe.VerdictBottom, probe.ModalTop, probe.ModalBottom, probe.VerdictHeight, probe.Text,
-		probe.ButtonLeft, probe.ButtonTop)
+	t.Logf("at %dx%d: verdict %.0f..%.0f inside dialog %.0f..%.0f (%0.fpx tall, %q); button at %.0f,%.0f",
+		width, used, probe.VerdictTop, probe.VerdictBottom, probe.ModalTop, probe.ModalBottom, probe.VerdictHeight,
+		probe.Text, probe.ButtonLeft, probe.ButtonTop)
 }
 
 // verdictProbe is one measurement of the probe.
 type verdictProbe struct {
 	Error         string  `json:"error"`
+	MaxHeight     string  `json:"maxHeight"`
 	Scrollable    bool    `json:"scrollable"`
 	InActionsRow  bool    `json:"inActionsRow"`
 	VerdictTop    float64 `json:"verdictTop"`
