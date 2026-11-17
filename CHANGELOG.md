@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### 新功能
+
+- **模板 v2：一个扩展可以有多条通道（#331）**：过去一个扩展只有一个通道——`command`/`url`/`mode` 占着同一个 shell id，而其余能力（forwards、exposes、paths、allow）本来都是列表。于是「这个扩展既在中转一个 HTTP 端点、又跑一个 worker 进程」没有形状：`command` 与 `url` 按构造互斥，也没有第二个槽位。现在 `[[channel]]` 是一个列表，每条自带 `name`、`kind`（`stdio`/`pty`/`http`）、`command`+`args` 或 `url`，`default = true` 标记无参数提问指向哪一条。**旧模板完全不变**：`command`/`url`/`mode` 读成一条无名派生通道，落在原来那个状态键上，`ext get` 打印的字段一个字没变。寻址有一条规则、一个实现：`open ext <name> --channel <name>` 要指定通道，`/ext/{name}/stream` 只认 http 通道（那条路由挂的是 MCP server），不带 `--channel` 时取默认通道。`Status.channels` 报告每条通道的状态与句柄，单通道模板仍只给 `shell_id`。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

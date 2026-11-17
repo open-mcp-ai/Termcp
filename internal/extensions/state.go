@@ -17,10 +17,18 @@ type extState struct {
 	status    string
 	groupKey  string // the connection this extension is served by; "" = none
 	sessionID string // the group's session, while this extension is attached
-	shellID   string // this extension's own channel; "" for a template with no shell
-	forwards  []ForwardStatus
-	exposes   []ForwardStatus
-	failures  []Failure
+	shellID   string // the DEFAULT channel's shell; "" for a template with no channel
+	// channelShells maps every declared channel's name to its shell id (issue #331).
+	// Keyed by name, with "" for the derived single channel, so a template that
+	// declares one channel files its shell exactly where the old field was and the
+	// whole single-channel path is unchanged. The field above stays as the default's
+	// id because it is read from a dozen places that mean "the channel", not "one of
+	// the channels", and making them all consult a map would be a rename with no
+	// behaviour behind it.
+	channelShells map[string]string
+	forwards      []ForwardStatus
+	exposes       []ForwardStatus
+	failures      []Failure
 	// consecutive counts consecutive failures, for the backoff ladder.
 	consecutive int
 	readyAt     time.Time // earliest moment a retry may run
@@ -189,6 +197,16 @@ func fingerprint(ext *Extension) string {
 	// WHAT RUNS IS WHAT IS IN THE FINGERPRINT. Every field a session is built from
 	// belongs here; a field that only describes the template does not, because
 	// changing a description must not tear down a live instance.
+	// THE CHANNEL LIST IS PART OF WHAT RUNS (issue #331). A template whose channels
+	// changed is a different template: an edit that adds a worker has to rebuild,
+	// exactly as an edit to the command does.
+	for _, c := range ext.EffectiveChannels() {
+		fmt.Fprintf(&b, "ch:%s/%s/%q/", c.Name, c.resolvedKind(), c.Command)
+		for _, a := range c.Args {
+			fmt.Fprintf(&b, "%q,", a)
+		}
+		fmt.Fprintf(&b, "|%q|%v", c.URL, c.Default)
+	}
 	fmt.Fprintf(&b, "%s|%s|%q|", ext.Target, ext.Mode, ext.Command)
 	for _, a := range ext.Args {
 		fmt.Fprintf(&b, "%q,", a)
@@ -511,13 +529,64 @@ func (st *extState) shellOf() string {
 	return st.shellID
 }
 
-// attach records the session and the channel this extension is now driven
+// attach records the session and the DEFAULT channel this extension is now driven
 // through.
 func (st *extState) attach(sessionID, shellID string) {
 	st.mu.Lock()
 	st.sessionID = sessionID
 	st.shellID = shellID
 	st.mu.Unlock()
+}
+
+// attachChannels records every channel's shell id at once, for a template that
+// declares more than one (issue #331). The default channel (key "") is also copied
+// into shellID, so the single-channel readers keep working.
+func (st *extState) attachChannels(sessionID string, shells map[string]string) {
+	st.mu.Lock()
+	st.sessionID = sessionID
+	st.channelShells = make(map[string]string, len(shells))
+	for name, id := range shells {
+		st.channelShells[name] = id
+	}
+	st.shellID = shells[""]
+	st.mu.Unlock()
+}
+
+// channelShellsOf returns a copy of the per-channel shell map.
+func (st *extState) channelShellsOf() map[string]string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	out := make(map[string]string, len(st.channelShells))
+	for name, id := range st.channelShells {
+		out[name] = id
+	}
+	return out
+}
+
+// shellOfChannel returns the shell id a named channel runs on, and whether it has
+// one. An empty name asks for the default.
+func (st *extState) shellOfChannel(name string) (string, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.channelShells) == 0 {
+		if name == "" {
+			return st.shellID, st.shellID != ""
+		}
+		return "", false
+	}
+	if name == "" {
+		// The map is authoritative when it exists; the default is "" in it for a
+		// derived channel and the first entry otherwise.
+		if id, ok := st.channelShells[""]; ok {
+			return id, id != ""
+		}
+		for _, id := range st.channelShells {
+			return id, id != ""
+		}
+		return "", false
+	}
+	id, ok := st.channelShells[name]
+	return id, ok && id != ""
 }
 
 // takeAttachment removes and returns what this extension holds, so a detach can

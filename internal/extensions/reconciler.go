@@ -128,6 +128,24 @@ type Status struct {
 	// Targets reports the per-host breakdown when the extension declares multiple
 	// targets. Omitted on single-target templates so the wire format stays small.
 	Targets []TargetStatus `json:"targets,omitempty"`
+
+	// Channels reports each declared channel and the handle it is driven through
+	// (issue #331). Omitted for a template that declares one channel, because the
+	// single `shell_id` above already says everything a caller needs — the same
+	// reason Targets is omitted on a single-host template.
+	Channels []ChannelStatus `json:"channels,omitempty"`
+}
+
+// ChannelStatus is one channel's runtime half.
+type ChannelStatus struct {
+	Name string `json:"name"`
+	// Kind is stdio, pty or http: what the channel is, not how it was spelled.
+	Kind string `json:"kind"`
+	// ShellID is the handle to drive it through, empty when the channel declares no
+	// process on this host.
+	ShellID string `json:"shell_id,omitempty"`
+	// Default marks the channel an unqualified ask refers to.
+	Default bool `json:"default,omitempty"`
 }
 
 // maxFailures caps the history. Enough to see a pattern, not so much that a
@@ -303,7 +321,7 @@ func (r *Reconciler) probe(ctx context.Context, name, target string) {
 	}
 	// The reconciler's own attempt: it reuses the channel the extension already has,
 	// because a retry after a tunnel failure must not restart the process.
-	_, _, _, _, _ = r.bringUp(ctx, ext, st, false)
+	_, _, _, _, _ = r.bringUp(ctx, ext, st, false, "")
 }
 
 // fail records a reason, marks the extension unavailable, and arms the backoff
@@ -384,6 +402,10 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 		return hostPlan{}, fmt.Errorf("restriction: %w", err)
 	}
 
+	// CHANNELS ARE RESOLVED PER ENTRY (issue #331). A template with no [[channel]]
+	// list resolves exactly one, derived from command/url/mode — which is why this
+	// function's answer for an old template is the same as it always was.
+	declared := ext.EffectiveChannels()
 	cmd, args := sshconfig.EffectiveCommand(ent, ext.Command, ext.Args)
 	// THE TARGET OF A url TEMPLATE IS THE MACHINE THE CONNECTION LEAVES FROM (#233).
 	// It is not where the process runs: what runs on the channel is termcp's own
@@ -419,6 +441,12 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 			// target = "internal" with a url: the loopback entry already loaded above.
 		}
 		cmd, args = bridgeCommand(ext, bridgeVia)
+		// A mixed template puts the relay on the channel that needs it, and the
+		// workers on channels that run their own programs. The url branch above is
+		// still what decides the SESSION, because the relay is what needs the loopback
+		// container; a worker beside it shares that container rather than getting a
+		// second connection, which is the same rule every other co-resident channel
+		// follows.
 	}
 	mode := sshconfig.EffectiveMode(ent, ext.Mode)
 	rows, cols := ext.Rows, ext.Cols
@@ -457,14 +485,102 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 			Restriction: restriction,
 			Namespace:   name,
 		},
-		channel: ext.Name,
-		command: cmd,
-		args:    args,
-		shell:   ext.Mode != "",
-		pty:     mode == "pty",
-		rows:    rows,
-		cols:    cols,
+		channel:  ext.Name,
+		channels: planChannels(ext, declared, ent, cmd, args, bridgeVia, mode, rows, cols),
 	}, nil
+}
+
+// planChannels turns the template's channel list into the argv each one runs.
+//
+// THE DERIVED SINGLE CHANNEL TAKES THE COMMAND/ARGS ALREADY RESOLVED, profile
+// defaults and all, so an old template's channel is byte-identical to what it was
+// before there was a list. A declared channel resolves its own: the profile's
+// command override is an extension-level default and does not apply to a channel
+// that named its own program, or to one that named an endpoint.
+func planChannels(ext *Extension, declared []ChannelDecl, ent *sshconfig.Entry,
+	derivedCmd string, derivedArgs []string, bridgeVia, mode string, rows, cols int) []channelPlan {
+	out := make([]channelPlan, 0, len(declared))
+	for _, c := range declared {
+		switch {
+		case c.URL != "":
+			// An endpoint's channel runs the relay. `via` is the far host its requests
+			// leave from, which is empty when the endpoint is reached from here.
+			bc, ba := bridgeCommandFor(c, bridgeViaFor(c, ext))
+			out = append(out, channelPlan{
+				name: c.Name, command: bc, args: ba, shell: true,
+				pty: false, rows: rows, cols: cols,
+				via: bridgeViaFor(c, ext),
+			})
+		case c.Command != "" || len(c.Args) > 0:
+			chMode := mode
+			if c.Kind == "pty" {
+				chMode = "pty"
+			}
+			chRows, chCols := rows, cols
+			if c.Rows > 0 {
+				chRows = c.Rows
+			}
+			if c.Cols > 0 {
+				chCols = c.Cols
+			}
+			out = append(out, channelPlan{
+				name: c.Name, command: c.Command, args: c.Args, shell: true,
+				pty: chMode == "pty", rows: chRows, cols: chCols,
+			})
+		default:
+			// A channel with neither a program nor an endpoint declares no process.
+			// It is still a channel: the template said it exists, and dropping it would
+			// make `--channel <name>` answer "no such channel" for one the author wrote.
+			out = append(out, channelPlan{name: c.Name})
+		}
+	}
+	// THE DERIVED CASE KEEPS THE RESOLVED ARGV. When the template wrote no list there
+	// is exactly one entry, and its command is whatever the profile/url resolution
+	// above produced.
+	if len(ext.Channels) == 0 && len(out) == 1 {
+		out[0].command = derivedCmd
+		out[0].args = derivedArgs
+		// THE DERIVED CHANNEL KEEPS ITS OLD SHELL RULE, exactly: a template with no
+		// `mode` opens no channel at all, even when it names an endpoint. That is not
+		// an oversight to be tidied up here — a url template is mounted as an MCP peer
+		// by the session layer, and `mode` is how its author says they ALSO want a
+		// channel to drive. Making shell unconditional would start a process on every
+		// endpoint template, which is a different extension.
+		out[0].shell = ext.Mode != ""
+		out[0].pty = mode == "pty"
+		out[0].rows, out[0].cols = rows, cols
+	}
+	return out
+}
+
+// bridgeCommandFor renders one channel's relay argv from ITS OWN url and headers.
+//
+// The extension-level bridgeCommand exists for the derived single channel, whose
+// fields are the template's. A declared channel has its own, so it gets its own
+// renderer rather than being folded back into the template's.
+func bridgeCommandFor(c ChannelDecl, via string) (string, []string) {
+	args := []string{c.URL}
+	if via != "" {
+		args = append(args, "--via", via)
+	}
+	for _, name := range sortedKeys(c.Headers) {
+		args = append(args, "--header", name+"="+c.Headers[name])
+	}
+	return mcpbridge.BuiltinCommand, args
+}
+
+// bridgeViaFor is the host a channel's relay dials requests from.
+//
+// IT IS THE TEMPLATE'S TARGET UNLESS THE CHANNEL SAID OTHERWISE, which is the #233
+// rule: the endpoint is reached from the machine the extension names, because that is
+// the machine that can reach it. An extension-level target of internal means "from
+// here", and an http channel with a url of its own on a host target still leaves from
+// that host.
+func bridgeViaFor(c ChannelDecl, ext *Extension) string {
+	if sshconfig.IsInternalName(ext.Target) {
+		return ""
+	}
+	return ext.Target
 }
 
 // bridgeCommand renders a URL template as the argv that carries it: the built-in
@@ -550,6 +666,7 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 	if len(parts) == 1 {
 		out := parts[0]
 		out.Lazy = ext.Lazy()
+		out.Channels = channelStatuses(ext, r.stateFor(name, targets[0].Host))
 		return out
 	}
 	out := foldStatus(parts)
@@ -572,6 +689,33 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 			ClosedReason:    parts[i].ClosedReason,
 		}
 		out.Targets = append(out.Targets, row)
+	}
+	return out
+}
+
+// channelStatuses pairs each declared channel with the handle it is driven through
+// (issue #331).
+//
+// OMITTED FOR A ONE-CHANNEL TEMPLATE. The single `shell_id` above already names it,
+// and a list of one is noise in every reply that carries it — the same rule
+// `targets` follows. A template with a declared list gets the list, because "which
+// of these processes is up" is the question it exists to answer.
+func channelStatuses(ext *Extension, state *extState) []ChannelStatus {
+	chans := ext.EffectiveChannels()
+	if len(chans) <= 1 || len(ext.Channels) == 0 {
+		return nil
+	}
+	out := make([]ChannelStatus, 0, len(chans))
+	for _, c := range chans {
+		row := ChannelStatus{
+			Name:    c.Label(),
+			Kind:    c.resolvedKind(),
+			Default: c.Default,
+		}
+		if id, ok := state.shellOfChannel(c.Name); ok {
+			row.ShellID = id
+		}
+		out = append(out, row)
 	}
 	return out
 }

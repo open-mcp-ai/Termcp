@@ -344,13 +344,17 @@ func (s *Server) handleExtensionUse(ctx context.Context, request mcp.CallToolReq
 	// slow to answer returns `probing` with what the caller should poll, rather
 	// than a failure it would have to guess was not one.
 	target := strings.TrimSpace(getString(args, "target", ""))
-	st, err := s.extensions.AcquireTarget(name, target, extensionUseBudget)
+	channel := strings.TrimSpace(getString(args, "channel", ""))
+	st, err := s.extensions.AcquireChannel(name, target, channel, extensionUseBudget)
 	if err != nil {
 		return toolError(CodeOperationFailed, "starting extension %q: %s", name, err), nil
 	}
 	entry := extensionConfigMap(ext)
 	if target != "" {
 		entry["target"] = target
+	}
+	if channel != "" {
+		entry["channel"] = channel
 	}
 	s.extensionRuntimeFields(entry, st, true)
 	if st.Status == extensions.StatusIdle {
@@ -479,6 +483,12 @@ func extensionConfigMap(ext *extensions.Extension) map[string]any {
 	}
 	if len(ext.Targets) > 0 {
 		entry["targets"] = ext.Targets
+	}
+	// CHANNELS ARE REPORTED ONLY WHEN DECLARED (issue #331). A legacy template's one
+	// derived channel is already described by command/url/mode above, and printing a
+	// one-element list beside those fields would be the same fact said twice.
+	if len(ext.Channels) > 0 {
+		entry["channels"] = ext.Channels
 	}
 	return entry
 }

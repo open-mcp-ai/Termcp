@@ -95,6 +95,26 @@ func (s *Server) ExtMCPHandler() http.Handler {
 	})
 }
 
+// extHTTPChannel names the channel `/ext/{name}/stream` should drive (issue #331).
+//
+// HTTP PRIORITY. The route mounts an MCP server over streamable HTTP, so the only
+// channel it can carry is an htp endpoint; a template whose default is a stdio
+// worker but which also relays an endpoint answers on that endpoint. Falling back to
+// the default (empty name) is what a one-channel template has always done.
+//
+// A template that does not load answers with the default too: the Acquire below
+// reports the load error, and this function's job is only to name a channel.
+func extHTTPChannel(s *Server, name string) string {
+	ext, err := s.extensions.Store().Load(name)
+	if err != nil {
+		return ""
+	}
+	if ch, ok := ext.HTTPChannel(); ok {
+		return ch.Name
+	}
+	return ""
+}
+
 // extMCPPost forwards one JSON-RPC frame to the extension and writes the answer.
 func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, extMCPMaxBody+1))
@@ -127,7 +147,13 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 
 	// THE EXTENSION IS RESOLVED FIRST, because the reply to a bad name should be a
 	// fact about the name rather than a frame that went nowhere.
-	st, err := s.extensions.Acquire(name, extMCPStartWait)
+	//
+	// THE ROUTE MOUNTS AN MCP SERVER, so it can only mean an http channel (issue
+	// #331). A template whose default is a stdio worker but which also relays an
+	// endpoint answers on the endpoint: that is the only channel this route can
+	// carry, and picking the default would hand the client a process that speaks
+	// something else.
+	st, err := s.extensions.AcquireChannel(name, "", extHTTPChannel(s, name), extMCPStartWait)
 	if err != nil {
 		http.Error(w, "extension "+name+": "+err.Error(), http.StatusNotFound)
 		return
