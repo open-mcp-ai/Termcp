@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 新功能
+
+- **转发可以用 `via` 指定建在哪台机器的连接上（#330）**：一个扩展过去只能"要么出站拨 MCP、要么只带转发"，因为转发由扩展自己的会话承载（`ensureForwards` 取 `st.sessionID` 的 `SSHClient()`），而 `url` 模板的会话被写死 loopback。于是"本机拨 MCP 端点 + 在 VPS 上开监听"必须拆成两个互不相识的扩展。现在 `[[forward]]` 带 `via = "<profile>"`：那条隧道建在去那台机器的连接上，bridge 仍从本机拨。`via` 里出现的 host 会自动成为一个**派生 target**（否则没有人去建那条连接），它只承载连接、不继承 `command`/`mode`，并且**不是可寻址的 target**——`Acquire` 只认作者声明的那些，所以 `/ext/{name}/stream` 与 `open ext` 不会因它变得歧义。顶层 forward 的 `via` 只能命名**没有**出现在 `[[targets]]` 里的 host，否则同一条隧道有两处可建；`ext get` 的 forward 状态带 `via` 字段，读的人知道监听在哪台机器上。
+
 
 ## v0.2.10-rc.1 — 2026-11-13
 

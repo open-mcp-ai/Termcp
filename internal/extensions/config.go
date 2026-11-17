@@ -61,6 +61,11 @@ type Extension struct {
 	// non-conflicting local ports while sharing the parent extension's command,
 	// mode, and capabilities.
 	Targets []TargetDecl `toml:"targets,omitempty"`
+	// viaDerived marks a view produced by forTarget for a host that exists only
+	// because a forward named it (issue #330). It is runtime state, never a TOML key:
+	// the author does not write it, and it would be a second way to say something the
+	// forward list already says.
+	viaDerived bool
 	// Description is the author's one-line summary, shown wherever the extension is
 	// listed. It does NOT reach the model by itself: nothing about the set of
 	// installed extensions goes into the MCP instructions, because the tool surface
@@ -205,6 +210,18 @@ func (e *Extension) SetEnabled(v bool) {
 // target for -R and this host for -L/-D, and one field cannot say both.
 type ForwardDecl struct {
 	DirectionKind string `toml:"kind" json:"kind"`
+	// Via names the host this tunnel is built through, instead of the extension's
+	// own target (issue #330).
+	//
+	// ONE TEMPLATE CAN NOW BOTH DIAL OUT AND LISTEN ELSEWHERE. An extension that
+	// relays an MCP endpoint (`url`) has its channel on the loopback bridge, so
+	// every tunnel it declares used to listen on this machine — there was no way to
+	// publish a listener on the far host without a second extension that knew nothing
+	// about the first. `via = "tencentcloud"` puts that one tunnel on that host's
+	// connection while the relay still dials from here.
+	//
+	// Empty keeps today's behaviour exactly: the extension's own session.
+	Via string `toml:"via,omitempty" json:"via,omitempty"`
 	// BindHost is what -L and -D listen on in this host; empty means loopback.
 	BindHost string `toml:"bind_host,omitempty"`
 	// LocalHost is what -R listens on in the TARGET host.
@@ -241,7 +258,42 @@ type TargetDecl struct {
 
 // EffectiveTargets returns the target bindings of the extension. If Targets is
 // non-empty, it is returned; otherwise, a legacy Target string is wrapped.
+//
+// A HOST NAMED ONLY BY `via` IS ALSO A TARGET (issue #330), appended after the
+// declared ones and carrying no channel. It has to be: a tunnel is built on that
+// host's connection, and nothing else would ever dial it — the reconciler walks
+// this list to decide what to bring up, so a `via` host missing here would be a
+// tunnel waiting for a connection nobody opens.
+//
+// The derived entry has no `command` and no `mode` by construction (it is not
+// declared, it is derived), which is already the legal "connection only" shape.
+// It is never a target a caller can ask for by name: Acquire resolves through
+// TargetFor on the DECLARED list, so `/ext/{name}/stream` and `open ext` cannot
+// become ambiguous because of it.
 func (e *Extension) EffectiveTargets() []TargetDecl {
+	declared := e.declaredTargets()
+	if len(declared) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(declared))
+	for _, t := range declared {
+		seen[t.Host] = true
+	}
+	out := declared
+	for _, host := range e.viaHosts() {
+		if seen[host] {
+			continue
+		}
+		seen[host] = true
+		out = append(out, TargetDecl{Host: host})
+	}
+	return out
+}
+
+// declaredTargets is the list the author wrote: the targets array, or the legacy
+// single target wrapped. This is what an ask resolves against, so a host derived
+// from `via` can never be named as the extension's own.
+func (e *Extension) declaredTargets() []TargetDecl {
 	if len(e.Targets) > 0 {
 		return e.Targets
 	}
@@ -251,10 +303,67 @@ func (e *Extension) EffectiveTargets() []TargetDecl {
 	return nil
 }
 
+// isViaDerivedTarget reports whether this extension's own target exists only
+// because a forward named it, rather than being declared by the author.
+//
+// The distinction is load-bearing in one place: `resolve` forces a url template's
+// session to the loopback bridge, because that is where the relay runs. A host that
+// came from `via` is not the bridge's machine — it is the machine a tunnel listens
+// on — so the loopback rule must not apply to it (issue #330).
+func (e *Extension) isViaDerivedTarget() bool {
+	// A VIEW CARRIES ITS OWN ANSWER. forTarget sets viaDerived when it builds a host
+	// nobody declared, and by then Targets is empty — so re-deriving from the lists
+	// here would always say "declared" and the flag would be dead weight.
+	if e.viaDerived {
+		return true
+	}
+	if e.Target == "" {
+		return false
+	}
+	for _, t := range e.declaredTargets() {
+		if t.Host == e.Target {
+			return false
+		}
+	}
+	for _, host := range e.viaHosts() {
+		if host == e.Target {
+			return true
+		}
+	}
+	return false
+}
+
+// viaHosts lists every host named by a forward's `via`, in declaration order and
+// without repeats.
+func (e *Extension) viaHosts() []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(fs []ForwardDecl) {
+		for _, f := range fs {
+			if f.Via == "" || seen[f.Via] {
+				continue
+			}
+			seen[f.Via] = true
+			out = append(out, f.Via)
+		}
+	}
+	add(e.Forwards)
+	for _, t := range e.Targets {
+		add(t.Forwards)
+	}
+	return out
+}
+
 // TargetFor finds the matching TargetDecl by host name, or returns the first
 // target if host is empty and exactly one target exists.
+//
+// IT RESOLVES AGAINST THE DECLARED LIST, not EffectiveTargets: a host derived from
+// a forward's `via` is a connection the extension needs, not a place its channel
+// runs, so an ask naming it would be asking for a process that does not exist there.
+// Keeping the two lists apart is what lets `via` be added without changing what
+// `/ext/{name}/stream` and `open ext` mean (issue #330).
 func (e *Extension) TargetFor(host string) (TargetDecl, bool) {
-	targets := e.EffectiveTargets()
+	targets := e.declaredTargets()
 	if len(targets) == 0 {
 		return TargetDecl{}, false
 	}
@@ -282,6 +391,12 @@ func (e *Extension) Lazy() bool {
 	if e.Resident {
 		return false
 	}
+	// A HOST THAT EXISTS FOR A TUNNEL IS NEVER LAZY. Nothing calls it: it is dialled
+	// because a forward on another host named it, so waiting for a caller would leave
+	// that tunnel permanently unbuilt (issue #330).
+	if e.viaDerived {
+		return false
+	}
 	targets := e.EffectiveTargets()
 	if len(targets) == 0 {
 		return len(e.Forwards) == 0
@@ -296,6 +411,12 @@ func (e *Extension) Lazy() bool {
 
 // LazyForTarget reports whether this host entry has no resident forward.
 func (t TargetDecl) Lazy() bool { return len(t.Forwards) == 0 }
+
+// IsViaDerived reports whether this view describes a host that exists only because a
+// forward named it. Such a host is never lazy: its whole reason to be brought up is
+// a tunnel somebody else is waiting for, and there is no caller whose ask could
+// start it (issue #330).
+func (e *Extension) IsViaDerived() bool { return e.viaDerived }
 
 // IdleTimeoutDuration is the configured idle window, or the default when the key
 // is absent. An unparsable or non-positive value is an error rather than a
@@ -370,6 +491,7 @@ func (e *Extension) Normalize() {
 // Normalize fills a forward's conventional defaults.
 func (f *ForwardDecl) Normalize() {
 	f.DirectionKind = strings.TrimSpace(strings.ToLower(f.DirectionKind))
+	f.Via = strings.TrimSpace(f.Via)
 	f.BindHost = strings.TrimSpace(f.BindHost)
 	f.LocalHost = strings.TrimSpace(f.LocalHost)
 	f.RemoteHost = strings.TrimSpace(f.RemoteHost)
@@ -412,6 +534,25 @@ func (e *Extension) Validate() error {
 	}
 	if len(e.Targets) > 0 {
 		seen := make(map[string]bool, len(e.Targets))
+		// A TOP-LEVEL `via` MAY NOT NAME A DECLARED TARGET (issue #330). The rule the
+		// error below enforces is "forwards belong to a host": with a [[targets]] list,
+		// a top-level forward that named one of those hosts would be a tunnel with two
+		// places it could be built, and the runtime would have to pick one silently.
+		// Naming a host that is NOT declared is the whole point of `via` — it is how a
+		// template reaches a machine its channel does not run on.
+		for j, f := range e.Forwards {
+			if f.Via == "" {
+				continue
+			}
+			for k, t := range e.Targets {
+				if f.Via != t.Host {
+					continue
+				}
+				return fmt.Errorf("top-level forward #%d names via %q, which is [[targets]] #%d: "+
+					"move that forward under targets #%d, since a tunnel has one host and two declarations of it would let the runtime pick",
+					j+1, f.Via, k+1, k+1)
+			}
+		}
 		for i, t := range e.Targets {
 			if t.Host == "" {
 				return fmt.Errorf("targets #%d has no host: every entry needs host = \"<ssh_config profile>\"", i+1)
@@ -434,8 +575,17 @@ func (e *Extension) Validate() error {
 		}
 		// The legacy top-level list belongs to the legacy top-level target; with a
 		// [[targets]] list there is no single host for it to hang off.
-		if len(e.Forwards) > 0 {
-			return fmt.Errorf("forwards belong to a host: move [[forward]] under the [[targets]] entry it listens for, since two targets cannot both bind the same local port")
+		//
+		// A TOP-LEVEL FORWARD WITH `via` IS THE EXCEPTION (issue #330). It is not a
+		// tunnel for one of these hosts — it is a tunnel for a machine none of them is,
+		// built through that host's connection. The check above already refused a `via`
+		// that names a declared target, so what reaches here names a host that exists
+		// only because this forward asked for it.
+		for j, f := range e.Forwards {
+			if f.Via == "" {
+				return fmt.Errorf("forwards belong to a host: move [[forward]] #%d under the [[targets]] entry it listens for, "+
+					"since two targets cannot both bind the same local port (or set `via` to name a host that is not a target)", j+1)
+			}
 		}
 	}
 	switch e.Mode {
@@ -566,6 +716,15 @@ func (f *ForwardDecl) Validate() error {
 	// reconcile -- and point at the forward that does publish one service.
 	if f.DirectionKind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
 		return fmt.Errorf("a dynamic (SOCKS5) forward binds loopback only: it performs no authentication, so %q would be an open proxy (use kind = \"local\" to publish one service)", forward.ResolveBindHost(f.BindHost))
+	}
+	// `via` NAMES A HOST, so it is checked as one (issue #330). A value that is not a
+	// profile name would fail at dial time as "no such profile" on a host the author
+	// never meant to write; naming it here is the difference between a typo and a
+	// mystery.
+	if f.Via != "" {
+		if err := sshconfig.ValidateName(f.Via); err != nil {
+			return fmt.Errorf("via names the host this tunnel is built through: %w", err)
+		}
 	}
 	return nil
 }
