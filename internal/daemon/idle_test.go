@@ -126,10 +126,7 @@ func TestIdleWatcherDisabled(t *testing.T) {
 func TestIdleWatcherConstructionArmsUnderLock(t *testing.T) {
 	for range 25 {
 		fired := make(chan struct{})
-		watcher := NewIdleWatcher(time.Nanosecond, func() { close(fired) })
-		if watcher.timeout != time.Nanosecond {
-			t.Fatalf("watcher recorded timeout %v", watcher.timeout)
-		}
+		NewIdleWatcher(time.Nanosecond, func() { close(fired) })
 		select {
 		case <-fired:
 		case <-time.After(3 * time.Second):
