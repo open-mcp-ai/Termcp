@@ -91,6 +91,7 @@ const (
 // Status is the runtime half of an extension. The template half stays in the
 // Store; the two are merged for whoever asks (the MCP tool, the Web UI).
 type Status struct {
+	Health
 	Name string `json:"name"`
 	// Status is one of the five above.
 	Status string `json:"status"`
@@ -489,6 +490,7 @@ func bridgeCommand(ext *Extension, via string) (string, []string) {
 // extension with a single target reports the same fields at the top level, so a
 // caller that never asked about targets keeps working unchanged.
 type TargetStatus struct {
+	Health
 	Target string `json:"target"`
 	Status string `json:"status"`
 	// SessionID/ShellID are this host's handles. Extensions on the same host and
@@ -507,6 +509,29 @@ type TargetStatus struct {
 	ClosedSessionID string `json:"closed_session_id,omitempty"`
 	ClosedShellID   string `json:"closed_shell_id,omitempty"`
 	ClosedReason    string `json:"closed_reason,omitempty"`
+}
+
+// Health separates the reconciler's verdict from observations about the
+// channel named in this row. A nil ChannelOpen means there is no such handle.
+type Health struct {
+	PID          int   `json:"pid,omitempty"`
+	ChannelOpen  *bool `json:"channel_open,omitempty"`
+	LastActiveAt int64 `json:"last_active_at,omitempty"` // Unix ms
+	Restarts     int   `json:"restarts"`
+}
+
+func (r *Reconciler) observeChannel(st *Status) {
+	st.PID, st.ChannelOpen = 0, nil
+	if st.ShellID == "" || r.sessMgr == nil {
+		return
+	}
+	open := false
+	if sess := r.liveSession(st.SessionID); sess != nil {
+		if child := sess.GetChildShell(st.ShellID); child != nil {
+			open, st.PID = child.RuntimeEvidence()
+		}
+	}
+	st.ChannelOpen = &open
 }
 
 // Status reports the runtime state of one extension. ok is false for a name the
@@ -545,7 +570,9 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 	for _, t := range targets {
 		st := r.stateFor(name, t.Host)
 		r.reapEnded(name, st)
-		parts = append(parts, st.snapshot())
+		part := st.snapshot()
+		r.observeChannel(&part)
+		parts = append(parts, part)
 	}
 	if len(parts) == 1 {
 		out := parts[0]
@@ -556,6 +583,7 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 	out.Lazy = ext.Lazy()
 	for i, t := range targets {
 		row := TargetStatus{
+			Health:          parts[i].Health,
 			Target:          t.Host,
 			Status:          parts[i].Status,
 			SessionID:       parts[i].SessionID,
@@ -584,6 +612,10 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 // honest answer to "is this extension usable" when half its machines are down.
 func foldStatus(parts []Status) Status {
 	out := Status{Status: StatusUnavailable}
+	for _, p := range parts {
+		out.Restarts += p.Restarts
+		out.LastActiveAt = max(out.LastActiveAt, p.LastActiveAt)
+	}
 	if len(parts) == 0 {
 		return out
 	}
@@ -638,7 +670,9 @@ func (r *Reconciler) TargetStatus(name, target string) (Status, bool) {
 	}
 	st := r.stateFor(name, t.Host)
 	r.reapEnded(name, st)
-	return st.snapshot(), true
+	out := st.snapshot()
+	r.observeChannel(&out)
+	return out, true
 }
 
 // List reports every extension's runtime state, sorted the way the store sorts

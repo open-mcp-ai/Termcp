@@ -1015,9 +1015,18 @@ const getDetail = `Describe one node: a session, one of its channels, or a peer.
   get a1f3 mcp tools        list tools offered by a mounted MCP peer
   get a1f3 mcp tools search inspect input schema for one tool
   get task task_9f2c11ab    one background transfer, waiting up to the window
+  get ext <name>            extension state and observed channel health
   get use:<host> file /p   metadata for one path on a host, no session needed
 
 For the list of what exists, use ls.
+
+EXTENSION HEALTH: channel_open reports the named SSH channel, not application
+readiness. pid is the embedded server's live child (possibly a shell wrapper);
+ordinary SSH, in-process handlers and shell-less templates have no observable PID.
+last_active_at is the last attachment or observed use (Unix ms), not a heartbeat.
+restarts counts replacement resident channels since this reconciler began tracking
+the target; first starts, extra on-demand instances and failed retries do not count.
+For multiple targets, inspect targets_status for each channel.
 
 A HOST CAN BE THE TARGET, with 'get use:<host> file <path>' (or the bare profile
 name). That reads the path's metadata over the host's pooled transport; the reply

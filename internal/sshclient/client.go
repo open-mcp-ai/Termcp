@@ -14,7 +14,8 @@ import (
 
 // ExecSession wraps an active SSH client session.
 type ExecSession struct {
-	client *ssh.Client
+	client   *ssh.Client
+	localPID func() int // in-memory transport only, bound to this channel
 	// session is the channel a command runs on. It is nil for a bare client (see
 	// BareClient): a connection with no process on it, which is what a shell-less
 	// container is.
@@ -43,6 +44,15 @@ type ExecSession struct {
 	// Without this, a deferred close racing an explicit Delete double-closed the
 	// session and raced on extraClosers (issue #255).
 	closeOnce sync.Once
+}
+
+// LocalPID reports the embedded server's child, or zero when no local child is
+// observable. An SSH session ID is not an OS process ID.
+func (es *ExecSession) LocalPID() int {
+	if es.localPID != nil {
+		return es.localPID()
+	}
+	return 0
 }
 
 // newStdinToken builds the one-token channel with its token already in place.

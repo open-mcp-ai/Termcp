@@ -534,6 +534,18 @@ func (s *Server) extensionRuntimeFields(entry map[string]any, st extensions.Stat
 	name, _ := entry["name"].(string)
 	status, next := extensionStatusWord(name, st, enabled)
 	entry["status"] = status
+	if withHistory {
+		entry["restarts"] = st.Restarts
+		if st.PID != 0 {
+			entry["pid"] = st.PID
+		}
+		if st.ChannelOpen != nil {
+			entry["channel_open"] = *st.ChannelOpen
+		}
+		if st.LastActiveAt != 0 {
+			entry["last_active_at"] = st.LastActiveAt
+		}
+	}
 	if next != "" {
 		entry["next"] = next
 	}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **`get ext <name>` 提供健康对账字段（#325）**：`channel_open` 报告通道是否仍打开，`pid` 仅在内置服务确实启动了本地子进程时返回；`last_active_at` 是最近挂载或使用的 Unix 毫秒时间，`restarts` 只计常驻通道被成功替换。多目标扩展逐目标报告。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

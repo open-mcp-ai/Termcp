@@ -34,6 +34,12 @@ type extState struct {
 	lazy      bool
 	idleLimit time.Duration
 	lastUse   time.Time
+	// Unlike the idle timer, activity requires a successful attachment or use;
+	// a failed acquire is not activity. Keep the previous resident identity
+	// across detach so replacement is counted, but reattaching it is not.
+	lastActive        time.Time
+	lastResidentShell string
+	restarts          int
 
 	// What was taken away, for a caller still holding the handle: "not found" is
 	// true and useless where "this was closed at 14:02 because it was idle for 10m"
@@ -160,6 +166,9 @@ func (st *extState) renewSession(sessionID string) bool {
 		if ex.sessionID == sessionID {
 			ex.lastUse = st.lastUse
 		}
+	}
+	if st.shellID != "" || len(st.extra) != 0 {
+		st.lastActive = st.lastUse
 	}
 	return true
 }
@@ -290,7 +299,8 @@ func (st *extState) addExtra(sessionID, shellID, label, fp string) {
 		// this extension served by" must still answer after the last channel goes.
 		st.sessionID = sessionID
 	}
-	st.extra = append(st.extra, &extraChannel{sessionID: sessionID, shellID: shellID, label: label, lastUse: time.Now(), fp: fp})
+	st.lastActive = time.Now()
+	st.extra = append(st.extra, &extraChannel{sessionID: sessionID, shellID: shellID, label: label, lastUse: st.lastActive, fp: fp})
 	st.mu.Unlock()
 }
 
@@ -322,10 +332,15 @@ func (st *extState) dropInstancesOnSession(sessionID string) []string {
 func (st *extState) renew(shellID string) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if st.shellID != "" && shellID == st.shellID {
+		st.lastActive = time.Now()
+		return true
+	}
 	for _, ex := range st.extra {
 		if ex.shellID == shellID {
 			ex.lastUse = time.Now()
 			st.lastUse = ex.lastUse
+			st.lastActive = ex.lastUse
 			return true
 		}
 	}
@@ -515,6 +530,15 @@ func (st *extState) shellOf() string {
 // through.
 func (st *extState) attach(sessionID, shellID string) {
 	st.mu.Lock()
+	if shellID != "" && st.lastResidentShell != shellID {
+		if st.lastResidentShell != "" {
+			st.restarts++
+		}
+		st.lastResidentShell = shellID
+		st.lastActive = time.Now()
+	} else if shellID == "" && sessionID != "" && st.sessionID != sessionID {
+		st.lastActive = time.Now()
+	}
 	st.sessionID = sessionID
 	st.shellID = shellID
 	st.mu.Unlock()
@@ -695,11 +719,15 @@ func (st *extState) snapshot() Status {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	out := Status{
+		Health:    Health{Restarts: st.restarts},
 		Status:    st.status,
 		SessionID: st.sessionID,
 		ShellID:   st.shellID,
 		Lazy:      st.lazy,
 		Instances: len(st.extra),
+	}
+	if !st.lastActive.IsZero() {
+		out.LastActiveAt = st.lastActive.UnixMilli()
 	}
 	// THE CHANNEL REPORTED IS ONE THE CALLER CAN DRIVE. For a template with its own
 	// channel that is the reconciler's; for an on-demand extension it is the instance
