@@ -946,6 +946,9 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 			"how a shell pipeline is written. To sequence two directives, use `;` or `&&`.")
 	}
 
+	if op, _ := right.Flag("op"); op == "batch-create" || right.FlagState("dry-run") != FlagAbsent {
+		return refuse("batch-create and --dry-run take an explicit manifest, not a piped byte stream")
+	}
 	left.Pipe = &right
 	right.Piped = true
 	// The echo in the reply is the line the caller wrote, not the half this statement

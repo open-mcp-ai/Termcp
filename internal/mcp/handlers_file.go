@@ -94,6 +94,21 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 	defer releaseTransport()
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
+		// Some servers reject OPEN on a directory; others open it and let
+		// FSTAT identify it. Probe on failure only: a regular file keeps
+		// its original round trips, rendering, and error classification.
+		if mode == "text" && args["offset"] == nil && args["length"] == nil && charset == "" && !raw && !numbered && sftpCli.IsDirectory(remotePath) {
+			// A directory reveals metadata for its children. Keep the same
+			// admission as the existing file_stat listing, before enumeration.
+			if bad := (toolGuard{server: s}).check(ctx, "file_stat", lookupGate("file_stat"), request); bad != nil {
+				return bad, nil
+			}
+			listing, listErr := sftpCli.ListDirectory(ctx, remotePath)
+			if listErr != nil {
+				return fileErr(listErr, remotePath), nil
+			}
+			return jsonResult(toMap(listing)), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	return jsonResult(toMap(result)), nil
@@ -121,16 +136,33 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	if data == "" {
-		return toolError(CodeInvalidArgument, "%s", "data required"), nil
+	createOnly := getBool(args, "create_only", false)
+	if data == "" && !createOnly {
+		return toolError(CodeInvalidArgument, "%s", "data required: write one named file, e.g. `write <session> file <directory>/<name> --data ...`; for a directory use --op batch-create --data $1 --dry-run"), nil
 	}
 
+	// The approved-operation executor replays the handler directly. Recheck
+	// this child's current grant even if the queued request was authorized.
+	if createOnly {
+		if bad := s.admission(ctx, "file_write", lookupGate("file_write"), request); bad != nil {
+			return bad, nil
+		}
+	}
 	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
 	defer releaseTransport()
+	if createOnly {
+		if err := sftpCli.CreateExclusive(remotePath, data); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return toolError(CodeConflict, "%s already exists; not overwritten", remotePath), nil
+			}
+			return fileErr(err, remotePath), nil
+		}
+		return jsonResult(map[string]any{"created": true, "bytes_written": len(data)}), nil
+	}
 	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
 	if err != nil {
 		return fileErr(err, remotePath), nil

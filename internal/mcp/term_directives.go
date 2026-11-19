@@ -429,6 +429,12 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 	// needs.
 	case "write":
 		if stmt.Kind == "file" {
+			if op, _ := stmt.Flag("op"); op == "batch-create" {
+				return s.batchCreate(ctx, stmt)
+			}
+			if stmt.FlagState("dry-run") != directive.FlagAbsent {
+				return []envelope.Slot{badRequest(stmt, "--dry-run is only supported with --op batch-create")}
+			}
 			// --old-text makes it a replace: one write verb, and whether it edits in
 			// place is a property of what was supplied, not a second word to learn.
 			action := "write"

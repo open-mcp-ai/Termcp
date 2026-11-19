@@ -192,9 +192,10 @@ var ops = []Op{
 		// satisfied by any spelling: the handler requires remote_path and size, and the
 		// flag for size did not exist.
 		Flags: []string{"data", "mode", "offset:number", "length:number", "size:number",
-			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number"},
-		Usage:  "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
-		Detail: writeDetail},
+			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number", "dry-run"},
+		Valueless: []string{"dry-run"},
+		Usage:     "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
+		Detail:    writeDetail},
 
 	// --- a peer: one call, or the manual send/recv pair ---
 
@@ -423,6 +424,11 @@ A HOST CAN BE THE TARGET WITHOUT A SESSION. 'read use:<host> file <path>' (or
 returns the bytes directly; it creates no session and leaves no archive tile. Use
 'connect <host>' first only when you need a channel, a terminal, or the file URLs
 that belong to a session.
+
+With no byte or rendering flags, a directory returns a JSON object with entries
+(name, type, size in bytes, mtime in Unix milliseconds). One level only; links
+are reported as symlink and never traversed. Up to 128 entries in name order fit
+the reply, fewer for a small byte window; truncated means the list is incomplete.
 
 The bytes go from the left node to the right one WITHOUT passing through your
 context: no window, no rendering, and nothing held in between — the two ends are
@@ -1078,6 +1084,17 @@ const writeDetail = `Write a file on a session.
   write a1f3 file /tmp/x --data hello
   read internal file ./x | write a1f3 file /tmp/x
   write a1f3 file /tmp/x --data hex:00ff
+
+Name the child file to change. A directory is not an implicit batch request.
+To create direct children of an existing absolute directory:
+  write a1f3 file /work --op batch-create --data $1 --dry-run
+Pass the JSON manifest as args[0], e.g. [["a.txt","hello"],["b.txt",""]].
+The preview checks names and write grants; it does not open files or predict
+collisions. Remove --dry-run to create files exclusively, never overwrite.
+Each child has its own result and normal write approval. Conflicts do not
+stop later entries. Limit: 32 children and 256 KiB of manifest JSON. Text is
+written as UTF-8 without further escape decoding. Use a trusted, stable parent
+directory: SFTP v3 has no handle-relative create if ancestors are moved concurrently.
 
 A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
 profile name) writes over the host's pooled transport, so no session is created and

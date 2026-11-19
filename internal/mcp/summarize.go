@@ -87,6 +87,9 @@ func summarizeOperation(tool string, args map[string]any) string {
 	switch tool {
 	case "file_write":
 		path := s("remote_path")
+		if getBool(args, "create_only", false) {
+			return fmt.Sprintf("create %s (%d UTF-8 bytes, never overwrite)", path, len(getString(args, "data", "")))
+		}
 		return fmt.Sprintf("write %s to %s", describeBytes(len(s("data")), s("mode")), path)
 
 	case "file_delete":
