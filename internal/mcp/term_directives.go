@@ -240,6 +240,9 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		case stmt.Kind == "alias":
 			return []envelope.Slot{s.directiveAlias(ctx, aliasStatement(stmt, true), win)}
 		default:
+			if ids, batch := splitBatchIDs(stmt.Target); batch {
+				return s.removeArchives(ctx, stmt, ids)
+			}
 			return []envelope.Slot{s.directiveRemove(ctx, stmt, win)}
 		}
 

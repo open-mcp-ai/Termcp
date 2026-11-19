@@ -3,7 +3,58 @@ package mcp
 import (
 	"strings"
 	"testing"
+
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
+
+func TestRmArchiveBatch(t *testing.T) {
+	s := newTestServer(t)
+	newSession := func(name string) string {
+		handle := handleFrom(t, termText(t, s, map[string]any{"cmd": "connect internal --name " + name}))
+		id := strings.Split(handle, ":")[0]
+		t.Cleanup(func() { _ = s.sessMgr.Delete(id) })
+		return id
+	}
+	first, live, last := newSession("first"), newSession("live"), newSession("last")
+	for _, id := range []string{first, last} {
+		termText(t, s, map[string]any{"cmd": "close " + id})
+	}
+	ids := []string{first, live, "missing", last}
+	line := "rm " + strings.Join(ids, ",")
+	for _, flag := range []string{" --force", " --dry-run", ""} {
+		reply := s.Term(t.Context(), line+flag, nil)
+		if flag == " --force" {
+			if len(reply.Slots) != 1 || reply.Slots[0].Code != 400 {
+				t.Fatalf("batch force must be refused: %+v", reply.Slots)
+			}
+		} else {
+			success := 204
+			if flag != "" {
+				success = 200
+			}
+			if len(reply.Slots) != len(ids) {
+				t.Fatalf("want one slot per requested session, got %+v", reply.Slots)
+			}
+			if result := reply.Slots[0].Headers["Batch-Result"]; result != "ok=2 failed=2 held=0" {
+				t.Errorf("unexpected batch summary %q", result)
+			}
+			for i, code := range []int{success, 409, 404, success} {
+				slot := reply.Slots[i]
+				if slot.Code != code || slot.Headers["Path"] != "rm "+ids[i]+flag {
+					t.Errorf("entry %s: got %+v, want %d", ids[i], slot, code)
+				}
+			}
+		}
+		for _, id := range []string{first, last} {
+			if exists := s.sessMgr.Get(id) != nil; exists != (flag != "") {
+				t.Fatalf("flag %q: archive %s exists=%t", flag, id, exists)
+			}
+		}
+		if sess := s.sessMgr.Get(live); sess == nil || sess.Info().Status != api.SessionRunning {
+			t.Fatalf("flag %q: running session changed", flag)
+		}
+	}
+}
 
 // TestRmRunningSessionNeedsForce pins the guard against accidental erasure.
 //

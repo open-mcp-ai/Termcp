@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/mcp"
+	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
 func (s *Server) handleListSessions(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -63,6 +64,17 @@ func (s *Server) handleTerminateSession(ctx context.Context, request mcp.CallToo
 func (s *Server) handleDeleteSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	sessionID := getString(args, "session_id", "")
+	if getBool(args, "archive_only", false) {
+		// Use the immutable session ID here, at the point of deletion (including
+		// delayed dispatch). Never resolve a vanished archive to a name or channel.
+		if bad := s.checkArchivedID(sessionID); bad != nil {
+			return bad, nil
+		}
+		if err := s.sessMgr.Delete(sessionID); err != nil {
+			return toolError(CodeOperationFailed, "%s", err.Error()), nil
+		}
+		return successResult(), nil
+	}
 
 	// Comma-separated form: erase every listed session independently so one bad
 	// entry does not stop the rest; the JSON result carries per-session outcomes.
@@ -84,4 +96,17 @@ func (s *Server) handleDeleteSession(ctx context.Context, request mcp.CallToolRe
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	return successResult(), nil
+}
+
+func (s *Server) checkArchivedID(id string) *mcp.CallToolResult {
+	sess := s.sessMgr.Get(id)
+	if sess == nil {
+		return toolError(CodeSessionNotFound, "no session with ID %q; use session IDs from `ls --all`", id)
+	}
+	switch status := sess.Info().Status; status {
+	case api.SessionExited, api.SessionError:
+		return nil
+	default:
+		return toolError(CodeConflict, "session %q is %s; batch rm only removes stopped sessions", id, status)
+	}
 }

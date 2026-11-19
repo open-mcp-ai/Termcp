@@ -475,8 +475,53 @@ func (s *Server) directiveClose(ctx context.Context, stmt directive.Statement, w
 	return closedSlot(stmt, stmt.Target, "")
 }
 
-// directiveRemove deletes a session and its logs.
+// removeArchives keeps one outcome per requested ID, including previews.
+// Namespace admission for the entire list already ran in runDirective.
+func (s *Server) removeArchives(ctx context.Context, stmt directive.Statement, ids []string) []envelope.Slot {
+	if _, force := stmt.Flag("force"); force || len(ids) == 0 {
+		return []envelope.Slot{badRequest(stmt, "batch rm needs stopped session IDs separated by commas; --force is not accepted")}
+	}
+	preview := boolFlag(stmt, "dry-run")
+	slots := make([]envelope.Slot, 0, len(ids))
+	ok, failed, held := 0, 0, 0
+	for _, id := range ids {
+		entry := stmt
+		entry.Target, entry.Path = id, "rm "+id
+		var slot envelope.Slot
+		if preview {
+			entry.Path += " --dry-run"
+			if bad := s.checkArchivedID(id); bad != nil {
+				slot = s.slotFromFailure(ctx, entry, failureFromResult(bad))
+			} else {
+				slot = envelope.Slot{Code: 200, Headers: map[string]string{"Path": entry.Path},
+					Body: "Would permanently erase the session manifest and transcript."}
+			}
+			slot.Headers["Dry-Run"] = "true"
+		} else {
+			result, fail := s.callTool(ctx, "session_delete", argsOf("session_id", id, "archive_only", true))
+			if fail != nil {
+				slot = s.slotFromFailure(ctx, entry, fail)
+			} else if pending := reviewPendingFrom(result); pending != nil {
+				slot = pending.slot(entry.Path)
+			} else {
+				slot = noContent(entry)
+			}
+		}
+		switch {
+		case slot.Code >= 400:
+			failed++
+		case slot.Code == 202:
+			held++
+		default:
+			ok++
+		}
+		slots = append(slots, slot)
+	}
+	slots[0].Headers["Batch-Result"] = fmt.Sprintf("ok=%d failed=%d held=%d", ok, failed, held)
+	return slots
+}
 
+// directiveRemove deletes a session and its logs.
 func (s *Server) directiveRemove(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	// --dry-run ANSWERS WHAT WOULD HAPPEN WITHOUT DOING IT, and it runs FIRST.
 	//
