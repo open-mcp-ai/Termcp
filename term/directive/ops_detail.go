@@ -768,30 +768,12 @@ connection and answers with its output:
   cmd: "run use:internal $1"          args: ["echo short-circuit works"]
   cmd: "run prod $1"                  args: ["systemctl is-active app"]
 
-The transport comes from the pool, so a host whose session you closed a moment ago
-answers without a new handshake; and NOTHING is registered — no session appears in
-ls, and no DEAD tile is archived afterwards for a command that printed one line.
-That is the whole point: connect + run + close is three calls and leaves a record,
-and most of what a caller runs is one line whose only product is its output.
-
-WHAT IT GIVES UP IS THE CHANNEL, so it is not 'run' on a session and does not
-pretend to be:
-  - nothing is retained: no cursor, no later 'read', no 'key'/'input' into the
-    process. The reply is what arrived before it exited.
-  - stdin is closed. A program that asks a question reads EOF and exits, so this
-    form is for commands that do not converse.
-  - --tail and --grep still filter the output, and exit status still rides in
-    Exit-Code — those are properties of the reply, not of a channel.
-  - timeout is a DEADLINE here, not a sample: the SSH channel's process exiting is
-    a real completion signal, so the call returns the moment it exits, and a command
-    that outlives the window is stopped and reported as Status: stopped, because a
-    one-shot has nowhere to keep a live process for a later read.
-  - the host profile's default_approval still applies, and a short-circuit operation
-    is REFUSED when it is on: review is a session's queue, and this form has no
-    session to hold the decision. 'connect' is the way to run a reviewable command.
-
-A command that must be watched, typed into, or read in pieces wants a channel, which
-is what 'connect' is for.
+Each command gets its own pipe channel in the host's reusable use session.
+The reply's Channel header is its address, for example a1f3:2. If the wait
+expires, the command continues. Use 'read a1f3:2' to follow its output, or
+'read a1f3:2 --cursor 0' to start from the beginning. Do not resubmit the
+command just to collect its result. A pipe reports Exit-Code when known.
+A host requiring default_approval must still be reached with 'connect' first.
 
 ONE WORD, ONE LANGUAGE. cmd IS THE DIRECTIVE LANGUAGE: a reference ($1, $2, $NAME) is
 the WHOLE word it sits in, never glued to a literal. There is no shell concatenation

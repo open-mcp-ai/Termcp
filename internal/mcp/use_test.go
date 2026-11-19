@@ -269,8 +269,8 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if all := sessMgr.ListAll(); len(all) != 1 {
 		t.Fatalf("a running short-circuit run must not create another container, got %d: %+v", len(all), all)
 	}
-	if cs := sessMgr.GetChildShell(slowChannel); cs == nil {
-		t.Errorf("the channel named in the reply is not in the registry: %q", slowChannel)
+	if cs, bad := s.requireShell(slowChannel); bad != nil || cs == nil {
+		t.Errorf("the channel named in the reply does not resolve: %q", slowChannel)
 	} else {
 		cs.TerminateShell() // leave nothing running behind this test
 	}
