@@ -139,10 +139,6 @@ func (r Restriction) AllowsPath(p string) bool {
 // handlers — answer with this text, so a caller who meets the whitelist on
 // either one reads the same sentence and is pointed at the same remedy.
 //
-// The wording is unchanged from when the whitelist held tool names: it is part of
-// the contract an extension's author and an agent both read, and a refactor that
-// silently reworded a refusal would make two otherwise identical deployments
-// disagree in their logs.
 // The wording names BOTH surfaces' spelling, because a refusal is read on whichever
 // one produced it. It used to name only `extension(action=get)`, which is the MCP
 // tool: a caller driving the DSL read that advice, ran it, and got "unknown
@@ -150,8 +146,13 @@ func (r Restriction) AllowsPath(p string) bool {
 // #172). The DSL's spelling comes first because the DSL is the surface this project
 // points a caller at, and the tool name is what an MCP client has instead.
 func ForbiddenTool(toolName string) string {
-	return "tool " + toolName + " is not permitted on this session: it is an extension session whose capability list does not include it. " +
+	msg := "tool " + toolName + " is not permitted on this session: it is an extension session whose capability list does not include it. " +
 		"Use `get ext <name>` (`extension` with `action=get` on the MCP tool surface) to see what this session was created to allow."
+	if toolName == "shell_archive" || toolName == "session_terminate" {
+		return msg + " To release one on-demand instance, use `close ext <name> <shell_id>` with its shell_id. " +
+			"For a resident instance, ask the extension owner to manage its lifecycle."
+	}
+	return msg + " If this operation belongs in the template, ask the extension owner to review its capability list; retrying this call will not change it."
 }
 
 // ForbiddenPath renders the refusal for a path argument outside the whitelist.
