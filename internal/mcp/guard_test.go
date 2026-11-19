@@ -96,7 +96,7 @@ func TestGuardRefusesToolsOutsideWhitelist(t *testing.T) {
 		}
 	}
 
-	for _, tool := range []string{"file_write", "file_delete", "shell_input", "session_terminate"} {
+	for _, tool := range []string{"file_write", "file_delete", "shell_input", "session_terminate", "shell_archive"} {
 		bad := (toolGuard{server: s}).check(context.Background(), tool, lookupGate(tool), makeRequest(map[string]any{
 			"session_id":  sid,
 			"remote_path": "~/skills/foo/SKILL.md",
@@ -107,6 +107,12 @@ func TestGuardRefusesToolsOutsideWhitelist(t *testing.T) {
 		code, msg := decodeToolError(t, bad)
 		if code != CodeForbidden {
 			t.Errorf("%s refusal code = %q, want %q (msg: %s)", tool, code, CodeForbidden, msg)
+		}
+		if !strings.Contains(msg, "extension owner") || !strings.Contains(msg, "get ext <name>") {
+			t.Errorf("%s refusal must identify who can act and where to inspect the template: %s", tool, msg)
+		}
+		if tool == "shell_archive" && !strings.Contains(msg, "close ext <name> <shell_id>") {
+			t.Errorf("archive refusal must name the instance-specific release command: %s", msg)
 		}
 	}
 }
