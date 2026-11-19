@@ -253,6 +253,9 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 	// channel on the link. That is the same shape as #132 (`close <session> --force`
 	// closing the primary channel): a qualifier read as decoration.
 	case "close":
+		if strings.Contains(stmt.Target, ",") && stmt.Kind == "" {
+			return s.closeBatch(ctx, stmt, win)
+		}
 		switch stmt.Kind {
 		case "ext":
 			// HANDING AN INSTANCE BACK (issue #183). An on-demand extension's instances

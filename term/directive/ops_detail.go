@@ -136,7 +136,7 @@ var ops = []Op{
 		RetiredFlags: map[string]string{
 			"force": "--force is gone. `close` stops and keeps the record, `rm` erases it.",
 		},
-		Usage:  "close <session> [<index>]   |   close <peer>   |   close ext <name> [<channel>]",
+		Usage:  "close <session> [<index>]   |   close <id>[:<index>],<id>[:<index>]...   |   close <peer>   |   close ext <name> [<channel>]",
 		Detail: closeDetail},
 	{Name: "rm", Kind: KindFlags, Target: true, NoPositional: true, TargetKind: TargetSession,
 		Kinds:     []string{"file", "host", "ext", "alias"},
@@ -1519,6 +1519,11 @@ close <session>:<index>   stops that CHANNEL. Other channels and the connection
 close <session>           stops the whole SESSION: every channel ends, the
                           transport drops, and the entry stays in the archive as
                           exited with its output still readable.
+
+Batch: close a1f3:2,b2c4,c3d5:1 closes two individual channels and one whole
+session. Use exact session IDs from ls, without spaces or flags. Each target gets
+its own result in order. A malformed list is refused before any close; a missing
+target does not stop the remaining entries.
 
 --grace N (sessions only) is how long the process gets to exit after SIGTERM
 before the transport is closed anyway. YOU DO NOT HAVE TO PASS IT: omitted means
