@@ -685,8 +685,8 @@ func (r *Reconciler) RetryTarget(name, target string) error {
 		return err
 	}
 	st.want()
-	r.detach(st)
-	st.mark(StatusUnavailable)
+	// The probe reuses working resources and archives an exited channel.
+	// Detaching here would erase its transcript or kill a healthy process.
 	st.resetRetryBudget()
 	r.retryTargetNow(name, ext.Target)
 	return nil
