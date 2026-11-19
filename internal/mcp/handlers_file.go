@@ -136,16 +136,33 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
-	if data == "" {
-		return toolError(CodeInvalidArgument, "%s", "data required: write one named file, e.g. `write <session> file <directory>/<name> --data ...`; a directory is not a batch request"), nil
+	createOnly := getBool(args, "create_only", false)
+	if data == "" && !createOnly {
+		return toolError(CodeInvalidArgument, "%s", "data required: write one named file, e.g. `write <session> file <directory>/<name> --data ...`; for a directory use --op batch-create --data $1 --dry-run"), nil
 	}
 
+	// The approved-operation executor replays the handler directly. Recheck
+	// this child's current grant even if the queued request was authorized.
+	if createOnly {
+		if bad := s.admission(ctx, "file_write", lookupGate("file_write"), request); bad != nil {
+			return bad, nil
+		}
+	}
 	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)
 	if bad != nil {
 		return bad, nil
 	}
 	defer sftpCli.Close()
 	defer releaseTransport()
+	if createOnly {
+		if err := sftpCli.CreateExclusive(remotePath, data); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return toolError(CodeConflict, "%s already exists; not overwritten", remotePath), nil
+			}
+			return fileErr(err, remotePath), nil
+		}
+		return jsonResult(map[string]any{"created": true, "bytes_written": len(data)}), nil
+	}
 	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
 	if err != nil {
 		return fileErr(err, remotePath), nil

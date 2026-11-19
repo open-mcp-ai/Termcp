@@ -772,7 +772,7 @@ func (s *Client) openForWrite(remotePath string, offset *int64) (*pkgsftp.File, 
 		return f, off, nil
 	}
 	if fi, statErr := s.client.Stat(remotePath); statErr == nil && fi.IsDir() {
-		return nil, 0, fmt.Errorf("%s: %w; write one named child with `write <session> file <directory>/<name> --data ...`", remotePath, ErrIsDirectory)
+		return nil, 0, fmt.Errorf("%s: %w; write one named child with `write <session> file <directory>/<name> --data ...` or preview a manifest with --op batch-create --data $1 --dry-run", remotePath, ErrIsDirectory)
 	}
 	// Only the not-found case is worth a second round trip; a permission refusal or
 	// a transport fault is already saying the right thing.
