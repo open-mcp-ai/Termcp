@@ -882,17 +882,17 @@ a long capability list becomes a count, because what a caller acts on here is th
 and the tools, not an essay. '--all' prints the template whole, and
 'get ext <name> --all' is the same document.
 
-An extension that declares no forward is started ON DEMAND. Every call is answered with
-an instance of its own: one that has been silent for the whole idle_timeout is nobody's
-and is handed over, and one that was used a moment ago belongs to whoever is using it, so
-the next caller gets its own process. An instance nobody touches for the whole window is
+An extension with no forward and no resident=true is started ON DEMAND. Every call
+gets a new instance. An instance nobody touches for its configured idle window is
 closed, and the id that named it then answers with when and why instead of "not found".
 
   close ext boxfs             give the instance back now instead of at the end of the
                               window; close ext boxfs <shell_id> gives back one
 
-A template that declares a forward is the exception - a listener has no caller to start
-it, so it is up from startup and stays up, and its connection is not yours to close.
+A template with a forward or resident=true is resident. If its process exits, use
+'open ext <name>' again: it archives the exited channel and starts a replacement.
+If the resident is still running, the same channel comes back; other channels on the
+connection keep running.
 
 THE MODE IS SSH'S OWN RULE, which is why it needs no remembering: ssh host gives you a
 terminal, ssh host cmd runs cmd without one, ssh -t host cmd forces a terminal back.

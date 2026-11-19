@@ -267,8 +267,14 @@ func (r *Reconciler) ensureMemberShell(plan hostPlan, st *extState, sess *sessio
 	if !plan.shell {
 		return "", nil
 	}
-	if shell := liveShell(sess, st.shellOf()); shell != nil {
-		return shell.ID, nil
+	if previous := sess.GetChildShell(st.shellOf()); previous != nil {
+		if previous.Info().Status == api.SessionRunning {
+			return previous.ID, nil
+		}
+		// An exited channel still owns its label for output draining. Archive our
+		// previous channel by ID before reclaiming the resident's fixed label.
+		// If another caller already removed it, the label is free either way.
+		_, _ = r.sessMgr.ArchiveChildShell(previous.ID)
 	}
 	shell, err := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, plan.channel)
 	if err != nil {
