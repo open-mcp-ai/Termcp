@@ -142,7 +142,7 @@ var ops = []Op{
 		Kinds:     []string{"file", "host", "ext", "alias"},
 		Flags:     []string{"force", "dry-run"},
 		Valueless: []string{"force", "dry-run"},
-		Usage:     "rm <session>   |   rm <session> file <path>   |   rm host|ext|alias <name>",
+		Usage:     "rm <session>   |   rm <id>,<id>... [--dry-run]   |   rm <session> file <path>   |   rm host|ext|alias <name>",
 		Detail:    rmDetail},
 
 	// --- inside a channel ---
@@ -1642,6 +1642,11 @@ session is left untouched, so the guard costs one extra word rather than a mista
   rm <session>              a stopped session, no ceremony
   rm <session> --force      a running one; its channels and forwards are released first
   rm <session> --dry-run    say what would be erased, erase nothing
+
+Use rm <id>,<id>... --dry-run to preview a list of archives from 'ls --all'.
+Omit --dry-run to permanently erase each stopped session's manifest and transcript.
+Use exact session IDs. Each ID gets a result in order; a missing or running session
+is left alone. Batch deletion never accepts --force.
 
 --dry-run is the cautious call, and it comes first: it is answered even for a RUNNING
 session, because that is exactly when a caller wants to ask before passing --force.
