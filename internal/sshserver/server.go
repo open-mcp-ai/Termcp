@@ -322,12 +322,23 @@ func (s *Server) handleSession(sess ssh.Session) {
 	// command, which on Windows breaks ConPTY process reaping. So the wrapper
 	// applies to PIPE mode only; PTY mode executes the program directly.
 	ps, hasPty := takePTY(sess)
+	// The client sends a private correlation key before exec on the in-memory
+	// transport. Consume it here; it is not part of the child's environment.
+	var pidKey string
+	var childEnv []string
+	for _, e := range sess.Environ() {
+		if key, ok := strings.CutPrefix(e, pidKeyEnv+"="); ok {
+			pidKey = key
+		} else {
+			childEnv = append(childEnv, e)
+		}
+	}
 	var cmd *exec.Cmd
 	if raw := sess.RawCommand(); len(cmdArgs) > 0 && raw != "" && !hasPty {
 		sh, shArgs, extraEnv := shell.NewDetector().CommandLine(raw)
 		cmd = exec.Command(sh, shArgs...)
 		if len(extraEnv) > 0 {
-			cmd.Env = append(append(os.Environ(), sess.Environ()...), extraEnv...)
+			cmd.Env = append(append(os.Environ(), childEnv...), extraEnv...)
 		}
 	} else {
 		cmd = exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -393,6 +404,10 @@ func (s *Server) handleSession(sess ssh.Session) {
 	}
 
 	sigProc.Store(cmd.Process)
+	local, _ := sess.LocalAddr().(inMemAddr)
+	if pidKey != "" && local.pids != nil {
+		local.pids.Store(pidKey, cmd.Process.Pid)
+	}
 
 	// THE SESSION OWNS A TREE, AND THE TREE DIES WITH IT (#293).
 	//
@@ -440,6 +455,9 @@ func (s *Server) handleSession(sess ssh.Session) {
 		exitCode = <-waitDone
 	}
 
+	if pidKey != "" && local.pids != nil {
+		local.pids.Delete(pidKey)
+	}
 	sess.Exit(exitCode)
 }
 

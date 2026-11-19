@@ -59,6 +59,16 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 		}
 	}
 
+	var localPID func() int
+	if local, ok := client.LocalAddr().(interface {
+		LocalPIDKey() (string, string, func() int)
+	}); ok {
+		name, key, read := local.LocalPIDKey()
+		// Same channel as exec, so ordering is guaranteed without a round trip.
+		if _, err := session.SendRequest("env", false, ssh.Marshal(struct{ Name, Value string }{name, key})); err == nil {
+			localPID = read
+		}
+	}
 	var startErr error
 	if trimmed := strings.TrimSpace(command); trimmed == "" && len(args) == 0 {
 		if !pty {
@@ -94,6 +104,7 @@ func startSession(client *ssh.Client, session *ssh.Session, command string, args
 
 	es := &ExecSession{
 		client:    client,
+		localPID:  localPID,
 		session:   session,
 		Stdin:     stdin,
 		Stdout:    stdout,

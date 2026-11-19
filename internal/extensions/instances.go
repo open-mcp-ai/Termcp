@@ -289,6 +289,7 @@ func (st *extState) nextLabel(ext *Extension) string {
 func (r *Reconciler) instanceStatusFor(name, target, sessionID, shellID string) Status {
 	got, _ := r.TargetStatus(name, target)
 	got.SessionID, got.ShellID = sessionID, shellID
+	r.observeChannel(&got)
 	return got
 }
 

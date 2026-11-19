@@ -1,6 +1,7 @@
 package sshserver
 
 import (
+	"crypto/rand"
 	"io"
 	"net"
 	"sync"
@@ -57,6 +58,7 @@ func (l *inMemListener) Dial() (net.Conn, error) {
 // version exchange when both sides write before either reads (net.Pipe / io.Pipe
 // are synchronous and block writes until the other side reads).
 type duplexConn struct {
+	addr      inMemAddr
 	writeMu   sync.Mutex // serializes close(writeCh) and sends to writeCh
 	readCh    <-chan []byte
 	writeCh   chan []byte // bidirectional; nil after Close (peer reader gets io.EOF via close)
@@ -117,8 +119,8 @@ func (c *duplexConn) Close() error {
 	})
 	return nil
 }
-func (c *duplexConn) LocalAddr() net.Addr              { return inMemAddr{} }
-func (c *duplexConn) RemoteAddr() net.Addr             { return inMemAddr{} }
+func (c *duplexConn) LocalAddr() net.Addr              { return c.addr }
+func (c *duplexConn) RemoteAddr() net.Addr             { return c.addr }
 func (c *duplexConn) SetDeadline(time.Time) error      { return nil }
 func (c *duplexConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *duplexConn) SetWriteDeadline(time.Time) error { return nil }
@@ -131,12 +133,27 @@ func duplexPipe() (net.Conn, net.Conn) {
 	a2b := make(chan []byte, bufCap)
 	b2a := make(chan []byte, bufCap)
 
-	a := &duplexConn{readCh: b2a, writeCh: a2b, closeCh: make(chan struct{})}
-	b := &duplexConn{readCh: a2b, writeCh: b2a, closeCh: make(chan struct{})}
+	addr := inMemAddr{pids: new(sync.Map)}
+	a := &duplexConn{addr: addr, readCh: b2a, writeCh: a2b, closeCh: make(chan struct{})}
+	b := &duplexConn{addr: addr, readCh: a2b, writeCh: b2a, closeCh: make(chan struct{})}
 	return a, b
 }
 
-type inMemAddr struct{}
+type inMemAddr struct{ pids *sync.Map }
+
+const pidKeyEnv = "TERMCP_INTERNAL_PID_KEY"
+
+// LocalPIDKey correlates one SSH channel with the child started by its server.
+// Keys are scoped to this in-memory connection; TCP and proxy transports do
+// not offer this capability. There is no entry until a child actually starts.
+func (a inMemAddr) LocalPIDKey() (string, string, func() int) {
+	key := rand.Text()
+	return pidKeyEnv, key, func() int {
+		pid, _ := a.pids.Load(key)
+		n, _ := pid.(int)
+		return n
+	}
+}
 
 func (inMemAddr) Network() string { return "inmem" }
 func (inMemAddr) String() string  { return "inmem" }

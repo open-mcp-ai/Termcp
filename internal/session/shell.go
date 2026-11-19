@@ -193,6 +193,15 @@ func (cs *ChildShell) Done() <-chan struct{} {
 	return cs.done
 }
 
+// RuntimeEvidence observes the exec channel without waiting for output drain.
+// An open channel can lack an OS PID (ordinary SSH or an in-process builtin).
+func (cs *ChildShell) RuntimeEvidence() (channelOpen bool, localPID int) {
+	if cs.execSession == nil || cs.processGone() || cs.statusValue() != api.SessionRunning {
+		return false, 0
+	}
+	return true, cs.execSession.LocalPID()
+}
+
 // SendTerminalBytes writes raw keystrokes to the child shell's stdin.
 // pressEnter is kept for WebUI NL flag; MCP should use PressKey instead.
 func (cs *ChildShell) SendTerminalBytes(data []byte, pressEnter bool) error {
