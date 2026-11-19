@@ -36,7 +36,7 @@ func (s *Server) closeBatch(ctx context.Context, stmt directive.Statement, win t
 		id, _, _ := strings.Cut(target, ":")
 		if s.sessMgr.Get(id) == nil {
 			slots = append(slots, s.slotFromFailure(ctx, entry, &toolFailure{
-				code: CodeSessionNotFound, msg: "no session with ID "+id+"; use IDs from ls",
+				code: CodeSessionNotFound, msg: "no session with ID " + id + "; use IDs from ls",
 			}))
 			continue
 		}

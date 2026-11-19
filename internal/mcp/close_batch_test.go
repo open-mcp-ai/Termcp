@@ -18,6 +18,10 @@ func TestCloseBatch(t *testing.T) {
 	}
 	keep, stop := connect("keep"), connect("stop")
 	child := handleFrom(t, termText(t, s, map[string]any{"cmd": "open " + keep + " --name worker"}))
+	worker, bad := s.requireShell(child)
+	if bad != nil || worker.IsBufferClosed() {
+		t.Fatalf("test needs a live worker channel: %s", child)
+	}
 	for _, bad := range []string{stop + "," + keep + ":oops", stop + ",", stop + "," + keep + " --channel"} {
 		r := s.Term(t.Context(), "close "+bad, nil)
 		if len(r.Slots) != 1 || r.Slots[0].Code != 400 || s.sessMgr.Get(stop).Info().Status != api.SessionRunning {
@@ -37,7 +41,7 @@ func TestCloseBatch(t *testing.T) {
 	if s.sessMgr.Get(keep).Info().Status != api.SessionRunning || s.sessMgr.Get(stop).Info().Status != api.SessionExited {
 		t.Fatal("only the explicitly named whole session should have stopped; both records must survive")
 	}
-	if sh, err := s.requireShell(child); err == nil && !sh.IsBufferClosed() {
+	if !worker.IsBufferClosed() {
 		t.Fatal("named child channel is still open")
 	}
 }
