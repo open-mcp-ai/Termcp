@@ -115,6 +115,11 @@ func TestGuardRefusesToolsOutsideWhitelist(t *testing.T) {
 			t.Errorf("archive refusal must name the instance-specific release command: %s", msg)
 		}
 	}
+	// File verbs also have an early DSL capability check, before the tool guard.
+	reply := s.Term(t.Context(), "write "+sid+" file denied.txt --data ignored", nil)
+	if slot := reply.Slots[0]; slot.Code != 403 || !strings.Contains(slot.Body, "extension owner") {
+		t.Errorf("DSL capability refusal lacks recovery guidance: %+v", slot)
+	}
 }
 
 // TestGuardRefusesPathOutsideWhitelist pins that reachability is the gate, not

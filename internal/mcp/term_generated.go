@@ -1371,7 +1371,7 @@ func (s *Server) refuseAction(ctx context.Context, stmt directive.Statement, cap
 			"Path":       stmt.Path,
 			"Error-Code": CodeForbidden,
 		},
-		Body: "this session's template does not grant " + capID,
+		Body: "this session's template does not grant " + capID + ". " + session.ForbiddenTool(capability.ToolForID(capID)),
 	}, true
 }
 
