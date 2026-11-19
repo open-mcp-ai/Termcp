@@ -424,6 +424,11 @@ returns the bytes directly; it creates no session and leaves no archive tile. Us
 'connect <host>' first only when you need a channel, a terminal, or the file URLs
 that belong to a session.
 
+With no byte or rendering flags, a directory returns a JSON object with entries
+(name, type, size in bytes, mtime in Unix milliseconds). One level only; links
+are reported as symlink and never traversed. Up to 128 entries in name order fit
+the reply, fewer for a small byte window; truncated means the list is incomplete.
+
 The bytes go from the left node to the right one WITHOUT passing through your
 context: no window, no rendering, and nothing held in between — the two ends are
 wired straight to each other and the copy streams in chunks. That is the whole
@@ -1078,6 +1083,8 @@ const writeDetail = `Write a file on a session.
   write a1f3 file /tmp/x --data hello
   read internal file ./x | write a1f3 file /tmp/x
   write a1f3 file /tmp/x --data hex:00ff
+
+Name the child file to change. A directory is not an implicit batch request.
 
 A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
 profile name) writes over the host's pooled transport, so no session is created and

@@ -94,6 +94,21 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 	defer releaseTransport()
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
+		// Some servers reject OPEN on a directory; others open it and let
+		// FSTAT identify it. Probe on failure only: a regular file keeps
+		// its original round trips, rendering, and error classification.
+		if mode == "text" && args["offset"] == nil && args["length"] == nil && charset == "" && !raw && !numbered && sftpCli.IsDirectory(remotePath) {
+			// A directory reveals metadata for its children. Keep the same
+			// admission as the existing file_stat listing, before enumeration.
+			if bad := (toolGuard{server: s}).check(ctx, "file_stat", lookupGate("file_stat"), request); bad != nil {
+				return bad, nil
+			}
+			listing, listErr := sftpCli.ListDirectory(ctx, remotePath)
+			if listErr != nil {
+				return fileErr(listErr, remotePath), nil
+			}
+			return jsonResult(toMap(listing)), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	return jsonResult(toMap(result)), nil
@@ -122,7 +137,7 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
 	if data == "" {
-		return toolError(CodeInvalidArgument, "%s", "data required"), nil
+		return toolError(CodeInvalidArgument, "%s", "data required: write one named file, e.g. `write <session> file <directory>/<name> --data ...`; a directory is not a batch request"), nil
 	}
 
 	sftpCli, releaseTransport, bad := s.sftpClientContext(ctx, sessionID)

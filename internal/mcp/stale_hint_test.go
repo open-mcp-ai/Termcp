@@ -7,7 +7,7 @@ import (
 
 // TestADirectoryHintNamesAFlagThatExists pins issue #146.
 //
-// `read <session> file <dir>` is refused correctly, but the refusal pointed at
+// A byte read of a directory is refused, but the refusal pointed at
 // `--action stat` — a flag of the `file` directive, which the command-surface
 // rewrite deleted. `--action` is not accepted anywhere now, so the hint sent the
 // caller straight into a second error:
@@ -26,7 +26,7 @@ func TestADirectoryHintNamesAFlagThatExists(t *testing.T) {
 	h := openPipe(t, s, "sleep 5")
 
 	dir := t.TempDir()
-	refused := termText(t, s, map[string]any{"cmd": "read " + h + " file " + dir})
+	refused := termText(t, s, map[string]any{"cmd": "read " + h + " file " + dir + " --mode hex"})
 	if !strings.Contains(refused, "is a directory") {
 		t.Fatalf("reading a directory was not refused as one:\n%s", refused)
 	}

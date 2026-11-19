@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -866,7 +867,36 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 			Body: body,
 		}
 	}
+	if action == "read" && doc["type"] == "directory" {
+		return directoryListingSlot(stmt, win, doc)
+	}
 	return generatedSlot(stmt, win, compactDocument(doc))
+}
+
+// Keep a directory page parseable even when only a prefix fits the caller's
+// byte window. A cut in the middle of a JSON string is not a smaller page.
+func directoryListingSlot(stmt directive.Statement, win termArgs, doc map[string]any) envelope.Slot {
+	body, _ := json.Marshal(doc)
+	if win.BytesLimit <= 0 || len(body) <= win.BytesLimit || win.OnBytesOverflow == "fold" {
+		return generatedSlot(stmt, win, string(body))
+	}
+	total := len(body)
+	entries, _ := doc["entries"].([]any)
+	doc["truncated"] = true
+	// Find the longest prefix fitting the window, including JSON escaping.
+	n := sort.Search(len(entries)+1, func(n int) bool {
+		doc["entries"] = entries[:n]
+		b, _ := json.Marshal(doc)
+		return len(b) > win.BytesLimit
+	})
+	slot := envelope.Slot{Code: 206, Headers: map[string]string{"Path": stmt.Path}}
+	if n > 0 {
+		doc["entries"] = entries[:n-1]
+		b, _ := json.Marshal(doc)
+		slot.Body = string(b)
+	}
+	noteTruncated(slot.Headers, slot.Code, total-len(slot.Body), total, win)
+	return slot
 }
 
 // fileSubActions names the sub-actions of a multi-action file verb, for the
