@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -253,6 +254,30 @@ func (s *Server) handleTerm(ctx context.Context, request mcp.CallToolRequest) (*
 // string is a 400 and an absent one is the guide, and neither surface gets to have
 // its own opinion about which is which (issue #131 P0-3).
 func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) envelope.Reply {
+	alias, used := args["command"]
+	if !used {
+		return s.termCanonical(ctx, cmd, args)
+	}
+	if _, both := args["cmd"]; both {
+		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath("received both cmd and command; send only cmd")}}
+	}
+	// Normalize before validation and dispatch, without changing the transport's
+	// argument map. Keep the hint outside the body (which may be file data).
+	args = maps.Clone(args)
+	delete(args, "command")
+	args["cmd"] = alias
+	reply := s.termCanonical(ctx, cmd, args)
+	if len(reply.Slots) > 0 {
+		first := &reply.Slots[0]
+		if first.Headers == nil {
+			first.Headers = map[string]string{}
+		}
+		first.Headers["Argument-Alias"] = "command -> cmd; use cmd next time"
+	}
+	return reply
+}
+
+func (s *Server) termCanonical(ctx context.Context, cmd string, args map[string]any) envelope.Reply {
 	if fromArgs, present, derr := readCmd(args); derr != nil {
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	} else if present {
