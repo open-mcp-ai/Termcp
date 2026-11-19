@@ -36,6 +36,30 @@ func TestHelpSummaryIsCheaperThanThePage(t *testing.T) {
 	}
 }
 
+func TestOpenHelpFitsTheDefaultWindow(t *testing.T) {
+	s := newTestServer(t)
+	got := s.Term(t.Context(), "help open", nil).Slots[0]
+	if got.Code != 200 || !strings.Contains(got.Body, "help open --all") {
+		t.Fatalf("default help must be complete and point to the long page (status %d, %d bytes)", got.Code, len(got.Body))
+	}
+	op, _ := directive.Lookup("open")
+	for _, flag := range op.FlagNames() {
+		if line, ok := directive.FlagSummary("open", flag); !ok || !strings.Contains(got.Body, line) {
+			t.Errorf("missing explanation for --%s", flag)
+		}
+	}
+	page := s.Term(t.Context(), "help open --all", map[string]any{"bytes_limit": 32768, "lines_limit": 1000}).Slots[0]
+	if page.Code != 200 || !strings.Contains(page.Body, op.Detail) || len(got.Body) >= len(page.Body)/2 {
+		t.Fatalf("summary/full page sizes %d/%d, full status %d", len(got.Body), len(page.Body), page.Code)
+	}
+	example, _ := directive.SummaryExample("open")
+	cmd, _, _ := strings.Cut(example, "#")
+	if _, err := directive.Parse(strings.TrimSpace(cmd)); err != nil {
+		t.Fatalf("published example does not parse: %v", err)
+	}
+	t.Logf("default %d bytes; full %d bytes", len(got.Body), len(page.Body))
+}
+
 // A verb that has not migrated keeps its page, so the surface can move one verb at a
 // time without a half-migrated table anywhere.
 func TestUnmigratedVerbStillReturnsItsPage(t *testing.T) {
