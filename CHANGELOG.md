@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 导出 Go 包 `pkg/detach` 和 `pkg/daemon`：其他 CLI 可复用跨平台进程分离、启动就绪检查、状态查询和按实例停止；Termcp 原有的 HTTP 发现与停止方式不变（#309）。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

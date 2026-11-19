@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	public "github.com/open-mcp-ai/termcp/pkg/daemon"
 )
 
 // Mark is the banner the public docs start with; it distinguishes a termcp
@@ -77,10 +79,5 @@ func IsServing(ctx context.Context, host string, port int) bool {
 // host:port. It is deliberately HTTP-free, so a liveness poll never counts as
 // activity for the instance's idle timer.
 func PortReachable(host string, port int) bool {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ConnectHost(host), strconv.Itoa(port)), probeTimeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+	return public.PortReachable(context.Background(), net.JoinHostPort(ConnectHost(host), strconv.Itoa(port)))
 }
