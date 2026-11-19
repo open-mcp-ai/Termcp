@@ -162,6 +162,6 @@ func (s *Server) runUse(ctx context.Context, stmt directive.Statement, win termA
 	// no longer kills the process on timeout: it used to, because it handed back no way
 	// to reach it, and that made the same question answer 504 here and 200 there.
 	slot.Headers["Host"] = host
-	slot.Headers["Channel"] = cs.ID
+	slot.Headers["Channel"] = fmt.Sprintf("%s:%d", container.ID, cs.Info().Index)
 	return slot
 }

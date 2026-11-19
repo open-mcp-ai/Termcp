@@ -1567,9 +1567,8 @@ func (s *Server) termGuide(ctx context.Context, win termArgs) termReply {
 	b.WriteString("  args: [\"make && test\"]\n")
 	b.WriteString("  input/key/read are the same three steps taken separately, for a TUI or a\n")
 	b.WriteString("  long-running command you want to watch between calls.\n")
-	b.WriteString("  For one non-interactive command, `run use:<host> $1` uses the pooled\n")
-	b.WriteString("  connection and leaves no session/archive entry; connect only when you need\n")
-	b.WriteString("  a persistent channel for interaction, waiting or later reads.\n\n")
+	b.WriteString("  `run use:<host> $1` opens a pipe in the host's use session. To follow\n")
+	b.WriteString("  its output after the wait ends, `read <Channel>` using the reply header.\n\n")
 
 	b.WriteString("cmd = the DSL.  sh = a shell command.\n")
 	b.WriteString("cmd is parsed by the directive grammar, so shell text reaches it as one\n")
