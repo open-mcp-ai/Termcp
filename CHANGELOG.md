@@ -228,7 +228,15 @@
   it termcp's directive language, and it is not `resources/subscribe`: the subscriber
   consumes the peer's own methods, so all this had to do was not swallow them. The
   reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
+<<<<<<< HEAD
   peer alive between events.
+=======
+  peer alive between events. The version the endpoint reports is the peer's own
+  (`Mcp-Protocol-Version` from its `initialize` answer), not this build's constant, and
+  the answer window is five minutes: it is the backstop for a peer that never answers,
+  not a tool timeout, so a `tools/call` that takes a minute still returns its result.
+
+>>>>>>> 6e32c11d (feat(mcp): 版本说对端的，窗口不是工具超时 (#328 S3 收尾))
 ### Fixed
 
 - `/ext/{name}/stream` is served by the same streamable-HTTP transport as the

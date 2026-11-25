@@ -29,6 +29,9 @@ type Server struct {
 	// extPumps holds one reader per extension channel, keyed by shell id: it is what makes
 	// a frame the extension sends on its own reach an attached client.
 	extPumps sync.Map
+	// extVersions is the protocol version each extension's peer negotiated (#328): the
+	// transport answers with it instead of this library's own.
+	extVersions sync.Map
 	// extShells remembers the channel each extension's endpoint is talking to. An on-demand
 	// extension hands out a fresh instance per Acquire — right for a caller, wrong for an
 	// endpoint that has clients attached (see extChannel).

@@ -425,12 +425,13 @@ func (r *Reconciler) NameOfShell(shellID string) string {
 	if strings.TrimSpace(shellID) == "" {
 		return ""
 	}
-	r.mu.Lock()
-	states := make(map[string]*extState, len(r.states))
-	for name, st := range r.states {
-		states[name] = st
-	}
-	r.mu.Unlock()
+	// RANGE IS THE SNAPSHOT NOW: states is a sync.Map, and no invariant spans its keys
+	// here (AGENTS.md).
+	states := make(map[string]*extState)
+	r.states.Range(func(k, v any) bool {
+		states[k.(string)] = v.(*extState)
+		return true
+	})
 	for _, st := range states {
 		if st.ownsShell(shellID) {
 			// THE STATE'S OWN NAME, NOT THE MAP KEY: the key is name+target so one
