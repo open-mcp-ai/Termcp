@@ -692,10 +692,17 @@ func TestReconcilerSessionIsNamespaced(t *testing.T) {
 	}
 }
 
-// TestReconcilerSweepsRestoredSessions pins the restart path: a session a
-// previous process kept for an extension comes back from its manifest as a
-// placeholder nothing can be driven through, so the reconciler drops it instead of
-// leaving an entry that can never be reopened.
+/* TestReconcilerSweepsRestoredSessions pins the restart path: a session a previous
+ * process kept for an extension comes back from its manifest as a placeholder
+ * nothing can be driven through, so it is dropped instead of being left as an entry
+ * that can never be reopened.
+ *
+ * THE SWEEP IS NO LONGER PART OF Start. Session history is restored in the
+ * background after the socket is bound (issue #353), so at the moment Start runs
+ * there are no restored sessions to sweep — the ordering that made this a startup
+ * step is gone. The core calls SweepRestored when the restore finishes, which is the
+ * first moment there is anything to drop; this test calls it at the same point.
+ */
 func TestReconcilerSweepsRestoredSessions(t *testing.T) {
 	r := startReconciler(t)
 	// The session stands in for one a previous run left behind: same namespace,
@@ -712,11 +719,17 @@ func TestReconcilerSweepsRestoredSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.Stop()
+	// Start alone must NOT sweep: it runs before the restore, and sweeping then
+	// would look at a registry that does not hold the restored sessions yet.
+	if r.sessMgr.Get(leftover.ID) == nil {
+		t.Fatal("Start swept a session before the history was restored")
+	}
+	restarted.SweepRestored()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for r.sessMgr.Get(leftover.ID) != nil {
 		if time.Now().After(deadline) {
-			t.Fatal("a restored extension session should be swept on start")
+			t.Fatal("a restored extension session should be swept once the restore finishes")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -619,5 +620,72 @@ func TestASavedAliasOutlivesTheInstance(t *testing.T) {
 	second := instance()
 	if code, body := post(second, `{"cmd":"saved"}`); code != http.StatusOK {
 		t.Fatalf("a saved alias did not run on a fresh instance: %d %s", code, body)
+	}
+}
+
+/* The listener does not wait for yesterday's sessions (issue #353).
+ *
+ * Restoring the registry from disk is one manifest read and one fsync per session,
+ * so a data dir with a few dozen archived sessions kept the socket closed for
+ * seconds — and an MCP client whose handshake times out in 8s reported "0 tools"
+ * against an instance that was only still reading. The order is now: bind, answer,
+ * restore. This test holds the restore open and asserts the instance is serving and
+ * reporting `restoring` while it is still in progress — a state, not a sleep.
+ */
+func TestServingStartsBeforeTheHistoryIsRestored(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	// The web UI is what publishes the state, so this test keeps it: the probe a
+	// client reads is GET /api/daemon.
+	srv, err := New(Options{Config: cfg, Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { srv.Close("test done") })
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	open := func() { releaseOnce.Do(func() { close(release) }) }
+	// A failure below must not leave the restore blocked, or the cleanup's Close
+	// would wait out its bound for a reason the test created.
+	t.Cleanup(open)
+	restored := make(chan struct{})
+	srv.restoreSessions = func() error {
+		defer close(restored)
+		/* Bounded, not open-ended: a Start that waits for this (the bug this test is
+		   about) must fail the assertions below rather than hang the run. */
+		select {
+		case <-release:
+		case <-time.After(3 * time.Second):
+		}
+		return nil
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Start returned while the restore is still blocked: the door is open.
+	if !srv.Restoring() {
+		t.Fatal("the instance reports itself fully loaded while the restore is still running")
+	}
+	// It answers, which is the property the issue is about — a client handshake
+	// must not depend on the restore.
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/daemon", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/daemon while restoring = %d; want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"restoring":true`) {
+		t.Errorf("the probe does not publish the restoring state: %s", rec.Body.String())
+	}
+
+	open()
+	select {
+	case <-restored:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore never finished after it was released")
+	}
+	// The flag clears on its own once the work is done.
+	for srv.Restoring() {
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- **The instance serves before it finishes reading yesterday.** Restoring the session
+  registry — one manifest read and one fsync per archived session — used to run while
+  constructing the server, so a data dir with a few dozen sessions kept the port
+  closed for seconds and an MCP client whose handshake times out in 8 s reported
+  "0 tools" against an instance that was only still loading. The socket is now bound
+  first and the history is restored behind it; `GET /api/daemon` publishes
+  `"restoring": true` while that is in progress, so "not up yet" and "up, still
+  loading" are distinguishable without watching a clock (#353).
+- Opening a data dir no longer reads the host catalog, and listing hosts is no
+  longer quadratic: one name is resolved by reading that name's directory instead of
+  rescanning all of them. 245 encrypted hosts: 143 s → 0.6 s to start, 138 s → 0.6 s
+  to list.
 - Connections at rest now have **two independent switches**. A key can be *loaded*
   (its 24 words are unsealed into this machine's memory, so it can read what the key
   seals) or *released*; a host, separately, can be *activated* or not. Reading needs

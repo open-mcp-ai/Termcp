@@ -91,6 +91,11 @@ type Handler struct {
 	DaemonLog   string
 	IdleTimeout time.Duration // effective idle countdown; 0 = never auto-exits
 
+	// Restoring reports that the instance is up and serving while it is still
+	// reading yesterday's sessions (issue #353). It is a status, not a gate: every
+	// route answers either way, and the session list is simply not complete yet.
+	Restoring func() bool
+
 	// StopDaemon asks the process to shut down gracefully; main wires it to the
 	// same path a SIGTERM takes. Called from POST /api/daemon/stop once the
 	// response is on the wire.

@@ -101,6 +101,14 @@ func NewHybridStore(dataDir string, repo *configstore.Repository, encryptNew boo
 // keys need a human comes back with nothing loaded rather than failing: the
 // operator loads one through the panel, and until then writes are refused
 // instead of silently falling back to plaintext.
+//
+// NOTHING IS READ HERE. Opening the store used to load every committed profile
+// to prove they still parse, which made startup O(hosts) disk reads and — since
+// one is enough — let a single host whose key is not loaded, whose host is not
+// activated, or whose TOML no longer parses refuse to serve every other host.
+// The panel that repairs those states is served by this same process, so a
+// startup check is the one place the check cannot be acted on. Each profile is
+// read when it is used, and reports its own state then.
 func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*Store, error) {
 	repo, err := configstore.OpenRepository(dataDir, providers...)
 	if errors.Is(err, configstore.ErrNotInitialized) {
@@ -118,30 +126,6 @@ func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*St
 	   in that state — including plaintext hosts, which need no key at all. */
 	encryptNew := repo.EncryptNew()
 	store := NewHybridStore(repo.DataDir(), repo, encryptNew)
-	if !repo.Loaded() {
-		return store, nil
-	}
-	// Opening verifies every committed profile: a catalog entry that no longer
-	// parses must fail startup rather than surface later as a broken session.
-	names, err := store.List()
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-	for _, name := range names {
-		if _, err := store.Load(name); err != nil {
-			/* A profile whose key was deleted is already unreadable and always will
-			   be; failing the whole startup over it would take every other host
-			   down with it, which is the opposite of what a damaged profile
-			   deserves. Everything else still has to parse. */
-			var orphaned orphanedCiphertextError
-			if errors.As(err, &orphaned) {
-				continue
-			}
-			_ = store.Close()
-			return nil, fmt.Errorf("verify profile %q: %w", name, err)
-		}
-	}
 	return store, nil
 }
 
@@ -903,6 +887,12 @@ func (s *Store) Delete(name string) error {
 // encryptedFold reports whether the repository holds a name that equals name
 // case-insensitively, returning the stored spelling.
 func (s *Store) encryptedFold(name string) (string, bool, error) {
+	/* The name's own directory answers the common case in one readdir. The catalog
+	   listing below is O(hosts), and asking it once per host — which is what a
+	   listing does — made painting the host list quadratic. */
+	if s.hasCiphertextOnDisk(name) {
+		return name, true, nil
+	}
 	repo := s.repositorySnapshot()
 	unloaded := repo == nil
 	var names []string

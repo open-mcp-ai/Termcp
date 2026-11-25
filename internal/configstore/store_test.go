@@ -244,7 +244,13 @@ func TestRepositoryMigratesTheIndexedLegacyLayout(t *testing.T) {
 		t.Fatalf("migrated profile read = %q, err %v", got, err)
 	}
 	/* The index's activation boolean becomes the host's own marker, so the host comes
-	   back ACTIVE instead of silently losing its second layer. */
+	   back ACTIVE instead of silently losing its second layer.
+	   List is what publishes the whole-tree view now that opening no longer scans
+	   (the per-name read above answers from one directory and leaves the catalog
+	   alone), so the snapshot is asked for after it. */
+	if _, err := reopened.List(); err != nil {
+		t.Fatalf("listing after migration: %v", err)
+	}
 	moved := reopened.refsSnapshot()["kali"]
 	if !moved.activated {
 		t.Fatal("migration dropped the activation state")

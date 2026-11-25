@@ -238,16 +238,20 @@ func (r *Reconciler) Start(ctx context.Context) error {
 		cancel()
 		return err
 	}
-	r.sweepRestored()
 	go r.run(cctx)
 	return nil
 }
 
-// sweepRestored removes what a previous process left behind. An extension's
+// SweepRestored removes what a previous process left behind. An extension's
 // session serves the run that created it: this process builds its own from the
 // templates, so a restored placeholder — a connection nothing can be driven
 // through — is dropped rather than kept as an entry that can never be reopened.
-func (r *Reconciler) sweepRestored() {
+//
+// It is EXPORTED and no longer called from Start: the session restore moved to the
+// background (issue #353), so at the moment Start runs there are no restored
+// sessions to sweep yet. core calls this after the restore finishes, which is the
+// first moment there is anything to drop.
+func (r *Reconciler) SweepRestored() {
 	if r.sessMgr == nil {
 		return
 	}
