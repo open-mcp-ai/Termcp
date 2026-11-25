@@ -414,3 +414,30 @@ func (r *Reconciler) channelStatuses(ext *Extension, st *extState) []ChannelStat
 	}
 	return out
 }
+
+// NameOfShell reports which extension owns a channel handle, or "" for one that belongs
+// to nobody (a caller's own instance, an ordinary session).
+//
+// IT ASKS THE RUNNING STATE, NOT THE TEMPLATE. The endpoint that fans notifications out
+// needs the extension's NAME to find its transport, and the only thing that knows a
+// handle belongs to an extension is the reconciler that opened it.
+func (r *Reconciler) NameOfShell(shellID string) string {
+	if strings.TrimSpace(shellID) == "" {
+		return ""
+	}
+	r.mu.Lock()
+	states := make(map[string]*extState, len(r.states))
+	for name, st := range r.states {
+		states[name] = st
+	}
+	r.mu.Unlock()
+	for _, st := range states {
+		if st.ownsShell(shellID) {
+			// THE STATE'S OWN NAME, NOT THE MAP KEY: the key is name+target so one
+			// extension can hold several hosts, and handing that back would name an
+			// extension nothing else has heard of.
+			return st.name()
+		}
+	}
+	return ""
+}

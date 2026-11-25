@@ -26,14 +26,21 @@ type Server struct {
 	// extTransports holds one streamable transport per extension name (issue #328): the
 	// transport owns sessions and GET streams, so it cannot be created per request.
 	extTransports sync.Map
-	sessMgr      *session.Manager
-	msgMgr       *message.Manager
-	sshConfigs   *sshconfig.Store
-	forwardMgr   *forward.ForwardManager
-	extensions   *extensions.Reconciler
-	baseURL      string // http://host:port, set from Start()
-	docsFS       fs.FS  // embedded agent docs, set via SetDocsFS
-	NoInternal   bool   // when true, hide and refuse the built-in loopback profile
+	// extPumps holds one reader per extension channel, keyed by shell id: it is what makes
+	// a frame the extension sends on its own reach an attached client.
+	extPumps sync.Map
+	// extShells remembers the channel each extension's endpoint is talking to. An on-demand
+	// extension hands out a fresh instance per Acquire — right for a caller, wrong for an
+	// endpoint that has clients attached (see extChannel).
+	extShells  sync.Map
+	sessMgr    *session.Manager
+	msgMgr     *message.Manager
+	sshConfigs *sshconfig.Store
+	forwardMgr *forward.ForwardManager
+	extensions *extensions.Reconciler
+	baseURL    string // http://host:port, set from Start()
+	docsFS     fs.FS  // embedded agent docs, set via SetDocsFS
+	NoInternal bool   // when true, hide and refuse the built-in loopback profile
 	// ManageSSHConfigs enables the profile write actions (create/edit/copy/delete)
 	// of the `profile` directive; main sets it from --mcp-manage-ssh-configs.
 	ManageSSHConfigs bool
