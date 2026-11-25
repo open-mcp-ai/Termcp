@@ -491,6 +491,9 @@ func (s *Server) directiveRemove(ctx context.Context, stmt directive.Statement, 
 	// written today cannot use it.
 	if boolFlag(stmt, "dry-run") {
 		what := "session '" + stmt.Target + "' does not exist, so nothing would be erased"
+		// A --dry-run ON A LIVE SESSION answers the same question the real call would
+		// meet: naming the status and what --force would do is the whole point of a
+		// preview (issue #241).
 		if sess, bad := s.requireSession(stmt.Target); bad == nil && sess != nil {
 			info := sess.Info()
 			what = "would erase session '" + stmt.Target + "' (status " + string(info.Status) +

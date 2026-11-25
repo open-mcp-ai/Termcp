@@ -138,6 +138,37 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 				}
 				return []envelope.Slot{s.mcpToolList(ctx, stmt, h, win, tool)}
 			}
+			// A WORD THE PEER DOES NOT HAVE IS REFUSED, not ignored. `get a1f3 mcp:1
+			// bogus` used to answer 200 with the generic description: the reply looked
+			// like success and said nothing about the word, so the caller read it as
+			// "that is the answer" and kept the spelling. The `call … tools` family in
+			// #356 is exactly this — 6 attempts, 6 failures, all from a word in the
+			// wrong layer.
+			if len(stmt.Args) > 0 {
+				words := peerSubcommands(stmt.Kind)
+				if len(words) == 0 {
+					return []envelope.Slot{badRequest(stmt, "`"+stmt.Target+" "+stmt.Kind+
+						"` takes nothing after the address: a raw frame channel has no subcommands. "+
+						"`read`/`call` take the frame itself.")}
+				}
+				// THE ADDRESS AS THE CALLER WROTE IT: `h.index` is the connection the
+				// lookup resolved, which is what `dash(index)` above is not — that one
+				// is the PAGE inside a browser peer, and it is empty here.
+				addr := stmt.Target + " " + stmt.Kind
+				if h.index != "" {
+					addr += ":" + h.index
+				}
+				// NOT badRequest: that helper appends the verb's generic example, and the
+				// generic `get` example reads a file. Two lines below a peer refusal, a
+				// file example is one more address to reconcile (the failure #356 counts).
+				return []envelope.Slot{{Code: 400, Headers: map[string]string{
+					"Path": stmt.Path, "Error-Code": CodeInvalidArgument},
+					Body: "`" + stmt.Args[0] + "` is not something `" + stmt.Target + " " + stmt.Kind +
+						":` answers. The words that follow the address are: " + strings.Join(words, ", ") +
+						", and each takes an optional name after it:\n" +
+						"  " + addr + " " + words[0] + "          the list\n" +
+						"  " + addr + " " + words[0] + " <name>   one entry's full detail"}}
+			}
 			return []envelope.Slot{s.cdpDescribe(stmt, h, index)}
 		}
 		if stmt.Kind == "file" {
@@ -240,6 +271,16 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 		case stmt.Kind == "alias":
 			return []envelope.Slot{s.directiveAlias(ctx, aliasStatement(stmt, true), win)}
 		default:
+			// SEVERAL TARGETS IN ONE CALL (#339): a comma list of sessions, or
+			// `--dead` for every session that has ended. One slot per entry.
+			if slots, isBatch := s.rmBatch(ctx, stmt, win); isBatch {
+				return slots
+			}
+			if strings.TrimSpace(stmt.Target) == "" {
+				return []envelope.Slot{badRequest(stmt, "rm needs a target: `rm <session>[,<session>…]` erases "+
+					"those sessions, `rm --dead` erases every session that has ended, and "+
+					"`rm <session> file <path>` removes a file.")}
+			}
 			return []envelope.Slot{s.directiveRemove(ctx, stmt, win)}
 		}
 
@@ -309,6 +350,12 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			}
 			if isPeerHandle(stmt.Target) {
 				return s.peerChannel(ctx, stmt, win, "close", nil)
+			}
+			// SEVERAL TARGETS IN ONE CALL (#341): a comma list, `--index 1,2,3`, or
+			// `--all`. One slot per target, in the order they were written; a failing
+			// entry does not roll back the ones beside it.
+			if slots, isBatch := s.closeBatch(ctx, stmt, win); isBatch {
+				return slots
 			}
 			return []envelope.Slot{s.directiveClose(ctx, stmt, win)}
 		default:

@@ -174,6 +174,48 @@
 - **钥匙详情保持形状**：助记词「隐藏」是模糊，不是消失（此前会改变弹窗高度，按钮从指针底下移走），三个动词移到标题行；未载入的钥匙公钥框会说明「载入之后它才有分享地址」，不再只是一个空虚线框。「接收分享的主机」移到公钥标题行，与它用到的地址在一起。
 - **钥匙改叫「载入 / 释放」**（不再用「插入 / 拔掉」）：载入是把 24 词解到内存，释放是从内存丢掉，钥匙本身与任何文件都不动。钥匙链标题行会显示已载入的把数，`api.md`、服务端错误信息与设计文档统一用同一套词。
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
+### Added
+
+- `close` takes several targets: `close a1f3:1,b2c4:1`, `close a1f3 --index 1,2,3`,
+  `close a1f3 --all`. One reply slot per target, in the order written, each carrying
+  a `Batch:` header naming the address it answers; a target that fails does not stop
+  or undo the ones beside it. `--all` on a channel handle is refused and names
+  `close <session>` instead of closing the session behind the caller's back.
+- `rm` takes several sessions (`rm a1f3,b2c4`) and clears the archive in one call
+  (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
+  never swept: `--dead` names its targets by state, so `--force` does not apply to it.
+### Fixed
+- `call <peer>` can carry a frame that the command line cannot spell: `--file <path>`
+  and `@<path>` read the bytes on the host running termcp (8 MiB, JSON checked, the
+  path named in every refusal), so a large frame or one full of quotes never passes
+  through a quoting layer. `--file -` is refused with the reason: under a stdio
+  transport fd 0 carries the protocol itself.
+- A single-quoted frame can now hold an apostrophe: the POSIX splice `'\''` is
+  reassembled into one `'` for a verbatim payload, which is how a shell user writes it.
+  A `\'` inside single quotes — the spelling that used to produce invalid JSON three
+  layers down — is refused WITH the three spellings that work.
+- `get <session> mcp tools` — the form the instructions, `help get`/`help call`/
+  `help mcp` and `docs/agents/hints.md` all taught — answers 400, because the peer
+  address parser accepted `protocol` and rejected every other word before the branch
+  that implements `tools` could run. `tools` is now accepted in both positions
+  (`mcp tools` and `mcp:1 tools`), and the docs spell the address the way it is
+  printed: `mcp:<n>`, copied from `ls ext`.
+- `get <session> mcp:<n>` (the address without `tools`) dereferenced the browser
+  state a non-browser peer does not have. It now describes the peer and names the
+  next call.
+- `get <session> mcp:<n> <unknown word>` answered 200 with the generic description;
+  it is a 400 that lists the words the peer does answer.
+- `ls ext` prints a copyable next call under every row that carries a live address,
+  and one at the end of the list. The address column answers "what is installed";
+  nothing answered "what do I type".
+- `|` is documented and refused as what it is: `read … | write …`, the only pairing
+  this language has. A shell pipeline written in `cmd` (`grep x | head`) now gets the
+  pipe rule and where a shell line belongs, instead of "unknown directive: grep" and
+  a verb table. `Op.PipeEnd` declares the pair, so a vocabulary without one (an
+  embedder like zero-memcp) says it has no `|` operator rather than teaching a
+  construct it does not implement.
+- `term` accepts `command` as an alias for `cmd`; both present and different is a
+  400 naming both rather than a silent choice.
 ### 修复
 
 - **本地端口转发（-L）的监听地址不再被静默忽略**：Web UI 弹窗此前对所有方向都统一提交 `local_host`，而服务端 `-L` 实际只消费 `bind_host`，导致用户在界面填入任意非回环监听地址后，服务端均静默回落到 `127.0.0.1`；现弹窗根据方向自适应提交 `bind_host`（本地）与 `local_host`（远端），输入框标签按方向明确标示「本机」或「目标机」。

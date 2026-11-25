@@ -44,8 +44,9 @@ no exit signal, so its reply is a sample.
 
 CAPABILITY — start at 'ls ext': installed MCP servers and skill trees,
 with their operating notes. Search here first for a tool or a skill. 'ls': session
-state (learn_mode:true adds usage). MCP peer: 'get <session> mcp tools', then
-'call <peer> <tool> {json}'. CDP controls a real browser: 'open <session> cdp <url>',
+state (learn_mode:true adds usage). MCP peer: 'get <session> mcp:<n> tools', then
+'call <session> mcp:<n> <tool> {json}'; copy the address from 'ls ext' (it is live).
+CDP controls a real browser: 'open <session> cdp <url>',
 then 'call <peer> {method}' — navigate, click, screenshot, eval. Repeated job?
 'create ext', 'create alias <name> <cmd>' or 'open <session> mcp <url>'.
 

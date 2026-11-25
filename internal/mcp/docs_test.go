@@ -799,7 +799,7 @@ func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 func TestInstructionsExplainActionWhenTermcpFeelsAwkward(t *testing.T) {
 	for _, want := range []string{
 		"Long, awkward", "missing a capability", "say what you are trying to do and ask",
-		"create ext", "open <session> mcp <url>", "call <peer> <tool>",
+		"create ext", "open <session> mcp <url>", "mcp:<n> tools", "mcp:<n> <tool>",
 	} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("initialize instructions miss high-level action or escalation path %q:\n%s", want, mcpServerInstructions)
