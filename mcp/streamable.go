@@ -170,6 +170,35 @@ func NewStreamableHTTPServer(srv Dispatcher, opts ...StreamableOption) *Streamab
 	return s
 }
 
+// Broadcast delivers a frame to every session that has an open GET stream, and reports how
+// many took it.
+//
+// THIS IS THE SERVER-INITIATED HALF, and it is a broadcast rather than a per-session send
+// on purpose (issue #328). A shared stdio peer has no notion of which client a notification
+// is for: it says `notifications/acme/job` and the line-delimited channel carries it to
+// whoever is reading. Fanning out is the honest mapping of that; stopping at one session
+// would invent a routing rule the peer never expressed.
+//
+// DELIVERY IS LOSSY BY DESIGN: each session holds 64 frames and a client that is not
+// reading drops them (write returns an error, which is counted as not delivered). The
+// extension's own sequence numbers are what makes that recoverable — see the transport
+// docs — and a queue that grows instead would turn one stuck client into a leak.
+func (s *StreamableHTTPServer) Broadcast(frame []byte) int {
+	var sessions []*streamClient
+	s.sessions.Range(func(_, v any) bool {
+		sessions = append(sessions, v.(*streamClient))
+		return true
+	})
+	sent := 0
+	for _, sc := range sessions {
+		sc.touch()
+		if err := sc.write(context.Background(), frame); err == nil {
+			sent++
+		}
+	}
+	return sent
+}
+
 // ServeHTTP dispatches on the verb.
 func (s *StreamableHTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {

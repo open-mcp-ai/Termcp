@@ -526,6 +526,73 @@ out=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$EXT" -H 'Content-Type: ap
   -H "Mcp-Session-Id: $SID_EXT" -d '{"jsonrpc":"2.0","id":4,"method":"ping"}')
 check "#328 结束后的 session 是 404" "$out" '404'
 
+# ---------------------------------------------------------------------------
+# #328 S3：常驻 pump 与四路分帧。用一个真对话的桩 MCP server，因为它会**自己说话**
+# （notifications/acme/job），而 cat 只会回声——回声验不出「没人请求时帧能不能到」。
+say "#328 pump：没人 POST 时通知也能到"
+cat > "$WORK/stub_mcp.py" <<'PYEOF'
+import sys, json, threading, time
+def out(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+def push():
+    time.sleep(0.2)
+    n = 0
+    while True:
+        n += 1
+        out({"jsonrpc": "2.0", "method": "notifications/acme/job", "params": {"seq": n}})
+        time.sleep(0.3)
+threading.Thread(target=push, daemon=True).start()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        m = json.loads(line)
+    except Exception:
+        continue
+    if "id" not in m:
+        continue
+    out({"jsonrpc": "2.0", "id": m["id"], "result": {
+        "serverInfo": {"name": "stub", "version": "1"},
+        "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+        "echoed": m.get("params", {})}})
+PYEOF
+term "create ext stub --target internal --mode pipe --command python3 --args $WORK/stub_mcp.py" >/dev/null
+sleep 2
+EXT2="http://127.0.0.1:$PORT/ext/stub/stream"
+# 开一个 session（initialize），后面所有请求都用它。
+HSESS="$WORK/sess.hdr"
+curl -s -D "$HSESS" -o /dev/null -X POST "$EXT2" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+S1=$(grep -i '^mcp-session-id:' "$HSESS" | tr -d '\r' | awk '{print $2}')
+# The session id is random; what matters is that the handshake produced one at all.
+check_not "#328 桩扩展确实起来了（拿到了 session）" "$S1" 'unknown'
+# 1) 没有任何 POST 在进行时，GET 流在 1s 内收到扩展自己发出的通知。
+timeout 2 curl -s -N -X GET "$EXT2" -H "Mcp-Session-Id: $S1" > "$WORK/stream.out"
+check "#328 GET 流收到扩展主动发的帧" "$(cat "$WORK/stream.out")" 'notifications/acme/job'
+# 2) 两个客户端都用 id:1，各拿各的回答。
+HSESS2="$WORK/sess2.hdr"
+curl -s -D "$HSESS2" -o /dev/null -X POST "$EXT2" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+S2=$(grep -i '^mcp-session-id:' "$HSESS2" | tr -d '\r' | awk '{print $2}')
+curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $S1" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"who":"A"}}' > "$WORK/a.out" &
+PA=$!
+curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $S2" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"who":"B"}}' > "$WORK/b.out" &
+PB=$!
+# BARE `wait` WOULD WAIT FOR THE DAEMON TOO — it is a background job of this shell, so the
+# script would hang until the suite timer fired. Wait for the two curls by pid.
+wait "$PA" "$PB"
+check "#328 客户端 A 拿到自己的回答" "$(cat "$WORK/a.out")" '"who": "A"'
+check "#328 客户端 B 拿到自己的回答" "$(cat "$WORK/b.out")" '"who": "B"'
+check_not "#328 两个 id:1 不串包（A 没拿到 B 的）" "$(cat "$WORK/a.out")" '"who": "B"'
+# 3) initialize 只转给对端一次：第二个客户端拿到的是缓存，回包里的 serverInfo 仍是扩展自己的。
+out=$(curl -s -X POST "$EXT2" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":42,"method":"initialize","params":{}}')
+check "#328 第二个 initialize 复用缓存" "$out" '"serverInfo"'
+check "#328 且 id 改回调用方的" "$out" '"id": 42'
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
