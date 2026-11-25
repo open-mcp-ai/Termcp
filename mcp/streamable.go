@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,6 +39,11 @@ const (
 // receive a server-initiated request. Saying so is better than blocking.
 type streamClient struct {
 	*client
+
+	// lastSeen is unix nanos of the last request seen on this session. It is what the
+	// reaper measures (see idle.go), and it lives here rather than on *client because
+	// the SSE transport has its own liveness rule: its GET IS the session.
+	lastSeen atomic.Int64
 
 	mu  sync.Mutex
 	out chan []byte // nil until a GET opens
@@ -106,6 +113,13 @@ type StreamableHTTPServer struct {
 	mu       sync.Mutex
 	sessions map[string]*streamClient
 	closed   bool
+
+	// idleWindow is how long a session may go untouched before it is reclaimed. Zero
+	// means defaultIdleWindow.
+	idleWindow time.Duration
+	// stopJanitor ends the reaper started by NewStreamableHTTPServer.
+	stopJanitor context.CancelFunc
+	janitorDone chan struct{}
 }
 
 // StreamableOption customises the streamable transport.
@@ -117,12 +131,19 @@ func WithHTTPContextFunc(f func(context.Context, *http.Request) context.Context)
 	return func(s *StreamableHTTPServer) { s.contextFunc = f }
 }
 
+// WithStreamableIdleWindow sets how long a session may go untouched before the
+// transport reclaims it. A value of zero (or a negative one) means the default.
+func WithStreamableIdleWindow(d time.Duration) StreamableOption {
+	return func(s *StreamableHTTPServer) { s.idleWindow = d }
+}
+
 // NewStreamableHTTPServer builds the streamable-HTTP transport.
 func NewStreamableHTTPServer(srv *Server, opts ...StreamableOption) *StreamableHTTPServer {
-	s := &StreamableHTTPServer{srv: srv, sessions: map[string]*streamClient{}}
+	s := &StreamableHTTPServer{srv: srv, sessions: map[string]*streamClient{}, janitorDone: make(chan struct{})}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.startJanitor()
 	return s
 }
 
@@ -178,6 +199,7 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		}
 		s.sessions[sess.id] = sess
 		s.mu.Unlock()
+		sess.touch()
 		w.Header().Set(sessionHeader, sess.id)
 		s.srv.registerSession(ctx, sess)
 	}
@@ -186,17 +208,31 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		http.Error(w, "missing "+sessionHeader, http.StatusBadRequest)
 		return
 	}
+	sess.touch()
 
-	answer := s.srv.Handle(WithSessionContext(ctx, sess), body, sess)
-	if answer == nil {
-		// A notification: accepted, nothing to say.
-		w.WriteHeader(http.StatusAccepted)
+	// MCP-Protocol-Version IS READ, NOT ONLY WRITTEN (issue #327). This transport wrote
+	// the header on every answer and never looked at the one the client sent, so a
+	// client speaking a version this server does not implement was served anyway and
+	// the two sides interpreted the same frames differently — a failure that looks like
+	// a handler bug from every angle.
+	//
+	// A MISSING HEADER IS NOT AN ERROR. The spec has clients omit it before the
+	// handshake settles, and the handshake is where the version is actually agreed;
+	// refusing here would break the clients that do the right thing.
+	if v := strings.TrimSpace(r.Header.Get(versionHeader)); v != "" && v != ProtocolVersion {
+		msg := "unsupported " + versionHeader + ": " + v + " (this instance speaks " + ProtocolVersion + ")"
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(versionHeader, ProtocolVersion)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(answer)
+
+	// A CALL THAT ASKED TO BE WATCHED ANSWERS AS A STREAM (see streamable_progress.go).
+	// The token is read from the raw frame, because the content type has to be chosen
+	// before dispatch runs.
+	if token, ok := progressTokenOf(body); ok {
+		s.serveWithProgress(ctx, w, sess, body, token)
+		return
+	}
+	s.servePlain(ctx, w, sess, body)
 }
 
 func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +321,13 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 // in-flight handlers, which this transport does not track; it is accepted for
 // symmetry with the SSE transport's signature.
 func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
+	if s.stopJanitor != nil {
+		s.stopJanitor()
+		// WAIT FOR THE REAPER, because it may be inside unregisterSession, whose hooks
+		// belong to the caller. Returning while a hook is still running would let the
+		// caller tear down state a hook is reading.
+		<-s.janitorDone
+	}
 	s.mu.Lock()
 	s.closed = true
 	sessions := make([]*streamClient, 0, len(s.sessions))

@@ -17,6 +17,13 @@ func registerTermTools(mcpServer *mcp.Server, s *Server) {
 		// Four default booleans on every tool carry no termcp information and cost
 		// ~80 bytes; the annotation block is empty on purpose.
 		mcp.WithToolAnnotation(mcp.ToolAnnotation{}),
+		// A TITLE IS FOR THE HUMAN IN THE CLIENT'S UI, the description for the model
+		// (issue #327). They cost one short string; leaving the title out is what
+		// makes a tool list read as `term` to somebody who has never heard of this
+		// server. No outputSchema: the structured projection is a single slot or a
+		// `{"slots": [...]}` batch depending on the call, and a schema that claimed one
+		// of the two would be a validation rule that rejects half the replies.
+		mcp.WithTitle("termcp terminal"),
 		mcp.WithDescription(termDescription),
 	}
 	opts = append(opts, termArgToolOptions()...)

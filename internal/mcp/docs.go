@@ -9,9 +9,10 @@ import (
 	"github.com/open-mcp-ai/termcp/mcp"
 )
 
-// Agent-facing documentation surface: one MCP prompt, no MCP resources.
+// Agent-facing documentation surface: one MCP prompt, and no MCP RESOURCE FOR THE
+// TRANSPORT REFERENCE.
 //
-// WHY THERE ARE NO RESOURCES. termcp used to publish api.md as an MCP resource
+// WHY api.md IS NOT A RESOURCE. termcp used to publish api.md as an MCP resource
 // (`resources/list` + `resources/read`). That is now redundant: the tool surface is
 // ONE tool whose argument is a command line, and the command space describes itself
 // — an empty cmd returns the guide, `help` returns the whole directive table, and
@@ -25,6 +26,13 @@ import (
 // command language, not HTTP routes. A caller scripting against REST fetches that
 // URL directly. Publishing the same bytes through a second access path bought
 // nothing and cost a capability claim plus four hooks to keep the two in sync.
+//
+// THE ONE RESOURCE NAMESPACE IS termcp://guide/* (#355), and it is a different
+// artefact for a different reader: the HUMAN-facing material in guide_text.go, which
+// `help` cannot replace because `help` is written for a caller that already knows
+// what a directive is. It is read-only, it has no subscription, and it is the only
+// thing this server publishes at a URI — see guide.go for why that boundary is where
+// it is.
 //
 // The `learn-api` prompt stays: it is the one thing that cannot be derived from
 // asking the instance, because an agent that does not yet know `cmd` is the whole
