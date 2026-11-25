@@ -174,6 +174,10 @@ var ops = []Op{
 
 	{Name: "read", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		Kinds: []string{"file", "cdp", "mcp", "jrpc"},
+		// The left end of the ONE pipeline this language has. Declared here rather
+		// than hardcoded in the parser so the refusal can describe the vocabulary it
+		// is refusing in (see Grammar.PipePair).
+		PipeEnd: "source",
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
 			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait"},
@@ -188,6 +192,9 @@ var ops = []Op{
 	// the two legitimate forms. The dispatcher tells them apart by Kind.
 	{Name: "write", Kind: KindFlags, Target: true,
 		Kinds: []string{"file"},
+		// The right end: `read … | write …` is a copy, and it is the only pairing
+		// either side accepts.
+		PipeEnd: "sink",
 		// --size is the truncate target. It was missing, so `--op truncate` could not be
 		// satisfied by any spelling: the handler requires remote_path and size, and the
 		// flag for size did not exist.
@@ -452,9 +459,19 @@ link's time, not in milliseconds, and a call that waited for it would be killed
 partway by whatever watchdog is in front of you. get task <id> waits, and
 reports progress while it runs.
 
-| belongs to the next layer: inside a shell payload, run h:1 $1 with args
-["ls | wc -l"] sends the pipeline to the remote shell. read | write connects
-two termcp file streams. The same symbol serves each grammar at its own layer.
+THE PIPE IS ONE PAIR, NOT AN OPERATOR. read | write connects two termcp file streams,
+and that is the only "|" this language has: cmd1 | cmd2 is refused — not run, not
+guessed at — because "|" one layer down belongs to the remote shell, and one character
+cannot mean two things.
+
+A SHELL PIPELINE IS WRITTEN INSIDE A PAYLOAD, where "|" is the shell's:
+
+  cmd: "run h:1 $1"    args: ["ls -la | wc -l"]
+  cmd: "run h:1 $1"    args: ["grep -rn TODO . | head -20"]
+
+Outside a payload (grep x | head written directly in cmd) there is nothing to pipe:
+grep and head are not directives, and the refusal names the read | write pair so the
+caller learns it rather than guessing a third spelling.
 
 --grep RE FILTERS BEFORE THE WINDOW, AND THE DIFFERENCE MATTERS. The pattern runs
 over this daemon's own transcript — the command already finished, its bytes are
