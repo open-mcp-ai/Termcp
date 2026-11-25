@@ -1282,6 +1282,11 @@ func (s *Server) directiveExtensionUse(ctx context.Context, stmt directive.State
 	if target != "" {
 		args["target"] = target
 	}
+	// --channel picks among a template's channels (issue #331). Absent means the
+	// default one, which is what every request before this flag meant.
+	if v, ok := stmt.Flag("channel"); ok && strings.TrimSpace(v) != "" {
+		args["channel"] = strings.TrimSpace(v)
+	}
 	res, fail := s.callTool(ctx, "extension", args)
 	if fail != nil {
 		return s.slotFromFailure(ctx, stmt, fail)

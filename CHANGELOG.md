@@ -176,6 +176,24 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- A template can hold several channels: `[[channel]]` names each process or endpoint,
+  with its own `kind` (http, stdio, pty), `name` and `target`, so one card can run an
+  MCP endpoint here and a worker there — two connections, one lifecycle, one retry
+  ladder, one place to edit when a host moves. A channel is opened once per session
+  rather than once per caller, `open ext <name> --channel <ch>` names which one, `get
+  ext` reports every channel with its handle, and `/ext/{name}/stream` talks to the
+  http one. The old single-channel spelling (`command`/`url`/`mode`) keeps its meaning
+  exactly; a file that uses both is refused rather than merged.
+- `ext create --template @file` now reads the file. The help text has always shown
+  that spelling, and it used to reach the TOML parser as the literal `@file`.
+- A template's tunnel can be built on another host's connection: `[[forward]]` takes
+  `via = "<ssh_config>"`, so ONE extension can mount an outbound MCP endpoint and open
+  an inbound listener on a machine it does not run on (a VPS dialling back, a NAT
+  traversal). The extension still has one target, so its handle and `open ext` are
+  unchanged — a via host is a connection opened for the tunnel alone, sharing one SSH
+  link per host. A tunnel that fails there is reported in `failures[]` with its `via`
+  host and retried on its own: the endpoint keeps answering, and the status stays
+  `available` because only the tunnel is down.
 - `read <session> file <directory>` lists a bounded, structured directory table
   (type, path/name, size, mtime, mode) instead of failing with `is a directory`.
   `--depth` (1–5) and `--limit` (200–2000) bound the walk; withheld entries and
@@ -204,6 +222,13 @@
   reassembled into one `'` for a verbatim payload, which is how a shell user writes it.
   A `\'` inside single quotes — the spelling that used to produce invalid JSON three
   layers down — is refused WITH the three spellings that work.
+- An extension's `--targets` / `[[targets]]` entry refuses keys nothing reads
+  (`command`, `args`, `mode`, `resident`, `allow`, …) instead of dropping them on
+  save: the stored template used to differ from the one the author wrote, and the
+  experiment run afterwards tested a shape nobody asked for. The message names the
+  keys an entry does take and where the extension-level ones belong; a wrong value
+  type is reported separately, so "spelled differently" and "not supported" never
+  read alike.
 - `get <session> mcp tools` — the form the instructions, `help get`/`help call`/
   `help mcp` and `docs/agents/hints.md` all taught — answers 400, because the peer
   address parser accepted `protocol` and rejected every other word before the branch

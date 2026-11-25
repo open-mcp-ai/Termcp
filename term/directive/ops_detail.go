@@ -105,10 +105,10 @@ var ops = []Op{
 		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "ext"},
 		Flags: []string{"pipe", "pty", "argv", "name", "on-exit:enum=keep,close", "rows:number", "cols:number",
 			"size:geometry", "bind-host", "remote-host", "remote-port:number", "local-port:number",
-			"local-host", "dynamic", "remote", "target", "all"},
+			"local-host", "dynamic", "remote", "target", "channel", "all"},
 		Valueless: []string{"pipe", "pty", "dynamic", "remote", "all"},
 		RestValue: []string{"argv"},
-		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name>   |   open <session> cdp:N --target <targetId>",
+		Usage:     "open <session> [--pty] --argv <cmd>   |   open <session> forward …   |   open <session> mcp|cdp|jrpc <url>   |   open ext <name> [--channel <ch>]   |   open <session> cdp:N --target <targetId>",
 		Detail:    openDetail},
 	{Name: "ls", Core: true, Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true,
 		Kinds:     []string{"forward", "file", "host", "ext", "alias", "cdp", "mcp", "jrpc", "task"},
@@ -220,8 +220,8 @@ var ops = []Op{
 			// refused by name rather than opened as a file.
 			"recursive", "dry-run"},
 		Valueless: []string{"recursive", "dry-run"},
-		Usage:  "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
-		Detail: writeDetail},
+		Usage:     "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
+		Detail:    writeDetail},
 
 	// --- a peer: one call, or the manual send/recv pair ---
 
@@ -926,6 +926,11 @@ value it never found a use for and nothing has run yet.
 
 const openDetail = `Add a child to a session you already have: a channel, a forward, or a peer.
 
+OPEN EXT NAMES A CHANNEL WHEN THE TEMPLATE HAS SEVERAL: open ext NAME --channel CH.
+With no --channel the default one answers, which is what a single-channel template has
+always done. A name the template does not have is refused with the list of names it
+does have.
+
 OPEN EXT IS THE ONE FORM WITH NO SESSION IN IT. Every other open names a container first,
 because the caller is adding to a connection it already has; an extension's connection
 belongs to the reconciler, which is what keeps it trimmed to the template. So open ext
@@ -1432,7 +1437,27 @@ template keeps the values, which is what makes an upgrade safe.
 --allow is the capability whitelist, comma-separated, e.g. --allow file_read,file_stat.
 --paths is the path whitelist; a path outside it is refused even when the
 capability is allowed. --forwards declares tunnels that come up and go down with
-the session, as a JSON array of {kind, local_port, remote_host, remote_port}.
+the session, as a JSON array of {kind, local_port, remote_host, remote_port, via}.
+
+VIA IS THE ONE FIELD THAT NAMES A SECOND HOST. Without it a tunnel is built on the
+extension's own connection — true for every ordinary template, and the reason it is
+the default. A template that mounts an outbound endpoint AND has to LISTEN on a
+machine it does not run on needs the tunnel somewhere else:
+  --url http://127.0.0.1:18890/mcp --target internal
+  --forwards '[{"kind":"remote","via":"vps","local_port":18890,
+                "remote_host":"127.0.0.1","remote_port":18890}]'
+Now the relay dials 127.0.0.1:18890 from INSIDE the container (the extension's own
+connection), while the listener stands on vps. One template, two directions, one
+card. The extension still has ONE target, so its handle and "open ext" are unchanged;
+a via host is a connection opened for the tunnel alone.
+  - via does not apply to a dynamic (SOCKS) forward: the proxy listens where its
+    connection is, so there is nothing for via to carry.
+  - via does not apply to a forward written under [[targets]]: that entry already
+    names the host, and two answers to one question is what Validate refuses.
+  - via = the extension's own connection is refused by name rather than accepted as
+    a no-op: writing it would look like a decision that changed nothing.
+  - the tunnel reports its via in "ext get", because a listener on another machine is
+    invisible here and ss -ltn would otherwise disagree with the reply.
 THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
   - ONE TEMPLATE CAN CARRY BOTH. A forwards list beside --command (or --paths, or
     --mode pty) is not two extensions: the program runs on the target, the tunnels
@@ -1458,6 +1483,29 @@ THREE FACTS THE FIELD DOES NOT SAY, each of which changes what you write:
     not undo entries 1-2: they stay listening and are recorded, the retry targets
     only the one that failed, and the extension stays usable for everything the
     tunnel was not for.
+
+A TEMPLATE MAY HAVE SEVERAL CHANNELS (v2, the channel table). The four fields above are
+the one-channel spelling; a list is the several-channel one, and a file that uses
+both is refused rather than merged:
+  [[channel]]
+  name = "api"                       the name --channel addresses
+  kind = "http"                      http | stdio | pty (inferred from url/command)
+  url  = "http://127.0.0.1:18890/mcp"
+  [[channel]]
+  name = "worker"
+  kind = "stdio"
+  command = "node"
+  args = ["worker.mjs"]
+Each channel may name its own --target: an http channel's target is the machine its
+requests leave from (its connection is the loopback one, as with --url above), and a
+stdio or pty channel's target is where that process runs — so one card can hold an
+endpoint here and a worker there, on two connections. One channel may say
+default = true: that is the one "open ext NAME" with no --channel answers with, and
+the one the /ext route talks to when it is the http one.
+  - a channel is opened ONCE per session, not once per caller: a declared worker runs
+    one process, and "open ext NAME --channel worker" hands back that one.
+  - "get ext NAME" reports every channel with its handle and status, including a
+    channel that failed, because that is the one a reader needs to see.
 
 --args is an ARGV WORD LIST, the same grammar --argv uses for pipe/pty: quoting is
 the shell's, and an argument may contain a comma or a space. It takes the REST of

@@ -88,6 +88,12 @@ type Extension struct {
 	Rows    int      `toml:"rows,omitempty"`
 	Cols    int      `toml:"cols,omitempty"`
 
+	// Channels is the v2 spelling: a list of processes and endpoints, each with its
+	// own name and host (issue #331). The four fields above are the v1 spelling of
+	// the same thing for the case of exactly one, and the two do not combine — see
+	// channel.go for why they are not merged.
+	Channels []Channel `toml:"channel,omitempty"`
+
 	// IdleTimeout closes the channel after this long with nothing asked of it.
 	//
 	// IT APPLIES TO THE EXTENSIONS THE RECONCILER STARTS ON DEMAND — every enabled
@@ -212,6 +218,25 @@ type ForwardDecl struct {
 	LocalPort  int    `toml:"local_port,omitempty"`  // 0 = picked at runtime
 	RemoteHost string `toml:"remote_host,omitempty"` // local: where the target dials
 	RemotePort int    `toml:"remote_port,omitempty"`
+
+	// Via names the host whose CONNECTION carries this tunnel, when it is not the
+	// extension's own (issue #330).
+	//
+	// WHY IT IS NEEDED AT ALL. A template's session decides two things at once: where
+	// the channel runs and where the tunnel is built. That is right for the common case
+	// and wrong for one shape — an extension that mounts an outbound MCP endpoint AND
+	// listens on a machine it does not run on (a VPS dialling back in). Until this
+	// field, that shape needed two templates, because a `url` template's session is
+	// always the loopback one (its channel runs termcp's own bridge) and a `-R` on it
+	// could therefore only listen locally.
+	//
+	// EMPTY MEANS THE EXTENSION'S OWN SESSION, which is exactly today's behaviour, so
+	// every existing template keeps its meaning.
+	//
+	// IT NAMES A CONNECTION, NOT A TARGET. The extension still has ONE target, so
+	// `/ext/{name}/stream` and `open ext` stay unambiguous: a via host is a connection
+	// opened for the tunnel and nothing else (no channel, no capability set).
+	Via string `toml:"via,omitempty"`
 }
 
 // ExposeDecl is one path whitelist published to a target over ssh -R (issue #321).
@@ -353,6 +378,9 @@ func (e *Extension) Normalize() {
 	for i := range e.Args {
 		e.Args[i] = strings.TrimSpace(e.Args[i])
 	}
+	for i := range e.Channels {
+		e.Channels[i].Normalize(e.Target, i)
+	}
 	for i := range e.Forwards {
 		e.Forwards[i].Normalize()
 	}
@@ -373,6 +401,7 @@ func (f *ForwardDecl) Normalize() {
 	f.BindHost = strings.TrimSpace(f.BindHost)
 	f.LocalHost = strings.TrimSpace(f.LocalHost)
 	f.RemoteHost = strings.TrimSpace(f.RemoteHost)
+	f.Via = strings.TrimSpace(f.Via)
 	// -L reaches a host as seen from the target, where localhost is the usual
 	// intent; -R names its own target explicitly, so it gets no default.
 	if f.DirectionKind == ForwardLocal && f.RemoteHost == "" {
@@ -430,6 +459,16 @@ func (e *Extension) Validate() error {
 				if err := t.Forwards[j].Validate(); err != nil {
 					return fmt.Errorf("targets #%d (%s) forward #%d: %w", i+1, t.Host, j+1, err)
 				}
+				// ONE TUNNEL HAS ONE PLACE TO BE BUILT (issue #330). A forward listed
+				// under a [[targets]] entry already names its carrier — that entry's
+				// host — so a `via` here would be a second answer to the same question,
+				// and the runtime would have to pick one silently.
+				if t.Forwards[j].Via != "" {
+					return fmt.Errorf("targets #%d (%s) forward #%d: via does not apply here — this forward already "+
+						"belongs to host %q, and that is where its tunnel is built. Move the forward to the top "+
+						"level (next to target = …) if you need it on a different host.",
+						i+1, t.Host, j+1, t.Host)
+				}
 			}
 		}
 		// The legacy top-level list belongs to the legacy top-level target; with a
@@ -442,6 +481,25 @@ func (e *Extension) Validate() error {
 	case "", "pty", "pipe":
 	default:
 		return fmt.Errorf("mode must be pty, pipe or empty (no shell), got %q", e.Mode)
+	}
+	// ONE SPELLING PER FILE (issue #331). A template that carries both a top-level
+	// command/url/mode and a [[channel]] list would leave "what runs" with two answers
+	// and no rule for combining them, so it is refused by name rather than merged.
+	if len(e.Channels) > 0 {
+		for _, pair := range []struct{ key, val string }{
+			{"command", e.Command}, {"url", e.URL}, {"mode", e.Mode},
+		} {
+			if pair.val != "" {
+				return fmt.Errorf("%s at the top level and [[channel]] are alternatives: a channel list names what runs, "+
+					"one entry at a time. Move %s into the entry that runs it, or drop the list", pair.key, pair.key)
+			}
+		}
+		if len(e.Args) > 0 || len(e.Headers) > 0 {
+			return fmt.Errorf("args and headers belong to a channel: move them into the [[channel]] entry that uses them")
+		}
+		if err := e.validateChannels(); err != nil {
+			return err
+		}
 	}
 	// A pipe has no login shell to fall back to, so a commandless pipe would
 	// start a channel that can do nothing — refuse it here rather than at dial.
@@ -503,6 +561,10 @@ func (e *Extension) Validate() error {
 	// exposed file paths, port forwards, or an interactive pty shell). Declaring none
 	// of these is an empty container.
 	hasCapability := e.Command != "" || e.URL != "" || len(e.Paths) > 0 || len(e.Forwards) > 0 || len(e.Exposes) > 0 || e.Mode == "pty"
+	// A CHANNEL LIST IS THAT SAME DECLARATION, one entry at a time (issue #331).
+	if len(e.Channels) > 0 {
+		hasCapability = true
+	}
 	for _, t := range e.Targets {
 		if len(t.Forwards) > 0 {
 			hasCapability = true
@@ -511,9 +573,19 @@ func (e *Extension) Validate() error {
 	if !hasCapability {
 		return fmt.Errorf("extension declares no capability: explicitly specify at least one of command, url, paths, forward, or mode=pty")
 	}
+	// A via THAT NAMES THE EXTENSION'S OWN CONNECTION IS A NO-OP SPELLED AS A DECISION.
+	// Refused by name, because the two spellings would otherwise look like two
+	// behaviours and behave identically — and the author would believe the tunnel had
+	// been moved when it had not.
+	ownSession := e.SessionHost()
 	for i := range e.Forwards {
 		if err := e.Forwards[i].Validate(); err != nil {
 			return fmt.Errorf("forward #%d: %w", i+1, err)
+		}
+		if via := e.Forwards[i].Via; via != "" && via == ownSession {
+			return fmt.Errorf("forward #%d: via = %q is this extension's own connection, so it changes nothing — "+
+				"omit via to mean it. A url template's connection is internal (its channel runs the bridge), "+
+				"which is why a tunnel that should listen on %q has to say so here", i+1, via, ownSession)
 		}
 	}
 	for i := range e.Exposes {
@@ -567,6 +639,14 @@ func (f *ForwardDecl) Validate() error {
 	if f.DirectionKind == ForwardDynamic && !forward.IsLoopbackHost(f.BindHost) {
 		return fmt.Errorf("a dynamic (SOCKS5) forward binds loopback only: it performs no authentication, so %q would be an open proxy (use kind = \"local\" to publish one service)", forward.ResolveBindHost(f.BindHost))
 	}
+	// via NAMES A CONNECTION, so it needs a form that HAS a connection on this side.
+	// A dynamic forward with via would be a SOCKS proxy standing on somebody else's
+	// connection while listening here — a shape nobody asked for, and one whose
+	// failure would be indistinguishable from the far host being down.
+	if f.Via != "" && f.DirectionKind == ForwardDynamic {
+		return fmt.Errorf("via does not apply to a dynamic forward: a SOCKS proxy is opened on the connection that listens, " +
+			"so there is nothing for via to carry (use kind = \"remote\" to listen on another host)")
+	}
 	return nil
 }
 
@@ -597,15 +677,61 @@ func validEndpointURL(raw string) error {
 
 // Parse decodes TOML bytes into an Extension without validating. Callers that
 // round-trip a file through an editor use this; Save validates separately.
+//
+// A KEY UNDER [[targets]] THAT NOTHING READS IS REFUSED (#332). It used to be
+// ignored, so a hand-written entry carrying `command = "node"`, or a `resident`
+// nobody implemented, loaded as a template without it: the file said one thing and
+// the extension did another, which is the reading that costs an author their
+// experiment rather than their build.
+//
+// THE REFUSAL IS SCOPED TO targets ON PURPOSE. An unknown top-level key is left
+// alone, because the fixtures that carry one are also the files a newer termcp
+// wrote — a package installed from a share, a template copied from a machine on a
+// later build — and "this build is older than the file" must not be reported as
+// "the file is broken". An entry, by contrast, has had exactly one shape since it
+// existed (host and forward), so a key nobody reads there is a spelling mistake or
+// a field an author expected the entry to own. A wrong TYPE is still answered by
+// the decoder above ("incompatible types: TOML value has type boolean; destination
+// has type string"), so the two failures never read the same.
 func Parse(data []byte) (*Extension, error) {
 	if len(data) > MaxConfigSize {
 		return nil, fmt.Errorf("extension config too large (max %d bytes)", MaxConfigSize)
 	}
 	var e Extension
-	if err := toml.Unmarshal(data, &e); err != nil {
+	md, err := toml.Decode(string(data), &e)
+	if err != nil {
 		return nil, fmt.Errorf("extension toml: %w", err)
 	}
+	if err := refuseUnknownTomlTargetKeys(md); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// refuseUnknownTomlTargetKeys reports the keys inside [[targets]] — or inside a nested
+// [[targets.forward]] — that decoding left on the table.
+//
+// MetaData.Undecoded is the decoder's own account of what it could not place, so
+// this asks the parser rather than keeping a second list of legal keys that would
+// drift from the struct the moment a field is added.
+func refuseUnknownTomlTargetKeys(md toml.MetaData) error {
+	var unknown []string
+	for _, key := range md.Undecoded() {
+		// The path is already hierarchical ("targets.resident"), which is why the
+		// prefix test covers a nested unknown key as well as a direct one.
+		if len(key) > 0 && key[0] == "targets" {
+			unknown = append(unknown, key.String())
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	word := "key"
+	if len(unknown) > 1 {
+		word = "keys"
+	}
+	return fmt.Errorf("[[targets]] has unknown %s: %s. A targets entry takes host = \"<ssh_config profile>\" and its own [[targets.forward]] entries; command, args, mode, url, resident, allow, paths and idle_timeout belong on the extension, outside the list",
+		word, strings.Join(unknown, ", "))
 }
 
 func (x *ExposeDecl) Normalize() {
@@ -643,4 +769,20 @@ func (x *ExposeDecl) Validate() error {
 		}
 	}
 	return nil
+}
+
+// SessionHost is the host whose connection carries this extension's channel.
+//
+// IT IS NOT ALWAYS Target: a url template's channel runs termcp's own bridge, so its
+// session is the loopback one and the declared target rides as `--via` inside the
+// bridge's argv (#233). Both places that need to know — the forward check above and
+// `via` compared against "the extension's own connection" — must agree, which is why
+// this is one method rather than a condition repeated at each call site.
+func (e *Extension) SessionHost() string {
+	// A TEMPLATE WITH NO CHANNEL STILL HAS A CONNECTION: a file window, a card that is
+	// only forwards. Its connection is its target's.
+	if ch, ok := e.ChannelNamed(""); ok {
+		return ch.Host(strings.TrimSpace(e.Target))
+	}
+	return strings.TrimSpace(e.Target)
 }

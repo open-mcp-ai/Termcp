@@ -64,6 +64,9 @@ type extStateData struct {
 	// bookkeeping but not from the session, and the session refused it (#188).
 	labels int
 
+	// sideRuns are the template's channels beyond the default one (issue #331).
+	sideRuns []channelRun
+
 	// extra are the channels this extension has handed out. Each is one caller's
 	// own process on the group's connection, so a second caller costs a fork, not a
 	// dial — and no two callers ever share a cursor (issue #183).
@@ -523,7 +526,7 @@ func (st *extState) retireExtra(sessionID, shellID, reason string) bool {
 		next = append(next, d.extra[:idx]...)
 		next = append(next, d.extra[idx+1:]...)
 		d.extra = next
-		recordFailure(d, "session", reason)
+		recordFailure(d, "session", reason, "")
 		d.closedAt = time.Now()
 		d.closedSessionID, d.closedShellID, d.closedReason = sessionID, shellID, reason
 		d.status = StatusUnavailable
@@ -552,8 +555,32 @@ func (st *extState) settle() bool {
 // walk settling after a sweep, and the reap step that just removed the instance.
 // Deciding it only on the walk's path left the moment described in retireExtra and
 // dueExtras.
+// carrierOnlyFailure reports whether every recorded failure belongs to a tunnel carried
+// by another host's connection, with none about this extension itself.
+//
+// IT IS THE LINE BETWEEN "this extension is down" and "the machine it tunnels through
+// is". Only the first should change the status word (issue #330).
+func carrierOnlyFailure(d *extStateData) bool {
+	if len(d.failures) == 0 {
+		return false
+	}
+	for _, f := range d.failures {
+		if f.Via == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func settle(d *extStateData) bool {
 	switch {
+	case carrierOnlyFailure(d):
+		// A TUNNEL ON ANOTHER HOST IS DOWN AND THE EXTENSION IS NOT (issue #330). The
+		// status bringUp settled on — available, because the endpoint or the channel
+		// answered — is the truth here, and rewriting it to idle or unavailable would
+		// take away a capability that works. The failure still names its via host in
+		// `failures[]`.
+		return false
 	case len(d.failures) > 0 && instanceCount(d) == 0:
 		return false // leave the failure standing
 	case instanceCount(d) > 0:
@@ -602,8 +629,75 @@ func (st *extState) takeAttachment() (sessionID, shellID string, forwards []Forw
 	st.update(func(d *extStateData) {
 		sessionID, shellID, forwards = d.sessionID, d.shellID, d.forwards
 		d.sessionID, d.shellID, d.forwards = "", "", nil
+		d.sideRuns = nil
 	})
 	return sessionID, shellID, forwards
+}
+
+// channelRun is one of the template's channels beyond the default one, as it is
+// actually opened (issue #331).
+//
+// WHY THE DEFAULT CHANNEL IS NOT IN HERE. The default channel is the extension's
+// own instance — the thing `open ext` hands out copies of, the thing the idle rule
+// reaps — and that machinery already lives in sessionID/shellID and in `extra`. The
+// other channels are one per session rather than one per caller: opening a second
+// copy of a worker for each caller would run N processes where the template declared
+// one. So they are tracked here and closed with the attachment.
+type channelRun struct {
+	name      string
+	label     string
+	target    string
+	sessionID string
+	shellID   string
+}
+
+// setSideRuns records the extra channels and reports the shells it is replacing,
+// which the caller closes.
+func (st *extState) setSideRuns(runs []channelRun) []string {
+	var stale []string
+	st.update(func(d *extStateData) {
+		for _, old := range d.sideRuns {
+			keep := false
+			for _, n := range runs {
+				if n.shellID == old.shellID {
+					keep = true
+					break
+				}
+			}
+			if !keep && old.shellID != "" {
+				stale = append(stale, old.shellID)
+			}
+		}
+		// A SNAPSHOT THAT WAS HANDED OUT MUST NEVER CHANGE, so the slice is copied in.
+		d.sideRuns = append([]channelRun(nil), runs...)
+	})
+	return stale
+}
+
+// takeSideRuns removes and returns the extra channels, for the paths that close
+// everything this extension holds.
+func (st *extState) takeSideRuns() []channelRun {
+	var out []channelRun
+	st.update(func(d *extStateData) {
+		out = d.sideRuns
+		d.sideRuns = nil
+	})
+	return out
+}
+
+// sideRunsSnapshot copies the extra channels for a status read.
+func (st *extState) sideRunsSnapshot() []channelRun {
+	return append([]channelRun(nil), st.load().sideRuns...)
+}
+
+// sideShell returns the running shell of one extra channel, or "".
+func (st *extState) sideShell(name string) string {
+	for _, run := range st.load().sideRuns {
+		if run.name == name {
+			return run.shellID
+		}
+	}
+	return ""
 }
 
 // detachFrom forgets the attachment when it is the one named, and reports whether
@@ -734,14 +828,24 @@ func (st *extState) lastStage() string {
 // so a permanently broken extension does not bury its history under one repeated
 // line while the count still climbs.
 func (st *extState) recordFailure(stage, reason string) {
-	st.update(func(d *extStateData) { recordFailure(d, stage, reason) })
+	st.update(func(d *extStateData) { recordFailure(d, stage, reason, "") })
 }
 
-// recordFailure is the history update on one snapshot; callers already hold it.
-func recordFailure(d *extStateData, stage, reason string) {
+// recordCarrierFailure records a failure that belongs to a tunnel carried by ANOTHER
+// host's connection (issue #330).
+//
+// THE `via` IS THE POINT, not decoration: a failure naming a carrier host is a
+// statement about that machine, and the extension's own endpoint or channel may be
+// answering perfectly well. The status code reads this field to decide whether the
+// extension is down or only its tunnel is (settleLocked).
+func (st *extState) recordCarrierFailure(stage, reason, via string) {
+	st.update(func(d *extStateData) { recordFailure(d, stage, reason, via) })
+}
+
+func recordFailure(d *extStateData, stage, reason, via string) {
 	if len(d.failures) > 0 {
 		last := d.failures[len(d.failures)-1]
-		if last.Stage == stage && last.Reason == reason {
+		if last.Stage == stage && last.Reason == reason && last.Via == via {
 			d.consecutive++
 			return
 		}
@@ -752,6 +856,7 @@ func recordFailure(d *extStateData, stage, reason string) {
 		At:     clock.Now(),
 		Stage:  stage,
 		Reason: truncate(reason, 300),
+		Via:    via,
 	})
 	if len(next) > maxFailures {
 		next = append([]Failure(nil), next[len(next)-maxFailures:]...)
@@ -809,3 +914,4 @@ func (st *extState) snapshot() Status {
 	}
 	return out
 }
+

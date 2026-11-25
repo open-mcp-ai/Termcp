@@ -2,6 +2,8 @@ package extensions
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -173,8 +175,19 @@ func SaveStruct(store *Store, ext *Extension) error {
 	return store.Save(ext)
 }
 
+// targetEntryKeys is the whole vocabulary of a targets object, in the order the
+// refusal below names it.
+var targetEntryKeys = []string{"host", "target", "forwards", "forward"}
+
 // ParseTargetDecls decodes a targets list: shorthand host strings ("node1") or
 // full target objects ({ host: "node1", forwards: [...] }).
+//
+// A KEY AN ENTRY DOES NOT READ IS REFUSED (#332). It used to be ignored, so
+// `targets: [{host: "a", command: "node"}]` saved as an entry with a host and
+// nothing else: the template the author wrote was not the template stored, and
+// the experiment they ran afterwards tested a shape they had not asked for. The
+// same reading applies to forwards — a silently shortened list is a template the
+// author did not write — and an entry is small enough to state in full.
 func ParseTargetDecls(v any) ([]TargetDecl, error) {
 	if v == nil {
 		return nil, nil
@@ -189,9 +202,12 @@ func ParseTargetDecls(v any) ([]TargetDecl, error) {
 		case string:
 			out = append(out, TargetDecl{Host: strings.TrimSpace(m)})
 		case map[string]any:
-			host := optString(m, "host", "")
-			if host == "" {
-				host = optString(m, "target", "")
+			host, err := targetHost(i, m)
+			if err != nil {
+				return nil, err
+			}
+			if err := refuseUnknownTargetKeys(i, host, m); err != nil {
+				return nil, err
 			}
 			var forwards []ForwardDecl
 			if hasOpt(m, "forwards") {
@@ -207,12 +223,74 @@ func ParseTargetDecls(v any) ([]TargetDecl, error) {
 				}
 				forwards = f
 			}
-			out = append(out, TargetDecl{Host: strings.TrimSpace(host), Forwards: forwards})
+			out = append(out, TargetDecl{Host: host, Forwards: forwards})
 		default:
 			return nil, fmt.Errorf("targets #%d must be a host string or an object with {host, forwards}, got %T", i+1, item)
 		}
 	}
 	return out, nil
+}
+
+// targetHost reads the host off one targets object, accepting the `target`
+// spelling as its alias. A value of the wrong type is refused instead of read as
+// absent: `host: 5` and "no host at all" are different mistakes, and reporting
+// only the second one sends the author looking for a missing key they did write.
+func targetHost(i int, m map[string]any) (string, error) {
+	for _, key := range []string{"host", "target"} {
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("targets #%d %s must be a string, got %v", i+1, key, v)
+		}
+		// An empty host is not an answer, so the alias still gets its turn — the
+		// precedence that existed before this check did.
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s), nil
+		}
+	}
+	return "", nil
+}
+
+// refuseUnknownTargetKeys names every key of a targets object that nothing reads.
+//
+// THE MESSAGE HAS TO SAY WHERE THE KEY BELONGS. The keys authors put here are
+// overwhelmingly extension-level ones — command, args, mode, resident, allow —
+// written inside the entry because that is where the host is; a refusal that only
+// said "unknown key" would leave them guessing whether the field is spelled
+// differently or unsupported. Naming the two keys an entry does take, and the
+// fields that live outside the list, answers both. A key that is neither is then
+// visibly a typo, and a wrong type is answered by targetHost instead, so the two
+// failures never read the same.
+func refuseUnknownTargetKeys(i int, host string, m map[string]any) error {
+	var unknown []string
+	for key := range m {
+		if !slices.Contains(targetEntryKeys, key) {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	// Map order is not document order, and a message that reorders its own list
+	// between two identical calls is one a reader cannot quote back.
+	slices.Sort(unknown)
+	quoted := make([]string, len(unknown))
+	for j, key := range unknown {
+		quoted[j] = strconv.Quote(key)
+	}
+	word := "key"
+	if len(quoted) > 1 {
+		word = "keys"
+	}
+	at := ""
+	if host != "" {
+		at = " (" + host + ")"
+	}
+	return fmt.Errorf("targets #%d%s has unknown %s: %s. A targets entry takes host (alias target) and forwards (alias forward); command, args, mode, url, resident, allow and paths belong on the extension, outside the list",
+		i+1, at, word, strings.Join(quoted, ", "))
 }
 
 // ParseForwardDecls turns the JSON array an author sent into forward
@@ -240,6 +318,11 @@ func ParseForwardDecls(v any) ([]ForwardDecl, error) {
 			LocalPort:     optInt(m, "local_port", 0),
 			RemoteHost:    optString(m, "remote_host", ""),
 			RemotePort:    optInt(m, "remote_port", 0),
+			// VIA IS READ HERE FOR THE SAME REASON EVERY OTHER KEY IS, and it was the
+			// one that would have been dropped: a tunnel declaration that carries a key
+			// its reader ignores is a template the author did not write (issue #330,
+			// and the rule #332 applied to targets).
+			Via: optString(m, "via", ""),
 		})
 	}
 	return out, nil

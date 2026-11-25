@@ -291,30 +291,6 @@ check "#339 运行中的会话还在" "$b" "$E:1"
 check_not "#339 已清的 D 不在列表里" "$b" "$D"
 
 # ---------------------------------------------------------------------------
-say "#354 call 的 frame 表达力"
-printf '{"jsonrpc":"2.0","id":1,"method":"ping"}' > "$WORK/frame.json"
-out=$(term "call $SID mcp:1 --file $WORK/frame.json")
-check "#354 --file 从文件发 frame" "$out" '"code":200'
-check "#354 frame 真的发出去了" "$(body "$out")" '"id":1'
-out=$(term "call $SID mcp:1 @$WORK/frame.json")
-check "#354 @path 是 --file 的短写法" "$out" '"code":200'
-out=$(term "call $SID mcp:1 --file $WORK/frame.json '{\"a\":1}'")
-check "#354 --file 与内联 frame 同时给被拒绝" "$out" '"code":400'
-check "#354 并说明该丢哪个" "$out" 'two different frames'
-out=$(term "call $SID mcp:1 --file -")
-check "#354 --file - 被拒绝并说明原因" "$out" '"code":400'
-check "#354 指出 stdin 是协议通道" "$out" 'standard input'
-out=$(term "call $SID mcp:1 --file $WORK/nope.json")
-check "#354 文件不存在时点名路径" "$out" '"code":400'
-check "#354 并说明路径在哪台机器上" "$out" 'running termcp'
-# 撇号：POSIX 拼接在 verbatim payload 里被还原成一个引号。
-out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it'\\''s\"}}'")
-check "#354 单引号里的撇号（拼接写法）能发出去" "$out" '"code":200'
-# 写错的转义要指向真正的那一层，并给出三种可行写法。
-out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it\\'s\"}}'")
-check "#354 反斜杠撇号被拒绝" "$out" '"code":400'
-check "#354 报错说明 payload 是 verbatim" "$out" 'VERBATIM payload'
-check "#354 并给出 --file 的出路" "$out" '--file /tmp/frame.json'
 say "#340 read/write 支持目录"
 TREE="$WORK/tree"
 mkdir -p "$TREE/sub"
@@ -354,6 +330,162 @@ check "#340 越界路径被拒绝" "$out" '"code":400'
 check "#340 越界拒绝说明原因" "$out" 'climbs out'
 out=$(term "write $SID file $TREE --recursive --data 'not json'")
 check "#340 非对象 payload 被拒绝" "$out" '"code":400'
+
+# ---------------------------------------------------------------------------
+say "#354 call 的 frame 表达力"
+printf '{"jsonrpc":"2.0","id":1,"method":"ping"}' > "$WORK/frame.json"
+out=$(term "call $SID mcp:1 --file $WORK/frame.json")
+check "#354 --file 从文件发 frame" "$out" '"code":200'
+check "#354 frame 真的发出去了" "$(body "$out")" '"id":1'
+out=$(term "call $SID mcp:1 @$WORK/frame.json")
+check "#354 @path 是 --file 的短写法" "$out" '"code":200'
+out=$(term "call $SID mcp:1 --file $WORK/frame.json '{\"a\":1}'")
+check "#354 --file 与内联 frame 同时给被拒绝" "$out" '"code":400'
+check "#354 并说明该丢哪个" "$out" 'two different frames'
+out=$(term "call $SID mcp:1 --file -")
+check "#354 --file - 被拒绝并说明原因" "$out" '"code":400'
+check "#354 指出 stdin 是协议通道" "$out" 'standard input'
+out=$(term "call $SID mcp:1 --file $WORK/nope.json")
+check "#354 文件不存在时点名路径" "$out" '"code":400'
+check "#354 并说明路径在哪台机器上" "$out" 'running termcp'
+# 撇号：POSIX 拼接在 verbatim payload 里被还原成一个引号。
+out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it'\\''s\"}}'")
+check "#354 单引号里的撇号（拼接写法）能发出去" "$out" '"code":200'
+# 写错的转义要指向真正的那一层，并给出三种可行写法。
+out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it\\'s\"}}'")
+check "#354 反斜杠撇号被拒绝" "$out" '"code":400'
+check "#354 报错说明 payload 是 verbatim" "$out" 'VERBATIM payload'
+check "#354 并给出 --file 的出路" "$out" '--file /tmp/frame.json'
+
+# ---------------------------------------------------------------------------
+# #330：via 让一条隧道建在别的连接上。本机没有第二台可 SSH 的主机，所以这里验的是
+# 规则与失败隔离——两条都是"能不能安全地写"的部分；真机上的双向验证在 issue 里
+# 需要一台 VPS，报告里说明。
+say "#330 forward via"
+FWD_VIA='[{"kind":"remote","via":"nosuchhost","local_port":18921,"remote_host":"127.0.0.1","remote_port":'"$PORT"'}]'
+out=$(term "create ext viabad --target internal --url http://127.0.0.1:$PORT/stream --forwards '$FWD_VIA'")
+check "#330 带 via 的模板可以保存" "$out" '"code":200'
+check "#330 模板里保留了 via" "$(body "$out")" '"Via": "nosuchhost"'
+sleep 3
+out=$(term "get ext viabad"); b=$(body "$out")
+check "#330 隧道失败不影响扩展可用" "$b" 'status: available'
+check "#330 失败点名是哪台机器" "$b" '"via": "nosuchhost"'
+check "#330 失败只记在 forward 这一段" "$b" '"stage": "forward"'
+check "#330 并排了重试时间" "$b" 'next_retry:'
+# endpoint 在隧道坏着的时候照常可用（failures 是隧道的事，不是通道的事）。
+out=$(term "open ext viabad")
+check "#330 隧道坏着也能挂上 MCP peer" "$out" '"code":200'
+HANDLE=$(printf '%s' "$out" | python3 -c 'import sys,json,re
+b=json.load(sys.stdin).get("body","")
+m=re.search(r"session_id: (\S+)", b)
+print(m.group(1) + " mcp:1" if m else "")')
+out=$(term "get $HANDLE tools")
+check "#330 隧道坏着 endpoint 仍然回答问题" "$out" '"code":200'
+# 规则：via 不能是本扩展自己的连接 / 不能用在 dynamic / 不能写在 [[targets]] 下
+out=$(term "create ext bad1 --target internal --url http://127.0.0.1:$PORT/stream --forwards '[{\"kind\":\"remote\",\"via\":\"internal\",\"local_port\":18922,\"remote_host\":\"127.0.0.1\",\"remote_port\":$PORT}]'")
+check "#330 via 指自己会被拒绝" "$out" '"code":400'
+check "#330 并说明省略 via 就是它" "$out" 'own connection'
+out=$(term "create ext bad2 --target internal --forwards '[{\"kind\":\"dynamic\",\"via\":\"x\",\"local_port\":18923}]'")
+check "#330 dynamic 上的 via 被拒绝" "$out" '"code":400'
+out=$(term "create ext bad3 --targets '[{\"host\":\"internal\",\"forwards\":[{\"kind\":\"remote\",\"via\":\"x\",\"local_port\":18924,\"remote_host\":\"127.0.0.1\",\"remote_port\":22}]}]'")
+check "#330 [[targets]] 下的 via 被拒绝" "$out" '"code":400'
+check "#330 并说明它已经属于那个 host" "$out" 'already'
+
+# ---------------------------------------------------------------------------
+# #331：模板 v2 —— 一个 ext 多条通道，每条各自的连接与句柄。
+say "#331 template v2 ([[channel]])"
+cat > "$WORK/two.toml" <<TOML
+name = "twocard"
+target = "internal"
+resident = true
+description = "an endpoint and a worker from one card"
+
+[[channel]]
+name = "api"
+kind = "http"
+url = "http://127.0.0.1:$PORT/stream"
+
+[[channel]]
+name = "worker"
+kind = "stdio"
+command = "cat"
+TOML
+out=$(term "create ext twocard --template @$WORK/two.toml")
+b=$(body "$out")
+check "#331 --template @file 装得进去" "$out" '"code":200'
+check "#331 两条通道都起来了" "$b" '"name": "api"'
+check "#331 第二条也有状态" "$b" '"kind": "stdio"'
+sleep 3
+b=$(body "$(term "get ext twocard")")
+check "#331 api 拿到了句柄" "$b" 'api'
+check "#331 两条都 available" "$b" 'available'
+check "#331 worker 有自己的 shell" "$b" 'worker'
+# 一条卡片两条通道 → 同一个会话里两个进程，第二进不去的地方就是 bug。
+SID=$(printf '%s' "$b" | python3 -c 'import sys,re
+m=re.search(r"session_id: (\S+)", sys.stdin.read())
+print(m.group(1) if m else "")')
+b=$(body "$(term "ls $SID")")
+check "#331 api 的通道在会话里" "$b" 'twocard.api'
+check "#331 worker 的通道并排存在" "$b" 'twocard.worker'
+# 寻址：--channel 指名哪条；名字不存在要说清有哪些。
+b=$(body "$(term "open ext twocard --channel worker")")
+check "#331 --channel 取到 worker" "$b" 'channel: worker'
+out=$(term "open ext twocard --channel nope")
+check "#331 不存在的通道是 400" "$out" '"code":400'
+check "#331 并列出合法名字" "$out" 'api, worker'
+# 旧模板一个通道，形状不变：没有 channels 这一节。
+term "create ext singlecard --target internal --mode pipe --command cat" >/dev/null
+sleep 2
+b=$(body "$(term "get ext singlecard")")
+check_not "#331 单通道模板不出现 channels" "$b" 'channels:'
+check "#331 单通道仍然是懒的（形状没变）" "$b" 'status: idle'
+# 两种说法不能混写：顶层 command 与 [[channel]] 二选一，按名字拒绝而不是合并。
+cat > "$WORK/mixed.toml" <<TOML
+name = "mixed"
+target = "internal"
+command = "cat"
+mode = "pipe"
+
+[[channel]]
+name = "worker"
+kind = "stdio"
+command = "cat"
+TOML
+out=$(term "create ext mixed --template @$WORK/mixed.toml")
+check "#331 顶层 command 与 [[channel]] 混写被拒" "$out" '"code":400'
+check "#331 并说明二选一" "$out" 'alternatives'
+# 名字是寻址：重名就没有唯一答案。
+cat > "$WORK/dup.toml" <<TOML
+name = "dup"
+target = "internal"
+
+[[channel]]
+name = "worker"
+kind = "stdio"
+command = "cat"
+
+[[channel]]
+name = "worker"
+kind = "stdio"
+command = "cat"
+TOML
+out=$(term "create ext dup --template @$WORK/dup.toml")
+check "#331 重名通道被拒" "$out" '"code":400'
+check "#331 并说明名字要唯一" "$out" 'twice'
+# 一个端点不接受 command：那是两条通道。
+cat > "$WORK/httpcmd.toml" <<TOML
+name = "httpcmd"
+target = "internal"
+
+[[channel]]
+name = "api"
+kind = "http"
+url = "http://127.0.0.1:$PORT/stream"
+command = "cat"
+TOML
+out=$(term "create ext httpcmd --template @$WORK/httpcmd.toml")
+check "#331 http 通道带 command 被拒" "$out" '"code":400'
+check "#331 并说明那要写成两条通道" "$out" 'two channels'
 
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
