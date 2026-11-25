@@ -49,6 +49,16 @@
 
 ### Fixed
 
+- `/ext/{name}/stream` is served by the same streamable-HTTP transport as the
+  instance's own `/stream`, instead of a second, hand-rolled copy of it. Three things
+  the copy got wrong are gone with it: a request answered `202` (the spec forbids it,
+  and the client then waits on a stream the copy refused to serve), `GET` answered
+  `405` (that is exactly where the client waits), and no `Mcp-Session-Id` (so a later
+  `GET` could not name itself). `GET` without a session is now a `400` naming the
+  header, `DELETE` ends the session, a JSON-RPC batch is refused by name, and a frame
+  and the `Enter` that ends it are written under the channel's line lock — two
+  concurrent POSTs used to interleave into one unparseable line.
+
 - An MCP client that cancels a call now stops it. `notifications/cancelled` was read
   and discarded, so a cancelled 60-second read ran to completion with nobody
   listening; the reply also now says it was cancelled instead of reading like an
