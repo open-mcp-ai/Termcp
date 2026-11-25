@@ -675,6 +675,15 @@ func (s *Server) directiveForward(ctx context.Context, stmt directive.Statement,
 	if action == "" {
 		action = "list"
 	}
+	// THE DIRECTION DECIDES WHICH ADDRESS FLAG EXISTS, and the check runs here for
+	// two reasons. It is the only place that knows both the flag the caller wrote
+	// and the direction it selected, and it is ahead of the review gate — a call
+	// whose address could never take effect must not reach a human as a prompt that
+	// renders it (the summary shows bind_host, so a dropped local_host would be
+	// approved as "127.0.0.1").
+	if msg := forwardAddressConflict(stmt, action); msg != "" {
+		return badRequest(stmt, msg)
+	}
 	args["action"] = action
 	if slot, bad := stringFlags(args, stmt,
 		[2]string{"session", "session_id"},
@@ -720,6 +729,61 @@ func (s *Server) directiveForward(ctx context.Context, stmt directive.Statement,
 	}
 	doc, _ := toolResultMap(res)
 	return generatedSlot(stmt, win, compactDocument(doc))
+}
+
+// forwardAddressConflict names the flag that cannot mean anything in this
+// direction, or "" when the call is consistent.
+//
+// TWO ADDRESSES, TWO MACHINES. `--bind-host` is where THIS host listens (local,
+// and the loopback-only dynamic); `--local-host` is where the TARGET listens
+// (remote). Both were declared on `open`, so the wrong one parsed, was forwarded,
+// and then read by nobody: `open s forward --local-port 8080 --local-host 0.0.0.0`
+// answered 200 while the listener stayed on 127.0.0.1. A caller cannot tell that
+// from a working forward — the reply names an address, it is just not the one it
+// asked for — so the answer is a refusal that names the right flag, not a guess at
+// what was meant.
+func forwardAddressConflict(stmt directive.Statement, action string) string {
+	named := func(flag string) bool {
+		v, ok := stmt.Flag(flag)
+		return ok && strings.TrimSpace(v) != ""
+	}
+	switch action {
+	case "remote":
+		if named("bind-host") {
+			return "`--bind-host` is the address THIS host listens on; a remote forward opens the port on the TARGET, so its address is `--local-host`.\n" +
+				"Example: open " + forwardTarget(stmt) + " forward --remote --local-port 9090 --local-host 0.0.0.0 --remote-host db --remote-port 5432"
+		}
+	case "dynamic":
+		if named("local-host") {
+			return "`--local-host` is the address a remote forward's TARGET listens on; a SOCKS5 forward has no target side.\n" +
+				"It listens on this host only (loopback: the handshake carries no authentication), which is `--bind-host`.\n" +
+				"Example: open " + forwardTarget(stmt) + " forward --dynamic --local-port 1080"
+		}
+		if named("remote-host") || named("remote-port") {
+			return "a SOCKS5 forward has no fixed target: the client names the destination on every connection, so `--remote-host`/`--remote-port` would do nothing.\n" +
+				"Drop them, or publish one service with a local forward.\n" +
+				"Example: open " + forwardTarget(stmt) + " forward --local-port 8080 --remote-host db --remote-port 5432"
+		}
+	case "local":
+		if named("local-host") {
+			return "`--local-host` is the address the TARGET listens on, which only a remote forward (`--remote`) binds; a local forward listens on THIS host, so its address is `--bind-host`.\n" +
+				"Example: open " + forwardTarget(stmt) + " forward --local-port 8080 --bind-host 0.0.0.0 --remote-host db --remote-port 5432"
+		}
+	}
+	// ONLY THE THREE CREATING ACTIONS ARE CHECKED, and the others cannot reach an
+	// address flag at all: `ls` and `close` do not declare them, so the parser answers
+	// "unknown flag for close" before this function is called.
+	return ""
+}
+
+// forwardTarget is the session a forward statement names, for the copyable line a
+// refusal carries. A statement without one keeps the placeholder `help` uses, so
+// the line stays a shape the caller completes rather than one that points nowhere.
+func forwardTarget(stmt directive.Statement) string {
+	if stmt.Target != "" {
+		return stmt.Target
+	}
+	return "<session>"
 }
 
 // forwardCapability maps a forward action onto its capability.

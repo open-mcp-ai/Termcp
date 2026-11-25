@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"strings"
 
+	"github.com/open-mcp-ai/termcp/internal/forward"
 	"github.com/open-mcp-ai/termcp/mcp"
 )
 
@@ -104,6 +106,13 @@ func (s *Server) handleDynamicForward(ctx context.Context, request mcp.CallToolR
 	// sess.ID, not the argument — see handleLocalForward.
 	fw, err := s.forwardMgr.CreateDynamic(sess.ID, info.Name, bindHost, localPort, sshCli, info.SSHEndpoint == "internal")
 	if err != nil {
+		// The address is the caller's to change, so the refusal is a 400 with the
+		// argument code: answering operation_failed here would tell an agent the
+		// server broke and send it to the logs instead of to the flag it passed.
+		var nb *forward.NonLoopbackBindError
+		if errors.As(err, &nb) {
+			return toolError(CodeInvalidArgument, "%s", err.Error()), nil
+		}
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 	sess.AttachCleanup(func() { _ = s.forwardMgr.Close(fw.ForwardID) })
