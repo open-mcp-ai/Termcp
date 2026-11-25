@@ -103,6 +103,6 @@ func (s *StreamableHTTPServer) reapIdle(ctx context.Context, window time.Duratio
 	})
 	for _, sess := range doomed {
 		sess.close()
-		s.srv.unregisterSession(ctx, sess)
+		s.srv.UnregisterSession(ctx, sess)
 	}
 }
