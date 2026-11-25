@@ -50,10 +50,15 @@ const (
 	// extPumpMaxChunk bounds one read. A line longer than this is a peer that does not
 	// speak line-delimited JSON-RPC, and the scanner drops what it cannot parse.
 	extPumpMaxChunk = 8 << 20
-	// extPumpAnswerWindow is how long a forwarded request waits for its reply. It is the
-	// same 60s the directive surface uses, and the only thing that keeps a dead peer from
-	// pinning a goroutine for ever.
-	extPumpAnswerWindow = 60 * time.Second
+	// extPumpAnswerWindow is how long a forwarded request waits for its reply.
+	//
+	// IT IS NOT A TOOL TIMEOUT (issue #328). The reason it exists is that a peer which never
+	// answers must not pin a goroutine for ever; the reason it is this large is that a
+	// legitimate `tools/call` may take a minute or two, and a window that cut it short would
+	// turn a working tool into a protocol error. The client's own request deadline is the
+	// authority on "too long" — this is the backstop for a client that has none, and it must
+	// stay above a plausible tool call.
+	extPumpAnswerWindow = 5 * time.Minute
 )
 
 // extPump is one extension channel's reader and its routing table.
@@ -228,7 +233,10 @@ func (p *extPump) failAll(reason string) {
 	p.waiters = map[string]chan []byte{}
 	p.mu.Unlock()
 	for id, ch := range waiters {
-		ch <- extErrorFrame(json.RawMessage(id), extCodePeer, reason)
+		// THE KEY IS THE UNQUOTED MINTED ID (`tc7`), and a JSON-RPC id has to be valid JSON:
+		// handing the bare token to json.Marshal failed, and the client got the generic
+		// "internal error" instead of the sentence saying what happened.
+		ch <- extErrorFrame(json.RawMessage(`"`+id+`"`), extCodePeer, reason)
 		close(ch)
 	}
 }
@@ -279,6 +287,10 @@ func (p *extPump) ask(ctx context.Context, frame string) []byte {
 		}
 		out := rewriteFrameID(reply, origID)
 		if env.Method == "initialize" {
+			// WHAT THE PEER SAYS IT SPEAKS (issue #328): the transport answers with this
+			// instead of its own constant, so a client negotiates against the version the
+			// extension actually implements.
+			p.s.noteExtVersion(p.s.extNameOfShell(p.shell), initializeVersion(reply))
 			p.mu.Lock()
 			p.initialized, p.initReply = true, out
 			p.mu.Unlock()
@@ -447,4 +459,17 @@ func (s *Server) extNameOfShell(shellID string) string {
 // waiter, since we minted it ourselves).
 func mintedKey(raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), `"`)
+}
+
+// initializeVersion reads protocolVersion out of an initialize answer.
+func initializeVersion(reply []byte) string {
+	var env struct {
+		Result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(reply, &env); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(env.Result.ProtocolVersion)
 }
