@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
 	"sort"
 	"strings"
 	"sync"
@@ -87,14 +88,17 @@ func (r *Reconciler) groupNamed(key string) bool {
 // "the same calls are permitted", and no extension can reach past its own
 // template — which is the whole promise of the layer.
 func groupKey(ext *Extension) string {
-	target := strings.TrimSpace(ext.Target)
-	if ext.URL != "" {
-		// A url extension runs its bridge on the loopback connection regardless of
-		// which host its requests leave from (#233). It groups with other internal
-		// extensions carrying the same capability set.
-		target = "internal"
-	}
-	return target + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+	// A CHANNEL LIST GROUPS BY ITS DEFAULT CHANNEL'S CONNECTION (issue #331): the group
+	// a state names is the one its own instance lives on, and the other channels open
+	// their own groups below.
+	return strings.TrimSpace(ext.SessionHost()) + "\x00" + restrictionKey(ext.Allow, ext.Paths)
+}
+
+// pickGroupKey is the key for one channel's connection: same host, same restriction,
+// same connection. Two channels of one template that share a host therefore share a
+// session — one dial, two shells — and two that do not are two connections.
+func pickGroupKey(plan hostPlan, ext *Extension) string {
+	return plan.config.SSHConfig + "\x00" + restrictionKey(ext.Allow, ext.Paths)
 }
 
 // restrictionKey renders a whitelist pair as a comparable string. Entries are
@@ -263,11 +267,23 @@ func (r *Reconciler) attachedSession(st *extState) *session.Session {
 // window) is served by the connection alone and reports no channel; one whose
 // channel is still running keeps it, so a retry after a tunnel failure does not
 // restart the process.
-func (r *Reconciler) ensureMemberShell(plan hostPlan, st *extState, sess *session.Session) (string, error) {
+func (r *Reconciler) ensureMemberShell(plan hostPlan, st *extState, sess *session.Session, channelName string) (string, error) {
 	if !plan.shell {
 		return "", nil
 	}
-	if shell := liveShell(sess, st.shellOf()); shell != nil {
+	// WHICH SHELL IS ALREADY THIS CHANNEL'S. The default channel keeps the v1
+	// bookkeeping (st.shellOf); the others are looked up by name, so a retry after a
+	// tunnel failure reuses the worker it started instead of forking a second one
+	// (issue #331).
+	// A NAMED CHANNEL LOOKS ITS SHELL UP BY NAME AND NOTHING ELSE. Falling back to the
+	// default channel's shell here made the two one process: the second channel found
+	// the first one's shell "already running" and never forked its own, so a template
+	// declaring an endpoint and a worker ran the endpoint twice.
+	existing := st.shellOf()
+	if channelName != "" {
+		existing = st.sideShell(channelName)
+	}
+	if shell := liveShell(sess, existing); shell != nil {
 		return shell.ID, nil
 	}
 	shell, err := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, plan.channel)
@@ -350,10 +366,22 @@ func liveShell(sess *session.Session, shellID string) *session.ChildShell {
 // alone: it belongs to the group, another member may be using it, and one nobody
 // is using is closed by the walk when the group loses its last member.
 func (r *Reconciler) detach(st *extState) {
+	runs := st.sideRunsSnapshot()
 	sid, shellID, forwards := st.takeAttachment()
 	if shellID != "" {
 		if sess := r.sessMgr.Get(sid); sess != nil {
 			_ = sess.CloseChildShell(shellID)
+		}
+	}
+	// THE OTHER CHANNELS GO WITH IT (issue #331). They are this extension's processes
+	// on this extension's connections; leaving them behind would keep a stopped
+	// template running until its host noticed.
+	for _, run := range runs {
+		if run.shellID == "" {
+			continue
+		}
+		if sess := r.sessMgr.Get(run.sessionID); sess != nil {
+			_ = sess.CloseChildShell(run.shellID)
 		}
 	}
 	r.closeForwards(forwards)

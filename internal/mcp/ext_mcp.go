@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -132,11 +133,27 @@ func (s *Server) extMCPPost(w http.ResponseWriter, r *http.Request, name string)
 		http.Error(w, "extension "+name+": "+err.Error(), http.StatusNotFound)
 		return
 	}
-	shellID := st.ShellID
+	// WHICH CHANNEL ANSWERS /ext/{name}/stream (issue #331). A template may declare
+	// several now, and the one whose traffic the endpoint can carry is the http one:
+	// its channel already speaks JSON-RPC over a pipe, with no handshake to type and no
+	// terminal to echo. A single-channel template keeps the channel it always had.
+	shellID := extMCPChannelShell(st)
 	if shellID == "" {
 		// A template with no channel (a read-only file window, a forwards-only
 		// tunnel) has no MCP server to talk to. Naming which shape it is beats
 		// "not found", which would send the caller looking for a typo.
+		if len(st.Channels) > 0 {
+			// SEVERAL CHANNELS AND NONE OF THEM AN ENDPOINT (issue #331): say which
+			// ones exist, because "add a command" is the wrong advice for a template
+			// that already has two.
+			names := make([]string, 0, len(st.Channels))
+			for _, ch := range st.Channels {
+				names = append(names, ch.Name+" ("+ch.Kind+")")
+			}
+			http.Error(w, "extension "+name+" has no http channel, so this endpoint has nothing to talk to: "+
+				"its channels are "+strings.Join(names, ", ")+". Add a channel with kind = \"http\" to give it one.", http.StatusConflict)
+			return
+		}
 		http.Error(w, "extension "+name+" has no channel, so it has no MCP server to talk to: "+
 			"its template declares no command. Add --command (or --url) to give it one.", http.StatusConflict)
 		return
@@ -243,4 +260,24 @@ func truncateForError(body string) string {
 		return body
 	}
 	return body[:limit] + "…"
+}
+
+// extMCPChannelShell picks the channel the /ext endpoint speaks to.
+//
+// AN HTTP CHANNEL WINS WHEN THERE IS ONE. Everything about this endpoint is the HTTP
+// shape — one JSON-RPC frame per request, no session state of ours — and a template
+// that declares an endpoint has already said which channel is meant. A template with
+// one channel answers with that one, which is exactly what this endpoint did before
+// channels existed; a template with several channels but no http one is refused by
+// the caller below, naming the channels it does have.
+func extMCPChannelShell(st extensions.Status) string {
+	if len(st.Channels) == 0 {
+		return st.ShellID
+	}
+	for _, ch := range st.Channels {
+		if ch.Kind == extensions.ChannelHTTP && ch.ShellID != "" {
+			return ch.ShellID
+		}
+	}
+	return ""
 }

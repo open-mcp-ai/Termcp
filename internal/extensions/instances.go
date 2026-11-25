@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/clock"
 	"log/slog"
 	"strings"
 	"time"
@@ -230,6 +231,14 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		// A template with no shell is served by the connection alone: a read-only file
 		// window has no channel to hand out, and its instance is the session.
 		st.addExtra(sess.ID, shellID, label, fingerprint(ext))
+		// THE OTHER CHANNELS COME UP HERE TOO (issue #331). This branch returns, so
+		// putting them below would leave a resident template with its first channel
+		// running and the rest declared but never opened — a listing that quietly
+		// disagrees with the file.
+		if cerr := r.ensureSideChannels(ctx, ext, st); cerr != nil {
+			r.fail(st, "start", cerr.Error())
+			return sess.ID, shellID, "", "start", cerr
+		}
 		r.armIdle(name, st)
 		st.mark(StatusAvailable)
 		st.resetRetryBudget()
@@ -238,7 +247,7 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 		return sess.ID, shellID, label, "", nil
 	}
 
-	shellID, err = r.ensureMemberShell(plan, st, sess)
+	shellID, err = r.ensureMemberShell(plan, st, sess, "")
 	if err != nil {
 		// The connection is up and shared; only this extension's process failed to
 		// start, so the retry is a channel open rather than a redial.
@@ -250,19 +259,44 @@ func (r *Reconciler) bringUp(ctx context.Context, ext *Extension, st *extState, 
 	// reads the moment of the ASK as its last use and reaps it early.
 	st.touch()
 
-	if err := r.ensureForwards(ext, st); err != nil {
+	if err := r.ensureForwards(ctx, ext, st); err != nil {
 		// The session is up and usable; only the tunnel is missing, so the retry
 		// targets the forward alone instead of tearing the connection down.
 		r.fail(st, "forward", err.Error())
 		return sess.ID, shellID, "", "forward", err
 	}
+	// THE TEMPLATE'S OTHER CHANNELS (issue #331). Each is opened once per session —
+	// not once per caller — on the connection its own host names, so a card can hold an
+	// endpoint on the loopback connection and a worker on the far host at the same time.
+	// A channel that fails is recorded and named; the rest stay up, because they were
+	// never one process.
+	if err := r.ensureSideChannels(ctx, ext, st); err != nil {
+		r.fail(st, "start", err.Error())
+		return sess.ID, shellID, "", "start", err
+	}
 	if err := r.ensureExposes(ext, st); err != nil {
 		r.fail(st, "expose", err.Error())
 		return sess.ID, shellID, "", "expose", err
 	}
-	// Proven up: the budget is whole again, so a later failure starts the ladder over
-	// rather than resuming a count from before the extension was working.
-	st.resetRetryBudget()
+	// THE EXTENSION IS UP; A TUNNEL ON ANOTHER HOST MAY NOT BE (issue #330). The status
+	// says available — the endpoint or the channel answers — while the failure stays in
+	// `failures[]` naming the tunnel and its via host. Reporting the whole extension as
+	// down would take away a capability that works, which is the isolation this field
+	// exists for.
+	//
+	// THE BUDGET IS NOT RESET IN THAT CASE. Resetting it here would restart the ladder
+	// on every walk — the extension is "up", so every walk reaches this line — and an
+	// unreachable via host would then be dialled at the first backoff step for ever.
+	tunnelsDown := st.tunnelFailures() > 0
+	if tunnelsDown {
+		if wait, ok := st.scheduleBackoff(); ok {
+			r.armRetry(st, wait)
+		}
+	} else {
+		// Proven up: the budget is whole again, so a later failure starts the ladder over
+		// rather than resuming a count from before the extension was working.
+		st.resetRetryBudget()
+	}
 	st.mark(StatusAvailable)
 	slog.Debug("extension available", "name", name, "session_id", sess.ID, "shell_id", shellID)
 	r.notifyChange()
@@ -615,4 +649,183 @@ func (r *Reconciler) ExplainClosed(sessionID, shellID string) (name, reason stri
 		}
 	}
 	return "", "", time.Time{}, false
+}
+
+// ensureSideChannels opens the template's channels beyond the default one, each on
+// the connection its own host names (issue #331).
+//
+// IT IS PER SESSION, NOT PER CALLER. The default channel is what `open ext` hands out
+// copies of (issue #183); a worker declared once must run once, or a template with a
+// background process would grow a new copy for every caller. So these are opened the
+// first time the connection comes up and reused afterwards — and a channel that is
+// already running is not restarted, which is what keeps a tunnel retry from forking a
+// second worker.
+func (r *Reconciler) ensureSideChannels(ctx context.Context, ext *Extension, st *extState) error {
+	chs := ext.EffectiveChannels()
+	if len(chs) <= 1 {
+		// One channel is the default one, already running; none means the template has
+		// no process at all.
+		st.setSideRuns(nil)
+		return nil
+	}
+	defaultCh, _ := pickChannel(chs, "")
+	runs := make([]channelRun, 0, len(chs))
+	var failures []string
+	for _, ch := range chs {
+		if ch.Name == defaultCh.Name && ch.Default == defaultCh.Default {
+			continue
+		}
+		plan, err := r.resolveChannel(ext, chs, ch.Name)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %v", ch.Name, err))
+			continue
+		}
+		g := r.group(pickGroupKey(plan, ext), ext)
+		sess, err := r.ensureGroupSession(ctx, g, plan.config)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %s", ch.Name, sshclient.DescribeDialError(err)))
+			continue
+		}
+		shellID, err := r.ensureMemberShell(plan, st, sess, ch.Name)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("channel %q: %v", ch.Name, err))
+			continue
+		}
+		runs = append(runs, channelRun{
+			name:      ch.Name,
+			label:     plan.channel,
+			target:    ch.Host(strings.TrimSpace(ext.Target)),
+			sessionID: sess.ID,
+			shellID:   shellID,
+		})
+	}
+	// A channel the template no longer declares (or whose host changed) is closed
+	// rather than left running: an edit is what removed it, and a process nobody
+	// declared any more is a leak with a name.
+	for _, stale := range st.setSideRuns(runs) {
+		if sess := r.findSessionOfShell(stale); sess != nil {
+			_ = sess.CloseChildShell(stale)
+		}
+	}
+	if len(failures) > 0 {
+		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// findSessionOfShell returns the session that holds a shell, looking only at the
+// connections this extension is attached to.
+func (r *Reconciler) findSessionOfShell(shellID string) *session.Session {
+	if shellID == "" || r.sessMgr == nil {
+		return nil
+	}
+	for _, info := range r.sessMgr.ListAll() {
+		sess := r.sessMgr.Get(info.ID)
+		if sess == nil {
+			continue
+		}
+		if shell := sess.GetChildShell(shellID); shell != nil {
+			return sess
+		}
+	}
+	return nil
+}
+
+// AcquireChannel brings an extension up and returns the handles of ONE of its
+// channels (issue #331).
+//
+// THE DEFAULT CHANNEL IS THE INSTANCE MACHINERY; the others are not. `open ext` with
+// no --channel hands out a caller's own copy of the default channel (issue #183),
+// because that is the shape of "give me a process to drive". A named channel is
+// declared once and runs once, so the answer here is the channel that is already
+// running — forking a second worker per caller would run N processes where the file
+// declared one.
+func (r *Reconciler) AcquireChannel(name, target, channel string, wait time.Duration) (Status, error) {
+	ext, err := r.store.Load(name)
+	if err != nil {
+		return Status{}, err
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return r.AcquireTarget(name, target, wait)
+	}
+	chs := ext.EffectiveChannels()
+	ch, ok := pickChannelNamed(chs, channel)
+	if !ok {
+		return Status{}, fmt.Errorf("extension %q has no channel %q; the channels are %s",
+			name, channel, strings.Join(channelNameList(chs), ", "))
+	}
+	if def, hasDef := pickChannel(chs, ""); hasDef && def.Name == ch.Name {
+		return r.AcquireTarget(name, target, wait)
+	}
+	// Bringing the extension up opens every channel it declares, so this is the ask
+	// that makes the named one exist.
+	if _, err := r.AcquireTarget(name, target, wait); err != nil {
+		return Status{}, err
+	}
+	st := r.stateFor(name, targetHostOf(ext, target))
+	for _, run := range st.sideRunsSnapshot() {
+		if run.name != ch.Name {
+			continue
+		}
+		got, ok := r.Status(name)
+		if !ok {
+			return Status{}, fmt.Errorf("extension %q not found", name)
+		}
+		got.SessionID, got.ShellID = run.sessionID, run.shellID
+		if run.shellID == "" {
+			got.Status = StatusUnavailable
+			got.Failures = append(got.Failures, Failure{
+				At:     clock.Now(),
+				Stage:  "start",
+				Reason: fmt.Sprintf("channel %q is not running", ch.Name),
+			})
+		}
+		return got, nil
+	}
+	got, _ := r.Status(name)
+	got.Failures = append(got.Failures, Failure{
+		At:     clock.Now(),
+		Stage:  "start",
+		Reason: fmt.Sprintf("channel %q has not been opened: %s", ch.Name, channelReason(got)),
+	})
+	return got, nil
+}
+
+// pickChannelNamed resolves a channel by its exact name, without the empty-means-
+// default shortcut.
+func pickChannelNamed(chs []Channel, name string) (Channel, bool) {
+	for _, ch := range chs {
+		if ch.Name == name {
+			return ch, true
+		}
+	}
+	return Channel{}, false
+}
+
+// channelReason turns a status into a sentence a caller can act on.
+func channelReason(st Status) string {
+	if len(st.Failures) > 0 {
+		return st.Failures[len(st.Failures)-1].Reason
+	}
+	if st.Status == StatusProbing {
+		return "it is still coming up; ask again in a moment"
+	}
+	return "the extension is " + statusOrEmpty(st.Status)
+}
+
+func statusOrEmpty(s string) string {
+	if s == "" {
+		return "not started"
+	}
+	return s
+}
+
+// targetHostOf is the host a status read should use for an extension whose target was
+// not named: the single one it declares.
+func targetHostOf(ext *Extension, target string) string {
+	if t, ok := ext.TargetFor(target); ok {
+		return t.Host
+	}
+	return strings.TrimSpace(ext.Target)
 }
