@@ -552,6 +552,8 @@ for line in sys.stdin:
         continue
     if "id" not in m:
         continue
+    if (m.get("params") or {}).get("slow"):
+        time.sleep(float(m["params"]["slow"]))
     out({"jsonrpc": "2.0", "id": m["id"], "result": {
         "serverInfo": {"name": "stub", "version": "1"},
         "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
@@ -592,6 +594,27 @@ out=$(curl -s -X POST "$EXT2" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":42,"method":"initialize","params":{}}')
 check "#328 第二个 initialize 复用缓存" "$out" '"serverInfo"'
 check "#328 且 id 改回调用方的" "$out" '"id": 42'
+# 3) 一个慢调用：窗口不是工具超时，客户端等到的是结果（旧实现会先回 202）。
+started=$(date +%s)
+out=$(curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $S1" \
+  -d '{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{"slow":2,"who":"slow"}}')
+elapsed=$(( $(date +%s) - started ))
+check "#328 慢调用等到了结果" "$out" '"who": "slow"'
+check "#328 确实等了（不是立刻 202）" "$elapsed" '2'
+
+# 6) 扩展在请求中途消失：客户端拿到可读的错误，而不是挂到窗口用完。
+started=$(date +%s)
+curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $S1" \
+  -d '{"jsonrpc":"2.0","id":88,"method":"tools/call","params":{"slow":30}}' > "$WORK/teardown.out" &
+PT=$!
+sleep 2
+term "rm ext stub" >/dev/null
+wait "$PT"
+elapsed=$(( $(date +%s) - started ))
+check "#328 扩展消失后请求拿到错误" "$(cat "$WORK/teardown.out")" '"error"'
+check "#328 并说明通道没了" "$(cat "$WORK/teardown.out")" 'channel ended'
+if [ "$elapsed" -lt 10 ]; then fast=yes; else fast="no(${elapsed}s)"; fi
+check "#328 而且很快（没有挂到窗口用完）" "$fast" 'yes'
 
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

@@ -36,9 +36,6 @@ const (
 	// connection: a target that takes minutes to answer must not turn into a request
 	// that never answers.
 	extMCPStartWait = 20 * time.Second
-	// extMCPCallWindow is the reply window for one forwarded frame. It is what keeps a
-	// dead peer from pinning a goroutine for ever.
-	extMCPCallWindow = 60.0 // seconds, as termArgs.TimeoutSeconds
 )
 
 // ExtMCPHandler serves every extension's MCP server: one route, the name in the path.
@@ -73,7 +70,11 @@ func (s *Server) extTransport(name string) *mcp.StreamableHTTPServer {
 	if v, ok := s.extTransports.Load(name); ok {
 		return v.(*mcp.StreamableHTTPServer)
 	}
-	tr := mcp.NewStreamableHTTPServer(&extDispatcher{s: s, name: name})
+	tr := mcp.NewStreamableHTTPServer(&extDispatcher{s: s, name: name},
+		// THE PEER'S VERSION, NOT OURS (issue #328). The transport used to write this
+		// library's constant over whatever the extension negotiated, so a client chose its
+		// frame shapes from a version the peer never spoke.
+		mcp.WithProtocolVersion(func() string { return s.extSpeaks(name) }))
 	actual, _ := s.extTransports.LoadOrStore(name, tr)
 	return actual.(*mcp.StreamableHTTPServer)
 }
@@ -131,15 +132,19 @@ func extFrameKind(frame string) (string, bool) {
 	return env.Method, env.ID != nil
 }
 
-// extWriteLine puts one frame on the channel as one line, under the channel's line lock.
+// extWriteLine puts one frame on the channel as one line, under the channel's line token.
 //
 // ONE LINE AT A TIME. The text and the Enter that ends it are two writes, and two requests
 // interleaving there produce a line no reader can parse (#212). The lock is released before
 // any wait: holding it across a reply would serialise every client behind the slowest peer.
 func (s *Server) extWriteLine(ctx context.Context, shellID, frame string) error {
-	lock := s.lineLock(shellID)
-	lock.Lock()
-	defer lock.Unlock()
+	tok := s.lineToken(shellID)
+	select {
+	case <-tok:
+	case <-ctx.Done():
+		return fmt.Errorf("timed out waiting for a prior command line on this channel to finish submitting")
+	}
+	defer func() { tok <- struct{}{} }()
 	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", shellID, "text", frame)); fail != nil {
 		return fmt.Errorf("%s", fail.msg)
 	}
@@ -255,7 +260,7 @@ func extSlotReason(slot envelope.Slot, id string) string {
 	case slot.Code == http.StatusNoContent:
 		return fmt.Sprintf("the extension did not answer id %s within %s. It is alive — the frame was delivered — "+
 			"but this window is all the endpoint will hold a request open for. A tool that needs longer belongs on the "+
-			"directive surface (`call <peer>`), whose window the caller sets", id, time.Duration(extMCPCallWindow*float64(time.Second)))
+			"directive surface (`call <peer>`), whose window the caller sets", id, extPumpAnswerWindow)
 	case body == "":
 		return "the extension answered with an empty body, which is not a JSON-RPC message"
 	default:
@@ -295,4 +300,22 @@ func extCodeForStatus(code int) int {
 	default:
 		return extCodePeer
 	}
+}
+
+// extSpeaks is the protocol version the extension's peer negotiated, or "" before its
+// initialize answer has been seen (the transport then falls back to its own).
+func (s *Server) extSpeaks(name string) string {
+	if v, ok := s.extVersions.Load(name); ok {
+		out, _ := v.(string)
+		return out
+	}
+	return ""
+}
+
+// noteExtVersion records what the peer said it speaks, read from its initialize answer.
+func (s *Server) noteExtVersion(name, version string) {
+	if name == "" || version == "" {
+		return
+	}
+	s.extVersions.Store(name, version)
 }

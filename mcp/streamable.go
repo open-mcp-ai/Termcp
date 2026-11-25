@@ -137,6 +137,13 @@ type StreamableHTTPServer struct {
 	sessions sync.Map // sessionID string -> *streamClient
 	closed   atomic.Bool
 
+	// speaks is the version this transport answers with, when the thing behind it is not
+	// this library's own server.
+	//
+	// AN EXTENSION'S PEER HAS ITS OWN VERSION (issue #328). Writing 2025-06-18 over an
+	// extension that negotiated something else is the transport lying about the only thing
+	// a client uses to decide which frames are legal.
+	speaks func() string
 	// idleWindow is how long a session may go untouched before it is reclaimed. Zero
 	// means defaultIdleWindow.
 	idleWindow time.Duration
@@ -147,6 +154,22 @@ type StreamableHTTPServer struct {
 
 // StreamableOption customises the streamable transport.
 type StreamableOption func(*StreamableHTTPServer)
+
+// WithProtocolVersion makes the transport answer with the version the thing behind it
+// actually speaks, instead of this library's own.
+func WithProtocolVersion(fn func() string) StreamableOption {
+	return func(s *StreamableHTTPServer) { s.speaks = fn }
+}
+
+// spokenVersion is the version to answer with.
+func (s *StreamableHTTPServer) spokenVersion() string {
+	if s.speaks != nil {
+		if v := s.speaks(); v != "" {
+			return v
+		}
+	}
+	return ProtocolVersion
+}
 
 // WithHTTPContextFunc sets the function that lifts an HTTP request into handler
 // context.

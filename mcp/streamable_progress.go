@@ -106,7 +106,7 @@ func (s *StreamableHTTPServer) serveWithProgress(ctx context.Context, w http.Res
 	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
-	h.Set(versionHeader, ProtocolVersion)
+	h.Set(versionHeader, s.spokenVersion())
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
@@ -127,7 +127,7 @@ func (s *StreamableHTTPServer) servePlain(ctx context.Context, w http.ResponseWr
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(versionHeader, ProtocolVersion)
+	w.Header().Set(versionHeader, s.spokenVersion())
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(answer)
 }
