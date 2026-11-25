@@ -191,7 +191,11 @@ var ops = []Op{
 		PipeEnd: "source",
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
-			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait"},
+			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait",
+			// A DIRECTORY READ'S TWO CAPS (#340): --limit bounds the rows, --depth the
+			// levels walked. They are declared here rather than invented at the handler
+			// so a misspelling is refused with a usage line.
+			"depth:number", "limit:number"},
 		Valueless: []string{"raw", "lines", "frame", "screen", "wait"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
 			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
@@ -210,7 +214,12 @@ var ops = []Op{
 		// satisfied by any spelling: the handler requires remote_path and size, and the
 		// flag for size did not exist.
 		Flags: []string{"data", "mode", "offset:number", "length:number", "size:number",
-			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number"},
+			"old-text", "new-text", "op", "uid:number", "gid:number", "atime:number", "mtime:number",
+			// --recursive IS THE SWITCH THAT MAKES A DIRECTORY TARGET LEGAL (#340), and
+			// --dry-run is its cautious half. Without the switch a directory target is
+			// refused by name rather than opened as a file.
+			"recursive", "dry-run"},
+		Valueless: []string{"recursive", "dry-run"},
 		Usage:  "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
 		Detail: writeDetail},
 
@@ -376,7 +385,24 @@ page until it is dealt with, rather than timing out while the human is away.`
 // readDetail states the defaults because "read" without a selector is the
 // common call: whether that means "new bytes" or "everything" decides what the
 // caller does next, and guessing it from silence is how loops get written.
-const readDetail = `Defaults: the new bytes since the last read, on a live channel and on a
+const readDetail = `READING A DIRECTORY LISTS IT. read <session> file <path> answers with a
+table when the path is a directory — one row per entry: type (d/- /l), name, size,
+mtime and mode — instead of the old "is a directory" refusal, which left the caller
+parsing terminal output from a run ls. It is the same call either way: a caller that
+does not know whether its path is a file or a directory does not have to find out.
+
+  read a1f3 file /srv/app                 the entries of one directory
+  read a1f3 file /srv/app --depth 2       two levels, cap 5
+  read a1f3 file /srv/app --limit 500     more rows, cap 2000
+
+--limit (default 200) bounds the rows and --depth (default 1) the levels walked.
+Whatever the caps withheld is COUNTED in the reply, because "nothing is there" and
+"you are not being shown" have to read differently. A symbolic link is reported with
+its target and never followed — a link pointing at its own parent would loop — and an
+entry that cannot be read (permissions, a broken link) is listed WITH the reason
+rather than dropped.
+
+Defaults: the new bytes since the last read, on a live channel and on a
 closed one alike. --stream o keeps stdout only, e keeps stderr only; the default
 keeps both. --cursor N is a byte offset (end+1 from Content-Range), --from-line N
 a complete line, --tail N the last N lines.
@@ -1129,6 +1155,23 @@ const writeDetail = `Write a file on a session.
   write a1f3 file /tmp/x --data hello
   read internal file ./x | write a1f3 file /tmp/x
   write a1f3 file /tmp/x --data hex:00ff
+
+WRITING SEVERAL FILES, ONE CALL. A directory has no bytes of its own, so
+'write <session> file <dir>' is refused by name and the refusal names both forms:
+
+  write a1f3 file /srv/app/a.txt --data hi; write a1f3 file /srv/app/b.txt --data yo
+  write a1f3 file /srv/app --recursive --data '{"a.txt":"hi","sub/b.txt":"yo"}'
+
+The first is ordinary statement sequencing — one call, one reply slot per file, and it
+needs no flag at all. The second is the batch form: --data carries a JSON OBJECT of
+path→content, each key is RELATIVE to the directory named by the target, and a key that
+is absolute or climbs out with '..' is refused (the tree the caller named is the tree
+it writes). Caps: 100 files and 1 MiB per call, because the payload travels inside the
+call. The reply is one line per file plus a count, and a file that failed is the only
+one that did not happen — nothing is rolled back. Preview with --dry-run.
+
+The directory itself is created when it is absent, like mkdir -p for the tree; that is
+the same promise the single-file form makes about a file.
 
 A HOST IS ALSO A TARGET: 'write use:<host> file <path> --data …' (or the bare
 profile name) writes over the host's pooled transport, so no session is created and

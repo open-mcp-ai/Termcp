@@ -4,6 +4,16 @@
 
 ### Added
 
+- `read <session> file <directory>` lists a bounded, structured directory table
+  (type, path/name, size, mtime, mode) instead of failing with `is a directory`.
+  `--depth` (1–5) and `--limit` (200–2000) bound the walk; withheld entries and
+  unreadable entries are counted and named, and symbolic links are shown but never
+  followed.
+- `write <session> file <directory> --recursive` accepts a JSON object of
+  path→content and writes the tree in one call, with `--dry-run`, one result line per
+  file, and 100-file / 1 MiB caps. Absolute and parent-escaping keys are refused
+  before anything is written. Without `--recursive`, a directory target is refused
+  with both working spellings: one statement per file, or this batch form.
 - `close` takes several targets: `close a1f3:1,b2c4:1`, `close a1f3 --index 1,2,3`,
   `close a1f3 --all`. One reply slot per target, in the order written, each carrying
   a `Batch:` header naming the address it answers; a target that fails does not stop

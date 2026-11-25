@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -75,6 +76,188 @@ type FileStatResult struct {
 	Uid      string           `json:"uid,omitempty"`
 	Gid      string           `json:"gid,omitempty"`
 	Children []FileStatResult `json:"children,omitempty"`
+}
+
+// DirEntry is one row of a bounded directory listing.
+type DirEntry struct {
+	Name  string `json:"name"`
+	IsDir bool   `json:"is_dir"`
+	// Type is the three-way answer a caller actually branches on: "dir", "file",
+	// "link", "other". os.FileInfo can say is_dir and nothing else useful without
+	// the caller re-reading the mode bits, and a symlink to a directory is neither
+	// a plain file nor a place to descend.
+	Type    string `json:"type"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mod_time,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	// Link is the target of a symbolic link. It is reported, never followed: a
+	// listing that follows links loops on a directory that contains one pointing at
+	// its parent, and the caller cannot see that it happened.
+	Link string `json:"link,omitempty"`
+	// Error says why this entry could not be read (a permission refusal, a broken
+	// link, an unreadable directory). The entry is still listed: silently dropping
+	// it would make "the file is not there" and "the file is not yours" look alike.
+	Error string `json:"error,omitempty"`
+	// Depth is 1 for a direct child of the named directory.
+	Depth int `json:"depth,omitempty"`
+	// Path is the entry's full path, which is what a caller pastes into the next
+	// call. Name alone is enough at depth 1 and ambiguous below it: two nested
+	// directories both holding a `go.mod` produce two rows called `go.mod`.
+	Path string `json:"path,omitempty"`
+}
+
+// DirListing is one bounded walk of a directory.
+//
+// IT IS BOUNDED ON PURPOSE. A caller asking "what is in this repository" gets an
+// answer it can read; a node_modules with 40 000 entries does not arrive as 40 000
+// rows. Depth and entry count are the caller's, and whatever was withheld is
+// counted rather than silently cut.
+type DirListing struct {
+	Path    string     `json:"path"`
+	Entries []DirEntry `json:"entries"`
+	// Truncated counts the entries the cap withheld, and Directories the ones the
+	// depth cap left unwalked. Both are zero when the listing is complete.
+	Truncated   int `json:"truncated,omitempty"`
+	Directories int `json:"directories_not_walked,omitempty"`
+	Depth       int `json:"depth"`
+	Failed      int `json:"failed,omitempty"`
+}
+
+// ListDir walks remotePath breadth-first, up to maxEntries entries and maxDepth
+// levels, and never follows a symbolic link.
+//
+// THE LIMITS ARE THE ARGUMENT, NOT A GLOBAL. A caller reading a repository wants
+// depth 2 and 500 entries; a caller checking a deploy directory wants depth 1 and 20.
+// A constant here would be a second opinion about the caller's context.
+//
+// A FILE IS A ONE-ROW LISTING, not an error. `read file <path>` should work whether
+// the path names a file or a directory, which is the whole point of #340: the caller
+// does not always know which it is holding.
+func (s *Client) ListDir(remotePath string, maxEntries, maxDepth int) (*DirListing, error) {
+	if maxEntries <= 0 {
+		maxEntries = 200
+	}
+	if maxDepth <= 0 {
+		maxDepth = 1
+	}
+	root, err := s.client.Stat(remotePath)
+	if err != nil {
+		return nil, fmt.Errorf("stat: %w", err)
+	}
+	if !root.IsDir() {
+		e := s.entryFor(remotePath, filepath.Base(remotePath), root, 1)
+		return &DirListing{Path: remotePath, Entries: []DirEntry{e}, Depth: maxDepth}, nil
+	}
+
+	out := &DirListing{Path: remotePath, Depth: maxDepth}
+	type pending struct {
+		path  string
+		depth int
+	}
+	queue := []pending{{remotePath, 1}}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		entries, err := s.client.ReadDir(cur.path)
+		if err != nil {
+			if cur.depth == 1 {
+				return nil, fmt.Errorf("read %s: %w", cur.path, err)
+			}
+			// A subdirectory that cannot be read is REPORTED, not skipped: the reply
+			// says which one and why, and the walk continues. Dropping it would make
+			// "nothing is there" and "you cannot see it" arrive identically.
+			out.Failed++
+			out.Entries = append(out.Entries, DirEntry{
+				Name:  cur.path,
+				Type:  "dir",
+				Depth: cur.depth,
+				Error: err.Error(),
+			})
+			continue
+		}
+		for i, e := range entries {
+			if len(out.Entries) >= maxEntries {
+				// WHAT WAS WITHHELD IS COUNTED, precisely for this directory and by
+				// its number of subdirectories elsewhere. A bare "truncated" hides
+				// whether one row or thirty thousand are missing.
+				out.Truncated += len(entries) - i
+				out.Directories += countDirs(entries[i:]) + len(queue)
+				return out, nil
+			}
+			entry := s.entryFor(joinRemote(cur.path, e.Name()), e.Name(), e, cur.depth)
+			if entry.Error != "" {
+				out.Failed++
+			}
+			out.Entries = append(out.Entries, entry)
+			if entry.IsDir && cur.depth < maxDepth {
+				queue = append(queue, pending{path: joinRemote(cur.path, e.Name()), depth: cur.depth + 1})
+			} else if entry.IsDir {
+				out.Directories++
+			}
+		}
+	}
+	return out, nil
+}
+
+// countDirs counts the directories in a slice of entries, for the "not walked" count.
+func countDirs(entries []os.FileInfo) int {
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() && e.Mode()&os.ModeSymlink == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// entryFor turns one os.FileInfo into a row.
+//
+// THE TYPE IS READ FROM THE MODE, not from IsDir alone: a symlink to a directory
+// reports IsDir true, and descending into it would loop on a link pointing at its own
+// parent. The link target is resolved here because "x -> /srv/data" is the difference
+// between a file the caller can read and a link into a tree it cannot.
+func (s *Client) entryFor(path, name string, fi os.FileInfo, depth int) DirEntry {
+	e := DirEntry{
+		Name:    name,
+		IsDir:   fi.IsDir(),
+		Type:    "file",
+		Size:    fi.Size(),
+		ModTime: clock.Millis(fi.ModTime()),
+		Depth:   depth,
+		Path:    path,
+	}
+	if fi.IsDir() {
+		e.Type = "dir"
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		e.Type = "link"
+		e.IsDir = false
+		if target, err := s.client.ReadLink(path); err == nil {
+			e.Link = target
+		} else {
+			e.Error = "link target unreadable: " + err.Error()
+		}
+	}
+	if st, ok := fi.Sys().(*sftp.FileStat); ok && st != nil {
+		e.Mode = fmt.Sprintf("%04o", st.Mode&0o7777)
+	}
+	return e
+}
+
+// joinRemote joins a directory and a child name with the separator the caller's path
+// already uses, without the local filepath package (which would rewrite a POSIX path
+// on Windows).
+func joinRemote(dir, name string) string {
+	switch {
+	case dir == "":
+		return name
+	case strings.HasSuffix(dir, "/"), strings.HasSuffix(dir, "\\"):
+		return dir + name
+	case strings.Contains(dir, "\\") && !strings.Contains(dir, "/"):
+		return dir + "\\" + name
+	default:
+		return dir + "/" + name
+	}
 }
 
 // sftpClient abstracts SFTP operations.

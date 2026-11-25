@@ -855,6 +855,18 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if boolFlag(stmt, "lines") {
 		args["lines"] = true
 	}
+	// A DIRECTORY READ'S CAPS AND A DIRECTORY WRITE'S SWITCHES (#340). Both are read by
+	// the handlers, so they have to arrive: a flag that parses and is never passed on
+	// answers a different question than the one asked.
+	if slot, bad := numericFlags(args, stmt, [2]string{"depth", "depth"}, [2]string{"limit", "limit"}); bad {
+		return slot
+	}
+	if boolFlag(stmt, "recursive") {
+		args["recursive"] = true
+	}
+	if boolFlag(stmt, "dry-run") {
+		args["dry_run"] = true
+	}
 	if slot, bad := stringFlags(args, stmt,
 		[2]string{"target", "target"},
 		[2]string{"link-path", "link_path"},
@@ -913,6 +925,13 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if !ok {
 		text := toolResultText(res)
 		return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path}, Body: text}
+	}
+	// A DIRECTORY LISTING IS A TABLE, NOT A JSON BLOB (#340). The document shape is
+	// right for a program and wrong for the caller that asked "what is in this
+	// directory": eleven lines of `{"name":…,"size":…}` is the same information with
+	// the columns unaligned, and it costs more tokens than the table it replaces.
+	if isDir, _ := doc["is_dir"].(bool); isDir {
+		return generatedSlot(stmt, win, renderDirListing(doc))
 	}
 	if taskID := getString(doc, "task_id", ""); taskID != "" {
 		// A TRANSFER IS A RECEIPT (202 Accepted). The transfer has started in the
