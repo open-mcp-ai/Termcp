@@ -266,21 +266,60 @@ func TestEncryptedStoreKeepsTemporaryCollisionAndSelectionRules(t *testing.T) {
 	}
 }
 
-func TestOpenConfiguredStoreValidatesCommittedTOML(t *testing.T) {
+/* A profile that no longer parses is the profile's own problem, reported when it is
+ * read — not a reason for the process to refuse to start.
+ *
+ * Opening the store used to read every committed profile to prove they parse. That
+ * made startup O(hosts) disk reads, and it made one damaged file fatal for every
+ * other host: the panel that could repair or delete it is served by the process
+ * that refused to start. The check moved to the read, where the answer can be
+ * acted on.
+ */
+func TestOpenConfiguredStoreDefersProfileValidationToTheRead(t *testing.T) {
 	t.Setenv(configstore.EnvKEKVariable, environmentConfigKEK(0x35))
 	dir := t.TempDir()
 	repo, err := configstore.InitializeRepository(dir, configstore.NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Save("broken", []byte("kind = \"remote\"\nhost = \"\"")); err != nil {
+	broken := []byte("kind = \"remote\"\nhost = \"\"")
+	sound := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	if err := repo.Save("broken", broken); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save("sound", sound); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenConfiguredStore(dir, configstore.NewEnvProvider("")); err == nil {
-		t.Fatal("configured store accepted a committed profile with invalid TOML")
+	store, err := OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
+	if err != nil {
+		t.Fatalf("one unparseable profile stopped the store from opening: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	// It is listed — the operator has to see it in order to repair it …
+	names, err := store.List()
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	found := false
+	for _, name := range names {
+		if name == "broken" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the damaged profile is not listed: %v", names)
+	}
+	// … and reading it is what fails.
+	if _, err := store.Load("broken"); err == nil {
+		t.Fatal("reading a profile with invalid TOML succeeded")
+	}
+	// The sound profile beside it is untouched.
+	if _, err := store.Load("sound"); err != nil {
+		t.Fatalf("a sound profile failed to read: %v", err)
 	}
 }
 

@@ -184,10 +184,11 @@ func openExisting(root string, lock *directoryLock, fail func(error) (*Repositor
 		keyring.Destroy()
 		return fail(err)
 	}
-	if err := repository.loadRefs(); err != nil {
-		keyring.Destroy()
-		return fail(err)
-	}
+	/* The disk view is NOT built here. Every accessor refreshes it
+	   (`currentRef`, `listRefs`, the keychain's scans), so building it at open was
+	   the same work done twice: once before the process could serve, and again on
+	   the first question. Opening now costs one keychain file, whatever the number
+	   of hosts. */
 	return repository, nil
 }
 
@@ -257,10 +258,10 @@ func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) 
 		keyring.Destroy()
 		return fail(err)
 	}
-	if err := repository.loadRefs(); err != nil {
-		keyring.Destroy()
-		return fail(err)
-	}
+	/* The disk view is NOT built here — same reason as openExisting: every accessor
+	   refreshes it, so building it at open was the same work done twice, once before
+	   the process could serve. Opening costs one keychain file, whatever the number
+	   of hosts. */
 	return repository, nil
 }
 
@@ -287,8 +288,32 @@ func (r *Repository) Read(name string) ([]byte, error) {
 	return r.readObject(ref)
 }
 
-// currentRef resolves one name against the disk view.
+/* currentRef resolves one name against the disk.
+ *
+ * It reads THAT name's directory, not the whole tree. There is no index, so
+ * resolving one host is one directory; resolving it by rescanning every host is
+ * what made listing quadratic — 245 hosts took minutes to list because each of
+ * the 245 loads rescanned all 245 directories. The whole-tree scan is only the
+ * fallback, for a name whose spelling differs in case from the directory.
+ */
 func (r *Repository) currentRef(name string) (catalogRef, error) {
+	if st := r.snap(); st.keyring != nil {
+		ref, found, err := r.scanHostDir(name, st.keyring.StoreID())
+		if err != nil {
+			return catalogRef{}, err
+		}
+		if found {
+			/* The second layer is a property of the generation, read from that
+			   generation's own marker or `.adk` — the same computation the whole-tree
+			   scan does, for one host. */
+			stored, keyErr := r.readKeyringFile()
+			if keyErr != nil && !errors.Is(keyErr, ErrNotInitialized) {
+				return catalogRef{}, keyErr
+			}
+			ref.activated = r.generationActivated(ref, stored)
+			return ref, nil
+		}
+	}
 	if err := r.loadRefs(); err != nil {
 		return catalogRef{}, err
 	}
