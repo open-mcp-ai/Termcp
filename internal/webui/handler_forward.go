@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -109,13 +110,27 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required parameters per direction.
+	//
+	// THE LISTEN ADDRESS NAMES A MACHINE, and which machine depends on the
+	// direction: local and dynamic listen HERE (bind_host), remote listens on the
+	// TARGET (local_host). The other field is refused rather than ignored — it was
+	// accepted and dropped, so a caller asking to publish a tunnel got a 201 and a
+	// listener on 127.0.0.1, which is the one outcome the reply cannot be read for.
 	switch req.Direction {
 	case "local":
+		if strings.TrimSpace(req.LocalHost) != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "a local forward listens on this host: set bind_host. local_host is the address the TARGET listens on, which only a remote forward binds"})
+			return
+		}
 		if req.RemoteHost == "" || req.RemotePort <= 0 || req.RemotePort > 65535 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "local forward requires remote_host and remote_port (1-65535)"})
 			return
 		}
 	case "remote":
+		if strings.TrimSpace(req.BindHost) != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "a remote forward listens on the target: set local_host. bind_host is the address THIS host listens on, which only a local forward binds"})
+			return
+		}
 		if req.LocalHost == "" || req.LocalPort <= 0 || req.LocalPort > 65535 ||
 			req.RemoteHost == "" || req.RemotePort <= 0 || req.RemotePort > 65535 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "remote forward requires local_host, local_port, remote_host, remote_port (all ports 1-65535)"})
@@ -123,6 +138,14 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 		}
 	case "dynamic":
 		// dynamic only needs local_port (optional, auto-assigned if 0).
+		if strings.TrimSpace(req.LocalHost) != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "a dynamic (SOCKS5) forward has no target side: it listens on this host only. local_host is the address a remote forward's TARGET listens on"})
+			return
+		}
+		if req.RemoteHost != "" || req.RemotePort != 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "a dynamic (SOCKS5) forward has no fixed target: the client names the destination per connection. Drop remote_host/remote_port, or publish one service with a local forward"})
+			return
+		}
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "direction must be local, remote, or dynamic"})
 		return
@@ -146,6 +169,15 @@ func (h *Handler) handleCreateForward(w http.ResponseWriter, r *http.Request) {
 		fw, fwErr = h.ForwardMgr.CreateRemote(sessionID, sshConfig, req.LocalHost, req.LocalPort, req.RemoteHost, req.RemotePort, sshClient)
 	}
 	if fwErr != nil {
+		// A REFUSED ADDRESS IS A BAD REQUEST, not a server fault: the caller wrote
+		// something only it can change, and a 500 tells it to look at the server.
+		// Every other failure here is a real operation failure (the port is taken,
+		// the transport went away), which is why the branch is narrow.
+		var nb *forward.NonLoopbackBindError
+		if errors.As(fwErr, &nb) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": fwErr.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": fwErr.Error()})
 		return
 	}
