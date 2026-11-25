@@ -88,6 +88,15 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	mcpServer.Use(withPanicRecovery())
 
 	registerTermTools(mcpServer, s)
+	// The human-facing material (#355): the `guide` tool and the read-only resources
+	// termcp://guide/*. Registered here rather than from Start() with the docs prompt
+	// because its text is static — it needs no origin, so it is served from the first
+	// handshake in every deployment, including an in-process embedder's.
+	registerGuide(mcpServer, s)
+	// COMPLETION (#327). Registered LAST and on its own: the capability is advertised
+	// from this registration (mcp/server.go), so a build that does not call this cannot
+	// claim a picker it does not answer.
+	mcpServer.OnMethod("completion/complete", s.handleCompletion)
 
 	s.mcpServer = mcpServer
 	// Both transports lift the request's own origin into the context, so a tools/list

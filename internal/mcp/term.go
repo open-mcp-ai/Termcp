@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term"
@@ -266,7 +267,11 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	if derr != nil {
 		return envelope.Reply{Slots: []envelope.Slot{badRequestNoPath(derr.Msg)}}
 	}
-	t := s.executeTerm(ctx, cmd, win)
+	// A CALL THAT ASKED TO BE WATCHED REPORTS WHILE IT RUNS (issue #327). The wrapper is
+	// a no-op for every call that sent no `_meta.progressToken`, which is all of them
+	// unless a client is drawing a progress bar — see progress.go.
+	t := withProgressReporting(ctx, time.Duration(win.TimeoutSeconds*float64(time.Second)),
+		func(ctx context.Context) termReply { return s.executeTerm(ctx, cmd, win) })
 	// EVERY 2xx SLOT INHERITS THE CALLER'S WINDOW UNLESS IT SAYS IT ALREADY DID.
 	//
 	// `bytes_limit`/`lines_limit` are documented as an argument of the tool, not of one
@@ -287,7 +292,16 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	applyAliasHint(slots, aliasHint)
 	// The total cap is a property of the REPLY, not of one slot: ten slots each
 	// within their own byte limit still add up to a context nobody budgeted for.
-	return envelope.Reply{Slots: t.applyTotalCap(slots), StructuredContent: win.StructuredContent, NoText: win.NoText}
+	slots = t.applyTotalCap(slots)
+	// A CANCELLED CALL MUST NOT READ AS AN ORDINARY EMPTY ONE (issue #327).
+	//
+	// The client sent notifications/cancelled, this call's ctx was cancelled, and every
+	// wait in here stops on ctx.Done — but it stops the same way its window expiring
+	// does, so the reply said "did not match within the window" and a caller reading it
+	// had no way to tell that IT had stopped the work. That is the one fact the caller
+	// already knows and the reply denied.
+	markCancelled(ctx, slots)
+	return envelope.Reply{Slots: slots, StructuredContent: win.StructuredContent, NoText: win.NoText}
 }
 
 // applyAliasHint hangs the `command`→`cmd` teaching on the first slot that has no
@@ -767,3 +781,28 @@ func fmtBytes(n int) string { return fmt.Sprintf("%d B", n) }
 // between a tool surface that can grow and one that cannot — every directive this
 // text listed would be a line to edit the day the command space gains one.
 const termDescription = "Run one terminal line on this instance and read its result: a session's bytes, a file, a listing, a directive's own output. No cmd = bearings (what runs, what is installed, the syntax); ls ext = pinned capability (MCP servers, skills trees). Window parameters bound how much comes back, never what the command does."
+
+// markCancelled records on the reply that the client stopped this call.
+//
+// IT IS A HEADER, NOT A STATUS CHANGE. The statuses are still true — a 204 means
+// nothing was delivered, a 200 means bytes arrived before the cancel landed — and
+// rewriting them would throw away the work that did happen. What was missing is the
+// CAUSE, and Hint is the header this protocol already uses for "why this reply looks
+// the way it does" (see noContentSaying).
+func markCancelled(ctx context.Context, slots []envelope.Slot) {
+	if len(slots) == 0 || ctx == nil || ctx.Err() == nil {
+		return
+	}
+	why := "cancelled by the client: this call stopped where it was, so an empty or partial reply means " +
+		"\"stopped\", not \"nothing was there\". The peer's work may still be finishing on the far side."
+	for i := range slots {
+		if slots[i].Headers == nil {
+			slots[i].Headers = map[string]string{}
+		}
+		if prev := slots[i].Headers["Hint"]; prev != "" {
+			slots[i].Headers["Hint"] = why + " (" + prev + ")"
+			continue
+		}
+		slots[i].Headers["Hint"] = why
+	}
+}

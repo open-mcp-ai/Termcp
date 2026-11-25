@@ -194,6 +194,12 @@
   link per host. A tunnel that fails there is reported in `failures[]` with its `via`
   host and retried on its own: the endpoint keeps answering, and the status stays
   `available` because only the tunnel is down.
+- A `guide` tool publishes the onboarding material written for a PERSON — what to
+  configure next, why each step exists, and which steps are theirs — so a model can
+  hand it over verbatim instead of improvising a lesson. No argument returns the
+  first-run page (under 4 KB); `topic` returns one subject. The same pages are
+  published read-only as `termcp://guide/*`, `help` stays the machine view, and the
+  material says plainly that an empty `ls ext` on a fresh install is normal.
 - `read <session> file <directory>` lists a bounded, structured directory table
   (type, path/name, size, mtime, mode) instead of failing with `is a directory`.
   `--depth` (1–5) and `--limit` (200–2000) bound the walk; withheld entries and
@@ -213,6 +219,30 @@
   (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
   never swept: `--dead` names its targets by state, so `--force` does not apply to it.
 ### Fixed
+
+- An MCP client that cancels a call now stops it. `notifications/cancelled` was read
+  and discarded, so a cancelled 60-second read ran to completion with nobody
+  listening; the reply also now says it was cancelled instead of reading like an
+  ordinary empty window. Keyed by (session, request id), so one client cannot cancel
+  another's call.
+- A client that leaves without sending DELETE no longer keeps a session for the life
+  of the process: the streamable transport records activity and reclaims a session
+  after two keepalive intervals, exempting any session with an open GET stream.
+- `MCP-Protocol-Version` is validated on POST: an unsupported version is a 400 that
+  names the one this instance speaks, instead of two sides interpreting the same
+  frames differently.
+- The frame window for `call` / `read --frame` defaults to the transport's own 8 MiB
+  limit instead of a 1 MiB floor. A larger `.call` frame used to answer 413 forever
+  (MCP has no chunking to retry with); above the limit the 413 now names the ceiling
+  and the flag that raises it.
+- `tools/call` carrying `_meta.progressToken` is answered as an event stream:
+  `notifications/progress` frames while the tool works, the ordinary result last.
+  `completion/complete` completes directive names from the vocabulary this build owns
+  (`cl` → `close`; an unknown prefix is an empty list, never an error), and the
+  capability is advertised only when the handler is registered. `term` also carries a
+  `title`, and the protocol layer can pass an `outputSchema` through for a tool whose
+  structured projection has one fixed shape (`term` does not: its projection is a
+  single slot or a `{"slots": [...]}` batch).
 - `call <peer>` can carry a frame that the command line cannot spell: `--file <path>`
   and `@<path>` read the bytes on the host running termcp (8 MiB, JSON checked, the
   path named in every refusal), so a large frame or one full of quotes never passes
