@@ -94,9 +94,54 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 	defer releaseTransport()
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
+		// A DIRECTORY IS A LISTING, NOT A FAILED READ (#340).
+		//
+		// `read <session> file <path>` is how a caller asks "what is at this path", and
+		// it does not always know whether the path is a file: the answer used to be a
+		// 400 that said "is a directory" and named `run ls` as the alternative, which
+		// is a text the caller then has to parse. The listing is the answer to the
+		// question that was asked — with the entry cap and depth the caller passed, so
+		// a repository with a checked-in dependency tree does not arrive whole.
+		if errors.Is(err, filesftp.ErrIsDirectory) {
+			listing, lerr := sftpCli.ListDir(remotePath, dirLimit(args), dirDepth(args))
+			if lerr != nil {
+				return fileErr(lerr, remotePath), nil
+			}
+			out := toMap(listing)
+			out["is_dir"] = true
+			out["ok"] = true
+			return jsonResult(out), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	return jsonResult(toMap(result)), nil
+}
+
+// dirLimit and dirDepth read the two caps a directory listing takes.
+//
+// THEY ARE THE CALLER'S, WITH A CEILING. `--limit` bounds how many rows come back and
+// `--depth` how many levels are walked; both are clamped so a caller cannot ask for a
+// listing that floods its own context, and the reply says what was withheld.
+func dirLimit(args map[string]any) int {
+	n := int(getFloat64(args, "limit", 0))
+	if n <= 0 {
+		return 200
+	}
+	if n > 2000 {
+		return 2000
+	}
+	return n
+}
+
+func dirDepth(args map[string]any) int {
+	n := int(getFloat64(args, "depth", 0))
+	if n <= 0 {
+		return 1
+	}
+	if n > 5 {
+		return 5
+	}
+	return n
 }
 
 func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -131,8 +176,26 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	}
 	defer sftpCli.Close()
 	defer releaseTransport()
+
+	// A DIRECTORY TARGET IS A DIFFERENT OPERATION, and it has to say so (#340).
+	//
+	// `write` carries ONE payload: --data is the bytes of one file, and a directory
+	// has no bytes of its own. So a directory is refused BY NAME rather than opened
+	// and failed deep inside the write, and the refusal names the two ways to write
+	// several files — one statement per file in a single cmd (one call, one slot
+	// each), or --recursive with a JSON object of path→content.
+	if fi, serr := sftpCli.StatFile(remotePath); serr == nil && fi.IsDir && !getBool(args, "recursive", false) {
+		return toolError(CodeInvalidArgument, "%s", dirWriteRefusal(remotePath)), nil
+	}
+	if getBool(args, "recursive", false) {
+		return s.writeTree(ctx, sftpCli, sessionID, remotePath, data, mode, getBool(args, "dry_run", false)), nil
+	}
+
 	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
 	if err != nil {
+		if errors.Is(err, filesftp.ErrIsDirectory) {
+			return toolError(CodeInvalidArgument, "%s", dirWriteRefusal(remotePath)), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	// THE RECEIPT HAS TO PROVE THE BYTES (issue #302). `bytes_written: 542` next to an

@@ -315,6 +315,45 @@ out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\
 check "#354 反斜杠撇号被拒绝" "$out" '"code":400'
 check "#354 报错说明 payload 是 verbatim" "$out" 'VERBATIM payload'
 check "#354 并给出 --file 的出路" "$out" '--file /tmp/frame.json'
+say "#340 read/write 支持目录"
+TREE="$WORK/tree"
+mkdir -p "$TREE/sub"
+printf 'hi\n' > "$TREE/a.txt"
+printf 'yo\n' > "$TREE/sub/b.txt"
+mkdir -p "$TREE/deep/er"
+out=$(term "read $SID file $TREE"); b=$(body "$out")
+check "#340 读目录不再报 is a directory" "$out" '"code":200'
+check_not "#340 也不再是二进制报错" "$b" 'is a directory'
+check "#340 列出条目名" "$b" 'a.txt'
+check "#340 标出目录" "$b" 'sub/'
+check "#340 表里带大小" "$b" '3'
+check "#340 表里带类型标记" "$b" 'd  sub/'
+out=$(term "read $SID file $TREE --depth 2"); b=$(body "$out")
+check "#340 --depth 走下去（深层行印全路径）" "$b" 'sub/b.txt'
+out=$(term "read $SID file $TREE --limit 2"); b=$(body "$out")
+check "#340 --limit 封顶" "$out" '"code":200'
+check "#340 并说清被截掉多少" "$b" 'more not listed'
+check "#340 深度封顶时说清还有几层没走" "$b" 'directories not walked'
+out=$(term "read $SID file $TREE/a.txt"); b=$(body "$out")
+check "#340 文件照旧按字节读" "$b" 'hi'
+out=$(term "write $SID file $TREE --data hi"); b=$(body "$out")
+check "#340 写目录默认被拒绝" "$out" '"code":400'
+check "#340 拒绝语给出批量写法" "$b" '--recursive'
+check "#340 并给出多语句写法" "$b" 'write <session> file'
+out=$(term "write $SID file $TREE --recursive --dry-run --data '{\"x.txt\":\"hi\",\"sub/y.txt\":\"yo\"}'")
+check "#340 dry-run 只预告" "$(body "$out")" 'would write'
+check_not "#340 dry-run 没有真的写" "$(ls $TREE)" 'x.txt'
+out=$(term "write $SID file $TREE --recursive --data '{\"x.txt\":\"hi\",\"sub/y.txt\":\"yo\"}'"); b=$(body "$out")
+check "#340 批量写逐条回报" "$b" 'ok    '
+check "#340 写法条数" "$b" 'wrote 2 file(s)'
+check "#340 子目录被建出来" "$(cat $TREE/sub/y.txt 2>/dev/null)" 'yo'
+out=$(term "write $SID file $TREE --recursive --data '{\"/etc/passwd\":\"x\"}'")
+check "#340 绝对路径被拒绝" "$out" '"code":400'
+out=$(term "write $SID file $TREE --recursive --data '{\"../x\":\"x\"}'")
+check "#340 越界路径被拒绝" "$out" '"code":400'
+check "#340 越界拒绝说明原因" "$out" 'climbs out'
+out=$(term "write $SID file $TREE --recursive --data 'not json'")
+check "#340 非对象 payload 被拒绝" "$out" '"code":400'
 
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

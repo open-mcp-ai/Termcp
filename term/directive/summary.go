@@ -47,6 +47,8 @@ var flagSummaries = map[string]map[string]string{
 		"reader":   "registered reader id to consume from; keeps its own cursor independent of the default reader",
 		"mode":     "on a file read: text (default), hex for bytes, or file to download to a local_path",
 		"wait":     "spend the whole timeout on an empty window instead of ending it when the stream goes quiet (valueless)",
+		"depth":    "on a directory read: levels to walk, 1 by default and 5 at most",
+		"limit":    "on a directory read: entries to return, 200 by default and 2000 at most",
 	},
 }
 
