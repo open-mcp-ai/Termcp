@@ -903,12 +903,9 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 		if word, ok := literalWord(src, call.Args[0]); ok {
 			if _, known := g.Lookup(word); !known {
 				return Statement{}, false, &Error{
-					Op: left.Op,
-					Msg: "`" + word + "` is not a directive, and the right side of a termcp `|` must be one: " +
-						"`read … | write …` copies bytes from one node to another, and it is the only pipeline " +
-						"in this language.\nA SHELL pipeline is written inside a payload, where `|` belongs to " +
-						"the shell: `run h:1 $1` with args [\"ls | " + word + "\"].",
-					Usage: "read <session> <index> | write <session> file <path>",
+					Op:    left.Op,
+					Msg:   pipeRuleMsg(g, word),
+					Usage: pipeUsage(g),
 				}
 			}
 		}
@@ -925,8 +922,7 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 	// off the outer statement, which is the one that carries the `&` or the `&&`.
 	// `read … | write … &` therefore stays a backgrounded copy.
 	refuse := func(msg string) (Statement, bool, error) {
-		return Statement{}, false, &Error{Op: left.Op, Msg: msg,
-			Usage: "read <session> <index> [--stream o|e] | write <session> file <path>"}
+		return Statement{}, false, &Error{Op: left.Op, Msg: msg, Usage: pipeUsage(g)}
 	}
 
 	switch {
@@ -938,12 +934,23 @@ func parsePipeline(src string, outer *syntax.Stmt, bin *syntax.BinaryCmd, holes 
 		return refuse("a pipeline here has exactly two ends: `read … | write …`. " +
 			"Chaining a third is refused rather than run in an order you would have to guess — " +
 			"write the second copy as its own statement.")
-	case left.Op != "read" || right.Op != "write":
-		return refuse("`|` connects two termcp directives only as `read … | write …`, which copies bytes " +
-			"from one node to another without them passing through your context; got `" + left.Op +
+	case !isPipePair(g, left.Op, right.Op):
+		src, sink := g.PipePair()
+		if src == "" || sink == "" {
+			// THIS VOCABULARY HAS NO PIPE AT ALL. An embedder that inherits this
+			// package without a copy operator must not be told about `read | write`:
+			// the hint would name a verb its own `help` does not list (issue #352).
+			return refuse("`|` is not an operator in this language: no verb here pipes into another.\n" +
+				shellPipeAdvice(g) + "\n" +
+				"To sequence two directives, use `;` or `&&`.")
+		}
+		return refuse("`|` connects two termcp directives only as `" + src + " … | " + sink + " …`, which " +
+			"copies bytes from one node to another without them passing through your context; got `" + left.Op +
 			" | " + right.Op + "`.\n" +
-			"Inside a payload `|` belongs to the REMOTE SHELL — `run h:1 $1` with args [\"ls | wc -l\"] is " +
-			"how a shell pipeline is written. To sequence two directives, use `;` or `&&`.")
+			"It is NOT a general pipe: `cmd1 | cmd2` is refused rather than run, because `|` one layer down " +
+			"belongs to the remote shell and the same character cannot mean both.\n" +
+			shellPipeAdvice(g) + "\n" +
+			"To sequence two directives, use `;` or `&&`.")
 	}
 
 	left.Pipe = &right
@@ -984,9 +991,20 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 		// A caller that typed a name this build does not have is exactly who a
 		// usage line helps, so the error carries the whole table rather than
 		// making them ask for it in a second call.
+		//
+		// UNLESS THE LINE IS A PIPELINE. `grep x | head` reaches this branch on its
+		// first word, and the verb table answers a question the caller did not ask:
+		// it wrote a shell pipeline, so what it needs is the pipe rule and where a
+		// shell line belongs (issue #352). The advice is added HERE rather than in
+		// parsePipeline because the left side is looked up before the pipeline
+		// branch is ever reached.
+		msg := "unknown directive: " + name
+		if hasPipeOperator(stmt) {
+			msg += "\n" + pipeRule(g)
+		}
 		return Statement{}, false, &Error{
 			Op:    name,
-			Msg:   "unknown directive: " + name,
+			Msg:   msg,
 			Usage: "help",
 			Rest:  restOfStatement(src, stmt),
 		}
@@ -1486,4 +1504,77 @@ func trailingFlagInPayload(op Op, payloadWords []word) string {
 		return "--" + key
 	}
 	return ""
+}
+
+// hasPipeOperator reports whether the shell AST for this statement carries a `|`.
+// It is how a refusal knows the caller wrote a pipeline rather than a misspelled
+// verb, without a second parse.
+func hasPipeOperator(stmt *syntax.Stmt) bool {
+	if stmt == nil {
+		return false
+	}
+	bin, ok := stmt.Cmd.(*syntax.BinaryCmd)
+	if !ok {
+		return false
+	}
+	return bin.Op == syntax.Pipe || bin.Op == syntax.PipeAll
+}
+
+// pipeRule is the sentence that says what `|` is here: the pair this vocabulary
+// declares, or the plain statement that it has none.
+func pipeRule(g *Grammar) string {
+	src, sink := g.PipePair()
+	if src == "" || sink == "" {
+		return "This line has a \"|\" in it, and that is not a general pipe: no verb here pipes into " +
+			"another.\n" + shellPipeAdvice(g)
+	}
+	return "This line has a \"|\" in it, and it is not a general pipe: " + src + " | " + sink +
+		" is the only pairing this language has, and cmd1 | cmd2 is refused rather than run.\n" + shellPipeAdvice(g)
+}
+
+// isPipePair reports whether these two verbs are the ends this vocabulary declares
+// for `|`. Both ends must be declared and must match: a language with a source but no
+// sink has no pipeline, and saying otherwise would refuse with a usage line it cannot
+// honour.
+func isPipePair(g *Grammar, left, right string) bool {
+	src, sink := g.PipePair()
+	return src != "" && sink != "" && left == src && right == sink
+}
+
+// pipeUsage is the usage line a `|` refusal prints, from the vocabulary.
+func pipeUsage(g *Grammar) string {
+	src, sink := g.PipePair()
+	if src == "" || sink == "" {
+		return ""
+	}
+	return src + " <session> <index> [--stream o|e] | " + sink + " <session> file <path>"
+}
+
+// shellPipeAdvice says where a shell pipeline belongs, in this vocabulary.
+//
+// THE POINT OF ASKING THE GRAMMAR: an embedder whose language has no channel verb has
+// no shell line to hand anywhere, and a hint naming `run h:1 $1` would send its
+// callers looking for a verb its help never lists. So the advice is either the verb
+// that takes a command line, or the plain fact that a shell pipeline is the shell's
+// and has no place in this language at all.
+func shellPipeAdvice(g *Grammar) string {
+	if v := g.PayloadVerb(); v != "" {
+		return "A SHELL pipeline is written inside a payload, where `|` belongs to the shell: `" +
+			v + " <channel> $1` with args [\"ls | wc -l\"]."
+	}
+	return "A SHELL pipeline belongs to the shell, and this language has no verb that takes a shell " +
+		"command line, so there is nowhere here to write one."
+}
+
+// pipeRuleMsg is the refusal for a right-hand side that is not a verb at all.
+func pipeRuleMsg(g *Grammar, word string) string {
+	src, sink := g.PipePair()
+	if src == "" || sink == "" {
+		return "`" + word + "` is not a directive, and this language has no `|` operator: no verb " +
+			"here pipes into another.\n" + shellPipeAdvice(g)
+	}
+	return "`" + word + "` is not a directive, and the right side of a termcp `|` must be one: " +
+		"`" + src + " … | " + sink + " …` copies bytes from one node to another, and it is the only " +
+		"pipeline this language has — `" + src + " | " + word + "` is not a pipe.\n" +
+		shellPipeAdvice(g)
 }
