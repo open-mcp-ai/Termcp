@@ -8,11 +8,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
@@ -51,6 +53,28 @@ var (
 	dataDomain = []byte("termcp/config/data/v1")
 	wrapDomain = []byte("termcp/config/wrap/v1")
 )
+
+/* The four derivation domains of format v1. They are part of the format, not a
+ * choice a caller makes: changing one changes what a sealed byte string means,
+ * so it costs a FormatVersion bump.
+ *
+ *   mainKeyDomain    mnemonic  -> Main Key          (keyring.go)
+ *   dataKeyDomain    DEK + activation key -> body key
+ *   activateDomain   .adk associated data
+ *   activatedDomain  the fixed plaintext .adk authenticates
+ */
+const (
+	mainKeyDomain   = "termcp/config/main/v1"
+	dataKeyDomain   = "termcp/config/data-key/v1"
+	activateDomain  = "termcp/config/activate/v1"
+	activatedDomain = "termcp/config/activated/v1"
+)
+
+// noActivationKey stands in for a host whose key carries no passphrase. Using a
+// fixed value rather than a branch keeps one code path: the body key is always
+// derived from DEK and an activation key, and for such a host the second half is
+// the authorization boolean in the catalog rather than a secret.
+var noActivationKey [32]byte
 
 // ObjectKind selects the authenticated purpose and size limit of an envelope.
 type ObjectKind uint8
@@ -146,12 +170,15 @@ type Envelope struct {
 }
 
 // Seal encrypts plaintext with a fresh random DEK and wraps that DEK with main.
-// keyID identifies main in the currently unlocked keyring.
-func Seal(plaintext []byte, identity Identity, keyID ID, main MainKey) (*Envelope, error) {
-	return sealWithRandom(plaintext, identity, keyID, main, rand.Reader)
+// keyID identifies main in the currently loaded keychain. activationKey is the
+// host's second layer: a value derived from its passphrase, or noActivationKey
+// when the key that seals the host carries none. The body key is derived from
+// both halves, so neither the DEK alone nor the activation key alone opens it.
+func Seal(plaintext []byte, identity Identity, keyID ID, main MainKey, activationKey [32]byte) (*Envelope, error) {
+	return sealWithRandom(plaintext, identity, keyID, main, activationKey, rand.Reader)
 }
 
-func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey, random io.Reader) (*Envelope, error) {
+func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey, activationKey [32]byte, random io.Reader) (*Envelope, error) {
 	if err := identity.validate(); err != nil {
 		return nil, err
 	}
@@ -166,13 +193,13 @@ func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey,
 		return nil, fmt.Errorf("%w: nil random source", ErrFormat)
 	}
 
-	var dataKey [chacha20poly1305.KeySize]byte
+	var dek [chacha20poly1305.KeySize]byte
 	var dataNonce [chacha20poly1305.NonceSizeX]byte
 	var wrapNonce [chacha20poly1305.NonceSizeX]byte
-	if _, err := io.ReadFull(random, dataKey[:]); err != nil {
+	if _, err := io.ReadFull(random, dek[:]); err != nil {
 		return nil, fmt.Errorf("generate DEK: %w", err)
 	}
-	defer clear(dataKey[:])
+	defer clear(dek[:])
 	if _, err := io.ReadFull(random, dataNonce[:]); err != nil {
 		return nil, fmt.Errorf("generate data nonce: %w", err)
 	}
@@ -180,10 +207,6 @@ func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey,
 		return nil, fmt.Errorf("generate wrap nonce: %w", err)
 	}
 
-	dataAEAD, err := chacha20poly1305.NewX(dataKey[:])
-	if err != nil {
-		return nil, fmt.Errorf("data cipher: %w", err)
-	}
 	mainAEAD, err := chacha20poly1305.NewX(main[:])
 	if err != nil {
 		return nil, fmt.Errorf("wrap cipher: %w", err)
@@ -200,6 +223,16 @@ func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey,
 	copy(header[61:85], dataNonce[:])
 	binary.LittleEndian.PutUint32(header[85:89], uint32(len(plaintext)+chacha20poly1305.Overhead))
 
+	dataKey, err := deriveDataKey(header, dek, activationKey)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(dataKey[:])
+	dataAEAD, err := chacha20poly1305.NewX(dataKey[:])
+	if err != nil {
+		return nil, fmt.Errorf("data cipher: %w", err)
+	}
+
 	ciphertext := dataAEAD.Seal(nil, dataNonce[:], plaintext, appendDomain(dataDomain, header))
 	digest := sha256.Sum256(ciphertext)
 	wrapAAD := make([]byte, 0, len(wrapDomain)+len(header)+len(keyID)+len(digest))
@@ -207,7 +240,7 @@ func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey,
 	wrapAAD = append(wrapAAD, header...)
 	wrapAAD = append(wrapAAD, keyID[:]...)
 	wrapAAD = append(wrapAAD, digest[:]...)
-	wrapped := mainAEAD.Seal(nil, wrapNonce[:], dataKey[:], wrapAAD)
+	wrapped := mainAEAD.Seal(nil, wrapNonce[:], dek[:], wrapAAD)
 
 	raw := make([]byte, 0, len(header)+len(keyID)+len(wrapNonce)+len(wrapped)+len(ciphertext))
 	raw = append(raw, header...)
@@ -220,6 +253,57 @@ func sealWithRandom(plaintext []byte, identity Identity, keyID ID, main MainKey,
 		identity: identity,
 		keyID:    keyID,
 	}, nil
+}
+
+/*
+envelopeIdentity reads the public identity out of an envelope header, after
+
+	checking the file is one of ours for this store. Nothing is trusted: Open
+	authenticates the header again before any plaintext is returned, so a wrong
+	answer here costs a failed read, never a wrong one.
+*/
+func envelopeIdentity(raw []byte, storeID ID, kind ObjectKind) (ID, ID, bool) {
+	var objectID, generationID ID
+	if len(raw) < envelopeHeaderSize || !bytes.Equal(raw[:8], []byte("TCPCFG01")) {
+		return objectID, generationID, false
+	}
+	if binary.LittleEndian.Uint16(raw[8:10]) != FormatVersion {
+		return objectID, generationID, false
+	}
+	if ObjectKind(raw[12]) != kind {
+		return objectID, generationID, false
+	}
+	var gotStore ID
+	copy(gotStore[:], raw[13:29])
+	if gotStore != storeID {
+		return objectID, generationID, false
+	}
+	copy(objectID[:], raw[29:45])
+	copy(generationID[:], raw[45:61])
+	if objectID.IsZero() || generationID.IsZero() {
+		return objectID, generationID, false
+	}
+	return objectID, generationID, true
+}
+
+/*
+envelopeKeyID reads only the public key id out of an envelope header. It exists
+
+	because "which key seals this" is a question the panel must answer without any
+	key loaded — an unreadable index is exactly when it matters most — and the id is
+	a plain field, not part of the secret. Framing is checked so a stray file cannot
+	masquerade as a key holder.
+*/
+func envelopeKeyID(raw []byte) (ID, bool) {
+	var keyID ID
+	if len(raw) < envelopeHeaderSize || !bytes.Equal(raw[:8], []byte("TCPCFG01")) {
+		return keyID, false
+	}
+	if binary.LittleEndian.Uint16(raw[8:10]) != FormatVersion {
+		return keyID, false
+	}
+	copy(keyID[:], raw[89:105])
+	return keyID, !keyID.IsZero()
 }
 
 // Parse validates framing and the expected public identity without running the
@@ -330,12 +414,21 @@ func (e *Envelope) WrapKeyID() ID {
 	return e.keyID
 }
 
-// Open unwraps the DEK and authenticates and decrypts the entire body.
-func (e *Envelope) Open(main MainKey) ([]byte, error) {
+// Open unwraps the DEK, combines it with activationKey, and authenticates and
+// decrypts the entire body. A host whose second layer is missing answers
+// ErrAuthentication here, which is exactly the AND the two layers promise: the
+// DEK alone is not a body key.
+func (e *Envelope) Open(main MainKey, activationKey [32]byte) ([]byte, error) {
 	if e == nil || len(e.raw) != envelopeHeaderSize+int(binary.LittleEndian.Uint32(e.raw[85:89])) {
 		return nil, ErrFormat
 	}
-	dataKey, err := e.unwrapDataKey(main)
+	dek, err := e.unwrapDataKey(main)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(dek[:])
+	header := e.raw[:dataHeaderSize]
+	dataKey, err := deriveDataKey(header, dek, activationKey)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +437,6 @@ func (e *Envelope) Open(main MainKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("data cipher: %w", err)
 	}
-	header := e.raw[:dataHeaderSize]
 	dataNonce := e.raw[61:85]
 	ciphertext := e.raw[envelopeHeaderSize:]
 	plaintext, err := aead.Open(nil, dataNonce, ciphertext, appendDomain(dataDomain, header))
@@ -354,8 +446,28 @@ func (e *Envelope) Open(main MainKey) ([]byte, error) {
 	return plaintext, nil
 }
 
+/*
+deriveDataKey is the join of the two layers: the DEK that the inserted key
+
+	unwraps, and the activation key that the passphrase derives. The stable header D
+	is the HKDF salt, so every generation gets a different body key even from the
+	same pair — which is what makes two generations' body ciphertexts unrelated.
+*/
+func deriveDataKey(header []byte, dek [chacha20poly1305.KeySize]byte, activationKey [32]byte) ([32]byte, error) {
+	var out [32]byte
+	ikm := make([]byte, 0, len(dek)+len(activationKey))
+	ikm = append(ikm, dek[:]...)
+	ikm = append(ikm, activationKey[:]...)
+	defer clear(ikm)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, ikm, header, []byte(dataKeyDomain)), out[:]); err != nil {
+		return out, fmt.Errorf("derive data key: %w", err)
+	}
+	return out, nil
+}
+
 // Rewrap changes only the Main Key wrapper. The stable data header and body
-// ciphertext remain byte-for-byte identical.
+// ciphertext remain byte-for-byte identical — the body key does not depend on
+// the Main Key, so re-wrapping a DEK cannot disturb it.
 func (e *Envelope) Rewrap(oldMain MainKey, newKeyID ID, newMain MainKey) (*Envelope, error) {
 	if e == nil || newKeyID.IsZero() {
 		return nil, ErrFormat
@@ -397,9 +509,9 @@ func (e *Envelope) Rewrap(oldMain MainKey, newKeyID ID, newMain MainKey) (*Envel
 }
 
 func (e *Envelope) unwrapDataKey(main MainKey) ([chacha20poly1305.KeySize]byte, error) {
-	var dataKey [chacha20poly1305.KeySize]byte
+	var dek [chacha20poly1305.KeySize]byte
 	if e == nil || len(e.raw) < envelopeHeaderSize+chacha20poly1305.Overhead {
-		return dataKey, ErrFormat
+		return dek, ErrFormat
 	}
 	header := e.raw[:dataHeaderSize]
 	keyID := e.raw[89:105]
@@ -414,20 +526,36 @@ func (e *Envelope) unwrapDataKey(main MainKey) ([chacha20poly1305.KeySize]byte, 
 	wrapAAD = append(wrapAAD, digest[:]...)
 	aead, err := chacha20poly1305.NewX(main[:])
 	if err != nil {
-		return dataKey, fmt.Errorf("wrap cipher: %w", err)
+		return dek, fmt.Errorf("wrap cipher: %w", err)
 	}
 	plain, err := aead.Open(nil, wrapNonce, wrapped, wrapAAD)
-	if err != nil || len(plain) != len(dataKey) {
+	if err != nil || len(plain) != len(dek) {
 		clear(plain)
-		return dataKey, ErrAuthentication
+		return dek, ErrAuthentication
 	}
-	copy(dataKey[:], plain)
+	copy(dek[:], plain)
 	clear(plain)
-	return dataKey, nil
+	return dek, nil
 }
 
 func appendDomain(domain, body []byte) []byte {
 	out := make([]byte, 0, len(domain)+len(body))
 	out = append(out, domain...)
 	return append(out, body...)
+}
+
+// MarshalText renders an ID as hex, so it can cross an HTTP boundary as a string
+// without a second representation appearing in the UI.
+func (id ID) MarshalText() ([]byte, error) {
+	return []byte(hex.EncodeToString(id[:])), nil
+}
+
+// UnmarshalText parses the hex form MarshalText produces.
+func (id *ID) UnmarshalText(text []byte) error {
+	decoded, err := hex.DecodeString(string(text))
+	if err != nil || len(decoded) != len(id) {
+		return ErrFormat
+	}
+	copy(id[:], decoded)
+	return nil
 }

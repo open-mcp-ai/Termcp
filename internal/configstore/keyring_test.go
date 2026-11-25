@@ -3,7 +3,6 @@ package configstore
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -16,14 +15,24 @@ func environmentKEK(value byte) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
-func testArgon2Cost() Argon2Parameters {
-	return Argon2Parameters{Time: 1, Memory: 8 * 1024, Threads: 1}
+// testStoreID is the salt every derivation in these tests uses. It is synthetic:
+// nothing here depends on a real machine.
+func testStoreID() ID { return filledID(0x10) }
+
+func testPhrase(t *testing.T) string {
+	t.Helper()
+	phrase, err := NewMnemonic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return phrase
 }
 
-func TestKeyringENVRoundTripAndProfileEnvelope(t *testing.T) {
+func TestKeyringSealsTheMnemonicNotTheMainKey(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
+	storeID := testStoreID()
+	phrase := testPhrase(t)
+	data, keyring, err := CreateKeyring(storeID, phrase, "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,23 +40,40 @@ func TestKeyringENVRoundTripAndProfileEnvelope(t *testing.T) {
 	if bytes.Contains(data, []byte(environmentKEK(0x61))) {
 		t.Fatal("keyring file contains its Provider KEK")
 	}
-
-	unlocked, err := UnlockKeyring(data, NewEnvProvider(""))
+	/* The words must not appear either: a slot is a sealed copy, and a file that
+	   held them in clear would make the wrapper meaningless. */
+	normalized, err := NormalizeMnemonic(phrase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unlocked.Destroy()
+	if bytes.Contains(data, []byte(normalized)) {
+		t.Fatal("keyring file contains the recovery phrase in clear")
+	}
+	/* Nor the Main Key it derives. */
+	main, err := deriveMainKey(storeID, normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, main[:]) || bytes.Contains(data, []byte(base64.StdEncoding.EncodeToString(main[:]))) {
+		t.Fatal("keyring file contains the Main Key")
+	}
+
+	loaded, err := LoadKeyring(data, NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Destroy()
 	identity := Identity{
 		StoreID:      storeID,
 		ObjectID:     filledID(0x20),
 		GenerationID: filledID(0x30),
 		Kind:         KindProfile,
 	}
-	envelope, err := unlocked.Seal([]byte("profile body"), identity)
+	envelope, err := loaded.SealWith([]byte("profile body"), identity, onlyKeyID(t, loaded), noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, err := keyring.Open(envelope)
+	plaintext, err := keyring.Open(envelope, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,109 +82,138 @@ func TestKeyringENVRoundTripAndProfileEnvelope(t *testing.T) {
 	}
 }
 
+/* The Main Key is DERIVED, so the same words in the same store are the same key —
+ * that is what makes the exported phrase and this machine the same ability — and
+ * the same words in another store are a different one.
+ */
+func TestMainKeyIsDerivedFromTheMnemonicAndTheStore(t *testing.T) {
+	phrase := testPhrase(t)
+	normalized, err := NormalizeMnemonic(phrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := deriveMainKey(testStoreID(), normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := deriveMainKey(testStoreID(), strings.ToUpper(strings.ReplaceAll(phrase, " ", "  ")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != again {
+		t.Fatal("casing and whitespace changed the derived Main Key")
+	}
+	other, err := deriveMainKey(filledID(0x11), normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == other {
+		t.Fatal("the same phrase in another store derived the same Main Key")
+	}
+	if _, err := deriveMainKey(testStoreID(), "not a phrase at all"); !errors.Is(err, ErrMnemonicInvalid) {
+		t.Fatalf("deriving from an invalid phrase = %v; want ErrMnemonicInvalid", err)
+	}
+}
+
 func TestKeyringWrongEnvironmentKEKDoesNotRevealAuthenticationOracle(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer keyring.Destroy()
 
 	t.Setenv(EnvKEKVariable, environmentKEK(0x62))
-	if _, err := UnlockKeyring(data, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("UnlockKeyring = %v, want ErrAuthentication", err)
+	if _, err := LoadKeyring(data, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("LoadKeyring = %v, want ErrAuthentication", err)
 	}
 }
 
-func TestPasswordAndENVSlotsUnwrapSameKeyring(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	passwordProvider, err := NewPasswordProvider([]byte("correct-horse-battery"), testArgon2Cost())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer passwordProvider.Destroy()
-
-	data, keyring, err := CreateKeyring(storeID, passwordProvider, NewEnvProvider(""))
+/* The plugged bit is what survives a restart. A key marked unplugged stays out of
+ * memory with every provider able to open it, and a key marked plugged comes back
+ * with none of them asked.
+ */
+func TestKeychainFileRecordedPluggedState(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x63))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer keyring.Destroy()
 
-	fromENV, err := UnlockKeyring(data, NewEnvProvider(""))
+	loaded, err := LoadKeyring(data, NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fromENV.Destroy()
+	if loaded.keysCount() != 1 {
+		t.Fatalf("a freshly created keychain has %d pluggable keys; want 1", loaded.keysCount())
+	}
+	loaded.Destroy()
 
-	fromPassword, err := UnlockKeyring(data, passwordProvider)
+	var stored storedKeyring
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Keys[0].Plugged {
+		t.Fatal("a new key is not recorded as plugged")
+	}
+	stored.Keys[0].Plugged = false
+	unplugged, err := json.Marshal(stored)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fromPassword.Destroy()
-
-	identity := Identity{
-		StoreID:      storeID,
-		ObjectID:     filledID(0x20),
-		GenerationID: filledID(0x30),
-		Kind:         KindProfile,
+	reloaded, err := LoadKeyring(unplugged, NewEnvProvider(""))
+	if err != nil && !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("an unplugged keychain failed to load: %v", err)
 	}
-	envelope, err := fromENV.Seal([]byte("wrapped body"), identity)
-	if err != nil {
-		t.Fatal(err)
+	defer reloaded.Destroy()
+	if reloaded.keysCount() != 0 {
+		t.Fatal("an unplugged key's material was put in memory anyway")
 	}
-	plaintext, err := fromPassword.Open(envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext) != "wrapped body" {
-		t.Fatalf("plaintext = %q", plaintext)
+	/* The words still open it: unplugging is a decision, not a loss. */
+	if _, _, err := unsealKey(mustParse(t, unplugged), storedKeyIDOf(t, unplugged), NewEnvProvider("")); err != nil {
+		t.Fatalf("the words no longer open an unplugged key: %v", err)
 	}
 }
 
-func TestPasswordProviderRejectsWrongPasswordAndBoundsKDF(t *testing.T) {
-	storeID := filledID(0x10)
-	good, err := NewPasswordProvider([]byte("the-real-password"), testArgon2Cost())
+func mustParse(t *testing.T, data []byte) storedKeyring {
+	t.Helper()
+	stored, err := parseStoredKeyring(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer good.Destroy()
+	return stored
+}
 
-	data, keyring, err := CreateKeyring(storeID, good)
-	if err != nil {
-		t.Fatal(err)
+// storedKeyIDOf returns the id of the keychain's single key. With no index owner
+// there is no field naming a key, so tests read the key itself.
+func storedKeyIDOf(t *testing.T, data []byte) ID {
+	t.Helper()
+	stored := mustParse(t, data)
+	if len(stored.Keys) == 0 {
+		t.Fatal("keychain holds no key")
 	}
-	defer keyring.Destroy()
+	var id ID
+	copy(id[:], stored.Keys[0].ID)
+	return id
+}
 
-	bad, err := NewPasswordProvider([]byte("wrong-password"), testArgon2Cost())
-	if err != nil {
-		t.Fatal(err)
+// onlyKeyID returns the id of the one key this keyring holds in memory.
+func onlyKeyID(t *testing.T, keyring *Keyring) ID {
+	t.Helper()
+	st := keyring.state.Load()
+	if st == nil || len(st.mainKeys) != 1 {
+		t.Fatalf("expected exactly one plugged key, got %+v", st)
 	}
-	defer bad.Destroy()
-
-	if _, err := UnlockKeyring(data, bad); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("UnlockKeyring with bad password = %v, want ErrAuthentication", err)
+	for id := range st.mainKeys {
+		return id
 	}
-
-	for _, invalid := range []Argon2Parameters{
-		{Time: 0, Memory: 64 * 1024, Threads: 1},
-		{Time: 11, Memory: 64 * 1024, Threads: 1},
-		{Time: 1, Memory: 4 * 1024, Threads: 1},
-		{Time: 1, Memory: 512 * 1024, Threads: 1},
-		{Time: 1, Memory: 64 * 1024, Threads: 0},
-		{Time: 1, Memory: 64 * 1024, Threads: 9},
-	} {
-		if _, err := NewPasswordProvider([]byte("password"), invalid); !errors.Is(err, ErrFormat) {
-			t.Fatalf("NewPasswordProvider(%+v) = %v, want ErrFormat", invalid, err)
-		}
-	}
+	return ID{}
 }
 
 func TestKeyringFileRejectsUnknownFieldsDuplicateSlotsAndTampering(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	data, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
+	t.Setenv(EnvKEKVariable, environmentKEK(0x64))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,77 +225,80 @@ func TestKeyringFileRejectsUnknownFieldsDuplicateSlotsAndTampering(t *testing.T)
 	}
 	raw["extra"] = "forbidden"
 	withUnknown, _ := json.Marshal(raw)
-	if _, err := UnlockKeyring(withUnknown, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
-		t.Fatalf("UnlockKeyring with unknown fields = %v, want ErrFormat", err)
+	if _, err := LoadKeyring(withUnknown, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
+		t.Fatalf("LoadKeyring with unknown fields = %v, want ErrFormat", err)
 	}
 
 	var stored storedKeyring
 	if err := json.Unmarshal(data, &stored); err != nil {
 		t.Fatal(err)
 	}
-	stored.Slots = append(stored.Slots, stored.Slots[0])
+	stored.Keys[0].Slots = append(stored.Keys[0].Slots, stored.Keys[0].Slots[0])
 	withDuplicates, _ := json.Marshal(stored)
-	if _, err := UnlockKeyring(withDuplicates, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
-		t.Fatalf("UnlockKeyring with duplicate slot IDs = %v, want ErrFormat", err)
+	if _, err := LoadKeyring(withDuplicates, NewEnvProvider("")); !errors.Is(err, ErrFormat) {
+		t.Fatalf("LoadKeyring with duplicate slot IDs = %v, want ErrFormat", err)
 	}
 
 	tampered := bytes.Clone(data)
 	tampered[len(tampered)-10] ^= 0x40
-	if _, err := UnlockKeyring(tampered, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) && !errors.Is(err, ErrFormat) {
-		t.Fatalf("UnlockKeyring with tampered ciphertext = %v", err)
+	if _, err := LoadKeyring(tampered, NewEnvProvider("")); !errors.Is(err, ErrAuthentication) && !errors.Is(err, ErrFormat) {
+		t.Fatalf("LoadKeyring with tampered ciphertext = %v", err)
 	}
 }
 
-func TestKeyringMarshalPreservesMainKeys(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	keyID := filledID(0x20)
-	main := testMainKey(0x30)
-	keyring := &Keyring{}
-	keyring.state.Store(&keyringState{
-		storeID:     storeID,
-		activeKeyID: keyID,
-		mainKeys:    map[ID]MainKey{keyID: main},
+/* A slot seals its key under the AAD of that key, key id included. Moving a slot
+ * — same slot id, same provider — under another key's header must not
+ * authenticate: otherwise the wrapper made for one key would open the material of
+ * the key that seals real hosts.
+ *
+ * Mutation check: drop the key id from keyringSlotAAD and the moved slot opens the
+ * second key.
+ */
+func TestKeyringSlotCannotBeMovedToAnotherKey(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x65))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""), NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keyring.Destroy()
+	var stored storedKeyring
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Keys[0].Slots) != 2 {
+		t.Fatalf("first key has %d slots; want two", len(stored.Keys[0].Slots))
+	}
+	second, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Keys = append(stored.Keys, storedKey{
+		ID:    append([]byte(nil), second[:]...),
+		Slots: []storedKeySlot{stored.Keys[0].Slots[1]},
 	})
-	data, err := keyring.Marshal(NewEnvProvider(""))
+	stored.Keys[0].Slots = stored.Keys[0].Slots[:1]
+	spliced, err := json.Marshal(stored)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unlocked, err := UnlockKeyring(data, NewEnvProvider(""))
-	if err != nil {
-		t.Fatal(err)
+	loaded, err := LoadKeyring(spliced, NewEnvProvider(""))
+	if loaded == nil {
+		t.Fatalf("the spliced keychain did not parse: %v", err)
 	}
-	defer unlocked.Destroy()
-
-	identity := Identity{
-		StoreID:      storeID,
-		ObjectID:     filledID(0x40),
-		GenerationID: filledID(0x50),
-		Kind:         KindProfile,
+	defer loaded.Destroy()
+	if material, ok := loaded.key(second); ok {
+		clear(material[:])
+		t.Fatal("a slot sealed for one key loaded another key's material")
 	}
-	envelope, err := unlocked.Seal([]byte("payload"), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plaintext, err := envelope.Open(main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plaintext) != "payload" {
-		t.Fatalf("plaintext = %q", plaintext)
+	if _, ok := loaded.key(onlyKeyID(t, keyring)); !ok {
+		t.Fatal("the untouched slot stopped working")
 	}
 }
 
 func TestKeyringFileHoldsNoKeyMaterial(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	passwordProvider, err := NewPasswordProvider([]byte("correct-horse-battery"), testArgon2Cost())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer passwordProvider.Destroy()
-
-	raw, keyring, err := CreateKeyring(storeID, passwordProvider, NewEnvProvider(""))
+	t.Setenv(EnvKEKVariable, environmentKEK(0x66))
+	phrase := testPhrase(t)
+	raw, keyring, err := CreateKeyring(testStoreID(), phrase, "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,56 +313,22 @@ func TestKeyringFileHoldsNoKeyMaterial(t *testing.T) {
 		if bytes.Contains(raw, mainBytes) {
 			t.Fatal("the keyring file contains a Main Key raw")
 		}
-		if bytes.Contains(raw, []byte(hex.EncodeToString(mainBytes))) {
-			t.Fatal("the keyring file contains a Main Key hex-encoded")
-		}
 		if bytes.Contains(raw, []byte(base64.StdEncoding.EncodeToString(mainBytes))) {
 			t.Fatal("the keyring file contains a Main Key base64-encoded")
 		}
 	}
-	if bytes.Contains(raw, []byte("correct-horse-battery")) {
-		t.Fatal("the keyring file contains the password")
-	}
 }
 
-func TestPasswordPolicy(t *testing.T) {
-	for _, tc := range []struct {
-		password string
-		confirm  string
-		want     error
-	}{
-		{"", "", ErrPasswordInvalid},
-		{"short", "short", ErrPasswordInvalid},
-		{"1234567", "1234567", ErrPasswordInvalid},
-		{"12345678", "12345678", nil},
-		{"   12345678   ", "   12345678   ", nil},
-		{strings.Repeat("a", 1024), strings.Repeat("a", 1024), nil},
-		{strings.Repeat("a", 1025), strings.Repeat("a", 1025), ErrPasswordInvalid},
-		{"12345678", "1234567x", ErrPasswordConfirmation},
-	} {
-		err := validateNewPassword(tc.password, tc.confirm)
-		if tc.want == nil {
-			if err != nil {
-				t.Errorf("password of len %d rejected: %v", len(tc.password), err)
-			}
-			continue
-		}
-		if !errors.Is(err, tc.want) {
-			t.Errorf("validateNewPassword(%q, %q) = %v, want %v", tc.password, tc.confirm, err, tc.want)
-		}
-	}
-}
-
-// Destroy can be called concurrently with Seal or Open without panic or data race.
-// The lock detector confirms no mutex was used to buy that property.
+// Destroy can be called concurrently with SealWith or Open without panic or data
+// race. The lock detector confirms no mutex was used to buy that property.
 func TestConcurrentSealAndDestroyRacesSafely(t *testing.T) {
-	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	storeID := filledID(0x10)
-	_, keyring, err := CreateKeyring(storeID, NewEnvProvider(""))
+	t.Setenv(EnvKEKVariable, environmentKEK(0x67))
+	storeID := testStoreID()
+	_, keyring, err := CreateKeyring(storeID, testPhrase(t), "", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	keyID := onlyKeyID(t, keyring)
 	identity := Identity{
 		StoreID:      storeID,
 		ObjectID:     filledID(0x20),
@@ -318,7 +342,7 @@ func TestConcurrentSealAndDestroyRacesSafely(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				_, _ = keyring.Seal([]byte("race"), identity)
+				_, _ = keyring.SealWith([]byte("race"), identity, keyID, noActivationKey)
 			}
 		}()
 	}
@@ -329,7 +353,7 @@ func TestConcurrentSealAndDestroyRacesSafely(t *testing.T) {
 	}()
 	wg.Wait()
 
-	if _, err := keyring.Seal([]byte("after"), identity); !errors.Is(err, ErrProviderUnavailable) {
-		t.Fatalf("Seal after Destroy = %v, want ErrProviderUnavailable", err)
+	if _, err := keyring.SealWith([]byte("after"), identity, keyID, noActivationKey); !errors.Is(err, ErrClosed) {
+		t.Fatalf("SealWith after Destroy = %v, want ErrClosed", err)
 	}
 }

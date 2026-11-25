@@ -2,272 +2,190 @@ package webui
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
-	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 )
 
-// An empty body initializes a machine-bound keyring: nothing is typed, the
-// provider protects the Main Key alone, and the store stays open across restarts
-// with no human in the loop. This is the deployment's default path, and it is
-// covered at the HTTP boundary because the empty password is what the Web UI
-// sends when the operator leaves the password checkbox alone.
-func TestConfigStorageInitializeMachineBound(t *testing.T) {
-	dir := t.TempDir()
-	store := sshconfig.NewStore(dir)
-	defer store.Close()
-	h := &Handler{SSH: store}
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/config-storage/initialize", bytes.NewBufferString(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("machine-bound initialize: %d %s", rec.Code, rec.Body.String())
-	}
-	var state sshconfig.EncryptionStatus
-	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
-		t.Fatal(err)
-	}
-	if !state.Initialized {
-		t.Fatalf("state = %+v, want initialized", state)
-	}
-	if state.PasswordConfigured {
-		t.Fatal("machine-bound keyring reports a password; nothing was typed")
-	}
-	if state.Locked {
-		t.Fatalf("state = %+v, want unlocked right after enabling", state)
-	}
-}
-
-func TestConfigStorageHTTPEnablesEncryptsAndRestoresSelectedHosts(t *testing.T) {
-	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, 32)))
-	dir := t.TempDir()
-	store := sshconfig.NewStore(dir)
-	defer store.Close()
-	h := &Handler{SSH: store}
-	mux := http.NewServeMux()
-	h.Register(mux)
-	defer store.Close()
-
-	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
-	for _, name := range []string{"one", "two"} {
-		put := httptest.NewRecorder()
-		mux.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/api/connections/"+name, bytes.NewReader(profile)))
-		if put.Code != http.StatusNoContent {
-			t.Fatalf("seed %s: %d %s", name, put.Code, put.Body.String())
-		}
-	}
-
-	status := getConfigStorageStatus(t, mux)
-	if status.Initialized || status.EncryptNew {
-		t.Fatalf("default status = %+v", status)
-	}
-	for _, host := range status.Hosts {
-		if host.Name == "one" || host.Name == "two" {
-			if host.Mode != sshconfig.StoragePlaintext {
-				t.Fatalf("default host mode = %+v", host)
-			}
-		}
-	}
-
-	set := httptest.NewRecorder()
-	initialBody, err := json.Marshal(map[string]string{"password": "synthetic first password", "confirmation": "synthetic first password"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	initialize := httptest.NewRequest(http.MethodPost, "/api/config-storage/initialize", bytes.NewReader(initialBody))
-	initialize.Header.Set("Content-Type", "application/json")
-	mux.ServeHTTP(set, initialize)
-	if set.Code != http.StatusOK {
-		t.Fatalf("enable: %d %s", set.Code, set.Body.String())
-	}
-	status = getConfigStorageStatus(t, mux)
-	if !status.Initialized || !status.EncryptNew {
-		t.Fatalf("enabled status = %+v", status)
-	}
-
-	put := httptest.NewRecorder()
-	mux.ServeHTTP(put, httptest.NewRequest(http.MethodPut, "/api/connections/three", bytes.NewReader(profile)))
-	if put.Code != http.StatusNoContent {
-		t.Fatalf("new encrypted profile: %d %s", put.Code, put.Body.String())
-	}
-	if mode, _ := store.StorageMode("three"); mode != sshconfig.StorageEncrypted {
-		t.Fatalf("new profile mode = %q", mode)
-	}
-
-	convert := httptest.NewRecorder()
-	mux.ServeHTTP(convert, httptest.NewRequest(
-		http.MethodPost,
-		"/api/config-storage/encrypt",
-		bytes.NewBufferString(`{"names":["one"]}`),
-	))
-	if convert.Code != http.StatusOK {
-		t.Fatalf("encrypt selected: %d %s", convert.Code, convert.Body.String())
-	}
-	if mode, _ := store.StorageMode("one"); mode != sshconfig.StorageEncrypted {
-		t.Fatalf("one mode = %q", mode)
-	}
-	if mode, _ := store.StorageMode("two"); mode != sshconfig.StoragePlaintext {
-		t.Fatalf("unselected two mode = %q", mode)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "ssh_configs", "one", "config.toml")); !os.IsNotExist(err) {
-		t.Fatalf("selected plaintext remains: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "ssh_configs", "two", "config.toml")); err != nil {
-		t.Fatalf("unselected plaintext was removed: %v", err)
-	}
-
-	restore := httptest.NewRecorder()
-	mux.ServeHTTP(restore, httptest.NewRequest(
-		http.MethodPost,
-		"/api/config-storage/restore",
-		bytes.NewBufferString(`{"names":["three"]}`),
-	))
-	if restore.Code != http.StatusOK {
-		t.Fatalf("restore selected: %d %s", restore.Code, restore.Body.String())
-	}
-	if mode, _ := store.StorageMode("three"); mode != sshconfig.StoragePlaintext {
-		t.Fatalf("restored three mode = %q", mode)
-	}
-	if mode, _ := store.StorageMode("one"); mode != sshconfig.StorageEncrypted {
-		t.Fatalf("unselected encrypted one mode = %q", mode)
-	}
-}
-
-func TestConfigStorageHTTPChangesPasswordAndSurvivesRestart(t *testing.T) {
-	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+func newKeychainServer(t *testing.T, kek byte) (*sshconfig.Store, string, *http.ServeMux) {
+	t.Helper()
+	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{kek}, 32)))
 	dir := t.TempDir()
 	store := sshconfig.NewStore(dir)
 	t.Cleanup(func() { _ = store.Close() })
 	h := &Handler{SSH: store}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	request := func(method, path, body string, expected int) *httptest.ResponseRecorder {
-		t.Helper()
+	return store, dir, mux
+}
+
+func keychainCall(t *testing.T, mux *http.ServeMux, method, path, body string, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("%s %s = %d %s; want %d", method, path, rec.Code, rec.Body.String(), want)
+	}
+	if strings.Contains(path, "/api/keychain") && rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%s %s is cacheable; key material must not be", method, path)
+	}
+	return rec
+}
+
+type keychainBody struct {
+	Keys         []configstore.KeyInfo `json:"keys"`
+	CatalogKeyID string                `json:"catalog_key_id"`
+	Mnemonic     string                `json:"mnemonic"`
+}
+
+func decodeKeychain(t *testing.T, rec *httptest.ResponseRecorder) keychainBody {
+	t.Helper()
+	var body keychainBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode keychain body: %v", err)
+	}
+	return body
+}
+
+/* The keychain panel's whole backend: an empty store lists nothing, the first key
+ * creates the keychain, the phrase comes back exactly once, and the four actions
+ * are per key: plug, unplug, export, remove.
+ */
+func TestKeychainHTTPCreateListPlugExportRemove(t *testing.T) {
+	store, _, mux := newKeychainServer(t, 0x61)
+	empty := decodeKeychain(t, keychainCall(t, mux, http.MethodGet, "/api/keychain", "", http.StatusOK))
+	if len(empty.Keys) != 0 || empty.CatalogKeyID != "" {
+		t.Fatalf("empty keychain = %+v", empty)
+	}
+
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\nport = 2222\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+
+	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	var other string
+	for _, key := range second.Keys {
+		if key.ID != first.Keys[0].ID {
+			other = key.ID
+		}
+	}
+	if other == "" {
+		t.Fatalf("second key not listed: %+v", second.Keys)
+	}
+
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt",
+		`{"names":["alpha"],"key":"`+other+`"}`, http.StatusOK)
+	if mode, err := store.StorageMode("alpha"); err != nil || mode != sshconfig.StorageEncrypted {
+		t.Fatalf("alpha mode = %q, %v", mode, err)
+	}
+	// The human half of the guarantee: that key now seals a host, so removing it
+	// would strand the profile.
+	conflict := keychainCall(t, mux, http.MethodDelete, "/api/keychain/"+other, `{"backup_confirmed":true}`, http.StatusConflict)
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(conflict.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "key_in_use" {
+		t.Fatalf("removal code = %q; want key_in_use", body.Code)
+	}
+	if _, err := store.ReadRaw("alpha"); err != nil {
+		t.Fatalf("refused removal damaged the host: %v", err)
+	}
+
+	// The connection form's own route: ?key= seals the profile with that key.
+	keychainCall(t, mux, http.MethodPut, "/api/connections/beta?key="+other, string(profile), http.StatusNoContent)
+	if mode, err := store.StorageMode("beta"); err != nil || mode != sshconfig.StorageEncrypted {
+		t.Fatalf("beta mode = %q, %v", mode, err)
+	}
+	if _, err := store.ReadRaw("beta"); err != nil {
+		t.Fatalf("profile saved with an explicit key is unreadable: %v", err)
+	}
+}
+
+/* Unplugging and plugging are one key's business: the host sealed by the unplugged
+ * key reports which key it needs, and the other host keeps working.
+ */
+func TestKeychainHTTPUnplugAndPlugOneKey(t *testing.T) {
+	store, _, mux := newKeychainServer(t, 0x63)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
+
+	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	var other string
+	for _, key := range second.Keys {
+		if key.ID != first.Keys[0].ID {
+			other = key.ID
+		}
+	}
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt", `{"names":["beta"],"key":"`+other+`"}`, http.StatusOK)
+
+	off := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain/"+other+"/unplug", "", http.StatusOK))
+	for _, key := range off.Keys {
+		if key.ID == other && key.Plugged {
+			t.Fatalf("the unplugged key still reports plugged: %+v", key)
+		}
+	}
+	if _, err := store.ReadRaw("beta"); !errors.Is(err, configstore.ErrKeyNotLoaded) {
+		t.Fatalf("reading a host whose key is unplugged = %v; want ErrKeyNotLoaded", err)
+	}
+	if _, err := store.ReadRaw("alpha"); err != nil {
+		t.Fatalf("unplugging one key broke another key's host: %v", err)
+	}
+
+	keychainCall(t, mux, http.MethodPost, "/api/keychain/"+other+"/plug", "", http.StatusOK)
+	if _, err := store.ReadRaw("beta"); err != nil {
+		t.Fatalf("host after plugging its key back in: %v", err)
+	}
+}
+
+/* The old model's endpoints are gone, not aliased. A stale client must get a 404
+ * rather than a half-working door.
+ */
+func TestRemovedEndpointsAreGone(t *testing.T) {
+	_, _, mux := newKeychainServer(t, 0x64)
+	for _, path := range []string{
+		"/api/config-storage/initialize",
+		"/api/config-storage/unlock",
+		"/api/config-storage/recover",
+		"/api/config-storage/lock",
+		"/api/config-storage/destroy",
+		"/api/config-storage/password",
+		"/api/keychain/00000000000000000000000000000000/load",
+		"/api/keychain/00000000000000000000000000000000/unload",
+		"/api/keychain/00000000000000000000000000000000/phrase",
+		"/api/keychain/00000000000000000000000000000000/auto",
+		"/api/keychain/00000000000000000000000000000000/default",
+	} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{}`))
 		req.Header.Set("Content-Type", "application/json")
 		mux.ServeHTTP(rec, req)
-		if rec.Code != expected {
-			t.Fatalf("%s %s: %d %s", method, path, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("removed endpoint %s returned %d", path, rec.Code)
 		}
-		return rec
 	}
-	request(http.MethodPost, "/api/config-storage/password", `{}`, http.StatusConflict)
-	if getConfigStorageStatus(t, mux).Initialized {
-		t.Fatal("rotation initialized encryption without opting in")
-	}
-	profile := "kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n"
-	request(http.MethodPut, "/api/connections/plain", profile, http.StatusNoContent)
-	initialBody, err := json.Marshal(map[string]string{"password": "synthetic first password", "confirmation": "synthetic first password"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request(http.MethodPost, "/api/config-storage/initialize", string(initialBody), http.StatusOK)
-	request(http.MethodPut, "/api/connections/encrypted", profile, http.StatusNoContent)
-	before := getConfigStorageStatus(t, mux)
-	request(http.MethodPost, "/api/config-storage/password", `{"unexpected":true}`, http.StatusBadRequest)
-	if getConfigStorageStatus(t, mux).MainKeyID != before.MainKeyID {
-		t.Fatal("invalid request changed the Main Key")
-	}
-	rec := request(http.MethodPost, "/api/config-storage/password", `{"current_password":"synthetic first password","new_password":"synthetic second password","confirmation":"synthetic second password"}`, http.StatusOK)
-	if rec.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("key management response may be cached")
-	}
-	after := getConfigStorageStatus(t, mux)
-	if len(after.MainKeyID) != 32 || before.MainKeyID == after.MainKeyID || after.RotationPending || !after.EncryptNew {
-		t.Fatalf("unexpected rotation status: %+v", after)
-	}
-	if raw, err := store.ReadRaw("encrypted"); err != nil || string(raw) != profile {
-		t.Fatalf("encrypted profile changed after rotation: %v", err)
-	}
-	plain, err := os.ReadFile(filepath.Join(dir, "ssh_configs", "plain", "config.toml"))
-	if err != nil || string(plain) != profile {
-		t.Fatalf("rotation modified the plaintext profile: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := sshconfig.OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	h.SSH = reopened
-	if restarted := getConfigStorageStatus(t, mux); restarted.MainKeyID != after.MainKeyID || restarted.RotationPending {
-		t.Fatalf("restarted status = %+v", restarted)
-	}
-	request(http.MethodPost, "/api/config-storage/restore", `{"names":["encrypted"]}`, http.StatusOK)
-}
-
-func TestConfigStorageWSRetainsProfileModesAfterRotation(t *testing.T) {
-	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32)))
-	store := sshconfig.NewStore(t.TempDir())
-	t.Cleanup(func() { _ = store.Close() })
-	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
-	if err := store.Save("plain", profile); err != nil {
-		t.Fatal(err)
-	}
-	provider := configstore.NewEnvProvider("")
-	if err := store.SetNewProfileEncryption(true, provider); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save("encrypted", profile); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveWithOptions("temporary", profile, true); err != nil {
-		t.Fatal(err)
-	}
-	ws := &uiWS{
-		h:   &Handler{SSH: store, Sessions: &session.Manager{}, NoInternal: true},
-		ctx: context.Background(), send: make(chan []byte, 1),
-	}
-	for _, rotate := range []bool{false, true} {
-		if rotate {
-			if err := store.RotateMainKey(provider); err != nil {
-				t.Fatal(err)
-			}
-		}
-		ws.enqueueSessions()
-		var data []byte
-		select {
-		case data = <-ws.send:
-		default:
-			t.Fatal("no connection frame was queued")
-		}
-		var frame struct {
-			Connections []connectionSummary `json:"connections"`
-		}
-		if err := json.Unmarshal(data, &frame); err != nil {
-			t.Fatal(err)
-		}
-		modes := make(map[string]string)
-		for _, conn := range frame.Connections {
-			modes[conn.Name] = conn.Storage
-			if conn.Temporary != (conn.Name == "temporary") {
-				t.Fatalf("live frame lost temporary status: %+v", conn)
-			}
-		}
-		for name, want := range map[string]string{
-			"plain": sshconfig.StoragePlaintext, "encrypted": sshconfig.StorageEncrypted,
-			"temporary": sshconfig.StorageTemporary,
-		} {
-			if modes[name] != want {
-				t.Fatalf("live mode of %s = %q, want %q", name, modes[name], want)
-			}
+	for _, path := range []string{"/api/config-storage/keys", "/api/config-storage/keys/mnemonic"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("removed endpoint %s returned %d", path, rec.Code)
 		}
 	}
 }
@@ -286,177 +204,468 @@ func getConfigStorageStatus(t *testing.T, mux *http.ServeMux) sshconfig.Encrypti
 	return status
 }
 
-func TestConfigStorageInitializationAndProviderRecovery(t *testing.T) {
-	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, 32)))
-	dir := t.TempDir()
-	store := sshconfig.NewStore(dir)
-	t.Cleanup(func() { _ = store.Close() })
-	h := &Handler{SSH: store}
-	mux := http.NewServeMux()
-	h.Register(mux)
-	request := func(method, path string, body any, expected int) *httptest.ResponseRecorder {
-		t.Helper()
-		data, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req := httptest.NewRequest(method, path, bytes.NewReader(data))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != expected {
-			t.Fatalf("%s %s returned %d, wanted %d", method, path, rec.Code, expected)
-		}
-		return rec
-	}
-	for i := 0; i < 2; i++ {
-		if getConfigStorageStatus(t, mux).Initialized {
-			t.Fatal("opening the settings initialized a keyring")
-		}
-	}
-	/* There is no global on/off switch any more: whether a profile is encrypted
-	   is decided per profile in the connection form (see handlePutConnection's
-	   ?encrypt=), and this endpoint existed only to flip that preference. The
-	   route is gone, so an attempt to use it 404s — which is the honest answer
-	   for a surface that no longer exists. */
-	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": true}, http.StatusNotFound)
-	if _, err := os.Stat(filepath.Join(dir, "keys", "config.keys")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the first enable request skipped explicit Main Key initialization")
-	}
-	main := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32))
-	request(http.MethodPost, "/api/config-storage/initialize", map[string]string{"password": "invalid", "confirmation": "invalid"}, http.StatusBadRequest)
+/* Where each host is stored, and which part of the keychain is plugged in, are the
+ * two things the panel reads from this route.
+ */
+func TestConfigStorageStatusReportsKeysAndHostModes(t *testing.T) {
+	store, _, mux := newKeychainServer(t, 0x65)
 	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
 	if err := store.Save("plain", profile); err != nil {
 		t.Fatal(err)
 	}
-	initialized := request(http.MethodPost, "/api/config-storage/initialize", map[string]string{"password": main, "confirmation": main}, http.StatusOK)
-	if bytes.Contains(initialized.Body.Bytes(), []byte(main)) {
-		t.Fatal("the initialization response exposed its Main Key")
+	status := getConfigStorageStatus(t, mux)
+	if status.Initialized || status.Keys != 0 {
+		t.Fatalf("status before any key = %+v", status)
 	}
-	if err := store.Save("encrypted", profile); err != nil {
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt", `{"names":["plain"]}`, http.StatusOK)
+
+	status = getConfigStorageStatus(t, mux)
+	if !status.Initialized || status.Keys != 1 || status.KeysPlugged != 1 {
+		t.Fatalf("status after enabling = %+v", status)
+	}
+	modes := map[string]sshconfig.EncryptionHost{}
+	for _, host := range status.Hosts {
+		modes[host.Name] = host
+	}
+	if modes["plain"].Mode != sshconfig.StorageEncrypted {
+		t.Fatalf("host mode = %q; want encrypted", modes["plain"].Mode)
+	}
+	// A host under a key without a passphrase is ACTIVE, and says it needs none.
+	if !modes["plain"].Activated || modes["plain"].Passphrase {
+		t.Fatalf("host facts = %+v; want activated and no passphrase", modes["plain"])
+	}
+}
+
+/* A keychain file that does not parse is damage, and the status has to say so
+ * rather than pretend the store is merely unplugged. What may happen NEXT depends
+ * on whether anything is sealed by it.
+ */
+func TestDamagedKeychainIsNamedRatherThanReportedAsUnplugged(t *testing.T) {
+	store, dir, mux := newKeychainServer(t, 0x67)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	before := getConfigStorageStatus(t, mux)
-	keyPath := filepath.Join(dir, "keys", "config.keys")
-	keysBefore, err := os.ReadFile(keyPath)
+	path := dir + "/keys/config.keys"
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogPath := filepath.Join(dir, "ssh_configs", "store.enc")
-	catalogBefore, err := os.ReadFile(catalogPath)
-	if err != nil {
+	if err := os.WriteFile(path, raw[:len(raw)-8], 0o600); err != nil {
 		t.Fatal(err)
+	}
+	reopened, err := sshconfig.OpenConfiguredStore(dir)
+	if err != nil {
+		t.Fatalf("a damaged keychain prevented startup: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	h := &Handler{SSH: reopened}
+	fresh := http.NewServeMux()
+	h.Register(fresh)
+	status := getConfigStorageStatus(t, fresh)
+	if status.ErrorCode != "keyring_missing" || status.KeysPlugged != 0 {
+		t.Fatalf("status with a damaged keychain = %+v", status)
+	}
+	/* Nothing is sealed by the damaged file, so adding a key is the way out. */
+	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	if status := getConfigStorageStatus(t, fresh); status.ErrorCode != "" || status.KeysPlugged != 1 {
+		t.Fatalf("status after replacing a damaged keychain = %+v", status)
+	}
+}
+
+/* A store with no key plugged in still has to open, list its hosts, and refuse to
+ * write cleartext over ciphertext.
+ */
+func TestConfigStorageStatusSurvivesAnUnpluggedKeychain(t *testing.T) {
+	store, dir, mux := newKeychainServer(t, 0x66)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sshconfig.OpenConfiguredStore(dir)
+	if err != nil {
+		t.Fatalf("a keychain that needs plugging in prevented startup: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	h := &Handler{SSH: reopened}
+	fresh := http.NewServeMux()
+	h.Register(fresh)
+	status := getConfigStorageStatus(t, fresh)
+	if !status.Initialized || status.Keys != 1 || status.KeysPlugged != 0 {
+		t.Fatalf("status with nothing plugged in = %+v", status)
+	}
+	rec := httptest.NewRecorder()
+	fresh.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/connections/prod",
+		bytes.NewBufferString("kind = \"remote\"\nhost = \"host.example\"\nuser = \"u\"\npassword = \"p\"\n")))
+	if rec.Code == http.StatusNoContent {
+		t.Fatal("a store with nothing plugged in wrote a profile")
+	}
+	if listed := decodeKeychain(t, keychainCall(t, fresh, http.MethodGet, "/api/keychain", "", http.StatusOK)); len(listed.Keys) != 1 {
+		t.Fatalf("keychain list while nothing is plugged in = %+v", listed)
+	}
+}
+
+/* A damaged keychain with a sealed profile still on disk must not be replaced,
+ * because that profile could only ever be opened by the key this file holds.
+ */
+func TestDamagedKeychainWithSealedProfilesRefusesReplacement(t *testing.T) {
+	store, dir, _ := newKeychainServer(t, 0x69)
+	h := &Handler{SSH: store}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	profile := []byte("kind = \"remote\"\nhost = \"sealed.example\"\nuser = \"ops\"\npassword = \"synthetic\"\n")
+	encrypt := true
+	if err := store.SaveWithMode("sealed", profile, sshconfig.SaveMode{Encrypt: &encrypt}); err != nil {
+		t.Fatalf("save sealed profile: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(configstore.EnvKEKVariable, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x45}, 32)))
-	locked, err := sshconfig.OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
+	path := dir + "/keys/config.keys"
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = locked.Close() })
-	h.SSH = locked
-	state := getConfigStorageStatus(t, mux)
-	if !state.Initialized || !state.Locked || state.ErrorCode != "keyring_authentication_failed" || len(state.Hosts) != 0 {
-		t.Fatalf("locked status = %+v", state)
-	}
-	// The encrypted host is locked and cannot be read.
-	if _, err := locked.ReadRaw("encrypted"); !errors.Is(err, configstore.ErrLocked) {
-		t.Fatalf("encrypted profile did not report locked: %v", err)
-	}
-	// Plaintext profile must load normally.
-	if _, err := locked.ReadRaw("plain"); err != nil {
-		t.Fatalf("plaintext profile failed on locked store: %v", err)
-	}
-	// The connections list succeeds (200), carrying the plaintext host and the
-	// marked locked host, rather than dragging the whole inventory down.
-	connsResp := request(http.MethodGet, "/api/connections", nil, http.StatusOK)
-	var conns struct {
-		Connections []struct {
-			Name    string `json:"name"`
-			Storage string `json:"storage"`
-		} `json:"connections"`
-	}
-	if err := json.Unmarshal(connsResp.Body.Bytes(), &conns); err != nil {
+	if err := os.WriteFile(path, raw[:len(raw)-8], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hasPlain, hasEnc := false, false
-	for _, c := range conns.Connections {
-		if c.Name == "plain" && c.Storage == "plaintext" { hasPlain = true }
-		if c.Name == "encrypted" && c.Storage == "encrypted" { hasEnc = true }
-	}
-	if !hasPlain || !hasEnc {
-		t.Fatalf("connections list under lock = %+v; want plain (plaintext) and encrypted (encrypted)", conns.Connections)
-	}
-	request(http.MethodPut, "/api/config-storage", map[string]bool{"encrypt_new": false}, http.StatusNotFound)
-	request(http.MethodPost, "/api/config-storage/recover", map[string]string{"password": "incorrect synthetic password"}, http.StatusBadRequest)
-	keysWrong, err := os.ReadFile(keyPath)
-	if err != nil || !bytes.Equal(keysWrong, keysBefore) {
-		t.Fatal("wrong Main Key replaced the existing keyring")
-	}
-	response := request(http.MethodPost, "/api/config-storage/recover", map[string]string{"password": main}, http.StatusOK)
-	if bytes.Contains(response.Body.Bytes(), []byte(main)) {
-		t.Fatal("recovery returned a secret in its status response")
-	}
-	after := getConfigStorageStatus(t, mux)
-	if after.Locked || !after.EncryptNew || after.MainKeyID != before.MainKeyID {
-		t.Fatalf("recovered status = %+v", after)
-	}
-	for _, name := range []string{"plain", "encrypted"} {
-		if raw, err := locked.ReadRaw(name); err != nil || !bytes.Equal(raw, profile) {
-			t.Fatalf("profile %s was not recovered: %v", name, err)
-		}
-	}
-	catalogAfter, err := os.ReadFile(catalogPath)
-	if err != nil || !bytes.Equal(catalogBefore, catalogAfter) {
-		t.Fatal("key-provider recovery changed the authenticated catalog")
-	}
-	if err := locked.Close(); err != nil {
-		t.Fatal(err)
-	}
-	restarted, err := sshconfig.OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
+	reopened, err := sshconfig.OpenConfiguredStore(dir)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("damaged keychain prevented startup: %v", err)
 	}
-	t.Cleanup(func() { _ = restarted.Close() })
-	if state, err := restarted.EncryptionStatus(); err != nil || state.Locked || !state.EncryptNew {
-		t.Fatalf("status after restart = %+v, error %v", state, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	damaged := &Handler{SSH: reopened}
+	fresh := http.NewServeMux()
+	damaged.Register(fresh)
+	rec := keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusConflict)
+	if !strings.Contains(rec.Body.String(), "keychain_seals_hosts") {
+		t.Fatalf("replacing a keychain that seals a host = %s; want keychain_seals_hosts", rec.Body.String())
 	}
 }
 
-func TestConfigStorageMainKeyEndpointsRejectCrossOriginRequests(t *testing.T) {
-	h := &Handler{SSH: sshconfig.NewStore(t.TempDir())}
+/* A damaged keychain with nothing behind it must have a button, not just a status
+ * line: the panel can report "broken" forever, but only this route lets the human
+ * move on. It replaces what POST /api/keychain does implicitly, and it must refuse
+ * the two cases where discarding is a loss rather than an escape.
+ */
+func TestDiscardKeychainIsTheExplicitExitForADamagedFile(t *testing.T) {
+	store, dir, _ := newKeychainServer(t, 0x6b)
+	h := &Handler{SSH: store}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	for _, path := range []string{"initialize", "recover", "unlock", "password"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/config-storage/"+path, bytes.NewBufferString(`{}`))
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+
+	/* A healthy keychain is not thrown away by this route: deleting keys you can
+	   still read is DELETE /api/keychain/{id}, with its own guards. */
+	rec := keychainCall(t, mux, http.MethodPost, "/api/config-storage/discard-keychain", `{}`, http.StatusConflict)
+	if !strings.Contains(rec.Body.String(), "keychain_readable") {
+		t.Fatalf("discarding a readable keychain = %s; want keychain_readable", rec.Body.String())
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := dir + "/keys/config.keys"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw[:len(raw)-8], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sshconfig.OpenConfiguredStore(dir)
+	if err != nil {
+		t.Fatalf("damaged keychain prevented startup: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	damaged := &Handler{SSH: reopened}
+	fresh := http.NewServeMux()
+	damaged.Register(fresh)
+
+	keychainCall(t, fresh, http.MethodPost, "/api/config-storage/discard-keychain", `{}`, http.StatusOK)
+	status := getConfigStorageStatus(t, fresh)
+	if status.ErrorCode != "" || status.Initialized || status.Keys != 0 {
+		t.Fatalf("status after discarding a damaged keychain = %+v", status)
+	}
+	/* And the panel must then be able to start over. */
+	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	if status := getConfigStorageStatus(t, fresh); status.ErrorCode != "" || !status.Initialized {
+		t.Fatalf("status after starting over = %+v", status)
+	}
+}
+
+/* The activation valve at the HTTP layer: a passphrase per key, one batch, and a
+ * refusal that names the key rather than a host.
+ */
+func TestActivationHTTPTakesOnePassphrasePerKey(t *testing.T) {
+	store, _, mux := newKeychainServer(t, 0x6a)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
+
+	guarded := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain",
+		`{"passphrase":"synthetic passphrase for tests"}`, http.StatusOK))
+	keyID := guarded.Keys[0].ID
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt",
+		`{"names":["alpha","beta"],"key":"`+keyID+`","passphrase":"synthetic passphrase for tests"}`, http.StatusOK)
+
+	// Both are active right after creation.
+	status := getConfigStorageStatus(t, mux)
+	for _, host := range status.Hosts {
+		if host.Name != "internal" && !host.Activated {
+			t.Fatalf("host %q = %+v; want activated after creation", host.Name, host)
+		}
+		if host.Name != "internal" && !host.Passphrase {
+			t.Fatalf("host %q does not report that its key has a passphrase", host.Name)
+		}
+	}
+
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/deactivate", `{"names":["alpha","beta"]}`, http.StatusOK)
+	for _, name := range []string{"alpha", "beta"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/connections/"+name, nil))
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "host_not_activated") {
+			t.Fatalf("reading %s while inactive = %d %s; want 409 host_not_activated", name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// One request, one passphrase, two hosts.
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/activate",
+		`{"names":["alpha","beta"],"passphrases":{"`+keyID+`":"synthetic passphrase for tests"}}`, http.StatusOK)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.ReadRaw(name); err != nil {
+			t.Fatalf("reading %s after activating: %v", name, err)
+		}
+	}
+
+	// A request that forgets the passphrase is refused, and says which key it needs.
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/deactivate", `{"names":["alpha","beta"]}`, http.StatusOK)
+	rec := keychainCall(t, mux, http.MethodPost, "/api/config-storage/activate",
+		`{"names":["alpha","beta"]}`, http.StatusConflict)
+	if !strings.Contains(rec.Body.String(), "passphrase_required") {
+		t.Fatalf("activating without the passphrase = %s; want passphrase_required", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), keyID[:8]) {
+		t.Fatalf("the refusal does not name the key %s: %s", keyID[:8], rec.Body.String())
+	}
+
+	// A wrong passphrase refuses the batch and names the key, never a host.
+	rec = keychainCall(t, mux, http.MethodPost, "/api/config-storage/activate",
+		`{"names":["alpha","beta"],"passphrases":{"`+keyID+`":"not the passphrase"}}`, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), "passphrase_incorrect") {
+		t.Fatalf("activating with a wrong passphrase = %s; want passphrase_incorrect", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "alpha") || strings.Contains(rec.Body.String(), "beta") {
+		t.Fatalf("a passphrase error named a host: %s", rec.Body.String())
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.ReadRaw(name); !errors.Is(err, configstore.ErrNotActivated) {
+			t.Fatalf("a refused batch activated %s: %v", name, err)
+		}
+	}
+}
+
+/* Masking is a display-layer switch: it changes what the list serializes and
+ * nothing else. §10.2
+ */
+func TestMaskingChangesSerializationOnly(t *testing.T) {
+	store, _, mux := newKeychainServer(t, 0x6b)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+
+	read := func(reveal bool) connectionSummary {
+		t.Helper()
+		path := "/api/connections"
+		if reveal {
+			path += "?reveal=true"
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Connections []connectionSummary `json:"connections"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range body.Connections {
+			if entry.Name == "alpha" {
+				return entry
+			}
+		}
+		t.Fatal("alpha is missing from the list")
+		return connectionSummary{}
+	}
+
+	unmasked := read(false)
+	if unmasked.Host != "host.example" || unmasked.User != "operator" {
+		t.Fatalf("list before masking = %+v", unmasked)
+	}
+	keychainCall(t, mux, http.MethodPut, "/api/config-storage/mask", `{"masked":true}`, http.StatusOK)
+
+	masked := read(false)
+	if masked.Host != maskFixedWidth || masked.User != maskFixedWidth {
+		t.Fatalf("masked list = %+v; want fixed-width dots", masked)
+	}
+	/* The port goes with them, and `masked` is what says so: a masked row that
+	   still printed `:2222` would leak which machine this is through the one field
+	   the mask did not cover. */
+	if masked.Port != 0 || !masked.Masked {
+		t.Fatalf("masked list kept the port or lost the flag: %+v", masked)
+	}
+	if masked.Storage != unmasked.Storage {
+		t.Fatalf("masking changed more than the address: %+v", masked)
+	}
+	// Connectivity and validation are untouched: the profile still loads.
+	if entry, err := store.Load("alpha"); err != nil || entry.Host != "host.example" {
+		t.Fatalf("masking changed what the profile means: %+v, %v", entry, err)
+	}
+	revealed := read(true)
+	if revealed.Host != "host.example" || revealed.User != "operator" {
+		t.Fatalf("revealed list = %+v", revealed)
+	}
+}
+
+/* The masking switch is a TOGGLE, and its state has to survive a round trip: on,
+ * off, on. The bug this locks down was the state never reaching the client at
+ * all — the file was written, `PUT` answered `{"masked":true}`, and every
+ * subsequent status read still said false, so the eye flipped back on the next
+ * paint and the list never changed.
+ */
+func TestMaskingTogglesOnOffOnAndSurvivesAStatusRead(t *testing.T) {
+	_, _, mux := newKeychainServer(t, 0x6d)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\nport = 2222\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+
+	masked := func() bool { return getConfigStorageStatus(t, mux).Masked }
+
+	if masked() {
+		t.Fatal("masking should start off")
+	}
+	for i, want := range []bool{true, false, true} {
+		keychainCall(t, mux, http.MethodPut, "/api/config-storage/mask",
+			fmt.Sprintf(`{"masked":%t}`, want), http.StatusOK)
+		/* Read it back through the status route, which is what the panel paints
+		   from — the response body of the PUT is not the source of truth. */
+		if got := masked(); got != want {
+			t.Fatalf("toggle %d: status reports masked=%t, want %t", i+1, got, want)
+		}
+	}
+}
+
+/* A store with NO keychain still has a mask. Hiding addresses is a property of
+ * what the page prints, not of whether encryption was ever enabled — and reading
+ * it only out of the repository made the switch look dead on a fresh install,
+ * which is exactly where a new user meets it first.
+ */
+func TestMaskingWorksBeforeAnyKeychainExists(t *testing.T) {
+	_, _, mux := newKeychainServer(t, 0x6e)
+
+	if getConfigStorageStatus(t, mux).Masked {
+		t.Fatal("masking should start off")
+	}
+	keychainCall(t, mux, http.MethodPut, "/api/config-storage/mask", `{"masked":true}`, http.StatusOK)
+	if !getConfigStorageStatus(t, mux).Masked {
+		t.Fatal("masking was accepted but the status still reports it off")
+	}
+	keychainCall(t, mux, http.MethodPut, "/api/config-storage/mask", `{"masked":false}`, http.StatusOK)
+	if getConfigStorageStatus(t, mux).Masked {
+		t.Fatal("masking did not turn back off")
+	}
+}
+
+/* Turning the valves is human-only: an Agent holding the MCP token must be refused
+ * with 403 (§7.2, §10.3).
+ */
+func TestKeychainValvesRefuseAgents(t *testing.T) {
+	_, _, mux := newKeychainServer(t, 0x6c)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keys := decodeKeychain(t, keychainCall(t, mux, http.MethodGet, "/api/keychain", "", http.StatusOK))
+	id := keys.Keys[0].ID
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/keychain", `{}`},
+		{http.MethodPost, "/api/keychain/" + id + "/plug", ""},
+		{http.MethodPost, "/api/keychain/" + id + "/unplug", ""},
+		{http.MethodGet, "/api/keychain/" + id + "/mnemonic", ""},
+		{http.MethodDelete, "/api/keychain/" + id, `{"backup_confirmed":true}`},
+		{http.MethodPost, "/api/config-storage/activate", `{"names":[]}`},
+		{http.MethodPost, "/api/config-storage/deactivate", `{"names":[]}`},
+	} {
+		req := httptest.NewRequest(request.method, request.path, bytes.NewBufferString(request.body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Origin", "https://foreign.example")
+		req.Header.Set("X-Termcp-Role", "agent")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusForbidden || rec.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("cross-origin %s response = %d", path, rec.Code)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s as an agent = %d %s; want 403", request.method, request.path, rec.Code, rec.Body.String())
 		}
-	}
-	req := httptest.NewRequest(http.MethodPost, "/api/config-storage/initialize", bytes.NewBufferString(`{}`))
-	req.Header.Set("Content-Type", "text/plain")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("non-JSON key initialization response = %d", rec.Code)
 	}
 }
 
-func TestConfigStorageDoesNotExposeBackupOrRandomRotation(t *testing.T) {
-	h := &Handler{SSH: sshconfig.NewStore(t.TempDir())}
-	mux := http.NewServeMux()
-	h.Register(mux)
-	for _, path := range []string{"backup", "rotate"} {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/config-storage/"+path, bytes.NewBufferString(`{}`)))
-		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("removed %s endpoint returned %d", path, rec.Code)
+/* Changing a passphrase over HTTP: the key keeps its id and its address, the hosts
+ * keep their names and their plaintext, and the OLD passphrase stops working while
+ * the new one opens every host the key seals.
+ *
+ * The route exists because rotating the key is the only other way to change a
+ * passphrase, and it changes the words too — which is more than the question asked.
+ */
+func TestChangingAPassphraseOverHTTPKeepsTheKey(t *testing.T) {
+	const old, next = "synthetic passphrase for tests", "another synthetic passphrase"
+	store, _, mux := newKeychainServer(t, 0x6b)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
+
+	guarded := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain",
+		`{"passphrase":"`+old+`","label":"work"}`, http.StatusOK))
+	keyID := guarded.Keys[0].ID
+	address := guarded.Keys[0].PublicKey
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt",
+		`{"names":["alpha","beta"],"key":"`+keyID+`","passphrase":"`+old+`"}`, http.StatusOK)
+
+	// A wrong current passphrase is refused before anything is written.
+	wrong := keychainCall(t, mux, http.MethodPost, "/api/keychain/"+keyID+"/passphrase",
+		`{"old":"not the passphrase","new":"`+next+`"}`, http.StatusBadRequest)
+	if !strings.Contains(wrong.Body.String(), "passphrase_incorrect") {
+		t.Fatalf("a wrong current passphrase = %s; want a passphrase error", wrong.Body.String())
+	}
+
+	changed := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain/"+keyID+"/passphrase",
+		`{"old":"`+old+`","new":"`+next+`"}`, http.StatusOK))
+	if len(changed.Keys) != 1 {
+		t.Fatalf("keychain = %+v; want the one key", changed.Keys)
+	}
+	if changed.Keys[0].ID != keyID || changed.Keys[0].PublicKey != address {
+		t.Fatalf("the key changed identity: %+v", changed.Keys[0])
+	}
+	if !changed.Keys[0].Passphrase {
+		t.Fatal("the key lost its passphrase flag")
+	}
+
+	// Both hosts still read, under the new passphrase only.
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/deactivate", `{"names":["alpha","beta"]}`, http.StatusOK)
+	stale := keychainCall(t, mux, http.MethodPost, "/api/config-storage/activate",
+		`{"names":["alpha","beta"],"passphrases":{"`+keyID+`":"`+old+`"}}`, http.StatusBadRequest)
+	if !strings.Contains(stale.Body.String(), "passphrase_incorrect") {
+		t.Fatalf("the old passphrase still activates the hosts: %s", stale.Body.String())
+	}
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/activate",
+		`{"names":["alpha","beta"],"passphrases":{"`+keyID+`":"`+next+`"}}`, http.StatusOK)
+	for _, name := range []string{"alpha", "beta"} {
+		got, err := store.ReadRaw(name)
+		if err != nil {
+			t.Fatalf("reading %s after the change: %v", name, err)
+		}
+		if string(got) != string(profile) {
+			t.Errorf("%s = %q, want the profile back", name, got)
 		}
 	}
 }

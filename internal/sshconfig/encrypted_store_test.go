@@ -77,71 +77,6 @@ func TestEncryptedStoreRoundTripTemporaryAndInternal(t *testing.T) {
 	}
 }
 
-func TestStoreRotatesMainKeyPreservingMixedProfileModes(t *testing.T) {
-	t.Setenv(configstore.EnvKEKVariable, environmentConfigKEK(0x35))
-	dir := t.TempDir()
-	store := NewStore(dir)
-	t.Cleanup(func() { _ = store.Close() })
-	provider := configstore.NewEnvProvider("")
-	if err := store.RotateMainKey(provider); !errors.Is(err, configstore.ErrNotInitialized) {
-		t.Fatalf("rotation before initialization = %v", err)
-	}
-	raw := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
-	if err := store.Save("plain", raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetNewProfileEncryption(true, provider); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save("encrypted", raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveWithOptions("temporary", raw, true); err != nil {
-		t.Fatal(err)
-	}
-	before, err := store.EncryptionStatus()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Callbacks may read state and must run after the Store lock is released.
-	store.SetOnChange(func() { _, _ = store.EncryptionStatus() })
-	if err := store.RotateMainKey(provider); err != nil {
-		t.Fatal(err)
-	}
-	after, err := store.EncryptionStatus()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before.MainKeyID == after.MainKeyID || len(after.MainKeyID) != 32 || after.RotationPending || !after.EncryptNew {
-		t.Fatalf("unexpected rotation status: %+v", after)
-	}
-	for name, expected := range map[string]string{
-		"plain": StoragePlaintext, "encrypted": StorageEncrypted, "temporary": StorageTemporary,
-	} {
-		if mode, err := store.StorageMode(name); err != nil || mode != expected {
-			t.Fatalf("%s mode = %q, error %v", name, mode, err)
-		}
-		if data, err := store.ReadRaw(name); err != nil || !bytes.Equal(data, raw) {
-			t.Fatalf("%s contents changed: %v", name, err)
-		}
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := OpenConfiguredStore(dir, provider)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	state, err := reopened.EncryptionStatus()
-	if err != nil || state.MainKeyID != after.MainKeyID || state.RotationPending {
-		t.Fatalf("restarted encryption status = %+v, error %v", state, err)
-	}
-	if _, err := reopened.Load("encrypted"); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestEncryptionDefaultsOffAndConvertsSelectedHosts(t *testing.T) {
 	t.Setenv(configstore.EnvKEKVariable, environmentConfigKEK(0x32))
 	dir := t.TempDir()
@@ -186,7 +121,7 @@ func TestEncryptionDefaultsOffAndConvertsSelectedHosts(t *testing.T) {
 		t.Fatalf("editing an existing plaintext host converted it to %q", mode)
 	}
 
-	results, err := store.EncryptProfiles([]string{"plain-existing"})
+	results, err := store.EncryptProfiles([]string{"plain-existing"}, configstore.ID{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,15 +207,22 @@ func TestEnabledEncryptionWithoutKeyringFailsClosed(t *testing.T) {
 	if err := repo.SetEncryptNew(true); err != nil {
 		t.Fatal(err)
 	}
+	/* One profile has to be sealed already: without an index, ciphertext on disk is
+	   the only thing that distinguishes "this store was encrypted" from "this store
+	   was never encrypted", and only the first one has a keychain to lose. */
+	if err := repo.Save("sealed", []byte("kind = \"remote\"\nhost = \"host.example\"\n")); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, "keys", "config.keys")); err != nil {
 		t.Fatal(err)
 	}
-	/* Losing the keyring must not take the instance down with it. The store comes
-	   back LOCKED: the encrypted profile is unreachable, plaintext profiles are
-	   untouched, and the operator still has a page to fix it from. */
+	/* Losing the keychain must not take the instance down with it. The store comes
+	   back with the fault recorded: the encrypted profile is unreachable,
+	   plaintext profiles are untouched, and the operator still has a page to act
+	   on it from. */
 	store, err := OpenConfiguredStore(dir, configstore.NewEnvProvider(""))
 	if err != nil {
 		t.Fatalf("missing keyring prevented startup: %v", err)
@@ -290,8 +232,8 @@ func TestEnabledEncryptionWithoutKeyringFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Locked {
-		t.Fatal("store with a lost keyring reported itself unlocked")
+	if status.Keys != 0 || status.ErrorCode != "keyring_missing" {
+		t.Fatalf("status = %+v; want no keys and the keyring_missing fault", status)
 	}
 	raw := []byte(`kind = "remote"
 host = "host.example"

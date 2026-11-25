@@ -2,11 +2,13 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/capability"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/session"
 	"github.com/open-mcp-ai/termcp/internal/sshclient"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
@@ -50,6 +52,28 @@ func (h *Handler) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	cfgName, ent, remote, err := h.resolveSSH(body.SSHConfig)
 	if err != nil {
+		/* An encrypted host whose key is not loaded is not a bad request the client
+		   can fix by editing the body: it is a state the operator changes in the
+		   keychain panel. Answer with a code so every surface — Web UI toast, API
+		   client — can say that in its own language instead of echoing an English
+		   sentence. */
+		if errors.Is(err, configstore.ErrKeyNotLoaded) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "key_locked",
+				"error": "This host is encrypted and the key that seals it is not loaded.",
+			})
+			return
+		}
+		/* Ciphertext whose key was deleted is not a body the client can fix either,
+		   and it is not the same problem as "load that key": no key will ever make it
+		   readable. Say that instead of echoing an English sentence. */
+		if sshconfig.IsOrphanedCiphertext(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"code":  "config_encryption_orphaned",
+				"error": "This host was encrypted with a key that has been deleted.",
+			})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
