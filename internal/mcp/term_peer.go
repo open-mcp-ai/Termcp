@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -73,10 +76,16 @@ func (s *Server) peerOf(stmt directive.Statement) (*jrpcHandle, string, *envelop
 			}
 		} else if idx, isIndex := directive.ChannelIndex(stmt.Key); isIndex {
 			connIndex = idx
-		} else if stmt.Key != "protocol" {
+		} else if !peerSubcommand(stmt.Kind, stmt.Key) {
+			// THE WORD AFTER THE ADDRESS MAY BE A SUBCOMMAND (`protocol`, `tools`), and
+			// it is accepted only where one exists: `@targetId` belongs to a browser, so
+			// `cdp:1@x` is an address while `mcp:1@x` is a mistake (refused below).
 			slot := badRequest(stmt, "`"+stmt.Target+" "+stmt.Kind+" "+stmt.Key+"` names nothing. "+
-				"An address is `<session> "+stmt.Kind+":<n>` (a connection) or `<session> "+stmt.Kind+
-				":<n>@<targetId>` (a page in it).")
+				"An address is `<session> "+stmt.Kind+":<n>` (a connection)"+pageSuffix(stmt.Kind)+
+				", and the words that may follow it are: "+strings.Join(peerSubcommands(stmt.Kind), ", ")+
+				".\n"+
+				"Write `"+stmt.Target+" "+stmt.Kind+":<n> "+stmt.Key+"` — the address comes first, and "+
+				"`"+stmt.Kind+":` with no number is the address too when there is exactly one connection.")
 			return nil, "", &slot
 		}
 	}
@@ -227,7 +236,10 @@ func (s *Server) peerChannel(ctx context.Context, stmt directive.Statement, win 
 	case "write":
 		sub = "send"
 	}
-	frame := strings.TrimSpace(stmt.Payload)
+	frame, frameBad := callFrameBytes(stmt)
+	if frameBad != nil {
+		return []envelope.Slot{*frameBad}
+	}
 
 	var h *jrpcHandle
 	index := ""
@@ -282,6 +294,128 @@ func (s *Server) peerChannel(ctx context.Context, stmt directive.Statement, win 
 	return []envelope.Slot{namePeerTimeout(callCtx, s.jrpcChannel(callCtx, out, win, h.kind, sub, []string{addr, frame}))}
 }
 
+// callFrameBytes is the frame this statement sends: the payload as written, or the bytes
+// of the file it names with `@<path>` (#354).
+//
+// WHY A PATH AND NOT ONLY A PAYLOAD. A frame is sliced out of the command line, and that
+// same line must also be one valid shell line — so a frame of a few KB, or one whose own
+// bytes contain the shell's quoting, has no spelling that satisfies both readers. A path
+// is a short word with no quotes in it, and its bytes are read AFTER the line is parsed,
+// so nothing between the caller and the peer can touch them.
+//
+// `@` CANNOT BE MISTAKEN FOR AN ADDRESS: a peer's `@<targetId>` is part of the ADDRESS
+// (`cdp:1@7D87`), which the parser has already consumed as the key by the time the
+// payload starts, and a JSON frame never begins with `@`.
+func callFrameBytes(stmt directive.Statement) (string, *envelope.Slot) {
+	frame := strings.TrimSpace(stmt.Payload)
+	// --file AND @<path> ARE TWO SPELLINGS OF ONE THING, so they are refused together
+	// when both are present: guessing which one the caller meant is how a frame is sent
+	// that nobody wrote (issue #354).
+	if flagPath, ok := stmt.Flag("file"); ok {
+		if frame != "" {
+			slot := badRequest(stmt, "`--file` and an inline frame are two different frames, and this call "+
+				"carries both.\nDrop one: `call <peer> --file "+flagPath+"` sends the file's bytes, or "+
+				"`call <peer> '<frame>'` sends the line's.")
+			return "", &slot
+		}
+		if strings.TrimSpace(flagPath) == "-" {
+			slot := badRequest(stmt, "`--file -` would read this process's standard input, and that is not a "+
+				"frame channel: under a stdio MCP transport fd 0 carries the protocol itself, and a frame read "+
+				"from it would eat the next request.\nWrite the frame to a file instead — "+
+				"`read <session> file <path> --raw | write internal file /tmp/frame.json` then "+
+				"`call <peer> --file /tmp/frame.json` — or pass it inline when it is short.")
+			return "", &slot
+		}
+		body, err := readFrameFile(flagPath)
+		if err != nil {
+			slot := badRequest(stmt, "cannot read the frame from "+flagPath+": "+err.Error()+"\n"+
+				"A --file frame is read on the host running termcp, so the path has to exist there.")
+			return "", &slot
+		}
+		var probe any
+		if err := json.Unmarshal([]byte(body), &probe); err != nil {
+			slot := badRequest(stmt, "the frame in "+flagPath+" is not JSON: "+err.Error()+"\n"+frameSpelling)
+			return "", &slot
+		}
+		return body, nil
+	}
+	path, isPath := frameFilePath(frame)
+	if !isPath {
+		return frame, nil
+	}
+	if path == "" {
+		slot := badRequest(stmt, "an @ frame names a path: `call <peer> @/tmp/frame.json`.\n"+
+			"The frame then travels as the file's bytes instead of as the line's, which is how a large "+
+			"frame or one full of quotes is sent without a quoting layer touching it.")
+		return "", &slot
+	}
+	body, err := readFrameFile(path)
+	if err != nil {
+		slot := badRequest(stmt, "cannot read the frame from "+path+": "+err.Error()+"\n"+
+			"An @<path> frame is read on the host running termcp, so the path has to exist there. "+
+			"Pass the frame inline when it is short: "+`call <peer> '{"method":"…"}'`)
+		return "", &slot
+	}
+	// THE FILE'S OWN BYTES ARE CHECKED HERE, so the refusal can name the PATH. The frame
+	// parser below would say "the frame is not JSON" and the caller would go back to the
+	// command line, which no longer holds those bytes.
+	var probe any
+	if err := json.Unmarshal([]byte(body), &probe); err != nil {
+		slot := badRequest(stmt, "the frame in "+path+" is not JSON: "+err.Error()+"\n"+frameSpelling)
+		return "", &slot
+	}
+	return body, nil
+}
+
+// frameFilePath reports the path a frame payload names with `@<path>`, and whether it
+// names one at all.
+//
+// QUOTING IS GROUPING HERE TOO: a path with a space in it is written in quotes, and the
+// one layer of them is peeled before the path is read — the same reading every other
+// frame spelling gets.
+func frameFilePath(frame string) (string, bool) {
+	switch {
+	case strings.HasPrefix(frame, "@"):
+		return strings.TrimSpace(frame[1:]), true
+	case strings.HasPrefix(frame, "'@"), strings.HasPrefix(frame, `"@`):
+		unquoted := strings.TrimSpace(unquoteWord(frame))
+		if strings.HasPrefix(unquoted, "@") {
+			return strings.TrimSpace(unquoted[1:]), true
+		}
+	}
+	return "", false
+}
+
+// maxFrameFileBytes bounds a frame read through `@<path>`.
+//
+// The path is the caller's and the bytes land in this process before they are sent, so
+// the read is bounded the way a peer's own frame buffer is (8 MiB). A file over the limit
+// is refused rather than truncated: half a JSON document is not a smaller frame.
+const maxFrameFileBytes = 8 << 20
+
+// readFrameFile reads one frame from disk, bounded and trimmed.
+//
+// A trailing newline is not part of a frame: an editor writes one, a JSON parser ignores
+// it, and trimming keeps the echoed payload the caller's bytes rather than their editor's.
+func readFrameFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil && info.IsDir() {
+		return "", fmt.Errorf("it is a directory, and a frame is one file's bytes")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxFrameFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) > maxFrameFileBytes {
+		return "", fmt.Errorf("it is larger than the %d MiB limit for a frame read from a file", maxFrameFileBytes>>20)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 // openPeer opens a peer through a session and returns the handle.
 func (s *Server) openPeer(ctx context.Context, stmt directive.Statement, win termArgs, kind string) []envelope.Slot {
 	out := stmt
@@ -305,4 +439,51 @@ func namePeerTimeout(ctx context.Context, slot envelope.Slot) envelope.Slot {
 			"give the call a larger `timeout` if this method needs longer, or use `--send` for fire-and-forget."
 	}
 	return slot
+}
+
+// peerSubcommands lists the words that may follow an address of this kind, before the
+// address itself is resolved.
+//
+// IT IS A FUNCTION OF THE KIND, not one shared list: `protocol` reads a document only a
+// browser publishes, and `tools` lists a table only an MCP peer has. Answering "tools"
+// for `cdp` would send the caller to a subcommand that cannot exist, and the refusal it
+// then reads blames the address.
+//
+// `tools` WAS MISSING FROM THE WHITELIST, and the cost was invisible: the word reached
+// this check, was refused as part of the address, and the branch that implements it
+// (term_directives.go: `mcp tools` and `mcp:1 tools` in the same two positions) could
+// never be reached — while the help pages, the per-turn instructions and the repo's own
+// agent docs all taught `get <session> mcp tools`. Documented, implemented, unreachable
+// (#356).
+func peerSubcommands(kind string) []string {
+	switch kind {
+	case "mcp":
+		return []string{"tools"}
+	case "cdp":
+		return []string{"protocol"}
+	default:
+		// jrpc is the raw frame peer: it has no self-describing table to read, so the
+		// address is the whole grammar and the list is empty rather than invented.
+		return nil
+	}
+}
+
+// peerSubcommand reports whether word is one of them. An empty list accepts nothing,
+// which is the correct grammar for a peer whose only address is its handle.
+func peerSubcommand(kind, word string) bool {
+	for _, s := range peerSubcommands(kind) {
+		if s == word {
+			return true
+		}
+	}
+	return false
+}
+
+// pageSuffix names the `@targetId` form where it exists. Only a browser has pages, and
+// printing it for `mcp` would teach an address the next call refuses.
+func pageSuffix(kind string) string {
+	if kind == "cdp" {
+		return " or `<session> " + kind + ":<n>@<targetId>` (a page in it)"
+	}
+	return ""
 }

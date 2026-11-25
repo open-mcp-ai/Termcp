@@ -130,20 +130,31 @@ var ops = []Op{
 		// becomes a stray positional argument and the statement still reaches the
 		// container. A declared kind is recognised, and the dispatcher's default branch
 		// then answers with what to write instead.
-		Kinds:     []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
-		Flags:     []string{"grace:number", "forward-id", "channel", "later"},
-		Valueless: []string{"later"},
+		Kinds: []string{"forward", "mcp", "cdp", "jrpc", "file", "task", "ext"},
+		// --index and --all are the two SPELLINGS OF A MULTI-TARGET CLOSE (#341):
+		// `close a1f3 --index 1,2,3` names channels of one session, `close a1f3 --all`
+		// names the container. Both are explicit and countable — neither can turn a
+		// channel target into a session one, which is the trap #199 was about.
+		Flags:     []string{"grace:number", "forward-id", "channel", "later", "index", "all"},
+		Valueless: []string{"later", "all"},
 		RetiredFlags: map[string]string{
 			"force": "--force is gone. `close` stops and keeps the record, `rm` erases it.",
 		},
 		Usage:  "close <session> [<index>]   |   close <peer>   |   close ext <name> [<channel>]",
 		Detail: closeDetail},
-	{Name: "rm", Kind: KindFlags, Target: true, NoPositional: true, TargetKind: TargetSession,
-		Kinds:     []string{"file", "host", "ext", "alias"},
-		Flags:     []string{"force", "dry-run"},
-		Valueless: []string{"force", "dry-run"},
-		Usage:     "rm <session>   |   rm <session> file <path>   |   rm host|ext|alias <name>",
-		Detail:    rmDetail},
+	// TargetOptional: `rm --dead` names its targets by STATE rather than by name, and
+	// a verb that required a target could not say it. `rm` with neither a target nor
+	// --dead is refused by the handler, which can list the forms.
+	{Name: "rm", Kind: KindFlags, Target: true, TargetOptional: true, NoPositional: true, TargetKind: TargetSession,
+		Kinds: []string{"file", "host", "ext", "alias"},
+		// --dead is the archive sweep (#339): every session that has ENDED, and only
+		// those. A running session is never swept, which is why --force has no power
+		// over this flag.
+		Flags:     []string{"force", "dry-run", "dead"},
+		Valueless: []string{"force", "dry-run", "dead"},
+		Usage: "rm <session>[,<session>…]   |   rm --dead [--dry-run]   |   " +
+			"rm <session> file <path>   |   rm host|ext|alias <name>",
+		Detail: rmDetail},
 
 	// --- inside a channel ---
 
@@ -206,8 +217,12 @@ var ops = []Op{
 	// --- a peer: one call, or the manual send/recv pair ---
 
 	{Name: "call", Kind: KindPayload, PayloadSpan: SpanVerbatim, Target: true,
-		Kinds:     []string{"cdp", "mcp", "jrpc"},
-		Flags:     []string{"send", "json"},
+		Kinds: []string{"cdp", "mcp", "jrpc"},
+		// --file NAMES THE FRAME THE WAY @<path> DOES, in the spelling a caller reaches
+		// for first: `call <peer> --file /tmp/frame.json` (issue #354). Both forms read
+		// the bytes on the host running termcp, after the line is parsed, so a large
+		// frame or one full of quotes never passes through a quoting layer.
+		Flags:     []string{"send", "json", "file"},
 		Valueless: []string{"send", "json"},
 		Usage:     "call <session> mcp:<n> <tool> [<json-args>]   |   call <session> cdp|mcp|jrpc[:N][@target] [--send] <frame>   |   call <channel> <frame>",
 		Detail:    callDetail},
@@ -1029,8 +1044,8 @@ const getDetail = `Describe one node: a session, one of its channels, or a peer.
   get a1f3 cdp:1@<id>       one tab: target, url, enabled domains
   get a1f3 cdp:1 protocol   the browser's OWN command list (the live /json/protocol)
   get a1f3 cdp:1 protocol Page   one domain's commands and their parameters
-  get a1f3 mcp tools        list tools offered by a mounted MCP peer
-  get a1f3 mcp tools search inspect input schema for one tool
+  get a1f3 mcp:1 tools        list tools offered by a mounted MCP peer
+  get a1f3 mcp:1 tools search inspect input schema for one tool
   get task task_9f2c11ab    one background transfer, waiting up to the window
   get use:<host> file /p   metadata for one path on a host, no session needed
 
@@ -1065,9 +1080,13 @@ Peers speak different protocols; call routes by the peer's kind:
 
 STANDARD USAGE:
   # Calling an MCP tool directly (the common case):
-  get  internal mcp tools                   list available tools on this peer
-  get  internal mcp tools search            show one tool's input schema
+  get  internal mcp:1 tools                 list available tools on this peer
+  get  internal mcp:1 tools search          show one tool's input schema
   call internal mcp:1 search {"query":"error"}  invoke a tool and get its text (args optional)
+
+  The :1 is the connection number, and it is part of the address: "mcp" alone works
+  only while the session has exactly one MCP peer, and stops working the moment a
+  second one is mounted. Copy the address "ls ext" prints rather than retyping it.
 
   # Driving a browser through CDP:
   call internal cdp:1 {"method":"Target.getTargets"}
@@ -1076,6 +1095,21 @@ STANDARD USAGE:
 LOW-LEVEL USAGE (deliberate raw frame on an MCP/JRPC peer):
   call internal mcp:1 '{"jsonrpc":"2.0","id":1,"method":"ping"}'
   call internal jrpc:1 '{"jsonrpc":"2.0","id":1,"method":"custom_method"}'
+
+A quote mark inside a single-quoted frame is spelled with the shell's splice — close the
+quotes, spell the quote, reopen them:
+  call internal cdp:1 '{"method":"Runtime.evaluate","params":{"expression":"document.title.includes('\''X'\'')"}}'
+The bytes inside a frame are JSON, so JSON's escapes are the only ones that apply: " inside
+a string is written \", a backslash is \\, and \' is not JSON at all.
+
+FRAME FROM A FILE (large frames, or frames whose bytes would need quoting):
+  call internal cdp:1 @/tmp/frame.json
+  call internal mcp:1 @/tmp/frame.json
+An @<path> payload is a path, not a frame: the bytes are read on the host running termcp
+after the line is parsed, so no quoting layer touches them and the line's length stops
+being a limit (8 MiB). The file must hold one JSON frame; a JSON error names the file
+instead of the command line. There is no stdin form: a frame on stdin would be a pipeline
+(read … | call …), and call takes its bytes from the line or from a file.
 
 FLAGS:
   --send       fire-and-forget: does not wait for a reply (answers arrive on read <peer>).
@@ -1445,10 +1479,14 @@ MOUNTING AN MCP PEER:
   open <session> --argv my-mcp-server        run a stdio MCP server
 
 CALLING TOOLS (preferred):
-  get  <session> mcp tools                     list tools offered by this peer
-  get  <session> mcp tools <tool>              inspect parameters for one tool
-  call <session> mcp:1 <tool> {"arg":"val"}    invoke tool directly and get text
-  call <session> mcp:1 <tool> --json           invoke tool and keep raw JSON
+  get  <session> mcp:<n> tools                 list tools offered by this peer
+  get  <session> mcp:<n> tools <tool>          inspect parameters for one tool
+  call <session> mcp:<n> <tool> {"arg":"val"}  invoke tool directly and get text
+  call <session> mcp:<n> <tool> --json         invoke tool and keep raw JSON
+
+<n> is the connection number from "ls <session> mcp" (or the "mcp:N" address "ls ext"
+prints for a mounted extension). Leaving it out is accepted while the session has
+exactly one MCP peer and refused with the live list as soon as it has two.
 
 RAW PROTOCOL (when not calling a tool):
   call <session> mcp:1 '{"method":"ping"}'     raw JSON-RPC request
@@ -1545,6 +1583,22 @@ close <session>:<index>   stops that CHANNEL. Other channels and the connection
 close <session>           stops the whole SESSION: every channel ends, the
                           transport drops, and the entry stays in the archive as
                           exited with its output still readable.
+
+SEVERAL TARGETS IN ONE CALL. A task that connected to five machines leaves five
+sessions, and closing them one at a time is five round trips:
+
+  close a1f3:1,b2c4:1,b2c4:2   each address closed as written, one reply slot each
+  close a1f3 --index 1,2,3     those channels OF a1f3
+  close a1f3 --all             the whole session (the same thing close a1f3 does)
+
+EACH TARGET IS ANSWERED SEPARATELY, in the order written, and each slot carries a
+"Batch:" header naming the address it belongs to. A target that no longer resolves
+does not stop the ones beside it and does not undo them — what closed stays closed.
+
+--all ON A CHANNEL HANDLE IS REFUSED, not upgraded: close a1f3:1 --all would have to
+close the session that channel belongs to, taking every other channel with it, and
+that is the widening a caller naming one channel did not ask for. The refusal names
+close a1f3, which says what it does.
 
 --grace N (sessions only) is how long the process gets to exit after SIGTERM
 before the transport is closed anyway. YOU DO NOT HAVE TO PASS IT: omitted means
@@ -1668,6 +1722,23 @@ session is left untouched, so the guard costs one extra word rather than a mista
   rm <session>              a stopped session, no ceremony
   rm <session> --force      a running one; its channels and forwards are released first
   rm <session> --dry-run    say what would be erased, erase nothing
+  rm a1f3,b2c4,c5d6         SEVERAL sessions, one slot each, in the order written
+  rm --dead                 every session that has ENDED — the archive sweep
+  rm --dead --dry-run       the same list, erased nothing
+
+ONE CALL FOR THE WHOLE ARCHIVE. A finished task usually leaves five or six dead
+sessions behind, and erasing them one at a time is five or six round trips. rm --dead
+clears exactly the entries that have ended (any status other than running) and answers
+one line per session plus a count, so a partial failure is still attributable to an id.
+
+--dead NEVER TAKES A LIVE SESSION, and --force does not change that: force erases a
+running session the caller NAMED, while --dead names its targets by STATE. Combining
+them is refused, because the pair reads as "the archive, and whatever else is running".
+To erase one live session, name it.
+
+A COMMA LIST IS NOT ALL-OR-NOTHING. Each entry is erased independently and answered
+with its own status line: a running session in the list is refused with 409 (and says
+so) while the stopped ones beside it are erased. What succeeded stays succeeded.
 
 --dry-run is the cautious call, and it comes first: it is answered even for a RUNNING
 session, because that is exactly when a caller wants to ask before passing --force.

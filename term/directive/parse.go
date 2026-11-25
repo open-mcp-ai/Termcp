@@ -118,7 +118,7 @@ func ParseGrammar(src string, sub Subst, g *Grammar) (*File, error) {
 	parser := syntax.NewParser()
 	file, err := parser.Parse(strings.NewReader(src), "")
 	if err != nil {
-		return nil, &Error{Msg: "cannot parse cmd: " + err.Error()}
+		return nil, &Error{Msg: "cannot parse cmd: " + err.Error() + quoteLayerHint(src, g)}
 	}
 	// THE FIRST PASS'S OFFSETS ARE NOT REUSED: a raw value is a sentinel of a
 	// different length, so they no longer address the same bytes. Nothing after the
@@ -567,7 +567,57 @@ func mustLiteralWord(src string, w *syntax.Word) string {
 
 // shellSingleQuote renders a value as a single-quoted shell word.
 func shellSingleQuote(v string) string {
-	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
+	return "'" + strings.ReplaceAll(v, "'", quoteSplice) + "'"
+}
+
+// quoteSplice is the shell's only way to spell one single quote INSIDE a
+// single-quoted word: close the quotes, spell the quote, reopen them. The double-quoted
+// spelling is the same move with a different delimiter in the middle.
+const (
+	quoteSplice    = `'\''`
+	quoteSpliceAlt = `'"'"'`
+)
+
+// payloadText slices a payload out of the source, reading the one spelling the SHELL
+// itself joins (#354).
+//
+// THE BYTES COME FIRST. A payload is a slice of the source rather than a word rebuilt
+// from the parse, because a frame has spaces and quotes of its own and neither of those
+// is this language's to interpret: `call <peer> {"a":"b c"}` needs no quoting at all.
+//
+// A POSIX QUOTE SPLICE IS THE ONE EXCEPTION, and it is forced by the two readers of this
+// line. Closing the single quotes, spelling one quote and reopening them is the only way a
+// shell can put a quote mark inside single quotes; the slice would then carry a
+// backslash-quote, and a frame that reaches json.Unmarshal with that in it is invalid
+// there — JSON has no such escape. So the splice is read here, the way the shell reads it,
+// and the outer grouping quotes stay for the layer that peels them:
+//
+//	call p cdp:1 '{"e":"it'\''s"}'   payload  '{"e":"it's"}'
+//
+// ONLY A VERBATIM PAYLOAD IS READ THIS WAY. A shell line's payload goes to a terminal as
+// written, and rewriting it here would be this layer evaluating the shell it does not
+// evaluate.
+func payloadText(raw string, op Op) string {
+	if op.payloadSpanMode() != SpanVerbatim {
+		return raw
+	}
+	return readQuoteSplices(raw)
+}
+
+// readQuoteSplices joins the POSIX spellings of a quote inside single quotes.
+//
+// THE GUARD IS THE OUTER QUOTES: a splice is only a splice inside a single-quoted word,
+// and a bare frame that happens to contain those bytes is copied untouched — its quotes
+// are JSON's, not the shell's.
+func readQuoteSplices(raw string) string {
+	if len(raw) < 4 || raw[0] != '\'' || raw[len(raw)-1] != '\'' {
+		return raw
+	}
+	if !strings.Contains(raw, quoteSplice) && !strings.Contains(raw, quoteSpliceAlt) {
+		return raw
+	}
+	joined := strings.ReplaceAll(raw, quoteSplice, "'")
+	return strings.ReplaceAll(joined, quoteSpliceAlt, "'")
 }
 
 // isSentinel reports whether a value is still a raw hole waiting to be filled.
@@ -1353,7 +1403,7 @@ func parseStatement(src string, stmt *syntax.Stmt, holes *sentinelTable, g *Gram
 				Usage: op.Usage,
 			}
 		}
-		out.Payload = src[start:end]
+		out.Payload = payloadText(src[start:end], op)
 
 	case KindFlags:
 		for i := 0; i < len(rest); i++ {
@@ -1577,4 +1627,41 @@ func pipeRuleMsg(g *Grammar, word string) string {
 		"`" + src + " … | " + sink + " …` copies bytes from one node to another, and it is the only " +
 		"pipeline this language has — `" + src + " | " + word + "` is not a pipe.\n" +
 		shellPipeAdvice(g)
+}
+
+// quoteLayerHint explains a QUOTING failure when the verb was one whose payload is
+// shell-neutral bytes (issue #354).
+//
+// The failure it answers is the one a caller cannot diagnose from the message: a frame
+// is a JSON document, JSON does not escape an apostrophe, and yet typing one inside a
+// single-quoted frame produces "reached EOF without closing quote" — a complaint about
+// the SHELL's quoting, from a verb whose payload the shell is not supposed to read. The
+// caller then tries `\'`, which POSIX reads as "close, escaped quote, reopen": the
+// apostrophe becomes a splice and the JSON that reaches the peer is invalid.
+//
+// WHAT THE HINT DOES NOT DO IS GUESS WHAT THE CALLER MEANT. It names the three
+// spellings that work — the POSIX splice that this parser already reassembles, a
+// double-quoted frame, and a frame read from a file — and leaves the choice alone.
+func quoteLayerHint(src string, g *Grammar) string {
+	if !strings.ContainsAny(src, "'\"") {
+		return ""
+	}
+	// WHICH VERB IS THIS? The first word is enough: the parse failed, so there is no
+	// statement to ask, and the caller's own first word is what identifies the intent.
+	fields := strings.Fields(strings.TrimLeft(src, " \t"))
+	if len(fields) == 0 {
+		return ""
+	}
+	op, known := g.Lookup(fields[0])
+	if !known || op.PayloadSpan != SpanVerbatim {
+		return ""
+	}
+	return "\n" + op.Name + " takes a VERBATIM payload — the frame is read as bytes, not as shell text, so " +
+		"its own JSON rules are the only ones that apply and `'` inside it needs no escaping. Three " +
+		"spellings work, in order of how little they ask of the quoting layer:\n" +
+		"  read it from a file      " + op.Name + " <peer> --file /tmp/frame.json\n" +
+		"  single quotes, spliced   " + op.Name + " <peer> '{\"text\":\"it'\\''s\"}'\n" +
+		"  double quotes, escaped   " + op.Name + " <peer> \"{\\\"text\\\":\\\"it's\\\"}\"\n" +
+		"Writing \\' inside single quotes is what fails: POSIX ends the quoted run there, and the bytes that " +
+		"reach the peer are not JSON."
 }

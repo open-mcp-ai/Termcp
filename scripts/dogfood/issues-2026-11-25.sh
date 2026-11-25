@@ -195,6 +195,127 @@ mv "$EMB_DIR" "$WORK/embedder-src"
 check "#352 下游无 pipe 的词汇不说 read | write" "$emb" "no verb here pipes into another"
 check_not "#352 下游报错里不出现 read" "$emb" "read | write is the only"
 
+# ---------------------------------------------------------------------------
+# #356 needs a real MCP peer. This instance serves /stream itself, so the peer is a
+# second mount of the same server: no network, no fixture, and the tool table is real.
+say "#356 mcp tools 地址与可复制示例"
+out=$(term "open $SID mcp http://127.0.0.1:$PORT/stream")
+check "#356 挂一个 MCP peer" "$out" '"code":200'
+check "#356 挂载回复给出 mcp:1 句柄" "$out" 'mcp:1'
+out=$(term "get $SID mcp:1 tools")
+check "#356 带编号的地址可列工具" "$out" '"code":200'
+out=$(term "get $SID mcp tools")
+check "#356 文档教的 mcp tools（不带编号）现在也通" "$out" '"code":200'
+check "#356 两种写法给同一张表" "$out" "tool(s) on $SID mcp:1"
+out=$(term "get $SID mcp:1")
+b=$(body "$out")
+check "#356 get 到 peer 本身不 panic" "$out" '"code":200'
+check_not "#356 没有 internal_error" "$out" 'internal_error'
+check "#356 并指出下一步是 tools" "$b" 'tools'
+out=$(term "get $SID mcp:1 bogus")
+check "#356 认不出的词按 400 拒绝" "$out" '"code":400'
+check "#356 拒绝时点名 tools" "$out" 'tools'
+check_not "#356 不再静默返回描述" "$out" '"code":200'
+# The body is read decoded: the JSON escapes `<` and `>` as \u003c/\u003e, and a
+# check on the raw reply would be testing the escaper rather than the text.
+out=$(term "help get"); b=$(body "$out")
+check "#356 help get 用真地址形态" "$b" 'mcp:1 tools'
+check_not "#356 help get 不再教不带编号的 mcp tools" "$b" 'a1f3 mcp tools'
+out=$(term "help call"); b=$(body "$out")
+check "#356 help call 用真地址形态" "$b" 'mcp:1 tools'
+out=$(term "help mcp"); b=$(body "$out")
+check "#356 help mcp 用真地址形态" "$b" 'mcp:<n> tools'
+check "#356 并说明编号可以省略的条件" "$b" 'exactly one MCP peer'
+out=$(term "ls $SID mcp")
+check "#356 ls mcp 印出可复制的句柄" "$out" "$SID mcp:1"
+
+# `ls ext` 的 next 行：装一个扩展并打开，表里就该给出可复制的调用。
+out=$(term "create ext self --target internal --url http://127.0.0.1:$PORT/stream")
+check "#356 创建一个扩展" "$out" '"code":200'
+out=$(term "open ext self")
+check "#356 打开扩展" "$out" '"code":200'
+out=$(term "ls ext"); b=$(body "$out")
+check "#356 挂载后的行给一行 next 调用" "$b" '→ get'
+check "#356 next 行用真地址而不是占位符" "$b" 'mcp:1 tools'
+check "#356 表尾一行 next" "$b" 'next: get'
+check_not "#356 占位符 <peer> 不再出现" "$b" '<peer>'
+# 未挂载的行不给 next：那一行只有名字本身，重复四十遍会把有地址的行埋掉。
+out=$(term "create ext idle-one --target internal --url http://127.0.0.1:$PORT/stream")
+check "#356 再建一个扩展" "$out" '"code":200'
+out=$(term "ls ext"); b=$(body "$out")
+check_not "#356 未挂载的行不重复打印 open ext" "$b" '→ open ext idle-one'
+check "#356 已挂载的行仍然有 next" "$b" '→ get' 
+
+# ---------------------------------------------------------------------------
+say "#341 close 批量"
+A=$(new_session); B=$(new_session); C=$(new_session)
+out=$(term "open $A --argv sh -c 'sleep 60'"); check "#341 准备第二个通道" "$out" '"code":200'
+out=$(term "open $A --argv sh -c 'sleep 60'"); check "#341 准备第三个通道" "$out" '"code":200'
+out=$(term "close $A:2,$A:3")
+check "#341 一次关两个通道" "$out" '"code":204'
+check "#341 每个槽点出自己关的是谁" "$out" "\"Batch\":\"$A:2\""
+check "#341 第二个槽也一样" "$out" "\"Batch\":\"$A:3\""
+check_not "#341 仍然活着" "$out" 'running'
+out=$(term "close $A:1,nosuch:9")
+check "#341 失败的那条给出 404" "$out" '"code":404'
+check "#341 成功的那条不被回滚" "$out" '"code":204'
+out=$(term "close $B --index 1")
+check "#341 --index 指出单个通道" "$out" "$B:1"
+out=$(term "close $B:1 --all")
+check "#341 --all 落在通道上被拒绝" "$out" '"code":400'
+check "#341 并给出正确写法" "$out" "close $B"
+out=$(term "close $C --all")
+check "#341 --all 落在会话上就是关整个会话" "$out" '"code":204'
+out=$(term "close $C:1 --index 1")
+check "#341 --index 落在通道上被拒绝" "$out" '"code":400'
+
+say "#339 rm 批量与归档清空"
+D=$(new_session); E=$(new_session)
+out=$(term "close $D"); check "#339 先结束一个会话" "$out" '"code":204'
+out=$(term "rm $D,$E")
+check "#339 死的那条被清" "$out" '"code":204'
+check "#339 活的那条被拒绝" "$out" 'session_running'
+check "#339 两条各自成槽" "$out" "\"Batch\":\"$E\""
+out=$(term "rm --dead --dry-run")
+check "#339 --dead --dry-run 只预告" "$out" 'Dry-Run'
+check "#339 预告里没有已清的 D" "$out" '"code":200'
+out=$(term "rm --dead --force")
+check "#339 --force 不能用在 --dead 上" "$out" '"code":400'
+check "#339 并说明 --dead 不动活会话" "$out" 'never touches a live session'
+out=$(term "rm --dead")
+check "#339 一次清空归档" "$out" '"code":200'
+check "#339 清空归档不影响活会话" "$out" '0 failed'
+# 会话活着时 `ls` 印的是它的通道地址（`<session>:1`），不是裸 id，所以按前缀断言。
+out=$(term "ls"); b=$(body "$out")
+check "#339 运行中的会话还在" "$b" "$E:1"
+check_not "#339 已清的 D 不在列表里" "$b" "$D"
+
+# ---------------------------------------------------------------------------
+say "#354 call 的 frame 表达力"
+printf '{"jsonrpc":"2.0","id":1,"method":"ping"}' > "$WORK/frame.json"
+out=$(term "call $SID mcp:1 --file $WORK/frame.json")
+check "#354 --file 从文件发 frame" "$out" '"code":200'
+check "#354 frame 真的发出去了" "$(body "$out")" '"id":1'
+out=$(term "call $SID mcp:1 @$WORK/frame.json")
+check "#354 @path 是 --file 的短写法" "$out" '"code":200'
+out=$(term "call $SID mcp:1 --file $WORK/frame.json '{\"a\":1}'")
+check "#354 --file 与内联 frame 同时给被拒绝" "$out" '"code":400'
+check "#354 并说明该丢哪个" "$out" 'two different frames'
+out=$(term "call $SID mcp:1 --file -")
+check "#354 --file - 被拒绝并说明原因" "$out" '"code":400'
+check "#354 指出 stdin 是协议通道" "$out" 'standard input'
+out=$(term "call $SID mcp:1 --file $WORK/nope.json")
+check "#354 文件不存在时点名路径" "$out" '"code":400'
+check "#354 并说明路径在哪台机器上" "$out" 'running termcp'
+# 撇号：POSIX 拼接在 verbatim payload 里被还原成一个引号。
+out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it'\\''s\"}}'")
+check "#354 单引号里的撇号（拼接写法）能发出去" "$out" '"code":200'
+# 写错的转义要指向真正的那一层，并给出三种可行写法。
+out=$(term "call $SID mcp:1 '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\",\"params\":{\"n\":\"it\\'s\"}}'")
+check "#354 反斜杠撇号被拒绝" "$out" '"code":400'
+check "#354 报错说明 payload 是 verbatim" "$out" 'VERBATIM payload'
+check "#354 并给出 --file 的出路" "$out" '--file /tmp/frame.json'
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

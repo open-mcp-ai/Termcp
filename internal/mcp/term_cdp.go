@@ -347,6 +347,14 @@ func (s *Server) cdpTargets(ctx context.Context, h *jrpcHandle) ([]cdpTarget, er
 // cdpDescribe implements `get <peer>` and `get <peer>:N`.
 func (s *Server) cdpDescribe(stmt directive.Statement, h *jrpcHandle, target string) envelope.Slot {
 	handle := peerAddress(h.sessionID, h.kind, h.index)
+	// A NON-BROWSER PEER HAS NO PAGES, and h.cdp is nil for it. `get <session> mcp:1`
+	// with no subcommand used to reach this function and dereference that nil: the
+	// caller saw internal_error, the log said "invalid memory address or nil pointer
+	// dereference", and the one thing it could have been told — "say what you want
+	// from this peer, e.g. `tools`" — was not said (#356).
+	if h.cdp == nil {
+		return s.describeFramePeer(stmt, h)
+	}
 	if target == "" {
 		var b strings.Builder
 		b.WriteString(handle + "  " + h.ch.URL() + "  (" + h.ch.Transport().String() + ")\n")
@@ -1054,3 +1062,29 @@ func (s *Server) pageFrame(stmt directive.Statement, h *jrpcHandle, n int64, off
 // inlinePageBytes is the size of one page when the caller did not ask for a size.
 // It is the same number the receipt previews, so "first 4 KB" and "one page" agree.
 const inlinePageBytes = 4096
+
+// describeFramePeer answers `get <peer>` for a peer that has no pages: an MCP endpoint or
+// a raw JSON-RPC channel.
+//
+// IT NAMES THE NEXT CALL, because the handle is not self-describing: an mcp peer's whole
+// vocabulary lives behind `tools`, and a caller that reads only "here is the URL" has to
+// guess the word. The guess it makes is `call <peer> tools`, which fails (6/6 in the
+// report behind #356).
+func (s *Server) describeFramePeer(stmt directive.Statement, h *jrpcHandle) envelope.Slot {
+	handle := peerAddress(h.sessionID, h.kind, h.index)
+	var b strings.Builder
+	b.WriteString(handle + "  " + h.ch.URL() + "  (" + h.ch.Transport().String() + ")\n")
+	stats := h.ch.Latest()
+	b.WriteString(fmt.Sprintf("frames received: %d  (read --since N pages the history)\n", stats))
+	if h.kind == "mcp" {
+		b.WriteString("\nthis peer answers MCP: its tool table is one call away —\n" +
+			"  get  " + handle + " tools            names, one per line\n" +
+			"  get  " + handle + " tools <name>     that tool's full input schema\n" +
+			"  call " + handle + " <name> {json}   run it (the tool name, not the word tools)\n")
+	} else {
+		b.WriteString("\nthis is a raw frame channel: send one JSON-RPC frame and read the reply.\n" +
+			"  call " + handle + " '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}'\n" +
+			"  read " + handle + " --frame          the frames that arrived since your last read\n")
+	}
+	return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path, "Latest": fmt.Sprint(stats)}, Body: b.String()}
+}

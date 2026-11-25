@@ -616,20 +616,48 @@ func parseJRPCFrame(stmt directive.Statement, rest []string) (map[string]any, *e
 	}
 	var frame map[string]any
 	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
-		return nil, ptrSlot(badRequest(stmt, "the frame is not JSON: "+err.Error()+"\n"+frameSpelling))
+		return nil, ptrSlot(badRequest(stmt, "the frame is not JSON: "+err.Error()+"\n"+frameSpelling+frameJSONHint(err)))
 	}
 	return frame, nil
 }
 
-// frameSpelling is the one sentence that turns "invalid character" into a fix.
+// frameSpelling is the paragraph that turns "invalid character" into a fix.
 //
-// A JSON body is full of double quotes, so the instinct is to wrap it in double
-// quotes and escape the ones inside — which is what a shell would need and this
-// layer does not do: quoting here groups the line into one word and is then
-// removed, one layer, with the bytes inside left alone. The escaped spelling
-// therefore arrives at the parser as backslashes and is refused for it.
+// TWO LAYERS ARE NAMED IN IT because the mistake is always one of them being confused
+// for the other: grouping (this line's, and only grouping) and escaping (JSON's, and
+// JSON has no `\'`). It also names the third way out — a frame in a file — because the
+// callers who need it are exactly the ones who hit the first two (#354).
 const frameSpelling = "A frame is passed bare or in single quotes — quoting here only groups the line, " +
-	"it does not escape: `call <peer> '{\"method\":\"tools/list\"}'`."
+	"it does not escape: `call <peer> '{\"method\":\"tools/list\"}'`.\n" +
+	"The bytes inside are JSON, so JSON's rules apply and only JSON's: a double quote in a string is " +
+	"written \\\", a backslash is written \\\\, and a single quote is written as itself or as \\u0027 — " +
+	"`\\'` is not a JSON escape, and inside single quotes the shell produces exactly that.\n" +
+	"A quote mark inside a single-quoted frame is spelled with the shell's splice, " +
+	"`call <peer> '{\"e\":\"it'\\''s\"}'`, and a frame too large or too quote-riddled for one line " +
+	"travels as a path: `call <peer> @/path/frame.json` reads the bytes from there, so no quoting " +
+	"layer touches them."
+
+// frameJSONHint adds the rule behind the two JSON mistakes a shell-minded caller makes.
+//
+// The generic sentence above already refuses the spelling; this says WHICH byte was wrong
+// and what it should have been, because "the frame is not JSON" sends the caller back to
+// the quoting layer that produced the bytes — which is how the same fix gets tried three
+// times in a row (#354).
+func frameJSONHint(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "escape"):
+		return "\nWHAT WENT WRONG: a JSON string is not a shell string. `\\'` is what a POSIX shell " +
+			"produces for a quote inside single quotes, and JSON rejects it; `'` needs no escape at " +
+			"all. Keep the shell splice so the backslash never reaches the parser, write \\u0027, or " +
+			"keep the frame in a file."
+	case strings.Contains(msg, "after object key:value pair"), strings.Contains(msg, "after top-level value"):
+		return "\nWHAT WENT WRONG: that position expects a comma or a closing brace, so a string was " +
+			"probably closed early. A double quote INSIDE a JSON string is `\\\"` (one backslash); " +
+			"`\\\\\"` ends the string and leaves a stray backslash behind."
+	}
+	return ""
+}
 
 // jrpcError renders a transport failure as a reply, never as a success shape.
 func jrpcError(stmt directive.Statement, err error) envelope.Slot {
