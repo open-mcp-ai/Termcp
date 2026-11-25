@@ -226,11 +226,68 @@ function nodeSessionInfo(name) {
 function nodeProtocol(c) { return c.kind === 'internal' ? t('nethub.proto.loopback') : 'SSH'; }
 
 /** The address line: user@host:port, or the loopback note for the internal
- *  profile. Never a secret — the profile's password and key stay in the editor. */
+ *  profile. Never a secret — the profile's password and key stay in the editor.
+ *
+ *  A masked row prints a fixed-width mask for ALL THREE parts. The server sends
+ *  the mask for host and user and `masked` for the rest: the port is a number, so
+ *  there is no "masked port" it could send, and printing the real one would leak
+ *  which machine this is through the only field the mask did not cover. */
+/* THE ONLY masking decision the page makes.
+ *
+ * It used to be two: the eye read `masked` from /api/config-storage while each row
+ * read `c.masked` from /api/connections, and the two arrived at different times. On
+ * a fresh load the list painted real addresses, the status call landed, the eye
+ * said "hidden", and the rows — never refetched — kept showing them. Clicking the
+ * eye happened to refetch, so the state "fixed itself" after a few clicks. One
+ * switch, one source: the local flag, applied when the row is rendered.
+ *
+ * `c.masked` from the server is deliberately ignored here. It still exists for the
+ * MCP surface, where a client reads the JSON and has no eye to consult.
+ */
+function connMasked() {
+  return !!(window._configStorageState && window._configStorageState.masked);
+}
+
+/* The mask lives in config-storage.js, but the rows it affects are rendered here,
+   and this file loads first. A one-listener set keeps the dependency pointing one
+   way: the panel announces the change, the list repaints. */
+var _maskListeners = [];
+function onMaskChange(fn) { if (typeof fn === 'function') _maskListeners.push(fn); }
+function notifyMaskChange() {
+  _maskListeners.forEach(function (fn) {
+    try { fn(); } catch (e) { console.error(e); }
+  });
+}
+
+/* The line where a card's address would be, when the card has no address to show.
+ *
+ * It was a bare <button> carrying a whole sentence, so the browser drew it as a
+ * centred, two-line box in the middle of the card — the loudest thing on a card
+ * that is saying it has nothing to say. The state is a caption, not a control, so
+ * it is drawn like one: a glyph that carries the state, three words that name it,
+ * one line, and the sentence the toast actually prints kept in the tooltip.
+ *
+ * The glyph is a KEY, never a second padlock: the card's own padlock sits two lines
+ * above and already says "encrypted at rest". What the caption answers is the other
+ * question — is the key here? A key when it is loaded (the host just needs
+ * activating), the same key struck through when it is not.
+ *
+ * Both strings are translated here, at render time, instead of being marked with
+ * `data-i18n`: a marker holds a literal key, and these keys are arguments. The grid
+ * redraws on a language switch (`onLangChange` below), so the marker would only be a
+ * second, weaker copy of the same translation. */
+function cardLockLine(name, reason, glyph, label, hint) {
+  return '<button type="button" class="node-addr is-locked" data-conn-name="' + escapeHtml(name) + '"' +
+    ' data-lock-reason="' + escapeHtml(reason) + '"' +
+    ' title="' + escapeHtml(hint) + '" aria-label="' + escapeHtml(hint) + '">' +
+    glyph + '<span>' + escapeHtml(label) + '</span></button>';
+}
+
 function nodeAddress(c) {
   if (c.kind === 'internal') return t('nethub.internal');
   var host = String(c.host || '');
   if (!host) return '';
+  if (connMasked()) return t('nethub.maskedTarget');
   var user = String(c.user || '');
   var port = c.port && c.port !== 22 ? ':' + c.port : '';
   return (user ? user + '@' : '') + host + port;
@@ -325,7 +382,7 @@ var _nodeBatch = createBatchBar({
   menuId: 'nethub-open-menu',
   exportId: 'nethub-menu-export',
   deleteId: 'nethub-menu-delete',
-  actionIds: ['nethub-menu-export', 'nethub-menu-encrypt', 'nethub-menu-restore', 'nethub-menu-delete'],
+  actionIds: ['nethub-menu-export', 'nethub-menu-encrypt', 'nethub-menu-restore', 'nethub-menu-share', 'nethub-menu-delete'],
   gridId: 'conn-grid',
   cardSelector: '.conn-tile[data-conn-name]',
   nameAttr: 'data-conn-name',
@@ -354,20 +411,6 @@ var _nodeBatch = createBatchBar({
      first (disabled while nothing is ticked), so this refines that answer. */
   onUpdate: function () { if (typeof syncConfigStorageActions === 'function') syncConfigStorageActions(); }
 });
-
-/* The banner is the page's one persistent statement that the store is locked.
-   Leaving it as text means a dismissed modal cannot be reopened without a
-   browser refresh — the door has to be the same thing as the sign. */
-function makeConnBannerOpenUnlock() {
-  var banner = document.getElementById('conn-load-banner');
-  if (!banner) return;
-  banner.classList.add('is-clickable');
-  banner.title = t('storage.clickToUnlock');
-  banner.onclick = function (event) {
-    if (event.target.closest('button[aria-label], .banner-close')) return;
-    showModal('modal-config-storage');
-  };
-}
 
 function renderConnGrid(connections, bannerMsg) {
   var grid = document.getElementById('conn-grid');
@@ -440,6 +483,14 @@ function renderConnGrid(connections, bannerMsg) {
        be derived from the session list, which keeps archives and holds sessions no
        card shows, so it would call a host dead for a history someone chose to keep
        — and "is this machine up" is not what this column is asked. */
+    /* The state caption rides on the protocol row, hard against the right edge: the
+       row is short ("SSH") and the space beside it is the only room on the card that
+       was already empty. Below the row it read as a second, competing line. */
+    var lockLine = c.key_unloaded
+      ? cardLockLine(c.name, 'key_unloaded', SVG_KEY_SLASHED, t('storage.cardLocked'), t('storage.cardLockedHint'))
+      : (c.not_activated
+        ? cardLockLine(c.name, 'not_activated', SVG_KEY, t('storage.cardInactive'), t('storage.cardInactiveHint'))
+        : '');
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<div class="entry-card-main">' +
@@ -456,8 +507,16 @@ function renderConnGrid(connections, bannerMsg) {
       '</div>' +
       '<div class="node-meta">' +
       '<span class="node-proto">' + escapeHtml(nodeProtocol(c)) + '</span>' +
+      lockLine +
       '</div>' +
-      (addr ? '<div class="node-addr">' + escapeHtml(addr) + '</div>' : '') +
+      /* A host whose sealing key is not loaded has no address to show and no way
+         to connect, so the card says that instead of pretending to be findable. */
+      /* Clicking it explains WHY, because the card is the only place the question
+         comes up and a dead address with no reason is a bug report waiting to be
+         written. The reason is the state the server already reported, not a new
+         probe: unloaded key and inactive host are different problems with different
+         fixes. */
+      (lockLine ? '' : (addr ? '<div class="node-addr">' + escapeHtml(addr) + '</div>' : '')) +
       '<div class="node-sess">' + escapeHtml(info.count
           ? tCount('nethub.sessions.one', 'nethub.sessions.other', { count: info.count })
           : t('nethub.sessions.none')) + '</div>' +
@@ -478,7 +537,9 @@ function renderConnGrid(connections, bannerMsg) {
         _nodeBatch.toggleSelection(c.name, tile);
         return;
       }
-      if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn') || e.target.closest('.conn-storage-mark')) return;
+      /* The state caption is a question, not a door: its own handler explains, and a
+         card press that opened the keychain as well would answer twice at once. */
+      if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn') || e.target.closest('.conn-storage-mark') || e.target.closest('.node-addr.is-locked')) return;
       /* An encrypted host on a locked store has no decrypted recipe to connect
          to. Clicking the card opens the unlock dialog directly, so closing the
          modal earlier does not trap the user in an un-unlockable page. */
@@ -498,7 +559,9 @@ function renderConnGrid(connections, bannerMsg) {
         .catch(function (err) {
           if (err && err.name === 'AbortError') return;
           console.error(err);
-          var msg = (err && err.message) ? err.message : String(err);
+          var msg = (typeof describeStorageError === 'function')
+            ? describeStorageError(err)
+            : ((err && err.message) ? err.message : String(err));
           rememberConnBanner('banner.conn.failed', { msg: msg });
           if (b) setLoadBanner(b, t('banner.conn.failed', { msg: msg }));
         })
@@ -731,7 +794,13 @@ function loadForwards() {
 
 
 function loadConnections() {
-  return fetch(apiPath('/api/connections'))
+  /* `reveal=true` unconditionally: the page masks from its own flag, so it needs
+     the real values to have something to hide. Asking the server to mask instead
+     would put the decision back in two places, which is the bug this replaced —
+     the row would be reading a field while the eye read a switch. The server-side
+     mask still applies to every consumer that has no eye to consult (MCP, raw
+     REST clients). */
+  return fetch(apiPath('/api/connections?reveal=true'))
     .then(function (r) {
       return r.text().then(function (t) {
         if (!r.ok) {
@@ -752,22 +821,13 @@ function loadConnections() {
     })
     .then(function (j) {
       window._lastConnections = j.connections || [];
-      /* The list now succeeds even while the store is locked: plaintext hosts
-         load normally and encrypted ones come back marked. So the warning can no
-         longer piggyback on the 409 — it is derived from the state instead, and
-         stays clickable so the unlock form is one click away. */
-      var locked = !!(window._configStorageState && window._configStorageState.locked);
-      rememberConnBanner(locked ? 'storage.lockedBanner' : null);
-      renderConnGrid(window._lastConnections, locked ? t('storage.lockedBanner') : '');
-      if (locked) makeConnBannerOpenUnlock();
+      /* No banner for a key that is not inserted: the row itself carries the lock,
+         and its tooltip says which key it waits for. A warning above the list that
+         repeats every row is a second answer to the same question, and it was the
+         only thing on the page a dismissal could not bring back. */
+      renderConnGrid(window._lastConnections);
     })
     .catch(function (e) {
-      if (e && e.code === 'config_encryption_locked') {
-        window._lastConnections = [];
-        rememberConnBanner('storage.lockedBanner');
-        renderConnGrid([], t('storage.lockedBanner'));
-        return;
-      }
       console.error(e);
       window._lastConnections = [];
       var msg = (e && e.message) ? e.message : String(e);
@@ -783,3 +843,9 @@ function loadConnections() {
    is passed back in so a failure the user is still reading survives the switch
    in the new language. */
 onLangChange(function () { renderConnGrid(window._lastConnections || [], connBannerText()); });
+
+/* The eye is a display switch, so flipping it repaints the rows already in memory.
+ * Refetching was the old behaviour and it is what made the toggle feel delayed:
+ * the answer was already here, and asking the server again only added a frame in
+ * which the eye and the list disagreed. */
+onMaskChange(function () { renderConnGrid(window._lastConnections || [], connBannerText()); });

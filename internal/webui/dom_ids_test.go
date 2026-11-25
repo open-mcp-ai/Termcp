@@ -42,16 +42,22 @@ func TestReferencedElementIDsExist(t *testing.T) {
 	}
 	// Everything the assets define, either as markup or as a quoted id passed to
 	// a builder that emits the element.
+	ref := regexp.MustCompile(`getElementById\('([^']+)'\)`)
+	/* THE REFERENCE IS NOT THE DEFINITION. A quoted id in a `getElementById` call was
+	   being counted as proof the element exists, because both are `'lower-case-word'`
+	   — so the check passed for every id that nothing creates, which is exactly the
+	   case it was written for (`key-form-facts`, removed from the markup and still
+	   looked up, hid the fact that a fresh create form kept the previous key's host
+	   count). Definitions are collected with the lookups blanked out first. */
 	defined := map[string]bool{}
 	for _, body := range assets {
 		for _, m := range regexp.MustCompile(`id="([^"]+)"`).FindAllStringSubmatch(body, -1) {
 			defined[m[1]] = true
 		}
-		for _, m := range regexp.MustCompile(`'([a-z0-9-]+)'`).FindAllStringSubmatch(body, -1) {
+		for _, m := range regexp.MustCompile(`'([a-z0-9-]+)'`).FindAllStringSubmatch(ref.ReplaceAllString(body, ""), -1) {
 			defined[m[1]] = true
 		}
 	}
-	ref := regexp.MustCompile(`getElementById\('([^']+)'\)`)
 	var missing []string
 	seen := map[string]bool{}
 	for path, body := range assets {

@@ -282,8 +282,18 @@ function openConnModal(edit, name, kind) {
       temporaryWrap.insertAdjacentHTML('afterend',
         '<div class="conn-field conn-field-check" id="conn-encrypt-wrap">' +
         '<label class="conn-check" for="conn-encrypt"><input type="checkbox" id="conn-encrypt" checked>' +
-        '<span data-i18n="conn.encrypt">Encrypt this profile</span></label>' +
-        '<div class="conn-check-hint" data-i18n="conn.encrypt.hint">Saved in the encrypted store. Needs the key to read.</div></div>');
+        '<span data-i18n="conn.encrypt">' + _hesc(t('conn.encrypt')) + '</span></label>' +
+        '<div class="conn-check-hint" data-i18n="conn.encrypt.hint">' + _hesc(t('conn.encrypt.hint')) + '</div>' +
+        /* Which key seals this host is a property of this host, so the choice sits
+           in the form that creates it. The options are the real keychain, so a
+           key that does not exist cannot be picked. */
+        '<div class="conn-field" id="conn-key-row"><label for="conn-key" data-i18n="conn.key">Key</label>' +
+        '<select id="conn-key"></select></div></div>');
+      /* The text is built with t() rather than left to the attributes: this markup
+         appears after the page's single i18n pass has already run, so a data-i18n
+         attribute alone would leave the row in English until the language is
+         switched again. The attributes stay for that later switch. */
+      applyI18n(document.getElementById('conn-encrypt-wrap'));
     }
   }
 
@@ -319,6 +329,51 @@ function openConnModal(edit, name, kind) {
     encWrap.style.display = (isInternal || temporaryNow) ? 'none' : '';
     var keyReady = !!(window._configStorageState && window._configStorageState.initialized);
     encBox.checked = (edit && current) ? current.storage === 'encrypted' : keyReady;
+    /* Which key seals this host is a property of THIS host, so the choice lives in
+       this form and nothing is preselected: there is no default key any more, and a
+       preselected one would be an implicit choice the model does not have (§8.2).
+       A key that is not inserted is listed but not selectable — saving through it
+       would fail, and a choice that cannot work is not a choice. */
+    var keySelect = document.getElementById('conn-key');
+    if (keySelect && encBox) {
+      var keyList = (typeof _configStorageKeys !== 'undefined' && _configStorageKeys) || [];
+      /* WHICH KEY SEALS THIS HOST COMES FROM THE KEYCHAIN'S OWN PAYLOAD.
+         /api/connections carries no `key_id` (see connectionSummary), so reading it
+         from `current` silently selected nothing — and the save then sent no key at
+         all, which the server refuses with key_required. */
+      var wanted = '';
+      if (edit && current && current.storage === 'encrypted') {
+        var hostState = ((typeof _configStorageState !== 'undefined' && _configStorageState)
+          ? (_configStorageState.hosts || []) : []);
+        for (var i = 0; i < hostState.length; i++) {
+          if (hostState[i].name === current.name) { wanted = hostState[i].key_id || ''; break; }
+        }
+      }
+      keySelect.innerHTML = '';
+      if (keyList.length) {
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = t('storage.keyChoose');
+        keySelect.appendChild(placeholder);
+      }
+      keyList.forEach(function (key) {
+        var option = document.createElement('option');
+        option.value = key.id;
+        /* The name is how the keychain panel names these keys; a hex id here would be
+           a second name for the same thing, and the person never chose it. */
+        option.textContent = key.label || key.id.slice(0, 8);
+        option.disabled = !key.plugged;
+        keySelect.appendChild(option);
+      });
+      if (wanted && keyList.some(function (k) { return k.id === wanted; })) keySelect.value = wanted;
+      keySelect.disabled = !keyList.length;
+      /* The key choice only means something while the host is encrypted. */
+      var syncKeyRow = function () {
+        document.getElementById('conn-key-row').style.display = encBox.checked ? '' : 'none';
+      };
+      encBox.onchange = syncKeyRow;
+      syncKeyRow();
+    }
   }
   document.getElementById('modal-conn-title').textContent = edit ? t('modal.conn.titleEdit') : t('modal.conn.titleAdd');
   document.getElementById('conn-delete').style.display = (edit && !isInternal) ? 'inline-block' : 'none';
@@ -355,7 +410,7 @@ function openConnModal(edit, name, kind) {
   if (iconToml) iconToml.style.display = 'none';
   if (edit) {
     fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
-      if (!r.ok) throw new Error(r.statusText);
+      if (!r.ok) return connFailureText(r).then(function (message) { throw new Error(message); });
       return r.text();
     }).then(function (t) {
       /* The profile the user is looking at now is the newer open's; a slow read
@@ -475,7 +530,7 @@ _jumpsBox.addEventListener('change', function (e) {
   var idx = card ? parseInt(card.getAttribute('data-idx'), 10) : NaN;
   if (isNaN(idx)) return;
   fetch(apiPath('/api/connections/') + encodeURIComponent(name)).then(function (r) {
-    if (!r.ok) throw new Error(r.statusText);
+    if (!r.ok) return connFailureText(r).then(function (message) { throw new Error(message); });
     return r.text();
   }).then(function (t) {
     var parsed = _parseConnTOML(t);
@@ -569,7 +624,7 @@ document.getElementById('conn-test').onclick = function () {
   btn.textContent = t('test.testing');
   fetch(apiPath('/api/connections/test'), { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+      if (!r.ok) return connFailureText(r).then(function (text) { throw new Error(text); });
       return r.json();
     })
     .then(function (j) {
@@ -647,12 +702,14 @@ document.getElementById('conn-save').onclick = function () {
   var encryptBox = document.getElementById('conn-encrypt');
   if (encryptBox && encryptBox.style.display !== 'none') {
     params.set('encrypt', encryptBox.checked ? 'true' : 'false');
+    var keySelect = document.getElementById('conn-key');
+    if (encryptBox.checked && keySelect && keySelect.value) params.set('key', keySelect.value);
   }
   if (editingConnName && editingConnName !== name) params.set('from', editingConnName);
   url += '?' + params.toString();
   fetch(url, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: body })
     .then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+      if (!r.ok) return connFailureText(r).then(function (text) { throw new Error(text); });
       hideModal('modal-conn');
       loadConnections();
     })
@@ -671,10 +728,34 @@ document.getElementById('conn-delete').onclick = function () {
     doDeleteConnection(name);
   });
 };
+/* Deleting a connection fails for two states the user can act on — locked, or a
+   profile whose key is gone — and both answer with a code, not prose. Translate
+   here so the dialog never shows raw JSON or an English sentence in a Chinese
+   UI; anything unknown falls back to the shared localized failure text. */
+function describeConnDeleteFailure(body, status) {
+  var payload = null;
+  try { payload = JSON.parse(body); } catch (e) { payload = null; }
+  if (payload && payload.code) {
+    if (typeof describeStorageError === 'function') return describeStorageError(payload);
+    return payload.error || body || String(status);
+  }
+  return body || String(status);
+}
+
+/* Same translation for every connection request that can fail on a state the
+   user can act on: 409 bodies carry a code, and r.statusText is "Conflict" —
+   which is what "Not Found" used to be: English, and not the reason. */
+function connFailureText(response) {
+  return response.text().then(function (body) {
+    if (body) return describeConnDeleteFailure(body, response.status);
+    return response.statusText || ('HTTP ' + response.status);
+  });
+}
+
 function doDeleteConnection(name) {
   fetch(apiPath('/api/connections/') + encodeURIComponent(name), { method: 'DELETE' })
     .then(function (r) {
-    if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+    if (!r.ok) return r.text().then(function (body) { throw new Error(describeConnDeleteFailure(body, r.status)); });
       hideModal('modal-conn');
       loadConnections();
     })
@@ -832,7 +913,7 @@ function deleteResourcesBatch(resource, ids) {
     if (r.status === 204 || r.status === 404) {
       return ids.map(function (id) { return { id: id, ok: true }; });
     }
-    return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+    return r.text().then(function (body) { throw new Error(describeConnDeleteFailure(body, r.status)); });
   });
 }
 

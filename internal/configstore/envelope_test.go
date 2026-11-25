@@ -40,11 +40,11 @@ func TestEnvelopeRoundTripAndFreshDEKPerSave(t *testing.T) {
 	main := testMainKey(0x44)
 	plaintext := []byte("host = \"example\"\nuser = \"operator\"\n")
 
-	first, err := Seal(plaintext, identity, filledID(0x55), main)
+	first, err := Seal(plaintext, identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Seal(plaintext, identity, filledID(0x55), main)
+	second, err := Seal(plaintext, identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestEnvelopeRoundTripAndFreshDEKPerSave(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		opened, err := parsed.Open(main)
+		opened, err := parsed.Open(main, noActivationKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,7 +70,7 @@ func TestEnvelopeRoundTripAndFreshDEKPerSave(t *testing.T) {
 func TestEnvelopeIdentityAndAuthenticationFailClosed(t *testing.T) {
 	identity := testIdentity(KindProfile)
 	main := testMainKey(0x44)
-	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main)
+	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestEnvelopeIdentityAndAuthenticationFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parsed.Open(testMainKey(0x54)); !errors.Is(err, ErrAuthentication) {
+	if _, err := parsed.Open(testMainKey(0x54), noActivationKey); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("wrong Main Key error = %v", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestEnvelopeIdentityAndAuthenticationFailClosed(t *testing.T) {
 func TestEnvelopeTamperingRequiresAuthentication(t *testing.T) {
 	identity := testIdentity(KindProfile)
 	main := testMainKey(0x44)
-	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main)
+	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestEnvelopeTamperingRequiresAuthentication(t *testing.T) {
 			if err != nil {
 				t.Fatalf("public header parse failed before authentication: %v", err)
 			}
-			if _, err := parsed.Open(main); !errors.Is(err, ErrAuthentication) {
+			if _, err := parsed.Open(main, noActivationKey); !errors.Is(err, ErrAuthentication) {
 				t.Fatalf("Open error = %v, want authentication failure", err)
 			}
 		})
@@ -131,7 +131,7 @@ func TestEnvelopeTamperingRequiresAuthentication(t *testing.T) {
 func TestEnvelopeRejectsMalformedFramingBeforeAllocation(t *testing.T) {
 	identity := testIdentity(KindProfile)
 	main := testMainKey(0x44)
-	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main)
+	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestEnvelopeRejectsMalformedFramingBeforeAllocation(t *testing.T) {
 	if _, err := Parse(oversized, identity); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized error = %v", err)
 	}
-	if _, err := Seal(make([]byte, MaxProfilePlaintext+1), identity, filledID(0x55), main); !errors.Is(err, ErrTooLarge) {
+	if _, err := Seal(make([]byte, MaxProfilePlaintext+1), identity, filledID(0x55), main, noActivationKey); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized seal error = %v", err)
 	}
 }
@@ -172,7 +172,7 @@ func TestEnvelopeAcceptsTheDocumentedPlaintextLimit(t *testing.T) {
 	identity := testIdentity(KindProfile)
 	main := testMainKey(0x44)
 	plaintext := bytes.Repeat([]byte{'x'}, MaxProfilePlaintext)
-	sealed, err := Seal(plaintext, identity, filledID(0x55), main)
+	sealed, err := Seal(plaintext, identity, filledID(0x55), main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestEnvelopeAcceptsTheDocumentedPlaintextLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := parsed.Open(main)
+	got, err := parsed.Open(main, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestEnvelopeRewrapChangesOnlyWrapper(t *testing.T) {
 	oldMain := testMainKey(0x44)
 	newMain := testMainKey(0x66)
 	newKeyID := filledID(0x77)
-	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), oldMain)
+	sealed, err := Seal([]byte("host = \"example\"\n"), identity, filledID(0x55), oldMain, noActivationKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,10 +213,10 @@ func TestEnvelopeRewrapChangesOnlyWrapper(t *testing.T) {
 	if got := rewrapped.WrapKeyID(); got != newKeyID {
 		t.Fatalf("WrapKeyID = %x, want %x", got, newKeyID)
 	}
-	if _, err := rewrapped.Open(newMain); err != nil {
+	if _, err := rewrapped.Open(newMain, noActivationKey); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rewrapped.Open(oldMain); !errors.Is(err, ErrAuthentication) {
+	if _, err := rewrapped.Open(oldMain, noActivationKey); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("old key error = %v", err)
 	}
 }
@@ -230,6 +230,7 @@ func TestEnvelopeV1Golden(t *testing.T) {
 		identity,
 		filledID(0x44),
 		main,
+		noActivationKey,
 		random,
 	)
 	if err != nil {

@@ -14,7 +14,7 @@ const EnvKEKFileVariable = "TERMCP_CONFIG_KEK_FILE"
 // NewFileProvider reads a KEK from the file at path. An empty path means
 // EnvKEKFileVariable, so a container can mount a secret and name it once.
 // A missing file or unreadable bytes report ErrProviderUnavailable, which is
-// what "this machine cannot unlock by itself" looks like to the caller.
+// what "this machine cannot load a key by itself" looks like to the caller.
 func NewFileProvider(path string) Provider {
 	if path == "" {
 		path = os.Getenv(EnvKEKFileVariable)

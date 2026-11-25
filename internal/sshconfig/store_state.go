@@ -8,13 +8,18 @@ import (
 // Store: the repository holding ciphertext and the preference for how a brand
 // new profile is first persisted.
 //
-// Reads load the pointer; the operations that change it (enable, initialize,
-// unlock, rotate) build the next value and store it. No lock: the repository
-// itself already serializes its own writers, and a reader here only needs a
-// coherent pair of fields.
+// Reads load the pointer; the operations that change it (enable, create a key,
+// plug a key in) build the next value and store it. No lock: the repository itself
+// already serializes its own writers, and a reader here only needs a coherent
+// pair of fields.
 type storeState struct {
 	repo       *configstore.Repository
 	encryptNew bool
+	/* masked is the session's answer when there is no keychain file to record it
+	   in. A plaintext store still wants to hide its addresses on screen; the
+	   setting becomes durable the moment encryption is enabled, because then
+	   config.keys has a field for it. */
+	masked bool
 }
 
 func (s *Store) stateSnapshot() *storeState {
@@ -31,11 +36,11 @@ func (s *Store) repositorySnapshot() *configstore.Repository {
 }
 
 func (s *Store) setEncryption(repo *configstore.Repository, encryptNew bool) {
-	s.state.Store(&storeState{repo: repo, encryptNew: encryptNew})
+	s.state.Store(&storeState{repo: repo, encryptNew: encryptNew, masked: s.stateSnapshot().masked})
 }
 
 // setEncryptNew updates the preference, keeping the current repository.
 func (s *Store) setEncryptPreference(encryptNew bool) {
 	cur := s.stateSnapshot()
-	s.state.Store(&storeState{repo: cur.repo, encryptNew: encryptNew})
+	s.state.Store(&storeState{repo: cur.repo, encryptNew: encryptNew, masked: cur.masked})
 }

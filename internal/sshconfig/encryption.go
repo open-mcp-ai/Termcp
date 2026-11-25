@@ -19,27 +19,36 @@ const (
 	StorageTemporary = "temporary"
 )
 
-// EncryptionHost is one host's persistent storage mode.
+/* EncryptionHost is one host's non-secret storage facts (§7.2):
+ *
+ *   name      the profile name
+ *   mode      plaintext / encrypted / temporary / builtin / unknown
+ *   key_id    which key seals it, when it is ciphertext
+ *   activated whether its second layer is on right now
+ *   passphrase whether activating it needs its key's passphrase
+ *   orphaned  whether its key was deleted, which is permanent
+ */
 type EncryptionHost struct {
-	Name string `json:"name"`
-	Mode string `json:"mode"`
+	Name       string `json:"name"`
+	Mode       string `json:"mode"`
+	KeyID      string `json:"key_id,omitempty"`
+	Activated  bool   `json:"activated"`
+	Passphrase bool   `json:"passphrase"`
+	Orphaned   bool   `json:"orphaned"`
 }
 
 // EncryptionStatus is the page's non-secret configuration-encryption state.
 type EncryptionStatus struct {
 	Initialized               bool             `json:"initialized"`
 	EncryptNew                bool             `json:"encrypt_new"`
+	Masked                    bool             `json:"masked"`
 	LegacyEncryptionArtifacts bool             `json:"legacy_encryption_artifacts"`
 	Hosts                     []EncryptionHost `json:"hosts"`
-	MainKeyID                 string           `json:"main_key_id,omitempty"`
-	RotationPending           bool             `json:"rotation_pending"`
-	Locked                    bool             `json:"locked"`
-	ErrorCode                 string           `json:"error_code,omitempty"`
-	PasswordConfigured        bool             `json:"password_configured"`
-	AutomaticUnlock           bool             `json:"automatic_unlock"`
+	// Keys counts the keychain and KeysPlugged the part of it in memory.
+	Keys        int    `json:"keys"`
+	KeysPlugged int    `json:"keys_plugged"`
+	ErrorCode   string `json:"error_code,omitempty"`
 	// SystemAvailable reports whether this OS offers a native credential store.
-	// The setup form uses it to offer (or refuse) machine binding up front,
-	// instead of letting the user choose a mode that then fails.
 	SystemAvailable bool `json:"system_available"`
 }
 
@@ -51,8 +60,76 @@ type EncryptionResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// KeychainStatus is the keychain panel's whole view.
+type KeychainStatus struct {
+	Keys []configstore.KeyInfo `json:"keys"`
+}
+
+// KeychainStatus lists the keys, readable without any key being plugged in: the
+// panel has to render the list before anyone can insert one.
+func (s *Store) KeychainStatus() (KeychainStatus, error) {
+	status := KeychainStatus{Keys: []configstore.KeyInfo{}}
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return status, nil
+	}
+	keys, err := repo.Keys()
+	if err != nil {
+		if errors.Is(err, configstore.ErrNotInitialized) {
+			return status, nil
+		}
+		return KeychainStatus{}, err
+	}
+	/* Each key's address goes out with the list. It is derived, not stored, and only
+	   a plugged key has one — which is the same rule as everywhere else here: a key
+	   that is not in memory cannot answer at its address, so the row shows why. */
+	for i := range keys {
+		if !keys[i].Plugged {
+			continue
+		}
+		var id configstore.ID
+		if err := id.UnmarshalText([]byte(keys[i].ID)); err != nil {
+			continue
+		}
+		if public, err := s.SharePublicKey(id); err == nil {
+			keys[i].PublicKey = public
+		}
+	}
+	status.Keys = keys
+	return status, nil
+}
+
+// AddUnlockTo gives one key another way to be plugged in: a machine provider such
+// as a mounted KEK file. The slots all seal the same words, so this adds a path,
+// never a second root.
+func (s *Store) AddUnlockTo(id configstore.ID, provider configstore.Provider) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.AddUnlockTo(id, provider); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// RemoveUnlockFrom drops every slot of one kind from one key, refusing to remove
+// the last one: an unwrappable key strands every host sealed by it.
+func (s *Store) RemoveUnlockFrom(id configstore.ID, kind string) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.RemoveUnlockFrom(id, kind); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
 // SetNewProfileEncryption enables or disables encryption for newly created
-// persistent profiles. Enabling creates a keyring on first use.
+// persistent profiles. Enabling creates a keychain on first use.
 func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.Provider) error {
 	st := s.stateSnapshot()
 	repo := st.repo
@@ -79,125 +156,350 @@ func (s *Store) SetNewProfileEncryption(enabled bool, providers ...configstore.P
 	return nil
 }
 
+// Masked reports the global address/username masking switch (§10.2).
+func (s *Store) Masked() bool {
+	st := s.stateSnapshot()
+	if st.repo != nil {
+		return st.repo.Masked()
+	}
+	return st.masked
+}
+
+/* SetMasked records the global masking switch. It changes serialization only.
+ *
+ * The durable home for it is config.keys (§3.1), so a store with no keychain can
+ * only keep it for this process. That is the honest answer: the switch hides
+ * addresses on screen, and a plaintext store has no file to write it to that would
+ * not be a second source of truth about encryption.
+ */
+func (s *Store) SetMasked(masked bool) error {
+	st := s.stateSnapshot()
+	if st.repo == nil {
+		s.state.Store(&storeState{encryptNew: st.encryptNew, masked: masked})
+		s.notifyChange()
+		return nil
+	}
+	if err := st.repo.SetMasked(masked); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
 // EncryptionStatus reports which hosts currently use plaintext or encrypted
-// storage. Temporary profiles and the stateless built-in profile are included
-// so the page can explain why they cannot be converted.
+// storage, and for each encrypted one its two-layer state.
 func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
-	// Reported on every response, including the locked one: the page decides
-	// whether "bind to this machine" is even offered, and it must not have to
-	// guess or fail after the user picks it.
 	status := EncryptionStatus{Hosts: []EncryptionHost{}, SystemAvailable: configstore.SystemAvailable()}
 	st := s.stateSnapshot()
 	status.Initialized = st.repo != nil
 	status.EncryptNew = st.encryptNew
+	/* A store with no keychain still has a mask: hiding addresses is a property of
+	   what this page prints, not of whether encryption was enabled. Reading it only
+	   from the repository made the switch look dead on a fresh install — the file
+	   was written where one existed, and silently ignored where none did. */
+	status.Masked = st.masked
 	if st.repo != nil {
 		repoStatus := st.repo.Status()
-		if !repoStatus.MainKeyID.IsZero() {
-			status.MainKeyID = hex.EncodeToString(repoStatus.MainKeyID[:])
-		}
-		status.RotationPending = repoStatus.RotationPending
-		status.Locked = repoStatus.Locked
+		status.KeysPlugged = repoStatus.LoadedKeys
+		status.Masked = repoStatus.Masked
 		status.ErrorCode = repoStatus.ErrorCode
-		status.PasswordConfigured = repoStatus.PasswordConfigured
-		status.AutomaticUnlock = repoStatus.AutomaticUnlock
-	}
-	if status.Locked {
-		return status, nil
+		if keys, err := st.repo.Keys(); err == nil {
+			status.Keys = len(keys)
+		}
 	}
 	names, err := s.List()
 	if err != nil {
 		return EncryptionStatus{}, err
 	}
 	for _, name := range names {
+		host := EncryptionHost{Name: name}
 		mode, err := s.StorageMode(name)
 		if err != nil {
-			return EncryptionStatus{}, err
+			/* One unreadable profile must not take the panel down with it: the
+			   operator opens this screen precisely to deal with such a profile, and
+			   a failed status call leaves them with "the operation failed" and no
+			   way to act. Report the name with an explicit mode instead. */
+			host.Mode = "unknown"
+			status.Hosts = append(status.Hosts, host)
+			continue
 		}
-		status.Hosts = append(status.Hosts, EncryptionHost{Name: name, Mode: mode})
+		host.Mode = mode
+		if mode == StorageEncrypted && st.repo != nil {
+			if state, err := st.repo.HostState(name); err == nil {
+				host.KeyID = keyIDText(state.KeyID)
+				host.Activated = state.Activated
+				host.Passphrase = state.NeedsPassphrase
+				host.Orphaned = state.Orphaned
+			} else if errors.Is(err, configstore.ErrNotFound) {
+				host.Orphaned = true
+			}
+		}
+		status.Hosts = append(status.Hosts, host)
 	}
 	return status, nil
 }
 
-// InitializeEncryption creates the first keyring. An empty password asks for a
-// machine-bound keyring instead: the Main Key is wrapped only by the providers,
-// so the operating system's credential store can open it on every later start
-// with no human in the loop, and a copy of the data directory cannot be opened
-// on another machine at all. A non-empty password keeps the old behaviour and
-// adds a password wrapper beside the provider's.
-func (s *Store) InitializeEncryption(password, confirmation string, providers ...configstore.Provider) error {
-	if s.repositorySnapshot() != nil {
-		return configstore.ErrAlreadyInitialized
-	}
-	var repo *configstore.Repository
-	var err error
-	if password == "" && confirmation == "" {
-		repo, err = configstore.InitializeRepository(s.dataDir, providers...)
-	} else {
-		repo, err = configstore.InitializeRepositoryWithPassword(s.dataDir, password, confirmation, providers...)
-	}
-	if err == nil {
-		err = repo.SetEncryptNew(true)
+/* ---- the four keychain actions -------------------------------------------
+ * Every one of them is one request, because a key is independent: inserting one
+ * unwraps exactly that key, exporting one writes down exactly its words, and
+ * removing one destroys exactly its own slots.
+ */
+
+// CreateKey adds a key to the keychain, creating the keychain first when
+// encryption has never been enabled. secret is the mnemonic to adopt; empty means
+// "generate one and return it once". passphrase, when non-empty, marks the key so
+// its hosts need that passphrase to activate — the phrase itself is never stored.
+func (s *Store) CreateKey(secret, passphrase string, providers ...configstore.Provider) (configstore.KeyInfo, string, error) {
+	return s.CreateKeyWithLabel(secret, passphrase, "", providers...)
+}
+
+// CreateKeyWithLabel is CreateKey with a human name for the new key.
+func (s *Store) CreateKeyWithLabel(secret, passphrase, label string, providers ...configstore.Provider) (configstore.KeyInfo, string, error) {
+	generated := ""
+	mnemonic := secret
+	if strings.TrimSpace(mnemonic) == "" {
+		phrase, err := configstore.NewMnemonic()
 		if err != nil {
-			_ = repo.Close()
+			return configstore.KeyInfo{}, "", err
 		}
-	}
-	if err == nil {
-		s.setEncryption(repo, true)
-		s.notifyChange()
-	}
-	return err
-}
-
-// UnlockEncryption opens a locked store. Unlocking is the only way to make
-// encrypted profiles readable, and it requires the credential — that is what
-// makes 上锁 worth doing.
-//
-// bindMachine is the caller's choice, never a default: adding a machine wrapper
-// changes key material, and key material must only change because someone asked.
-// (An older build did this implicitly to migrate password-only keyrings; the
-// migration is now a checkbox in the unlock form.)
-func (s *Store) UnlockEncryption(password string, bindMachine bool, providers ...configstore.Provider) error {
-	repo := s.repositorySnapshot()
-	if repo == nil {
-		return configstore.ErrNotInitialized
-	}
-	var err error
-	if password == "" {
-		err = repo.UnlockProviders(providers...)
+		mnemonic, generated = phrase, phrase
+	} else if normalized, err := configstore.NormalizeMnemonic(mnemonic); err != nil {
+		return configstore.KeyInfo{}, "", err
 	} else {
-		err = repo.UnlockPassword(password)
-		if err == nil && bindMachine {
-			err = repo.RebindPasswordProvider(providers...)
+		mnemonic = normalized
+	}
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		/* The first key is also the first keychain: there is nothing to add it to,
+		   so the repository is created around it. */
+		storeID, err := configstore.NewID()
+		if err != nil {
+			return configstore.KeyInfo{}, "", err
 		}
+		_ = storeID
+		created, err := configstore.InitializeRepositoryWithMnemonic(s.dataDir, mnemonic, passphrase, providers...)
+		if err != nil {
+			return configstore.KeyInfo{}, "", err
+		}
+		if err := created.SetEncryptNew(true); err != nil {
+			_ = created.Close()
+			return configstore.KeyInfo{}, "", err
+		}
+		s.setEncryption(created, true)
+		s.notifyChange()
+		info, err := firstKeyInfo(created)
+		if err != nil {
+			return configstore.KeyInfo{}, generated, err
+		}
+		/* InitializeRepositoryWithMnemonic has no name to give the key it creates:
+		   the name is a later decision about an object that already exists. Naming
+		   it here keeps "create with a name" one outcome instead of "created, then
+		   maybe named". */
+		if label != "" {
+			if err := created.SetKeyLabel(mustKeyID(info.ID), label); err != nil {
+				return configstore.KeyInfo{}, generated, err
+			}
+			info, err = firstKeyInfo(created)
+		}
+		return info, generated, err
 	}
-	if !repo.Status().Locked {
-		s.setEncryptPreference(repo.EncryptNew())
+	info, err := repo.CreateKeyWithLabel(mnemonic, passphrase, label, providers...)
+	if err != nil {
+		return configstore.KeyInfo{}, "", err
 	}
 	s.notifyChange()
-	return err
+	return info, generated, nil
 }
 
-func (s *Store) ChangeEncryptionPassword(current, password, confirmation string, providers ...configstore.Provider) error {
+// RotateKey replaces one key's recovery phrase. The new words are returned once,
+// like a fresh key's, because that is what they are: the old ones no longer open
+// anything.
+func (s *Store) RotateKey(id configstore.ID, passphrase string, providers ...configstore.Provider) (configstore.KeyInfo, string, error) {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.KeyInfo{}, "", configstore.ErrNotInitialized
+	}
+	info, phrase, err := repo.RotateKey(id, passphrase, providers...)
+	s.notifyChange()
+	return info, phrase, err
+}
+
+/* ChangeKeyPassphrase rotates one key's second layer: same 24 words, same id, same
+ * address, and every host it seals is re-sealed under the new passphrase. The hosts
+ * are unreadable between the old passphrase and the new one, so both are supplied in
+ * the same call and a wrong old one changes nothing. */
+func (s *Store) ChangeKeyPassphrase(id configstore.ID, oldPassphrase, newPassphrase string) error {
 	repo := s.repositorySnapshot()
 	if repo == nil {
 		return configstore.ErrNotInitialized
 	}
-	err := repo.ChangePassword(current, password, confirmation, providers...)
+	if err := repo.ChangePassphrase(id, oldPassphrase, newPassphrase); err != nil {
+		return err
+	}
 	s.notifyChange()
-	return err
+	return nil
 }
 
-// RotateMainKey preserves the compatibility rotation used by old
-// provider-only stores. Password-derived stores must use ChangeEncryptionPassword.
-func (s *Store) RotateMainKey(providers ...configstore.Provider) error {
+// SetKeyLabel renames one key. A name is public and re-seals nothing, so this is
+// the one action on a key that destroys no ciphertext.
+func (s *Store) SetKeyLabel(id configstore.ID, label string) error {
 	repo := s.repositorySnapshot()
 	if repo == nil {
 		return configstore.ErrNotInitialized
 	}
-	err := repo.RotateMainKey(providers...)
-	// A failed publication can still leave a persisted, resumable rotation.
+	if err := repo.SetKeyLabel(id, label); err != nil {
+		return err
+	}
 	s.notifyChange()
-	return err
+	return nil
+}
+
+func mustKeyID(hexID string) configstore.ID {
+	var id configstore.ID
+	_ = id.UnmarshalText([]byte(hexID))
+	return id
+}
+
+// firstKeyInfo returns the keychain's first key. With no index owner there is no
+// special entry to look for: a fresh keychain holds exactly the one just created.
+func firstKeyInfo(repo *configstore.Repository) (configstore.KeyInfo, error) {
+	keys, err := repo.Keys()
+	if err != nil {
+		return configstore.KeyInfo{}, err
+	}
+	if len(keys) == 0 {
+		return configstore.KeyInfo{}, configstore.ErrKeyNotFound
+	}
+	return keys[0], nil
+}
+
+// PlugKey inserts one key: it unwraps the mnemonic and derives the Main Key into
+// memory, then records `plugged` so the next start does the same by itself.
+func (s *Store) PlugKey(id configstore.ID, providers ...configstore.Provider) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.PlugKey(id, providers...); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// UnplugKey drops one key's material and every activation key it held. Nothing is
+// deleted: plugging it back in restores everything.
+func (s *Store) UnplugKey(id configstore.ID) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.UnplugKey(id); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// ExportMnemonic returns one key's 24 words. This machine already holds the slot,
+// so it asks for nothing: exporting and using the key here are the same ability.
+func (s *Store) ExportMnemonic(id configstore.ID) (string, error) {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return "", configstore.ErrNotInitialized
+	}
+	return repo.ExportMnemonic(id)
+}
+
+// DiscardDamagedKeychain is the human exit for a keychain file this build cannot
+// read. It refuses while profiles are still sealed by it, but a damaged leftover
+// with no ciphertext behind it must not dead-end the panel — otherwise "broken"
+// is a state with no button.
+func (s *Store) DiscardDamagedKeychain() error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.DiscardDamagedKeychain(); err != nil {
+		return err
+	}
+	if repo.KeyringDetached() {
+		if err := repo.Close(); err != nil {
+			return err
+		}
+		s.setEncryption(nil, false)
+	}
+	s.notifyChange()
+	return nil
+}
+
+// RemoveKey destroys one key. backupConfirmed is the human's statement that the
+// words are written down; the key may seal no host and may not own the index.
+func (s *Store) RemoveKey(id configstore.ID, backupConfirmed bool) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.RemoveKey(id, backupConfirmed); err != nil {
+		return err
+	}
+	if repo.KeyringDetached() {
+		// The keychain is gone; drop the repository so nothing calls into a store
+		// whose keys were revoked.
+		if err := repo.Close(); err != nil {
+			return err
+		}
+		s.setEncryption(nil, false)
+	}
+	s.notifyChange()
+	return nil
+}
+
+// Activate turns on the second layer for a selection of hosts, in one batch.
+func (s *Store) Activate(names []string, passphrases map[configstore.ID]string) (map[string]error, error) {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return nil, configstore.ErrNotInitialized
+	}
+	names = cleanProfileSelection(names)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%w: select at least one host", ErrInvalid)
+	}
+	results, err := repo.Activate(names, passphrases)
+	if err != nil {
+		return nil, err
+	}
+	s.notifyChange()
+	return results, nil
+}
+
+// Deactivate drops the second layer for a selection of hosts. No file changes: the
+// body key is computed per read, so forgetting it is the whole operation.
+func (s *Store) Deactivate(names []string) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	names = cleanProfileSelection(names)
+	if len(names) == 0 {
+		return fmt.Errorf("%w: select at least one host", ErrInvalid)
+	}
+	if err := repo.Deactivate(names); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// NewMnemonic exposes phrase generation to the panel: the phrase is key material,
+// and a client-generated one would be a second implementation of the same rule.
+func (s *Store) NewMnemonic() (string, error) { return configstore.NewMnemonic() }
+
+func keyIDText(id configstore.ID) string {
+	if id.IsZero() {
+		return ""
+	}
+	return hex.EncodeToString(id[:])
 }
 
 // StorageMode returns where one profile is currently persisted.
@@ -219,13 +521,21 @@ func (s *Store) StorageMode(name string) (string, error) {
 	if IsInternalName(name) {
 		return StorageBuiltin, nil
 	}
+	/* Ciphertext left behind by an earlier key: the catalog that described it went
+	   with the key, so no entry answers for this name, but the bytes are still on
+	   disk and still encrypted. Reporting "not found" made one such profile fail the
+	   whole status call, which is how the encryption panel became unopenable. */
+	if s.hasCiphertextOnDisk(name) {
+		return StorageEncrypted, nil
+	}
 	return "", fmt.Errorf("ssh config %q %w", name, ErrNotFound)
 }
 
-// EncryptProfiles moves selected persistent plaintext profiles into the
-// encrypted repository. The catalog commits the whole selection before any
-// selected plaintext source is removed.
-func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
+// EncryptProfiles moves selected persistent plaintext profiles into the encrypted
+// repository, sealed with keyID (empty means the index owner). passphrase is the
+// key's passphrase, required when that key carries one: it is what writes each
+// host's `.adk` (§8.2 step 2).
+func (s *Store) EncryptProfiles(names []string, keyID configstore.ID, passphrase string) ([]EncryptionResult, error) {
 	names = cleanProfileSelection(names)
 	if len(names) == 0 {
 		return nil, fmt.Errorf("%w: select at least one host", ErrInvalid)
@@ -239,8 +549,41 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("configuration encryption has not been enabled")
 	}
-	if repo.Status().RotationPending {
-		return nil, configstore.ErrRotationPending
+	keys, err := repo.Keys()
+	if err != nil {
+		return nil, err
+	}
+	selected := configstore.KeyInfo{}
+	if keyID.IsZero() {
+		/* No implicit choice: the caller must say which key seals the selection,
+		   because a host's key is a property of that host (§8.2). The one exception
+		   is the single-key store, where there is nothing to choose between. */
+		if len(keys) != 1 {
+			return nil, configstore.ErrKeyRequired
+		}
+		selected = keys[0]
+		copyID, err := parseKeyID(selected.ID)
+		if err != nil {
+			return nil, err
+		}
+		keyID = copyID
+	} else {
+		known := false
+		for _, key := range keys {
+			if key.ID == keyIDText(keyID) {
+				known = true
+				selected = key
+			}
+		}
+		if !known {
+			return nil, configstore.ErrKeyNotFound
+		}
+	}
+	if !selected.Plugged {
+		return nil, configstore.ErrKeyNotLoaded
+	}
+	if selected.Passphrase && passphrase == "" {
+		return nil, fmt.Errorf("%w: key %s", configstore.ErrPassphraseRequired, keyIDText(keyID)[:8])
 	}
 
 	// Serialise all selected names so concurrent saves cannot race with this batch.
@@ -249,6 +592,9 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 
 	results := make([]EncryptionResult, 0, len(names))
 	items := make([]configstore.Item, 0, len(names))
+	/* Re-keyed hosts are written one at a time, each replacing its own object: a
+	   batch import creates objects, and these already have one. */
+	var rekeys []string
 	sources := make([]string, 0, len(names))
 	seen := make(map[string]bool, len(names))
 	for _, name := range names {
@@ -261,10 +607,19 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 			results = append(results, EncryptionResult{Name: name, Code: "temporary_profile", Error: "temporary profiles are not persisted"})
 			continue
 		}
-		if _, encrypted, err := s.encryptedFold(name); err != nil {
+		_, encrypted, err := s.encryptedFold(name)
+		if err != nil {
 			return nil, err
-		} else if encrypted {
-			results = append(results, EncryptionResult{Name: name, OK: true, Code: "already_encrypted"})
+		}
+		if encrypted {
+			/* Already sealed. Two cases, and telling them apart matters: the same key
+			   means nothing to do, a different key means "move it here". */
+			state, err := repo.HostState(name)
+			if err == nil && state.KeyID == keyID {
+				results = append(results, EncryptionResult{Name: name, OK: true, Code: "already_encrypted"})
+				continue
+			}
+			rekeys = append(rekeys, name)
 			continue
 		}
 		plaintextName, plaintext, err := s.plaintextFold(name)
@@ -291,21 +646,27 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 		items = append(items, configstore.Item{Name: plaintextName, Data: data})
 		sources = append(sources, plaintextName)
 	}
-	if len(items) == 0 {
+	if len(items) == 0 && len(rekeys) == 0 {
 		return results, nil
 	}
-	if err := s.importCiphertexts(repo, items); err != nil {
-		for _, item := range items {
-			clear(item.Data)
+	options := configstore.SaveOptions{KeyID: keyID, Passphrase: passphrase}
+	if len(items) > 0 {
+		if err := s.importCiphertexts(repo, items, options); err != nil {
+			for _, item := range items {
+				clear(item.Data)
+			}
+			return nil, err
 		}
-		return nil, err
+		for i, name := range sources {
+			if err := removePlaintextProfile(s.plaintextPath(name)); err != nil {
+				results = append(results, EncryptionResult{Name: name, Code: "plaintext_cleanup_failed", Error: err.Error()})
+				continue
+			}
+			results = append(results, EncryptionResult{Name: items[i].Name, OK: true})
+		}
 	}
-	for _, name := range sources {
-		if err := removePlaintextProfile(s.plaintextPath(name)); err != nil {
-			results = append(results, EncryptionResult{Name: name, Code: "plaintext_cleanup_failed", Error: err.Error()})
-			continue
-		}
-		results = append(results, EncryptionResult{Name: name, OK: true})
+	for _, name := range rekeys {
+		results = append(results, s.rekeyOne(repo, name, options))
 	}
 	for _, item := range items {
 		clear(item.Data)
@@ -315,7 +676,9 @@ func (s *Store) EncryptProfiles(names []string) ([]EncryptionResult, error) {
 }
 
 // RestoreProfiles writes selected encrypted profiles back to plaintext before
-// removing their catalog references.
+// removing their catalog references. It is the only path that turns ciphertext into
+// plaintext, so it needs an active host: an INACTIVE or ORPHANED one cannot be read
+// and therefore cannot be restored (§8.3).
 func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 	names = cleanProfileSelection(names)
 	if len(names) == 0 {
@@ -327,9 +690,6 @@ func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 		}
 	}
 	repo := s.repositorySnapshot()
-	if repo != nil && repo.Status().RotationPending {
-		return nil, configstore.ErrRotationPending
-	}
 
 	unlock := s.lockNames(names...)
 	defer unlock()
@@ -356,6 +716,10 @@ func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 			continue
 		}
 		data, err := repo.Read(encryptedName)
+		if errors.Is(err, configstore.ErrNotActivated) {
+			results = append(results, EncryptionResult{Name: name, Code: "host_not_activated", Error: "activate the host before restoring it"})
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -382,6 +746,46 @@ func (s *Store) RestoreProfiles(names []string) ([]EncryptionResult, error) {
 	return results, nil
 }
 
+// importCiphertexts publishes a converted selection as one catalog commit.
+func (s *Store) importCiphertexts(repo *configstore.Repository, items []configstore.Item, options configstore.SaveOptions) error {
+	if s.importCiphertext != nil {
+		return s.importCiphertext(repo, items, options)
+	}
+	return repo.ImportWithOptions(items, options)
+}
+
+/* rekeyOne moves a single sealed host to another key. The plaintext is read into
+ * memory first, which is the whole point: it proves the ciphertext still opens
+ * before the only surviving copy is replaced. Reading needs the old key inserted
+ * AND the host activated — the two-layer rule is what makes this a deliberate
+ * action rather than something that silently succeeds on a locked host.
+ */
+func (s *Store) rekeyOne(repo *configstore.Repository, name string, options configstore.SaveOptions) EncryptionResult {
+	data, err := s.ReadRaw(name)
+	if err != nil {
+		code := "read_failed"
+		if errors.Is(err, configstore.ErrNotActivated) || errors.Is(err, configstore.ErrPassphraseRequired) {
+			code = "not_activated"
+		} else if errors.Is(err, configstore.ErrKeyNotLoaded) {
+			code = "key_not_loaded"
+		}
+		return EncryptionResult{Name: name, Code: code, Error: err.Error()}
+	}
+	defer clear(data)
+	if _, err := ParseAndValidate(data); err != nil {
+		return EncryptionResult{Name: name, Code: "invalid_profile", Error: err.Error()}
+	}
+	/* Write through the repository, not SaveWithMode: EncryptProfiles already holds
+	   this name's token for the whole batch, and SaveWithMode would take it again
+	   and deadlock on its own caller. Everything SaveWithMode would check has been
+	   checked here already — the name is validated, the body is parsed, and the
+	   object exists by construction. */
+	if err := s.saveCiphertext(repo, name, data, SaveMode{KeyID: options.KeyID, Passphrase: options.Passphrase}); err != nil {
+		return EncryptionResult{Name: name, Code: "rekey_failed", Error: err.Error()}
+	}
+	return EncryptionResult{Name: name, OK: true}
+}
+
 func cleanProfileSelection(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, name := range names {
@@ -392,47 +796,20 @@ func cleanProfileSelection(names []string) []string {
 	return out
 }
 
-// DestroyEncryption 删除密钥: it deletes the keyring and the catalog index and
-// nothing else. Encrypted profiles stay on disk, unreadable forever — that is
-// the stated consequence, not an accident, and it is what a user asking to
-// "delete the key" actually asked for. Removing host data is a separate,
-// per-host action; folding it in here would destroy more than the request.
-//
-// It requires an unlocked store, so the caller has already presented the
-// credential. Deleting a key you cannot use would be a way to destroy data
-// without ever proving you were entitled to it.
-func (s *Store) DestroyEncryption() error {
+// SealedProfiles reports how many profiles a damaged keychain would strand.
+func (s *Store) SealedProfiles() int {
 	repo := s.repositorySnapshot()
 	if repo == nil {
-		return fmt.Errorf("configuration encryption has not been enabled")
+		return 0
 	}
-	if repo.Status().Locked {
-		return configstore.ErrPasswordRequired
-	}
-	if repo.Status().RotationPending {
-		return fmt.Errorf("a password change is unfinished; finish it before deleting the key")
-	}
-	if err := configstore.DiscardDataDirKeys(s.dataDir); err != nil {
-		return err
-	}
-	if err := repo.Close(); err != nil {
-		return err
-	}
-	s.setEncryption(nil, false)
-	s.notifyChange()
-	return nil
+	return repo.SealedProfiles()
 }
 
-// LockEncryption 上锁: the unwrapped key leaves memory, the keyring file stays.
-// Encrypted hosts stop being readable; plaintext ones are untouched. Locking
-// asks for no credential — it is the safe direction, and being able to do it
-// deliberately (而不是只能靠重启) is the reason the lock exists.
-func (s *Store) LockEncryption() error {
-	repo := s.repositorySnapshot()
-	if repo == nil {
-		return configstore.ErrNotInitialized
+// parseKeyID reads the hex id the panel speaks back into a key id.
+func parseKeyID(text string) (configstore.ID, error) {
+	var id configstore.ID
+	if err := id.UnmarshalText([]byte(text)); err != nil {
+		return id, configstore.ErrKeyNotFound
 	}
-	err := repo.Lock()
-	s.notifyChange()
-	return err
+	return id, nil
 }

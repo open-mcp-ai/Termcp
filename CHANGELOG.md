@@ -1,18 +1,120 @@
 # Changelog
 
 ## Unreleased
+- Connections at rest now have **two independent switches**. A key can be *loaded*
+  (its 24 words are unsealed into this machine's memory, so it can read what the key
+  seals) or *released*; a host, separately, can be *activated* or not. Reading needs
+  both, and neither half alone opens a body: loading a key unwraps the profile's
+  data key, while activation derives the other half from the host's own passphrase
+  salt. Loading a key no longer makes every host it seals readable.
+- A key's passphrase is a property of the **key**, typed once per key and never
+  written to disk, so one restart means one prompt per passphrase-bearing key rather
+  than one per host. A batch activation covers the whole selection or nothing.
+- **Each key has one root**: the 24 words. Its slots are several ways to unseal those
+  words — this machine's credential store, a mounted KEK file, `TERMCP_CONFIG_KEK` —
+  not several secrets, and the word/phrase wrapper is gone because a phrase sealing
+  the key derived from that same phrase meant nothing. Words can be shown on demand
+  and re-created anywhere.
+- There is no lock, no unlock and no default key — and no index either. Each host
+  is one directory under `ssh_configs/`, and *which key seals it* is the `keyID` in
+  that host's own envelope header, so the list of hosts is the directory listing and
+  any one inserted key can read it. An encrypted host's activation state lives in
+  its own directory (`active`), next to the ciphertext it describes, so one key can
+  no longer become the single point of failure for every other host. Encrypting a
+  host names its key explicitly. Plugging in a key, activating a host and showing
+  the words are human-only actions — an agent request is refused even with a valid
+  token.
+- Keys can be named, rotated (keeping or resetting their passphrase), backed up together, filtered by name, and deleted with a list of the hosts still in the way; encrypted hosts can be re-keyed directly onto another key in memory.
+- Addresses and user names can be masked globally; `?reveal=true` prints them. It
+  changes what is displayed, not what is stored, dialed or validated.
+- Hosts can be shared between people as text. Pick a host, paste the other
+  person's public key, and send them the block that comes out; on their side one
+  paste adds it to their list. The profile is sealed to their key alone, so the
+  chat server and the sender cannot read it.
+- Reading a connection whose key was deleted says so instead of "Not Found", and
+  one unreadable profile no longer fails the whole status call: the panel lists
+  it as encrypted and the delete removes the leftover ciphertext. A keychain file
+  that is gone while ciphertext remains is reported as `keyring_missing` rather than
+  "never encrypted", which is what makes those two states distinguishable without an
+  index — and a directory holding two `.enc` files is reported as damage instead of
+  silently resolving to the newest one.
+- Startup no longer reads the host catalog. It used to load every committed profile
+  to prove they still parse, which made opening an instance cost one disk read per
+  host — 143 s for 245 encrypted hosts — and let a single host whose key was not
+  loaded, or whose file no longer parsed, refuse to start the whole process,
+  including the panel that could repair it. Opening now costs one keychain file;
+  each profile is read when it is used and reports its own state then.
+- Listing hosts is no longer quadratic. Resolving one name rescanned every host
+  directory, so painting a list of 245 hosts took over two minutes; it now reads
+  that name's directory, with the whole-tree scan kept for the case it exists for
+  (a name whose spelling differs in case). 245 hosts: 138 s → 0.6 s.
+- A host card whose key is not loaded, or whose host is not activated, says so in
+  three words on the right of its protocol row instead of a two-line paragraph in a
+  browser-drawn box below it, marked with a key rather than a second padlock: a key
+  when the key is loaded (the host only needs activating), the same key struck
+  through when it is not. Its click still explains what to do, and no longer opens
+  the keychain behind the explanation.
+- The import-host button beside the sharing address is now the same glyph-only
+  button as the copy button next to it; its word lives in the tooltip.
+- Two dialog handlers that had been left dangling: opening the key-picker threw a
+  `ReferenceError` (so the lock on a host card did nothing), and the passphrase
+  dialog's Cancel button had no handler at all.
+- A key's passphrase can be changed on its own, without changing the words: *Change
+  passphrase* in the key's sheet asks for the old one and the new one, verifies the
+  old against every host the key seals before writing anything, then re-seals each
+  host with a fresh salt. The key keeps its id and its address. An empty new
+  passphrase removes the second layer. Rotating the key is still the way to change
+  the words.
+- The detail sheet's verbs are icons: the words' show/copy/export and the address's
+  copy are 15px glyphs with their word as a tooltip, and the receiving action is
+  named *Import host ciphertext* and carries the glyph for what it does. The four
+  paragraphs that explained restart behaviour and passphrase mechanics are gone —
+  the sheet keeps one line of fact, how many hosts the key seals, because that is a
+  property of THIS key rather than an explanation of the model.
+- The key detail sheet holds its shape: the words fold to a blurred grid instead
+  of disappearing (the dialog used to grow and shrink under the button), their
+  verbs sit on the heading row, and a released key's address box says it has no
+  address until it is loaded instead of showing an empty dashed box. Receiving a
+  shared host moved onto the public-key heading, where the address it uses is.
+- A key is **loaded** or **released**, not "inserted" or "removed": the words are
+  unsealed into memory, and releasing them drops them again. The keychain's title
+  line says how many are loaded, and the same word is used in `api.md`, in the
+  server's error messages and in the design document.
+- The keychain's tick and its four actions sit in the title bar beside the name they
+  act on. The row they used to occupy was a header between the title and the list it
+  names, and it was folded away by key count — which left an empty keychain, the
+  state a fresh install opens in, with nothing to press at all. The panel is now a
+  title bar, the list, and a filter row that appears once the list is long enough to
+  need one.
+- Importing keys takes a file as well as a paste: the dialog has a *Choose a backup
+  file* button, and the file's text lands in the box so it can be read before it
+  becomes keys. The warning banner above the host list that said some hosts' keys
+  were not inserted is gone — each row already carries its own lock and tooltip, and
+  the banner repeated them.
+- The tick inside a checked box takes its colour from the theme canvas again: a
+  dialog rule written for text fields was painting it in the body colour, so a light
+  theme showed a dark tick and a dark theme a light one.
 
-- **连接配置逐条加密与钥匙生命周期（#305）**：
-  - **逐条加密**：新建/编辑连接表单带「加密这个连接」勾选，新建时默认勾上，决策属于单条配置；未设置密钥时保存触发引导（「去设置密钥」或「改为明文保存」）。编辑时取消勾选并保存即还原为明文。
-  - **四动作生命周期**：
-    - `设置密钥`：单选「绑定本机（换机失效）」或「密码保护（可搬迁）」，本机无凭据库时自动置灰并说明原因。
-    - `解锁`：输入密码解锁；绑定本机的密钥支持空密码直接走本机凭据解锁；可选「同时绑定本机（下次免密码）」。
-    - `上锁`：一键上锁，密钥移出内存，已加密主机不可读，明文主机不受影响。
-    - `删除密钥`：彻底删除 `config.keys` 与目录索引；密文主机留在磁盘上、标记为已加密且永久不可用（提示密钥已删除），不自动销毁用户主机数据。
-  - **启动降级**：钥匙丢失或损坏时进程照常启动并进入锁定态，明文主机正常加载与连接，密文主机逐台报错并指名道姓给出解法，AI 不再因一台锁坏的主机而被全站停摆（此前整体拒绝启动）。
-  - **系统凭据链**：Windows DPAPI、macOS Keychain、Linux Secret Service、KEK 文件与 `TERMCP_CONFIG_KEK` 环境变量形成按序降级链，重启免密码。
-  - **常驻入口**：锁定态下顶部横幅可点击直达解锁面板，卡片锁形图标取警告色，点密文卡片直接唤出解锁表单，关闭弹窗不再需要刷新页面。
-
+- **连接配置改为「两层阀门 + 助记词单根」**：钥匙有「插入 / 拔掉」，主机另有「激活 / 未激活」，两者是 AND。插上钥匙只解出该主机的数据密钥；激活密钥另由该主机自己的 salt 与钥匙口令派生，缺一层都解不开正文——插上钥匙不再等于名下所有主机都能读。
+- **口令是钥匙级的**：一把钥匙一个口令，输入一次即可激活它名下选中的所有主机；口令不落盘，因此重启后带口令的钥匙需要重新输入一次。批量激活要么整批成功，要么一台都不变。
+- **每把钥匙只有一条根：24 个助记词**。封装槽是「解出这 24 个词」的几种本机方式（系统凭据、挂载的 KEK 文件、`TERMCP_CONFIG_KEK`），不是几种并列秘密；用短语封装「由这些词派生的钥匙」没有意义，所以那条路径已删除。助记词可按需导出，也可在任何机器上重建这把钥匙。
+- **没有上锁/解锁、没有默认钥匙，也没有索引**。每台主机就是 `ssh_configs/` 下的一个目录，「被封在哪把钥匙下」写在它自己 envelope 的公开头里，因此主机名单就是目录列表，插着任意一把钥匙都能列出来；无口令主机的激活状态也落在它自己目录里（`active`），一把钥匙不再成为其余所有主机列表与写入的单点。加密一台主机时必须指明用哪把钥匙。插入钥匙、激活主机、导出助记词只能由人发起，Agent 即使持有 token 也会被拒绝。
+- **钥匙支持命名、轮换（可保留或重置口令）、一键备份全部已插入钥匙、按名字筛选**，删除被挡住时会列出挡路的主机名；已加密的主机可以直接在内存里校验后重封到另一把钥匙。
+- **地址与用户名可以全局打码**，`?reveal=true` 打印原文；打码只改变显示，不改变存储、连通或校验。
+- **连接可以以文本形式在两个人之间分享**：选一台主机、粘贴对方的公钥，把生成的一段文本发过去，对方粘贴即可加入自己的主机列表；内容只用对方的钥匙封装，聊天服务器和发送者都读不到。
+- 读一台「钥匙已被删除」的主机不再报「未找到」；单个读不了的主机也不会再让整个状态接口失败：面板把它列为已加密，删除操作会清掉残留密文。
+- **每把钥匙有自己的分享地址**。公钥由**那把钥匙**的主密钥派生，所以有三把钥匙就有三个地址；别人封给哪个地址，导入的主机就落在哪把钥匙下，不需要你再选一次。公钥在钥匙自己的视图里，主机分享对话框里不再显示「你的公钥」——那个值过去对每把钥匙都一样。
+- **钥匙有了名字，也可以轮换**。名字明文保存在钥匙链里（所以在什么都没插入时也能分辨），不是秘密。轮换（钥匙详情左下角）用新词建一把同名钥匙、把主机逐台交过去、再删掉旧的；正文密文全程不动，任何一步崩溃都只是两把钥匙并存，每台主机仍恰好能被其中一把打开。
+- **导入钥匙可以选文件**：除了粘贴，导入框多了「选择备份文件」，文件内容会先填进输入框，看清了再导入。**主机列表上方那条「有些主机的钥匙尚未插入」的提示去掉了**——每一行本来就带着自己的锁和说明，横幅只是把它们重复一遍。
+- **启动不再读主机目录**：以前开机要把每台主机的密文读一遍证明还能解析——245 台加密主机要 143 秒——而且只要有一台钥匙没载入或文件坏了，整个进程就不启动，连能修它的那个面板一起拒之门外。现在开机只读一个钥匙链文件，每台主机在被用到时才读、并报告它自己的状态。
+- **列主机不再是平方级**：解析一个名字会把所有主机目录扫一遍，于是列 245 台要两分多钟；现在只读这个名字自己的目录，全树扫描只留给它真正需要的场景（名字大小写不同）。245 台：138 秒 → 0.6 秒。
+- **主机卡片的锁定状态改成右侧一行小字 + 钥匙图标**：以前是浏览器默认样式的按钮、居中两行，占满了卡片唯一的空位；现在是协议行右端的一句状态（「未激活」/「钥匙未载入」）。图标用钥匙而不是第二个锁（卡片右上角已经有一个锁）：钥匙已载入是钥匙本身，钥匙没载入是把钥匙划掉。点击仍会说明该怎么办，且不会同时把钥匙链弹出来。
+- **导入主机密文只留图标**：与左边复制地址的按钮同款（`.cs-tool`、27×27、间距 6px），词义进 tooltip 与 aria-label。
+- **两处悬空的弹框处理器**：打开钥匙选择框会抛 `ReferenceError`（主机卡片上的小锁因此什么都不做），口令弹框的「取消」则是没有绑定。新增守卫 `TestEveryHandlerNulledOnCloseIsBound`：关闭时置 null 的名字必须先声明、并且真的被绑定过（`node --check` 两者都看不见）。
+- **可以只换口令、不换助记词**：钥匙详情里的「改口令」要求输入旧口令与新口令，先用旧口令验证它名下每一台主机（错了就一个字节都不写），再逐台用新 salt 重新封存；keyID 与分享地址不变。新口令留空 = 去掉第二层。换词仍然走「轮换」。
+- **钥匙详情保持形状**：助记词「隐藏」是模糊，不是消失（此前会改变弹窗高度，按钮从指针底下移走），三个动词移到标题行；未载入的钥匙公钥框会说明「载入之后它才有分享地址」，不再只是一个空虚线框。「接收分享的主机」移到公钥标题行，与它用到的地址在一起。
+- **钥匙改叫「载入 / 释放」**（不再用「插入 / 拔掉」）：载入是把 24 词解到内存，释放是从内存丢掉，钥匙本身与任何文件都不动。钥匙链标题行会显示已载入的把数，`api.md`、服务端错误信息与设计文档统一用同一套词。
+- **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

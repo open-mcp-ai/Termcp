@@ -173,9 +173,9 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		sshConfigs: sshConfigs,
 		forwardMgr: forwardMgr,
 
-		syncs:      make(chan string, 64),
-		revive:     make(chan struct{}, 1),
-		done:       make(chan struct{}),
+		syncs:  make(chan string, 64),
+		revive: make(chan struct{}, 1),
+		done:   make(chan struct{}),
 	}
 	if store != nil {
 		// The write names the template, so the runtime does that one and nothing

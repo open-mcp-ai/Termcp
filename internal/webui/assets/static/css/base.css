@@ -692,7 +692,7 @@
   .modal-h h2 { margin: 0; font-size: 1rem; color: var(--text-primary); }
   .modal-body { padding: 8px 24px; }
   .modal-body label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
-  .modal-body input, .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary); margin-bottom: 12px; }
+  .modal-body input:not([type="checkbox"]):not([type="radio"]), .modal-body textarea, .modal-body select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-input); color: var(--text-primary); margin-bottom: 12px; }
   .modal-body textarea { min-height: 220px; font-family: var(--font-mono); font-size: 12px; }
   .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 8px; }
   /* A verdict that belongs to one of the buttons shares their row instead of

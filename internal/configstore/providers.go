@@ -22,7 +22,7 @@ func decodeKEK(raw []byte) ([]byte, error) {
 	return decoded, nil
 }
 
-// DefaultProviders is the unlock chain, in the order the repository tries it:
+// DefaultProviders is the loading chain, in the order the repository tries it:
 //
 //  1. the operating system's credential store, which follows the machine and the
 //     logged-in account — the desktop case, and the reason a restart needs no
@@ -33,7 +33,7 @@ func decodeKEK(raw []byte) ([]byte, error) {
 //
 // Every entry may report ErrProviderUnavailable; that is not an error, it is the
 // absence of that path on this host. When all three are unavailable the store
-// opens locked and waits for the password, which stays the recovery route.
+// still opens, with no key loaded, and waits for a phrase to be typed.
 func DefaultProviders() []Provider {
 	return []Provider{
 		SystemProvider(),
@@ -60,12 +60,11 @@ func SystemAvailable() bool {
 	return false
 }
 
-// DiscardDataDirKeys removes the keyring and its catalog, returning the data
-// directory to a plaintext store. It deletes the catalog first: a leftover
-// catalog without keys is the one state the opener refuses outright, while keys
-// without a catalog are inert.
+// DiscardDataDirKeys removes the keyring, returning the data directory to a
+// plaintext store. A leftover index from the previous format goes with it: it was
+// sealed by these keys and can never be read again.
 func DiscardDataDirKeys(dataDir string) error {
-	for _, path := range []string{repositoryCatalogPath(dataDir), filepath.Join(dataDir, "keys", "config.keys")} {
+	for _, path := range []string{legacyCatalogPath(dataDir), filepath.Join(dataDir, "keys", "config.keys")} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}

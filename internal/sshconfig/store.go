@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/fsutil"
+	"github.com/open-mcp-ai/termcp/internal/hostshare"
 )
 
 // ErrNotFound reports that a named ssh config does not exist. Callers can
@@ -62,23 +63,20 @@ type Store struct {
 	// lost profile, and it cannot be observed without an injected failure.
 	// Production leaves both nil.
 	writeCiphertext  func(*configstore.Repository, string, []byte) error
-	importCiphertext func(*configstore.Repository, []configstore.Item) error
+	importCiphertext func(*configstore.Repository, []configstore.Item, configstore.SaveOptions) error
 }
 
-// saveCiphertext publishes one encrypted profile.
-func (s *Store) saveCiphertext(repo *configstore.Repository, name string, data []byte) error {
+// saveCiphertext publishes one encrypted profile with this save's decisions: which
+// key seals it and, when that key carries a passphrase, the passphrase that writes
+// the host's `.adk`.
+func (s *Store) saveCiphertext(repo *configstore.Repository, name string, data []byte, mode SaveMode) error {
 	if s.writeCiphertext != nil {
 		return s.writeCiphertext(repo, name, data)
 	}
-	return repo.Save(name, data)
-}
-
-// importCiphertexts publishes a converted selection as one catalog commit.
-func (s *Store) importCiphertexts(repo *configstore.Repository, items []configstore.Item) error {
-	if s.importCiphertext != nil {
-		return s.importCiphertext(repo, items)
-	}
-	return repo.Import(items)
+	return repo.SaveWithOptions(name, data, configstore.SaveOptions{
+		KeyID:      mode.KeyID,
+		Passphrase: mode.Passphrase,
+	})
 }
 
 // NewEncryptedStore returns a Store whose persistent profiles live in repo.
@@ -99,32 +97,28 @@ func NewHybridStore(dataDir string, repo *configstore.Repository, encryptNew boo
 }
 
 // OpenConfiguredStore opens an encrypted repository when one has been
-// initialized and otherwise preserves the plaintext layout. A store whose
-// keyring needs a password comes back locked rather than failing: the operator
-// unlocks it through the UI, and until then writes are refused instead of
-// silently falling back to plaintext.
+// initialized and otherwise preserves the plaintext layout. A keychain whose
+// keys need a human comes back with nothing loaded rather than failing: the
+// operator loads one through the panel, and until then writes are refused
+// instead of silently falling back to plaintext.
 func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*Store, error) {
-	repo, err := configstore.OpenRepositoryForRecovery(dataDir, providers...)
+	repo, err := configstore.OpenRepository(dataDir, providers...)
 	if errors.Is(err, configstore.ErrNotInitialized) {
-		/* The catalog without its keyring no longer lands here: configstore opens
-		   that state as a locked repository, so the instance starts and each
-		   encrypted profile fails on access instead of every plaintext profile
-		   being refused at startup. What is left is a genuinely plaintext dir. */
+		/* A catalog without its keychain does not land here: configstore opens that
+		   state with the fault recorded, so the instance starts and each encrypted
+		   profile fails on access instead of every plaintext profile being refused
+		   at startup. What is left is a genuinely plaintext dir. */
 		return NewStore(dataDir), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	/* A locked store is told to encrypt even if the catalog's preference cannot be
-	   read yet: "I cannot read the keyring" must never become "then plaintext is
-	   fine". Writes are refused while locked, and UnlockEncryption re-reads the
-	   real preference once the catalog opens. */
+	/* The preference is readable whether or not a key is loaded, so "no key is
+	   active" no longer has to guess. Guessing true made the whole store read-only
+	   in that state — including plaintext hosts, which need no key at all. */
 	encryptNew := repo.EncryptNew()
-	if repo.Status().Locked {
-		encryptNew = true
-	}
 	store := NewHybridStore(repo.DataDir(), repo, encryptNew)
-	if repo.Status().Locked {
+	if !repo.Loaded() {
 		return store, nil
 	}
 	// Opening verifies every committed profile: a catalog entry that no longer
@@ -136,6 +130,14 @@ func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*St
 	}
 	for _, name := range names {
 		if _, err := store.Load(name); err != nil {
+			/* A profile whose key was deleted is already unreadable and always will
+			   be; failing the whole startup over it would take every other host
+			   down with it, which is the opposite of what a damaged profile
+			   deserves. Everything else still has to parse. */
+			var orphaned orphanedCiphertextError
+			if errors.As(err, &orphaned) {
+				continue
+			}
 			_ = store.Close()
 			return nil, fmt.Errorf("verify profile %q: %w", name, err)
 		}
@@ -144,14 +146,14 @@ func OpenConfiguredStore(dataDir string, providers ...configstore.Provider) (*St
 }
 
 // StartupWarning names the one condition an operator has to act on before the
-// store can persist anything: an initialized store whose keyring is locked.
+// store can persist anything: an initialized store with no key loaded.
 func (s *Store) StartupWarning() string {
 	repo := s.repositorySnapshot()
 	if repo == nil {
 		return ""
 	}
-	if status := repo.Status(); status.Locked {
-		return "configuration encryption is initialized but locked; open the settings page and enter the password before saving or converting hosts"
+	if !repo.Loaded() {
+		return "configuration encryption is initialized but no key is plugged in; open the keychain panel and plug a key in before saving or converting hosts"
 	}
 	return ""
 }
@@ -239,9 +241,27 @@ func (s *Store) configPath(name string) (string, error) {
 	return filepath.Join(s.root(), name, "config.toml"), nil
 }
 
+/* hostStorageError turns a repository read failure into the per-host vocabulary
+ * the surface speaks, so one host's state is never reported as another's: "insert
+ * the key" and "activate the host" are different actions, and a caller that gets
+ * the wrong one has nothing to do next.
+ */
+func hostStorageError(err error, name string) error {
+	switch {
+	case errors.Is(err, configstore.ErrOrphaned):
+		return orphanedCiphertextError{name: name}
+	case errors.Is(err, configstore.ErrNotActivated):
+		return notActivatedHostError{name: name}
+	case errors.Is(err, configstore.ErrKeyNotLoaded):
+		return unloadedHostError{name: name}
+	default:
+		return err
+	}
+}
+
 // orphanedCiphertextError reports a profile whose key has been deleted: the
 // file is there, nothing can decrypt it, and saying so is kinder than reporting
-// the host as missing or letting the operator believe an unlock would help.
+// the host as missing or letting the operator believe loading a key would help.
 type orphanedCiphertextError struct{ name string }
 
 func (e orphanedCiphertextError) Error() string {
@@ -250,16 +270,41 @@ func (e orphanedCiphertextError) Error() string {
 
 func (e orphanedCiphertextError) Unwrap() error { return configstore.ErrNotInitialized }
 
-// lockedHostError names the one profile that cannot be read and what would fix
-// it, while still answering errors.Is(err, configstore.ErrLocked) so callers
-// keep one condition to handle.
-type lockedHostError struct{ name string }
+// unloadedHostError names the one profile that cannot be read and what would fix
+// it, while still answering errors.Is(err, configstore.ErrKeyNotLoaded) so
+// callers keep one condition to handle.
+type unloadedHostError struct{ name string }
 
-func (e lockedHostError) Error() string {
-	return fmt.Sprintf("host %q is encrypted at rest and the store is locked; unlock it with the encryption password to use this host", e.name)
+func (e unloadedHostError) Error() string {
+	return fmt.Sprintf("host %q is encrypted at rest and the key that seals it is not loaded; load that key in the keychain panel to use this host", e.name)
 }
 
-func (e lockedHostError) Unwrap() error { return configstore.ErrLocked }
+func (e unloadedHostError) Unwrap() error { return configstore.ErrKeyNotLoaded }
+
+/* notActivatedHostError names the one profile whose second layer is off, and what
+ * would fix it, while still answering errors.Is(err, configstore.ErrNotActivated)
+ * so callers keep one condition to handle.
+ */
+type notActivatedHostError struct{ name string }
+
+func (e notActivatedHostError) Error() string {
+	return fmt.Sprintf("host %q is encrypted at rest and is not activated; activate it in the keychain panel (its key's passphrase may be needed) before using it", e.name)
+}
+
+func (e notActivatedHostError) Unwrap() error { return configstore.ErrNotActivated }
+
+// IsNotActivated reports an error caused by a profile whose second layer is off.
+func IsNotActivated(err error) bool {
+	return errors.Is(err, configstore.ErrNotActivated)
+}
+
+// IsOrphanedCiphertext reports an error caused by a profile whose key is gone:
+// the bytes are on disk, nothing can ever decrypt them again. Callers use it to
+// answer "this profile is gone for good" instead of "bad request".
+func IsOrphanedCiphertext(err error) bool {
+	var orphaned orphanedCiphertextError
+	return errors.As(err, &orphaned)
+}
 
 // Load reads and validates a named config.
 // name "internal" is the built-in entry, optionally overridden by a stored
@@ -284,18 +329,19 @@ func (s *Store) Load(name string) (*Entry, error) {
 		}
 		return ent, nil
 	}
-	/* Both no-repo and locked-repo mean "no readable ciphertext". The first case
-	   is a deleted key: the ciphertext is still on disk and can never be opened
-	   again, which is a different message from "unlock me". */
-	lockedRepo := false
+	/* Both no-repo and nothing-loaded mean "no readable ciphertext". The first
+	   case is a deleted key: the ciphertext is still on disk and can never be
+	   opened again, which is a different message from "load my key". */
+	unloadedRepo := false
 	if repo := s.repositorySnapshot(); repo != nil {
-		lockedRepo = repo.Status().Locked
+		unloadedRepo = !repo.Loaded()
 	}
-	if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted && (lockedRepo || s.repositorySnapshot() == nil) {
-		if s.repositorySnapshot() == nil {
+	if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted && (unloadedRepo || s.repositorySnapshot() == nil) {
+		repo := s.repositorySnapshot()
+		if repo == nil || repo.KeyringMissing() {
 			return nil, orphanedCiphertextError{name: name}
 		}
-		return nil, lockedHostError{name: name}
+		return nil, unloadedHostError{name: name}
 	}
 	p, err := s.configPath(name)
 	if err != nil {
@@ -304,15 +350,21 @@ func (s *Store) Load(name string) (*Entry, error) {
 	if v, inMemory := s.temporary.Load(name); inMemory {
 		return ParseAndValidate(v.([]byte))
 	}
+	/* Ciphertext on disk that no catalog lists: its key was deleted. Say that,
+	   rather than "not found", so callers can tell a damaged store from a missing
+	   name — the startup verifier skips these instead of refusing to run. */
+	if _, encrypted, err := s.encryptedFold(name); err == nil && !encrypted && s.hasCiphertextOnDisk(name) {
+		return nil, orphanedCiphertextError{name: name}
+	}
 	// Ciphertext is consulted before plaintext: an encrypted profile is the
 	// current generation of that name, and a leftover plaintext copy is what a
 	// half-finished conversion or an interrupted restore leaves behind.
-	// A locked store has no ciphertext it can read: asking would fail the load
-	// with "store is locked" and take every plaintext profile with it.
-	if repo := s.repositorySnapshot(); repo != nil && !repo.Status().Locked {
+	// A store with nothing loaded has no ciphertext it can read: asking would
+	// fail the load with "no key loaded" and take every plaintext profile with it.
+	if repo := s.repositorySnapshot(); repo != nil && repo.Loaded() {
 		data, err := repo.Read(name)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
-			return nil, err
+			return nil, hostStorageError(err, name)
 		}
 		if err == nil {
 			return ParseAndValidate(data)
@@ -345,11 +397,17 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 		}
 		return InternalTemplate(), nil
 	}
-	if repo := s.repositorySnapshot(); repo != nil && repo.Status().Locked {
+	if repo := s.repositorySnapshot(); repo != nil && !repo.Loaded() {
 		if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted {
-			/* Name the host and the action. A generic "store is locked" leaves the
-			   AI unable to tell which profile failed or what would fix it. */
-			return nil, lockedHostError{name: name}
+			/* The keychain file itself is gone: no key will ever open this, and
+			   telling the operator to insert one sends them looking for something
+			   that does not exist. */
+			if repo.KeyringMissing() {
+				return nil, orphanedCiphertextError{name: name}
+			}
+			/* Name the host and the action. A generic "no key loaded" leaves the AI
+			   unable to tell which profile failed or what would fix it. */
+			return nil, unloadedHostError{name: name}
 		}
 	}
 	p, err := s.configPath(name)
@@ -359,12 +417,12 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	if v, inMemory := s.temporary.Load(name); inMemory {
 		return append([]byte(nil), v.([]byte)...), nil
 	}
-	// Same rule as Load: a locked store has no ciphertext it can read, so asking
-	// the repository would fail a plaintext profile with "store is locked".
-	if repo := s.repositorySnapshot(); repo != nil && !repo.Status().Locked {
+	// Same rule as Load: a store with nothing loaded has no ciphertext it can
+	// read, so asking the repository would fail a plaintext profile too.
+	if repo := s.repositorySnapshot(); repo != nil && repo.Loaded() {
 		data, err := repo.Read(name)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
-			return nil, err
+			return nil, hostStorageError(err, name)
 		}
 		if err == nil {
 			if _, err := ParseAndValidate(data); err != nil {
@@ -375,6 +433,13 @@ func (s *Store) ReadRaw(name string) ([]byte, error) {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
+		/* No readable ciphertext and no plaintext, yet the directory holds
+		   generations: the key is gone. Report that instead of a bare file error,
+		   which the HTTP layer turns into "Not Found" for a profile that plainly
+		   exists in the list. */
+		if os.IsNotExist(err) && s.hasCiphertextOnDisk(name) {
+			return nil, orphanedCiphertextError{name: name}
+		}
 		return nil, err
 	}
 	if _, err := ParseAndValidate(data); err != nil {
@@ -405,10 +470,10 @@ func (s *Store) List() ([]string, error) {
 	})
 	if repo := s.repositorySnapshot(); repo != nil {
 		stored, err := repo.List()
-		// Locked: the catalog cannot be read, so the names below come from the
-		// profile directories on disk. A host whose key is unavailable is still a
-		// host the user can see and un-block, not one that disappears.
-		if err != nil && !errors.Is(err, configstore.ErrLocked) {
+		// Nothing loaded: the catalog cannot be read, so the names below come from
+		// the profile directories on disk. A host whose key is unavailable is still
+		// a host the user can see and load a key for, not one that disappears.
+		if err != nil && !errors.Is(err, configstore.ErrKeyNotLoaded) {
 			return nil, err
 		}
 		for _, name := range stored {
@@ -473,6 +538,15 @@ func (s *Store) Save(name string, data []byte) error {
 type SaveMode struct {
 	Temporary bool
 	Encrypt   *bool
+	// KeyID seals this profile with one named Main Key. It implies Encrypt: a
+	// caller that chose a key asked for ciphertext, and the choice is per profile
+	// because which key protects a host is a property of that host.
+	KeyID configstore.ID
+	/* Passphrase is the sealing key's passphrase, present only when this save
+	   creates or re-saves a host under a key that carries one. It is never stored:
+	   it derives the host's activation key, which writes the `.adk` beside the new
+	   generation (§4.5, §8.2 step 2). */
+	Passphrase string
 }
 
 // SaveWithOptions stores a profile under the store's preference.
@@ -549,10 +623,14 @@ func (s *Store) SaveWithMode(name string, data []byte, mode SaveMode) error {
 	}
 
 	// The explicit request wins over the store preference; nil keeps the old
-	// rule (existing plaintext profiles stay plaintext until converted).
+	// rule (existing plaintext profiles stay plaintext until converted). A named
+	// key is an even more explicit request: it names the ciphertext to use.
 	encryptNew := s.stateSnapshot().encryptNew
 	if mode.Encrypt != nil {
 		encryptNew = *mode.Encrypt
+	}
+	if !mode.KeyID.IsZero() {
+		encryptNew = true
 	}
 	// Unchecking "encrypt" on an existing encrypted profile restores it: the
 	// operator asked for plaintext, and leaving ciphertext behind would make the
@@ -595,10 +673,27 @@ func (s *Store) SaveWithMode(name string, data []byte, mode SaveMode) error {
 	if repo == nil {
 		return errEncryptionUnavailable
 	}
+	if mode.KeyID.IsZero() {
+		/* No implicit choice: a host's key is a property of that host (§8.2). The one
+		   exception is a keychain with exactly one key, where there is nothing to
+		   choose between and making the caller name it would be ceremony. */
+		keys, err := repo.Keys()
+		if err != nil {
+			return err
+		}
+		if len(keys) != 1 {
+			return configstore.ErrKeyRequired
+		}
+		wanted, err := parseKeyID(keys[0].ID)
+		if err != nil {
+			return err
+		}
+		mode.KeyID = wanted
+	}
 	// The ciphertext is published first. Only after it succeeds is the plaintext
 	// copy removed: a crash here leaves both copies, which is recoverable, while
 	// the opposite order would lose the profile.
-	if err := s.saveCiphertext(repo, name, data); err != nil {
+	if err := s.saveCiphertext(repo, name, data, mode); err != nil {
 		return err
 	}
 	if plaintextExists {
@@ -611,9 +706,9 @@ func (s *Store) SaveWithMode(name string, data []byte, mode SaveMode) error {
 	return nil
 }
 
-// errEncryptionUnavailable is the refusal that keeps a locked store from
-// silently writing plaintext where the operator expects ciphertext.
-var errEncryptionUnavailable = fmt.Errorf("configuration encryption is enabled but its keyring is unavailable")
+// errEncryptionUnavailable is the refusal that keeps a store with no key loaded
+// from silently writing plaintext where the operator expects ciphertext.
+var errEncryptionUnavailable = fmt.Errorf("configuration encryption is enabled but no key is loaded")
 
 // IsTemporary reports whether the profile exists only in this process.
 func (s *Store) IsTemporary(name string) bool {
@@ -754,12 +849,41 @@ func (s *Store) Delete(name string) error {
 	defer unlock()
 	s.temporary.Delete(name)
 	repo := s.repositorySnapshot()
-	encryptedName, encryptedExists, err := s.encryptedFold(name)
-	if err == nil && encryptedExists {
-		if repo == nil {
-			err = errEncryptionUnavailable
-		} else {
-			err = repo.Delete(encryptedName)
+	encryptedName, inCatalog, err := s.encryptedFold(name)
+	/* A loaded catalog only answers for names it still lists, so a leftover
+	   generation from a deleted key looks absent. Ask the disk as well: without
+	   this the delete returned success and removed nothing. */
+	onDisk := s.hasCiphertextOnDisk(name)
+	if err == nil && (inCatalog || onDisk) {
+		switch {
+		case repo == nil:
+			/* No catalog and no keyring: nothing can ever decrypt these files, so
+			   removing them IS the delete. Refusing made an unreadable profile
+			   impossible to clean up — the exact profile the panel tells the
+			   operator to delete and recreate. */
+			err = s.removeCiphertextFiles(name)
+		case repo.KeyringMissing():
+			/* The keychain file itself is gone: nothing can ever open these bytes,
+			   so removing them IS the delete. Refusing left the one profile the
+			   panel tells the operator to delete and recreate impossible to clean
+			   up. */
+			err = s.removeCiphertextFiles(name)
+		case !repo.Loaded():
+			/* A keychain exists but nothing is plugged in: what looks like an
+			   orphan might still open once its key is loaded, so do not destroy it
+			   from a state that cannot prove entitlement. Say "load the key",
+			   which is actionable. */
+			err = configstore.ErrKeyNotLoaded
+		default:
+			if inCatalog {
+				err = repo.Delete(encryptedName)
+			}
+			if err == nil && s.hasCiphertextOnDisk(name) {
+				/* The catalog did not know this name — its entry was lost with an
+				   older key — so repo.Delete had nothing to remove. Clear the
+				   leftover generations, which nothing can read. */
+				err = s.removeCiphertextFiles(name)
+			}
 		}
 	}
 	plaintextName, plaintextExists, plaintextErr := s.plaintextFold(name)
@@ -780,17 +904,17 @@ func (s *Store) Delete(name string) error {
 // case-insensitively, returning the stored spelling.
 func (s *Store) encryptedFold(name string) (string, bool, error) {
 	repo := s.repositorySnapshot()
-	locked := repo == nil
+	unloaded := repo == nil
 	var names []string
 	var err error
 	if repo != nil {
 		names, err = repo.List()
-		locked = errors.Is(err, configstore.ErrLocked)
+		unloaded = errors.Is(err, configstore.ErrKeyNotLoaded)
 	}
-	if locked {
-		/* Locked: the catalog is unreadable, but the ciphertext's directory still
-		   says this name is encrypted. Answering from disk keeps the storage mode
-		   — and therefore the lock glyph and the "unavailable" state — visible
+	if unloaded {
+		/* Nothing loaded: the catalog is unreadable, but the ciphertext's directory
+		   still says this name is encrypted. Answering from disk keeps the storage
+		   mode — and therefore the badge and the "key not loaded" state — visible
 		   instead of degrading into "not found". */
 		dir := filepath.Join(s.root(), name)
 		entries, readErr := os.ReadDir(dir)
@@ -813,6 +937,21 @@ func (s *Store) encryptedFold(name string) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// hasCiphertextOnDisk reports whether the profile directory holds encrypted
+// generations, regardless of whether any catalog currently lists the name.
+func (s *Store) hasCiphertextOnDisk(name string) bool {
+	entries, err := os.ReadDir(filepath.Join(s.root(), name))
+	if err != nil {
+		return false
+	}
+	for _, f := range entries {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".enc") {
+			return true
+		}
+	}
+	return false
 }
 
 // plaintextFold reports whether a config.toml exists for name, case-insensitively.
@@ -854,6 +993,27 @@ func (s *Store) plaintextPath(name string) string {
 	return filepath.Join(s.root(), name, "config.toml")
 }
 
+// removeCiphertextFiles deletes every encrypted generation stored under a
+// profile directory, plus the directory itself. Only callers that have already
+// established the bytes are unreadable (no catalog, no keyring) use this.
+func (s *Store) removeCiphertextFiles(name string) error {
+	dir := filepath.Join(s.root(), name)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".enc") && !strings.HasSuffix(entry.Name(), ".adk")) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	_ = os.Remove(dir)
+	return nil
+}
+
 func removePlaintextProfile(path string) error {
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -874,4 +1034,191 @@ func regularFileExists(path string) (bool, error) {
 		return false, err
 	}
 	return !st.IsDir(), nil
+}
+
+/* Sharing a profile happens between two people, so it cannot use the store's own
+ * key: the recipient has a different one. Each store derives a stable X25519
+ * identity from its Main Key, and a profile is sealed to the recipient's public
+ * half with an ephemeral exchange. Nothing new is stored, nothing new can be
+ * lost: a store with a loaded key can receive, one with nothing loaded cannot.
+ */
+const shareIdentityInfo = "termcp/hostshare/identity/v1"
+
+/* SharePublicKey returns the base64 public half of ONE key's sharing identity.
+ *
+ * It used to be the store's identity, derived from whichever key seals the index,
+ * and that was the wrong unit: a keychain with ten keys answered to one address, so
+ * whoever sent a host could not say which of them should hold it, and the receiving
+ * side had to guess. A key is the thing that holds hosts, so a key is the thing that
+ * has an address. Handing one out is how someone else sends you a host it will
+ * protect — and it is public by design, useless to anyone who does not already have
+ * the blob.
+ */
+func (s *Store) SharePublicKey(keyID configstore.ID) (string, error) {
+	secret, err := s.shareSecretForKey(keyID)
+	if err != nil {
+		return "", err
+	}
+	defer clear(secret[:])
+	return hostshare.PublicKey(secret), nil
+}
+
+// shareSecretForKey derives the X25519 secret of one key. It requires that key to
+// be inserted, which is the same rule the rest of the panel follows: an address you
+// cannot answer at is worse than no address.
+func (s *Store) shareSecretForKey(keyID configstore.ID) ([32]byte, error) {
+	var out [32]byte
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return out, configstore.ErrNotInitialized
+	}
+	return repo.DeriveSubkeyFor(keyID, shareIdentityInfo)
+}
+
+// shareSecretLegacy is the pre-existing store-wide identity. Blobs sealed against
+// it are still in chat windows, so import keeps answering them; nothing new is
+// ever sealed with it.
+func (s *Store) shareSecretLegacy() ([32]byte, error) {
+	var out [32]byte
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return out, configstore.ErrNotInitialized
+	}
+	return repo.DeriveSubkey(shareIdentityInfo)
+}
+
+// ExportSharedProfile seals one profile's plaintext to recipientPublicKey and
+// returns the chat-sized blob. The profile keeps its own name as a suggestion;
+// the recipient decides where it lands.
+func (s *Store) ExportSharedProfile(name, recipientPublicKey string) (string, error) {
+	recipient, err := hostshare.ParsePublicKey(recipientPublicKey)
+	if err != nil {
+		return "", err
+	}
+	data, err := s.ReadRaw(name)
+	if err != nil {
+		return "", err
+	}
+	defer clear(data)
+	/* The sender's own address in the card is a label, and the honest one is the key
+	   that seals the profile being sent: a person with several keys who sends from
+	   different ones should be able to tell the two apart in the reply. */
+	secret, err := s.senderIdentity(name)
+	if err != nil {
+		return "", err
+	}
+	defer clear(secret[:])
+	return hostshare.Seal(recipient, name, data, hostshare.PublicKey(secret))
+}
+
+// senderIdentity derives the sharing identity of the key that seals name, falling
+// back to the store-wide identity for a plaintext profile, which no key seals.
+func (s *Store) senderIdentity(name string) ([32]byte, error) {
+	status, err := s.EncryptionStatus()
+	if err == nil {
+		for _, host := range status.Hosts {
+			if host.Name != name || host.KeyID == "" {
+				continue
+			}
+			var keyID configstore.ID
+			if err := keyID.UnmarshalText([]byte(host.KeyID)); err == nil {
+				if secret, err := s.shareSecretForKey(keyID); err == nil {
+					return secret, nil
+				}
+			}
+			break
+		}
+	}
+	return s.shareSecretLegacy()
+}
+
+/* openingShareKey finds the key a blob was addressed to by trying each key this
+ * store is currently holding. The legacy store-wide identity is tried last, so a
+ * blob shared before keys had addresses still imports.
+ */
+func (s *Store) openingShareKey(blob string) (configstore.ID, [32]byte, error) {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ID{}, [32]byte{}, configstore.ErrNotInitialized
+	}
+	keys, err := repo.Keys()
+	if err != nil {
+		return configstore.ID{}, [32]byte{}, err
+	}
+	for _, key := range keys {
+		if !key.Plugged {
+			/* A key that is not loaded cannot answer at this address, which is the
+			   same rule the panel shows. Skipping it is not a limitation: the sender
+			   was given the address of a key, and that key has to be there. */
+			continue
+		}
+		var keyID configstore.ID
+		if err := keyID.UnmarshalText([]byte(key.ID)); err != nil {
+			continue
+		}
+		secret, err := s.shareSecretForKey(keyID)
+		if err != nil {
+			continue
+		}
+		if _, _, err := hostshare.Open(secret, blob); err == nil {
+			return keyID, secret, nil
+		}
+		clear(secret[:])
+	}
+	legacy, err := s.shareSecretLegacy()
+	if err != nil {
+		return configstore.ID{}, [32]byte{}, hostshare.ErrDecrypt
+	}
+	if _, _, err := hostshare.Open(legacy, blob); err == nil {
+		return configstore.ID{}, legacy, nil
+	}
+	clear(legacy[:])
+	return configstore.ID{}, [32]byte{}, hostshare.ErrDecrypt
+}
+
+/* ImportSharedProfile opens a blob and saves it under the name the sender used,
+ * suffixed if that name is taken. Importing is deliberately plain: the profile is
+ * validated like any other paste, and the caller decides whether to keep it.
+ *
+ * Which key opens it is not a question the user is asked. The blob names no key —
+ * it was sealed to one public key — so the store tries the keys it is holding and
+ * the one that opens it is the one that seals the result. That is the whole point
+ * of an address per key: the sender already chose, by choosing which address to
+ * write to.
+ */
+func (s *Store) ImportSharedProfile(blob string) (string, error) {
+	keyID, secret, err := s.openingShareKey(blob)
+	if err != nil {
+		return "", err
+	}
+	defer clear(secret[:])
+	name, data, err := hostshare.Open(secret, blob)
+	if err != nil {
+		return "", err
+	}
+	defer clear(data)
+	if _, err := ParseAndValidate(data); err != nil {
+		return "", err
+	}
+	name = strings.TrimSpace(name)
+	if err := ValidateName(name); err != nil || IsInternalName(name) {
+		return "", fmt.Errorf("%w: the shared profile name %q is not usable here", ErrInvalid, name)
+	}
+	for i := 0; i < 50; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", name, i+1)
+		}
+		if err := s.checkNameCollision(candidate, ""); err != nil {
+			continue
+		}
+		/* Sealed by the key that opened it, not by a store preference: which key
+		   protects a host is a property of that host, and this one arrived addressed
+		   to a particular key. */
+		if err := s.SaveWithMode(candidate, data, SaveMode{KeyID: keyID}); err != nil {
+			return "", err
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("%w: too many profiles named %q", ErrInvalid, name)
 }

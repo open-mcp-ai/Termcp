@@ -296,67 +296,296 @@ Response 200:
 
 ### Configuration at rest
 
-`GET /api/config-storage` returns whether a keyring is initialized, whether new
-profiles will be encrypted, whether an encryption password is configured,
-whether automatic unlocking is available, and each listed host's `mode`:
+`GET /api/config-storage` reports whether a keychain exists, whether new profiles
+will be encrypted, whether addresses are masked, how much of the keychain is
+loaded, and each listed host's `mode`, key, and two-layer state. There is no
+index: the hosts are the directories under `ssh_configs/`, and a host's key is the
+`keyID` in its own envelope header:
 
 ```json
 {
   "initialized": true,
   "encrypt_new": true,
-  "main_key_id": "0123456789abcdef0123456789abcdef",
-  "rotation_pending": false,
-  "locked": false,
-  "password_configured": true,
-  "automatic_unlock": true,
+  "masked": false,
+  "keys": 2,
+  "keys_plugged": 1,
+  "system_available": true,
+  "error_code": "",
+  "legacy_encryption_artifacts": false,
   "hosts": [
-    {"name": "internal", "mode": "builtin"},
-    {"name": "prod", "mode": "plaintext"},
-    {"name": "staging", "mode": "encrypted"}
+    {"name": "internal", "mode": "builtin", "activated": false, "passphrase": false, "orphaned": false},
+    {"name": "prod", "mode": "plaintext", "activated": false, "passphrase": false, "orphaned": false},
+    {"name": "staging", "mode": "encrypted", "key_id": "89abcdef…", "activated": true, "passphrase": true, "orphaned": false}
   ]
 }
 ```
 
-Opening the Web UI or reading status never creates a keyring. The first enable
-action asks the user to choose an encryption password and submit:
+No field names a "default" key, because none exists: nothing in the keychain
+decides which key a new host gets, and a request that omits the key id is refused
+(`400 key_required`) unless exactly one key is loaded.
 
-```json
-{"password": "<user password>", "confirmation": "<same password>"}
+Two independent switches decide whether a host can be read:
+
+| switch | states | survives a restart |
+| --- | --- | --- |
+| the key | loaded / released | yes — the `plugged` bit in `config.keys` |
+| the host | activated / inactive | only for a key without a passphrase (catalog boolean) |
+
+The switches are an AND. A loaded key unwraps the host's DEK; the host's
+activation key is the other half of the body key. Neither half alone opens
+anything: with only the key you cannot derive the body key, and with only the
+passphrase you cannot unwrap the DEK.
+
+Opening the Web UI or reading status never creates a keychain. Whether a profile
+is encrypted is a property of that profile, not a global setting:
+`PUT /api/connections/<name>` takes `?encrypt=true|false` alongside `?temporary=`,
+and `?key=<id>` to name the key that seals it. There is no implicit choice: with
+more than one key in the keychain an encrypted save that names none is refused with
+`404 key_unknown`. `true` writes the profile into the encrypted catalog and `false`
+restores it to plaintext, so the connection form's own checkbox decides the mode.
+Ciphertext generations live at `ssh_configs/<profile>/<generation>.enc`, and a host
+whose key carries a passphrase has a `<generation>.adk` beside it.
+
+`PUT /api/config-storage/mask` with `{"masked":true|false}` flips the global mask.
+Masking changes serialization only, and the same answer reaches every surface that
+prints an address: `GET /api/connections` and the MCP `ls host` / `get host`
+results print a fixed-width dots string instead of the address, the user name and
+the port, and `GET /api/connections?reveal=true` prints the real ones.
+
+All three parts go, the port included. Leaving `:2222` in place would narrow down
+which machine this is through the one field the mask did not cover, so a masked row
+is `{"host":"••••••","user":"••••••","port":0,"masked":true}`. The `masked` flag is
+what distinguishes "hidden" from "no port written down" — both legitimately report
+zero. Storage, dialing and validation are untouched, and the mask works with no
+keychain at all: it hides what the page prints, which is not a property of
+encryption.
+
+### The keychain
+
+`keys/config.keys` is a keychain: an array of keys, and each key has exactly **one
+root** — the 24 words a person wrote down.
+
+```text
+{"version":2,"store_id":…,"masked":false,
+ "keys":[{"id":…,"plugged":true,"passphrase":true,
+          "slots":[{"provider":"dpapi",…},{"provider":"env",…}]}]}
 ```
 
-to `POST /api/config-storage/initialize`. The password must contain at least 8
-Unicode characters and at most 1024 UTF-8 bytes. A 32-byte Main Key is derived
-directly with Argon2id using a random 16-byte salt (3 iterations, 64 MiB,
-parallelism 1). The password and plaintext Main Key are never stored. Only the
-KDF parameters, salt, an authenticated verifier, and optional automatic-unlock
-wrappers are stored in `keys/config.keys`.
+A slot seals **those words** under one provider's key-encryption key. The slots are
+several ways to open the same secret, not several secrets: this machine's credential
+store, a mounted KEK file, an environment variable. The Main Key is derived from the
+words, so exporting the phrase and using this machine are strictly the same ability
+— which is what makes exporting mean something.
 
-This explicit action initializes the keyring and sets `encrypt_new=true`.
-Canceling leaves the data directory uninitialized. Existing plaintext files are
-not converted or moved.
+There is no `mnemonic` slot and no `password` slot any more. A phrase used as a
+wrapper would seal the Main Key under a key derived from the very words that
+determine it; a password-derived Main Key was a different model, and a keychain file
+that still names `password` is refused as an unsupported format.
 
-Whether a profile is encrypted is a property of that profile, not a global
-setting: `PUT /api/connections/<name>` takes `?encrypt=true|false` alongside
-`?temporary=`. `true` writes the profile into the encrypted catalog and `false`
-restores it to plaintext, so the connection form's own checkbox decides the
-mode. Omitting the parameter keeps the store preference for callers that do not
-care. Ciphertext generations live at
-`ssh_configs/<profile>/<generation>.enc`.
+Inserting a key is silent: the words are already in the slots, so nothing is typed.
+A key none of this machine's providers can open is **FAILED** — the file is intact
+and re-importing the words is the way back.
 
-`POST /api/config-storage/lock` takes no body and **locks the store**: it drops the
-unwrapped Main Key from memory while leaving the keyring on disk. Encrypted
-profiles stop being readable and plaintext profiles keep working; unlocking
-again takes the credential. `POST /api/config-storage/destroy` (also no body)
-**deletes the key**: it deletes `keys/config.keys` and `ssh_configs/store.enc` and
-nothing else, so every still-encrypted profile becomes permanently unreadable
-while remaining on disk. It requires an unlocked store — deleting a key you
-cannot use would destroy data without proving the caller was entitled to it.
+```text
+GET    /api/keychain                        → {"keys":[…]}
+POST   /api/keychain                        {"label":"…"}                     add a key, phrase generated
+                                            {"secret":"word word …"}          adopt written-down words
+                                            {"passphrase":"…"}                mark the key as one whose hosts need it
+DELETE /api/keychain/{id}                   {"backup_confirmed":true}         delete a key
+POST   /api/keychain/{id}/plug              load it (unseal the words into memory)
+POST   /api/keychain/{id}/unplug            remove it
+POST   /api/keychain/{id}/rename            {"label":"…"}                     rename it
+POST   /api/keychain/{id}/rotate            {"passphrase":"…"} → {"keys":[…],"mnemonic":"…"}
+POST   /api/keychain/{id}/passphrase        {"old":"…","new":"…"} → {"keys":[…]}
+                                            (same words, same id, same address; every
+                                             host it seals is re-sealed under `new`)
+                                            new words; hosts handed over
+POST   /api/keychain/new-mnemonic         → {"mnemonic":"word word …"}
+                                            fresh words only; creates nothing
+GET    /api/keychain/{id}/mnemonic          → {"mnemonic":"word word …"}
+POST   /api/config-storage/discard-keychain discard an unreadable key file
+```
 
-The encrypted catalog itself is `ssh_configs/store.enc`. It contains the format
-version, Store ID, monotonic revision, the authenticated `encrypt_new` setting,
-and each committed profile's name, Object ID, and current Generation ID. The
-profile TOML is not stored in the catalog. A profile is one independent
-envelope:
+Each key is reported as:
+
+```json
+{"id":"0123456789abcdef0123456789abcdef","catalog":true,"plugged":true,
+ "auto":true,"passphrase":true,"hosts":3}
+```
+
+- `plugged` — its Main Key is in memory right now.
+- `auto` — the words are sealed into a wrapper this machine can open by itself
+  (its credential store, a mounted KEK file, an environment variable), so a
+  `plugged` key comes back on the next start with nothing typed. Each key carries
+  its **own** wrappers: no key wraps another, and there is no master key.
+- `passphrase` — this key's hosts need a passphrase to activate. The passphrase
+  itself is never stored.
+- `hosts` — how many profiles it seals, so deleting it can say what it would strand.
+
+The list is readable with nothing loaded: the panel has to render the rows before
+anyone can load one. `POST /api/keychain` is also how encryption is switched on
+from scratch — the first key and the first keychain are the same object — and it
+sets `encrypt_new=true`.
+
+Guards the endpoints enforce:
+
+- Deleting without `"backup_confirmed":true` → `409 key_backup_required`. Deleting a
+  key destroys its slots, so the words on paper become the only copy.
+- Deleting a key that still seals hosts → `409 key_in_use`.
+- Removing a key's last wrapper → `409 key_last_wrapper`.
+- A secret that is not valid BIP39 → `400 key_mnemonic_invalid`, before any KDF runs.
+- An id that is not in this keychain → `404 key_unknown`.
+
+Deleting the last key **turns encryption off** when nothing is sealed by it: the
+keychain file is removed, the store keeps its plaintext profiles, and later saves
+are plaintext. A key still sealing hosts is refused (`409 key_in_use`), because
+deleting it would make those profiles unreadable forever.
+
+A generated phrase is returned **once**, in the response body as `"mnemonic"`.
+A key has a **name**. It is stored in clear beside the plugged bit — the keychain
+file has to be readable while nothing is loaded, so you can tell the keys apart
+before any of them is in memory — which also means a name is not a secret. The API
+takes one on create and on rename, and an empty one is legal: the panel then prints
+the short id rather than inventing a name.
+
+`POST /api/keychain/{id}/passphrase` changes a key's second layer and nothing else:
+same 24 words, same id, same sharing address. It is not a field edit — a host's body
+key is HKDF(DEK ‖ activation key), and the activation key comes from the passphrase and
+that host's own salt — so every host sealed by the key is re-sealed with a new salt
+and a new `.adk`. Both passphrases are supplied in one request: the old one proves the
+caller can open the hosts, the new one is what they will be sealed with. A wrong old
+passphrase is refused before anything is written, and an empty `new` removes the
+second layer (the hosts fall back to the keychain boolean, i.e. an `active` marker).
+`/rotate` is the other way to change a passphrase: it changes the words too and hands
+the hosts over to the new key.
+
+`POST /api/keychain/{id}/rotate` gives a key new words. The optional `passphrase`
+is the second layer the NEW key carries; leaving it out produces a key with none,
+which is a decision the caller states rather than one that happens to them — the
+first version of this endpoint dropped the passphrase silently, and a security
+property changed as a side effect of an unrelated action.
+
+Rotation is three operations, not a re-encryption: a second key is created with the new phrase and the same name,
+every object is handed over one at a time (only the wrapper holding the DEK moves —
+the body ciphertext is untouched, so nothing is decrypted), and the old key is
+deleted, which the store refuses until it seals nothing. A crash at any point leaves
+both keys present with every object readable by exactly one of them, which is a
+state the panel shows rather than a state that needs repairing.
+
+`GET /api/keychain/{id}/mnemonic` returns it again on request: this machine already
+holds the slot, so it asks for no passphrase.
+
+Inserting a key, activating a host and exporting the words are **human actions**. A
+request that identifies itself as an agent (`X-Termcp-Role: agent`) is refused with
+`403 forbidden` on those routes. Every key operation answers `Cache-Control: no-store`.
+
+### A host that cannot be read
+
+Nothing fails closed at startup. A store whose keys need a passphrase, or whose keys
+were never loaded, opens with nothing readable, lists every host, and answers the
+profile reads it cannot serve with a code — not prose, so each surface can say it in
+its own language:
+
+| state | answer |
+| --- | --- |
+| the key that seals it is not loaded | `409 key_locked` |
+| the key is loaded, the host is not activated | `409 host_not_activated` |
+| its key was deleted | `409 config_encryption_orphaned` |
+
+The first two are recoverable and are different actions: load the key, or activate
+the host. The third is permanent — no key will ever open it, and the panel's advice
+is to delete and recreate the profile.
+
+Writing while a host is inactive is refused rather than falling back to plaintext,
+and a save that would silently drop a host's second layer (re-saving a
+passphrase-bearing host without its activation key in memory) fails with
+`409 passphrase_required` instead of writing a body nobody could open.
+
+### Activating and deactivating hosts
+
+```text
+POST /api/config-storage/activate    {"names":["a","b","c"],
+                                      "passphrases":{"<key id>":"…","<key id>":"…"}}
+POST /api/config-storage/deactivate  {"names":["a","b"]}
+```
+
+**A passphrase is given per key, not per host.** A selection of 5 hosts under 2
+passphrase-bearing keys needs 2 passphrases and one request: the panel groups the
+selection by `key_id` and renders one box per key, labelled with that key's short id
+and its host count. Each host under one key has its own 16-byte Argon2id salt, so one
+passphrase derives N different activation keys for N hosts.
+
+The batch is all-or-nothing:
+
+1. Every host is decided first. A host whose key is not loaded refuses the whole
+   batch, and nothing changes.
+2. Every passphrase-bearing key in the selection must be supplied. A missing one
+   refuses the batch with `409 passphrase_required`, listing the keys by short id.
+   Extra entries for keys that are not in the selection are ignored.
+3. Each host's activation key is derived from its own salt.
+4. A wrong passphrase refuses the batch with `400 passphrase_incorrect`, naming the
+   **key** — never a host, because one passphrase belongs to a whole key.
+
+A key without a passphrase needs nothing for its hosts: activation for those is the
+authenticated catalog boolean, and a mixed selection is allowed.
+
+Deactivating drops the in-memory activation key (or clears the boolean) and touches
+no ciphertext: the body key is computed per read, so there is nothing to rewrite.
+Deactivating does not change whether the key is loaded, and loading a key does
+not activate its hosts.
+
+Restart behaviour follows from the two switches being independent: a key whose
+`plugged` bit is set comes back loaded, hosts whose key has no passphrase come back
+activated from the catalog boolean, and hosts whose key has a passphrase come back
+**inactive** — the activation key was never on disk, so the passphrase has to be
+typed again.
+
+### Sharing one host with another person
+
+A profile can be handed to somebody else as a single block of text, so it travels
+through whatever chat the two people already use. The address a host is sent to
+belongs to a **key**, not to the store: each key derives its own stable X25519
+identity from its own Main Key, so a keychain with ten keys has ten addresses.
+Nothing new is stored — an address is a function of a key that already exists — and
+a key has to be loaded to answer at its address, which is the same rule the rest
+of the panel follows.
+
+That granularity is the point. The sender picks the address, and the address picks
+the key: a host sealed to key A's address is saved under key A, and one sealed to
+key B's is saved under key B. The receiving side is never asked which key to use,
+because asking would be a second decision about something the sender already
+decided.
+
+- `GET /api/share/identity?key=<key id>` returns `{"public_key": "..."}` — that
+  key's public half. `key` is required: there is no such thing as "the" address of
+  a keychain, and defaulting to one would silently pick where a stranger's host
+  lands. The keychain list carries the same value as `public_key` on each key, so
+  the panel does not make a request per row; it is absent while the key is not
+  loaded, because an address is derived from a Main Key and a key that is not in
+  memory cannot answer at one.
+- `POST /api/share/export` takes `{"name": "...", "recipient": "<their public key>"}`
+  and answers `{"blob": "termcp-host-v1:..."}`. The profile is sealed to the
+  recipient with an ephemeral X25519 exchange; the sender cannot open the result.
+- `POST /api/share/import` takes `{"blob": "..."}` and answers `{"name": "..."}`
+  with the name it was saved under, suffixed when the sender's name is taken. The
+  profile is validated like any other paste before it lands.
+
+The blob authenticates its contents, not its author: anyone holding the public key
+can seal a profile to it, so an imported host is untrusted input until its recipient
+decides otherwise. The name travels inside the authenticated envelope, so a blob
+cannot be relabelled to overwrite a different profile on the way in.
+
+Import tries the keys this store is currently holding and saves under whichever one
+opens the blob; a blob addressed to a key that is not loaded answers
+`share_wrong_key`, because an address nobody is holding cannot be answered.
+Rotating a key's words gives it a new address, so shares made to the old one stop
+opening — that is what rotation means.
+
+There is no index file. Each profile is its own directory under `ssh_configs/`,
+the directory name is the profile name, and a directory holding exactly one `.enc`
+is one committed generation. Two `.enc` files in one directory is damage (a save
+that died between the write and the cleanup), reported as an ambiguity rather than
+resolved by picking the newest. A profile is one independent envelope:
 
 ```text
 random DEK encrypts the TOML
@@ -364,84 +593,73 @@ Main Key encrypts the DEK into an EDK
 the current Main Key ID, wrap nonce, and EDK are stored with the body ciphertext
 ```
 
-`POST /api/config-storage/encrypt` and `POST
-/api/config-storage/restore` take `{"names":["prod","staging"]}` and report one
-result per requested host. Encryption commits all selected ciphertext objects
-and the catalog before removing their plaintext `config.toml` files. Restore
-writes an atomic plaintext file first, then removes the encrypted catalog entry.
-Temporary profiles cannot be converted. These routes use the instance's existing
-HTTP authentication.
+`POST /api/keychain/new-mnemonic` hands out a phrase **without creating anything**.
+The panel's create form asks for one when the person presses Generate: the words are
+a field they can read, keep, or replace with ones they already wrote down, and Save is
+what makes a key. Before this the only way to get words was to create a key, which is
+how a key could be born with no name.
 
-`POST /api/config-storage/password` changes the encryption password with:
+`POST /api/config-storage/encrypt` takes
+`{"names":["prod","staging"],"key":"<id>","passphrase":"…"}` and
+`POST /api/config-storage/restore` takes `{"names":["prod","staging"]}`; both report
+one result per requested host. `key` may also be given as `?key=<id>`. Encryption
+commits all selected ciphertext objects and the catalog before removing their
+plaintext `config.toml` files — and, for a key that carries a passphrase, writes each
+host's `.adk` and leaves the hosts active, because the person creating them is
+present (that passphrase is the "type it once while setting up" moment). A missing
+passphrase for such a key answers `409 passphrase_required`. Restore writes an atomic
+plaintext file first, then removes the encrypted catalog entry, and needs an active
+host: an inactive or orphaned one cannot be read, so it cannot be restored. Temporary
+profiles cannot be converted. These routes use the instance's existing HTTP
+authentication.
 
-```json
-{
-  "current_password": "<current password>",
-  "new_password": "<new password>",
-  "confirmation": "<new password>"
-}
-```
+Encrypting a host that is **already** sealed means "move it to this key": the
+plaintext is read into memory (which needs the old key loaded and the host
+activated), validated, and written again under the named key. Reading first is the
+point — it proves the existing ciphertext still opens before the only surviving copy
+is replaced, and a host that cannot be read answers `not_activated` or
+`key_not_loaded` per host rather than failing the batch. Asking for the key a host is
+already under is a no-op that reports `already_encrypted`.
 
-The server first authenticates the current password, verifies every active
-ciphertext object, and derives a new Main Key from the new password. It rewraps
-all active EDKs and the catalog EDK; profile body ciphertext, Object IDs,
-Generation IDs, storage modes, and `encrypt_new` stay unchanged. A short-lived
-two-key state is persisted before publication so an interrupted change can be
-resumed. The old password no longer authenticates the active key after the
-change completes.
+### When no key can be loaded
 
-When `rotation_pending` is true, submit the password accepted by the interrupted
-change as `current_password`, with empty `new_password` and `confirmation`, to
-finish publication. Encryption-mode changes and host conversions return `409`
-while this state is pending. This is a key-rewrap operation; it does not
-re-encrypt profile bodies. It also does not protect data for which a DEK or
-plaintext was already exposed.
+If the keychain parses but none of this machine's providers can open it, the server
+keeps running: status reports `initialized:true`, `keys_plugged:0`, and an
+`error_code`:
 
-When the provider cannot unlock an existing keyring, the server remains running
-with the repository exclusively locked. Status returns `initialized:true`,
-`locked:true`, `hosts:[]`, and an `error_code`:
+- `key_provider_unavailable`: no system or ENV provider secret exists at all.
+- `keyring_authentication_failed`: the credential this machine presents cannot
+  authenticate the keychain (a wrong KEK, for instance).
+- `keyring_missing`: the keychain file is gone or does not parse while the catalog
+  it sealed is still there — damaged state, and the encrypted profiles are
+  permanently unreadable.
 
-- `password_required`: no automatic provider can unlock the keyring, so enter
-  the encryption password.
-- `key_provider_unavailable`: the system or ENV provider secret is missing.
-- `keyring_authentication_failed`: a supplied KEK cannot authenticate the
-  keyring.
+Reads and writes of encrypted profiles fail with `409 key_locked` until the key is
+loaded; plaintext profiles keep working, and the host list still succeeds.
+A keychain that does not parse is a different fault from one this machine cannot
+open, and only the first may be replaced. `POST /api/keychain` over an unparseable
+file discards it and starts a new keychain — unless profiles are still sealed, in
+which case it answers `409` and nothing is written.
 
-Credential reads and configuration writes fail closed while locked. The
-encryption preference and Main Key ID are unknown until unlocking. An
-authentication failure in the catalog after successful keyring unlocking is a
-data error, not a provider-unlock state.
+That implicit replacement has an explicit form: `POST /api/config-storage/discard-keychain`
+throws the unreadable file away and leaves an uninitialized store, which is what a
+panel needs when the human wants to start over without also creating a key in the
+same breath. It answers `409 keychain_readable` for a file that reads fine (deleting
+keys you can still read is `DELETE /api/keychain/{id}`, with its own guards) and
+`409 keychain_seals_hosts` while any ciphertext depends on it. A keychain that parses but whose
+keys none of this machine's providers can open is not damaged at all: it is waiting
+for the words, and adding a key would leave the file's own keys unreachable while
+their hosts stayed sealed. So that case refuses, and the words are the way back.
 
-`POST /api/config-storage/unlock` with an empty password unlocks through the
-machine provider chain (DPAPI, macOS Keychain, Linux Secret Service, a KEK file,
-or `TERMCP_CONFIG_KEK`), which is how a machine-bound keyring is re-opened after
-an explicit `lock`. With a password it opens the password slot instead, and
-`recover` additionally re-wraps the key for this machine.
+Inserting needs nothing typed: a key whose words are held by this machine's
+credential store comes back on every start, because `plugged` is a persisted bit, not
+a memory state that a human re-creates.
 
-`POST /api/config-storage/unlock` accepts
-`{"password":"<encryption password>"}` and unlocks the current process for
-manual use after restart. It does not change automatic-provider wrappers.
-
-`POST /api/config-storage/recover` accepts the same body, authenticates the
-catalog and every active profile, and then unlocks with that password. If the
-selected system or ENV provider is available, it also replaces the automatic
-unlock wrappers in `keys/config.keys`. The catalog, profile ciphertext,
-identities, and encryption preference stay unchanged. If the provider remains
-unavailable, the password unlock can still succeed and the request reports
-`key_provider_unavailable`; the UI reloads the now-unlocked state.
-
-Password operations require `Content-Type: application/json`, reject
-cross-origin requests, use the instance's HTTP authentication policy, serialize
-concurrent key operations (`429 key_operation_busy`), and return
-`Cache-Control: no-store`. They are available in `no_webui` builds too.
-
-Password unlocking needs no external KEK. Automatic unlocking additionally uses
-the operating-system credential store, or a stable ENV key in containers. Set
-`TERMCP_CONFIG_KEK` to the canonical Base64 encoding of 32 random bytes. When
-set, it is the only automatic unlock path: it wraps the Main Key for startup and
-is not the Main Key or the user's encryption password. Without a working
-`TERMCP_CONFIG_KEK`, the service starts locked and requires the password after
-every restart.
+Set `TERMCP_CONFIG_KEK` to the canonical Base64 encoding of 32 random bytes to mount
+a KEK from the environment instead. It is a key-encryption key that seals the words
+for startup, not the words themselves. Without a working provider the service starts
+with nothing loaded, and a host's passphrase is what a person has to type — the
+words live on paper, not in the workflow.
 
 ---
 

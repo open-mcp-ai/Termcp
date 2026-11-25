@@ -61,11 +61,11 @@
 }
 
 /* ---- Inputs and overlays ---------------------------------------------- */
-.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
+.modal-body input:not([type="checkbox"]):not([type="radio"]):focus, .modal-body textarea:focus, .modal-body select:focus,
 .conn-field input:focus, .conn-field select:focus, .conn-field textarea:focus {
   outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
 }
-.modal-body input, .modal-body textarea, .modal-body select,
+.modal-body input:not([type="checkbox"]):not([type="radio"]), .modal-body textarea, .modal-body select,
 .conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
 .modal { background: var(--bg-elevated); }
 .modal-h { background: var(--bg-card); }
@@ -563,7 +563,7 @@
 }
 
 /* Inputs: dark wells with a cyan focus edge, no rounding. */
-.modal-body input, .modal-body textarea, .modal-body select,
+.modal-body input:not([type="checkbox"]):not([type="radio"]), .modal-body textarea, .modal-body select,
 .conn-field input, .conn-field select, .conn-field textarea {
   border-radius: 0; border-color: var(--border-subtle); background: var(--bg-input);
   font-family: var(--font-mono); color: var(--text-bright);

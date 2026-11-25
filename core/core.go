@@ -59,6 +59,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/config"
 	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -68,7 +69,6 @@ import (
 	"github.com/open-mcp-ai/termcp/internal/mcpbridge"
 	"github.com/open-mcp-ai/termcp/internal/message"
 	"github.com/open-mcp-ai/termcp/internal/session"
-	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/sshconfig"
 	"github.com/open-mcp-ai/termcp/internal/sshserver"
 	"github.com/open-mcp-ai/termcp/internal/storage"

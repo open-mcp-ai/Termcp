@@ -3,7 +3,6 @@ package configstore
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,11 +13,6 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
-)
-
-const (
-	repositoryVersion = uint16(1)
-	maxCatalogEntries = 10_000
 )
 
 var (
@@ -32,61 +26,25 @@ var (
 	ErrAlreadyInitialized = errors.New("configstore: encrypted store is already initialized")
 	// ErrClosed reports use of a repository after Close.
 	ErrClosed = errors.New("configstore: repository is closed")
-	// ErrKeyringMissing reports a catalog whose keyring file is gone. The data is
-	// still on disk and still encrypted; nothing can open it, which is a locked
-	// store, not an uninitialized one.
-	ErrKeyringMissing = errors.New("configstore: the keyring for the encrypted catalog is missing")
+	// ErrKeyringMissing reports a keychain file that is gone or unreadable while
+	// encrypted hosts still depend on it. The data is there, nobody can read it.
+	ErrKeyringMissing = errors.New("configstore: the keyring for the encrypted profiles is missing")
 )
 
-var (
-	catalogObjectID  = repeatedID(0xca)
-	internalObjectID = repeatedID(0xcb)
-)
+var internalObjectID = repeatedID(0xcb)
 
-type catalogDocument struct {
-	Version    uint16           `json:"version"`
-	StoreID    []byte           `json:"store_id"`
-	Revision   uint64           `json:"revision"`
-	EncryptNew bool             `json:"encrypt_new"`
-	Profiles   []catalogProfile `json:"profiles"`
-}
+/*
+Repository owns one exclusive encrypted connection-profile directory.
 
-type catalogProfile struct {
-	Name         string `json:"name"`
-	ObjectID     []byte `json:"object_id"`
-	GenerationID []byte `json:"generation_id"`
-}
+	There is no index. A host is a directory holding one generation, and the
+	directory plus the public envelope header are the whole record of what is
+	committed. Saving publishes a new generation file and removes the old one;
+	deleting removes the directory; renaming renames it.
 
-type catalogRef struct {
-	name         string
-	objectID     ID
-	generationID ID
-}
-
-// Item is one opaque profile body for an import transaction.
-type Item struct {
-	Name string
-	Data []byte
-}
-
-// Status is the non-secret administrative state of a repository.
-type Status struct {
-	StoreID            ID
-	Revision           uint64
-	Profiles           int
-	EncryptNew         bool
-	Closed             bool
-	MainKeyID          ID
-	RotationPending    bool
-	Locked             bool
-	ErrorCode          string
-	PasswordConfigured bool
-	AutomaticUnlock    bool
-}
-
-// Repository owns one exclusive encrypted connection-profile directory. The
-// catalog commits name-to-object mappings; profile bodies remain independent
-// generations so one damaged item cannot silently replace another.
+	The old `store.enc` index is read once by `migrateLegacyIndex` and then
+	deleted: it was a second copy of facts the filesystem already publishes, and
+	sealing it with one key made that key a gate on every other key's hosts.
+*/
 type Repository struct {
 	dataDir string
 	lock    *directoryLock
@@ -96,24 +54,30 @@ type Repository struct {
 	writeTok chan struct{}
 }
 
-// InitializeRepository creates an empty encrypted repository. If key creation
-// succeeded but catalog publication was interrupted, a retry with the same
-// provider resumes at the missing catalog.
+// ErrKeyRequired reports a save or conversion with no key named. A host's key is a
+// per-host choice, so there is no default to fall back on.
+var ErrKeyRequired = errors.New("configstore: choose the key that should seal this host")
+
+// Status is the non-secret administrative state of a repository.
+type Status struct {
+	StoreID    ID
+	Profiles   int
+	EncryptNew bool
+	Masked     bool
+	Closed     bool
+	// LoadedKeys counts the keys whose material is in memory. Zero means every
+	// encrypted profile is unreadable right now, which the panel reports as
+	// "nothing loaded" rather than as an error.
+	LoadedKeys int
+	// Loaded reports whether the host list can be enumerated. With no index this
+	// needs no key at all: it is true whenever the keychain parsed.
+	Loaded    bool
+	ErrorCode string
+}
+
+// InitializeRepository creates an empty encrypted repository holding one newly
+// generated key.
 func InitializeRepository(dataDir string, providers ...Provider) (*Repository, error) {
-	return initializeRepository(dataDir, nil, providers...)
-}
-
-// InitializeRepositoryWithMainKey initializes encryption with the key backed up
-// by the user during the first enable operation. It never replaces existing keys.
-func InitializeRepositoryWithMainKey(dataDir string, main MainKey, providers ...Provider) (*Repository, error) {
-	defer clear(main[:])
-	if isZeroBytes(main[:]) {
-		return nil, ErrFormat
-	}
-	return initializeRepository(dataDir, &main, providers...)
-}
-
-func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Provider) (*Repository, error) {
 	root, err := prepareDataDir(dataDir)
 	if err != nil {
 		return nil, err
@@ -126,117 +90,128 @@ func initializeRepository(dataDir string, suppliedMain *MainKey, providers ...Pr
 		_ = lock.Close()
 		return nil, err
 	}
+	keysExist, err := pathExists(filepath.Join(root, "keys", "config.keys"))
+	if err != nil {
+		return fail(err)
+	}
+	if keysExist {
+		return openExisting(root, lock, fail, providers...)
+	}
+	storeID, err := NewID()
+	if err != nil {
+		return fail(err)
+	}
+	phrase, main, err := NewKeyMaterial(storeID)
+	if err != nil {
+		return fail(err)
+	}
+	clear(main[:])
+	return initializeWithMnemonic(root, lock, storeID, phrase, "", fail, providers...)
+}
 
-	keysPath := filepath.Join(root, "keys", "config.keys")
-	catalogPath := repositoryCatalogPath(root)
-	keysExist, err := pathExists(keysPath)
+// InitializeRepositoryWithMnemonic creates an empty encrypted repository whose
+// first key is built from mnemonic. The phrase itself is never stored.
+func InitializeRepositoryWithMnemonic(dataDir, mnemonic, passphrase string, providers ...Provider) (*Repository, error) {
+	root, err := prepareDataDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := acquireDirectoryLock(root)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*Repository, error) {
+		_ = lock.Close()
+		return nil, err
+	}
+	keysExist, err := pathExists(filepath.Join(root, "keys", "config.keys"))
 	if err != nil {
 		return fail(err)
 	}
-	catalogExists, err := pathExists(catalogPath)
+	if keysExist {
+		_ = lock.Close()
+		return OpenRepository(root, providers...)
+	}
+	storeID, err := NewID()
 	if err != nil {
 		return fail(err)
 	}
-	if catalogExists && !keysExist {
-		return fail(fmt.Errorf("%w: catalog exists without its keyring", ErrAlreadyInitialized))
-	}
-	if !keysExist {
-		storeID, err := NewID()
-		if err != nil {
-			return fail(err)
-		}
-		var keyData []byte
-		var keyring *Keyring
-		if suppliedMain == nil {
-			keyData, keyring, err = CreateKeyring(storeID, providers...)
-		} else {
-			keyData, keyring, err = createKeyringWithMainKey(storeID, *suppliedMain, providers...)
-		}
-		if err != nil {
-			return fail(err)
-		}
-		if err := writeFileAtomic(keysPath, keyData); err != nil {
-			keyring.Destroy()
-			return fail(err)
-		}
-		repository := newRepository(root)
-		repository.lock = lock
-		repository.storeKeyring(keyring, keyring.StoreID())
-		/* A keyring created through providers is openable without a password, so
-		   the status must say so immediately rather than only after the first
-		   restart's unlock. */
-		if len(providers) > 0 {
-			repository.mutate(func(next *repoSnapshot) { next.automaticUnlock = true })
-		}
-		if err := repository.commitCatalog(catalogDocument{
-			Version:  repositoryVersion,
-			StoreID:  append([]byte(nil), storeID[:]...),
-			Revision: 1,
-			Profiles: []catalogProfile{},
-		}); err != nil {
-			keyring.Destroy()
-			return fail(err)
-		}
-		repository.setRevision(1)
-		return repository, nil
-	}
+	return initializeWithMnemonic(root, lock, storeID, mnemonic, passphrase, fail, providers...)
+}
 
-	keyData, err := readBoundedFile(keysPath, maxKeyringFile)
+func initializeWithMnemonic(root string, lock *directoryLock, storeID ID, phrase, passphrase string, fail func(error) (*Repository, error), providers ...Provider) (*Repository, error) {
+	keyData, keyring, err := CreateKeyring(storeID, phrase, passphrase, providers...)
 	if err != nil {
 		return fail(err)
 	}
-	keyring, err := UnlockKeyring(keyData, providers...)
-	clear(keyData)
-	if err != nil {
-		return fail(err)
-	}
-	if suppliedMain != nil {
-		_, keys, activeID, err := keyring.snapshot()
-		matches := err == nil && keys[activeID] == *suppliedMain && !catalogExists
-		clearMainKeyMap(keys)
-		if !matches {
-			keyring.Destroy()
-			return fail(ErrAlreadyInitialized)
-		}
-	}
-	repository := newRepository(root)
-	repository.lock = lock
-	repository.storeKeyring(keyring, keyring.StoreID())
-	if catalogExists {
-		if err := repository.loadCatalog(); err != nil {
-			keyring.Destroy()
-			return fail(err)
-		}
-		return repository, nil
-	}
-	storeID := keyring.StoreID()
-	if err := repository.commitCatalog(catalogDocument{
-		Version:  repositoryVersion,
-		StoreID:  append([]byte(nil), storeID[:]...),
-		Revision: 1,
-		Profiles: []catalogProfile{},
-	}); err != nil {
+	if err := writeFileAtomic(filepath.Join(root, "keys", "config.keys"), keyData); err != nil {
 		keyring.Destroy()
 		return fail(err)
 	}
-	repository.setRevision(1)
+	repository := newRepository(root)
+	repository.lock = lock
+	repository.storeKeyring(keyring)
+	if err := repository.loadRefs(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
 	return repository, nil
 }
 
-// OpenRepository unlocks the existing keyring and verifies every committed
-// profile before returning.
+// openExisting finishes a repository that already has a keychain file.
+func openExisting(root string, lock *directoryLock, fail func(error) (*Repository, error), providers ...Provider) (*Repository, error) {
+	keyData, err := readBoundedFile(filepath.Join(root, "keys", "config.keys"), maxKeyringFile)
+	if err != nil {
+		return fail(err)
+	}
+	keyring, options, loadErr := LoadKeyringWithOptions(keyData, providers...)
+	clear(keyData)
+	if keyring == nil {
+		if errors.Is(loadErr, ErrFormat) {
+			return damagedRepository(root, lock), nil
+		}
+		return fail(loadErr)
+	}
+	repository := newRepository(root)
+	repository.lock = lock
+	repository.mutate(func(next *repoSnapshot) {
+		next.keyring = keyring
+		next.loadErr = loadErr
+		next.encryptNew = options.EncryptNew
+		next.masked = options.Masked
+	})
+	if err := repository.migrateLegacyIndex(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
+	if err := repository.loadRefs(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
+	return repository, nil
+}
+
+// damagedRepository opens with the fault recorded and every encrypted profile
+// failing on access, so plaintext profiles and the panel still work.
+func damagedRepository(root string, lock *directoryLock) *Repository {
+	damaged := newRepository(root)
+	damaged.lock = lock
+	damaged.mutate(func(next *repoSnapshot) {
+		next.loadErr = ErrKeyringMissing
+		next.encryptNew = true
+	})
+	return damaged
+}
+
+/*
+OpenRepository loads every key this host can unwrap by itself.
+
+	A keychain whose keys need a human opens with nothing loaded instead of
+	failing: hosts stay listed, each encrypted one reports which key it needs,
+	and plugging that key in brings it back. Refusing to open would take every
+	plaintext profile down with the encrypted ones.
+*/
 func OpenRepository(dataDir string, providers ...Provider) (*Repository, error) {
-	return openRepository(dataDir, false, providers...)
-}
-
-// OpenRepositoryForRecovery retains a locked repository when only provider
-// unlocking fails. The directory remains exclusively held and no reads or
-// mutations can fall back to plaintext while the management UI offers recovery.
-func OpenRepositoryForRecovery(dataDir string, providers ...Provider) (*Repository, error) {
-	return openRepository(dataDir, true, providers...)
-}
-
-func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (*Repository, error) {
 	root, err := prepareDataDir(dataDir)
 	if err != nil {
 		return nil, err
@@ -249,140 +224,163 @@ func openRepository(dataDir string, allowRecovery bool, providers ...Provider) (
 		_ = lock.Close()
 		return nil, err
 	}
-
 	keyData, err := readBoundedFile(filepath.Join(root, "keys", "config.keys"), maxKeyringFile)
 	if errors.Is(err, os.ErrNotExist) {
-		/* A catalog whose keyring is gone is unreadable, not uninitialized. The
-		   profiles are still on disk and their names are still knowable, so open
-		   LOCKED and let each encrypted profile fail on access. Refusing to open
-		   would take every plaintext profile down with the encrypted ones — one
-		   lost key would stop the whole instance, including hosts it never
-		   touched. */
-		if allowRecovery {
-			if exists, statErr := pathExists(repositoryCatalogPath(root)); statErr != nil {
-				return fail(statErr)
-			} else if exists {
-				locked := newRepository(root)
-				locked.lock = lock
-				locked.mutate(func(next *repoSnapshot) {
-					next.unlockErr = ErrKeyringMissing
-					next.encryptNew = true
-				})
-				return locked, nil
-			}
+		/* Ciphertext with no keychain is damaged, not uninitialized: the hosts are
+		   on disk and nothing can ever open them. Reporting "no encryption" here
+		   would invite a new keychain over profiles that are still there. */
+		if hasCiphertext(root) {
+			return damagedRepository(root, lock), nil
 		}
 		return fail(ErrNotInitialized)
 	}
 	if err != nil {
 		return fail(err)
 	}
-	stored, err := parseStoredKeyring(keyData)
-	if err != nil {
-		return fail(err)
-	}
-	keyring, err := UnlockKeyring(keyData, providers...)
+	keyring, options, loadErr := LoadKeyringWithOptions(keyData, providers...)
 	clear(keyData)
-	if err != nil {
-		if stored.Password != nil && len(stored.Slots) == 0 {
-			err = ErrPasswordRequired
+	if keyring == nil {
+		if errors.Is(loadErr, ErrFormat) {
+			return damagedRepository(root, lock), nil
 		}
-		if allowRecovery && (errors.Is(err, ErrProviderUnavailable) || errors.Is(err, ErrAuthentication) || errors.Is(err, ErrPasswordRequired)) {
-			var storeID ID
-			copy(storeID[:], stored.StoreID)
-			if exists, statErr := pathExists(repositoryCatalogPath(root)); statErr != nil {
-				return fail(statErr)
-			} else if !exists {
-				return fail(ErrNotInitialized)
-			}
-			locked := newRepository(root)
-			locked.lock = lock
-			locked.mutate(func(next *repoSnapshot) {
-				next.unlockErr = err
-				next.lockedStoreID = storeID
-				next.password = stored.Password
-			})
-			return locked, nil
-		}
-		return fail(err)
+		return fail(loadErr)
 	}
 	repository := newRepository(root)
 	repository.lock = lock
-	repository.storeKeyring(keyring, keyring.StoreID())
-	if err := repository.loadCatalog(); err != nil {
+	repository.mutate(func(next *repoSnapshot) {
+		next.keyring = keyring
+		next.loadErr = loadErr
+		next.encryptNew = options.EncryptNew
+		next.masked = options.Masked
+	})
+	if err := repository.migrateLegacyIndex(); err != nil {
 		keyring.Destroy()
 		return fail(err)
 	}
-	repository.mutate(func(next *repoSnapshot) {
-		next.password = stored.Password
-		next.automaticUnlock = len(stored.Slots) > 0
-	})
+	if err := repository.loadRefs(); err != nil {
+		keyring.Destroy()
+		return fail(err)
+	}
 	return repository, nil
 }
 
-// List returns committed names in lexical order.
+// List returns committed names in lexical order, with no key required.
 func (r *Repository) List() ([]string, error) {
-	if err := r.ready(); err != nil {
+	if err := r.usable(); err != nil {
 		return nil, err
 	}
-	if err := r.refreshProfileDirectories(); err != nil {
-		return nil, err
-	}
-	st := r.snap()
-	names := make([]string, 0, len(st.refs))
-	for name := range st.refs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
+	return r.listRefs()
 }
 
 // Read returns a caller-owned plaintext copy for the committed name.
 func (r *Repository) Read(name string) ([]byte, error) {
-	if err := r.ready(); err != nil {
+	if err := r.usable(); err != nil {
 		return nil, err
 	}
 	if err := validateCatalogName(name); err != nil {
 		return nil, err
 	}
-	st := r.snap()
-	ref, ok := st.refs[name]
-	if !ok {
-		if err := r.refreshProfileDirectories(); err != nil {
-			return nil, err
-		}
-		st = r.snap()
-		ref, ok = st.refs[name]
-	}
-	if !ok {
-		return nil, fmt.Errorf("%q: %w", name, ErrNotFound)
+	ref, err := r.currentRef(name)
+	if err != nil {
+		return nil, err
 	}
 	return r.readObject(ref)
 }
 
+// currentRef resolves one name against the disk view.
+func (r *Repository) currentRef(name string) (catalogRef, error) {
+	if err := r.loadRefs(); err != nil {
+		return catalogRef{}, err
+	}
+	ref, ok := r.snap().refs[name]
+	if !ok {
+		return catalogRef{}, fmt.Errorf("%q: %w", name, ErrNotFound)
+	}
+	return ref, nil
+}
+
 // Save creates a profile or commits a new generation under the existing stable
-// object ID. It never substitutes an empty profile for a damaged one.
+// object ID. The host is born ACTIVATED: a person is creating it right now.
 func (r *Repository) Save(name string, data []byte) error {
-	return r.put([]Item{{Name: name, Data: data}}, true)
+	return r.put([]Item{{Name: name, Data: data}}, true, SaveOptions{})
+}
+
+// SaveWithKey seals the profile with one named Main Key, which must be plugged.
+func (r *Repository) SaveWithKey(name string, data []byte, keyID ID) error {
+	return r.put([]Item{{Name: name, Data: data}}, true, SaveOptions{KeyID: keyID})
+}
+
+// SaveWithOptions commits a profile with explicit per-save decisions.
+func (r *Repository) SaveWithOptions(name string, data []byte, options SaveOptions) error {
+	return r.put([]Item{{Name: name, Data: data}}, true, options)
+}
+
+// ImportWithOptions commits profiles that must not overwrite an existing name.
+func (r *Repository) ImportWithOptions(items []Item, options SaveOptions) error {
+	return r.put(items, false, options)
 }
 
 // Import commits profiles that must not overwrite an existing name.
 func (r *Repository) Import(items []Item) error {
-	return r.put(items, false)
+	return r.put(items, false, SaveOptions{})
 }
 
-func (r *Repository) put(items []Item, overwrite bool) error {
+// ImportWithKey commits profiles sealed with one named Main Key.
+func (r *Repository) ImportWithKey(items []Item, keyID ID) error {
+	return r.put(items, false, SaveOptions{KeyID: keyID})
+}
+
+// Item is one opaque profile body for an import transaction.
+type Item struct {
+	Name string
+	Data []byte
+}
+
+// SaveOptions is one save request's per-host decisions, all of them optional.
+type SaveOptions struct {
+	// KeyID seals with that key. There is no default: a host's key is a choice.
+	KeyID ID
+	// Passphrase is the key's passphrase, present only when the caller is
+	// creating or re-saving a host under a passphrase-bearing key. It never
+	// reaches disk: it derives the activation key, which writes a fresh `.adk`.
+	Passphrase string
+	// ReuseActivation keeps the activation key this host already has in memory
+	// instead of deriving a new one from Passphrase.
+	ReuseActivation bool
+}
+
+/* put writes each host's new generation, then publishes it.
+ *
+ * There is no shared commit point any more: each host's directory is its own
+ * transaction. A new generation is written and verified, then the old one is
+ * removed. A crash between those two leaves two generations in that directory,
+ * which the next open reports as ambiguous rather than silently choosing one.
+ */
+func (r *Repository) put(items []Item, overwrite bool, options SaveOptions) error {
 	if len(items) == 0 {
 		return nil
 	}
 	defer r.acquireWrite()()
-	if err := r.writable(); err != nil {
+	if err := r.usable(); err != nil {
 		return err
 	}
-
+	if err := r.loadRefs(); err != nil {
+		return err
+	}
 	cur := r.snap()
 	next := cloneRefs(cur.refs)
-	oldGenerations := make([]catalogRef, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
+	type pending struct {
+		ref           catalogRef
+		previous      catalogRef
+		hadOld        bool
+		keyID         ID
+		activationKey [32]byte
+		data          []byte
+		record        activationRecord
+		writeADK      bool
+	}
+	var batch []pending
 	for _, item := range items {
 		if err := validateCatalogName(item.Name); err != nil {
 			return err
@@ -399,8 +397,8 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 		if collision && (existing.name != item.Name || !overwrite) {
 			return fmt.Errorf("%s: %w", existing.name, ErrExists)
 		}
-
 		ref, exists := next[item.Name]
+		previous := ref
 		if !exists {
 			objectID := internalObjectID
 			if !strings.EqualFold(item.Name, "internal") {
@@ -409,44 +407,71 @@ func (r *Repository) put(items []Item, overwrite bool) error {
 				if err != nil {
 					return err
 				}
-				if objectID == catalogObjectID || objectID == internalObjectID {
+				if objectID == internalObjectID {
 					return ErrFormat
 				}
 			}
 			ref = catalogRef{name: item.Name, objectID: objectID}
-		} else {
-			oldGenerations = append(oldGenerations, ref)
 		}
 		generationID, err := NewID()
 		if err != nil {
 			return err
 		}
 		ref.generationID = generationID
-		if err := r.writeObject(ref, item.Data); err != nil {
+		saveKeyID := options.KeyID
+		if saveKeyID.IsZero() {
+			/* No implicit choice: a host's key is a property of that host. The one
+			   exception is a keychain with exactly one key in memory, where there is
+			   nothing to choose between and demanding a name would be ceremony. */
+			only, ok := cur.keyring.anySealableKey()
+			if !ok || cur.keyring.keysCount() != 1 {
+				return ErrKeyRequired
+			}
+			saveKeyID = only
+		}
+		ref.keyID = saveKeyID
+		activationKey, activated, record, err := r.activationForSave(ref, saveKeyID, storedKeyForKey(r, saveKeyID), options)
+		if err != nil {
 			return err
 		}
-		next[item.Name] = ref
+		ref.activated = activated
+		batch = append(batch, pending{
+			ref: ref, previous: previous, hadOld: exists, keyID: saveKeyID,
+			activationKey: activationKey, data: item.Data, record: record,
+			writeADK: activated && options.Passphrase != "",
+		})
 	}
-
-	nextCatalog := r.catalogDocument(next, cur.revision+1)
-	if err := r.commitCatalog(nextCatalog); err != nil {
-		if errors.Is(err, ErrDurability) {
-			r.publishRefs(cur, next, cur.encryptNew)
+	for i := range batch {
+		entry := &batch[i]
+		if err := r.commitGeneration(entry.ref, entry.data, entry.activationKey); err != nil {
+			return err
 		}
-		return err
+		if entry.writeADK {
+			if err := r.writeActivation(entry.ref, entry.record, entry.activationKey); err != nil {
+				return err
+			}
+		}
+		if entry.ref.activated && entry.activationKey == noActivationKey {
+			if err := r.writeActiveMarker(entry.ref); err != nil {
+				return err
+			}
+		}
+		if entry.hadOld {
+			r.removeObject(entry.previous)
+		}
+		if entry.ref.activated && entry.activationKey != noActivationKey {
+			cur.keyring.withActivationKey(entry.keyID, entry.ref.objectID, entry.activationKey)
+		}
+		next[entry.ref.name] = entry.ref
 	}
-	r.publishRefs(cur, next, cur.encryptNew)
-	for _, ref := range oldGenerations {
-		r.removeObject(ref)
-	}
+	r.mutate(func(s *repoSnapshot) { s.refs = next })
 	return nil
 }
 
-// Rename publishes the same ciphertext under the new per-profile directory
-// before committing the catalog rename, then removes the old copy.
+// Rename moves the whole host directory; the ciphertext is untouched.
 func (r *Repository) Rename(oldName, newName string) error {
 	defer r.acquireWrite()()
-	if err := r.writable(); err != nil {
+	if err := r.usable(); err != nil {
 		return err
 	}
 	if oldName == newName {
@@ -458,6 +483,9 @@ func (r *Repository) Rename(oldName, newName string) error {
 	if err := validateCatalogName(newName); err != nil {
 		return err
 	}
+	if err := r.loadRefs(); err != nil {
+		return err
+	}
 	cur := r.snap()
 	ref, ok := cur.refs[oldName]
 	if !ok {
@@ -466,18 +494,7 @@ func (r *Repository) Rename(oldName, newName string) error {
 	if existing, collision := findRef(cur.refs, newName); collision {
 		return fmt.Errorf("%s: %w", existing.name, ErrExists)
 	}
-	raw, err := r.readObjectRaw(ref)
-	if err != nil {
-		return err
-	}
-	checked, err := r.openObjectRaw(ref, raw)
-	clear(checked)
-	if err != nil {
-		return err
-	}
-	newRef := ref
-	newRef.name = newName
-	oldDir, newDir := filepath.Dir(r.objectPath(ref)), filepath.Dir(r.objectPath(newRef))
+	oldDir, newDir := hostDir(r.dataDir, oldName), hostDir(r.dataDir, newName)
 	if err := requireRealDirectory(oldDir); err != nil {
 		return err
 	}
@@ -489,29 +506,25 @@ func (r *Repository) Rename(oldName, newName string) error {
 	if err := os.Rename(oldDir, newDir); err != nil {
 		return err
 	}
+	if err := syncDir(hostsRoot(r.dataDir)); err != nil {
+		return fmt.Errorf("%w: sync renamed profile directory: %v", ErrDurability, err)
+	}
 	next := cloneRefs(cur.refs)
 	delete(next, oldName)
+	newRef := ref
+	newRef.name = newName
 	next[newName] = newRef
-	err = r.commitCatalog(r.catalogDocument(next, cur.revision+1))
-	if err != nil && !errors.Is(err, ErrDurability) {
-		if rollbackErr := os.Rename(newDir, oldDir); rollbackErr != nil {
-			r.publishRefs(cur, next, cur.encryptNew)
-			return fmt.Errorf("%w: profile directory rename needs recovery: %v; rollback: %v", ErrDurability, err, rollbackErr)
-		}
-		_ = syncDir(filepath.Dir(oldDir))
-		return err
-	}
-	r.publishRefs(cur, next, cur.encryptNew)
-	if syncErr := syncDir(filepath.Dir(newDir)); syncErr != nil {
-		return fmt.Errorf("%w: sync renamed profile directory: %v", ErrDurability, syncErr)
-	}
-	return err
+	r.mutate(func(s *repoSnapshot) { s.refs = next })
+	return nil
 }
 
-// Delete removes the catalog reference before cleaning its ciphertext.
+// Delete removes the host's directory and its activation state.
 func (r *Repository) Delete(name string) error {
 	defer r.acquireWrite()()
-	if err := r.writable(); err != nil {
+	if err := r.usable(); err != nil {
+		return err
+	}
+	if err := r.loadRefs(); err != nil {
 		return err
 	}
 	cur := r.snap()
@@ -519,16 +532,16 @@ func (r *Repository) Delete(name string) error {
 	if !ok {
 		return nil
 	}
-	next := cloneRefs(cur.refs)
-	delete(next, name)
-	if err := r.commitCatalog(r.catalogDocument(next, cur.revision+1)); err != nil {
-		if errors.Is(err, ErrDurability) {
-			r.publishRefs(cur, next, cur.encryptNew)
-		}
+	r.removeObject(ref)
+	_ = removeIfExists(r.activeMarkerPath(ref))
+	_ = os.Remove(hostDir(r.dataDir, name))
+	if err := syncDir(hostsRoot(r.dataDir)); err != nil {
 		return err
 	}
-	r.publishRefs(cur, next, cur.encryptNew)
-	r.removeObject(ref)
+	next := cloneRefs(cur.refs)
+	delete(next, name)
+	r.mutate(func(s *repoSnapshot) { s.refs = next })
+	cur.keyring.withoutActivationKeys(map[ID]struct{}{ref.objectID: {}})
 	return nil
 }
 
@@ -538,34 +551,79 @@ func (r *Repository) Status() Status {
 		return Status{}
 	}
 	st := r.snap()
-	keyID, pending := st.keyring.rotationStatus()
-	password := st.password
+	status := Status{
+		Profiles:   len(st.refs),
+		EncryptNew: st.encryptNew,
+		Masked:     st.masked,
+		Closed:     st.closed,
+		Loaded:     r.Loaded(),
+	}
 	if st.keyring != nil {
-		password = st.keyring.password
+		status.StoreID = st.keyring.StoreID()
+		status.LoadedKeys = st.keyring.keysCount()
 	}
-	if password != nil && password.Previous != nil {
-		pending = true
-	}
-	storeID := st.lockedStoreID
-	if st.keyring != nil {
-		storeID = st.keyring.StoreID()
-	}
-	return Status{
-		StoreID:            storeID,
-		Revision:           st.revision,
-		Profiles:           len(st.refs),
-		EncryptNew:         st.encryptNew,
-		Closed:             st.closed,
-		MainKeyID:          keyID,
-		RotationPending:    pending,
-		Locked:             st.unlockErr != nil,
-		ErrorCode:          keyUnlockErrorCode(st.unlockErr),
-		PasswordConfigured: password != nil,
-		AutomaticUnlock:    st.automaticUnlock,
+	status.ErrorCode = keyLoadErrorCode(st.loadErr)
+	return status
+}
+
+// keyLoadErrorCode names why the keychain could not be used.
+func keyLoadErrorCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrKeyringMissing):
+		return "keyring_missing"
+	case errors.Is(err, ErrProviderUnavailable):
+		return "key_provider_unavailable"
+	case errors.Is(err, ErrAuthentication):
+		return "keyring_authentication_failed"
+	default:
+		return "key_load_failed"
 	}
 }
 
-// EncryptNew reports the authenticated preference for newly created profiles.
+/* KeyringMissing reports ciphertext whose keychain file is gone.
+ *
+ * It is the state the panel states as "the keychain cannot be read", and the one
+ * where nothing that is encrypted can ever be opened again — as opposed to "no key
+ * is plugged in", which the operator fixes by inserting one.
+ */
+func (r *Repository) KeyringMissing() bool {
+	return errors.Is(r.snap().loadErr, ErrKeyringMissing)
+}
+
+// Loaded reports whether hosts can be listed. With no index this needs no key:
+// names are directory names, and each host says which key it needs.
+func (r *Repository) Loaded() bool {
+	st := r.snap()
+	return !st.closed && st.keyring != nil && st.loadErr == nil
+}
+
+// DeriveSubkey exposes a purpose-separated subkey of a plugged-in Main Key.
+func (r *Repository) DeriveSubkey(info string) ([32]byte, error) {
+	if err := r.usable(); err != nil {
+		return [32]byte{}, err
+	}
+	st := r.snap()
+	if st.keyring == nil {
+		return [32]byte{}, ErrNotInitialized
+	}
+	return st.keyring.DeriveSubkey(info)
+}
+
+// DeriveSubkeyFor derives a purpose-separated subkey of ONE key.
+func (r *Repository) DeriveSubkeyFor(keyID ID, info string) ([32]byte, error) {
+	if r == nil || r.snap().closed {
+		return [32]byte{}, ErrClosed
+	}
+	st := r.snap()
+	if st.keyring == nil {
+		return [32]byte{}, ErrNotInitialized
+	}
+	return st.keyring.DeriveSubkeyFor(keyID, info)
+}
+
+// EncryptNew reports the preference for newly created profiles.
 func (r *Repository) EncryptNew() bool {
 	if r == nil {
 		return false
@@ -573,27 +631,55 @@ func (r *Repository) EncryptNew() bool {
 	return r.snap().encryptNew
 }
 
-// SetEncryptNew commits the authenticated preference in the encrypted catalog.
+// Masked reports the global address/username masking switch.
+func (r *Repository) Masked() bool {
+	if r == nil {
+		return false
+	}
+	return r.snap().masked
+}
+
+// SetMasked records the global masking switch. Display layer only.
+func (r *Repository) SetMasked(masked bool) error {
+	defer r.acquireWrite()()
+	if err := r.usable(); err != nil {
+		return err
+	}
+	if r.snap().masked == masked {
+		return nil
+	}
+	stored, err := r.readKeyringFile()
+	if err != nil {
+		return err
+	}
+	stored.Masked = masked
+	if err := r.writeKeyringFile(stored); err != nil {
+		return err
+	}
+	r.mutate(func(next *repoSnapshot) { next.masked = masked })
+	return nil
+}
+
+// SetEncryptNew records whether new profiles are sealed by default. It works
+// with every key unloaded, which is when someone decides where new hosts go.
 func (r *Repository) SetEncryptNew(enabled bool) error {
 	defer r.acquireWrite()()
-	if err := r.writable(); err != nil {
+	if err := r.usable(); err != nil {
 		return err
 	}
 	cur := r.snap()
 	if cur.encryptNew == enabled {
 		return nil
 	}
-	next := cloneRefs(cur.refs)
-	catalog := r.catalogDocument(next, cur.revision+1)
-	catalog.EncryptNew = enabled
-	if err := r.commitCatalog(catalog); err != nil {
-		if !errors.Is(err, ErrDurability) {
-			return err
-		}
-		r.publishRefs(cur, next, enabled)
+	stored, err := r.readKeyringFile()
+	if err != nil {
 		return err
 	}
-	r.publishRefs(cur, next, enabled)
+	stored.EncryptNew = &enabled
+	if err := r.writeKeyringFile(stored); err != nil {
+		return err
+	}
+	r.mutate(func(next *repoSnapshot) { next.encryptNew = enabled })
 	return nil
 }
 
@@ -624,129 +710,46 @@ func (r *Repository) Close() error {
 	return r.lock.Close()
 }
 
-func (r *Repository) ready() error {
+// usable reports whether the repository can serve reads and writes. It needs a
+// parsed keychain, not a plugged key: which key each host needs is a fact about
+// that host, and the panel has to be able to show it with nothing plugged in.
+func (r *Repository) usable() error {
 	st := r.snap()
 	if st.closed {
 		return ErrClosed
 	}
-	if st.unlockErr != nil {
-		return fmt.Errorf("%w: %w", ErrLocked, st.unlockErr)
+	if st.keyring == nil && st.loadErr == nil {
+		return ErrNotInitialized
 	}
-	if st.keyring == nil {
-		return ErrClosed
+	if st.loadErr != nil {
+		return ErrKeyNotLoaded
 	}
 	return nil
 }
 
-func (r *Repository) loadCatalog() error {
-	catalog, refs, generationID, err := r.readCatalogSnapshot()
-	if err != nil {
-		return err
-	}
-	refs, moved, err := r.resolveProfileDirectories(refs)
-	if err != nil {
-		return err
-	}
-	if err := r.migrateLegacyObjectLayout(refs); err != nil {
-		return err
-	}
-	for _, ref := range refs {
-		data, err := r.readUnlocked(ref)
-		if err != nil {
-			return fmt.Errorf("verify profile %q: %w", ref.name, err)
-		}
-		clear(data)
-	}
-	r.cleanupLegacyObjectLayout(refs)
-	if moved {
-		if err := r.commitCatalog(r.catalogDocument(refs, catalog.Revision+1)); err != nil {
-			return err
-		}
-		catalog.Revision++
-	}
-	r.mutate(func(next *repoSnapshot) {
-		next.catalogGeneration = generationID
-		next.revision = catalog.Revision
-		next.encryptNew = catalog.EncryptNew
-		next.refs = refs
-	})
-	return nil
-}
-
-func (r *Repository) commitCatalog(catalog catalogDocument) error {
-	if catalog.Version != repositoryVersion || len(catalog.StoreID) != len(ID{}) ||
-		catalog.Revision == 0 || len(catalog.Profiles) > maxCatalogEntries {
-		return ErrFormat
-	}
-	plaintext, err := json.Marshal(catalog)
-	if err != nil {
-		return fmt.Errorf("encode catalog: %w", err)
-	}
-	defer clear(plaintext)
-	if len(plaintext) > MaxCatalogPlaintext {
-		return ErrTooLarge
-	}
-	generationID, err := NewID()
-	if err != nil {
-		return err
+func (r *Repository) writeObject(ref catalogRef, data []byte, keyID ID, activationKey [32]byte) error {
+	keyring := r.snap().keyring
+	if keyring == nil {
+		return ErrNotInitialized
 	}
 	identity := Identity{
-		StoreID:      r.snap().keyring.StoreID(),
-		ObjectID:     catalogObjectID,
-		GenerationID: generationID,
-		Kind:         KindCatalog,
-	}
-	envelope, err := r.snap().keyring.Seal(plaintext, identity)
-	if err != nil {
-		return err
-	}
-	path := repositoryCatalogPath(r.dataDir)
-	durabilityErr := error(nil)
-	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
-		if !errors.Is(err, ErrDurability) {
-			return err
-		}
-		durabilityErr = err
-	}
-
-	parsed, err := parseCatalogEnvelope(envelope.Bytes(), identity.StoreID, catalogObjectID)
-	if err != nil {
-		return err
-	}
-	check, err := r.snap().keyring.Open(parsed)
-	if err != nil {
-		return err
-	}
-	defer clear(check)
-	if !bytes.Equal(check, plaintext) {
-		return ErrAuthentication
-	}
-	r.mutate(func(next *repoSnapshot) {
-		next.catalogGeneration = generationID
-	})
-	return durabilityErr
-}
-
-func (r *Repository) writeObject(ref catalogRef, data []byte) error {
-	identity := Identity{
-		StoreID:      r.snap().keyring.StoreID(),
+		StoreID:      keyring.StoreID(),
 		ObjectID:     ref.objectID,
 		GenerationID: ref.generationID,
 		Kind:         KindProfile,
 	}
-	envelope, err := r.snap().keyring.Seal(data, identity)
+	envelope, err := keyring.SealWith(data, identity, keyID, activationKey)
 	if err != nil {
 		return err
 	}
-	path := r.objectPath(ref)
-	if err := writeFileAtomic(path, envelope.Bytes()); err != nil {
+	if err := writeFileAtomic(r.objectPath(ref), envelope.Bytes()); err != nil {
 		return err
 	}
 	parsed, err := Parse(envelope.Bytes(), identity)
 	if err != nil {
 		return err
 	}
-	check, err := r.snap().keyring.Open(parsed)
+	check, err := keyring.Open(parsed, activationKey)
 	if err != nil {
 		return err
 	}
@@ -757,11 +760,17 @@ func (r *Repository) writeObject(ref catalogRef, data []byte) error {
 	return nil
 }
 
-func (r *Repository) readObject(ref catalogRef) ([]byte, error) {
-	return r.readUnlocked(ref)
+/* commitGeneration publishes one host's generation with no shared index.
+ *
+ * Write the new file, verify it reads back, and only then is it committed. The
+ * caller removes the previous generation afterwards, so a failure here leaves
+ * the old generation intact rather than a half-written host.
+ */
+func (r *Repository) commitGeneration(ref catalogRef, data []byte, activationKey [32]byte) error {
+	return r.writeObject(ref, data, ref.keyID, activationKey)
 }
 
-func (r *Repository) readUnlocked(ref catalogRef) ([]byte, error) {
+func (r *Repository) readObject(ref catalogRef) ([]byte, error) {
 	raw, err := r.readObjectRaw(ref)
 	if err != nil {
 		return nil, err
@@ -789,8 +798,12 @@ func (r *Repository) readObjectRaw(ref catalogRef) ([]byte, error) {
 }
 
 func (r *Repository) openObjectRaw(ref catalogRef, raw []byte) ([]byte, error) {
+	keyring := r.snap().keyring
+	if keyring == nil {
+		return nil, ErrNotInitialized
+	}
 	identity := Identity{
-		StoreID:      r.snap().keyring.StoreID(),
+		StoreID:      keyring.StoreID(),
 		ObjectID:     ref.objectID,
 		GenerationID: ref.generationID,
 		Kind:         KindProfile,
@@ -799,140 +812,66 @@ func (r *Repository) openObjectRaw(ref catalogRef, raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.snap().keyring.Open(envelope)
-}
-
-func (r *Repository) migrateLegacyObjectLayout(refs map[string]catalogRef) error {
-	for _, ref := range refs {
-		newPath := r.objectPath(ref)
-		if exists, err := pathExists(newPath); err != nil {
-			return err
-		} else if exists {
-			continue
-		}
-		legacyPath := r.legacyObjectPath(ref)
-		raw, err := readBoundedFile(
-			legacyPath,
-			int64(envelopeHeaderSize+MaxProfilePlaintext+chacha20poly1305.Overhead),
-		)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if _, err := r.openObjectRaw(ref, raw); err != nil {
-			return err
-		}
-		if err := writeFileAtomic(newPath, raw); err != nil {
-			return err
-		}
-		_ = removeIfExists(legacyPath)
-		_ = os.Remove(filepath.Dir(legacyPath))
+	activationKey, err := r.activationKeyFor(ref, envelope, ref.activated)
+	if err != nil {
+		return nil, err
 	}
-	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
-	return nil
+	return keyring.Open(envelope, activationKey)
 }
 
-func (r *Repository) cleanupLegacyObjectLayout(refs map[string]catalogRef) {
-	for _, ref := range refs {
-		path := r.legacyObjectPath(ref)
-		_ = removeIfExists(path)
-		_ = os.Remove(filepath.Dir(path))
+/*
+activationKeyFor resolves a host's second layer before any body decryption.
+
+  - the key that sealed it is not loaded -> ErrKeyNotLoaded
+  - the key carries a passphrase and its activation key is not in memory
+    -> ErrNotActivated, without deriving anything
+  - otherwise the activation key, or the all-zero stand-in, in which case the
+    per-host `active` marker is the gate.
+*/
+func (r *Repository) activationKeyFor(ref catalogRef, envelope *Envelope, activated bool) ([32]byte, error) {
+	keyring := r.snap().keyring
+	if _, plugged := keyring.key(envelope.keyID); !plugged {
+		/* "Not plugged in" and "this key was deleted" are different answers, and
+		   the keychain file is what tells them apart: the first is fixed by
+		   inserting the key, the second never is. */
+		if stored, err := r.readKeyringFile(); err == nil {
+			if _, known := storedKeyByID(stored, envelope.keyID); !known {
+				return noActivationKey, ErrOrphaned
+			}
+		}
+		return noActivationKey, ErrKeyNotLoaded
 	}
-	_ = os.Remove(filepath.Join(r.dataDir, "ssh_configs", "objects"))
+	if key, ok := keyring.activationKey(envelope.keyID, envelope.identity.ObjectID); ok {
+		return key, nil
+	}
+	stored, err := r.readKeyringFile()
+	if err != nil {
+		return noActivationKey, err
+	}
+	if key, ok := storedKeyByID(stored, envelope.keyID); ok && keyHasPassphrase(key) {
+		return noActivationKey, ErrNotActivated
+	}
+	if !activated {
+		return noActivationKey, ErrNotActivated
+	}
+	return noActivationKey, nil
 }
 
-func (r *Repository) objectPath(ref catalogRef) string {
-	return filepath.Join(
-		r.dataDir,
-		"ssh_configs",
-		ref.name,
-		hex.EncodeToString(ref.generationID[:])+".enc",
-	)
-}
-
-func (r *Repository) legacyObjectPath(ref catalogRef) string {
-	return filepath.Join(
-		r.dataDir,
-		"ssh_configs",
-		"objects",
-		hex.EncodeToString(ref.objectID[:]),
-		hex.EncodeToString(ref.generationID[:])+".enc",
-	)
-}
-
+/* removeObject clears one generation: its ciphertext and the `.adk` that belongs
+ * to it. They are one unit — an activation record for a body that is gone can only
+ * confuse the next generation.
+ *
+ * The `active` marker is NOT removed here. It is a fact about the host, and a save
+ * writes the new generation's marker before the previous generation is cleaned up;
+ * deleting it here would erase the state the save just recorded. Host deletion
+ * removes it explicitly.
+ */
 func (r *Repository) removeObject(ref catalogRef) {
+	_ = removeIfExists(r.activationPath(ref))
 	for _, path := range []string{r.objectPath(ref), r.legacyObjectPath(ref)} {
 		_ = removeIfExists(path)
 		_ = os.Remove(filepath.Dir(path))
 	}
-}
-
-func (r *Repository) catalogDocument(refs map[string]catalogRef, revision uint64) catalogDocument {
-	profiles := make([]catalogProfile, 0, len(refs))
-	for _, ref := range refs {
-		profiles = append(profiles, catalogProfile{
-			Name:         ref.name,
-			ObjectID:     append([]byte(nil), ref.objectID[:]...),
-			GenerationID: append([]byte(nil), ref.generationID[:]...),
-		})
-	}
-	sort.Slice(profiles, func(i, j int) bool {
-		return strings.ToLower(profiles[i].Name) < strings.ToLower(profiles[j].Name)
-	})
-	storeID := r.snap().keyring.StoreID()
-	return catalogDocument{
-		Version:    repositoryVersion,
-		StoreID:    append([]byte(nil), storeID[:]...),
-		Revision:   revision,
-		EncryptNew: r.snap().encryptNew,
-		Profiles:   profiles,
-	}
-}
-
-func decodeCatalog(data []byte, storeID ID) (catalogDocument, map[string]catalogRef, error) {
-	var catalog catalogDocument
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&catalog); err != nil {
-		return catalogDocument{}, nil, ErrFormat
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return catalogDocument{}, nil, ErrFormat
-	}
-	if catalog.Version != repositoryVersion || catalog.Revision == 0 ||
-		len(catalog.StoreID) != len(ID{}) || !bytes.Equal(catalog.StoreID, storeID[:]) ||
-		len(catalog.Profiles) > maxCatalogEntries {
-		return catalogDocument{}, nil, ErrFormat
-	}
-	refs := make(map[string]catalogRef, len(catalog.Profiles))
-	folded := make(map[string]string, len(catalog.Profiles))
-	for _, profile := range catalog.Profiles {
-		if err := validateCatalogName(profile.Name); err != nil ||
-			len(profile.ObjectID) != len(ID{}) || len(profile.GenerationID) != len(ID{}) {
-			return catalogDocument{}, nil, ErrFormat
-		}
-		var objectID, generationID ID
-		copy(objectID[:], profile.ObjectID)
-		copy(generationID[:], profile.GenerationID)
-		if objectID.IsZero() || generationID.IsZero() || objectID == catalogObjectID ||
-			(strings.EqualFold(profile.Name, "internal") && objectID != internalObjectID) ||
-			(!strings.EqualFold(profile.Name, "internal") && objectID == internalObjectID) {
-			return catalogDocument{}, nil, ErrFormat
-		}
-		nameKey := strings.ToLower(profile.Name)
-		if existing, ok := folded[nameKey]; ok {
-			return catalogDocument{}, nil, fmt.Errorf("%w: duplicate names %q and %q", ErrFormat, existing, profile.Name)
-		}
-		folded[nameKey] = profile.Name
-		refs[profile.Name] = catalogRef{
-			name:         profile.Name,
-			objectID:     objectID,
-			generationID: generationID,
-		}
-	}
-	return catalog, refs, nil
 }
 
 func cloneRefs(refs map[string]catalogRef) map[string]catalogRef {
@@ -992,10 +931,6 @@ func prepareDataDir(dataDir string) (string, error) {
 	return absolute, nil
 }
 
-func repositoryCatalogPath(dataDir string) string {
-	return filepath.Join(dataDir, "ssh_configs", "store.enc")
-}
-
 func hasIncompatibleLayout(dataDir string) (bool, error) {
 	for _, path := range []string{
 		filepath.Join(dataDir, "keys", "master.key"),
@@ -1024,23 +959,6 @@ func HasLegacyEncryptionArtifacts(dataDir string) (bool, error) {
 		return false, err
 	}
 	return hasIncompatibleLayout(root)
-}
-
-// HasManagedCatalog reports whether a current encrypted catalog exists. A
-// catalog without its keyring is damaged state and must fail closed.
-func HasManagedCatalog(dataDir string) (bool, error) {
-	root, err := filepath.Abs(filepath.Clean(dataDir))
-	if err != nil {
-		return false, err
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return pathExists(repositoryCatalogPath(root))
 }
 
 func pathExists(path string) (bool, error) {
@@ -1093,4 +1011,32 @@ func repeatedID(value byte) (id ID) {
 		id[i] = value
 	}
 	return id
+}
+
+func randomBytes(n int) ([]byte, error) {
+	id, err := NewID()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, n)
+	for len(out) < n {
+		out = append(out, id[:]...)
+		if len(out) < n {
+			id, err = NewID()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out[:n], nil
+}
+
+// sortedRefNames gives deterministic iteration for reports and tests.
+func sortedRefNames(refs map[string]catalogRef) []string {
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

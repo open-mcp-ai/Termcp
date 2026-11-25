@@ -1,6 +1,7 @@
 package sshconfig
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -52,10 +53,10 @@ func TestFailedConversionKeepsEveryPlaintextSource(t *testing.T) {
 	first := writePlaintextProfile(t, store, "alpha", safetyProfile)
 	second := writePlaintextProfile(t, store, "beta", safetyProfile)
 
-	store.importCiphertext = func(*configstore.Repository, []configstore.Item) error {
+	store.importCiphertext = func(*configstore.Repository, []configstore.Item, configstore.SaveOptions) error {
 		return errInjectedPublish
 	}
-	if _, err := store.EncryptProfiles([]string{"alpha", "beta"}); !errors.Is(err, errInjectedPublish) {
+	if _, err := store.EncryptProfiles([]string{"alpha", "beta"}, configstore.ID{}, ""); !errors.Is(err, errInjectedPublish) {
 		t.Fatalf("EncryptProfiles = %v, want the injected publication failure", err)
 	}
 
@@ -114,45 +115,70 @@ func TestEncryptingStoreWithoutKeyringRefusesToWrite(t *testing.T) {
 	}
 }
 
-// A locked repository must let the process start — the settings page is where
-// the operator enters the password — and must refuse to write until it is
-// unlocked, rather than writing cleartext.
-func TestLockedRepositoryRefusesEncryptedWrite(t *testing.T) {
+/* A keychain whose only ways in are phrases must let the process start — the
+ * panel is where one is typed — and must refuse to write until a key is loaded,
+ * rather than writing cleartext.
+ *
+ * Mutation check: treat "no key loaded" as "then plaintext is fine" and the save
+ * below succeeds in cleartext.
+ */
+func TestUnloadedKeychainRefusesEncryptedWrite(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Initialize with a password, then reopen without one: that is the state a
-	// restart leaves behind.
-	repo, err := configstore.InitializeRepositoryWithPassword(dir, "a-long-password", "a-long-password")
+	provider := configstore.NewEnvProvider("")
+	t.Setenv(configstore.EnvKEKVariable, environmentConfigKEK(0x42))
+	repo, err := configstore.InitializeRepository(dir, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.SetEncryptNew(true); err != nil {
 		t.Fatal(err)
 	}
+	keys, err := repo.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id configstore.ID
+	if err := id.UnmarshalText([]byte(keys[0].ID)); err != nil {
+		t.Fatal(err)
+	}
+	// Drop the machine wrapper: from here only a phrase can load the key, which a
+	// restart has nobody to type.
+	if err := repo.RemoveUnlockFrom(id, "env"); !errors.Is(err, configstore.ErrLastWrapper) {
+		t.Fatalf("removing the only wrapper = %v; want ErrLastWrapper", err)
+	}
+	/* A mounted KEK file is the other way in: machine-presentable, but this start
+	   does not name it, so the key stays out of memory exactly as a phrase-only
+	   keychain would. */
+	keyFilePath := writeSyntheticKEK(t)
+	if err := repo.AddUnlockTo(id, configstore.NewFileProvider(keyFilePath)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RemoveUnlockFrom(id, "env"); err != nil {
+		t.Fatalf("removing the machine wrapper once another way in exists: %v", err)
+	}
+	t.Setenv(configstore.EnvKEKFileVariable, "")
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	store, err := OpenConfiguredStore(dir)
 	if err != nil {
-		t.Fatalf("a password-locked store must still open so the UI can unlock it: %v", err)
+		t.Fatalf("a phrase-only keychain must still open so the panel can load it: %v", err)
 	}
 	defer store.Close()
 	status, err := store.EncryptionStatus()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Locked {
-		t.Fatal("the store reopened unlocked")
+	if status.KeysPlugged != 0 || status.Keys != 1 {
+		t.Fatalf("status = %+v; want one key, none loaded", status)
 	}
 
 	if err := store.Save("prod", []byte(safetyProfile)); err == nil {
-		t.Fatal("a locked store accepted an encrypted write")
+		t.Fatal("a store with no key loaded accepted an encrypted write")
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "ssh_configs", "prod", "config.toml")); statErr == nil {
-		t.Fatal("the locked store wrote cleartext instead")
+		t.Fatal("the store with no key loaded wrote cleartext instead")
 	}
 }
 
@@ -170,19 +196,121 @@ func TestCatalogWithoutKeyringFailsClosed(t *testing.T) {
 		t.Fatalf("remove keyring: %v", err)
 	}
 
-	/* Opening succeeds, in the LOCKED state: the daemon still has to serve the
+	/* Opening succeeds with the fault recorded: the daemon still has to serve the
 	   plaintext profiles that share this data directory, and the Web UI needs a
-	   running process to accept the recovery. What must never happen is reading
-	   or writing the encrypted profile. */
+	   running process to act on it. What must never happen is reading or writing
+	   the encrypted profile. */
 	reopened, err := OpenConfiguredStore(dir)
 	if err != nil {
-		t.Fatalf("a catalog without its keyring must open locked, not fail: %v", err)
+		t.Fatalf("a catalog without its keychain must open with the fault recorded, not fail: %v", err)
 	}
 	defer reopened.Close()
-	if status, err := reopened.EncryptionStatus(); err != nil || !status.Locked {
-		t.Fatalf("status = %+v, err %v; want locked", status, err)
+	if status, err := reopened.EncryptionStatus(); err != nil || status.Keys != 0 || status.ErrorCode == "" {
+		t.Fatalf("status = %+v, err %v; want no keys and an error code", status, err)
 	}
 	if _, err := reopened.Load("prod"); err == nil {
 		t.Fatal("an unreadable encrypted profile was loaded")
+	}
+}
+
+// writeSyntheticKEK writes a synthetic 32-byte KEK to a per-test file and returns
+// its path. It stands in for a container's mounted secret.
+func writeSyntheticKEK(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kek")
+	raw, err := base64.StdEncoding.DecodeString(environmentConfigKEK(0x43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(raw)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Re-keying moves an already-sealed host to another key.
+// The plaintext is verified in memory first: moving needs the old key plugged AND
+// the host activated. Moving to the SAME key reports already_encrypted.
+func TestRekeyMovesHostBetweenKeysAndHonorsValves(t *testing.T) {
+	t.Setenv(configstore.EnvKEKVariable, environmentConfigKEK(0x42))
+	dir := t.TempDir()
+	env := configstore.NewEnvProvider("")
+	repo, err := configstore.InitializeRepository(dir, env)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	store := NewHybridStore(dir, repo, true)
+	defer store.Close()
+
+	keyA, _, err := store.CreateKeyWithLabel("", "", "key-a", env)
+	if err != nil {
+		t.Fatalf("key A: %v", err)
+	}
+	keyB, _, err := store.CreateKeyWithLabel("", "", "key-b", env)
+	if err != nil {
+		t.Fatalf("key B: %v", err)
+	}
+	idA, err := parseKeyID(keyA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := parseKeyID(keyB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePlaintextProfile(t, store, "node-1", safetyProfile)
+
+	/* 1. Seal under Key A. */
+	resA, err := store.EncryptProfiles([]string{"node-1"}, idA, "")
+	if err != nil || len(resA) != 1 || !resA[0].OK {
+		t.Fatalf("encrypt A: %+v, %v", resA, err)
+	}
+	stA, err := repo.HostState("node-1")
+	if err != nil || stA.KeyID != idA {
+		t.Fatalf("host should be under key A (%s), got %+v, %v", idA, stA, err)
+	}
+
+	/* 2. Re-key to Key B: succeeds while key A is plugged and host active. */
+	resB, err := store.EncryptProfiles([]string{"node-1"}, idB, "")
+	if err != nil || len(resB) != 1 || !resB[0].OK {
+		t.Fatalf("rekey to B: %+v, %v", resB, err)
+	}
+	stB, err := repo.HostState("node-1")
+	if err != nil || stB.KeyID != idB {
+		t.Fatalf("host should be under key B (%s), got %+v, %v", idB, stB, err)
+	}
+	readBack, err := store.ReadRaw("node-1")
+	if err != nil || string(readBack) != safetyProfile {
+		t.Fatalf("read back: %q, %v", string(readBack), err)
+	}
+
+	/* 3. Re-key to the SAME key: already_encrypted no-op. */
+	resSame, err := store.EncryptProfiles([]string{"node-1"}, idB, "")
+	if err != nil || len(resSame) != 1 || !resSame[0].OK || resSame[0].Code != "already_encrypted" {
+		t.Fatalf("rekey same: %+v, %v", resSame, err)
+	}
+
+	/* 4. Deactivated host refuses to re-key: valve 2 is shut. */
+	if err := store.Deactivate([]string{"node-1"}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	resDeact, err := store.EncryptProfiles([]string{"node-1"}, idA, "")
+	if err != nil || len(resDeact) != 1 || resDeact[0].OK || resDeact[0].Code != "not_activated" {
+		t.Fatalf("rekey deactivated: want not_activated, got %+v, %v", resDeact, err)
+	}
+
+	/* Reactivate node-1 under key B. */
+	if actRes, err := store.Activate([]string{"node-1"}, nil); err != nil || actRes["node-1"] != nil {
+		t.Fatalf("reactivate: %v, %v", actRes, err)
+	}
+
+	/* 5. Unplugged key refuses to re-key: valve 1 is shut. */
+	if err := store.UnplugKey(idB); err != nil {
+		t.Fatalf("unplug B: %v", err)
+	}
+	resUnplug, err := store.EncryptProfiles([]string{"node-1"}, idA, "")
+	if err != nil || len(resUnplug) != 1 || resUnplug[0].OK || resUnplug[0].Code != "key_not_loaded" {
+		t.Fatalf("rekey unplugged: want key_not_loaded, got %+v, %v", resUnplug, err)
 	}
 }

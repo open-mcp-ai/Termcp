@@ -407,3 +407,45 @@ func placeholders(s string) []string {
 	sort.Strings(out)
 	return out
 }
+
+/* A module that builds markup at load time runs after i18n.js has already made
+ * its single pass over the document, so every data-i18n attribute it wrote stays
+ * in the catalog's source language. That is how the encryption dialog ended up
+ * half translated: its status line (drawn with t()) in Chinese while its title,
+ * labels and buttons stayed English. A load-time injection carrying data-i18n
+ * has to apply the translations itself.
+ *
+ * Mutation check: removing the applyI18n call after config-storage.js builds its
+ * modal fails this test.
+ */
+func TestLoadTimeMarkupAppliesItsOwnTranslations(t *testing.T) {
+	// Top-level assignment: the line starts in column 0, which is what makes it
+	// run at load rather than when a dialog opens.
+	topLevel := regexp.MustCompile(`(?m)^[A-Za-z_$][\w$.]*\.innerHTML\s*=\s*[\[` + "`" + `'"]`)
+	for _, f := range jsModules(t) {
+		body := readAssetLF(t, f)
+		for _, loc := range topLevel.FindAllStringIndex(body, -1) {
+			/* The block ends where the array it assigns is joined. A fixed window
+			   was tried first and stopped working the moment a panel grew — the
+			   assertion is about the markup, so it follows the markup. */
+			tail := body[loc[0]:]
+			close := strings.Index(tail, "].join(")
+			if close < 0 {
+				continue
+			}
+			block := tail[:close]
+			if !strings.Contains(block, "data-i18n") {
+				continue
+			}
+			/* The translation pass follows the assignment, not the markup: what is
+			   checked is that it happens at load time, near the block it fixes. */
+			after := tail[close:]
+			if len(after) > 1500 {
+				after = after[:1500]
+			}
+			if !strings.Contains(after, "applyI18n(") {
+				t.Errorf("%s: builds data-i18n markup at load time without applying translations; those labels render in the source language", f)
+			}
+		}
+	}
+}

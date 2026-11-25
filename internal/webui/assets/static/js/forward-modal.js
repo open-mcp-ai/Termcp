@@ -76,7 +76,7 @@ document.getElementById('fw-direction').onchange = function () {
   document.getElementById('fw-dir-hint-remote').style.display = v === 'remote' ? '' : 'none';
   document.getElementById('fw-dir-hint-dynamic').style.display = v === 'dynamic' ? '' : 'none';
   var isDynamic = v === 'dynamic';
-  var tf = document.getElementById('fw-target-fields-modal') || document.getElementById('fw-target-fields');
+  var tf = document.getElementById('fw-target-fields-modal');
   if (tf) tf.style.display = isDynamic ? 'none' : '';
   var lh = document.getElementById('fw-local-host');
   if (lh) { var lbl = lh.closest('label'); if (lbl) lbl.style.display = isDynamic ? 'none' : ''; lh.style.display = isDynamic ? 'none' : ''; }

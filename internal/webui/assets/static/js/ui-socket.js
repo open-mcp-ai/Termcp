@@ -159,6 +159,12 @@ function connectUIWebSocket() {
            server already wakes this loop for those. */
         if (j.clients || j.mcp_clients) renderClients(j.mcp_clients, j.clients);
       }
+      else if (j.type === 'config-storage') {
+        /* Same frame shape as the panel's own status call, pushed by the server
+           whenever a key is loaded or created, so a second tab or an MCP client
+           cannot leave this one showing the wrong state. */
+        if (typeof applyConfigStorageSnapshot === 'function') applyConfigStorageSnapshot(j.config_storage);
+      }
       else if (j.type === 'terminal') {
         /* One window lookup per frame, not two: this branch runs once per output
            frame, and each lookup was a full DOM scan. */

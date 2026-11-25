@@ -115,10 +115,8 @@ type Handler struct {
 
 	// viewers tracks the Web UI tabs currently attached (see viewers.go), so the
 	// page can show who is watching. Created on first use.
-	viewers       *viewerRegistry
-	viewerOnce    sync.Once
-	configKeyOnce sync.Once
-	configKeyBusy chan struct{} // 1-slot channel token for non-blocking password admission (429)
+	viewers    *viewerRegistry
+	viewerOnce sync.Once
 
 	// MCPConnections lists the MCP clients attached to the MCP server (see
 	// internal/mcp/connections.go). Wired by main to server.Connections; nil when
@@ -182,18 +180,34 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/connections/{name}", h.handlePutConnection)
 	mux.HandleFunc("DELETE /api/connections/{name}", h.handleDeleteConnection)
 	mux.HandleFunc("POST /api/connections/test", h.handleTestConnection)
+	mux.HandleFunc("GET /api/share/identity", h.handleShareIdentity)
+	mux.HandleFunc("POST /api/share/export", h.handleShareExport)
+	mux.HandleFunc("POST /api/share/import", h.handleShareImport)
 
-	// Configuration-at-rest management. The page chooses whether new profiles
-	// are encrypted and explicitly converts selected existing hosts.
+	// Configuration-at-rest management: the keychain, the per-host storage mode,
+	// and converting selected hosts between plaintext and ciphertext. Each key is
+	// independent, so every key action is one route and one request; a host is
+	// sealed with whichever key the caller names.
 	mux.HandleFunc("GET /api/config-storage", h.handleConfigStorageStatus)
-	mux.HandleFunc("POST /api/config-storage/lock", h.handleConfigStorageLock)
-	mux.HandleFunc("POST /api/config-storage/destroy", h.handleConfigStorageDestroy)
 	mux.HandleFunc("POST /api/config-storage/encrypt", h.handleEncryptConfigs)
 	mux.HandleFunc("POST /api/config-storage/restore", h.handleRestoreConfigs)
-	mux.HandleFunc("POST /api/config-storage/initialize", h.handleInitializeConfigKey)
-	mux.HandleFunc("POST /api/config-storage/recover", h.handleRecoverConfigKey)
-	mux.HandleFunc("POST /api/config-storage/unlock", h.handleUnlockConfigKey)
-	mux.HandleFunc("POST /api/config-storage/password", h.handleChangeConfigPassword)
+	mux.HandleFunc("POST /api/config-storage/activate", h.handleActivateConfigs)
+	mux.HandleFunc("POST /api/config-storage/deactivate", h.handleDeactivateConfigs)
+	mux.HandleFunc("PUT /api/config-storage/mask", h.handleMaskConfigs)
+	mux.HandleFunc("GET /api/keychain", h.handleKeychainList)
+	mux.HandleFunc("POST /api/keychain", h.handleKeychainAdd)
+	mux.HandleFunc("DELETE /api/keychain/{id}", h.handleKeychainRemove)
+	mux.HandleFunc("POST /api/keychain/{id}/plug", h.handleKeychainPlug)
+	mux.HandleFunc("POST /api/keychain/{id}/unplug", h.handleKeychainUnplug)
+	mux.HandleFunc("POST /api/keychain/new-mnemonic", h.handleKeychainNewMnemonic)
+	mux.HandleFunc("POST /api/keychain/{id}/rename", h.handleKeychainRename)
+	mux.HandleFunc("POST /api/keychain/{id}/rotate", h.handleKeychainRotate)
+	mux.HandleFunc("POST /api/keychain/{id}/passphrase", h.handleKeychainPassphrase)
+	mux.HandleFunc("GET /api/keychain/{id}/mnemonic", h.handleKeychainMnemonic)
+	/* The explicit exit for a keychain file this build cannot read. Without a route
+	   the panel could only report "broken" and leave the human to guess that adding
+	   a key would replace the file. It refuses while hosts are still sealed by it. */
+	mux.HandleFunc("POST /api/config-storage/discard-keychain", h.handleDiscardKeychain)
 
 	// Extensions (the right panel): templates for pinned, capability-trimmed
 	// sessions with the reconciler's live status on each. The authoring routes
