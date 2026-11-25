@@ -61,11 +61,27 @@ if (_fwCreate) _fwCreate.onclick = function () {
   if (dir !== 'dynamic' && (!remoteHost || !remotePort)) { err.textContent = t('modal.forward.err.required'); err.style.display = 'block'; return; }
   var body = {
     direction: dir,
-    remote_host: remoteHost,
-    remote_port: remotePort,
-    local_host: document.getElementById('fw-local-host').value.trim() || '127.0.0.1',
     local_port: parseInt(document.getElementById('fw-local-port').value) || 0
   };
+  /* A SOCKS5 forward has no fixed target, so the hidden target fields are not sent
+   * with it: leaving them in would post a destination the direction cannot carry,
+   * and the server refuses that rather than dropping it on the floor. */
+  if (dir !== 'dynamic') {
+    body.remote_host = remoteHost;
+    body.remote_port = remotePort;
+  }
+  /* THE LISTEN ADDRESS HAS TWO NAMES BECAUSE IT NAMES TWO MACHINES. For -L (and
+   * for -D, which can only be loopback) the listener is on THIS host and the field
+   * is bind_host; for -R the listener is on the TARGET and the field is local_host.
+   * Sending local_host for every direction is what made this dialog's Listen host
+   * do nothing at all for a local forward: the server reads bind_host there, so the
+   * address was dropped and the tunnel came up on 127.0.0.1. */
+  var listenHost = document.getElementById('fw-local-host').value.trim();
+  if (dir === 'remote') {
+    body.local_host = listenHost || '127.0.0.1';
+  } else if (dir === 'local') {
+    body.bind_host = listenHost || '127.0.0.1';
+  }
   createForward(body)
     .then(function () { hideModal('modal-forward'); loadForwards(); })
     .catch(function (e) { err.textContent = String(e.message || e); err.style.display = 'block'; });
@@ -79,7 +95,26 @@ document.getElementById('fw-direction').onchange = function () {
   var tf = document.getElementById('fw-target-fields-modal');
   if (tf) tf.style.display = isDynamic ? 'none' : '';
   var lh = document.getElementById('fw-local-host');
-  if (lh) { var lbl = lh.closest('label'); if (lbl) lbl.style.display = isDynamic ? 'none' : ''; lh.style.display = isDynamic ? 'none' : ''; }
+  /* THE LABEL NAMES THE MACHINE, because the field does: the same box is "this
+   * host" for a local forward and "the target" for a remote one. "Listen host"
+   * named neither, which is how an address meant for the local side was read as the
+   * remote side's (and then dropped) more than once. */
+  var lhl = document.getElementById('fw-local-host-label');
+  if (lhl) {
+    /* BOTH BRANCHES SPELL THE KEY OUT. The catalog scan reads keys off the source
+     * (data-i18n markers and t() arguments), so a key held in a variable is an
+     * orphan to it — and the marker has to be rewritten here anyway, or a language
+     * switch would relabel the box with whatever the direction was at load time. */
+    if (v === 'remote') {
+      lhl.setAttribute('data-i18n', 'modal.forward.listenHostTarget');
+      lhl.textContent = t('modal.forward.listenHostTarget');
+    } else {
+      lhl.setAttribute('data-i18n', 'modal.forward.listenHostHere');
+      lhl.textContent = t('modal.forward.listenHostHere');
+    }
+    lhl.style.display = isDynamic ? 'none' : '';
+  }
+  if (lh) lh.style.display = isDynamic ? 'none' : '';
   var pl = document.getElementById('fw-local-port-label');
   if (pl) pl.textContent = isDynamic ? t('modal.forward.socksPort') : t('modal.forward.listenPort');
 };

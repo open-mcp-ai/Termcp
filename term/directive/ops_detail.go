@@ -1492,11 +1492,20 @@ Two different addresses, because the side that listens differs:
                 reach this machine — that is a deliberate act, and the review
                 prompt says so.
   --local-host  what the TARGET listens on for remote. Default 127.0.0.1;
-                "0.0.0.0" publishes it to the target's network.
+                "0.0.0.0" (or "*") publishes it to the target's network.
 
-dynamic has no --bind-host on purpose: the SOCKS5 proxy this server runs performs
-no authentication (same as "ssh -D"), so on any other interface it would be an open
-proxy for whoever can reach it. Use --action local to publish one service instead.
+The two are NOT interchangeable, and the wrong one is refused rather than ignored:
+--local-host on a local forward answers 400 and names --bind-host, because a flag
+that parses and changes nothing produces a 200 about an address the caller never
+asked for. Same for --bind-host on --remote.
+
+dynamic is LOOPBACK ONLY, and that is not a default: the SOCKS5 proxy this server
+runs performs no authentication (same as "ssh -D"), so any other interface would
+be an open proxy for whoever can reach it. --bind-host is accepted there only as
+the loopback it has to be, and refused otherwise; to publish one service use a
+local forward instead. A --remote-host/--local-host written on a dynamic forward
+is refused for the same reason a target would be pointless: the client names the
+destination per connection, so there is no fixed destination to carry.
 
 The reply differs by direction, which is easy to misread: local and dynamic report
 the listening address as local_port, while remote reports the port on the TARGET as

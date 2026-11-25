@@ -20,6 +20,23 @@ import (
 // branch on it with errors.Is instead of matching the message.
 var ErrNotFound = errors.New("not found")
 
+// NonLoopbackBindError is the refusal of a SOCKS5 forward asked to listen on an
+// address other than loopback.
+//
+// IT IS A TYPE RATHER THAN A SENTINEL because the message has to name the address
+// and the risk, and a sentinel would either be wrapped into that sentence ("...:
+// SOCKS5 proxy ...") or duplicate it. It exists so the callers can answer with a
+// client error: the address is a request only the caller can change, and a 500
+// tells an agent the server broke, which sends it to retry or to look at logs
+// instead of at the flag it passed.
+type NonLoopbackBindError struct {
+	Host string
+}
+
+func (e *NonLoopbackBindError) Error() string {
+	return fmt.Sprintf("SOCKS5 proxy %q cannot bind a non-loopback address: it performs no authentication, so it would be an open proxy for anything that can reach this host (use a local forward to publish one service)", e.Host)
+}
+
 // ForwardManager manages port forwards for SSH connections.
 //
 // One forward is one independent entry keyed by id, so the table is a sync.Map;
@@ -166,7 +183,7 @@ func (fm *ForwardManager) CreateRemoteHTTP(sessionID, sshConfig, agentHost strin
 // "dial anything".
 func (fm *ForwardManager) CreateDynamic(sessionID, sshConfig, bindHost string, localPort int, sshClient *ssh.Client, localDial bool) (*ForwardInfo, error) {
 	if !IsLoopbackHost(bindHost) {
-		return nil, fmt.Errorf("SOCKS5 proxy %q cannot bind a non-loopback address: it performs no authentication, so it would be an open proxy for anything that can reach this host (use a local forward to publish one service)", ResolveBindHost(bindHost))
+		return nil, &NonLoopbackBindError{Host: ResolveBindHost(bindHost)}
 	}
 	if !localDial && sshClient == nil {
 		return nil, fmt.Errorf("no SSH client available for %q", sshConfig)
