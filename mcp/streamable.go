@@ -103,9 +103,28 @@ func (sc *streamClient) close() {
 	sc.out.Store(nil)
 }
 
+// Dispatcher is everything a transport needs from the thing it serves: three calls,
+// and no knowledge of what answers them.
+//
+// WHY AN INTERFACE AND NOT *Server (issue #328). The transport is one implementation of
+// the protocol's HTTP half — session ids, GET streams, the version header, body limits,
+// 405/400/413 — and there used to be a second, hand-rolled copy of that half in the
+// extension endpoint. Two copies of a protocol surface drift: the copy answered 202 to a
+// request (which the spec forbids), 405 to the GET stream (which a client needs), and
+// invented no session id. Naming the three methods the transport actually uses is what
+// makes the second copy unnecessary.
+type Dispatcher interface {
+	// RegisterSession records a session that just began.
+	RegisterSession(ctx context.Context, sess Session)
+	// UnregisterSession drops one that ended.
+	UnregisterSession(ctx context.Context, sess Session)
+	// Handle answers one inbound frame. A notification returns nil.
+	Handle(ctx context.Context, raw []byte, sess Session) []byte
+}
+
 // StreamableHTTPServer is the streamable-HTTP transport.
 type StreamableHTTPServer struct {
-	srv *Server
+	srv Dispatcher
 	// contextFunc lifts the HTTP request into handler context.
 	contextFunc func(context.Context, *http.Request) context.Context
 	// endpoint is the path this handler is mounted at, used for the GET stream's
@@ -142,7 +161,7 @@ func WithStreamableIdleWindow(d time.Duration) StreamableOption {
 }
 
 // NewStreamableHTTPServer builds the streamable-HTTP transport.
-func NewStreamableHTTPServer(srv *Server, opts ...StreamableOption) *StreamableHTTPServer {
+func NewStreamableHTTPServer(srv Dispatcher, opts ...StreamableOption) *StreamableHTTPServer {
 	s := &StreamableHTTPServer{srv: srv, janitorDone: make(chan struct{})}
 	for _, opt := range opts {
 		opt(s)
@@ -202,7 +221,7 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		s.sessions.Store(sess.id, sess)
 		sess.touch()
 		w.Header().Set(sessionHeader, sess.id)
-		s.srv.registerSession(ctx, sess)
+		s.srv.RegisterSession(ctx, sess)
 	}
 
 	if sess == nil {
@@ -315,7 +334,7 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 		ctx = s.contextFunc(ctx, r)
 	}
 	sess.close()
-	s.srv.unregisterSession(ctx, sess)
+	s.srv.UnregisterSession(ctx, sess)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -339,7 +358,7 @@ func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
 	})
 	for _, sess := range sessions {
 		sess.close()
-		s.srv.unregisterSession(ctx, sess)
+		s.srv.UnregisterSession(ctx, sess)
 	}
 	return nil
 }

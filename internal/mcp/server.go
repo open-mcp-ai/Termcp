@@ -23,6 +23,9 @@ type Server struct {
 	mcpServer    *mcp.Server
 	sseServer    *mcp.SSEServer
 	streamServer *mcp.StreamableHTTPServer
+	// extTransports holds one streamable transport per extension name (issue #328): the
+	// transport owns sessions and GET streams, so it cannot be created per request.
+	extTransports sync.Map
 	sessMgr      *session.Manager
 	msgMgr       *message.Manager
 	sshConfigs   *sshconfig.Store
@@ -261,6 +264,16 @@ func (s *Server) Stop() error {
 	defer cancel()
 	if s.streamServer != nil {
 		_ = s.streamServer.Shutdown(ctx)
+	}
+	// The per-extension transports own sessions and janitors too (#328): a Stop that left
+	// them running would keep one goroutine per extension alive after shutdown.
+	s.extTransports.Range(func(k, v any) bool {
+		_ = v.(*mcp.StreamableHTTPServer).Shutdown(ctx)
+		s.extTransports.Delete(k)
+		return true
+	})
+	if s.sseServer == nil {
+		return nil
 	}
 	return s.sseServer.Shutdown(ctx)
 }

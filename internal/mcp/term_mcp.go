@@ -428,13 +428,17 @@ func (s *Server) recvReader(handle string) chan struct{} {
 	return actual.(chan struct{})
 }
 
-// lineLock returns the mutex that makes one channel's writes land as whole lines,
-// creating it on first use.
+// lineToken returns the one-slot channel token that makes one channel's writes land as
+// whole lines, creating it on first use.
 //
 // THE UNIT IS A LINE, not a write: `run` sends the text and the enter that ends it as
 // two calls, and two runs interleaving there produce a stream no line reader can
 // parse (issue #212). Callers hold this across both writes and release it before
 // waiting for output.
+//
+// A TOKEN RATHER THAN A MUTEX: acquiring it can listen on the caller's ctx, and
+// releasing it is a send, so there is no path that can return while holding it
+// (AGENTS.md).
 func (s *Server) lineToken(handle string) chan struct{} {
 	if v, ok := s.lineTokens.Load(handle); ok {
 		return v.(chan struct{})

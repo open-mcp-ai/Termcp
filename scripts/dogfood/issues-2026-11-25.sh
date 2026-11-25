@@ -487,6 +487,45 @@ out=$(term "create ext httpcmd --template @$WORK/httpcmd.toml")
 check "#331 http 通道带 command 被拒" "$out" '"code":400'
 check "#331 并说明那要写成两条通道" "$out" 'two channels'
 
+# ---------------------------------------------------------------------------
+# #328：/ext 的传输接缝。#328 的四步里这一步（S1+S2）是「不再自己写一份传输」：
+# session id、GET 流、状态码、body 上限都来自共用实现，端点只剩「把一帧写成一行、
+# 等回答」。
+say "#328 /ext 走共用传输"
+term "create ext echo --target internal --mode pipe --command cat" >/dev/null
+sleep 2
+EXT="http://127.0.0.1:$PORT/ext/echo/stream"
+# GET 缺 session 是 400 并点名头（此前是 405 + 一段解释，而客户端恰恰在这里等推送）。
+out=$(curl -s -o /dev/null -w '%{http_code}' -X GET "$EXT")
+check "#328 GET 缺 session 是 400" "$out" '400'
+out=$(curl -s -X GET "$EXT")
+check "#328 并点名缺哪个头" "$out" 'Mcp-Session-Id'
+# initialize 拿到 session id：此前这个端点没有 id，后面的 GET 无从指名。
+hdr=$(mktemp)
+out=$(curl -s -D "$hdr" -X POST "$EXT" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}')
+check "#328 initialize 有回答" "$out" '"jsonrpc":"2.0"'
+check "#328 并给出 Mcp-Session-Id" "$(cat "$hdr")" 'Mcp-Session-Id:'
+SID_EXT=$(grep -i '^mcp-session-id:' "$hdr" | tr -d '\r' | awk '{print $2}')
+# 通知是 202（规范如此）；请求不许 202——那条差别正是旧实现丢掉的一半。
+out=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$EXT" -H 'Content-Type: application/json' \
+  -H "Mcp-Session-Id: $SID_EXT" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}')
+check "#328 通知回 202" "$out" '202'
+out=$(curl -s -X POST "$EXT" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $SID_EXT" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"ping"}')
+check "#328 请求拿到的是帧，不是 202" "$out" '"id":2'
+# 批量帧按名字拒绝：2025-06-18 没有 batch。
+out=$(curl -s -X POST "$EXT" -H 'Content-Type: application/json' -H "Mcp-Session-Id: $SID_EXT" \
+  -d '[{"jsonrpc":"2.0","id":3,"method":"ping"}]')
+check "#328 批量帧被拒绝" "$out" 'batch'
+# DELETE 结束 session（旧实现是假成功，什么都不做）。
+out=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$EXT" -H "Mcp-Session-Id: $SID_EXT")
+check "#328 DELETE 结束 session" "$out" '204'
+out=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$EXT" -H 'Content-Type: application/json' \
+  -H "Mcp-Session-Id: $SID_EXT" -d '{"jsonrpc":"2.0","id":4,"method":"ping"}')
+check "#328 结束后的 session 是 404" "$out" '404'
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

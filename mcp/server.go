@@ -162,16 +162,22 @@ func (s *Server) OnMethod(method string, h InboundHandler) {
 	s.inbound[method] = h
 }
 
-// registerSession records a new session and fires the hook.
-func (s *Server) registerSession(ctx context.Context, sess Session) {
+// RegisterSession records a new session and fires the hook.
+//
+// IT IS EXPORTED BECAUSE THE TRANSPORTS ARE AN INTERFACE NOW (#328). The streamable
+// transport needs exactly three things from whatever it is serving — register, unregister,
+// answer — and spelling that as a method set is what lets a second backend (an
+// extension's own MCP server) reuse the whole transport instead of growing a second,
+// subtly different copy of session handling, body limits and status codes.
+func (s *Server) RegisterSession(ctx context.Context, sess Session) {
 	s.sessions.Store(sess.SessionID(), sess)
 	for _, fn := range s.hooks.OnRegisterSession {
 		fn(ctx, sess)
 	}
 }
 
-// unregisterSession drops a session and fires the hook.
-func (s *Server) unregisterSession(ctx context.Context, sess Session) {
+// UnregisterSession drops a session and fires the hook.
+func (s *Server) UnregisterSession(ctx context.Context, sess Session) {
 	s.sessions.Delete(sess.SessionID())
 	for _, fn := range s.hooks.OnUnregisterSession {
 		fn(ctx, sess)
