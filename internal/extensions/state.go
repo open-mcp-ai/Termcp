@@ -854,3 +854,24 @@ func (st *extState) carrierOnlyFailureLocked() bool {
 	}
 	return true
 }
+
+// ownsShell reports whether this extension holds the channel handle: its own default
+// channel, one of the template's other channels, or an instance handed to a caller.
+func (st *extState) ownsShell(shellID string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.shellID == shellID {
+		return true
+	}
+	for _, run := range st.sideRuns {
+		if run.shellID == shellID {
+			return true
+		}
+	}
+	for _, ex := range st.extra {
+		if ex.shellID == shellID {
+			return true
+		}
+	}
+	return false
+}

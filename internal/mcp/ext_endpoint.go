@@ -27,7 +27,6 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/mcp"
-	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
 
@@ -103,36 +102,44 @@ func (d *extDispatcher) Handle(ctx context.Context, raw []byte, sess mcp.Session
 		return extErrorFrame(nil, extCodeParse, why)
 	}
 
-	// ONE LINE AT A TIME. The text and the Enter that ends it are two writes, and two
-	// requests interleaving there produce a line no reader can parse (#212). The lock is
-	// released before the wait: holding it across the reply would serialise every client
-	// behind the slowest peer.
-	lock := d.s.lineLock(shell)
-	lock.Lock()
-	inErr := d.s.extWriteLine(ctx, shell, frame)
-	lock.Unlock()
-	if inErr != nil {
-		return extErrorFrame(nil, extCodePeer, "the extension's channel refused the frame: "+inErr.Error())
+	// THE WRITE BELONGS TO THE ROUTER, NOT HERE (issue #328 S3). A request leaves with a
+	// MINTED id, so the pump has to be the one that writes it — writing here as well put the
+	// caller's frame on the channel twice, and the extra answer is a reply nobody is waiting
+	// for, which the router drops. Two clients then raced for one reply.
+	pump, perr := d.s.extPumpFor(shell)
+	if perr != nil {
+		return extErrorFrame(json.RawMessage(frameID(frame)), extCodePeer,
+			"the extension's channel is not readable: "+perr.Error())
 	}
-
-	id := frameID(frame)
-	if id == "" {
+	if method, hasID := extFrameKind(frame); method != "" && !hasID {
 		// A notification has no answer. Returning nil is the transport's signal for "no
 		// body", which it turns into 202 — correct here, because nothing was requested.
-		return nil
+		return pump.note(ctx, frame, method)
 	}
-	stmt := directive.Statement{Op: "mcp", Kind: "mcp", Target: shell}
-	win := termArgs{TimeoutSet: true, TimeoutSeconds: extMCPCallWindow}
-	slot := d.s.mcpAwaitReply(ctx, stmt, shell, id, win, nil)
-	if body, ok := extSlotBody(slot); ok {
-		return []byte(body)
-	}
-	return extErrorFrame(json.RawMessage(id), extCodePeer,
-		extSlotReason(slot, id))
+	return pump.ask(ctx, frame)
 }
 
-// extWriteLine puts one frame on the channel as one line.
+// extFrameKind reports the method and whether the frame carries an id.
+func extFrameKind(frame string) (string, bool) {
+	var env struct {
+		ID     *json.RawMessage `json:"id"`
+		Method string           `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(frame), &env); err != nil {
+		return "", false
+	}
+	return env.Method, env.ID != nil
+}
+
+// extWriteLine puts one frame on the channel as one line, under the channel's line lock.
+//
+// ONE LINE AT A TIME. The text and the Enter that ends it are two writes, and two requests
+// interleaving there produce a line no reader can parse (#212). The lock is released before
+// any wait: holding it across a reply would serialise every client behind the slowest peer.
 func (s *Server) extWriteLine(ctx context.Context, shellID, frame string) error {
+	lock := s.lineLock(shellID)
+	lock.Lock()
+	defer lock.Unlock()
 	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", shellID, "text", frame)); fail != nil {
 		return fmt.Errorf("%s", fail.msg)
 	}
@@ -146,6 +153,20 @@ func (s *Server) extWriteLine(ctx context.Context, shellID, frame string) error 
 // it is on demand. code is 0 when the channel is usable; otherwise it is the HTTP status
 // to answer with and why says which shape is missing.
 func (s *Server) extChannel(name string) (shellID string, code int, why string) {
+	// ONE CHANNEL PER EXTENSION, NOT ONE PER REQUEST (#183 meets #328). `Acquire` hands an
+	// on-demand caller its OWN instance — the right answer for "give me a process to drive"
+	// and the wrong one here: every POST would fork a fresh peer, so `initialize` would
+	// land in one process and the next request in another, and an attached client would
+	// never see anything the first one said. The endpoint therefore remembers the channel
+	// it acquired and keeps using it until it dies.
+	if v, ok := s.extShells.Load(name); ok {
+		if shell, _ := v.(string); shell != "" && s.sessMgr.GetChildShell(shell) != nil {
+			if s.extensions != nil {
+				s.extensions.Touch(shell, "")
+			}
+			return shell, 0, ""
+		}
+	}
 	st, err := s.extensions.Acquire(name, extMCPStartWait)
 	if err != nil {
 		return "", http.StatusNotFound, "extension " + name + ": " + err.Error()
@@ -154,6 +175,7 @@ func (s *Server) extChannel(name string) (shellID string, code int, why string) 
 	// several now; the one whose traffic this endpoint can carry is the http one.
 	shell := extMCPChannelShell(st)
 	if shell != "" {
+		s.extShells.Store(name, shell)
 		return shell, 0, ""
 	}
 	if len(st.Channels) > 0 {

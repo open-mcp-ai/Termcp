@@ -47,6 +47,18 @@
   (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
   never swept: `--dead` names its targets by state, so `--force` does not apply to it.
 
+### Added
+
+- An extension's own notifications now reach an attached client: `/ext/{name}/stream`
+  keeps a reader on the channel per extension, so a frame the peer sends on its own
+  (`notifications/<own name>/<event>` — a spec-legal custom method) is delivered to
+  every open `GET` stream within the second, with no request in flight. That is what
+  makes a custom agent driven by a self-written MCP server possible without teaching
+  it termcp's directive language, and it is not `resources/subscribe`: the subscriber
+  consumes the peer's own methods, so all this had to do was not swallow them. The
+  reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
+  peer alive between events.
+
 ### Fixed
 
 - `/ext/{name}/stream` is served by the same streamable-HTTP transport as the
@@ -57,7 +69,14 @@
   `GET` could not name itself). `GET` without a session is now a `400` naming the
   header, `DELETE` ends the session, a JSON-RPC batch is refused by name, and a frame
   and the `Enter` that ends it are written under the channel's line lock — two
-  concurrent POSTs used to interleave into one unparseable line.
+  concurrent POSTs used to interleave into one unparseable line. Two clients on one
+  extension are independent even when both say `id:1`: each request leaves with a
+  termcp-minted id and comes back with the caller's id put back, and the frame's own
+  bytes are otherwise untouched. `initialize` is forwarded once and replayed from the
+  cache for later sessions (the peer's identity is the same for all of them), and
+  `notifications/initialized` is delivered once. A request the peer starts is answered
+  with an error rather than dropped, so a stdio server cannot deadlock waiting for a
+  response this endpoint will never send.
 
 - An MCP client that cancels a call now stops it. `notifications/cancelled` was read
   and discarded, so a cancelled 60-second read ran to completion with nobody
