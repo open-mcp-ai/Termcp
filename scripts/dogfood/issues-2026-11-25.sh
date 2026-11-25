@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Dogfood loop for the 2026-11-25 issue batch (#327-#356).
+#
+# It drives a REAL termcp instance over the same two entrances an agent uses —
+# POST /api/term (the DSL) and POST /api/... (the REST surface) — and checks the
+# acceptance criteria of each issue. No unit tests: the point of a dogfood round is
+# that the product, assembled and running, answers the way the issue asked.
+#
+#   scripts/dogfood/issues-2026-11-25.sh [--port N] [--keep]
+#
+# Exit code is the number of failed checks (0 = all green). The instance is built
+# from the working tree, started on a spare port with a throwaway data dir, and
+# stopped on exit unless --keep is given.
+set -uo pipefail
+
+cd "$(dirname "$0")/../.." || exit 1
+
+PORT=${PORT:-18791}
+KEEP=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port) PORT="$2"; shift 2 ;;
+    --keep) KEEP=1; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/termcp-dogfood.XXXXXX")
+BIN="$WORK/termcp"
+DATA="$WORK/data"
+mkdir -p "$DATA"
+LOG="$WORK/termcp.log"
+
+PASS=0
+FAIL=0
+FAILED_NAMES=()
+
+cleanup() {
+  if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
+    kill -TERM "$PID" 2>/dev/null
+    for _ in $(seq 1 40); do kill -0 "$PID" 2>/dev/null || break; sleep 0.05; done
+    kill -KILL "$PID" 2>/dev/null
+  fi
+  if [ "$KEEP" = "1" ]; then
+    echo "kept: $WORK (log: $LOG)"
+  else
+    mv "$WORK" "${TMPDIR:-/tmp}/termcp-dogfood-done.$$" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
+bad()  { FAIL=$((FAIL+1)); FAILED_NAMES+=("$*"); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
+
+# check NAME CONDITION_OUTPUT EXPECTED_SUBSTRING — pass when EXPECTED appears in OUTPUT.
+check() {
+  local name="$1" got="$2" want="$3"
+  if printf '%s' "$got" | grep -qF -- "$want"; then ok "$name"; else
+    bad "$name"
+    printf '       want substring: %s\n' "$want"
+    printf '       got: %s\n' "$(printf '%s' "$got" | head -c 800 | tr '\n' '|')"
+  fi
+}
+
+# check_not NAME OUTPUT UNWANTED_SUBSTRING — pass when UNWANTED does not appear.
+check_not() {
+  local name="$1" got="$2" unwanted="$3"
+  if printf '%s' "$got" | grep -qF -- "$unwanted"; then
+    bad "$name"
+    printf '       unwanted substring present: %s\n' "$unwanted"
+    printf '       got: %s\n' "$(printf '%s' "$got" | head -c 800 | tr '\n' '|')"
+  else ok "$name"; fi
+}
+
+build() {
+  say "build"
+  if ! go build -o "$BIN" . 2>"$WORK/build.err"; then
+    echo "build failed:"; cat "$WORK/build.err"; exit 1
+  fi
+  echo "  built $BIN"
+}
+
+start() {
+  say "start on :$PORT"
+  "$BIN" --data-dir "$DATA" --port "$PORT" --log-level info >"$LOG" 2>&1 &
+  PID=$!
+  local i
+  for i in $(seq 1 200); do
+    if curl -sf "http://127.0.0.1:$PORT/api/forwards" >/dev/null 2>&1; then echo "  ready (pid $PID)"; return 0; fi
+    kill -0 "$PID" 2>/dev/null || { echo "  died; log:"; tail -30 "$LOG"; exit 1; }
+    sleep 0.1
+  done
+  echo "  never became ready; log:"; tail -30 "$LOG"; exit 1
+}
+
+# term CMD — POST a term command line, print the reply text.
+term() { curl -s -X POST "http://127.0.0.1:$PORT/api/term" -H 'Content-Type: application/json' \
+  --data-binary "$(python3 -c 'import json,sys; print(json.dumps({"cmd": sys.argv[1]}))' "$1")"; }
+# termj JSON — POST a raw term argument object.
+termj() { curl -s -X POST "http://127.0.0.1:$PORT/api/term" -H 'Content-Type: application/json' --data-binary "$1"; }
+# body JSON — print the reply's body field, decoded (so the assertions can quote
+# the prose a caller actually reads rather than its JSON escaping).
+body() { printf '%s' "$1" | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("body",""))
+except Exception: print("")'; }
+# api METHOD PATH [BODY] — print "CODE<TAB>BODY".
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  if [ -n "$body" ]; then
+    curl -s -o "$WORK/api.out" -w '%{http_code}' -X "$method" "http://127.0.0.1:$PORT$path" \
+      -H 'Content-Type: application/json' --data-binary "$body"
+  else
+    curl -s -o "$WORK/api.out" -w '%{http_code}' -X "$method" "http://127.0.0.1:$PORT$path"
+  fi
+  printf '\t'; cat "$WORK/api.out"
+}
+
+# new_session — create an internal pty session, print its id.
+new_session() {
+  api POST /api/sessions '{"ssh_config":"internal","mode":"pty"}' |
+    python3 -c 'import sys,json; raw=sys.stdin.read(); code,body=raw.split("\t",1); print(json.loads(body)["session_id"])'
+}
+
+build
+start
+
+SID=$(new_session)
+if [ -z "$SID" ]; then echo "could not create a session; log:"; tail -40 "$LOG"; exit 1; fi
+echo "  session $SID"
+
+# ---------------------------------------------------------------------------
+say "#338 term 接受 command 作为 cmd 的别名"
+out=$(termj '{"command":"ls"}')
+check "#338 command 单独出现时执行" "$out" '"code":200'
+check "#338 别名在回复里可见" "$out" '"Hint"'
+check "#338 列表结果照常返回" "$out" '"body":"'"$SID"
+out=$(termj '{"cmd":"ls","command":"ls"}')
+check "#338 两者相同则放行" "$out" '"code":200'
+out=$(termj '{"cmd":"ls","command":"ls host"}')
+check "#338 两者不同则拒绝" "$out" '"code":400'
+check "#338 冲突消息点名两个字段" "$out" 'cmd and command'
+out=$(termj '{"command":123}')
+check "#338 非字符串拒绝" "$out" '"code":400' 
+
+# ---------------------------------------------------------------------------
+say "#352 `|` 只是 read|write，不是通用管道"
+out=$(term "grep x | head")
+b=$(body "$out")
+check "#352 拒绝 shell 管道（左侧不是指令也一样）" "$out" '"code":400'
+check "#352 报错点名 read | write 这一对" "$b" 'read | write is the only pairing'
+check "#352 报错说明不是通用管道" "$b" 'not a general pipe'
+check "#352 报错指出 shell 管道写在 payload 里" "$b" 'run <channel> $1'
+check_not "#352 不再把 | 说成通用管道操作符" "$b" 'only pipeline this language has'
+out=$(term "read $SID:1 | grep x")
+b=$(body "$out")
+check "#352 右侧不是指令时也点名 pair" "$out" '"code":400'
+check "#352 且给出 payload 写法" "$b" 'ls | wc -l'
+out=$(term "read $SID:1 | write $SID file /tmp/pipe-target.txt")
+check "#352 read | write 仍然可用" "$out" '202'
+out=$(term "read $SID:1 | write $SID file /a | write $SID file /b")
+check "#352 三端串联被拒绝而不是猜顺序" "$out" '"code":400'
+
+# The downstream half of #352: an embedder that inherits this package without a copy
+# verb must not be told about read | write. Its own vocabulary decides the sentence.
+# The program has to live INSIDE this module to import termcp/term, so it is written
+# into a scratch dir at the repo root and moved out of the tree as soon as it has run.
+EMB_DIR=".dogfood-embedder.$$"
+mkdir -p "$EMB_DIR"
+cat > "$EMB_DIR/main.go" <<'GO'
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/open-mcp-ai/termcp/term"
+)
+
+func main() {
+	// A language with no pipe ends at all — what zero-memcp has.
+	// Flags verbs: a payload verb keeps the `|` as part of its payload, so the
+	// operator reading only applies to verbs that take neither a payload nor a
+	// RestValue flag — which is exactly where a discarded right side is a bug.
+	g := term.NewGrammar([]term.Op{
+		{Name: "create", Kind: term.KindFlags},
+		{Name: "list", Kind: term.KindFlags},
+	})
+	_, err := term.New(g).Parse("create x | list", term.Subst{})
+	fmt.Println(strings.ReplaceAll(fmt.Sprint(err), "\n", " | "))
+}
+GO
+emb=$(go run "./$EMB_DIR/main.go" 2>&1)
+mv "$EMB_DIR" "$WORK/embedder-src"
+check "#352 下游无 pipe 的词汇不说 read | write" "$emb" "no verb here pipes into another"
+check_not "#352 下游报错里不出现 read" "$emb" "read | write is the only"
+
+echo
+printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
+if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
+exit "$FAIL"

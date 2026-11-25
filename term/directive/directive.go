@@ -133,6 +133,19 @@ type Op struct {
 	// The first entry is the DEFAULT: a verb whose kind can be inferred from
 	// TargetKind's shape (channels) lists none, and a verb that needs one lists it.
 	Kinds []string
+	// PipeEnd declares that this verb may stand on one side of a `|`, and which
+	// side — "source" (`read … | write …`), "sink", or "" for neither.
+	//
+	// IT IS A DECLARATION IN THIS TABLE, not a name the parser hardcodes, because
+	// the sentence a refused pipe prints must describe the pipeline THIS vocabulary
+	// has. `internal/mcp` declares read as the source and write as the sink; an
+	// embedder with neither verb (`zero-memcp`, whose language has no copy operator
+	// at all) then answers `a | b` with "there is no pipe in this language" instead
+	// of teaching a construct it does not implement — which is the one way a
+	// downstream that inherits this hint stops telling its callers about a feature
+	// that is not there (issue #352).
+	PipeEnd string
+
 	// PayloadType says what the bytes after the target ARE, and it is the declaration
 	// that keeps the directive language and the shell apart.
 	//
@@ -494,6 +507,60 @@ func NewGrammar(ops []Op) *Grammar {
 
 // DefaultGrammar is the vocabulary this build ships, indexed once.
 var DefaultGrammar = NewGrammar(ops)
+
+// PipePair returns the verbs this vocabulary allows on the two sides of a `|`, or
+// two empty names when it has no pipe operator at all.
+//
+// A PAIR, NOT A BOOLEAN, because the refusal has to name what the caller may
+// write. One source with no sink (or the reverse) is not a pipe either, so the
+// answer is empty unless both ends are declared.
+func (g *Grammar) PipePair() (source, sink string) {
+	if g == nil {
+		g = DefaultGrammar
+	}
+	for _, op := range g.ops {
+		switch op.PipeEnd {
+		case "source":
+			if source == "" {
+				source = op.Name
+			}
+		case "sink":
+			if sink == "" {
+				sink = op.Name
+			}
+		}
+		if source != "" && sink != "" {
+			return source, sink
+		}
+	}
+	return "", ""
+}
+
+// PayloadVerb names the verb this vocabulary uses to hand a shell command line to a
+// channel, or "" when it has none. It is what a pipeline refusal points at instead:
+// `run h:1 $1` with args ["ls | wc -l"].
+//
+// "run" WINS WHEN BOTH EXIST. `input` declares the same payload type (it is the same
+// one-reference-many-times rule), but a refusal teaches the verb a caller reaches for
+// when it wants a command line produced, and that is `run`.
+func (g *Grammar) PayloadVerb() string {
+	if g == nil {
+		g = DefaultGrammar
+	}
+	first := ""
+	for _, op := range g.ops {
+		if op.PayloadType != PayloadVar {
+			continue
+		}
+		if op.Name == "run" {
+			return "run"
+		}
+		if first == "" {
+			first = op.Name
+		}
+	}
+	return first
+}
 
 // Ops returns the vocabulary, in help order. It is a copy: a caller that appends
 // to the result must not be able to reach into the table every parse shares.
