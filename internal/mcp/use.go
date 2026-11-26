@@ -46,7 +46,14 @@ func (s *Server) parseUseHost(raw string) (string, bool) {
 func (s *Server) acquireSSHTransport(ctx context.Context, target string) (*ssh.Client, func(), error) {
 	host, isUse := s.parseUseHost(target)
 	if !isUse {
-		sess := s.sessMgr.Get(target)
+		// A SESSION IS NAMED THREE WAYS (issue #320): full id, the display name it was
+		// created with, or a unique id prefix. This is the door `run` comes through, and it
+		// used to know only the first — so `read web:1` resolved and `run web:1` answered
+		// `session "web" not found`.
+		sess, err := s.resolveSessionRef(target)
+		if err != nil {
+			return nil, nil, err
+		}
 		if sess == nil {
 			return nil, nil, fmt.Errorf("session %q not found", target)
 		}
