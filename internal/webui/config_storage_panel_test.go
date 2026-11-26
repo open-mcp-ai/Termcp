@@ -414,7 +414,7 @@ func TestTheDetailSheetHoldsItsShape(t *testing.T) {
 		if at < 0 {
 			t.Fatalf("%s is gone", id)
 		}
-		line := panel[strings.LastIndex(panel[:at], "<button"):strings.Index(panel[at:], ">")+at]
+		line := panel[strings.LastIndex(panel[:at], "<button") : strings.Index(panel[at:], ">")+at]
 		if !strings.Contains(line, `class="cs-tool"`) {
 			t.Errorf("%s is not an icon button", id)
 		}
@@ -697,5 +697,59 @@ func TestTheCreateFormClearsTheHostsLine(t *testing.T) {
 	}
 	if !strings.Contains(body, "key-form-hosts-summary") || !strings.Contains(body, "textContent = ''") {
 		t.Error("the create form leaves the previous key's host count on screen")
+	}
+}
+
+/* The entry key in the host drawer has four states, and that button is the only
+ * place encryption is visible while the panel is closed. A state class the module
+ * paints with no rule selecting it is a state the operator cannot see — which is
+ * what `is-orphaned` was: ciphertext that outlived its key, painted, unstyled.
+ *
+ * Mutation check: delete either rule from config-storage.css and this fails by name.
+ */
+func TestTheKeychainEntryKeyShowsEveryState(t *testing.T) {
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	css := readAssetLF(t, "static/css/config-storage.css")
+	for _, state := range []string{"is-configured", "is-locked", "is-orphaned", "is-unknown"} {
+		if !strings.Contains(panel, "'"+state+"'") {
+			t.Errorf("config-storage.js no longer paints %q on the entry key", state)
+		}
+		if !strings.Contains(css, "#config-storage-open."+state) {
+			t.Errorf("the entry key can be %q, but no rule selects that state", state)
+		}
+	}
+}
+
+/* The mask button's glyph names the action its label names: "Show addresses" while
+ * masked, "Hide addresses" while visible. `aria-pressed` is true exactly when they
+ * are visible, so the pressed rule must show the struck eye and the unpressed one the
+ * open eye. The paint comment used to say the opposite — that the eye showed the
+ * current state — so the stylesheet and the prose disagreed about which of them was
+ * wrong.
+ *
+ * Mutation check: swap the two display values in workspace.css and this fails.
+ */
+func TestTheMaskGlyphNamesTheActionItsLabelNames(t *testing.T) {
+	css := readAssetLF(t, "static/css/workspace.css")
+	for _, want := range []string{
+		".drawer-mask .eye-open { display: block; }",
+		`.drawer-mask[aria-pressed="true"] .eye-closed { display: block; }`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("the mask no longer offers the action its label names: missing %q", want)
+		}
+	}
+	for _, wrong := range []string{
+		".drawer-mask .eye-closed { display: block; }",
+		`.drawer-mask[aria-pressed="true"] .eye-open { display: block; }`,
+	} {
+		if strings.Contains(css, wrong) {
+			t.Errorf("the mask glyph is inverted by %q", wrong)
+		}
+	}
+
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	if !strings.Contains(panel, "btn.setAttribute('aria-pressed', masked ? 'false' : 'true')") {
+		t.Error("paintMaskToggle no longer makes pressed mean visible")
 	}
 }
