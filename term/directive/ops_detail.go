@@ -752,7 +752,9 @@ THE REPLY DOES NOT CLAIM THE COMMAND FINISHED, because a pty gives nothing to ba
 that on: a finished command and one that is working without printing are the same
 bytes. So Completion appears ONLY when there is evidence to name:
 Completion: matched when your own --until pattern was observed, Completion: exit when
-the remote shell reported the end itself (OSC 133, together with Exit-Code). NO
+the remote shell reported the end itself (OSC 133, together with Exit-Code). The
+completion report is read whether or not you asked for it, so a shell with integration
+enabled gives an exit code to a plain run — the marker is in the bytes either way. NO
 Completion HEADER MEANS THE STATE IS UNKNOWN — the honest answer, not a failure: read
 the stream and decide, the way a human at the same screen would. Still-Running: true
 is the one other fact, and it means the window ran out while bytes were still
