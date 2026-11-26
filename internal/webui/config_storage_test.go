@@ -74,8 +74,8 @@ func TestKeychainHTTPCreateListPlugExportRemove(t *testing.T) {
 	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\nport = 2222\npassword = \"placeholder\"\n")
 	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
 
-	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
-	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-1"}`, http.StatusOK))
+	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-2"}`, http.StatusOK))
 	var other string
 	for _, key := range second.Keys {
 		if key.ID != first.Keys[0].ID {
@@ -126,8 +126,8 @@ func TestKeychainHTTPUnplugAndPlugOneKey(t *testing.T) {
 	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
 	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
 
-	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
-	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK))
+	first := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-3"}`, http.StatusOK))
+	second := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-4"}`, http.StatusOK))
 	var other string
 	for _, key := range second.Keys {
 		if key.ID != first.Keys[0].ID {
@@ -217,7 +217,7 @@ func TestConfigStorageStatusReportsKeysAndHostModes(t *testing.T) {
 	if status.Initialized || status.Keys != 0 {
 		t.Fatalf("status before any key = %+v", status)
 	}
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-5"}`, http.StatusOK)
 	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt", `{"names":["plain"]}`, http.StatusOK)
 
 	status = getConfigStorageStatus(t, mux)
@@ -243,7 +243,7 @@ func TestConfigStorageStatusReportsKeysAndHostModes(t *testing.T) {
  */
 func TestDamagedKeychainIsNamedRatherThanReportedAsUnplugged(t *testing.T) {
 	store, dir, mux := newKeychainServer(t, 0x67)
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-6"}`, http.StatusOK)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestDamagedKeychainIsNamedRatherThanReportedAsUnplugged(t *testing.T) {
 		t.Fatalf("status with a damaged keychain = %+v", status)
 	}
 	/* Nothing is sealed by the damaged file, so adding a key is the way out. */
-	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{"label":"key-7"}`, http.StatusOK)
 	if status := getConfigStorageStatus(t, fresh); status.ErrorCode != "" || status.KeysPlugged != 1 {
 		t.Fatalf("status after replacing a damaged keychain = %+v", status)
 	}
@@ -279,7 +279,7 @@ func TestDamagedKeychainIsNamedRatherThanReportedAsUnplugged(t *testing.T) {
  */
 func TestConfigStorageStatusSurvivesAnUnpluggedKeychain(t *testing.T) {
 	store, dir, mux := newKeychainServer(t, 0x66)
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-8"}`, http.StatusOK)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestDamagedKeychainWithSealedProfilesRefusesReplacement(t *testing.T) {
 	h := &Handler{SSH: store}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-9"}`, http.StatusOK)
 	profile := []byte("kind = \"remote\"\nhost = \"sealed.example\"\nuser = \"ops\"\npassword = \"synthetic\"\n")
 	encrypt := true
 	if err := store.SaveWithMode("sealed", profile, sshconfig.SaveMode{Encrypt: &encrypt}); err != nil {
@@ -339,7 +339,7 @@ func TestDamagedKeychainWithSealedProfilesRefusesReplacement(t *testing.T) {
 	damaged := &Handler{SSH: reopened}
 	fresh := http.NewServeMux()
 	damaged.Register(fresh)
-	rec := keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusConflict)
+	rec := keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{"label":"key-10"}`, http.StatusConflict)
 	if !strings.Contains(rec.Body.String(), "keychain_seals_hosts") {
 		t.Fatalf("replacing a keychain that seals a host = %s; want keychain_seals_hosts", rec.Body.String())
 	}
@@ -355,7 +355,7 @@ func TestDiscardKeychainIsTheExplicitExitForADamagedFile(t *testing.T) {
 	h := &Handler{SSH: store}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-11"}`, http.StatusOK)
 
 	/* A healthy keychain is not thrown away by this route: deleting keys you can
 	   still read is DELETE /api/keychain/{id}, with its own guards. */
@@ -390,7 +390,7 @@ func TestDiscardKeychainIsTheExplicitExitForADamagedFile(t *testing.T) {
 		t.Fatalf("status after discarding a damaged keychain = %+v", status)
 	}
 	/* And the panel must then be able to start over. */
-	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, fresh, http.MethodPost, "/api/keychain", `{"label":"key-12"}`, http.StatusOK)
 	if status := getConfigStorageStatus(t, fresh); status.ErrorCode != "" || !status.Initialized {
 		t.Fatalf("status after starting over = %+v", status)
 	}
@@ -406,7 +406,7 @@ func TestActivationHTTPTakesOnePassphrasePerKey(t *testing.T) {
 	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
 
 	guarded := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain",
-		`{"passphrase":"synthetic passphrase for tests"}`, http.StatusOK))
+		`{"label":"guarded","passphrase":"synthetic passphrase for tests"}`, http.StatusOK))
 	keyID := guarded.Keys[0].ID
 	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt",
 		`{"names":["alpha","beta"],"key":"`+keyID+`","passphrase":"synthetic passphrase for tests"}`, http.StatusOK)
@@ -583,7 +583,7 @@ func TestMaskingWorksBeforeAnyKeychainExists(t *testing.T) {
  */
 func TestKeychainValvesRefuseAgents(t *testing.T) {
 	_, _, mux := newKeychainServer(t, 0x6c)
-	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"key-13"}`, http.StatusOK)
 	keys := decodeKeychain(t, keychainCall(t, mux, http.MethodGet, "/api/keychain", "", http.StatusOK))
 	id := keys.Keys[0].ID
 	for _, request := range []struct {
@@ -591,7 +591,7 @@ func TestKeychainValvesRefuseAgents(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{http.MethodPost, "/api/keychain", `{}`},
+		{http.MethodPost, "/api/keychain", `{"label":"key-14"}`},
 		{http.MethodPost, "/api/keychain/" + id + "/plug", ""},
 		{http.MethodPost, "/api/keychain/" + id + "/unplug", ""},
 		{http.MethodGet, "/api/keychain/" + id + "/mnemonic", ""},
@@ -667,5 +667,30 @@ func TestChangingAPassphraseOverHTTPKeepsTheKey(t *testing.T) {
 		if string(got) != string(profile) {
 			t.Errorf("%s = %q, want the profile back", name, got)
 		}
+	}
+}
+
+/* A key without a name is refused at the route, with a code the page can turn into
+ * a sentence — not a 500, and not a silently-created nameless key.
+ *
+ * Mutation check: make NormalizeKeyLabel accept an empty name and this fails on the
+ * first case.
+ */
+func TestCreatingAKeyWithoutANameIsRefused(t *testing.T) {
+	_, _, mux := newKeychainServer(t, 0x7d)
+	for _, body := range []string{`{}`, `{"label":""}`, `{"label":"   "}`} {
+		rec := keychainCall(t, mux, http.MethodPost, "/api/keychain", body, http.StatusBadRequest)
+		if !strings.Contains(rec.Body.String(), "key_label_invalid") {
+			t.Fatalf("%s = %s; want key_label_invalid", body, rec.Body.String())
+		}
+	}
+	if listed := decodeKeychain(t, keychainCall(t, mux, http.MethodGet, "/api/keychain", "", http.StatusOK)); len(listed.Keys) != 0 {
+		t.Fatalf("a refused name still created %d key(s)", len(listed.Keys))
+	}
+	// And the name is required on rename too, so a key cannot lose its name later.
+	created := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain", `{"label":"work"}`, http.StatusOK))
+	rec := keychainCall(t, mux, http.MethodPost, "/api/keychain/"+created.Keys[0].ID+"/rename", `{"label":""}`, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), "key_label_invalid") {
+		t.Fatalf("rename to blank = %s; want key_label_invalid", rec.Body.String())
 	}
 }

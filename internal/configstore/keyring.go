@@ -154,9 +154,20 @@ func deriveMainKey(storeID ID, mnemonic string) (MainKey, error) {
 // CreateKeyring creates a keychain holding one key whose root is mnemonic, sealed
 // by every provider that can address this host. The returned bytes are the
 // config.keys representation.
-func CreateKeyring(storeID ID, mnemonic, passphrase string, providers ...Provider) ([]byte, *Keyring, error) {
+func CreateKeyring(storeID ID, mnemonic, passphrase, label string, providers ...Provider) ([]byte, *Keyring, error) {
 	if storeID.IsZero() {
 		return nil, nil, ErrFormat
+	}
+	/* The key a store is born with carries a name like every other key. An
+	   initialization has no human to ask, so it uses DefaultKeyLabel — a name the
+	   owner can change on the first look, which is a better answer than a row that
+	   says "unnamed" forever (see NormalizeKeyLabel). */
+	if label == "" {
+		label = DefaultKeyLabel
+	}
+	label, err := NormalizeKeyLabel(label)
+	if err != nil {
+		return nil, nil, err
 	}
 	main, err := deriveMainKey(storeID, mnemonic)
 	if err != nil {
@@ -181,6 +192,7 @@ func CreateKeyring(storeID ID, mnemonic, passphrase string, providers ...Provide
 	}
 	key.Plugged = true
 	key.Passphrase = passphrase != ""
+	key.Label = label
 	stored.Keys = append(stored.Keys, key)
 	data, err := encodeStoredKeyring(stored)
 	if err != nil {

@@ -140,7 +140,7 @@ func InitializeRepositoryWithMnemonic(dataDir, mnemonic, passphrase string, prov
 }
 
 func initializeWithMnemonic(root string, lock *directoryLock, storeID ID, phrase, passphrase string, fail func(error) (*Repository, error), providers ...Provider) (*Repository, error) {
-	keyData, keyring, err := CreateKeyring(storeID, phrase, passphrase, providers...)
+	keyData, keyring, err := CreateKeyring(storeID, phrase, passphrase, DefaultKeyLabel, providers...)
 	if err != nil {
 		return fail(err)
 	}

@@ -50,7 +50,7 @@ func TestKeychainHoldsSeveralIndependentKeys(t *testing.T) {
 	}
 	first := keys[0].ID
 
-	added, err := repo.CreateKey(testPhrase(t), "", NewEnvProvider(""))
+	added, err := repo.CreateKeyWithLabel(testPhrase(t), "", "added", NewEnvProvider(""))
 	if err != nil {
 		t.Fatalf("add key: %v", err)
 	}
@@ -95,7 +95,6 @@ func TestKeychainHoldsSeveralIndependentKeys(t *testing.T) {
 	}
 }
 
-
 /* A key that seals hosts cannot be removed: those hosts would become unreadable
  * with nothing to warn about it afterwards.
  *
@@ -110,7 +109,7 @@ func TestRemovingAKeyInUseIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
-	b, err := repo.CreateKey(testPhrase(t), "", NewEnvProvider(""))
+	b, err := repo.CreateKeyWithLabel(testPhrase(t), "", "b", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +274,7 @@ func TestAddingAKeyKeepsAnUnopenableKeychain(t *testing.T) {
 	if reopened.Loaded() {
 		t.Fatal("nothing should be readable")
 	}
-	second, err := reopened.CreateKey(testPhrase(t), "", NewFileProvider(writeKeyFile(t, 0x99)))
+	second, err := reopened.CreateKeyWithLabel(testPhrase(t), "", "second", NewFileProvider(writeKeyFile(t, 0x99)))
 	if err != nil {
 		t.Fatalf("adding a key beside an unopenable one: %v", err)
 	}
@@ -345,5 +344,58 @@ func TestUnopenableKeychainWithoutAnIndexStillStarts(t *testing.T) {
 	}
 	if keys, err := reopened.Keys(); err != nil || len(keys) != 1 || !keys[0].Plugged {
 		t.Fatalf("keychain after plugging = %+v, %v", keys, err)
+	}
+}
+
+/* A key without a name is not a key you can create.
+ *
+ * An empty label used to be legal and the panel rendered it as the short id — a row
+ * whose only distinguishing feature was a hash, in a list whose whole job is telling
+ * keys apart. The rule lives at the store, so the panel form, the REST route and an
+ * agent's tool call all answer the same way; the one key that is named without being
+ * asked is the one a store is born with.
+ */
+func TestAKeyCannotBeCreatedWithoutAName(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x7c))
+	repo, err := InitializeRepository(t.TempDir(), NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	before, err := repo.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"", "   ", "\t\n"} {
+		if _, err := repo.CreateKeyWithLabel(testPhrase(t), "", label, NewEnvProvider("")); !errors.Is(err, ErrInvalidLabel) {
+			t.Fatalf("CreateKeyWithLabel(%q) = %v; want ErrInvalidLabel", label, err)
+		}
+	}
+	after, err := repo.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("a refused name still added a key: %d then %d", len(before), len(after))
+	}
+	// The key the store was born with is named, so nothing has to special-case it.
+	if len(before) != 1 || before[0].Label != DefaultKeyLabel {
+		t.Fatalf("the initial key = %+v; want one key named %q", before, DefaultKeyLabel)
+	}
+	// Renaming to nothing is the same refusal.
+	if err := repo.SetKeyLabel(keyIDOf(t, before[0].ID), "  "); !errors.Is(err, ErrInvalidLabel) {
+		t.Fatalf("SetKeyLabel to blank = %v; want ErrInvalidLabel", err)
+	}
+	// A real name still works, and reads back.
+	if err := repo.SetKeyLabel(keyIDOf(t, before[0].ID), "  work  "); err != nil {
+		t.Fatalf("SetKeyLabel: %v", err)
+	}
+	renamed, err := repo.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed[0].Label != "work" {
+		t.Fatalf("label = %q; want the trimmed name", renamed[0].Label)
 	}
 }

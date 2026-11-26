@@ -39,7 +39,7 @@ func passphraseRepository(t *testing.T, kek byte, host, body string) (*Repositor
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _, err := CreateKeyring(storeID, phrase, testPassphrase, NewEnvProvider(""))
+	data, _, err := CreateKeyring(storeID, phrase, testPassphrase, "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,11 +252,11 @@ func TestOneActivationAcrossTwoPassphraseKeys(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	first, err := repo.CreateKey(testPhrase(t), testPassphrase, NewEnvProvider(""))
+	first, err := repo.CreateKeyWithLabel(testPhrase(t), testPassphrase, "first", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repo.CreateKey(testPhrase(t), "another synthetic passphrase", NewEnvProvider(""))
+	second, err := repo.CreateKeyWithLabel(testPhrase(t), "another synthetic passphrase", "second", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,11 +322,11 @@ func TestActivationMissingAPassphraseRefusesTheBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
-	covered, err := repo.CreateKey(testPhrase(t), testPassphrase, NewEnvProvider(""))
+	covered, err := repo.CreateKeyWithLabel(testPhrase(t), testPassphrase, "covered", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	forgotten, err := repo.CreateKey(testPhrase(t), "unasked synthetic passphrase", NewEnvProvider(""))
+	forgotten, err := repo.CreateKeyWithLabel(testPhrase(t), "unasked synthetic passphrase", "forgotten", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,11 +391,11 @@ func TestRestartKeepsPluggedAndDropsThePassphraseLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	open, err := repo.CreateKey(testPhrase(t), "", NewEnvProvider(""))
+	open, err := repo.CreateKeyWithLabel(testPhrase(t), "", "open", NewEnvProvider(""))
 	if err != nil {
 		t.Fatalf("key without a passphrase: %v", err)
 	}
-	guarded, err := repo.CreateKey(testPhrase(t), testPassphrase, NewEnvProvider(""))
+	guarded, err := repo.CreateKeyWithLabel(testPhrase(t), testPassphrase, "guarded", NewEnvProvider(""))
 	if err != nil {
 		t.Fatalf("key with a passphrase: %v", err)
 	}
