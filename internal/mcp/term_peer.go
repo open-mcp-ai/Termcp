@@ -258,6 +258,15 @@ func (s *Server) peerChannel(ctx context.Context, stmt directive.Statement, win 
 		found, ok := jrpcChannels[stmt.Target]
 		jrpcChannelsMu.Unlock()
 		if !ok {
+			// AN EXTENSION'S STDIO CHANNEL IS A KNOWN MCP SERVER (issue #316), so a tool
+			// name on it is a fact rather than a guess about bytes — the same tool form
+			// the HTTP peer accepts, on the address `open ext` handed back. Any other
+			// channel keeps the raw-frame-only rule (#271): `call <channel> <tool> {…}`
+			// there would be this layer deciding what runs on someone's pipe.
+			if !strings.HasPrefix(unquoteWord(strings.TrimSpace(frame)), "{") &&
+				s.stdioMCPChannel(stmt.Target) != "" {
+				return []envelope.Slot{s.extStdioToolCall(ctx, stmt, stmt.Target, frame, win, sub == "send" || boolFlag(stmt, "send"))}
+			}
 			return []envelope.Slot{s.mcpStdio(ctx, stmt, sub, stmt.Target, []string{frame}, win)}
 		}
 		h = found

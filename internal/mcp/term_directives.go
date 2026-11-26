@@ -171,6 +171,24 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			}
 			return []envelope.Slot{s.cdpDescribe(stmt, h, index)}
 		}
+		// `get <channel> tools` IS THE STDIO SIBLING OF `get <session> mcp:1 tools`
+		// (issue #316). An extension channel that runs a stdio MCP server offers the same
+		// table, so the word has to mean the same thing on the address a caller actually
+		// holds — the handle `open ext` printed. On any other channel `tools` is not a
+		// word this address answers, and the ordinary channel description is the reply
+		// (that is the unchanged path below).
+		if stmt.Kind == "" && (stmt.Key == "tools" || (len(stmt.Args) > 0 && stmt.Args[0] == "tools")) &&
+			s.stdioMCPChannel(stmt.Target) != "" {
+			tool := ""
+			if stmt.Key == "tools" {
+				if len(stmt.Args) > 0 {
+					tool = stmt.Args[0]
+				}
+			} else if len(stmt.Args) > 1 {
+				tool = stmt.Args[1]
+			}
+			return []envelope.Slot{s.extStdioToolList(ctx, stmt, stmt.Target, win, tool)}
+		}
 		if stmt.Kind == "file" {
 			// --op names a SUB-ACTION; the sfTP layer groups those under an action
 			// (perm, link, fs) and dispatches again inside the group. The group is

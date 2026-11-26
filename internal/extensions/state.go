@@ -858,20 +858,39 @@ func (st *extState) carrierOnlyFailureLocked() bool {
 // ownsShell reports whether this extension holds the channel handle: its own default
 // channel, one of the template's other channels, or an instance handed to a caller.
 func (st *extState) ownsShell(shellID string) bool {
+	_, ok := st.channelOfShell(shellID)
+	return ok
+}
+
+// channelOfShell names the channel a handle belongs to, "" for the extension's own
+// default channel.
+//
+// THE NAME IS WHAT MAKES THE KIND ANSWERABLE (issue #316): "which channel is this" is
+// the question a caller asks to find out whether the process on it is a stdio MCP
+// server or a terminal, and a handle alone cannot answer it — the template can hold
+// several channels of different kinds (issue #331), so the shell has to be placed in
+// one of them before its kind means anything.
+func (st *extState) channelOfShell(shellID string) (string, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.shellID == shellID {
-		return true
+		return "", true
 	}
 	for _, run := range st.sideRuns {
 		if run.shellID == shellID {
-			return true
+			return run.name, true
 		}
 	}
 	for _, ex := range st.extra {
 		if ex.shellID == shellID {
-			return true
+			// AN INSTANCE'S CHANNEL IS THE DEFAULT ONE, and its label must not be read as
+			// a channel name: "fresh" resolves the template's default channel
+			// (bringUp(fresh=true)), while the label is what a human sees in `ls` —
+			// the extension's own name, or `<name>#N` for the second instance. Returning
+			// the label here made every instance answer with a channel called
+			// "stub316", which no template declares.
+			return "", true
 		}
 	}
-	return false
+	return "", false
 }

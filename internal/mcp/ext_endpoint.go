@@ -138,7 +138,10 @@ func extFrameKind(frame string) (string, bool) {
 // interleaving there produce a line no reader can parse (#212). The lock is released before
 // any wait: holding it across a reply would serialise every client behind the slowest peer.
 func (s *Server) extWriteLine(ctx context.Context, shellID, frame string) error {
-	lock := s.lineLock(shellID)
+	// ONE LOCK PER CHANNEL, whatever spelling named it: a bare frame typed at the same
+	// process through `call <sid>:1 '{…}'` and a tool-name wrapper both make one line,
+	// and two locks would let them interleave (#212).
+	lock := s.lineLock(s.channelStateKey(shellID))
 	lock.Lock()
 	defer lock.Unlock()
 	if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", shellID, "text", frame)); fail != nil {

@@ -4,6 +4,12 @@
 
 ### Added
 
+- An extension channel declared with a stdio MCP server now works as a peer in `call`
+  and `get`: `get <channel> tools [<name>]` prints the live tool table or one schema,
+  and `call <channel> <tool> [<json-args>]` performs the `initialize` /
+  `notifications/initialized` handshake once per channel, invokes `tools/call`, and
+  returns the tool's text (`--json` keeps the frame, `--send` writes without waiting).
+  Plain `open` pipe channels still accept raw JSON-RPC frames only.
 - A template can hold several channels: `[[channel]]` names each process or endpoint,
   with its own `kind` (http, stdio, pty), `name` and `target`, so one card can run an
   MCP endpoint here and a worker there — two connections, one lifecycle, one retry
